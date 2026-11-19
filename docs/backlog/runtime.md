@@ -67,7 +67,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   reboot (reset path) without host-side reconfiguration; unauthorized calls rejected (test).
 
 ### RT-005 (TIF-33) `myco-rt-core`: six-op API + Backend trait
-- **status:** pending
+- **status:** done (2026-11-19 @ 79785c9; 9/9 session tests: illegal transitions, stale refs, permission denial, terminal destroy, reset semantics)
 - **owner:** build
 - **blocked_by:** RT-002
 - **description:** Rust workspace `runtime/`: core library with the six ops, session
@@ -79,7 +79,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   tests including illegal-transition rejection; FakeBackend exercises all six ops.
 
 ### RT-006 (TIF-34) QEMU+HVF Linux backend
-- **status:** pending
+- **status:** done (2026-11-19, RT owner). QemuLinuxBackend implements Backend: provision (lock + boot + agent install + channel), reset (discard overlay + reboot + reinstall + reconnect), destroy (crash-tolerant shutdown + overlay delete + lock release), concurrency cap via atomic lockfile with stale reclaim. observe/act return Unimplemented by design (RT-007/008). Evidence: live lifecycle test PASS ×2 — cold CREATE 14.0 s, RESET 19.7 s (marker file GONE after reset), DESTROY 4.1 s (overlay deleted, no qemu). cargo test 15/15 + 1 live. Caveat recorded: channel-ready ≠ cloud-init-done; observe gates on the GUI session at RT-007.
 - **owner:** build
 - **blocked_by:** RT-003, RT-004, RT-005
 - **description:** `QemuLinuxBackend` implementing the Backend trait: qcow2 overlay
