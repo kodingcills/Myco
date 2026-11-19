@@ -11,42 +11,42 @@ workstream), `agent-under-test` (cheaperinference/glm-5.3), `verifier`
 
 ---
 
-### DF-001 (TIF-pending) Sample app: myco-todo with seeded persistence bug
+### DF-001 (TIF-23) Sample app: myco-todo with seeded persistence bug
 - **status:** done (2026-11-19, this branch)
 - **owner:** dogfood-owner
 - **blocked_by:** none
 - **description:** Tiny Tkinter GUI todo app under `dogfood/apps/myco-todo/`, Linux-first, JSON-persisted store, seeded bug: `BUG`-prefixed items silently dropped at save while UI reports success.
 - **acceptance:** `--self-test` passes headless; save/load logic verified against edge cases (case-insensitive prefix, empty store); README documents the bug contract.
 
-### DF-002 (TIF-pending) Dogfood scenarios DF-S01..DF-S05
+### DF-002 (TIF-24) Dogfood scenarios DF-S01..DF-S05
 - **status:** done (2026-11-19, this branch)
 - **owner:** dogfood-owner
 - **blocked_by:** DF-001
 - **description:** Five scenarios under `dogfood/scenarios/`: install-launch-save, find-seeded-bug, fix-seeded-bug, crash-recovery, adversarial-inputs. Each states task prompt, required runtime capabilities (REQ-ids), an independent host-side success oracle, and its false-success trap.
 - **acceptance:** every oracle is computable without consulting the agent's claims; every scenario names its REQ-ids from docs/coordination/dogfood-state.md.
 
-### DF-003 (TIF-pending) Scoring + Linear issue format
+### DF-003 (TIF-25) Scoring + Linear issue format
 - **status:** done (2026-11-19, this branch)
 - **owner:** dogfood-owner
 - **blocked_by:** DF-002
 - **description:** `dogfood/scoring.md`: run buckets (success / false-success / refusal / uncertain / gap), time-cost recording, missing-capability attribution by REQ-id, and the exact DF backlog-entry format for capability failures. Reuses M1-012 evidence schemas; no new schema invented.
 - **acceptance:** a failed run can be transcribed into a backlog entry using only the format in scoring.md; buckets map onto the M1-012 ledger state derivation table.
 
-### DF-004 (TIF-pending) Runtime capability requirements posted
+### DF-004 (TIF-26) Runtime capability requirements posted
 - **status:** done (2026-11-19, this branch)
 - **owner:** dogfood-owner
 - **blocked_by:** DF-002
 - **description:** REQ-01..REQ-12 posted to docs/coordination/dogfood-state.md as requirements for the Myco Desktop Runtime (Rust) owner, each traced to the scenarios that exercise it.
 - **acceptance:** every scenario's required capabilities resolve to a REQ-id; coordinator + runtime owner can read the table without further context.
 
-### DF-005 (TIF-pending) Phase 1: run DF-S01..DF-S05 through the real runtime
+### DF-005 (TIF-27) Phase 1: run DF-S01..DF-S05 through the real runtime
 - **status:** blocked
 - **owner:** dogfood-owner (execution), agent-under-test, verifier
 - **blocked_by:** DF-001, DF-002, DF-003, RT-first-path
 - **description:** For each scenario: provision a desktop via the runtime, run cheaperinference/glm-5.3 as the agent under test on the scenario task, grade with the scenario's oracle plus cheaperinference/kimi-k3 as independent verifier of the agent's report, emit M1-012 evidence (trace.jsonl, result.json, ledger.jsonl), score per dogfood/scoring.md.
 - **acceptance:** 5 scenarios × ≥3 runs each scored with schema-valid evidence; false-success count reported separately; median time cost per scenario reported; all gaps attributed to REQ-ids.
 
-### DF-006 (TIF-pending) File Phase 1 capability failures and re-run after fixes
+### DF-006 (TIF-28) File Phase 1 capability failures and re-run after fixes
 - **status:** blocked
 - **owner:** dogfood-owner
 - **blocked_by:** DF-005
