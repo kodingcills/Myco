@@ -104,14 +104,28 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 ### RT-009 evidence: trace + artifacts reusing M1 schema
 - **status:** pending
 - **owner:** build
-- **blocked_by:** RT-005
+- **blocked_by:** RT-005, RT-014
 - **description:** `evidence` op emits `runs/<sessionId>/trace.jsonl` +
-  `result.json` conforming to M1's schemas/ (verdict omitted at runtime layer per
-  ADR-0012); screenshot and other artifacts landed in the run dir. Schema validation
-  reuses M1's validators where the language boundary allows, else a Rust-side
-  validator against the same schema documents.
+  `result.json` conforming to M1's schemas/ with `recordKind: "session"` (verdict
+  forbidden at runtime layer per ADR-0012); screenshot and other artifacts landed in
+  the run dir. Schema validation reuses M1's validators where the language boundary
+  allows, else a Rust-side validator against the same schema documents.
 - **acceptance:** a sample session's artifacts validate against schemas/; a
-  deliberately malformed event fails validation loudly.
+  deliberately malformed event fails validation loudly; no verdict-less record is
+  emitted under the pre-recordKind schema.
+
+### RT-014 Schema PR: `recordKind` discriminator on result.json
+- **status:** pending
+- **owner:** build
+- **blocked_by:** none
+- **description:** PR against schemas/ (M1-owned, reviewed by M1 coordinator per
+  ADR-0012 resolution 2026-11-19): add `recordKind: "run" | "session"` to
+  result.json — `"run"` keeps verdict required (current behavior, backward
+  compatible), `"session"` forbids verdict and makes checks optional. Updates
+  result-record.ts, validate.ts, and docs/architecture/evidence-schema.md.
+- **acceptance:** PR reviewed by M1 coordinator and merged; existing M1 artifacts
+  still validate unchanged; a `"session"` record without verdict validates and one
+  with a verdict fails.
 
 ### RT-010 MCP server + CLI front ends
 - **status:** pending
@@ -131,7 +145,10 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   observe (tree + screenshot) → act (launch app, type text) → evidence → reset →
   destroy. Runs on this Mac; skipped gracefully when QEMU unavailable.
 - **acceptance:** test passes end-to-end with real QEMU+HVF; artifacts on disk prove
-  each step; total wall-clock recorded; VM shut down at test end (no idle leak).
+  each step; wall-clock for create (cold boot), reset, and destroy measured and
+  recorded in docs/env/linux-runtime.md (the M1 coordinator explicitly does not want
+  M1-017's Windows live-snapshot numbers inherited); VM shut down at test end (no
+  idle leak).
 
 ### RT-012 Windows/UTM backend interface anticipation (design only)
 - **status:** pending
