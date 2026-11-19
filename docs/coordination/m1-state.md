@@ -141,6 +141,11 @@ Obligations:
 - kimi-k3 quota exhausted (402 twice, spaced apart — ceiling, not transient). glm-5.3 confirmed alive. TEMPORARY role change: verifiers run on glm-5.3 with attack-specific mechanical briefs until the outer loop confirms kimi-k3 balance. Judgment-heavy calls (merge decisions, escalations) stay with the coordinator (which runs on kimi-k3 as the parent — note: the parent model has quota by construction; if this thread itself 402s, everything stops).
 - PR #11 verifier respawned on glm-5.3 with the same adversarial brief.
 
+## Log 2026-11-19 (14) — CORRECTION to (11)
+- Correction: the two pywin32 fixes are ALREADY in the repo (landed with M1-006, with a raw-ctypes fallback) — PR #11's body described them as 'hot-patched in the deployed copy only', which was inaccurate; the deployed copy and repo agreed. Verified by reading origin/main:agent/myco_agent/windows_backend.py:284-320. The deployed copy on the VM was also wiped by resets, so it is not recoverable — and does not need to be.
+- The ONE genuine gap was the interpreter: PR #12 switches all bootstrap scripts to `C:\Program Files\LibreOffice\program\python.exe` (pyuno ABI). Coordinator verified independently from a clean reset: `reset.sh live` (10s) -> `deploy-to-vm.sh` foreground -> "DEPLOY OK", ping verified over ssh -L.
+- Lesson: PR bodies' deployment notes are claims like any other; diff before porting.
+
 ## Log 2026-11-19 (13)
 - Hot-patch child #1 stalled: ended its turn 'waiting for a background deploy' with zero commits; its branch equals main. VM was healthy (SSH up, 2 python.exe). Respawned fresh with an explicit rule: never end a turn waiting on a background job; run deploys foreground with hard timeouts; capture the deployed-vs-repo diff FIRST so the deliverable survives a stall.
 - Standing instructions for all VM children: foreground commands with timeouts, deliverable-first ordering, reset the VM when done.
