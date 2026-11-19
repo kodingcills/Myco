@@ -71,18 +71,23 @@ same `Backend`/`AppAdapter` seam it uses for the fake app and the Windows guest 
   Rust-provisioned hosts (the Windows VM path is untouched; M1 keeps owning it).
 - `observe`/`act` map onto the adapter interface (opaque refs, `StaleRefError`,
   three-way action outcome — ADR-0003's shapes, which the Rust runtime adopts
-  verbatim so both layers speak one vocabulary).
+  verbatim so both layers speak one vocabulary). `act` is a transport/actuation
+  primitive only: it reports whether the action landed, never whether the task
+  succeeded. Policy, guarded programs, and verification stay host-side in M1's TS
+  engine (ADR-0001).
 - Verification stays in M1: M1's verifiers read through `observe` (or their own
   channels, e.g. UNO) exactly as today. The Rust runtime never emits verdicts.
 
-**Evidence.** The Rust runtime's `evidence` op reuses M1's evidence schema
+**Evidence.** The Rust runtime's `evidence` op emits M1's evidence schema as-is
 (`schemas/`, `docs/architecture/evidence-schema.md`, M1-012): session-level events are
-emitted as `trace.jsonl` lines conforming to `trace-events.ts`, and the per-session
-summary as a `result.json` RunRecord with `verdict` omitted at the runtime layer
-(verdicts are M1's alone; a runtime session has `steps`, `guardFailure`-shaped errors,
-and `unresolvedState`, never a verdict). Any schema change goes through the shared
-`schemas/` directory with both workstreams' validators updated in the same PR. The
-runtime does not fork the schema and does not invent a parallel format.
+`trace.jsonl` lines in the M1 trace vocabulary, and the per-session summary is a
+`result.json` RunRecord including its weighted partial_scores shape. The runtime layer
+never assigns verdicts — verdicts are M1's alone — so runtime-produced records carry
+no task-success claims; how a verdict-less session record is represented inside the
+RunRecord schema is resolved against the schema owner, not improvised. If the schema
+cannot express something the runtime needs, the runtime proposes the extension as a
+PR against `schemas/` and flags the M1 coordinator; it does not fork the schema and
+does not invent a parallel format.
 
 **Consistency with ADR-0001.** ADR-0001 decided the *core runtime* (state model,
 program runner, verifier orchestration, evidence, eval harness) is TypeScript, with

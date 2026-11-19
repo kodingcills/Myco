@@ -58,3 +58,8 @@ the environment. The Dogfood workstream consumes this.
 - Verified host facts: Rust 1.94.0, QEMU 11.1.3, no /dev/kvm (HVF as expected), 97 GB disk free, Win11 VM scripts are osascript-based (will not touch VM).
 - Wrote docs/architecture/runtime.md (ADR-0011..0013), this file, docs/backlog/runtime.md.
 - Delegated RT-001 prior-art research (deepseek-v4.1-flash).
+- M1 coordinator set three boundary constraints (act = transport primitive; evidence =
+  M1 schema as-is with extensions via flagged PRs against schemas/; myco-win11 owned by
+  M1, hands off without asking). ADR-0012 updated to match verbatim; no conflicts.
+  Coordinator will review the boundary ADR on myco/runtime-v0; RT owes the coordinator
+  the Phase-1 go signal input when the first end-to-end path works.
