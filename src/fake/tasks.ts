@@ -14,10 +14,10 @@ export const setCellFamily: TaskFamily = {
       describe: `set ${ref} to "${String(params.value ?? "")}" and save`,
     };
   },
-  programFor(adapter: AppAdapter, params: Record<string, unknown>): Program {
+  programFor(_adapter: AppAdapter, params: Record<string, unknown>): Program {
     const ref = String(params.cell ?? "B2");
     const value = String(params.value ?? `v${String(params.trial ?? 0)}`);
-    void adapter;
+
     const cellIsBlank = predicate(
       `cell ${ref} is blank before edit`,
       (s) => (findNode(s, ref)?.value ?? "") === "",
@@ -37,12 +37,12 @@ export const setCellFamily: TaskFamily = {
       name: "set-cell-and-save",
       steps: [
         {
-          action: { kind: "click", ref },
+          action: { kind: "click", ref: { nodeId: ref } },
           preconditions: [cellIsBlank],
           postconditions: [targetStillFocused],
         },
         {
-          action: { kind: "setValue", ref, value },
+          action: { kind: "setValue", ref: { nodeId: ref }, value },
           preconditions: [targetStillFocused],
           postconditions: [cellHasValue],
         },

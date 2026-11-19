@@ -1,4 +1,4 @@
-import type { Action } from "./adapter.ts";
+import type { ProgramAction } from "./adapter.ts";
 import type { AppState } from "./state.ts";
 
 export interface StatePredicate {
@@ -16,7 +16,7 @@ export function predicate(
 }
 
 export interface ProgramStep {
-  action: Action;
+  action: ProgramAction;
   preconditions: StatePredicate[];
   postconditions: StatePredicate[];
   /** Marks the step whose side effect persists the work (e.g. save). */
@@ -36,7 +36,7 @@ export interface PredicateResult {
 
 export interface StepRecord {
   step: number;
-  action: Action;
+  action: ProgramAction;
   preconditionResults: PredicateResult[];
   postconditionResults: PredicateResult[];
   stateVersionBefore: number;

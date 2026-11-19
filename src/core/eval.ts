@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AppAdapter } from "./adapter.ts";
 import { type RunRecord, stepFromRecord, writeRunEvidence } from "./evidence.ts";
-import { readCsvSpreadsheet } from "./filepersist.ts";
+import { PersistedStateReadError, readCsvSpreadsheet } from "./filepersist.ts";
 import type { Program } from "./program.ts";
 import { type RunOutcome, runProgram } from "./runner.ts";
 import type { PersistedState, TaskIntent, Verdict, Verifier } from "./verify.ts";
@@ -12,6 +12,8 @@ export interface FaultInjector {
   beforeTrial?(ctx: FaultContext): void;
   /** Runs right before the save step is dispatched. */
   beforeSave?(ctx: FaultContext): void;
+  /** Runs after the program finishes, before the verifier reads persisted state. */
+  afterProgram?(ctx: FaultContext): void;
 }
 
 export interface FaultContext {
@@ -41,6 +43,7 @@ export interface EvalSummary {
   trials: number;
   succeeded: number;
   verified: number;
+  uncertain: number;
   falseSuccesses: number;
   recovered: number;
   results: TrialResult[];
@@ -64,10 +67,23 @@ export async function runEvaluation(config: EvalConfig): Promise<EvalSummary> {
   const succeeded = results.filter((r) => r.programCompleted).length;
   const verified = results.filter((r) => r.verdict?.status === "verified").length;
   const falseSuccesses = results.filter((r) => r.falseSuccess).length;
+  const uncertain = results.filter((r) => r.verdict?.status === "uncertain").length;
   const recovered = results.filter(
-    (r) => !r.programCompleted && r.verdict?.status !== "verified" && !r.falseSuccess,
+    (r) =>
+      !r.programCompleted &&
+      r.verdict?.status !== "verified" &&
+      r.verdict?.status !== "uncertain" &&
+      !r.falseSuccess,
   ).length;
-  return { trials: config.trials, succeeded, verified, falseSuccesses, recovered, results };
+  return {
+    trials: config.trials,
+    succeeded,
+    verified,
+    uncertain,
+    falseSuccesses,
+    recovered,
+    results,
+  };
 }
 
 async function runTrial(config: EvalConfig, trialIndex: number): Promise<TrialResult> {
@@ -122,15 +138,31 @@ async function runTrial(config: EvalConfig, trialIndex: number): Promise<TrialRe
     };
   }
 
+  fault.afterProgram?.(ctx);
+
   let persisted: PersistedState;
+  let verdict: Verdict | undefined;
   try {
     persisted = readCsvSpreadsheet(filePath);
-  } catch {
+  } catch (error) {
+    // ADR-0002: could not look is `uncertain`, never an empty-state refute
+    const detail =
+      error instanceof PersistedStateReadError
+        ? error.message
+        : `unexpected error reading ${filePath}`;
+    verdict = {
+      status: "uncertain",
+      reasons: [`could not look: persisted state unreadable — ${detail}`],
+    };
     persisted = { kind: "csv", filePath, cells: {} };
   }
-  const verdict = config.verifier.verify(persisted, intent);
-  const groundTruthSatisfied = config.family.satisfiedBy(persisted, params);
-  const falseSuccess = verdict.status === "verified" && !groundTruthSatisfied;
+  if (verdict === undefined) {
+    verdict = config.verifier.verify(persisted, intent);
+  }
+  const resolvedVerdict: Verdict = verdict;
+  const couldNotLook = resolvedVerdict.status === "uncertain";
+  const groundTruthSatisfied = couldNotLook ? false : config.family.satisfiedBy(persisted, params);
+  const falseSuccess = resolvedVerdict.status === "verified" && !groundTruthSatisfied;
 
   if (config.runsDir) {
     const record: RunRecord = {
@@ -140,14 +172,14 @@ async function runTrial(config: EvalConfig, trialIndex: number): Promise<TrialRe
       startedAt: new Date().toISOString(),
       steps: outcome.steps.map(stepFromRecord),
       guardFailure: outcome.guardFailure,
-      verdict,
+      verdict: resolvedVerdict,
     };
     writeRunEvidence(config.runsDir, record, {
       outcome: outcome.completed ? "completed" : "guardFailure",
-      verdict,
+      verdict: resolvedVerdict,
       finalSummary: falseSuccess
         ? "FALSE SUCCESS: verifier verified but ground truth unsatisfied"
-        : `verdict=${verdict.status}`,
+        : `verdict=${resolvedVerdict.status}`,
     });
   }
 
@@ -155,7 +187,7 @@ async function runTrial(config: EvalConfig, trialIndex: number): Promise<TrialRe
     trialIndex,
     fault: fault.name,
     programCompleted: outcome.completed,
-    verdict,
+    verdict: resolvedVerdict,
     groundTruthSatisfied,
     falseSuccess,
   };

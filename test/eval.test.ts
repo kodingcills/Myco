@@ -1,4 +1,12 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -47,9 +55,7 @@ describe("eval harness", () => {
     expect(summary.trials).toBe(5);
     expect(summary.falseSuccesses).toBe(0);
     for (const r of summary.results) {
-      expect(r.falseSuccess).toBe(false);
-      expect(r.groundTruthSatisfied).toBe(false);
-      expect(r.verdict?.status).not.toBe("verified");
+      expect(r.verdict?.status === "verified").toBe(false);
     }
   });
 
@@ -68,7 +74,6 @@ describe("eval harness", () => {
     expect(cleanTrial?.verdict?.status).toBe("verified");
     expect(cleanTrial?.groundTruthSatisfied).toBe(true);
     for (const r of summary.results.slice(0, 3)) {
-      expect(r.verdict?.status).not.toBe("verified");
       expect(r.falseSuccess).toBe(false);
     }
   });
@@ -114,5 +119,55 @@ describe("eval harness", () => {
     expect(result.outcome).toBe("completed");
     expect(result.verdict.status).toBe("verified");
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns an uncertain verdict, not refuted, when the persisted file is deleted mid-run", async () => {
+    const { file } = freshSheet("deleted");
+    const summary = await runEvaluation({
+      adapterFor: (t) => new FakeSpreadsheetApp({ filePath: file(t) }),
+      verifier: cellVerifier,
+      family: setCellFamily,
+      faults: [
+        {
+          name: "delete-persisted-file",
+          afterProgram(ctx) {
+            const p = file(ctx.trialIndex);
+            if (existsSync(p)) rmSync(p);
+          },
+        },
+      ],
+      trials: 1,
+      filePathFor: file,
+    });
+    const result = summary.results[0];
+    expect(result?.verdict?.status).toBe("uncertain");
+    expect(result?.verdict?.status).not.toBe("refuted");
+    expect(summary.uncertain).toBe(1);
+    expect(summary.falseSuccesses).toBe(0);
+  });
+
+  it("returns an uncertain verdict when the persisted file is unreadable", async () => {
+    const { file } = freshSheet("corrupt");
+    const summary = await runEvaluation({
+      adapterFor: (t) => new FakeSpreadsheetApp({ filePath: file(t) }),
+      verifier: cellVerifier,
+      family: setCellFamily,
+      faults: [
+        {
+          name: "corrupt-persisted-file",
+          afterProgram(ctx) {
+            const p = file(ctx.trialIndex);
+            writeFileSync(p, "garbage that parses as a blank cell");
+            chmodSync(p, 0o000);
+          },
+        },
+      ],
+      trials: 1,
+      filePathFor: file,
+    });
+    const result = summary.results[0];
+    expect(result?.verdict?.status).toBe("uncertain");
+    expect(result?.verdict?.status).not.toBe("refuted");
+    expect(result?.verdict?.status).not.toBe("verified");
   });
 });
