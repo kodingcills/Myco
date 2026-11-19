@@ -103,7 +103,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   yields StaleRefError (test).
 
 ### RT-008 (TIF-36) act: launch, click, type, key
-- **status:** pending
+- **status:** done (2026-11-19, RT owner) — pending PR + independent review. Live test PASS: `launch` → `delivered_verified` (process alive after spawn); `typeText` → `delivered_verified` with the typed string confirmed in the app's own state file (`{"entry_text":"myco-act-probe"}`) and via the AT-SPI Text interface; unresolvable ref → `failed` with reason, never a guess. Refs bound to the observation's state version; stale version → `stale_ref` refusal.
 - **owner:** build
 - **blocked_by:** RT-007
 - **description:** Implement `act` as a closed action union (launch / click(ref) /

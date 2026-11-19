@@ -238,6 +238,26 @@ impl Channel {
         }
     }
 
+    /// `act`: perform one action and return the raw three-way outcome (RT-008).
+    /// The outcome envelope is returned even for `failed`, so callers can report
+    /// why instead of losing it to an error.
+    pub fn act(
+        &mut self,
+        action: serde_json::Value,
+        state_version: u64,
+    ) -> Result<serde_json::Value, TransportError> {
+        let resp = self.roundtrip(serde_json::json!({
+            "op": "act",
+            "action": action,
+            "state_version": state_version,
+        }))?;
+        if resp.get("op").and_then(|v| v.as_str()) == Some("act") {
+            Ok(resp)
+        } else {
+            Err(TransportError::Protocol(resp.to_string()))
+        }
+    }
+
     /// `shutdown`: clean agent exit (NOT a VM poweroff).
     pub fn shutdown(mut self) -> Result<(), TransportError> {
         let resp = self.roundtrip(serde_json::json!({"op": "shutdown"}))?;

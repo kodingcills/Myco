@@ -17,7 +17,7 @@ pub const MAX_NODES: usize = 2000;
 /// Hard cap on traversal depth.
 pub const MAX_DEPTH: usize = 24;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Node {
     /// Opaque ref: `n<index>` within this observation. Valid only for `state_version`.
     pub r#ref: String,
