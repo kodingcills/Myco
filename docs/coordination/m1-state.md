@@ -113,6 +113,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 
 Obligations:
 - Review runtime owner's boundary ADR when it lands on myco/runtime-v0; flag conflicts with ADR-0001 / M1-012 schema to the outer loop.
+  - 2026-11-19: REVIEWED docs/architecture/runtime.md @ 55bd21c (ADR-0011/0012/0013) — ACCEPTED, no conflicts. Answered its open question as schema owner: verdict-less session records become a `recordKind` discriminator (run: verdict required; session: verdict forbidden) via a schema PR the runtime owner files; no verdict-less records under the current schema meanwhile.
 - On runtime first-path-works: message dogfood owner to start Phase 1.
 - myco-win11 is M1-owned; other owners must ask before touching it.
 - RAM watch: Windows VM 8 GB of 24 GB; Linux VM must stay small and be shut down when idle. Check memory_pressure when both VMs may be up.
