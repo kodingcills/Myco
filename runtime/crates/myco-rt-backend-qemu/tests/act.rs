@@ -4,7 +4,7 @@
 use myco_rt_backend_qemu::{QemuConfig, QemuLinuxBackend};
 use myco_rt_core::ops::{Action, ActionOutcome};
 use myco_rt_core::state::ElementRef;
-use myco_rt_core::{Backend, StateVersion};
+use myco_rt_core::Backend;
 use std::path::PathBuf;
 
 fn find_ref(obs: &myco_rt_core::Observation, name: &str) -> Option<ElementRef> {
@@ -42,7 +42,7 @@ fn live_act_launch_type_and_stale_ref() {
             Err(e) => { eprintln!("waiting for gui: {e}"); std::thread::sleep(std::time::Duration::from_secs(3)); }
         }
     }
-    let obs = obs.expect("observe never ready");
+    obs.expect("observe never ready");
 
     // 1. launch an app that exists in the guest — verified by the process
     //    staying alive (a binary that execs and dies is caught here).
