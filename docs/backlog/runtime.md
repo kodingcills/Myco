@@ -10,7 +10,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 ---
 
 ### RT-001 Prior-art evaluation: xa11y, computer-use-rs, MS Hybrid Computer Use
-- **status:** in progress (delegated, swarm)
+- **status:** done (2026-11-19; docs/research/runtime-prior-art.md, all claims verified against pinned-commit clones + crates.io/GitHub APIs)
 - **owner:** swarm
 - **blocked_by:** none
 - **description:** Evaluate the three named projects plus a comparative pass over
@@ -21,6 +21,11 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** report committed with sources and access dates; unverifiable claims
   marked [INFERENCE]; explicit build/adopt/wrap call per project with justification;
   recommendation for the in-guest observation/actuation stack feeding RT-003.
+- **outcome:** ADOPT xa11y 0.16.1 (only published MIT Rust crate with AT-SPI reads +
+  structural actions + XTest/uinput input); BUILD the rest; HCU = contract reference
+  (input_emitted/effect_unknown, layout lease, aN/wN/rN refs); cua-vmm = reset concept
+  source; agent-desktop = post-mortem source (read-back verification mandatory).
+  Decisions recorded in ADR-0014.
 
 ### RT-002 ADRs: host backend, M1 boundary, API surface
 - **status:** done (2026-11-19, coordinator)
@@ -33,15 +38,18 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** ADRs committed; consequential ones flagged to outer loop;
   docs/coordination/runtime-state.md records provided/needed interfaces.
 
-### RT-003 In-guest stack: display server, AT-SPI, input injection
+### RT-003 In-guest stack: provisioning for X11 + AT-SPI + xa11y
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-001, RT-002
-- **description:** Pick and implement the guest-side stack per the RT-001
-  recommendation: display (Xvfb vs minimal Wayland compositor), accessibility bus
-  (AT-SPI2), input injection path (XTEST / uinput / at-spi actions), and the thin
-  guest helper if the control channel needs one. Pinned base image (Ubuntu 24.04
-  ARM64 cloud image or Debian; SHA-256 recorded in-repo).
+- **description:** Decisions made (ADR-0014): X11 session on Xvfb (Wayland's portal
+  screenshot prompt is a hard blocker), AT-SPI2 bus, xa11y 0.16.1 as the in-guest
+  a11y/input layer, Ubuntu Server 24.04 LTS ARM64 cloud image with SHA-256 pinned
+  in-repo. Implement: scripted download + verification of the base image, cloud-init
+  seed installing xvfb, at-spi2-core, a minimal test GUI app, and starting Xvfb +
+  the AT-SPI bus at boot. Prove it: host-side smoke script (SSH is acceptable for
+  this proof; the op channel is RT-004) showing an AT-SPI tree read and a synthetic
+  key/click landing in the guest.
 - **acceptance:** a scripted cloud-init (or equivalent) provisioning path produces a
   guest where AT-SPI tree reads and synthetic input work; proven by a host-side smoke
   script; image SHA-256 and package pins committed.
