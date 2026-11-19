@@ -85,3 +85,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 
 ## Log 2026-11-19 (3)
 - M1-005 (guest agent) delivered as PR #4 (head 4f4608f): NDJSON loopback server, token auth, 10 ops, WindowsBackend/FakeBackend split, InteractiveToken bootstrap XML, 20/20 pytest, 4/4 CI green. Independent verifier (kimi-k3) spawned.
+
+## Log 2026-11-19 (4)
+- PR #4 (M1-005 guest agent) VERIFIED at 4f4608f: protocol conformant (10/10 ops), token enforced on every op over real sockets, loopback-only, agent-thinness clean, bootstrap XML correct, stress attack survived (backlog RSTs only). Coordinator applied the 4 nice-to-fixes (session_info mislabel, request_queue_size=64, ps1 dedupe, README path semantics) as 709c0ad; pytest 20/20 locally; CI 4/4 green on new head; MERGED. Note: windows_backend.py session_info fix is untestable off-Windows — first real-VM run must validate it (part of M1-008).
+- M1-005 marked done. Next delegatable: M1-010 fault injectors (now unblocked: M1-001 + M1-005 merged).
