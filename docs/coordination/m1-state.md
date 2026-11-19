@@ -13,6 +13,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - Build: cheaperinference/glm-5.3. Judgment: cheaperinference/kimi-k3. Swarm/research: cheaperinference/deepseek-v4.1-flash. All with thinking:auto.
 
 ## Active children
+(Point-in-time log; rows are stamped when written and not rewritten retroactively. Current as of 2026-11-18.)
 | Child | Task | Model | Status |
 |---|---|---|---|
 | Research: eval frameworks | OSWorld/OSWorld2, OpenComputer verifiers, screenshot baselines (OpenAdapt, Agent S, UI-TARS, OpenCUA) | deepseek-v4.1-flash | done → docs/research/eval-frameworks.md (committed) |
@@ -21,7 +22,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 | Build: core runtime skeleton | TS toolchain, core interfaces, fake app, tests, CI | glm-5.3 | done → PR #1, head c85b568; CI + independent review pending |
 | Verify: PR #1 | adversarial review | kimi-k3 | done → REJECTED: uncertain collapse, bare-ok ActResult, fake ref versioning (ADR-0002/0003). Adversarial attack could NOT fool the harness. |
 | Fix: PR #1 | must-fixes 1-3 + lockfile on feat/m1-core-runtime-skeleton | glm-5.3 | running |
-| Verify: PR #2 | docs foundation review | kimi-k3 | running |
+| Verify: PR #2 | docs foundation review | kimi-k3 | done → VERIFIED; nice-to-fixes applied (Cua date note, 2 citation fixes, snapshot header) |
 
 ## Decisions so far
 - Issue tracker: Linear team TIF, owned by outer loop; repo-local canonical backlog at docs/backlog/m1.md. (setup-matt-pocock-skills)

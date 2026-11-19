@@ -6,7 +6,9 @@ build the first adapter on.
 
 Method: every claim below was checked against the cloned repository, the published
 package index, the vendor download server, or the vendor documentation. Where a claim
-could not be verified it is marked `[UNVERIFIED]`. Repo state was read on 2026-11-18.
+could not be verified it is marked `[UNVERIFIED]`. Repo state was read on 2026-11-18
+(local time); "pushed" dates below are API-reported UTC timestamps and can read one
+day later than the local read date (that is why trycua/cua shows 2026-11-19).
 
 Repos cloned and read at these commits:
 
