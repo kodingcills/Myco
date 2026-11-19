@@ -9,7 +9,8 @@
  * seam is {@link FixtureConverter}, which the Windows path implements.
  */
 
-/** FNV-1a 32-bit string hash. Stable across runs and processes. */
+/** FNV-1a 32-bit string hash. Stable across runs and processes, but not
+ * collision-proof; eval seed lists are curated to avoid collisions. */
 export function hash32(input: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {

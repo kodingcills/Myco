@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -127,6 +127,7 @@ describe("calc-record-edit guarded program against the fake app", () => {
     const seed = sampleSeeds[0] ?? "alpha";
     const filePath = tmpCsv("invalid-row");
     const app = fakeForSeed(seed, filePath);
+    const fileBefore = readFileSync(filePath, "utf8"); // fixture bytes before the run
     const dataRows = dataRowsForSeed(seed);
     const params: CalcRecordEditParams = {
       fixtureSeed: seed,
@@ -138,8 +139,8 @@ describe("calc-record-edit guarded program against the fake app", () => {
     expect(outcome.completed).toBe(false);
     expect(outcome.guardFailure?.phase).toBe("precondition");
     expect(outcome.guardFailure?.observed).toContain("invalid target");
-    // nothing was acted on: the file is untouched
-    expect(readCsvSpreadsheet(filePath).cells).toEqual(readCsvSpreadsheet(filePath).cells);
+    // nothing was acted on: the file is byte-identical to before the run
+    expect(readFileSync(filePath, "utf8")).toBe(fileBefore);
   });
 
   it("aborts for an unknown column name", async () => {
