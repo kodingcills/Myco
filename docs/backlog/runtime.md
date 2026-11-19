@@ -91,7 +91,8 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   two concurrent-create attempts respect the cap.
 
 ### RT-007 (TIF-35) observe: AT-SPI tree + screenshot + process/window info
-- **status:** pending
+- **status:** done @ c5db97d (2026-11-19, RT owner). Live test PASS: 4 AT-SPI nodes (GTK app → window → label), named window `MycoGtkSanity`, valid PNG (magic verified), 116 processes, introspection null-by-default, state_version advancing. Independent adversarial review QUEUED but not obtained (delegate API returned `parent_not_active` twice) — merge gate still open; work sits on the branch only.
+- **findings:** (a) xa11y links `libxkbcommon`, so the musl static cross-build fails at link time → native in-guest build script; (b) sshd exports `DBUS_SESSION_BUS_ADDRESS` for the login session whose desktop is empty, so the agent MUST override from `gui.env` — the actual cause of a 0-node tree; (c) per-uid AT-SPI registries mean the GUI session must run as the agent's uid; (d) seed had lost the `myco-gui-session` write_files path header (fresh overlays were missing the session script).
 - **owner:** build
 - **blocked_by:** RT-006
 - **description:** Implement `observe`: accessibility tree with opaque refs and

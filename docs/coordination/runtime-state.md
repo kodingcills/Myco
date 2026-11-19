@@ -128,3 +128,12 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   runtime read-retry-once on parse failure + explicit channel-absence reporting.
   Actuation: global XTEST with real focus; send_event prohibited. RT-007 implements
   the observe merge.
+- RT-007 done @ c5db97d, live PASS (4 nodes, named window, valid PNG, 116 procs,
+  introspection tri-state, advancing version). Four root causes found and fixed, all
+  documented in the backlog entry: xkbcommon blocks musl cross-build (native in-guest
+  build now the supported path); sshd's login-session bus is empty so gui.env must
+  OVERRIDE inherited env; per-uid AT-SPI registries require the GUI session to run as
+  the agent's uid (service User=myco + RuntimeDirectory=/run/myco); seed had lost the
+  myco-gui-session write_files header. Guest shut down; no qemu running.
+- Independent review of RT-007 BLOCKED on tooling: delegate_task returns
+  `parent_not_active` (twice). Not merging; branch-only. Re-attempt next turn.
