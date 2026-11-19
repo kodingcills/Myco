@@ -96,7 +96,13 @@ class TodoApp:
             "status_text": self.status.cget("text"),
             "entry_text": self.entry.get(),
         }
-        Path(self._state_file).write_text(json.dumps(state), encoding="utf-8")
+        # ADR-0016 contract: the file is either absent or complete-and-valid —
+        # never partial, never empty. Write to a temp sibling in the same
+        # directory, then atomic rename over the target.
+        target = Path(self._state_file)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        os.replace(tmp, target)
 
     def add_item(self) -> None:
         text = self.entry.get().strip()

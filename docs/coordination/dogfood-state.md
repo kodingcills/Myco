@@ -70,6 +70,16 @@ search, workflow compilation, multi-OS support beyond Linux ARM64, product UI.
   Consequence: dogfood makes no arbitrary-Tk-app observation claim in Phase 1;
   a generic Tk ATK bridge is out of scope for both workstreams.
 
+- **2026-11-19 — REQ-03 channel atomicity (ADR-0016, both-sides).** Publisher
+  MUST write temp-sibling + rename (`os.replace`) so the state file is either
+  absent or complete-and-valid — a torn read that happens to parse is worse
+  than one that fails, and the runtime can't distinguish partial-valid JSON
+  from complete. Runtime ALSO retries once (50ms) on parse failure and reports
+  `{unavailable: "parse: ..."}` on a second failure — defense in depth, not a
+  substitute. Env mapping: app publishes to `$MYCO_TODO_STATE_FILE`; runtime
+  reads `$MYCO_INTROSPECTION_FILE` and maps at the session layer. Observation's
+  `introspection` field is tri-state: null (unset) | record | {unavailable}.
+
 ## Status
 Phase 0 complete: PR #8 merged to main (2026-11-19, head 3ffcceb; VERIFIED by
 independent kimi-k3 review at a491f71 + docs-only hardening delta, CI 4/4 green).
