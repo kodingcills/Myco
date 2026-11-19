@@ -142,3 +142,16 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
 - Dogfood: ADR-0016 atomic publish landed (0266a83, temp + os.replace); mapping
   MYCO_TODO_STATE_FILE -> MYCO_INTROSPECTION_FILE confirmed; no further asks; ready
   for RT-011.
+
+## Log 2026-11-19 (RT-008)
+- PR #17 (RT-001..RT-007) MERGED after two adversarial review rounds: round 1 found
+  6 must-fixes (positional-ref ambiguity, unbounded D-Bus reads, empty-desktop-as-
+  success, destroy-after-failed-reset, unwired introspection), round 2 found one new
+  defect introduced by the fix (window nodes aliasing DFS paths). Final PASS, CI green,
+  merge commit bc41b0e.
+- RT-008 act implemented on myco/runtime-act: launch/click/typeText/keyPress, three-way
+  outcome, refs bound to the observation's state version, read-back via AT-SPI Text
+  (GTK entries expose Text, not Value) plus app state files. Live: launch verified,
+  typeText verified with exact text in the app's state file, unresolvable ref fails.
+- Guest-side finding: typing immediately after focus drops leading characters on GTK;
+  a 250 ms settle after focus fixes it.
