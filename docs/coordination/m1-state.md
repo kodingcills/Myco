@@ -128,3 +128,7 @@ Obligations:
 
 ## Log 2026-11-19 (9)
 - PR #10 (M1-006 UIA adapter) delivered with real-VM evidence: 198-element tree after MSAA wake, A1 typed via Name Box and persisted, 61KB screenshot, bounded 0.1s timeout on killed app. VM-discovered constraints now encoded: IUIAutomation2 via direct CoCreateInstance (QI refused), timeouts as property setters in comtypes 1.5, per-thread COM init, descriptor fallback (LO reports empty RuntimeIds via proxy), ValuePattern.SetValue never commits (keyboard sequence instead). Child also found the coordinator's session_info nit-fix was broken on real Windows (win32ts.GetProcessWindowStation doesn't exist; fixed to win32service). Independent verifier re-running all VM evidence itself.
+
+## Log 2026-11-19 (10)
+- Discovery: reset.sh live restores clean-base-live, which PREDATES the myco-agent install — every reset wipes the deployment. Integration child blocked on this; answered: redeploy and proceed.
+- Decision (VM owner): after the integration run proves out, create a NEW live snapshot `m1-agent-live` (vm.sh snapshot; never delete/modify clean-base*) with the agent installed+running, and point the eval harness reset at it. Recorded here so a fresh coordinator does it if I'm interrupted.
