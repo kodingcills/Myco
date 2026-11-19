@@ -92,3 +92,8 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 
 ## Log 2026-11-19 (5)
 - PR #5 (M1-009) verifier: content PASS (30 distinct deterministic sets, host-only ground truth confirmed by code read, 4/4 attacks failed, CI green) but REJECTED on process: branch not rebased onto main (vendored runtime pollutes diff), one tautological no-write test, close-step comment/guard mismatch. Fix child delegated (rebase + 2 code fixes + FNV collision note). Parked for real-adapter phase: strengthen locate beyond pristine-value equality (row/column header identity) — belongs to M1-006/M1-013 integration.
+
+## Log 2026-11-19 (6)
+- PR #6 (M1-012) verified at db55655 and merged. Merge blocker: repo OAuth token lacks `workflow` scope (GitHub refuses API merges touching ci.yml). Worked around by folding schema-validate into `pnpm test`. Durable fix = Tiffany runs `gh auth refresh -s workflow`.
+- M1-010 child stream died post-push; work recovered from PR #7, conflict resolved by coordinator, VERIFIED at 7d9b080 (0 false successes in 11/11 corrupted configs; 65/65 tests), merged. Parked nice-to-fix: fake app setSaveDelay 60s timer could use a dispose().
+- VM-gated items remain blocked on the UTM Automation Allow click (TCC dialog on the Mac's screen; re-trigger with one vm.sh status call if dismissed).
