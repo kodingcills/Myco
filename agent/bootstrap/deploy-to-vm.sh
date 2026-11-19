@@ -41,28 +41,18 @@ chmod 600 "$TOKEN_FILE"
 
 SSH() { ssh -F "$VM_SSH_CONFIG" "$@"; }
 SCP() { scp -q -F "$VM_SSH_CONFIG" "$@"; }
-
 echo "==> copying agent tree to guest ($GUEST_AGENT_DIR)"
-SSH "$VM_SSH_HOST" 'powershell -Command "New-Item -ItemType Directory -Force -Path C:/Program\ Files/Myco/agent | Out-Null"'
+SCP "$AGENT_SRC/bootstrap/guest-deploy.ps1" "$VM_SSH_HOST:C:/Users/myco/guest-deploy.ps1"
+SSH "$VM_SSH_HOST" 'powershell -ExecutionPolicy Bypass -File C:\Users\myco\guest-deploy.ps1 -Stage prepare'
 SCP -r "$AGENT_SRC/myco_agent" "$AGENT_SRC/bootstrap" "$AGENT_SRC/pyproject.toml" \
     "$VM_SSH_HOST:$GUEST_AGENT_DIR/"
 
 echo "==> writing token file ($GUEST_TOKEN_PATH)"
-SSH "$VM_SSH_HOST" "powershell -Command \"Copy-Item '$GUEST_TOKEN_POSIX.tmp' '$GUEST_TOKEN_POSIX' -Force -ErrorAction SilentlyContinue\"" || true
 SCP "$TOKEN_FILE" "$VM_SSH_HOST:$GUEST_TOKEN_POSIX"
 
-echo "==> writing run-agent.cmd and registering the MycoAgent task"
-# run-agent.cmd: absolute python, module run, windows backend, token file
-CMD_FILE="$(mktemp --suffix=.cmd)"
-cat > "$CMD_FILE" <<EOF
-$PYEXE -m myco_agent --host 127.0.0.1 --port $PORT --token-file "$GUEST_TOKEN_PATH" --backend windows
-EOF
-SCP "$CMD_FILE" "$VM_SSH_HOST:$GUEST_AGENT_DIR/run-agent.cmd"
-rm -f "$CMD_FILE"
-SSH "$VM_SSH_HOST" 'powershell -Command "schtasks /Create /TN MycoAgent /XML \"C:\Program Files\Myco\agent\bootstrap\MycoAgent.xml\" /F; if ($LASTEXITCODE -ne 0) { exit 1 }"'
+echo "==> registering MycoAgent task and starting it in the interactive session"
+SSH "$VM_SSH_HOST" 'powershell -ExecutionPolicy Bypass -File C:\Users\myco\guest-deploy.ps1 -Stage register'
 
-echo "==> stopping any stale agent and starting MycoAgent (interactive session)"
-SSH "$VM_SSH_HOST" "powershell -Command \"schtasks /End /TN MycoAgent 2>\$null; schtasks /Run /TN MycoAgent; if (\$LASTEXITCODE -ne 0) { exit 1 }\""
 
 echo "==> verifying ping over ssh -L $PORT:127.0.0.1:$PORT"
 TUNNEL_LOG="$(mktemp)"
@@ -74,7 +64,7 @@ OK=""
 for _ in $(seq 1 30); do
   PONG="$(printf '{"id":1,"token":"%s","op":"ping","params":{}}\n' "$TOKEN" \
       | nc -w 5 127.0.0.1 "$PORT" 2>/dev/null || true)"
-  if echo "$PONG" | grep -q '"ok":true'; then
+  if echo "$PONG" | grep -q '"ok": *true'; then
     OK=1
     break
   fi

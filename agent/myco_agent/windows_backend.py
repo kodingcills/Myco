@@ -95,10 +95,18 @@ def _user_object_name(handle):
     import ctypes.wintypes as wintypes
 
     u32 = ctypes.windll.user32
+    u32.GetUserObjectInformationW.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, wintypes.LPWSTR,
+        wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+    ]
+    u32.GetUserObjectInformationW.restype = wintypes.BOOL
     length = wintypes.DWORD()
-    u32.GetUserObjectInformationW(handle, 1, None, 0, ctypes.byref(length))  # 1 = UOI_NAME
+    if not u32.GetUserObjectInformationW(handle, 1, None, 0, ctypes.byref(length)):
+        raise OpError("OP_FAILED", "GetUserObjectInformationW probe failed")
     buf = ctypes.create_unicode_buffer(length.value // 2 + 1)
-    if not u32.GetUserObjectInformationW(handle, 1, buf, length.value, ctypes.byref(length)):
+    if not u32.GetUserObjectInformationW(
+        handle, 1, buf, length.value, ctypes.byref(length)
+    ):
         raise OpError("OP_FAILED", "GetUserObjectInformationW failed")
     return buf.value
 
@@ -112,6 +120,13 @@ def _is_timeout_error(exc):
     if isinstance(getattr(hresult, "value", None), int):
         hresult = hresult.value
     if isinstance(hresult, int) and hresult & 0xFFFFFFFF == 0x80131505:
+        return True
+    # 0x80040201: "event was unable to invoke any subscribers" — what a
+    # dead/killed provider returns instead of a real timeout (VM-verified)
+    hresult = getattr(exc, "hresult", None)
+    if isinstance(getattr(hresult, "value", None), int):
+        hresult = hresult.value
+    if isinstance(hresult, int) and hresult & 0xFFFFFFFF == 0x80040201:
         return True
     return "timeout" in str(exc).lower()
 
@@ -127,26 +142,34 @@ class WindowsBackend:
     # ----- UIA plumbing -----
 
     def _uia_thread(self):
-        """uiautomation's COM client scoped to this thread, upgraded to
-        IUIAutomation2 with both timeouts set before any query. Sits inside
-        UIAutomationInitializerInThread, which CoInitializes COM per thread.
+        """The thread-scoped IUIAutomation2 client used for every UIA op in
+        this thread, with SetConnectionTimeout/SetTransactionTimeout applied
+        before any query (ADR-0003). COM is initialized lazily once per agent
+        thread and kept: uiautomation caches COM objects on a process-wide
+        singleton, so tearing COM down between requests would poison them.
 
-        The timeouts are re-read from env each call, so config changes after
-        agent start are honoured on every thread.
+        The timeouts are re-read from env and re-applied whenever they change,
+        so config changes after agent start are honoured on every thread.
         """
         import uiautomation as auto
-        from comtypes.gen.UIAutomationClient import IUIAutomation2
+        import comtypes.client
+        from comtypes.gen.UIAutomationClient import CUIAutomation8, IUIAutomation2
 
-        with auto.UIAutomationInitializerInThread():
-            client = auto._AutomationClient.instance().IUIAutomation.QueryInterface(
-                IUIAutomation2
-            )
-            client.SetConnectionTimeout(_connect_timeout_ms())
-            client.SetTransactionTimeout(_transaction_timeout_ms())
-            try:
-                yield client
-            finally:
-                pass  # context manager uninitializes COM for this thread
+        state = self._thread_state
+        client = getattr(state, "uia2", None)
+        conf = (_connect_timeout_ms(), _transaction_timeout_ms())
+        if client is None or getattr(state, "uia_conf", None) != conf:
+            auto.InitializeUIAutomationInCurrentThread()
+            # Create CUIAutomation8 directly on IUIAutomation2: QueryInterface
+            # from an IUIAutomation pointer is refused on this build (verified
+            # on the live VM), but CoCreateInstance with IUIAutomation2 works.
+            client = comtypes.client.CreateObject(CUIAutomation8, interface=IUIAutomation2)
+            # comtypes 1.5 exposes the setters as property assignment.
+            client.ConnectionTimeout = conf[0]
+            client.TransactionTimeout = conf[1]
+            state.uia2 = client
+            state.uia_conf = conf
+        return client
 
     def _uia_call(self, fn, what):
         """Run fn(client) inside the timeout-configured thread UIA client;
@@ -156,29 +179,24 @@ class WindowsBackend:
         import time
 
         start = time.monotonic()
-        gen = self._uia_thread()
         try:
-            client = next(gen)
-            try:
-                return fn(client)
-            except OpError:
-                raise
-            except Exception as exc:
-                elapsed = time.monotonic() - start
-                budget = (_connect_timeout_ms() + _transaction_timeout_ms()) / 1000.0
-                if _is_timeout_error(exc) or elapsed >= budget * 0.5:
-                    raise OpError(
-                        "OP_FAILED",
-                        "UIA %s: TIMEOUT after %.1fs: %s: %s"
-                        % (what, elapsed, type(exc).__name__, exc),
-                    ) from exc
+            return fn(self._uia_thread())
+        except OpError:
+            raise
+        except Exception as exc:
+            elapsed = time.monotonic() - start
+            budget = (_connect_timeout_ms() + _transaction_timeout_ms()) / 1000.0
+            if _is_timeout_error(exc) or elapsed >= budget * 0.5:
                 raise OpError(
                     "OP_FAILED",
-                    "UIA %s failed after %.1fs: %s: %s"
+                    "UIA %s: TIMEOUT after %.1fs: %s: %s"
                     % (what, elapsed, type(exc).__name__, exc),
                 ) from exc
-        finally:
-            gen.close()
+            raise OpError(
+                "OP_FAILED",
+                "UIA %s failed after %.1fs: %s: %s"
+                % (what, elapsed, type(exc).__name__, exc),
+            ) from exc
 
     # ----- MSAA wake + foreground (guest findings 1 & 2) -----
 
@@ -249,15 +267,31 @@ class WindowsBackend:
         session_id = wintypes.DWORD()
         if not ctypes.windll.kernel32.ProcessIdToSessionId(pid, ctypes.byref(session_id)):
             raise OpError("OP_FAILED", "ProcessIdToSessionId failed")
-        u32 = ctypes.windll.user32
-        station = u32.GetProcessWindowStation()
-        desktop = u32.GetThreadDesktop(ctypes.windll.kernel32.GetCurrentThreadId())
+        k32 = ctypes.windll.kernel32
+        tid = k32.GetCurrentThreadId()
         computer = os.environ.get("COMPUTERNAME", "")
         user = os.environ.get("USERNAME", "")
+        try:
+            # pywin32 (verified on the live VM): UOI_NAME via win32service.
+            # The coordinator's original win32ts path used APIs that do not
+            # exist in pywin32 (GetProcessWindowStation is in win32service,
+            # not win32ts; win32process has no GetCurrentThreadId).
+            import win32con
+            import win32service
+
+            station = win32service.GetProcessWindowStation()
+            station_name = win32service.GetUserObjectInformation(station, win32con.UOI_NAME)
+            desktop = win32service.GetThreadDesktop(tid)
+            desktop_name = win32service.GetUserObjectInformation(desktop, win32con.UOI_NAME)
+        except (ImportError, AttributeError):
+            # raw fallback for environments without pywin32
+            u32 = ctypes.windll.user32
+            station_name = _user_object_name(u32.GetProcessWindowStation())
+            desktop_name = _user_object_name(u32.GetThreadDesktop(tid))
         return {
             "session_id": session_id.value,
-            "window_station": _user_object_name(station),
-            "desktop": _user_object_name(desktop),
+            "window_station": station_name,
+            "desktop": desktop_name,
             "user": "%s\\%s" % (computer, user) if computer and user else user,
         }
 
@@ -293,10 +327,14 @@ class WindowsBackend:
             matches = self._find_windows(pid=pid, title=title)
         windows = []
         for hwnd, _wpid, _wtitle in matches[:MAX_WINDOWS]:
-            self._wake_msaa(hwnd)  # LibreOffice bridge wake; no-op elsewhere
-            windows.append(
-                self._uia_call(lambda h=hwnd: self._window_node(h, depth), "uia_tree")
-            )
+            def run(_client, h=hwnd):
+                # UIA client first: an MSAA wake before the thread's COM
+                # client exists poisons later UIA calls (verified on the VM:
+                # COMError 0x80040201 "event unable to invoke subscribers").
+                self._wake_msaa(h)
+                return self._window_node(h, depth)
+
+            windows.append(self._uia_call(run, "uia_tree"))
         return {"windows": windows}
 
     def _window_node(self, hwnd, depth):
@@ -314,6 +352,7 @@ class WindowsBackend:
             rid = ctrl.GetRuntimeId()
             node = {
                 "pid": int(ctrl.ProcessId),
+                "hwnd": int(ctrl.NativeWindowHandle),
                 "title": ctrl.Name or "",
                 "name": ctrl.Name or "",
                 "control_type": ctrl.ControlTypeName,
@@ -334,22 +373,44 @@ class WindowsBackend:
         return node
 
     def _control_by_runtime_id(self, runtime_id):
-        """Find the element whose RuntimeId matches exactly across visible
-        top-level windows' subtrees. Returns (control, top_hwnd)."""
+        """Find an element by runtime_id OR, when the runtime id is empty
+        (LibreOffice's MSAA->UIA proxy reports no RuntimeIds at all — verified
+        on the VM), by a descriptor fallback: runtime_id of shape
+        [window_hwnd, control_type, name] or {"hwnd":..., "control_type":...,
+        "name":...} passed as the first element. Returns (control, top_hwnd).
+        """
         import uiautomation as auto
 
-        rid = [int(x) for x in runtime_id]
+        rid = [int(x) if isinstance(x, (int, float)) else x for x in runtime_id]
         searched = [0]
+
+        descriptor = None
+        if rid and isinstance(rid[0], str):
+            try:
+                import json
+
+                descriptor = json.loads(rid[0])
+            except ValueError:
+                pass
+
+        def match(ctrl):
+            if descriptor is not None:
+                if ctrl.ControlTypeName != descriptor.get("control_type"):
+                    return False
+                if descriptor.get("name") and (ctrl.Name or "") != descriptor["name"]:
+                    return False
+                return True
+            try:
+                return [int(x) for x in ctrl.GetRuntimeId()] == rid
+            except Exception:
+                return False  # dead element mid-walk: non-match, keep walking
 
         def walk(ctrl, remaining):
             searched[0] += 1
             if searched[0] > MAX_ELEMENTS * 4:
                 return None
-            try:
-                if [int(x) for x in ctrl.GetRuntimeId()] == rid:
-                    return ctrl
-            except Exception:
-                pass  # dead element mid-walk: treat as non-match, keep walking
+            if match(ctrl):
+                return ctrl
             if remaining <= 0:
                 return None
             for child in ctrl.GetChildren():
@@ -358,7 +419,10 @@ class WindowsBackend:
                     return found
             return None
 
-        for hwnd, _wpid, _wtitle in [w[:3] for w in _top_windows() if w[2]][:MAX_WINDOWS]:
+        tops = [w[:3] for w in _top_windows() if w[2]][:MAX_WINDOWS]
+        if descriptor is not None and descriptor.get("hwnd"):
+            tops = [(int(descriptor["hwnd"]), 0, "")]
+        for hwnd, _wpid, _wtitle in tops:
             control = auto.ControlFromHandle(hwnd)
             if control is None:
                 continue
@@ -368,11 +432,24 @@ class WindowsBackend:
         raise OpError(
             "OP_FAILED",
             "control not found for runtime_id %r (searched %d elements)"
-            % (rid, searched[0]),
+            % (runtime_id, searched[0]),
         )
 
-    def uia_invoke(self, runtime_id, action, value=None):
+    def uia_invoke(self, runtime_id, action, value=None, keys=None, cell=None):
+        """Act on a control. Extras beyond the stock three actions (needed
+        because LibreOffice's MSAA->UIA proxy is lossy):
+        - keys: raw SendKeys sequence delivered to the window after the
+          control is focused (e.g. "{Ctrl}s" to save).
+        - cell + set_value: the smoke-proven Calc flow — focus the Name Box,
+          type "<cell>{Enter}", then "<value>{Enter}" — which selects the cell
+          and commits the value in one uninterrupted sequence. Two separate
+          invokes cannot do it: the second Name Box click steals focus back
+          and the value lands in the box, not the cell (verified on the VM).
+        """
+
         def run(_client):
+            import time
+
             import uiautomation as auto
 
             control, hwnd = self._control_by_runtime_id(runtime_id)
@@ -387,18 +464,36 @@ class WindowsBackend:
                 control.Invoke()
             elif action == "select":
                 control.Select()
-            else:  # set_value
+            elif action == "set_value":
                 if value is None:
                     raise OpError("BAD_REQUEST", "set_value requires value")
-                try:
-                    control.GetValuePattern().SetValue(value)
-                except Exception:
-                    # No ValuePattern through the MSAA->UIA bridge (typical for
-                    # the LibreOffice Name Box): deliver by focus + keyboard.
-                    control.SetFocus()
+                if cell is not None:
+                    # smoke_calc_uia.py's exact sequence against the Name Box
+                    control.Click(simulateMove=False)
+                    time.sleep(0.3)
+                    auto.SendKeys("{Ctrl}a", waitTime=0.1)
+                    auto.SendKeys(
+                        "%s{Enter}" % _sendkeys_escape(cell), waitTime=0.3
+                    )
+                    auto.SendKeys(
+                        "%s{Enter}" % _sendkeys_escape(value),
+                        interval=0.01, waitTime=0.3,
+                    )
+                else:
+                    control.Click(simulateMove=False)
+                    time.sleep(0.3)
                     auto.SendKeys("{Ctrl}a", waitTime=0.05)
-                    auto.SendKeys(_sendkeys_escape(value), interval=0.01, waitTime=0.1)
+                    auto.SendKeys(
+                        _sendkeys_escape(value), interval=0.01, waitTime=0.1
+                    )
                     auto.SendKeys("{Enter}", waitTime=0.1)
+            elif action == "keys":
+                if not keys:
+                    raise OpError("BAD_REQUEST", "keys action requires keys")
+                control.SetFocus()
+                auto.SendKeys(keys, waitTime=1.0)
+            else:
+                raise OpError("BAD_REQUEST", "unknown action: %r" % action)
             return {"delivered": True}
 
         return self._uia_call(run, "uia_invoke(%s)" % action)
@@ -604,12 +699,28 @@ class _GDIPLUS_STARTUP_INPUT(ctypes.Structure):
 
 def _hbitmap_to_png(hbmp):
     """HBITMAP -> PNG bytes via the GDI+ flat API and an HGLOBAL IStream read
-    back through its vtable (no PIL, no generated COM interfaces)."""
-    from ctypes import (HRESULT, WINFUNCTYPE, byref, c_longlong, c_ulong,
+    back through a comtypes IStream (no PIL, no generated typelib). Pattern
+    proven on the live VM."""
+    import ctypes
+    from ctypes import (POINTER, HRESULT, byref, c_longlong, c_ulong,
                         c_ulonglong, c_void_p)
 
+    import comtypes
+    from comtypes import GUID, IUnknown, STDMETHOD
+
+    class _IStream(IUnknown):
+        _iid_ = GUID("{0000000C-0000-0000-C000-000000000046}")
+        _methods_ = [
+            STDMETHOD(HRESULT, "Read", [c_void_p, c_ulong, POINTER(c_ulong)]),
+            STDMETHOD(HRESULT, "Write", [c_void_p, c_ulong, POINTER(c_ulong)]),
+            STDMETHOD(
+                HRESULT, "Seek",
+                [c_longlong, c_ulong, POINTER(c_ulonglong)],
+            ),
+        ]
+
     gdiplus = ctypes.WinDLL("gdiplus")
-    ole32 = ctypes.windll.ole32
+    ole32 = ctypes.OleDLL("ole32")
 
     token = c_ulong()
     startup = _GDIPLUS_STARTUP_INPUT()
@@ -617,7 +728,7 @@ def _hbitmap_to_png(hbmp):
     if gdiplus.GdiplusStartup(byref(token), byref(startup), None) != 0:
         raise OpError("OP_FAILED", "GdiplusStartup failed")
     try:
-        stream = c_void_p()
+        stream = POINTER(_IStream)()
         if ole32.CreateStreamOnHGlobal(None, True, byref(stream)) != 0:
             raise OpError("OP_FAILED", "CreateStreamOnHGlobal failed")
         bmp = c_void_p()
@@ -625,46 +736,23 @@ def _hbitmap_to_png(hbmp):
         if status != 0:
             raise OpError("OP_FAILED", "GdipCreateBitmapFromHBITMAP hr=%d" % status)
         try:
-            status = gdiplus.GdipSaveImageToStream(bmp, stream, byref(_PNG_ENCODER_CLSID), None)
+            status = gdiplus.GdipSaveImageToStream(
+                bmp, stream, byref(_PNG_ENCODER_CLSID), None
+            )
             if status != 0:
                 raise OpError("OP_FAILED", "GdipSaveImageToStream hr=%d" % status)
-            return _istream_read_all(stream)
+            pos = c_ulonglong()
+            stream.Seek(c_longlong(0), 0, byref(pos))  # STREAM_SEEK_SET
+            chunks = []
+            while True:
+                buf = ctypes.create_string_buffer(65536)
+                got = c_ulong()
+                stream.Read(buf, 65536, byref(got))
+                if got.value == 0:
+                    break
+                chunks.append(buf.raw[: got.value])
+            return b"".join(chunks)
         finally:
             gdiplus.GdipDisposeImage(bmp)
     finally:
         gdiplus.GdiplusShutdown(token)
-
-
-def _istream_read_all(stream):
-    """Read an IStream* to exhaustion via vtable calls (after IUnknown slots
-    0-2: Read is slot 3, Seek is slot 5, Release slot 2)."""
-    from ctypes import (HRESULT, WINFUNCTYPE, POINTER, byref, c_longlong,
-                        c_ulong, c_ulonglong, c_void_p, cast)
-
-    addr = cast(stream, POINTER(c_void_p)).value  # interface ptr -> its vtable
-    vtbl = (c_void_p * 24).from_address(addr)
-
-    read_fn = WINFUNCTYPE(HRESULT, c_void_p, c_void_p, c_ulong, POINTER(c_ulong))(vtbl[3])
-    seek_fn = WINFUNCTYPE(HRESULT, c_void_p, c_longlong, c_ulong, POINTER(c_ulonglong))(vtbl[5])
-    release_fn = WINFUNCTYPE(c_ulong, c_void_p)(vtbl[2])
-
-    newpos = c_ulonglong()
-    hr = seek_fn(stream, 0, 0, byref(newpos))  # STREAM_SEEK_SET to start
-    if hr != 0:
-        release_fn(stream)
-        raise OpError("OP_FAILED", "IStream.Seek hr=%d" % hr)
-
-    chunks = []
-    try:
-        while True:
-            buf = ctypes.create_string_buffer(65536)
-            got = c_ulong()
-            hr = read_fn(stream, buf, len(buf), byref(got))
-            if hr != 0:
-                raise OpError("OP_FAILED", "IStream.Read hr=%d" % hr)
-            if got.value == 0:
-                break
-            chunks.append(buf.raw[: got.value])
-    finally:
-        release_fn(stream)
-    return b"".join(chunks)
