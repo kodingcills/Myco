@@ -11,11 +11,12 @@ import {
   intentFor,
   programFor,
 } from "../src/tasks/calc-record-edit.ts";
-import { dataRowsForSeed, generateFixture } from "../src/tasks/fixture.ts";
+import { DATA_COLUMNS, dataRowsForSeed, generateFixture } from "../src/tasks/fixture.ts";
 import {
   type CalcRecordEditParams,
   generateParameterSets,
   groundTruth,
+  isAutoCorrectImmune,
 } from "../src/tasks/intent.ts";
 
 const SEEDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
@@ -60,6 +61,62 @@ describe("calc-record-edit parameter generation", () => {
     const a = generateParameterSets(SEEDS)[0];
     const b = generateParameterSets([SEEDS[0] ?? ""]);
     expect(b[0]).toEqual(a);
+  });
+
+  it("emits AutoCorrect-immune newValues for a 5,000-seed sweep across all columns", () => {
+    for (let i = 0; i < 5_000; i++) {
+      for (const set of generateParameterSets([`sweep-${i}`])) {
+        const col = DATA_COLUMNS.find((c) => c.name === set.column);
+        expect(col, set.column).toBeDefined();
+        if (!col) continue;
+        expect(isAutoCorrectImmune(set.newValue, col.type), `${set.newValue} / ${set.column}`).toBe(
+          true,
+        );
+      }
+    }
+  });
+});
+
+describe("parameter generation shape", () => {
+  it("keeps the standard-seed-list 30-set shape unchanged", () => {
+    const sets = generateParameterSets(SEEDS);
+    expect(sets).toHaveLength(30);
+    expect(new Set(sets.map((p) => JSON.stringify(p))).size).toBe(30);
+    expect(new Set(sets.map((p) => p.newValue)).size).toBe(30);
+    expect(new Set(sets.map((p) => p.column))).toEqual(
+      new Set(["name", "qty", "joined", "salary"]),
+    );
+  });
+});
+
+describe("isAutoCorrectImmune", () => {
+  it("rejects known-bad values", () => {
+    const bad = [
+      "revised-908578",
+      "myco-smoke-1",
+      "=SUM(A1)",
+      "'quoted",
+      "2024-01-01",
+      "",
+      "+42",
+      "-30",
+    ];
+    for (const v of bad) {
+      expect(isAutoCorrectImmune(v, "text"), v).toBe(false);
+    }
+  });
+
+  it("accepts known-good values", () => {
+    const good = ["REVISED-908578", "Myco-Smoke-1", "908578", "EMP-0038"];
+    for (const v of good) {
+      expect(isAutoCorrectImmune(v, "text"), v).toBe(true);
+    }
+  });
+
+  it("accepts typed values for their own column types", () => {
+    expect(isAutoCorrectImmune("42", "integer")).toBe(true);
+    expect(isAutoCorrectImmune("2024-01-01", "date")).toBe(true);
+    expect(isAutoCorrectImmune("$123.45", "currency")).toBe(true);
   });
 });
 
