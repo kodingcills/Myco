@@ -166,3 +166,12 @@ Obligations:
 - Its "must-fix: port the deployed 720-line backend" finding is RETRACTED by coordinator inspection: the saved diff (/tmp/wb.diff) compares the deployed file against a STALE pre-M1-006 checkout. Current origin/main windows_backend.py is 779 lines — identical marker set (`_user_object_name` ctypes fallback, `_is_timeout_error`, `MAX_ELEMENTS`, GDI screenshots) and same length as deployed. The repo already contains the backend. Lesson: verify a diff's BASE before acting on it (second time this session a claim's base was wrong).
 - Genuine must-fix retained: run-live.ts:100 uses `process.stderr.write(error)` on a non-string, masking AgentOpError. Small; fix before or right after merge.
 - Note: verifier's reset took 77s (vs 8-10s) — RAM pressure while Ollama holds 9 GB.
+
+## Log 2026-11-19 (18) — deploy made real; PR #14
+Four defects found by driving the deploy myself (no child found them):
+1. pyuno ABI → agent must run under LO bundled Python 3.13.
+2. `schtasks /Run MycoAgent` from SSH → session 0, UIA blind. Deploy now launches via run-interactive.ps1.
+3. pywin32/comtypes/uiautomation missing from LO Python site-packages → session_info ModuleNotFoundError.
+4. run-agent.cmd `start` detached the agent so the task completed and Windows killed the child; cmd cannot invoke .ps1 directly; UOI_NAME NULL length probe is rejected.
+Verified end-to-end from a clean reset: `DEPLOY OK`, agent pids SessionId 1, `session_info` = `{session_id:1, WinSta0, Default, MYCO-WIN11\myco}`. PR #14 open.
+CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's UIA step could not have reached the desktop; M1-013 evidence must be regenerated after #14 merges. I am treating #11's *verdicts* as valid only for the UNO/file path, not for UIA actuation.
