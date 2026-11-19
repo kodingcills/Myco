@@ -89,3 +89,6 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 ## Log 2026-11-19 (4)
 - PR #4 (M1-005 guest agent) VERIFIED at 4f4608f: protocol conformant (10/10 ops), token enforced on every op over real sockets, loopback-only, agent-thinness clean, bootstrap XML correct, stress attack survived (backlog RSTs only). Coordinator applied the 4 nice-to-fixes (session_info mislabel, request_queue_size=64, ps1 dedupe, README path semantics) as 709c0ad; pytest 20/20 locally; CI 4/4 green on new head; MERGED. Note: windows_backend.py session_info fix is untestable off-Windows — first real-VM run must validate it (part of M1-008).
 - M1-005 marked done. Next delegatable: M1-010 fault injectors (now unblocked: M1-001 + M1-005 merged).
+
+## Log 2026-11-19 (5)
+- PR #5 (M1-009) verifier: content PASS (30 distinct deterministic sets, host-only ground truth confirmed by code read, 4/4 attacks failed, CI green) but REJECTED on process: branch not rebased onto main (vendored runtime pollutes diff), one tautological no-write test, close-step comment/guard mismatch. Fix child delegated (rebase + 2 code fixes + FNV collision note). Parked for real-adapter phase: strengthen locate beyond pristine-value equality (row/column header identity) — belongs to M1-006/M1-013 integration.
