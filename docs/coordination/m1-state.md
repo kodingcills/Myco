@@ -18,7 +18,9 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 | Research: eval frameworks | OSWorld/OSWorld2, OpenComputer verifiers, screenshot baselines (OpenAdapt, Agent S, UI-TARS, OpenCUA) | deepseek-v4.1-flash | done → docs/research/eval-frameworks.md (committed) |
 | Research: structural adapters | UFO/UFO2, agent-desktop (verify Tiffany's claims), pywinauto vs uiautomation, UNO verifier, Cua; ARM64 matrix | deepseek-v4.1-flash | done → docs/research/adapters.md (committed) |
 | Research: Windows env | UTM scripting, snapshot reset strategy, SSH session-0 launcher, ARM64 compat | deepseek-v4.1-flash | done → docs/env/windows.md (committed) |
-| Build: core runtime skeleton | TS toolchain, core interfaces (state/adapter/program/verify/evidence/eval), fake app, tests, CI, PR to main | glm-5.3 | running |
+| Build: core runtime skeleton | TS toolchain, core interfaces, fake app, tests, CI | glm-5.3 | done → PR #1, head c85b568; CI + independent review pending |
+| Verify: PR #1 | adversarial review incl. false-success attack test | kimi-k3 | running |
+| Verify: PR #2 | docs foundation review | kimi-k3 | running |
 
 ## Decisions so far
 - Issue tracker: Linear team TIF, owned by outer loop; repo-local canonical backlog at docs/backlog/m1.md. (setup-matt-pocock-skills)
