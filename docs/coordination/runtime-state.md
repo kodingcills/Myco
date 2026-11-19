@@ -67,7 +67,10 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
 - ADR-0011 host = Linux ARM64 QEMU+HVF VM over container desktop (tradeoffs in ADR). [CONSEQUENTIAL, reported]
 - ADR-0012 boundary: Rust = lifecycle/session only; no runner/verifier/verdicts; reuses M1 evidence schema. [CONSEQUENTIAL, reported]
 - ADR-0013 surface = MCP stdio + CLI JSON from one core. [CONSEQUENTIAL, reported]
-- Prior art: xa11y / computer-use-rs / MS Hybrid Computer Use evaluation in progress → docs/research/runtime-prior-art.md (RT-001).
+- ADR-0014 guest stack: adopt xa11y 0.16.1, X11/Xvfb session, Ubuntu 24.04 ARM64 floor, read-back verification mandatory. [reported]
+- Dogfood consume path (outer loop, 2026-11-19): Dogfood's agent under test (Oh My Pi) uses the MCP stdio server as primary; Dogfood's host-side oracles and harness use the myco-rt CLI (JSON). RT-011 exercises the full path over MCP and smoke-tests the CLI. The earlier open question is CLOSED.
+- Scope (outer loop, 2026-11-19, accepted): v0 stays at exactly six ops; REQ-08/10/11 and the kill/relaunch part of REQ-09 become extended ops RT-015..RT-018 immediately after the first path.
+- REQ-03 fallback protocol (outer loop, 2026-11-19): if the RT-003 Tk/AT-SPI probe shows Tk listbox rows or the status line are not exposed, RT proposes a fallback (GTK sample app or app-side introspection) to the Dogfood owner via the coordinator; REQ-03 is not quietly weakened.
 
 ## Active children
 | Child | Task | Model | Status |
