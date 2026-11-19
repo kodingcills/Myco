@@ -2,6 +2,12 @@
 //!
 //! Runs inside the guest as the `myco` uid (per-uid AT-SPI registries — RT-003).
 //! Refs are opaque and bound to a state version; the host never interprets them.
+//!
+//! Refs carry the element's **positional path** in the tree, not just an identity
+//! fingerprint: resolving by `(role, name, pid)` alone would silently pick the first
+//! of two identical siblings (e.g. two "Save" buttons) and click the wrong one.
+//! The path lets `find_element` walk straight to the exact node and verify identity
+//! on arrival — O(depth), and a mismatch is an error rather than a guess.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -22,6 +28,9 @@ pub struct Node {
     pub bounds: Option<[f64; 4]>,
     pub actions: Vec<String>,
     pub pid: Option<u32>,
+    /// Child indices from the session root: `[app_idx, child_idx, ...]`.
+    /// Opaque to the host; used by the agent to resolve the ref exactly.
+    pub path: Vec<usize>,
     pub children: Vec<String>,
 }
 
@@ -41,20 +50,22 @@ pub struct ProcessInfo {
 #[derive(Debug, Serialize)]
 pub struct Observation {
     pub state_version: u64,
+    /// Number of applications AT-SPI reported. `0` is never returned as success
+    /// by the op handler (see `branch::obs_error_if_empty_desktop`).
+    pub app_count: usize,
     pub nodes: Vec<Node>,
     pub roots: Vec<String>,
     pub windows: Vec<WindowInfo>,
     pub processes: Vec<ProcessInfo>,
     pub screenshot_path: Option<String>,
-    /// Explicit statement about the app-side introspection channel (ADR-0016):
-    /// `None` = not configured, `Some(record)` = read successfully,
+    /// ADR-0016: `None` = not configured, `Some(record)` = read OK,
     /// `Some({"unavailable": reason})` = configured but unreadable.
     pub introspection: Option<serde_json::Value>,
     pub truncated: bool,
 }
 
-/// Build one observation. `state_version` is supplied by the agent (monotonic
-/// per session); `screenshot_path` is where the PNG was written, if capture worked.
+/// Build one observation. `state_version` is supplied by the agent (monotonic per
+/// session); `screenshot_path` is where the PNG was written, if capture worked.
 pub fn observe(state_version: u64, screenshot_path: Option<String>) -> Result<Observation, String> {
     let provider = xa11y::provider().map_err(|e| format!("provider: {e}"))?;
 
@@ -64,47 +75,57 @@ pub fn observe(state_version: u64, screenshot_path: Option<String>) -> Result<Ob
     let mut truncated = false;
 
     let apps = provider.list_apps().map_err(|e| format!("list_apps: {e}"))?;
-    for app in apps {
-        let app_ref = push_node(&mut nodes, &app, None);
+    let app_count = apps.len();
+
+    for (app_idx, app) in apps.iter().enumerate() {
+        let app_path = vec![app_idx];
+        let app_ref = push_node(&mut nodes, app, app_path.clone());
         roots.push(app_ref.clone());
-        if nodes.len() >= MAX_NODES {
-            truncated = true;
-            break;
+
+        if let Ok(wins) = provider.app_windows(app) {
+            for (w_idx, w) in wins.iter().enumerate() {
+                let wref = push_node(&mut nodes, w, vec![app_idx, w_idx]);
+                windows.push(WindowInfo {
+                    id: wref,
+                    title: w.name.clone().unwrap_or_default(),
+                    pid: w.pid.unwrap_or(0),
+                });
+            }
         }
-        // Windows are first-class in the observation (REQ-03: named window).
-        if let Ok(wins) = provider.app_windows(&app) {
-            for w in wins {
-                let title = w.name.clone().unwrap_or_default();
-                let pid = w.pid.unwrap_or(0);
-                let wref = push_node(&mut nodes, &w, Some(&app_ref));
-                windows.push(WindowInfo { id: wref, title, pid });
+
+        // One-pass DFS: children are enumerated once, in tree order, so the path
+        // built here is exactly the path `find_element` walks back.
+        let mut stack: Vec<(xa11y::Element, Vec<usize>)> = vec![(
+            xa11y::Element::new(app.clone(), provider.clone()),
+            app_path,
+        )];
+        while let Some((el, path)) = stack.pop() {
+            if path.len() >= MAX_DEPTH {
+                continue;
+            }
+            let Ok(children) = el.children() else { continue };
+            let parent_ref = nodes
+                .iter()
+                .find(|n| n.path == path)
+                .map(|n| n.r#ref.clone());
+            let mut child_refs = Vec::with_capacity(children.len());
+            for (c_idx, child) in children.into_iter().enumerate() {
+                let mut cpath = path.clone();
+                cpath.push(c_idx);
+                let cref = push_node(&mut nodes, child.data(), cpath.clone());
+                child_refs.push(cref.clone());
+                stack.push((child, cpath));
                 if nodes.len() >= MAX_NODES {
                     truncated = true;
                     break;
                 }
             }
-        }
-        if truncated {
-            break;
-        }
-    }
-
-    // Depth-first expansion of every root, breadth-limited by MAX_NODES.
-    let mut queue: Vec<(String, usize)> = roots.iter().map(|r| (r.clone(), 0)).collect();
-    while let Some((parent_ref, depth)) = queue.pop() {
-        if depth >= MAX_DEPTH {
-            continue;
-        }
-        let Some(parent) = find_element(&provider, &nodes, &parent_ref) else { continue };
-        let Ok(children) = parent.children() else { continue };
-        for child in children {
-            let cref = push_node(&mut nodes, child.data(), Some(&parent_ref));
-            if let Some(node) = nodes.iter_mut().find(|n| n.r#ref == parent_ref) {
-                node.children.push(cref.clone());
+            if let Some(pref) = parent_ref {
+                if let Some(node) = nodes.iter_mut().find(|n| n.r#ref == pref) {
+                    node.children.extend(child_refs);
+                }
             }
-            queue.push((cref, depth + 1));
-            if nodes.len() >= MAX_NODES {
-                truncated = true;
+            if truncated {
                 break;
             }
         }
@@ -113,81 +134,86 @@ pub fn observe(state_version: u64, screenshot_path: Option<String>) -> Result<Ob
         }
     }
 
-    let processes = list_processes();
-    let introspection = read_introspection();
-
     Ok(Observation {
         state_version,
+        app_count,
         nodes,
         roots,
         windows,
-        processes,
+        processes: list_processes(),
         screenshot_path,
-        introspection,
+        introspection: read_introspection(),
         truncated,
     })
 }
 
-fn push_node(
-    nodes: &mut Vec<Node>,
-    data: &xa11y::ElementData,
-    _parent: Option<&str>,
-) -> String {
+fn push_node(nodes: &mut Vec<Node>, data: &xa11y::ElementData, path: Vec<usize>) -> String {
     let r = format!("n{}", nodes.len());
     nodes.push(Node {
         r#ref: r.clone(),
-        role: format!("{:?}", data.role).to_lowercase(),
+        role: role_token(&data.role),
         name: data.name.clone(),
         value: data.value.clone(),
         description: data.description.clone(),
         bounds: data.bounds.map(|b| [b.x as f64, b.y as f64, b.width as f64, b.height as f64]),
         actions: data.actions.clone(),
         pid: data.pid,
+        path,
         children: Vec::new(),
     });
     r
 }
 
-/// Re-resolve a ref by walking from the app roots. Refs are positional within
-/// one observation, so this is only valid for the version they were issued at;
-/// the host enforces that (StaleRefError) before calling.
-fn find_element(
-    provider: &std::sync::Arc<dyn xa11y::Provider>,
-    nodes: &[Node],
-    target: &str,
-) -> Option<xa11y::Element> {
-    let idx: usize = target.strip_prefix('n')?.parse().ok()?;
-    let node = nodes.get(idx)?;
-    // Walk from each app root, matching by (role, name, pid) — the same identity
-    // the node was built from. Ambiguity is resolved by first match; the host's
-    // AmbiguousTargetError path covers the act side.
-    let apps = provider.list_apps().ok()?;
-    for app in apps {
-        if node.pid.is_some() && app.pid != node.pid {
-            continue;
-        }
-        let el = xa11y::Element::new(app, provider.clone());
-        if let Some(found) = search(&el, node, 0) {
-            return Some(found);
-        }
-    }
-    None
+fn role_token(role: &xa11y::Role) -> String {
+    format!("{role:?}").to_lowercase()
 }
 
-fn search(el: &xa11y::Element, want: &Node, depth: usize) -> Option<xa11y::Element> {
-    if depth > MAX_DEPTH {
-        return None;
+/// Resolve a ref by walking its recorded path. Fails loudly on any structural or
+/// identity mismatch — never falls back to a first-match search.
+pub fn resolve(
+    provider: &std::sync::Arc<dyn xa11y::Provider>,
+    nodes: &[Node],
+    target_ref: &str,
+) -> Result<xa11y::Element, String> {
+    let idx: usize = target_ref
+        .strip_prefix('n')
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| format!("malformed ref {target_ref:?}"))?;
+    let want = nodes
+        .get(idx)
+        .filter(|n| n.r#ref == target_ref)
+        .ok_or_else(|| format!("unknown ref {target_ref:?} for this observation"))?;
+
+    let apps = provider.list_apps().map_err(|e| format!("list_apps: {e}"))?;
+    let app_idx = *want
+        .path
+        .first()
+        .ok_or_else(|| format!("ref {target_ref:?} has an empty path"))?;
+    let app = apps
+        .get(app_idx)
+        .ok_or_else(|| format!("app {app_idx} vanished since observation"))?;
+
+    let mut el = xa11y::Element::new(app.clone(), provider.clone());
+    for step in &want.path[1..] {
+        let children = el
+            .children()
+            .map_err(|e| format!("walk to ref {target_ref:?} failed at depth: {e}"))?;
+        el = children
+            .into_iter()
+            .nth(*step)
+            .ok_or_else(|| format!("ref {target_ref:?} path diverged (no child {step})"))?;
     }
-    let role = format!("{:?}", el.role).to_lowercase();
-    if role == want.role && el.name == want.name && el.pid == want.pid {
-        return Some(el.clone());
+
+    // Identity check on arrival: the tree may have changed under us even within a
+    // version (an app mutating without a host-visible action).
+    let role = role_token(&el.role);
+    if role != want.role || el.name != want.name || el.pid != want.pid {
+        return Err(format!(
+            "ref {target_ref:?} now resolves to a different element (role {role:?} name {:?} pid {:?}); re-observe",
+            el.name, el.pid
+        ));
     }
-    for child in el.children().ok()? {
-        if let Some(found) = search(&child, want, depth + 1) {
-            return Some(found);
-        }
-    }
-    None
+    Ok(el)
 }
 
 fn list_processes() -> Vec<ProcessInfo> {
@@ -216,13 +242,18 @@ fn read_introspection() -> Option<serde_json::Value> {
                 Ok(v) => return Some(v),
                 Err(e) if attempt == 0 => {
                     // Torn read mid-mutation: retry once after a short delay.
-                    let _ = e;
                     std::thread::sleep(std::time::Duration::from_millis(50));
+                    let _ = e;
                 }
                 Err(e) => {
                     return Some(serde_json::json!({"unavailable": format!("parse: {e}")}));
                 }
             },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Distinguish "the app has not published yet" from "broken":
+                // a consumer must know whether to wait or to investigate.
+                return Some(serde_json::json!({"unavailable": "not_published_yet"}));
+            }
             Err(e) => {
                 return Some(serde_json::json!({"unavailable": format!("read: {e}")}));
             }
@@ -238,6 +269,20 @@ pub fn capture_screenshot(path: &str) -> Result<String, String> {
     Ok(path.to_string())
 }
 
-/// Unused-import guard for HashMap in future ref maps.
+/// Refuse to report an empty desktop as a successful observation: a connectable
+/// but wrong AT-SPI bus yields exactly that, and the host cannot tell it from a
+/// genuinely idle desktop (adversarial review finding #4).
+pub fn validate(obs: &Observation) -> Result<(), String> {
+    if obs.app_count == 0 {
+        return Err(
+            "empty AT-SPI desktop: no applications registered. The GUI session is not up, \
+             or gui.env points at the wrong bus — refusing to report this as a valid state"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Unused-import guard for HashMap kept for the ref->path index shape.
 #[allow(dead_code)]
-fn _unused(_: HashMap<String, String>) {}
+fn _unused(_: HashMap<String, Vec<usize>>) {}

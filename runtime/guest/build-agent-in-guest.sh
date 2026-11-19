@@ -38,5 +38,8 @@ TOML
 echo "[build] cargo build --release -p myco-rt-agent (native, in guest)"
 "${SSH[@]}" 'cd ~/myco-build && ~/.cargo/bin/cargo build --release -p myco-rt-agent 2>&1 | tail -5'
 
-"${SSH[@]}" 'mkdir -p ~/bin && cp ~/myco-build/target/release/myco-rt-agent ~/bin/myco-rt-agent && chmod +x ~/bin/myco-rt-agent && ~/bin/myco-rt-agent --version 2>/dev/null || true; ls -la ~/bin/myco-rt-agent'
-echo "[build] OK: /home/myco/bin/myco-rt-agent"
+"${SSH[@]}" 'mkdir -p ~/bin && cp ~/myco-build/target/release/myco-rt-agent ~/bin/myco-rt-agent && chmod +x ~/bin/myco-rt-agent; ls -la ~/bin/myco-rt-agent'
+# Keep a host-side copy: reset() recreates the overlay, which deletes ~/myco-build
+# and ~/bin inside the guest, so the backend must be able to reinstall from here.
+"${SCP[@]}" myco@localhost:~/bin/myco-rt-agent "$GUEST_DIR/state/myco-rt-agent-aarch64" >/dev/null
+echo "[build] OK: /home/myco/bin/myco-rt-agent (host copy: runtime/guest/state/myco-rt-agent-aarch64)"

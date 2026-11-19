@@ -23,6 +23,16 @@ pub enum TransportError {
     Timeout(Duration),
 }
 
+/// Build the remote command line: token always, introspection file when enabled.
+fn remote_command(token: &str, agent_path: &str, introspection: Option<&str>) -> String {
+    match introspection {
+        Some(path) => format!(
+            "MYCO_RT_TOKEN={token} MYCO_INTROSPECTION_FILE={path} {agent_path}"
+        ),
+        None => format!("MYCO_RT_TOKEN={token} {agent_path}"),
+    }
+}
+
 /// Connection parameters for the SSH channel to a guest agent.
 pub struct SshConfig {
     pub host: String,
@@ -32,6 +42,11 @@ pub struct SshConfig {
     pub token: String,
     /// Path of the agent binary inside the guest.
     pub agent_path: String,
+    /// ADR-0016: guest path the agent should read widget state from. `None`
+    /// disables the introspection channel (observation reports `null`).
+    pub introspection_file: Option<String>,
+    /// Hard per-op deadline; a hung app or agent becomes a `Timeout`, never a hang.
+    pub op_timeout: Duration,
 }
 
 impl SshConfig {
@@ -52,7 +67,7 @@ impl SshConfig {
             // Token via env on the remote command line. v0 accepts that the token
             // is visible in the guest's process list for the lifetime of the agent;
             // the guest is disposable and single-tenant (ADR-0015).
-            .arg(format!("MYCO_RT_TOKEN={} {}", self.token, self.agent_path));
+            .arg(remote_command(&self.token, &self.agent_path, self.introspection_file.as_deref()));
         c
     }
 }
@@ -62,6 +77,7 @@ pub struct Channel {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    op_timeout: Duration,
 }
 
 impl Channel {
@@ -70,20 +86,78 @@ impl Channel {
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        // Own process group: a hung op must be killable as a group, or a child that
+        // inherited the pipe (e.g. a shell's `sleep`) keeps the read blocked.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         let mut child = cmd.spawn().map_err(|e| TransportError::Spawn(e.to_string()))?;
         let stdin = child.stdin.take().ok_or(TransportError::Closed)?;
         let stdout = BufReader::new(child.stdout.take().ok_or(TransportError::Closed)?);
-        let mut ch = Self { child, stdin, stdout };
+        let mut ch = Self { child, stdin, stdout, op_timeout: Duration::from_secs(10) };
         ch.authenticate(token)?;
         Ok(ch)
     }
 
     /// Connect to a guest over SSH and authenticate.
     pub fn connect_ssh(config: &SshConfig) -> Result<Self, TransportError> {
-        Self::spawn(config.command(), &config.token)
+        let mut ch = Self::spawn(config.command(), &config.token)?;
+        ch.op_timeout = config.op_timeout;
+        Ok(ch)
+    }
+
+    /// Spawn with an explicit op deadline (tests).
+    pub fn spawn_with_timeout(
+        cmd: Command,
+        token: &str,
+        op_timeout: Duration,
+    ) -> Result<Self, TransportError> {
+        let mut ch = Self::spawn(cmd, token)?;
+        ch.op_timeout = op_timeout;
+        Ok(ch)
     }
 
     fn roundtrip(&mut self, request: serde_json::Value) -> Result<serde_json::Value, TransportError> {
+        // Bounded behaviour (adversarial review finding #2): a hung guest app can
+        // block an op forever. A watchdog kills the channel at the deadline; the
+        // blocked read then fails and we report Timeout instead of hanging.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let deadline = self.op_timeout;
+        let done = Arc::new(AtomicBool::new(false));
+        let expired = Arc::new(AtomicBool::new(false));
+        let pid = self.child.id();
+        let (done_w, expired_w) = (done.clone(), expired.clone());
+        // Detached thread: sleeps at most `deadline`, then exits. Dropping the
+        // JoinHandle is intentional (std detaches).
+        std::thread::spawn(move || {
+            std::thread::sleep(deadline);
+            if !done_w.load(Ordering::SeqCst) {
+                expired_w.store(true, Ordering::SeqCst);
+                // Negative pid = process group: kills descendants that hold the pipe.
+                let _ = Command::new("kill")
+                    .args(["-9", &format!("-{pid}")])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        });
+
+        let result = self.roundtrip_inner(request);
+        done.store(true, Ordering::SeqCst);
+        if expired.load(Ordering::SeqCst) {
+            return Err(TransportError::Timeout(deadline));
+        }
+        result
+    }
+
+    fn roundtrip_inner(
+        &mut self,
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value, TransportError> {
         let mut line = serde_json::to_string(&request).map_err(|e| TransportError::Protocol(e.to_string()))?;
         line.push('\n');
         self.stdin.write_all(line.as_bytes()).map_err(|_| TransportError::Closed)?;
@@ -244,6 +318,32 @@ mod tests {
         // Agent exits(2) before reading auth: channel closes → transport error.
         let res = Channel::spawn(c, "anything");
         assert!(matches!(res, Err(TransportError::Closed) | Err(TransportError::AuthRejected(_))));
+    }
+
+    #[test]
+    fn hung_agent_becomes_timeout_not_hang() {
+        // A fake agent that authenticates then stops answering: the transport must
+        // return Timeout within the deadline, not block forever (review finding #2).
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent().and_then(|p| p.parent()).unwrap().to_path_buf();
+        let bin = workspace.join("target").join("debug").join("myco-rt-agent");
+        let _ = agent_command("warmup");
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(format!(
+            "printf '%s\n' '{{\"ok\":true,\"op\":\"auth\"}}'; sleep 30; exec {}",
+            bin.display()
+        ));
+        // The shell prints an auth OK, so the channel authenticates; then the agent
+        // never answers because the shell is still sleeping.
+        let mut ch = Channel::spawn_with_timeout(c, "any", Duration::from_millis(300))
+            .expect("authenticate against the fake");
+        let start = Instant::now();
+        match ch.ping() {
+            Err(TransportError::Timeout(_)) => {
+                assert!(start.elapsed() < Duration::from_secs(5), "timeout fired late");
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
     }
 
     #[test]

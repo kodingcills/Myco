@@ -143,13 +143,23 @@ fn main() {
                 let shot_path = format!("/tmp/myco-observe-{version}.png");
                 let shot = observe::capture_screenshot(&shot_path).ok();
                 match observe::observe(version, shot) {
-                    Ok(obs) => {
-                        let _ = writeln!(
-                            stdout,
-                            "{}",
-                            serde_json::json!({"ok": true, "op": "observe", "observation": obs})
-                        );
-                    }
+                    Ok(obs) => match observe::validate(&obs) {
+                        Ok(()) => {
+                            let _ = writeln!(
+                                stdout,
+                                "{}",
+                                serde_json::json!({"ok": true, "op": "observe", "observation": obs})
+                            );
+                        }
+                        Err(e) => {
+                            // Never report an empty desktop as a valid observation.
+                            let _ = writeln!(
+                                stdout,
+                                "{}",
+                                serde_json::json!({"ok": false, "op": "observe", "error": "gui_not_ready", "detail": e})
+                            );
+                        }
+                    },
                     Err(e) => {
                         let _ = writeln!(
                             stdout,
@@ -199,16 +209,11 @@ fn gui_ready() -> bool {
 /// the AT-SPI bus would be unreachable. `myco-gui-session` publishes the session
 /// environment to /run/myco/gui.env; adopt the missing vars from it.
 fn load_gui_env() {
-    // Written by myco-gui-session into the unit's RuntimeDirectory. The
-    // /run/user/<uid> variant is a fallback for sessions that have one.
-    let path = if std::path::Path::new("/run/myco/gui.env").exists() {
-        "/run/myco/gui.env".to_string()
-    } else {
-        std::env::var("XDG_RUNTIME_DIR")
-            .map(|d| format!("{d}/myco/gui.env"))
-            .unwrap_or_else(|_| "/run/user/1000/myco/gui.env".to_string())
-    };
-    let Ok(text) = std::fs::read_to_string(path) else { return };
+    // Written by myco-gui-session into the unit's RuntimeDirectory, which systemd
+    // recreates on every start — so this file cannot outlive its session. (An
+    // unmanaged fallback path could survive a restart and point at a dead bus.)
+    const PATH_ENV: &str = "/run/myco/gui.env";
+    let Ok(text) = std::fs::read_to_string(PATH_ENV) else { return };
     for line in text.lines() {
         let Some((k, v)) = line.split_once('=') else { continue };
         // Override, do not merely fill: sshd exports DBUS_SESSION_BUS_ADDRESS for
