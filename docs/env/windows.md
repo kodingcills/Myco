@@ -46,6 +46,47 @@ built VM; this document wins for design rationale.
 
 ---
 
+## Live environment (provisioned 2026-11-19, supersedes research-phase choices where they differ)
+
+The VM is live and smoke-tested. Authoritative facts: `~/VMs/myco-win11/README.md` (never copy
+credentials out of that directory; `credentials.txt` and `seed.iso` are off-limits).
+
+What the provisioning settled, vs this document's earlier recommendations:
+
+| Topic | Research-phase recommendation | As built |
+|---|---|---|
+| VM control | `utmctl` (blocked by TCC from SSH) | `scripts/vm.sh` wraps UTM **AppleScript via osascript** — do not attempt to bypass the utmctl block |
+| Reset | snapshot-restore; disposable gated by P7 | `scripts/reset.sh live` restores `clean-base-live` (RAM+disk, desktop logged in) in **~7 s**; `cold` ~20 s; `disposable` ~20 s. Live snapshots work because the system disk was converted NVMe→VirtIO (`scripts/convert-disk-virtio.sh`) |
+| GUI launcher | logon-started agent + InteractiveToken scheduled task | `C:\myco\bin\run-interactive.ps1 -Exe <exe> -ArgList "<args>" -Wait` runs any program in the logged-in session via a scheduled task. This is the bootstrap path for `myco-agent` too |
+| Screenshots | in-guest only | confirmed: UTM host capture returns a placeholder for the ramfb display; all screenshots (incl. the TIF-19 baseline) are taken in-guest |
+| SSH | key auth as `myco` via localhost forward | `ssh -F ~/VMs/myco-win11/ssh_config myco-win11` (127.0.0.1:2222); shortcut `scripts/vssh` |
+| Guest toolchain | Python 3.12 ARM64, LibreOffice ARM64, pywinauto, uiautomation | confirmed: Python 3.12.10 ARM64, **LibreOffice 26.8.3 native ARM64** (PE machine 0xAA64), pywin32 312, comtypes 1.5.0, pywinauto 0.6.9, uiautomation 2.0.29 |
+
+Smoke test (6/6 passing): `vssh 'C:\myco\bin\smoke.ps1'` — creates an .ods headlessly, drives Calc
+via UIA in the interactive session (writes A1, saves), and reads A1 back with an independent
+headless `soffice --convert-to csv` under a separate profile. This is the M1 verification shape
+running end-to-end already.
+
+**Guest findings that constrain M1 design** (from the outer loop's provisioning, verified by its
+smoke test):
+
+1. **LibreOffice's UIA tree is lazy.** Until a client makes one MSAA call
+   (`AccessibleObjectFromWindow(hwnd, OBJID_CLIENT)`), UIA shows only the title bar. The adapter
+   must wake the bridge first (`smoke_calc_uia.py` shows how). Resolves Open risk 2 downward:
+   UIA sees menus, toolbars, Name Box, and the sheet table after the wake — cell *values* still
+   come from UNO/file checks.
+2. **Foreground is contested.** Scheduled-task windows don't get foreground; the Windows Search
+   flyout can hold it. `bring_to_front()` (Esc on shell flyouts, Alt tap, AttachThreadInput +
+   SetForegroundWindow, then verify) is mandatory before keystrokes.
+3. **AutoCorrect mutates typed values** ("myco-smoke-1" → "Myco-smoke-1"); a case-insensitive
+   check accepted it — a real false success. Verifiers compare exactly. Defaults stay on so the
+   app behaves realistically; this is a ready-made corrupted-trial fixture.
+4. **Reproducibility from zero is unproven**: `build-all.sh` has never run end-to-end. Tracked
+   under M1-016.
+
+Guest hygiene: the VM costs 8 GB of the Mac's 24 GB; shut it down when idle
+(`scripts/shutdown.sh`).
+
 ## Control plane design
 
 ### The session-0 problem
@@ -497,14 +538,11 @@ title, same cell values) and both emit a complete evidence bundle.
    fallback is to run the whole agent under LibreOffice's bundled Python, which then constrains
    every other dependency choice.
 
-4. **Reset cost is one full Windows boot.** At 30 trials plus 10 corrupted trials, boot time
-   dominates the evaluation loop. If disposable mode (P7) works, this halves. If not, budget for
-   it and measure it rather than assuming.
+4. ~~**Reset cost is one full Windows boot.**~~ Resolved by the live environment: `reset.sh live`
+   restores a RAM+disk snapshot in ~7 s (measured 2026-11-18), desktop already logged in.
 
-5. **`utmctl` cold-start hang on macOS 27.** UTM 5.0.9 is installed; the hidden-launch hang is
-   fixed only on `main` ([#8006](https://github.com/utmapp/UTM/issues/8006)). Mitigation: keep UTM
-   running and visible; never `open -j`. If it bites, the workaround is to start UTM by hand
-   before the first `utmctl` call.
+5. ~~**`utmctl` cold-start hang / TCC.**~~ Moot: the control plane is osascript AppleScript, not
+   utmctl.
 
 6. **Auto-logon stores the password as a recoverable LSA secret.** Documented by Microsoft
    ([Autologon](https://learn.microsoft.com/en-us/sysinternals/downloads/autologon)). Acceptable
