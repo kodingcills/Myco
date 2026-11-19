@@ -40,6 +40,11 @@ pub struct QemuConfig {
     pub ssh_port: u16,
     /// Max time to wait for SSH after boot.
     pub boot_timeout: Duration,
+    /// ADR-0016 introspection channel: guest path the agent reads widget state
+    /// from. `None` = channel disabled (observation reports `null`).
+    pub introspection_file: Option<String>,
+    /// Per-op deadline for the control channel.
+    pub op_timeout_secs: u64,
 }
 
 impl QemuConfig {
@@ -49,6 +54,8 @@ impl QemuConfig {
             token: token.to_string(),
             ssh_port: 10022,
             boot_timeout: Duration::from_secs(180),
+            introspection_file: None,
+            op_timeout_secs: 10,
         }
     }
 }
@@ -105,6 +112,8 @@ impl QemuLinuxBackend {
                 .to_string(),
             token: self.config.token.clone(),
             agent_path: "/home/myco/bin/myco-rt-agent".into(),
+            introspection_file: self.config.introspection_file.clone(),
+            op_timeout: Duration::from_secs(self.config.op_timeout_secs),
         }
     }
 
@@ -186,55 +195,42 @@ impl QemuLinuxBackend {
         Ok(())
     }
 
-    /// Install the agent binary into the guest (idempotent). Required after every
-    /// fresh overlay: the base image does not carry the agent.
+    /// Install the agent binary into the guest (idempotent, and required after every
+    /// fresh overlay — the base image carries no agent).
     ///
-    /// Two build paths, because xa11y links libxkbcommon (C) and cannot be
-    /// statically cross-linked from macOS:
-    /// 1. a musl static binary built on the host, if present;
-    /// 2. otherwise the native in-guest build (`runtime/guest/build-agent-in-guest.sh`)
-    ///    is copied from `~/myco-build` — which is how the guest is provisioned.
+    /// Both build paths end with a binary on the host: the musl static build, or the
+    /// copy fetched back by `build-agent-in-guest.sh`. The guest copy alone is not
+    /// enough: `reset()` recreates the overlay and deletes it.
     fn install_agent(&self) -> Result<(), BackendError> {
         self.guest_exec("mkdir -p /home/myco/bin")?;
-        let local = self
-            .config
-            .guest_dir
-            .parent()
-            .unwrap()
-            .join("target/aarch64-unknown-linux-musl/release/myco-rt-agent");
-        if local.exists() {
-            let status = Command::new("scp")
-                .args([
-                    "-i", &self.config.guest_dir.join("keys").join("id_ed25519").to_string_lossy(),
-                    "-P", &self.config.ssh_port.to_string(),
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
-                ])
-                .arg(&local)
-                .arg("myco@localhost:/home/myco/bin/myco-rt-agent")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()?;
-            if !status.success() {
-                return Err(BackendError::Protocol("scp of agent failed".into()));
-            }
-            self.guest_exec("chmod +x /home/myco/bin/myco-rt-agent")?;
-            return Ok(());
-        }
-        // Native build path: copy the guest-built binary into place, and fail
-        // loudly if it is absent (a silently stale agent is worse than an error).
-        let out = self.guest_exec(
-            "if [ -x ~/myco-build/target/release/myco-rt-agent ]; then \
-                 cp ~/myco-build/target/release/myco-rt-agent ~/bin/myco-rt-agent && \
-                 chmod +x ~/bin/myco-rt-agent && echo INSTALLED; \
-             elif [ -x ~/bin/myco-rt-agent ]; then echo PRESENT; \
-             else echo MISSING; fi",
-        )?;
-        if out.contains("MISSING") {
+        let root = self.config.guest_dir.parent().unwrap();
+        let candidates = [
+            root.join("target/aarch64-unknown-linux-musl/release/myco-rt-agent"),
+            self.config.guest_dir.join("state/myco-rt-agent-aarch64"),
+        ];
+        let Some(local) = candidates.iter().find(|p| p.exists()) else {
             return Err(BackendError::Protocol(
-                "agent binary missing in guest: run runtime/guest/build-agent-in-guest.sh".into(),
+                "no agent binary on the host: build one with runtime/guest/build-agent-in-guest.sh \
+                 (it stores a copy under runtime/guest/state/)"
+                    .into(),
             ));
+        };
+        let status = Command::new("scp")
+            .args([
+                "-i", &self.config.guest_dir.join("keys").join("id_ed25519").to_string_lossy(),
+                "-P", &self.config.ssh_port.to_string(),
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+            ])
+            .arg(local)
+            .arg("myco@localhost:/home/myco/bin/myco-rt-agent")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err(BackendError::Protocol("scp of agent failed".into()));
         }
+        self.guest_exec("chmod +x /home/myco/bin/myco-rt-agent")?;
         Ok(())
     }
 
@@ -369,6 +365,8 @@ mod tests {
             token: "t".into(),
             ssh_port: 10022,
             boot_timeout: Duration::from_secs(1),
+            introspection_file: None,
+            op_timeout_secs: 10,
         }
     }
 

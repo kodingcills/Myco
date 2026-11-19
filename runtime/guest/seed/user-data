@@ -20,6 +20,8 @@ packages:
   - python3-tk
   - python3-gi
   - gir1.2-atspi-2.0
+  # The AT-SPI sanity window is a GTK3 app; python3-gi alone has no Gtk namespace.
+  - gir1.2-gtk-3.0
 write_files:
   - path: /opt/myco/myco-tk-app.py
     permissions: '0755'

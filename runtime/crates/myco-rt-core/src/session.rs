@@ -77,6 +77,7 @@ impl<B: Backend> Session<B> {
                 | (Ready, Failed)
                 | (Resetting, Ready)
                 | (Resetting, Failed)
+                | (Failed, Destroyed)
         );
         if !legal {
             return Err(RuntimeError::IllegalTransition {
@@ -177,8 +178,16 @@ impl<B: Backend> Session<B> {
     }
 
     /// `destroy`: terminal. After this the session rejects every op.
+    ///
+    /// Allowed from `Failed` too: a failed reset must not strand a live guest and
+    /// overlay with no handle (REQ-12). The backend's destroy is crash-tolerant.
     pub fn destroy(&mut self) -> Result<(), RuntimeError> {
-        self.require_ready()?;
+        if !matches!(self.phase, SessionPhase::Ready | SessionPhase::Failed) {
+            return Err(RuntimeError::IllegalTransition {
+                from: self.phase,
+                to: SessionPhase::Destroyed,
+            });
+        }
         self.backend.destroy().map_err(Self::backend_err)?;
         self.transition(SessionPhase::Destroyed)
     }
@@ -380,6 +389,40 @@ mod tests {
         ));
         assert!(matches!(s.reset(), Err(RuntimeError::IllegalTransition { .. })));
         assert!(matches!(s.destroy(), Err(RuntimeError::IllegalTransition { .. })));
+    }
+
+    #[test]
+    fn destroy_works_after_a_failed_reset() {
+        struct ResetFails;
+        #[derive(Debug, thiserror::Error)]
+        #[error("reset failed")]
+        struct E;
+        impl Backend for ResetFails {
+            type Err = E;
+            fn provision(&mut self) -> Result<(), E> { Ok(()) }
+            fn observe(&mut self) -> Result<Observation, E> {
+                Ok(Observation {
+                    state_version: StateVersion(0),
+                    a11y_tree: serde_json::json!(null),
+                    screenshot_artifact: None,
+                    processes: vec![],
+                    windows: vec![],
+                })
+            }
+            fn act(&mut self, _: &Action) -> Result<ActionOutcome, E> { Ok(ActionOutcome::DeliveredUnverified) }
+            fn reset(&mut self) -> Result<(), E> { Err(E) }
+            fn destroy(&mut self) -> Result<(), E> { Ok(()) }
+        }
+        let mut s = Session::new_creating(
+            SessionConfig { session_id: "s3".into(), permissions: Permissions::default(), idle_timeout: None },
+            ResetFails,
+        );
+        s.create().unwrap();
+        assert!(s.reset().is_err());
+        assert_eq!(s.phase(), SessionPhase::Failed);
+        // REQ-12: a failed reset must not strand the guest behind a terminal state.
+        s.destroy().expect("destroy from Failed");
+        assert_eq!(s.phase(), SessionPhase::Destroyed);
     }
 
     #[test]
