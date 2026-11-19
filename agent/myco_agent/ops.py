@@ -30,12 +30,15 @@ def uia_tree(backend, params):
 @op(
     "uia_invoke",
     required={"runtime_id": list, "action": str},
-    optional={"value": str},
+    optional={"value": str, "keys": str, "cell": str},
 )
 def uia_invoke(backend, params):
-    if params["action"] not in ("invoke", "select", "set_value"):
-        raise OpError("BAD_REQUEST", "action must be invoke, select or set_value")
-    return backend.uia_invoke(params["runtime_id"], params["action"], params.get("value"))
+    if params["action"] not in ("invoke", "select", "set_value", "keys"):
+        raise OpError("BAD_REQUEST", "action must be invoke, select, set_value or keys")
+    return backend.uia_invoke(
+        params["runtime_id"], params["action"],
+        value=params.get("value"), keys=params.get("keys"), cell=params.get("cell"),
+    )
 
 
 @op("screenshot", optional={"pid": int, "rect": list})
