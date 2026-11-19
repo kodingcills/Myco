@@ -111,6 +111,10 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 | Myco Runtime Owner (Rust) | mcp:launch:cba81a8ecbe150c1ad3f6908da73bab666f2f4eca8ccd1657f403f1f051220fa | myco/runtime-v0 | boundary constraints sent 2026-11-19 (no duplicating TS engine per ADR-0001; reuse M1-012 evidence schema; hands off myco-win11) | nothing — M1 is independent; do not slow M1 for it |
 | Myco Dogfood Owner | mcp:launch:a4cad102668e27328e4726db527286133e1d90b3a6884a507edbd4fb1a0a5ebc | myco/dogfood-v0 | gated on runtime's first end-to-end path; M1 coordinator sends the Phase-1 go signal | nothing |
 
+### Cross-workstream notes
+- 2026-11-19 ADR-0016 state-file contract (relayed to Dogfood): atomic write (temp+rename) REQUIRED on the publisher side; runtime additionally retries once on parse failure and reports `{unavailable: reason}` rather than fabricating state. Runtime env var `MYCO_INTROSPECTION_FILE`; Dogfood keeps publishing `$MYCO_TODO_STATE_FILE`; mapping happens at the runtime session layer. Tri-state `introspection` in observation: null | record | {unavailable}.
+- 2026-11-19 RT build-path finding (informational for M1): xa11y musl static cross-build from macOS fails at link (`rust-lld: unable to find library -lxkbcommon`) — xa11y's input layer links a C library, so static musl cross-compilation does not extend to it. RT falls back to a native in-guest build via rustup (runtime/guest/build-agent-in-guest.sh). Host-side crates still cross-compile. No M1 impact; recorded because the same constraint would bite any future attempt to cross-build a desktop-driving agent statically.
+
 Obligations:
 - Review runtime owner's boundary ADR when it lands on myco/runtime-v0; flag conflicts with ADR-0001 / M1-012 schema to the outer loop.
   - 2026-11-19: REVIEWED docs/architecture/runtime.md @ 55bd21c (ADR-0011/0012/0013) — ACCEPTED, no conflicts. Answered its open question as schema owner: verdict-less session records become a `recordKind` discriminator (run: verdict required; session: verdict forbidden) via a schema PR the runtime owner files; no verdict-less records under the current schema meanwhile.
