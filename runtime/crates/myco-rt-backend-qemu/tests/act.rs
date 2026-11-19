@@ -43,7 +43,6 @@ fn live_act_launch_type_and_stale_ref() {
         }
     }
     let obs = obs.expect("observe never ready");
-    let version = obs.state_version;
 
     // 1. launch an app that exists in the guest — verified by the process
     //    staying alive (a binary that execs and dies is caught here).
