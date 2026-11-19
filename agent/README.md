@@ -46,6 +46,26 @@ always answers and keeps serving.
 artifacts live outside any single root. The agent is loopback-only and
 token-authed; the host is the trusted caller. There is no path sandbox.
 
+LibreOffice quirk: through the MSAA→UIA proxy, controls report empty
+RuntimeIds, so `uia_invoke` also accepts a JSON descriptor
+(`{"hwnd":…, "control_type":…, "name":…}`) in place of a runtime id. Descriptors
+go stale fast — e.g. after typing, the Name Box renames itself (`A1`→`A2`) —
+so re-observe (`uia_tree`) after each mutation instead of caching descriptors.
+
+### Timeouts (ADR-0003)
+
+Every UIA call runs on an `IUIAutomation2` client with
+`SetConnectionTimeout`/`SetTransactionTimeout` applied before any query, so a
+killed or wedged app fails bounded with `OP_FAILED` (`...TIMEOUT after Ns...`)
+instead of hanging. Config: `MYCO_UIA_CONNECT_TIMEOUT_MS` (default 5000),
+`MYCO_UIA_TRANSACTION_TIMEOUT_MS` (default 10000).
+
+LibreOffice specifics handled by the backend: the MSAA
+`AccessibleObjectFromWindow(OBJID_CLIENT)` wake before each tree walk
+(otherwise UIA sees only the title bar), and bring-to-front (Esc on shell
+flyouts, Alt tap, `AttachThreadInput` + `SetForegroundWindow`, verify) before
+any invoke. Screenshots are raw GDI BitBlt + GDI+ PNG — no Pillow needed.
+
 ## Backends
 
 Every op sits behind `OpsBackend` (`myco_agent/backend.py`) with two
@@ -73,6 +93,13 @@ gain nothing from an event loop.
 `docs/env/windows.md` §Layer 2). `bootstrap/install-agent.ps1` (run from an
 elevated SSH session) writes `run-agent.cmd`, registers the task, and starts
 the agent in the interactive session.
+
+### Deploying to the live VM
+
+From the Mac: `bootstrap/deploy-to-vm.sh` copies the agent into the guest via
+scp, writes a fresh per-deploy token file, registers the MycoAgent scheduled
+task from `bootstrap/MycoAgent.xml`, starts the agent in the interactive
+session, and verifies `ping` through `ssh -L 8765:127.0.0.1:8765`.
 
 ## Recovery
 
