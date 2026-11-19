@@ -1,0 +1,127 @@
+{
+  "runId": "d7ad45bf-8448-4ec8-9946-e6b73fa408cf",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-013-live",
+    "rowKey": "EMP-0038",
+    "column": "name",
+    "newValue": "revised-908578"
+  },
+  "startedAt": "2026-11-19T15:44:27.079Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-013-live\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-13609-1795103067081-631873626\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-13609-1795103067081-631873626\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B39"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-013-live\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-13609-1795103067081-631873626\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B39 located at record EMP-0038, column name, holds fixture value \"Enzo Nakamura\"",
+          "passed": true,
+          "observed": "value=\"Enzo Nakamura\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B39"
+        },
+        "value": "revised-908578"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-13609-1795103067081-631873626\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B39 located at record EMP-0038, column name, holds fixture value \"Enzo Nakamura\"",
+          "passed": true,
+          "observed": "value=\"Enzo Nakamura\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B39 holds \"revised-908578\"",
+          "passed": false,
+          "observed": "value=\"Revised-908578\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    }
+  ],
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "cell B39 holds \"revised-908578\"",
+    "observed": "value=\"Revised-908578\"",
+    "reason": "postcondition \"cell B39 holds \"revised-908578\"\" not met after step 2"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "cell B39 expected \"revised-908578\" but live document has \"Revised-908578\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": ["cell B39 expected \"revised-908578\" but live document has \"Revised-908578\""]
+  }
+}
