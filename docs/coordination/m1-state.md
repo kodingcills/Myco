@@ -72,3 +72,8 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 3. Write docs/architecture/m1.md (ADRs) using research.
 4. Write docs/backlog/m1.md.
 5. Commit docs, push branch, report to outer loop.
+
+## Log 2026-11-19
+- PR #2 (docs foundation) VERIFIED by independent kimi-k3 review (consistency PASS, spec coverage 8/8, scope PASS, one factual nit + 2 citation drifts fixed by coordinator) and MERGED to main (81bf6c4).
+- M1-005 (guest agent) delegated to glm-5.3. Protocol surface per docs/env/windows.md is stable, so it runs parallel to PR #1's fix round.
+- PR #1 fix round still running (glm-5.3).
