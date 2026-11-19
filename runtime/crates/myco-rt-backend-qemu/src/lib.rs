@@ -28,6 +28,8 @@ pub enum BackendError {
     Unimplemented(&'static str),
     #[error("protocol: {0}")]
     Protocol(String),
+    #[error("evidence: {0}")]
+    Evidence(String),
 }
 
 /// Configuration for one QEMU Linux session.
@@ -45,6 +47,10 @@ pub struct QemuConfig {
     pub introspection_file: Option<String>,
     /// Per-op deadline for the control channel.
     pub op_timeout_secs: u64,
+    /// Session id, used as the evidence run id.
+    pub session_id: String,
+    /// Root directory for `runs/<session>/` evidence artifacts.
+    pub evidence_root: PathBuf,
 }
 
 impl QemuConfig {
@@ -56,6 +62,8 @@ impl QemuConfig {
             boot_timeout: Duration::from_secs(180),
             introspection_file: None,
             op_timeout_secs: 10,
+            session_id: format!("session-{}", std::process::id()),
+            evidence_root: workspace_root.join("runs"),
         }
     }
 }
@@ -67,6 +75,8 @@ pub struct QemuLinuxBackend {
     locked: bool,
     /// State version of the last successful `observe`; refs are bound to it.
     last_state_version: u64,
+    /// Evidence recorder for this session (RT-009).
+    recorder: Option<myco_rt_evidence::SessionRecorder>,
 }
 
 /// The session lock file enforcing the concurrency cap (ADR-0011: default 1).
@@ -77,7 +87,14 @@ fn lock_path(guest_dir: &Path) -> PathBuf {
 impl QemuLinuxBackend {
     pub fn new(config: QemuConfig) -> Self {
         let lock_path = lock_path(&config.guest_dir);
-        Self { config, channel: None, lock_path, locked: false, last_state_version: 0 }
+        Self {
+            config,
+            channel: None,
+            lock_path,
+            locked: false,
+            last_state_version: 0,
+            recorder: None,
+        }
     }
 
     fn run_script(&self, name: &str, args: &[&str]) -> Result<String, BackendError> {
@@ -332,7 +349,17 @@ impl Backend for QemuLinuxBackend {
             self.run_script("boot.sh", &[])?;
             self.wait_ssh()?;
             self.install_agent()?;
-            self.connect()
+            self.connect()?;
+            // Evidence is collected from the first op onward (RT-009).
+            self.recorder = Some(
+                myco_rt_evidence::SessionRecorder::new(
+                    &self.config.evidence_root,
+                    &self.config.session_id,
+                    "myco-runtime-session",
+                )
+                .map_err(|e| BackendError::Evidence(e.to_string()))?,
+            );
+            Ok(())
         })();
         if result.is_err() {
             // A failed provision must not strand the lock or a half-booted guest.
@@ -360,6 +387,9 @@ impl Backend for QemuLinuxBackend {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         self.last_state_version = version;
+        if let Some(rec) = self.recorder.as_mut() {
+            rec.observation(version, nodes.as_array().map(|a| a.len()).unwrap_or(0));
+        }
         Ok(Observation {
             state_version: myco_rt_core::StateVersion(version),
             a11y_tree: serde_json::json!({
@@ -410,12 +440,12 @@ impl Backend for QemuLinuxBackend {
                 "kind": "keyPress", "keys": keys
             }),
         };
-        let resp = ch.act(wire, version)?;
+        let resp = ch.act(wire.clone(), version)?;
         let outcome = resp
             .get("outcome")
             .cloned()
             .ok_or_else(|| BackendError::Protocol("act response missing outcome".into()))?;
-        Ok(match outcome.get("outcome").and_then(|v| v.as_str()) {
+        let resolved = match outcome.get("outcome").and_then(|v| v.as_str()) {
             Some("delivered_verified") => ActionOutcome::DeliveredVerified,
             Some("delivered_unverified") => ActionOutcome::DeliveredUnverified,
             Some("failed") => ActionOutcome::Failed {
@@ -430,14 +460,38 @@ impl Backend for QemuLinuxBackend {
                     "unknown act outcome {other:?}"
                 )))
             }
-        })
-        .map(|resolved| {
-            // A delivered action may have mutated state; the next ref must come
-            // from a fresh observe (mirrors Session::act's version bump).
-            if !matches!(resolved, ActionOutcome::Failed { .. }) {
-                self.last_state_version += 1;
-            }
-            resolved
+        };
+
+        // Evidence: the delivery disposition, never a task verdict (ADR-0012).
+        let disposition = match &resolved {
+            ActionOutcome::DeliveredVerified => "delivered_verified",
+            ActionOutcome::DeliveredUnverified => "delivered_unverified",
+            ActionOutcome::Failed { .. } => "failed",
+        };
+        let detail = match &resolved {
+            ActionOutcome::DeliveredVerified => "action landed and read-back confirmed".to_string(),
+            ActionOutcome::DeliveredUnverified => "action delivered; no read-back possible".to_string(),
+            ActionOutcome::Failed { reason } => reason.clone(),
+        };
+        let before = version;
+        if !matches!(resolved, ActionOutcome::Failed { .. }) {
+            self.last_state_version += 1;
+        }
+        if let Some(rec) = self.recorder.as_mut() {
+            rec.action(wire.clone(), before, self.last_state_version, disposition, &detail);
+        }
+        Ok(resolved)
+    }
+
+    fn evidence(&mut self) -> Result<myco_rt_core::ops::EvidenceArtifacts, BackendError> {
+        let rec = self
+            .recorder
+            .as_mut()
+            .ok_or_else(|| BackendError::Protocol("evidence before provision".into()))?;
+        let paths = rec.flush().map_err(|e| BackendError::Evidence(e.to_string()))?;
+        Ok(myco_rt_core::ops::EvidenceArtifacts {
+            trace_path: paths.trace.to_string_lossy().to_string(),
+            result_path: paths.result.to_string_lossy().to_string(),
         })
     }
 
@@ -448,7 +502,11 @@ impl Backend for QemuLinuxBackend {
         self.run_script("boot.sh", &[])?;
         self.wait_ssh()?;
         self.install_agent()?;
-        self.connect()
+        self.connect()?;
+        // The guest restarts its state counter on a fresh overlay; mirror it so a
+        // pre-reset ref can never validate against post-reset state.
+        self.last_state_version = 0;
+        Ok(())
     }
 
     fn destroy(&mut self) -> Result<(), BackendError> {
@@ -484,6 +542,8 @@ mod tests {
             boot_timeout: Duration::from_secs(1),
             introspection_file: None,
             op_timeout_secs: 10,
+            session_id: "test-session".into(),
+            evidence_root: dir.join("runs"),
         }
     }
 

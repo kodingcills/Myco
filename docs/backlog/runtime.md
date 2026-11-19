@@ -114,7 +114,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   failed, not panic.
 
 ### RT-009 (TIF-37) evidence: trace + artifacts reusing M1 schema
-- **status:** pending
+- **status:** done (2026-11-19, RT owner) — pending PR/review. New `myco-rt-evidence` crate writes `runs/<session>/trace.jsonl` (run-start / observation / action events) and `result.json` as a `recordKind:"session"` record, and **refuses to write** artifacts that do not match M1's shapes (closed-property check; a session record carrying a verdict is rejected). Backend records every observe and act; live test PASS: trace 3+ lines, session record with no verdict, delivery disposition per step, artifacts survive reset+destroy.
 - **owner:** build
 - **blocked_by:** RT-005, RT-014
 - **description:** `evidence` op emits `runs/<sessionId>/trace.jsonl` +

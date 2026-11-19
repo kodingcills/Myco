@@ -585,6 +585,7 @@ name = "myco-rt-backend-qemu"
 version = "0.1.0"
 dependencies = [
  "myco-rt-core",
+ "myco-rt-evidence",
  "myco-rt-transport",
  "serde_json",
  "thiserror",
@@ -595,6 +596,14 @@ name = "myco-rt-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "myco-rt-evidence"
+version = "0.1.0"
+dependencies = [
  "serde_json",
  "thiserror",
 ]
