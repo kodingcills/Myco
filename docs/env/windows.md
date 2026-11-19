@@ -56,7 +56,7 @@ What the provisioning settled, vs this document's earlier recommendations:
 | Topic | Research-phase recommendation | As built |
 |---|---|---|
 | VM control | `utmctl` (blocked by TCC from SSH) | `scripts/vm.sh` wraps UTM **AppleScript via osascript** — do not attempt to bypass the utmctl block |
-| Reset | snapshot-restore; disposable gated by P7 | `scripts/reset.sh live` restores `clean-base-live` (RAM+disk, desktop logged in) in **~7 s**; `cold` ~20 s; `disposable` ~20 s. Live snapshots work because the system disk was converted NVMe→VirtIO (`scripts/convert-disk-virtio.sh`) |
+| Reset | snapshot-restore; disposable gated by P7 | `scripts/reset.sh live` restores `clean-base-live` (RAM+disk, desktop logged in). Measured by the coordinator 2026-11-19: **8.3–8.6 s across 3 consecutive resets**, guest clean after each (no leftover soffice, no fixture files). `cold` ~20 s; `disposable` ~20 s. Live snapshots work because the system disk was converted NVMe→VirtIO (`scripts/convert-disk-virtio.sh`) |
 | GUI launcher | logon-started agent + InteractiveToken scheduled task | `C:\myco\bin\run-interactive.ps1 -Exe <exe> -ArgList "<args>" -Wait` runs any program in the logged-in session via a scheduled task. This is the bootstrap path for `myco-agent` too |
 | Screenshots | in-guest only | confirmed: UTM host capture returns a placeholder for the ramfb display; all screenshots (incl. the TIF-19 baseline) are taken in-guest |
 | SSH | key auth as `myco` via localhost forward | `ssh -F ~/VMs/myco-win11/ssh_config myco-win11` (127.0.0.1:2222); shortcut `scripts/vssh` |
