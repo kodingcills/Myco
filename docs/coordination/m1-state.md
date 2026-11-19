@@ -15,7 +15,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 ## Active children
 | Child | Task | Model | Status |
 |---|---|---|---|
-| Research: eval frameworks | OSWorld/OSWorld2, OpenComputer verifiers, screenshot baselines (OpenAdapt, Agent S, UI-TARS, OpenCUA) | deepseek-v4.1-flash | running |
+| Research: eval frameworks | OSWorld/OSWorld2, OpenComputer verifiers, screenshot baselines (OpenAdapt, Agent S, UI-TARS, OpenCUA) | deepseek-v4.1-flash | done → docs/research/eval-frameworks.md (committed) |
 | Research: structural adapters | UFO/UFO2, agent-desktop (verify Tiffany's claims), pywinauto vs uiautomation, UNO verifier, Cua; ARM64 matrix | deepseek-v4.1-flash | running |
 | Research: Windows env | UTM scripting, snapshot reset strategy, SSH session-0 launcher, ARM64 compat | deepseek-v4.1-flash | done → docs/env/windows.md (committed) |
 | Build: core runtime skeleton | TS toolchain, core interfaces (state/adapter/program/verify/evidence/eval), fake app, tests, CI, PR to main | glm-5.3 | running |
@@ -32,6 +32,15 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - utmctl refuses SSH (OSStatus -1743, TCC). Outer loop must run from GUI session or pre-authorize TCC — flagged to outer loop.
 - Live snapshots fail on wizard-default Win11 ARM64 (NVMe + virtio-ramfb-gl). Reset = stop --request → snapshot restore clean-base → start. Fallback A: utmctl start --disposable (P7 gates on it; may be strictly better). Fallback B: qcow2 overlays.
 - LibreOffice 26.8.3 official Win ARM64 MSI exists; pywinauto/uiautomation/comtypes run native ARM64 (pywin32/Pillow have cp312-win_arm64 wheels).
+
+## Key research findings (docs/research/eval-frameworks.md)
+- OpenComputer with state verifiers = echo0715/OpenComputer (Yale NLP, Apache-2.0): ships a UNO-based Calc verifier with 16 check-* endpoints. Adopt verifier shape, not harness.
+- OpenAdapt is a COMPETITOR (MIT, verified execution layer, published false-success numbers: 54/72 bad saves reported saved from on-screen "Saved"; 30/30 from a computer-use agent). M1 must cite and beat these.
+- OSWorld Calc evaluator = whole-sheet DataFrame.equals; gold computed OUTSIDE the guest (employee_age_reference discipline — adopt verbatim). OSWorld 2.0 partial_scores = right evidence shape.
+- Cheap general VLMs cannot ground Calc cells (measured 2/16). Baseline = Agent S3 + UI-TARS-1.5-7B grounding. CheaperInference vision support unverified (credits error).
+- Verdict needs UNVERIFIED state distinct from failed (both prior designs collapse it). Matches the build brief's verified/refuted/uncertain.
+- Never eval() task-supplied strings (OpenComputer does — RCE hole). Use declarative predicate language.
+- Evaluator must not depend on GUI keystrokes (OSWorld postconfig presses Ctrl+S via pyautogui).
 
 ## Open decisions
 - Adapter choice (agent-desktop vs pywinauto/uiautomation direct) — pending research.
