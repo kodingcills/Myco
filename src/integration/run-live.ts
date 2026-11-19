@@ -67,27 +67,19 @@ async function main(): Promise<void> {
   }
 
   if (mode === "kill") {
-    // Corrupted trial: kill soffice mid-program. The kill must land after the
-    // set step (edit made, not saved) so the trial's ground truth is "not
-    // satisfied" — the harness must end refuted/uncertain, never verified,
-    // and must not hang. We interpose by monkey-patching nothing: the
-    // runTrial flow runs the whole program; instead we start the trial and
-    // race a timer that kills soffice.bin in the guest 12 s in (mid-program:
-    // after launch+locate, around set/save).
-    const killAt = Date.now() + Number(arg("kill-after-ms") ?? 12_000);
-    const killer = (async () => {
-      await new Promise<void>((r) => setTimeout(r, killAt - Date.now()));
-      try {
-        await client.kill({ image_name: "soffice.bin" });
-        process.stderr.write(
-          `[kill-fault] soffice.bin killed at +${Date.now() - (killAt - 12_000)}ms\n`,
-        );
-      } catch (error) {
-        process.stderr.write(`[kill-fault] kill op failed: ${String(error)}\n`);
-      }
-    })();
-    const report = await runTrial({ client, params, unoSocket: socket, runsDir });
-    await killer;
+    // Corrupted trial: kill soffice after the edit lands and before the save.
+    // A wall-clock timer cannot do this reliably — launching Calc and making
+    // it observable takes ~30 s, so a 12 s timer fires during launch and the
+    // trial never executes a step (observed: steps: [], precondition
+    // adapter-available failure). The kill is therefore step-triggered.
+    const killAfterStep = Number(arg("kill-after-step") ?? 3);
+    const report = await runTrial({
+      client,
+      params,
+      unoSocket: socket,
+      runsDir,
+      killAfterStep,
+    });
     process.stdout.write(JSON.stringify(report, null, 2));
     await tunnel.stop();
     process.exit(report.verdict.status === "verified" ? 1 : 0);
