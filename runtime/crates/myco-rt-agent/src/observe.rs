@@ -82,22 +82,11 @@ pub fn observe(state_version: u64, screenshot_path: Option<String>) -> Result<Ob
         let app_ref = push_node(&mut nodes, app, app_path.clone());
         roots.push(app_ref.clone());
 
-        if let Ok(wins) = provider.app_windows(app) {
-            for (w_idx, w) in wins.iter().enumerate() {
-                let wref = push_node(&mut nodes, w, vec![app_idx, w_idx]);
-                windows.push(WindowInfo {
-                    id: wref,
-                    title: w.name.clone().unwrap_or_default(),
-                    pid: w.pid.unwrap_or(0),
-                });
-            }
-        }
-
         // One-pass DFS: children are enumerated once, in tree order, so the path
         // built here is exactly the path `find_element` walks back.
         let mut stack: Vec<(xa11y::Element, Vec<usize>)> = vec![(
             xa11y::Element::new(app.clone(), provider.clone()),
-            app_path,
+            app_path.clone(),
         )];
         while let Some((el, path)) = stack.pop() {
             if path.len() >= MAX_DEPTH {
@@ -127,6 +116,20 @@ pub fn observe(state_version: u64, screenshot_path: Option<String>) -> Result<Ob
             }
             if truncated {
                 break;
+            }
+        }
+
+        // Windows are the app's top-level frames — they are ALREADY nodes from the
+        // DFS above (an application's AT-SPI children are its windows). Reference
+        // them by their DFS-assigned ref instead of pushing synthetic paths, which
+        // collided with the DFS index space (adversarial review, fix round 2).
+        for node in nodes.iter() {
+            if node.path.len() == 2 && node.path[0] == app_idx && is_window_role(&node.role) {
+                windows.push(WindowInfo {
+                    id: node.r#ref.clone(),
+                    title: node.name.clone().unwrap_or_default(),
+                    pid: node.pid.unwrap_or(0),
+                });
             }
         }
         if truncated {
@@ -166,6 +169,11 @@ fn push_node(nodes: &mut Vec<Node>, data: &xa11y::ElementData, path: Vec<usize>)
 
 fn role_token(role: &xa11y::Role) -> String {
     format!("{role:?}").to_lowercase()
+}
+
+/// Roles that count as a top-level window in the observation's `windows` list.
+fn is_window_role(role: &str) -> bool {
+    matches!(role, "frame" | "window" | "dialog")
 }
 
 /// Resolve a ref by walking its recorded path. Fails loudly on any structural or

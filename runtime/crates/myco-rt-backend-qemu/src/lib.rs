@@ -215,6 +215,24 @@ impl QemuLinuxBackend {
                     .into(),
             ));
         };
+        // Freshness guard: an old binary silently shadowing a newer source tree is
+        // exactly the stale-agent class this workstream already hit twice. Compare
+        // against the newest file in the agent crate and refuse to install.
+        let agent_src = self.config.guest_dir.parent().unwrap().join("crates/myco-rt-agent");
+        if let (Ok(bin_meta), Some(newest_src)) = (
+            std::fs::metadata(local),
+            newest_mtime(&agent_src),
+        ) {
+            if let Ok(bin_mtime) = bin_meta.modified() {
+                if bin_mtime < newest_src {
+                    return Err(BackendError::Protocol(format!(
+                        "agent binary {} is older than the agent sources; rebuild with \
+                         runtime/guest/build-agent-in-guest.sh",
+                        local.display()
+                    )));
+                }
+            }
+        }
         let status = Command::new("scp")
             .args([
                 "-i", &self.config.guest_dir.join("keys").join("id_ed25519").to_string_lossy(),
@@ -268,6 +286,31 @@ fn kill_zero(pid: u32) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Newest modification time under `dir` (recursive), used for staleness checks.
+fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(t) = newest_mtime(&path) {
+                newest = Some(match newest {
+                    Some(cur) if cur > t => cur,
+                    _ => t,
+                });
+            }
+        } else if let Ok(meta) = entry.metadata() {
+            if let Ok(t) = meta.modified() {
+                newest = Some(match newest {
+                    Some(cur) if cur > t => cur,
+                    _ => t,
+                });
+            }
+        }
+    }
+    newest
 }
 
 impl Backend for QemuLinuxBackend {
