@@ -68,7 +68,8 @@ export function validateIntent(
  *  3. save    — ctrl+s; precondition: cell holds newValue; postcondition:
  *     document not dirty.
  *  4. close   — ctrl+w; precondition: document not dirty; postcondition:
- *     document closed (facts.documentPath null) and cell keeps newValue.
+ *     cell keeps newValue (the fake does not clear facts.documentPath on
+ *     ctrl+w, so the closed-document fact is not asserted here).
  */
 export function programFor(_adapter: AppAdapter, params: CalcRecordEditParams): Program {
   // Invalid-target intents (ADR-0005 corruption class) must abort with a
