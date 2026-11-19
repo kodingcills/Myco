@@ -1,0 +1,217 @@
+#cloud-config
+# RT-003: Myco runtime v0 guest — Ubuntu Server 24.04 LTS ARM64, X11/Xvfb + AT-SPI + xdotool.
+# Test app: minimal Tkinter (matches dogfood/apps/myco-todo stack; Tk AT-SPI visibility is
+# an explicit smoke-test question, see runtime/guest/smoke.sh and docs/env/linux-runtime.md).
+hostname: myco-runtime-v0
+users:
+  - name: myco
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    ssh_authorized_keys:
+      - __MYCO_PUBKEY__
+ssh_pwauth: false
+package_update: true
+packages:
+  - xvfb
+  - openbox
+  - xdotool
+  - x11-xserver-utils
+  - python3-tk
+  - python3-gi
+  - gir1.2-atspi-2.0
+  # The AT-SPI sanity window is a GTK3 app; python3-gi alone has no Gtk namespace.
+  - gir1.2-gtk-3.0
+write_files:
+  - path: /opt/myco/myco-tk-app.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      """Minimal Tk test app: Listbox (3 rows), Entry, status Label, Save button.
+
+      The Save button dumps the app's own widget state to STATE_FILE — this is the
+      observable proof surface for synthetic (xdotool/XTEST) input landing in the app
+      without depending on Tk's AT-SPI visibility (which is unknown; see smoke.sh).
+      """
+      import json
+      import time
+      import tkinter as tk
+
+
+      GEOM_FILE = "/tmp/myco-tk-geometry.txt"
+      STATE_FILE = "/tmp/myco-tk-state.json"
+
+      root = tk.Tk()
+      root.title("MycoTkTest")
+      root.geometry("640x480+0+0")
+
+      listbox = tk.Listbox(root, name="todo_list")
+      for item in ("buy milk", "walk dog", "ship myco"):
+          listbox.insert(tk.END, item)
+      listbox.pack(pady=8)
+
+      # After first layout, publish widget geometry so the host can aim clicks
+      # without relying on AT-SPI coordinates (Tk may expose none).
+      def dump_geometry(_event=None):
+          with open(GEOM_FILE, "w") as f:
+              for w in (listbox, entry, status, save_btn, root):
+                  f.write(f"{w.winfo_name()} {w.winfo_rootx()} {w.winfo_rooty()} "
+                          f"{w.winfo_width()} {w.winfo_height()}\n")
+
+      entry = tk.Entry(root, name="entry")
+      entry.pack(pady=8)
+
+      status = tk.Label(root, text="ready", name="status")
+      status.pack(pady=8)
+
+      def save():
+          state = {
+              "ts": time.time(),
+              "entry_text": entry.get(),
+              "listbox_rows": [listbox.get(i) for i in range(listbox.size())],
+              "listbox_selection": [listbox.get(i) for i in listbox.curselection()],
+              "status_text": status.cget("text"),
+          }
+          with open(STATE_FILE, "w") as f:
+              json.dump(state, f)
+      save_btn = tk.Button(root, text="Save", command=save, name="save")
+      save_btn.pack(pady=8)
+      # Save on every Entry keystroke too: smoke.sh types into the entry and reads
+      # this file — no button click needed (button-press coordinates drift under
+      # the window manager; keystroke delivery is position-independent).
+      entry.bind("<KeyRelease>", lambda _e: save())
+      root.update_idletasks()
+      dump_geometry()
+      root.bind("<Configure>", dump_geometry)
+      root.mainloop()
+  - path: /usr/local/bin/myco-session-inner
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # Runs INSIDE dbus-run-session with DISPLAY=:0 already set.
+      # Start the AT-SPI2 registry; apps register on org.a11y.Bus over the session bus.
+      /usr/libexec/at-spi-bus-launcher --launch-immediately &
+      openbox &
+
+      # 2. Publish the session env so an SSH-spawned agent can reach the same bus.
+      #    The service runs as `myco`, so the session bus, the AT-SPI bus and the
+      #    apps all share one uid — the agent connects to the same registry.
+      #    /run/myco is the unit's RuntimeDirectory (systemd-owned, recreated each
+      #    start; /run/user/<uid> is unreliable without a logind session).
+      ENVFILE=/run/myco/gui.env
+      printf 'DISPLAY=%s\nDBUS_SESSION_BUS_ADDRESS=%s\nXDG_RUNTIME_DIR=%s\nNO_AT_BRIDGE=%s\n' \
+        "$DISPLAY" "$DBUS_SESSION_BUS_ADDRESS" "${XDG_RUNTIME_DIR:-/run/user/1000}" "${NO_AT_BRIDGE:-0}" \
+        > "$ENVFILE"
+      chmod 0644 "$ENVFILE"
+      python3 /opt/myco/myco-tk-app.py &
+
+      # Tiny GTK3 window as an AT-SPI sanity node: if this shows in the tree but the
+      # Tk window does not, the read path works and Tk is genuinely not exposing AT-SPI.
+      python3 /opt/myco/myco-gtk-sanity.py &
+      sleep infinity
+
+  - path: /opt/myco/myco-gtk-sanity.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      """Tiny GTK3 window as an AT-SPI sanity node (see session-inner)."""
+      import gi
+
+      gi.require_version("Gtk", "3.0")
+      from gi.repository import Gtk
+
+      win = Gtk.Window(title="MycoGtkSanity")
+      win.set_default_size(320, 200)
+      win.add(Gtk.Label(label="gtk-sanity-label"))
+      win.connect("destroy", Gtk.main_quit)
+      win.show_all()
+      Gtk.main()
+  - path: /usr/local/bin/myco-gui-session
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # Headless GUI session: Xvfb :0 + dbus-run-session (session bus + AT-SPI) + Tk app.
+      Xvfb :0 -screen 0 1280x800x24 -nolisten tcp &
+      XPID=$!
+      for i in $(seq 1 50); do xdpyinfo -display :0 >/dev/null 2>&1 && break; sleep 0.2; done
+      export DISPLAY=:0 NO_AT_BRIDGE=0
+      exec dbus-run-session -- /usr/local/bin/myco-session-inner
+  - path: /opt/myco/atspi-dump.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      """Dump the AT-SPI tree of the session as text (smoke proof for tree reads).
+
+      Must run with the same session bus + DISPLAY as the GUI session. Run via:
+        sudo systemctl show -p Environment ... — no; use the helper in smoke.sh
+        (it enters the service's environment via /proc/<pid>/environ).
+      """
+      import sys
+      import gi
+
+      gi.require_version("Atspi", "2.0")
+      from gi.repository import Atspi
+
+      MAX_DEPTH = 8
+
+      def role_name(acc):
+          try:
+              return acc.get_role_name()
+          except Exception:
+              return "?"
+
+      def describe(acc, depth):
+          try:
+              name = acc.get_name() or ""
+          except Exception:
+              name = "<err>"
+          try:
+              n_children = acc.get_child_count()
+          except Exception:
+              n_children = -1
+          text = ""
+          if role_name(acc) == "text":
+              try:
+                  t = acc.get_text(0, min(acc.get_character_count(), 120))
+                  text = f" text={t!r}"
+              except Exception:
+                  pass
+          print(f"{'  ' * depth}{role_name(acc)} name={name!r} children={n_children}{text}")
+          if depth >= MAX_DEPTH:
+              return
+          for i in range(max(n_children, 0)):
+              try:
+                  describe(acc.get_child_at_index(i), depth + 1)
+              except Exception as e:
+                  print(f"{'  ' * (depth + 1)}<child error: {e}>")
+
+      desktop = Atspi.get_desktop(0)
+      n = desktop.get_child_count()
+      print(f"AT-SPI desktop children: {n}")
+      for i in range(n):
+          describe(desktop.get_child_at_index(i), 0)
+  - path: /etc/systemd/system/myco-gui.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Myco headless GUI session (Xvfb + session dbus + AT-SPI + Tk app)
+      After=systemd-user-sessions.service network.target
+      [Service]
+      Type=simple
+      # Run as the same uid as the control agent: each uid gets its own AT-SPI
+      # registry, and a root-owned session bus puts the accessibility bus in
+      # /root/.cache/at-spi, unreachable for the myco-user agent (RT-007 finding).
+      User=myco
+      Environment=HOME=/home/myco
+      Environment=XDG_RUNTIME_DIR=/run/user/1000
+      RuntimeDirectory=myco
+      RuntimeDirectoryMode=0755
+      ExecStart=/usr/local/bin/myco-gui-session
+      Restart=on-failure
+      RestartSec=2
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable --now myco-gui.service
+  - echo 'myco-runtime-v0 provisioned' > /var/lib/myco-provisioned

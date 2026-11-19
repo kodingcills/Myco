@@ -20,15 +20,29 @@ runs/
 
 ## result.json — RunRecord
 
+ADR-0012 adds a `recordKind` discriminator distinguishing M1's scored run
+records from runtime-layer session records:
+
+| `recordKind` | Verdict | `checks` | Description |
+|---|---|---|---|
+| `"run"` (default when absent) | **required** | — (inside verdict) | M1 scored record; current behavior, unchanged. Existing M1 artifacts without `recordKind` validate as-is. |
+| `"session"` | **forbidden** | optional (top-level) | Runtime-layer session summary (ADR-0012). The runtime never assigns verdicts; a session record carrying `verdict` is rejected by the schema. Top-level `checks` lets host-side verification attach per-check results without a scored verdict. |
+
+Implemented as `anyOf` of a `RunRecord` and a `SessionRecord` branch (the draft-07
+subset validator needs no extension): the session branch simply does not declare
+`verdict`, so `additionalProperties: false` rejects it.
+
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `recordKind` | `"run"` \| `"session"` | no | Discriminator; absent = `"run"` (backward-compatible with M1 artifacts). |
 | `runId` | string | yes | UUID identifying this trial's run. |
-| `taskId` | string | yes | Task family id, e.g. `fake-set-cell`. |
-| `taskParams` | object | yes | Trial parameters (intent inputs). |
+| `taskId` | string | run: yes / session: no | Task family id, e.g. `fake-set-cell`. |
+| `taskParams` | object | run: yes / session: no | Trial parameters (intent inputs). |
 | `startedAt` | string | yes | ISO-8601 start timestamp. |
 | `steps` | EvidenceStep[] | yes | Executed steps in order (see below). |
 | `guardFailure` | GuardFailure | no | Present iff the runner aborted on a guard. |
-| `verdict` | ScoredVerdict | yes | Final verdict with per-check scores (see below). |
+| `verdict` | ScoredVerdict | run: yes / session: forbidden | Final verdict with per-check scores (see below). |
+| `checks` | CheckVerdict[] | session only, optional | Per-check results without a scored verdict. |
 | `unresolvedState` | string | no | Present iff the run ended `uncertain`; names the ambiguity. |
 
 ### EvidenceStep
