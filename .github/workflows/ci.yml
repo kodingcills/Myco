@@ -25,6 +25,8 @@ jobs:
         run: pnpm typecheck
       - name: Lint
         run: pnpm lint
+      - name: Validate evidence artifacts against schemas
+        run: pnpm schema-validate
       - name: Test
         run: pnpm test
       - name: Build

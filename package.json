@@ -14,11 +14,13 @@
     "typecheck": "tsc -p tsconfig.json",
     "lint": "biome check .",
     "format": "biome format --write .",
+    "schema-validate": "tsx schemas/validate-artifacts.ts",
     "test": "vitest run"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
     "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   }
