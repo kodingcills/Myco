@@ -181,13 +181,19 @@ impl QemuLinuxBackend {
 
     fn connect(&mut self) -> Result<(), BackendError> {
         let mut ch = Channel::connect_ssh(&self.ssh_config())?;
-        ch.ping()?;
+        ch.require_ops(&["ping", "observe"])?;
         self.channel = Some(ch);
         Ok(())
     }
 
     /// Install the agent binary into the guest (idempotent). Required after every
     /// fresh overlay: the base image does not carry the agent.
+    ///
+    /// Two build paths, because xa11y links libxkbcommon (C) and cannot be
+    /// statically cross-linked from macOS:
+    /// 1. a musl static binary built on the host, if present;
+    /// 2. otherwise the native in-guest build (`runtime/guest/build-agent-in-guest.sh`)
+    ///    is copied from `~/myco-build` — which is how the guest is provisioned.
     fn install_agent(&self) -> Result<(), BackendError> {
         self.guest_exec("mkdir -p /home/myco/bin")?;
         let local = self
@@ -213,6 +219,21 @@ impl QemuLinuxBackend {
                 return Err(BackendError::Protocol("scp of agent failed".into()));
             }
             self.guest_exec("chmod +x /home/myco/bin/myco-rt-agent")?;
+            return Ok(());
+        }
+        // Native build path: copy the guest-built binary into place, and fail
+        // loudly if it is absent (a silently stale agent is worse than an error).
+        let out = self.guest_exec(
+            "if [ -x ~/myco-build/target/release/myco-rt-agent ]; then \
+                 cp ~/myco-build/target/release/myco-rt-agent ~/bin/myco-rt-agent && \
+                 chmod +x ~/bin/myco-rt-agent && echo INSTALLED; \
+             elif [ -x ~/bin/myco-rt-agent ]; then echo PRESENT; \
+             else echo MISSING; fi",
+        )?;
+        if out.contains("MISSING") {
+            return Err(BackendError::Protocol(
+                "agent binary missing in guest: run runtime/guest/build-agent-in-guest.sh".into(),
+            ));
         }
         Ok(())
     }
@@ -273,7 +294,34 @@ impl Backend for QemuLinuxBackend {
     }
 
     fn observe(&mut self) -> Result<Observation, BackendError> {
-        Err(BackendError::Unimplemented("observe lands at RT-007"))
+        let ch = self
+            .channel
+            .as_mut()
+            .ok_or_else(|| BackendError::Protocol("observe before provision".into()))?;
+        let resp = ch.observe()?;
+        let obs = resp
+            .get("observation")
+            .ok_or_else(|| BackendError::Protocol("observe response missing observation".into()))?;
+        let version = obs.get("state_version").and_then(|v| v.as_u64()).unwrap_or(0);
+        let nodes = obs.get("nodes").cloned().unwrap_or(serde_json::json!([]));
+        let windows = obs.get("windows").cloned().unwrap_or(serde_json::json!([]));
+        let processes = obs.get("processes").cloned().unwrap_or(serde_json::json!([]));
+        let screenshot = obs
+            .get("screenshot_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        Ok(Observation {
+            state_version: myco_rt_core::StateVersion(version),
+            a11y_tree: serde_json::json!({
+                "nodes": nodes,
+                "roots": obs.get("roots").cloned().unwrap_or(serde_json::json!([])),
+                "truncated": obs.get("truncated").cloned().unwrap_or(serde_json::json!(false)),
+                "introspection": obs.get("introspection").cloned().unwrap_or(serde_json::Value::Null),
+            }),
+            screenshot_artifact: screenshot,
+            processes: serde_json::from_value(processes).unwrap_or_default(),
+            windows: serde_json::from_value(windows).unwrap_or_default(),
+        })
     }
 
     fn act(&mut self, _action: &Action) -> Result<ActionOutcome, BackendError> {

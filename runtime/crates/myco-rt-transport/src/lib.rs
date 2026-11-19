@@ -113,6 +113,30 @@ impl Channel {
         }
     }
 
+    /// Verify the agent advertises every op the caller needs. A stale agent
+    /// binary (e.g. one built before an op existed) must fail loudly here, not
+    /// as a confusing "unknown op" on first use.
+    pub fn require_ops(&mut self, required: &[&str]) -> Result<(), TransportError> {
+        let resp = self.ping()?;
+        let advertised: Vec<String> = resp
+            .get("ops")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let missing: Vec<&str> = required
+            .iter()
+            .copied()
+            .filter(|op| !advertised.iter().any(|a| a == op))
+            .collect();
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(TransportError::Protocol(format!(
+                "stale agent: missing ops {missing:?} (advertised {advertised:?}); rebuild with runtime/guest/build-agent-in-guest.sh"
+            )))
+        }
+    }
+
     /// `ping`: protocol version + guest identity. Returns the raw response.
     pub fn ping(&mut self) -> Result<serde_json::Value, TransportError> {
         let resp = self.roundtrip(serde_json::json!({"op": "ping"}))?;
@@ -128,6 +152,16 @@ impl Channel {
         let start = Instant::now();
         let resp = self.ping()?;
         Ok((resp, start.elapsed()))
+    }
+
+    /// `observe`: AT-SPI tree + screenshot + process/window info (RT-007).
+    pub fn observe(&mut self) -> Result<serde_json::Value, TransportError> {
+        let resp = self.roundtrip(serde_json::json!({"op": "observe"}))?;
+        if resp.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+            Ok(resp)
+        } else {
+            Err(TransportError::Protocol(resp.to_string()))
+        }
     }
 
     /// `shutdown`: clean agent exit (NOT a VM poweroff).

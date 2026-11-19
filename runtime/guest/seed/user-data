@@ -91,14 +91,21 @@ write_files:
       /usr/libexec/at-spi-bus-launcher --launch-immediately &
       openbox &
 
-      # Run the apps as the unprivileged myco user WITHOUT login su (- strips the
-      # environment, and DBUS_SESSION_BUS_ADDRESS is what lets an app register on
-      # org.a11y.Bus — losing it cost us an "AT-SPI desktop: 0 children" run).
-      su myco -c 'exec python3 /opt/myco/myco-tk-app.py' &
+      # 2. Publish the session env so an SSH-spawned agent can reach the same bus.
+      #    The service runs as `myco`, so the session bus, the AT-SPI bus and the
+      #    apps all share one uid — the agent connects to the same registry.
+      #    /run/myco is the unit's RuntimeDirectory (systemd-owned, recreated each
+      #    start; /run/user/<uid> is unreliable without a logind session).
+      ENVFILE=/run/myco/gui.env
+      printf 'DISPLAY=%s\nDBUS_SESSION_BUS_ADDRESS=%s\nXDG_RUNTIME_DIR=%s\nNO_AT_BRIDGE=%s\n' \
+        "$DISPLAY" "$DBUS_SESSION_BUS_ADDRESS" "${XDG_RUNTIME_DIR:-/run/user/1000}" "${NO_AT_BRIDGE:-0}" \
+        > "$ENVFILE"
+      chmod 0644 "$ENVFILE"
+      python3 /opt/myco/myco-tk-app.py &
 
       # Tiny GTK3 window as an AT-SPI sanity node: if this shows in the tree but the
       # Tk window does not, the read path works and Tk is genuinely not exposing AT-SPI.
-      su myco -c 'exec python3 /opt/myco/myco-gtk-sanity.py' &
+      python3 /opt/myco/myco-gtk-sanity.py &
       sleep infinity
 
   - path: /opt/myco/myco-gtk-sanity.py
@@ -117,6 +124,7 @@ write_files:
       win.connect("destroy", Gtk.main_quit)
       win.show_all()
       Gtk.main()
+  - path: /usr/local/bin/myco-gui-session
     permissions: '0755'
     content: |
       #!/bin/sh
@@ -188,6 +196,14 @@ write_files:
       After=systemd-user-sessions.service network.target
       [Service]
       Type=simple
+      # Run as the same uid as the control agent: each uid gets its own AT-SPI
+      # registry, and a root-owned session bus puts the accessibility bus in
+      # /root/.cache/at-spi, unreachable for the myco-user agent (RT-007 finding).
+      User=myco
+      Environment=HOME=/home/myco
+      Environment=XDG_RUNTIME_DIR=/run/user/1000
+      RuntimeDirectory=myco
+      RuntimeDirectoryMode=0755
       ExecStart=/usr/local/bin/myco-gui-session
       Restart=on-failure
       RestartSec=2

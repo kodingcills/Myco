@@ -6,7 +6,10 @@
 //! transport crate; the shapes are frozen and covered by the transport's
 //! unit tests against this very binary).
 //!
-//! v0 surface ONLY: auth handshake, ping, shutdown. observe/act are RT-007/008.
+//! v0 surface: auth handshake, ping, shutdown (RT-004), observe (RT-007).
+//! act lands at RT-008.
+
+mod observe;
 
 use std::io::{BufRead, BufReader, Write};
 
@@ -110,9 +113,51 @@ fn main() {
                         "ok": true,
                         "op": "ping",
                         "protocol_version": PROTOCOL_VERSION,
+                        "ops": ["ping", "observe", "shutdown"],
                         "guest": guest,
                     })
                 );
+                let _ = stdout.flush();
+            }
+            "observe" => {
+                // GUI-readiness gate: a fresh overlay runs cloud-init in the
+                // background after the channel is up. Report readiness explicitly
+                // rather than an empty tree that looks like "no apps".
+                let ready = gui_ready();
+                if !ready {
+                    let _ = writeln!(
+                        stdout,
+                        "{}",
+                        serde_json::json!({
+                            "ok": false,
+                            "op": "observe",
+                            "error": "gui_not_ready",
+                            "detail": "Xvfb/AT-SPI session not up yet (cloud-init may still be running)"
+                        })
+                    );
+                    let _ = stdout.flush();
+                    line.clear();
+                    continue;
+                }
+                let version = next_state_version();
+                let shot_path = format!("/tmp/myco-observe-{version}.png");
+                let shot = observe::capture_screenshot(&shot_path).ok();
+                match observe::observe(version, shot) {
+                    Ok(obs) => {
+                        let _ = writeln!(
+                            stdout,
+                            "{}",
+                            serde_json::json!({"ok": true, "op": "observe", "observation": obs})
+                        );
+                    }
+                    Err(e) => {
+                        let _ = writeln!(
+                            stdout,
+                            "{}",
+                            serde_json::json!({"ok": false, "op": "observe", "error": e})
+                        );
+                    }
+                }
                 let _ = stdout.flush();
             }
             "shutdown" => {
@@ -130,11 +175,56 @@ fn main() {
 }
 
 fn uname_kernel() -> String {
-    // /proc/sys/kernel/osrelease is the cheapest stable source on Linux.
     std::fs::read_to_string("/proc/sys/kernel/osrelease")
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+/// GUI-readiness gate (RT-007): the X display must exist and the AT-SPI bus must
+/// answer. Cheap checks only — no app-specific assumptions.
+fn gui_ready() -> bool {
+    load_gui_env();
+    // 1. X display socket present and connectable.
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+    let sock = format!("/tmp/.X11-unix/X{}", display.trim_start_matches(':').split('.').next().unwrap_or("0"));
+    if !std::path::Path::new(&sock).exists() {
+        return false;
+    }
+    // 2. AT-SPI registry reachable: the provider construction is the real probe.
+    xa11y::provider().is_ok()
+}
+
+/// An agent spawned over SSH inherits none of the GUI session's environment, so
+/// the AT-SPI bus would be unreachable. `myco-gui-session` publishes the session
+/// environment to /run/myco/gui.env; adopt the missing vars from it.
+fn load_gui_env() {
+    // Written by myco-gui-session into the unit's RuntimeDirectory. The
+    // /run/user/<uid> variant is a fallback for sessions that have one.
+    let path = if std::path::Path::new("/run/myco/gui.env").exists() {
+        "/run/myco/gui.env".to_string()
+    } else {
+        std::env::var("XDG_RUNTIME_DIR")
+            .map(|d| format!("{d}/myco/gui.env"))
+            .unwrap_or_else(|_| "/run/user/1000/myco/gui.env".to_string())
+    };
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once('=') else { continue };
+        // Override, do not merely fill: sshd exports DBUS_SESSION_BUS_ADDRESS for
+        // the *login* session, whose bus has no GUI apps — silently preferring it
+        // yields an empty desktop (the bug this file exists to prevent).
+        // Safety: single-threaded op loop; set before any provider is built.
+        unsafe { std::env::set_var(k, v) };
+    }
+}
+
+/// Monotonic per-session state version. The agent process is per-session, so a
+/// process-local counter is sufficient; the host also tracks it.
+fn next_state_version() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static V: AtomicU64 = AtomicU64::new(0);
+    V.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 fn send(out: &mut impl Write, v: serde_json::Value) {
