@@ -46,6 +46,12 @@ always answers and keeps serving.
 artifacts live outside any single root. The agent is loopback-only and
 token-authed; the host is the trusted caller. There is no path sandbox.
 
+LibreOffice quirk: through the MSAA→UIA proxy, controls report empty
+RuntimeIds, so `uia_invoke` also accepts a JSON descriptor
+(`{"hwnd":…, "control_type":…, "name":…}`) in place of a runtime id. Descriptors
+go stale fast — e.g. after typing, the Name Box renames itself (`A1`→`A2`) —
+so re-observe (`uia_tree`) after each mutation instead of caching descriptors.
+
 ### Timeouts (ADR-0003)
 
 Every UIA call runs on an `IUIAutomation2` client with
