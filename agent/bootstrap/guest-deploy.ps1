@@ -21,10 +21,17 @@ $cmdPath = Join-Path $agentDir 'run-agent.cmd'
 if (-not (Test-Path $xmlPath)) { throw "missing $xmlPath" }
 if (-not (Test-Path $tokenPath)) { throw "missing $tokenPath" }
 
-$pyExe = '"C:\Program Files\Python312-arm64\python.exe"'
+# The agent MUST run in the logged-on user's desktop session: a session-0
+# process cannot see windows, so UIA would silently observe nothing. A bare
+# `schtasks /Run` of an InteractiveToken task lands in session 0 when started
+# from an SSH context (verified on the VM), so we go through
+# run-interactive.ps1, which registers a per-launch Interactive task and
+# provably yields session 1. The wrapper keeps the task name stable so the
+# LogonTrigger path still works for reboot recovery.
+$pyExe = 'C:\Program Files\LibreOffice\program\python.exe'
 $lines = @(
     "cd /d `"$agentDir`"",
-    "start `"`" /min $pyExe -m myco_agent --host 127.0.0.1 --port 8765 --token-file `"$tokenPath`" --backend windows"
+    "`"C:\myco\bin\run-interactive.ps1`"`" -Exe `"$pyExe`" -ArgList `"-m myco_agent --host 127.0.0.1 --port 8765 --token-file $tokenPath --backend windows`" -Name myco-agent-interactive"
 )
 $cmd = ($lines -join "`r`n") + "`r`n"
 Set-Content -Path $cmdPath -Value $cmd -Encoding ASCII
