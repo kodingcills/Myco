@@ -149,3 +149,8 @@ Obligations:
 ## Log 2026-11-19 (13)
 - Hot-patch child #1 stalled: ended its turn 'waiting for a background deploy' with zero commits; its branch equals main. VM was healthy (SSH up, 2 python.exe). Respawned fresh with an explicit rule: never end a turn waiting on a background job; run deploys foreground with hard timeouts; capture the deployed-vs-repo diff FIRST so the deliverable survives a stall.
 - Standing instructions for all VM children: foreground commands with timeouts, deliverable-first ordering, reset the VM when done.
+
+## Log 2026-11-19 (15) — RAM pressure
+- Mac at 18% free pages. Culprit: Ollama's `llama-server` (pid 47256, 9.1 GB RSS, local model), NOT the VMs. Windows VM shows ~1 GB RSS (QEMULauncher 1.0 GB) — the guest's 8 GB is committed but compressed/swapped.
+- Effect: SSH to 127.0.0.1:2222 times out during banner exchange; guest ops intermittently unreachable. PR #12's clean deploy DID pass (DEPLOY OK, ping verified) before pressure peaked.
+- Action: escalated to the outer loop — Tiffany side app, not mine to kill. VM stays up; waiting for headroom before the next live-trial work.
