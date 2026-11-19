@@ -152,12 +152,34 @@ pub struct Paths {
 }
 
 fn now() -> String {
-    // RFC-3339-ish UTC without a chrono dependency.
+    // RFC-3339 UTC, matching M1's `new Date().toISOString()` shape. No chrono
+    // dependency: civil-from-days conversion is exact and testable.
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    format!("{secs}Z")
+    format_iso8601(secs)
+}
+
+/// Format unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (Howard Hinnant's civil algorithm).
+pub fn format_iso8601(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+
+    // days since 1970-01-01 → civil date
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+
+    format!("{year:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
 }
 
 // ── Validation (mirrors schemas/trace-events.ts and result-record.ts) ─────────
@@ -238,6 +260,48 @@ fn validate_session_record(v: &Value) -> Result<(), EvidenceError> {
             return Err(EvidenceError::Invalid(format!("session record: missing {req:?}")));
         }
     }
+    // Validate every step against the closed EvidenceStep shape; a step with an
+    // undeclared field would be rejected by M1's validator, so we must not write it.
+    if let Some(steps) = obj.get("steps").and_then(|s| s.as_array()) {
+        for (i, step) in steps.iter().enumerate() {
+            validate_step(step).map_err(|e| EvidenceError::Invalid(format!("step {i}: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_step(v: &Value) -> Result<(), String> {
+    let obj = v.as_object().ok_or("not an object")?;
+    let allowed = [
+        "step",
+        "action",
+        "preconditionResults",
+        "postconditionResults",
+        "stateVersionBefore",
+        "stateVersionAfter",
+    ];
+    for k in obj.keys() {
+        if !allowed.contains(&k.as_str()) {
+            return Err(format!("unexpected field {k:?}"));
+        }
+    }
+    for req in allowed {
+        if !obj.contains_key(req) {
+            return Err(format!("missing required field {req:?}"));
+        }
+    }
+    for field in ["preconditionResults", "postconditionResults"] {
+        let arr = obj[field].as_array().ok_or(format!("{field} is not an array"))?;
+        for p in arr {
+            let pobj = p.as_object().ok_or("predicate result is not an object")?;
+            if !pobj.contains_key("predicateName")
+                || !pobj.contains_key("passed")
+                || !pobj.contains_key("observed")
+            {
+                return Err("predicate result missing a required field".into());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -288,6 +352,30 @@ mod tests {
         v["verdict"] = json!({"status": "verified"});
         let err = validate_session_record(&v).unwrap_err();
         assert!(err.to_string().contains("verdict"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn timestamps_are_rfc3339() {
+        assert_eq!(format_iso8601(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_iso8601(1_765_000_000), "2025-12-06T05:46:40Z");
+        let now = now();
+        assert_eq!(now.len(), 20, "YYYY-MM-DDTHH:MM:SSZ is 20 chars: {now}");
+        assert!(now.ends_with('Z'));
+        assert_eq!(&now[4..5], "-");
+        assert_eq!(&now[10..11], "T");
+    }
+
+    #[test]
+    fn a_step_with_an_undeclared_field_is_refused() {
+        let dir = std::env::temp_dir().join(format!("myco-ev-s-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut r = rec(&dir);
+        r.action(json!({"kind": "click", "ref": "n1"}), 0, 1, "delivered_unverified", "x");
+        let mut v: Value = serde_json::from_slice(&r.result_bytes().unwrap()).unwrap();
+        v["steps"][0]["verdict"] = json!("nope");
+        let err = validate_session_record(&v).unwrap_err();
+        assert!(err.to_string().contains("unexpected field"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
