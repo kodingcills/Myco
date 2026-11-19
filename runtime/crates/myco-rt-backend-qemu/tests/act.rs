@@ -63,6 +63,7 @@ fn live_act_launch_type_and_stale_ref() {
     //    the action's return value (ADR-0014 read-back discipline).
     let obs2 = backend.observe().expect("re-observe");
     let entry = find_ref(&obs2, "sanity-entry").expect("sanity-entry node");
+    let pre_action_ref = entry.clone();
     let typed = backend
         .act(&Action::TypeText { target: entry, text: "myco-act-probe".into() })
         .expect("typeText");
@@ -80,14 +81,23 @@ fn live_act_launch_type_and_stale_ref() {
         "typing did not reach the app (state: {state})"
     );
 
-    // 3. stale ref: a ref that cannot be resolved must be refused, not guessed.
-    let stale = ElementRef { payload: "n999".into(), issued_at: StateVersion(version.0) };
+    // 3. STALE REF: a ref from the pre-action observation, after the version moved
+    //    on. The refusal must be specifically stale_ref, not a generic failure.
+    let stale = ElementRef {
+        payload: pre_action_ref.payload.clone(),
+        issued_at: pre_action_ref.issued_at,
+    };
     let res = backend.act(&Action::Click { target: stale }).expect("act call");
     println!("stale ref outcome: {res:?}");
-    assert!(
-        matches!(res, ActionOutcome::Failed { .. }),
-        "an unresolvable ref must fail, got {res:?}"
-    );
+    match &res {
+        ActionOutcome::Failed { reason } => {
+            assert!(
+                reason.contains("stale_ref"),
+                "expected a stale_ref refusal, got {reason:?}"
+            );
+        }
+        other => panic!("stale ref must fail, got {other:?}"),
+    }
 
     backend.destroy().expect("destroy");
     println!("ACT PASS");

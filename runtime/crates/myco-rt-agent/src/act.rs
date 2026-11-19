@@ -106,31 +106,29 @@ fn launch(command: &str, args: &[String]) -> (Outcome, Option<String>) {
     // Inherit the GUI session env (DISPLAY, bus) so the app joins the desktop.
     crate::load_gui_env();
     match cmd.spawn() {
-        Ok(child) => {
+        Ok(mut child) => {
             let pid = child.id();
-            // Verification: the process is still alive shortly after spawn (a
-            // binary that execs and dies — wrong arch, missing lib — fails here).
+            // Verification: the process is still running shortly after spawn.
+            // try_wait reaps and distinguishes an exited child from a live one —
+            // /proc existence alone would count an unreaped zombie as alive.
             std::thread::sleep(std::time::Duration::from_millis(400));
-            let alive = std::path::Path::new(&format!("/proc/{pid}")).exists()
-                || Command::new("kill")
-                    .args(["-0", &pid.to_string()])
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-            if alive {
-                (
+            match child.try_wait() {
+                Ok(None) => (
                     Outcome::DeliveredVerified {
-                        verified_by: format!("process_alive pid={pid}"),
+                        verified_by: format!("process_running pid={pid} at +400ms"),
                     },
                     None,
-                )
-            } else {
-                (
+                ),
+                Ok(Some(status)) => (
                     Outcome::Failed {
-                        reason: format!("spawned pid {pid} exited immediately"),
+                        reason: format!("spawned pid {pid} exited immediately ({status})"),
                     },
                     Some("process_died".into()),
-                )
+                ),
+                Err(e) => (
+                    Outcome::Failed { reason: format!("wait failed: {e}") },
+                    Some("wait_error".into()),
+                ),
             }
         }
         Err(e) => (
@@ -207,6 +205,10 @@ fn type_text(
     text: &str,
     nodes: &[Node],
 ) -> (Outcome, Option<String>) {
+    // Baseline BEFORE acting. Without it, "the text is present afterwards" is
+    // vacuous: pre-filled or previously typed text passes a containment check
+    // even if this action changed nothing (adversarial review M1).
+    let baseline = read_text(provider, nodes, target);
     // Focus first (semantic), then let the toolkit settle before typing: typing
     // immediately after focus loses the leading characters on GTK.
     let focus_ok = provider.focus(el.data()).is_ok();
@@ -221,41 +223,53 @@ fn type_text(
             Some("type_error".into()),
         );
     }
-    // Read-back: re-resolve the SAME ref and read the element's text. GTK entries
-    // expose the content through the Text interface, not Value (value is usually
-    // None there), so both are consulted.
     std::thread::sleep(std::time::Duration::from_millis(200));
-    let observed = match resolve(provider, nodes, target) {
-        Ok(e) => {
-            let from_value = e.value.clone().filter(|v| !v.is_empty());
-            from_value.or_else(|| e.text().read_all().ok().filter(|t| !t.is_empty()))
-        }
-        Err(_) => None,
-    };
-    match observed {
-        Some(v) if v.contains(text) => (
-            Outcome::DeliveredVerified {
-                verified_by: "value_readback".into(),
-            },
-            None,
-        ),
-        Some(v) => (
+    let observed = read_text(provider, nodes, target);
+
+    let Some(before) = baseline else {
+        return (
             Outcome::DeliveredUnverified {
                 reason: format!(
-                    "typed but value reads {v:?} (focus_ok={focus_ok}); app may not have committed"
+                    "typed (focus_ok={focus_ok}) but the target exposes no readable text, so \
+                     the effect cannot be verified"
+                ),
+            },
+            Some("no_baseline".into()),
+        );
+    };
+    let after = observed.unwrap_or_default();
+    let expected = format!("{before}{text}");
+    if after == expected {
+        (
+            Outcome::DeliveredVerified {
+                verified_by: "text_readback_delta".into(),
+            },
+            None,
+        )
+    } else {
+        (
+            Outcome::DeliveredUnverified {
+                reason: format!(
+                    "typed (focus_ok={focus_ok}) but read-back {after:?} != expected {expected:?}"
                 ),
             },
             Some("readback_mismatch".into()),
-        ),
-        None => (
-            Outcome::DeliveredUnverified {
-                reason: format!(
-                    "typed with no readable value on the target (focus_ok={focus_ok})"
-                ),
-            },
-            Some("no_readback".into()),
-        ),
+        )
     }
+}
+
+/// Read an element's current text, preferring Value then the Text interface
+/// (GTK entries expose Text, not Value).
+fn read_text(
+    provider: &std::sync::Arc<dyn xa11y::Provider>,
+    nodes: &[Node],
+    target: &str,
+) -> Option<String> {
+    let el = resolve(provider, nodes, target).ok()?;
+    el.value
+        .clone()
+        .filter(|v| !v.is_empty())
+        .or_else(|| el.text().read_all().ok())
 }
 
 fn key_press(keys: &str) -> (Outcome, Option<String>) {
@@ -321,8 +335,9 @@ fn parse_chord(spec: &str) -> Result<(xa11y::Key, Vec<xa11y::Key>), String> {
         other => {
             if let Some(n) = other.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
                 xa11y::Key::F(n)
-            } else if other.chars().count() == 1 {
-                let c = other.chars().next().unwrap();
+            } else if last.chars().count() == 1 {
+                // Case matters: inspect the RAW char, not the lowercased token.
+                let c = last.chars().next().unwrap();
                 if c.is_ascii_uppercase() {
                     // Key::Char must be lowercase; hold Shift for the capital.
                     held.push(xa11y::Key::Shift);
@@ -336,5 +351,30 @@ fn parse_chord(spec: &str) -> Result<(xa11y::Key, Vec<xa11y::Key>), String> {
         }
     };
     Ok((key, held))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chord_parsing_covers_common_forms() {
+        assert_eq!(parse_chord("ctrl+shift+tab").unwrap(), (xa11y::Key::Tab, vec![xa11y::Key::Ctrl, xa11y::Key::Shift]));
+        assert_eq!(parse_chord("Ctrl+Tab").unwrap(), (xa11y::Key::Tab, vec![xa11y::Key::Ctrl]));
+        assert_eq!(parse_chord("Return").unwrap(), (xa11y::Key::Enter, vec![]));
+        assert_eq!(parse_chord("F5").unwrap(), (xa11y::Key::F(5), vec![]));
+        // Uppercase letter: Shift is added, the char stays lowercase.
+        assert_eq!(parse_chord("A").unwrap(), (xa11y::Key::Char('a'), vec![xa11y::Key::Shift]));
+        assert_eq!(parse_chord("a").unwrap(), (xa11y::Key::Char('a'), vec![]));
+    }
+
+    #[test]
+    fn chord_parsing_rejects_garbage_instead_of_guessing() {
+        assert!(parse_chord("").is_err());
+        assert!(parse_chord("a+b").is_err(), "unknown modifier must error");
+        assert!(parse_chord("ctrl+").is_err(), "modifier-only must error");
+        assert!(parse_chord("ctrl+shift").is_err(), "modifier-only must error");
+        assert!(parse_chord("nonsense").is_err());
+    }
 }
 

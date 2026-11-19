@@ -290,6 +290,14 @@ fn kill_zero(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// The element ref an action carries, if any.
+fn action_ref(action: &Action) -> Option<&myco_rt_core::ElementRef> {
+    match action {
+        Action::Click { target } | Action::TypeText { target, .. } => Some(target),
+        _ => None,
+    }
+}
+
 /// Newest modification time under `dir` (recursive), used for staleness checks.
 fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
     let mut newest = None;
@@ -367,6 +375,24 @@ impl Backend for QemuLinuxBackend {
     }
 
     fn act(&mut self, action: &Action) -> Result<ActionOutcome, BackendError> {
+        // Refs carry the version they were issued at; never relabel them with the
+        // newest observation (adversarial review M3). A ref from an older
+        // observation is stale, and saying so is the whole point of the binding.
+        let version = match action_ref(action) {
+            Some(r) => {
+                if r.issued_at.0 != self.last_state_version {
+                    return Ok(ActionOutcome::Failed {
+                        reason: format!(
+                            "stale_ref: ref issued at version {}, current is {}; re-observe",
+                            r.issued_at.0, self.last_state_version
+                        ),
+                    });
+                }
+                r.issued_at.0
+            }
+            None => self.last_state_version,
+        };
+
         let ch = self
             .channel
             .as_mut()
@@ -405,6 +431,14 @@ impl Backend for QemuLinuxBackend {
                     "unknown act outcome {other:?}"
                 )))
             }
+        })
+        .map(|resolved| {
+            // A delivered action may have mutated state; the next ref must come
+            // from a fresh observe (mirrors Session::act's version bump).
+            if !matches!(resolved, ActionOutcome::Failed { .. }) {
+                self.last_state_version += 1;
+            }
+            resolved
         })
     }
 
