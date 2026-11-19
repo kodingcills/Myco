@@ -19,9 +19,9 @@ VNC/RDP, so no human ever installs a remote-desktop client.
 | | Linux VM (QEMU+HVF) | Container desktop (Docker) |
 |---|---|---|
 | Isolation | Hardware virtualization; kernel boundary. A guest crash or `kill -9` storm cannot touch the host or other desktops. | Shared host kernel; weaker boundary. |
-| Lifecycle fidelity | Full OS: real display server, real AT-SPI bus, real systemd/session semantics. `reset` = qcow2 discard + reboot, proven 8–20 s on this machine (M1-017, Windows). | No hardware display; Xvfb-in-container works but shares kernel state (e.g. udev, input devices) with the host. |
+| Lifecycle fidelity | Full OS: real display server, real AT-SPI bus, real systemd/session semantics. `reset` = qcow2 discard + reboot; cost measured at RT-011 (M1-017's 8.3–8.6 s figure is the Windows *live-snapshot* path — RAM+disk restore — not a Linux cold boot; per M1 coordinator review it is not inherited). | No hardware display; Xvfb-in-container works but shares kernel state (e.g. udev, input devices) with the host. |
 | Destructive actions | Safe: an agent can `rm -rf /` inside a disposable VM. | Unsafe or requires privileged containers, which erode the boundary. |
-| Cost | ~8 s boot + 2–4 GB RAM each. HVF gives near-native CPU on ARM64. | Near-instant start, ~100 MB overhead. |
+| Cost | Boot + 2–4 GB RAM each. HVF gives near-native CPU on ARM64; actual Linux boot/reset cost measured at RT-011, not estimated here. | Near-instant start, ~100 MB overhead. |
 | Density | Low (a few concurrent desktops on 24 GB with the Win11 VM at 8 GB). | High. |
 | Matches product direction | Yes — vision names Windows and cloud VMs; a VM backend trait generalizes. | Only Linux, ever. |
 
@@ -30,11 +30,11 @@ is that an agent can do anything inside the desktop and `destroy` leaves nothing
 a VM makes that unconditionally safe on a shared host. (2) **The interface generalizes**
 — M1 already needs a Windows/UTM backend later; a VM-shaped `Backend` trait
 (create/observe/act/reset/destroy over a control channel) ports to UTM and to cloud
-VMs; a container-shaped one does not. (3) Boot cost (~8 s, measured for the Windows
-VM's live-snapshot path on identical hardware; Linux cloud-init boots are typically
-comparable or faster) is acceptable for agent tasks measured in minutes, and `reset`
-reuses the same path. Container density is a real loss; it is accepted for v0 and
-revisited if fleet Linux desktops become the dominant use.
+VMs; a container-shaped one does not. (3) Boot cost (to be measured at RT-011; M1-017's
+8.3–8.6 s is the Windows live-snapshot path and is deliberately not inherited) is
+expected to be acceptable for agent tasks measured in minutes, and `reset` reuses the
+same path. Container density is a real loss; it is accepted for v0 and revisited if
+fleet Linux desktops become the dominant use.
 
 **RAM discipline.** Budget: Win11 VM 8 GB (M1, may be running) + one runtime VM at
 2 GB + host ≈ 14 GB of 24 GB. The runtime MUST enforce a configurable cap on
@@ -83,11 +83,14 @@ same `Backend`/`AppAdapter` seam it uses for the fake app and the Windows guest 
 `trace.jsonl` lines in the M1 trace vocabulary, and the per-session summary is a
 `result.json` RunRecord including its weighted partial_scores shape. The runtime layer
 never assigns verdicts — verdicts are M1's alone — so runtime-produced records carry
-no task-success claims; how a verdict-less session record is represented inside the
-RunRecord schema is resolved against the schema owner, not improvised. If the schema
-cannot express something the runtime needs, the runtime proposes the extension as a
-PR against `schemas/` and flags the M1 coordinator; it does not fork the schema and
-does not invent a parallel format.
+no task-success claims. Resolution (M1 coordinator, 2026-11-19, ADR review accepted):
+a schema PR against `schemas/` adds a `recordKind` discriminator to `result.json` —
+`"run"` (verdict required, current behavior) vs `"session"` (verdict forbidden, checks
+optional) — keeping M1's "no verdict without verification" invariant machine-enforced.
+Until that PR lands, the runtime does not emit verdict-less records under the current
+schema (RT-009 blocked on it; the schema PR is RT work, reviewed by M1 as normal).
+Any further schema need follows the same path: PR against `schemas/`, flagged to the
+M1 coordinator; never a fork, never a parallel format.
 
 **Consistency with ADR-0001.** ADR-0001 decided the *core runtime* (state model,
 program runner, verifier orchestration, evidence, eval harness) is TypeScript, with
