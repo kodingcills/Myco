@@ -1,0 +1,2 @@
+# Raw caches live outside the repo; see docs/research/PIPELINE.md
+# (nothing here today — cache dir is ~/.myco/research-cache/)
