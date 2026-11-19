@@ -111,16 +111,39 @@ export async function runProgram(adapter: AppAdapter, program: Program): Promise
       };
     }
 
-    if (step.action.kind === "waitFor") {
-      const deadline = Date.now() + step.action.timeoutMs;
-      let after = await adapter.observe();
-      while (!step.action.predicate(after) && Date.now() < deadline) {
-        await delay(10);
-        after = await adapter.observe();
+    // A mid-program app death (killed process, lost window) surfaces here as a
+    // throwing observe(). It must become a structured guard failure carrying
+    // the steps already executed — otherwise the evidence cannot distinguish
+    // "died after the edit" from "never launched", which is exactly the
+    // distinction recovery and the corrupted-trial audit depend on.
+    try {
+      if (step.action.kind === "waitFor") {
+        const deadline = Date.now() + step.action.timeoutMs;
+        let after = await adapter.observe();
+        while (!step.action.predicate(after) && Date.now() < deadline) {
+          await delay(10);
+          after = await adapter.observe();
+        }
+        state = after;
+      } else {
+        state = await adapter.observe();
       }
-      state = after;
-    } else {
-      state = await adapter.observe();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failure: GuardFailure = {
+        step: i,
+        phase: "postcondition",
+        predicateName: "observe-after-action",
+        observed: message,
+        reason: `app became unobservable after step ${i}: ${message}`,
+      };
+      return {
+        program: program.name,
+        completed: false,
+        steps,
+        guardFailure: failure,
+        finalState: state,
+      };
     }
 
     const postconditionResults = evaluatePredicates(step.postconditions, state);

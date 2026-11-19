@@ -49,6 +49,13 @@ export interface TrialOptions {
   runsDir: string;
   /** Guest dir for fixtures + helper (created in the guest by the converter). */
   guestDir?: string;
+  /**
+   * Kill soffice after this many program steps have completed. A timer cannot
+   * land mid-program reliably: launching Calc and making it observable takes
+   * ~30 s, so a wall-clock kill fires during launch and the trial never
+   * executes a step. Step-triggered kills are deterministic.
+   */
+  killAfterStep?: number;
 }
 
 export interface TrialReport {
@@ -155,6 +162,10 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
   // launch event, and the schema rejects negative step indices.
 
   // 4. Run the guarded program (skipped when the launch itself failed).
+  const programAdapter =
+    options.killAfterStep === undefined
+      ? adapter
+      : killAfterStepAdapter(adapter, options.killAfterStep, options.client);
   const outcome = launchFailure
     ? {
         program: program.name,
@@ -163,7 +174,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
         guardFailure: launchFailure,
         finalState: null,
       }
-    : await runProgramSafe(adapter, program);
+    : await runProgramSafe(programAdapter, program);
 
   // 5. Verdict: the independent UnoVerifier over the live document + the
   //    persisted file. It closes the document itself (check (c)).
@@ -204,6 +215,34 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
 }
 
 /** runProgram, with adapter/UNO failures folded into a guard-failure outcome. */
+/**
+ * Delegating adapter that kills soffice.bin once N steps have completed, so
+ * the fault lands after the edit and before the save — the interruption M1's
+ * recovery criterion is about. The kill is fire-and-forget: the next adapter
+ * call observes the dead app and the runner reports a bounded failure.
+ */
+function killAfterStepAdapter(
+  inner: AppAdapter,
+  afterStep: number,
+  client: AgentClient,
+): AppAdapter {
+  let completed = 0;
+  return {
+    observe: () => inner.observe(),
+    capabilities: () => inner.capabilities(),
+    issueRef: (nodeId: string) => inner.issueRef?.(nodeId) ?? null,
+    async act(action) {
+      const result = await inner.act(action);
+      completed += 1;
+      if (completed === afterStep) {
+        process.stderr.write(`[kill-fault] killing soffice.bin after step ${completed}\n`);
+        void client.kill({ image_name: "soffice.bin" }).catch(() => {});
+      }
+      return result;
+    },
+  };
+}
+
 async function runProgramSafe(adapter: AppAdapter, program: Program): Promise<RunOutcome> {
   try {
     return await runProgram(adapter, program);
