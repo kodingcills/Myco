@@ -58,6 +58,7 @@ search, workflow compilation, multi-OS support beyond Linux ARM64, product UI.
   `docs/coordination/runtime-state.md`; dogfood wakes on that.
 
 ## Status
-Phase 0 complete on branch `myco/dogfood-v0` (pending PR + independent review).
+Phase 0 complete: PR #8 merged to main (2026-11-19, head 3ffcceb; VERIFIED by
+independent kimi-k3 review at a491f71 + docs-only hardening delta, CI 4/4 green).
 Phase 1 blocked on the runtime's first end-to-end path. Not polling; will be
 woken.
