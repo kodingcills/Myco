@@ -132,3 +132,7 @@ Obligations:
 ## Log 2026-11-19 (10)
 - Discovery: reset.sh live restores clean-base-live, which PREDATES the myco-agent install — every reset wipes the deployment. Integration child blocked on this; answered: redeploy and proceed.
 - Decision (VM owner): after the integration run proves out, create a NEW live snapshot `m1-agent-live` (vm.sh snapshot; never delete/modify clean-base*) with the agent installed+running, and point the eval harness reset at it. Recorded here so a fresh coordinator does it if I'm interrupted.
+
+## Log 2026-11-19 (11)
+- PR #11 (integration) delivered: normal trial VERIFIED (C39 persisted 7331, UNO+isModified+file parse agree), corrupted trial (kill mid-program) UNCERTAIN no hang, 89/89 tests, schema-valid artifacts. Verifier re-running both trials on the VM.
+- FOLLOW-UPS OWED: (1) two pywin32 hot-patches exist ONLY in the deployed guest copy of windows_backend.py — verifier is capturing the diff; must be ported to agent/ in a follow-up PR. (2) Deployment now runs under LO's bundled Python (pyuno built against it) — update agent/bootstrap + docs/env/windows.md when ported. (3) reset.sh live took 58s once (vs 8.3s baseline) — watch for RAM pressure / snapshot growth. (4) AutoCorrect case-flips lowercase text values → legit refuted; M1-013's parameter generator MUST emit AutoCorrect-immune values (uppercase-start or numeric) or the 27/30 criterion is unwinnable. (5) m1-agent-live snapshot still owed — take it AFTER the hot-patch port lands.
