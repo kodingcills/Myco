@@ -97,6 +97,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  process.stderr.write(error);
+  // String(): write() rejects non-string/Buffer, which would mask the real error
+  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   process.exit(1);
 });
