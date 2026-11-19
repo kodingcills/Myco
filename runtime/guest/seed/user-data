@@ -114,17 +114,52 @@ write_files:
     permissions: '0755'
     content: |
       #!/usr/bin/env python3
-      """Tiny GTK3 window as an AT-SPI sanity node (see session-inner)."""
+      """GTK3 sanity window: an AT-SPI-visible label AND an entry whose content is
+      published to a state file, so the runtime can verify synthetic typing by
+      read-back (RT-008) instead of trusting an AT-SPI return value."""
+      import json
+      import os
+
       import gi
 
       gi.require_version("Gtk", "3.0")
       from gi.repository import Gtk
 
+      STATE_FILE = os.environ.get("MYCO_GTK_STATE_FILE", "/tmp/myco-gtk-state.json")
+
       win = Gtk.Window(title="MycoGtkSanity")
       win.set_default_size(320, 200)
-      win.add(Gtk.Label(label="gtk-sanity-label"))
+
+      box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+      label = Gtk.Label(label="gtk-sanity-label")
+      label.set_name("sanity-label")
+      entry = Gtk.Entry()
+      entry.set_name("sanity-entry")
+      box.add(label)
+      box.add(entry)
+      win.add(box)
+
+
+      def name_accessible(_widget=None):
+          # set_name() names the widget; AT-SPI exposes the *accessible* name.
+          entry.get_accessible().set_name("sanity-entry")
+
+
+      entry.connect("realize", name_accessible)
+
+
+      def publish(_widget=None):
+          # Atomic: write a temp file then rename, so a reader never sees torn JSON.
+          tmp = STATE_FILE + ".tmp"
+          with open(tmp, "w") as f:
+              json.dump({"entry_text": entry.get_text()}, f)
+          os.replace(tmp, STATE_FILE)
+
+
+      entry.connect("changed", publish)
       win.connect("destroy", Gtk.main_quit)
       win.show_all()
+      publish()
       Gtk.main()
   - path: /usr/local/bin/myco-gui-session
     permissions: '0755'

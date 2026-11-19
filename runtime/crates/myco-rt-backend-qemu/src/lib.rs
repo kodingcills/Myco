@@ -65,6 +65,8 @@ pub struct QemuLinuxBackend {
     channel: Option<Channel>,
     lock_path: PathBuf,
     locked: bool,
+    /// State version of the last successful `observe`; refs are bound to it.
+    last_state_version: u64,
 }
 
 /// The session lock file enforcing the concurrency cap (ADR-0011: default 1).
@@ -75,7 +77,7 @@ fn lock_path(guest_dir: &Path) -> PathBuf {
 impl QemuLinuxBackend {
     pub fn new(config: QemuConfig) -> Self {
         let lock_path = lock_path(&config.guest_dir);
-        Self { config, channel: None, lock_path, locked: false }
+        Self { config, channel: None, lock_path, locked: false, last_state_version: 0 }
     }
 
     fn run_script(&self, name: &str, args: &[&str]) -> Result<String, BackendError> {
@@ -349,6 +351,7 @@ impl Backend for QemuLinuxBackend {
             .get("screenshot_path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        self.last_state_version = version;
         Ok(Observation {
             state_version: myco_rt_core::StateVersion(version),
             a11y_tree: serde_json::json!({
@@ -363,8 +366,46 @@ impl Backend for QemuLinuxBackend {
         })
     }
 
-    fn act(&mut self, _action: &Action) -> Result<ActionOutcome, BackendError> {
-        Err(BackendError::Unimplemented("act lands at RT-008"))
+    fn act(&mut self, action: &Action) -> Result<ActionOutcome, BackendError> {
+        let ch = self
+            .channel
+            .as_mut()
+            .ok_or_else(|| BackendError::Protocol("act before provision".into()))?;
+        let wire = match action {
+            Action::Launch { command, args } => serde_json::json!({
+                "kind": "launch", "command": command, "args": args
+            }),
+            Action::Click { target } => serde_json::json!({
+                "kind": "click", "target": target.payload
+            }),
+            Action::TypeText { target, text } => serde_json::json!({
+                "kind": "typeText", "target": target.payload, "text": text
+            }),
+            Action::KeyPress { keys } => serde_json::json!({
+                "kind": "keyPress", "keys": keys
+            }),
+        };
+        let resp = ch.act(wire, self.last_state_version)?;
+        let outcome = resp
+            .get("outcome")
+            .cloned()
+            .ok_or_else(|| BackendError::Protocol("act response missing outcome".into()))?;
+        Ok(match outcome.get("outcome").and_then(|v| v.as_str()) {
+            Some("delivered_verified") => ActionOutcome::DeliveredVerified,
+            Some("delivered_unverified") => ActionOutcome::DeliveredUnverified,
+            Some("failed") => ActionOutcome::Failed {
+                reason: outcome
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unspecified")
+                    .to_string(),
+            },
+            other => {
+                return Err(BackendError::Protocol(format!(
+                    "unknown act outcome {other:?}"
+                )))
+            }
+        })
     }
 
     fn reset(&mut self) -> Result<(), BackendError> {
