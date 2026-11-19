@@ -63,3 +63,10 @@ the environment. The Dogfood workstream consumes this.
   M1, hands off without asking). ADR-0012 updated to match verbatim; no conflicts.
   Coordinator will review the boundary ADR on myco/runtime-v0; RT owes the coordinator
   the Phase-1 go signal input when the first end-to-end path works.
+- M1 coordinator review of ADR-0011/0012/0013 @ 55bd21c: ACCEPTED. Verdict-less session
+  records resolved as RT-014 (recordKind discriminator PR against schemas/: "run" =
+  verdict required, backward compatible; "session" = verdict forbidden, checks optional).
+  ADR-0011 reset-cost figure corrected: M1-017's 8.3–8.6 s is Windows live-snapshot;
+  Linux boot/reset cost measured fresh at RT-011. Phase-1 go signal: standing — send
+  RT-011 passing evidence, coordinator messages Dogfood same day.
+- Delegated RT-014 (recordKind schema PR, glm-5.3).
