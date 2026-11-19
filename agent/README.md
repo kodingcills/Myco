@@ -94,12 +94,31 @@ gain nothing from an event loop.
 elevated SSH session) writes `run-agent.cmd`, registers the task, and starts
 the agent in the interactive session.
 
-### Deploying to the live VM
+### Interpreter: LibreOffice's bundled Python (required)
 
-From the Mac: `bootstrap/deploy-to-vm.sh` copies the agent into the guest via
-scp, writes a fresh per-deploy token file, registers the MycoAgent scheduled
-task from `bootstrap/MycoAgent.xml`, starts the agent in the interactive
-session, and verifies `ping` through `ssh -L 8765:127.0.0.1:8765`.
+The agent MUST run under LibreOffice's bundled interpreter,
+`C:\Program Files\LibreOffice\program\python.exe` — not the system Python
+3.12. `pyuno` (`uno.py` / `pyuno.pyd`, the `uno_eval` op's dependency) is
+built against LibreOffice's bundled Python ABI; importing it from the system
+interpreter fails. All bootstrap scripts write `run-agent.cmd` accordingly,
+and the agent's runtime deps (uiautomation, comtypes, pywin32) must be
+installed into LO Python's site-packages (`& "C:\Program Files\LibreOffice\program\python.exe" -m pip install ...`).
+
+### Deploying to the live VM (clean-deploy sequence)
+
+Resets restore the `clean-base-live` snapshot, which wipes any deployed agent
+(`docs/coordination/m1-state.md`), so always deploy onto a freshly reset VM:
+
+```
+~/VMs/myco-win11/scripts/reset.sh live   # guest clean, desktop logged in (~10s)
+agent/bootstrap/deploy-to-vm.sh          # foreground; ends with "DEPLOY OK"
+```
+
+`deploy-to-vm.sh` copies the agent into the guest via scp, writes a fresh
+per-deploy token file, registers the MycoAgent scheduled task from
+`bootstrap/MycoAgent.xml`, starts the agent in the interactive session under
+LO's bundled Python, and verifies `ping` through `ssh -L 8765:127.0.0.1:8765`.
+Run it in the foreground and read the output; do not background it.
 
 ## Recovery
 

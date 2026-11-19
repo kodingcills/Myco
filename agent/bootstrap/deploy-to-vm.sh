@@ -21,7 +21,10 @@ GUEST_AGENT_DIR='C:/Program Files/Myco/agent'
 GUEST_TOKEN_PATH="${MYCO_TOKEN_PATH:-C:\\ProgramData\\Myco\\agent.token}"
 GUEST_TOKEN_POSIX='C:/ProgramData/Myco/agent.token'
 PORT="${MYCO_AGENT_PORT:-8765}"
-PYEXE='C:\\Program Files\\Python312-arm64\\python.exe'
+# pyuno (uno.py/pyuno.pyd) is built against LibreOffice's bundled Python
+# ABI; the system 3.12 interpreter cannot import it. The agent must run
+# under LO's python.exe.
+PYEXE='C:\\Program Files\\LibreOffice\\program\\python.exe'
 
 die() { echo "deploy-to-vm: $*" >&2; exit 1; }
 

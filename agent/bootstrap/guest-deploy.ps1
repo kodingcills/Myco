@@ -21,7 +21,9 @@ $cmdPath = Join-Path $agentDir 'run-agent.cmd'
 if (-not (Test-Path $xmlPath)) { throw "missing $xmlPath" }
 if (-not (Test-Path $tokenPath)) { throw "missing $tokenPath" }
 
-$pyExe = '"C:\Program Files\Python312-arm64\python.exe"'
+# pyuno is built against LibreOffice's bundled Python ABI — the system
+# Python 3.12 cannot import it, so the agent must run under LO's python.exe.
+$pyExe = '"C:\Program Files\LibreOffice\program\python.exe"'
 $lines = @(
     "cd /d `"$agentDir`"",
     "start `"`" /min $pyExe -m myco_agent --host 127.0.0.1 --port 8765 --token-file `"$tokenPath`" --backend windows"
