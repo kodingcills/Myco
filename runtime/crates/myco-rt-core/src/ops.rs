@@ -70,6 +70,13 @@ pub struct SessionEvent {
     pub event: serde_json::Value,
 }
 
+/// Paths of a session's evidence artifacts (ADR-0007 layout).
+#[derive(Debug, Clone)]
+pub struct EvidenceArtifacts {
+    pub trace_path: String,
+    pub result_path: String,
+}
+
 /// Per-session summary; maps onto M1's RunRecord with `verdict` omitted —
 /// verdicts are M1's alone (ADR-0012).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +98,9 @@ pub trait Backend: Send {
     fn observe(&mut self) -> Result<Observation, Self::Err>;
     /// Perform one action. Implementations MUST bound all waits.
     fn act(&mut self, action: &Action) -> Result<ActionOutcome, Self::Err>;
+    /// `evidence`: export this session's artifacts (trace + result). Returns the
+    /// paths written; validation failures are errors, never partial artifacts.
+    fn evidence(&mut self) -> Result<EvidenceArtifacts, Self::Err>;
     /// Return to a clean desktop (discard writes; reboot as needed).
     fn reset(&mut self) -> Result<(), Self::Err>;
     /// Tear down the guest and delete all on-disk state.
