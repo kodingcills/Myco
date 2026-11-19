@@ -502,7 +502,11 @@ impl Backend for QemuLinuxBackend {
         self.run_script("boot.sh", &[])?;
         self.wait_ssh()?;
         self.install_agent()?;
-        self.connect()
+        self.connect()?;
+        // The guest restarts its state counter on a fresh overlay; mirror it so a
+        // pre-reset ref can never validate against post-reset state.
+        self.last_state_version = 0;
+        Ok(())
     }
 
     fn destroy(&mut self) -> Result<(), BackendError> {

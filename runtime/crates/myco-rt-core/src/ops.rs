@@ -77,16 +77,6 @@ pub struct EvidenceArtifacts {
     pub result_path: String,
 }
 
-/// Per-session summary; maps onto M1's RunRecord with `verdict` omitted —
-/// verdicts are M1's alone (ADR-0012).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionSummary {
-    pub session_id: String,
-    pub started_at: String,
-    pub events_path: String,
-    pub unresolved_state: Option<String>,
-}
-
 /// The host backend seam. Implementations: QemuLinuxBackend (RT-006), later
 /// UtmWindowsBackend (RT-012) and CloudBackend. The six runtime ops route here.
 pub trait Backend: Send {

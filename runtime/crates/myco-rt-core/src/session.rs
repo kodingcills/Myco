@@ -1,6 +1,6 @@
 //! Session state machine and the six runtime operations (RT-005).
 
-use crate::ops::{Action, ActionOutcome, Backend, Observation, SessionSummary};
+use crate::ops::{Action, ActionOutcome, Backend, Observation};
 use crate::state::StateVersion;
 use crate::{Permissions, RuntimeError};
 use serde::{Deserialize, Serialize};
@@ -147,8 +147,8 @@ impl<B: Backend> Session<B> {
         Ok(outcome)
     }
 
-    /// `evidence`: session summary; trace.jsonl/result.json emission lands with
-    /// the evidence writer in RT-009, which consumes this summary.
+    /// `evidence`: export this session's artifacts (trace.jsonl + result.json,
+    /// ADR-0007) through the backend's validated writer.
     pub fn evidence(&mut self) -> Result<crate::ops::EvidenceArtifacts, RuntimeError> {
         self.backend.evidence().map_err(Self::backend_err)
     }
