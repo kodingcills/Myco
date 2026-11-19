@@ -197,3 +197,10 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - Schema validation: 4 result.json + 51 trace events ALL OK.
 - Confirms follow-up (4): the parameter generator MUST emit AutoCorrect-immune values or 27/30 is unwinnable. The child used an uppercase override for the normal trial.
 - Independent verifier (kimi-k3) is re-running on the VM and inspecting the screenshot itself.
+
+## Log 2026-11-19 (22) — PR #18 verified with a must-fix; root cause found and fixed
+- PR #18 VERIFIED (kimi-k3) on the central claim: UIA actuation reached the desktop — proven by the screenshot (B39 shows REVISED-SESSI, selection at B40), the AutoCorrect case flip, and the verifier's OWN independent verified run (55.1s, its own value persisted). Conditional must-fix: the Trial 2 prose claimed a mid-program kill at +13.2s, but the artifacts show `steps: []` and an `adapter-available` precondition failure.
+- ROOT CAUSE (found by coordinator, not reported by any child): (a) `runProgram` let a throwing `observe()` escape after an action, so `runProgramSafe` discarded executed steps — a mid-program death was indistinguishable from a failed launch; (b) the kill fault was a 12s wall-clock timer while launch+observability takes ~30s, so it always fired during launch.
+- FIX (PR #19): mid-program death is now a structured GuardFailure (phase postcondition, predicate observe-after-action) carrying executed steps; kill is step-triggered (--kill-after-step). Coordinator-verified on the VM: kill after step 3 → 2 steps recorded, guard at step 2 (setValue), uncertain, 27.9s, no hang. Normal trial after the change still verified (40.2s).
+- PR #18 prose corrected to match its artifacts and to point at PR #19 for the real mid-program kill.
+- This is the first genuine mid-program interruption evidence — the precondition for M1-011 recovery.
