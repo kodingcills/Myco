@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,20 +80,41 @@ class TodoApp:
 
         self.entry.bind("<Return>", lambda _e: self.add_item())
 
+        # Opt-in REQ-03 introspection channel (Myco runtime, option B): when
+        # MYCO_TODO_STATE_FILE is set, publish widget state JSON after every
+        # mutation. Off by default; app behavior and the seeded bug are
+        # identical when unset.
+        self._state_file = os.environ.get("MYCO_TODO_STATE_FILE")
+        self._publish_state()
+
+    def _publish_state(self) -> None:
+        if not self._state_file:
+            return
+        state = {
+            "listbox_rows": list(self.listbox.get(0, tk.END)),
+            "listbox_selection": list(self.listbox.curselection()),
+            "status_text": self.status.cget("text"),
+            "entry_text": self.entry.get(),
+        }
+        Path(self._state_file).write_text(json.dumps(state), encoding="utf-8")
+
     def add_item(self) -> None:
         text = self.entry.get().strip()
         if not text:
             self.status.config(text="nothing to add")
+            self._publish_state()
             return
         self.listbox.insert(tk.END, text)
         self.entry.delete(0, tk.END)
         self.status.config(text=f"added: {text}")
+        self._publish_state()
 
     def save(self) -> None:
         items = list(self.listbox.get(0, tk.END))
         save_items(self.store, items)
         # Note: status reports the on-screen count, not the persisted count.
         self.status.config(text=f"saved {len(items)} item(s)")
+        self._publish_state()
 
 
 def main(argv: list[str]) -> int:

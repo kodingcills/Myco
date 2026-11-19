@@ -37,8 +37,8 @@ will exercise; each gap becomes a DF backlog item with a reproduction.
 |---|---|---|
 | REQ-01 | **Create**: provision a fresh Linux (ARM64 first) desktop session on demand via one call; return a session handle. | all |
 | REQ-02 | **Destroy**: tear down a session and free its resources; no state leaks between sessions. | all |
-| REQ-03 | **Observe**: read structured GUI state (widget tree / accessibility tree) of a named window, not only screenshots. Must surface listbox rows and status-line text for Tk apps (DF-S05 needs the status line). | all |
-| REQ-04 | **Act**: synthesize keyboard typing into a focused field and pointer clicks on named/found widgets; per-action three-way outcome (delivered_verified / delivered_unverified / failed), never bare ok. | all |
+| REQ-03 | **Observe**: read structured GUI state of a named window, not only screenshots. For the dogfood fixture (Tk) this is satisfied by an **opt-in app-side introspection channel**: the app publishes widget state JSON (`listbox_rows`, `listbox_selection`, `status_text`, `entry_text` — shape proven on RT-003) and the runtime's observe merges it with the AT-SPI tree. Tk registers zero AT-SPI nodes (no ATK bridge, measured on RT-003), so AT-SPI alone does NOT satisfy this requirement for Tk. Scope note: the channel is per-app instrumentation, NOT a claim about arbitrary Tk apps. A generic Tk ATK bridge is out of scope. | all |
+| REQ-04 | **Act**: synthesize keyboard typing into a focused field and pointer clicks on named/found widgets; per-action three-way outcome (delivered_verified / delivered_unverified / failed), never bare ok. Delivery mechanism on Linux/X11: **global XTEST with real focus** (windowactivate + click + type) — proven to land in Tk on RT-003. `xdotool type --window` (send_event) does NOT land in Tk and MUST NOT be used. | all |
 | REQ-05 | **Evidence**: every run emits schema-valid `trace.jsonl` + `result.json` per docs/architecture/evidence-schema.md; run ids propagated to caller. | all |
 | REQ-06 | **Reset**: restore a session to a known-clean base between runs; measured cost reported (M1's VM reset is 8.3–8.6s; the runtime should beat or explain its number). | DF-S01 |
 | REQ-07 | *(retired — id intentionally unused; was "screenshot capture", folded into REQ-03 since structured observation subsumes it)* | — |
@@ -56,6 +56,19 @@ search, workflow compilation, multi-OS support beyond Linux ARM64, product UI.
   flagged here and in the end-of-turn report for the coordinator/outer loop.
 - Runtime owner announces first end-to-end path in
   `docs/coordination/runtime-state.md`; dogfood wakes on that.
+
+## Decisions
+- **2026-11-19 — REQ-03 channel (option B accepted).** Runtime probe on RT-003
+  (Ubuntu 24.04 ARM64, Tk 8.6, Xvfb+openbox, AT-SPI 2.52): Tk registers zero
+  AT-SPI nodes; synthetic input works via global XTEST with real focus
+  (`xdotool type --window` send_event does NOT land in Tk); app-side
+  introspection publishes `listbox_rows`/`listbox_selection`/`status_text`/
+  `entry_text`. Dogfood accepts option B: runtime builds the opt-in Tk
+  introspection channel, observe merges it with the AT-SPI tree. Option A (port
+  fixture to GTK3/PyGObject) rejected: rewrites the fixture to fit the probe,
+  and the seeded bug + scenarios are already verified against the Tk app.
+  Consequence: dogfood makes no arbitrary-Tk-app observation claim in Phase 1;
+  a generic Tk ATK bridge is out of scope for both workstreams.
 
 ## Status
 Phase 0 complete: PR #8 merged to main (2026-11-19, head 3ffcceb; VERIFIED by
