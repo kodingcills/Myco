@@ -407,4 +407,25 @@ export class AgentClient {
     if (cwd !== undefined) params.cwd = cwd;
     return this.request("launch", params).then((r) => (r as { pid: number }).pid);
   }
+
+  /** Write bytes to a guest file (parent directories are created). */
+  async writeFile(path: string, data: Buffer): Promise<number> {
+    const result = (await this.request("write_file", {
+      path,
+      data_b64: data.toString("base64"),
+    })) as { bytes: number };
+    return result.bytes;
+  }
+
+  /** Terminate a guest pid or image name; resolves the killed targets. */
+  kill(params: { pid?: number; image_name?: string }): Promise<Array<number | string>> {
+    return this.request("kill", params).then(
+      (r) => (r as { killed: Array<number | string> }).killed,
+    );
+  }
+
+  /** Depth-limited UIA subtree of the guest's top-level windows. */
+  uiaTree(params: { pid?: number; title?: string; depth?: number }): Promise<unknown> {
+    return this.request("uia_tree", params);
+  }
 }

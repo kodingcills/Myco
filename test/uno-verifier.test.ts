@@ -49,7 +49,9 @@ function csvWithTarget(value: string): string {
 function verifierWith(script: ConstructorParameters<typeof FakeAgent>[0]) {
   const agent = new FakeAgent(script);
   const client = new AgentClient(agent, { token: "test-token" });
-  return { verifier: unoVerifierOverAgent(client), agent };
+  // Short convert poll: the unreadable-file test must fail fast, not wait
+  // out the 60s production timeout.
+  return { verifier: unoVerifierOverAgent(client, undefined, 50), agent };
 }
 
 describe("UnoVerifier verdicts", () => {

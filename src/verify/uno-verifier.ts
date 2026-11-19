@@ -62,15 +62,52 @@ export interface DocumentCloser {
 
 /** The agent client implements both read-only seams. */
 export class AgentUnoReader implements UnoReader {
-  constructor(private readonly client: AgentClient) {}
+  constructor(
+    private readonly client: AgentClient,
+    /** UNO accept socket of the live document (required by the deployed agent). */
+    private socket?: string,
+  ) {}
 
   cellState(sheet: string, cell: string): Promise<UnoEvalResult> {
-    return this.client.unoEval({ call: "get_string", sheet, cell });
+    // The deployed agent resolves the sheet by name and falls back to the
+    // ActiveSheet when none is given. A converted fixture's first sheet is
+    // named after the CSV file, not "Sheet1", so pass no sheet: the trial
+    // has exactly one open document and its active sheet is the fixture.
+    void sheet;
+    return this.client.unoEval({ call: "get_string", cell, socket: this.socket });
   }
 
   isModified(): Promise<boolean> {
-    return this.client.unoEval({ call: "is_modified" }).then((r) => r.is_modified === true);
+    return this.client
+      .unoEval({ call: "is_modified", socket: this.socket })
+      .then((r) => unoResultModified(r));
   }
+
+  setSocket(socket: string | undefined): void {
+    this.socket = socket;
+  }
+}
+
+/**
+ * The deployed agent returns `{call, cell, value}` from uno_eval (pinned by
+ * agent/tests/test_agent.py); the host-side `UnoEvalResult` shape is
+ * `{get_string, is_modified}`. Accept both (additive, M1-013): a boolean
+ * `value` is the deployed agent's is_modified.
+ */
+function unoResultModified(result: UnoEvalResult): boolean {
+  const raw = result as Record<string, unknown>;
+  if (typeof raw.is_modified === "boolean") return raw.is_modified;
+  if (typeof raw.value === "boolean") return raw.value;
+  if (raw.value === 1 || raw.value === "True") return true;
+  return false;
+}
+
+/** Same dual-shape rule for the string readback (check (a)). */
+function unoResultString(result: UnoEvalResult): string {
+  const raw = result as Record<string, unknown>;
+  if (typeof raw.get_string === "string") return raw.get_string;
+  if (typeof raw.value === "string") return raw.value;
+  return "";
 }
 
 export interface SofficeDeps {
@@ -95,6 +132,7 @@ export async function sofficeCsvBytes(
   xlsxPath: string,
   soffice = "soffice.com",
   guestTempDir = "C:\\Users\\myco\\AppData\\Local\\Temp",
+  pollTimeoutMs = 60_000,
 ): Promise<Buffer> {
   const outDir = `${guestTempDir}\\${nonce()}`;
   const profile = `${guestTempDir}\\${nonce()}\\profile`;
@@ -109,10 +147,25 @@ export async function sofficeCsvBytes(
     outDir,
     xlsxPath,
   ]);
-  // soffice writes <basename>.csv into outDir.
+  // The headless convert is asynchronous relative to the fire-and-forget
+  // `launch` op: poll for the output CSV (bounded) instead of reading once.
+  // A nonce outDir guarantees a poll hit is THIS conversion's output.
   const base = xlsxPath.replaceAll("\\", "/").split("/").pop() ?? "";
   const csvName = base.endsWith(".xlsx") ? `${base.slice(0, -5)}.csv` : `${base}.csv`;
-  return deps.readFile(`${outDir}\\${csvName}`);
+  const csvPath = `${outDir}\\${csvName}`;
+  const deadline = Date.now() + pollTimeoutMs;
+  for (;;) {
+    try {
+      return await deps.readFile(csvPath);
+    } catch (error) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `headless csv convert did not produce ${csvPath} within ${pollTimeoutMs}ms — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +228,7 @@ export class UnoVerifier {
     try {
       this.opsIssued.push("uno_eval");
       const r = await this.uno.cellState(FIRST_SHEET, cellRef);
-      live = typeof r.get_string === "string" ? r.get_string : "";
+      live = unoResultString(r);
     } catch (error) {
       // UNO unreachable / errored: could not look — never refuted, never verified.
       return uncertain(
@@ -245,16 +298,25 @@ function parseCsvBytes(csv: Buffer, xlsxPath: string): PersistedState {
   }
 }
 
-/** Wire an UnoVerifier directly over an AgentClient. */
-export function unoVerifierOverAgent(client: AgentClient): UnoVerifier {
+/**
+ * Wire an UnoVerifier directly over an AgentClient. `socket` is the UNO
+ * accept socket of the live document; the deployed agent requires it.
+ */
+export function unoVerifierOverAgent(
+  client: AgentClient,
+  socket?: string,
+  convertPollTimeoutMs = 60_000,
+): UnoVerifier {
   const deps: SofficeDeps = {
     launch: (argv: readonly string[], cwd?: string) => client.launch(argv, cwd),
     readFile: (path: string) => client.readFile(path),
   };
   const files: GuestFileReader = {
-    readCsvViaSoffice: (xlsxPath) => sofficeCsvBytes(deps, xlsxPath),
+    readCsvViaSoffice: (xlsxPath) =>
+      sofficeCsvBytes(deps, xlsxPath, undefined, undefined, convertPollTimeoutMs),
   };
-  return new UnoVerifier({ uno: new AgentUnoReader(client), files });
+  const reader = new AgentUnoReader(client, socket);
+  return new UnoVerifier({ uno: reader, files });
 }
 
 export { AgentOpError, AgentUnreachableError };
