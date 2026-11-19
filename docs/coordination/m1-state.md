@@ -104,3 +104,15 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - M1-017 done: reset.sh live ×3, 8.3-8.6s each, guest clean each time.
 - Delegated: M1-006 (glm-5.3, owns agent/, deploys to live VM, bounded-UIA-timeout validation required as evidence) and M1-007 (glm-5.3, owns src/verify/+src/win/, host-side UNO verifier, exact-match comparison vs AutoCorrect, fake-agent tests).
 - VM stays UP while M1-006 works. Shut down when idle: ~/VMs/myco-win11/scripts/shutdown.sh.
+
+## Cross-workstream dependencies (owner: M1 coordinator, per outer loop 2026-11-19)
+| Workstream | Thread | Branch | Depends on M1 | M1 depends on it |
+|---|---|---|---|---|
+| Myco Runtime Owner (Rust) | mcp:launch:cba81a8ecbe150c1ad3f6908da73bab666f2f4eca8ccd1657f403f1f051220fa | myco/runtime-v0 | boundary constraints sent 2026-11-19 (no duplicating TS engine per ADR-0001; reuse M1-012 evidence schema; hands off myco-win11) | nothing — M1 is independent; do not slow M1 for it |
+| Myco Dogfood Owner | mcp:launch:a4cad102668e27328e4726db527286133e1d90b3a6884a507edbd4fb1a0a5ebc | myco/dogfood-v0 | gated on runtime's first end-to-end path; M1 coordinator sends the Phase-1 go signal | nothing |
+
+Obligations:
+- Review runtime owner's boundary ADR when it lands on myco/runtime-v0; flag conflicts with ADR-0001 / M1-012 schema to the outer loop.
+- On runtime first-path-works: message dogfood owner to start Phase 1.
+- myco-win11 is M1-owned; other owners must ask before touching it.
+- RAM watch: Windows VM 8 GB of 24 GB; Linux VM must stay small and be shut down when idle. Check memory_pressure when both VMs may be up.
