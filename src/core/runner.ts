@@ -1,4 +1,10 @@
 import type { ActResult, AppAdapter } from "./adapter.ts";
+import {
+  type Action,
+  AmbiguousTargetError,
+  type ProgramAction,
+  type TargetRef,
+} from "./adapter.ts";
 import type { GuardFailure, PredicateResult, Program, StepRecord } from "./program.ts";
 import type { AppState } from "./state.ts";
 
@@ -70,14 +76,31 @@ export async function runProgram(adapter: AppAdapter, program: Program): Promise
 
     let actResult: ActResult;
     try {
-      actResult = await adapter.act(step.action);
+      actResult = await adapter.act(resolveAction(step.action, adapter));
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       const failure: GuardFailure = {
         step: i,
         phase: "precondition",
         predicateName: `act:${String(describeAction(step.action).kind)}`,
-        observed: error instanceof Error ? error.message : String(error),
-        reason: `action dispatch failed on step ${i}: ${error instanceof Error ? error.message : String(error)}`,
+        observed: message,
+        reason: `action dispatch failed on step ${i}: ${message}`,
+      };
+      return {
+        program: program.name,
+        completed: false,
+        steps,
+        guardFailure: failure,
+        finalState: state,
+      };
+    }
+    if (actResult.outcome === "failed") {
+      const failure: GuardFailure = {
+        step: i,
+        phase: "precondition",
+        predicateName: `act:${String(describeAction(step.action).kind)}`,
+        observed: actResult.details,
+        reason: `action dispatch failed on step ${i}: ${actResult.details}`,
       };
       return {
         program: program.name,
@@ -129,4 +152,23 @@ export async function runProgram(adapter: AppAdapter, program: Program): Promise
   }
 
   return { program: program.name, completed: true, steps, finalState: state };
+}
+
+function resolveAction(action: ProgramAction, adapter: AppAdapter): Action {
+  const resolve = (ref: TargetRef): string => {
+    if (typeof ref === "string") return ref;
+    const issued = adapter.issueRef?.(ref.nodeId);
+    if (issued === null || issued === undefined) {
+      throw new AmbiguousTargetError(ref.nodeId, 0);
+    }
+    return issued;
+  };
+  switch (action.kind) {
+    case "click":
+    case "typeText":
+    case "setValue":
+      return { ...action, ref: resolve(action.ref) };
+    default:
+      return action;
+  }
 }

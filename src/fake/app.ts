@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { Action, ActResult, AdapterCapabilities, AppAdapter } from "../core/adapter.ts";
-import { AppCrashedError, StaleRefError } from "../core/adapter.ts";
+import { AppCrashedError, StaleRefError, UnknownRefError } from "../core/adapter.ts";
 import { cellRef } from "../core/filepersist.ts";
 import type { AppState, StateNode } from "../core/state.ts";
 
@@ -9,6 +9,8 @@ export interface FakeAppOptions {
   rows?: number;
   cols?: number;
 }
+
+const SAVE_BUTTON_ID = "btn:save";
 
 export class FakeSpreadsheetApp implements AppAdapter {
   #cells: Record<string, string> = {};
@@ -21,6 +23,7 @@ export class FakeSpreadsheetApp implements AppAdapter {
   #dirty = false;
   readonly #rows: number;
   readonly #cols: number;
+  #refTable = new Map<string, { nodeId: string; refVersion: number }>();
 
   constructor(options: FakeAppOptions) {
     this.#filePath = options.filePath;
@@ -43,6 +46,13 @@ export class FakeSpreadsheetApp implements AppAdapter {
     return Promise.resolve(this.#snapshot());
   }
 
+  issueRef(nodeId: string): string | null {
+    if (!this.#liveNodeIds().includes(nodeId)) return null;
+    const ref = `ref:${this.#stateVersion}:${nodeId}`;
+    this.#refTable.set(ref, { nodeId, refVersion: this.#stateVersion });
+    return ref;
+  }
+
   act(action: Action): Promise<ActResult> {
     if (!this.#alive) {
       return Promise.reject(new AppCrashedError("app crashed; cannot act"));
@@ -50,78 +60,112 @@ export class FakeSpreadsheetApp implements AppAdapter {
     try {
       switch (action.kind) {
         case "click": {
-          this.#requireRef(action.ref);
-          this.#focusedNodeId = action.ref;
+          const nodeId = this.#resolveRef(action.ref);
+          this.#focusedNodeId = nodeId;
           this.#bump();
-          break;
+          return Promise.resolve({
+            outcome: "delivered_verified",
+            details: `clicked ${nodeId}`,
+            stateVersionAfter: this.#stateVersion,
+          });
         }
         case "typeText": {
-          this.#requireRef(action.ref);
-          this.#focusedNodeId = action.ref;
-          this.#setCellValue(action.ref, action.text);
-          break;
+          const nodeId = this.#resolveRef(action.ref);
+          this.#focusedNodeId = nodeId;
+          this.#setCellValue(nodeId, action.text);
+          return Promise.resolve({
+            outcome: "delivered_verified",
+            details: `typed ${action.text} into ${nodeId}`,
+            stateVersionAfter: this.#stateVersion,
+          });
         }
         case "setValue": {
-          this.#requireRef(action.ref);
-          this.#setCellValue(action.ref, action.value);
-          break;
+          const nodeId = this.#resolveRef(action.ref);
+          this.#setCellValue(nodeId, action.value);
+          return Promise.resolve({
+            outcome: "delivered_verified",
+            details: `set ${nodeId} to ${action.value}`,
+            stateVersionAfter: this.#stateVersion,
+          });
         }
         case "keyPress": {
           if (action.keys === "ctrl+s") {
             this.#dirty = false;
             this.#bump();
             this.#flushSave();
-          } else {
-            this.#bump();
+            return Promise.resolve({
+              outcome: "delivered_verified",
+              details: `pressed ctrl+s; saved to ${this.#filePath}`,
+              stateVersionAfter: this.#stateVersion,
+            });
           }
-          break;
+          this.#bump();
+          return Promise.resolve({
+            outcome: "delivered_unverified",
+            details: `pressed ${action.keys}`,
+            stateVersionAfter: this.#stateVersion,
+          });
         }
         case "waitFor":
-          break;
+          return Promise.resolve({
+            outcome: "delivered_unverified",
+            details: "waitFor dispatched; predicate checked by runner",
+            stateVersionAfter: this.#stateVersion,
+          });
         default:
-          throw new Error("unknown action");
+          return Promise.resolve({
+            outcome: "failed",
+            details: `unknown action kind ${String((action as { kind: unknown }).kind)}`,
+          });
       }
     } catch (error) {
       return Promise.reject(error);
     }
-    return Promise.resolve({ dispatched: true, stateVersionAfter: this.#stateVersion });
   }
 
-  #setCellValue(ref: string, value: string): void {
-    if (this.#parseCellRef(ref)) {
-      this.#cells[ref] = value;
-      this.#dirty = true;
-      this.#bump();
-    } else {
-      this.#bump();
-    }
+  crash(): void {
+    this.#alive = false;
   }
 
-  #requireRef(ref: string): void {
-    const match = this.#parseCellRef(ref);
-    if (match) {
-      const { row, col } = match;
-      if (row >= this.#rows || col >= this.#cols) {
-        throw new StaleRefError(ref, this.#stateVersion, this.#stateVersion);
+  stealFocus(): void {
+    this.#focusedNodeId = "system:notification";
+    this.#bump();
+  }
+
+  setSaveDelay(ms: number): void {
+    this.#saveDelayMs = ms;
+  }
+
+  isSavePending(): boolean {
+    return this.#saveQueued;
+  }
+
+  #liveNodeIds(): string[] {
+    const ids: string[] = [];
+    for (let r = 0; r < this.#rows; r++) {
+      for (let c = 0; c < this.#cols; c++) {
+        ids.push(cellRef(r, c));
       }
-      return;
     }
-    if (ref.startsWith("btn:") && (ref === "btn:save" || ref === "btn:cell-A1")) return;
-    throw new StaleRefError(ref, this.#stateVersion, this.#stateVersion);
+    ids.push(SAVE_BUTTON_ID);
+    return ids;
   }
 
-  #parseCellRef(ref: string): { row: number; col: number } | null {
-    const m = /^([A-Z]+)([0-9]+)$/.exec(ref);
-    if (!m) return null;
-    const letters = m[1] as string;
-    const digits = m[2] as string;
-    let col = 0;
-    for (const ch of letters) {
-      col = col * 26 + (ch.charCodeAt(0) - 64);
+  #resolveRef(ref: string): string {
+    const entry = this.#refTable.get(ref);
+    if (!entry) {
+      throw new UnknownRefError(ref);
     }
-    col -= 1;
-    const row = Number.parseInt(digits, 10) - 1;
-    return { row, col };
+    if (entry.refVersion !== this.#stateVersion) {
+      throw new StaleRefError(ref, entry.refVersion, this.#stateVersion);
+    }
+    return entry.nodeId;
+  }
+
+  #setCellValue(nodeId: string, value: string): void {
+    this.#cells[nodeId] = value;
+    this.#dirty = true;
+    this.#bump();
   }
 
   #snapshot(): AppState {
@@ -141,7 +185,7 @@ export class FakeSpreadsheetApp implements AppAdapter {
       }
     }
     nodes.push({
-      id: "btn:save",
+      id: SAVE_BUTTON_ID,
       role: "button",
       name: "Save",
       value: "",
@@ -203,22 +247,5 @@ export class FakeSpreadsheetApp implements AppAdapter {
         if (v) this.#cells[cellRef(r, c)] = v;
       }
     }
-  }
-
-  crash(): void {
-    this.#alive = false;
-  }
-
-  stealFocus(): void {
-    this.#focusedNodeId = "system:notification";
-    this.#bump();
-  }
-
-  setSaveDelay(ms: number): void {
-    this.#saveDelayMs = ms;
-  }
-
-  isSavePending(): boolean {
-    return this.#saveQueued;
   }
 }

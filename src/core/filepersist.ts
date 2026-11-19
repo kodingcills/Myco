@@ -1,8 +1,29 @@
 import { readFileSync } from "node:fs";
 import type { PersistedState } from "./verify.ts";
 
+export class PersistedStateReadError extends Error {
+  readonly filePath: string;
+  readonly cause: "missing" | "unreadable" | "corrupt";
+
+  constructor(filePath: string, cause: "missing" | "unreadable" | "corrupt", message: string) {
+    super(message);
+    this.name = "PersistedStateReadError";
+    this.filePath = filePath;
+    this.cause = cause;
+  }
+}
+
 export function readCsvSpreadsheet(filePath: string): PersistedState {
-  const content = readFileSync(filePath, "utf8");
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf8");
+  } catch {
+    throw new PersistedStateReadError(
+      filePath,
+      "missing",
+      `cannot read ${filePath}: file missing or unreadable`,
+    );
+  }
   const cells: Record<string, string> = {};
   const lines = content.split(/\r?\n/).filter((line) => line !== "");
   for (let r = 0; r < lines.length; r++) {
