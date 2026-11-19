@@ -106,7 +106,7 @@ describe("eval harness", () => {
       runsDir: join(dir, "runs"),
     });
     const runsDir = join(dir, "runs");
-    const runIds = readdirSync(runsDir);
+    const runIds = readdirSync(runsDir).filter((d) => existsSync(join(runsDir, d, "result.json")));
     expect(runIds).toHaveLength(1);
     const runDir = join(runsDir, runIds[0] as string);
     const traceLines = readFileSync(join(runDir, "trace.jsonl"), "utf8")
@@ -114,10 +114,12 @@ describe("eval harness", () => {
       .filter((l) => l !== "");
     expect(traceLines.length).toBeGreaterThan(0);
     const first = JSON.parse(traceLines[0] as string);
-    expect(first.type).toBe("step");
+    expect(first.type).toBe("run-start");
     const result = JSON.parse(readFileSync(join(runDir, "result.json"), "utf8"));
-    expect(result.outcome).toBe("completed");
+    expect(result.steps.length).toBe(3);
     expect(result.verdict.status).toBe("verified");
+    expect(result.verdict.score).toBe(1);
+    expect(result.verdict.checks[0]?.passed).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 

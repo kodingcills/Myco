@@ -2,3 +2,4 @@ agent/myco_agent.egg-info/
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
