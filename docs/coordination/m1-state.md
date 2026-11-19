@@ -140,3 +140,7 @@ Obligations:
 ## Log 2026-11-19 (12)
 - kimi-k3 quota exhausted (402 twice, spaced apart — ceiling, not transient). glm-5.3 confirmed alive. TEMPORARY role change: verifiers run on glm-5.3 with attack-specific mechanical briefs until the outer loop confirms kimi-k3 balance. Judgment-heavy calls (merge decisions, escalations) stay with the coordinator (which runs on kimi-k3 as the parent — note: the parent model has quota by construction; if this thread itself 402s, everything stops).
 - PR #11 verifier respawned on glm-5.3 with the same adversarial brief.
+
+## Log 2026-11-19 (13)
+- Hot-patch child #1 stalled: ended its turn 'waiting for a background deploy' with zero commits; its branch equals main. VM was healthy (SSH up, 2 python.exe). Respawned fresh with an explicit rule: never end a turn waiting on a background job; run deploys foreground with hard timeouts; capture the deployed-vs-repo diff FIRST so the deliverable survives a stall.
+- Standing instructions for all VM children: foreground commands with timeouts, deliverable-first ordering, reset the VM when done.
