@@ -392,7 +392,6 @@ impl Backend for QemuLinuxBackend {
             }
             None => self.last_state_version,
         };
-
         let ch = self
             .channel
             .as_mut()
@@ -411,7 +410,7 @@ impl Backend for QemuLinuxBackend {
                 "kind": "keyPress", "keys": keys
             }),
         };
-        let resp = ch.act(wire, self.last_state_version)?;
+        let resp = ch.act(wire, version)?;
         let outcome = resp
             .get("outcome")
             .cloned()
