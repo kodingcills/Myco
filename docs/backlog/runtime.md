@@ -42,7 +42,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   docs/coordination/runtime-state.md records provided/needed interfaces.
 
 ### RT-003 (TIF-31) In-guest stack: provisioning for X11 + AT-SPI + xa11y
-- **status:** pending
+- **status:** done (2026-11-19 @ 9e7eb40; RT owner completed the child's unfinished run — child died mid-report with STATE_FILE undefined + wrong-uid AT-SPI dump; both fixed, smoke PASS). Evidence: docs/env/linux-runtime.md. Measured: 17 s SSH / 23 s app cold boot. Critical finding: **Tk registers NO AT-SPI node** (GTK visible in same session) — REQ-03 fallback protocol triggered.
 - **owner:** build
 - **blocked_by:** RT-001, RT-002
 - **description:** Decisions made (ADR-0014): X11 session on Xvfb (Wayland's portal

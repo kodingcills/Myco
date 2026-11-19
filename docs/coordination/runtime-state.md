@@ -109,3 +109,10 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   the runtime PR; owner re-runs compat at that PR's head. M1 shares the Tk/AT-SPI
   skepticism (labels can be invisible); RT-003's Tk probe numbers go to both M1 and
   Dogfood when they land.
+- RT-003 done @ 9e7eb40 (child died mid-report; RT owner recovered in the live guest:
+  fixed missing STATE_FILE, wrong-uid AT-SPI dump, entry-clear in smoke; smoke PASS).
+  Measured: 17 s SSH / 23 s app cold boot. REQ-03 verdict: Tk registers ZERO AT-SPI
+  nodes (GTK visible; global XTEST input lands; app-side introspection JSON carries the
+  required fields). Fallback proposal (A: port Dogfood app to GTK3; B: app-side
+  introspection channel, recommended) sent to M1 coordinator for the Dogfood owner.
+  Guest shut down after measurement. Delegated RT-004 (control channel, glm-5.3).
