@@ -118,9 +118,10 @@ finding is a P0 M1 bug, not an L2 result — stop and escalate.
 
 ## Next action
 
-Outer loop: (1) verify the CUA-Recovery citation (one fetch), (2) decide
-whether to mirror this as a Linear issue in project "Myco Research" (team
-TIF), (3) sequence it **after** M1-014 so it doesn't contend for the VM.
+Outer loop: (1) decide whether to mirror this as a Linear issue in project
+"Myco Research" (team TIF), (2) sequence it **after** M1-014 so it doesn't
+contend for the VM. The CUA-Recovery citation is already verified (2026-11-19,
+see Evidence above); no fetch needed.
 
 ## Reopen-if
 
