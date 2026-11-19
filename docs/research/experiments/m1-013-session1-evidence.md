@@ -56,13 +56,31 @@ follow-up (4): M1-013's parameter generator must emit AutoCorrect-immune values
 No evidence of a UNO-write-only path was observed; the typed value appeared on
 screen before any save or verifier close.
 
-## Trial 2 — corrupted: kill soffice mid-program (step 4)
+## Trial 2 — corrupted: kill soffice (step 4)
 
-Run `87ee5b14-d512-4922-ae60-eafe4864c569`: agent `kill` op
-(`image_name: soffice.bin`) fired at +13.2 s (mid-program, after set, before
-save). Verdict: **`uncertain`** — "could not look: UNO readback of B39 failed —
-NoConnectException (WSAECONNREFUSED)" — never `verified`. Elapsed **15.3 s**, no
-hang (bounded timeouts held). Artifacts in `kill-87ee5b14/`.
+Run `87ee5b14-d512-4922-ae60-eafe4864c569`: verdict **`uncertain`** — "could not
+look: UNO readback of B39 failed — NoConnectException (WSAECONNREFUSED)" — never
+`verified`. Elapsed **15.3 s**, no hang (bounded timeouts held). Artifacts in
+`kill-87ee5b14/`.
+
+**Correction (2026-11-19, after independent review).** An earlier draft of this
+report claimed the kill "fired at +13.2 s, mid-program, after set, before save".
+The committed artifacts do not support that: `steps: []` and the guard failure is
+`adapter-available` — "Calc window never became observable" — i.e. the app was
+killed (or never came up) **before step 0**. The outcome still demonstrates a
+bounded, non-verified failure, but it is **not** evidence of a mid-program
+interruption.
+
+The root cause was two defects, now fixed in PR #19: (a) `runProgram` let a
+throwing `observe()` escape, so `runProgramSafe` discarded the executed steps;
+(b) the kill was a 12 s wall-clock timer, and launch+observability alone takes
+~30 s, so the timer always fired during launch.
+
+**Proper mid-program kill (PR #19, coordinator-run on the live VM):**
+`--mode kill --kill-after-step 3` → 2 steps recorded (click A1, click B39/locate),
+guard failure at step 2 (`setValue`) with `observe-after-action` /
+`NoConnectException`, verdict `uncertain`, 27.9 s, no hang. That is the
+interruption M1-011 recovery is about.
 
 ## Schema validation (step 5)
 
