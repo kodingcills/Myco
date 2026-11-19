@@ -1,0 +1,39 @@
+{
+  "runId": "87ee5b14-d512-4922-ae60-eafe4864c569",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-013-live",
+    "rowKey": "EMP-0038",
+    "column": "name",
+    "newValue": "REVISED-SESSION1"
+  },
+  "startedAt": "2026-11-19T15:49:16.517Z",
+  "steps": [],
+  "guardFailure": {
+    "step": -1,
+    "phase": "precondition",
+    "predicateName": "adapter-available",
+    "observed": "Calc window never became observable: COMError(-2147023174, 'The RPC server is unavailable.', (None, None, None, 0, None))",
+    "reason": "adapter unusable: Calc window never became observable: COMError(-2147023174, 'The RPC server is unavailable.', (None, None, None, 0, None))"
+  },
+  "verdict": {
+    "status": "uncertain",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": null,
+        "reason": "could not look: UNO readback of B39 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "could not look: UNO readback of B39 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+    ]
+  },
+  "unresolvedState": "could not look: UNO readback of B39 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+}
