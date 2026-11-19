@@ -1,0 +1,145 @@
+{
+  "runId": "711e16c1-3a80-44df-ad6a-4a8b472b2cd2",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-013-live",
+    "rowKey": "EMP-0038",
+    "column": "name",
+    "newValue": "REVISED-SESSION1"
+  },
+  "startedAt": "2026-11-19T15:46:53.094Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-013-live\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-15822-1795103213095-303412898\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-15822-1795103213095-303412898\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B39"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-013-live\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-15822-1795103213095-303412898\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B39 located at record EMP-0038, column name, holds fixture value \"Enzo Nakamura\"",
+          "passed": true,
+          "observed": "value=\"Enzo Nakamura\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B39"
+        },
+        "value": "REVISED-SESSION1"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-15822-1795103213095-303412898\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B39 located at record EMP-0038, column name, holds fixture value \"Enzo Nakamura\"",
+          "passed": true,
+          "observed": "value=\"Enzo Nakamura\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B39 holds \"REVISED-SESSION1\"",
+          "passed": true,
+          "observed": "value=\"REVISED-SESSION1\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B39 holds \"REVISED-SESSION1\"",
+          "passed": true,
+          "observed": "value=\"REVISED-SESSION1\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B39 (record EMP-0038, column name) persisted as \"REVISED-SESSION1\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B39 (record EMP-0038, column name) persisted as \"REVISED-SESSION1\""
+    ]
+  }
+}
