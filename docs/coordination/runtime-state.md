@@ -116,3 +116,7 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   required fields). Fallback proposal (A: port Dogfood app to GTK3; B: app-side
   introspection channel, recommended) sent to M1 coordinator for the Dogfood owner.
   Guest shut down after measurement. Delegated RT-004 (control channel, glm-5.3).
+- RT-004 done @ 18c05ba (second child stream death; RT owner completed solo and has
+  paused further delegation for the critical path). ADR-0015: persistent SSH + NDJSON
+  + per-session token. Live proof: ping ~70–80 ms incl. connect, auth rejection,
+  reboot survival. cargo test 13/13. Next: RT-006 QEMU backend (RT owner, in the open).
