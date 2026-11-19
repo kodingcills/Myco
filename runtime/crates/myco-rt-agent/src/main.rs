@@ -9,6 +9,7 @@
 //! v0 surface: auth handshake, ping, shutdown (RT-004), observe (RT-007).
 //! act lands at RT-008.
 
+mod act;
 mod observe;
 
 use std::io::{BufRead, BufReader, Write};
@@ -76,6 +77,7 @@ fn main() {
     let _ = stdout.flush();
 
     // --- Op loop: one JSON request per line, one JSON response per line.
+    let mut last_observation: Option<act::RefCache> = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -145,11 +147,17 @@ fn main() {
                 match observe::observe(version, shot) {
                     Ok(obs) => match observe::validate(&obs) {
                         Ok(()) => {
+                            // Cache for act: refs are valid only for this version.
+                            let cache = act::RefCache {
+                                version: obs.state_version,
+                                nodes: obs.nodes.clone(),
+                            };
                             let _ = writeln!(
                                 stdout,
                                 "{}",
                                 serde_json::json!({"ok": true, "op": "observe", "observation": obs})
                             );
+                            last_observation = Some(cache);
                         }
                         Err(e) => {
                             // Never report an empty desktop as a valid observation.
@@ -168,6 +176,35 @@ fn main() {
                         );
                     }
                 }
+                let _ = stdout.flush();
+            }
+            "act" => {
+                // Refs are only meaningful against the observation that issued
+                // them; keep the latest one and require the host to name it.
+                let version = req.get("state_version").and_then(|v| v.as_u64()).unwrap_or(0);
+                let Some(action) = req.get("action").cloned().and_then(|a| serde_json::from_value::<act::Action>(a).ok()) else {
+                    let _ = writeln!(stdout, "{}", serde_json::json!({"ok": false, "op": "act", "error": "malformed action"}));
+                    let _ = stdout.flush();
+                    line.clear();
+                    continue;
+                };
+                let Some(cache) = last_observation.clone() else {
+                    let _ = writeln!(stdout, "{}", serde_json::json!({"ok": false, "op": "act", "error": "no_observation: call observe before act"}));
+                    let _ = stdout.flush();
+                    line.clear();
+                    continue;
+                };
+                let (outcome, code) = act::act(&action, &cache, version);
+                let _ = writeln!(
+                    stdout,
+                    "{}",
+                    serde_json::json!({
+                        "ok": !matches!(outcome, act::Outcome::Failed { .. }),
+                        "op": "act",
+                        "outcome": outcome,
+                        "refusal": code,
+                    })
+                );
                 let _ = stdout.flush();
             }
             "shutdown" => {
@@ -208,10 +245,10 @@ fn gui_ready() -> bool {
 /// An agent spawned over SSH inherits none of the GUI session's environment, so
 /// the AT-SPI bus would be unreachable. `myco-gui-session` publishes the session
 /// environment to /run/myco/gui.env; adopt the missing vars from it.
-fn load_gui_env() {
-    // Written by myco-gui-session into the unit's RuntimeDirectory, which systemd
-    // recreates on every start — so this file cannot outlive its session. (An
-    // unmanaged fallback path could survive a restart and point at a dead bus.)
+pub(crate) fn load_gui_env() {
+    // /run/myco is the unit's RuntimeDirectory: systemd recreates it on every
+    // start, so this file cannot outlive its session. (An unmanaged fallback path
+    // could survive a restart and point at a dead bus.)
     const PATH_ENV: &str = "/run/myco/gui.env";
     let Ok(text) = std::fs::read_to_string(PATH_ENV) else { return };
     for line in text.lines() {
