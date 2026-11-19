@@ -125,3 +125,6 @@ Obligations:
 - CheaperInference wallet outage killed the first M1-006 child (402); respawned after top-up with identical kickoff.
 - PR #9 (M1-007 UNO verifier) VERIFIED at 6e166fa: exact comparison confirmed, all 8 attacks failed (case flip refuted, dropped save refuted, fabricating agent refuted/uncertain, no hangs). Coordinator applied 3 nice-to-fixes (sequenced ids, SshTunnel SIGKILL escalation, configurable guest temp dir) as 79660f3, gates green, MERGED.
 - Note: dogfood workstream merged PR #8 to main (their own scope; no M1 interaction).
+
+## Log 2026-11-19 (9)
+- PR #10 (M1-006 UIA adapter) delivered with real-VM evidence: 198-element tree after MSAA wake, A1 typed via Name Box and persisted, 61KB screenshot, bounded 0.1s timeout on killed app. VM-discovered constraints now encoded: IUIAutomation2 via direct CoCreateInstance (QI refused), timeouts as property setters in comtypes 1.5, per-thread COM init, descriptor fallback (LO reports empty RuntimeIds via proxy), ValuePattern.SetValue never commits (keyboard sequence instead). Child also found the coordinator's session_info nit-fix was broken on real Windows (win32ts.GetProcessWindowStation doesn't exist; fixed to win32service). Independent verifier re-running all VM evidence itself.
