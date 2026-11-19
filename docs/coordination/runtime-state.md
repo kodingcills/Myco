@@ -120,3 +120,11 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   paused further delegation for the critical path). ADR-0015: persistent SSH + NDJSON
   + per-session token. Live proof: ping ~70–80 ms incl. connect, auth rejection,
   reboot survival. cargo test 13/13. Next: RT-006 QEMU backend (RT owner, in the open).
+- REQ-03 CLOSED: Dogfood owner accepted option B (app-side introspection channel;
+  fixture + seeded bug unchanged; generic Tk ATK bridge out of scope both workstreams).
+  Contract = ADR-0016: proven shape {listbox_rows, listbox_selection, status_text,
+  entry_text} (matches Dogfood's existing publisher), $MYCO_TODO_STATE_FILE opt-in,
+  atomic write-tmp-rename REQUIRED publisher-side (RT requested; Dogfood implementing),
+  runtime read-retry-once on parse failure + explicit channel-absence reporting.
+  Actuation: global XTEST with real focus; send_event prohibited. RT-007 implements
+  the observe merge.

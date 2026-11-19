@@ -189,3 +189,32 @@ if multi-tenant guests ever exist. Transport reads are blocking; op deadlines ar
 enforced at the session layer and by bounded agent ops (ADR-0014's read-back
 discipline), not by transport-level retries — a malformed or EOF'd channel is a hard
 error, never a silent retry.
+
+## ADR-0016 — App-side introspection channel for AT-SPI-invisible apps (Dogfood option B)
+
+**Decision.** For apps that do not register with AT-SPI (proven: Tk on Ubuntu 24.04,
+RT-003), `observe` merges an **opt-in, per-app instrumentation channel** with the
+AT-SPI tree. This is per-app instrumentation, NOT an arbitrary-Tk-app claim; a generic
+Tk ATK bridge is out of scope for both workstreams (Dogfood owner, 2026-11-19, option
+B accepted — the verified fixture and its seeded bug stay unchanged).
+
+**Contract.**
+- Opt-in via environment: the app publishes only when its state-file env var is set
+  (Dogfood's myco-todo: `$MYCO_TODO_STATE_FILE`; off by default, behavior identical
+  when unset).
+- Shape (exactly the shape proven at RT-003): `{"listbox_rows": [string],
+  "listbox_selection": [string], "status_text": string, "entry_text": string}`.
+  Dogfood's publisher conforms to this; new instrumented apps reuse the same keys
+  where applicable and extend by app-specific namespaced keys.
+- **Atomic publication REQUIRED**: write-tmp-then-rename, so `observe` never reads
+  torn JSON mid-mutation (Dogfood implements publisher-side; requested by RT).
+- Runtime-side defense: on JSON parse failure the runtime retries the read once
+  after a short delay, then reports the introspection channel as unavailable for
+  that observation — never fabricates or partially applies widget state.
+- `observe` output carries the introspection record under a per-app key alongside
+  the AT-SPI tree; absence of the channel is reported explicitly (`unknown` is a
+  positive statement, per agent-desktop's role-vocabulary lesson), not as an empty
+  tree.
+- Actuation for AT-SPI-invisible apps uses global XTEST with real focus
+  (windowactivate + click + type). `send_event`-style synthetic keys
+  (`xdotool type --window`) are PROHIBITED — proven not to land in Tk (RT-003).
