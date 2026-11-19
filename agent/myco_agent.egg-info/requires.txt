@@ -1,0 +1,6 @@
+
+[windows]
+uiautomation>=2.0.28
+comtypes>=1.4.8
+pywin32>=308
+pillow>=11.0.0

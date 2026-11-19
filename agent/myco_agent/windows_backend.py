@@ -24,13 +24,17 @@ class WindowsBackend:
         import win32service  # noqa: F401  (window station via pywin32 below)
         import win32ts
 
+        import win32process
+
         station = win32ts.GetProcessWindowStation()
-        desktop = win32ts.GetUserObjectInformation(station, 1)
+        station_name = win32ts.GetUserObjectInformation(station, 1)  # UOI_NAME
+        thread_desktop = win32ts.GetThreadDesktop(win32process.GetCurrentThreadId())
+        desktop_name = win32ts.GetUserObjectInformation(thread_desktop, 1)
         user = os.environ.get("USERNAME", "")
         return {
             "session_id": session_id.value,
-            "window_station": desktop and "WinSta0",
-            "desktop": desktop or "Default",
+            "window_station": station_name,
+            "desktop": desktop_name,
             "user": user,
         }
 

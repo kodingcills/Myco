@@ -42,6 +42,10 @@ always answers and keeps serving.
 | `kill` | `pid?` or `image_name` | `killed[]` |
 | `uno_eval` | `call`, `sheet?`, `cell?`, `socket?` | UNO readback (`get_value`, `get_string`, `get_error`, `is_modified`) |
 
+`read_file`/`write_file` take arbitrary absolute paths by design — fixtures and
+artifacts live outside any single root. The agent is loopback-only and
+token-authed; the host is the trusted caller. There is no path sandbox.
+
 ## Backends
 
 Every op sits behind `OpsBackend` (`myco_agent/backend.py`) with two

@@ -37,6 +37,8 @@ class _Handler(socketserver.StreamRequestHandler):
 class AgentServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    # default backlog of 5 refuses connections under connect bursts
+    request_queue_size = 64
 
     def __init__(self, host, port, token, backend):
         self.token = token
