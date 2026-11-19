@@ -141,4 +141,46 @@ describe("runner", () => {
     const result = await app.act({ kind: "click", ref });
     expect(result.outcome).toBe("delivered_verified");
   });
+
+  it("preserves executed steps when the app dies mid-program", async () => {
+    // A mid-program death must be distinguishable from a failed launch: the
+    // evidence has to show which steps ran before the app became unobservable.
+    // M1-011 recovery and the corrupted-trial audit both depend on it.
+    const app = new FakeSpreadsheetApp({ filePath: tmpFile("middeath") });
+    let observes = 0;
+    const dying = {
+      observe: async () => {
+        observes += 1;
+        // initial observe + step 0's post-act observe succeed; step 1's throws
+        if (observes >= 3) throw new Error("app gone: RPC server unavailable");
+        return app.observe();
+      },
+      act: (action: Parameters<typeof app.act>[0]) => app.act(action),
+      capabilities: () => app.capabilities(),
+      issueRef: (nodeId: string) => app.issueRef(nodeId),
+    };
+    const program: Program = {
+      name: "two-clicks",
+      steps: [
+        {
+          action: { kind: "click", ref: { nodeId: "A1" } },
+          preconditions: [],
+          postconditions: [],
+        },
+        {
+          action: { kind: "click", ref: { nodeId: "B2" } },
+          preconditions: [],
+          postconditions: [],
+        },
+      ],
+    };
+    const outcome = await runProgram(dying, program);
+    expect(outcome.completed).toBe(false);
+    expect(outcome.guardFailure?.phase).toBe("postcondition");
+    expect(outcome.guardFailure?.predicateName).toBe("observe-after-action");
+    expect(outcome.guardFailure?.step).toBe(1);
+    expect(outcome.guardFailure?.observed).toContain("RPC server unavailable");
+    expect(outcome.steps).toHaveLength(1);
+    expect(outcome.steps[0]?.step).toBe(0);
+  });
 });
