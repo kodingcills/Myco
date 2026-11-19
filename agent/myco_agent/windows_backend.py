@@ -94,20 +94,24 @@ def _user_object_name(handle):
     """GetUserObjectInformationW(UOI_NAME) for a window-station/desktop handle."""
     import ctypes.wintypes as wintypes
 
+    # A NULL-buffer length probe is rejected on some stations (the probe returns
+    # FALSE with ERROR_INSUFFICIENT_BUFFER, not success), so ask for a fixed
+    # 256-char buffer directly and let the call report the real length.
     u32 = ctypes.windll.user32
     u32.GetUserObjectInformationW.argtypes = [
-        wintypes.HANDLE, ctypes.c_int, wintypes.LPWSTR,
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
         wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
     ]
     u32.GetUserObjectInformationW.restype = wintypes.BOOL
-    length = wintypes.DWORD()
-    if not u32.GetUserObjectInformationW(handle, 1, None, 0, ctypes.byref(length)):
-        raise OpError("OP_FAILED", "GetUserObjectInformationW probe failed")
-    buf = ctypes.create_unicode_buffer(length.value // 2 + 1)
+    size = wintypes.DWORD(0)
+    buf = ctypes.create_unicode_buffer(256)
     if not u32.GetUserObjectInformationW(
-        handle, 1, buf, length.value, ctypes.byref(length)
+        handle, 1, buf, ctypes.sizeof(buf), ctypes.byref(size)
     ):
-        raise OpError("OP_FAILED", "GetUserObjectInformationW failed")
+        raise OpError(
+            "OP_FAILED",
+            "GetUserObjectInformationW failed (err=%d)" % ctypes.get_last_error(),
+        )
     return buf.value
 
 
