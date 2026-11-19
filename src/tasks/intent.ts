@@ -57,14 +57,28 @@ const LEADING_TRIGGERS = /^[=+\-@]/;
 const LOOKS_LIKE_DATE = /^\d{4}-\d{2}-\d{2}$|^\d{1,2}\/\d{1,2}(\/\d{2,4})?$/;
 
 /**
+ * Shapes Calc's input path rewrites in a text column even though they are not
+ * dates: leading-zero integers (`007` -> 7), exponents (`1e5` -> 100000),
+ * grouped numbers (`1,234`), percentages (`100%` -> 1), booleans (`TRUE`), and
+ * non-ISO date forms (`2024-1-1`). Each is a rewrite risk found in review; the
+ * generator never emits them, but the predicate is exported and must not
+ * vouch for values it cannot guarantee.
+ */
+const REWRITTEN_AS_NUMBER_OR_BOOLEAN =
+  /^0\d|\d[eE][+-]?\d|\d,\d|%$|^(?:TRUE|FALSE|T|F)$|^\d{4}-\d{1,2}-\d{1,2}$|^\d{1,2}:\d{2}/;
+
+/**
  * True when Calc's input path cannot mutate `value` typed into a cell of
  * `columnType` (M1-013, LibreOffice AutoCorrect finding 2026-11-23):
  * no sentence-casing (leading lowercase letter), no formula/escape triggers
  * (=, +, -, @, '), and — in a text column — nothing Calc might parse or
- * reformat as a date. Integer/date/currency columns receive values of their
- * own type, which Calc stores verbatim. Digit-led values (e.g. `908578`)
- * are accepted: Calc parses them as numbers without rewriting any
- * characters, so the readback is byte-identical.
+ * reformat as a date, number, percentage, or boolean. Integer/date/currency
+ * columns receive values of their own type, which Calc stores verbatim.
+ *
+ * A plain digit string (`908578`) is accepted: Calc stores it as a number
+ * whose displayed text equals the input. Digit strings Calc would REWRITE
+ * (`007`, `1e5`, `1,234`, `100%`) are rejected — see
+ * REWRITTEN_AS_NUMBER_OR_BOOLEAN.
  */
 export function isAutoCorrectImmune(value: string, columnType: FixtureColumn["type"]): boolean {
   if (value.length === 0 || /^[='@]/.test(value) || LEADING_TRIGGERS.test(value)) {
@@ -74,7 +88,7 @@ export function isAutoCorrectImmune(value: string, columnType: FixtureColumn["ty
     if (!/[A-Z0-9]/.test(value[0] ?? "")) {
       return false; // leading lowercase → AutoCorrect sentence-case risk
     }
-    return !LOOKS_LIKE_DATE.test(value);
+    return !LOOKS_LIKE_DATE.test(value) && !REWRITTEN_AS_NUMBER_OR_BOOLEAN.test(value);
   }
   return true;
 }
