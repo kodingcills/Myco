@@ -105,6 +105,19 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - Delegated: M1-006 (glm-5.3, owns agent/, deploys to live VM, bounded-UIA-timeout validation required as evidence) and M1-007 (glm-5.3, owns src/verify/+src/win/, host-side UNO verifier, exact-match comparison vs AutoCorrect, fake-agent tests).
 - VM stays UP while M1-006 works. Shut down when idle: ~/VMs/myco-win11/scripts/shutdown.sh.
 
+## M1 acceptance criteria — status (updated 2026-11-19)
+
+| # | Criterion | Status | Evidence / gap |
+|---|---|---|---|
+| 1 | Real desktop execution (one parameterized family, real Windows GUI app) | **DONE** | calc-record-edit on real LibreOffice Calc 26.8.3 ARM64, session-1 agent; verified trial with persisted value (PR #18) |
+| 2 | Independent verification (success from persisted state, never agent claims) | **DONE** | UnoVerifier: UNO live read + isModified + persisted-file parse; verdict independence proven by call-graph (PR #11 review); exact comparison (AutoCorrect case flip refutes) |
+| 3 | Reliability ≥ 27/30 varied normal trials | **NOT STARTED** | Only single trials so far. Sweep blocked on the AutoCorrect-immune generator (in flight) |
+| 4 | Failure detection: 0 false successes across ≥10 corrupted/interrupted trials | **PARTIAL** | Individual corrupted trials end uncertain/refuted, never verified (kill, AutoCorrect, invalid-target). The ≥10-trial sweep is not run |
+| 5 | Recovery: app interruption AND invalid UI target | **IN PROGRESS** | Mid-program interruption evidence now real (PR #19). Recovery ladder delegated (M1-011). Invalid-target aborts safely today (GuardFailure at step 0) but is not yet a recovery path |
+| 6 | Evidence: machine-readable trace, result, verification outcome | **DONE** | trace.jsonl + result.json + ledger, schema-validated in CI (M1-012); 4 result.json + 51 trace events validated on the live run |
+| 7 | Baseline: screenshot agent on identical tasks/states/model settings | **NOT STARTED** | M1-015; constraint: no paid/hosted service without escalation; Agent S3 + UI-TARS-1.5-7B chosen by measurement |
+| 8 | Reproducibility: another agent can reproduce the evaluation | **PARTIAL** | Deploy is now reproducible from a clean reset (PR #14, retro-verified). Runbook (docs/eval-runbook.md) not written; build-from-scratch (build-all.sh) unproven |
+
 ## Cross-workstream dependencies (owner: M1 coordinator, per outer loop 2026-11-19)
 | Workstream | Thread | Branch | Depends on M1 | M1 depends on it |
 |---|---|---|---|---|
