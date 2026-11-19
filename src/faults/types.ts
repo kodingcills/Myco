@@ -2,7 +2,14 @@ import type { AppAdapter } from "../core/adapter.ts";
 import type { FaultContext, FaultInjector } from "../core/eval.ts";
 import type { Verdict } from "../core/verify.ts";
 
-/** The four M1 corruption classes (ADR-0005). */
+/**
+ * The four M1 corruption classes (ADR-0005).
+ *
+ * Trust boundary: injectors are harness-trusted code. The recorded schedule is
+ * trusted absolutely — nothing cross-checks it against observed guest state. A
+ * lying injector can desync ground truth from reality; that is accepted by
+ * design, since injectors and ground truth share one author.
+ */
 export type FaultClass = "kill-app" | "invalid-target" | "delayed-save" | "focus-change";
 
 /** What each fault class means for the intent — the per-class ground-truth rule. */
