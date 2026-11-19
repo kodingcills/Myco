@@ -122,8 +122,6 @@
       }
     ],
     "score": 0,
-    "reasons": [
-      "cell B39 expected \"revised-908578\" but live document has \"Revised-908578\""
-    ]
+    "reasons": ["cell B39 expected \"revised-908578\" but live document has \"Revised-908578\""]
   }
 }
