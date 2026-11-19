@@ -1,0 +1,27 @@
+[project]
+name = "myco-agent"
+version = "0.1.0"
+description = "Guest agent for the Myco Windows VM: NDJSON desktop ops on loopback"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+windows = [
+    "uiautomation>=2.0.28",
+    "comtypes>=1.4.8",
+    "pywin32>=308",
+    "pillow>=11.0.0",
+]
+
+[tool.uv]
+dev-dependencies = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["myco_agent*"]
