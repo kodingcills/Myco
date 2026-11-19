@@ -14,7 +14,7 @@ UNO and saved-file verifier.
   correct one of four same-named projects: `echo0715/OpenComputer`, Yale NLP,
   Apache-2.0. It ships a UNO-based Calc verifier with 16 `check-*` endpoints
   that read object-model/persisted state, not pixels.
-- M1 already adopted its *shape* and hardened it (ADR-0002, ADR-0005, ADR-0010):
+- M1 already adopted its *shape* and hardened it (ADR-0002, ADR-0005):
   - Two independent read-only checks: (1) UNO live readback
     (`getValue`/`getString`/`getError`, `XModifiable.isModified()` pre-check),
     (2) close the document, then host-side parse of the persisted `.xlsx`

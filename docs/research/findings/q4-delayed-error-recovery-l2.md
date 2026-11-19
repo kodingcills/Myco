@@ -35,7 +35,8 @@ the authors' repo README:
   failures from real policies, locates each root cause against the gold
   lineage, and replays to controlled takeover depths. Code:
   <https://github.com/xu-hu-2002/CUA-Recovery> (MIT).
-- **Why it matters for Myco:** the paper's own framing is the M1 thesis —
+- **Why it matters for Myco:** the authors' repo README states the M1 thesis
+  almost verbatim —
   "An early wrong action is written into files, spreadsheets, or databases,
   stays hidden for many steps, and surfaces only after the step that caused it
   has left the agent's context." Its takeover-depth protocol is directly
@@ -100,8 +101,8 @@ change (M1-013/014/015 run as planned).
 **Plug-in points (no M1 changes needed to propose this):**
 
 - `FaultInjector` interface and fault schedule: M1-010 (merged).
-- Dogfood scenarios: DF-S02 (find-the-bug) is the same failure shape at task
-  scale — a wrong persistence decision discovered later. The L2 result feeds
+- Dogfood scenarios: DF-S02 (`find-seeded-bug`) exercises a related failure shape at task
+  scale [INFERENCE: the scenario does not state this] — a wrong persistence decision discovered later. The L2 result feeds
   the Dogfood owner's Phase 1 scenario design directly; DF-S04
   (crash-recovery) is the adjacent already-planned scenario.
 - Evidence/ledger: M1-012 schema needs no changes; `stale-write` is a new
@@ -130,5 +131,5 @@ TIF), (3) sequence it **after** M1-014 so it doesn't contend for the VM.
 
 ## Cost spent
 
-0 tool calls for the paper (deferred, flagged UNVERIFIED). Design: this
-thread, ~1 synthesis pass.
+3 tool calls (arXiv abstract page + authors' repo README + one index/ledger
+update). Design: this thread, ~1 synthesis pass.

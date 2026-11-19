@@ -15,20 +15,19 @@ Already researched and verified against clones/primary sources:
   FindAllBuildCache + 3-property-cache query shape is worth copying; its
   verification is an LLM judging screenshots (`evaluate.yaml`) — the failure
   mode M1 exists to fix. Windows-only, no UNO/LibreOffice.
-- **HCU** (`repo:microsoft/Hybrid-Computer-Use`, docs/research/runtime-prior-art.md
-  §3): contract shapes (`aN/wN/rN` refs, `input_emitted`/`effect_unknown`,
+- **HCU** (`repo:microsoft/Hybrid-Computer-Use`, `myco/runtime-v0:docs/research/runtime-prior-art.md §3`): contract shapes (`aN/wN/rN` refs, `input_emitted`/`effect_unknown`,
   layout lease, `allow_global_input`) are worth lifting; the Go binary with a
   private JSONL protocol and embedded Python provider is not consumable as a
   dependency.
-- **Cua** (`repo:trycua/cua`, adapters.md §6, runtime-prior-art.md §4):
+- **Cua** (`repo:trycua/cua`, adapters.md §5, `myco/runtime-v0:docs/research/runtime-prior-art.md §4`):
   `cua-vmm` is the only open-source code found that solves golden-snapshot
   reset on Apple silicon (concept source for the runtime's create/reset); the
   driver crates are not on crates.io and the perception extension is AGPL.
-- **xa11y** (`repo:xa11y/xa11y`, runtime-prior-art.md §1): the only published,
-  MIT, Rust-native Linux AT-SPI + actuation crate (0.16.1, crates.io, aarch64
-  CI). Adopted by the runtime workstream behind its own `Backend` trait
+- **xa11y** (`repo:xa11y/xa11y`, `myco/runtime-v0:docs/research/runtime-prior-art.md §1`): the only published,
+  MIT, Rust-native Linux AT-SPI + actuation crate (0.16.1, crates.io; CI cross-checks
+  xa11y-core for aarch64 and builds aarch64 wheels, but tests nothing on aarch64). Adopted by the runtime workstream behind its own `Backend` trait
   (ADR-0014).
-- **computer-use-rs** (runtime-prior-art.md §2): two weeks old, 279 downloads,
+- **computer-use-rs** (`myco/runtime-v0:docs/research/runtime-prior-art.md §2`): two weeks old, 279 downloads,
   one contributor, partially AI-generated per its own README. Rejected as a
   dependency; `AppState` observation shape borrowed.
 - **agent-desktop** (not in the question's list, but the actual source of

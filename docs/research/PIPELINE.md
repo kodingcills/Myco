@@ -58,9 +58,11 @@ Prefer an experiment over more speculation once there is a plausible approach.
 - `docs/research/ledger.jsonl` — one line per investigation:
   `{ts, question, level, tool_calls, tokens, outcome, decision_resolved}`.
   Feeds the four metrics: cost per resolved decision, cost per actionable
-  experiment, duplicate rate (L0 additions rejected as already-indexed ÷
-  total L0 candidates), and the informative-outcome rate of experiments
-  (succeeded or failed informatively ÷ total).
+  experiment, duplicate rate, and the informative-outcome rate of experiments
+  (succeeded or failed informatively ÷ total). Duplicate rate (L0 additions
+  rejected as already-indexed ÷ total L0 candidates) is **derived from the
+  outer loop's L0 logs**, not carried in a ledger field — the ledger records
+  the work this thread paid for, and L0 work is usually the outer loop's.
 - `docs/research/findings/<id>.md` — one file per resolved finding. Sections,
   in order, no ten-page reports:
   1. Question

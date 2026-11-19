@@ -12,7 +12,7 @@ against the runtime workstream's `Backend` trait.
 ## Evidence
 
 **Runtime trait as it exists** (branch `myco/runtime-v0`,
-`runtime/crates/myco-rt-core/src/ops.rs`): `Backend { provision, observe, act,
+`myco/runtime-v0:runtime/crates/myco-rt-core/src/ops.rs`): `Backend { provision, observe, act,
 reset, destroy }`. The `Session` wrapper owns phase transitions
 (creating/ready/resetting/destroyed/failed), permissions, and state versions.
 Sixth op `evidence` is session-level, not on the trait. There is deliberately
@@ -20,10 +20,12 @@ Sixth op `evidence` is session-level, not on the trait. There is deliberately
 
 **QEMU primary docs** (verified 2026-11-19 against qemu.org/docs/master):
 
-- Internal snapshots (`savevm`/`loadvm`) include CPU+RAM+device state when the
-  guest is running; stored in the first writable qcow2 device. **Not
+- Internal snapshots (`savevm`/`loadvm`) include CPU+RAM+device state; stored
+  in the first writable qcow2 device. **Not
   deprecated** in current master docs (checked `about/deprecated.html`), though
-  the migration docs promote mapped-ram/background-snapshot as the modern path.
+  the migration docs list mapped-ram/background-snapshot as capabilities
+  [INFERENCE: that they are the "modern path" is my reading, not a ranking
+  the docs state].
   Limitation: requires ≥1 non-removable writable qcow2; USB and removable
   devices have incomplete snapshot support. (system/images.html#vm-snapshots,
   system/monitor.html)
@@ -52,7 +54,7 @@ site summary; all technical content is in the API docs):
 - No CoW/dedup/hypervisor mechanism publicly disclosed (`fly_instance_id`
   hints Fly.io-derived infra) [INFERENCE by scout].
 
-**Cua cua-vmm** (already indexed, runtime-prior-art.md §4): golden snapshot =
+**Cua cua-vmm** (already indexed; `myco/runtime-v0:docs/research/runtime-prior-art.md §4`): golden snapshot =
 shared RAM `memory-backend-file` + `x-ignore-shared` migration stream + qcow2
 overlay, each VM restored paused with CoW RAM; `freeze()` folds the disk into
 a layer. Consistent with both QEMU docs above.
@@ -66,7 +68,7 @@ lifecycle verbs when fork/search lands**:
 1. **Today (v0, correct as-is):** `provision / observe / act / reset /
    destroy`. `reset` = "return to clean desktop" — its *implementation* is the
    golden-snapshot + qcow2-overlay pattern (ADR-0011 already commits to qcow2
-   overlay on a pinned base). Nothing in the verified evidence requires
+   overlay on a pinned base; `myco/runtime-v0:docs/architecture/runtime.md` @ 30ce323). Nothing in the verified evidence requires
    exposing `snapshot` as a public op for M1 or dogfood Phase 1.
 2. **When fork/branch search lands (post-M1, vision.md step 3):** add
    `snapshot() -> SnapshotHandle` and `fork(SnapshotHandle) -> Session`
@@ -81,7 +83,7 @@ lifecycle verbs when fork/search lands**:
      snapshot handle) vs `provision(template=…)` (disk-only, fresh boot —
      already expressible in the current trait).
    - Keep it backend-agnostic: the trait must never name qcow2, QEMU, or KVM.
-   `UtmWindowsBackend` (RT-012) will implement `reset` via UTM snapshot
+   `UtmWindowsBackend` (runtime backlog RT-012; ADR-0012 names the backend) will implement `reset` via UTM snapshot
    restore (M1-017: measured 8.3–8.6 s) and may legitimately answer
    `fork` with `Unsupported` — the `Failed{reason}`/`uncertain` honesty bar
    applies to lifecycle ops too.
