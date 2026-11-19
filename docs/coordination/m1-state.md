@@ -204,3 +204,10 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - FIX (PR #19): mid-program death is now a structured GuardFailure (phase postcondition, predicate observe-after-action) carrying executed steps; kill is step-triggered (--kill-after-step). Coordinator-verified on the VM: kill after step 3 → 2 steps recorded, guard at step 2 (setValue), uncertain, 27.9s, no hang. Normal trial after the change still verified (40.2s).
 - PR #18 prose corrected to match its artifacts and to point at PR #19 for the real mid-program kill.
 - This is the first genuine mid-program interruption evidence — the precondition for M1-011 recovery.
+
+## Log 2026-11-19 (23) — PRs #18 and #19 merged
+- PR #19 VERIFIED at b9ae1f4 (kimi-k3): scope exact, runner catch correctly scoped (initial observe still propagates → launch-vs-death distinction preserved), kill adapter delegates correctly and fires exactly once, 89/89 tests, 4/4 CI, and the verifier reproduced the mid-program kill itself (2 steps, observe-after-action, uncertain, no hang) plus a normal verified run. No must-fixes.
+- Coordinator added the missing unit test (observe-after-action preserving steps) and corrected the killAfterStep doc (counts dispatched acts, not recorded steps). 97/97 tests, 4/4 CI green, merged.
+- PR #18 merged after its prose correction (Trial 2 now matches its artifacts and points at #19 for the real mid-program kill).
+- Note: PR #19's code content had already reached main via another path (files byte-identical); the merged PR carries the test + doc delta.
+- M1-013 status: single-trial evidence done; the 30-trial sweep remains, and it MUST use an AutoCorrect-immune generator (uppercase-start or numeric values) or 27/30 is unwinnable.
