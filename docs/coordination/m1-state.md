@@ -224,3 +224,8 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - PR #18 merged after its prose correction (Trial 2 now matches its artifacts and points at #19 for the real mid-program kill).
 - Note: PR #19's code content had already reached main via another path (files byte-identical); the merged PR carries the test + doc delta.
 - M1-013 status: single-trial evidence done; the 30-trial sweep remains, and it MUST use an AutoCorrect-immune generator (uppercase-start or numeric values) or 27/30 is unwinnable.
+
+## Log 2026-11-19 (24) — PR #21 merged (AutoCorrect-immune generator)
+- PR #21 VERIFIED at 0e11821, then DELTA VERIFIED at 69e545b after the coordinator tightened the exported predicate: it had accepted `007`, `1e5`, `1,234`, `100%`, `TRUE`, `2024-1-1`, `12:30` for text columns (all shapes Calc rewrites). Generator output was always safe; the predicate was the trap. 102/102 tests, 4/4 CI, merged.
+- Known conservative overreach (harmless): `%$` is unanchored, so `Cost50%` is rejected. Generator never emits `%`.
+- NEXT (owed): guest-side proof that every generated value survives Calc's input path byte-identically, then the 30-trial sweep.
