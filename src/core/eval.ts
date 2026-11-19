@@ -88,7 +88,7 @@ export interface EvalConfig {
 }
 
 /** Wrap a verifier verdict as a single-check scored verdict. */
-function scoreVerdict(verdict: Verdict, oracleName: string): ScoredVerdict {
+export function scoreVerdict(verdict: Verdict, oracleName: string): ScoredVerdict {
   if (verdict.status === "verified") {
     return {
       status: "verified",
