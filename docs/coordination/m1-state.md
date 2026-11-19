@@ -16,7 +16,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 | Child | Task | Model | Status |
 |---|---|---|---|
 | Research: eval frameworks | OSWorld/OSWorld2, OpenComputer verifiers, screenshot baselines (OpenAdapt, Agent S, UI-TARS, OpenCUA) | deepseek-v4.1-flash | done → docs/research/eval-frameworks.md (committed) |
-| Research: structural adapters | UFO/UFO2, agent-desktop (verify Tiffany's claims), pywinauto vs uiautomation, UNO verifier, Cua; ARM64 matrix | deepseek-v4.1-flash | running |
+| Research: structural adapters | UFO/UFO2, agent-desktop (verify Tiffany's claims), pywinauto vs uiautomation, UNO verifier, Cua; ARM64 matrix | deepseek-v4.1-flash | done → docs/research/adapters.md (committed) |
 | Research: Windows env | UTM scripting, snapshot reset strategy, SSH session-0 launcher, ARM64 compat | deepseek-v4.1-flash | done → docs/env/windows.md (committed) |
 | Build: core runtime skeleton | TS toolchain, core interfaces (state/adapter/program/verify/evidence/eval), fake app, tests, CI, PR to main | glm-5.3 | running |
 
@@ -42,10 +42,22 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - Never eval() task-supplied strings (OpenComputer does — RCE hole). Use declarative predicate language.
 - Evaluator must not depend on GUI keystrokes (OSWorld postconfig presses Ctrl+S via pyautogui).
 
+## Key research findings (docs/research/adapters.md)
+- agent-desktop verified real: Rust, CUIAutomation8, STALE_REF/AMBIGUOUS_TARGET, three-way outcome, MCP, Apache-2.0, ARM64 released. But publish=false, no COM/UNO. → steal primitives, no dependency.
+- Adapter = uiautomation + raw comtypes SetConnectionTimeout/SetTransactionTimeout (neither lib exposes them; killed-app trial hits unbounded hang). UNO = independent read-only verifier, separate process.
+- Two verifications: edit landed (UNO live read) vs edit persisted (close + host-side file parse). isModified() = cheap pre-check.
+- UFO's reusable asset: UIA query shape (FindAllBuildCache, 3-property cache, element cap). UFO verification = LLM judging screenshots — rejected.
+- ARM64 clear: LibreOffice 26.8.3 aarch64 MSI + SDK; pywin32 win_arm64 wheels; uiautomation bitmap DLLs x64-only but degrade gracefully.
+
+## Architecture and backlog
+- docs/architecture/m1.md: ADR-0001 (TS host + Python guest agent, NDJSON) [CONSEQUENTIAL], ADR-0002 (independent 3-valued verifier, UNO), ADR-0003 (uiautomation+comtypes adapter, agent-desktop primitives, no dependency) [CONSEQUENTIAL], ADR-0004 (programs as data), ADR-0005 (fault injection, host-side ground truth), ADR-0006 (recovery semantics), ADR-0007 (evidence + conformance ledger), ADR-0008 (eval harness), ADR-0009 (baseline: Agent S3 + UI-TARS-1.5-7B), ADR-0010 (env ratified). Task family calc-record-edit + per-row DoD defined.
+- docs/backlog/m1.md: M1-001..M1-018 with blocked_by. Ready for Linear mirroring.
+
 ## Open decisions
-- Adapter choice (agent-desktop vs pywinauto/uiautomation direct) — pending research.
-- Task family exact definition (Calc record edits parameters) — after research.
-- DSL vs API for guarded programs — pending architecture doc.
+- ~~Adapter choice~~ → decided: uiautomation + comtypes timeouts, agent-desktop primitives reimplemented (ADR-0003).
+- ~~Task family~~ → decided: calc-record-edit (docs/architecture/m1.md).
+- ~~DSL vs API~~ → decided: programs as declarative data (ADR-0004).
+- UI-TARS hosting for the baseline (local vs hosted; possible account/cost) — escalate when M1-015 starts.
 
 ## Blockers
 - Windows VM not yet provisioned (outer loop owns).
