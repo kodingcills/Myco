@@ -23,6 +23,30 @@ the environment. The Dogfood workstream consumes this.
 - Merge only after independent verifier (kimi-k3) passes and CI is green.
 - Never answer permission prompts or read credentials.
 
+## Dogfood requirements (REQ-01..REQ-12) — coverage map
+
+Source: docs/coordination/dogfood-state.md on main (PR #8, merged 2026-11-19).
+DF-005 (TIF-27) is blocked on **RT-first-path** (= RT-011 end-to-end test).
+
+| REQ | Requirement | Covered by | First path? |
+|---|---|---|---|
+| REQ-01 | create → session handle | RT-006 (`QemuLinuxBackend.provision`) | yes |
+| REQ-02 | destroy, no state leaks | RT-006 (`destroy`, overlay deletion) | yes |
+| REQ-03 | observe: structured tree incl. **Tk listbox rows + status line** | RT-007 — **AT RISK**: Tk's AT-SPI exposure on Linux is unverified (historically weak/absent). RT-003's smoke app is a Tk app (Listbox + Entry + status Label) precisely to probe this; finding lands with RT-003. | yes, pending Tk probe |
+| REQ-04 | act: typing + clicks, three-way outcome | RT-008 (`ActionOutcome` three-way, read-back per ADR-0014) | yes |
+| REQ-05 | evidence: M1-012 schema artifacts + run ids | RT-009 (+ RT-014 `recordKind:"session"`) | yes |
+| REQ-06 | reset with measured cost | RT-006 + RT-011 (measured, not inherited from M1-017) | yes |
+| REQ-08 | host-side guest file read | **RT-015** (extended op, post-first-path) | no |
+| REQ-09 | process control (launch/kill/relaunch, exit status) | launch via `act` now; kill/relaunch/exit-status = **RT-016** | partial |
+| REQ-10 | guest file edit/write | **RT-017** (extended op) | no |
+| REQ-11 | guest shell exec w/ stdout/stderr/exit | **RT-018** (extended op) | no |
+| REQ-12 | reset/destroy after crashes | RT-006 acceptance + RT-011 (crash-then-reset case) | yes |
+
+Note: REQ-08/10/11 exceed the brief's "v0 = exactly six operations". They are
+scheduled as extended ops immediately after the first path rather than expanding v0
+mid-flight; flagged to the outer loop (runtime-state.md log, 2026-11-19).
+REQ-07 was retired by Dogfood (folded into REQ-03).
+
 ## Interfaces RT provides to M1 / Dogfood
 | Interface | Shape | Status |
 |---|---|---|
