@@ -13,16 +13,40 @@ and the world has legitimately moved on since?
 
 ## Evidence and citation status
 
-- The arXiv id `2610.27645` and the CUA-Recovery title, dataset size (2,250
-  error states / 100 tasks), and headline claim come from the outer loop's
-  brief. **UNVERIFIED against the primary source** — this L1 did not spend
-  budget fetching the paper (queued item; the proposal below does not depend
-  on the exact numbers, only on the failure *shape*, which matches
-  OpenAdapt's published false-success results already in the index).
-- Verification step for whoever picks this up: fetch
-  https://arxiv.org/abs/2610.27645, confirm id/title/claims, update
-  `index.jsonl`. If the id is wrong, find the real CUA-Recovery paper before
-  writing the L2 issue.
+**VERIFIED 2026-11-19** against the primary source (arXiv abstract page) and
+the authors' repo README:
+
+- **Title:** "CUA-Recovery: Benchmarking Error Recovery in Long-Horizon
+  Computer-Use Agents" (Xu Hu, Haoming Li, Yuxiang Wang, et al.; 2026-10-20;
+  cs.AI/cs.CL/cs.LG). Matches the brief.
+- **Dataset:** "a human-verified test suite of 2,250 erroneous states over 100
+  tasks and a training suite of 8.6K trajectories over 377 tasks." Matches the
+  brief's 2,250 / 100.
+- **The "many steps earlier" dimension is explicit and quantified:** the test
+  suite takes over each state at depth `d ∈ {0, 5, 10, 15, 20, 25}` steps after
+  the root cause, with no error warning. The brief's "~15 steps" is one of the
+  paper's own depths, not an invention.
+- **Headline result:** across six agents and six takeover depths, Error
+  Awareness Rate (EAR) ≤ 44.0% and Pass@3 ≤ 25.5%. Fine-tuning Qwen3.5-35B-A3B
+  on the training suite lifts average EAR 19.9% → 35.2% and Rubric Score
+  5.0% → 16.1% on held-out recovery states.
+- **Mechanism:** ReRail composes MyPCBench tasks into long multi-application
+  workflows with an executable gold lineage, collects verifier-confirmed
+  failures from real policies, locates each root cause against the gold
+  lineage, and replays to controlled takeover depths. Code:
+  <https://github.com/xu-hu-2002/CUA-Recovery> (MIT).
+- **Why it matters for Myco:** the paper's own framing is the M1 thesis —
+  "An early wrong action is written into files, spreadsheets, or databases,
+  stays hidden for many steps, and surfaces only after the step that caused it
+  has left the agent's context." Its takeover-depth protocol is directly
+  reusable as the L2's trial schedule (use `d ∈ {0,5,10,15,20,25}`, not an
+  ad-hoc "k+15").
+
+One correction to the brief's framing: the paper measures *inherited* errors
+in a takeover setting (a fresh agent inherits a corrupted state), not a single
+agent's self-monitoring over a long run. The L2 below tests the single-agent
+case, which is the gap the paper leaves open and the one M1's runner actually
+faces.
 
 Why this matters independently of the citation: M1's fault injectors
 (M1-010) all produce **immediately detectable** faults (kill-app,
@@ -47,7 +71,8 @@ change (M1-013/014/015 run as planned).
    session, each edit a guarded step. This already exists as a parameter sweep;
    the L2 adds one thing — a `stale-write` fault class.
 2. **New fault injector `stale-write`** implementing M1-010's `FaultInjector`
-   interface: at step k (uniformly sampled from steps 3–6 of 20), silently
+   interface: at step k (sampled from the paper's takeover depths
+   `d ∈ {0, 5, 10, 15, 20, 25}` mapped onto a 20-edit program), silently
    write a wrong value to the target cell *between* the runner's postcondition
    check and the next step (i.e., through the UNO channel or a second UIA
    client, outside the adapter the runner is watching). The runner's
