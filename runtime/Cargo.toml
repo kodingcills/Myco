@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/myco-rt-core",
+    "crates/myco-rt-agent",
+    "crates/myco-rt-transport",
+    "crates/myco-rt-backend-qemu",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Tifaine/myco"
+
+[profile.release]
+lto = "thin"
