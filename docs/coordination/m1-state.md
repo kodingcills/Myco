@@ -82,3 +82,6 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - PR #1 RE-VERIFIED at d8a16be by fresh kimi-k3 verifier: all 3 must-fixes confirmed end-to-end, 9-case adversarial attack produced no false success and no uncounted uncertain, no scope creep, lockfile fixed. MERGED to main (f90cd73). Backlog M1-001 marked done.
 - Nice-to-fix parked: PersistedStateReadError "corrupt" variant is dead code (parseable garbage legitimately refutes). Next PR touching filepersist.ts should drop or implement it.
 - Delegated: M1-009 task family (glm-5.3, owns src/tasks/), M1-012 evidence schema + ledger (glm-5.3, owns evidence.ts/eval.ts/schemas/). Disjoint file ownership to avoid merge collisions. M1-005 (guest agent) still running.
+
+## Log 2026-11-19 (3)
+- M1-005 (guest agent) delivered as PR #4 (head 4f4608f): NDJSON loopback server, token auth, 10 ops, WindowsBackend/FakeBackend split, InteractiveToken bootstrap XML, 20/20 pytest, 4/4 CI green. Independent verifier (kimi-k3) spawned.
