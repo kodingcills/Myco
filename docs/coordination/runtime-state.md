@@ -70,3 +70,10 @@ the environment. The Dogfood workstream consumes this.
   Linux boot/reset cost measured fresh at RT-011. Phase-1 go signal: standing — send
   RT-011 passing evidence, coordinator messages Dogfood same day.
 - Delegated RT-014 (recordKind schema PR, glm-5.3).
+- RT-001 done: docs/research/runtime-prior-art.md committed (verified, pinned commits).
+  ADOPT xa11y 0.16.1; BUILD rest; HCU contract shapes; cua-vmm reset concept; agent-desktop
+  post-mortems → read-back verification mandatory in act. ADR-0014 records the stack:
+  X11/Xvfb (Wayland portal prompt blocks unattended screenshots), Ubuntu 24.04 ARM64 floor.
+- Delegated RT-003 (guest provisioning: Ubuntu 24.04 ARM64 + Xvfb + AT-SPI + smoke proof,
+  glm-5.3). RT-003 and RT-014 children share this branch; file ownership is disjoint
+  (schemas/ vs runtime/guest/).
