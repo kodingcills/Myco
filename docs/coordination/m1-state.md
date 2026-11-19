@@ -190,3 +190,10 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - Clarification recorded: "two python processes" is LO's python.exe stub re-execing python-core-3.13.18 — one logical agent, not a duplicate.
 - Residual (non-blocking): logon-triggered MycoAgent path not exercised (needs logoff/logon); deploy-to-vm.sh line 24 has an unused PYEXE variable (cosmetic).
 - Process lesson stands: the merge was still a violation even though the code turned out correct. Verification-after-the-fact is not verification.
+
+## Log 2026-11-19 (21) — M1-013 evidence regenerated; UIA reaches the desktop
+- PR #18 (evidence-only) delivered. Coordinator inspected the mid-typing screenshot directly: LibreOffice Calc window, cell B39 showing `REVISED-SESSI` (column-width truncation of REVISED-SESSION1), selection advanced to B40 with `Cleo Larsen` in the formula bar. That is a real keyboard commit on the real grid — UIA actuation reached the desktop. 214 UIA elements (vs ~198 blank doc); a session-0 agent sees an empty tree.
+- Normal trial: `verified`, B39 persisted REVISED-SESSION1, 34.3s. Kill-mid-program: `uncertain` (NoConnectException), 15.3s, no hang. AutoCorrect control run: typed lowercase → Calc sentence-cased → `refuted` — independent corroboration that real input landed (a UNO write would store verbatim).
+- Schema validation: 4 result.json + 51 trace events ALL OK.
+- Confirms follow-up (4): the parameter generator MUST emit AutoCorrect-immune values or 27/30 is unwinnable. The child used an uppercase override for the normal trial.
+- Independent verifier (kimi-k3) is re-running on the VM and inspecting the screenshot itself.
