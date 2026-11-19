@@ -123,7 +123,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   emitted under the pre-recordKind schema.
 
 ### RT-014 Schema PR: `recordKind` discriminator on result.json
-- **status:** done on myco/runtime-v0 @ a0e5dda (2026-11-19); handed to M1 coordinator for schema-owner review. 72/72 tests incl. 7 recordKind cases + schema-validate green (independently reproduced by RT owner).
+- **status:** done — ACCEPTED by M1 schema owner (2026-11-19). Dual verification: 72/72 on myco/runtime-v0 (RT owner) AND 77/77 on M1 main with the schema dropped in, all existing M1 artifacts validating unchanged. Rides with the runtime PR; schema owner re-runs the compat check at that PR's head.
 - **owner:** build
 - **blocked_by:** none
 - **description:** PR against schemas/ (M1-owned, reviewed by M1 coordinator per

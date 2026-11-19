@@ -101,3 +101,8 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
 - Delegated RT-003 (guest provisioning: Ubuntu 24.04 ARM64 + Xvfb + AT-SPI + smoke proof,
   glm-5.3). RT-003 and RT-014 children share this branch; file ownership is disjoint
   (schemas/ vs runtime/guest/).
+- RT-014 ACCEPTED by M1 schema owner: dual verification (72/72 on myco/runtime-v0;
+  77/77 on M1 main with the schema dropped in, all M1 artifacts unchanged). Rides with
+  the runtime PR; owner re-runs compat at that PR's head. M1 shares the Tk/AT-SPI
+  skepticism (labels can be invisible); RT-003's Tk probe numbers go to both M1 and
+  Dogfood when they land.
