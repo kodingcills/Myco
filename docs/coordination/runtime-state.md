@@ -135,5 +135,10 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   OVERRIDE inherited env; per-uid AT-SPI registries require the GUI session to run as
   the agent's uid (service User=myco + RuntimeDirectory=/run/myco); seed had lost the
   myco-gui-session write_files header. Guest shut down; no qemu running.
-- Independent review of RT-007 BLOCKED on tooling: delegate_task returns
-  `parent_not_active` (twice). Not merging; branch-only. Re-attempt next turn.
+- Independent review of RT-007 initially blocked on tooling (delegate_task returned
+  `parent_not_active` twice); re-attempted successfully after the outer loop
+  re-established the run. PR #17 opened (runtime v0, RT-001..RT-007) and watched;
+  kimi-k3 adversarial review running; CI pending. Nothing merges until both pass.
+- Dogfood: ADR-0016 atomic publish landed (0266a83, temp + os.replace); mapping
+  MYCO_TODO_STATE_FILE -> MYCO_INTROSPECTION_FILE confirmed; no further asks; ready
+  for RT-011.
