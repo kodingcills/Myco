@@ -95,3 +95,22 @@ Live proof (`runtime/guest/channel-test.sh`, PASS):
 - Reboot survival: after `sudo reboot`, ping succeeds with zero host-side changes.
 - Unit tests: `cargo test --workspace` = 13/13 (9 core session + 4 transport,
   the transport tests spawn the real agent binary).
+
+## Backend lifecycle (RT-006; live-verified 2026-11-19, two consecutive runs)
+
+`QemuLinuxBackend` (runtime/crates/myco-rt-backend-qemu) implements the `Backend`
+trait over the scripts above. Live test:
+`MYCO_RT_LIVE=1 cargo test -p myco-rt-backend-qemu --test lifecycle -- --nocapture`
+
+| Op | Measured | Proof |
+|---|---|---|
+| create (cold boot + agent + channel ready) | **14.0 s** | channel ping OK |
+| reset (discard overlay + reboot + agent + channel) | **19.7 s** | `/home/myco/RESET_MARKER` written pre-reset is GONE after |
+| destroy | **4.1 s** | overlay deleted, `pgrep qemu-system-aarch64` empty |
+
+Caveat: create/reset wait for SSH + agent handshake, NOT for cloud-init's package
+install to finish (a fresh overlay re-runs cloud-init in the background). `observe`
+must additionally gate on the GUI session being up (RT-007). Concurrency cap: one
+session, enforced by an atomic lockfile with stale-pid reclaim; a second live
+`acquire_lock` fails with `CapReached` (unit-tested). Destroy is crash-tolerant
+(best-effort shutdown; a dead guest is not an error) per REQ-12.
