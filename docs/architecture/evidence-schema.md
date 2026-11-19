@@ -94,7 +94,7 @@ Every line is a JSON object with a discriminating `type`:
 | `fault-injection` | `timestamp`, `fault`, `detail` | FaultInjector arms (`beforeTrial`, `beforeSave`). |
 | `recovery` | `timestamp`, `event`, `stateVersion` | Recovery events (ADR-0006); M1-012 emits `aborted-uncertain` when a run ends unresolved. Full recovery event stream lands with M1-011. |
 
-All timestamps are ISO-8601. `ActionRecord` mirrors the closed ADR-0004 union: `kind` plus `ref`/`text`/`value`/`keys`/`timeoutMs` as applicable.
+All timestamps are ISO-8601. `ActionRecord` mirrors the closed ADR-0004 union: `kind` plus `ref`/`text`/`value`/`keys`/`timeoutMs` as applicable. `ActionRecord` is intentionally open (no `additionalProperties: false`): adapters may attach delivery metadata to recorded actions without breaking evidence validation; the `kind` discriminator stays authoritative.
 
 ## ledger.jsonl — LedgerRow (Cua action-support ledger format)
 
@@ -116,11 +116,11 @@ One row per `(evalId, runId, trialIndex, corruptionClass, actionKind)`:
 
 | state | condition |
 |---|---|
-| `pass` | verdict `verified` AND host-side ground truth satisfied. |
-| `refusal` | program aborted on a guard, verdict `refuted` (runner refused; refusalCode set). |
+| `pass` | verdict `verified` AND host-side ground truth satisfied — including when the program did not complete (the intent was still demonstrably met). |
+| `refusal` | program did not complete and verdict `refuted` (runner refused; refusalCode set). |
 | `failure` | verdict `refuted` with the program completing, or a false success (`ground-truth:false`). |
 | `uncertain` | verdict `uncertain` (could not look; ADR-0002). |
-| `gap` | program did not complete and the verdict is not `refuted` — the action kind was never exercised. Never a pass. |
+| `gap` | Reserved; not currently emitted. Semantics if ever used: trial ended without a usable verdict (neither verified nor refuted nor uncertain). With the current single-verifier harness every incomplete-program trial lands in `refusal`, `failure`, or `uncertain`, so no reachable derivation exists; the ledger format reserves `gap` for future fault classes. Never counted as a pass. |
 
 ## Validator
 

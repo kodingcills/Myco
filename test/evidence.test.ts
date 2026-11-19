@@ -11,6 +11,7 @@ import {
   auditLedgerRows,
   InvalidEvidenceError,
   type LedgerRow,
+  writeRunEvidence,
 } from "../src/core/evidence.ts";
 import { FakeSpreadsheetApp } from "../src/fake/app.ts";
 import { delayedSave, focusChange, invalidTarget, killApp } from "../src/fake/faults.ts";
@@ -92,6 +93,72 @@ describe("evidence schema validation", () => {
     };
     expect(() => assertSchema(row, ledgerRowSchema, "ledger row")).not.toThrow();
   });
+
+  it("rejects a verdict whose partial_score weights do not sum to 1.0", () => {
+    const record = {
+      runId: "r",
+      taskId: "fake-set-cell",
+      taskParams: { trial: 0 },
+      startedAt: "2026-01-01T00:00:00Z",
+      steps: [],
+      verdict: {
+        status: "refuted",
+        checks: [
+          {
+            name: "check-a",
+            passed: false,
+            reason: "a",
+            partial_score: { score: 0, weight: 0.45 },
+          },
+          {
+            name: "check-b",
+            passed: false,
+            reason: "b",
+            partial_score: { score: 0, weight: 0.45 },
+          },
+        ],
+        score: 0,
+        reasons: ["nope"],
+      },
+    };
+    expect(() =>
+      writeRunEvidence(join(tmpdir(), `myco-weights-${process.pid}`), record as never, []),
+    ).toThrow(InvalidEvidenceError);
+  });
+
+  it("writes a multi-check verdict whose weights sum to 1.0", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-weights-ok-"));
+    const record = {
+      runId: "r1",
+      taskId: "fake-set-cell",
+      taskParams: { trial: 0 },
+      startedAt: "2026-01-01T00:00:00Z",
+      steps: [],
+      verdict: {
+        status: "refuted",
+        checks: [
+          {
+            name: "check-a",
+            passed: true,
+            reason: "a",
+            partial_score: { score: 1, weight: 0.6 },
+          },
+          {
+            name: "check-b",
+            passed: false,
+            reason: "b",
+            partial_score: { score: 0, weight: 0.4 },
+          },
+        ],
+        score: 0.6,
+        reasons: ["partial"],
+      },
+    };
+    const runDir = writeRunEvidence(dir, record as never, []);
+    const written = JSON.parse(readFileSync(join(runDir, "result.json"), "utf8"));
+    expect(written.verdict.checks).toHaveLength(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("conformance ledger", () => {
@@ -172,19 +239,39 @@ describe("eval summary rate reporting", () => {
       evalId: "eval-rates",
     });
 
-    // trial 0 is killed before save (not satisfied, refuted or uncertain);
-    // trial 1 is clean (satisfied, verified)
+    // trial 0 is killed before save (refuted, not satisfied); trial 1 is
+    // clean (verified, satisfied). successRate counts ground-truth
+    // satisfaction over trials; checkPassRate counts passed checks over all
+    // scored checks. Both are single-check verdicts here, so the values are
+    // computable by hand and must differ from a naive alias of the other.
     expect(summary.results[0]?.groundTruthSatisfied).toBe(false);
     expect(summary.results[1]?.groundTruthSatisfied).toBe(true);
-    // successRate: intent-satisfaction rate over trials
     expect(summary.successRate).toBe(0.5);
-    // checkPassRate: per-check pass rate — distinct field, distinct value source
-    expect(summary.checkPassRate).toBeDefined();
-    expect(summary.checkPassRate).toBeLessThanOrEqual(1);
-    expect(summary.checkPassRate).toBeGreaterThanOrEqual(0);
-    // both fields present and independently computed, never aliased
-    expect(summary).toHaveProperty("successRate");
-    expect(summary).toHaveProperty("checkPassRate");
+    // Both trials are single-check verdicts; the killed trial's check fails
+    // and the clean trial's passes, so checkPassRate is also 1/2 here — but
+    // see the aliasing probe below for a case where the two provably differ.
+    expect(summary.checkPassRate).toBe(0.5);
+    // Provable non-aliasing: an implementation that computed checkPassRate as
+    // 1 - successRate, successRate², or trials-based shortcuts would produce
+    // a different value in this configuration (e.g. a lying verifier below).
+
+    // Aliasing probe: a verifier that always passes checks while ground truth
+    // fails must yield checkPassRate = 1 with successRate = 0.
+    const { dir: liarDir, file: liarFile } = freshSheet("rates-alias");
+    const lyingSummary = await runEvaluation({
+      adapterFor: (t) => new FakeSpreadsheetApp({ filePath: liarFile(t) }),
+      verifier: { verify: () => ({ status: "verified" as const, reasons: ["trust me"] }) },
+      family: setCellFamily,
+      faults: [killApp()],
+      trials: 1,
+      filePathFor: liarFile,
+      runsDir: join(liarDir, "runs"),
+      evalId: "eval-rates-alias",
+    });
+    expect(lyingSummary.successRate).toBe(0);
+    expect(lyingSummary.checkPassRate).toBe(1);
+    expect(lyingSummary.checkPassRate).not.toBe(lyingSummary.successRate);
     rmSync(dir, { recursive: true, force: true });
+    rmSync(liarDir, { recursive: true, force: true });
   });
 });

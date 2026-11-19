@@ -173,6 +173,24 @@ export function assertSchema(value: unknown, schema: JsonSchema, what: string): 
 }
 
 /**
+ * Enforce the ADR-0007 partial_scores invariant that the schema subset
+ * validator cannot express: the weights across a verdict's checks must sum
+ * to 1.0 (M1-012). Throws InvalidEvidenceError on drift.
+ */
+export function assertWeightsSumToOne(verdict: ScoredVerdict): void {
+  const sum = verdict.checks.reduce((acc, check) => acc + check.partial_score.weight, 0);
+  if (Math.abs(sum - 1) > 1e-9) {
+    throw new InvalidEvidenceError("result.json", [
+      {
+        path: "$.verdict.checks[*].partial_score.weight",
+        keyword: "sum",
+        message: `partial_score weights must sum to 1.0, got ${sum}`,
+      },
+    ]);
+  }
+}
+
+/**
  * Write a run's trace.jsonl and result.json. Every artifact is schema-checked
  * before being persisted; a tampered or drifting writer fails the run loudly
  * with InvalidEvidenceError (M1-012: invalid artifacts fail the run).
@@ -182,6 +200,8 @@ export function writeRunEvidence(
   record: RunRecord,
   extraTrace: TraceEvent[],
 ): string {
+  assertWeightsSumToOne(record.verdict);
+
   const runDir = join(runsDir, record.runId);
   mkdirSync(runDir, { recursive: true });
 
