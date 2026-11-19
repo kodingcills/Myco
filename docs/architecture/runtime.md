@@ -125,3 +125,42 @@ vocabulary per ADR-0012 so M1 and agents see one language.
 **Rejected.** MCP-only (testability, M1 integration friction). CLI-only (no
 discovery/schema surface for agents). HTTP server (a third surface with auth
 questions; stdio MCP + CLI covers v0's consumers).
+
+## ADR-0014 — Guest observation/actuation stack: adopt xa11y, X11 session, HCU contract shapes
+
+**Decision.** Following the prior-art evaluation
+([docs/research/runtime-prior-art.md](../research/runtime-prior-art.md), RT-001):
+
+- **ADOPT `xa11y` 0.16.1** (`xa11y` + `xa11y-core` + `xa11y-linux`, MIT, crates.io,
+  aarch64-linux CI) as the in-guest accessibility + input layer, behind our own
+  `Backend` trait so no xa11y type leaks into the six-op API. Semver churn risk
+  (pre-1.0, single maintainer) is managed by pinning the exact `=` version triplet
+  the xa11y workspace itself enforces.
+- **X11 session, not Wayland, for v0.** xa11y's Wayland screenshot path goes through
+  the xdg portal with an interactive consent prompt — a hard blocker for unattended
+  agents. X11 gives prompt-free `GetImage` screenshots and XTest input. The guest
+  display is Xvfb (headless) unless RT-003 finds a reason for a real compositor.
+- **Base image: Ubuntu Server 24.04 LTS ARM64 cloud image**, SHA-256 pinned in-repo.
+  agent-desktop's post-mortems document that Ubuntu 22.04's AT-SPI bridge aborts on
+  `Action.GetActions` — 24.04 is the floor.
+- **BUILD everything else**, borrowing contract shapes: HCU's `aN/wN/rN` ref
+  namespace, `input_emitted`/`effect_unknown` delivery honesty (maps onto xa11y's
+  `Delivery::Unknown`), screenshot-bound layout lease for coordinate actions, and
+  `allow_global_input: false` policy precedent; computer-use-rs's `AppState`
+  observation-record shape and xdotool key-chord syntax. Neither is a dependency.
+- **Read-back verification is mandatory in `act`.** agent-desktop's AT-SPI
+  post-mortems document per-toolkit cases where a write returns `true` and changes
+  nothing (and vice versa); an action's return value is never proof. This is the
+  same discipline as ADR-0003's three-way outcome and is why `ActionOutcome` has
+  `DeliveredUnverified`.
+- **Reset design** (RT-006) studies cua's `cua-vmm` golden-snapshot technique
+  (shared-RAM file + `x-ignore-shared` device state + CoW map + qcow2 overlay) as a
+  concept source only; its driver crates are not on crates.io.
+
+**Rejected.** computer-use-rs as a dependency (279 downloads, one contributor, two
+weeks old, self-declared AI-generated portions — a liability under an
+execution-guarantees promise). HCU as a dependency (Go binary, private wire
+protocol, embedded Python provider — imports a second runtime for a contract we can
+lift from MIT-licensed docs). agent-desktop code (`publish = false` everywhere; its
+upstream is xa11y anyway). pyatspi/OSWorld's guest server (deprecated approach,
+Python in the guest contradicts the thin-guest posture).
