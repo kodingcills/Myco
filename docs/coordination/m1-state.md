@@ -136,3 +136,7 @@ Obligations:
 ## Log 2026-11-19 (11)
 - PR #11 (integration) delivered: normal trial VERIFIED (C39 persisted 7331, UNO+isModified+file parse agree), corrupted trial (kill mid-program) UNCERTAIN no hang, 89/89 tests, schema-valid artifacts. Verifier re-running both trials on the VM.
 - FOLLOW-UPS OWED: (1) two pywin32 hot-patches exist ONLY in the deployed guest copy of windows_backend.py — verifier is capturing the diff; must be ported to agent/ in a follow-up PR. (2) Deployment now runs under LO's bundled Python (pyuno built against it) — update agent/bootstrap + docs/env/windows.md when ported. (3) reset.sh live took 58s once (vs 8.3s baseline) — watch for RAM pressure / snapshot growth. (4) AutoCorrect case-flips lowercase text values → legit refuted; M1-013's parameter generator MUST emit AutoCorrect-immune values (uppercase-start or numeric) or the 27/30 criterion is unwinnable. (5) m1-agent-live snapshot still owed — take it AFTER the hot-patch port lands.
+
+## Log 2026-11-19 (12)
+- kimi-k3 quota exhausted (402 twice, spaced apart — ceiling, not transient). glm-5.3 confirmed alive. TEMPORARY role change: verifiers run on glm-5.3 with attack-specific mechanical briefs until the outer loop confirms kimi-k3 balance. Judgment-heavy calls (merge decisions, escalations) stay with the coordinator (which runs on kimi-k3 as the parent — note: the parent model has quota by construction; if this thread itself 402s, everything stops).
+- PR #11 verifier respawned on glm-5.3 with the same adversarial brief.
