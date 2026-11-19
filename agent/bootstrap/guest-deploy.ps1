@@ -28,8 +28,8 @@ $lines = @(
 )
 $cmd = ($lines -join "`r`n") + "`r`n"
 Set-Content -Path $cmdPath -Value $cmd -Encoding ASCII
-taskkill /IM python.exe /F 2>$null | Out-Null
-schtasks /End /TN 'MycoAgent' 2>$null | Out-Null
+try { taskkill /IM python.exe /F 2>$null | Out-Null } catch { }  # no python.exe on first deploy is fine
+try { schtasks /End /TN 'MycoAgent' 2>$null | Out-Null } catch { }
 schtasks /Create /TN 'MycoAgent' /XML $xmlPath /F | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "schtasks create failed: $LASTEXITCODE" }
 schtasks /Run /TN 'MycoAgent' | Out-Null

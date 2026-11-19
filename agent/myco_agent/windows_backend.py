@@ -200,22 +200,43 @@ class WindowsBackend:
 
     # ----- MSAA wake + foreground (guest findings 1 & 2) -----
 
-    def _wake_msaa(self, hwnd):
+    def _wake_msaa(self, hwnd, timeout_s=5.0):
         """One AccessibleObjectFromWindow(hwnd, OBJID_CLIENT): until a client
         makes an MSAA call, LibreOffice builds no accessibility bridge and UIA
-        sees only the title bar. Harmless for other apps."""
+        sees only the title bar. Harmless for other apps. Runs on a worker
+        thread with a deadline: the call is a SendMessage-style RPC to the
+        target window and could block if the provider wedges."""
+        import threading
+
         import comtypes
         import comtypes.client
 
         comtypes.client.GetModule("oleacc.dll")
         from comtypes.gen.Accessibility import IAccessible
 
-        acc = ctypes.POINTER(IAccessible)()
-        hr = ctypes.oledll.oleacc.AccessibleObjectFromWindow(
-            hwnd, _OBJID_CLIENT, ctypes.byref(IAccessible._iid_), ctypes.byref(acc)
-        )
-        if hr != 0:
-            raise OpError("OP_FAILED", "AccessibleObjectFromWindow failed hr=%s" % hr)
+        error = []
+
+        def call():
+            try:
+                acc = ctypes.POINTER(IAccessible)()
+                hr = ctypes.oledll.oleacc.AccessibleObjectFromWindow(
+                    hwnd, _OBJID_CLIENT, ctypes.byref(IAccessible._iid_), ctypes.byref(acc)
+                )
+                if hr != 0:
+                    error.append("AccessibleObjectFromWindow failed hr=%s" % hr)
+            except Exception as exc:  # ctypes raises on wedged/gone hwnd
+                error.append(str(exc))
+
+        worker = threading.Thread(target=call, daemon=True)
+        worker.start()
+        worker.join(timeout_s)
+        if worker.is_alive():
+            raise OpError(
+                "OP_FAILED",
+                "MSAA wake timed out after %.1fs (provider wedged?)" % timeout_s,
+            )
+        if error:
+            raise OpError("OP_FAILED", error[0])
 
     def _bring_to_front(self, hwnd, timeout_s=8.0):
         """Reliable foreground for a scheduled-task-launched window: dismiss
