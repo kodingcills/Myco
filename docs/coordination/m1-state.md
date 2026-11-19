@@ -19,7 +19,8 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 | Research: structural adapters | UFO/UFO2, agent-desktop (verify Tiffany's claims), pywinauto vs uiautomation, UNO verifier, Cua; ARM64 matrix | deepseek-v4.1-flash | done → docs/research/adapters.md (committed) |
 | Research: Windows env | UTM scripting, snapshot reset strategy, SSH session-0 launcher, ARM64 compat | deepseek-v4.1-flash | done → docs/env/windows.md (committed) |
 | Build: core runtime skeleton | TS toolchain, core interfaces, fake app, tests, CI | glm-5.3 | done → PR #1, head c85b568; CI + independent review pending |
-| Verify: PR #1 | adversarial review incl. false-success attack test | kimi-k3 | running |
+| Verify: PR #1 | adversarial review | kimi-k3 | done → REJECTED: uncertain collapse, bare-ok ActResult, fake ref versioning (ADR-0002/0003). Adversarial attack could NOT fool the harness. |
+| Fix: PR #1 | must-fixes 1-3 + lockfile on feat/m1-core-runtime-skeleton | glm-5.3 | running |
 | Verify: PR #2 | docs foundation review | kimi-k3 | running |
 
 ## Decisions so far
