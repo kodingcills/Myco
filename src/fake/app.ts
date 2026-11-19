@@ -21,6 +21,7 @@ export class FakeSpreadsheetApp implements AppAdapter {
   #filePath: string;
   #focusedNodeId: string | null = null;
   #dirty = false;
+  #saveDropped = false;
   readonly #rows: number;
   readonly #cols: number;
   #refTable = new Map<string, { nodeId: string; refVersion: number }>();
@@ -48,8 +49,10 @@ export class FakeSpreadsheetApp implements AppAdapter {
 
   issueRef(nodeId: string): string | null {
     if (!this.#liveNodeIds().includes(nodeId)) return null;
-    const ref = `ref:${this.#stateVersion}:${nodeId}`;
-    this.#refTable.set(ref, { nodeId, refVersion: this.#stateVersion });
+    const boundVersion = this.#nextRefStale ? this.#stateVersion - 1 : this.#stateVersion;
+    this.#nextRefStale = false;
+    const ref = `ref:${boundVersion}:${nodeId}`;
+    this.#refTable.set(ref, { nodeId, refVersion: boundVersion });
     return ref;
   }
 
@@ -127,9 +130,12 @@ export class FakeSpreadsheetApp implements AppAdapter {
     this.#alive = false;
   }
 
-  stealFocus(): void {
-    this.#focusedNodeId = "system:notification";
-    this.#bump();
+  get alive(): boolean {
+    return this.#alive;
+  }
+
+  dropSave(): void {
+    this.#saveDropped = true;
   }
 
   setSaveDelay(ms: number): void {
@@ -138,6 +144,17 @@ export class FakeSpreadsheetApp implements AppAdapter {
 
   isSavePending(): boolean {
     return this.#saveQueued;
+  }
+  stealFocus(target?: string): void {
+    this.#focusedNodeId = target ?? "system:notification";
+    this.#bump();
+  }
+
+  #nextRefStale = false;
+
+  /** Test seam: the next issued ref is bound to a superseded stateVersion. */
+  markNextRefStale(): void {
+    this.#nextRefStale = true;
   }
 
   #liveNodeIds(): string[] {
@@ -208,8 +225,11 @@ export class FakeSpreadsheetApp implements AppAdapter {
   #bump(): void {
     this.#stateVersion += 1;
   }
-
   #flushSave(): void {
+    if (this.#saveDropped) {
+      this.#saveQueued = false;
+      return;
+    }
     const write = () => {
       if (!this.#alive) {
         this.#saveQueued = false;
