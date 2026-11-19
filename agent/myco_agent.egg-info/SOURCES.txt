@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+myco_agent/__init__.py
+myco_agent/__main__.py
+myco_agent/backend.py
+myco_agent/fake_backend.py
+myco_agent/ops.py
+myco_agent/protocol.py
+myco_agent/server.py
+myco_agent/windows_backend.py
+myco_agent.egg-info/PKG-INFO
+myco_agent.egg-info/SOURCES.txt
+myco_agent.egg-info/dependency_links.txt
+myco_agent.egg-info/requires.txt
+myco_agent.egg-info/top_level.txt
+tests/test_agent.py
+tests/test_protocol.py

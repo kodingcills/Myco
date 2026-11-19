@@ -9,8 +9,6 @@
 #   - token file at   C:\ProgramData\Myco\agent.token  (ACL: myco only)
 
 $ErrorActionPreference = 'Stop'
-
-$ErrorActionPreference = 'Stop'
 $agentDir = 'C:\Program Files\Myco\agent'
 $xmlPath = Join-Path $agentDir 'bootstrap\MycoAgent.xml'
 $cmdPath = Join-Path $agentDir 'run-agent.cmd'
