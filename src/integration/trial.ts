@@ -50,10 +50,12 @@ export interface TrialOptions {
   /** Guest dir for fixtures + helper (created in the guest by the converter). */
   guestDir?: string;
   /**
-   * Kill soffice after this many program steps have completed. A timer cannot
-   * land mid-program reliably: launching Calc and making it observable takes
-   * ~30 s, so a wall-clock kill fires during launch and the trial never
-   * executes a step. Step-triggered kills are deterministic.
+   * Kill soffice after this many adapter actions have been dispatched. A timer
+   * cannot land mid-program reliably: launching Calc and making it observable
+   * takes ~30 s, so a wall-clock kill fires during launch and the trial never
+   * executes a step. Counting acts (not recorded steps) is deliberate: the
+   * kill must land after the action whose effect we want to interrupt, and a
+   * step record only exists once its post-act observation succeeded.
    */
   killAfterStep?: number;
 }
