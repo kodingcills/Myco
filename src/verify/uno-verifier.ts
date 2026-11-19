@@ -94,9 +94,10 @@ export async function sofficeCsvBytes(
   deps: SofficeDeps,
   xlsxPath: string,
   soffice = "soffice.com",
+  guestTempDir = "C:\\Users\\myco\\AppData\\Local\\Temp",
 ): Promise<Buffer> {
-  const outDir = `C:\\Users\\myco\\AppData\\Local\\Temp\\${nonce()}`;
-  const profile = `C:\\Users\\myco\\AppData\\Local\\Temp\\${nonce()}\\profile`;
+  const outDir = `${guestTempDir}\\${nonce()}`;
+  const profile = `${guestTempDir}\\${nonce()}\\profile`;
   await deps.launch([
     soffice,
     "--headless",

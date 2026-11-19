@@ -265,7 +265,7 @@ export class SshTunnel implements AgentTransport {
       if (await canConnect("127.0.0.1", this.options.localPort ?? 8765, 500)) return;
       await sleep(200);
     }
-    this.stop();
+    await this.stop();
     throw new AgentUnreachableError(`ssh tunnel did not become healthy within ${startTimeoutMs}ms`);
   }
 
@@ -276,16 +276,20 @@ export class SshTunnel implements AgentTransport {
   }
 
   /** Kill the tunnel process. Safe to call repeatedly. */
-  stop(): void {
-    if (this.child && this.child.exitCode === null) {
-      this.child.kill("SIGTERM");
-    }
+  async stop(): Promise<void> {
+    const child = this.child;
     this.child = undefined;
+    if (!child || child.exitCode !== null) return;
+    child.kill("SIGTERM");
+    const exited = await Promise.race([
+      new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+      sleep(2000).then(() => false),
+    ]);
+    if (!exited && child.exitCode === null) child.kill("SIGKILL");
   }
 
   async disconnect(): Promise<void> {
-    this.stop();
-    await sleep(50);
+    await this.stop();
   }
 
   call(request: AgentRequest): Promise<AgentResponse> {
@@ -341,6 +345,7 @@ export function agentConfigFromEnv(env: AgentClientEnv = process.env): AgentClie
  */
 export class AgentClient {
   private readonly transport: AgentTransport;
+  private nextId = 1;
   private readonly token: string;
 
   constructor(transport: AgentTransport, config: AgentClientConfig) {
@@ -365,7 +370,7 @@ export class AgentClient {
   private async request(op: AgentOp, params: Record<string, unknown> = {}): Promise<unknown> {
     let response: AgentResponse;
     try {
-      response = await this.transport.call({ id: 0, token: this.token, op, params });
+      response = await this.transport.call({ id: this.nextId++, token: this.token, op, params });
     } catch (error) {
       if (error instanceof AgentUnreachableError) throw error;
       throw new AgentUnreachableError(error instanceof Error ? error.message : String(error));
