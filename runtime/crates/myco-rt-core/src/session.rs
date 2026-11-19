@@ -1,6 +1,6 @@
 //! Session state machine and the six runtime operations (RT-005).
 
-use crate::ops::{Action, ActionOutcome, Backend, Observation, SessionSummary};
+use crate::ops::{Action, ActionOutcome, Backend, Observation};
 use crate::state::StateVersion;
 use crate::{Permissions, RuntimeError};
 use serde::{Deserialize, Serialize};
@@ -147,18 +147,10 @@ impl<B: Backend> Session<B> {
         Ok(outcome)
     }
 
-    /// `evidence`: session summary; trace.jsonl/result.json emission lands with
-    /// the evidence writer in RT-009, which consumes this summary.
-    pub fn evidence(&self) -> Result<SessionSummary, RuntimeError> {
-        Ok(SessionSummary {
-            session_id: self.config.session_id.clone(),
-            started_at: String::new(), // RT-009 wires real timestamps
-            events_path: String::new(),
-            unresolved_state: match self.phase {
-                SessionPhase::Failed => Some("session failed".into()),
-                _ => None,
-            },
-        })
+    /// `evidence`: export this session's artifacts (trace.jsonl + result.json,
+    /// ADR-0007) through the backend's validated writer.
+    pub fn evidence(&mut self) -> Result<crate::ops::EvidenceArtifacts, RuntimeError> {
+        self.backend.evidence().map_err(Self::backend_err)
     }
 
     /// `reset`: back to a clean desktop; session becomes ready again.
@@ -256,6 +248,13 @@ mod tests {
             Ok(())
         }
 
+        fn evidence(&mut self) -> Result<crate::ops::EvidenceArtifacts, FakeErr> {
+            Ok(crate::ops::EvidenceArtifacts {
+                trace_path: "trace.jsonl".into(),
+                result_path: "result.json".into(),
+            })
+        }
+
         fn destroy(&mut self) -> Result<(), FakeErr> {
             self.destroyed = true;
             Ok(())
@@ -345,6 +344,9 @@ mod tests {
                 Ok(ActionOutcome::Failed { reason: "no display".into() })
             }
             fn reset(&mut self) -> Result<(), FakeErr> { Ok(()) }
+            fn evidence(&mut self) -> Result<crate::ops::EvidenceArtifacts, FakeErr> {
+                Ok(crate::ops::EvidenceArtifacts { trace_path: String::new(), result_path: String::new() })
+            }
             fn destroy(&mut self) -> Result<(), FakeErr> { Ok(()) }
         }
         let mut fs = Session::new_creating(
@@ -411,6 +413,9 @@ mod tests {
             }
             fn act(&mut self, _: &Action) -> Result<ActionOutcome, E> { Ok(ActionOutcome::DeliveredUnverified) }
             fn reset(&mut self) -> Result<(), E> { Err(E) }
+            fn evidence(&mut self) -> Result<crate::ops::EvidenceArtifacts, E> {
+                Ok(crate::ops::EvidenceArtifacts { trace_path: String::new(), result_path: String::new() })
+            }
             fn destroy(&mut self) -> Result<(), E> { Ok(()) }
         }
         let mut s = Session::new_creating(
