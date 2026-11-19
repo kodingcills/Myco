@@ -1,0 +1,11 @@
+[package]
+name = "myco-rt-transport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Host-side client for the SSH NDJSON control channel to myco-rt-agent (RT-004, ADR-0015)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

@@ -164,3 +164,28 @@ protocol, embedded Python provider — imports a second runtime for a contract w
 lift from MIT-licensed docs). agent-desktop code (`publish = false` everywhere; its
 upstream is xa11y anyway). pyatspi/OSWorld's guest server (deprecated approach,
 Python in the guest contradicts the thin-guest posture).
+
+## ADR-0015 — Control channel: persistent SSH + NDJSON + per-session token
+
+**Decision.** The host↔guest op channel is a persistent SSH connection spawning the
+in-guest `myco-rt-agent` (thin Rust binary, statically cross-compiled
+`aarch64-unknown-linux-musl` with `rust-lld` + `link-self-contained`, so the guest
+needs no toolchain). Framing is NDJSON (one JSON request/response per line), matching
+M1's guest-agent habit. The first line is an auth handshake carrying a per-session
+token (constant-time comparison; wrong/missing token = one error line + clean exit).
+The agent implements `ping`/`shutdown` at RT-004; `observe`/`act` ops land at
+RT-007/008.
+
+**Why SSH, not virtio-serial.** No extra device configuration, key auth already
+exists from provisioning, and reboot survival is trivially true (agent binary on the
+overlay at `/home/myco/bin/`; the host reconnects — measured, not argued). Measured
+round trip including SSH connect: ~70–80 ms per op; a persistent channel amortizes
+the connect cost. virtio-serial remains a later optimization if op latency matters.
+
+**v0 limitations (accepted).** The token is passed on the remote command line and is
+visible in the guest's process list for the agent's lifetime; the guest is disposable
+and single-tenant, so this is acceptable for v0 and moves to a provisioned token file
+if multi-tenant guests ever exist. Transport reads are blocking; op deadlines are
+enforced at the session layer and by bounded agent ops (ADR-0014's read-back
+discipline), not by transport-level retries — a malformed or EOF'd channel is a hard
+error, never a silent retry.

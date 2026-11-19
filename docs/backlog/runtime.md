@@ -58,7 +58,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   script; image SHA-256 and package pins committed.
 
 ### RT-004 (TIF-32) Control channel: host↔guest transport
-- **status:** pending
+- **status:** done (2026-11-19; child died after scaffolding the agent, RT owner completed: transport crate + workspace wiring + musl cross-build + live proof). ADR-0015. Live evidence: channel-test.sh PASS — ping ~70–80 ms incl. connect, wrong-token rejected, reboot survival. cargo test 13/13.
 - **owner:** build
 - **blocked_by:** RT-003
 - **description:** virtio-serial vs SSH for the op channel; token auth; framing

@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/myco-rt-core"]
+members = [
+    "crates/myco-rt-core",
+    "crates/myco-rt-agent",
+    "crates/myco-rt-transport",
+]
 
 [workspace.package]
 edition = "2021"
