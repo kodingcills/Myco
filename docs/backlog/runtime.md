@@ -1,15 +1,18 @@
 # Myco Desktop Runtime (Rust) backlog
 
-Canonical in-repo backlog for the RT workstream. The outer loop mirrors this into
-Linear, team TIF, project "Myco Desktop Runtime (Rust)". Ids are stable; never
-renumber. `blocked_by` lists markdown ids in this file. Owner roles: `build`
+Canonical in-repo backlog for the RT workstream. Mirrored by the outer loop into
+Linear, team TIF, project "Myco Desktop Runtime (Rust)" (2026-11-19): RT-001..RT-009 =
+TIF-29..TIF-37, RT-014 = TIF-38, RT-010..RT-012 = TIF-39..TIF-41, RT-first-path =
+TIF-42, RT-015..RT-018 = TIF-43..TIF-46, RT-013 = TIF-47 (Linear order reflects mirror
+time, not markdown order). Dogfood DF-005 (TIF-27) is blocked by TIF-42.
+Ids are stable; never renumber. `blocked_by` lists markdown ids in this file. Owner roles: `build`
 (glm-5.3), `judgment` (kimi-k3), `swarm` (deepseek-v4.1-flash), `outer-loop`,
 `coordinator` (this thread). ADRs: [../architecture/runtime.md](../architecture/runtime.md).
 Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.md).
 
 ---
 
-### RT-001 Prior-art evaluation: xa11y, computer-use-rs, MS Hybrid Computer Use
+### RT-001 (TIF-29) Prior-art evaluation: xa11y, computer-use-rs, MS Hybrid Computer Use
 - **status:** done (2026-11-19; docs/research/runtime-prior-art.md, all claims verified against pinned-commit clones + crates.io/GitHub APIs)
 - **owner:** swarm
 - **blocked_by:** none
@@ -27,7 +30,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   source; agent-desktop = post-mortem source (read-back verification mandatory).
   Decisions recorded in ADR-0014.
 
-### RT-002 ADRs: host backend, M1 boundary, API surface
+### RT-002 (TIF-30) ADRs: host backend, M1 boundary, API surface
 - **status:** done (2026-11-19, coordinator)
 - **owner:** coordinator
 - **blocked_by:** none
@@ -38,7 +41,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** ADRs committed; consequential ones flagged to outer loop;
   docs/coordination/runtime-state.md records provided/needed interfaces.
 
-### RT-003 In-guest stack: provisioning for X11 + AT-SPI + xa11y
+### RT-003 (TIF-31) In-guest stack: provisioning for X11 + AT-SPI + xa11y
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-001, RT-002
@@ -54,7 +57,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   guest where AT-SPI tree reads and synthetic input work; proven by a host-side smoke
   script; image SHA-256 and package pins committed.
 
-### RT-004 Control channel: host↔guest transport
+### RT-004 (TIF-32) Control channel: host↔guest transport
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-003
@@ -63,7 +66,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** round-trip op latency measured and recorded; channel survives guest
   reboot (reset path) without host-side reconfiguration; unauthorized calls rejected (test).
 
-### RT-005 `myco-rt-core`: six-op API + Backend trait
+### RT-005 (TIF-33) `myco-rt-core`: six-op API + Backend trait
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-002
@@ -75,7 +78,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** `cargo test` green on macOS; state machine transitions covered by
   tests including illegal-transition rejection; FakeBackend exercises all six ops.
 
-### RT-006 QEMU+HVF Linux backend
+### RT-006 (TIF-34) QEMU+HVF Linux backend
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-003, RT-004, RT-005
@@ -87,7 +90,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   clean guest (proven by a marker file test); destroy leaves no processes or files;
   two concurrent-create attempts respect the cap.
 
-### RT-007 observe: AT-SPI tree + screenshot + process/window info
+### RT-007 (TIF-35) observe: AT-SPI tree + screenshot + process/window info
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-006
@@ -98,7 +101,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   stable refs; screenshot is a valid PNG of the session; stale ref after state change
   yields StaleRefError (test).
 
-### RT-008 act: launch, click, type, key
+### RT-008 (TIF-36) act: launch, click, type, key
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-007
@@ -109,7 +112,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   the text observable in a subsequent `observe`; failed action on a stale ref returns
   failed, not panic.
 
-### RT-009 evidence: trace + artifacts reusing M1 schema
+### RT-009 (TIF-37) evidence: trace + artifacts reusing M1 schema
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-005, RT-014
@@ -122,7 +125,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   deliberately malformed event fails validation loudly; no verdict-less record is
   emitted under the pre-recordKind schema.
 
-### RT-014 Schema PR: `recordKind` discriminator on result.json
+### RT-014 (TIF-38) Schema PR: `recordKind` discriminator on result.json
 - **status:** done — ACCEPTED by M1 schema owner (2026-11-19). Dual verification: 72/72 on myco/runtime-v0 (RT owner) AND 77/77 on M1 main with the schema dropped in, all existing M1 artifacts validating unchanged. Rides with the runtime PR; schema owner re-runs the compat check at that PR's head.
 - **owner:** build
 - **blocked_by:** none
@@ -135,7 +138,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   still validate unchanged; a `"session"` record without verdict validates and one
   with a verdict fails.
 
-### RT-010 MCP server + CLI front ends
+### RT-010 (TIF-39) MCP server + CLI front ends
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-005
@@ -145,20 +148,23 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   six ops with schema-checked args; CLI round-trips the same ops; error shapes match
   across both surfaces.
 
-### RT-011 End-to-end integration test: thinnest north-star path
+### RT-011 (TIF-40) End-to-end integration test: thinnest north-star path
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-008, RT-009, RT-010
 - **description:** Real integration test (not fake backend): create Linux desktop →
   observe (tree + screenshot) → act (launch app, type text) → evidence → reset →
-  destroy. Runs on this Mac; skipped gracefully when QEMU unavailable.
+  destroy. Runs on this Mac; skipped gracefully when QEMU unavailable. The full path
+  is exercised through the MCP stdio server (Dogfood's agent-under-test surface, per
+  outer loop 2026-11-19); the CLI JSON surface is smoke-tested for the same ops
+  (Dogfood's host-oracle/harness surface).
 - **acceptance:** test passes end-to-end with real QEMU+HVF; artifacts on disk prove
   each step; wall-clock for create (cold boot), reset, and destroy measured and
   recorded in docs/env/linux-runtime.md (the M1 coordinator explicitly does not want
   M1-017's Windows live-snapshot numbers inherited); VM shut down at test end (no
   idle leak).
 
-### RT-012 Windows/UTM backend interface anticipation (design only)
+### RT-012 (TIF-41) Windows/UTM backend interface anticipation (design only)
 - **status:** pending
 - **owner:** coordinator
 - **blocked_by:** RT-005
@@ -168,7 +174,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** design note in docs/architecture/ reviewed by M1 coordinator; no
   code touching UTM.
 
-### RT-first-path First end-to-end path (Dogfood unblocker)
+### RT-first-path (TIF-42) First end-to-end path (Dogfood unblocker)
 - **status:** pending (tracks RT-011)
 - **owner:** coordinator
 - **blocked_by:** RT-011
@@ -181,7 +187,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   docs/coordination/runtime-state.md and to the M1 coordinator (who holds the
   Phase-1 go signal for Dogfood); measured create/reset/destroy costs recorded.
 
-### RT-015 Extended op: host-side guest file read (Dogfood REQ-08)
+### RT-015 (TIF-43) Extended op: host-side guest file read (Dogfood REQ-08)
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-first-path
@@ -191,7 +197,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** integration test writes a file in the guest, reads it host-side,
   bytes match; permission denied for paths outside the session's grant (test).
 
-### RT-016 Extended op: process control (Dogfood REQ-09)
+### RT-016 (TIF-44) Extended op: process control (Dogfood REQ-09)
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-first-path
@@ -200,7 +206,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** integration test kills the demo app mid-session, observes it
   gone, relaunches, exit status reported; session stays usable (feeds REQ-12).
 
-### RT-017 Extended op: guest file edit (Dogfood REQ-10)
+### RT-017 (TIF-45) Extended op: guest file edit (Dogfood REQ-10)
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-first-path
@@ -209,7 +215,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** integration test replaces a file in the guest; subsequent read
   (RT-015) returns the new content.
 
-### RT-018 Extended op: shell exec (Dogfood REQ-11)
+### RT-018 (TIF-46) Extended op: shell exec (Dogfood REQ-11)
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-first-path
@@ -218,7 +224,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** integration test runs a command that fails and one that succeeds;
   exit codes and captured output exact.
 
-### RT-013 Idle/RAM discipline + ops docs
+### RT-013 (TIF-47) Idle/RAM discipline + ops docs
 - **status:** pending
 - **owner:** build
 - **blocked_by:** RT-006
