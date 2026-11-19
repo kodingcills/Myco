@@ -168,6 +168,56 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
 - **acceptance:** design note in docs/architecture/ reviewed by M1 coordinator; no
   code touching UTM.
 
+### RT-first-path First end-to-end path (Dogfood unblocker)
+- **status:** pending (tracks RT-011)
+- **owner:** coordinator
+- **blocked_by:** RT-011
+- **description:** Roll-up marker for the first end-to-end path the Dogfood
+  workstream is blocked on (DF-005 / TIF-27): create → observe → act → evidence →
+  reset → destroy against the real QEMU+HVF Linux guest. Covers Dogfood REQ-01,
+  REQ-02, REQ-03 (pending Tk AT-SPI probe in RT-003), REQ-04, REQ-05, REQ-06,
+  REQ-12; coverage map in docs/coordination/runtime-state.md.
+- **acceptance:** RT-011 green; announcement posted in
+  docs/coordination/runtime-state.md and to the M1 coordinator (who holds the
+  Phase-1 go signal for Dogfood); measured create/reset/destroy costs recorded.
+
+### RT-015 Extended op: host-side guest file read (Dogfood REQ-08)
+- **status:** pending
+- **owner:** build
+- **blocked_by:** RT-first-path
+- **description:** Read an arbitrary guest file from the host for oracle checks,
+  without going through the GUI (control-channel file op or SSH; reuses RT-004
+  channel). Exposed as an extended op beyond the six-op v0 surface.
+- **acceptance:** integration test writes a file in the guest, reads it host-side,
+  bytes match; permission denied for paths outside the session's grant (test).
+
+### RT-016 Extended op: process control (Dogfood REQ-09)
+- **status:** pending
+- **owner:** build
+- **blocked_by:** RT-first-path
+- **description:** Kill (SIGKILL) and relaunch a named guest process with exit
+  status reporting (launch already exists via `act`). Needed by DF-S02/DF-S04.
+- **acceptance:** integration test kills the demo app mid-session, observes it
+  gone, relaunches, exit status reported; session stays usable (feeds REQ-12).
+
+### RT-017 Extended op: guest file edit (Dogfood REQ-10)
+- **status:** pending
+- **owner:** build
+- **blocked_by:** RT-first-path
+- **description:** Write/replace a file in the guest (fix-the-bug scenarios,
+  DF-S03).
+- **acceptance:** integration test replaces a file in the guest; subsequent read
+  (RT-015) returns the new content.
+
+### RT-018 Extended op: shell exec (Dogfood REQ-11)
+- **status:** pending
+- **owner:** build
+- **blocked_by:** RT-first-path
+- **description:** Run a command in the guest, capture stdout/stderr/exit code
+  (`--self-test`, functional probes, DF-S03).
+- **acceptance:** integration test runs a command that fails and one that succeeds;
+  exit codes and captured output exact.
+
 ### RT-013 Idle/RAM discipline + ops docs
 - **status:** pending
 - **owner:** build
