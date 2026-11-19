@@ -4,3 +4,4 @@ runs/
 *.log
 .DS_Store
 __pycache__/
+.myco-token
