@@ -114,6 +114,8 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 Obligations:
 - Review runtime owner's boundary ADR when it lands on myco/runtime-v0; flag conflicts with ADR-0001 / M1-012 schema to the outer loop.
   - 2026-11-19: REVIEWED docs/architecture/runtime.md @ 55bd21c (ADR-0011/0012/0013) — ACCEPTED, no conflicts. Answered its open question as schema owner: verdict-less session records become a `recordKind` discriminator (run: verdict required; session: verdict forbidden) via a schema PR the runtime owner files; no verdict-less records under the current schema meanwhile.
+  - 2026-11-19: RT-014 (recordKind schema) delivered on myco/runtime-v0 @ a0e5dda — ACCEPTED after dropping their result-record.ts onto M1 main and running the full M1 suite: 77/77 green, artifacts validate unchanged. Rides with the runtime PR; will re-verify at that PR's head.
+  - Radar: dogfood REQ-03 needs Tk listbox rows + status line via AT-SPI; runtime owner is probing with a Tkinter smoke app (RT-003) and will forward measurements.
 - On runtime first-path-works: message dogfood owner to start Phase 1.
 - myco-win11 is M1-owned; other owners must ask before touching it.
 - RAM watch: Windows VM 8 GB of 24 GB; Linux VM must stay small and be shut down when idle. Check memory_pressure when both VMs may be up.
