@@ -97,3 +97,10 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - PR #6 (M1-012) verified at db55655 and merged. Merge blocker: repo OAuth token lacks `workflow` scope (GitHub refuses API merges touching ci.yml). Worked around by folding schema-validate into `pnpm test`. Durable fix = Tiffany runs `gh auth refresh -s workflow`.
 - M1-010 child stream died post-push; work recovered from PR #7, conflict resolved by coordinator, VERIFIED at 7d9b080 (0 false successes in 11/11 corrupted configs; 65/65 tests), merged. Parked nice-to-fix: fake app setSaveDelay 60s timer could use a dispose().
 - VM-gated items remain blocked on the UTM Automation Allow click (TCC dialog on the Mac's screen; re-trigger with one vm.sh status call if dismissed).
+
+## Log 2026-11-19 (7) — VM PHASE STARTED
+- TCC Automation grant landed (Tiffany reset T3 Code AppleEvents; one vm.sh status call succeeded in 2s). VM was already started from the earlier timed-out dispatch.
+- M1-008 done (coordinator, live VM): comtypes 1.5.0, uiautomation 2.0.29, pyuno (LO-bundled python), pywin32 all import on ARM64. smoke.ps1 pass:true, exact match, 197 UIA elements. uia_cell found:false confirms cell values must come from UNO/file, not UIA (validates ADR-0002/0003).
+- M1-017 done: reset.sh live ×3, 8.3-8.6s each, guest clean each time.
+- Delegated: M1-006 (glm-5.3, owns agent/, deploys to live VM, bounded-UIA-timeout validation required as evidence) and M1-007 (glm-5.3, owns src/verify/+src/win/, host-side UNO verifier, exact-match comparison vs AutoCorrect, fake-agent tests).
+- VM stays UP while M1-006 works. Shut down when idle: ~/VMs/myco-win11/scripts/shutdown.sh.
