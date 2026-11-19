@@ -117,3 +117,8 @@ Obligations:
 - On runtime first-path-works: message dogfood owner to start Phase 1.
 - myco-win11 is M1-owned; other owners must ask before touching it.
 - RAM watch: Windows VM 8 GB of 24 GB; Linux VM must stay small and be shut down when idle. Check memory_pressure when both VMs may be up.
+
+## Log 2026-11-19 (8)
+- CheaperInference wallet outage killed the first M1-006 child (402); respawned after top-up with identical kickoff.
+- PR #9 (M1-007 UNO verifier) VERIFIED at 6e166fa: exact comparison confirmed, all 8 attacks failed (case flip refuted, dropped save refuted, fabricating agent refuted/uncertain, no hangs). Coordinator applied 3 nice-to-fixes (sequenced ids, SshTunnel SIGKILL escalation, configurable guest temp dir) as 79660f3, gates green, MERGED.
+- Note: dogfood workstream merged PR #8 to main (their own scope; no M1 interaction).
