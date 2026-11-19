@@ -154,3 +154,9 @@ Obligations:
 - Mac at 18% free pages. Culprit: Ollama's `llama-server` (pid 47256, 9.1 GB RSS, local model), NOT the VMs. Windows VM shows ~1 GB RSS (QEMULauncher 1.0 GB) — the guest's 8 GB is committed but compressed/swapped.
 - Effect: SSH to 127.0.0.1:2222 times out during banner exchange; guest ops intermittently unreachable. PR #12's clean deploy DID pass (DEPLOY OK, ping verified) before pressure peaked.
 - Action: escalated to the outer loop — Tiffany side app, not mine to kill. VM stays up; waiting for headroom before the next live-trial work.
+
+## Log 2026-11-19 (16) — CRITICAL: agent was in session 0
+- Found while validating PR #12: the deployed agent ran in SESSION 0 (`session_id:0`, `window_station: Service-0x0-...`) despite `InteractiveToken` in the task XML — a `schtasks /Run` from an SSH context does not move the child to the interactive desktop. Session 0 has no window station, so UIA sees nothing: every trial would fail opaquely.
+- Proof: `Get-Process python*` → all SessionId 0. `run-interactive.ps1` probe → `pid=8208 session=1`. After relaunching the agent through run-interactive.ps1 → pids in session 1; `session_info` → `{session_id:1, window_station:"WinSta0", desktop:"Default"}`.
+- Fix landed as PR #13 (guest-deploy.ps1 writes run-agent.cmd to use run-interactive.ps1). PR #12 (interpreter) and #13 (session) touch adjacent lines of the same file — reconcile at merge; whichever lands second rebases.
+- Implication for M1 evidence: any trial executed before this fix ran against a session-0 agent. PR #11's integration run reported verified/uncertain verdicts — those verdicts came from UNO/file checks (which work in session 0), while the UIA typing step must be re-examined. Treat PR #11's evidence as UNTRUSTED until re-run after this fix.
