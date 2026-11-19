@@ -11,7 +11,7 @@ pub mod ops;
 pub mod session;
 pub mod state;
 
-pub use ops::{Action, ActionOutcome, Backend, Observation, SessionEvent, SessionSummary};
+pub use ops::{Action, ActionOutcome, Backend, EvidenceArtifacts, Observation, SessionEvent};
 pub use session::{Session, SessionConfig, SessionPhase};
 pub use state::{ElementRef, StateVersion};
 

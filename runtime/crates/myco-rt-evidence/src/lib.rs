@@ -36,6 +36,17 @@ pub struct SessionRecorder {
 impl SessionRecorder {
     /// Create a recorder writing into `<root>/runs/<run_id>/`.
     pub fn new(root: &Path, run_id: &str, task_id: &str) -> Result<Self, EvidenceError> {
+        // The id becomes a directory name; a `../` would escape the evidence root.
+        if run_id.is_empty()
+            || run_id.contains('/')
+            || run_id.contains('\\')
+            || run_id.contains("..")
+            || run_id.contains('\0')
+        {
+            return Err(EvidenceError::Invalid(format!(
+                "unsafe run id {run_id:?}: must be a plain path segment"
+            )));
+        }
         let dir = root.join("runs").join(run_id);
         std::fs::create_dir_all(&dir)?;
         let mut rec = Self {
@@ -95,7 +106,7 @@ impl SessionRecorder {
             "action": action,
             "preconditionResults": [],
             "postconditionResults": [{
-                "predicateName": "action_delivered",
+                "predicateName": "action_delivery_verified",
                 "passed": outcome == "delivered_verified",
                 "observed": format!("{outcome}: {detail}"),
             }],
@@ -109,14 +120,17 @@ impl SessionRecorder {
     }
 
     /// Write `trace.jsonl` and `result.json`, validating both first.
+    ///
+    /// Both files are written temp-then-renamed: a crash or an error between the
+    /// two writes must never leave a truncated file that looks like a complete
+    /// artifact (same discipline the introspection channel mandates, ADR-0016).
     pub fn flush(&self) -> Result<Paths, EvidenceError> {
         let trace = self.trace_bytes()?;
         let result = self.result_bytes()?;
         let trace_path = self.dir.join("trace.jsonl");
         let result_path = self.dir.join("result.json");
-        let mut f = std::fs::File::create(&trace_path)?;
-        f.write_all(&trace)?;
-        std::fs::write(&result_path, result)?;
+        write_atomic(&trace_path, &trace)?;
+        write_atomic(&result_path, &result)?;
         Ok(Paths { trace: trace_path, result: result_path })
     }
 
@@ -149,6 +163,19 @@ impl SessionRecorder {
 pub struct Paths {
     pub trace: PathBuf,
     pub result: PathBuf,
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!(
+        "{}.tmp",
+        path.extension().and_then(|e| e.to_str()).unwrap_or("out")
+    ));
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 fn now() -> String {
@@ -352,6 +379,35 @@ mod tests {
         v["verdict"] = json!({"status": "verified"});
         let err = validate_session_record(&v).unwrap_err();
         assert!(err.to_string().contains("verdict"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unsafe_run_id_is_refused() {
+        let dir = std::env::temp_dir().join(format!("myco-ev-id-{}", std::process::id()));
+        for bad in ["../escape", "a/b", "", "x\\y", ".."] {
+            assert!(
+                SessionRecorder::new(&dir, bad, "t").is_err(),
+                "run id {bad:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn flush_is_atomic_and_leaves_no_temp_files() {
+        let dir = std::env::temp_dir().join(format!("myco-ev-a-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut r = rec(&dir);
+        r.observation(1, 2);
+        let paths = r.flush().unwrap();
+        assert!(paths.trace.exists() && paths.result.exists());
+        // No `.tmp` survivors: a reader never sees a partial artifact.
+        let leftovers: Vec<_> = std::fs::read_dir(paths.trace.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left behind");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
