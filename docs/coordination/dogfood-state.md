@@ -41,6 +41,7 @@ will exercise; each gap becomes a DF backlog item with a reproduction.
 | REQ-04 | **Act**: synthesize keyboard typing into a focused field and pointer clicks on named/found widgets; per-action three-way outcome (delivered_verified / delivered_unverified / failed), never bare ok. | all |
 | REQ-05 | **Evidence**: every run emits schema-valid `trace.jsonl` + `result.json` per docs/architecture/evidence-schema.md; run ids propagated to caller. | all |
 | REQ-06 | **Reset**: restore a session to a known-clean base between runs; measured cost reported (M1's VM reset is 8.3–8.6s; the runtime should beat or explain its number). | DF-S01 |
+| REQ-07 | *(retired — id intentionally unused; was "screenshot capture", folded into REQ-03 since structured observation subsumes it)* | — |
 | REQ-08 | **File read (host-side)**: read an arbitrary guest file from the host for oracle checks, without going through the GUI. | all |
 | REQ-09 | **Process control**: launch, kill (SIGKILL), and relaunch a named guest process; report exit status. | DF-S02, DF-S04 |
 | REQ-10 | **File edit**: write/replace a file in the guest (for fix-the-bug scenarios). | DF-S03 |
