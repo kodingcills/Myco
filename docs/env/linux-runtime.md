@@ -78,3 +78,20 @@ provision time; private key gitignored). cloud-init user-data:
 RAM discipline: guest hard-capped at 2 GB; `shutdown.sh` when idle. Never touches
 UTM or `myco-win11`. Reset semantics (discard overlay + reboot) and their measured
 cost land with RT-006/RT-011.
+
+## Control channel (RT-004, ADR-0015; verified live 2026-11-19)
+
+`myco-rt-agent`: thin Rust NDJSON agent, cross-compiled static
+(`aarch64-unknown-linux-musl`, `RUSTFLAGS="-C linker=rust-lld -C link-self-contained=yes"
+cargo build --release -p myco-rt-agent --target aarch64-unknown-linux-musl`) — no guest
+toolchain. Installed at `/home/myco/bin/myco-rt-agent` (**not** /tmp: tmpfs, lost on
+reboot). Host client: `myco-rt-transport::Channel` (persistent process; SSH config or
+any child process for tests).
+
+Live proof (`runtime/guest/channel-test.sh`, PASS):
+- Auth handshake + ping over real SSH: round trip **~70–80 ms including SSH connect**
+  (5/5 runs, 0.069–0.080 s). Guest identity: aarch64, kernel 6.8.0-147-generic.
+- Wrong token → `{"ok":false,"op":"auth","error":"invalid token"}` + guest-side log.
+- Reboot survival: after `sudo reboot`, ping succeeds with zero host-side changes.
+- Unit tests: `cargo test --workspace` = 13/13 (9 core session + 4 transport,
+  the transport tests spawn the real agent binary).
