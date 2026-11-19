@@ -144,10 +144,11 @@ function countChecks(scored: ScoredVerdict): number {
 }
 
 /**
- * Ledger state for a trial. `gap` is reserved for trials where neither the
- * program nor the verifier could exercise the action kind at all (e.g. the
- * adapter was already dead before the first action) — it is never counted
- * as a pass (ADR-0007).
+ * Ledger state for a trial. The verdict statuses partition every reachable
+ * outcome: `uncertain` (ADR-0002, could not look), false success, verified,
+ * and refuted. `gap` is reserved in the ledger schema for future fault
+ * classes where a trial ends with no usable verdict at all; no current fault
+ * injector can produce one, so this function never emits it.
  */
 function ledgerStateFor(
   programCompleted: boolean,
@@ -160,7 +161,7 @@ function ledgerStateFor(
   if (verdict.status === "verified" && groundTruthSatisfied) return "pass";
   if (!programCompleted && verdict.status === "refuted") return "refusal";
   if (verdict.status === "refuted") return "failure";
-  if (!programCompleted) return "gap";
+  // Unreachable defensive default: every verdict status is handled above.
   return "failure";
 }
 
@@ -351,7 +352,8 @@ async function runTrial(
       outcome.steps.map((s) => String((s.action as Record<string, unknown>).kind)),
     );
     if (actionKinds.size === 0) {
-      // the adapter died before the first action landed — a genuine gap
+      // the adapter died before the first action landed; actionKind records
+      // that nothing was exercised (row state itself still follows the verdict)
       actionKinds.add("none");
     }
     const state = ledgerStateFor(
