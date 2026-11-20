@@ -229,3 +229,9 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - PR #21 VERIFIED at 0e11821, then DELTA VERIFIED at 69e545b after the coordinator tightened the exported predicate: it had accepted `007`, `1e5`, `1,234`, `100%`, `TRUE`, `2024-1-1`, `12:30` for text columns (all shapes Calc rewrites). Generator output was always safe; the predicate was the trap. 102/102 tests, 4/4 CI, merged.
 - Known conservative overreach (harmless): `%$` is unanchored, so `Cost50%` is rejected. Generator never emits `%`.
 - NEXT (owed): guest-side proof that every generated value survives Calc's input path byte-identically, then the 30-trial sweep.
+
+## Log 2026-11-20 (25) — resume after pause
+- Pause context: Tiffany's interview, then the T3 tunnel was down. VM was stopped; restarted (cold boot ~2 min to SSH, slower than the 17s recorded earlier — RAM pressure).
+- M1-011 child was INTERRUPTED mid-work with nothing pushed. Salvaged its uncommitted work from its worktree into /tmp/m1-011-salvage/ (src/core/recovery.ts 262 lines, test/recovery.test.ts 372 lines, tracked.patch). Assessment: typecheck fixed (3 async/sync errors), but ALL SIX recovery tests fail — the ladder is not wired end-to-end (every rung returns empty; resume path never completes). Not mergeable as-is.
+- Re-delegated M1-011 with the salvage as an explicit starting point and permission to rewrite more simply. The six required behaviors are restated in the brief.
+- PR #21 (AutoCorrect-immune generator) merged at 69e545b earlier; guest-side proof of the generator still owed.
