@@ -248,3 +248,10 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - Isolation: after `reset.sh live` + redeploy, the SAME qty trial (EMP-0038 / 9733) returned `verified` (C39 persisted "9733"). Not a generator or input-path defect.
 - CONSEQUENCE FOR THE SWEEP: per-trial reset is mandatory (already required), and any trial that fails to clean up must trigger a reset before the next trial. The earlier one-off trials in logs 21/24 were single runs on a clean VM, so they stand.
 - Also: reset wipes the agent (clean-base-live predates the deploy), so every reset costs a redeploy (~100s). Budget accordingly: 30 trials x (deploy ~100s + trial ~40-90s + reset ~45s) ≈ 1.5-2 hours.
+
+## Log 2026-11-20 (28) — outer-loop follow-ups
+- PR #24 verified by kimi-k3 (in flight at time of writing), specifically asked: can `--mode values` report `verified` on a contaminated guest?
+- Backlog: added M1-019 (TIF-23) always-cleanup on the failure path + guest-health precondition, and M1-020 (TIF-24) pre-deployed snapshot for resets. M1-014 now marked blocked on M1-019 for trustworthy results.
+- M1-019 delegated (host-side only; the VM is owned by the sweep child). VM validation of M1-019 deferred until the sweep finishes.
+- M1-020 will be decided AFTER the sweep: take a new snapshot (never modifying clean-base*) with the agent pre-deployed to cut ~2 min/trial, and record the new reset baseline in an ADR/log.
+- Sweep reporting rule (outer loop): report exactly what the JSONL shows, no re-runs to get past 27. TIF-17 is back to In Progress upstream until the 30-trial result lands.
