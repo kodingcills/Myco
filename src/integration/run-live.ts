@@ -100,6 +100,13 @@ async function main(): Promise<void> {
       "seed-e",
       "seed-f",
     ]).slice(0, limit);
+    if (sets.length === 0) {
+      // Proving nothing is not the same as proving success: an empty sweep
+      // exits non-zero so a broken generator cannot look like a pass.
+      process.stderr.write("values: the generator produced no parameter sets\n");
+      await tunnel.stop();
+      process.exit(2);
+    }
     const rows: Array<Record<string, unknown>> = [];
     for (const params of sets) {
       try {
