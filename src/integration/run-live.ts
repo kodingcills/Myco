@@ -86,6 +86,51 @@ async function main(): Promise<void> {
     process.exit(report.verdict.status === "verified" ? 1 : 0);
   }
 
+  if (mode === "values") {
+    // Generator proof (M1-013): type each generated value through the real
+    // input path and let the verifier compare the persisted readback exactly.
+    // A verified verdict here means the value survived Calc byte-identically;
+    // a refuted one names the mismatch in its reason string.
+    const limit = Number(arg("limit") ?? 40);
+    const sets = generateParameterSets([
+      "m1-013-live",
+      "seed-b",
+      "seed-c",
+      "seed-d",
+      "seed-e",
+      "seed-f",
+    ]).slice(0, limit);
+    const rows: Array<Record<string, unknown>> = [];
+    for (const params of sets) {
+      try {
+        const report = await runTrial({
+          client,
+          params,
+          unoSocket: socket,
+          runsDir: join(runsDir, "values"),
+        });
+        rows.push({
+          column: params.column,
+          typed: params.newValue,
+          status: report.verdict.status,
+          reason: report.verdict.reasons[0] ?? "",
+          elapsedMs: report.elapsedMs,
+        });
+      } catch (error) {
+        rows.push({
+          column: params.column,
+          typed: params.newValue,
+          status: "harness-error",
+          reason: String(error),
+        });
+      }
+    }
+    process.stdout.write(JSON.stringify(rows, null, 2));
+    await tunnel.stop();
+    const bad = rows.filter((r) => r.status !== "verified");
+    process.exit(bad.length === 0 ? 0 : 1);
+  }
+
   throw new Error(`unknown mode: ${mode}`);
 }
 
