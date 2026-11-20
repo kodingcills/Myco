@@ -241,3 +241,10 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - Verifier's own kill trial recovered: retry:1-failed, retry:2-failed, relaunch:resumed, relaunch:completed; verdict verified from the persisted-file parse (separate headless soffice), steps [0,1,2,3]. Normal trial with --recovery still verified (36.8s).
 - Attacks found no false-success path: post-save failure refuses relaunch; set-value is idempotent on a disk-reloaded doc; a stale UNO socket throws and is treated as "could not look".
 - Nice-to-fix parked: two doomed retries against a dead app each pay a full observe timeout (~20s of an 80s trial) — a liveness pre-check would cut it.
+
+## Log 2026-11-20 (27) — pre-sweep finding: cross-trial contamination
+- Ran a 12-value generator proof WITHOUT resetting between values: qty/salary refuted with ANOTHER RECORD's value in the cell ($45075.21, 322), plus fixture-convert timeouts.
+- Diagnosed: guest had 2 leaked soffice processes and 202 run directories. The trial path does not clean up on failure, so failed trials accumulate state and later trials read a stale/foreign document.
+- Isolation: after `reset.sh live` + redeploy, the SAME qty trial (EMP-0038 / 9733) returned `verified` (C39 persisted "9733"). Not a generator or input-path defect.
+- CONSEQUENCE FOR THE SWEEP: per-trial reset is mandatory (already required), and any trial that fails to clean up must trigger a reset before the next trial. The earlier one-off trials in logs 21/24 were single runs on a clean VM, so they stand.
+- Also: reset wipes the agent (clean-base-live predates the deploy), so every reset costs a redeploy (~100s). Budget accordingly: 30 trials x (deploy ~100s + trial ~40-90s + reset ~45s) ≈ 1.5-2 hours.
