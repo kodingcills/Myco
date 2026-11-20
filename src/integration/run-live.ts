@@ -4,7 +4,7 @@
  *
  * Usage (host, with the ssh tunnel and MYCO_AGENT_TOKEN set):
  *   tsx src/integration/run-live.ts --mode normal   [--seed s] [--runs-dir runs]
- *   tsx src/integration/run-live.ts --mode kill
+ *   tsx src/integration/run-live.ts --mode kill    [--kill-after-step 3] [--recovery]
  *
  * The token is never committed: it is read from MYCO_AGENT_TOKEN (fetched
  * from the guest over vssh by the caller) or from the .myco-token file.
@@ -26,9 +26,9 @@ function arg(name: string): string | undefined {
 async function main(): Promise<void> {
   const mode = arg("mode") ?? "normal";
   const runsDir = arg("runs-dir") ?? "runs";
+  const recovery = process.argv.includes("--recovery");
   const seed = arg("seed") ?? "m1-013-live";
   const socket = arg("uno-socket") ?? "2002";
-
   let token = process.env.MYCO_AGENT_TOKEN;
   if (!token) {
     try {
@@ -60,7 +60,7 @@ async function main(): Promise<void> {
   };
 
   if (mode === "normal") {
-    const report = await runTrial({ client, params, unoSocket: socket, runsDir });
+    const report = await runTrial({ client, params, unoSocket: socket, runsDir, recovery });
     process.stdout.write(JSON.stringify(report, null, 2));
     await tunnel.stop();
     process.exit(report.verdict.status === "verified" ? 0 : 1);
@@ -79,6 +79,7 @@ async function main(): Promise<void> {
       unoSocket: socket,
       runsDir,
       killAfterStep,
+      recovery,
     });
     process.stdout.write(JSON.stringify(report, null, 2));
     await tunnel.stop();

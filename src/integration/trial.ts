@@ -29,6 +29,7 @@ import {
   writeRunEvidence,
 } from "../core/evidence.js";
 import { type GuardFailure, type Program, predicate } from "../core/program.ts";
+import { recoveryTraceEvents, runRecovery } from "../core/recovery.js";
 import { type RunOutcome, runProgram } from "../core/runner.ts";
 import { findNode } from "../core/state.ts";
 import type { TaskIntent, Verdict } from "../core/verify.ts";
@@ -37,7 +38,7 @@ import { generateFixture } from "../tasks/fixture.js";
 import { type CalcRecordEditParams, groundTruth } from "../tasks/intent.js";
 import { unoVerifierOverAgent } from "../verify/uno-verifier.js";
 import type { AgentClient } from "../win/agent-client.js";
-import { WindowsCalcAdapter } from "../win/calc-adapter.js";
+import { unoModified, unoString, WindowsCalcAdapter } from "../win/calc-adapter.js";
 import { WindowsFixtureConverter } from "./windows-fixture.js";
 
 export interface TrialOptions {
@@ -58,6 +59,12 @@ export interface TrialOptions {
    * step record only exists once its post-act observation succeeded.
    */
   killAfterStep?: number;
+  /**
+   * Enable the ADR-0006 recovery ladder (M1-011). Off by default: the
+   * non-recovery behavior (interrupted trial → honest uncertain) is
+   * unchanged.
+   */
+  recovery?: boolean;
 }
 
 export interface TrialReport {
@@ -168,15 +175,90 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     options.killAfterStep === undefined
       ? adapter
       : killAfterStepAdapter(adapter, options.killAfterStep, options.client);
-  const outcome = launchFailure
+  const outcome: RunOutcome = launchFailure
     ? {
         program: program.name,
         completed: false,
         steps: [],
         guardFailure: launchFailure,
         finalState: null,
+        lastGoodStep: null,
+        lastGoodStateVersion: null,
       }
     : await runProgramSafe(programAdapter, program);
+
+  // 4b. Recovery ladder (ADR-0006, M1-011): only for a genuine mid-program
+  //     interruption — steps already executed + a structured GuardFailure.
+  //     Launch failures and convert failures have no known-good point to
+  //     resume from and stay on the plain path.
+  let recovered = outcome;
+  const recoveryEvents: TraceEvent[] = [];
+  if (options.recovery && !outcome.completed && outcome.steps.length > 0) {
+    const failedAt = outcome.guardFailure?.step ?? program.steps.length;
+    const saveStepIndex = program.steps.findIndex((s) => s.isSave === true);
+    try {
+      const result = await runRecovery(
+        programAdapter,
+        program,
+        outcome,
+        {
+          // Re-observe rung: read-only UNO readback of the target cell +
+          // isModified — the same facts the independent verifier consults,
+          // but this only decides whether to STOP retrying; the verdict
+          // itself always comes from the UnoVerifier below.
+          intentSatisfied: async () => {
+            try {
+              const cell = await options.client.unoEval({
+                call: "get_string",
+                cell: gt.cellRef,
+                socket: options.unoSocket,
+              });
+              if (unoString(cell) !== gt.expectedValue) return false;
+              const modified = await options.client.unoEval({
+                call: "is_modified",
+                socket: options.unoSocket,
+              });
+              return !unoModified(modified);
+            } catch {
+              return false; // could not look — never guess satisfied
+            }
+          },
+          // Relaunch rung: launchCalc kills any stray instance, reopens the
+          // fixture, and blocks until UNO answers — the app returns exactly
+          // to the known-good (pristine) state.
+          relaunch: async () => {
+            try {
+              await adapter.launchCalc();
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        },
+        {
+          maxRetries: 2,
+          // Reversibility: the calc-record-edit program is reversible up to
+          // the save (the edit is not persisted until save). When the failure
+          // is at or past the save step, redoing could double-apply or mask
+          // a partial save: no silent redo, honest uncertain instead.
+          isReversible: () => saveStepIndex < 0 || failedAt < saveStepIndex,
+        },
+      );
+      recovered = result.outcome;
+      recoveryEvents.push(...recoveryTraceEvents(result.attempts));
+    } catch (error) {
+      // The ladder itself failed (not the app): record it and fall through
+      // with the original outcome — the verifier still runs.
+      const message = error instanceof Error ? error.message : String(error);
+      recoveryEvents.push({
+        type: "recovery",
+        timestamp: new Date().toISOString(),
+        event: `ladder-error:${message}`,
+        stateVersion: outcome.lastGoodStateVersion ?? 0,
+      });
+    }
+  }
+  const finalOutcome = recovered;
 
   // 5. Verdict: the independent UnoVerifier over the live document + the
   //    persisted file. It closes the document itself (check (c)).
@@ -201,16 +283,16 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     taskId: "calc-record-edit",
     taskParams: options.params as unknown as Record<string, unknown>,
     startedAt: new Date(started).toISOString(),
-    steps: outcome.steps.map(stepFromRecord),
-    guardFailure: outcome.guardFailure,
+    steps: finalOutcome.steps.map(stepFromRecord),
+    guardFailure: finalOutcome.guardFailure,
     verdict,
-    trace,
+    trace: [...trace, ...recoveryEvents],
   });
 
   return {
     runId,
     verdict,
-    completed: outcome.completed,
+    completed: finalOutcome.completed,
     elapsedMs: Date.now() - started,
     xlsxPath,
   };
@@ -262,6 +344,8 @@ async function runProgramSafe(adapter: AppAdapter, program: Program): Promise<Ru
         reason: `adapter unusable: ${message}`,
       },
       finalState: null,
+      lastGoodStep: null,
+      lastGoodStateVersion: null,
     };
   }
 }
