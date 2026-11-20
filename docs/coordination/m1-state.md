@@ -235,3 +235,9 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - M1-011 child was INTERRUPTED mid-work with nothing pushed. Salvaged its uncommitted work from its worktree into /tmp/m1-011-salvage/ (src/core/recovery.ts 262 lines, test/recovery.test.ts 372 lines, tracked.patch). Assessment: typecheck fixed (3 async/sync errors), but ALL SIX recovery tests fail — the ladder is not wired end-to-end (every rung returns empty; resume path never completes). Not mergeable as-is.
 - Re-delegated M1-011 with the salvage as an explicit starting point and permission to rewrite more simply. The six required behaviors are restated in the brief.
 - PR #21 (AutoCorrect-immune generator) merged at 69e545b earlier; guest-side proof of the generator still owed.
+
+## Log 2026-11-20 (26) — M1-011 recovery merged
+- PR #23 VERIFIED at 92f794b (kimi-k3, own VM runs). All four ADR-0006 invariants proven by code read: ladder constructs no verdict; rung order re-observe→retry→relaunch with relaunch gated on reversibility; retries bounded (default 2); startStep merge cannot duplicate or skip because indices are absolute.
+- Verifier's own kill trial recovered: retry:1-failed, retry:2-failed, relaunch:resumed, relaunch:completed; verdict verified from the persisted-file parse (separate headless soffice), steps [0,1,2,3]. Normal trial with --recovery still verified (36.8s).
+- Attacks found no false-success path: post-save failure refuses relaunch; set-value is idempotent on a disk-reloaded doc; a stale UNO socket throws and is treated as "could not look".
+- Nice-to-fix parked: two doomed retries against a dead app each pay a full observe timeout (~20s of an 80s trial) — a liveness pre-check would cut it.
