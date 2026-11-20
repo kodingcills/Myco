@@ -255,3 +255,8 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - M1-019 delegated (host-side only; the VM is owned by the sweep child). VM validation of M1-019 deferred until the sweep finishes.
 - M1-020 will be decided AFTER the sweep: take a new snapshot (never modifying clean-base*) with the agent pre-deployed to cut ~2 min/trial, and record the new reset baseline in an ADR/log.
 - Sweep reporting rule (outer loop): report exactly what the JSONL shows, no re-runs to get past 27. TIF-17 is back to In Progress upstream until the 30-trial result lands.
+
+## Log 2026-11-20 (29) — PR #24 verified; contamination question answered
+- PR #24 VERIFIED at 45a085f. Key finding for the outer loop's question: values mode CANNOT report `verified` against a foreign document. Evidence: launchCalc kills stray soffice.bin before every launch; per-trial guest dirs are nonce-named (C:\myco\runs\myco-<pid>-<ts>-<rand>); the verifier only sees this trial's xlsxPath and reconverts into its own nonce outdir; live readback polls the bridge and fails to uncertain if it never binds. A foreign value mismatches this trial's ground truth → refuted.
+- Nice-to-fix found and fixed: `--mode values` exited 0 on an empty parameter set (proving nothing reads as a pass). PR #25 adds an explicit exit 2.
+- NOTE: PR #24's content reached main via the branch push; the PR is MERGED.
