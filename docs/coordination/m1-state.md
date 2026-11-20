@@ -251,7 +251,7 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 
 ## Log 2026-11-20 (28) — outer-loop follow-ups
 - PR #24 verified by kimi-k3 (in flight at time of writing), specifically asked: can `--mode values` report `verified` on a contaminated guest?
-- Backlog: added M1-019 (TIF-23) always-cleanup on the failure path + guest-health precondition, and M1-020 (TIF-24) pre-deployed snapshot for resets. M1-014 now marked blocked on M1-019 for trustworthy results.
+- Backlog: added M1-019 (TIF-48) always-cleanup on the failure path + guest-health precondition, and M1-020 (TIF-49) pre-deployed snapshot for resets. M1-014 now marked blocked on M1-019 for trustworthy results.
 - M1-019 delegated (host-side only; the VM is owned by the sweep child). VM validation of M1-019 deferred until the sweep finishes.
 - M1-020 will be decided AFTER the sweep: take a new snapshot (never modifying clean-base*) with the agent pre-deployed to cut ~2 min/trial, and record the new reset baseline in an ADR/log.
 - Sweep reporting rule (outer loop): report exactly what the JSONL shows, no re-runs to get past 27. TIF-17 is back to In Progress upstream until the 30-trial result lands.
@@ -260,3 +260,11 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - PR #24 VERIFIED at 45a085f. Key finding for the outer loop's question: values mode CANNOT report `verified` against a foreign document. Evidence: launchCalc kills stray soffice.bin before every launch; per-trial guest dirs are nonce-named (C:\myco\runs\myco-<pid>-<ts>-<rand>); the verifier only sees this trial's xlsxPath and reconverts into its own nonce outdir; live readback polls the bridge and fails to uncertain if it never binds. A foreign value mismatches this trial's ground truth → refuted.
 - Nice-to-fix found and fixed: `--mode values` exited 0 on an empty parameter set (proving nothing reads as a pass). PR #25 adds an explicit exit 2.
 - NOTE: PR #24's content reached main via the branch push; the PR is MERGED.
+
+## Merge discipline rule (outer loop, 2026-11-20) — applies to the coordinator AND every child
+Violations: PR #24 reached main before its verifier passed; PR #25 merged ~20s after opening, with no verifier.
+RULE from now on:
+1. NEVER push feature content directly to main. Every change goes through a PR (docs/coordination state-log commits by the coordinator are the sole exception, and they must not carry code).
+2. Merge ONLY when BOTH hold at the SAME head commit: an independent verifier's pass, AND green CI.
+3. Record each retroactive verification in this file.
+Children must be briefed with these rules, and reviewers must state the head SHA they verified.
