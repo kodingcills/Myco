@@ -9,7 +9,9 @@ Per trial: the report's `fixture.seed` must equal the requested seed and its
 "seed-mismatch" (the sweep aborts on it). A report that cannot be parsed stays
 "harness-error": there is no fixture identity to check.
 
-Final: every record carrying a fixture hash must map seeds to hashes one to
+Final: any "seed-mismatch" record fails the sweep outright (it can survive a
+resume with a matching hash, so the mapping check alone cannot catch it).
+Every record carrying a fixture hash must map seeds to hashes one to
 one, and every seed in FINGERPRINTS must appear (as many distinct hashes as
 sweep seeds).
 """
@@ -40,6 +42,13 @@ def record(argv):
         fixtureSha256=fx.get("csvSha256"),
         fixtureRows=fx.get("dataRows"),
     )
+    conv = d.get("fixtureConvert")
+    if isinstance(conv, dict):
+        rec.update(
+            convertMs=conv.get("durationMs"),
+            convertDeadlineMs=conv.get("deadlineMs"),
+            convertOutcome=conv.get("outcome"),
+        )
     problems = []
     if expected is None:
         problems.append(f"no expected fingerprint for seed {seed!r}")
@@ -62,6 +71,8 @@ def final(log_path, fp_path):
         if not line:
             continue
         r = json.loads(line)
+        if r.get("status") == "seed-mismatch":
+            bad.append(f"index {r.get('index')}: recorded seed-mismatch disqualifies this sweep")
         h, s = r.get("fixtureSha256"), r.get("fixtureSeed")
         if not h:
             continue
