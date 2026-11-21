@@ -103,3 +103,43 @@ faulted suite) `faultVersion`. A report that cannot name its triple is not repor
 **Why.** Benchmarks that edit prompts or checkers between runs and publish one number are
 the reason "we beat X on Y" claims are unverifiable. The triple costs three integers per
 trial and makes every published number reproducible or visibly unreproducible.
+
+## ADR-0023 — The hidden split is generated from a secret seed and lives outside every git work tree **[CONSEQUENTIAL]**
+
+**Context.** ADR-0017 put the oracle in a separate root of the *same repository*. That keeps
+it off the implementer's import graph, but not off their disk: anyone who can read the repo
+can read `src/foundry/oracles/`, and a public task bank is a training set the moment a team
+optimises against it. EF-004 needs a split that implementers cannot read *by construction*.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| A. Encrypted blob committed to the repo, key outside | Rejected. Adds key management for no gain: the ciphertext is public and permanent, so a later key leak exposes every past version. |
+| B. A separate private GitHub repo | **Preferred end state**, not buildable now: creating repos/permissions is an account-level change this workstream may not make. Queued as an escalation. |
+| C. Out-of-tree directory on the host, generated from a secret seed | **Chosen now.** Implementable today, reversible, no account or spend. |
+| D. Hidden tasks listed in-repo with the answers withheld | Rejected. Filters leak by accident (contract §6). |
+
+**Decision.** The hidden split is **generated, not stored**. A 32-byte seed created locally
+by `foundry-hidden init` lives only in `$MYCO_FOUNDRY_HIDDEN_DIR` (default
+`~/.myco-foundry/hidden/`, mode 0700, seed file 0600) — a path outside every git work tree.
+The repository carries only (1) the *generator* (how variants are derived; public code,
+useless without the seed), (2) a **hash commitment** manifest — SHA-256 of each generated
+hidden fixture — so a swapped or edited hidden fixture is detectable without publishing
+it, and (3) a loader that **refuses** a hidden directory inside a git work tree, world- or
+group-readable permissions, or a missing/short seed. Public tasks stay the development set;
+hidden variants reuse the same families with sampled items, values and fault schedules, so a
+team that overfits public strings fails the hidden set.
+
+**Honest limit.** Mode 0700 stops other OS users, not other processes of the *same* OS user,
+and the Runtime Owner's agents run as the same user on this Mac. The mitigations in force are:
+the arm under test runs with `MYCO_FOUNDRY_HIDDEN_DIR` absent from its environment; the grader
+is a separate process; the loader refuses in-tree paths; the commitment makes tampering
+visible. **These raise the cost of peeking, they do not make it impossible.** Real isolation
+needs option B or a separate OS account, which is an escalation for the outer loop and Tiffany;
+until then a result must be reported as "hidden split held out by path + environment, not by
+account".
+
+**Consequences.** Hidden scores are only reproducible by someone holding the seed; the report
+therefore names the commitment hash it was scored against. Rotating the seed bumps
+`hiddenSplitVersion` (part of the score triple's context) and invalidates comparisons.
