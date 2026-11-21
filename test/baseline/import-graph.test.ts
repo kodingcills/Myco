@@ -55,6 +55,7 @@ function violations(entry: string, extraAllowed: string[] = []): string[] {
           (ts.isIdentifier(node.expression) && node.expression.text === "require"))
       )
         errors.push(`dynamic import in ${file}`);
+      if (ts.isIdentifier(node) && node.text === "require") errors.push(`require reference in ${file}`);
       ts.forEachChild(node, walk);
     }
     walk(source);
@@ -88,4 +89,8 @@ describe("baseline import boundary", () => {
     expect(violations(resolve("test/baseline/fixtures/import-type.txt"))).toContain(
       resolve("src/integration/trial.ts"),
     ));
+});
+
+it.each(["alias-require.txt", "property-require.txt"])("detects require references in %s", (name) => {
+  expect(violations(resolve(`test/baseline/fixtures/${name}`))).not.toEqual([]);
 });

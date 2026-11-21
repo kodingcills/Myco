@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  auditFalseSuccess, falseSuccess, sumUsage, planActions,
   type BaselineRow,
   checkPurity,
   type DriverPrecondition,
@@ -52,6 +53,8 @@ const row: BaselineRow = {
   verdictReason: "persisted-match",
   falseSuccess: false,
   audited: true,
+  independentValuePresent: true,
+  usage: [{ prompt: 1, completion: 1 }],
   elapsedMs: 1,
   steps: 1,
   stepBudget: 30,
@@ -132,17 +135,40 @@ describe("baseline", () => {
         verdictReason: "step-budget",
       }),
     ).toBe(true);
-    expect(isBaselineRow({ ...row, audited: false, falseSuccess: null })).toBe(true);
+    expect(isBaselineRow({ ...row, audited: false, independentValuePresent: null, falseSuccess: null })).toBe(true);
     expect(
       isBaselineRow({
         ...row,
         audited: false,
-        falseSuccess: null,
+        independentValuePresent: null,
+        falseSuccess: false,
         verdict: "uncertain",
         verdictReason: "driver-unreachable",
         driver: { ...row.driver, sessionIdentityMatches: false },
       }),
     ).toBe(true);
     expect(rowKey(row)).not.toBe(rowKey({ ...row, subArm: "c2" }));
+  });
+});
+
+describe("accounting and preconditions", () => {
+  it("derives false success and handles audit errors", () => {
+    expect([true, false, null].map(v => falseSuccess("verified", v))).toEqual([false, true, null]);
+    expect(falseSuccess("refuted", null)).toBe(false);
+    expect(falseSuccess("uncertain", false)).toBe(false);
+    expect(auditFalseSuccess("verified", () => { throw new Error(); }).falseSuccess).toBe(null);
+    expect(isBaselineRow({ ...row, independentValuePresent: false })).toBe(false);
+  });
+  it("sums usage and validates totals", () => {
+    expect(sumUsage([])).toEqual({ cost: 0, tokens: { in: 0, out: 0 }, modelCalls: 0 });
+    expect(sumUsage([{prompt: 2, cost: 1}, {completion: 3}, {}])).toEqual({ cost: 1, tokens: { in: 2, out: 3 }, modelCalls: 3 });
+    expect(isBaselineRow({ ...row, modelCalls: 2 })).toBe(false);
+  });
+  it("emits no actions when any driver precondition fails", () => {
+    const actions = [{tool: "click", arguments: {x: 1, y: 2}}];
+    for (const patch of [{guestVersion: "mismatch"}, {hostVersion: ""}, {pipeReachable: false}, {sessionIdentityMatches: false}]) {
+      expect(planActions({...row.driver, ...patch}, actions)).toEqual({actions: [], verdict: {status: "uncertain", reasons: ["driver-unreachable"]}});
+    }
+    expect(planActions(row.driver, actions)).toEqual({actions, verdict: null});
   });
 });
