@@ -24,6 +24,58 @@ export function driverReady(d: DriverPrecondition): boolean {
     d.sessionIdentityMatches
   );
 }
+export function planActions(
+  driver: DriverPrecondition,
+  actions: Action[],
+): { actions: Action[]; verdict: Verdict | null } {
+  return driverReady(driver)
+    ? { actions, verdict: null }
+    : { actions: [], verdict: { status: "uncertain", reasons: ["driver-unreachable"] } };
+}
+export function falseSuccess(
+  verdict: VerdictStatus,
+  independentValuePresent: boolean | null,
+): boolean | null {
+  return verdict === "verified"
+    ? independentValuePresent === null
+      ? null
+      : !independentValuePresent
+    : false;
+}
+export function auditFalseSuccess(
+  verdict: VerdictStatus,
+  audit: () => boolean,
+): { independentValuePresent: boolean | null; falseSuccess: boolean | null } {
+  let independentValuePresent: boolean | null;
+  try {
+    independentValuePresent = audit();
+  } catch {
+    independentValuePresent = null;
+  }
+  return { independentValuePresent, falseSuccess: falseSuccess(verdict, independentValuePresent) };
+}
+export interface Usage {
+  prompt?: number;
+  completion?: number;
+  cost?: number;
+}
+export function sumUsage(usage: Usage[]): {
+  cost: number;
+  tokens: { in: number; out: number };
+  modelCalls: number;
+} {
+  return usage.reduce<{ cost: number; tokens: { in: number; out: number }; modelCalls: number }>(
+    (total, call) => ({
+      cost: total.cost + (call.cost ?? 0),
+      tokens: {
+        in: total.tokens.in + (call.prompt ?? 0),
+        out: total.tokens.out + (call.completion ?? 0),
+      },
+      modelCalls: total.modelCalls + 1,
+    }),
+    { cost: 0, tokens: { in: 0, out: 0 }, modelCalls: 0 },
+  );
+}
 export type Observation =
   | { kind: "persisted"; actual: string | number; expected: string | number }
   | { kind: "modified" | "dialog" | "driver-action" | "step-budget" | "unavailable" };
@@ -40,6 +92,8 @@ export function judge(
         : { status: "refuted", reasons: ["persisted-mismatch"] };
     case "unavailable":
       return { status: "uncertain", reasons: ["unavailable"] };
+    case "driver-action":
+      return { status: "refuted", reasons: ["step-budget"] };
     default:
       return { status: "refuted", reasons: [observation.kind] };
   }
@@ -93,6 +147,8 @@ export interface BaselineRow {
   verdictReason: string;
   falseSuccess: boolean | null;
   audited: boolean;
+  independentValuePresent: boolean | null;
+  usage: Usage[];
   elapsedMs: number;
   steps: number;
   stepBudget: number;
@@ -148,7 +204,28 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     str(x.verdictReason) &&
     (typeof x.falseSuccess === "boolean" || x.falseSuccess === null) &&
     typeof x.audited === "boolean" &&
-    (x.audited || x.falseSuccess === null) &&
+    (typeof x.independentValuePresent === "boolean" || x.independentValuePresent === null) &&
+    x.audited === (x.independentValuePresent !== null) &&
+    x.falseSuccess === falseSuccess(x.verdict, x.independentValuePresent) &&
+    Array.isArray(x.usage) &&
+    x.usage.every(
+      (u: unknown) =>
+        object(u) &&
+        (u.prompt === undefined || count(u.prompt)) &&
+        (u.completion === undefined || count(u.completion)) &&
+        (u.cost === undefined ||
+          (typeof u.cost === "number" && Number.isFinite(u.cost) && u.cost >= 0)),
+    ) &&
+    // Allow rounding error from floating-point summation, scaled for larger totals.
+    typeof x.cost === "number" &&
+    Number.isFinite(x.cost) &&
+    x.cost >= 0 &&
+    Number.isFinite(sumUsage(x.usage).cost) &&
+    Math.abs(x.cost - sumUsage(x.usage).cost) <=
+      1e-9 * (1 + Math.max(x.cost, sumUsage(x.usage).cost)) &&
+    x.modelCalls === sumUsage(x.usage).modelCalls &&
+    x.tokens.in === sumUsage(x.usage).tokens.in &&
+    x.tokens.out === sumUsage(x.usage).tokens.out &&
     count(x.elapsedMs) &&
     count(x.steps) &&
     count(x.stepBudget) &&
