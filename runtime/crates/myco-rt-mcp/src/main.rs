@@ -29,39 +29,78 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = writeln!(stdout, "{}", json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":format!("parse error: {e}")}}));
-                let _ = stdout.flush();
-                continue;
-            }
-        };
-        // Notifications (no id) get no response.
-        let id = req.get("id").cloned();
-        let method = req["method"].as_str().unwrap_or("");
-        let params = req.get("params").cloned().unwrap_or(Value::Null);
-        let response = match method {
-            "initialize" => Some(Ok(json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "myco-rt", "version": env!("CARGO_PKG_VERSION")},
-            }))),
-            "notifications/initialized" => None,
-            "ping" => Some(Ok(json!({}))),
-            "tools/list" => Some(Ok(json!({"tools": tool_defs()}))),
-            "tools/call" => Some(srv.call_tool(&params)),
-            other => Some(Err((-32601, format!("method not found: {other}")))),
-        };
-        if let (Some(id), Some(res)) = (id, response) {
-            let msg = match res {
-                Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-                Err((code, message)) => json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}),
-            };
-            let _ = writeln!(stdout, "{msg}");
+        if let Some(reply) = handle_line(&mut srv, &line) {
+            let _ = writeln!(stdout, "{reply}");
             let _ = stdout.flush();
         }
     }
+}
+
+/// Handle one wire line. Returns the reply (if any); `None` for notifications.
+///
+/// Protocol rules this enforces (JSON-RPC 2.0 + MCP):
+/// - a batch (top-level array) is not supported by MCP here: `-32600`, not a
+///   misleading `-32601` with an empty method name;
+/// - `"id": null` is a *request* with a null id and MUST get a reply, unlike a
+///   notification which has no `id` member at all;
+/// - a missing/invalid `method` is `-32600` invalid request;
+/// - unknown methods are `-32601`;
+/// - malformed JSON is `-32700` and the server keeps running.
+fn handle_line(srv: &mut Server, line: &str) -> Option<String> {
+    let req: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => {
+            return Some(
+                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":format!("parse error: {e}")}})
+                    .to_string(),
+            )
+        }
+    };
+
+    if req.is_array() {
+        return Some(
+            json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"batch requests are not supported"}})
+                .to_string(),
+        );
+    }
+
+    // `id: null` is a request (reply required); absent `id` is a notification.
+    let id_member = req.get("id").cloned();
+    let has_id = id_member.is_some();
+    let id = id_member.unwrap_or(Value::Null);
+
+    let Some(method) = req.get("method").and_then(|m| m.as_str()) else {
+        return Some(
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":-32600,"message":"invalid request: missing method"}})
+                .to_string(),
+        );
+    };
+    let params = req.get("params").cloned().unwrap_or(Value::Null);
+
+    let response = match method {
+        "initialize" => Some(Ok(json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "myco-rt", "version": env!("CARGO_PKG_VERSION")},
+        }))),
+        "notifications/initialized" => None,
+        "ping" => Some(Ok(json!({}))),
+        "tools/list" => Some(Ok(json!({"tools": tool_defs()}))),
+        "tools/call" => Some(srv.call_tool(&params)),
+        other => Some(Err((-32601, format!("method not found: {other}")))),
+    };
+
+    let res = response?;
+    if !has_id {
+        // A notification that produced a result still gets no reply.
+        return None;
+    }
+    Some(match res {
+        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}).to_string(),
+        Err((code, message)) => {
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}).to_string()
+        }
+    })
 }
 
 fn tool_defs() -> Vec<Value> {
@@ -240,5 +279,100 @@ fn outcome_json(outcome: &myco_rt_core::ops::ActionOutcome) -> Value {
         DeliveredVerified => json!({"kind": "delivered_verified"}),
         DeliveredUnverified => json!({"kind": "delivered_unverified"}),
         Failed { reason } => json!({"kind": "failed", "reason": reason}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: PathBuf::from("."), next_id: 1 }
+    }
+
+    fn reply(s: &mut Server, line: &str) -> Value {
+        serde_json::from_str(&handle_line(s, line).expect("expected a reply")).unwrap()
+    }
+
+    #[test]
+    fn initialize_returns_protocol_and_server_info() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+        assert_eq!(r["id"], 1);
+        assert_eq!(r["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(r["result"]["serverInfo"]["name"], "myco-rt");
+    }
+
+    #[test]
+    fn notification_gets_no_reply() {
+        let mut s = srv();
+        assert!(handle_line(&mut s, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+    }
+
+    #[test]
+    fn null_id_is_a_request_and_gets_a_reply() {
+        // JSON-RPC: id:null is a request (reply required), unlike an absent id.
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#);
+        assert!(r.get("result").is_some(), "{r}");
+        assert!(r["id"].is_null());
+    }
+
+    #[test]
+    fn batch_is_invalid_request_not_unknown_method() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#);
+        assert_eq!(r["error"]["code"], -32600, "{r}");
+    }
+
+    #[test]
+    fn unknown_method_is_32601() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":2,"method":"bogus/method"}"#);
+        assert_eq!(r["error"]["code"], -32601);
+        assert!(r["error"]["message"].as_str().unwrap().contains("bogus/method"));
+    }
+
+    #[test]
+    fn missing_method_is_invalid_request() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":3}"#);
+        assert_eq!(r["error"]["code"], -32600, "{r}");
+    }
+
+    #[test]
+    fn malformed_json_is_parse_error_and_server_survives() {
+        let mut s = srv();
+        let r = reply(&mut s, "{not json");
+        assert_eq!(r["error"]["code"], -32700);
+        // and the next request still works
+        let r2 = reply(&mut s, r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#);
+        assert!(r2["result"]["tools"].as_array().unwrap().len() >= 6);
+    }
+
+    #[test]
+    fn tools_list_exposes_exactly_the_six_ops() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#);
+        let mut names: Vec<&str> = r["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["act", "create", "destroy", "evidence", "observe", "reset"]);
+    }
+
+    #[test]
+    fn tool_call_with_unknown_session_is_a_tool_error_not_a_protocol_error() {
+        let mut s = srv();
+        let r = reply(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"observe","arguments":{"session_id":"nope"}}}"#,
+        );
+        // MCP convention: execution failures are results with isError, not JSON-RPC errors.
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown session"));
     }
 }
