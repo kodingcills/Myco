@@ -573,16 +573,17 @@ it.** Per trial: cold reset **140 s** (measured 143/134/145/152/139 over five ru
 **redeploy ~100 s** (clean-base predates the agent — log 27; the running sweep does a `DEPLOY OK`
 every trial), and the trial itself. So:
 
-| Arm | Per-trial | 30 trials |
+| Arm | Per trial | 30 trials |
 |---|---|---|
 | One sub-arm (C1 **or** C2) | 140 + 100 + ~135 = 375 s | **≈3.1 h** |
-| Both sub-arms, one reset per trial | 140 + 100 + 2×135 = 510 s | **≈4.25 h** |
+| Both sub-arms, each with its own reset+deploy | 2 × 375 = 750 s | **≈6.25 h** |
 
 **Each sub-arm gets its own reset.** An earlier draft of this section proposed sharing one reset
 between C1 and C2 to halve the cost. That is wrong and the design rejects it: C1 *edits the cell*,
 so C2 would start from a document C1 had already modified and its verdict would be meaningless. The
-saving is one reset per trial (~140 s of 510) — not worth an invalid arm. **Every row, in every
-sub-arm, begins from its own `clean-base` restore.**
+saving is one reset+deploy per trial (~240 s of 750) — not worth an invalid arm. **Every row, in
+every sub-arm, begins from its own `clean-base` restore and its own deploy**, which is why the
+two-arm figure is 2× a single arm rather than less.
 
 Trial wall time is the least certain input: the running sweep's rows show 21–115 s, earlier verified
 trials were 34–40 s, and the Coordinator's planning figure is ~135 s. The report records actual
@@ -1180,12 +1181,12 @@ decisions, and none of them is answered here:
    C2 is what makes the comparison credible and also what could make Myco look worse. Tiffany's
    call; both are cheap, and dropping C2 weakens the baseline.
 4. **VM time after the M1-013 sweep**: the §1a spike (~30 min), then **≈3.1 h** for one 30-trial
-   sub-arm and **≈4.25 h** for C1 and C2 together (per-trial arithmetic in §2.1), plus the same
+   sub-arm and **≈6.25 h** for C1 and C2 together, each with its own reset and deploy (per-trial arithmetic in §2.1), plus the same
    again for the corrupted arm if §7 is in scope. The Coordinator owns the host and is running the
    sweep now.
    **Ask for it chunked if that helps**: every row begins from its own `clean-base` restore, so a
    chunk boundary is just another row boundary and the run is resumable — so the window can be split
-   however suits (for the two-arm run, 2 × ~2.1 h is as valid as one ~4.25 h block), and *safer*,
+   however suits (for the two-arm run, 2 × ~3.1 h is as valid as one ~6.25 h block), and *safer*,
    because a host sleep or a UTM wedge otherwise costs the whole run
    (logs 41/35).
 5. **Frontier API as a third column** (`gpt-6.2-sol`/`gpt-6.2-astra`, Gemini 3.1 Pro): est.
