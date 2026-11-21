@@ -500,19 +500,46 @@ No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-
 
 **Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
 
+## Log 2026-11-21 (51) — Table 4 settled from the PDF text layer; five wrong versions before it
+A parallel thread's `f6d2671` replaced the sourcing row with a new set of totals, and its commit message named my rows as wrong. Both of us were wrong. Settled by extracting the **PDF text layer** (`gs -sDEVICE=txtwrite` on `arxiv.org/pdf/2409.08264`) instead of HTML, where row-to-column alignment is lost:
+
+| UIA | Perception | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+|---|---|---|---|---|---|
+| ✗ | Pytesseract+GroundingDINO | 8.6 | **5.2** | 7.2 | 1.3 |
+| ✓ | Pytesseract+GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
+| ✗ | OneOCR | 11.3 | 9.3 | 5.3 | 3.2 |
+| ✓ | OneOCR | 13.1 | 13.3 | 7.3 | 4.0 |
+| ✗ | OmniParser | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | OmniParser | **19.5** | **8.6** | 4.2 | 3.5 |
+
+(Six blocks, four models each, printed Phi3-V → GPT-4o-mini → GPT-4o → GPT-4V-1106. Human 74.5%.)
+
+**What this settles.** The tree-free OmniParser row — B1's configuration — is **12.5% GPT-4V-1106, 9.4% GPT-4o**. My "8.6% with GPT-4o" was the **UIA-on** block's GPT-4o cell, one block down. The parallel thread's headline row (19.5/13.3/7.3/4.0) was the UIA-on **OneOCR** block. Neither read the ✗/✓ marker boundaries correctly, and both were reasoning from HTML.
+
+**Process change, now standing:** a table from a PDF-format paper is extracted from the PDF text layer, never from HTML or from memory, and the cell values are pasted from the extraction rather than typed. Five wrong versions of this one table is the evidence.
+
+**Downstream:** `publicScore.value` stays **0.125** (tree-free maximum, GPT-4V-1106). No other claim moves; the credibility argument never rested on a specific row.
+
+Docs only; no VM, no spend, no accounts.
+
 ## Log 2026-11-21 (50) — the PASS was wrong about row 279; the verifier's own expected tuple was wrong too
 `7e94d6c` returned PASS with a non-blocking note. Both the verdict and the note were wrong, in opposite directions, and re-deriving the table from the paper's raw blocks settles it.
 
 **How the paper prints it.** Each of six perception blocks prints four model rows in the order **Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106**, each ending in a Total. A naive split on the ✓/✗ markers attaches the first block's four rows to the *second* label, which is what produced the earlier confusion. Re-split correctly:
 
-| UIA | Other | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+| UIA | Perception | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
 |---|---|---|---|---|---|
-| ✗ | Pytesseract+GroundingDINO | 8.6 | 9.8 | 2.6 | 2.0 |
-| ✓ | Pytesseract+GroundingDINO | 13.1 | 9.3 | 5.3 | 3.2 |
-| ✗ | OneOCR | 11.3 | 13.3 | 7.3 | 4.0 |
-| ✓ | OneOCR | 13.1 | 9.4 | 2.7 | 2.0 |
-| ✗ | OmniParser | **12.5** | 8.6 | 4.2 | 3.5 |
-| ✓ | OmniParser | **19.5** | 8.6 | — | — |
+| ✗ | Pytesseract+GroundingDINO | 8.6 | **5.2** | 7.2 | 1.3 |
+| ✓ | Pytesseract+GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
+| ✗ | OneOCR | 11.3 | 9.3 | 5.3 | 3.2 |
+| ✓ | OneOCR | 13.1 | 13.3 | 7.3 | 4.0 |
+| ✗ | OmniParser | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | OmniParser | **19.5** | **8.6** | 4.2 | 3.5 |
+
+*(Corrected by log 51: the first version of this table, written from HTML, attached each block's
+model rows to the preceding ✗/✓ marker and so shifted every column by one block. The values above
+come from the PDF text layer. The lesson stands — verification whose oracle is the author is not
+verification — but the table it was attached to was itself wrong.)*
 
 **What was wrong in the previous commit.** The table carried five rows, having **merged the two OneOCR blocks into one**, so it paired 13.1% with 9.4/2.7 — the ✓OneOCR GPT-4V cell beside the ✗OneOCR block's other models. It also gave the headline row GPT-4o 9.4, which belongs to ✓OneOCR.
 
