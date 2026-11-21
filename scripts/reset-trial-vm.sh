@@ -16,7 +16,17 @@
 set -euo pipefail
 
 SNAPSHOT=${1:-clean-base}
+# Where vm.sh lives. Override with MYCO_VM_SCRIPTS to point at a stub.
+#
+# Footgun this guards: a test that means to stub but forgets to export the
+# variable silently drove the REAL VM and wedged it mid-sweep. So the real
+# default is only used when the caller is not asking for a stub — and a stub
+# that is requested but missing fails loudly instead of falling back.
 VM_SCRIPTS=${MYCO_VM_SCRIPTS:-$HOME/VMs/myco-win11/scripts}
+if [ -n "${MYCO_VM_SCRIPTS:-}" ] && [ ! -x "$VM_SCRIPTS/vm.sh" ]; then
+  echo "reset-trial-vm: MYCO_VM_SCRIPTS is set but $VM_SCRIPTS/vm.sh is not executable; refusing to fall back to the real VM" >&2
+  exit 2
+fi
 STOP_TIMEOUT=${MYCO_STOP_TIMEOUT:-30}
 SSH_WAIT_TIMEOUT=${MYCO_SSH_WAIT_TIMEOUT:-600}
 
@@ -36,6 +46,9 @@ esac
 for _ in $(seq 1 "$STOP_TIMEOUT"); do
   s=$(status)
   [ "$s" = stopped ] && break
+  # Diagnose the wedge the moment it is observed: waiting out the timeout only
+  # delays the message the operator needs.
+  [ "$s" = resuming ] && break
   sleep 1
 done
 s=$(status)
@@ -56,6 +69,8 @@ fi
 
 # 4. The guest clock is the snapshot's clock; resync so trial timestamps are sane.
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-"$VM_SCRIPTS/vssh" "Set-Date -Date ([datetime]::Parse('$NOW').ToUniversalTime().ToLocalTime()) | Out-Null" >/dev/null 2>&1 || true
+if ! "$VM_SCRIPTS/vssh" "Set-Date -Date ([datetime]::Parse('$NOW').ToUniversalTime().ToLocalTime()) | Out-Null" >/dev/null 2>&1; then
+  echo "reset-trial-vm: WARNING guest clock resync failed; trial timestamps may be stale" >&2
+fi
 
 echo "reset-trial-vm: ready on '$SNAPSHOT'"
