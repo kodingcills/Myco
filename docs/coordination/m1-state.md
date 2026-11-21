@@ -388,3 +388,10 @@ While an M1-013 sweep is running, **no child may execute any VM-adjacent script,
 Why: a PR #32 verifier ran a stub test intending `MYCO_VM_SCRIPTS=/tmp/stub` but did not export the variable in the same tool call, so `reset-trial-vm.sh` fell back to the REAL VM, killed the agent mid-trial and wedged the next reset. Trials 0 and 1 of that sweep were destroyed and are preserved under /tmp/m1-013/discarded-external-interference/ labelled as EXTERNAL INTERFERENCE — not Myco results, never counted.
 
 Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MYCO_VM_SCRIPTS` refuse instead of falling back to the real guest; (2) this rule. Children must be briefed with it.
+
+## Log 2026-11-21 (41) — sweep attempt ABORTED BY HOST SLEEP (not a Myco failure)
+- Attempt restarted 01:46Z from trial 0. Trial 0 reached "registering MycoAgent task…" at ~01:49Z, then the Mac ran on battery and slept ~02:08Z → 11:27Z. No JSONL, runs/ empty, no surviving process.
+- Classified as INFRASTRUCTURE ABORT. Artifacts preserved at /tmp/m1-013/discarded-host-sleep/ with a README stating it must never be counted toward the 30-trial criterion.
+- Prevention for the next attempt: (1) gate on `pmset -g batt` reporting AC Power; (2) wrap the sweep in `caffeinate -dimsu` so the host cannot sleep mid-run.
+- At 11:30Z the host was STILL on battery (55%, discharging), so the sweep was NOT restarted. Reported to the outer loop.
+- PR status confirmed: #32 MERGED 01:46:39Z (delta-verified at 9dc4c32), #33 MERGED 01:38:12Z (verified at 67c1961). Both match the outer loop's record.
