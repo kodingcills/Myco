@@ -343,3 +343,8 @@ hook test note
 - HOLD: do not touch the VM or start the sweep until the outer loop says UTM is back (Tiffany is quitting/reopening UTM in the GUI session). The sweep was stopped after 12m of runtime, 1 trial — no usable sweep data, and none is claimed.
 - PR #28: verifier returned REJECTED (agent-less restores 3/4; restore-on-running wedges UTM; staleness undetectable). Revert opened as PR #31, under verification. #28 never entered the sweep.
 - PR #29: verifier returned VERIFIED at d74dff9; merged. Its VM-only validation checklist is log 36.
+
+## Log 2026-11-21 (38) — PR #31 (revert of #28) merged
+- PR #31 VERIFIED at fc05779 (kimi-k3): revert is exactly two pure deletions, `src/`/`agent/`/`test/` untouched, no history undone, no dangling references (only dated log entries, which are records not instructions), and the revert is genuinely needed (both scripts were present on main). 115/115 tests, 4/4 CI green at the SAME head SHA, then merged.
+- So PR #28 is fully backed out. M1-020 is NOT done; it stays open at TIF-49 with the follow-up conditions recorded in the revert PR: a restore sequence proven to preserve running state, a wait-for-stopped guard, and a content-hash staleness check.
+- This is the first merge in this project that followed the rule end-to-end: verifier PASS at head SHA + green CI, then merge. No breaches this turn.
