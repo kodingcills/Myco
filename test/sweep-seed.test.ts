@@ -120,4 +120,46 @@ describe("m1-sweep-record.py", () => {
     const rec = JSON.parse(runRecord(["3", "seed-b", "EMP-0001", "qty", "1", out, fp]).stdout);
     expect(rec.status).toBe("harness-error");
   });
+
+  it("final check fails on a recorded seed-mismatch even when its stored hash matches (resume hole)", () => {
+    const log = join(dir, "mismatch-resumed.jsonl");
+    const rows = SEEDS.map((s, i) =>
+      JSON.stringify({ index: i, fixtureSeed: s, fixtureSha256: map[s], status: "verified" }),
+    );
+    rows.push(
+      JSON.stringify({
+        index: 6,
+        fixtureSeed: "seed-b",
+        fixtureSha256: map["seed-b"],
+        status: "seed-mismatch",
+        trialStatus: "verified",
+      }),
+    );
+    writeFileSync(log, `${rows.join("\n")}\n`);
+    const r = runRecord(["--final", log, fp]);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain("seed-mismatch disqualifies");
+  });
+
+  it("copies the conversion timing into the sweep record", () => {
+    const out = join(dir, "with-timing.json");
+    writeFileSync(
+      out,
+      JSON.stringify({
+        runId: "r",
+        verdict: { status: "verified", reasons: ["ok"] },
+        completed: true,
+        elapsedMs: 1,
+        fixture: { seed: "seed-b", dataRows: 10, csvSha256: map["seed-b"] },
+        fixtureConvert: { deadlineMs: 240000, durationMs: 31234, outcome: "arrived" },
+      }),
+    );
+    const rec = JSON.parse(runRecord(["3", "seed-b", "EMP-0001", "qty", "1", out, fp]).stdout);
+    expect(rec).toMatchObject({
+      status: "verified",
+      convertMs: 31234,
+      convertDeadlineMs: 240000,
+      convertOutcome: "arrived",
+    });
+  });
 });

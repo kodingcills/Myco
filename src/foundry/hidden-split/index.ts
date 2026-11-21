@@ -120,6 +120,8 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 export const fixtureHash = (fixture: HiddenFixture) => hash(canonical(fixture));
+export const publicFixtureHash = (fixture: FixtureManifest, intent: TaskIntent) =>
+  hash(canonical({ fixture, intent }));
 export function commitment(fixtures: readonly HiddenFixture[]) {
   const perFixtureHash = fixtures.map(fixtureHash).sort();
   return {

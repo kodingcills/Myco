@@ -25,11 +25,13 @@ export interface ReportTrial {
   readonly hiddenSplitVersion: number;
   readonly commitmentRoot: string;
   readonly fixtureHash: string;
+  readonly faultArmed?: boolean;
 }
 export function scoreReport(
   results: readonly ReportTrial[],
   selfTestPassed: boolean,
   trustedCommitment: ReturnType<typeof commitment>,
+  options: { allowUnfaulted?: boolean } = {},
 ) {
   const versions = new Set(results.map((r) => r.hiddenSplitVersion));
   const roots = new Set(results.map((r) => r.commitmentRoot));
@@ -49,9 +51,13 @@ export function scoreReport(
     )
   )
     throw new Error("Mixed or invalid hidden split versions or commitments");
-  const summary = summarise(results.map((r) => r.result));
+  const summary = summarise(
+    results.map((r) => r.result),
+    options.allowUnfaulted,
+  );
   const decided = summary.verified + summary.refuted;
-  const corrupted = results.filter((r) => r.faultClass !== null);
+  const corrupted = results.filter((r) => r.faultClass !== null && r.faultArmed !== false);
+  const unarmed = results.filter((r) => r.faultClass !== null && r.faultArmed === false).length;
   const normal = results.filter((r) => r.faultClass === null);
   const knownNormal = normal.filter((r) => r.result.verdict !== "uncertain");
   const reliabilityReasons: string[] = [];
@@ -67,6 +73,7 @@ export function scoreReport(
   )
     reliabilityReasons.push("Normal trials must use the hidden split");
   const zeroReasons: string[] = [];
+  if (unarmed) zeroReasons.push("Scheduled faults went unarmed");
   if (corrupted.length < 30) zeroReasons.push("Fewer than 30 corrupted trials");
   if (!selfTestPassed) zeroReasons.push("Verifier self-test did not pass");
   if (corrupted.some((r) => r.result.falseSuccess || r.result.verdict === "uncertain"))
@@ -96,6 +103,7 @@ export function scoreReport(
     hiddenSplitVersion: results[0]!.hiddenSplitVersion,
     commitmentRoot: results[0]!.commitmentRoot,
     unknown: summary.uncertain,
+    unarmed,
     completion: {
       successes: summary.verified,
       trials: decided,
@@ -116,6 +124,7 @@ export function scoreReport(
         allowed: zeroReasons.length === 0,
         reasons: zeroReasons,
         exactUpper95:
+          !unarmed &&
           corrupted.length &&
           corrupted.every((r) => !r.result.falseSuccess && r.result.verdict !== "uncertain")
             ? 1 - 0.05 ** (1 / corrupted.length)
