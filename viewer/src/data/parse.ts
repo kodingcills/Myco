@@ -83,13 +83,13 @@ async function* jsonLines(blob: Blob) {
       let start = 0;
       let end = pending.indexOf("\n");
       while (end !== -1) {
-        yield { line: ++line, text: pending.slice(start, end).trim() };
+        yield { line: ++line, text: pending.slice(start, end).replace(/\r$/, "") };
         start = end + 1;
         end = pending.indexOf("\n", start);
       }
       pending = pending.slice(start);
     }
-    if (pending) yield { line: ++line, text: pending.trim() };
+    if (pending) yield { line: ++line, text: pending.replace(/\r$/, "") };
   } finally {
     reader.releaseLock();
   }
@@ -121,9 +121,9 @@ export async function parseRun(
     const blob = files.read(file);
     if (!blob) continue;
     for await (const { line, text } of jsonLines(blob)) {
-      if (!text) continue;
+      if (!text.trim()) continue;
       // The extended artifact may be a full copy of the trace with extra lines.
-      if (file === "trace.extended.jsonl" && seen?.has(text)) continue;
+      if (file === "trace.extended.jsonl" && seen?.has(text.trim())) continue;
       const source = { file, line };
       const value = json(text, source, parseErrors);
       const schema = traceSchemas.get(eventType(value));
@@ -134,6 +134,7 @@ export async function parseRun(
       const entry: ViewTraceEvent = schema
         ? { kind: "standard", event: value as TraceEvent, source }
         : { kind: "extended", event: value as ExtendedEvent, source };
+      entry.raw = text;
       if (
         "step" in entry.event &&
         typeof entry.event.step === "number" &&
@@ -148,7 +149,7 @@ export async function parseRun(
         }
         stepEvents.push(entry);
       }
-      if (file === "trace.jsonl") seen?.add(text);
+      if (file === "trace.jsonl") seen?.add(text.trim());
       events.push(entry);
       if (emit) {
         batch.push(entry);
@@ -165,7 +166,7 @@ export async function parseRun(
   const ledgerFile = files.read("ledger.jsonl");
   if (ledgerFile) {
     for await (const { line, text } of jsonLines(ledgerFile)) {
-      if (!text) continue;
+      if (!text.trim()) continue;
       const source = { file: "ledger.jsonl", line };
       const value = json(text, source, parseErrors);
       if (valid(value, ledgerRowSchema, source, parseErrors)) {
@@ -188,10 +189,48 @@ export async function parseRun(
     ledger,
     manifest,
     artifactPaths: artifactPaths(files),
+    screenshots: await screenshotPaths(files, events),
     parseErrors,
   };
 }
 
 function artifactPaths(files: RunFiles) {
   return files.paths.filter((path) => path.startsWith("artifacts/"));
+}
+
+async function screenshotPaths(files: RunFiles, events: ViewTraceEvent[]) {
+  const screenshots: NonNullable<RunData["screenshots"]> = new Map();
+  const paths = new Set(files.paths);
+  const isImage = (path: string) =>
+    path.startsWith("artifacts/") && /\.(?:png|webp)$/i.test(path) && paths.has(path);
+  for (const { event, step, source } of events) {
+    if (
+      event.type === "screenshot" &&
+      "path" in event &&
+      typeof event.path === "string" &&
+      step !== undefined &&
+      isImage(event.path)
+    ) {
+      screenshots.set(step, { value: event.path, source });
+    }
+  }
+  for (const path of paths) {
+    if (!path.startsWith("artifacts/") || !path.endsWith("-meta.json")) continue;
+    const metadata = json((await files.read(path)?.text()) ?? "", { file: path, path: "" }, []);
+    if (
+      !metadata ||
+      typeof metadata !== "object" ||
+      !("step" in metadata) ||
+      typeof metadata.step !== "number" ||
+      !Number.isSafeInteger(metadata.step) ||
+      metadata.step < 0 ||
+      screenshots.has(metadata.step)
+    )
+      continue;
+    const stem = path.slice(0, -"-meta.json".length);
+    const image = [`${stem}.png`, `${stem}.webp`].find(isImage);
+    if (image)
+      screenshots.set(metadata.step, { value: image, source: { file: path, path: "/step" } });
+  }
+  return screenshots;
 }

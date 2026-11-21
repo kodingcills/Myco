@@ -32,6 +32,7 @@ export type ViewTraceEvent = (
 ) & {
   source: SourceRef;
   step?: number;
+  raw?: string;
 };
 
 export interface RunManifest {
@@ -47,6 +48,7 @@ export interface RunData {
   ledger: Sourced<LedgerRow>[];
   manifest?: RunManifest;
   artifactPaths: string[];
+  screenshots?: Map<number, Sourced<string>>;
   parseErrors: ParseError[];
 }
 

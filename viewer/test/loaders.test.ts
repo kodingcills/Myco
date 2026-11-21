@@ -107,6 +107,7 @@ describe("evidence loaders", () => {
       kind: "standard",
       step: 2,
       event: action,
+      raw: trace,
       source: { file: "trace.jsonl", line: 1 },
     });
   });
@@ -128,10 +129,14 @@ describe("evidence loaders", () => {
   test("collects syntax and schema errors with physical line numbers and keeps valid lines", async () => {
     const data = await parseRun(
       await loadRunFiles([
-        new File([trace, "\r\n\r\n{broken\r\n", '{"type":"action"}\r\n', trace], "trace.jsonl"),
+        new File(
+          ["  ", trace, " \r\n\r\n{broken\r\n", '{"type":"action"}\r\n', trace],
+          "trace.jsonl",
+        ),
         new File([JSON.stringify(result)], "result.json"),
       ]),
     );
+    expect(data.events[0]?.raw).toBe(`  ${trace} `);
     expect(data.events.map((entry) => entry.source)).toEqual([
       { file: "trace.jsonl", line: 1 },
       { file: "trace.jsonl", line: 5 },
@@ -167,7 +172,7 @@ describe("evidence loaders", () => {
         ),
       ]),
     );
-    expect(data.events).toEqual([
+    expect(data.events).toMatchObject([
       { kind: "standard", event: action, source: { file: "trace.jsonl", line: 1 }, step: 2 },
       { kind: "extended", event: future, source: { file: "trace.jsonl", line: 2 } },
       {

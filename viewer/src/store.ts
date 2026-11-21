@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import type { RunFileInput } from "./data/loaders.ts";
+import { joinSteps } from "./data/steps.ts";
 import type { RunData, RunUpdate, SourceRef } from "./data/types.ts";
 import { loadRunInWorker } from "./data/worker-client.ts";
 
+export type InspectorTab = "detail" | "raw";
 export type Mode = "why" | "proof";
 export type ProofFilter = "checks" | "guards" | "recoveries";
 export interface Selection {
@@ -30,6 +32,8 @@ interface ViewerStore {
   sidebarOpen?: boolean;
   railWidth?: number;
   inspectorOpen: boolean;
+  inspectorTab: InspectorTab;
+  selectStep(step: number): void;
   filter?: ProofFilter;
   select(selection: Selection): void;
   activate(run: OpenedRun): void;
@@ -61,6 +65,7 @@ function readHash(): Selection {
 }
 
 function writeHash(selection: Selection) {
+  if (typeof location === "undefined") return;
   const { run, step, check, source } = selection;
   const params = new URLSearchParams();
   if (run !== undefined) params.set("run", run);
@@ -113,14 +118,20 @@ export const useViewer = create<ViewerStore>((set, get) => ({
   runs: [],
   selection: typeof location === "undefined" ? {} : readHash(),
   mode: "proof",
-  inspectorOpen: false,
+  inspectorOpen: true,
+  inspectorTab: typeof location !== "undefined" && readHash().source ? "raw" : "detail",
+  selectStep(step) {
+    const { selection, select } = get();
+    if (selection.step === step && !selection.source && selection.check === undefined) return;
+    select({ run: selection.run, step });
+  },
   select(selection) {
     writeHash(selection);
     set({ selection });
   },
   activate(run) {
     get().select({ run: run.key });
-    set({ mode: "proof", filter: undefined, inspectorOpen: false });
+    set({ mode: "proof", filter: undefined, inspectorOpen: true, inspectorTab: "detail" });
   },
   async open(name, files) {
     const run: OpenedRun = {
@@ -177,7 +188,7 @@ export const useViewer = create<ViewerStore>((set, get) => ({
         if (current) {
           const selection = pendingSelection?.run === key ? pendingSelection : { run: key };
           get().select(selection);
-          if (selection.source) set({ inspectorOpen: true });
+          if (selection.source) set({ inspectorOpen: true, inspectorTab: "raw" });
         }
       } else {
         pendingEvents.push(...message.events);
@@ -222,20 +233,42 @@ export const useViewer = create<ViewerStore>((set, get) => ({
     saveRunReferences(remaining);
   },
   inspect(source) {
-    const { selection, runs, select } = get();
+    const { selection, runs, select, mode } = get();
     const run = runs.find((item) => item.key === selection.run);
     const check = "path" in source && /^\/(?:verdict\/)?checks\/(\d+)/.exec(source.path);
-    const step =
-      "line" in source
-        ? run?.data.events.find(
-            (entry) =>
-              "line" in entry.source &&
-              entry.source.file === source.file &&
-              entry.source.line === source.line,
-          )?.step
-        : undefined;
-    select({ run: selection.run, check: check ? Number(check[1]) : undefined, step, source });
-    set({ inspectorOpen: true });
+    const stepPath =
+      "path" in source &&
+      source.file === "result.json" &&
+      /^\/steps\/(\d+)(?:\/|$)/.exec(source.path);
+    const trace = "line" in source && /^trace(?:\.extended)?\.jsonl$/.test(source.file);
+    const direct = trace
+      ? run?.data.events.find(
+          (entry) =>
+            "line" in entry.source &&
+            entry.source.file === source.file &&
+            entry.source.line === source.line,
+        )
+      : undefined;
+    const step = stepPath
+      ? run?.data.result?.steps[Number(stepPath[1])]?.step
+      : (direct?.step ??
+        (run && direct
+          ? joinSteps(run.data).rows.find((row) => row.events.includes(direct))?.step
+          : undefined));
+    const hasStep =
+      step !== undefined && run?.data.result?.steps.some((record) => record.step === step);
+    const detail = mode === "proof" && trace && hasStep;
+    select({
+      run: selection.run,
+      step: hasStep ? step : selection.step,
+      check: check ? Number(check[1]) : undefined,
+      source,
+    });
+    set({
+      mode: hasStep ? "why" : mode,
+      inspectorOpen: true,
+      inspectorTab: detail ? "detail" : "raw",
+    });
   },
   setMode: (mode) => set({ mode, filter: undefined }),
   toggleFilter: (filter) =>
@@ -248,7 +281,10 @@ export const useViewer = create<ViewerStore>((set, get) => ({
 if (typeof window !== "undefined") {
   window.addEventListener("hashchange", () => {
     const selection = readHash();
-    useViewer.setState({ selection, inspectorOpen: !!selection.source });
+    useViewer.setState({
+      selection,
+      ...(selection.source && { inspectorOpen: true, inspectorTab: "raw" }),
+    });
   });
 }
 
