@@ -284,12 +284,17 @@ meaningful. This is a reporting recommendation, not a scope change.
 
 ### 7.3 Baseline comparison power
 
-At n=30, a two-sided sign test needs **≥5 discordant trials all favouring Myco** for
-p<0.05. So the baseline comparison is only meaningful if Myco and the screenshot agent
-disagree on at least 5 of 30 trials. Given the measured 2/16 cell-grounding rate for
-cheap VLMs (eval-frameworks.md §3.8), that is plausible but not guaranteed — the
-comparison should be reported as a paired table (both outcomes per trial), not two
-independent rates.
+At n=30, a two-sided sign test needs **≥6 discordant trials all favouring Myco** for
+p<0.05: 5 of 5 gives p = 2·(1/2)^5 = **0.0625**, which is not significant; 6 of 6 gives
+p = 2·(1/2)^6 = **0.0312**, the smallest significant count. So the baseline comparison is
+only meaningful if Myco and the screenshot agent disagree on at least 6 of 30 trials.
+*(Corrected 2026-11-21: this section previously said 5. The error was caught while folding
+this survey into the baseline design, whose §4.5.2 carries the corrected table; fixed here
+at source so the two documents agree.)*
+
+Given the measured 2/16 cell-grounding rate for cheap VLMs (eval-frameworks.md §3.8),
+that is plausible but not guaranteed — the comparison should be reported as a paired
+table (both outcomes per trial), not two independent rates.
 
 ## 8. Can Myco report on a public benchmark subset?
 
