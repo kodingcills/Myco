@@ -144,6 +144,15 @@ acts?* The guard refutes a run when
 - the trace records `write_file` / `shell-exec` touching a path in `persistenceFiles`, or
 - the persisted content equals the expected end state but the app was never launched.
 
+**Known limits (tested or tracked, not hidden).** The guard sees only what the trace
+records. (a) A write the runtime fails to record (an unrecorded `shell-exec`) is invisible to
+the `file-write` clause. (b) With no `save-observed` event nothing is compared, so the result
+is `clean`; the oracle's `added_at` provenance check is then the only backstop, and a
+hand-written store can forge `added_at`. (c) After any later GUI act the guard treats a changed
+file as explained, even if the change was a direct edit between acts. These are why the
+guard is one of two independent checks, never the sole defence, and why a pixel-only or
+sandbox-level file-write audit remains EF-003 follow-up work.
+
 The guard is a *task property*, not a runtime property. It lives with the fixture, it is
 tested by the Foundry, and it is applied to every arm (Myco, C1, C2, HCU, Orgo, Sai)
 identically. An arm that only has pixels has nothing to reconcile — which is fine, because
@@ -166,7 +175,7 @@ src/foundry/
   hidden/            # HIDDEN (lazily created): generated ground-truth JSON, fault schedules
 ```
 
-`blind.ts` is the one file outside the hidden roots that imports `oracles/`, because scoring
+`oracles/blind.ts` is the one file outside the hidden roots that imports `oracles/`, because scoring
 needs the answer. It is the grader entrypoint, not an implementer surface: it ships in the
 same excluded set as the hidden roots. `test/foundry/split.test.ts` asserts that no **other**
 file under `src/` reaches the oracle, so adding a second importer fails CI until the exclusion
@@ -177,14 +186,14 @@ Enforcement, strongest first:
 1. **Path**: `src/foundry/oracles/` and `src/foundry/hidden/` are excluded from the tree an
    implementer is given, and CI enforces the import rule
    (`test/foundry/split.test.ts`): exactly one file outside those roots may reach the
-   oracle — `blind.ts`, the grader entrypoint — and a second importer fails the build.
+   oracle — `oracles/blind.ts`, the grader entrypoint — and a second importer fails the build.
 2. **Permissions**: the grading run is a separate process that reads the hidden root; the
    arm under test runs with the hidden root path absent from its environment.
 3. **Review**: a PR that touches `foundry/oracles/` or `foundry/hidden/` requires a
    Foundry-owner review, not a runtime-team review. The repo area is owned by P-TIF-6.
 
 A scored run is **blind** when the grader never sees the arm's self-report until after
-the state oracle has produced a verdict. `src/foundry/blind.ts` therefore orders the
+the state oracle has produced a verdict. `src/foundry/oracles/blind.ts` therefore orders the
 work: read state → oracle verdict → only then attach the transcript (annotated, never
 overriding).
 
@@ -211,7 +220,7 @@ wedges UTM in `resuming`, -2700). At 100 trials that is ~35 min of reset time. B
 
 | Claim in a report | Minimum evidence | Why |
 |---|---|---|
-| "Completion rate X" | ~100 normal trials, 3 seeds, Wilson 95% CI reported | 27/30 has CI [0.735, 0.979]; an 80%-reliable system passes 27/30 12.3% of the time. A point estimate alone is not reportable. |
+| "Completion rate X" | ~100 normal trials, 3 seeds, Wilson 95% CI reported | 27/30 has Wilson 95% CI [0.744, 0.965] (exact Clopper-Pearson: [0.735, 0.979], the figure quoted in the M2 research; report Wilson, say which); an 80%-reliable system passes 27/30 12.3% of the time. A point estimate alone is not reportable. |
 | "Zero false successes" | ~30 corrupted trials **and** the verifier self-test (§7b) | 0/10 only bounds the rate below 26%. Trials show a rate; the self-test shows the verifier catches a named class. |
 | "Drift robustness" | Evidence the Foundry generates itself | No published number covers desktop office suites (m2-04); mobile (PACE 29-42% silent) and mock-app (OpenApps 63%->4%) figures are analogies, never citations for our claim. |
 

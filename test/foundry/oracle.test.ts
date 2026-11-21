@@ -127,19 +127,15 @@ describe("EF-002 state oracle: reads state, not the GUI", () => {
 });
 
 describe("EF-002 no-leak rule: the answer never depends on the agent's output", () => {
-  it("derives the same expectation regardless of what the agent produced", () => {
+  it("expected() takes only (intent, initialState): it cannot see agent output", () => {
+    // Arity is the structural protection (contract §4): an extra ActualState parameter
+    // would change this and fail loudly.
+    expect(ORACLE.expected.length).toBe(2);
     for (const manifest of TODO_FIXTURES) {
       const intent = intentFor(manifest.fixtureId);
-      // Two wildly different agent outcomes. The derived expectation must be identical,
-      // because `expected()` is given neither of them.
-      const first = new TextEncoder().encode(storeOf(["whatever the agent wrote", "garbage"]));
-      const second = new TextEncoder().encode("{}");
-      const expectedA = ORACLE.expected(intent, manifest.initialState);
-      const expectedB = ORACLE.expected(intent, manifest.initialState);
-      expect(JSON.stringify(expectedA)).toBe(JSON.stringify(expectedB));
-      // And the expectation is not constructed from either file content.
-      expect(JSON.stringify(expectedA)).not.toContain("whatever the agent wrote");
-      expect(new TextDecoder().decode(first)).not.toBe(new TextDecoder().decode(second));
+      const a = JSON.stringify(ORACLE.expected(intent, manifest.initialState));
+      expect(a).toBe(JSON.stringify(ORACLE.expected(intent, manifest.initialState)));
+      expect(a).not.toContain("whatever the agent wrote");
     }
   });
 

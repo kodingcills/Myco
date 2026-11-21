@@ -20,7 +20,8 @@ function sourceFiles(dir: string): string[] {
 
 describe("EF-002 hidden split isolation", () => {
   it("no src/ file outside the hidden roots imports them", () => {
-    const imports = /from\s+["'][^"']*foundry\/(oracles|hidden)\//;
+    // Matches absolute-ish (`foundry/oracles/`) and relative (`./oracles/`, `../oracles/`) imports.
+    const imports = /from\s+["'](?:[^"']*foundry\/|\.{1,2}\/(?:[^"']*\/)?)(oracles|hidden)\//;
     const leaks = sourceFiles(SRC)
       .filter((file) => !HIDDEN_ROOTS.some((hidden) => file.startsWith(hidden)))
       .filter((file) => imports.test(readFileSync(file, "utf8")));

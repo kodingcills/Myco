@@ -10,9 +10,8 @@
  * bytes, a screen view, and a trace, and needs no VM.
  */
 
-import { checkTrace } from "./guard.ts";
-import { oracleForApp, verifyFixture } from "./oracles/state.ts";
-import { compositeVerdict, observeScreenClaims } from "./screen.ts";
+import { checkTrace } from "../guard.ts";
+import { compositeVerdict, observeScreenClaims } from "../screen.ts";
 import type {
   ActualState,
   FixtureManifest,
@@ -20,7 +19,8 @@ import type {
   GuardTraceEvent,
   ScreenView,
   TaskIntent,
-} from "./types.ts";
+} from "../types.ts";
+import { oracleForApp, verifyFixture } from "./state.ts";
 
 export interface TrialInput {
   readonly fixture: FixtureManifest;

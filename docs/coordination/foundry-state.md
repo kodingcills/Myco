@@ -29,7 +29,7 @@ host without a desktop. Any future VM work is scheduled through the M1 Coordinat
 | TIF-50 | EF-001 | in progress | `foundry/` fixture contracts + the GUI-disagreement seed task; `src/foundry/` runner; `docs/foundry/contract.md` |
 | TIF-51 | EF-002 | in progress | `src/foundry/oracles/` (state oracles, hidden by path), mutation audit, hidden split scaffolding |
 | TIF-52 | EF-003 | blocked on EF-001 + EF-002 | `src/foundry/faults/` (planned) + `docs/research/findings/f1-ef-fault-taxonomy.md` |
-| TIF-57 | EF-004 | blocked on EF-001 + EF-002 | blind scoring in `src/foundry/blind.ts`; split roots `foundry/hidden/` |
+| TIF-57 | EF-004 | blocked on EF-001 + EF-002 | blind scoring in `src/foundry/oracles/blind.ts`; split roots `foundry/hidden/` |
 | TIF-58 | EF-005 | blocked on EF-001 + EF-002 | baselines over the same tasks; escalation list in the report |
 
 ## Design decisions already taken

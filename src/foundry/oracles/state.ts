@@ -2,7 +2,7 @@
  * HIDDEN SPLIT — TIF-51 EF-002 state oracles.
  *
  * Nothing in src/ outside this directory may import src/foundry/oracles/ or
- * src/foundry/hidden/ (contract §6; enforced by test/foundry/split-isolation.test.ts).
+ * src/foundry/hidden/ (contract §6; enforced by test/foundry/split.test.ts).
  * This directory holds ANSWER DERIVATION: it computes the expected end state from the
  * intent and the initial state, and it reads what the app actually persisted.
  *

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { scoreTrial, summarise } from "../../src/foundry/blind.ts";
 import { checkTrace, parseGuardTrace, serialiseGuardTrace } from "../../src/foundry/guard.ts";
+import { scoreTrial, summarise } from "../../src/foundry/oracles/blind.ts";
 import {
   addItem,
   bootApp,

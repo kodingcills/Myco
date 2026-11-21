@@ -64,7 +64,7 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   leaves no forensic trace is rejected; zero false successes across the faulted suite.
 
 ### EF-004 (TIF-57) Evidence collection, blind scoring, and a hidden test split
-- **status:** blocked (design started in `src/foundry/blind.ts` + contract §6)
+- **status:** blocked (design started in `src/foundry/oracles/blind.ts` + contract §6)
 - **owner:** foundry-owner
 - **blocked_by:** EF-001, EF-002
 - **description:** Graders must not treat the system-under-test's self-reported success as

@@ -139,6 +139,22 @@ describe("EF-001 trap: a GUI-trusting verifier fails, the state oracle refuses",
     }
   });
 
+  it("a screen-only verifier ACCEPTS the same runs the state oracle refutes", () => {
+    // An executable credulous grader: success iff the screen shows the saved-N banner.
+    const screenOnly = (text: string, n: number) => text.includes(`saved ${n} item(s)`);
+    for (const spec of TODO_FIXTURE_SPECS) {
+      const saved = performTask(spec.fixtureId);
+      const fixture = fixtureFor(spec.fixtureId);
+      const credulous = screenOnly(visibleScreen(saved).join("\n"), saved.listbox.length);
+      const state = verifyFixture(fixture, INTENTS[spec.fixtureId]!, {
+        kind: "myco-todo",
+        files: persistedFiles(saved),
+      });
+      expect(credulous, `${spec.fixtureId}: screen-only grader should be fooled`).toBe(true);
+      expect(state.status, spec.fixtureId).toBe("refuted");
+    }
+  });
+
   it("a run that does nothing is refuted and is never reported as a false success", () => {
     for (const spec of TODO_FIXTURE_SPECS) {
       const fixture = fixtureFor(spec.fixtureId);
