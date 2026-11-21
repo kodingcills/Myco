@@ -1,3 +1,4 @@
+import type { commitment } from "../hidden-split/index.ts";
 import type { FoundryTrialResult } from "../types.ts";
 import { summarise } from "./blind.ts";
 
@@ -23,13 +24,22 @@ export interface ReportTrial {
   readonly faultClass: string | null;
   readonly hiddenSplitVersion: number;
   readonly commitmentRoot: string;
-  readonly hidden: boolean;
+  readonly fixtureHash: string;
 }
-export function scoreReport(results: readonly ReportTrial[], selfTestPassed = false) {
+export function scoreReport(
+  results: readonly ReportTrial[],
+  selfTestPassed: boolean,
+  trustedCommitment: ReturnType<typeof commitment>,
+) {
   const versions = new Set(results.map((r) => r.hiddenSplitVersion));
   const roots = new Set(results.map((r) => r.commitmentRoot));
   if (
     versions.size !== 1 ||
+    results.some(
+      (r) =>
+        r.hiddenSplitVersion !== trustedCommitment.hiddenSplitVersion ||
+        r.commitmentRoot !== trustedCommitment.rootHash,
+    ) ||
     roots.size !== 1 ||
     results.some(
       (r) =>
@@ -51,7 +61,10 @@ export function scoreReport(results: readonly ReportTrial[], selfTestPassed = fa
   if (knownNormal.length < 100) reliabilityReasons.push("Fewer than 100 known normal trials");
   if (new Set(knownNormal.map((r) => r.seed)).size < 3)
     reliabilityReasons.push("Fewer than three seeds");
-  if (knownNormal.some((r) => !r.hidden) || knownNormal.length === 0)
+  if (
+    knownNormal.some((r) => !trustedCommitment.perFixtureHash.includes(r.fixtureHash)) ||
+    knownNormal.length === 0
+  )
     reliabilityReasons.push("Normal trials must use the hidden split");
   const zeroReasons: string[] = [];
   if (corrupted.length < 30) zeroReasons.push("Fewer than 30 corrupted trials");

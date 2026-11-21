@@ -38,12 +38,15 @@ export function initHiddenSplit(dir: string): void {
   if ((statSync(dir).mode & 0o077) !== 0) throw new HiddenSplitError("permissions");
   writeFileSync(join(dir, "seed"), randomBytes(32), { mode: 0o600, flag: "wx" });
 }
-export function loadHiddenSplit(dir = process.env.MYCO_FOUNDRY_HIDDEN_DIR): Uint8Array {
+export function loadHiddenSplit(
+  dir = process.env.MYCO_FOUNDRY_HIDDEN_DIR,
+  stat: typeof statSync = statSync,
+): Uint8Array {
   if (!dir) throw new HiddenSplitError("unset");
   const path = resolve(dir);
   if (!existsSync(path)) throw new HiddenSplitError("missing");
   outsideTree(path);
-  if (typeof process.getuid === "function" && statSync(path).uid !== process.getuid())
+  if (typeof process.getuid === "function" && stat(path).uid !== process.getuid())
     throw new HiddenSplitError("owner");
   if ((statSync(path).mode & 0o077) !== 0) throw new HiddenSplitError("permissions");
   const file = join(path, "seed");

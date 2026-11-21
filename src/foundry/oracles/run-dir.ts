@@ -119,7 +119,12 @@ function validTrace(v: unknown): v is GuardTraceEvent {
     (!("detail" in v.action) || typeof v.action.detail === "string")
   );
 }
-export function scoreRunDir(dir: string, expected: ReturnType<typeof commitment>, io: FileIO = fs) {
+export function scoreRunDir(
+  dir: string,
+  expected: ReturnType<typeof commitment>,
+  io: FileIO = fs,
+  scorer: typeof scoreTrial = scoreTrial,
+) {
   const read = (name: string) => {
     try {
       return io.readFileSync(join(dir, name), "utf8");
@@ -226,7 +231,7 @@ export function scoreRunDir(dir: string, expected: ReturnType<typeof commitment>
     screen: screen as unknown as ScreenView,
     trace: trace as GuardTraceEvent[],
   } as const;
-  const verdict = scoreTrial({ ...input, selfReport: { claimsSuccess: false, text: "" } });
+  const verdict = scorer({ ...input, selfReport: { claimsSuccess: false, text: "" } });
   io.writeFileSync(join(dir, "verdict.json"), encode(verdict));
   const selfReport = parse("selfreport.json");
   if (
@@ -236,7 +241,7 @@ export function scoreRunDir(dir: string, expected: ReturnType<typeof commitment>
     typeof selfReport.text !== "string"
   )
     invalid("Invalid self report");
-  const score = scoreTrial({
+  const score = scorer({
     ...input,
     selfReport: { claimsSuccess: selfReport.claimsSuccess, text: selfReport.text },
   });

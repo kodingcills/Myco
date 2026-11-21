@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectEvidence } from "../../src/foundry/hidden-split/evidence.ts";
+import { collectEvidence, decode, encode } from "../../src/foundry/hidden-split/evidence.ts";
 import {
   commitment,
   fixtureHash,
@@ -11,6 +11,7 @@ import {
   loadHiddenSplit,
   verifyCommitment,
 } from "../../src/foundry/hidden-split/index.ts";
+import { scoreTrial } from "../../src/foundry/oracles/blind.ts";
 import { scoreReport, wilson } from "../../src/foundry/oracles/report.ts";
 import { scoreRunDir } from "../../src/foundry/oracles/run-dir.ts";
 import { TODO_FIXTURE_SPECS } from "../../src/foundry/tasks/todo.ts";
@@ -115,16 +116,20 @@ it("writes verdict before reading the self report", () => {
     const second = scoreRunDir(dir, commitment(generateHiddenFixtures(synthetic, 1)));
     expect(second.verdict).toBe(first.verdict);
     expect(
-      scoreReport([
-        {
-          result: second,
-          seed: 1,
-          faultClass: "stale-ui",
-          hiddenSplitVersion: 1,
-          commitmentRoot: commitment(generateHiddenFixtures(synthetic, 1)).rootHash,
-          hidden: true,
-        },
-      ]).unknown,
+      scoreReport(
+        [
+          {
+            result: second,
+            seed: 1,
+            faultClass: "stale-ui",
+            hiddenSplitVersion: 1,
+            commitmentRoot: commitment(generateHiddenFixtures(synthetic, 1)).rootHash,
+            fixtureHash: fixtureHash(hidden),
+          },
+        ],
+        false,
+        commitment(generateHiddenFixtures(synthetic, 1)),
+      ).unknown,
     ).toBe(1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -178,21 +183,68 @@ it("rejects invalid evidence and uncommitted fixtures", () => {
     };
     setup();
     fs.writeFileSync(join(dir, "screen.json"), "{");
-    expect(() => scoreRunDir(dir, manifest)).toThrow();
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Malformed screen.json/);
     setup();
     fs.rmSync(join(dir, "screen.json"));
-    expect(() => scoreRunDir(dir, manifest)).toThrow();
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Cannot read screen.json/);
     setup();
     fs.writeFileSync(join(dir, "state", "store.json"), "changed");
-    expect(() => scoreRunDir(dir, manifest)).toThrow();
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/State integrity failure/);
     setup();
     fs.writeFileSync(join(dir, "state", "extra"), "x");
-    expect(() => scoreRunDir(dir, manifest)).toThrow();
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Unexpected state files/);
     setup();
     const bundle = JSON.parse(fs.readFileSync(join(dir, "bundle.json"), "utf8"));
     bundle.hiddenFixture.fixture.fixtureId = "fabricated";
     fs.writeFileSync(join(dir, "bundle.json"), JSON.stringify(bundle));
-    expect(() => scoreRunDir(dir, manifest)).toThrow();
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Commitment or version mismatch/);
+    setup();
+    const fabricated = structuredClone(hidden);
+    (fabricated.fixture as { fixtureId: string }).fixtureId = "fabricated";
+    const altered = decode(fs.readFileSync(join(dir, "bundle.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    altered.hiddenFixture = fabricated;
+    altered.fixture = fabricated.fixture;
+    altered.fixtureHash = fixtureHash(fabricated);
+    fs.writeFileSync(join(dir, "bundle.json"), encode(altered));
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Commitment or version mismatch/);
+    setup();
+    fs.writeFileSync(
+      join(dir, "trace.jsonl"),
+      JSON.stringify({ type: "action", timestamp: "now" }),
+    );
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Invalid trace/);
+    setup();
+    fs.writeFileSync(
+      join(dir, "screen.json"),
+      JSON.stringify({ visibleText: "bad", reachable: true }),
+    );
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Invalid screen/);
+    for (const key of ["hiddenSplitVersion", "faultVersion"]) {
+      setup();
+      const data = JSON.parse(fs.readFileSync(join(dir, "bundle.json"), "utf8"));
+      data[key] = 1.5;
+      fs.writeFileSync(join(dir, "bundle.json"), JSON.stringify(data));
+      expect(() => scoreRunDir(dir, manifest)).toThrow(/Commitment or version mismatch/);
+    }
+    setup();
+    fs.writeFileSync(
+      join(dir, "state", "manifest.json"),
+      JSON.stringify({ "store.json": "not-a-hash" }),
+    );
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Invalid state manifest/);
+    setup();
+    let calls = 0;
+    expect(() =>
+      scoreRunDir(dir, manifest, fs, (input) => {
+        const result = scoreTrial(input);
+        return ++calls === 1
+          ? result
+          : { ...result, verdict: result.verdict === "verified" ? "refuted" : "verified" };
+      }),
+    ).toThrow(/Scoring changed the verdict/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -224,16 +276,26 @@ it("requires sufficient known hidden trials and reports exact zero-event bounds"
       faultClass: null,
       hiddenSplitVersion: 1,
       commitmentRoot: manifest.rootHash,
-      hidden: true,
+      fixtureHash: fixtureHash(hidden),
     });
     const rows = Array.from({ length: 100 }, (_, i) => trial(i));
-    expect(scoreReport(rows).claims.canClaimReliability.allowed).toBe(true);
-    expect(scoreReport(rows.slice(1)).claims.canClaimReliability.allowed).toBe(false);
+    expect(scoreReport(rows, false, manifest).claims.canClaimReliability.allowed).toBe(true);
+    expect(scoreReport(rows.slice(1), false, manifest).claims.canClaimReliability.allowed).toBe(
+      false,
+    );
     expect(
-      scoreReport(rows.map((r) => ({ ...r, seed: 0 }))).claims.canClaimReliability.allowed,
+      scoreReport(
+        rows.map((r) => ({ ...r, seed: 0 })),
+        false,
+        manifest,
+      ).claims.canClaimReliability.allowed,
     ).toBe(false);
     expect(
-      scoreReport(rows.map((r) => ({ ...r, hidden: false }))).claims.canClaimReliability.allowed,
+      scoreReport(
+        rows.map((r) => ({ ...r, fixtureHash: "0".repeat(64), hidden: true })),
+        false,
+        manifest,
+      ).claims.canClaimReliability.allowed,
     ).toBe(false);
     const unknown = [
       ...rows,
@@ -242,17 +304,20 @@ it("requires sufficient known hidden trials and reports exact zero-event bounds"
         result: { ...base, verdict: "uncertain" as const },
       })),
     ];
-    expect(scoreReport(unknown).claims.canClaimReliability.allowed).toBe(false);
-    expect(() => scoreReport([rows[0]!, { ...rows[1]!, hiddenSplitVersion: 2 }])).toThrow();
+    expect(scoreReport(unknown, false, manifest).claims.canClaimReliability.allowed).toBe(false);
     expect(() =>
-      scoreReport([rows[0]!, { ...rows[1]!, commitmentRoot: "a".repeat(64) }]),
+      scoreReport([rows[0]!, { ...rows[1]!, hiddenSplitVersion: 2 }], false, manifest),
+    ).toThrow();
+    expect(() =>
+      scoreReport([rows[0]!, { ...rows[1]!, commitmentRoot: "a".repeat(64) }], false, manifest),
     ).toThrow();
     const corrupted = rows.slice(0, 10).map((r) => ({ ...r, faultClass: "stale-ui" }));
-    expect(scoreReport(corrupted).claims.canClaimZeroFalseSuccess.exactUpper95).toBeCloseTo(
-      0.259,
-      3,
+    expect(
+      scoreReport(corrupted, false, manifest).claims.canClaimZeroFalseSuccess.exactUpper95,
+    ).toBeCloseTo(0.259, 3);
+    expect(scoreReport(corrupted, false, manifest).claims.canClaimZeroFalseSuccess.allowed).toBe(
+      false,
     );
-    expect(scoreReport(corrupted).claims.canClaimZeroFalseSuccess.allowed).toBe(false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -264,4 +329,20 @@ it("refuses nonexistent and in-tree paths without creating them", () => {
   const inside = join(process.cwd(), "hidden-must-not-exist");
   expect(() => initHiddenSplit(inside)).toThrowError(/in-tree/);
   expect(fs.existsSync(inside)).toBe(false);
+});
+
+it("refuses a directory owned by another uid", () => {
+  if (typeof process.getuid !== "function") return;
+  const parent = temp();
+  try {
+    const dir = join(parent, "hidden");
+    initHiddenSplit(dir);
+    const other = ((path: fs.PathLike) => ({
+      ...fs.statSync(path),
+      uid: process.getuid!() + 1,
+    })) as typeof fs.statSync;
+    expect(() => loadHiddenSplit(dir, other)).toThrow(/owner/);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
 });
