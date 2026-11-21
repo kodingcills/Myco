@@ -83,6 +83,10 @@ async function readJson<T>(
   return valid(value, schema, source, errors) ? (value as T) : undefined;
 }
 
+function stripCarriageReturn(line: string) {
+  return line.endsWith("\r") ? line.slice(0, -1) : line;
+}
+
 async function readLines(
   blob: Blob,
   file: string,
@@ -109,13 +113,13 @@ async function readLines(
       let start = 0;
       let end = pending.indexOf("\n");
       while (end !== -1) {
-        consume(++line, pending.slice(start, end).replace(/\r$/, ""));
+        consume(++line, stripCarriageReturn(pending.slice(start, end)));
         start = end + 1;
         end = pending.indexOf("\n", start);
       }
       pending = pending.slice(start);
     }
-    if (pending) consume(++line, pending.replace(/\r$/, ""));
+    if (pending) consume(++line, stripCarriageReturn(pending));
   } finally {
     reader.releaseLock();
   }
@@ -127,6 +131,13 @@ function eventType(value: unknown) {
 }
 
 export async function parseRun(
+  files: RunFiles,
+  emit?: (update: RunUpdate) => void,
+): Promise<RunData> {
+  return indexScreenshots(files, await parseRunEvidence(files, emit));
+}
+
+export async function parseRunEvidence(
   files: RunFiles,
   emit?: (update: RunUpdate) => void,
 ): Promise<RunData> {
@@ -154,7 +165,7 @@ export async function parseRun(
   const events: ViewTraceEvent[] = [];
   const byStep = new Map<number, ViewTraceEvent[]>();
   const seen = files.paths.includes("trace.extended.jsonl") ? new Set<string>() : undefined;
-  let batch: ViewTraceEvent[] = [];
+  const previewSize = 256;
   for (const file of ["trace.jsonl", "trace.extended.jsonl"]) {
     const blob = read(file);
     if (!blob) continue;
@@ -189,16 +200,15 @@ export async function parseRun(
       }
       if (file === "trace.jsonl") seen?.add(text.trim());
       events.push(entry);
-      if (emit) {
-        batch.push(entry);
-        if (batch.length === 256) {
-          emit({ type: "trace", events: batch });
-          batch = [];
-        }
+      // Show the beginning of the trace while the worker validates the full run.
+      if (emit && events.length === previewSize) {
+        emit({ type: "trace", events: events.slice(0, previewSize) });
       }
     });
   }
-  if (batch.length > 0) emit?.({ type: "trace", events: batch });
+  if (emit && events.length > 0 && events.length < previewSize) {
+    emit({ type: "trace", events: [...events] });
+  }
 
   const ledger: RunData["ledger"] = [];
   const ledgerFile = read("ledger.jsonl");
@@ -229,7 +239,6 @@ export async function parseRun(
     ledger,
     manifest,
     artifactPaths: artifactPaths(files),
-    screenshots: await screenshotPaths(files, events),
     parseErrors,
   };
 }
@@ -238,12 +247,13 @@ function artifactPaths(files: RunFiles) {
   return files.paths.filter((path) => path.startsWith("artifacts/"));
 }
 
-async function screenshotPaths(files: RunFiles, events: ViewTraceEvent[]) {
+export async function indexScreenshots(files: RunFiles, data: RunData): Promise<RunData> {
   const screenshots: NonNullable<RunData["screenshots"]> = new Map();
-  const paths = new Set(files.paths);
+  const paths = new Set(data.artifactPaths);
+  if (paths.size === 0) return { ...data, screenshots };
   const isImage = (path: string) =>
     path.startsWith("artifacts/") && /\.(?:png|webp)$/i.test(path) && paths.has(path);
-  for (const { event, step, source } of events) {
+  for (const { event, step, source } of data.events) {
     if (
       event.type === "screenshot" &&
       "path" in event &&
@@ -272,5 +282,5 @@ async function screenshotPaths(files: RunFiles, events: ViewTraceEvent[]) {
     if (image)
       screenshots.set(metadata.step, { value: image, source: { file: path, path: "/step" } });
   }
-  return screenshots;
+  return { ...data, screenshots };
 }

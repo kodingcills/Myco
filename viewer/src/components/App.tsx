@@ -94,14 +94,17 @@ export function App() {
   const source = useViewer((state) => state.selection.source);
   const inspector = useViewer((state) => state.inspectorOpen);
   const data = run?.data;
+  const { result, events, screenshots } = data ?? {};
   const step = useViewer((state) => state.selection.step);
   const { rows, index, flagged } = useMemo(() => {
-    const joined = data ? joinSteps(data) : { rows: [], index: new Map<number, number>() };
+    const joined = events
+      ? joinSteps({ result, events, screenshots })
+      : { rows: [], index: new Map<number, number>() };
     return {
       ...joined,
       flagged: joined.rows.flatMap((row, index) => (row.markers.length ? [index] : [])),
     };
-  }, [data]);
+  }, [result, events, screenshots]);
   const digits = Math.max(2, String(rows.at(-1)?.step ?? 0).length);
   const sidebar = useViewer((state) => state.sidebarOpen);
   const narrow = useNarrowViewport();
@@ -447,7 +450,12 @@ export function App() {
                 {run && (!run.error || run.data.result) && (
                   <>
                     <Tabs.Panel value="proof" keepMounted tabIndex={-1} data-proof-panel>
-                      <Proof key={run.key} center={center} data={run.data} loading={run.loading} />
+                      <Proof
+                        key={run.key}
+                        center={center}
+                        data={run.data}
+                        loading={!run.verdict && run.loading}
+                      />
                     </Tabs.Panel>
                     <Tabs.Panel value="why" tabIndex={-1} data-why-panel>
                       <StepList key={run.opened} rows={rows} index={index} digits={digits} />

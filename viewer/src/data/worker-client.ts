@@ -1,5 +1,5 @@
 import type { RunFileInput } from "./loaders.ts";
-import type { RunWorkerMessage } from "./trace.worker.ts";
+import type { RunWorkerMessage, RunWorkerRequest } from "./trace.worker.ts";
 import TraceWorker from "./trace.worker.ts?worker&inline";
 import type { RunData, RunUpdate } from "./types.ts";
 
@@ -17,7 +17,22 @@ export function loadRunInWorker(
     const worker = new TraceWorker();
     let result: RunData["result"];
     const events: RunData["events"] = [];
+    const byStep: RunData["byStep"] = new Map();
+    let indexFrame: number | undefined;
+    let indexTimeout: ReturnType<typeof setTimeout> | undefined;
+    function cancelIndex() {
+      if (indexFrame !== undefined) cancelAnimationFrame(indexFrame);
+      clearTimeout(indexTimeout);
+    }
+    function send(message: RunWorkerRequest) {
+      worker.postMessage(message);
+    }
+    function beginIndexing() {
+      cancelIndex();
+      send({ type: "index" });
+    }
     function cleanup() {
+      cancelIndex();
       worker.terminate();
       signal?.removeEventListener("abort", abort);
     }
@@ -35,19 +50,26 @@ export function loadRunInWorker(
             break;
           case "trace":
             events.push(...message.events);
+            for (const entry of message.events) {
+              if (entry.step === undefined) continue;
+              const stepEvents = byStep.get(entry.step);
+              if (stepEvents) stepEvents.push(entry);
+              else byStep.set(entry.step, [entry]);
+            }
             onUpdate?.(message);
             break;
-          case "complete": {
-            const byStep = new Map(
-              Array.from(message.stepIndices, ([step, indices]) => [
-                step,
-                indices.map((index) => events[index]!),
-              ]),
-            );
+          case "validated":
+            onUpdate?.(message);
+            indexFrame = requestAnimationFrame(() => {
+              indexFrame = requestAnimationFrame(beginIndexing);
+            });
+            // Animation frames can pause in background tabs.
+            indexTimeout = setTimeout(beginIndexing, 100);
+            break;
+          case "complete":
             cleanup();
             resolve({ ...message.data, result, events, byStep });
             break;
-          }
           case "error":
             throw new Error(message.message);
         }
@@ -66,11 +88,12 @@ export function loadRunInWorker(
     };
     try {
       // File's structured clone does not carry webkitRelativePath.
-      worker.postMessage(
-        files.map((file) =>
+      send({
+        type: "open",
+        files: files.map((file) =>
           "file" in file ? file : { file, relativePath: file.webkitRelativePath },
         ),
-      );
+      });
     } catch (error) {
       cleanup();
       reject(error);

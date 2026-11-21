@@ -36,8 +36,11 @@ export interface StepRow {
   recovers?: number;
 }
 
-export function joinSteps(data: RunData) {
-  const result = data.result;
+export function joinSteps({
+  result,
+  events,
+  screenshots,
+}: Pick<RunData, "result" | "events" | "screenshots">) {
   const rows = (result?.steps ?? []).map(
     (record, index): StepRow => ({
       step: record.step,
@@ -48,7 +51,7 @@ export function joinSteps(data: RunData) {
       observations: [],
       guards: [],
       markers: [],
-      screenshot: data.screenshots?.get(record.step),
+      screenshot: screenshots?.get(record.step),
     }),
   );
   const index = new Map(rows.map((row, i) => [row.step, i]));
@@ -59,7 +62,7 @@ export function joinSteps(data: RunData) {
   let failedStep: StepRow | undefined;
   let recovery: { row: StepRow; entries: ViewTraceEvent[] } | undefined;
 
-  for (const entry of data.events) {
+  for (const entry of events) {
     const { event } = entry;
     const explicit = rowFor(entry.step);
     const observation = asEvent(entry, "observation");

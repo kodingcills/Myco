@@ -32,7 +32,8 @@ export type FailureRecoveryItem =
   | (Sourced<FailureEvent> & { kind: FailureEvent["type"]; alsoRecordedAt?: SourceRef })
   | (Sourced<NonNullable<RunRecord["guardFailure"]>> & { kind: "guardFailure" });
 
-type VerdictEvidence = Pick<RunData, "result"> & Partial<Pick<RunData, "events" | "ledger">>;
+type VerdictEvidence = Pick<RunData, "result"> &
+  Partial<Pick<RunData, "events" | "ledger" | "proofEvents">>;
 
 function resultRef(path: string): SourceRef {
   return { file: "result.json", path };
@@ -107,21 +108,26 @@ export function equalJson(left: unknown, right: unknown): boolean {
   }
   if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
   if (Array.isArray(left) || Array.isArray(right)) return false;
-  const rightValues = new Map(Object.entries(right));
-  const leftEntries = Object.entries(left);
+  const leftKeys = Object.keys(left);
   return (
-    leftEntries.length === rightValues.size &&
-    leftEntries.every(
-      ([key, value]) => rightValues.has(key) && equalJson(value, rightValues.get(key)),
+    leftKeys.length === Object.keys(right).length &&
+    leftKeys.every(
+      (key) =>
+        Object.prototype.propertyIsEnumerable.call(right, key) &&
+        equalJson(Reflect.get(left, key), Reflect.get(right, key)),
     )
   );
 }
 
-export function deriveComparatorRows({ result, events = [] }: VerdictEvidence): ComparatorRow[] {
+export function deriveComparatorRows({
+  result,
+  events = [],
+  proofEvents = events,
+}: VerdictEvidence): ComparatorRow[] {
   if (!result || result.recordKind === "session") return [];
   const params = result.taskParams;
   const claims = new Map<string, Sourced<unknown>>();
-  for (const entry of events) {
+  for (const entry of proofEvents) {
     const { event, source } = entry;
     if (
       event.type === "claim" &&
@@ -219,12 +225,13 @@ function failureEvent(entry: ViewTraceEvent): FailureEvent | undefined {
 export function deriveFailuresAndRecovery({
   result,
   events = [],
+  proofEvents = events,
 }: VerdictEvidence): FailureRecoveryItem[] {
   const guard = result?.guardFailure;
   const guardRef = resultRef("/guardFailure");
   const items: FailureRecoveryItem[] = [];
   let hasGuard = false;
-  for (const entry of events) {
+  for (const entry of proofEvents) {
     const event = failureEvent(entry);
     if (!event) continue;
     const duplicate = event.type === "guard-failure" && equalJson(event.guard, guard);

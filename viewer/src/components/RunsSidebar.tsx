@@ -11,7 +11,7 @@ export function layoutNumber(token: string) {
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto", style: "short" });
 
 function RunMarker({ run }: { run: OpenedRun }) {
-  const verdict = useMemo(() => deriveVerdict(run.data), [run.data]);
+  const verdict = useMemo(() => run.verdict ?? deriveVerdict(run.data), [run.verdict, run.data]);
   if (run.error || run.data.parseErrors.length > 0) {
     return <FileWarning aria-label="Can't read file" role="img" />;
   }

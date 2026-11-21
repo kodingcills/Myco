@@ -1,5 +1,39 @@
 # Myco Viewer performance
 
+## Final verdict before Why indexing
+
+The worker publishes the final verdict and its Proof evidence after full result, trace, ledger, and cross-file validation, including manifest checks when supplied. The Viewer shows a bounded trace preview during validation and starts bulk transfer and screenshot indexing after the verdict has had a render opportunity. J1 timing still starts on drop and ends at the second animation frame after the final Verdict Bar commits.
+
+These runs used Playwright Chromium Headless Shell **159.0.8154.6** at 1440×900, offline, with `--single-process --disable-gpu`, on the same Mac and existing five bare pairs as the conformance rerun. The normal Playwright launch of installed Chrome Stable **157.0.8103.79** exited with `SIGABRT`. Each case discarded one warmup and timed 15 fresh pages. Budgets compare against the maximum.
+
+| Run | Before final verdict median / max (ms) | After final verdict median / max (ms) | 150 ms |
+| --- | ---: | ---: | --- |
+| normal | 33.6 / 39.5 | 33.7 / 37.1 | Pass |
+| refuted-autocorrect | 34.7 / 37.8 | 34.0 / 39.4 | Pass |
+| kill | 35.7 / 40.0 | 33.2 / 36.8 | Pass |
+| perf-1000 | 66.2 / 68.8 | 54.1 / 68.8 | Pass |
+| perf-10000 | 250.6 / 284.2 | 171.6 / 254.6 | **Fail** |
+
+The 10,000-step first Why rows took 275.2 ms median and 355.2 ms max. Indexed and usable took 275.8 ms median and 355.2 ms max, versus 300.4 ms and 334.5 ms before. The generated cases stayed within the scrub input-to-render, Inspector commit, and keyboard budgets. Adjacent rAF intervals still reached 16.8 ms. Initial JS was 187,683 B gzip and fonts totaled 88,912 B.
+
+Separate instrumented probes on the 33.6 MB, 90,001-event pair show where the time went. These ranges come from four loads per build, including warmup. Per-event timers add overhead, and the trace stage includes the result post and the individual trace costs below.
+
+| 10,000-step worker stage | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| Read, parse, and validate result | 43.5–43.8 | 44.6–58.9 |
+| Trace stage through the last event | 151.1–154.8 | 117.0–123.7 |
+| Trace JSON parsing | 25.4–28.5 | 24.0–28.8 |
+| Trace schema validation | 62.5–65.1 | 62.2–63.8 |
+| Outbound trace cloning before verdict | 31.2–32.7 | 0–0.1 |
+| Ledger and cross-file checks | 11.9–13.3 | 9.5–9.7 |
+| Proof selection, verdict classification, and verdict post | — | 2.3–2.7 |
+
+After the change, the worker still spent 30.2–32.6 ms cloning trace batches, with the bulk work following verdict publication. The probes used bare pairs. A manifested run also needs every listed digest, and covered artifacts can increase the bytes read.
+
+**Outer-loop decision.** If Chrome Stable confirms the miss, decide whether to give legacy evidence above the 1,000-step / roughly 5 MB tier a separate final-verdict budget. Measure that tier using event count and total bytes that require validation or hashing, including manifested artifacts. The current 150 ms acceptance limit stays in effect. The remaining work includes full schema validation and cross-file checks even when the Viewer has already parsed the result.
+
+Run the reproduction command below against the same built artifacts and pair inputs. The diagnostic settings were `MYCO_VIEWER_PERF_DIR=/private/tmp/myco-viewer-perf.Jx3XIA` and `MYCO_VIEWER_CHROMIUM=/private/tmp/myco-viewer-single-process-chromium`. Set `MYCO_VIEWER_PERF_REPORT` to a separate JSON file for each build.
+
 ## v0 conformance rerun
 
 Apple M4 Pro, 24 GiB, macOS 27.0 (26A428), Playwright Chromium Headless Shell 159.0.8154.6, offline at 1440×900. The standard headless executable launch failed macOS Mach-port registration in this sandbox. Installed Chrome Stable 157.0.8103.79 exited on launch. A disposable executable wrapper ran the pinned browser with `--single-process --disable-gpu`. These are diagnostic measurements. Chrome Stable verification remains open.

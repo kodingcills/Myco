@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { RunFileInput } from "./data/loaders.ts";
 import { joinSteps } from "./data/steps.ts";
 import type { RunData, RunUpdate, SourceRef } from "./data/types.ts";
+import type { DisplayVerdict } from "./data/verdict.ts";
 import { loadRunInWorker } from "./data/worker-client.ts";
 
 export type InspectorTab = "detail" | "raw";
@@ -22,6 +23,7 @@ export interface OpenedRun {
   data: RunData;
   loading: boolean;
   resultReceived?: boolean;
+  verdict?: DisplayVerdict;
   error?: string;
 }
 
@@ -192,8 +194,14 @@ export const useViewer = create<ViewerStore>((set, get) => ({
           if (selection.source) set({ inspectorOpen: true, inspectorTab: "raw" });
         }
       } else {
-        pendingEvents.push(...message.events);
-        previewFrame ??= requestAnimationFrame(publishPreview);
+        const item = get().runs.find((item) => item.key === key);
+        if (!item || controller.signal.aborted) return;
+        if (message.type === "trace") {
+          pendingEvents.push(...message.events);
+          previewFrame ??= requestAnimationFrame(publishPreview);
+        } else {
+          update({ verdict: message.verdict, data: { ...item.data, ...message.evidence } });
+        }
       }
     }
     function publishPreview() {
@@ -216,6 +224,7 @@ export const useViewer = create<ViewerStore>((set, get) => ({
         if (current) {
           update({
             error: message,
+            verdict: undefined,
             loading: false,
             data: {
               ...current.data,
@@ -259,14 +268,7 @@ export const useViewer = create<ViewerStore>((set, get) => ({
       source.file === "result.json" &&
       /^\/steps\/(\d+)(?:\/|$)/.exec(source.path);
     const trace = "line" in source && /^trace(?:\.extended)?\.jsonl$/.test(source.file);
-    const direct = trace
-      ? run?.data.events.find(
-          (entry) =>
-            "line" in entry.source &&
-            entry.source.file === source.file &&
-            entry.source.line === source.line,
-        )
-      : undefined;
+    const direct = trace && run ? findTraceEntry(run.data, source) : undefined;
     const step = stepPath
       ? run?.data.result?.steps[Number(stepPath[1])]?.step
       : (direct?.step ??
@@ -304,6 +306,12 @@ if (typeof window !== "undefined") {
       ...(selection.source && { inspectorOpen: true, inspectorTab: "raw" }),
     });
   });
+}
+
+export function findTraceEntry(data: RunData, source: Extract<SourceRef, { line: number }>) {
+  const matches = ({ source: entry }: RunData["events"][number]) =>
+    "line" in entry && entry.file === source.file && entry.line === source.line;
+  return data.events.find(matches) ?? data.proofEvents?.find(matches);
 }
 
 export function useActiveRun() {

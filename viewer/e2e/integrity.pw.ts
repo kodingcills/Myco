@@ -11,7 +11,14 @@ for (const scenario of ["manifest mismatch", "malformed trace", "no-op recovery"
     await page.evaluate(() => {
       const history: string[] = [];
       document.body.dataset.provisionalVerdicts = "";
+      let sawFinal = false;
       new MutationObserver((mutations) => {
+        if (!sawFinal && document.querySelector('[data-verdict-final="true"]')) {
+          sawFinal = true;
+          document.body.dataset.indexedAtVerdict = String(
+            !!document.querySelector('[data-indexed="true"]'),
+          );
+        }
         for (const mutation of mutations) {
           if (
             !(mutation.target instanceof HTMLElement) ||
@@ -28,7 +35,7 @@ for (const scenario of ["manifest mismatch", "malformed trace", "no-op recovery"
         subtree: true,
         attributes: true,
         attributeOldValue: true,
-        attributeFilter: ["data-verdict"],
+        attributeFilter: ["data-verdict", "data-verdict-final"],
       });
     });
 
@@ -63,6 +70,7 @@ for (const scenario of ["manifest mismatch", "malformed trace", "no-op recovery"
       });
     const verdict = page.locator("[data-verdict-bar]");
     await expect(verdict).toHaveAttribute("data-verdict-final", "true");
+    await expect(page.locator("body")).toHaveAttribute("data-indexed-at-verdict", "false");
     await expect(verdict).toHaveAttribute(
       "data-verdict",
       scenario === "no-op recovery" ? "Verified" : "Unknown",

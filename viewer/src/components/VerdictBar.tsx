@@ -65,7 +65,8 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
   const { data, loading, error } = run;
   const waitingForResult = loading && !run.resultReceived;
   const { result, events } = data;
-  const verdict = useMemo(() => deriveVerdict(data), [data]);
+  const verdict = useMemo(() => run.verdict ?? deriveVerdict(data), [run.verdict, data]);
+  const verdictFinal = run.verdict !== undefined && !error;
   const failures = useMemo(() => deriveFailuresAndRecovery(data), [data]);
   const guards = failures.filter(
     (item) => item.kind === "guardFailure" || item.kind === "guard-failure",
@@ -91,7 +92,7 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
       data-region="verdict"
       data-verdict-bar
       data-verdict={waitingForResult || (error && !result) ? undefined : verdict.label}
-      data-verdict-final={!loading && !error ? "true" : undefined}
+      data-verdict-final={verdictFinal ? "true" : undefined}
       aria-label="Verdict bar"
       tabIndex={-1}
     >
@@ -179,10 +180,14 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
           filter="checks"
           source={checksSource}
         />
-        <Count label="guard failures" value={loading ? undefined : guards.length} filter="guards" />
+        <Count
+          label="guard failures"
+          value={verdictFinal ? guards.length : undefined}
+          filter="guards"
+        />
         <Count
           label="recoveries"
-          value={loading ? undefined : recoveries.length}
+          value={verdictFinal ? recoveries.length : undefined}
           filter="recoveries"
         />
       </fieldset>

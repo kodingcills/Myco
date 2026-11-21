@@ -1,5 +1,6 @@
 import type { SchemaIssue } from "../../../schemas/validate.ts";
 import type { CheckVerdict, LedgerRow, RunRecord, TraceEvent } from "../../../src/core/evidence.ts";
+import type { DisplayVerdict } from "./verdict.ts";
 
 export type ResultRecord =
   | (RunRecord & { recordKind?: "run" })
@@ -50,6 +51,8 @@ export interface RunData {
   validation: EvidenceValidation;
   result?: ResultRecord;
   events: ViewTraceEvent[];
+  /** Proof evidence available while the full trace is being indexed. */
+  proofEvents?: ViewTraceEvent[];
   byStep: Map<number, ViewTraceEvent[]>;
   ledger: Sourced<LedgerRow>[];
   manifest?: RunManifest;
@@ -60,4 +63,9 @@ export interface RunData {
 
 export type RunUpdate =
   | { type: "result"; result?: ResultRecord; parseErrors: ParseError[] }
-  | { type: "trace"; events: ViewTraceEvent[] };
+  | { type: "trace"; events: ViewTraceEvent[] }
+  | {
+      type: "validated";
+      verdict: DisplayVerdict;
+      evidence: Pick<RunData, "validation" | "parseErrors" | "proofEvents" | "ledger" | "manifest">;
+    };

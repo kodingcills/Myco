@@ -7,7 +7,7 @@ import tokens from "../../../docs/design/tokens.json";
 import { loadRunFiles } from "../data/loaders.ts";
 import { type StepRow, stepLabel } from "../data/steps.ts";
 import type { SourceRef } from "../data/types.ts";
-import { type InspectorTab, type OpenedRun, useViewer } from "../store.ts";
+import { findTraceEntry, type InspectorTab, type OpenedRun, useViewer } from "../store.ts";
 import { useScreenshotAsset } from "./Screenshots.tsx";
 import { formatValue, Missing, SourceChip, sourceLabel } from "./SourceRef.tsx";
 
@@ -18,12 +18,7 @@ function sourceValue(run: OpenedRun, source: SourceRef) {
       return data.ledger.find(
         (entry) => "line" in entry.source && entry.source.line === source.line,
       )?.value;
-    return data.events.find(
-      (entry) =>
-        entry.source.file === source.file &&
-        "line" in entry.source &&
-        entry.source.line === source.line,
-    )?.event;
+    return findTraceEntry(data, source)?.event;
   }
   let value: unknown =
     source.file === "result.json"
@@ -44,9 +39,7 @@ function sourceValue(run: OpenedRun, source: SourceRef) {
 
 async function readSource(run: OpenedRun, source: SourceRef) {
   if ("line" in source) {
-    const entry = run.data.events.find(
-      ({ source: ref }) => ref.file === source.file && "line" in ref && ref.line === source.line,
-    );
+    const entry = findTraceEntry(run.data, source);
     if (entry?.raw !== undefined) return entry.raw;
   }
   let value = sourceValue(run, source);
