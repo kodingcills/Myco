@@ -467,7 +467,8 @@ The 1b/1c sections (OSWorld + WAA as a source of scored agents and as methodolog
 
 **No money spent, no accounts, VM untouched.** Every check above was an HTTP read of a public source plus arithmetic.
 
-## Log 2026-11-21 (44) — Cua decision written; option choice closed; three governance questions open
+## Log 2026-11-21 (43b) — Cua decision written; option choice closed; three governance questions open
+*(43b: the sweep's own log took 44 on main while this entry was in flight. Numbered by commit order on main; see 44–49 for the baseline workstream's later entries.)*
 Resolves log 43 (superseded: that entry's ShowUI-2B/UI-TARS default and its four questions were written before the Cua evaluation landed). Design doc §1a/§8.4/§9 is the source of truth; PR #35 head `c22e36f` (this commit).
 
 **Decided (Tiffany, 2026-11-21):** the baseline agent is **Cua (trycua/cua), Cua Driver as the computer layer**. It is the only one of the three options that is simultaneously a recognised open-source computer-use framework, shipped as a Windows ARM64 release asset, and drivable over SSH with no VNC and no RDP — its session-1 daemon + named pipe is the same session-0 fix Myco needed (coordination log 16). $0 with a local planner, no account. Runs as two labelled sub-arms: **C1** pixel-only (the honest screenshot agent) and **C2** the driver's full accessibility+pixel ladder (the honest state of the art).
