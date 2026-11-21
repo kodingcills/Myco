@@ -419,3 +419,10 @@ Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MY
 ## Backlog item from the baseline workstream (NOT for now, guest change)
 - Cua (cua-driver-rs windows-arm64, MIT, 29MB) is the chosen screenshot baseline. It needs a SECOND autostart interactive-session daemon alongside MycoAgent, on a named pipe rather than a port (same session-1 fix we use). It is a GUEST CHANGE: waits for the coordinator to declare the host free, never during a sweep.
 - Risk to manage in the spike (~30 min): whether both daemons coexist cleanly in session 1 without UIA/COM interference. If they do not, the baseline moves to a second VM. Cua's own ledger covers WPF/WinUI3/WebView2 and deliberately SKIPS LibreOffice, so the spike gates everything.
+
+## Log 2026-11-21 (44) — sweep BLOCKED again: swap exhaustion, not Spotlight
+- After Tiffany's Spotlight exclusion (11:08), I polled 1-min load for 60 min: **never fell below 4** (range 6.7-34.5, mostly 8-16). The exclusion did not remove the load.
+- Diagnosis: **swap nearly exhausted — 9,998 MB used of 11,264 MB**, disk0 at 829 tps / ~50 MB/s. That is memory thrashing, not CPU work: no process above 4% CPU (QEMULauncher 3.3%, mediaanalysisd 0.6%, Chrome 0.4%).
+- Top-20 RSS sums to only ~5.6 GB on a 24 GB machine, so the pressure is CUMULATIVE — 11 days of uptime, swap filled across it. Not caused by one runaway process, and not by the VM: the wedged guest recovered on its own and a guarded cold reset then took 25.8s (vs 332s earlier), yet load stayed ~11.
+- NOT DONE (operator decision): freeing swap needs a host reboot (`sudo shutdown -r now`). I will not reboot Tiffany's Mac.
+- Consequence: the sweep cannot run honestly at load ~11 — a trial would measure the machine, not Myco. Trial 0 of this attempt is uncounted.
