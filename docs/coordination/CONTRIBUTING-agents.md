@@ -35,3 +35,27 @@ gh pr merge --squash --auto   # merges itself once CI is green and branch is cur
 1. PR from a feature branch.
 2. Merge ONLY when BOTH hold at the same head SHA: independent verifier PASS **and** all 4 CI checks green.
 3. Reviewers/verifiers state the head SHA they verified.
+
+## Model policy (standing, outer loop 2026-11-21)
+
+- **Verifiers, reviewers, and any judgment subagent: `cheaperinference/deepseek-v4.1-flash`.**
+- **Builders: `cheaperinference/glm-5.3`.**
+- **No new `cheaperinference/kimi-k3` threads** — too expensive. A kimi-k3 verifier already running may finish; nothing new starts on it.
+- The coordinator itself runs on kimi-k3 as the parent session; that is a platform fact, not a policy exception.
+
+Rationale: verification is the highest-frequency role (every PR needs one, most need a re-check after fixes), so it carries the largest cost exposure. deepseek-v4.1-flash has proven adequate for the mechanical checks that matter (diff scope, command-by-command verification against the repo, stub tests, running the gates) when the brief is specific about what to attack.
+
+## Sub-thread delegation (standing, outer loop 2026-11-21)
+
+A task too complex to hold in the main thread may be split into sub-threads or subagents. Two conditions:
+
+1. **Every sub-thread gets its own independent verifier.** A child that both builds and declares its own work good is not verification.
+2. **The coordinator reports each one** — what it owns, its branch/PR, and its verdict — in the end-of-turn report.
+
+## Verifier brief requirements (learned the hard way)
+
+Every verifier brief must state, explicitly:
+- the exact head SHA to verify, and that a verdict covers only that SHA;
+- whether VM access is allowed (during a sweep: **never**, stubbed or not);
+- `MYCO_VM_SCRIPTS=... bash script.sh` must be one command, never a preceding export — a separated export silently fell through to the real VM and killed a live sweep (PR #32 incident);
+- what evidence to paste, and the exact final-line format.
