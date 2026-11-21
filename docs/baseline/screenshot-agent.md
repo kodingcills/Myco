@@ -152,7 +152,7 @@ a fixed 5 guarded steps (`src/tasks/calc-record-edit.ts` `programFor()`), and th
 step-budget concept at all (`grep -rn 'MAX_STEPS\|maxSteps\|stepBudget' src/` is empty). The
 baseline gets 30. The generous direction is deliberate — a capped baseline is a straw man — but it
 goes in the deviations register (§3.5), and `steps` is reported per arm only, never as a
-side-by-side "fewer is better" column (§4.3).
+side-by-side "fewer is better" column (§4.2, where per-arm step counts are reported).
 
 **Budget exhaustion is `refuted`, and cause is attributed first.** If the loop runs out of steps
 the trial is `refuted` with `reason: step-budget`. The one collision with §3.3's dead-app row is
@@ -175,7 +175,8 @@ Edge case for the baseline, because it can leave the app in states Myco never do
 | Document closed, file parses, cell != expected | `refuted` | intent not satisfied |
 | Document open but UNO reports `isModified() == true` | `refuted` | the agent believed it saved; it did not. This is the OpenAdapt failure mode |
 | Document open, unmodified, file parses | scored from the file | equivalent to closed |
-| Calc dead / UNO unreachable / no file | `uncertain` | could not look (ADR-0002) — **not** `refuted` |
+| Calc dead / UNO unreachable / no file, **not caused by the driver** | `uncertain` | could not look (ADR-0002) — **not** `refuted` |
+| Calc dead **because the driver's own action killed it** (budget exhaustion, a destructive click) | `refuted` with `reason: step-budget` \| `driver-action` | cause is attributed before the could-not-look rule (§3.2) — we broke it, so it is our failure, not an unobservable state |
 | Dialog blocking the app at timeout | `refuted` after the close attempt | the agent left the app in a state that did not persist the edit; recorded with the dialog text |
 
 A save-dialog or overwrite prompt left on screen is a *baseline* failure, not a harness error: no
@@ -197,7 +198,7 @@ entries (to be kept current in the report):
 |---|---|---|
 | Baseline uses a host-side driver; Myco uses its runtime | by design | scoring judge is shared and blind |
 | Baseline may need a PyAutoGUI runner in the guest | baseline only | runs through the reviewed `launch` op; no UIA/UNO |
-| **Step budget is asymmetric**: baseline 30 model actions, Myco a fixed 5-step program with no budget concept in the runner | by construction | generous direction, stated in §3.2; `steps` never compared side by side (§4.3) |
+| **Step budget is asymmetric**: baseline 30 model actions, Myco a fixed 5-step program with no budget concept in the runner | by construction | generous direction, stated in §3.2;  `steps` never compared side by side (§4.2 reports it per arm) |
 | **Reset hygiene may differ in practice**: the baseline gets a scripted `clean-base` cold restore; the Myco rows inherit whatever the sweep did, including degraded resets under load | both intend identical, neither guaranteed | `resetMs` + AC/battery state recorded per row; a row whose `resetMs` exceeds 2× the 152 s measured maximum (log 39) is flagged and the comparison table reports how many were flagged |
 | Screenshot capture is GDI window-capture, not full-desktop | both capture, baseline-only consumer | same op, same rect policy |
 | VM reset cost differs by time of day (cold restore 134–152 s measured, log 39) | both | reset timing is a metric, not a deviation |
@@ -303,8 +304,9 @@ exists and the Coordinator declares the sweep final (§2, trial order). Field ma
 | `index`, `runId` | `index` |
 | `rowKey`, `column`, `typed`, `cellRef`, `expected` | `params`, `cellRef`, `expected` |
 | `verdict`, `verdictReason` | `verdict`, `verdictReason` |
-| `independentValuePresent`, `auditError` | `falseSuccess` (tri-state, §4 above) |
+| `independentValuePresent`, `auditError` | `falseSuccess` (tri-state, §4 above) and `audited` |
 | `elapsedMs`, `completed` | `elapsedMs` |
+| — (**not** in the sweep JSONL) | `params.fixtureSeed` — read from that row's `runs/<runId>/result.json` → `taskParams` (§4.4a) |
 | — | `steps`, `modelCalls`, `tokens` are baseline-only and left `null` for Myco rows |
 
 The sweep's `falseSuccess` is `verified && independentValuePresent === false`; the comparison
@@ -328,12 +330,24 @@ in-repo entrypoint** and the assumption is retracted:
 - Runbook §7.3 flags the same defect for the `--seed` form.
 
 So there is no single canonical "index". The comparison therefore treats the **sweep's final
-parameter list as the input**: the Coordinator's `params.json` (or the sweep JSONL's
-`rowKey/column/typed/cellRef` fields) is copied into the baseline run, and the baseline runs those
-exact sets in that exact order. If that list covers only `name`, the report says so and the
-comparison is honest about it; the baseline does **not** substitute a broader list to look
-thorougher. If the Coordinator instead re-runs the sweep through a fixed in-repo entrypoint, the
-list is whatever that entrypoint emits, recorded by hash in both reports.
+parameter list as the input**. The authoritative source per trial is
+`runs/<runId>/result.json` → `taskParams` (`src/integration/trial.ts:152`, written for every trial
+including refuted and uncertain ones, `src/core/evidence.ts:31`) — it carries the full
+`{fixtureSeed, rowKey, column, newValue}` set, which `groundTruth()` requires and which the sweep's
+summary JSONL omits (`/tmp/m1-013/trial-one.ts`'s row has `rowKey/column/typed/cellRef/expected`
+but no `fixtureSeed`; `/tmp/m1-013/params.json` is currently empty). So:
+
+1. take each sweep row's `runId` from the JSONL,
+2. read `taskParams` from that row's `runs/<runId>/result.json`,
+3. write the resulting 30-entry list to `baseline/params.json` with a SHA-256, and run the
+   baseline against that file.
+
+If a sweep row has no `runId` or no `result.json` (harness failure before evidence), that trial has
+no baseline counterpart and is reported as `no-parameter-set` in both columns — never silently
+dropped. The baseline runs those exact sets, in that exact order. If the list covers only `name`,
+the report says so; the baseline does **not** substitute a broader list to look thorough. If the
+Coordinator instead re-runs the sweep through a fixed in-repo entrypoint, the list is whatever that
+entrypoint emits, recorded by hash in both reports.
 
 ---
 
@@ -465,6 +479,11 @@ Only these questions need a human, and none of them is answered here:
 3. **Hosted UI-TARS** (option E): only if 1 and 2 both fail. Needs a provider and a budget.
 4. **VM time after the M1-013 sweep**: roughly 2–3 h of `myco-win11` for the baseline arm, plus
    the same for the corrupted arm if §7 is in scope. Scheduling is the M1 Coordinator's.
+5. **Guest provisioning for the baseline transport** (§3.1 option (a)): installing PyAutoGUI into
+   the guest image. It is a package install in the VM, not a spend or an account — but it changes
+   the guest the Myco arm also runs in, so it needs the environment owner's agreement and must not
+   happen while the sweep is running. If declined, the baseline needs option (b): new typed agent
+   ops in `agent/`.
 
 Recommended default if nobody answers: **B** (ShowUI-2B grounder, local, eval-frameworks §3.5's
 "GPU budget is zero" path) with **A**'s model as the planner fallback, because it spends nothing
@@ -507,7 +526,7 @@ and needs no account. Its ceiling is lower than UI-TARS — that gets stated in 
 | OpenAdapt 54/72 and 30/30 false-success shape | §3.7 |
 | Agent op surface: 10 ops, no coordinate click, keystrokes only via `uia_invoke action=keys` (needs a UIA `runtime_id`) | `src/win/agent-client.ts:19-29`, `agent/myco_agent/ops.py:30-43`, `agent/myco_agent/windows_backend.py:515-519` |
 | Myco's program is 5 fixed steps; no step budget exists in `src/` | `src/tasks/calc-record-edit.ts` `programFor()`; `grep -rn 'MAX_STEPS\|maxSteps\|stepBudget' src/` empty |
-| `run-live.ts` always takes parameter set 0 (`name`); the sweep driver used its own 6-seed list | `src/integration/run-live.ts:51-57`, `src/tasks/intent.ts:117-141`, `/tmp/m1-013/trial-one.ts`, runbook §7.3 |
+| `run-live.ts` always takes parameter set 0 (`name`) unless `--column/--row-key/--new-value` override it; the sweep driver used its own 6-seed list | `src/integration/run-live.ts:51-60`, `src/tasks/intent.ts:117-141`, `/tmp/m1-013/trial-one.ts`, runbook §7.3 |
 | `pyautogui==0.9.54` is UFO's pinned input path, **not** in the guest image | `docs/research/adapters.md:153-160`; guest pip line `docs/env/windows.md:481` |
 | Cold reset 134–152 s, 5/5 no wedge | `docs/coordination/m1-state.md` log 39 |
 | Host contention distorts reset timing 45 s → 1879 s | logs 30, 41 |
