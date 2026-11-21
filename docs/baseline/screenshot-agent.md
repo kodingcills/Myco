@@ -140,7 +140,7 @@ model spend for 30 trials at the §8.1 token budget; "free" means $0 marginal.
 | Credibility as "a real screenshot agent" | **High** — 32.7k stars, MIT, 122/122 Windows action rows, active today | **Medium-high** — the model is the published SOTA grounder; the loop would be ours | **Highest** — the actual commercial state of the art |
 | "Homemade" objection | Low: framework is theirs, only the task wiring is ours | **High**: we write the loop, so we own the result | Low |
 | Setup | **~2–4 d**: install arm64 driver in guest **from the VM console once** (Cua's own docs require `autostart enable` from an interactive session, not SSH), autostart task + named pipe, MCP client on host, Calc task wiring, C1/C2 mode switch | **~3–6 d**: Ollama GGUF serve, grounding parse, loop, transport ops | **~3–5 d**: transport ops + vendor client + prompt/tool wiring + key management |
-| Model spend / 30 trials | **$0** with the local Ollama planner; **$0.06–$0.46** with Claude Haiku 5.5 (the §8.4 table, one arithmetic run) | **$0** (all local) | **$0.06–$36.92** across the frontier models in §8.4 — the low end is `gpt-6-luna`, the ceiling is `gpt-6.2-astra` with its toolset overhead |
+| Model spend / 30 trials | **$0** with the local Ollama planner; **$0.06–$0.28** with Claude Haiku 5.5 (the §8.4 table, one arithmetic run) | **$0** (all local) | **$0.06–$22.30** across the frontier models in §8.4 — the low end is `gpt-6-luna`, the ceiling is `gpt-6.2-astra` with its toolset overhead |
 | Account needed | **None** for the local path | **None** | **Yes** — API key + billing |
 | Biggest risk | LibreOffice is unproven in Cua's Windows ledger | Our loop becomes the weak link, and the report is open to "you built a bad agent" | Credibility bought with money and vendor data handling |
 | Fair for row 7? | **Yes** (C1 as the screenshot arm, C2 as the SOTA arm) | Yes, but weakest read: risk of *understating* the baseline | Yes — but it is the most expensive way to learn that |
@@ -620,40 +620,41 @@ grounder** — that is measurement B in reverse, and §3.8 already shows it fail
 
 ### 8.4 Priced configurations (Tiffany's three options)
 
-**Every figure below is one arithmetic run over the stated budget**, so the numbers quoted in §1a,
-here, and in backlog M1-015 are identical by construction. Prices are published list prices read
-2026-11-21 (§12).
+**One arithmetic run, five sites.** Every figure in §1a, here, §9 and backlog M1-015 is computed by
+the same three lines below, so they agree by construction.
 
 Inputs and assumptions:
 
 - Input **0.44M–2.5M** and output **25k–45k** tokens per 30 trials (§8.1).
 - Tool-definition overhead **≈4,500 input tokens per request** (Anthropic's
-  `computer_toolset_20260801`; §12). At 8–14 requests per trial that is **1.08M–1.89M** extra
-  input tokens on top of the budget. **It is applied to every row in the `high` column**, because a
-  frontier computer-use loop declares a toolset whichever vendor serves it; the `low` column is the
-  same model without the toolset (what a plain screenshot loop costs).
-- No caching assumed. Prompt caching would cut both columns and is deliberately excluded, so these
-  are upper bounds rather than optimised prices.
+  `computer_toolset_20260801`). At 8–14 requests per trial that is **36,000–63,000** extra input
+  tokens over 30 trials — *not* per trial-batch. (An earlier revision multiplied this by 30 twice
+  and overstated every `high` cell; the correction is v4 of this section.)
+- The overhead is added to the `high` column only, because it represents the largest plausible
+  loop. The `low` column is the same budget without the toolset — what a plain screenshot loop
+  costs. No caching is assumed anywhere, so both columns are upper bounds.
+- Image tokens are folded into the input budget via §8.1's per-call range; a screenshot-heavy
+  descendant loop that re-sends more history lands near the `high` end.
 
 | Config | Plan (in / out, $ per MTok) | 30 trials, low (no toolset) | 30 trials, high (+toolset) |
 |---|---|---|---|
 | **Cua + local Ollama** (`qwen3.8-uncensored`) | 0 / 0 | **$0** | **$0** |
-| **Cua + Claude Haiku 5.5** | 0.10 / 0.50 | $0.06 | $0.46 |
-| **Cua + Claude Sonnet 5.5** | 2.00 / 10.00 | $1.13 | $9.23 |
-| **Cua + Claude Opus 5.5** | 4.00 / 20.00 | $2.26 | $18.46 |
-| **Frontier API, cheapest** (`gpt-6-luna`) | 0.10 / 0.50 | $0.06 | $0.46 |
-| **Frontier API, mainstream** (`gpt-6.2-sol` / `gpt-6.1-sol`) | 2.00 / 10.00 | $1.13 | $9.23 |
-| **Frontier API, strongest** (`gpt-6.2-astra`) | 8.00 / 40.00 | $4.52 | **$36.92** |
-| **Frontier API, Gemini** (Gemini 3.1 Pro) | 2.00 / 12.00 | $1.18 | $9.32 |
+| **Cua + Claude Haiku 5.5** | 0.10 / 0.50 | $0.06 | $0.28 |
+| **Cua + Claude Sonnet 5.5** | 2.00 / 10.00 | $1.13 | $5.58 |
+| **Cua + Claude Opus 5.5** | 4.00 / 20.00 | $2.26 | $11.15 |
+| **Frontier API, cheapest** (`gpt-6-luna`) | 0.10 / 0.50 | $0.06 | $0.28 |
+| **Frontier API, mainstream** (`gpt-6.2-sol` / `gpt-6.1-sol`) | 2.00 / 10.00 | $1.13 | $5.58 |
+| **Frontier API, strongest** (`gpt-6.2-astra`) | 8.00 / 40.00 | $4.52 | **$22.30** |
+| **Frontier API, Gemini** (Gemini 3.1 Pro) | 2.00 / 12.00 | $1.18 | $5.67 |
 | **UI-TARS local** (UI-TARS-1.5-7B) | 0 / 0 | **$0** | **$0** |
 
-Worked example, Sonnet, `high`: `(2.5M + 1.89M) × $2/M + 45k × $10/M = $8.78 + $0.45 = $9.23`.
+Worked example, Sonnet, `high`: `(2.5M + 63k) × $2/M + 45k × $10/M = $5.13 + $0.45 = $5.58`.
 The same run without the toolset is `2.5M × $2/M + $0.45 = $5.45`.
 
-**The honest summary.** The local path is **$0**. Every paid configuration is **single-digit dollars
-per 30 trials** except the strongest frontier model, whose worst case is **$36.92** — still less
-than an hour of anyone's time, and it is a price nobody has to pay because the recommended
-configuration is free. Money is not the constraint on this baseline; VM time and credibility are.
+**The honest summary.** The local path is **$0**. Every paid configuration is **under $12 per 30
+trials** except the strongest frontier model, whose ceiling is **$22.30** — and that is the most
+expensive run anyone could buy here. Money is not the constraint on this baseline; VM time and
+credibility are.
 
 ### 8.3 Cost, stated plainly
 
@@ -683,7 +684,7 @@ decisions, and none of them is answered here:
    it changes the guest the Myco arm also runs in, so it needs the environment owner's agreement and
    **must not happen while the M1-013 sweep is running**. This is the gate for everything else.
 2. **Planner model.** Local Ollama (`qwen3.8-uncensored`, already installed) at $0, or a paid API
-   planner (§8.4: $0.06–$0.46 for Haiku 5.5, $1.13–$9.23 for Sonnet 5.5, $2.26–$18.46 for Opus 5.5). If C2's element rung works on
+   planner (§8.4: $0.06–$0.28 for Haiku 5.5, $1.13–$5.58 for Sonnet 5.5, $2.26–$11.15 for Opus 5.5). If C2's element rung works on
    Calc, the weak local grounder matters much less, which favours $0.
 3. **Whether to run C2 at all.** §1a proposes two labelled sub-arms (C1 pixel-only, C2 full ladder).
    C2 is what makes the comparison credible and also what could make Myco look worse. Tiffany's
@@ -692,7 +693,7 @@ decisions, and none of them is answered here:
    one typed edit through each rung) then 2–3 h for the arm, plus the same for the corrupted arm if
    §7 is in scope. Scheduling is the M1 Coordinator's.
 5. **Frontier API as a third column** (`gpt-6.2-sol`/`gpt-6.2-astra`, Gemini 3.1 Pro): est.
-   **$0.06–$36.92 per 30 trials** (§8.4: `gpt-6-luna` low, `gpt-6.2-astra` with toolset overhead
+   **$0.06–$22.30 per 30 trials** (§8.4: `gpt-6-luna` low, `gpt-6.2-astra` with toolset overhead
    high), but requires an API key, billing, and vendor data handling of
    screenshots from a synthetic fixture. Recommended *only* if Tiffany wants the strongest possible
    number and accepts the account.

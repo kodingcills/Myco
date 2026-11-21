@@ -41,7 +41,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - OpenComputer with state verifiers = echo0715/OpenComputer (Yale NLP, Apache-2.0): ships a UNO-based Calc verifier with 16 check-* endpoints. Adopt verifier shape, not harness.
 - OpenAdapt is a COMPETITOR (MIT, verified execution layer, published false-success numbers: 54/72 bad saves reported saved from on-screen "Saved"; 30/30 from a computer-use agent). M1 must cite and beat these.
 - OSWorld Calc evaluator = whole-sheet DataFrame.equals; gold computed OUTSIDE the guest (employee_age_reference discipline — adopt verbatim). OSWorld 2.0 partial_scores = right evidence shape.
-- Cheap general VLMs cannot ground Calc cells (measured 2/16). Baseline = Agent S3 + UI-TARS-1.5-7B grounding. CheaperInference vision support unverified (credits error).
+- Cheap general VLMs cannot ground Calc cells (measured 2/16). Baseline was Agent S3 + UI-TARS-1.5-7B grounding; **superseded 2026-11-21** — Cua Driver is the agent (design §1a), UI-TARS stays the fallback grounder. CheaperInference vision support still unverified (credits error).
 - Verdict needs UNVERIFIED state distinct from failed (both prior designs collapse it). Matches the build brief's verified/refuted/uncertain.
 - Never eval() task-supplied strings (OpenComputer does — RCE hole). Use declarative predicate language.
 - Evaluator must not depend on GUI keystrokes (OSWorld postconfig presses Ctrl+S via pyautogui).
@@ -115,7 +115,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 | 4 | Failure detection: 0 false successes across ≥10 corrupted/interrupted trials | **PARTIAL** | Individual corrupted trials end uncertain/refuted, never verified (kill, AutoCorrect, invalid-target). The ≥10-trial sweep is not run |
 | 5 | Recovery: app interruption AND invalid UI target | **IN PROGRESS** | Mid-program interruption evidence now real (PR #19). Recovery ladder delegated (M1-011). Invalid-target aborts safely today (GuardFailure at step 0) but is not yet a recovery path |
 | 6 | Evidence: machine-readable trace, result, verification outcome | **DONE** | trace.jsonl + result.json + ledger, schema-validated in CI (M1-012); 4 result.json + 51 trace events validated on the live run |
-| 7 | Baseline: screenshot agent on identical tasks/states/model settings | **NOT STARTED** | M1-015; constraint: no paid/hosted service without escalation; Agent S3 + UI-TARS-1.5-7B chosen by measurement |
+| 7 | Baseline: screenshot agent on identical tasks/states/model settings | **NOT STARTED** | M1-015; constraint: no paid/hosted service without escalation. Agent = **Cua Driver** (C1/C2 sub-arms), planner local Ollama by default = $0; UI-TARS stays the fallback grounder (design §1a, PR #35) |
 | 8 | Reproducibility: another agent can reproduce the evaluation | **PARTIAL** | Deploy is now reproducible from a clean reset (PR #14, retro-verified). Runbook (docs/eval-runbook.md) not written; build-from-scratch (build-all.sh) unproven |
 
 ## Cross-workstream dependencies (owner: M1 coordinator, per outer loop 2026-11-19)
