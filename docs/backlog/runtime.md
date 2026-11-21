@@ -150,7 +150,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   across both surfaces.
 
 ### RT-011 (TIF-40) End-to-end integration test: thinnest north-star path
-- **status:** pending
+- **status:** in progress (2026-11-20). Live halves proven individually against the real guest: CLI create 1.0 s / 5 nodes, act `DeliveredVerified` with guest-side confirmation, evidence artifacts written, MCP six-op flow over raw JSON-RPC. Remaining for the gate: one scripted test driving create→observe→act→evidence→reset→destroy through MCP (Dogfood's surface) plus a CLI smoke, after the reset deadline fix.
 - **owner:** build
 - **blocked_by:** RT-008, RT-009, RT-010
 - **description:** Real integration test (not fake backend): create Linux desktop →
