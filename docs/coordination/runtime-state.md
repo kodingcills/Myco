@@ -183,3 +183,15 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   reader. commit 0308094.
 - Verified after the fix: CLI create 1.0 s (5 nodes) -> act DeliveredVerified with
   {"entry_text":"v3-probe"} in the app's own file. Reset under measurement.
+
+## Log 2026-11-20 (host contention with M1)
+- M1 coordinator reported my guest competing with myco-win11 (their reset took
+  1879s vs the usual 8-45s). Verified: PID 30897 was already gone; no
+  qemu-system-aarch64 running; guest shut down at end of the previous turn.
+- Cause was mine: two runs hung on the transport bug and I left the VM up while
+  debugging instead of tearing it down between attempts — a violation of
+  ADR-0011's idle-shutdown rule. Underlying hang fixed in d4c7b34.
+- Standing rule reaffirmed: the guest runs only during an active live test and is
+  shut down at the end of every turn. If a qemu from this worktree is ever seen
+  idle, it is a leak — kill it, do not wait.
+- Told the coordinator to continue their sweep (no yield needed).
