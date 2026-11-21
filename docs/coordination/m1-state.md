@@ -322,3 +322,13 @@ hook test note
 - HYPOTHESIS: repeated kill→restore→start cycles on a LIVE (RAM+disk) snapshot leave UTM/QEMU mid-resume; the 2 fatal errors are both -2700 "operation not available". This looks like a UTM limitation under rapid cycling, not a Myco defect.
 - Raw sweep output: /tmp/m1-013/sweep/{trials.jsonl,progress.log}. 1 trial attempted, 0 usable.
 - NEXT: recover UTM (likely: quit + relaunch UTM from the GUI session, which the coordinator cannot do over AppleScript while it is wedged), then either (a) slow the reset cadence, or (b) switch the sweep to the disk-only `cold` reset path (restore clean-base, cold boot ~20s) which uses plain qemu-img restore instead of a RAM resume.
+
+## Log 2026-11-21 (36) — M1-019 merged; the VM-only checklist it owes
+- PR #29 VERIFIED at d74dff9 (kimi-k3) and MERGED. All five exit paths covered by finally; cleanup cannot mask or alter the verdict; probe runs before any guest mutation; own-dir exclusion correct (probe runs before the trial's own dir exists, so anything present is foreign); guest-shell quoting safe (runRoot quote-rejected, batch names regex-pinned, the 'C:\Program Files\Myco\agent' space is fine because uses are quoted). 115/115 tests, 4/4 CI.
+- VM validation DEFERRED by design. What only a VM can prove (my checklist):
+  1. `rd /s /q` actually removes a run dir whose xlsx was locked by a just-killed soffice.bin — is the 500ms retry enough for real Windows lock release?
+  2. `dir /b /ad` parsing against real cmd.exe output (CRLF, 'File Not Found', localized labels) — the fake emits idealized listings.
+  3. `taskkill` by image name reports killed pids and soffice.bin actually dies, releasing the UNO socket and file locks.
+  4. The nonce-marker report protocol under real cmd.exe (redirection, truncation, visibility timing over the agent's filesystem view).
+  5. End-to-end: a genuinely contaminated guest (a hand-started soffice with a foreign doc) aborts `guest-contaminated`; after abort+cleanup, a second trial verifies.
+- Nice-to-fix noted: probeGuestHealth uses `kill` as its observation mechanism and therefore races a soffice starting between probe and launch — inherent TOCTOU, acceptable with serialized trials, worth an ADR line.
