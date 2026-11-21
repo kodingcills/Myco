@@ -669,3 +669,41 @@ with the OpenCUA evidence (strong ScreenSpot-v2, weak OSWorld success) as the re
 
 **Not done:** nothing has been re-measured; these are design and backlog changes only. The sweep
 host remains blocked per logs 44–45.
+
+## Log 2026-11-21 (55) — Coordinator's scheduling facts folded in; no VM touched
+No VM script, no UTM command, no `vssh`, no stub — the sweep owns `myco-win11` and the no-touch
+rule applies to design work too. Docs only.
+
+**§2.1 added — the operator interface, pinned to `main`.** Reset (`scripts/reset-trial-vm.sh`,
+`clean-base`), deploy (`deploy-to-vm.sh`, foreground, "DEPLOY OK"), reachability
+(`ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765`), token via `vssh`, screenshots via
+the agent's in-guest op. Two of those scripts are in this repo and the SSH config, key and `vssh` are host scripts deliberately outside it; the baseline adds no new VM plumbing. Noted that
+`SshTunnel` already defaults to exactly these values, so the harness reuses it.
+
+**Two operational facts recorded**, both previously unstated in this doc:
+- Screenshots must be in-guest; UTM host capture returns a placeholder.
+- `pgrep qemu-system-aarch64` is not a liveness check — the guest runs under UTM's QEMULauncher;
+  use `lsof -iTCP:2222`. Same error class as the `pgrep` check in log 39.
+
+**Budget, corrected after a verifier rejected my first version.** ~140 s reset + ~100 s redeploy +
+~135 s trial = 375 s/trial → **≈3.1 h** for one sub-arm; with two sub-arms, each with its own
+reset and deploy, 2 × 375 = 750 s/trial → **≈6.25 h** *(corrected again: this entry first said
+510 s / 4.25 h, which assumed a shared reset — see below)*. My first figure (2.5 h) omitted the mandatory redeploy and used the wrong multiplier.
+
+**A design idea I proposed and then rejected on review:** sharing one reset between C1 and C2 to
+halve the cost. C1 *edits the cell*, so C2 would read a document C1 had already changed — the arm
+would be invalid. The saving was one reset per trial (~240 s of 750, reset plus deploy), nowhere near worth it. **Each
+sub-arm now gets its own `clean-base` restore**, and M1-021 carries a C1/C2 discriminator in the row
+schema so the two cannot collide in transcripts.
+
+**Resumability stands:** every row begins from its own restore, so a chunk boundary is just another
+row boundary and a chunked window is as valid as one block — and safer, since a host sleep (log 41)
+or a UTM wedge (log 35) otherwise costs the whole run.
+
+**Acceptance criterion 7 held explicitly:** same `clean-base` snapshot, same
+`scripts/reset-trial-vm.sh`, same deploy flow, same 30 parameter sets, model and settings verbatim in
+the report, and every unavoidable deviation stated beside the numbers — which the design already
+required in §3.5 and now restates in §2 and §2.1.
+
+**Also noted:** the survey's §7.3 sign-test threshold was fixed at source by the research thread
+(PR #45, `≥6` not `≥5`), matching the correction in log 54. Main is 31f9083.
