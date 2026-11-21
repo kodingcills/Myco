@@ -712,7 +712,7 @@ required in §3.5 and now restates in §2 and §2.1.
 Decided 2026-11-21 4:04 PM EST (design §9.0 now carries the table):
 1. **Cua install: YES, gated.** Only after the M1-013 sweep **and** the corrupted run finish, only with the Coordinator's go, and **a new snapshot is taken before installing** so the Myco arm's `clean-base` stays reproducible.
 2. **Planner: paid Claude Sonnet 5.5 via the Anthropic API**, local Ollama `qwen3.8-uncensored` kept wired as the fallback. Needs `ANTHROPIC_API_KEY` with billing (design §9.1): **$1.13-$5.58 per 30 trials per arm, $2.26-$11.16 for C1+C2.** The outer loop manages the credential. The later run limits are **$9.00 total** and **$4.50 per arm by default**. Run C1 first, stop at a row boundary before crossing a cap, and report partial results and actual spend for each arm.
-3. **C2: YES.** C1 and C2 reported separately, each with its own `clean-base` restore.
+3. **C2: YES.** C1 and C2 reported separately, with an independent clean-base restore from the Cua-enabled snapshot for each trial.
 4. **External subset (M1-027/TIF-58): deferred** until after M1 sign-off. **No public-score arm and no frontier third column** for now.
 
 The Screenshot Baseline Owner received the planner, arm, spend, and VM requirements for M1-021. Installation and trial execution await the Coordinator's go.

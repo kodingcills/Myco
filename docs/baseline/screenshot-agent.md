@@ -518,7 +518,7 @@ arms must share all of the following. Anything that differs is a documented devi
 | Condition | How it is held constant |
 |---|---|
 | Task family and parameters | The sweep's final 30 parameter sets, copied verbatim into the baseline run (§4.4a) — same `{fixtureSeed,rowKey,column,newValue}` per trial. The generator that produced them (`generateParameterSets`, `src/tasks/intent.ts`) is the family definition; the *list used* is data, recorded with its hash in both reports. |
-| Initial state | Per-trial reset from **`clean-base`** via `scripts/reset-trial-vm.sh` (guarded, disk-only cold restore), identical for both arms — the same snapshot name, the same script, the same deploy flow (§2.1). Reset wall time recorded per trial. |
+| Initial state | Per-trial cold restore via `scripts/reset-trial-vm.sh`. Myco uses its preserved `clean-base`. C1 and C2 each restore a clean derivative of that base with Cua installed (§2.1). Record the snapshot name and reset wall time per row. |
 | Fixture file | Host-generated CSV → guest `.xlsx` by `WindowsFixtureConverter` (isolated throwaway profile). The **same fixture bytes** for trial *i* in both arms: the baseline gets fixture *i*, not a re-generated one. |
 | Guest software | Same VM, same LibreOffice 26.8.3 ARM64, same Windows build. No LibreOffice settings are changed for either arm (AutoCorrect stays on — see §3.4). |
 | Desktop geometry | Both arms run at the same display resolution; the baseline's `--grounding_width/height` equal the captured screenshot size. Resolution recorded. |
@@ -536,7 +536,7 @@ wherever it lives.
 
 | Step | Command (from `main`) | Success signal |
 |---|---|---|
-| Reset | `scripts/reset-trial-vm.sh` (default snapshot `clean-base`) | `reset-trial-vm: ready on 'clean-base'` |
+| Reset | `scripts/reset-trial-vm.sh` with the arm’s snapshot | The reset reports the selected snapshot ready |
 | Deploy | `agent/bootstrap/deploy-to-vm.sh` — **foreground**, never backgrounded | `DEPLOY OK` |
 | Reachability | `ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11` | agent `ping` answers |
 | Token | `vssh 'Get-Content C:\ProgramData\Myco\agent.token'` | non-empty; never committed |
@@ -575,12 +575,12 @@ every trial), and the trial itself. So:
 | One sub-arm (C1 **or** C2) | 140 + 100 + ~135 = 375 s | **≈3.1 h** |
 | Both sub-arms, each with its own reset+deploy | 2 × 375 = 750 s | **≈6.25 h** |
 
-**Each sub-arm gets its own reset.** An earlier draft of this section proposed sharing one reset
-between C1 and C2 to halve the cost. That is wrong and the design rejects it: C1 *edits the cell*,
-so C2 would start from a document C1 had already modified and its verdict would be meaningless. The
-saving is one reset+deploy per trial (~240 s of 750) — not worth an invalid arm. **Every row, in
-every sub-arm, begins from its own `clean-base` restore and its own deploy**, which is why the
-two-arm figure is 2× a single arm rather than less.
+**Each trial gets its own reset and deploy.** The Coordinator takes a new snapshot before Cua
+installation and preserves Myco's `clean-base`. During the authorized spike, record the name of
+the clean Cua-enabled derivative used for C1 and C2. The reset script currently allowlists snapshot
+names. Add support for the approved Cua snapshot and validate a reset during the spike before
+starting either arm. The Cua installation is a documented difference from Myco's base. Both
+sub-arms restore that derivative before each trial so C2 starts from a clean fixture after C1.
 
 Trial wall time is the least certain input: the running sweep's rows show 21–115 s, earlier verified
 trials were 34–40 s, and the Coordinator's planning figure is ~135 s. The report records actual
@@ -1097,19 +1097,16 @@ grounder** — that is measurement B in reverse, and §3.8 already shows it fail
 
 ### 8.4 Priced configurations (Tiffany's three options)
 
-**One arithmetic run, five sites.** Every figure in §1a, here, §9 and backlog M1-015 is computed by
-the same three lines below, so they agree by construction.
+These planning estimates predate the run caps in §9.1.
 
 Inputs and assumptions:
 
 - Input **0.44M–2.5M** and output **25k–45k** tokens per 30 trials (§8.1).
 - Tool-definition overhead **≈4,500 input tokens per request** (Anthropic's
-  `computer_toolset_20260801`). At 8–14 requests per trial that is **36,000–63,000** extra input
-  tokens over 30 trials — *not* per trial-batch. (An earlier revision multiplied this by 30 twice
-  and overstated every `high` cell; the correction is v4 of this section.)
-- The overhead is added to the `high` column only, because it represents the largest plausible
-  loop. The `low` column is the same budget without the toolset — what a plain screenshot loop
-  costs. No caching is assumed anywhere, so both columns are upper bounds.
+  `computer_toolset_20260801`). The high column in the planning table uses **63,000** extra input
+  tokens per arm. At 8–14 requests per trial, sending the full definition on every request would add
+  **1.08–1.89M** input tokens over 30 trials. The approved harness must project spend from its
+  actual request shape and honor §9.1. The low column excludes tool-definition overhead.
 - Image tokens are folded into the input budget via §8.1's per-call range; a screenshot-heavy
   descendant loop that re-sends more history lands near the `high` end.
 
@@ -1139,10 +1136,7 @@ column, and at `gpt-6.2-astra` that column is **$16/$60** per MTok, which would 
 short-context column is the correct one — but the report must state which column it used, and a
 future loop that re-sends much more history has to re-price.
 
-**The honest summary.** The local path is **$0**. Every paid configuration is **under $12 per 30
-trials** except the strongest frontier model, whose ceiling is **$22.30** — and that is the most
-expensive run anyone could buy here. Money is not the constraint on this baseline; VM time and
-credibility are.
+The local path costs $0 in API spend. Apply the §9.1 limits to the selected Sonnet run.
 
 ### 8.3 Cost, stated plainly
 
@@ -1171,7 +1165,7 @@ The numbered list in §9.2 records the original questions.
 |---|---|---|
 | 1 | Install Cua Driver in the guest | **YES, gated.** Only after the M1-013 sweep **and** the corrupted run have finished, and only with the Coordinator's explicit go (it owns the host and VM). **Take a new snapshot before installing**, to preserve the Myco arm's `clean-base`. |
 | 2 | Planner model | **Paid Claude Sonnet 5.5 via the Anthropic API** (§8.4: $1.13-$5.58 per 30 trials). **Local Ollama (`qwen3.8-uncensored`) stays wired as the fallback.** See §9.1 for what the run needs. |
-| 3 | Run C2 | **YES.** C1 and C2 are reported separately, each with its own `clean-base` restore (§2.1). |
+| 3 | Run C2 | **YES.** C1 and C2 are reported separately. Each trial gets its own clean-base restore from the Cua-enabled snapshot (§2.1). |
 | 5, 7 | Frontier third column; public-score arm (B1/B2) | **Not now.** No frontier column, no public-score arm. |
 | 8 | External subset (M1-027 / TIF-58) | **Deferred until after M1 sign-off.** |
 | 6 | CheaperInference vision probe | Moot: that provider is out of credit and is not used. |
@@ -1188,8 +1182,8 @@ The outer loop manages the credential. The harness receives it at runtime.
 | Env var | `ANTHROPIC_API_KEY` in the host process environment. Keep the credential out of the worktree, logs, traces, transcripts, rows, and pull requests. |
 | Account | An Anthropic API key with billing enabled. |
 | Model | `claude-sonnet-5-5`, short-context pricing, $2 / $10 per MTok in/out. |
-| Expected spend, C1 | $1.13-$5.58 per 30 trials (§8.4; upper bound, no caching). |
-| Expected spend, C2 | $1.13-$5.58 per 30 trials, same envelope (the element rung sends less pixel data, so the true figure is likely lower, but it is not assumed). |
+| Expected spend, C1 | $1.13-$5.58 per 30 trials (§8.4 planning estimate; no caching assumed). |
+| Expected spend, C2 | $1.13-$5.58 per 30 trials, same envelope (estimate uses the same token budget). |
 | Estimated total, C1 + C2 | **$2.26–$11.16** for two full 30-trial arms, excluding the spike and retries. |
 | Run limits | **$9.00 hard total across C1 and C2**, with **$4.50 per arm by default**. Run C1 first. Before starting each trial, check projected spend against both limits. If the trial would cross either limit, stop at the row boundary and report the completed rows as partial results. |
 | Fallback | If the key is absent or a request is refused, the harness uses the local Ollama planner and the report says so per row. A row's planner is recorded in its row schema; rows from different planners are never pooled silently. |
