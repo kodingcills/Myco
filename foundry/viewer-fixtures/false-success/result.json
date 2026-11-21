@@ -1,0 +1,317 @@
+{
+  "runId": "viewer-false-success",
+  "taskId": "ef-todo-silent-drop-v1",
+  "taskParams": {
+    "items": [
+      "buy milk",
+      "call mom"
+    ]
+  },
+  "startedAt": "2026-11-21T12:00:00.000Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#0]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Edit [name=new-item] focused1 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "List [name=items] rows=1 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 0,
+      "stateVersionAfter": 1
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#1]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "List [name=items] rows=2 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Button [name=Add] enabled2 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#2]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Button [name=Add] enabled3 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Status [name=status] text=3 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 2,
+      "stateVersionAfter": 3
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#3]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Status [name=status] text=4 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Window [name=myco-todo] foreground4 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 4,
+      "action": {
+        "kind": "press",
+        "ref": "Button[name=Add#4]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Window [name=myco-todo] foreground5 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Edit [name=new-item] focused5 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 4,
+      "stateVersionAfter": 5
+    },
+    {
+      "step": 5,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#5]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Edit [name=new-item] focused6 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "List [name=items] rows=6 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 6,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#6]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "List [name=items] rows=7 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Button [name=Add] enabled7 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 6,
+      "stateVersionAfter": 7
+    },
+    {
+      "step": 7,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#7]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Button [name=Add] enabled8 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Status [name=status] text=8 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    },
+    {
+      "step": 8,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#8]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Status [name=status] text=9 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Window [name=myco-todo] foreground9 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 8,
+      "stateVersionAfter": 9
+    },
+    {
+      "step": 9,
+      "action": {
+        "kind": "press",
+        "ref": "Button[name=Add#0]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Window [name=myco-todo] foreground10 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Edit [name=new-item] focused10 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 9,
+      "stateVersionAfter": 10
+    },
+    {
+      "step": 10,
+      "action": {
+        "kind": "type",
+        "ref": "Edit[name=new-item]",
+        "text": "call mom"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "Edit [name=new-item] focused11 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "List [name=items] rows=11 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 10,
+      "stateVersionAfter": 11
+    },
+    {
+      "step": 11,
+      "action": {
+        "kind": "click",
+        "ref": "Button[name=Add#2]"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "target-visible",
+          "passed": true,
+          "observed": "List [name=items] rows=12 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "row-visible",
+          "passed": true,
+          "observed": "Button [name=Add] enabled12 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"
+        }
+      ],
+      "stateVersionBefore": 11,
+      "stateVersionAfter": 12
+    }
+  ],
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "item-buy-milk-persisted",
+        "passed": true,
+        "reason": "persisted item matches intent",
+        "partial_score": {
+          "score": 1,
+          "weight": 0.5
+        }
+      },
+      {
+        "name": "item-call-mom-persisted",
+        "passed": false,
+        "reason": "persisted store has no item \"call mom\"; screen showed \"Saved 2 items\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 0.5
+        }
+      }
+    ],
+    "score": 0.5,
+    "reasons": [
+      "persisted state disagrees with the UI's claim"
+    ]
+  }
+}

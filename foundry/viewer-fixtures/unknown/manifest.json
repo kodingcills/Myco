@@ -1,0 +1,9 @@
+{
+  "format": "mycotrace/1",
+  "runId": "viewer-unknown",
+  "files": {
+    "trace.jsonl": "efb01af0fd00e9a0f0f5c579ec4cc593994007f9ccda4a8612413821fb9317ee",
+    "result.json": "2781ee604332a82398a024211bb46656763b84d21dd09f6d25d9159bd5d4f33f",
+    "ledger.jsonl": "805f679ae85f2430656ccb57cebe543314c9674062982a35141482c35d3bd508"
+  }
+}
