@@ -30,7 +30,10 @@ const itemFile = (rows: readonly string[], seed: number) =>
   `${JSON.stringify({ items: rows.map((text) => ({ text: text.trim().replace(/\s+/g, " "), added_at: timestamp(seed) })) }, null, 2)}\n`;
 const metaFile = (rows: readonly string[]) => `${JSON.stringify({ count: rows.length })}\n`;
 
-/** Inject at save, preserving the pre-save files as the durable baseline. */
+/** Inject at save, preserving the pre-save files as the durable baseline.
+ * Permission denial is seed-invariant: no write occurs. A torn unreadable store
+ * is ledgered uncertain, never a proven false success.
+ */
 export function injectFault(state: AppState, spec: FaultSpec): FaultResult {
   if (!Number.isInteger(spec.version) || spec.version < 1 || !Number.isSafeInteger(spec.seed))
     throw new Error("Invalid fault version or seed");

@@ -6,6 +6,7 @@ import { type Fault, injectFault, recoverSave, relaunch } from "../../src/foundr
 import { faultLedgerRow, scoreTrial, summarise } from "../../src/foundry/oracles/blind.ts";
 import { todoStateOracle, verifyPersistedState } from "../../src/foundry/oracles/state.ts";
 import {
+  addItem,
   bootApp,
   deleteItem,
   persistedFiles,
@@ -79,18 +80,17 @@ describe.each(faults)("%s fault", (fault) => {
   });
   it("recovers after relaunch, fresh read and reapplication", () => {
     const broken = injectFault(ready(), { fault, version: 1, seed: 5 }).state;
+    let read: typeof broken;
     if (fault === "interrupted-write") {
       expect(() => relaunch(broken)).toThrow();
-      return;
+      // An unreadable document is rebuilt by re-entering the user's intended rows.
+      read = { ...broken, rows: [], listbox: [], windowGone: false };
+    } else {
+      read = relaunch(broken);
+      for (const row of [...read.rows]) read = deleteItem(read, row);
     }
-    const read = relaunch(broken);
-    const repaired =
-      fault === "stale-ui"
-        ? { ...read, rows: read.rows.map((row) => row.replace(/ \[stale -?\d+\]$/, "")) }
-        : read;
-    const reapplied = repaired.rows.includes("archive Q1 invoices")
-      ? deleteItem(repaired, "archive Q1 invoices")
-      : repaired;
+    let reapplied = read;
+    for (const row of ready().rows) reapplied = addItem(reapplied, row);
     const recovered = recoverSave(reapplied, 5);
     expect(validateSchema(recovered.event, traceEventSchema)).toEqual([]);
     expect(
@@ -113,34 +113,6 @@ describe.each(faults)("%s fault", (fault) => {
       );
     }
     if (fault !== "permission-denied") expect(states.size).toBeGreaterThan(1);
-  });
-  it("audits mutations derived from this fault and keeps a positive control", () => {
-    const broken = injectFault(ready(), { fault, version: 1, seed: 1 }).state;
-    const mutations = [
-      { ...broken.files, "store.meta.json": '{"count":999}\n' },
-      { ...broken.files, "store.json": '{"items":[' },
-      Object.fromEntries(
-        Object.entries(broken.files).filter(([path]) => path !== "store.meta.json"),
-      ),
-      {
-        ...broken.files,
-        "store.json": JSON.stringify({ items: [{ text: "altered", added_at: "2026" }] }),
-      },
-    ];
-    for (const files of mutations) {
-      expect(
-        verifyPersistedState(
-          todoStateOracle(),
-          intent,
-          initial,
-          persistedFiles({ ...broken, files }),
-        ).status,
-      ).not.toBe("verified");
-    }
-    const correct = recoverSave(ready(), 1).state;
-    expect(
-      verifyPersistedState(todoStateOracle(), intent, initial, persistedFiles(correct)).status,
-    ).toBe("verified");
   });
 });
 
@@ -233,5 +205,140 @@ it("the companion-file mutation catches an items-only verifier", () => {
     verifyPersistedState(todoStateOracle(), intent, withoutCompanion, {
       "store.json": files["store.json"]!,
     }).status,
+  ).toBe("verified");
+});
+
+it("audits class-specific blind spots against the real oracle", () => {
+  const control = recoverSave(ready(), 1).state;
+  const correctItems = control.files["store.json"]!;
+  const itemsOnly = (files: Readonly<Record<string, string>>) => {
+    try {
+      const actual = JSON.parse(files["store.json"]!).items.map(
+        (item: { text: string }) => item.text,
+      );
+      return JSON.stringify(actual) === JSON.stringify(ready().rows);
+    } catch {
+      return false;
+    }
+  };
+  const metaOnly = (files: Readonly<Record<string, string>>) => {
+    try {
+      return JSON.parse(files["store.meta.json"]!).count === ready().rows.length;
+    } catch {
+      return false;
+    }
+  };
+  const injected = (fault: Fault, seed: number) =>
+    injectFault(ready(), { fault, version: 1, seed }).state.files;
+  const crash = injected("crash-mid-save", 1);
+  const stale = injected("stale-ui", 1);
+  const cases = [
+    {
+      name: "stale companion",
+      files: {
+        ...stale,
+        "store.json": correctItems,
+        "store.meta.json": ready().files["store.meta.json"]!,
+      },
+      blind: itemsOnly,
+      status: "refuted",
+    },
+    {
+      name: "stale altered row",
+      files: injected("stale-ui", 1),
+      blind: metaOnly,
+      status: "refuted",
+    },
+    {
+      name: "torn items",
+      files: {
+        ...injected("interrupted-write", 1),
+        "store.meta.json": control.files["store.meta.json"]!,
+      },
+      blind: metaOnly,
+      status: "uncertain",
+    },
+    {
+      name: "partial meta only (even)",
+      files: injected("partial-persistence", 0),
+      blind: metaOnly,
+      status: "refuted",
+    },
+    {
+      name: "partial items only (odd)",
+      files: injected("partial-persistence", 1),
+      blind: itemsOnly,
+      status: "refuted",
+    },
+    {
+      name: "crash stale meta",
+      files: { ...crash, "store.json": correctItems },
+      blind: itemsOnly,
+      status: "refuted",
+    },
+    {
+      name: "permission denied",
+      files: {
+        ...injected("permission-denied", 1),
+        "store.meta.json": control.files["store.meta.json"]!,
+      },
+      blind: metaOnly,
+      status: "refuted",
+    },
+  ];
+  for (const seed of [2, 3]) {
+    cases.push(
+      {
+        name: `stale altered row ${seed}`,
+        files: injected("stale-ui", seed),
+        blind: metaOnly,
+        status: "refuted",
+      },
+      {
+        name: `torn items ${seed}`,
+        files: {
+          ...injected("interrupted-write", seed),
+          "store.meta.json": control.files["store.meta.json"]!,
+        },
+        blind: metaOnly,
+        status: "uncertain",
+      },
+      {
+        name: `partial ${seed}`,
+        files: injected("partial-persistence", seed),
+        blind: seed % 2 ? itemsOnly : metaOnly,
+        status: "refuted",
+      },
+      {
+        name: `crash stale meta ${seed}`,
+        files: { ...injected("crash-mid-save", seed), "store.json": correctItems },
+        blind: itemsOnly,
+        status: "refuted",
+      },
+      {
+        name: `permission denied ${seed}`,
+        files: {
+          ...injected("permission-denied", seed),
+          "store.meta.json": control.files["store.meta.json"]!,
+        },
+        blind: metaOnly,
+        status: "refuted",
+      },
+    );
+  }
+  for (const entry of cases) {
+    expect(entry.blind(entry.files), entry.name).toBe(true);
+    expect(
+      verifyPersistedState(
+        todoStateOracle(),
+        intent,
+        initial,
+        persistedFiles({ ...control, files: entry.files }),
+      ).status,
+      entry.name,
+    ).toBe(entry.status);
+  }
+  expect(
+    verifyPersistedState(todoStateOracle(), intent, initial, persistedFiles(control)).status,
   ).toBe("verified");
 });
