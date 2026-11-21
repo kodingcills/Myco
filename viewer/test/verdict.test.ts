@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { loadRunFiles } from "../src/data/loaders.ts";
@@ -13,6 +14,7 @@ import {
 async function fromFolder(
   path: string,
   edit = (_name: string, body: string): string | undefined => body,
+  extra: Record<string, string> = {},
 ) {
   const folder = new URL(`${path}/`, import.meta.url);
   const entries = await readdir(folder, { withFileTypes: true });
@@ -26,8 +28,28 @@ async function fromFolder(
           : [{ file: new File([body], name), relativePath: `run/${name}` }];
       }),
   );
-  return parseRun(await loadRunFiles(files.flat()));
+  const added = Object.entries(extra).map(([name, body]) => ({
+    file: new File([body], name),
+    relativePath: `run/${name}`,
+  }));
+  return parseRun(await loadRunFiles([...files.flat(), ...added]));
 }
+
+const sha256 = (body: string) => createHash("sha256").update(body).digest("hex");
+
+/** Edit one evidence file in a test copy and regenerate the manifest digests to match. */
+async function fromEditedFolder(path: string, file: string, edit: (body: string) => string) {
+  const folder = new URL(`${path}/`, import.meta.url);
+  const edited = edit(await readFile(new URL(file, folder), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("manifest.json", folder), "utf8"));
+  manifest.files[file] = sha256(edited);
+  return fromFolder(path, (name, body) =>
+    name === file ? edited : name === "manifest.json" ? JSON.stringify(manifest) : body,
+  );
+}
+
+const wrongClaim =
+  '{"type":"claim","step":10,"source":"app-ui","field":"item-call-mom-persisted","value":"WRONG","timestamp":"2026-11-21T12:00:04.000Z"}\n';
 
 const sample = "../../docs/research/experiments/m1-013-session1";
 const fixture = "../../foundry/viewer-fixtures";
@@ -301,6 +323,92 @@ describe("verdict mapping", () => {
     }));
     const data = await fromFolder(`${sample}/refuted-autocorrect-d7ad45bf`);
     expect(deriveVerdict({ ...data, ledger: otherRun }).subtype).toBeUndefined();
+  });
+});
+
+describe("positive verdicts contradicted by other evidence (beyond the literal §6.2 table)", () => {
+  async function withClaim(folder: string, claim: string) {
+    const trace = await readFile(new URL(`${folder}/trace.jsonl`, import.meta.url), "utf8");
+    return fromFolder(folder, (name, body) => (name === "manifest.json" ? undefined : body), {
+      "trace.extended.jsonl": trace + claim,
+    });
+  }
+
+  test("an explicit claim that disagrees with the persisted value cannot read as Verified", async () => {
+    const data = await withClaim(`${fixture}/verified`, wrongClaim);
+    expect(data.result?.recordKind === "session" ? undefined : data.result?.verdict.status).toBe(
+      "verified",
+    );
+    expect(deriveComparatorRows(data).find((row) => row.comparison === "disagree")).toMatchObject({
+      claimedLabel: "claimed",
+      claimed: { value: "WRONG" },
+    });
+    const verdict = deriveVerdict(data);
+    expect(verdict).toMatchObject({ label: "Failed", subtype: "False success" });
+    expect(verdict.reason?.value).toBe(
+      "Stored verdict says verified, but claim WRONG contradicts persisted call mom (items[1].text)",
+    );
+    expect(verdict.sources).toContainEqual({ file: "trace.extended.jsonl", line: 110 });
+  });
+
+  test("an explicit claim that disagrees with a Recovered result also fails", async () => {
+    const data = await withClaim(`${fixture}/recovered`, wrongClaim);
+    expect(deriveVerdict(data)).toMatchObject({ label: "Failed", subtype: "False success" });
+  });
+
+  test("an agreeing explicit claim keeps Verified", async () => {
+    const data = await withClaim(`${fixture}/verified`, wrongClaim.replace("WRONG", "call mom"));
+    expect(deriveVerdict(data).label).toBe("Verified");
+  });
+
+  test("a derived-only claim keeps the stored verdict", async () => {
+    const data = await fromFolder(`${fixture}/verified`);
+    expect(deriveComparatorRows(data).every((row) => row.claimedLabel === "claimed (derived)")).toBe(
+      true,
+    );
+    expect(deriveVerdict(data).label).toBe("Verified");
+  });
+
+  test("ledger oracle ground-truth:false overrides a stored Verified result", async () => {
+    const data = await fromEditedFolder(`${fixture}/verified`, "ledger.jsonl", (body) =>
+      body.replace("verifier:verified+ground-truth", "ground-truth:false"),
+    );
+    expect(data.parseErrors).toEqual([]);
+    expect(data.validation).toEqual({ kind: "complete", manifestChecked: true });
+    const verdict = deriveVerdict(data);
+    expect(verdict).toMatchObject({ label: "Failed", subtype: "False success" });
+    expect(verdict.reason?.value).toBe(
+      "Stored verdict says verified, but the ledger oracle is ground-truth:false",
+    );
+    expect(verdict.sources).toContainEqual({ file: "ledger.jsonl", line: 1 });
+  });
+
+  test("ground-truth:false for another run does not change a Verified result", async () => {
+    const data = await fromFolder(`${fixture}/verified`, (name, body) =>
+      name === "manifest.json"
+        ? undefined
+        : name === "ledger.jsonl"
+          ? body
+              .replace("verifier:verified+ground-truth", "ground-truth:false")
+              .replace("viewer-verified", "someone-else")
+          : body,
+    );
+    expect(deriveVerdict(data).label).toBe("Verified");
+  });
+
+  test("unknown event types in trace.jsonl are extended and cannot change a verdict", async () => {
+    const data = await fromFolder(
+      `${fixture}/verified`,
+      (name, body) =>
+        name === "manifest.json"
+          ? undefined
+          : name === "trace.jsonl"
+            ? `${body}{"type":"vendor-note","verdict":"refuted","field":"item-call-mom-persisted","value":"WRONG"}\n`
+            : body,
+    );
+    const extended = data.events.find((entry) => entry.event.type === "vendor-note");
+    expect(extended).toMatchObject({ kind: "extended", source: { file: "trace.jsonl" } });
+    expect(deriveVerdict(data).label).toBe("Verified");
   });
 });
 

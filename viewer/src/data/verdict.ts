@@ -441,8 +441,63 @@ export function deriveVerdict({
   if (incompleteAttempt) {
     return unknown({ value: "Recovery has no recorded completion", source: incompleteAttempt });
   }
+  const contradiction = positiveContradiction({ result, events, ledger, parseErrors });
+  if (contradiction) return contradiction;
   const sources = [statusRef, resultRef("/verdict/checks")];
   return recovery
     ? { label: "Recovered", sources: [...sources, recovery] }
     : { label: "Verified", sources };
+}
+
+function show(value: unknown) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > 60 ? `${text.slice(0, 57)}...` : text;
+}
+
+/**
+ * A stored Verified/Recovered result that other evidence contradicts must never read as success.
+ * This goes beyond the literal §6.2 table; see DEVIATIONS.md.
+ */
+function positiveContradiction({
+  result,
+  events,
+  ledger,
+  parseErrors,
+}: Required<Pick<VerdictEvidence, "events" | "ledger">> &
+  Pick<RunData, "parseErrors"> & { result: RunRecord }): DisplayVerdict | undefined {
+  const statusRef = resultRef("/verdict/status");
+  const stored = result.verdict.status;
+  const oracle = ledger.find(
+    ({ value }) => value.runId === result.runId && value.oracle === "ground-truth:false",
+  );
+  if (oracle) {
+    return {
+      label: "Failed",
+      subtype: "False success",
+      reason: {
+        value: `Stored verdict says ${stored}, but the ledger oracle is ground-truth:false`,
+        source: oracle.source,
+      },
+      sources: [statusRef, oracle.source],
+    };
+  }
+  const row = deriveComparatorRows({
+    result,
+    events: parseErrors.length ? [] : events,
+  }).find(
+    (candidate) =>
+      candidate.claimedLabel === "claimed" && candidate.comparison === "disagree" && candidate.claimed,
+  );
+  if (!row?.claimed) return undefined;
+  const persisted =
+    row.persisted.status === "value" ? show(row.persisted.value) : row.persisted.status;
+  return {
+    label: "Failed",
+    subtype: "False success",
+    reason: {
+      value: `Stored verdict says ${stored}, but claim ${show(row.claimed.value)} contradicts persisted ${persisted} (${row.field})`,
+      source: row.claimed.source,
+    },
+    sources: [statusRef, row.claimed.source, row.persisted.source],
+  };
 }
