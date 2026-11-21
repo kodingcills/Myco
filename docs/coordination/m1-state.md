@@ -276,3 +276,9 @@ Children must be briefed with these rules, and reviewers must state the head SHA
 - The 20-value generator proof (20/20 verified) stands: it ran when the host was quieter with the same VM.
 - ASKED the Runtime owner to idle their guest when unused; no reply yet. NOT killed — their process, their worktree.
 - NEXT: rerun the sweep when the host is quiet (only myco-win11 running). The sweep driver is /tmp/sweep.sh; expected ~2-3h when resets are 10-45s.
+
+## Log 2026-11-21 (31)
+- PR #25 RETROACTIVELY VERIFIED at f9a5c3e: guard placement/semantics correct, exit 2 sensible and distinct from 0/1, no post-merge drift. Its verifier also surfaced that main's lint is RED.
+- MAIN LINT REPAIRED via PR #27: (a) src/win/calc-adapter.ts used `String.raw` on a template containing no escape sequences (no-op; verified by grepping the body for backslashes before removing it), (b) my generator-proof JSON lacked a trailing newline. Lint now clean, 108/108 tests. Verifier asked to prove the emitted Python is byte-identical after the String.raw removal — that is the only way this change could bite.
+- M1-019 child re-delegated after a provider stream stall (second such stall today; infrastructure, not code).
+- Sweep still blocked on host contention (log 30).
