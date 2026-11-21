@@ -152,20 +152,32 @@ never fires for it.
 
 ## 6. Hidden split and blind scoring
 
-The split is **two roots, not one root with filters** (filters leak by accident):
+The split is **two roots, not one root with filters** (filters leak by accident), and it
+is enforced by a CI test rather than by convention:
 
 ```
-foundry/
-  tasks/            # public: task text, fixture builders, screen claims. Implementers get this.
-  oracles/          # hidden: expected() implementations, answer derivation, fault schedules.
-  hidden/           # hidden: generated initial states, expected end states, ground-truth JSON.
+src/foundry/
+  types.ts           # public: shared contract, no answers
+  screen.ts          # public: the trap reader (declared strings only)
+  guard.ts           # public: trace guard
+  blind.ts           # public: scoring order + summary (imports the oracle; see §6.1)
+  tasks/             # public: task text, fixture builders, app model, screen claims
+  oracles/           # HIDDEN: expected() implementations, answer derivation
+  hidden/            # HIDDEN (lazily created): generated ground-truth JSON, fault schedules
 ```
+
+`blind.ts` is the one file outside the hidden roots that imports `oracles/`, because scoring
+needs the answer. It is the grader entrypoint, not an implementer surface: it ships in the
+same excluded set as the hidden roots. `test/foundry/split.test.ts` asserts that no **other**
+file under `src/` reaches the oracle, so adding a second importer fails CI until the exclusion
+set is updated deliberately.
 
 Enforcement, strongest first:
 
-1. **Path**: `foundry/oracles/` and `foundry/hidden/` are not under `src/`. Implementers
-   working in `src/` never import them, and CI runs `tsc` over `src/` only with those
-   roots absent from `include` unless the grader entrypoint is the entry (see `tsconfig`).
+1. **Path**: `src/foundry/oracles/` and `src/foundry/hidden/` are excluded from the tree an
+   implementer is given, and CI enforces the import rule
+   (`test/foundry/split.test.ts`): exactly one file outside those roots may reach the
+   oracle — `blind.ts`, the grader entrypoint — and a second importer fails the build.
 2. **Permissions**: the grading run is a separate process that reads the hidden root; the
    arm under test runs with the hidden root path absent from its environment.
 3. **Review**: a PR that touches `foundry/oracles/` or `foundry/hidden/` requires a
