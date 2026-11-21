@@ -4,6 +4,7 @@
  *
  * Usage (host, with the ssh tunnel and MYCO_AGENT_TOKEN set):
  *   tsx src/integration/run-live.ts --mode normal   [--seed s] [--runs-dir runs]
+ *       [--row-key K --column C --new-value V]   (sweep: pass --seed with the set's fixtureSeed)
  *   tsx src/integration/run-live.ts --mode kill    [--kill-after-step 3] [--recovery]
  *
  * The token is never committed: it is read from MYCO_AGENT_TOKEN (fetched
@@ -52,6 +53,10 @@ async function main(): Promise<void> {
   // plumbing only — the family generator is untouched).
   const base = generateParameterSets([seed])[0];
   if (!base) throw new Error("no parameter set generated");
+  // The sweep passes each set's fixtureSeed as --seed. Without it every trial
+  // ran on the default sheet while row/column/value varied (M1-013 pilot), so
+  // the trial's fixture fingerprint is printed in the report for the sweep to
+  // check against the seed it asked for.
   const params = {
     ...base,
     ...(arg("column") ? { column: arg("column") } : {}),
