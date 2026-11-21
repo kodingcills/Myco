@@ -683,7 +683,7 @@ decisions, and none of them is answered here:
    it changes the guest the Myco arm also runs in, so it needs the environment owner's agreement and
    **must not happen while the M1-013 sweep is running**. This is the gate for everything else.
 2. **Planner model.** Local Ollama (`qwen3.8-uncensored`, already installed) at $0, or a paid API
-   planner (§8.4: roughly $0.06–$17 per 30 trials depending on model). If C2's element rung works on
+   planner (§8.4: $0.06–$0.46 for Haiku 5.5, $1.13–$9.23 for Sonnet 5.5, $2.26–$18.46 for Opus 5.5). If C2's element rung works on
    Calc, the weak local grounder matters much less, which favours $0.
 3. **Whether to run C2 at all.** §1a proposes two labelled sub-arms (C1 pixel-only, C2 full ladder).
    C2 is what makes the comparison credible and also what could make Myco look worse. Tiffany's
@@ -692,7 +692,8 @@ decisions, and none of them is answered here:
    one typed edit through each rung) then 2–3 h for the arm, plus the same for the corrupted arm if
    §7 is in scope. Scheduling is the M1 Coordinator's.
 5. **Frontier API as a third column** (`gpt-6.2-sol`/`gpt-6.2-astra`, Gemini 3.1 Pro): est.
-   **$0.06–$17 per 30 trials**, but requires an API key, billing, and vendor data handling of
+   **$0.06–$36.92 per 30 trials** (§8.4: `gpt-6-luna` low, `gpt-6.2-astra` with toolset overhead
+   high), but requires an API key, billing, and vendor data handling of
    screenshots from a synthetic fixture. Recommended *only* if Tiffany wants the strongest possible
    number and accepts the account.
 6. **CheaperInference vision probe** (`deepseek-v4.1-flash`, `glm-5.3`): still unverified. A single
