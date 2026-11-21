@@ -707,3 +707,13 @@ required in §3.5 and now restates in §2 and §2.1.
 
 **Also noted:** the survey's §7.3 sign-test threshold was fixed at source by the research thread
 (PR #45, `≥6` not `≥5`), matching the correction in log 54. Main is 31f9083.
+
+## Log 2026-11-21 (56) — Tiffany's TIF-19 decisions recorded; no VM touched
+Decided 2026-11-21 4:04 PM EST (design §9.0 now carries the table):
+1. **Cua install: YES, gated.** Only after the M1-013 sweep **and** the corrupted run finish, only with the Coordinator's go, and **a new snapshot is taken before installing** so the Myco arm's `clean-base` stays reproducible.
+2. **Planner: paid Claude Sonnet 5.5 via the Anthropic API**, local Ollama `qwen3.8-uncensored` kept wired as the fallback. Needs `ANTHROPIC_API_KEY` with billing (design §9.1): **$1.13-$5.58 per 30 trials per arm, $2.26-$11.16 for C1+C2.** The outer loop obtains the key from Tiffany; no agent reads or looks for it.
+3. **C2: YES.** C1 and C2 reported separately, each with its own `clean-base` restore.
+4. **External subset (M1-027/TIF-58): deferred** until after M1 sign-off. **No public-score arm and no frontier third column** for now.
+
+**Consequences.** M1-021's harness targets Sonnet plus the Ollama fallback and both C1 and C2 (the Screenshot Baseline Owner has been told). The VM go is the Coordinator's; the baseline workstream is idle until it. **Not done:** nothing run, no spend, no key handled, no install.
+
