@@ -103,5 +103,21 @@ describe("m1-sweep-record.py", () => {
       `${SEEDS.map((s, i) => JSON.stringify({ index: i, fixtureSeed: s, fixtureSha256: map["m1-013-live"] })).join("\n")}\n`,
     );
     expect(runRecord(["--final", single, fp]).status).toBe(1);
+
+    const fiveSeeds = join(dir, "five.jsonl");
+    writeFileSync(
+      fiveSeeds,
+      `${SEEDS.slice(1)
+        .map((s, i) => JSON.stringify({ index: i, fixtureSeed: s, fixtureSha256: map[s] }))
+        .join("\n")}\n`,
+    );
+    expect(runRecord(["--final", fiveSeeds, fp]).status).toBe(1);
+  });
+
+  it("treats a non-object report as a harness error, not a crash", () => {
+    const out = join(dir, "array.json");
+    writeFileSync(out, "[]");
+    const rec = JSON.parse(runRecord(["3", "seed-b", "EMP-0001", "qty", "1", out, fp]).stdout);
+    expect(rec.status).toBe("harness-error");
   });
 });

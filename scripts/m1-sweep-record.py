@@ -10,7 +10,8 @@ Per trial: the report's `fixture.seed` must equal the requested seed and its
 "harness-error": there is no fixture identity to check.
 
 Final: every record carrying a fixture hash must map seeds to hashes one to
-one, and the run must show as many distinct hashes as distinct seeds.
+one, and every seed in FINGERPRINTS must appear (as many distinct hashes as
+sweep seeds).
 """
 
 import json
@@ -23,6 +24,8 @@ def record(argv):
     rec = {"index": int(idx), "fixtureSeed": seed, "rowKey": rk, "column": cl, "typed": nv}
     try:
         d = json.load(open(out_path))
+        if not isinstance(d, dict):
+            raise ValueError(f"report is {type(d).__name__}, not an object")
     except Exception as e:  # noqa: BLE001 - any unreadable report is a harness error
         rec.update(status="harness-error", reason=str(e)[:200])
         return rec
@@ -74,7 +77,10 @@ def final(log_path, fp_path):
             {"distinctSeeds": len(seed_to_hash), "distinctHashes": len(hash_to_seed), "problems": bad}
         )
     )
-    return 0 if not bad and len(seed_to_hash) == len(hash_to_seed) >= 2 else 1
+    missing = sorted(set(expected) - set(seed_to_hash))
+    if missing:
+        bad.append(f"no hash-bearing trial for seeds {missing}")
+    return 0 if not bad and len(seed_to_hash) == len(hash_to_seed) == len(expected) else 1
 
 
 if __name__ == "__main__":
