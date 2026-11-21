@@ -716,4 +716,3 @@ Decided 2026-11-21 4:04 PM EST (design §9.0 now carries the table):
 4. **External subset (M1-027/TIF-58): deferred** until after M1 sign-off. **No public-score arm and no frontier third column** for now.
 
 The Screenshot Baseline Owner received the planner, arm, spend, and VM requirements for M1-021. Installation and trial execution await the Coordinator's go.
-

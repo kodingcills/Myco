@@ -163,9 +163,7 @@ model spend for 30 trials at the §8.1 token budget; "free" means $0 marginal.
    `myco-win11`.
 3. **It fits ARM64 by release artifact**, not by hope: a `windows-arm64` build of the current driver
    plus a proved Windows action ledger.
-4. **It can be free.** With a local planner it costs $0 marginal, and the harness/model choice stays
-   with Tiffany (§9) because the planner is swappable through MCP — that is the point of Cua being a
-   tool layer rather than a model.
+4. **It can be free.** With a local planner it costs $0 marginal, and Tiffany chose the Sonnet planner with local Ollama as the fallback (§9.0).
 5. **It converts the "credibility" question into a reportable one.** C1 vs C2 vs Myco gives three
    columns instead of an argument about whether the baseline was fair.
 
@@ -174,8 +172,7 @@ below). It keeps the $0 property but moves the credibility problem onto our loop
 
 **Not recommended as primary: (c) frontier API.** It buys the strongest baseline with money and an
 account, and its references ship as Linux Docker containers, so the Windows half is still ours to
-build. It stays on the table as a *third* column if Tiffany wants the strongest possible number and
-has a budget (§9 item 6).
+build. Tiffany deferred the frontier column for this run (§9.0).
 
 ### The one gate that can overturn the recommendation
 
@@ -1172,7 +1169,7 @@ The numbered list in §9.2 records the original questions.
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | Install Cua Driver in the guest | **YES, gated.** Only after the M1-013 sweep **and** the corrupted run have finished, and only with the Coordinator's explicit go (it owns the host and VM). **Take a new snapshot before installing**, so the Myco arm's `clean-base` stays reproducible and the driver-bearing guest is a separate, named snapshot. |
+| 1 | Install Cua Driver in the guest | **YES, gated.** Only after the M1-013 sweep **and** the corrupted run have finished, and only with the Coordinator's explicit go (it owns the host and VM). **Take a new snapshot before installing**, to preserve the Myco arm's `clean-base`. |
 | 2 | Planner model | **Paid Claude Sonnet 5.5 via the Anthropic API** (§8.4: $1.13-$5.58 per 30 trials). **Local Ollama (`qwen3.8-uncensored`) stays wired as the fallback.** See §9.1 for what the run needs. |
 | 3 | Run C2 | **YES.** C1 and C2 are reported separately, each with its own `clean-base` restore (§2.1). |
 | 5, 7 | Frontier third column; public-score arm (B1/B2) | **Not now.** No frontier column, no public-score arm. |
@@ -1254,9 +1251,7 @@ The initial recommendation was Cua Driver with a local planner. The options belo
 |---|---|---|---|
 | 1 | Does Cua's driver actually reach LibreOffice Calc's grid on Windows ARM64 (the §1a spike)? | the whole option choice | baseline workstream, needs the VM |
 | 2 | Is the driver's pixel rung or element rung the one that lands on Calc cells? | C1 definition | baseline workstream, same spike |
-| 3 | Which planner model (local $0 vs paid §8.4) | any run | Tiffany via outer loop (§9.2) |
-| 4 | Is C2 (full ladder) in scope? | comparison credibility | Tiffany via outer loop (§9.3) |
-| 5 | VM time slot after the sweep | any run | M1 Coordinator |
+| 5 | VM time slot after the sweep and corrupted run | any run | M1 Coordinator |
 | 6 | Does the Myco sweep keep 30 columns varied, or only `name`? (runbook §7.3) | comparison honesty | M1 Coordinator (owner of the sweep) |
 
 
@@ -1265,7 +1260,8 @@ The initial recommendation was Cua Driver with a local planner. The options belo
 ## 11. Definition of done for M1-015
 
 - `docs/baseline/screenshot-agent-report.md` with the §4 table filled from artefacts, both arms,
-  30 rows each, plus the deviations register and the prompt/model hashes.
+  30 rows each, plus the deviations register and the prompt/model hashes. If a spend cap ends an
+  arm early, deliver the completed rows as a partial run (§9.1). The full 30-trial comparison remains open.
 - Every row reproducible from `baseline/transcripts/` without re-running.
 - **A per-trial paired table** (§4.5.1) — Myco outcome beside each baseline outcome, not two
   independent rates — and the exact sign test's `b`, `c`, and `p` (§4.5.2). If `d < 6` the report
