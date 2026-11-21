@@ -73,6 +73,9 @@ function Raw({ run, source, row }: { run: OpenedRun; source?: SourceRef; row?: S
   const [body, setBody] = useState<HTMLElement | null>(null);
   const header = useRef<HTMLElement>(null);
   const label = source ? sourceLabel(source) : row?.events[0] && sourceLabel(row.events[0].source);
+  // Event types outside the schema are kept as extended evidence and cannot change a verdict.
+  const extended =
+    source && "line" in source ? findTraceEntry(run.data, source)?.kind === "extended" : false;
   const text = source
     ? sourceText?.source === source && sourceText.run === run
       ? sourceText.text
@@ -150,6 +153,7 @@ function Raw({ run, source, row }: { run: OpenedRun; source?: SourceRef; row?: S
         {!source && row?.events[index] && (
           <div className="type-data-small text-text-secondary">
             {sourceLabel(row.events[index].source)}
+            {row.events[index].kind === "extended" && <span data-extended> · extended</span>}
           </div>
         )}
         {key ? (
@@ -181,6 +185,7 @@ function Raw({ run, source, row }: { run: OpenedRun; source?: SourceRef; row?: S
         </div>
         <div className="type-data-small text-text-secondary wrap-anywhere">
           {label ?? <Missing />}
+          {extended && <span data-extended> · extended</span>}
         </div>
         <span role="status" className="sr-only">
           {copyStatus}
@@ -371,6 +376,7 @@ function Detail({
       </DetailSection>
     );
   }
+  const extendedEvents = run.data.events.filter(({ kind }) => kind === "extended");
   if (!row)
     return (
       <DetailSection label="Run summary">
@@ -387,6 +393,15 @@ function Detail({
               source={{ file: "result.json", path: "/steps" }}
             />
           </div>
+        )}
+        {extendedEvents.slice(0, 20).map(({ event, source }) => (
+          <div key={sourceLabel(source)}>
+            Extended event <span className="type-data">{event.type}</span>{" "}
+            <SourceChip source={source} />
+          </div>
+        ))}
+        {extendedEvents.length > 20 && (
+          <div>+{extendedEvents.length - 20} more extended events</div>
         )}
       </DetailSection>
     );

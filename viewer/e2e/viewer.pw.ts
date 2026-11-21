@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
+import tokens from "../../docs/design/tokens.json" with { type: "json" };
 import {
   boot,
   checkOffline,
@@ -231,15 +232,38 @@ test("Why row facts and Verdict Bar counts lead to their contributing evidence",
     runs.find(({ name }) => name === "recovered")!.folder,
   );
   await waitForRun(page, "Recovered");
+  // Proof lists every step, including the unchanged recovery step #06 (v6→v6).
+  const states = page.getByRole("region", { name: "State changes" });
+  await expect(states).toContainText("#05");
+  await expect(
+    states.locator("[data-state-row][data-unchanged]", { hasText: "#06" }),
+  ).toContainText("unchanged");
+  // Every icon-only button names itself; the bar's source chips are one Tab stop.
+  const unnamed = await page.evaluate(() =>
+    [...document.querySelectorAll("button")]
+      .filter((button) => !button.textContent?.trim() && !button.getAttribute("aria-label"))
+      .map((button) => button.outerHTML.slice(0, 80)),
+  );
+  expect(unnamed).toEqual([]);
+  const barChips = page.locator("[data-verdict-bar] [data-source]");
+  expect(await barChips.count()).toBeGreaterThan(3);
+  expect(await page.locator('[data-verdict-bar] [data-source][tabindex="0"]').count()).toBe(1);
+  await expect(barChips.first()).toHaveAttribute("title", /Recovered verdict/);
+  await barChips.first().focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(barChips.nth(1)).toBeFocused();
+  await expect(page.locator('[data-verdict-bar] [data-source][tabindex="0"]')).toHaveCount(1);
   await page.keyboard.press("2");
   await page.keyboard.press("j");
-  const refs = page.getByRole("group", { name: "Sources for step #00" });
-  await expect(refs.getByRole("button")).toHaveCount(4);
-  await page.keyboard.press("Tab");
-  await expect(refs.getByRole("button").first()).toBeFocused();
+  await expect(page.getByRole("group", { name: /Sources for step/ })).toHaveCount(0);
+  const action = page
+    .locator("[data-detail]")
+    .getByRole("button", { name: /Open source trace\.jsonl:\d+/ })
+    .first();
+  await action.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("tab", { name: "Raw", selected: true })).toBeVisible();
-  await expect(page.locator("[data-raw-body]")).toContainText('"type":"action"');
+  await expect(page.locator("[data-raw-body]")).toContainText('"type"');
   await page.keyboard.press("Escape");
 
   const count = page.getByRole("button", { name: "guard failures 1" });
@@ -253,5 +277,31 @@ test("Why row facts and Verdict Bar counts lead to their contributing evidence",
   await page.keyboard.press("Enter");
   await expect(page.getByRole("tab", { name: "Detail", selected: true })).toBeVisible();
   await expect(page.getByRole("option", { selected: true })).toHaveAttribute("id", "step-row-6");
+  offline();
+});
+
+test("every rendered text uses a token font-size / line-height pair", async ({ page }) => {
+  const offline = checkOffline(page);
+  await boot(page);
+  const fixture = runs.find(({ name }) => name === "recovered")!;
+  await (await pickerByKeyboard(page, "folder")).setFiles(fixture.folder);
+  await waitForRun(page, fixture.verdict);
+  const allowed = new Set(
+    Object.values(tokens.font.size).map((size) => `${size.size}px/${size.lineHeight}px`),
+  );
+  for (const key of ["3", "2", "3"]) {
+    await page.keyboard.press(key);
+    await page.keyboard.press("j");
+    const off = await page.evaluate(() =>
+      [...document.querySelectorAll("body *")].flatMap((el) => {
+        if (![...el.childNodes].some((node) => node.nodeType === 3 && node.textContent?.trim())) {
+          return [];
+        }
+        const style = getComputedStyle(el);
+        return [`${style.fontSize}/${style.lineHeight}`];
+      }),
+    );
+    expect([...new Set(off)].filter((pair) => !allowed.has(pair))).toEqual([]);
+  }
   offline();
 });

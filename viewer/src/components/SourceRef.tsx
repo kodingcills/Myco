@@ -8,7 +8,16 @@ export function sourceLabel(source: SourceRef) {
     : `${source.file}${source.path ? `#${source.path}` : ""}`;
 }
 
-export function SourceChip({ source, compact = false }: { source: SourceRef; compact?: boolean }) {
+export function SourceChip({
+  source,
+  compact = false,
+  subject,
+}: {
+  source: SourceRef;
+  compact?: boolean;
+  /** Names what the source backs, so an icon-only chip never reads as an orphan control. */
+  subject?: string;
+}) {
   const inspect = useViewer((state) => state.inspect);
   const label = sourceLabel(source);
   const selected = useViewer(
@@ -23,8 +32,8 @@ export function SourceChip({ source, compact = false }: { source: SourceRef; com
       data-source
       aria-current={selected || undefined}
       data-compact={compact || undefined}
-      title={label}
-      aria-label={`Open source ${label}`}
+      title={subject ? `${subject} · ${label}` : label}
+      aria-label={subject ? `Open source ${label} for ${subject}` : `Open source ${label}`}
       onClick={() => inspect(source)}
     >
       {compact ? <FileJson aria-hidden="true" /> : label}

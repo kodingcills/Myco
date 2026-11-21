@@ -363,9 +363,9 @@ describe("positive verdicts contradicted by other evidence (beyond the literal Â
 
   test("a derived-only claim keeps the stored verdict", async () => {
     const data = await fromFolder(`${fixture}/verified`);
-    expect(deriveComparatorRows(data).every((row) => row.claimedLabel === "claimed (derived)")).toBe(
-      true,
-    );
+    expect(
+      deriveComparatorRows(data).every((row) => row.claimedLabel === "claimed (derived)"),
+    ).toBe(true);
     expect(deriveVerdict(data).label).toBe("Verified");
   });
 
@@ -397,14 +397,12 @@ describe("positive verdicts contradicted by other evidence (beyond the literal Â
   });
 
   test("unknown event types in trace.jsonl are extended and cannot change a verdict", async () => {
-    const data = await fromFolder(
-      `${fixture}/verified`,
-      (name, body) =>
-        name === "manifest.json"
-          ? undefined
-          : name === "trace.jsonl"
-            ? `${body}{"type":"vendor-note","verdict":"refuted","field":"item-call-mom-persisted","value":"WRONG"}\n`
-            : body,
+    const data = await fromFolder(`${fixture}/verified`, (name, body) =>
+      name === "manifest.json"
+        ? undefined
+        : name === "trace.jsonl"
+          ? `${body}{"type":"vendor-note","verdict":"refuted","field":"item-call-mom-persisted","value":"WRONG"}\n`
+          : body,
     );
     const extended = data.events.find((entry) => entry.event.type === "vendor-note");
     expect(extended).toMatchObject({ kind: "extended", source: { file: "trace.jsonl" } });

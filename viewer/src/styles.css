@@ -162,6 +162,7 @@
   font-family: var(--font-mono);
   font-feature-settings: var(--font-mono--font-feature-settings);
   font-size: var(--text-data-small);
+  line-height: var(--text-data-small--line-height);
   overflow-wrap: anywhere;
   text-decoration: underline;
   text-underline-offset: var(--spacing-0_5);
@@ -343,6 +344,7 @@
   border-radius: var(--radius-control);
   color: var(--color-text-secondary);
   font-size: var(--text-data-small);
+  line-height: var(--text-data-small--line-height);
   font-family: var(--font-mono);
 }
 
@@ -753,6 +755,7 @@
   height: var(--layout-filmstrip-thumb-height);
   border-right: var(--border-width) solid var(--color-border-subtle);
   font-size: var(--text-small);
+  line-height: var(--text-small--line-height);
 }
 
 [data-film-thumb] img {
@@ -780,14 +783,4 @@
 [data-scrub-seek]:focus-visible,
 [data-scrub-brush]:focus-visible {
   outline-offset: calc(-1 * var(--border-focus-ring-offset));
-}
-
-[data-step-sources] {
-  display: flex;
-  flex-wrap: wrap;
-  flex: none;
-  align-items: center;
-  padding-inline: var(--spacing-3);
-  gap: var(--spacing-2);
-  border-top: var(--border-width) solid var(--color-border-default);
 }

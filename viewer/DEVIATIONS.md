@@ -49,3 +49,25 @@
 - §2.6 CheckRow and §5 color conflict. Passing checks still use their check-level Verified badge. Outer-loop interpretation is pending.
 - Written sign-off for the earlier layout tokens and individual deviations remains pending.
 - Grok Bot screenshot review and attaching the refreshed screenshots to PR #69 remain pending.
+
+## PR #69 fix round 2
+
+- **Beyond the literal §6.2 table (needs outer-loop sign-off).** A stored `verified` or `recovered` result never reads as success when other evidence contradicts it. (A) An explicit `claim` event (`claimed`, not `claimed (derived)`) that disagrees with the persisted check value maps to Failed · False success. The bar reason reads "Stored verdict says verified, but claim X contradicts persisted Y (field)". Derived-only claims keep the stored verdict. (B) A ledger row for the same run with oracle `ground-truth:false` maps to Failed · False success with the reason "Stored verdict says verified, but the ledger oracle is ground-truth:false". §6.2 lists both as Failed / False success triggers but only attaches them to a stored `refuted` status. The three real M1 runs and the four Foundry fixtures map exactly as before (`verdict.test.ts`).
+- The per-step source strip under the Why list (Time, pre, post) is removed. It was not a spec component and added four extra Tab stops. Its sources stay reachable: the Action and Preconditions/Postconditions sections in Inspector › Detail carry the same trace lines, and the Time cell tooltip names its source. The `result.json#/startedAt` offset chip is only in that tooltip.
+- Verdict Bar source chips form one Tab stop (roving tabindex; Left/Right/Home/End move between them). Every chip names what it backs through its `aria-label` and tooltip.
+- Proof › State changes lists every recorded step. A step whose version does not change shows `vN → vN unchanged` in tertiary text instead of being skipped.
+- Line heights: three rules set a font size without a line height and inherited 18/20 px (`[data-source]` at 11 px, `[data-kbd]` at 11 px, filmstrip `not recorded` at 12 px). They now use the token pair (dataSmall 11/16, small 12/16). A Playwright test asserts that every rendered text node uses a size/line-height pair from `tokens.json`.
+- Event types outside the schema stay accepted as extended evidence. Run summary lists them (first 20, then a count), Raw marks them `· extended`, and a test confirms they cannot change a verdict.
+
+## Open decisions for outer loop
+
+These are recorded as found, not decided here.
+
+1. Failed-run Checks list shows green `Verified` per-check badges (spec §2.6 vs §5 conflict).
+2. Inspector is hidden in Proof until a source is selected, while the §1.4 diagram shows it always.
+3. `Open…` opens a two-item menu (files / folder).
+4. ModeTabs omit Now (allowed by §9).
+5. Panel collapse is instant versus the 200 ms in the §1.5 motion table.
+6. The recovery-step indent uses a heuristic (the next step after a recovery) versus the spec's "indent recovery steps under the step they recover".
+7. Staged verdict: a provisional `Checking run evidence` (Unknown) appears at about 77 ms, then the final verdict.
+8. Chrome Stable could not run here (SIGABRT); measurements use the Playwright Chromium headless shell 159.

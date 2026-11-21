@@ -200,3 +200,66 @@ test("a late same-run load cannot replace the newer sidebar entry", async ({ pag
   );
   await waitForRun(page, "Verified");
 });
+
+const wrongClaim =
+  '{"type":"claim","step":10,"source":"app-ui","field":"item-call-mom-persisted","value":"WRONG","timestamp":"2026-11-21T12:00:04.000Z"}\n';
+
+test("an unknown trace event is shown as extended and cannot change the verdict", async ({
+  page,
+}) => {
+  const offline = checkOffline(page);
+  await boot(page);
+  const folder = runs.find(({ name }) => name === "verified")!.folder;
+  const trace = `${await readFile(join(folder, "trace.jsonl"), "utf8")}{"type":"vendor-note","verdict":"refuted"}\n`;
+  await page
+    .locator("input[multiple]:not([webkitdirectory])")
+    .first()
+    .setInputFiles({
+      name: "extended.mycotrace",
+      mimeType: "application/zip",
+      buffer: Buffer.from(
+        zipSync({
+          "result.json": await readFile(join(folder, "result.json")),
+          "trace.jsonl": Buffer.from(trace),
+        }),
+      ),
+    });
+  await waitForRun(page, "Verified");
+  await page.keyboard.press("2");
+  const line = trace.trimEnd().split("\n").length;
+  await page
+    .getByRole("button", { name: `Open source trace.jsonl:${line}`, exact: false })
+    .first()
+    .click();
+  await expect(page.locator("[data-raw]")).toContainText(`trace.jsonl:${line} · extended`);
+  await expect(page.locator("[data-raw-body]")).toContainText("vendor-note");
+  offline();
+});
+
+test("a Verified result contradicted by its own claim renders Failed · False success", async ({
+  page,
+}) => {
+  const offline = checkOffline(page);
+  await boot(page);
+  const folder = runs.find(({ name }) => name === "verified")!.folder;
+  const trace = await readFile(join(folder, "trace.jsonl"), "utf8");
+  await page
+    .locator("input[multiple]:not([webkitdirectory])")
+    .first()
+    .setInputFiles({
+      name: "contradicted.mycotrace",
+      mimeType: "application/zip",
+      buffer: Buffer.from(
+        zipSync({
+          "result.json": await readFile(join(folder, "result.json")),
+          "trace.jsonl": Buffer.from(trace),
+          "trace.extended.jsonl": Buffer.from(trace + wrongClaim),
+        }),
+      ),
+    });
+  await waitForRun(page, "Failed");
+  const bar = page.locator("[data-verdict-bar]");
+  await expect(bar).toContainText("False success");
+  await expect(bar).toContainText("claim WRONG contradicts persisted call mom");
+  offline();
+});

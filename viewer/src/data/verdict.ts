@@ -486,7 +486,9 @@ function positiveContradiction({
     events: parseErrors.length ? [] : events,
   }).find(
     (candidate) =>
-      candidate.claimedLabel === "claimed" && candidate.comparison === "disagree" && candidate.claimed,
+      candidate.claimedLabel === "claimed" &&
+      candidate.comparison === "disagree" &&
+      candidate.claimed,
   );
   if (!row?.claimed) return undefined;
   const persisted =

@@ -226,17 +226,13 @@ export function Proof({
   const failures = useMemo(() => deriveFailuresAndRecovery(data), [data]);
   const stateChanges = useMemo(
     () =>
-      (data.result?.steps ?? []).flatMap((step, index) =>
-        step.stateVersionBefore === step.stateVersionAfter
-          ? []
-          : [
-              {
-                step,
-                path: `/steps/${index}`,
-                source: { file: "result.json", path: `/steps/${index}/step` },
-              },
-            ],
-      ),
+      // Every recorded step is listed so the sequence never jumps; an unchanged version is labeled.
+      (data.result?.steps ?? []).map((step, index) => ({
+        step,
+        path: `/steps/${index}`,
+        source: { file: "result.json", path: `/steps/${index}/step` },
+        unchanged: step.stateVersionBefore === step.stateVersionAfter,
+      })),
     [data.result],
   );
   const digits = Math.max(2, String(data.result?.steps.at(-1)?.step ?? 0).length);
@@ -290,10 +286,14 @@ export function Proof({
           <EvidenceList
             rows={stateChanges}
             center={center}
-            render={({ step, path, source }, virtual) => {
+            render={({ step, path, source, unchanged }, virtual) => {
               const Row = virtual ? "div" : "li";
               return (
-                <Row data-state-row className="type-data">
+                <Row
+                  data-state-row
+                  data-unchanged={unchanged || undefined}
+                  className={unchanged ? "type-data text-text-tertiary" : "type-data"}
+                >
                   <span>{stepLabel(step.step, digits)}</span>
                   <SourceChip source={source} compact />
                   <span>v{step.stateVersionBefore}</span>
@@ -307,6 +307,7 @@ export function Proof({
                     source={{ file: source.file, path: `${path}/stateVersionAfter` }}
                     compact
                   />
+                  {unchanged && <span>unchanged</span>}
                 </Row>
               );
             }}

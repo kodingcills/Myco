@@ -5,7 +5,7 @@ import tokens from "../../../docs/design/tokens.json";
 import { actionLabel, markerLabels, type StepRow, stepLabel } from "../data/steps.ts";
 import { useViewer } from "../store.ts";
 import { useScreenshotAsset } from "./Screenshots.tsx";
-import { Missing, SourceChip, sourceLabel } from "./SourceRef.tsx";
+import { Missing, sourceLabel } from "./SourceRef.tsx";
 import { VerdictBadge } from "./VerdictBadge.tsx";
 
 const localTime = new Intl.DateTimeFormat(undefined, {
@@ -159,7 +159,6 @@ export function StepList({
   const list = useRef<HTMLDivElement>(null);
   const [window, setWindow] = useState({ startIndex: 0, endIndex: -1 });
   const selected = step === undefined ? undefined : index.get(step);
-  const activeRow = selected === undefined ? undefined : rows[selected];
   const [finding, setFinding] = useState(false);
   const [search, setSearch] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -266,35 +265,6 @@ export function StepList({
           </p>
         )}
       </div>
-      {activeRow && (activeRow.timestampSource || activeRow.guards.length > 0) && (
-        <fieldset
-          data-step-sources
-          aria-label={`Sources for step ${stepLabel(activeRow.step, digits)}`}
-        >
-          {activeRow.timestampSource && (
-            <span data-inline-evidence>
-              Time
-              <SourceChip source={activeRow.timestampSource} compact />
-              {activeRow.offset !== undefined && (
-                <SourceChip source={{ file: "result.json", path: "/startedAt" }} compact />
-              )}
-            </span>
-          )}
-          {(["pre", "post"] as const).map((phase) => {
-            const guard = guardSummary(activeRow, phase);
-            return (
-              guard && (
-                <span key={phase} data-inline-evidence>
-                  <span className="type-data-small">{guard.text}</span>
-                  {guard.sources.map((source) => (
-                    <SourceChip key={sourceLabel(source)} source={source} compact />
-                  ))}
-                </span>
-              )
-            );
-          })}
-        </fieldset>
-      )}
     </div>
   );
 }
