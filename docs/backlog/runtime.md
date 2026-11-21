@@ -278,6 +278,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   - Isolation is the VM boundary + 2 GB cap + loopback-only hostfwd + disposable
     overlay. **Not** guaranteed: egress policy, guest→host file transfer, idle
     reaping, per-agent attribution, multi-tenant credentials.
+- **progress:** criterion 1 landed in code (workspace discovery: `$MYCO_HOME` → walk up from cwd → walk up from the binary; missing-workspace error names `MYCO_HOME`). Live run (2) still waits on the M1 Coordinator's go signal.
 - **acceptance:**
   1. A single documented entry point gets an agent from "nothing running" to a
      usable desktop with no repo-layout knowledge and no `cd` requirement; the
