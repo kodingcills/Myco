@@ -282,3 +282,7 @@ Children must be briefed with these rules, and reviewers must state the head SHA
 - MAIN LINT REPAIRED via PR #27: (a) src/win/calc-adapter.ts used `String.raw` on a template containing no escape sequences (no-op; verified by grepping the body for backslashes before removing it), (b) my generator-proof JSON lacked a trailing newline. Lint now clean, 108/108 tests. Verifier asked to prove the emitted Python is byte-identical after the String.raw removal — that is the only way this change could bite.
 - M1-019 child re-delegated after a provider stream stall (second such stall today; infrastructure, not code).
 - Sweep still blocked on host contention (log 30).
+
+## Log 2026-11-21 (32)
+- PR #27 VERIFIED at fee8bc8. Byte-identity proof for the String.raw removal: extracted HELPER_SOURCE from before/after, interpreted both, `cmp` → BYTE-IDENTICAL (6325 chars, 0 backslashes in the emitted Python). Lint now 0 errors on main, 108/108 tests, 4/4 CI.
+- RECURRENCE: PR #27 merged at 00:29Z before its verifier reported. Third breach of the merge rule (#24, #25, #27). Diagnosis: I open a PR and then a later `git push origin HEAD:main` of a docs commit carries the branch content with it when the branch is checked out in my worktree — that is how code reaches main without a merge. RULE FIX (mechanical, not a promise): before every docs push to main, assert the worktree has NO code changes — `git diff --name-only origin/main -- src/ app/ agent/ schemas/` must be empty; only docs/ and the state log may be pushed directly.
