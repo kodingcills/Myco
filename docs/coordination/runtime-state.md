@@ -195,3 +195,29 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   shut down at the end of every turn. If a qemu from this worktree is ever seen
   idle, it is a leak — kill it, do not wait.
 - Told the coordinator to continue their sweep (no yield needed).
+
+## Host yielded — 2026-11-20
+
+**host yielded.** The Mac is handed to M1 for its 30-trial reliability sweep
+(~3 h). Verified at handover: `pgrep -f qemu-system-aarch64` rc=1 (no matches),
+`pgrep -f myco-rt` rc=1, no guest pidfile. No VM of mine is running.
+
+M1 measured resets at 847-1879 s for myco-win11 while my guest ran alongside
+(usual 8-45 s). Cause: my guest outlived two hung test runs during the transport
+bug (fixed in d4c7b34). Rule from here: no VM is started while the host is
+yielded; work continues host-side only (PR #26 review fixes, tests, docs).
+
+### RT-011 reset check — result, recorded honestly
+The reset leg was exercised repeatedly against the live guest and the findings
+are conclusive, but **RT-011 is NOT passed and the first end-to-end path is not
+yet demonstrated as a single scripted run**:
+- create 1.0 s -> 5 AT-SPI nodes, state_version 2                (PASS)
+- act DeliveredVerified, guest-side state file shows the typed text (PASS)
+- evidence writes trace.jsonl + result.json, schema-valid        (PASS)
+- reset: guest is genuinely reset (marker file cleared, fresh overlay, GUI and
+  AT-SPI bus healthy afterwards) but takes **3-4 minutes**, not seconds, and two
+  earlier attempts hung indefinitely on the pre-d4c7b34 transport bug.
+- destroy: overlay deleted, no qemu left                          (PASS)
+The missing leg is one uninterrupted create->observe->act->evidence->reset->
+destroy run through MCP with the fixed binaries, plus measured reset cost. That
+needs the host, so it waits for the sweep to finish.
