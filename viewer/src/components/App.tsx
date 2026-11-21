@@ -1,14 +1,18 @@
 import { Popover } from "@base-ui/react/popover";
 import { Tabs } from "@base-ui/react/tabs";
-import { PanelLeft } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { PanelLeft, PanelRight } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { joinSteps } from "../data/steps.ts";
 import { droppedFiles, selectionName } from "../open-files.ts";
 import { type Mode, useActiveRun, useViewer } from "../store.ts";
 import { Inspector } from "./Inspector.tsx";
 import { OpenPicker, OpenScreen } from "./OpenScreen.tsx";
 import { Proof } from "./Proof.tsx";
 import { layoutNumber, RunsSidebar } from "./RunsSidebar.tsx";
+import { Screenshots } from "./Screenshots.tsx";
+import { Scrubber } from "./Scrubber.tsx";
 import { SourceChip } from "./SourceRef.tsx";
+import { StepList } from "./StepList.tsx";
 import { VerdictBar } from "./VerdictBar.tsx";
 
 const shortcuts = [
@@ -17,14 +21,20 @@ const shortcuts = [
   ["Mod+D", "Toggle source Inspector"],
   ["F6 / Shift+F6", "Next / previous region"],
   ["2 / 3", "Why / Proof"],
-  ["↑ / ↓", "Move through runs or comparisons"],
-  ["Home / End", "First / last run"],
-  ["Enter", "Open the focused run or persisted source"],
+  ["↑ / ↓", "Move through steps, runs, or comparisons"],
+  ["J / K", "Next / previous step"],
+  ["[ / ]", "Previous / next flagged step"],
+  ["← / →", "Move playhead by one step (Shift: ten)"],
+  ["+ / −", "Zoom the timeline"],
+  ["Shift+drag", "Draw a timeline range"],
+  ["R", "Toggle Inspector Detail / Raw"],
+  ["Home / End", "First / last step or run"],
+  ["Enter", "Open the focused run, step, or persisted source"],
   ["Delete", "Remove the focused run from the sidebar"],
   ["Mod+1…9", "Jump to a run"],
   ["Mod+Shift+[ / ]", "Previous / next run"],
   ["Esc", "Close an overlay or clear selection"],
-  ["Mod+F", "Find in the Raw source"],
+  ["Mod+F", "Find in steps or Raw"],
   ["?", "Show shortcuts"],
 ];
 
@@ -39,12 +49,30 @@ function useNarrowViewport() {
   return narrow;
 }
 
+function focusMode(mode: Mode) {
+  const selector = mode === "why" ? "[data-step-options]" : '[data-comparison][tabindex="0"]';
+  (
+    document.querySelector<HTMLElement>(selector) ??
+    document.querySelector<HTMLElement>('[data-verdict-bar] [aria-selected="true"]')
+  )?.focus({ preventScroll: true });
+}
+
 export function App() {
   const run = useActiveRun();
   const mode = useViewer((state) => state.mode);
   const setMode = useViewer((state) => state.setMode);
   const source = useViewer((state) => state.selection.source);
   const inspector = useViewer((state) => state.inspectorOpen);
+  const data = run?.data;
+  const step = useViewer((state) => state.selection.step);
+  const { rows, index, flagged } = useMemo(() => {
+    const joined = data ? joinSteps(data) : { rows: [], index: new Map<number, number>() };
+    return {
+      ...joined,
+      flagged: joined.rows.flatMap((row, index) => (row.markers.length ? [index] : [])),
+    };
+  }, [data]);
+  const digits = Math.max(2, String(rows.at(-1)?.step ?? 0).length);
   const sidebar = useViewer((state) => state.sidebarOpen);
   const narrow = useNarrowViewport();
   const showSidebar = sidebar ?? !narrow;
@@ -58,6 +86,13 @@ export function App() {
   const openTrigger = useRef<HTMLButtonElement>(null);
   const helpTrigger = useRef<HTMLButtonElement>(null);
   const lastFocus = useRef(new Map<HTMLElement, HTMLElement>());
+
+  const focusAfterModeChange = useRef<Mode>(null);
+  useLayoutEffect(() => {
+    if (focusAfterModeChange.current !== mode) return;
+    focusAfterModeChange.current = null;
+    focusMode(mode);
+  }, [mode]);
 
   useEffect(() => {
     function trackFocus(event: FocusEvent) {
@@ -134,15 +169,54 @@ export function App() {
         (key === "2" || key === "3")
       ) {
         event.preventDefault();
-        state.setMode(key === "2" ? "why" : "proof");
-        requestAnimationFrame(() => {
-          const target =
-            key === "3" && document.querySelector<HTMLElement>('[data-comparison][tabindex="0"]');
-          (
-            target || document.querySelector<HTMLElement>('[data-modes] [aria-selected="true"]')
-          )?.focus();
-        });
-      } else if (!modified && !editable && key === "?") {
+        const nextMode = key === "2" ? "why" : "proof";
+        if (state.mode === nextMode) focusMode(nextMode);
+        else {
+          focusAfterModeChange.current = nextMode;
+          state.setMode(nextMode);
+        }
+      } else if (
+        !modified &&
+        !event.altKey &&
+        !editable &&
+        !help &&
+        !picker &&
+        state.selection.run
+      ) {
+        const inList =
+          event.target instanceof HTMLElement && event.target.matches("[data-step-options]");
+        const current =
+          state.selection.step === undefined ? undefined : index.get(state.selection.step);
+        let next: number | undefined;
+        if (key === "j" || (inList && key === "arrowdown")) next = (current ?? -1) + 1;
+        if (key === "k" || (inList && key === "arrowup"))
+          next = current === undefined ? 0 : current - 1;
+        if (inList && key === "home") next = 0;
+        if (inList && key === "end") next = rows.length - 1;
+        if (key === "[") next = flagged.findLast((position) => position < (current ?? rows.length));
+        if (key === "]") next = flagged.find((position) => position > (current ?? -1));
+        if (next !== undefined && rows.length) {
+          event.preventDefault();
+          state.selectStep(rows[Math.min(rows.length - 1, Math.max(0, next))]!.step);
+        } else if (inList && key === "enter" && rows.length) {
+          event.preventDefault();
+          if (current === undefined) state.selectStep(rows[0]!.step);
+          useViewer.setState({ inspectorOpen: true });
+          requestAnimationFrame(() =>
+            document
+              .querySelector<HTMLElement>("[data-inspector-tabs] [aria-selected='true']")
+              ?.focus(),
+          );
+        } else if (key === "r") {
+          event.preventDefault();
+          useViewer.setState({
+            mode: state.selection.source ? state.mode : "why",
+            inspectorOpen: true,
+            inspectorTab: state.inspectorTab === "raw" ? "detail" : "raw",
+          });
+        }
+      }
+      if (!modified && !editable && key === "?") {
         helpTrigger.current?.focus();
         setHelp((open) => !open);
       } else if (
@@ -151,7 +225,8 @@ export function App() {
         !picker &&
         !document.activeElement?.closest('[role="menu"]')
       ) {
-        if (narrow && state.inspectorOpen) useViewer.setState({ inspectorOpen: false });
+        if (narrow && state.inspectorOpen && (state.mode === "why" || state.selection.source))
+          useViewer.setState({ inspectorOpen: false });
         else state.select({ run: state.selection.run });
       }
     }
@@ -171,7 +246,7 @@ export function App() {
       window.removeEventListener("keyup", modifiers);
       window.removeEventListener("blur", blur);
     };
-  }, [help, narrow, picker, showSidebar]);
+  }, [help, narrow, picker, showSidebar, index, rows, flagged]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: The shared center resets on run or mode changes.
   useEffect(() => {
@@ -239,6 +314,18 @@ export function App() {
           </span>
         )}
         <div className="grow" />
+        {run && (mode === "why" || source) && (
+          <button
+            type="button"
+            data-button
+            aria-label="Toggle Inspector"
+            title="Toggle Inspector (Mod+D)"
+            aria-pressed={inspector}
+            onClick={() => useViewer.setState({ inspectorOpen: !inspector })}
+          >
+            <PanelRight aria-hidden="true" />
+          </button>
+        )}
         <OpenPicker trigger={openTrigger} open={picker} setOpen={setPicker}>
           Open
         </OpenPicker>
@@ -270,58 +357,62 @@ export function App() {
       </header>
       <div data-workspace>
         {run && showSidebar && <RunsSidebar mod={mod} />}
-        <Tabs.Root data-run-view value={mode} onValueChange={(value) => setMode(value as Mode)}>
-          {run && <VerdictBar run={run} />}
-          <div data-run-body>
-            <main
-              ref={setCenter}
-              data-center
-              data-region="center"
-              aria-label={run ? "Run evidence" : "Open a run"}
-              tabIndex={-1}
-            >
-              {(error || parseError) && (
-                <section role="alert" className="p-3">
-                  <h1 className="type-title">Can't read this run</h1>
-                  {error && <p className="type-data wrap-anywhere">{error}</p>}
-                  {parseError && (
-                    <>
-                      <p>Incomplete trace</p>
-                      {parseError.issues.map(({ path, keyword, message }) => (
-                        <p
-                          key={JSON.stringify([path, keyword, message])}
-                          className="type-data wrap-anywhere"
-                        >
-                          {path} · {keyword} · {message}
-                        </p>
-                      ))}
-                      <SourceChip source={parseError.source} />
-                    </>
-                  )}
-                  <OpenPicker>Open another…</OpenPicker>
-                </section>
+        <Screenshots files={run?.files}>
+          <Tabs.Root data-run-view value={mode} onValueChange={(value) => setMode(value as Mode)}>
+            {run && <VerdictBar run={run} />}
+            <div data-run-body>
+              <main
+                ref={setCenter}
+                data-center
+                data-region="center"
+                aria-label={run ? "Run evidence" : "Open a run"}
+                tabIndex={-1}
+              >
+                {(error || parseError) && (
+                  <section role="alert" className="p-3">
+                    <h1 className="type-title">Can't read this run</h1>
+                    {error && <p className="type-data wrap-anywhere">{error}</p>}
+                    {parseError && (
+                      <>
+                        <p>Incomplete trace</p>
+                        {parseError.issues.map(({ path, keyword, message }) => (
+                          <p
+                            key={JSON.stringify([path, keyword, message])}
+                            className="type-data wrap-anywhere"
+                          >
+                            {path} · {keyword} · {message}
+                          </p>
+                        ))}
+                        <SourceChip source={parseError.source} />
+                      </>
+                    )}
+                    <OpenPicker>Open another…</OpenPicker>
+                  </section>
+                )}
+                {!run && !error && <OpenScreen />}
+                {run && (!run.error || run.data.result) && (
+                  <>
+                    <Tabs.Panel value="proof" keepMounted tabIndex={-1} data-proof-panel>
+                      <Proof key={run.key} center={center} data={run.data} loading={run.loading} />
+                    </Tabs.Panel>
+                    <Tabs.Panel value="why" tabIndex={-1} data-why-panel>
+                      <StepList key={run.opened} rows={rows} index={index} digits={digits} />
+                    </Tabs.Panel>
+                  </>
+                )}
+              </main>
+              {run && inspector && (mode === "why" || source) && (
+                <Inspector
+                  run={run}
+                  row={step === undefined ? undefined : rows[index.get(step) ?? -1]}
+                  digits={digits}
+                  narrow={narrow}
+                />
               )}
-              {!run && !error && <OpenScreen />}
-              {run && (!run.error || run.data.result) && (
-                <>
-                  <Tabs.Panel value="proof" keepMounted tabIndex={-1} data-proof-panel>
-                    <Proof key={run.key} center={center} data={run.data} loading={run.loading} />
-                  </Tabs.Panel>
-                  <Tabs.Panel value="why" tabIndex={-1}>
-                    <p className="p-3 text-text-secondary">
-                      Why view is unavailable in this build.
-                    </p>
-                  </Tabs.Panel>
-                </>
-              )}
-            </main>
-            {run && inspector && (
-              <div data-inspector-slot data-overlay={narrow || undefined}>
-                <Inspector run={run} source={source} />
-              </div>
-            )}
-          </div>
-        </Tabs.Root>
+            </div>
+            {run && <Scrubber key={run.opened} rows={rows} index={index} digits={digits} />}
+          </Tabs.Root>
+        </Screenshots>
       </div>
     </div>
   );

@@ -1,9 +1,15 @@
-import { cloneElement, useEffect, useRef, useState } from "react";
+import { Dialog } from "@base-ui/react/dialog";
+import { Tabs } from "@base-ui/react/tabs";
+import { PanelRightClose } from "lucide-react";
+import { cloneElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import tokens from "../../../docs/design/tokens.json";
 import { loadRunFiles } from "../data/loaders.ts";
+import { type StepRow, stepLabel } from "../data/steps.ts";
 import type { SourceRef } from "../data/types.ts";
-import type { OpenedRun } from "../store.ts";
-import { Missing, sourceLabel } from "./SourceRef.tsx";
+import { type InspectorTab, type OpenedRun, useViewer } from "../store.ts";
+import { useScreenshot } from "./Screenshots.tsx";
+import { formatValue, Missing, SourceChip, sourceLabel } from "./SourceRef.tsx";
 
 function sourceValue(run: OpenedRun, source: SourceRef) {
   const { data } = run;
@@ -19,7 +25,12 @@ function sourceValue(run: OpenedRun, source: SourceRef) {
         entry.source.line === source.line,
     )?.event;
   }
-  let value: unknown = source.file === "result.json" ? data.result : data.manifest;
+  let value: unknown =
+    source.file === "result.json"
+      ? data.result
+      : source.file === "manifest.json"
+        ? data.manifest
+        : undefined;
   for (const key of source.path
     .slice(1)
     .split("/")
@@ -32,27 +43,50 @@ function sourceValue(run: OpenedRun, source: SourceRef) {
 }
 
 async function readSource(run: OpenedRun, source: SourceRef) {
-  const value = sourceValue(run, source);
+  if ("line" in source) {
+    const entry = run.data.events.find(
+      ({ source: ref }) => ref.file === source.file && "line" in ref && ref.line === source.line,
+    );
+    if (entry?.raw !== undefined) return entry.raw;
+  }
+  let value = sourceValue(run, source);
   if (value !== undefined) return JSON.stringify(value, null, 2);
   const text = await (await loadRunFiles(run.files)).read(source.file)?.text();
   if (text === undefined) return undefined;
   if ("line" in source) return text.split(/\r?\n/)[source.line - 1];
   if (!source.path) return text;
-  return undefined;
+  try {
+    value = JSON.parse(text);
+    for (const key of source.path.slice(1).split("/")) {
+      const decoded = key.replaceAll("~1", "/").replaceAll("~0", "~");
+      if (!value || typeof value !== "object" || !Object.hasOwn(value, decoded)) return undefined;
+      value = Reflect.get(value, decoded);
+    }
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return undefined;
+  }
 }
 
-export function Inspector({ run, source }: { run: OpenedRun; source?: SourceRef }) {
-  const [text, setText] = useState<string>();
+function Raw({ run, source, row }: { run: OpenedRun; source?: SourceRef; row?: StepRow }) {
+  const [sourceText, setText] = useState<{ source: SourceRef; run: OpenedRun; text?: string }>();
   const [copyStatus, setCopyStatus] = useState("");
   const [finding, setFinding] = useState(false);
   const [query, setQuery] = useState("");
   const [match, setMatch] = useState<number>();
-  const inspector = useRef<HTMLElement>(null);
+  const inspector = useRef<HTMLDivElement>(null);
   const findInput = useRef<HTMLInputElement>(null);
   const virtualRaw = useRef<VirtuosoHandle>(null);
   const [body, setBody] = useState<HTMLElement | null>(null);
   const header = useRef<HTMLElement>(null);
-  const label = source && sourceLabel(source);
+  const label = source ? sourceLabel(source) : row?.events[0] && sourceLabel(row.events[0].source);
+  const text = source
+    ? sourceText?.source === source && sourceText.run === run
+      ? sourceText.text
+      : undefined
+    : row?.events.length
+      ? row.events.map(({ raw, event }) => raw ?? JSON.stringify(event)).join("\n")
+      : undefined;
   useEffect(() => {
     setText(undefined);
     setCopyStatus("");
@@ -61,7 +95,7 @@ export function Inspector({ run, source }: { run: OpenedRun; source?: SourceRef 
     if (source) {
       void readSource(run, source).then(
         (raw) => {
-          if (active) setText(raw);
+          if (active) setText({ source, run, text: raw });
         },
         () => {
           if (active) setText(undefined);
@@ -84,7 +118,7 @@ export function Inspector({ run, source }: { run: OpenedRun; source?: SourceRef 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") return;
-      if (!inspector.current?.contains(document.activeElement)) return;
+      if (!inspector.current?.closest("[data-inspector]")?.contains(document.activeElement)) return;
       event.preventDefault();
       setFinding(true);
       findInput.current?.select();
@@ -120,6 +154,11 @@ export function Inspector({ run, source }: { run: OpenedRun; source?: SourceRef 
     const key = /^\s*"(?:[^"\\]|\\.)*":/.exec(line)?.[0];
     return (
       <div data-json data-raw-match={hit === index || undefined} className="type-data">
+        {!source && row?.events[index] && (
+          <div className="type-data-small text-text-secondary">
+            {sourceLabel(row.events[index].source)}
+          </div>
+        )}
         {key ? (
           <>
             <span className="text-text-secondary">{key}</span>
@@ -132,13 +171,7 @@ export function Inspector({ run, source }: { run: OpenedRun; source?: SourceRef 
     );
   }
   return (
-    <aside
-      ref={inspector}
-      data-inspector
-      data-region="inspector"
-      aria-label="Inspector"
-      tabIndex={-1}
-    >
+    <div ref={inspector} data-raw>
       <header ref={header} tabIndex={-1}>
         <div data-inspector-actions>
           <span className="type-body-strong">Raw</span>
@@ -219,6 +252,356 @@ export function Inspector({ run, source }: { run: OpenedRun; source?: SourceRef 
           </div>
         )}
       </section>
-    </aside>
+    </div>
+  );
+}
+
+function Evidence({ value, source }: { value: unknown; source?: SourceRef }) {
+  if (value === undefined) return <Missing />;
+  return (
+    <div data-detail-evidence>
+      <span className="type-data wrap-anywhere">{formatValue(value)}</span>
+      {source && <SourceChip source={source} />}
+    </div>
+  );
+}
+
+function DetailSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h3 className="type-micro text-text-secondary">{label}</h3>
+      {children}
+    </section>
+  );
+}
+
+function Screenshot({ row }: { row: StepRow }) {
+  const path = row.screenshot?.value;
+  const full = useScreenshot(path, true);
+  const thumb = useScreenshot(path);
+  const url = full ?? thumb;
+  if (!url) return <Missing />;
+  return (
+    <>
+      <Dialog.Root>
+        <Dialog.Trigger data-screenshot-trigger aria-label="Enlarge screenshot">
+          <img src={url} alt="Step screenshot" />
+        </Dialog.Trigger>
+        <Dialog.Portal>
+          <Dialog.Backdrop data-screenshot-backdrop />
+          <Dialog.Popup data-screenshot-lightbox>
+            <Dialog.Title className="sr-only">Step screenshot</Dialog.Title>
+            <Dialog.Close data-button>Close</Dialog.Close>
+            <img src={url} alt="Step screenshot at original size" />
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+      {row.screenshot && <SourceChip source={row.screenshot.source} />}
+    </>
+  );
+}
+
+function Guards({ row, phase }: { row: StepRow; phase: "pre" | "post" }) {
+  const guards = row.guards.filter(({ value }) => value.phase === phase);
+  if (!guards.length) return <Missing />;
+  return guards.map(({ value, source }) => (
+    <div key={sourceLabel(source)} data-detail-event>
+      {value.results.length ? (
+        value.results.map((guard, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: Predicate order is part of the recorded evaluation.
+          <dl key={index}>
+            {Object.entries(guard).map(([key, entry]) => (
+              <div key={key}>
+                <dt>{key}</dt>
+                <dd>
+                  <Evidence value={entry} source={source} />
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ))
+      ) : (
+        <Evidence value={value.results} source={source} />
+      )}
+    </div>
+  ));
+}
+
+function Detail({
+  row,
+  run,
+  digits,
+  check,
+}: {
+  row?: StepRow;
+  run: OpenedRun;
+  digits: number;
+  check?: number;
+}) {
+  const result = run.data.result;
+  const scored = result?.recordKind !== "session";
+  const checks = scored ? result?.verdict.checks : result.checks;
+  const checkValue = check === undefined ? undefined : checks?.[check];
+  if (checkValue) {
+    const path = (scored ? "/verdict/checks/" : "/checks/") + check;
+    return (
+      <DetailSection label="Check">
+        <dl>
+          {Object.entries(checkValue).map(([key, value]) => (
+            <div key={key}>
+              <dt>{key}</dt>
+              <dd>
+                <Evidence value={value} source={{ file: "result.json", path: `${path}/${key}` }} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </DetailSection>
+    );
+  }
+  if (!row)
+    return (
+      <DetailSection label="Run summary">
+        <Evidence value={run.data.result?.runId} source={{ file: "result.json", path: "/runId" }} />
+        <Evidence
+          value={run.data.result?.taskId}
+          source={{ file: "result.json", path: "/taskId" }}
+        />
+        {run.data.result && (
+          <div>
+            Steps{" "}
+            <Evidence
+              value={run.data.result.steps.length}
+              source={{ file: "result.json", path: "/steps" }}
+            />
+          </div>
+        )}
+      </DetailSection>
+    );
+
+  const evidence = (field: keyof StepRow["record"]) => (
+    <Evidence
+      value={row.record[field]}
+      source={{ file: "result.json", path: `${row.path}/${field}` }}
+    />
+  );
+  const extra = row.events.filter(
+    ({ event }) =>
+      !["action", "observation", "guard-evaluation", "decision", "external-effect"].includes(
+        event.type,
+      ),
+  );
+  const decisions = row.events.filter(({ event }) => event.type === "decision");
+  const effects = row.events.filter(({ event }) => event.type === "external-effect");
+  const diff = run.data.artifactPaths.find(
+    (path) =>
+      path === "artifacts/state-diff.json" || path === `artifacts/state-diff-${row.step}.json`,
+  );
+  const events = (entries: StepRow["events"]) =>
+    entries.length ? (
+      entries.map(({ event, source }) => (
+        <Evidence key={sourceLabel(source)} value={event} source={source} />
+      ))
+    ) : (
+      <Missing />
+    );
+
+  return (
+    <>
+      <div data-detail-heading>
+        <h2 className="type-data-strong">{stepLabel(row.step, digits)}</h2>
+        <SourceChip source={{ file: "result.json", path: `${row.path}/step` }} />
+      </div>
+      <DetailSection label="Screenshot">
+        <Screenshot row={row} />
+      </DetailSection>
+      <DetailSection label="Observed state">
+        <dl>
+          <div>
+            <dt>State version before</dt>
+            <dd>{evidence("stateVersionBefore")}</dd>
+          </div>
+          <div>
+            <dt>State version after</dt>
+            <dd>{evidence("stateVersionAfter")}</dd>
+          </div>
+        </dl>
+        {row.observations.length ? (
+          row.observations.map(({ value, source }) => (
+            <dl key={sourceLabel(source)}>
+              <div>
+                <dt>Observed state version</dt>
+                <dd>
+                  <Evidence value={value.stateVersion} source={source} />
+                </dd>
+              </div>
+              <div>
+                <dt>Node count</dt>
+                <dd>
+                  <Evidence value={value.nodeCount} source={source} />
+                </dd>
+              </div>
+              <div>
+                <dt>Focused element</dt>
+                <dd>
+                  <Evidence
+                    value={"focusedElement" in value ? value.focusedElement : undefined}
+                    source={source}
+                  />
+                </dd>
+              </div>
+            </dl>
+          ))
+        ) : (
+          <Missing />
+        )}
+      </DetailSection>
+      <DetailSection label="Decision">{events(decisions)}</DetailSection>
+      <DetailSection label="Preconditions">
+        <Guards row={row} phase="pre" />
+      </DetailSection>
+      <DetailSection label="Action">
+        {row.actions.length ? (
+          row.actions.map(({ value, source }) => (
+            <dl key={sourceLabel(source)}>
+              {Object.entries(value.action).map(([key, entry]) => (
+                <div key={key}>
+                  <dt>{key}</dt>
+                  <dd>
+                    <Evidence value={entry} source={source} />
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ))
+        ) : (
+          <Missing />
+        )}
+      </DetailSection>
+      <DetailSection label="Postconditions">
+        <Guards row={row} phase="post" />
+      </DetailSection>
+      <DetailSection label="Effects">{events(effects)}</DetailSection>
+      <DetailSection label="State diff">
+        {diff ? <SourceChip source={{ file: diff, path: "" }} /> : <Missing />}
+      </DetailSection>
+      {extra.length > 0 && <DetailSection label="Other events">{events(extra)}</DetailSection>}
+    </>
+  );
+}
+
+const inspectorBounds = tokens.layout.inspectorBounds;
+const widthKey = "myco-inspector-width";
+
+function savedWidth() {
+  try {
+    const stored = localStorage.getItem(widthKey);
+    return stored ? clampWidth(Number(stored)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function clampWidth(width: number) {
+  return Number.isFinite(width)
+    ? Math.max(inspectorBounds.min, Math.min(inspectorBounds.max, width))
+    : tokens.layout.inspector;
+}
+
+export function Inspector({
+  run,
+  row,
+  digits,
+  narrow,
+}: {
+  run: OpenedRun;
+  row?: StepRow;
+  digits: number;
+  narrow: boolean;
+}) {
+  const source = useViewer((state) => state.selection.source);
+  const tab = useViewer((state) => state.inspectorTab);
+  const check = useViewer((state) => state.selection.check);
+  const detailTab = useRef<HTMLButtonElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Focus on source navigation only, not ordinary tab changes.
+  useLayoutEffect(() => {
+    if (source && tab === "detail") detailTab.current?.focus({ preventScroll: true });
+  }, [source]);
+  const [width, setWidth] = useState(savedWidth);
+  const drag = useRef<{ x: number; width: number }>(null);
+  const slot = useRef<HTMLDivElement>(null);
+
+  function resize(next: number) {
+    const width = clampWidth(next);
+    setWidth(width);
+    try {
+      localStorage.setItem(widthKey, String(width));
+    } catch {
+      // The in-memory size still works when storage is unavailable.
+    }
+  }
+
+  return (
+    <div ref={slot} data-inspector-slot data-overlay={narrow || undefined} style={{ width }}>
+      <input
+        type="range"
+        data-resize
+        data-inspector-resize
+        aria-label="Inspector width"
+        min={inspectorBounds.min}
+        max={inspectorBounds.max}
+        value={width ?? tokens.layout.inspector}
+        onChange={(event) => resize(event.currentTarget.valueAsNumber)}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || !slot.current) return;
+          event.preventDefault();
+          event.currentTarget.focus();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          drag.current = { x: event.clientX, width: slot.current.offsetWidth };
+        }}
+        onPointerMove={(event) => {
+          if (drag.current) resize(drag.current.width + drag.current.x - event.clientX);
+        }}
+        onLostPointerCapture={() => {
+          drag.current = null;
+        }}
+      />
+      <aside data-region="inspector" aria-label="Inspector" tabIndex={-1}>
+        <Tabs.Root
+          data-inspector
+          value={tab}
+          onValueChange={(value) => useViewer.setState({ inspectorTab: value as InspectorTab })}
+        >
+          <header data-inspector-tabs>
+            <Tabs.List aria-label="Inspector view" data-modes activateOnFocus>
+              <Tabs.Tab ref={detailTab} data-button value="detail">
+                Detail
+              </Tabs.Tab>
+              <Tabs.Tab data-button value="raw" aria-keyshortcuts="R">
+                Raw
+              </Tabs.Tab>
+            </Tabs.List>
+            <button
+              type="button"
+              data-button
+              aria-label="Close Inspector"
+              title="Close Inspector (Mod+D)"
+              onClick={() => {
+                useViewer.setState({ inspectorOpen: false });
+                document.querySelector<HTMLElement>("[data-step-options], [data-center]")?.focus();
+              }}
+            >
+              <PanelRightClose aria-hidden="true" />
+            </button>
+          </header>
+          <Tabs.Panel value="detail" data-detail tabIndex={0}>
+            <Detail row={row} run={run} digits={digits} check={check} />
+          </Tabs.Panel>
+          <Tabs.Panel value="raw" data-raw-tab tabIndex={-1}>
+            <Raw run={run} source={source} row={row} />
+          </Tabs.Panel>
+        </Tabs.Root>
+      </aside>
+    </div>
   );
 }
