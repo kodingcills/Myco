@@ -332,3 +332,10 @@ hook test note
   4. The nonce-marker report protocol under real cmd.exe (redirection, truncation, visibility timing over the agent's filesystem view).
   5. End-to-end: a genuinely contaminated guest (a hand-started soffice with a foreign doc) aborts `guest-contaminated`; after abort+cleanup, a second trial verifies.
 - Nice-to-fix noted: probeGuestHealth uses `kill` as its observation mechanism and therefore races a soffice starting between probe and launch — inherent TOCTOU, acceptable with serialized trials, worth an ADR line.
+
+## Log 2026-11-21 (37) — outer loop directives; cold-reset path written
+- APPROVED: sweep reset switches to the disk-only cold path, resets spaced out. Implemented on `feat/m1-013-cold-reset` (PR #32): scripts/reset-trial-vm.sh, with a STUCK-STATE DETECTOR — it refuses to wait forever, exits with the wedge diagnosis on `resuming`, refuses unexpected snapshot names, and never restores onto a non-stopped VM. PR #32 must show 5 consecutive cold resets with no wedge before the sweep uses it.
+- The `resuming` -2700 wedge stays an OPEN HYPOTHESIS (log 35), not a conclusion.
+- HOLD: do not touch the VM or start the sweep until the outer loop says UTM is back (Tiffany is quitting/reopening UTM in the GUI session). The sweep was stopped after 12m of runtime, 1 trial — no usable sweep data, and none is claimed.
+- PR #28: verifier returned REJECTED (agent-less restores 3/4; restore-on-running wedges UTM; staleness undetectable). Revert opened as PR #31, under verification. #28 never entered the sweep.
+- PR #29: verifier returned VERIFIED at d74dff9; merged. Its VM-only validation checklist is log 36.
