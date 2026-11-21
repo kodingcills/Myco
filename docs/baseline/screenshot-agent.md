@@ -287,9 +287,10 @@ explicitly and blocks are delimited by `\midrule`. Both rendered forms keep ever
 label and its seven numbers in order; what they lose is **where the block marker belongs**. In the
 PDF text layer the `✗`/`✓` lands on the block's **second** row (the `GPT-4o-mini` line); in the
 ar5iv HTML the multirow cells are not `rowspan`'d, so the ✗/✓ marker alone sits on the block's
-**fourth** row, with the perception label on its own row nearby. Splitting either form on the marker therefore shifts every block — by a
-different amount in each — which is what produced the earlier errors. Only the LaTeX `\midrule`
-delimits blocks unambiguously, so it is the artifact of record.
+**fourth** row, with the perception label on its own row nearby. Splitting either form on the
+marker therefore shifts every block — by a different amount in each — which is what produced the
+earlier errors. Only the LaTeX `\midrule` delimits blocks unambiguously, so it is the artifact of
+record.
 
 Human ceiling **74.5% overall**; **83.3% on LibreOffice Calc** (human avg 15.3 steps, difficulty
 2.0, Table 8). The four model rows print in the order **Phi3-V, GPT-4o-mini,
