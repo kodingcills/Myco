@@ -13,21 +13,27 @@ Counting rules (acceptance row 3 needs >= 27/30 verified):
     reader can see how much is infrastructure.
   - A record carrying no fixture hash is flagged: it predates the seed check (PR #53) and cannot
     count toward a single-fixture-proof claim.
-Also prints a Wilson 95% interval for the verified rate over the trials actually recorded, and the coverage over seeds and columns.
+The numeric threshold is a count only. The operator must confirm a completed sweep
+and a passing seed check before using it as acceptance evidence.
 """
 
 import json
 import math
 import sys
 from collections import Counter
+from pathlib import Path
 
 TARGET_N, TARGET_PASS = 30, 27
 VERDICTS = ("verified", "refuted", "uncertain")
+NON_VERDICTS = (
+    "harness-error", "reset-failed", "deploy-failed", "token-failed",
+    "param-error", "seed-mismatch",
+)
 
 
 def wilson(k, n, z=1.96):
     if n == 0:
-        return (0.0, 0.0)
+        return None
     p = k / n
     d = 1 + z * z / n
     c = p + z * z / (2 * n)
@@ -37,16 +43,26 @@ def wilson(k, n, z=1.96):
 
 def score(path):
     recs = {}
-    for line in open(path):
-        line = line.strip()
-        if line:
-            r = json.loads(line)
-            recs[int(r["index"])] = r  # resume-skip guarantees one record per index
+    with Path(path).open(encoding="utf-8") as records:
+        for line_number, line in enumerate(records, 1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError(f"line {line_number}: expected a trial record")
+            index = record.get("index")
+            if type(index) is not int or not 0 <= index < TARGET_N:
+                raise ValueError(f"line {line_number}: invalid trial index {index!r}")
+            if index in recs:
+                raise ValueError(f"line {line_number}: duplicate trial index {index}")
+            if record.get("status") not in VERDICTS + NON_VERDICTS:
+                raise ValueError(f"line {line_number}: invalid status {record.get('status')!r}")
+            recs[index] = record
     status = Counter(recs[i].get("status") for i in recs)
     verified = status.get("verified", 0)
     missing = [i for i in range(TARGET_N) if i not in recs]
     no_hash = sorted(i for i, r in recs.items() if not r.get("fixtureSha256"))
-    lo, hi = wilson(verified, len(recs))
+    interval = wilson(verified, len(recs))
     failures = [
         {"index": i, "status": r.get("status"), "seed": r.get("fixtureSeed"), "reason": (r.get("reason") or "")[:160]}
         for i, r in sorted(recs.items())
@@ -60,9 +76,9 @@ def score(path):
         "verified": verified,
         "byStatus": dict(sorted(status.items(), key=lambda kv: str(kv[0]))),
         "nonVerdict": sum(v for k, v in status.items() if k not in VERDICTS),
-        "meetsThreshold": verified >= TARGET_PASS,
+        "meetsThreshold": not missing and verified >= TARGET_PASS,
         "stillReachable": verified + len(missing) >= TARGET_PASS,
-        "wilson95": [round(lo, 3), round(hi, 3)],
+        "wilson95": [round(bound, 3) for bound in interval] if interval else None,
         "seeds": dict(Counter(r.get("fixtureSeed") for r in recs.values() if r.get("status") == "verified")),
         "columns": dict(Counter(r.get("column") for r in recs.values() if r.get("status") == "verified")),
         "recordsWithoutFixtureHash": no_hash,
@@ -71,14 +87,19 @@ def score(path):
 
 
 def markdown(s):
-    verdict = (
-        "MEETS ≥27/30" if s["meetsThreshold"] and s["complete"]
-        else "INCOMPLETE (threshold still reachable)" if s["stillReachable"]
-        else "FAILS ≥27/30"
-    )
+    if not s["complete"]:
+        reachability = "reachable" if s["stillReachable"] else "unreachable"
+        verdict = f"INCOMPLETE (threshold {reachability})"
+    else:
+        verdict = "MEETS NUMERIC THRESHOLD" if s["meetsThreshold"] else "FAILS ≥27/30"
+    interval = s["wilson95"]
     out = [
         f"**Reliability: {s['verified']}/{s['denominator']} verified, {verdict}.**",
-        f"Wilson 95% interval for the verified rate over the {s['recorded']} recorded trials: {s['wilson95'][0]:.2f}–{s['wilson95'][1]:.2f}.",
+        (
+            f"Wilson 95% interval over {s['recorded']} recorded trials: "
+            f"{interval[0]:.2f}–{interval[1]:.2f}."
+            if interval else "Wilson 95% interval unavailable with zero recorded trials."
+        ),
         "",
         "| Status | Count |",
         "|---|---|",
@@ -96,5 +117,10 @@ def markdown(s):
 
 
 if __name__ == "__main__":
-    result = score(sys.argv[1])
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--json"):
+        sys.exit("usage: m1-scorecard.py TRIALS_JSONL [--json]")
+    try:
+        result = score(sys.argv[1])
+    except (OSError, ValueError) as error:
+        sys.exit(f"m1-scorecard: {error}")
     print(json.dumps(result, indent=2) if "--json" in sys.argv else markdown(result))

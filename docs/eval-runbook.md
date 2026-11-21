@@ -286,9 +286,10 @@ Expected: `"verdict": {"status": "verified", "reasons": ["cell … persisted as 
 `"completed": true`, **exit 0** (non-verified exits 1). Recorded wall times: 34.3 s, 40.2 s,
 55.1 s. Report fields: `runId, verdict, completed, elapsedMs, xlsxPath, guardFailure?, cleanup`.
 
-A non-`verified` normal trial is a finding, not noise: read `verdict.reasons[0]` and classify it
-— contamination, host contention (`fixture convert did not produce … within 60000ms` — a harness
-timeout, log 30), or a real execution defect.
+For a non-`verified` normal trial, read `verdict.reasons[0]` and find the failing stage.
+`fixture convert did not produce … within 60000ms` is a setup timeout before Calc opens the
+document. Record it as `uncertain`. The timeout message alone cannot distinguish a slow
+conversion from a failed process or an unreachable guest.
 
 ### 7.2 Corrupted trial (kill Calc mid-program)
 
@@ -327,7 +328,7 @@ record. Per-trial reset is mandatory, because a failed trial can leak `soffice` 
 that contaminate the next verdict (log 27). The driver does it for you.
 
 ```bash
-OUT=/tmp/m1-013/sweep-<name>          # fresh dir per sweep; NEVER reuse an old one (see below)
+OUT="/tmp/m1-013/sweep-$(date -u +%Y%m%dT%H%M%SZ)"   # keep this path for a same-protocol resume
 nohup caffeinate -dimsu scripts/m1-sweep.sh "$OUT" > "$OUT.runner.out" 2>&1 < /dev/null &
 tail -f "$OUT/progress.log"            # what it is doing
 cat "$OUT/trials.jsonl"                # one record per finished index
@@ -347,7 +348,9 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   same command resumes: indices already in `trials.jsonl` are skipped, never re-run, whatever
   their status.
 - **Fresh `OUT` per sweep.** Resume-skip means a stale `trials.jsonl` in a reused directory
-  silently counts old records. A reused `params.json` / `fingerprints.json` is trusted as is.
+  silently counts old records. Resume after a host gate only with the same commit, guest
+  configuration, parameters and fingerprints. Preserve the old output and start at index 0
+  in a fresh directory after a harness or protocol change.
 - **Pin the code.** Run the driver from a dedicated worktree at a fixed commit
   (`git worktree add --detach /tmp/m1-013/ws <sha>`), so a checkout in your working tree cannot
   change the code mid-sweep.
@@ -356,17 +359,21 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   `param-error` mean no verdict was produced. Count them as not verified, and report them
   separately.
 
-Budget (measured, 2026-11-21, 6 GB guest): cold reset 25 s, deploy 20 s, trial 25–125 s, plus
-a 20 s settle. That is ≈ 2–4 min per trial, ≈ 1.5–2 h for 30. Report exactly what the artifacts
-say; do not re-run to reach 27/30.
+The driver applies the host and seed gates. The operator also watches conversion failures
+in `trials.jsonl`. If the fixture timeout recurs, stop at a trial boundary, retain the run
+directory, and report the failure before resuming. The sweep v2 stop was recorded by the
+operator in `progress.log`.
+
+Sweep v2 completed five trial cycles in about 35 minutes on the 6 GB guest, including cold
+resets, deploys, trials and settles. Use the measured cycle time to plan a host window and
+update the estimate from the next run. Report every recorded outcome.
 
 ### 7.4 The corrupted suite (M1-014) is not wired yet
 
 `run-live` exposes only the kill class. `invalid-target`, `delayed-save` and `focus-change` exist
 as fault injectors (`src/fake/faults.ts`, exercised host-side in CI via
-`src/core/eval.ts` + `pnpm test`), but there is no committed live entrypoint for them, and
-M1-014 is blocked on M1-019 for trustworthy results (backlog status note). A ≥10-trial, 4-class live suite cannot be reproduced from `main`
-today; the state log's "0 false successes in 11/11 corrupted configs" is the fake-app harness
+`src/core/eval.ts` + `pnpm test`). The live entrypoint still needs those classes and the
+M1-019 guest-hygiene checklist. The state log's "0 false successes in 11/11 corrupted configs" is the fake-app harness
 (PR #7). Do not present CI numbers as live-trial numbers.
 
 ## 8. Evidence
@@ -406,6 +413,10 @@ deleted. Use the agent's `screenshot` op if you need one.
 ```bash
 pnpm exec tsx src/integration/validate-live.ts runs
 ```
+
+For a sweep, validate each trial index directory that has artifacts, for example
+`pnpm exec tsx src/integration/validate-live.ts "$OUT/runs/0"`. The validator reads one directory
+level below its argument. Check the result count against the recorded run IDs.
 
 Expected: `validated N result.json + M trace events in runs: ALL OK` (recorded: 4 + 51 at PR #18;
 11 + 77 at PR #11). Non-zero exit and `INVALID …` lines name the offending file and JSON path.
@@ -456,7 +467,7 @@ Be explicit with whoever asks for an "independent reproduction":
    pywin32 312, comtypes 1.5.0, pywinauto 0.6.9, uiautomation 2.0.29 are recorded; the MSI
    SHA-256 that acceptance row 8 asks for is **not** recorded (M1-018 pending).
 6. **Parts of the evaluation do not exist yet**: the
-   ≥10-trial/4-class live corrupted suite (M1-014, blocked on M1-019), and the screenshot baseline
+   ≥10-trial/4-class live corrupted suite (M1-014), and the screenshot baseline
    (M1-015, Cua Driver as the agent with a local or approved planner — Agent S3/`cua-agent` is deprecated upstream; not started). A reproduction today can reach: reset → deploy
    → desktop proof → 20/20 generator proof → the 30-trial sweep (`scripts/m1-sweep.sh`, §7.3) →
    individual kill trials → validated per-trial evidence.
