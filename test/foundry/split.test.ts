@@ -6,7 +6,11 @@ import { TODO_FIXTURE_SPECS, TODO_FIXTURES } from "../../src/foundry/tasks/todo.
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const SRC = join(ROOT, "src");
-const HIDDEN_ROOTS = [join(SRC, "foundry", "oracles"), join(SRC, "foundry", "hidden")];
+const GRADER_ROOTS = ["oracles", "hidden", "hidden-split", "grader"].map((name) =>
+  join(SRC, "foundry", name),
+);
+const graderImport =
+  /(?:from\s*|(?:import|require)\s*(?:\(\s*)?)["'][^"']*(?:oracles|hidden|hidden-split|grader)\//;
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -20,13 +24,17 @@ function sourceFiles(dir: string): string[] {
 
 describe("EF-002 hidden split isolation", () => {
   it("no src/ file outside the hidden roots imports them", () => {
-    // Matches absolute-ish (`foundry/oracles/`) and relative (`./oracles/`, `../oracles/`) imports.
-    const imports =
-      /from\s+["'](?:[^"']*foundry\/|\.{1,2}\/(?:[^"']*\/)?)(oracles|hidden|hidden-split)\//;
     const leaks = sourceFiles(SRC)
-      .filter((file) => !HIDDEN_ROOTS.some((hidden) => file.startsWith(`${hidden}/`)))
-      .filter((file) => imports.test(readFileSync(file, "utf8")));
+      .filter((file) => !GRADER_ROOTS.some((root) => file.startsWith(`${root}/`)))
+      .filter((file) => graderImport.test(readFileSync(file, "utf8")));
     expect(leaks).toEqual([]);
+  });
+
+  it("detects direct imports, re-exports and side-effect imports of grader code", () => {
+    expect('import { scoreTrial } from "../../oracles/blind.ts"').toMatch(graderImport);
+    expect('import("../../hidden-split/index.ts")').toMatch(graderImport);
+    expect('import "../oracles/state.ts"').toMatch(graderImport);
+    expect('export { runArm } from "../grader/baseline-runner.ts"').toMatch(graderImport);
   });
 
   it("the public task bank does not import the oracle", () => {

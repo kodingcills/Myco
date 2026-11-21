@@ -112,7 +112,10 @@ export interface ScoreSummary {
   };
 }
 
-export function summarise(results: readonly FoundryTrialResult[]): ScoreSummary {
+export function summarise(
+  results: readonly FoundryTrialResult[],
+  allowUnfaulted = false,
+): ScoreSummary {
   if (results.some((r) => !Number.isInteger(r.faultVersion) || r.faultVersion < 0)) {
     throw new Error("A score requires a valid faultVersion");
   }
@@ -121,9 +124,11 @@ export function summarise(results: readonly FoundryTrialResult[]): ScoreSummary 
   const oracleVersions = [...new Set(results.map((r) => r.oracleVersion))].sort();
   const faultVersions = [...new Set(results.map((r) => r.faultVersion))].sort();
   if (
-    [fixtureVersions, oracleVersions, faultVersions].some(
+    [fixtureVersions, oracleVersions].some(
       (versions) => versions.length !== 1 || !Number.isInteger(versions[0]) || versions[0]! < 0,
-    )
+    ) ||
+    faultVersions.some((v) => !Number.isInteger(v) || v < 0) ||
+    (allowUnfaulted ? faultVersions.filter((v) => v !== 0).length > 1 : faultVersions.length !== 1)
   )
     throw new Error("Scores require one valid version triple");
   return {
