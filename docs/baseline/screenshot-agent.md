@@ -9,41 +9,156 @@ Owner: baseline workstream, branch `myco/m1-baseline` (PR-reviewable; no code un
 host is released).
 
 Scope: M1 acceptance row 7 — *the same tasks, initial states, and model settings, compared against
-a screenshot-based agent*. ADR-0009 fixes the baseline architecture (Agent S3 + UI-TARS-1.5-7B).
-It does **not** fix which model runs it. This document covers:
+a screenshot-based agent*. ADR-0009 fixed the baseline architecture as Agent S3 + UI-TARS-1.5-7B;
+**that is superseded here** — upstream `cua-agent` (the Agent-S-style framework) is deprecated by
+Cua, and Tiffany's 2026-11-21 direction requires a recognisable agent rather than a hand-rolled
+loop. ADR-0009 needs an amendment PR once Tiffany confirms §9.
+**Tiffany's 2026-11-21 direction supersedes that on one point**: the baseline must be a **real,
+recognizable screenshot-based desktop agent**, not a hand-rolled loop. So §1a evaluates the
+recognizable options (Cua, UI-TARS/open-model stacks, frontier computer-use APIs) on setup effort,
+cost per 30 trials, Windows ARM fit, and credibility — and picks one primary. §1b keeps the
+harness/generalisation contract G1–G7 against whichever is chosen.
 
-1. the harness that makes the comparison fair;
-2. the metrics, measured identically on both sides and aligned with M1-013's 30-trial sweep;
-3. the fairness rules that distinguish "the screenshot agent lost" from "we handicapped it";
-4. a candidate model shortlist with **estimated** cost per 30 trials, for Tiffany to choose.
+This document covers:
+
+1. **§1a — the option evaluation and the recommendation** (Tiffany's question);
+2. the harness that makes the comparison fair (§2–§3) and the generalisation contract (§1b);
+3. the metrics, measured identically on both sides and aligned with M1-013's 30-trial sweep (§4);
+4. the fairness rules that distinguish "the screenshot agent lost" from "we handicapped it" (§5);
+5. cost per 30 trials for every option (§8), with arithmetic shown.
 
 It deliberately chooses nothing that costs money. §9 is the escalation the outer loop owns.
 
 ---
 
-## 1. What the baseline is, precisely
+## 1a. Which screenshot agent? (Tiffany's question, 2026-11-21)
 
-A baseline that cannot be grounded will lose for reasons unrelated to Myco's thesis. The measured
-evidence for that is already in the repo (eval-frameworks §3.8): two local 7.6 GB / 6.4 GB VLMs
-scored **2 hits in 16 attempts** at locating a named Calc cell. So the baseline is a two-stage
-agent, not one model:
+**The ruling answer first.** The baseline should be **Cua (`trycua/cua`) — specifically Cua Driver
+as the computer layer, driven by an agent harness with a model we already pay for — pointed at a
+guest we control.** It is a real, recognizable open-source computer-use framework (32.7k stars,
+MIT, pushed 2026-11-21), it ships a **Windows ARM64** build, it runs **inside the guest** and is
+reached **over SSH**, which is exactly Myco's control-plane shape, and it covers the LibreOffice
+case structurally. Every claim below is from primary sources dated 2026-11-21; nothing was run.
 
-| Stage | Role | Input | Output |
+### The three axes that decide it
+
+**Axis 1 — transport.** M1's guest is a UTM Windows 11 ARM64 VM reachable over SSH on
+`localhost:2222` with an interactive auto-logon desktop. A baseline that needs a VNC/RDP-only path
+or a vendor-managed VM would either change the conditions or need a second environment. Cua's
+Windows-over-SSH design is the same shape as Myco's:
+
+> "Windows OpenSSH runs in Session 0, which has no desktop, so window tools return empty results
+> there. … Run the daemon in your interactive session and let the SSH side proxy to it over the
+> named pipe: Session 1+ (RDP or console) `cua-driver serve` (autostart task) → `\\.\pipe\cua-driver`
+> → Session 0 (SSH) `cua-driver call` / `cua-driver mcp --socket \\.\pipe\cua-driver`."
+> — Cua docs, *Run in a VM, over SSH, or in a sandbox*
+
+That is the identical **session-0 problem** Myco solved for `myco-agent` (coordination log 16), and
+Cua solves it the same way: an autostart interactive-session daemon plus an SSH-side client over a
+local IPC channel. So Cua needs **no VNC and no RDP**: `ssh -T myco-win11 cua-driver mcp --socket
+\\.\pipe\cua-driver`. On the guest the daemon runs in session 1 (owned by the same Windows account —
+the pipe is ACL'd to that account, and `cua-driver status` reports a SID mismatch rather than
+acting).
+
+**Axis 2 — Windows ARM64.** Three independent primary sources agree:
+
+| Evidence | Source |
+|---|---|
+| Published release asset `cua-driver-rs-0.56.4-windows-arm64.zip` (28.9 MB) alongside `-windows-x86_64` | GitHub release `cua-driver-rs-v0.56.4` |
+| Windows support is **"Supported"** (not experimental): Win32, UI Automation, native input, window messages; coverage Electron/Tauri/WPF/WinUI3/WebView2 | Cua docs, *Platform support* |
+| Accepted Windows/Win32 baseline: run `29257963004`, **122/122 rows, 99 delivered, 23 exact refusals** | `libs/cua-driver/docs/action-support.md` |
+| `ghcr.io/trycua/windows:11` image is `arch: [amd64, arm64]`: "On an Apple silicon Mac it is ARM64 Windows at full speed" | `libs/images/sandbox-images.json` |
+
+The Windows ledger is the honest caveat: the proven fixtures are WPF, WinUI3 and WebView2 — **not
+LibreOffice**. Cua's own Windows runner says it "intentionally skips optional external-app suites
+such as LibreOffice because those require extra software on the environment image". LibreOffice has
+no native UIA (only a lossy MSAA→UIA proxy, `docs/research/adapters.md` §4.5), so the driver will
+land on its **pixel/UIA-hit-test rung** rather than the verified element rung. That is fine — it is
+what a screenshot agent is — but it must be *reported*, not assumed.
+
+**Axis 3 — credibility.** This is the part that decides against my earlier proposal. Cua Driver is
+not "screenshot-only": `get_window_state` returns the accessibility tree **and** a screenshot in
+one call, and every input tool names an exact target, with a background-first action ladder
+(element → pixel → page → foreground) that reports `confirmed | unverifiable | suspected_noop |
+partial | refused`. An agent can therefore choose the element rung for Calc's grid, which a
+pure-pixel screenshot agent cannot. If the baseline is *meant* to represent the state of the art,
+that is the state of the art; **rigging it to pixels-only would be a weak baseline**, which
+Tiffany ruled out.
+
+That creates an unavoidable definitional issue, stated plainly: **with Cua the "screenshot agent"
+may beat Myco on reliability**, because it is a structural-accessibility agent with an LLM planner.
+That is a legitimate result and the report must be able to say it. To keep the comparison *about*
+M1's thesis, the Cua arm runs **twice**, as two labelled sub-arms, and both are reported:
+
+- **C1 — Cua Driver, pixel rung only** (`element_token` addressing disabled; coordinates from
+  screenshots). This is the honest "screenshot agent" for row 7.
+- **C2 — Cua Driver, full ladder.** Represents the best available computer-use framework. If Myco
+  loses to C2, we publish that and the differentiation moves to UNO-class persistence verification,
+  recovery, and evidence (M1-014), which is exactly where §7 predicts the gap.
+
+Same harness, same tasks, same judge; only the addressing mode differs, and it is recorded per
+trial. Two labelled arms cost the same as one run plus a third of the time, not a second project.
+
+### Option comparison
+
+Setup effort is in engineer-days (≈) for one person who knows the repo but not the tool. Cost is
+model spend for 30 trials at the §8.1 token budget; "free" means $0 marginal.
+
+| | **(a) Cua Driver + our model** | **(b) UI-TARS / open-model stack** | **(c) Frontier CUA API** |
 |---|---|---|---|
-| **Planner** | decides the next action from the instruction and the screen | task text + screenshot(s) + step history | one action in a closed vocabulary |
-| **Grounder** | turns a described element into a screen point | screenshot + element description | normalized coordinates (0–1000 or pixels) |
-| Transport | executes the action on the Windows desktop | one action | new screenshot + ack |
+| What it is | Rust driver (UIA + pixels), MCP/CLI, agent harness runs the loop | UI-TARS-1.5-7B (or a GGUF quant) as grounder+planner in a loop; Agent-S3 (`gui-agents`) optional | Vendor-hosted model with a native `computer` tool; client executes actions |
+| Windows ARM64 | **Yes** — `windows-arm64` release asset; Windows marked *Supported* | Model is arch-agnostic; the *loop* is ours | Client-side, so arm64 is our problem; vendor references ship Linux containers |
+| Drives myco-win11 over SSH | **Yes, natively** — `serve` in session 1 + `mcp --socket \\.\pipe\cua-driver` over `ssh -T` | Yes, but only via Myco's own agent ops — i.e. we build the transport | Yes, same as (b): we build the transport |
+| VNC needed | **No** | No | No (reference impl uses Docker/vnc for Linux) |
+| Credibility as "a real screenshot agent" | **High** — 32.7k stars, MIT, 122/122 Windows action rows, active today | **Medium-high** — the model is the published SOTA grounder; the loop would be ours | **Highest** — the actual commercial state of the art |
+| "Homemade" objection | Low: framework is theirs, only the task wiring is ours | **High**: we write the loop, so we own the result | Low |
+| Setup | **~2–4 d**: install arm64 driver in guest, autostart task + named pipe, MCP client on host, Calc task wiring, C1/C2 mode switch | **~3–6 d**: Ollama GGUF serve, grounding parse, loop, transport ops | **~3–5 d**: transport ops + vendor client + prompt/tool wiring + key management |
+| Model spend / 30 trials | **$0** if the planner is a local Ollama model; **~$1.3–10** if the planner is Claude Haiku 5.5; see §8 | **$0** (all local) | **~$0.06–3.7** per the §8 arithmetic, depending on model and resolution |
+| Account needed | **None** for the local path | **None** | **Yes** — API key + billing |
+| Biggest risk | LibreOffice is unproven in Cua's Windows ledger | Our loop becomes the weak link, and the report is open to "you built a bad agent" | Credibility bought with money and vendor data handling |
+| Fair for row 7? | **Yes** (C1 as the screenshot arm, C2 as the SOTA arm) | Yes, but weakest read: risk of *understating* the baseline | Yes — but it is the most expensive way to learn that |
 
-ADR-0009 fixes the planner+harness as **Agent S3 (`gui-agents`)** and the grounder as
-**UI-TARS-1.5-7B**. `gui-agents`' CLI makes the grounder mandatory (`--ground_provider`,
-`--ground_url`, `--ground_model`, `--grounding_width`, `--grounding_height` are all *Required*),
-and its `engine_type` accepts `openai`, i.e. any OpenAI-compatible endpoint — which is what a
-local Ollama proxy exposes. Grounding therefore can be swapped without touching the loop, and
-§4 treats it as a first-class choice.
+### Recommendation
 
-**What the baseline must not do.** It gets no structural state: no UIA tree, no UNO, no file
-access, no `calc-record-edit` program. It sees pixels and types. Its success is decided by the
-*same* UNO + persisted-file verifier as Myco (§3.3), so a "done" message on screen never counts.
+**Primary: (a) Cua Driver.** Reasons, in order:
+
+1. **It is a recognizable agent, not our code.** The framework, the action model, the refusals and
+   the verification ladder are Cua's and are published. Only the task wiring is ours — the same
+   amount of glue any integrator writes.
+2. **The transport is already solved in the shape we have.** Its Windows-over-SSH named-pipe design
+   is the session-0 fix Myco itself needed; no VNC, no RDP, no second VM, no change to
+   `myco-win11`.
+3. **It fits ARM64 by release artifact**, not by hope: a `windows-arm64` build of the current driver
+   plus a proved Windows action ledger.
+4. **It can be free.** With a local planner it costs $0 marginal, and the harness/model choice stays
+   with Tiffany (§9) because the planner is swappable through MCP — that is the point of Cua being a
+   tool layer rather than a model.
+5. **It converts the "credibility" question into a reportable one.** C1 vs C2 vs Myco gives three
+   columns instead of an argument about whether the baseline was fair.
+
+**Runner-up: (b) UI-TARS on Ollama** — use only if Cua cannot drive Calc at all (see the first gate
+below). It keeps the $0 property but moves the credibility problem onto our loop.
+
+**Not recommended as primary: (c) frontier API.** It buys the strongest baseline with money and an
+account, and its references ship as Linux Docker containers, so the Windows half is still ours to
+build. It stays on the table as a *third* column if Tiffany wants the strongest possible number and
+has a budget (§9 item 6).
+
+### The one gate that can overturn the recommendation
+
+Cua's Windows ledger does not include LibreOffice, and Calc's grid is the one control the repo
+already knows is hostile to UIA (`uia_cell found:false`, M1-008). So M1-021 starts with a
+**spike**: driver installed in the guest, `get_window_state` on a Calc window, one typed cell
+edit through both the element and pixel rungs, evidence captured. Outcome decides:
+
+| Spike result | Consequence |
+|---|---|
+| Element **and** pixel rungs both type into a Calc cell | Proceed: C1 (pixel-only) and C2 (full ladder) both run |
+| Only the pixel rung works | Proceed: it *is* a screenshot agent; C1 and C2 coincide, report says so |
+| Neither works | Fall back to (b) UI-TARS with our loop, and report the spike as the reason |
+
+This spike needs the VM, so it runs **after** the sweep frees the host (Coordinator's schedule), and
+it is the first thing in M1-021's queue.
 
 ---
 
@@ -74,49 +189,55 @@ different VM state with a different Myco run would void the comparison.
 
 ### 3.1 Placement and transport
 
+With Cua as the primary (§1a) the transport is **Cua Driver's own**, which removes the option
+analysis the earlier draft carried. Two processes, one channel:
+
 ```
-macOS host                                         Windows guest (myco-win11)
-┌──────────────────────────────┐                   ┌───────────────────────────────────┐
-│ baseline driver (Node, host) │                   │ myco-agent (existing, session 1)  │
-│  ├ AgentClient over SshTunnel│──── ssh -L ──────►│   op screenshot  → PNG bytes      │
-│  ├ planner client (HTTP)     │                   │   op kill/launch → process control│
-│  ├ grounder client (HTTP)    │                   │   *NO* UIA tree, *NO* UNO read-   │
-│  └ verifier (UNO + file)     │                   │    back, *NO* read_file for the   │
-└──────────────────────────────┘                   │    trial's xlsx                   │
-                                                   └───────────────────────────────────┘
+macOS host                          Windows guest (myco-win11, session 1)
+┌────────────────────────────┐      ┌──────────────────────────────────────────┐
+│ agent harness (ours)       │      │ cua-driver serve   (autostart task,      │
+│  ├ planner model (Ollama   │      │   session 1)  ── owns desktop,            │
+│  │   or vendored API)      │      │   observation, input, refusals           │
+│  ├ MCP client → ssh -T ────┼─────►│                                          │
+│  │   cua-driver mcp        │      │ \\.\pipe\cua-driver  (ACL'd to the        │
+│  │   --socket \\.\pipe\…   │      │   same Windows account; SID-checked)     │
+│  └ judge: UNO + file parse │      │ LibreOffice Calc 26.8.3 ARM64            │
+│      (unchanged, host-side)│      └──────────────────────────────────────────┘
+└────────────────────────────┘
 ```
 
-- **Screenshots** come from the existing agent `screenshot` op (`windows_backend.py:526`, GDI
-  capture of the Calc window) — already used and reviewed for M1-013 evidence. No new guest code.
-- **Actions** are the hard part. The agent's op union is exactly ten ops — `ping`,
-  `session_info`, `launch`, `uia_tree`, `uia_invoke`, `screenshot`, `read_file`, `write_file`,
-  `kill`, `uno_eval` (`src/win/agent-client.ts:19-29`) — and of those:
-  - **No coordinate-only click exists.** Clicks are UIA-only: `uia_invoke` needs a
-    `runtime_id` that came from `uia_tree` (`agent/myco_agent/ops.py:30-43`), and the backend
-    clicks that control.
-  - **A raw keystroke channel does exist**, contrary to an earlier draft of this doc:
-    `uia_invoke` with `action: "keys"` sends an arbitrary SendKeys string
-    (`ops.py:30-43`; `windows_backend.py:515-519` — `auto.SendKeys(keys)` after
-    `control.SetFocus()`). It is **not** goal-free input, because it still requires a
-    UIA-resolved `runtime_id`, i.e. it needs `uia_tree`, which §5.5 forbids the baseline from
-    using to locate the target. It is therefore usable for *blind* keys only (Ctrl+S, Enter,
-    Escape) on a control the baseline has no legitimate way to identify.
+- **No VNC and no RDP.** SSH carries MCP; the named pipe carries the desktop session. This is the
+  same session-0 fix Myco's own agent uses (coordination log 16), which is why the fit is good.
+- **The judge does not move.** Verdicts still come from `unoVerifierOverAgent` + the persisted-file
+  parse on the host (ADR-0002/ADR-0005); Cua's own `verified` field (accessibility read-back only)
+  is **never** the verdict. It is recorded as a per-action observation in the transcript.
+- **C1 (pixel-only) is enforced by an MCP allowlist**, not by trust: Cua's documented
+  `cua-mcp-filter` hides tools and rewrites `get_window_state` to text-only
+  (`--text-only`) where needed; for C1 the harness additionally passes no `element_token` and acts
+  only by `x, y` from `get_desktop_state`/screenshot, with a CI test asserting the C1 transcript
+  contains zero element-addressed actions (§3.6).
+- **What the baseline must not do.** It gets no UNO, no file access, no `calc-record-edit` program,
+  and no access to the trial's `.xlsx` by path. Both C1 and C2 are held to that; C2 is allowed the
+  accessibility tree because that is what the framework *is*.
+- **Fallback (b)**, if the §1a spike fails: an in-guest PyAutoGUI runner driven through the existing
+  `launch` op, or new typed agent ops — the analysis below still applies and is kept for that case.
 
-  A screenshot agent needs coordinate input (it must click where the grounder said), so the
-  options are narrower than an earlier draft claimed:
-  - **(a) in-guest PyAutoGUI runner** — PyAutoGUI is the reference synthetic-input path on
-    Windows (`pyautogui==0.9.54` in UFO's pinned requirements, `docs/research/adapters.md:153-160`)
-    but is **not** in the guest image today (P5 installs `pywinauto uiautomation comtypes pywin32
-    pillow`, `docs/env/windows.md:481`). A small script launched through the existing `launch`
-    op reads a JSON action from a file and executes it; installing PyAutoGUI is a guest
-    provisioning change (outer loop, §9).
-  - **(b) new agent ops** `mouse/click/key` — cleaner and typed, but touches `agent/`, a shared
-    component mid-sweep.
-  - **(c) `uia_invoke action=keys` only + grounder-free navigation** — no coordinate input at all.
-    Rejected: without a click it is not a screenshot agent as M1 defines one, and the comparison
-    would be measuring a different baseline.
-  Preference: **(a)** for M1 (baseline-only code, zero blast radius on the Myco path), (b)
-  recorded as the follow-up if the baseline is kept as a standing harness.
+#### Fallback transport (option (b) only)
+
+The agent's op union is exactly ten ops — `ping`, `session_info`, `launch`, `uia_tree`,
+`uia_invoke`, `screenshot`, `read_file`, `write_file`, `kill`, `uno_eval`
+(`src/win/agent-client.ts:19-29`):
+- **No coordinate-only click exists.** Clicks are UIA-only: `uia_invoke` needs a `runtime_id` that
+  came from `uia_tree` (`agent/myco_agent/ops.py:30-43`), and the backend clicks that control.
+- **A raw keystroke channel does exist**: `uia_invoke` with `action: "keys"` sends an arbitrary
+  SendKeys string (`windows_backend.py:515-519` — `auto.SendKeys(keys)` after `control.SetFocus()`),
+  but it requires a UIA-resolved `runtime_id`, i.e. `uia_tree`, which §5 rule 5 forbids the baseline from
+  using to locate a target.
+
+So the fallback needs coordinate input, via an in-guest PyAutoGUI runner (PyAutoGUI is the
+reference synthetic-input path — `pyautogui==0.9.54` in UFO's pinned requirements,
+`docs/research/adapters.md:153-160` — but **not** in the guest image today, `docs/env/windows.md:481`)
+or new typed agent ops.
 - **Isolation discipline.** The baseline driver must not import anything from `src/tasks/`
   except the *parameter generator and ground truth* (host-side, never guest state). It must not
   call `WindowsCalcAdapter`, `unoVerifierOverAgent`'s live-read, or any guarded program. This is
@@ -219,6 +340,16 @@ entries (to be kept current in the report):
   unaudited `verified` must never read as a pass (§4).
 - Cost accounting test: token counts from the stub HTTP clients are summed per trial and land in
   the row.
+- **C1 purity test** (§1a): a C1 transcript contains **zero** element-addressed actions — every
+  input tool call carries `x, y` and no `element_token`. The MCP allowlist alone is not trusted;
+  the transcript is asserted.
+- **Cua version pin test**: the guest driver version reported by `cua-driver --version` and the
+  host-side client version must match, and both are stamped into every row (§6). Cua's Windows
+  lane explicitly requires "that `cua-driver --version` matches over SSH" — a mismatch is a
+  real failure mode, not a theoretical one.
+- **Session-identity test**: `cua-driver status` must report the pipe reachable and the SID match
+  before trial 0; otherwise the trial aborts `uncertain`/`driver-unreachable` rather than acting
+  from session 0 (the exact Myco bug from log 16, in Cua's vocabulary).
 
 ---
 
@@ -364,9 +495,13 @@ The point of a baseline is to lose for the right reason. These are constraints o
    report. A prompt written after seeing trial failures turns the baseline into a straw man.
 4. **No retries, no step-budget stretching mid-run.** A step budget set before trial 0; a raised
    budget after a loss is a deviation entry and a re-run of all 30.
-5. **The baseline gets the same information the user would.** Task instruction, current screenshot,
-   its own action history. Not: the cell address resolved by UIA, not the UNO tree, not the file.
-   (Resolving the cell *is part of the task*.)
+5. **The baseline gets what a screenshot agent gets — and C2's extra is declared, not hidden.**
+   Both sub-arms receive the task instruction, screenshots, and their own action history. Neither
+   receives: the cell address resolved by Myco's adapter, the UNO tree, the `.xlsx` by path, or the
+   trial's ground truth. **C2 additionally receives the accessibility tree** — because the point of
+   C2 is to measure the best available framework, and withholding it would be rigging. C1 is
+   enforced mechanically (no `element_token` in the transcript, §3.6), so the screenshot-only claim
+   is a test result, not a promise. (Resolving the cell *is part of the task* in both sub-arms.)
 6. **No model shopping after the fact.** The planner and grounder are chosen before trial 0; the
    report names them with versions. A second model pair is a second reported arm, not a replacement.
 7. **Host conditions are the same and disclosed.** Both arms record reset time, host load, and
@@ -415,9 +550,13 @@ wants the comparison to cover row 4 too.
 
 ## 8. Candidate models and estimated cost per 30 trials
 
-**No choice here is final; §9 escalates it.** The estimates below are arithmetic over published or
-locally measured prices, with every assumption stated. Where a number is unknown it is marked
-`unknown`, not guessed.
+**No paid model is selected here; §9 escalates it.** The estimates are arithmetic over **published
+vendor prices read on 2026-11-21** (§12) or locally measured figures, with every assumption stated.
+Where a number cannot be established it is marked `unknown`, not guessed.
+
+Cua changes what "the model" means: Cua Driver is the *computer layer*, so the cost question is now
+"which planner model drives Cua", and the same numbers apply to option (b)'s loop. §8.4 prices the
+three concrete configurations named in §1a.
 
 ### 8.1 What actually drives cost
 
@@ -452,14 +591,45 @@ Excluded by rule: **kimi-k3 and all `*:cloud` Ollama aliases** (banned on this p
 returned a credits error, i.e. paid). Also excluded as planners: **any general chat VLM as the
 grounder** — that is measurement B in reverse, and §3.8 already shows it fails.
 
+### 8.4 Priced configurations (Tiffany's three options)
+
+Prices below are **published list prices, 2026-11-21**, and the token budget is §8.1's
+(0.44M–2.5M input, 25k–45k output per 30 trials). Two cost drivers are noted per row because they
+dominate: **image resolution** (a screenshot's token count is `⌈w/28⌉ × ⌈h/28⌉` for the current
+Claude high-res tier per Anthropic's docs — 1280×800 ≈ 1,334 tokens; 1024×768 ≈ 1,000–1,800 per
+their guidance) and **per-request tool-definition overhead** (Anthropic's `computer_toolset_20260801`
+adds ≈ **4,500 input tokens per request** — 8–14 requests/trial × 30 trials ≈ **1.1M–1.9M extra
+tokens**, which doubles the input side before a single screenshot).
+
+| Config | Planner model | Price (in / out per MTok) | 30 trials, low | 30 trials, high | Notes |
+|---|---|---|---|---|---|
+| **Cua + local Ollama** | `qwen3.8-uncensored` (installed) | $0 | **$0** | **$0** | RAM-bound: ~9 GB model + 8 GB VM on a 24 GB Mac. Grounding measured weak (2/16), so C2's element rung is what makes it viable |
+| **Cua + Claude Haiku 5.5** | `claude-haiku-5-5` | $0.10 in / $0.50 out (≤100k prompts) | ≈ **$0.36** | ≈ **$2.6** | + tool overhead pushes the high end up; a 30-trial run is still single-digit dollars |
+| **Cua + Claude Sonnet 5.5** | `claude-sonnet-5-5` | $2 in / $10 out | ≈ **$2.20** | ≈ **$9.5** | Strongest planner at a price that is still trivial relative to VM time |
+| **Frontier API, budget** | `gpt-6-luna` | $0.10 in / $0.50 out | ≈ **$0.06** | ≈ **$0.25** | Cheapest credible frontier planner; capability unproven on screenshots |
+| **Frontier API, mainstream** | `gpt-6.2-sol` / `gpt-6.1-sol` | $2 in / $10 out | ≈ **$1.1** | ≈ **$5.5** | |
+| **Frontier API, strongest** | `gpt-6.2-astra` | $8 in / $40 out | ≈ **$3.7** | ≈ **$17** | Plus Gemini 3.1 Pro at $2 / $12 ≈ $2.2–$12 |
+| **UI-TARS local** | UI-TARS-1.5-7B (apache-2.0, 228k downloads, GGUF quants exist) | $0 | **$0** | **$0** | Download only; RAM is the constraint |
+
+Arithmetic for the Sonnet row, so anyone can check it:
+`low` = 0.44M × $2/M + 0.025M × $10/M = $0.88 + $0.25 = **$1.13** (model tokens only);
+adding 1.1M tokens of tool-definition overhead at the same input rate → **≈ $3.3**;
+`high` = 2.5M × $2/M + 0.045M × $10/M = $5.00 + $0.45 = **$5.45**, + overhead → **≈ $7.7**.
+The table's ranges bracket those two figures. **The conclusion does not move under any assumption
+in this table: the local configuration is $0, and every paid configuration for 30 trials is under
+$20.** Money is not the constraint on this baseline; VM time and credibility are.
+
 ### 8.3 Cost, stated plainly
 
 - **A, B, C cost $0 in marginal spend.** They cost disk (4–20 GB), RAM during the run, and host
   time. On this Mac RAM is the binding constraint (log 15: Ollama at 9.1 GB + the VM at 8 GB
   starved the guest). A baseline run must therefore happen when the VM is the only heavy guest and
   the Mac is on AC power.
-- **D and E cannot be priced from here.** D needs a credit balance to answer "does it see at all".
-  E needs a provider quote. Both are §9 items.
+- **D and E stay `unknown` for a different reason than in the earlier draft.** The *token* cost is
+  now priced (§8.4). What is unknown is whether CheaperInference's `deepseek-v4.1-flash`/`glm-5.3`
+  accept images at all — the one prior check returned a credits error — and what a dedicated
+  UI-TARS endpoint costs, since those are metered by GPU-hour and not published per token. Both are
+  §9 items, and neither is needed if Cua + a local planner works.
 - **Time is not $0 to the project.** A cold reset is 134–152 s (log 39) and a Myco trial is 35–90 s.
   A 30-trial baseline run is ≈ 1.5–2 h of VM time at Myco's step count, and a screenshot agent's
   higher step count pushes it toward 2.5–3 h. It is VM time the M1-013 sweep and M1-014 also need.
@@ -468,26 +638,34 @@ grounder** — that is measurement B in reverse, and §3.8 already shows it fail
 
 ## 9. Escalation to the outer loop (Tiffany decides)
 
-Only these questions need a human, and none of them is answered here:
+The recommendation in §1a is **Cua Driver with a local planner**: $0 marginal, no account, no
+download beyond the driver itself (a 29 MB Windows ARM64 zip, MIT). It needs the following
+decisions, and none of them is answered here:
 
-1. **Grounder download**: is downloading a 4 GB (ShowUI-2B) or ~15 GB (UI-TARS-1.5-7B) model to the
-   Mac acceptable? No account, no payment, MIT/apache-2.0 weights — but it is disk and a multi-hour
-   download.
-2. **Vision probe on CheaperInference** (`deepseek-v4.1-flash`, `glm-5.3`): may a *single* minimal
-   request be spent to establish whether either model accepts an image? The result decides whether
-   option D exists at all. Until it does, D is not in the plan.
-3. **Hosted UI-TARS** (option E): only if 1 and 2 both fail. Needs a provider and a budget.
-4. **VM time after the M1-013 sweep**: roughly 2–3 h of `myco-win11` for the baseline arm, plus
-   the same for the corrupted arm if §7 is in scope. Scheduling is the M1 Coordinator's.
-5. **Guest provisioning for the baseline transport** (§3.1 option (a)): installing PyAutoGUI into
-   the guest image. It is a package install in the VM, not a spend or an account — but it changes
-   the guest the Myco arm also runs in, so it needs the environment owner's agreement and must not
-   happen while the sweep is running. If declined, the baseline needs option (b): new typed agent
-   ops in `agent/`.
+1. **Install Cua Driver in the guest.** A third-party autostart daemon in the same interactive
+   session as `myco-agent`, reached over a named pipe. No account, no payment, no licence fee — but
+   it changes the guest the Myco arm also runs in, so it needs the environment owner's agreement and
+   **must not happen while the M1-013 sweep is running**. This is the gate for everything else.
+2. **Planner model.** Local Ollama (`qwen3.8-uncensored`, already installed) at $0, or a paid API
+   planner (§8.4: roughly $0.06–$17 per 30 trials depending on model). If C2's element rung works on
+   Calc, the weak local grounder matters much less, which favours $0.
+3. **Whether to run C2 at all.** §1a proposes two labelled sub-arms (C1 pixel-only, C2 full ladder).
+   C2 is what makes the comparison credible and also what could make Myco look worse. Tiffany's
+   call; both are cheap, and dropping C2 weakens the baseline.
+4. **VM time after the M1-013 sweep**: the §1a spike (~30 min: install, `get_window_state` on Calc,
+   one typed edit through each rung) then 2–3 h for the arm, plus the same for the corrupted arm if
+   §7 is in scope. Scheduling is the M1 Coordinator's.
+5. **Frontier API as a third column** (`gpt-6.2-sol`/`gpt-6.2-astra`, Gemini 3.1 Pro): est.
+   **$0.06–$17 per 30 trials**, but requires an API key, billing, and vendor data handling of
+   screenshots from a synthetic fixture. Recommended *only* if Tiffany wants the strongest possible
+   number and accepts the account.
+6. **CheaperInference vision probe** (`deepseek-v4.1-flash`, `glm-5.3`): still unverified. A single
+   minimal request answers it. Not required for the Cua path — the planner does not have to be a
+   CheaperInference model — so this is now optional rather than blocking.
 
-Recommended default if nobody answers: **B** (ShowUI-2B grounder, local, eval-frameworks §3.5's
-"GPU budget is zero" path) with **A**'s model as the planner fallback, because it spends nothing
-and needs no account. Its ceiling is lower than UI-TARS — that gets stated in the report.
+Recommended default if nobody answers: **Cua Driver + local `qwen3.8-uncensored` planner, C1 and
+C2 both run**, because it spends nothing, needs no account, and produces the most defensible
+comparison. Its ceiling is whatever the local planner can do — stated plainly in the report.
 
 ---
 
@@ -495,8 +673,16 @@ and needs no account. Its ceiling is lower than UI-TARS — that gets stated in 
 
 | # | Question | Blocks | Owner |
 |---|---|---|---|
+| 1 | Does Cua's driver actually reach LibreOffice Calc's grid on Windows ARM64 (the §1a spike)? | the whole option choice | baseline workstream, needs the VM |
+| 2 | Is the driver's pixel rung or element rung the one that lands on Calc cells? | C1 definition | baseline workstream, same spike |
+| 3 | Which planner model (local $0 vs paid §8.4) | any run | Tiffany via outer loop (§9.2) |
+| 4 | Is C2 (full ladder) in scope? | comparison credibility | Tiffany via outer loop (§9.3) |
+| 5 | VM time slot after the sweep | any run | M1 Coordinator |
+| 6 | Does the Myco sweep keep 30 columns varied, or only `name`? (runbook §7.3) | comparison honesty | M1 Coordinator (owner of the sweep) |
+
+---|---|---|---|
 | 1 | PyAutoGUI runner via `launch` (a) vs new agent ops (b) | harness implementation | baseline workstream |
-| 2 | Does Agent S3 run on Windows-hosted Python against a remote desktop, or is the loop run on the Mac against the guest? | harness implementation | baseline workstream, after §1 transport is chosen |
+| 2 | Does the host-side agent harness run on the Mac against the guest over `ssh -T` MCP, or inside the guest? (Mac is preferred: it keeps the transcript and the judge on one machine.) | harness implementation | baseline workstream, decided in the M1-021 spike |
 | 3 | Grounding model choice (escalation §9.1/2) | any run | Tiffany via outer loop |
 | 4 | VM time slot after the sweep | any run | M1 Coordinator |
 | 5 | Does the Myco sweep keep 30 columns varied, or only `name`? (runbook §7.3) | comparison honesty | M1 Coordinator (owner of the sweep) |
@@ -518,7 +704,7 @@ and needs no account. Its ceiling is lower than UI-TARS — that gets stated in 
 
 | Claim | Source |
 |---|---|
-| Agent S3 + `gui-agents`, mandatory grounding CLI args, OpenAI-compatible endpoint | `docs/research/eval-frameworks.md` §3.2 |
+| Agent S3 + `gui-agents`, mandatory grounding CLI args, OpenAI-compatible endpoint (**historical**: superseded, `cua-agent` is deprecated upstream) | `docs/research/eval-frameworks.md` §3.2; `libs/python/agent/README.md` |
 | UI-TARS-1.5-7B apache-2.0, not gated; repo archived; parsing package | §3.3 |
 | ShowUI-2B MIT, 2B, CPU-viable, "GPU budget zero" path | §3.5, §3.9 |
 | Local VLMs score 2/16 at cell grounding; Ollama `/v1` accepts `image_url` | §3.8 [measured] |
@@ -533,3 +719,21 @@ and needs no account. Its ceiling is lower than UI-TARS — that gets stated in 
 | AutoCorrect immunity of the generator; 20/20 proof | PR #21, `docs/research/experiments/m1-013-generator-proof.md` |
 | Sweep row schema and the independent audit | `/tmp/m1-013/trial-one.ts` (throwaway), runbook §7.3 |
 | Installed local vision models | `ollama list` on this host, 2026-11-21: `eriktonon/gemma4-uncensored:12b`, `eriktonon/qwen3.8-uncensored:latest`, both `vision` |
+| Cua repo: MIT, 32.7k stars, pushed 2026-11-21 | `https://api.github.com/repos/trycua/cua` |
+| Cua Driver `windows-arm64` release asset (28.9 MB) beside `windows-x86_64` | release `cua-driver-rs-v0.56.4` |
+| Windows marked **Supported**; Win32/UIA/window messages; Electron/Tauri/WPF/WinUI3/WebView2 coverage | `https://cua.ai/docs/cua-driver/concepts/platform-support` |
+| Windows/Win32 accepted baseline: run `29257963004`, 122/122 rows, 99 delivered, 23 exact refusals | `libs/cua-driver/docs/action-support.md` |
+| Windows ledger fixtures are WPF/WinUI3/WebView2; LibreOffice intentionally skipped | same file; `libs/cua-driver/tests/runners/windows/README.md` |
+| Windows-over-SSH design: session-1 daemon + `\.\pipe\cua-driver` proxied from session 0 | `https://cua.ai/docs/cua-driver/guides/vms-and-remote` |
+| `get_window_state` returns tree **and** screenshot; action ladder element→pixel→page→foreground with `confirmed/unverifiable/refused` | `https://cua.ai/docs/cua-driver/concepts/how-cua-driver-works` |
+| `cua-mcp-filter` tool allowlist; `--text-only`; local-model guidance (64K context) | `https://cua.ai/docs/cua-driver/guides/local-models` |
+| `ghcr.io/trycua/windows:11` is `arch: [amd64, arm64]`, ARM64 on Apple silicon | `libs/images/sandbox-images.json` |
+| cua-bench `windows-qemu` tasks run through `cua-spacesd`; `evaluate` scores the sandbox | `libs/cua-bench/README.md` |
+| `cua-agent` (Agent-S-style framework) is **deprecated**; Cua Driver is the supported path | `libs/python/agent/README.md` |
+| UI-TARS-1.5-7B apache-2.0, not gated, 228,519 downloads, GGUF quants published | Hugging Face API, 2026-11-21 |
+| Claude prices: Haiku 5.5 $0.10/$0.50, Sonnet 5.5 $2/$10, Opus 5.5 $4/$20 per MTok | `docs.claude.com/en/docs/about-claude/pricing.md` |
+| `computer_toolset_20260801` adds ≈4,500 input tokens per request; screenshots billed as image input | `docs.claude.com/en/docs/agents-and-tools/computer-use.md` |
+| Screenshot token rule `ceil(w/28) x ceil(h/28)`, ≤4,784 visual tokens for current models | same file |
+| OpenAI prices: gpt-6-luna $0.10/$0.50, gpt-6.2-sol and gpt-6.1-sol $2/$10, gpt-6.2-astra $8/$40 | `platform.openai.com/docs/pricing.md` |
+| Gemini 3.1 Pro: $2 input / $12 output per MTok (≤200k prompts) | `ai.google.dev/gemini-api/docs/pricing.md` |
+| Computer-use reference implementation runs in a Linux Docker container | Anthropic computer-use docs |
