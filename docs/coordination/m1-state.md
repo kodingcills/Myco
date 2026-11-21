@@ -498,7 +498,8 @@ No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-
 
 **Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
 
-## Log 2026-11-21 (46) — benchmark sections verified at source; a wrong score and a wrong ARM claim corrected
+## Log 2026-11-21 (47) — benchmark sections verified at source; a wrong score and a wrong ARM claim corrected
+*(47, not 46: the sibling entry above was renumbered to 46 while this was being written. Numbering is assigned at commit time, not at draft time.)*
 `8a32ff2` passed full verification at `aaf7290` and delta verification at `8a32ff2` (2 independent verifiers, no VM access, no tree writes). Acting on their asides produced real corrections, plus one the verifiers could not produce because it needed the paper's tables rather than the README.
 
 **Corrections committed after the PASSes:**
