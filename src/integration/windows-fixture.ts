@@ -28,6 +28,9 @@ export interface WindowsFixtureConverterOptions {
  * how long the workbook took to appear in the guest, against which deadline.
  * `arrived` = the xlsx was readable before the deadline; `deadline` = it never
  * appeared in time; `error` = writing the CSV or launching soffice failed.
+ * `durationMs` is wall time and can exceed `deadlineMs` on a miss: the deadline is
+ * checked before each poll, so one in-flight `read_file` (up to its own RPC timeout)
+ * may finish after the deadline passes.
  */
 export interface ConvertTiming {
   deadlineMs: number;

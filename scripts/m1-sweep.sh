@@ -43,6 +43,13 @@ if [ -f "$LOG" ] && grep -q '"status": "seed-mismatch"' "$LOG"; then
   exit 9
 fi
 
+# A recorded seed-mismatch means a trial ran on the wrong fixture. Resume-skip would
+# keep that row and continue, so refuse: the directory is unusable for acceptance.
+if [ -f "$LOG" ] && grep -q '"status": "seed-mismatch"' "$LOG"; then
+  echo "REFUSED_SEED_MISMATCH_PRESENT $(date -u +%FT%TZ): $LOG contains a seed-mismatch; start a fresh OUT" >> "$PROGRESS"
+  exit 9
+fi
+
 if [ ! -s "$PARAMS" ]; then
   pnpm exec tsx scripts/m1-sweep-params.ts params > "$PARAMS" || { echo "FATAL: params generation failed" >> "$PROGRESS"; exit 1; }
 fi
