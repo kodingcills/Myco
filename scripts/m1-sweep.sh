@@ -31,7 +31,10 @@ FPRINTS="$OUT/fingerprints.json"
 LOG="$OUT/trials.jsonl"
 PROGRESS="$OUT/progress.log"
 cd "$WS" || exit 1
-mkdir -p "$OUT/runs"
+mkdir -p "$OUT/runs" || exit 1
+source "$WS/scripts/vm-lock.sh"
+vm_lock_acquire m1-sweep.sh "$PROGRESS" || exit "$?"
+trap vm_lock_release EXIT
 
 # A recorded seed-mismatch means a trial ran on the wrong fixture. Resume-skip would
 # keep that row and continue, so refuse: the directory is unusable for acceptance.
