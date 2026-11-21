@@ -17,7 +17,7 @@ native binding in v0 or v1.
 
 1. **It is the thin-layer rule made literal (§10).** The SDK, the CLI and an agent's
    MCP client then all go through the same process and the same tool contract. There
-   is no second path that can drift. A native binding would be a fourth door with its
+   is no second path that can drift. A native binding would be a fifth path with its
    own marshalling.
 2. **It already exists.** `runtime/crates/myco-rt-mcp` serves six ops (`create`,
    `observe`, `act`, `evidence`, `reset`, `destroy`) with a test pinning that list.
@@ -46,7 +46,7 @@ native binding in v0 or v1.
 ## Receipt rules carried from m2-02
 
 - The verdict lives behind a separate operation from the actuator. `act` returns no
-  field that can carry a verdict.
+  application-outcome verdict (its element-scope readback is not one).
 - Every receipt carries `application_commit: not_verified` unless the persisted file
   was read by the verifier.
 - Gaps against §10: the runtime MCP lacks `verify`, `fork` and `replay`. `verify` is
