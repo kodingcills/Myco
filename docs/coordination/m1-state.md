@@ -268,3 +268,11 @@ RULE from now on:
 2. Merge ONLY when BOTH hold at the SAME head commit: an independent verifier's pass, AND green CI.
 3. Record each retroactive verification in this file.
 Children must be briefed with these rules, and reviewers must state the head SHA they verified.
+
+## Log 2026-11-21 (30) — sweep ABORTED on host contention (result not reported as a Myco figure)
+- Trial 0: reset 1879s; verdict uncertain (fixture-convert timeout 60s) — a harness timeout under load, not a Myco defect.
+- Trial 1: reset 847s. Baseline is 8-45s. The Mac is running BOTH myco-win11 and the Runtime workstream's Linux QEMU guest (qemu-system-aarch64 -machine virt -m 2048 -smp 2, PID 92997 at the time, actively restarted), plus Chrome and the harness.
+- DECISION: aborted the sweep after 1 trial rather than burn ~10 hours producing numbers that measure the Mac's load, not Myco's reliability. Raw output preserved at /tmp/m1-013/sweep/trials.jsonl (1 trial) and docs/research/experiments/.
+- The 20-value generator proof (20/20 verified) stands: it ran when the host was quieter with the same VM.
+- ASKED the Runtime owner to idle their guest when unused; no reply yet. NOT killed — their process, their worktree.
+- NEXT: rerun the sweep when the host is quiet (only myco-win11 running). The sweep driver is /tmp/sweep.sh; expected ~2-3h when resets are 10-45s.
