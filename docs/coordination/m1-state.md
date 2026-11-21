@@ -677,7 +677,7 @@ rule applies to design work too. Docs only.
 **§2.1 added — the operator interface, pinned to `main`.** Reset (`scripts/reset-trial-vm.sh`,
 `clean-base`), deploy (`deploy-to-vm.sh`, foreground, "DEPLOY OK"), reachability
 (`ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765`), token via `vssh`, screenshots via
-the agent's in-guest op. All four exist on main; the baseline adds no new VM plumbing. Noted that
+the agent's in-guest op. Two of those scripts are in this repo and the SSH config, key and `vssh` are host scripts deliberately outside it; the baseline adds no new VM plumbing. Noted that
 `SshTunnel` already defaults to exactly these values, so the harness reuses it.
 
 **Two operational facts recorded**, both previously unstated in this doc:

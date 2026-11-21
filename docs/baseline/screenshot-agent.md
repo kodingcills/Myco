@@ -532,9 +532,10 @@ arms must share all of the following. Anything that differs is a documented devi
 ### 2.1 The operator interface — pinned to `main`, not invented here
 
 The baseline must drive the guest through **the same entry points the Myco arm uses**, or criterion
-7 is void. **The first four of these are in the repo or on the host today; `vssh` is a host script
-outside the repo** (`~/VMs/myco-win11/scripts/`), named here because the runbook depends on it. The
-baseline adds no new VM plumbing.
+7 is void. **`reset-trial-vm.sh` and `deploy-to-vm.sh` are in this repo; the SSH config, the key and
+the `vssh` wrapper are host scripts under `~/VMs/myco-win11/` and are deliberately not in the repo**
+(the runbook says so). The baseline adds no new VM plumbing — it drives exactly what already exists,
+wherever it lives.
 
 | Step | Command (from `main`) | Success signal |
 |---|---|---|
@@ -910,13 +911,17 @@ a per-trial table with both outcomes:
 | 3 | uncertain | refuted | refuted | `agree_fail` |
 | … | | | | |
 
-Discordant trials (rows where the two arms differ) are the only evidence. Trials where both pass,
-or both fail, carry no information about the difference and must not be counted as agreement
-towards it.
+**Each baseline sub-arm is tested against Myco separately, never pooled.** C1 and C2 are different
+agents; merging them into one "baseline" column would produce a number that describes neither. So
+the table is emitted **twice** — once Myco×C1, once Myco×C2 — and each gets its own `b`, `c`, `p`.
+
+Within one such table, discordant trials (rows where Myco and that sub-arm differ) are the only
+evidence. Trials where both pass, or both fail, carry no information about the difference and must
+not be counted as agreement towards it.
 
 **4.5.2 The exact threshold — corrected.** The survey states that "≥5 discordant trials all
 favouring Myco" reaches p<0.05. **That is wrong.** A two-sided exact sign test on the discordant
-pairs (b = Myco-only wins, c = baseline-only wins) gives:
+pairs (b = Myco-only wins, c = that sub-arm-only wins) gives:
 
 | discordant `d`, all favouring Myco | p (two-sided exact) |
 |---|---|
@@ -1179,8 +1184,9 @@ decisions, and none of them is answered here:
    again for the corrupted arm if §7 is in scope. The Coordinator owns the host and is running the
    sweep now.
    **Ask for it chunked if that helps**: every row begins from its own `clean-base` restore, so a
-   chunk boundary is just another row boundary and the run is resumable — 2 × 1.5 h is as valid as
-   one 3 h block, and *safer*, because a host sleep or a UTM wedge otherwise costs the whole run
+   chunk boundary is just another row boundary and the run is resumable — so the window can be split
+   however suits (for the two-arm run, 2 × ~2.1 h is as valid as one ~4.25 h block), and *safer*,
+   because a host sleep or a UTM wedge otherwise costs the whole run
    (logs 41/35).
 5. **Frontier API as a third column** (`gpt-6.2-sol`/`gpt-6.2-astra`, Gemini 3.1 Pro): est.
    **$0.06–$22.30 per 30 trials** (§8.4: `gpt-6-luna` low, `gpt-6.2-astra` with toolset overhead
@@ -1222,12 +1228,6 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | 5 | VM time slot after the sweep | any run | M1 Coordinator |
 | 6 | Does the Myco sweep keep 30 columns varied, or only `name`? (runbook §7.3) | comparison honesty | M1 Coordinator (owner of the sweep) |
 
----|---|---|---|
-| 1 | PyAutoGUI runner via `launch` (a) vs new agent ops (b) | harness implementation | baseline workstream |
-| 2 | Does the host-side agent harness run on the Mac against the guest over `ssh -T` MCP, or inside the guest? (Mac is preferred: it keeps the transcript and the judge on one machine.) | harness implementation | baseline workstream, decided in the M1-021 spike |
-| 3 | Grounding model choice (escalation §9.1/2) | any run | Tiffany via outer loop |
-| 4 | VM time slot after the sweep | any run | M1 Coordinator |
-| 5 | Does the Myco sweep keep 30 columns varied, or only `name`? (runbook §7.3) | comparison honesty | M1 Coordinator (owner of the sweep) |
 
 ---
 
