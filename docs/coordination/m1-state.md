@@ -375,3 +375,9 @@ Guest was CONTAMINATED on arrival: live agent + token + 3 stale `C:\myco\runs` d
 - M1-019 (PR #29) IS merged and therefore active in the sweep — the outer loop's "no M1-019 code until its verifier PASSes" condition is satisfied: #29 returned VERIFIED at d74dff9 and is on main.
 - No Linux qemu guest running ✓; VM up; 62% RAM free.
 - Honest count, no re-runs to reach 27.
+
+## Log 2026-11-21 (40) — PR #33 (M1-016 runbook) merged
+- PR #33 VERIFIED at 67c1961 (kimi-k3), 4/4 CI green at the same SHA, then merged. Criterion #8 (reproducibility) now has its runbook.
+- The verifier mechanically checked EVERY command against the repo and found zero wrong: package scripts, host scripts (correctly marked not-in-repo), reset-trial-vm.sh flags/model, deploy-to-vm.sh output strings, MYCO_AGENT_TOKEN plumbing, the SSH tunnel args, all three run-live modes and their exit codes, and validate-live.ts. Honesty checks passed: VM-dependent output marked UNVERIFIED; troubleshooting covers all seven real failures; §10 states plainly that build-all.sh is unproven and the ISOs/snapshots/fixtures are not in the repo.
+- Coordinator applied its nice-to-fix: the cold-reset timing now cites the MEASURED 134-152s over 5 runs (log 39) rather than the script header's single ~165s sample.
+- Still open: PR #32 (cold-reset script) verifier — code review + raw-log read + stub test, NO VM access while the sweep runs. Its VM-dependent part is deferred, so the sweep result stays provisional.
