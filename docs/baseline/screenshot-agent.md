@@ -281,19 +281,18 @@ and Phi3-V / GPT-4o-mini / GPT-4o / GPT-4V-1106 per row, with a human ceiling of
 | ✗ | **✓** | OmniParser | **12.5%** | 9.4% | 2.7% | 2.0% |
 | **✓** | **✓** | OmniParser | **19.5%** | 8.6% | 4.2% | 3.5% |
 
-Transcribed from arXiv 2409.08264 Table 4's **Total** column, taken from the **PDF text layer**
-(`gs -sDEVICE=txtwrite` on `arxiv.org/pdf/2409.08264`) because HTML rendering loses the row-to-column
-alignment that produced every earlier error here. Human ceiling **74.5% overall** — and, the number that
-actually matters for us, **83.3% on LibreOffice Calc** (human avg 15.3 steps, difficulty 2.0, Table 8).
-The four model rows print in
-the order **Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106** within each block, and the ✗/✓ markers
-delimit six blocks, not five.
+Transcribed from arXiv 2409.08264 Table 4's **Total** column, read from the paper's **LaTeX source**
+(`arxiv.org/e-print/2409.08264`, `inputs/results.tex`), where every row carries its model label
+explicitly — HTML and PDF rendering both lose the row-to-column alignment that produced every
+earlier error here. Human ceiling **74.5% overall**; **83.3% on LibreOffice Calc** (human avg 15.3
+steps, difficulty 2.0, Table 8). The four model rows print in the order **Phi3-V, GPT-4o-mini,
+GPT-4o, GPT-4V-1106** within each block, and the ✗/✓ markers delimit six blocks, not five.
 
 **Read the rows correctly.** `--som-origin omni` is the **fifth** row: screenshot + OmniParser, no
 UIA tree — **12.5% with GPT-4V-1106, 9.4% with GPT-4o**. The 19.5% headline is the **sixth** row,
 which adds the accessibility tree (8.6% with GPT-4o). Five errors were made in this document before
 the PDF extraction settled it, and they are named so a reader can check the work rather than trust
-it: attributing 19.5% to `omni`; pairing 12.5% with GPT-4o; merging the two OneOCR blocks; the
+it: attributing 19.5% to `omni`; pairing 12.5% with the wrong model; merging the two OneOCR blocks; the
 invented GPT-4o **14.3%** cell for the headline row; and reading the UIA-off Pytesseract row's GPT-4o
 as 9.8% when the paper prints 5.2%. B1's `publicScore.value` is **0.125**, the best published
 tree-free total, with `model: GPT-4V-1106` recorded beside it.

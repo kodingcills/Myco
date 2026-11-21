@@ -500,6 +500,28 @@ No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-
 
 **Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
 
+## Log 2026-11-21 (52) — Table 4 confirmed against the LaTeX source; the stale REJECT was aimed at 611ae58
+A second verifier returned REJECT against **`611ae58`**, not the head. Its defects describe the two-versions-ago table, so the verdict is stale — but its method is the right one and settles the table for good: it read `arxiv.org/e-print/2409.08264`, i.e. **`inputs/results.tex`**, where every row names its model and the block boundaries are `\\midrule`.
+
+I re-ran that extraction independently. Confirmed, verbatim:
+
+| UIA | Perception | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+|---|---|---|---|---|---|
+| ✗ | Pytesseract + DOM + GroundingDINO | 8.6 | 5.2 | 7.2 | 1.3 |
+| ✓ | Pytesseract + DOM + GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
+| ✗ | OneOCR (proprietary models) | 11.3 | 9.3 | 5.3 | 3.2 |
+| ✓ | OneOCR (proprietary models) | 13.1 | 13.3 | 7.3 | 4.0 |
+| ✗ | OmniParser | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | OmniParser | **19.5** | 8.6 | 4.2 | 3.5 |
+
+Human: 74.5% overall, **83.3% on LibreOffice Calc** (Table 8). This matches the table already on the branch at `5b48586` cell for cell, so **no values changed**; what changed is only the citation — the design now says the numbers come from `inputs/results.tex`, which is the artifact of record, rather than from a PDF text layer that happened to agree.
+
+**Process, final form:** where a paper ships LaTeX, that is the oracle — it carries explicit model labels and `\midrule` block delimiters, so no alignment is ever inferred. HTML loses the layout, PDF text loses it partially, and reading either is how this table was wrong five times.
+
+**Verifier hygiene note:** two of the five verdicts this session were graded against a head that had already moved. A verdict must name the SHA it read; when it does not match the PR head, re-delegate rather than repair.
+
+Docs only; no VM, no spend, no accounts.
+
 ## Log 2026-11-21 (51) — Table 4 settled from the PDF text layer; five wrong versions before it
 A parallel thread's `f6d2671` replaced the sourcing row with a new set of totals, and its commit message named my rows as wrong. Both of us were wrong. Settled by extracting the **PDF text layer** (`gs -sDEVICE=txtwrite` on `arxiv.org/pdf/2409.08264`) instead of HTML, where row-to-column alignment is lost:
 
