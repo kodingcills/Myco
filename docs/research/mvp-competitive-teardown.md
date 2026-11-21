@@ -64,16 +64,21 @@ task score) and Binary (full-credit rate) on OSWorld 2.0 and Score on OSWorld
 |---|---|---|---|---|---|
 | OSWorld 2.0 (108) | Linux | GPT-6 Astra | 72.37% **Partial**, 32.40% Binary | 68.82% / 31.50% | $10.03 vs $10.05 /task |
 | OSWorld 2.0 (108) | Linux | Claude Opus 5 | 72.06% Partial, **35.19% Binary** | — | $22.67/task |
-| OSWorld 1.0 (360) | Linux | GPT-5.4 | 70.13% Score | 62.47% | −59.1% |
+| OSWorld 1.0 (360) | Linux | GPT-5.4 | 70.13% Score *(released)* | 62.47% | −59.1% ($0.402 vs $0.983) |
 | Windows Agent Arena (111) | Windows | GPT-5.4 | 80.86% | 71.89% | −50.6% |
 | MacAgentBench, UI subset (28) | macOS | GPT-5.4 | 25 / 28 | 24 / 28 | −51.4% |
 | WeaveBench (114) | Linux | GPT-5.4 | 53.25% | 46.37% | −46.3% |
 
-(`HCU-P` Tables 1–2, §4.2; `HCU-R` Results. The paper greys out OpenAI's GPT-6
+(Every row is the **evaluated** `HCU-P` run except where marked *released*; never
+pair the two — the evaluated OSWorld 1.0 row is $2.52 vs $5.65 and 351.3 s vs
+500.8 s.) (`HCU-P` Tables 1–2, §4.2; `HCU-R` Results. The paper greys out OpenAI's GPT-6
 Astra row as "evaluated internally on a subset of tasks"; HCU's own row is a
-full-set Codex run.)
+full-set Codex run.) That omitted row is **72.60% Partial** — above HCU's 72.37%
+— so HCU is the best *full-set* result on that model, not the best *reported* one,
+and the 3.55-point Partial gap to CUA Driver is the honest one to sell.
 
-**Licence / pricing.** MIT (`LICENSE`). No product pricing; cost of ownership is
+**Licence / pricing.** MIT (`LICENSE`), with files adapted from OSWorld-V2
+(Apache-2.0) under `THIRD_PARTY_NOTICES.md`; the subtree is not pure MIT. No product pricing; cost of ownership is
 the agent's model spend, which the paper measures per task.
 
 **Outcome verification.** Widget-level, with the ceiling stated explicitly — the
@@ -85,13 +90,16 @@ single most important quote in this teardown (`HCU-PL`):
 and (`HCU-MCP`): "Control readback does not prove that the document was saved or
 that a dialog applied its changes." HCU reads back control state after a write
 (`effect: r58 checkbox "Interface" checked=false→true`), returns `effect_unknown`
-rather than a false positive, and runs `wait` steps that assert a condition
-before continuing ("placed last, it verifies the final state", `HCU-P` §3.1.1).
+rather than a false positive, The **evaluated** version also ran in-batch checks as ordered `wait` steps —
+"in-batch checks are unified as ordered wait steps (replacing action- and
+batch-level postconditions and assert_ax)" (`HCU-P` App. B.1); the **released**
+repo has ordered waits only.
 Persistence verification is **delegated upward to the agent's own file tools**.
 
 **Failure recovery.** Per-step, model-directed. "If an action fails, a wait times
 out, or window continuity is lost, HCU stops the batch and reports the stopping
-point and execution evidence" (`HCU-P` §3.1.1); the result carries `completed`
+point and execution evidence" (`HCU-P` §3.1.1, evaluated version; the released
+repo keeps stop-and-report with waits alone); the result carries `completed`
 and a corrected-call `hint`; `effect_unknown` forbids blind retry — "Do not
 retype that value" (`HCU-MCP`). No automated recovery loop.
 
@@ -115,7 +123,7 @@ benchmark scaffolding, not a product feature.
 **Architecture.** "Cua Driver is the UI layer of a computer-use agent. The
 harness runs the model and the loop; Cua Driver turns each proposed step into an
 observation or an action on a real desktop, and reports what happened." (`CUA`).
-The repo (`trycua/cua`, 32,747 stars, 2,477 forks, MIT) also ships Cua Spaces,
+The repo (`trycua/cua`, 32,748 stars, 2,477 forks at access) also ships Cua Spaces,
 Lume, CUA-S1 and Cua Bench.
 
 **Interfaces.** MCP (`cua-driver mcp`), CLI (`cua-driver call`), SDK
@@ -125,13 +133,16 @@ Lume, CUA-S1 and Cua Bench.
 Windows UIA + window messages; Linux X11 AT-SPI; Wayland partial — "Raw
 background keys refuse; use AT-SPI, XWayland, or foreground" (`CUA`).
 
-**Benchmarks.** None published by Cua in the pages read. It appears as HCU's
+**Benchmarks.** No benchmark number in the Cua Driver docs or the repo README
+(checked 2026-11-21); **Cua Bench and the Cua blog were not reviewed**, so this is
+a scope statement, not "Cua publishes none". It appears as HCU's
 baseline: 68.82% Partial / 31.50% Binary on OSWorld 2.0 with GPT-6 Astra, 62.30
 Score on OSWorld 1.0 with GPT-5.4 (`HCU-P` Tables 1–2). `[INFERENCE]` any Cua
 headline number must come from a third party until cua.ai publishes its own.
 
-**Licence / pricing.** Driver MIT. Cua Spaces "Free for individuals. Pro is $18 a
-month and Teams is $30 per seat a month" (`HCU-R` repo README of trycua/cua).
+**Licence / pricing.** "Everything outside Cua Spaces and Cua Driver Bench is
+MIT"; those two are **FSL-1.1-MIT**. Cua Spaces "Free for individuals. Pro is $18
+a month and Teams is $30 per seat a month" (repo README of trycua/cua).
 
 **Outcome verification.** The most rigorous vocabulary of the four, and it stops
 at accessibility read-back:
@@ -212,8 +223,14 @@ needs `sk_live_` key; free credit is limited per IP/network/day and refused from
 **Fork / branching.** Orgo's genuine differentiator. `POST /computers/{id}/fork`
 copies "the disk and live memory: open apps, windows, running processes"; the
 source "pauses for about two seconds while its memory is copied"; fork is
-"Running, Linux only" (`NOT_FORKABLE` otherwise), and "copies cannot" run past the
-50-computer baseline (`ORGO-F`). Clone = disk only, "From a fresh boot". It
+"Running, Linux only". Two distinct refusals both read `NOT_FORKABLE`: 400 (no
+server address) and 409 (not running, Windows, old VM type), alongside
+`DEVICE_LIFECYCLE_UNSUPPORTED`, `RESERVED_HOST`, `HOURLY_QUOTE_REQUIRED`
+(`ORGO-F`). The baseline limit is a **different page**: "A copy past the baseline
+… copies cannot", applying to clones, forks and restores alike (`ORGO-L`, account
+limits). The fork path also contradicts itself upstream: the prose accepts "UUID
+or instance_id" while the OpenAPI spec says a UUID returns 404. Treat neither as
+settled. Clone = disk only, "From a fresh boot". It
 branches the *machine*, not the *task*: no record of what was attempted.
 
 ---
@@ -260,6 +277,13 @@ but
 > judge."
 > "`verdict` | `passed`, `failed`, or `unverifiable` when a criterion could not be
 > checked." (`SAI-J`)
+>
+> Step-by-step judging of screenshots (`transitions`) and checking a live computer
+> (`probe`) "come later and return `400`" (`SAI-J`).
+
+That roadmap line matters for the wedge: persisted-state verification is not merely
+absent from the field, it is **planned** by the closest competitor. The
+differentiation is temporal, not structural.
 
 Three-valued, same vocabulary as Myco — adjudicated over a *transcript*, not
 persisted state, and self-declared injection-vulnerable. The turn record exposes
@@ -276,7 +300,10 @@ when the computer is not signed in, and `precondition_failed: ...` when it start
 on the wrong screen". With `maxIterations` it "runs the code several times to test
 Pass^k reliability, judges each run, and repairs the code after a failure". So it
 guarantees: an owned, version-controllable artifact; a two-case precondition
-taxonomy; Pass^k testing **at learn time only**. It does not guarantee a later run
+taxonomy; Pass^k testing **at learn time only**. Two documented caveats bound even
+that: without `reset` each rollout "starts where the last one ended", and
+"`testResult` says how the returned code did on the inputs it ran with, not on
+other inputs" (`SAI-L`). It does not guarantee a later run
 succeeded — the caller judges it, without screenshots. `learn`, `judge` and
 `direct control` are all labelled **research preview**. Underlying claim
 (arXiv 2609.36927, per `SAI-I`): "learned policies cut per-run cost 15–217× and
@@ -292,11 +319,16 @@ verification, and "A free account's first request of the day can take about two
 minutes while its computer starts". Sessions are "One conversation per API key and
 computer".
 
-**Fork / branching.** No fork API in the docs index. Branching exists only as
-procedure replay with different inputs; the machine is shared and single-tenant
+**Fork / branching.** No fork, branch or snapshot endpoint appears in any of the
+~50 indexed Sai pages (checked 2026-11-21). The `llms.txt` index is **not
+exhaustive** (the Organisations subtree and several endpoints are reachable but
+unlisted), so this is weak evidence, not proof. Branching exists only as
+procedure replay with different inputs; a computer runs one task at a time, and
+the free tier's Windows machine is pooled
 ("Direct control and learn jobs use your real screen, mouse and keyboard, so leave
 the computer alone while they run"). So: **Sai branches procedures, Orgo branches
-machine state, neither branches a live run at a step.**
+machine state, neither branches a live run at a step — stated as "not found",
+not "does not exist", for the same index limitation.**
 
 ---
 
@@ -304,12 +336,18 @@ machine state, neither branches a live run at a step.**
 
 A loop whose only observation is a raster screenshot and whose only action is
 pixel-addressed input — "A screenshot loop sends a full image at every step and
-acts only through pixels" (`HCU-R` FAQ). Documented cost of the pixel path, with no
-model in the loop: local parsing takes "about 2 to 2.5 seconds on macOS, 3.5 to 4
-seconds on Linux, and 8 to 9 seconds on Windows" per screenshot (`CUA`). Measured
+acts only through pixels" (`HCU-R` FAQ). Documented cost of the pixel path: local
+parsing takes "about 2 to 2.5 seconds on macOS, 3.5 to 4 seconds on Linux, and 8
+to 9 seconds on Windows" per screenshot (`CUA`) — that is the *perception
+extension's* CPU cost; a loop that instead sends every screenshot to a remote
+model pays model latency and image tokens per step, not this. Measured
 cost of dropping semantics: removing HCU's AX channel costs 2.79 points and
 +14.08% Steps; removing GUI costs ~0 points but +12.45% Steps (`HCU-P` Table 2,
-OSWorld 1.0, GPT-5.4). Full-set screenshot loops on OSWorld 2.0 sit at 68.31%
+OSWorld 1.0, GPT-5.4). A third of that table is the uncomfortable one for a
+runtime pitch: the **skill** (the prompt discipline) is worth 17.37% → 1.36%
+malformed calls and GUI actions 4.96 → 1.97, several times the AX channel. If
+"verify the final state" is partly prompt discipline, a competitor reproduces the
+cheap win with a skill file and no runtime. Full-set screenshot loops on OSWorld 2.0 sit at 68.31%
 (Claude Opus 5 Muse Spark 1.3), 62.72% (GPT-5.6 Sol), 59.00% (Gemini 3.8 Flash),
 58.30% (Kimi K3) — all **Partial** (`HCU-P` Table 1). Verification and recovery are
 model-improvised; the OSWorld 2.0 authors name the resulting failure as the
@@ -329,7 +367,7 @@ Misses the Absent Row" (`OSW2`).
 | **Cua Driver** | One-line installer, then two macOS toggles: "Neither prompt grants anything by itself: both offer Open System Settings, not Allow" (`CUA-Q`). No account for the driver. |
 | **Orgo** | `sk_live_` key required; free credit limited per IP/network/day and refused from "a server, datacenter or VPN address" (`ORGO-L`). |
 | **Sai** | "Phone verification is required before the first API key" (`SAI-B`); free tier one pooled Windows machine; first daily request "about two minutes" to start (`SAI-B`). |
-| **Screenshot-only** | Needs no accessibility consent; pays 2–9 s per screenshot for local parsing (`CUA`). |
+| **Screenshot-only** | Needs no accessibility consent; pays 2–9 s per screenshot for *local* parsing (`CUA`), or model latency plus image tokens if the loop sends pixels to a remote model. |
 
 ### 3.2 Independently verified correctness
 
@@ -356,7 +394,7 @@ Misses the Absent Row" (`OSW2`).
 
 | | Evidence |
 |---|---|
-| **HCU** | Environment repeatable, procedure not: one MCP process per desktop, "never share a process between benchmark tasks" (`HCU-MCP`); reproduction = "a fresh Docker/QEMU guest" (`HCU-R`). No replay artefact. |
+| **HCU** | Environment repeatable, procedure not: one MCP process per desktop, "never share a process between benchmark tasks" (`HCU-MCP`); reproduction = "a fresh Docker/QEMU guest" (`HCU-R`). No *documented* replay surface, though the repo retains per-call observations (`app_snapshot.go`, `*_evidence_test.go`). |
 | **Cua Driver** | Session-scoped; "after five idle minutes … element tokens and snapshots from the ended one stay invalid" (`CUA`); per-cell validation records "tied to the source commit". |
 | **Orgo** | Environment strong (Templates "launched in seconds", Scale/Enterprise to publish, `ORGO-L`); procedure none. Workflows: "a later edit never changes a run already going" (`ORGO-W`) — preview. |
 | **Sai** | Procedure strongest: learned code "you can read it, test it and keep it under version control" (`SAI-L`); reliability measured as "Pass^3 (success on all three of three runs)" (`SAI-I`). |
@@ -366,7 +404,7 @@ Misses the Absent Row" (`OSW2`).
 
 | | Evidence |
 |---|---|
-| **HCU** | **$10.03/task** vs CUA Driver **$10.05** on OSWorld 2.0 GPT-6 Astra at +3.55 Partial (`HCU-P` Table 1); **$2.52 vs $5.65** on OSWorld 1.0 GPT-5.4, **351.3 s vs 500.8 s** per task (`HCU-P` Table 2). Zero licence. |
+| **HCU** | **$10.03/task** vs CUA Driver **$10.05** on OSWorld 2.0 GPT-6 Astra at +3.55 Partial (`HCU-P` Table 1). OSWorld 1.0, kept in two columns that must not be mixed: **evaluated** (Table 2) $2.52 vs $5.65 per task, 351.3 s vs 500.8 s; **released** (Table 4) $0.402 vs $0.983 at 70.13% vs 62.47%. MIT except the Apache-2.0 OSWorld-V2 subtree. |
 | **Cua Driver** | Third-party numbers above; Cua Spaces $18/mo Pro, $30/seat/mo Teams (repo README); +2–9 s per screenshot with local perception (`CUA`). |
 | **Orgo** | Infra only: $0.055/hr Medium running, $0.0027/hr stopped; plans $29/$99/$399; Windows +$15/mo (`ORGO-P`). One internal inconsistency: `ORGO-P` says "$3 of starting credit", `ORGO-L` says "$5 for a person or $2 for an agent signup". |
 | **Sai** | **$14.34/task** on OSWorld 2.1, **$15.70/task** on 2.0 (`SAI-A`); computer + model included (`SAI-B`). |
@@ -377,12 +415,24 @@ Misses the Absent Row" (`OSW2`).
 | | Evidence |
 |---|---|
 | **HCU** | None documented. |
-| **Cua Driver** | None at driver level; Cua Spaces has VM-level Spaces + "Teleport" — `[INFERENCE]` desktop branching, not run branching. |
+| **Cua Driver** | None at driver level; Cua Spaces has VM-level Spaces + "Teleport" — `[INFERENCE]` desktop branching, not run branching. Its platform matrix also rates KDE/KWin and Hyprland **Experimental** (`CUA` platform support). |
 | **Orgo** | Strongest: fork copies "the disk and live memory: open apps, windows, running processes", source pauses "about two seconds", Linux running only, past-baseline "copies cannot" (`ORGO-F`). |
 | **Sai** | None; branching is procedure replay with new inputs (`SAI-L`). |
 | **Screenshot-only** | `[INFERENCE]` VM snapshot if the harness offers one; nothing in the interface. |
 
 ---
+
+## 3.7 The failure class none of them covers, and one of them caps
+
+Simular's own OSWorld article reports a task where "the current one zeroes any run
+that touches DevTools", and a run where Opus 4.7 "set the score variable by hand"
+(`SAI-A`). That is not a DevTools problem; it is **any agent that writes the answer
+instead of doing the work** — DevTools, `echo > file`, an accessibility
+`set_value` on a read-only field. A verifier over persisted state does not catch it
+on its own either, which is why M1's trace assertion (store contents may only
+advance via GUI act events) exists. This is the cheapest high-signal experiment in
+the document: a small family of answer-writing traps, scored by trace as well as
+state.
 
 ## 4. What we can run on 2026-11-21 with no account and no payment
 
@@ -402,16 +452,19 @@ Misses the Absent Row" (`OSW2`).
 4. **OSWorld 2.0 tasks** — public corpus (`github.com/xlang-ai/OSWorld-V2`,
    `huggingface.co/datasets/xlangai/osworld_v2_tasks`), so a Myco task set can be
    drawn from a shared, citable pool.
-5. **HCU vs Cua Driver head-to-head on identical tasks and model** — the one
-   comparison neither vendor authored.
+5. **An HCU vs Cua Driver head-to-head on *our* task set** — Microsoft already
+   published exactly this comparison on OSWorld/WAA (`HCU-P` Tables 1, 4–7, four
+   models), so the missing number is **Myco against either**, not HCU against Cua.
+   The paper's computer-use-loop rows are also the ready-made screenshot-only
+   reference for M1's baseline criterion.
 
 ## 5. Requires escalation
 
 | Item | Blocker | What it buys |
 |---|---|---|
-| Orgo key + credit | `sk_live_` key; datacenter/VPN IPs get nothing free | Real fork latency; confirm `NOT_FORKABLE` semantics |
+| Orgo key + credit | `sk_live_` key; a server/datacenter/VPN address gets no starting credit, and the account is free-only only if it never gets one (a card lifts it) | Real fork latency; confirm `NOT_FORKABLE` semantics |
 | Sai key | phone verification before first key | Test whether `success_criteria` verdicts are model-over-text only |
-| Paid OSWorld 2.0 runs | model access + compute (HCU ≈ $10.03 × 108 ≈ $1.1k; Sai ≈ $14.34 × 108 ≈ $1.5k) | Reproduce, not cite, the two headline numbers |
+| Paid OSWorld 2.0 runs | model access + compute. Arithmetic, not a quote, and not linearly derivable (a subset costs its per-task rate plus harness, and averages move with task mix): HCU ≈ $10.03 × 108 ≈ **$1.08k**; Sai on **2.0** ≈ $15.70 × 108 ≈ **$1.70k** ($14.34 is the 2.1 rate) | Reproduce, not cite, the headline numbers |
 | HCU notarised signing | local signing "is not notarization" (`HCU-PL`) | Only needed if Myco redistributes HCU |
 
 ---
@@ -428,9 +481,11 @@ Misses the Absent Row" (`OSW2`).
 3. **Sai's judge is steerable by screen text.** A page rendering "file saved
    successfully" without saving, judged against `success_criteria`. Falsified if
    the verdict is `failed`.
-4. **Pass^3 is the right axis and the gap is large.** Measure pass@1 vs pass^3 for
-   HCU and Cua on 20 tasks; Simular's own 77.3% partial vs "79.4% counting
-   repeated runs" `[INFERENCE]` predicts a real gap — measure its size in points.
+4. **Pass^3 is the axis *we choose*, and the gap is unknown.** Not inferred from
+   Simular's "79.4% counting repeated runs" — the article only says benchmarks
+   *report* pass@k, and OSWorld 2.0's primary metric is binary at 500 steps. So it
+   is a design choice, not a cited result: measure pass@1 vs pass^3 for HCU and
+   Cua on 20 tasks, report points, and print the underpowered statement.
 5. **Orgo's fork is a cheaper retry than a cold start.** Time `POST /fork` vs
    `POST /computers` + agent setup, on a task needing a signed-in browser.
 6. **Setup cost dominates the first run.** Stopwatch from clean machine to first
@@ -445,9 +500,13 @@ Misses the Absent Row" (`OSW2`).
    a desktop that has since changed is rejected, not sent" (`HCU-R`). Most directly
    transferable claim in this document.
 9. **Vendor benchmark numbers are not comparable.** Normalise every published
-   figure to `(partial, binary, cost/task, steps)` and re-rank. Falsified if the
-   order holds — Sai's 77.3% (2.1), HCU's 72.37% (2.0) and Simular's own 73% (2.0)
-   are already different benchmarks *and* different metrics.
+   figure to `(benchmark version, partial, binary, cost/task, steps)` and re-rank.
+   The breaks are per axis: **version** — Sai's 73.0% (2.0) and 77.3% (2.1) are
+   the same metric on different suites and cannot be ranked against each other;
+   **metric** — partial vs binary is the big break (Sai 77.3% / 41.7%; HCU 72.37%
+   / 32.40%; on binary the HCU–Cua gap is 0.9 points, not 3.55); **re-scoring** —
+   "79.4% counting repeated runs" is not a single-attempt metric. Falsified if any
+   ordering survives normalisation.
 10. **Nobody branches a run at a step.** Attempt step-level fork (snapshot at step
     N, two continuations) on all four. Prediction: Orgo forks the machine, Sai
     replays the procedure, HCU/Cua neither. Falsified if any exposes "snapshot this
@@ -488,5 +547,24 @@ Misses the Absent Row" (`OSW2`).
 | 27 | Simular — "Sai tops OSWorld 2.1" (Aug 28 2026; updated Oct 2 2026) | https://www.simular.ai/articles/sai-tops-osworld-2-0 |
 | 28 | OSWorld 2.0 site (leaderboard, metrics, failure cases) | https://osworld-v2.xlang.ai/ |
 | 29 | OSWorld 2.0 paper — abstract | https://arxiv.org/abs/2606.29537 |
+
+## 8. Revision log
+
+- **v2, 2026-11-21 (after independent verification).** Fifteen must-fix corrections applied,
+  all reproduced by the verifier against the same sources: evaluated-vs-released HCU rows
+  separated (Table 2 vs Table 4 costs and latencies); the evaluated version's `assert_ax`
+  postconditions replaced by the released ordered waits; the Sai fork-absence claim
+  downgraded to "not found in an incomplete index"; Orgo's two `NOT_FORKABLE` codes and the
+  misattributed baseline limit fixed (account-limits.md, not fork.md); the Sai escalation
+  re-priced at 2.0's $15.70; the metric comparison split into version/metric/re-scoring;
+  "the comparison neither vendor authored" withdrawn (Microsoft authored it); Cua stars and
+  the FSL-1.1-MIT subtree; HCU's Apache-2.0 OSWorld-V2 subtree; Cua's benchmark claim scoped
+  to the pages actually read; Sai's `transitions`/`probe` 400 roadmap and the learn-time
+  `reset`/`testResult` caveats added; Pass^3 reframed as our choice; "no replay artefact"
+  scoped to the documented surface; the 2–9 s screenshot cost attributed to local
+  perception; Orgo's free credit and Sai's one-task-per-computer stated precisely.
+  Omissions now named: OpenAI's 72.60% offline-subset row, binary as OSWorld 2.0's primary
+  metric, HCU's skill ablation, the answer-writing failure class (§3.7), Cua's experimental
+  Linux desktops, HCU's maturity (65 stars) versus Cua/Sai as the real incumbents.
 
 STATUS: complete | All four named competitors documented from primary docs on 2026-11-21; nothing was executed (no keys/installs), so every score is vendor- or paper-reported, and Orgo's two own pages disagree on starting credit ($3 vs $5/$2).
