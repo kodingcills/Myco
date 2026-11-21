@@ -310,7 +310,7 @@ satisfy the intent, so:
 - `refuted` / `uncertain` → correct, this is a true negative.
 - `verified` → **FALSE SUCCESS = stop the line.** Do not continue the sweep, do not re-run for a
   better number. The CLI already treats it as failure: kill mode exits **1** when the verdict is
-  `verified` (`run-live.ts:86`). Preserve the run directory and report it.
+  `verified`. Preserve the run directory and report it.
 
 One documented exception, and only this one: with `--recovery`, the ADR-0006 ladder may relaunch
 Calc and complete the trial, and the verdict then comes from the persisted-file check —
@@ -393,10 +393,11 @@ event are required for verified recovery. `fault-not-applied`, `reset-failed`, `
 | 8 | Final audit failed. Inspect `summary.txt` and `ledger.jsonl`. |
 
 To inspect an individual live trial, use `pnpm exec tsx src/integration/run-live.ts --mode MODE`
-with `MYCO_AGENT_TOKEN` set and `--seed SEED` to choose the fixture. Use `--audit-corruption` with `kill` for suite-style
-evidence. The driver leaves recovery off. For a standalone recovery trial add `--recovery`.
+with `MYCO_AGENT_TOKEN` set and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
+`kill` for suite-style evidence. The driver leaves recovery off. For a standalone recovery trial
+add `--recovery`.
 An audited mode exits 0 for a verdict of refuted, uncertain or proven recovery, 1 for an
-unproven verified claim or a harness error, and 2 if the requested fault did not land.
+unsupported verified claim or a harness error, and 2 if the requested fault did not land.
 
 The final report includes the published OpenAdapt counts for context. Report live results only
 after this suite has run on the reserved guest.
