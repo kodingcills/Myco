@@ -6,7 +6,7 @@ See `docs/product/vision.md` for the product vision and Milestone 1 acceptance c
 
 ### Issue tracker
 
-Issues are tracked in Linear, team TIF. Tiffany's outer-loop assistant (T3 Code Bridge) owns Linear and mirrors `docs/backlog/*.md` into it; agents in this repo do not have Linear access and MUST NOT call Linear directly. See `docs/agents/issue-tracker.md`.
+Issues are tracked in Linear, team TIF. Tiffany's outer-loop assistant (T3 Code Bridge) owns the issue structure and mirrors `docs/backlog/*.md` into Linear. Agents (including Claude cloud sessions) MAY read Linear and MAY update the status of, comment on, and link PRs to the TIF issue they are working on. Agents MUST NOT create, delete, re-parent, or move issues between projects, or edit other issues' scope; those changes still go through the outer loop. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
