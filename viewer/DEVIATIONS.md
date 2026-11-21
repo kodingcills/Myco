@@ -25,7 +25,7 @@
 
 ## v0 conformance decisions
 
-- The viewer parses the result first. A scored result can display a sourced Unknown while the worker checks the remaining evidence. The worker must finish trace validation, integrity checks, and cross-file checks before a positive run verdict can display. J1 timing measures the final verdict. See [PERF.md](PERF.md) for the 10,000-step budget miss.
+- The viewer parses the result first. A scored result can display a sourced Unknown while the worker checks the remaining evidence. The worker must finish trace validation, integrity checks, and cross-file checks before a positive run verdict can display. J1 timing measures the final verdict. See [PERF.md](PERF.md) for the measured budget.
 - A supplied manifest must identify the result and cover the required files and supplied viewer evidence. The viewer checks every listed SHA-256 against the original bytes. A folder or pair without a manifest can still be scored using its schema and cross-file evidence. That form can detect missing run starts, mismatched identity, missing recorded actions or guards, and failed steps whose corresponding failure and recovery events are both missing. A matching unsigned manifest establishes consistency within the selected files. It does not authenticate the producer.
 - The recovery classification ignores `none`. Aborted recovery remains Unknown. Failed and incomplete attempts require recorded completion. The guard-failure fallback accepts a new passing postcondition from the failed step or its immediate continuation in the recorded state. A continuation needs a matching action after the failure. The postcondition must match the result and the step must have no earlier passing postcondition.
 - Up/Down move the playhead globally when the focused widget leaves those keys available. A multi-row Comparator keeps its roving Up/Down. J/K remain available from every Comparator row. Collapsing a focused sidebar or Inspector moves focus to the Verdict Bar or center respectively. Reopening from that fallback restores focus to the previous control when available.
@@ -36,16 +36,16 @@
 
 - An unscoped recovery or fault source carries the preceding scoped step in the staged trace payload. Its chip resolves to the same step in Why before and after indexing. A source without step context opens Raw.
 - The Runs sidebar keeps the newest open for each known run ID. A superseded worker is aborted as soon as the duplicate is identified. Different run IDs keep separate entries in open order.
-- The 10,000-step verdict improved to **133.2 ms median and 179.9 ms max** in the isolated Chromium benchmark. The 150 ms maximum remains open. See [PERF.md](PERF.md) for the comparable runs and worker/main profile.
+- The 10,000-step final verdict missed 150 ms in this round's baseline. Fix round 2 closed it; see [PERF.md](PERF.md).
 
 ## Remaining v0 gates
 
 - Exact J2 evidence. The checked-in M1 normal run passed verification, and its mid-typing capture lacks a step association. The refuted M1 result is a live-document mismatch before persisted readback. The Foundry false-success fixture verifies the keyboard journey using its own claim, absent value, and check source. The exact B39 disagreement, trace line, and step-linked capture require the corresponding authoritative run.
 - Full J3 screenshot experience on a real run. The viewer-only test verifies the loading, preview, full-image and lightbox states. It leaves the real evidence unchanged.
-- The 150 ms final Verdict Bar limit at 10,000 steps. The diagnostic result and hard limit are recorded in [PERF.md](PERF.md).
+- The 150 ms final Verdict Bar limit at 10,000 steps now passes on the measured machine (122.7 / 126.0 / 136.4 ms median / p95 / max, N=20; [PERF.md](PERF.md)). Chrome Stable has not been run, and CI enforces 250 ms at 10,000 steps unless `MYCO_VIEWER_STRICT_BUDGET=1`.
 - Scrub input to playhead and selected-row rendering. This gate uses its own input-to-render measurement. The adjacent rAF interval is reported separately.
 - Screenshot budgets. Cached and cold full-image latency and memory at 1,000 screenshots remain unmeasured.
-- Chrome Stable and CI. Repeat on the specified M-series Chrome Stable setup and enforce the hard limits in CI. Printed diagnostics and the current fixture test do not enforce those limits.
+- Chrome Stable. Repeat on the specified M-series Chrome Stable setup.
 - §2.6 CheckRow and §5 color conflict. Passing checks still use their check-level Verified badge. Outer-loop interpretation is pending.
 - Written sign-off for the earlier layout tokens and individual deviations remains pending.
 - Grok Bot screenshot review and attaching the refreshed screenshots to PR #69 remain pending.
@@ -58,6 +58,8 @@
 - Proof › State changes lists every recorded step. A step whose version does not change shows `vN → vN unchanged` in tertiary text instead of being skipped.
 - Line heights: three rules set a font size without a line height and inherited 18/20 px (`[data-source]` at 11 px, `[data-kbd]` at 11 px, filmstrip `not recorded` at 12 px). They now use the token pair (dataSmall 11/16, small 12/16). A Playwright test asserts that every rendered text node uses a size/line-height pair from `tokens.json`.
 - Event types outside the schema stay accepted as extended evidence. Run summary lists them (first 20, then a count), Raw marks them `· extended`, and a test confirms they cannot change a verdict.
+
+- Load workers: each load uses two workers (trace, and result/manifest/ledger in parallel) taken from a pool of two idle workers spawned after the Open screen paints. This is an implementation choice for the §8 verdict budget. A positive verdict still waits for every check.
 
 ## Open decisions for outer loop
 

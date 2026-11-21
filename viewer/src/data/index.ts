@@ -22,4 +22,4 @@ export {
   type FailureRecoveryItem,
   type PersistedValue,
 } from "./verdict.ts";
-export { loadRunInWorker, type WorkerLoadOptions } from "./worker-client.ts";
+export { loadRunInWorker, type WorkerLoadOptions, warmWorkers } from "./worker-client.ts";

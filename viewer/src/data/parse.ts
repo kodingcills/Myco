@@ -11,6 +11,7 @@ import type {
   RunData,
   RunManifest,
   RunUpdate,
+  Sourced,
   SourceRef,
   ViewTraceEvent,
 } from "./types.ts";
@@ -137,31 +138,81 @@ export async function parseRun(
   return indexScreenshots(files, await parseRunEvidence(files, emit));
 }
 
-export async function parseRunEvidence(
-  files: RunFiles,
-  emit?: (update: RunUpdate) => void,
-): Promise<RunData> {
-  const parseErrors: ParseError[] = [];
+/** Reads files once per phase owner; artifacts stay uncached so each is read on demand. */
+export function cachedReader(files: RunFiles): RunFiles["read"] {
   const cached = new Map<string, Blob | undefined>();
-  function read(path: string) {
+  return (path) => {
     if (path.startsWith("artifacts/")) return files.read(path);
     if (!cached.has(path)) cached.set(path, files.read(path));
     return cached.get(path);
-  }
+  };
+}
+
+export interface ResultPhase {
+  result?: ResultRecord;
+  manifest?: RunManifest;
+  /** Result and manifest JSON errors, in read order. */
+  errors: ParseError[];
+  /** Resolves once every manifest digest has been checked. */
+  manifestCheck: Promise<Sourced<string> | undefined>;
+}
+
+/** The result and manifest, validated first so the verdict can paint before the trace finishes. */
+export async function parseResultPhase(
+  files: RunFiles,
+  read: RunFiles["read"],
+  emit?: (update: RunUpdate) => void,
+): Promise<ResultPhase> {
+  const errors: ParseError[] = [];
   const evidence = { paths: files.paths, read };
-  const result = await readJson<ResultRecord>(
-    evidence,
-    "result.json",
-    resultRecordSchema,
-    parseErrors,
-  );
-  emit?.({ type: "result", result, parseErrors: [...parseErrors] });
-
+  const result = await readJson<ResultRecord>(evidence, "result.json", resultRecordSchema, errors);
+  emit?.({ type: "result", result, parseErrors: [...errors] });
   const manifest = files.paths.includes("manifest.json")
-    ? await readJson<RunManifest>(evidence, "manifest.json", manifestSchema, parseErrors)
+    ? await readJson<RunManifest>(evidence, "manifest.json", manifestSchema, errors)
     : undefined;
-  const manifestCheck = checkManifest({ files, manifest, result, read });
+  return {
+    result,
+    manifest,
+    errors,
+    manifestCheck: checkManifest({ files, manifest, result, read }),
+  };
+}
 
+export interface LedgerPhase {
+  ledger: RunData["ledger"];
+  errors: ParseError[];
+}
+
+export async function parseLedgerPhase(read: RunFiles["read"]): Promise<LedgerPhase> {
+  const errors: ParseError[] = [];
+  const ledger: RunData["ledger"] = [];
+  const ledgerFile = read("ledger.jsonl");
+  if (ledgerFile) {
+    await readLines(ledgerFile, "ledger.jsonl", errors, (line, text) => {
+      if (!text.trim()) return;
+      const source = { file: "ledger.jsonl", line };
+      const value = json(text, source, errors);
+      if (valid(value, ledgerRowSchema, source, errors)) {
+        ledger.push({ value: value as LedgerRow, source });
+      }
+    });
+  }
+  return { ledger, errors };
+}
+
+export interface TracePhase {
+  events: ViewTraceEvent[];
+  byStep: Map<number, ViewTraceEvent[]>;
+  errors: ParseError[];
+}
+
+/** Streams trace.jsonl, then trace.extended.jsonl, validating and indexing each event by step. */
+export async function parseTracePhase(
+  files: RunFiles,
+  read: RunFiles["read"],
+  emit?: (update: RunUpdate) => void,
+): Promise<TracePhase> {
+  const errors: ParseError[] = [];
   const events: ViewTraceEvent[] = [];
   const byStep = new Map<number, ViewTraceEvent[]>();
   const seen = files.paths.includes("trace.extended.jsonl") ? new Set<string>() : undefined;
@@ -170,14 +221,14 @@ export async function parseRunEvidence(
   for (const file of ["trace.jsonl", "trace.extended.jsonl"]) {
     const blob = read(file);
     if (!blob) continue;
-    await readLines(blob, file, parseErrors, (line, text) => {
+    await readLines(blob, file, errors, (line, text) => {
       if (!text.trim()) return;
       // The extended artifact may be a full copy of the trace with extra lines.
       if (file === "trace.extended.jsonl" && seen?.has(text.trim())) return;
       const source = { file, line };
-      const value = json(text, source, parseErrors);
+      const value = json(text, source, errors);
       const schema = traceSchemas.get(eventType(value));
-      if (!valid(value, schema ?? additiveEventSchema, source, parseErrors)) {
+      if (!valid(value, schema ?? additiveEventSchema, source, errors)) {
         return;
       }
 
@@ -214,20 +265,18 @@ export async function parseRunEvidence(
   if (emit && events.length > 0 && events.length < previewSize) {
     emit({ type: "trace", events: [...events] });
   }
+  return { events, byStep, errors };
+}
 
-  const ledger: RunData["ledger"] = [];
-  const ledgerFile = read("ledger.jsonl");
-  if (ledgerFile) {
-    await readLines(ledgerFile, "ledger.jsonl", parseErrors, (line, text) => {
-      if (!text.trim()) return;
-      const source = { file: "ledger.jsonl", line };
-      const value = json(text, source, parseErrors);
-      if (valid(value, ledgerRowSchema, source, parseErrors)) {
-        ledger.push({ value: value as LedgerRow, source });
-      }
-    });
-  }
-  const manifestError = await manifestCheck;
+/** Joins the phases in their original order: result, trace, ledger, then cross-file checks. */
+export function finishEvidence(
+  files: RunFiles,
+  { result, manifest, errors: resultErrors }: Omit<ResultPhase, "manifestCheck">,
+  { events, byStep, errors: traceErrors }: TracePhase,
+  { ledger, errors: ledgerErrors }: LedgerPhase,
+  manifestError: Sourced<string> | undefined,
+): RunData {
+  const parseErrors = [...resultErrors, ...traceErrors, ...ledgerErrors];
   const manifestChecked = manifest !== undefined && !manifestError;
   const reason = manifestError ?? checkRunEvidence(result, events, byStep, ledger, manifestChecked);
   if (reason) {
@@ -246,6 +295,17 @@ export async function parseRunEvidence(
     artifactPaths: artifactPaths(files),
     parseErrors,
   };
+}
+
+export async function parseRunEvidence(
+  files: RunFiles,
+  emit?: (update: RunUpdate) => void,
+): Promise<RunData> {
+  const read = cachedReader(files);
+  const resultPhase = await parseResultPhase(files, read, emit);
+  const trace = await parseTracePhase(files, read, emit);
+  const ledger = await parseLedgerPhase(read);
+  return finishEvidence(files, resultPhase, trace, ledger, await resultPhase.manifestCheck);
 }
 
 function artifactPaths(files: RunFiles) {

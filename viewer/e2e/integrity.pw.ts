@@ -151,16 +151,19 @@ test("an unscoped recovery source opens the same step before and after indexing"
 test("a late same-run load cannot replace the newer sidebar entry", async ({ page }) => {
   await page.addInitScript(() => {
     const NativeWorker = Worker;
-    let first = true;
+    // A load uses two workers (trace and result); hold both of the first load's workers.
+    let held = 0;
+    const queued: { target: EventTarget; data: unknown }[] = [];
+    const targets: Worker[] = [];
     window.Worker = class extends NativeWorker {
       constructor(url: string | URL, options?: WorkerOptions) {
         super(url, options);
-        if (!first) return;
-        first = false;
-        const queued: MessageEvent[] = [];
+        if (held >= 2) return;
+        held++;
+        targets.push(this);
         const hold = (event: MessageEvent) => {
           event.stopImmediatePropagation();
-          queued.push(event);
+          queued.push({ target: this, data: event.data });
           if (event.data.type === "validated") document.body.dataset.olderValidated = "true";
         };
         this.addEventListener("message", hold);
@@ -168,8 +171,9 @@ test("a late same-run load cannot replace the newer sidebar entry", async ({ pag
           "release-older",
           () => {
             this.removeEventListener("message", hold);
-            for (const event of queued)
-              this.dispatchEvent(new MessageEvent("message", { data: event.data }));
+            if (targets.at(-1) !== this) return;
+            for (const { target, data } of queued)
+              target.dispatchEvent(new MessageEvent("message", { data }));
           },
           { once: true },
         );
