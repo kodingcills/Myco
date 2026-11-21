@@ -207,20 +207,31 @@ primary sources on 2026-11-21 and are cited in §12; nothing was executed.
 | **OSWorld-V2** (`xlang-ai/OSWorld-V2`, Apache-2.0, 429★) | same family, 108 tasks, weighted `partial_scores` | **47 Calc tasks** (same count) | Not as-is; same model |
 | **Windows Agent Arena** (`microsoft/WindowsAgentArena`, MIT, 918★, pushed 2026-10-26) | **its own Windows 11 VM inside Docker, QEMU, `--use-kvm true` by default**; Azure ML for scale | **24 `libreoffice_calc` tasks** (counted in the tree), across 12 app categories | **Not as-is, and not on this host** |
 
-So the honest framing is: *neither benchmark can be pointed at `myco-win11`.* Both own their VM.
-What they can supply is (i) **agents whose competence is already published** and (ii) **a task and
-checker format worth adopting**. Those are the two things §1b.2 and §1c take.
+So the honest framing is: *neither benchmark can be pointed at `myco-win11` as-is.* What they can
+supply is (i) **agents whose competence is already published** and (ii) **a task and checker
+format worth adopting**. Those are the two things §1b.2 and §1c take.
 
-**Why WAA in particular cannot run here, stated precisely.** Two independent blockers:
+**Why OSWorld cannot be pointed at our VM — stated accurately.** OSWorld's `Provider` interface
+(`desktop_env/providers/base.py`) has twelve concrete providers (`vmware`, `virtualbox`, `docker`,
+`aws`, `azure`, `gcp`, `modal`, `daytona`, `fastvm`, `aliyun`, `volcengine`, `pyromind`). Several
+of them boot **a VM you supply** rather than one they own — so the earlier draft's "boots its own
+VM" was wrong. What they actually require is a VM they can drive by *their* handle: a
+`vmrun`-revertible VMware/VirtualBox image, or a cloud instance, or Docker. Myco's guest is a UTM
+VM reachable only over SSH with a ten-op agent; **no provider attaches to an external VM over
+SSH**, which is why it cannot be pointed here — not because they insist on owning the machine.
 
-1. **Hypervisor.** WAA defaults to `--use-kvm true` and its own docs say "running the benchmark
-   locally without KVM acceleration is not recommended". macOS has no KVM; the VM would be
-   emulated and unusably slow.
-2. **Architecture.** WAA's golden image is built from the *Windows 11 Enterprise Evaluation* ISO
-   through Dockur, i.e. x64, on an x64 Docker host. There is no ARM64 path in its README or
-   scripts, unlike OSWorld, whose provider code explicitly branches on
-   `'arm' in arch or 'aarch' in arch` (`desktop_env/controllers/setup.py`) and whose image
-   datasets ship `Ubuntu-arm.zip`.
+**Why WAA in particular cannot run on this Mac.** The blocking factor is **architecture, not
+KVM**: WAA's golden image is built from the *Windows 11 Enterprise Evaluation* x64 ISO via Dockur,
+and there is no ARM64 path anywhere in its README or scripts (`grep -i arm64|aarch` → zero hits).
+That would mean TCG-emulating an entire x64 Windows desktop — technically possible, practically
+absurd. KVM is the *second* problem: `--use-kvm` defaults to `true` and the README says running
+without it "is not recommended due to performance issues"; note that `run.sh` silently flips to
+`--use-kvm false` when `/dev/kvm` is absent, so macOS takes the slow path rather than refusing.
+
+*(An earlier draft cited OSWorld's `if 'arm' in arch or 'aarch' in arch` as evidence of ARM support.
+That check is real but it sits in a Chrome-profile branch selecting `snap/chromium` versus
+`.config/google-chrome` — it is not a VM-architecture provider branch. The genuine ARM64 evidence
+is the published artefact `Ubuntu-arm.zip`.)*
 
 **A correction to what the repo previously assumed.** `docs/research/eval-frameworks.md` §1 treats
 OSWorld as Linux-only. That is too strong: `xlangai/windows_osworld` on Hugging Face is an
@@ -256,20 +267,37 @@ out. This is the trap in "pick the baseline from agents with public scores", and
 way from Tiffany's intent.
 
 **(ii) Publicly scored on Windows *and* Windows-native: Navi (WAA's own agent).** WAA ships
-`Navi` with published scores on 150+ Windows tasks, and — uniquely — it is the only agent in this
-survey whose published number is **on Windows**. Its modes are documented in the repo:
+`Navi`, and its published numbers are the only ones in this survey measured **on Windows**. The
+paper's **Table 4** is the source. It varies **perception inputs**, not `--som-origin` values: two
+independent toggles (UIA tree ✓/✗, Pytesseract+DOM+GroundingDINO OCR ✓/✗), an OmniParser toggle,
+and Phi3-V / GPT-4o-mini / GPT-4o / GPT-4V-1106 per row, with a human ceiling of 74.5%:
 
-| Mode | What it is | Notes |
-|---|---|---|
-| `--som-origin mixed-omni --a11y-backend uia` | OmniParser + accessibility tree | **Recommended for best results** (the paper's top config) |
-| `--som-origin omni` | OmniParser only — **pure screenshot** | The honest screenshot condition |
-| `--som-origin oss` | webparse + groundingdino + Tesseract OCR | Baseline |
-| `--som-origin a11y --a11y-backend uia/win32` | accessibility only | Not a screenshot agent at all |
+| UIA tree | OmniParser | OCR | Published total (GPT-4V-1106 / GPT-4o) |
+|---|---|---|---|
+| ✗ | ✗ | ✓ | 8.6% / **9.8%** |
+| ✓ | ✗ | ✓ | 13.1% / 9.4% |
+| ✗ | ✓ | ✗ | 12.5% / 8.6% |
+| **✓** | **✓** | ✗ | **19.5%** — the paper's headline / 14.3% |
 
-`--som-origin omni` is, by construction, **a publicly scored pure-screenshot Windows agent**, and
-its code (`client/mm_agents/`) is a plain Python agent class that talks to a VM over HTTP. That
-makes it the single best candidate under Tiffany's rule, and it is a genuine change to §1a's
-recommendation — see 1b.3.
+**Read the 8.6% correctly**: it is OmniParser **on the screenshot with no UIA tree** — which is
+what `--som-origin omni` actually does — and it comes from the GPT-4o row. The best published
+number for any *tree-free* configuration is **12.5%** (OmniParser only, GPT-4V). An earlier
+revision of this table attributed 8.6% to "OmniParser only" outright and listed 12.5% as a
+same-mode variant; the paper says otherwise, and the distinction matters for what B1 can claim.
+
+**A correction to the earlier draft, because it matters for honesty:** `--som-origin omni` is **not
+"pure screenshot by construction."** In `mm_agents/navi/agent.py` the `omni` branch calls
+`propose_ents(image, with_captions=True)` and builds the planner input as a SoM-annotated image
+**plus `list_of_text`** — VLM-generated captions per mark. The WAA paper files OmniParser under
+*icon/image detection*, alongside pytesseract + GroundingDINO. So **every** published Windows agent
+here uses pixels plus *some* derived structure; none is a bare-pixel agent, and no published
+Windows number exists for one.
+
+Also: Navi's `predict()` returns a list of **Python source strings** that the harness `exec`s
+against an in-guest `computer` object, and the package has a `requirements.txt` but **no packaging
+metadata** (no `setup.py`, no `pyproject.toml`, no PyPI package). "`pip install` and point it at our
+VM" — which the earlier draft implied — is wrong. Porting Navi means writing an execution shim that
+honours its action grammar inside the guest, which is real work, not a transport tweak.
 
 **(iii) Publicly scored and already running on our stack: Cua.** Cua has starred open-source status
 but no published OSWorld score in the sources I read; treat it as *unscored* rather than scored.
@@ -283,42 +311,60 @@ stories are present in one table:**
 
 | Arm | Agent | Public score exists? | Runs on our VM? | What it establishes |
 |---|---|---|---|---|
-| **B1** | **Navi, `--som-origin omni`** (WAA's agent, screenshot mode) | **Yes — on Windows** | Via a thin transport port (its agent is a Python class; our agent provides screenshot + input ops) | "An agent with a *published Windows score* also scores this on our Calc suite" |
-| **B2** | **UI-TARS-1.5-7B** in the OSWorld-style loop (`uitars15_v2.py` / `gui-agents`) | **Yes — on OSWorld (Linux)** | Same porting caveat, and must be labelled as *ported* | "A publicly scored OSWorld agent also works here" — with the port declared |
-| **C1/C2** | **Cua Driver** (§1a) | No public benchmark score | Yes, natively (SSH + named pipe) | Recognisable framework, best-in-class action model |
+| **B1** | **Navi, `--som-origin omni`** (WAA's agent) | **Yes — on Windows: 8.6% total** (best of its four model rows: 12.5% with GPT-4V) | **No — needs real porting.** Navi emits Python source strings for an in-guest executor; no pip package, no transport abstraction we can satisfy with the current ten agent ops | "An agent with a *published Windows score* also scores this on our Calc suite" |
+| **B2** | **UI-TARS-1.5-7B** in the OSWorld loop (`uitars15_v2.py`) | Yes — on OSWorld (Linux) | Ported, with the same action-grammar caveat, plus a coordinate-input transport we do not have yet | "A publicly scored OSWorld agent also works here" — with the port declared |
+| **C1/C2** | **Cua Driver** (§1a) | No public benchmark score | Yes, natively (SSH + named pipe), once the §1a spike passes | Recognisable framework, best-in-class action model |
 
-**Ordering of effort:** B1 is the cheap win and should be first — it is `pip`-installable, its
-inputs are screenshots plus mouse/keyboard, and it does not require the accessibility tree in
-`omni` mode, so it satisfies the "screenshot agent" reading of row 7 without any purity argument.
-B2 is the tie to the literature. C1/C2 remain the strongest engineering fit and the most
-maintained code.
+**Ordering of effort, corrected.** The earlier draft called B1 "the cheap win, `pip`-installable,
+should be first." That is false on both counts, and the ordering changes with it:
 
-**The one rule that keeps this honest:** every arm's table row carries
-`publicScore { benchmark, version, value, source }` and `ported: true|false`. A ported agent's
-published number is reported **as context, never as the expectation**. Row 7's comparison is
-between what we measure here, on identical tasks, and the published number is what lets a reader
-judge whether our port is plausible — not proof that it is.
+1. **C1/C2 remain first** — they need no ported agent, no new action grammar, and their transport
+   already exists. They are also the only arm that runs at all before the spike.
+2. **B1 is second, and it is a real project** — an in-guest action executor for Navi's Python-string
+   grammar, OmniParser's captioning model running somewhere, and a planner LLM. Budget it as
+   days, not hours, and only after Cua's spike tells us whether a coordinate-input path in the
+   guest works at all (Navi needs one too — see the fairness note below).
+3. **B2 third** — same coordinate-input dependency, plus a bigger model download.
+
+**The transport contradiction this exposes, stated plainly.** Every arm except C1/C2 needs
+**coordinate click and arbitrary keystroke** in the guest, and Myco's agent op union has neither
+(`uia_invoke` needs a UIA `runtime_id`, §3.1). So B1 and B2 depend on the same guest-side input
+channel that §3.1's fallback describes — in-guest PyAutoGUI driven through `launch`, or new typed
+agent ops. That work is **M1-021's**, it needs the VM, and it is the real gate for B1/B2 — not
+Navi's packaging.
+
+**The rule that keeps this honest.** Every arm's row carries
+`publicScore { benchmark, version, value, source }` and `portScope { transport, perception, planner,
+prompt }` — **not** a single `ported: true|false` boolean. A boolean throws away the distinction
+that matters: Navi's planner, prompt, SoM pipeline and action grammar are *unmodified*; only the
+observation and execution interfaces are substituted. `portScope` lets a reader see exactly that,
+while `publicScore` keeps the published number attached as context. Row 7's comparison is between
+what we measure here, on identical tasks; the published number is what lets a reader judge whether
+our port is plausible — never proof that it is.
+
+**And the number itself must be quoted with its mode.** Navi's headline 19.5% is `mixed-omni` +
+UIA, i.e. an accessibility-tree agent. The arm this document proposes runs `omni`, whose published
+total is **8.6%**. Quoting 19.5% beside a `omni` run would be exactly the kind of opaque
+comparison §1c.2 warns about.
 
 **Cost consequence.** Navi needs an LLM backend (its `config.json` takes OpenAI/Azure keys) and,
-for `mixed-omni`, OmniParser on a GPU. In `--som-origin omni` mode it needs OmniParser (the
-screen-understanding model, MIT, Microsoft) plus an LLM. A **local** LLM behind an
+in every screenshot mode, OmniParser (MIT, Microsoft) plus its captioning model — `omni` needs
+that stage too, just not the accessibility tree. A **local** LLM behind an
 OpenAI-compatible base URL keeps the $0 property; OmniParser is the one component whose local
 feasibility on this Mac is **UNVERIFIED** — it is the first thing M1-023 checks, and if it fails
 the fallback is B2/UI-TARS which needs no separate perception model.
 
-**Two source facts read on 2026-11-21 that decide how much porting B1 really is** (both verified
-this revision, not inferred):
+**Source facts read on 2026-11-21 that decide how much porting B1 really is** (verified, not
+inferred):
 
-- **The published number is Navi's, not the mode's.** WAA's paper reports *Navi* at **19.5%
-  success on the Windows domain** (human baseline 74.5%) — arXiv 2409.08264. The README's
-  configuration table (the ⭐ row) says `--som-origin mixed-omni --a11y-backend uia` is "recommended
-  for best results", i.e. **the paper's headline was measured in mixed-omni mode, which uses the
-  accessibility tree.** There is no published `--som-origin omni`-only number. So B1's row must
-  carry `publicScore { benchmark: WindowsAgentArena, value: 0.195, mode: mixed-omni, source:
-  arXiv:2409.08264 }` **and** `ported: true` — the arm we run is a mode *below* the scored one, and
-  calling its number "the published score" would be exactly the misrepresentation §1b.2 warns
-  about. This does not weaken B1; it is still the only arm with a Windows-published number, it just
-  means the number is an upper reference, not an expectation.
+- **Which number belongs to which configuration.** Navi's headline **19.5%** is Table 4's
+  `UIA ✓ + OmniParser ✓` row with GPT-4V-1106, and the human ceiling beside it is 74.5%. The
+  configuration B1 runs (`--som-origin omni`: screenshot + OmniParser, no tree) is Table 4's
+  `UIA ✗ + OmniParser ✓` row — **8.6% with GPT-4o, 12.5% with GPT-4V**. So B1's row carries
+  `publicScore { benchmark: WindowsAgentArena, version: arXiv:2409.08264, value: 0.086,
+  model: GPT-4o, mode: omni }` and, in `portScope`, records that the **planner model is
+  substituted** for whichever local model runs. Quoting 19.5% beside an `omni` run would be the
+  misrepresentation §1b.2 warns about.
 - **Navi's planner client is not base-URL configurable.** `mm_agents/navi/gpt/gpt4v_oai.py` builds
   `openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))` with no `base_url` argument, and its
   constructor is only `__init__(self, model="gpt-4o")`. Pointing it at a local endpoint is therefore
@@ -366,7 +412,7 @@ source of its task framework. So the two benchmarks share one format, and there 
 
 **The three things worth taking:**
 
-1. **`preserve_cells` as a negative assertion.** OSWorld-Verified added it specifically to catch
+1. **`preserve_cells` as a negative assertion.** OSWorld-Verified (v1) added it — `metrics/table.py` `_preserve_cells`, dispatched at `:442`, and **absent from OSWorld-V2**, which has a wider but different rule set (`sheet_value`, `chart`, `style`, `data_validation`, `filter`, …). It exists specifically to catch
    agents that "fixed" the answer by rewriting untouched regions. M1 has the same hole: our
    verifier asserts one cell and says nothing about the other 199 rows. Adding a
    `preserveCells(region)` predicate to the verifier's declarative language closes a real
@@ -404,10 +450,13 @@ preconditions.** Here is the honest assessment.
 > Myco's own verifier *and* by a re-implementation of their `compare_table`, with both numbers
 > reported.**
 
-That gives an external anchor without pretending to be on their leaderboard. It costs roughly
-**2–4 days** for 10 transcribed tasks, and it belongs *after* M1-015 — it is a credibility
-artefact, not an M1 acceptance criterion. Recommended as **M1-027 (TIF-58), post-M1, not
-blocking**.
+That gives an external anchor without pretending to be on their leaderboard. Cost is a **range
+conditioned on the task draw**: 1.5–2.5 days for ten tasks whose evaluators are plain
+`compare_table` over a downloaded gold file, **4–6 days** if the draw includes a *generated*-gold
+task (the very task quoted in 1c.1 builds its `expected` from a `host_reference_date` getter rather
+than a downloadable workbook) or a WAA task whose gold is a `cloud_file` on Google Drive. It
+belongs *after* M1-015 — a credibility artefact, not an M1 acceptance criterion. Recommended as
+**M1-027 (TIF-58), post-M1, not blocking**.
 
 **What we must not do:** run their tasks on their images and call the result "Myco on OSWorld".
 Their harness owns the VM; that is a different environment from every other number in M1, and
@@ -1045,7 +1094,14 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | WAA has **24** `libreoffice_calc` tasks across 12 app categories, each present twice (`examples/` and `examples_noctxt/`): a tree-wide recursive grep returns **48** files, 24 distinct ids | `git/trees/main?recursive=1`, paths under `src/win-arena-container/client/evaluation_examples_windows/`, 2026-11-21 |
 | WAA Calc task shape is OSWorld's with Windows paths; evaluator `compare_table`, `result.type: vm_file`, `expected.type: cloud_file` | `examples/libreoffice_calc/01b269ae-…-WOS.json` |
 | **44 of 47** OSWorld v1 Calc tasks run `pyautogui.hotkey("ctrl","s")` in `evaluator.postconfig` (the 3 exceptions use a `--convert-to csv` execute without the hotkey) | per-task sweeps of `evaluation_examples/examples/libreoffice_calc/*.json`, 2026-11-21 |
-| WAA's agent is **Navi**; `--som-origin omni` is pure screenshot, `mixed-omni + uia` is the paper's best mode | README §4.1 configuration table |
+| WAA's agent is **Navi**; `mixed-omni + uia` is the paper's best mode (**19.5%**, GPT-4V-1106), `omni`-only is **8.6%** (GPT-4o) / 12.5% (GPT-4V); human 74.5%; six perception configs reported | arXiv 2409.08264 Table 4; README §4.1 |
+| `--som-origin omni` feeds the planner a SoM-annotated image **plus `list_of_text`** captions — not pixels-only | `client/mm_agents/navi/agent.py:351-362` |
+| Navi returns Python source strings for an in-guest `exec` executor; `requirements.txt` only, no `setup.py`/`pyproject.toml`/PyPI package | `client/mm_agents/navi/` |
+| WAA client takes `--emulator_ip` and speaks HTTP to a guest control server on :5000 + CDP :9222 | `client/run.py:112` |
+| WAA `run.sh` silently sets `--use-kvm false` when `/dev/kvm` is missing | `scripts/run.sh:205-208` |
+| OSWorld has twelve providers, none of which attaches to an external VM over SSH | `desktop_env/providers/` |
+| `preserve_cells` is in OSWorld **v1** (`metrics/table.py::_preserve_cells`, dispatched `:442`) and **absent from V2** | both `metrics/table.py` files |
+| 19.5% / 74.5% is the only pair on the WAA project page (no community leaderboard found) | `microsoft.github.io/WindowsAgentArena` |
 | WAA requires an OpenAI or Azure OpenAI key | README prerequisites |
 | Navi's published score: **19.5%** success on the Windows domain, human baseline 74.5%, measured in the paper's `mixed-omni` config — no `--som-origin omni`-only number is published | arXiv **2409.08264** abstract; README configuration table |
 | Navi's OpenAI planner builds `openai.OpenAI(api_key=...)` with **no `base_url`**; constructor is `__init__(self, model="gpt-4o")` | `src/win-arena-container/client/mm_agents/navi/gpt/gpt4v_oai.py` lines 21-27 |

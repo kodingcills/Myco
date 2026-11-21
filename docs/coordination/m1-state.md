@@ -486,7 +486,8 @@ Resolves log 43 (superseded: that entry's ShowUI-2B/UI-TARS default and its four
 
 **Constraints honoured:** no money spent, no accounts created, VM untouched while the sweep runs (including this docs-only commit: it edits no script and executes none).
 
-## Log 2026-11-21 (44) — baseline workstream: OSWorld / WAA folded in (Tiffany's second ask)
+## Log 2026-11-21 (46) — baseline workstream: OSWorld / WAA folded in (Tiffany's second ask)
+*(Renumbered from 45: a parallel entry took 45 while this was being written, and 44 had been allocated twice. Both are recorded; read them in number order.)*
 No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-agent.md §1b, §1c.
 
 **Two takes on OSWorld + Windows Agent Arena.** (1) *Agents with public scores*: neither benchmark can be pointed at `myco-win11` — both own their VM — so the ask becomes "which scored agent can run here". Answer: **Navi** (WAA's agent) in `--som-origin omni` is the only one whose published number is **on Windows**, and it is pure screenshot by construction; UI-TARS-1.5-7B via OSWorld's `uitars15_v2.py` is the tie to the literature but its score is Linux, so any port must be labelled `ported: true` and the published number reported as context, never as the expectation. Cua has no published benchmark score; its §1a case is unchanged (framework quality, not a number). (2) *Methodology*: their task JSON (`config[]` / `evaluator.func` + `expected` + `result` + `postconfig`) already matches Myco's shape; the one thing worth taking is **`preserve_cells`** — OSWorld-Verified added it because agents "fix" answers by rewriting untouched regions, and M1's verifier has the same hole today. The one thing not to take is their `postconfig` autosave, which makes the evaluator depend on GUI keystrokes.
