@@ -685,14 +685,19 @@ the agent's in-guest op. All four exist on main; the baseline adds no new VM plu
 - `pgrep qemu-system-aarch64` is not a liveness check — the guest runs under UTM's QEMULauncher;
   use `lsof -iTCP:2222`. Same error class as the `pgrep` check in log 39.
 
-**Budget and resumability.** ~140 s reset + ~135 s trial ≈ 4.6 min/trial, so ~2.5 h for 30 trials.
-Each row is reset-isolated, so the arm is resumable trial-by-trial — a chunked window is as valid as
-one block and safer given logs 41/35. Recorded in the escalation item so the Coordinator can schedule
-2 × 1.25 h if that suits.
+**Budget, corrected after a verifier rejected my first version.** ~140 s reset + ~100 s redeploy +
+~135 s trial = 375 s/trial → **≈3.1 h** for one sub-arm; with two sub-arms at 510 s/trial →
+**≈4.25 h**. My first figure (2.5 h) omitted the mandatory redeploy and used the wrong multiplier.
 
-**One design constraint promoted to a requirement:** C1 and C2 must share a single `clean-base`
-restore per trial, or the two-arm budget doubles. Written into M1-021's description rather than left
-as an assumption.
+**A design idea I proposed and then rejected on review:** sharing one reset between C1 and C2 to
+halve the cost. C1 *edits the cell*, so C2 would read a document C1 had already changed — the arm
+would be invalid. The saving was one reset per trial (~140 s of 510), nowhere near worth it. **Each
+sub-arm now gets its own `clean-base` restore**, and M1-021 carries a C1/C2 discriminator in the row
+schema so the two cannot collide in transcripts.
+
+**Resumability stands:** every row begins from its own restore, so a chunk boundary is just another
+row boundary and a chunked window is as valid as one block — and safer, since a host sleep (log 41)
+or a UTM wedge (log 35) otherwise costs the whole run.
 
 **Acceptance criterion 7 held explicitly:** same `clean-base` snapshot, same
 `scripts/reset-trial-vm.sh`, same deploy flow, same 30 parameter sets, model and settings verbatim in

@@ -526,13 +526,15 @@ arms must share all of the following. Anything that differs is a documented devi
 | Guest software | Same VM, same LibreOffice 26.8.3 ARM64, same Windows build. No LibreOffice settings are changed for either arm (AutoCorrect stays on — see §3.4). |
 | Desktop geometry | Both arms run at the same display resolution; the baseline's `--grounding_width/height` equal the captured screenshot size. Resolution recorded. |
 | Agent isolation | One trial per guest state, no concurrent sessions. After either arm's trial: cleanup + reset before the next trial (M1-019 semantics). |
-| Trial order | The Myco arm's 30 trials must come from the M1-013 sweep. **As of 2026-11-21 that artefact does not exist**: `/tmp/m1-013/sweep/` holds only `progress.log` (trial 0 in flight) and an empty `runs/`; the prior attempts are classified host-sleep and external-interference aborts and are never counted. The join in §4.4 is therefore **contingent on the sweep completing and the Coordinator declaring it final**; nothing in this doc presumes a sweep number. The baseline arm runs **the same parameter sets, in the same order**, as the sweep's final parameter list — not a re-derived index (§4.4a). |
+| Trial order | The Myco arm's 30 trials must come from the M1-013 sweep. **As of 2026-11-21 the sweep is in progress, not finished**: `/tmp/m1-013/sweep/trials.jsonl` had four rows and `progress.log` had reached trial 4 at 19:02Z when this was written; it is still running and the numbers will change. Prior attempts are classified host-sleep and external-interference aborts and are never counted. The join in §4.4 is therefore **contingent on the sweep completing and the Coordinator declaring it final**; nothing in this doc presumes a sweep number. The baseline arm runs **the same parameter sets, in the same order**, as the sweep's final parameter list — not a re-derived index (§4.4a). |
 | Attempts | One attempt per trial. A retry is a new trial row, not a hidden re-run. |
 
 ### 2.1 The operator interface — pinned to `main`, not invented here
 
 The baseline must drive the guest through **the same entry points the Myco arm uses**, or criterion
-7 is void. All four exist on `main` today; the baseline adds no new VM plumbing.
+7 is void. **The first four of these are in the repo or on the host today; `vssh` is a host script
+outside the repo** (`~/VMs/myco-win11/scripts/`), named here because the runbook depends on it. The
+baseline adds no new VM plumbing.
 
 | Step | Command (from `main`) | Success signal |
 |---|---|---|
@@ -565,10 +567,25 @@ reset — two sweep trials destroyed. So during a sweep the baseline workstream 
 **no** UTM command and **no** `vssh`, "just a quick check" included. `reset-trial-vm.sh` now refuses
 rather than falling back (commit `9dc4c32`), but the rule is the defence, not the guard.
 
-**Budget, from the Coordinator's measurements:** ~140 s cold reset + ~135 s trial ≈ 4.6 min per
-trial, so **30 trials ≈ 2.5 h** per arm. C1 and C2 share a reset (same fixture, same guest state,
-two addressing modes), so the two-arm run is ~2.5 h, not 5 h — but only if the harness can run both
-modes against one reset, which is a design constraint on M1-021, not an assumption.
+**Budget, from measured figures — and the two-arm figure is larger than a single arm, not equal to
+it.** Per trial: cold reset **140 s** (measured 143/134/145/152/139 over five runs, log 39), a
+**redeploy ~100 s** (clean-base predates the agent — log 27; the running sweep does a `DEPLOY OK`
+every trial), and the trial itself. So:
+
+| Arm | Per-trial | 30 trials |
+|---|---|---|
+| One sub-arm (C1 **or** C2) | 140 + 100 + ~135 = 375 s | **≈3.1 h** |
+| Both sub-arms, one reset per trial | 140 + 100 + 2×135 = 510 s | **≈4.25 h** |
+
+**Each sub-arm gets its own reset.** An earlier draft of this section proposed sharing one reset
+between C1 and C2 to halve the cost. That is wrong and the design rejects it: C1 *edits the cell*,
+so C2 would start from a document C1 had already modified and its verdict would be meaningless. The
+saving is one reset per trial (~140 s of 510) — not worth an invalid arm. **Every row, in every
+sub-arm, begins from its own `clean-base` restore.**
+
+Trial wall time is the least certain input: the running sweep's rows show 21–115 s, earlier verified
+trials were 34–40 s, and the Coordinator's planning figure is ~135 s. The report records actual
+`elapsedMs` per row; the budget above uses the cautious 135 s.
 
 **Ordering of the two arms.** The baseline arm runs *after* the Myco arm produces its 30-trial
 result, on the same VM, because M1-013 owns the host first. If the Myco sweep is re-run (e.g. a
@@ -752,7 +769,7 @@ side-by-side table is a join, not a manual reconciliation.
 
 ```jsonc
 {
-  "arm": "myco" | "screenshot",
+  "arm": "myco" | "c1" | "c2",     // C1 and C2 are separate rows; never one "screenshot" bucket
   "index": 0,                       // 0..29, index into generateParameterSets(SEEDS)
   "params": { "fixtureSeed": "…", "rowKey": "EMP-0038", "column": "name", "newValue": "…" },
   "cellRef": "B39",
@@ -772,7 +789,7 @@ side-by-side table is a join, not a manual reconciliation.
   "screenshotSource": "agent-op",   // never "utm-host" — that returns a placeholder
   "resumed": false,                 // the app or harness was interrupted and resumed
   "recoveryEvents": 0,
-  "hostLoad": { "battery": "AC", "loadAvg1": 2.1 },
+  "hostLoad": { "loadAvg1": 2.1 },   // AC state is "acPower" above — one field, not two
   "deviations": []
 }
 ```
@@ -1157,12 +1174,14 @@ decisions, and none of them is answered here:
 3. **Whether to run C2 at all.** §1a proposes two labelled sub-arms (C1 pixel-only, C2 full ladder).
    C2 is what makes the comparison credible and also what could make Myco look worse. Tiffany's
    call; both are cheap, and dropping C2 weakens the baseline.
-4. **VM time after the M1-013 sweep**: the §1a spike (~30 min) then **~2.5 h** for the 30-trial arm,
-   plus the same again for the corrupted arm if §7 is in scope. The Coordinator owns the host and
-   has stated the budget: ~140 s cold reset + ~135 s trial per trial, sweep running 2–3 h now.
-   **Ask for it chunked if that helps**: the arm is resumable trial-by-trial (each row is
-   independent and reset-isolated), so 2 × 1.25 h is as valid as one 2.5 h block — and a chunked
-   run is *safer* given that a host sleep or a wedge costs the whole block otherwise (logs 41/35).
+4. **VM time after the M1-013 sweep**: the §1a spike (~30 min), then **≈3.1 h** for one 30-trial
+   sub-arm and **≈4.25 h** for C1 and C2 together (per-trial arithmetic in §2.1), plus the same
+   again for the corrupted arm if §7 is in scope. The Coordinator owns the host and is running the
+   sweep now.
+   **Ask for it chunked if that helps**: every row begins from its own `clean-base` restore, so a
+   chunk boundary is just another row boundary and the run is resumable — 2 × 1.5 h is as valid as
+   one 3 h block, and *safer*, because a host sleep or a UTM wedge otherwise costs the whole run
+   (logs 41/35).
 5. **Frontier API as a third column** (`gpt-6.2-sol`/`gpt-6.2-astra`, Gemini 3.1 Pro): est.
    **$0.06–$22.30 per 30 trials** (§8.4: `gpt-6-luna` low, `gpt-6.2-astra` with toolset overhead
    high), but requires an API key, billing, and vendor data handling of
