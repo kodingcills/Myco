@@ -27,7 +27,9 @@ This document covers:
    a public Calc subset**;
 4. the harness that makes the comparison fair (§2–§3);
 5. the metrics, measured identically on both sides and aligned with M1-013's 30-trial sweep (§4);
-6. the fairness rules that distinguish "the screenshot agent lost" from "we handicapped it" (§5);
+6. the fairness rules that distinguish "the screenshot agent lost" from "we handicapped it" (§5),
+   and **what n=30 can actually show** — the paired design, the exact test, and the grounding/success
+   distinction (§4.5);
 6. cost per 30 trials for every option (§8), with arithmetic shown.
 
 It deliberately chooses nothing that costs money. §9 is the escalation the outer loop owns.
@@ -88,7 +90,8 @@ them plainly:**
 The Windows ledger is the honest caveat: the proven fixtures are WPF, WinUI3 and WebView2 — **not
 LibreOffice**. Cua's own Windows runner says it "intentionally skips optional external-app suites
 such as LibreOffice because those require extra software on the environment image". LibreOffice has
-no native UIA (only a lossy MSAA→UIA proxy, `docs/research/adapters.md` §4.5), so the driver will
+no native UIA (only a lossy MSAA→UIA proxy — `docs/research/adapters.md`, its own §4.5, not this
+document's §4.5), so the driver will
 land on its **pixel/UIA-hit-test rung** rather than the verified element rung. That is fine — it is
 what a screenshot agent is — but it must be *reported*, not assumed.
 
@@ -441,6 +444,15 @@ source of its task framework. So the two benchmarks share one format, and there 
    verifier asserts one cell and says nothing about the other 199 rows. Adding a
    `preserveCells(region)` predicate to the verifier's declarative language closes a real
    false-success path in *both* arms, and it is cheap — the persisted file is already parsed.
+   **The strongest published evidence for this is WorkArena's verifier audit** (arXiv 2610.09142):
+   mutation-testing correct runs with hand-written edits found its form verifier **passed all 36
+   edited runs that filled an unrequested field**, and still passed 8/8 when the extra field was
+   filled last. Every confirmed false positive was an unrequested change; planted omissions and
+   wrong values produced none. That is exactly the class of side-effect blindness M1 claims to
+   eliminate, measured on a production verifier — and its method (mutate correct runs by hand,
+   confirm each false positive against the end state) is directly reusable as Myco's own verifier
+   self-test, which is why M1-024's acceptance criteria include a mutation case rather than only a
+   clean-vs-corrupt pair.
 2. **The `expected`/`result` separation as a contract.** Naming the gold artefact and the agent's
    artefact as two typed getters is why OSWorld can swap `compare_table` for `check_csv` without
    touching tasks. Myco's verifier is already shaped this way; writing it down makes the eventual
@@ -742,11 +754,12 @@ row is never quietly folded into the pass rate.
 
 | Metric | Definition | M1 target |
 |---|---|---|
-| **Pass rate** | `verified / 30` | Myco ≥ 27/30 (row 3) |
+| **Pass rate** | `verified / 30`, reported **with a Wilson 95% interval** (§4.5.7) | Myco ≥ 27/30 (row 3) |
 | **False successes** | rows with `falseSuccess === true` | 0 |
 | **Unaudited `verified`** | rows with `verdict === verified && falseSuccess === null` | 0, both arms |
 | **Time per trial** | median and p95 of `elapsedMs` | reported, no target |
 | **Recovery** | rows with `resumed: true` that ended `verified` | Myco: interruption + invalid target both recovered |
+| **Discordance** | paired: `d` discordant trials, `b` favouring Myco, `c` favouring the baseline, exact sign-test `p` | reported always; `p<0.05` needs **6 of 6** (§4.5.2) |
 
 ### 4.2 Secondary metrics
 
@@ -818,6 +831,94 @@ dropped. The baseline runs those exact sets, in that exact order. If the list co
 the report says so; the baseline does **not** substitute a broader list to look thorough. If the
 Coordinator instead re-runs the sweep through a fixed in-repo entrypoint, the list is whatever that
 entrypoint emits, recorded by hash in both reports.
+
+### 4.5 Statistics of the comparison — what n=30 can and cannot show
+
+Everything below was prompted by `docs/research/benchmark-survey.md` (PR #38) and re-derived here,
+because two of its numbers did not survive recomputation. The design had no statistical section
+before this; a report that emits two success rates and calls them a comparison is not one.
+
+**4.5.1 The comparison is paired, and the report must say so.** Both arms run the *same* 30
+parameter sets on the same VM (§2), so the natural unit is the pair, not the rate. The report emits
+a per-trial table with both outcomes:
+
+| trial | Myco | C1 | C2 | outcome class |
+|---|---|---|---|---|
+| 1 | verified | refuted | verified | `myco_only` |
+| 2 | verified | verified | verified | `agree_pass` |
+| 3 | uncertain | refuted | refuted | `agree_fail` |
+| … | | | | |
+
+Discordant trials (rows where the two arms differ) are the only evidence. Trials where both pass,
+or both fail, carry no information about the difference and must not be counted as agreement
+towards it.
+
+**4.5.2 The exact threshold — corrected.** The survey states that "≥5 discordant trials all
+favouring Myco" reaches p<0.05. **That is wrong.** A two-sided exact sign test on the discordant
+pairs (b = Myco-only wins, c = baseline-only wins) gives:
+
+| discordant `d`, all favouring Myco | p (two-sided exact) |
+|---|---|
+| 5 | **0.0625** — not significant |
+| **6** | **0.0312** — the smallest significant d |
+| 7 | 0.0156 |
+| 8 | 0.0078 |
+
+So the bar is **6 of 6 discordant favouring Myco** (p = 0.031). With any split against Myco the
+requirement rises: 9 discordant with 8 favouring Myco is p = 0.039; anything at ≤ 2/3 favouring is
+never significant at n=30. The report states the test used, b, c, and p — not a bare p-value quoted
+from somewhere else.
+
+**4.5.3 Power is the real risk, and the 2/16 measurement is why.** If Myco and the baseline agree
+on nearly every trial, this comparison cannot conclude anything however the arms are built. The
+number that makes discordance plausible is the measured cell-grounding failure of cheap VLMs
+(`docs/research/eval-frameworks.md` §3.8: **2 hits in 16 attempts**), plus ScreenSpot-style grounding
+being graded geometrically with no execution (§4.5.4). If the realised discordance is below 6, the
+report says **"underpowered at n=30"** in those words and gives the discordant count — it does not
+report a rate difference and let a reader infer significance.
+
+**4.5.4 A grounding score is never a success score.** ScreenSpot / -v2 / -Pro grade a click point
+against a bounding box: nothing executes, nothing persists, and a point on a disabled, occluded, or
+adjacent control scores identically to a correct one. OpenCUA's own paper makes the point with a
+number — Qwen2.5-VL-32B matches or beats OpenCUA on ScreenSpot-v2 while losing badly on OSWorld
+success. The false-success direction is also **inverted** relative to M1's criterion: a tight
+bounding box can only produce false *negatives*, never the false positives M1 exists to detect.
+Therefore:
+
+- the M1-015 report **never** cites a grounding number as evidence about baseline task success;
+- if a grounding number appears at all, it appears in a clearly-marked context paragraph about the
+  *grounder component*, with its benchmark, split, and pass mode named.
+
+**4.5.5 Grounding benchmarks cannot justify the grounder choice.** ScreenSpot-v2 is **saturated**:
+UI-TARS 7B 91.6 vs 72B 90.3; OpenCUA 7B 92.3 vs 32B 93.4 — a ~1-point spread between 7B and 72B cannot discriminate.
+Only ScreenSpot-**Pro** has real spread (0.06% to 85% across the leaderboard), and it is the only
+member of the family whose screenshots resemble our surface (full-screen, high-DPI, professional
+app chrome). Its Excel split is **64 items (13 icon + 51 text)**, and it is **macOS Excel 365** —
+not Windows LibreOffice Calc. So ScreenSpot-Pro is a reasonable *prior* on whether a grounder can
+find a cell; it is not evidence about our task, and it does not enter the comparison table.
+
+**4.5.6 Leaderboard entries are not comparable to each other.** The ScreenSpot-Pro leaderboard mixes
+single-pass models, zoom-in variants, training-free cascades (GroundCascade 85.14 uses ~2.57 model
+calls per example) and self-reported proprietary entries in one ranking. If the report quotes
+UI-TARS-1.5-7B's **61.61**, it is labelled **single-pass** and is not compared to a cascade.
+
+**4.5.7 State the interval, or the number is not comparable.** No grounding benchmark in this family
+reports variance — single greedy pass, no CI, no seeds. The only 3-run confidence intervals in the
+literature surveyed are OpenCUA's on OSWorld-Verified, which are execution-based. So for any rate
+M1-015 reports (pass rate, false-success rate, per-arm success), the report gives a **Wilson
+score-interval at 95%** and the trial count. Two example widths at n=30, so nobody is surprised
+later: 27/30 → 95% CI ≈ [0.74, 0.97]; 24/30 → ≈ [0.62, 0.90]. A 3-trial difference is inside the
+noise at this n, which is exactly why 4.5.2 exists.
+
+**4.5.8 Two premises not to repeat.** Both circulate in the repo and both are wrong, per the survey:
+
+- **OfficeBench is not LLM-judge based.** Its evaluators are ten Python predicates
+  (`exact_match`, `contain_text`, `file_exist`, `excel_cell_value`, …); "fuzzy matching" in the paper
+  means substring containment. It is unsuitable for M1 for a different reason: `contain_text` passes
+  when the keyword appears anywhere, including in a quoted instruction, and `file_exist` passes on a
+  zero-byte file.
+- **WebArena / VisualWebArena / WorkArena cannot host a Calc subset.** All three have **zero**
+  spreadsheet tasks.
 
 ---
 
@@ -1069,6 +1170,12 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 - `docs/baseline/screenshot-agent-report.md` with the §4 table filled from artefacts, both arms,
   30 rows each, plus the deviations register and the prompt/model hashes.
 - Every row reproducible from `baseline/transcripts/` without re-running.
+- **A per-trial paired table** (§4.5.1) — Myco outcome beside each baseline outcome, not two
+  independent rates — and the exact sign test's `b`, `c`, and `p` (§4.5.2). If `d < 6` the report
+  says **underpowered at n=30** in those words.
+- **Every rate carries a Wilson 95% interval and its trial count** (§4.5.7).
+- **No grounding number is used as evidence about task success** (§4.5.4); if one appears at all it
+  is labelled *grounder component*, with benchmark, split and pass mode named (§4.5.5, §4.5.6).
 - The report states what the baseline **beat** Myco at, if anything, in plain numbers.
 - CI covers §3.6; the baseline driver is code-reviewed and merged through the standing rule
   (independent verifier PASS at head SHA + green CI, then merge).
@@ -1130,6 +1237,15 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | OSWorld has twelve providers, none of which attaches to an external VM over SSH | `desktop_env/providers/` |
 | `preserve_cells` is in OSWorld **v1** (`metrics/table.py::_preserve_cells`, dispatched `:442`) and **absent from V2** | both `metrics/table.py` files |
 | 19.5% / 74.5% is the only pair on the WAA project page (no community leaderboard found) | `microsoft.github.io/WindowsAgentArena` |
+| Grounding benchmarks grade a click point in a bbox; no execution, no persistence; OpenCUA: Qwen2.5-VL-32B matches OpenCUA on ScreenSpot-v2 but loses on OSWorld success | `docs/research/benchmark-survey.md` §4 |
+| ScreenSpot-v2 saturated (UI-TARS 7B 91.6 vs 72B 90.3; OpenCUA 7B 92.3 vs 32B 93.4); ScreenSpot-Pro spread 0.06–85%, Excel split 64 items (13 icon + 51 text), macOS Excel 365 | survey §4 |
+| ScreenSpot-Pro leaderboard mixes single-pass, zoom-in, cascades (GroundCascade 85.14, ~2.57 calls/example) and self-reported entries; UI-TARS-1.5 61.61 is single-pass | survey §4 |
+| No grounding benchmark reports variance; only 3-run CIs in the survey are OpenCUA's on OSWorld-Verified | survey §4 |
+| WorkArena verifier mutation audit: 36/36 runs with an unrequested field passed; 8/8 when filled last | arXiv 2610.09142 (survey §5) |
+| OfficeBench evaluators are ten Python predicates, not an LLM judge; `contain_text` is substring containment and passes on a quoted instruction | survey §5 |
+| WebArena / VisualWebArena / WorkArena have zero spreadsheet tasks | survey §5 |
+| Exact sign-test threshold: 5/5 discordant p=0.0625, 6/6 p=0.0312 — recomputed here, correcting the survey's "≥5" | two-sided exact binomial, verified in-conversation |
+| Wilson 95% at n=30: 27/30 → [0.744, 0.965]; 24/30 → [0.627, 0.905] | score-interval formula, computed here |
 | WAA requires an OpenAI or Azure OpenAI key | README prerequisites |
 | Navi's published scores are **perception-row**, not per-mode. Table 4 totals from the paper's LaTeX source, `inputs/results.tex` (GPT-4V-1106 / GPT-4o / GPT-4o-mini / Phi3-V): UIA off + Pytesseract/DOM/GroundingDINO 8.6/5.2/7.2/1.3 · UIA on + same 13.1/9.8/2.6/2.0 · UIA off + OneOCR 11.3/9.3/5.3/3.2 · UIA on + OneOCR 13.1/13.3/7.3/4.0 · **OmniParser only 12.5/9.4/2.7/2.0** · **UIA + OmniParser 19.5/8.6/4.2/3.5**; human 74.5%. `mixed-omni` appears only in the README's CLI flags, never in the paper | arXiv **2409.08264** Table 4, `gs -sDEVICE=txtwrite` on the PDF; WAA README §4.1 |
 | Navi's OpenAI planner builds `openai.OpenAI(api_key=...)` with **no `base_url`**; constructor is `__init__(self, model="gpt-4o")` | `src/win-arena-container/client/mm_agents/navi/gpt/gpt4v_oai.py` lines 21-27 |

@@ -508,7 +508,7 @@ Post-merge review of the report sent to Tiffany found one surviving error, in th
 
 **Why it matters:** the merged document was telling future readers that the PDF is unusable, when the real rule is "parse structurally, and prefer the LaTeX because it needs no inference at all." The error was mine and it was in the *explanation* of my own error, which is the most misleading place for one to live.
 
-**Corrected in the design** (§1b.2 sourcing paragraph). *(Amendment 2026-11-21, round 15: the first correction said the markers sit "on their own lines" and that HTML "loses row-to-column alignment entirely". Both were wrong. A verifier checked the artifacts: the PDF puts each ✗/✓ on the block's SECOND row (the GPT-4o-mini line), and the ar5iv HTML keeps all 12 columns per row with the model at index 4 — it simply does not rowspan the multirow cells, so the ✗/✓ marker alone lands on the block's FOURTH row, with the perception label on its own nearby row. Both forms keep per-row labels; both misplace the marker, by a different amount. The design now says exactly that.)*
+**Corrected in the design** (§1b.2 sourcing paragraph). *(Amendment 2026-11-21, round 15: the first correction said the markers sit "on their own lines" and that HTML "loses row-to-column alignment entirely". Both were wrong. A verifier checked the artifacts: the PDF puts each ✗/✓ on the block's SECOND row (the GPT-4o-mini line), and the ar5iv HTML keeps all 12 columns per row with the model at index 4 — it simply does not rowspan the multirow cells, so the ✗/✓ marker AND the perception label both land on the block's FOURTH row (the GPT-4V-1106 line), leaving the three rows above blank in those columns. Both forms keep per-row labels; both misplace the marker, by a different amount. The design now says exactly that.)*
 
 Docs only; no VM, no spend, no accounts.
 
@@ -638,3 +638,34 @@ Docs only; no VM, no spend, no accounts.
 **Verification status:** both verifiers returned PASS at their heads; the changes above are post-hoc corrections of prose their briefs did not cover (Table 4 arithmetic, provider-set enumeration). They are in the same commit as the state log, docs only.
 
 **Constraints:** no VM touch, no VM script executed, no spend, no accounts.
+
+## Log 2026-11-21 (54) — benchmark survey folded into the baseline design; one survey number corrected
+Research thread's findings (PR #38, `docs/research/benchmark-survey.md`) absorbed into
+`docs/baseline/screenshot-agent.md`. No VM, no spend, no accounts. Scope unchanged; no ADR touched.
+
+**Added §4.5 — statistics of the comparison.** The design had no statistical section at all, so it
+could not have produced a defensible comparison. It now specifies: the paired per-trial table as the
+unit (not two rates); the exact sign test with `b`, `c`, `p`; Wilson 95% intervals on every rate;
+the grounding-is-not-success rule; and the "underpowered at n=30" statement that must be printed
+when discordance is too low.
+
+**One number in the survey is wrong and I corrected it rather than copying it.** §7.3 says a
+two-sided sign test needs "≥5 discordant trials all favouring Myco" for p<0.05. Recomputed: **5/5
+gives p = 0.0625** (not significant); **6/6 gives p = 0.0312**, which is the smallest significant
+count. 8-of-9 is p = 0.039. The design states 6, and the backlog acceptance for M1-015 now requires
+the corrected test. Worth flagging to the research thread so its §7.3 is fixed at source.
+
+**Also folded in:** `preserve_cells` rationale now cites the WorkArena mutation audit (36/36
+unrequested-field runs passed their verifier; 0 planted omissions) as the strongest published
+evidence that side-effect blindness is real in production verifiers — and its method becomes a
+requirement in M1-024's acceptance, not just a nice-to-have. Two premises corrected per the survey:
+OfficeBench is predicate-graded, not judge-graded; WebArena/VisualWebArena/WorkArena have zero
+spreadsheet tasks and cannot host a Calc subset.
+
+**Grounding numbers are quarantined.** ScreenSpot-v2 is saturated and cannot justify a grounder
+choice; ScreenSpot-Pro's Excel split is macOS Excel 365, not our surface; the leaderboard mixes
+single-pass with cascades. The design now forbids a grounding score standing in for task success,
+with the OpenCUA evidence (strong ScreenSpot-v2, weak OSWorld success) as the reason.
+
+**Not done:** nothing has been re-measured; these are design and backlog changes only. The sweep
+host remains blocked per logs 44–45.
