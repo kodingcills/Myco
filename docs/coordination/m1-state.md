@@ -1,5 +1,21 @@
 # Myco M1 — coordinator state
 
+## Current handoff — 2026-11-21, sweep v2 stopped
+
+- **M1-013:** recorded indices 0–4 at pinned commit `29369ce`. Three verified,
+  two fixture-convert timeouts (`uncertain`), 25 unrun. Stop marker at
+  20:47:24 UTC in `/tmp/m1-013/sweep-v2/progress.log`.
+- **Decision pending with the outer loop:** a cold diagnostic workbook landed
+  after 169.4 s. Proposed 240 s conversion deadline, two cold canaries and a
+  fresh sweep from index 0. Keep v2 for diagnosis. See
+  [the experiment and restart plan](../research/experiments/m1-013-convert-timeout.md).
+- **Non-VM work:** [runbook](../eval-runbook.md) and [scorecard](../m1-scorecard.md)
+  are updated. The scorecard lists the remaining evidence for the corrupted
+  suite, recovery, screenshot baseline and independent reproduction.
+- **Next:** await the restart decision and reserve the host. The diagnostic
+  was interrupted and the host process check found no leftover runner. Backlog is
+  [M1](../backlog/m1.md).
+
 ## Objective
 Milestone 1: verified, recoverable desktop execution in one real Windows GUI app (LibreOffice Calc record edits, default suggestion). Acceptance: 27/30 reliability, 0 false successes in ≥10 corrupted trials, recovery from app interruption and invalid target, machine-readable evidence, screenshot-agent baseline on identical conditions, reproducible by another agent. Full spec: docs/product/vision.md.
 

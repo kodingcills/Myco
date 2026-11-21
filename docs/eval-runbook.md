@@ -26,7 +26,7 @@ before moving on.
 
 | Item | Where | Notes |
 |---|---|---|
-| UTM 5.0.9+ with VM `myco-win11` | macOS host, GUI session | UUID `6C6414A1-9449-4E30-9503-F3F6726C8FFE`, 6 vCPU / 8 GB / VirtIO disk, en-US Win11 Pro ARM64 26100 |
+| UTM 5.0.9+ with VM `myco-win11` | macOS host, GUI session | UUID `6C6414A1-9449-4E30-9503-F3F6726C8FFE`, 6 vCPU / **6 GB** (8 GB until 2026-11-21; see `~/VMs/myco-win11/README.md` Changelog) / VirtIO disk, en-US Win11 Pro ARM64 26100 |
 | Snapshot `clean-base` | inside the VM bundle | disk-only, VM powered off. The cold reset target |
 | Snapshot `clean-base-live` | inside the VM bundle | RAM+disk, desktop logged in. Restores in ~8 s but wedges UTM under rapid cycling (§3.3) |
 | Host SSH config + key | `~/VMs/myco-win11/{ssh_config,id_ed25519}` | alias `myco-win11` → 127.0.0.1:2222, user `myco`, key-only |
@@ -286,9 +286,10 @@ Expected: `"verdict": {"status": "verified", "reasons": ["cell … persisted as 
 `"completed": true`, **exit 0** (non-verified exits 1). Recorded wall times: 34.3 s, 40.2 s,
 55.1 s. Report fields: `runId, verdict, completed, elapsedMs, xlsxPath, guardFailure?, cleanup`.
 
-A non-`verified` normal trial is a finding, not noise: read `verdict.reasons[0]` and classify it
-— contamination, host contention (`fixture convert did not produce … within 60000ms` — a harness
-timeout, log 30), or a real execution defect.
+For a non-`verified` normal trial, read `verdict.reasons[0]` and find the failing stage.
+`fixture convert did not produce … within 60000ms` is a setup timeout before Calc opens the
+document. Record it as `uncertain`. The timeout message alone cannot distinguish a slow
+conversion from a failed process or an unreachable guest.
 
 ### 7.2 Corrupted trial (kill Calc mid-program)
 
@@ -321,46 +322,64 @@ still 1 in that case — read `result.json`, not the exit code, for kill mode.
 
 ### 7.3 The 30-trial sweep
 
-There is **no sweep driver on `main`**: the one used for M1-013 lived at `/tmp/sweep.sh` (log 30)
-and is not in the repo. Reproduce it as 30 invocations, and reset between every one (§3) —
-per-trial reset is mandatory, because a failed trial can leak `soffice` and run dirs that
-contaminate the next verdict (log 27).
+The sweep driver is `scripts/m1-sweep.sh` (PR #53). For every index 0–29 it runs: host gates →
+cold reset (§3.1) → deploy (§4) → token fetch → one `run-live --mode normal` trial → one JSONL
+record. Per-trial reset is mandatory, because a failed trial can leak `soffice` and run dirs
+that contaminate the next verdict (log 27). The driver does it for you.
 
 ```bash
-mkdir -p runs
-for i in $(seq -w 1 30); do
-  ~/VMs/myco-win11/scripts/reset.sh cold || break          # or scripts/reset-trial-vm.sh
-  agent/bootstrap/deploy-to-vm.sh || break                 # agent is not in clean-base
-  export MYCO_AGENT_TOKEN="$(~/VMs/myco-win11/scripts/vssh 'Get-Content C:\ProgramData\Myco\agent.token')"
-  pnpm exec tsx src/integration/run-live.ts --mode normal \
-    --seed "m1-013-trial-$i" > "runs/sweep-$i.json"; rc=$?
-  printf '%s seed=m1-013-trial-%s exit=%s\n' "$(date -u +%FT%TZ)" "$i" "$rc" >> runs/sweep.log
-done
+OUT="/tmp/m1-013/sweep-$(date -u +%Y%m%dT%H%M%SZ)"   # keep this path for a same-protocol resume
+mkdir -p "$OUT"                        # the shell opens $OUT.runner.out before the driver runs
+nohup caffeinate -dimsu scripts/m1-sweep.sh "$OUT" > "$OUT.runner.out" 2>&1 < /dev/null &
+tail -F "$OUT/progress.log"            # what it is doing (-F: the file appears a few seconds in)
+cat "$OUT/trials.jsonl"                # one record per finished index
 ```
 
-(Shape only — **UNVERIFIED**. The trial report goes to `runs/sweep-$i.json`; ping status goes to
-stderr. Resolve every non-zero exit before continuing.)
+- **Parameters.** On first run it writes `$OUT/params.json` (the 30 sets from
+  `scripts/m1-sweep-params.ts params`: 6 fixture seeds × 5; varies seed, fixture size 33–128
+  rows, row, column across all four data columns, and value) and `$OUT/fingerprints.json` (the
+  SHA-256 of each seed's fixture CSV).
+- **Seed check.** Each trial passes its set's `fixtureSeed` as `--seed`. Each trial report
+  carries `fixture.csvSha256` over the bytes actually uploaded. If the seed or hash does not
+  match, the record is `seed-mismatch` and the driver exits 7. At the end, all 6 seeds must
+  appear, one to one with their hashes; otherwise `SEED_CHECK_FAILED` and exit 8. History: the
+  pilot driver dropped the seed, and every trial ran on one sheet (log 47).
+- **Gates and exit codes.** Checked before every trial; the driver exits rather than running
+  through them: 3 = on battery, 4 = 1-min load > 14, 6 = swap free < 300 MB. Re-running the
+  same command resumes: indices already in `trials.jsonl` are skipped, never re-run, whatever
+  their status.
+- **Fresh `OUT` per sweep.** Resume-skip means a stale `trials.jsonl` in a reused directory
+  silently counts old records. Resume after a host gate only with the same commit, guest
+  configuration, parameters and fingerprints. Preserve the old output and start at index 0
+  in a fresh directory after a harness or protocol change.
+- **Pin the code.** Run the driver from a dedicated worktree at a fixed commit
+  (`git worktree add --detach /tmp/m1-013/ws <sha>`), so a checkout in your working tree cannot
+  change the code mid-sweep.
+- **A `seed-mismatch` disqualifies the whole output directory.** Never resume over it: the
+  driver refuses to start on a `trials.jsonl` that contains one, and both `m1-sweep-record.py
+  --final` and `scripts/m1-scorecard.py` reject it. Start a fresh `OUT`. Resume is only for
+  the gate pauses (exit 3, 4, 6) and for an operator stop at a trial boundary, and only on the
+  same pinned commit.
+- **Statuses in `trials.jsonl`:** `verified` / `refuted` / `uncertain` are verdicts. `seed-mismatch`
+  aborts the sweep. `harness-error`, `reset-failed`, `deploy-failed`, `token-failed` and
+  `param-error` mean no verdict was produced. Count them as not verified, and report them
+  separately.
 
-Two deviations to know before you compare with acceptance row 3 ("30 trials vary row, column,
-value, and fixture size"):
+The driver applies the host and seed gates. The operator also watches conversion failures
+in `trials.jsonl`. If the fixture timeout recurs, stop at a trial boundary, retain the run
+directory, and report the failure before resuming. The sweep v2 stop was recorded by the
+operator in `progress.log`.
 
-- `--seed` alone varies the fixture seed, the row, the fixture size and the value — but **not the
-  column**: `run-live` always takes parameter set 0, whose column is `DATA_COLUMNS[0]` = `name`
-  (`src/tasks/intent.ts:117-141`). Add `--column qty|joined|salary` on a third of the runs to
-  match the acceptance wording.
-- `--mode values --limit 40` also yields only 30 sets: `generateParameterSets` always returns 30.
-
-Budget: reset (~20–45 s) + deploy (~100–180 s) + trial (~35–90 s) ≈ 3–5 min per trial; log 27
-estimated 1.5–2 h for 30 trials on the live path. Report exactly what the artifacts say; do not
-re-run to reach 27/30.
+Sweep v2 completed five trial cycles in about 35 minutes on the 6 GB guest (20:12:30Z → 20:47:24Z in `/tmp/m1-013/sweep-v2/progress.log`), including cold
+resets, deploys, trials and settles. Use the measured cycle time to plan a host window and
+update the estimate from the next run. Report every recorded outcome.
 
 ### 7.4 The corrupted suite (M1-014) is not wired yet
 
 `run-live` exposes only the kill class. `invalid-target`, `delayed-save` and `focus-change` exist
 as fault injectors (`src/fake/faults.ts`, exercised host-side in CI via
-`src/core/eval.ts` + `pnpm test`), but there is no committed live entrypoint for them, and
-M1-014 is blocked on M1-019 for trustworthy results (backlog status note). A ≥10-trial, 4-class live suite cannot be reproduced from `main`
-today; the state log's "0 false successes in 11/11 corrupted configs" is the fake-app harness
+`src/core/eval.ts` + `pnpm test`). The live entrypoint still needs those classes and the
+M1-019 guest-hygiene checklist. The state log's "0 false successes in 11/11 corrupted configs" is the fake-app harness
 (PR #7). Do not present CI numbers as live-trial numbers.
 
 ## 8. Evidence
@@ -377,7 +396,16 @@ runs/
   values/<runId>/          --mode values nests its trials here
   <evalId>/ledger.jsonl    conformance ledger — written ONLY by runEvaluation()
                            (src/core/eval.ts); the live entrypoint emits no ledger
-  sweep.log                your own sweep log, if you follow §7.3
+```
+
+A sweep (§7.3) writes under its own `OUT` dir instead:
+
+```
+$OUT/
+  params.json, fingerprints.json   the 30 sets and the expected per-seed fixture hashes
+  trials.jsonl                     one record per index (verdict, reason, fixture hash)
+  progress.log                     gates, resets, deploys, ABORT/PAUSED/STOPPED lines
+  runs/<index>/<runId>/            the trial's trace.jsonl + result.json
 ```
 
 Directory names are bare UUIDs produced by the code; the reviewed sample evidence under
@@ -391,6 +419,10 @@ deleted. Use the agent's `screenshot` op if you need one.
 ```bash
 pnpm exec tsx src/integration/validate-live.ts runs
 ```
+
+For a sweep, validate each trial index directory that has artifacts, for example
+`pnpm exec tsx src/integration/validate-live.ts "$OUT/runs/0"`. The validator reads one directory
+level below its argument. Check the result count against the recorded run IDs.
 
 Expected: `validated N result.json + M trace events in runs: ALL OK` (recorded: 4 + 51 at PR #18;
 11 + 77 at PR #11). Non-zero exit and `INVALID …` lines name the offending file and JSON path.
@@ -414,7 +446,7 @@ Every row is a failure we actually hit.
 | `session_info` → `session_id: 0`, `window_station: Service-0x0-…`; `uia_tree` returns ~6 title-bar nodes; trials fail at `adapter-available` | Agent in session 0: no window station, UIA blind. `schtasks /Run` from SSH does not move it | Redeploy (§4) so it starts via `run-interactive.ps1`; re-check §5. Delete trials run in this state (log 16/18) |
 | `scp: Connection closed` during deploy | Guest unreachable mid-resume, or UTM wedged | §2; if `resuming`, §3.3 (log 35) |
 | `UTM error -2700 "Operation not available"`; `status` stuck `resuming`; `kill` says "not running" while status says `resuming` | The live-resume wedge | **GUI-ONLY**: quit + reopen UTM, re-run the cold reset. §3.1 detects it (log 35/37) |
-| Trial `uncertain`, reason `fixture convert did not produce … within 60000ms`; resets take 1879 s / 847 s instead of 8–45 s | Host contention — another QEMU guest (e.g. the runtime workstream's Linux VM), Ollama, Chrome. Measures the Mac, not Myco | Shut down other guests; re-check `vm.sh status`/`wait-ssh.sh`; re-run. Do not report these numbers as reliability data (log 30) |
+| Trial `uncertain`, reason `fixture convert did not produce … within <N>ms` | The guest-side headless convert did not write the workbook before the deadline. A cold convert right after a reset was measured at 30.8 s and once at 169.4 s (`docs/research/experiments/m1-013-convert-timeout.md`), so this can happen on a healthy host. Heavy host contention (another QEMU guest, Ollama, swap exhaustion) makes it worse (log 30) | **Count it**: it is an `uncertain` verdict and stays in the denominator. Never drop it from reliability numbers. If it recurs, stop at a trial boundary and investigate; separately, check the host gates and that no other guest is running |
 | Text value `refuted`; persisted value is sentence-cased (`revised-908578` → `Revised-908578`) | Calc AutoCorrect rewrote a lowercase-leading value | Correct behaviour of the verifier. Use the generator's values (`REVISED-######`, numerics) or `--new-value` with an AutoCorrect-immune string. A case-insensitive check here would be a false success (log 21; `src/tasks/intent.ts`) |
 | Cell holds **another record's** value; several `soffice` alive; hundreds of `C:\myco\runs\myco-*` dirs | Cross-trial contamination: a failed trial leaked state and a later trial read a foreign document | Reset + redeploy, then re-run the same intent — it should flip to `verified`. Reset per trial, always. M1-019's host-side always-cleanup + `guest-contaminated` guard now aborts `uncertain` instead of guessing; its real-Windows behaviour is still unvalidated (log 27, 29, 36) |
 | Agent behaves like an older build right after a reset | Stale pre-deployed snapshot: `m1-agent-live` contains whatever agent existed when it was taken. `ping` cannot reveal this — `agent_version` is the constant `0.1.0` | Prefer cold reset + deploy (§3.1/§4). Trust a pre-deployed snapshot only if you know its commit; re-take it after any agent change (PR #28, reverted; PR #31) |
@@ -440,11 +472,11 @@ Be explicit with whoever asks for an "independent reproduction":
 5. **Versions are pinned but one hash is missing**: LibreOffice 26.8.3 aarch64, Python 3.12.10,
    pywin32 312, comtypes 1.5.0, pywinauto 0.6.9, uiautomation 2.0.29 are recorded; the MSI
    SHA-256 that acceptance row 8 asks for is **not** recorded (M1-018 pending).
-6. **Parts of the evaluation do not exist yet**: the 30-trial sweep driver (lived in `/tmp`), the
-   ≥10-trial/4-class live corrupted suite (M1-014, blocked on M1-019), and the screenshot baseline
+6. **Parts of the evaluation do not exist yet**: the
+   ≥10-trial/4-class live corrupted suite (M1-014), and the screenshot baseline
    (M1-015, Cua Driver as the agent with a local or approved planner — Agent S3/`cua-agent` is deprecated upstream; not started). A reproduction today can reach: reset → deploy
-   → desktop proof → 20/20 generator proof → individual normal and kill trials → validated
-   per-trial evidence.
+   → desktop proof → 20/20 generator proof → the 30-trial sweep (`scripts/m1-sweep.sh`, §7.3) →
+   individual kill trials → validated per-trial evidence.
 
 What an independent reproducer must obtain from the environment owner: the VM bundle with its
 snapshots (or a repaired `build-all.sh` plus its input ISOs), `ssh_config` + `id_ed25519`, the
