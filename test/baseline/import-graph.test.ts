@@ -1,0 +1,91 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import ts from "typescript";
+import { describe, expect, it } from "vitest";
+
+const allowed = new Set(
+  ["src/tasks/intent.ts", "src/tasks/fixture.ts", "src/core/verify.ts"].map((p) => resolve(p)),
+);
+function violations(entry: string, extraAllowed: string[] = []): string[] {
+  const permitted = new Set([...allowed, ...extraAllowed.map((p) => resolve(p))]);
+  const seen = new Set<string>();
+  const errors: string[] = [];
+  function visit(file: string): void {
+    if (seen.has(file)) return;
+    seen.add(file);
+    if (file !== entry && !permitted.has(file)) errors.push(file);
+    if (/\/src\/(integration|win|verify)\//.test(file)) return;
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    function checkSpecifier(spec: string): void {
+      if (!spec.startsWith(".")) {
+        errors.push(spec);
+        return;
+      }
+      const path = resolve(dirname(file), spec.replace(/\.js$/, ".ts"));
+      visit(path.endsWith(".ts") ? path : `${path}.ts`);
+    }
+    function walk(node: ts.Node): void {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      )
+        checkSpecifier(node.moduleSpecifier.text);
+      if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference) &&
+        node.moduleReference.expression &&
+        ts.isStringLiteral(node.moduleReference.expression)
+      )
+        checkSpecifier(node.moduleReference.expression.text);
+      if (
+        ts.isImportTypeNode(node) &&
+        ts.isLiteralTypeNode(node.argument) &&
+        ts.isStringLiteral(node.argument.literal)
+      )
+        checkSpecifier(node.argument.literal.text);
+      if (
+        ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+      )
+        errors.push(`dynamic import in ${file}`);
+      ts.forEachChild(node, walk);
+    }
+    walk(source);
+  }
+  visit(entry);
+  return errors;
+}
+describe("baseline import boundary", () => {
+  // Guards against any dependency outside the host task modules and shared verdict types.
+  it("enforces the allowlist", () =>
+    expect(violations(resolve("src/baseline/index.ts"))).toEqual([]));
+  // Guards against missing a direct forbidden integration import.
+  it("detects the offending fixture", () =>
+    expect(violations(resolve("test/baseline/fixtures/offending.ts"))).toContain(
+      resolve("src/integration/trial.ts"),
+    ));
+  // Guards against stopping at an allowed intermediate module.
+  it("detects a two-hop forbidden import", () =>
+    expect(
+      violations(resolve("test/baseline/fixtures/two-hop.ts"), [
+        "test/baseline/fixtures/offending.ts",
+      ]),
+    ).toContain(resolve("src/integration/trial.ts")));
+  // Guards against ignoring TypeScript import-equals dependencies.
+  it("detects import equals", () =>
+    expect(violations(resolve("test/baseline/fixtures/import-equals.txt"))).toContain(
+      resolve("src/integration/trial.ts"),
+    ));
+  // Guards against ignoring dependencies referenced by import types.
+  it("detects import types", () =>
+    expect(violations(resolve("test/baseline/fixtures/import-type.txt"))).toContain(
+      resolve("src/integration/trial.ts"),
+    ));
+});

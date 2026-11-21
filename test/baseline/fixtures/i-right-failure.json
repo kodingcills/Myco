@@ -1,0 +1,18 @@
+{
+  "transcript": {
+    "actions": [],
+    "claims": ["failure"]
+  },
+  "driver": {
+    "hostVersion": "1",
+    "guestVersion": "1",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "observation": {
+    "kind": "persisted",
+    "actual": "right",
+    "expected": "right"
+  },
+  "status": "verified"
+}

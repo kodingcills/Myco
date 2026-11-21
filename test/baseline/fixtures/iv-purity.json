@@ -1,0 +1,26 @@
+{
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 1,
+          "y": 2
+        }
+      }
+    ],
+    "claims": []
+  },
+  "driver": {
+    "hostVersion": "1",
+    "guestVersion": "1",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "observation": {
+    "kind": "persisted",
+    "actual": "x",
+    "expected": "x"
+  },
+  "status": "verified"
+}
