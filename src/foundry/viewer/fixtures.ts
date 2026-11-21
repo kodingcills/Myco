@@ -213,8 +213,8 @@ export function buildViewerRun(spec: ViewerRunSpec): ViewerRun {
     kind === "false-success"
       ? "ground-truth:false"
       : kind === "unknown"
-        ? "ground-truth:unavailable"
-        : "ground-truth:true";
+        ? "verifier:uncertain"
+        : "verifier:verified+ground-truth";
   const state = kind === "false-success" ? "failure" : kind === "unknown" ? "uncertain" : "pass";
   const ledgerLines = [
     JSON.stringify({

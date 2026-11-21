@@ -1,1 +1,1 @@
-{"evalId":"viewer-fixtures","runId":"viewer-recovered","trialIndex":0,"corruptionClass":"delayed-save","actionKind":"type","state":"pass","oracle":"ground-truth:true","refusalCode":null}
+{"evalId":"viewer-fixtures","runId":"viewer-recovered","trialIndex":0,"corruptionClass":"delayed-save","actionKind":"type","state":"pass","oracle":"verifier:verified+ground-truth","refusalCode":null}
