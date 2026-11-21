@@ -283,9 +283,14 @@ and Phi3-V / GPT-4o-mini / GPT-4o / GPT-4V-1106 per row, with a human ceiling of
 
 Transcribed from arXiv 2409.08264 Table 4's **Total** column, read from the paper's **LaTeX source**
 (`arxiv.org/e-print/2409.08264`, `inputs/results.tex`), where every row carries its model label
-explicitly — HTML and PDF rendering both lose the row-to-column alignment that produced every
-earlier error here. Human ceiling **74.5% overall**; **83.3% on LibreOffice Calc** (human avg 15.3
-steps, difficulty 2.0, Table 8). The four model rows print in the order **Phi3-V, GPT-4o-mini,
+explicitly and blocks are delimited by `\midrule`. The **HTML** rendering loses the row-to-column
+alignment entirely; the **PDF text layer** keeps each row's model label but prints the ✗/✓ block
+markers on their own lines, so a parser that splits on those markers shifts every block by one —
+which is what produced the earlier errors. Both are workable if parsed structurally; the LaTeX is
+the artifact of record and needs no inference.
+
+Human ceiling **74.5% overall**; **83.3% on LibreOffice Calc** (human avg 15.3 steps, difficulty
+2.0, Table 8). The four model rows print in the order **Phi3-V, GPT-4o-mini,
 GPT-4o, GPT-4V-1106** within each block, and the ✗/✓ markers delimit six blocks, not five.
 
 **Read the rows correctly.** `--som-origin omni` is the **fifth** row: screenshot + OmniParser, no
