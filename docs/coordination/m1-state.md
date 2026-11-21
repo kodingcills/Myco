@@ -650,7 +650,7 @@ the grounding-is-not-success rule; and the "underpowered at n=30" statement that
 when discordance is too low.
 
 **One number in the survey is wrong and I corrected it rather than copying it.** §7.3 says a
-two-sided sign test needs "≥5 discordant trials all favouring Myco" for p<0.05. Recomputed: **5/5
+two-sided sign test needs "≥5 discordant trials all favouring Myco" for p<0.05. *(Fixed at source 2026-11-21: `docs/research/benchmark-survey.md` §7.3 now says 6, with the arithmetic.)* Recomputed: **5/5
 gives p = 0.0625** (not significant); **6/6 gives p = 0.0312**, which is the smallest significant
 count. 8-of-9 is p = 0.039. The design states 6, and the backlog acceptance for M1-015 now requires
 the corrected test. Worth flagging to the research thread so its §7.3 is fixed at source.
