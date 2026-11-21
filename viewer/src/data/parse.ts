@@ -166,6 +166,7 @@ export async function parseRunEvidence(
   const byStep = new Map<number, ViewTraceEvent[]>();
   const seen = files.paths.includes("trace.extended.jsonl") ? new Set<string>() : undefined;
   const previewSize = 256;
+  let activeStep: number | undefined;
   for (const file of ["trace.jsonl", "trace.extended.jsonl"]) {
     const blob = read(file);
     if (!blob) continue;
@@ -191,12 +192,16 @@ export async function parseRunEvidence(
         (entry.kind === "standard" || entry.event.step >= 0)
       ) {
         entry.step = entry.event.step;
+        activeStep = entry.step;
         let stepEvents = byStep.get(entry.step);
         if (!stepEvents) {
           stepEvents = [];
           byStep.set(entry.step, stepEvents);
         }
         stepEvents.push(entry);
+      } else if (entry.event.type === "recovery" || entry.event.type === "fault-injection") {
+        // Keep the source destination when Proof receives this line without its preceding events.
+        entry.step = activeStep;
       }
       if (file === "trace.jsonl") seen?.add(text.trim());
       events.push(entry);

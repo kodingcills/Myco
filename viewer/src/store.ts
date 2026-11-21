@@ -155,15 +155,25 @@ export const useViewer = create<ViewerStore>((set, get) => ({
     let previewFrame: number | undefined;
     const pendingEvents: RunData["events"] = [];
     function update(patch: Partial<OpenedRun>) {
+      if (controller.signal.aborted) return;
       set((state) => ({
         runs: state.runs.map((item) => (item.key === key ? { ...item, ...patch } : item)),
       }));
     }
     function receive(message: RunUpdate) {
+      if (controller.signal.aborted) return;
       if (message.type === "result") {
         const id = message.result?.runId;
         const current = get().selection.run === key;
         const previous = key;
+        const { runs } = get();
+        // Rows are newest first, even while their workers are still reading the run ID.
+        const existing = runs.findIndex((item) => item.key === id);
+        if (existing >= 0 && existing < runs.findIndex((item) => item.key === previous)) {
+          get().remove(previous);
+          if (current) get().activate(runs[existing]!);
+          return;
+        }
         key = id ?? key;
         if (previous !== key) {
           jobs.get(key)?.abort();
@@ -195,7 +205,7 @@ export const useViewer = create<ViewerStore>((set, get) => ({
         }
       } else {
         const item = get().runs.find((item) => item.key === key);
-        if (!item || controller.signal.aborted) return;
+        if (!item) return;
         if (message.type === "trace") {
           pendingEvents.push(...message.events);
           previewFrame ??= requestAnimationFrame(publishPreview);

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { zipSync } from "fflate";
-import { boot, checkOffline, runs, screenshotDir } from "./support.ts";
+import { boot, checkOffline, runs, screenshotDir, waitForRun, zipUpload } from "./support.ts";
 
 for (const scenario of ["manifest mismatch", "malformed trace", "no-op recovery"] as const) {
   test(`worker publishes a safe verdict for ${scenario}`, async ({ page }) => {
@@ -97,3 +97,105 @@ for (const scenario of ["manifest mismatch", "malformed trace", "no-op recovery"
     offline();
   });
 }
+
+test("an unscoped recovery source opens the same step before and after indexing", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const postMessage = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message, options) {
+      if (message.type === "index") {
+        document.body.addEventListener(
+          "resume-indexing",
+          () => {
+            postMessage.call(this, message, options as StructuredSerializeOptions);
+          },
+          { once: true },
+        );
+      } else {
+        postMessage.call(this, message, options as StructuredSerializeOptions);
+      }
+    };
+  });
+  await boot(page);
+  const folder = runs.find(({ name }) => name === "recovered")!.folder;
+  const result = await readFile(join(folder, "result.json"));
+  const trace = await readFile(join(folder, "trace.jsonl"), "utf8");
+  const newline = trace.indexOf("\n") + 1;
+  const padded = trace.slice(0, newline) + '{"type":"future"}\n'.repeat(260) + trace.slice(newline);
+  await page
+    .locator("input[multiple]:not([webkitdirectory])")
+    .first()
+    .setInputFiles({
+      name: "padded.mycotrace",
+      mimeType: "application/zip",
+      buffer: Buffer.from(zipSync({ "result.json": result, "trace.jsonl": Buffer.from(padded) })),
+    });
+  const bar = page.locator("[data-verdict-bar]");
+  await expect(bar).toHaveAttribute("data-verdict", "Recovered");
+  const source = bar.getByRole("button", { name: "Open source trace.jsonl:321" });
+  await expect(page.locator('[data-indexed="true"]')).toHaveCount(0);
+  await source.click();
+  await expect(page).toHaveURL(/step=6&file=trace.jsonl&line=321/);
+  await expect(page.getByRole("tab", { name: "Detail" })).toHaveAttribute("aria-selected", "true");
+
+  await page.evaluate(() => document.body.dispatchEvent(new Event("resume-indexing")));
+  await waitForRun(page, "Recovered");
+  await page.keyboard.press("3");
+  await source.click();
+  await expect(page).toHaveURL(/step=6&file=trace.jsonl&line=321/);
+  await expect(page.getByRole("tab", { name: "Detail" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("a late same-run load cannot replace the newer sidebar entry", async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWorker = Worker;
+    let first = true;
+    window.Worker = class extends NativeWorker {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options);
+        if (!first) return;
+        first = false;
+        const queued: MessageEvent[] = [];
+        const hold = (event: MessageEvent) => {
+          event.stopImmediatePropagation();
+          queued.push(event);
+          if (event.data.type === "validated") document.body.dataset.olderValidated = "true";
+        };
+        this.addEventListener("message", hold);
+        document.body.addEventListener(
+          "release-older",
+          () => {
+            this.removeEventListener("message", hold);
+            for (const event of queued)
+              this.dispatchEvent(new MessageEvent("message", { data: event.data }));
+          },
+          { once: true },
+        );
+      }
+    };
+  });
+  await boot(page);
+  const folder = runs.find(({ name }) => name === "verified")!.folder;
+  const input = page.locator("input[multiple]:not([webkitdirectory])").first();
+  const result = await readFile(join(folder, "result.json"));
+  const trace = await readFile(join(folder, "trace.jsonl"), "utf8");
+  await input.setInputFiles({
+    name: "older.mycotrace",
+    mimeType: "application/zip",
+    buffer: Buffer.from(
+      zipSync({ "result.json": result, "trace.jsonl": Buffer.from(`${trace}{\n`) }),
+    ),
+  });
+  await expect(page.locator("body")).toHaveAttribute("data-older-validated", "true");
+  await input.setInputFiles(await zipUpload(folder, "newer"));
+  await waitForRun(page, "Verified");
+  await expect(page.locator("[data-run-row]")).toHaveCount(2);
+  await page.evaluate(() => document.body.dispatchEvent(new Event("release-older")));
+  await expect(page.locator("[data-run-row]")).toHaveCount(1);
+  await expect(page.locator('[data-run-row][aria-selected="true"]')).toHaveAttribute(
+    "title",
+    "newer.mycotrace",
+  );
+  await waitForRun(page, "Verified");
+});
