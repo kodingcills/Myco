@@ -20,7 +20,11 @@ struct Server {
 }
 
 fn main() {
-    let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspace = myco_rt_backend_qemu::workspace::discover().unwrap_or_else(|e| {
+        // Don't die: tools/list must still work so the agent can read the fix.
+        eprintln!("myco-rt-mcp: {e}");
+        PathBuf::from(".")
+    });
     let mut srv = Server { sessions: HashMap::new(), workspace, next_id: 1 };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();

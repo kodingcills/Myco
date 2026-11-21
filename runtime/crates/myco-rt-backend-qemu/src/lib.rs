@@ -7,6 +7,8 @@
 //!
 //! `observe`/`act` are RT-007/008 and return `Unimplemented` here by design.
 
+pub mod workspace;
+
 use myco_rt_core::ops::{Action, ActionOutcome, Observation};
 use myco_rt_core::Backend;
 use myco_rt_transport::{Channel, SshConfig};
