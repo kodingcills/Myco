@@ -15,8 +15,16 @@ type BenchmarkWindow = Window & {
 
 function summarize(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
-  const pick = (p: number) => Number(sorted[Math.ceil(p * sorted.length) - 1]!.toFixed(2));
-  return { n: sorted.length, min: pick(0.01), median: pick(0.5), p95: pick(0.95), max: pick(1) };
+  const n = sorted.length;
+  const round = (value: number) => Number(value.toFixed(2));
+  const middle = (sorted[Math.floor((n - 1) / 2)]! + sorted[Math.floor(n / 2)]!) / 2;
+  return {
+    n,
+    min: round(sorted[0]!),
+    median: round(middle),
+    p95: round(sorted[Math.ceil(0.95 * n) - 1]!),
+    max: round(sorted[n - 1]!),
+  };
 }
 
 async function dropRun(page: Page, folder: string, hasSteps: boolean) {
