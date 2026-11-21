@@ -21,11 +21,14 @@ harness/generalisation contract G1–G7 against whichever is chosen.
 
 This document covers:
 
-1. **§1a — the option evaluation and the recommendation** (Tiffany's question);
-2. the harness that makes the comparison fair (§2–§3) and the generalisation contract (§1b);
-3. the metrics, measured identically on both sides and aligned with M1-013's 30-trial sweep (§4);
-4. the fairness rules that distinguish "the screenshot agent lost" from "we handicapped it" (§5);
-5. cost per 30 trials for every option (§8), with arithmetic shown.
+1. **§1a — the option evaluation and the recommendation**;
+2. **§1b — agents with published scores, and which of them can run here** (Tiffany's second ask);
+3. **§1c — what to borrow from OSWorld / Windows Agent Arena, and whether Myco can be reported on
+   a public Calc subset**;
+4. the harness that makes the comparison fair (§2–§3);
+5. the metrics, measured identically on both sides and aligned with M1-013's 30-trial sweep (§4);
+6. the fairness rules that distinguish "the screenshot agent lost" from "we handicapped it" (§5);
+6. cost per 30 trials for every option (§8), with arithmetic shown.
 
 It deliberately chooses nothing that costs money. §9 is the escalation the outer loop owns.
 
@@ -188,6 +191,216 @@ This spike needs the VM, so it runs **after** the sweep frees the host (Coordina
 it is the first thing in M1-021's queue.
 
 ---
+
+## 1b. Credibility: agents with published scores, and external benchmarks (Tiffany's question, 2026-11-21)
+
+Two asks: **pick the baseline from agents with public scores where possible**, and **borrow the
+methodology of OSWorld / Windows Agent Arena**, later possibly reporting Myco on a small public
+Calc subset. Both are answered here; the methodology half is §1c. All facts below were read from
+primary sources on 2026-11-21 and are cited in §12; nothing was executed.
+
+### 1b.1 What the benchmark landscape actually offers
+
+| Benchmark | Platform | Calc coverage | Can it run our `myco-win11`? |
+|---|---|---|---|
+| **OSWorld v1 / Verified** (`xlang-ai/OSWorld`, Apache-2.0, 3.3k★, pushed 2026-11-14) | VMware, VirtualBox, Docker+KVM, AWS/Azure/GCP/Modal/daytona providers | **47 `libreoffice_calc` tasks** (counted in the tree) | **Not as-is.** The harness boots its *own* VM from its own image and drives it over its own server |
+| **OSWorld-V2** (`xlang-ai/OSWorld-V2`, Apache-2.0, 429★) | same family, 108 tasks, weighted `partial_scores` | **47 Calc tasks** (same count) | Not as-is; same model |
+| **Windows Agent Arena** (`microsoft/WindowsAgentArena`, MIT, 918★, pushed 2026-10-26) | **its own Windows 11 VM inside Docker, QEMU, `--use-kvm true` by default**; Azure ML for scale | **24 `libreoffice_calc` tasks** (counted in the tree), across 12 app categories | **Not as-is, and not on this host** |
+
+So the honest framing is: *neither benchmark can be pointed at `myco-win11`.* Both own their VM.
+What they can supply is (i) **agents whose competence is already published** and (ii) **a task and
+checker format worth adopting**. Those are the two things §1b.2 and §1c take.
+
+**Why WAA in particular cannot run here, stated precisely.** Two independent blockers:
+
+1. **Hypervisor.** WAA defaults to `--use-kvm true` and its own docs say "running the benchmark
+   locally without KVM acceleration is not recommended". macOS has no KVM; the VM would be
+   emulated and unusably slow.
+2. **Architecture.** WAA's golden image is built from the *Windows 11 Enterprise Evaluation* ISO
+   through Dockur, i.e. x64, on an x64 Docker host. There is no ARM64 path in its README or
+   scripts, unlike OSWorld, whose provider code explicitly branches on
+   `'arm' in arch or 'aarch' in arch` (`desktop_env/controllers/setup.py`) and whose image
+   datasets ship `Ubuntu-arm.zip`.
+
+**A correction to what the repo previously assumed.** `docs/research/eval-frameworks.md` §1 treats
+OSWorld as Linux-only. That is too strong: `xlangai/windows_osworld` on Hugging Face is an
+apache-2.0 dataset whose card says the VMs are "loaded by VMware/VirtualBox depending on the
+machine architecture x86 or arm64", and it ships `Windows-x86.zip` and
+`Windows 10 x64.qcow2` (49 GB). The Windows path exists but is (a) **x64 only in this dataset**
+and (b) for GIMP/VLC/Chrome-style Windows apps, not built around LibreOffice Calc on ARM64. It
+does not make WAA-on-macOS viable, and it does not make OSWorld pointable at our VM.
+
+### 1b.2 Which agents have public scores *and* can run against our VM
+
+This is the intersection Tiffany asked for. Three groups, honestly separated:
+
+**(i) Publicly scored on OSWorld *and* shipping code inside the OSWorld repo.** OSWorld's
+`mm_agents/` directory contains working adapters for a large set of scored agents: `uitars_agent.py`,
+`uitars15_v1.py`, `uitars15_v2.py`, `owl15_agent.py`, `aguvis_agent.py`, `opencua/`,
+`qwen3vl_agent.py`, `gemini_agent.py`, `o3_agent.py`, `gpt54_agent.py`, `anthropic/`,
+`openai_cua_agent.py`, `agi_agent.py`, `manus`·`mobileagent_v3`·`muse_spark` adapters, `jedi_3b/7b`,
+`maestro`, `coact`, `dart_gui`, `evocua`, `autoglm`, `aworldguiagent`, `gta1`, `surferH`, `gui_som`,
+`pointer`, `vlaa_gui`, and more. Each is an **agent class with a `predict()`**, so each is in
+principle host-portable.
+
+**But "can run against our VM" is not the same as "scored on OSWorld".** The OSWorld numbers those
+agents publish are measured on **Ubuntu 22.04 with GNOME**, not on Windows. Porting one is
+therefore a re-implementation, and — critically — **the published score no longer describes the
+thing you measure.** Reporting "UI-TARS-1.5-7B: 40% on OSWorld, X% on our Calc suite" implies both
+numbers describe the same system; after a port they do not, and a reviewer is right to call that
+out. This is the trap in "pick the baseline from agents with public scores", and it cuts the other
+way from Tiffany's intent.
+
+**(ii) Publicly scored on Windows *and* Windows-native: Navi (WAA's own agent).** WAA ships
+`Navi` with published scores on 150+ Windows tasks, and — uniquely — it is the only agent in this
+survey whose published number is **on Windows**. Its modes are documented in the repo:
+
+| Mode | What it is | Notes |
+|---|---|---|
+| `--som-origin mixed-omni --a11y-backend uia` | OmniParser + accessibility tree | **Recommended for best results** (the paper's top config) |
+| `--som-origin omni` | OmniParser only — **pure screenshot** | The honest screenshot condition |
+| `--som-origin oss` | webparse + groundingdino + Tesseract OCR | Baseline |
+| `--som-origin a11y --a11y-backend uia/win32` | accessibility only | Not a screenshot agent at all |
+
+`--som-origin omni` is, by construction, **a publicly scored pure-screenshot Windows agent**, and
+its code (`client/mm_agents/`) is a plain Python agent class that talks to a VM over HTTP. That
+makes it the single best candidate under Tiffany's rule, and it is a genuine change to §1a's
+recommendation — see 1b.3.
+
+**(iii) Publicly scored and already running on our stack: Cua.** Cua has starred open-source status
+but no published OSWorld score in the sources I read; treat it as *unscored* rather than scored.
+Its value in §1a remains that it is a recognisable, maintained framework with a proven Windows
+action ledger — not that it has a benchmark number.
+
+### 1b.3 Recommendation, revised
+
+**Primary is unchanged in practice, with one addition — a third arm, so all three credibility
+stories are present in one table:**
+
+| Arm | Agent | Public score exists? | Runs on our VM? | What it establishes |
+|---|---|---|---|---|
+| **B1** | **Navi, `--som-origin omni`** (WAA's agent, screenshot mode) | **Yes — on Windows** | Via a thin transport port (its agent is a Python class; our agent provides screenshot + input ops) | "An agent with a *published Windows score* also scores this on our Calc suite" |
+| **B2** | **UI-TARS-1.5-7B** in the OSWorld-style loop (`uitars15_v2.py` / `gui-agents`) | **Yes — on OSWorld (Linux)** | Same porting caveat, and must be labelled as *ported* | "A publicly scored OSWorld agent also works here" — with the port declared |
+| **C1/C2** | **Cua Driver** (§1a) | No public benchmark score | Yes, natively (SSH + named pipe) | Recognisable framework, best-in-class action model |
+
+**Ordering of effort:** B1 is the cheap win and should be first — it is `pip`-installable, its
+inputs are screenshots plus mouse/keyboard, and it does not require the accessibility tree in
+`omni` mode, so it satisfies the "screenshot agent" reading of row 7 without any purity argument.
+B2 is the tie to the literature. C1/C2 remain the strongest engineering fit and the most
+maintained code.
+
+**The one rule that keeps this honest:** every arm's table row carries
+`publicScore { benchmark, version, value, source }` and `ported: true|false`. A ported agent's
+published number is reported **as context, never as the expectation**. Row 7's comparison is
+between what we measure here, on identical tasks, and the published number is what lets a reader
+judge whether our port is plausible — not proof that it is.
+
+**Cost consequence.** Navi needs an LLM backend (its `config.json` takes OpenAI/Azure keys) and,
+for `mixed-omni`, OmniParser on a GPU. In `--som-origin omni` mode it needs OmniParser (the
+screen-understanding model, MIT, Microsoft) plus an LLM. A **local** LLM behind an
+OpenAI-compatible base URL keeps the $0 property; OmniParser is the one component whose local
+feasibility on this Mac is **UNVERIFIED** — it is the first thing M1-023 checks, and if it fails
+the fallback is B2/UI-TARS which needs no separate perception model.
+
+## 1c. Methodology: what to borrow from OSWorld and WAA, and the external-benchmark question
+
+### 1c.1 Their task format, and what ours already matches
+
+An OSWorld task is one JSON file. The Calc example above (`4e6fcf72…`), reduced to its bones:
+
+```jsonc
+{
+  "id": "4e6fcf72-…", "snapshot": "libreoffice_calc",
+  "instruction": "Please calculate the ages … don't touch irrelevant regions, even if they are blank.",
+  "config":    [ {"type":"host_reference_date", …}, {"type":"download", …}, {"type":"open", …} ],
+  "evaluator": {
+    "func": "compare_table",
+    "expected": {"type":"employee_age_reference", "source":"…Employee_Age_By_Birthday.xlsx", …},
+    "result":   {"type":"vm_file", "path":"/home/user/Employee_Age_By_Birthday.xlsx", "dest":"…xlsx"},
+    "postconfig": [ {"type":"activate_window", …}, {"type":"execute", "parameters":{"command":["python","-c","import pyautogui; pyautogui.hotkey(\"ctrl\",\"s\")"]}} ]
+  },
+  "related_apps": ["libreoffice calc"]
+}
+```
+
+WAA's Calc task (`01b269ae…-WOS`) is **the same shape with Windows paths in `config`**
+(`C:\Users\Docker\Downloads\…`) and `expected.type: cloud_file`. WAA cites OSWorld as the
+source of its task framework. So the two benchmarks share one format, and there is no
+"OSWorld format" versus "WAA format" choice to make.
+
+| OSWorld/WAA concept | Myco's equivalent (`docs/architecture/m1.md`) | Verdict |
+|---|---|---|
+| `config[]` setup steps (`download`/`open`/`launch`) | fixture generator + `WindowsFixtureConverter` + `TrialOptions` | **Match**; ours is deterministic from a seed instead of a URL, which is better |
+| `instruction` as free text | `TaskIntent` as typed parameters | **Deliberate difference** — M1 tests verified execution, not instruction parsing |
+| `evaluator.func` + `expected` + `result` (getter → metric) | `UnoVerifier` + persisted-file parse + declarative predicates | **Match in spirit**; ours adds a third state (`uncertain`) they lack |
+| `compare_table` `sheet_data` whole-sheet `DataFrame.equals` | per-cell assertion at a known `cellRef` | **Ours is stricter** for M1's purpose and gives a per-cell diagnostic; theirs is all-or-nothing per sheet |
+| `preserve_cells` ("never touch irrelevant regions") | not implemented | **Borrow this — see 1c.2** |
+| `postconfig` pressing Ctrl+S via pyautogui | Myco's `save` step is part of the program, verified afterwards | **Do not borrow**: it makes the evaluator depend on GUI keystrokes, which the existing research already flagged |
+| Weighted `partial_scores` (OSWorld 2.0) | `scoreVerdict` per-check weights (`src/core/eval.ts`) | **Already adopted** in shape |
+| Executable-file check (`vm_file` → host parse) | close + host-side `.xlsx` parse | **Match** — our verifier already reads the persisted artifact, not the screen |
+
+**The three things worth taking:**
+
+1. **`preserve_cells` as a negative assertion.** OSWorld-Verified added it specifically to catch
+   agents that "fixed" the answer by rewriting untouched regions. M1 has the same hole: our
+   verifier asserts one cell and says nothing about the other 199 rows. Adding a
+   `preserveCells(region)` predicate to the verifier's declarative language closes a real
+   false-success path in *both* arms, and it is cheap — the persisted file is already parsed.
+2. **The `expected`/`result` separation as a contract.** Naming the gold artefact and the agent's
+   artefact as two typed getters is why OSWorld can swap `compare_table` for `check_csv` without
+   touching tasks. Myco's verifier is already shaped this way; writing it down makes the eventual
+   `checkMyco` adapter trivial.
+3. **`snapshot` + per-task setup.** Their per-task snapshot name is our `clean-base` reset with
+   extra state. If M1 ever grows past one task family, per-task fixtures belong in the trial row,
+   exactly as theirs does.
+
+**The one thing not to take:** their `postconfig` autosave. We verify only after a *verified*
+save, which is the whole product thesis; importing a GUI-keystroke save into the evaluator would
+make our judge depend on the thing we claim is unreliable.
+
+### 1c.2 Could Myco be reported on a small OSWorld or WAA Calc subset?
+
+**Technically yes, and the path is short; practically it is a post-M1 item with two hard
+preconditions.** Here is the honest assessment.
+
+**What would have to be true:**
+
+| Requirement | Status | Notes |
+|---|---|---|
+| A Calc task set with host-side gold | **Have it** — 47 OSWorld v1/2 `libreoffice_calc` JSONs, 24 WAA Calc tasks | Apache-2.0 / MIT; both counted in the trees today |
+| A checker Myco can call | **Nearly have it** — `compare_table` is a Python function over two `.xlsx` paths | We would re-implement the *call*, not the semantics, and cross-check against their `compare_table` on the gold pair |
+| An environment those tasks run in | **Do not have** — they assume `/home/user/…` Linux paths (OSWorld) or `C:\Users\Docker\…` (WAA) on their own image | Our Windows ARM64 VM can host the WAA-shaped tasks; the OSWorld ones need path remapping and a LibreOffice that matches theirs |
+| A Myco adapter that accepts an *instruction* rather than typed parameters | **Do not have** | `calc-record-edit` takes `{rowKey, column, newValue}`. An OSWorld task is prose. Myco would need an intent-from-prose step, which is exactly the "agent judgment" layer M1 deliberately excludes |
+| Fair scoring | **Achievable but must be stated** | OSWorld counts only maintainer-run results as *verified* on its leaderboard |
+
+**The honest conclusion:** the useful artifact is **not** "Myco's OSWorld number". It is:
+
+> **A small held-out Calc suite transcribed from OSWorld/WAA into Myco's task format, scored by
+> Myco's own verifier *and* by a re-implementation of their `compare_table`, with both numbers
+> reported.**
+
+That gives an external anchor without pretending to be on their leaderboard. It costs roughly
+**2–4 days** for 10 transcribed tasks, and it belongs *after* M1-015 — it is a credibility
+artefact, not an M1 acceptance criterion. Recommended as **M1-027 (TIF-58), post-M1, not
+blocking**.
+
+**What we must not do:** run their tasks on their images and call the result "Myco on OSWorld".
+Their harness owns the VM; that is a different environment from every other number in M1, and
+reporting it beside our VM numbers would be exactly the kind of opaque comparison
+OSWorld-Verified's own blog criticises ("everyone has their own environment … making scores
+increasingly opaque and incomparable").
+
+### 1c.3 The credibility ladder this gives Myco
+
+```
+weakest ──────────────────────────────────────────────────────────── strongest
+  "we tested our thing"   B1 Navi/omni        B2 UI-TARS/OSWorld-loop      transcribed subset
+                          (published          (published Linux score,      (external tasks,
+                           Windows score)      ported and declared)         our verifier + theirs)
+```
+
+Each rung is cheap to reach and each is reported with its own caveat. Row 7 only needs the
+middle rung; the top rung is what turns M1 into a claim a stranger can check.
 
 ## 2. Conditions that must be identical
 
@@ -700,6 +913,15 @@ decisions, and none of them is answered here:
 6. **CheaperInference vision probe** (`deepseek-v4.1-flash`, `glm-5.3`): still unverified. A single
    minimal request answers it. Not required for the Cua path — the planner does not have to be a
    CheaperInference model — so this is now optional rather than blocking.
+7. **Which public-score arm to run (§1b.3).** **B1** = Navi in `--som-origin omni` (published
+   *Windows* score; needs OmniParser, whose local-on-this-Mac feasibility is unverified) and
+   **B2** = UI-TARS-1.5-7B in the OSWorld loop (published *Linux* score; must be labelled ported).
+   Both are additive to C1/C2, and both cost roughly a day of transport work. My recommendation:
+   B1 first, B2 second, C1/C2 as the engineering baseline. This is a scope decision for Tiffany
+   because three to four arms is a longer report than row 7 strictly requires.
+8. **External-benchmark subset (§1c.2).** Whether to build the 10-task transcribed OSWorld/WAA Calc
+   suite after M1, ~2–4 days, so Myco has an externally anchored number. Recommended as post-M1
+   (M1-027), not an M1 criterion.
 
 Recommended default if nobody answers: **Cua Driver + local `qwen3.8-uncensored` planner, C1 and
 C2 both run**, because it spends nothing, needs no account, and produces the most defensible
@@ -775,3 +997,20 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | OpenAI prices: gpt-6-luna $0.10/$0.50, gpt-6.2-sol and gpt-6.1-sol $2/$10, gpt-6.2-astra $8/$40 | `platform.openai.com/docs/pricing.md` |
 | Gemini 3.1 Pro: $2 input / $12 output per MTok (≤200k prompts) | `ai.google.dev/gemini-api/docs/pricing.md` |
 | Computer-use reference implementation runs in a Linux Docker container | Anthropic computer-use docs |
+| OSWorld repo: Apache-2.0, 3,273 stars, pushed 2026-11-14 | `api.github.com/repos/xlang-ai/OSWorld` |
+| **47** `libreoffice_calc` tasks in OSWorld v1, and **47** in OSWorld-V2 | directory listing counts, `evaluation_examples/examples/libreoffice_calc` on each repo, 2026-11-21 |
+| OSWorld task shape: `config[]` / `evaluator.func` + `expected` + `result` + `postconfig`; Calc uses `compare_table` | `evaluation_examples/examples/libreoffice_calc/4e6fcf72-daf3-439f-a232-c434ce416af6.json` |
+| OSWorld provider branches on ARM: `arch = controller.get_vm_machine().lower(); if 'arm' in arch or 'aarch' in arch` | `desktop_env/controllers/setup.py` |
+| OSWorld image datasets ship `Ubuntu-arm.zip`, `Ubuntu-x86.zip` | `huggingface.co/api/datasets/xlangai/ubuntu_osworld/tree/main` |
+| OSWorld Windows VM dataset exists but is **x64** (`Windows-x86.zip`, `Windows 10 x64.qcow2` 49 GB), VMware/VirtualBox, "depending on the machine architecture x86 or arm64" per its card | `huggingface.co/api/datasets/xlangai/windows_osworld` + dataset README |
+| WAA repo: MIT, 918 stars, pushed 2026-10-26 | `api.github.com/repos/microsoft/WindowsAgentArena` |
+| WAA runs its own Windows 11 VM in Docker/QEMU; `--use-kvm true` is the default and no-KVM "is not recommended due to performance issues" | `scripts/run-local.sh`, README §FAQ |
+| WAA golden image is the **Windows 11 Enterprise Evaluation x64** ISO via Dockur; no ARM64 path documented | README §3.1-3.2 |
+| WAA has **24** `libreoffice_calc` tasks across 12 app categories | directory counts, `client/evaluation_examples_windows/examples` |
+| WAA Calc task shape is OSWorld's with Windows paths; evaluator `compare_table`, `result.type: vm_file`, `expected.type: cloud_file` | `examples/libreoffice_calc/01b269ae-…-WOS.json` |
+| WAA's agent is **Navi**; `--som-origin omni` is pure screenshot, `mixed-omni + uia` is the paper's best mode | README §4.1 configuration table |
+| WAA requires an OpenAI or Azure OpenAI key | README prerequisites |
+| Navi/OmniParser: OmniParser is MIT and is "the current top performing screen understanding model in our benchmark" | WAA README update 2024-10-23 |
+| OSWorld agent adapters that ship in-repo (UI-TARS v1/v2, OpenCUA, Qwen3-VL, Gemini, o3, gpt54, Owl, AGUVIS, …) | `mm_agents/` directory listing, 2026-11-21 |
+| Published OSWorld number is only *verified* when maintainers run the agent | OSWorld README §"Public evaluation" |
+| OSWorld-Verified's own warning about opaque, incomparable self-run scores | `xlang.ai/blog/osworld-verified`, quoted in `docs/research/eval-frameworks.md` §1.5 |
