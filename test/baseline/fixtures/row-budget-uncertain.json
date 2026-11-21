@@ -1,0 +1,6 @@
+{
+  "steps": 30,
+  "budgetExhausted": true,
+  "verdict": "uncertain",
+  "verdictReason": "step-budget"
+}
