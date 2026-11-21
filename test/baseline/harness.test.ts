@@ -1,14 +1,17 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  auditFalseSuccess, falseSuccess, sumUsage, planActions,
+  auditFalseSuccess,
   type BaselineRow,
   checkPurity,
   type DriverPrecondition,
+  falseSuccess,
   isBaselineRow,
   judge,
   type Observation,
+  planActions,
   rowKey,
+  sumUsage,
   type Transcript,
 } from "../../src/baseline/index.ts";
 import type { VerdictStatus } from "../../src/core/verify.ts";
@@ -135,7 +138,9 @@ describe("baseline", () => {
         verdictReason: "step-budget",
       }),
     ).toBe(true);
-    expect(isBaselineRow({ ...row, audited: false, independentValuePresent: null, falseSuccess: null })).toBe(true);
+    expect(
+      isBaselineRow({ ...row, audited: false, independentValuePresent: null, falseSuccess: null }),
+    ).toBe(true);
     expect(
       isBaselineRow({
         ...row,
@@ -153,22 +158,42 @@ describe("baseline", () => {
 
 describe("accounting and preconditions", () => {
   it("derives false success and handles audit errors", () => {
-    expect([true, false, null].map(v => falseSuccess("verified", v))).toEqual([false, true, null]);
+    expect([true, false, null].map((v) => falseSuccess("verified", v))).toEqual([
+      false,
+      true,
+      null,
+    ]);
     expect(falseSuccess("refuted", null)).toBe(false);
     expect(falseSuccess("uncertain", false)).toBe(false);
-    expect(auditFalseSuccess("verified", () => { throw new Error(); }).falseSuccess).toBe(null);
+    expect(
+      auditFalseSuccess("verified", () => {
+        throw new Error();
+      }).falseSuccess,
+    ).toBe(null);
     expect(isBaselineRow({ ...row, independentValuePresent: false })).toBe(false);
   });
   it("sums usage and validates totals", () => {
     expect(sumUsage([])).toEqual({ cost: 0, tokens: { in: 0, out: 0 }, modelCalls: 0 });
-    expect(sumUsage([{prompt: 2, cost: 1}, {completion: 3}, {}])).toEqual({ cost: 1, tokens: { in: 2, out: 3 }, modelCalls: 3 });
+    expect(sumUsage([{ prompt: 2, cost: 1 }, { completion: 3 }, {}])).toEqual({
+      cost: 1,
+      tokens: { in: 2, out: 3 },
+      modelCalls: 3,
+    });
     expect(isBaselineRow({ ...row, modelCalls: 2 })).toBe(false);
   });
   it("emits no actions when any driver precondition fails", () => {
-    const actions = [{tool: "click", arguments: {x: 1, y: 2}}];
-    for (const patch of [{guestVersion: "mismatch"}, {hostVersion: ""}, {pipeReachable: false}, {sessionIdentityMatches: false}]) {
-      expect(planActions({...row.driver, ...patch}, actions)).toEqual({actions: [], verdict: {status: "uncertain", reasons: ["driver-unreachable"]}});
+    const actions = [{ tool: "click", arguments: { x: 1, y: 2 } }];
+    for (const patch of [
+      { guestVersion: "mismatch" },
+      { hostVersion: "" },
+      { pipeReachable: false },
+      { sessionIdentityMatches: false },
+    ]) {
+      expect(planActions({ ...row.driver, ...patch }, actions)).toEqual({
+        actions: [],
+        verdict: { status: "uncertain", reasons: ["driver-unreachable"] },
+      });
     }
-    expect(planActions(row.driver, actions)).toEqual({actions, verdict: null});
+    expect(planActions(row.driver, actions)).toEqual({ actions, verdict: null });
   });
 });
