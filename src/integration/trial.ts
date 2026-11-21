@@ -34,7 +34,7 @@ import { type RunOutcome, runProgram } from "../core/runner.ts";
 import { findNode } from "../core/state.ts";
 import type { TaskIntent, Verdict } from "../core/verify.ts";
 import { intentFor, validateIntent } from "../tasks/calc-record-edit.js";
-import { generateFixture } from "../tasks/fixture.js";
+import { type FixtureFingerprint, fixtureFingerprint, generateFixture } from "../tasks/fixture.js";
 import { type CalcRecordEditParams, type GroundTruth, groundTruth } from "../tasks/intent.js";
 import { unoVerifierOverAgent } from "../verify/uno-verifier.js";
 import type { AgentClient } from "../win/agent-client.js";
@@ -92,6 +92,8 @@ export interface TrialReport {
   guardFailure?: GuardFailure;
   /** M1-019: guest hygiene outcome, reported even when cleanup failed. */
   cleanup: GuestCleanupResult;
+  /** Identity of the fixture bytes this trial uploaded (M1-013 sweep seed check). */
+  fixture: FixtureFingerprint;
 }
 
 /**
@@ -165,6 +167,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     elapsedMs: Date.now() - started,
     xlsxPath: outcome.xlsxPath,
     cleanup,
+    fixture: fixtureFingerprint(fixture),
   };
 }
 
