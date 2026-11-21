@@ -283,7 +283,9 @@ and Phi3-V / GPT-4o-mini / GPT-4o / GPT-4V-1106 per row, with a human ceiling of
 
 Transcribed from arXiv 2409.08264 Table 4's **Total** column, taken from the **PDF text layer**
 (`gs -sDEVICE=txtwrite` on `arxiv.org/pdf/2409.08264`) because HTML rendering loses the row-to-column
-alignment that produced every earlier error here. Human ceiling 74.5%. The four model rows print in
+alignment that produced every earlier error here. Human ceiling **74.5% overall** — and, the number that
+actually matters for us, **83.3% on LibreOffice Calc** (human avg 15.3 steps, difficulty 2.0, Table 8).
+The four model rows print in
 the order **Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106** within each block, and the ✗/✓ markers
 delimit six blocks, not five.
 
