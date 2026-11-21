@@ -208,11 +208,13 @@ fn type_text(
     // Baseline BEFORE acting. Without it, "the text is present afterwards" is
     // vacuous: pre-filled or previously typed text passes a containment check
     // even if this action changed nothing (adversarial review M1).
-    let baseline = read_text(provider, nodes, target);
-    // Focus first (semantic), then let the toolkit settle before typing: typing
-    // immediately after focus loses the leading characters on GTK.
+    // Focus first (semantic), then let the toolkit settle before reading the
+    // baseline: typing immediately after focus loses leading characters on GTK,
+    // and a baseline read mid-settle can be stale, making a correct write look
+    // unverified.
     let focus_ok = provider.focus(el.data()).is_ok();
     std::thread::sleep(std::time::Duration::from_millis(250));
+    let baseline = read_text(provider, nodes, target);
     let typed = match xa11y::input_sim() {
         Ok(input) => input.keyboard().type_text(text).map_err(|e| e.to_string()),
         Err(e) => Err(format!("input unavailable: {e}")),

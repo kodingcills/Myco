@@ -47,6 +47,9 @@ pub struct QemuConfig {
     pub introspection_file: Option<String>,
     /// Per-op deadline for the control channel.
     pub op_timeout_secs: u64,
+    /// How long `provision`/`reset` wait for a usable desktop (cloud-init installs
+    /// packages for minutes on a fresh overlay).
+    pub desktop_timeout_secs: u64,
     /// Session id, used as the evidence run id.
     pub session_id: String,
     /// Root directory for `runs/<session>/` evidence artifacts.
@@ -62,8 +65,9 @@ impl QemuConfig {
             boot_timeout: Duration::from_secs(180),
             introspection_file: None,
             op_timeout_secs: 10,
+            desktop_timeout_secs: 900,
             session_id: format!("session-{}", std::process::id()),
-            evidence_root: workspace_root.join("runs"),
+            evidence_root: workspace_root.to_path_buf(),
         }
     }
 }
@@ -214,6 +218,52 @@ impl QemuLinuxBackend {
         Ok(())
     }
 
+    /// Poll until the GUI session answers with at least one AT-SPI application.
+    ///
+    /// Two waits, deliberately ordered: cloud-init FIRST (a fresh overlay installs
+    /// packages and restarts services mid-run, which tears down the X session and
+    /// the AT-SPI bus), then the desktop. Polling the desktop first "works" only
+    /// by accident — it sees a session that is about to be replaced.
+    fn wait_desktop(&mut self) -> Result<(), BackendError> {
+        let ci_deadline = Instant::now() + Duration::from_secs(self.config.desktop_timeout_secs);
+        loop {
+            // Bound each probe: an unbounded `cloud-init status --wait` would make
+            // this deadline decorative (review M1).
+            let probe = self.guest_exec_within(
+                "timeout 20 cloud-init status --wait >/dev/null 2>&1 && echo READY",
+                Duration::from_secs(40),
+            );
+            match probe {
+                Ok(out) if out.contains("READY") => break,
+                Ok(_) | Err(_) if Instant::now() < ci_deadline => {
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+                Ok(_) | Err(_) => {
+                    return Err(BackendError::Protocol(
+                        "cloud-init did not settle within the desktop timeout".into(),
+                    ))
+                }
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(self.config.desktop_timeout_secs);
+        let mut last = String::new();
+        loop {
+            match self.observe() {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    last = e.to_string();
+                    if Instant::now() > deadline {
+                        return Err(BackendError::Protocol(format!(
+                            "desktop not ready within {}s: {last}",
+                            self.config.desktop_timeout_secs
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+            }
+        }
+    }
+
     /// Install the agent binary into the guest (idempotent, and required after every
     /// fresh overlay — the base image carries no agent).
     ///
@@ -274,24 +324,98 @@ impl QemuLinuxBackend {
     /// Run a command in the guest over plain SSH (lifecycle ops only; the op
     /// channel is `Channel`). Used for agent installation and reset verification.
     pub fn guest_exec(&self, remote: &str) -> Result<String, BackendError> {
-        let out = Command::new("ssh")
+        self.guest_exec_within(remote, Duration::from_secs(self.config.op_timeout_secs.max(30)))
+    }
+
+    /// Run a guest command with a HARD host-side deadline covering the whole
+    /// operation: spawn, output draining, and exit.
+    ///
+    /// Three failure modes this must survive, all seen or measured:
+    /// - a hung guest sshd (no exit at all);
+    /// - a command whose output fills a pipe, blocking ssh because nobody drains
+    ///   it (draining only after `try_wait` reports exit deadlocks exactly there);
+    /// - a grandchild that keeps the pipe's write end open after the direct child
+    ///   exits, so waiting on the child alone still blocks forever.
+    /// So: drain both pipes on their own threads from the moment of spawn, poll
+    /// the child against the deadline, then join the drainers under a bounded wait.
+    pub fn guest_exec_within(
+        &self,
+        remote: &str,
+        deadline: Duration,
+    ) -> Result<String, BackendError> {
+        let mut child = Command::new("ssh")
             .args([
                 "-i", &self.config.guest_dir.join("keys").join("id_ed25519").to_string_lossy(),
                 "-p", &self.config.ssh_port.to_string(),
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=10",
+                "-o", "ServerAliveInterval=5",
+                "-o", "ServerAliveCountMax=3",
                 "myco@localhost",
                 remote,
             ])
-            .output()?;
-        if !out.status.success() {
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(BackendError::Io)?;
+
+        let mut out_pipe = child
+            .stdout
+            .take()
+            .ok_or_else(|| BackendError::Protocol("guest exec: no stdout pipe".into()))?;
+        let mut err_pipe = child
+            .stderr
+            .take()
+            .ok_or_else(|| BackendError::Protocol("guest exec: no stderr pipe".into()))?;
+
+        // Drain immediately: a full pipe blocks ssh and would look like a hang.
+        let out_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut out_pipe, &mut buf);
+            buf
+        });
+        let err_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut err_pipe, &mut buf);
+            buf
+        });
+
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(st)) => break st,
+                Ok(None) if start.elapsed() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    // Drainers may still be blocked by a grandchild holding the
+                    // pipe; detach rather than join on this path.
+                    return Err(BackendError::Protocol(format!(
+                        "guest command exceeded {deadline:?}: `{remote}`. The guest did not \
+                         answer in time — check it is up (runtime/guest/boot.sh) and that the \
+                         control channel responds, then retry"
+                    )));
+                }
+                Err(e) => return Err(BackendError::Io(e)),
+            }
+        };
+
+        // Join the drainers, but never past the deadline.
+        let remaining = deadline.saturating_sub(start.elapsed());
+        let stdout = join_within(out_thread, remaining);
+        let stderr = join_within(err_thread, remaining);
+
+        if !status.success() {
             return Err(BackendError::Protocol(format!(
-                "guest exec failed: {}",
-                String::from_utf8_lossy(&out.stderr)
+                "guest command failed (`{remote}`): {}",
+                String::from_utf8_lossy(&stderr.unwrap_or_default()).trim()
             )));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        Ok(String::from_utf8_lossy(&stdout.unwrap_or_default()).to_string())
     }
 }
 
@@ -313,6 +437,20 @@ fn action_ref(action: &Action) -> Option<&myco_rt_core::ElementRef> {
         Action::Click { target } | Action::TypeText { target, .. } => Some(target),
         _ => None,
     }
+}
+
+/// Join a drainer thread, giving up after `budget` so a grandchild holding a pipe
+/// cannot extend an operation past its deadline.
+fn join_within<T>(handle: std::thread::JoinHandle<T>, budget: Duration) -> Option<T> {
+    let start = Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= budget {
+            std::mem::forget(handle); // detach: it may stay blocked forever
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    handle.join().ok()
 }
 
 /// Newest modification time under `dir` (recursive), used for staleness checks.
@@ -359,6 +497,8 @@ impl Backend for QemuLinuxBackend {
                 )
                 .map_err(|e| BackendError::Evidence(e.to_string()))?,
             );
+            // `provision` promises a usable desktop, not just a live channel.
+            self.wait_desktop()?;
             Ok(())
         })();
         if result.is_err() {
@@ -506,6 +646,8 @@ impl Backend for QemuLinuxBackend {
         // The guest restarts its state counter on a fresh overlay; mirror it so a
         // pre-reset ref can never validate against post-reset state.
         self.last_state_version = 0;
+        // A recreated overlay re-runs cloud-init: wait for a usable desktop again.
+        self.wait_desktop()?;
         Ok(())
     }
 
@@ -542,8 +684,9 @@ mod tests {
             boot_timeout: Duration::from_secs(1),
             introspection_file: None,
             op_timeout_secs: 10,
+            desktop_timeout_secs: 1,
             session_id: "test-session".into(),
-            evidence_root: dir.join("runs"),
+            evidence_root: dir.to_path_buf(),
         }
     }
 
