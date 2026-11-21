@@ -156,13 +156,9 @@ fn run(op: &str, payload: Value) -> Result<Value, String> {
                             .into(),
                     );
                 };
-                let node = obs.a11y_tree["nodes"]
-                    .as_array()
-                    .and_then(|ns| {
-                        ns.iter().find(|n| n["name"].as_str().map(|s| s.contains(&name)).unwrap_or(false))
-                    })
-                    .ok_or_else(|| format!("no node named {name:?} in the current observation"))?;
-                let r = node["ref"].as_str().ok_or("node without ref")?;
+                let nodes = obs.a11y_tree["nodes"].as_array().cloned().unwrap_or_default();
+                let node = resolve_by_name(&nodes, &name)?;
+                let r = node["ref"].as_str().ok_or("node without a ref")?.to_string();
                 // The wire form of a ref is a string; bind it to the version of the
                 // observation it was just resolved from.
                 action_json["target"] = json!({
@@ -174,7 +170,7 @@ fn run(op: &str, payload: Value) -> Result<Value, String> {
             let action: Action = serde_json::from_value(action_json)
                 .map_err(|e| format!("malformed action: {e}"))?;
             let outcome = be.act(&action).map_err(|e| e.to_string())?;
-            Ok(json!({"ok": true, "op": "act", "outcome": format!("{outcome:?}")}))
+            Ok(json!({"ok": true, "op": "act", "outcome": outcome_json(&outcome)}))
         }
         "evidence" => {
             let (id, token) = load_session(&state_path())?;
@@ -199,5 +195,132 @@ fn run(op: &str, payload: Value) -> Result<Value, String> {
         }
         "" => Err("usage: myco-rt <create|observe|act|evidence|reset|destroy> ['<json>']".into()),
         other => Err(format!("unknown op {other:?}")),
+    }
+}
+
+/// Resolve a target by accessible name, refusing ambiguity instead of guessing.
+///
+/// Exact matches win; two exact matches, or only substring matches, is an error
+/// naming the candidates — silently picking the first node in tree order would
+/// retarget a click to the wrong control (review M2).
+fn resolve_by_name<'a>(nodes: &'a [Value], name: &str) -> Result<&'a Value, String> {
+    if name.is_empty() {
+        return Err("target name must not be empty".to_string());
+    }
+    let exact: Vec<&Value> = nodes
+        .iter()
+        .filter(|n| n["name"].as_str() == Some(name))
+        .collect();
+    match exact.len() {
+        1 => return Ok(exact[0]),
+        0 => {}
+        _ => {
+            return Err(format!(
+                "ambiguous target {name:?}: {} nodes share that exact name ({});                  re-observe and use a unique target",
+                exact.len(),
+                describe(&exact)
+            ))
+        }
+    }
+    let sub: Vec<&Value> = nodes
+        .iter()
+        .filter(|n| n["name"].as_str().map(|s| s.contains(name)).unwrap_or(false))
+        .collect();
+    match sub.len() {
+        0 => Err(format!("no node named {name:?} in the current observation")),
+        1 => Ok(sub[0]),
+        _ => Err(format!(
+            "ambiguous target {name:?}: {} nodes contain that name ({}); be more specific",
+            sub.len(),
+            describe(&sub)
+        )),
+    }
+}
+
+fn describe(nodes: &[&Value]) -> String {
+    nodes
+        .iter()
+        .take(5)
+        .map(|n| {
+            format!(
+                "{:?} ({})",
+                n["name"].as_str().unwrap_or(""),
+                n["role"].as_str().unwrap_or("?")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The ADR-0003 three-way outcome as structured data, not a Debug string: a
+/// client must be able to branch on it without parsing Rust syntax (review M4).
+fn outcome_json(outcome: &myco_rt_core::ops::ActionOutcome) -> Value {
+    use myco_rt_core::ops::ActionOutcome::*;
+    match outcome {
+        DeliveredVerified => json!({"kind": "delivered_verified"}),
+        DeliveredUnverified => json!({"kind": "delivered_unverified"}),
+        Failed { reason } => json!({"kind": "failed", "reason": reason}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nodes() -> Vec<Value> {
+        vec![
+            json!({"ref": "n0", "role": "frame", "name": "Untitled — Editor"}),
+            json!({"ref": "n1", "role": "push button", "name": "OK"}),
+            json!({"ref": "n2", "role": "push button", "name": "OK"}),
+            json!({"ref": "n3", "role": "menu", "name": "File"}),
+            json!({"ref": "n4", "role": "push button", "name": "Open File"}),
+        ]
+    }
+
+    #[test]
+    fn exact_unique_name_resolves() {
+        let n = nodes();
+        let f = resolve_by_name(&n, "File").unwrap();
+        assert_eq!(f["ref"], "n3", "exact match must win over the substring match");
+    }
+
+    #[test]
+    fn duplicate_exact_names_are_refused_not_guessed() {
+        let err = resolve_by_name(&nodes(), "OK").unwrap_err();
+        assert!(err.contains("ambiguous"), "{err}");
+        assert!(err.contains("2 nodes"), "{err}");
+    }
+
+    #[test]
+    fn multiple_substring_matches_are_refused() {
+        // "File" matches the exact menu AND the "Open File" button by substring;
+        // the exact match wins, so a second, non-exact query must be refused.
+        let n = vec![
+            json!({"ref": "n0", "role": "push button", "name": "Save File"}),
+            json!({"ref": "n1", "role": "push button", "name": "Open File"}),
+        ];
+        let err = resolve_by_name(&n, "File").unwrap_err();
+        assert!(err.contains("ambiguous"), "{err}");
+        assert!(err.contains("2 nodes"), "{err}");
+    }
+
+    #[test]
+    fn empty_name_is_refused() {
+        assert!(resolve_by_name(&nodes(), "").is_err());
+    }
+
+    #[test]
+    fn unknown_name_is_refused() {
+        assert!(resolve_by_name(&nodes(), "Nonexistent").is_err());
+    }
+
+    #[test]
+    fn outcomes_serialize_as_data_not_debug_text() {
+        use myco_rt_core::ops::ActionOutcome;
+        assert_eq!(outcome_json(&ActionOutcome::DeliveredVerified)["kind"], "delivered_verified");
+        let f = outcome_json(&ActionOutcome::Failed { reason: "boom".into() });
+        assert_eq!(f["kind"], "failed");
+        assert_eq!(f["reason"], "boom");
+        assert!(f.get("reason").is_some());
     }
 }

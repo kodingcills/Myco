@@ -206,7 +206,7 @@ impl Server {
             .map_err(|e| (-32602, format!("malformed action: {e}")))?;
         let s = self.session(args)?;
         let outcome = s.act(&action).map_err(|e| (-32000, e.to_string()))?;
-        Ok(json!({"ok": true, "outcome": format!("{outcome:?}")}))
+        Ok(json!({"ok": true, "outcome": outcome_json(&outcome)}))
     }
 
     fn evidence(&mut self, args: &Value) -> Result<Value, (i64, String)> {
@@ -229,5 +229,16 @@ impl Server {
             .ok_or((-32602, format!("unknown session {id}")))?;
         s.destroy().map_err(|e| (-32000, e.to_string()))?;
         Ok(json!({"ok": true}))
+    }
+}
+
+/// The ADR-0003 three-way outcome as structured data (review M4): a client must
+/// branch on `kind`, never parse a Rust Debug string.
+fn outcome_json(outcome: &myco_rt_core::ops::ActionOutcome) -> Value {
+    use myco_rt_core::ops::ActionOutcome::*;
+    match outcome {
+        DeliveredVerified => json!({"kind": "delivered_verified"}),
+        DeliveredUnverified => json!({"kind": "delivered_unverified"}),
+        Failed { reason } => json!({"kind": "failed", "reason": reason}),
     }
 }

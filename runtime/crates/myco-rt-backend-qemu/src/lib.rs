@@ -67,7 +67,7 @@ impl QemuConfig {
             op_timeout_secs: 10,
             desktop_timeout_secs: 900,
             session_id: format!("session-{}", std::process::id()),
-            evidence_root: workspace_root.join("runs"),
+            evidence_root: workspace_root.to_path_buf(),
         }
     }
 }
@@ -227,7 +227,13 @@ impl QemuLinuxBackend {
     fn wait_desktop(&mut self) -> Result<(), BackendError> {
         let ci_deadline = Instant::now() + Duration::from_secs(self.config.desktop_timeout_secs);
         loop {
-            match self.guest_exec("cloud-init status --wait >/dev/null 2>&1; echo READY") {
+            // Bound each probe: an unbounded `cloud-init status --wait` would make
+            // this deadline decorative (review M1).
+            let probe = self.guest_exec_within(
+                "timeout 20 cloud-init status --wait >/dev/null 2>&1; echo READY",
+                Duration::from_secs(40),
+            );
+            match probe {
                 Ok(out) if out.contains("READY") => break,
                 Ok(_) | Err(_) if Instant::now() < ci_deadline => {
                     std::thread::sleep(Duration::from_secs(3));
@@ -318,17 +324,58 @@ impl QemuLinuxBackend {
     /// Run a command in the guest over plain SSH (lifecycle ops only; the op
     /// channel is `Channel`). Used for agent installation and reset verification.
     pub fn guest_exec(&self, remote: &str) -> Result<String, BackendError> {
-        let out = Command::new("ssh")
+        self.guest_exec_within(remote, Duration::from_secs(self.config.op_timeout_secs.max(30)))
+    }
+
+    /// Run a guest command with a HARD host-side deadline.
+    ///
+    /// `ssh ... output()` blocks forever on a hung guest or a remote command that
+    /// never returns, so the caller's own deadline would be decorative (review M1).
+    /// The ssh session is killed at the deadline and the call fails loudly.
+    pub fn guest_exec_within(
+        &self,
+        remote: &str,
+        deadline: Duration,
+    ) -> Result<String, BackendError> {
+        let mut child = Command::new("ssh")
             .args([
                 "-i", &self.config.guest_dir.join("keys").join("id_ed25519").to_string_lossy(),
                 "-p", &self.config.ssh_port.to_string(),
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=10",
+                "-o", "ServerAliveInterval=5",
+                "-o", "ServerAliveCountMax=3",
                 "myco@localhost",
                 remote,
             ])
-            .output()?;
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(BackendError::Io)?;
+
+        let start = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if start.elapsed() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(BackendError::Protocol(format!(
+                        "guest exec exceeded {deadline:?} (guest unresponsive?)"
+                    )));
+                }
+                Err(e) => return Err(BackendError::Io(e)),
+            }
+        }
+
+        let out = child
+            .wait_with_output()
+            .map_err(BackendError::Io)?;
         if !out.status.success() {
             return Err(BackendError::Protocol(format!(
                 "guest exec failed: {}",
@@ -592,7 +639,7 @@ mod tests {
             op_timeout_secs: 10,
             desktop_timeout_secs: 1,
             session_id: "test-session".into(),
-            evidence_root: dir.join("runs"),
+            evidence_root: dir.to_path_buf(),
         }
     }
 
