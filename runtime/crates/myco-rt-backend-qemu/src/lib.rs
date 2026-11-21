@@ -230,7 +230,7 @@ impl QemuLinuxBackend {
             // Bound each probe: an unbounded `cloud-init status --wait` would make
             // this deadline decorative (review M1).
             let probe = self.guest_exec_within(
-                "timeout 20 cloud-init status --wait >/dev/null 2>&1; echo READY",
+                "timeout 20 cloud-init status --wait >/dev/null 2>&1 && echo READY",
                 Duration::from_secs(40),
             );
             match probe {
@@ -327,11 +327,17 @@ impl QemuLinuxBackend {
         self.guest_exec_within(remote, Duration::from_secs(self.config.op_timeout_secs.max(30)))
     }
 
-    /// Run a guest command with a HARD host-side deadline.
+    /// Run a guest command with a HARD host-side deadline covering the whole
+    /// operation: spawn, output draining, and exit.
     ///
-    /// `ssh ... output()` blocks forever on a hung guest or a remote command that
-    /// never returns, so the caller's own deadline would be decorative (review M1).
-    /// The ssh session is killed at the deadline and the call fails loudly.
+    /// Three failure modes this must survive, all seen or measured:
+    /// - a hung guest sshd (no exit at all);
+    /// - a command whose output fills a pipe, blocking ssh because nobody drains
+    ///   it (draining only after `try_wait` reports exit deadlocks exactly there);
+    /// - a grandchild that keeps the pipe's write end open after the direct child
+    ///   exits, so waiting on the child alone still blocks forever.
+    /// So: drain both pipes on their own threads from the moment of spawn, poll
+    /// the child against the deadline, then join the drainers under a bounded wait.
     pub fn guest_exec_within(
         &self,
         remote: &str,
@@ -355,34 +361,61 @@ impl QemuLinuxBackend {
             .spawn()
             .map_err(BackendError::Io)?;
 
+        let mut out_pipe = child
+            .stdout
+            .take()
+            .ok_or_else(|| BackendError::Protocol("guest exec: no stdout pipe".into()))?;
+        let mut err_pipe = child
+            .stderr
+            .take()
+            .ok_or_else(|| BackendError::Protocol("guest exec: no stderr pipe".into()))?;
+
+        // Drain immediately: a full pipe blocks ssh and would look like a hang.
+        let out_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut out_pipe, &mut buf);
+            buf
+        });
+        let err_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut err_pipe, &mut buf);
+            buf
+        });
+
         let start = Instant::now();
-        loop {
+        let status = loop {
             match child.try_wait() {
-                Ok(Some(_)) => break,
+                Ok(Some(st)) => break st,
                 Ok(None) if start.elapsed() < deadline => {
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 Ok(None) => {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // Drainers may still be blocked by a grandchild holding the
+                    // pipe; detach rather than join on this path.
                     return Err(BackendError::Protocol(format!(
-                        "guest exec exceeded {deadline:?} (guest unresponsive?)"
+                        "guest command exceeded {deadline:?}: `{remote}`. The guest did not \
+                         answer in time — check it is up (runtime/guest/boot.sh) and that the \
+                         control channel responds, then retry"
                     )));
                 }
                 Err(e) => return Err(BackendError::Io(e)),
             }
-        }
+        };
 
-        let out = child
-            .wait_with_output()
-            .map_err(BackendError::Io)?;
-        if !out.status.success() {
+        // Join the drainers, but never past the deadline.
+        let remaining = deadline.saturating_sub(start.elapsed());
+        let stdout = join_within(out_thread, remaining);
+        let stderr = join_within(err_thread, remaining);
+
+        if !status.success() {
             return Err(BackendError::Protocol(format!(
-                "guest exec failed: {}",
-                String::from_utf8_lossy(&out.stderr)
+                "guest command failed (`{remote}`): {}",
+                String::from_utf8_lossy(&stderr.unwrap_or_default()).trim()
             )));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        Ok(String::from_utf8_lossy(&stdout.unwrap_or_default()).to_string())
     }
 }
 
@@ -404,6 +437,20 @@ fn action_ref(action: &Action) -> Option<&myco_rt_core::ElementRef> {
         Action::Click { target } | Action::TypeText { target, .. } => Some(target),
         _ => None,
     }
+}
+
+/// Join a drainer thread, giving up after `budget` so a grandchild holding a pipe
+/// cannot extend an operation past its deadline.
+fn join_within<T>(handle: std::thread::JoinHandle<T>, budget: Duration) -> Option<T> {
+    let start = Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= budget {
+            std::mem::forget(handle); // detach: it may stay blocked forever
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    handle.join().ok()
 }
 
 /// Newest modification time under `dir` (recursive), used for staleness checks.
