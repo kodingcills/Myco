@@ -35,11 +35,14 @@ fn main() {
 fn state_path() -> PathBuf {
     std::env::var("MYCO_RT_STATE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("runtime/state/session.json"))
+        .unwrap_or_else(|_| workspace().join("runtime/state/session.json"))
 }
 
 fn workspace() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    myco_rt_backend_qemu::workspace::discover().unwrap_or_else(|e| {
+        eprintln!("myco-rt: {e}");
+        PathBuf::from(".")
+    })
 }
 
 fn load_session(state: &PathBuf) -> Result<(String, String), String> {
