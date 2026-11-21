@@ -258,7 +258,13 @@ describe("trial evidence artifacts", () => {
       failOps: ["write_file"],
     });
     const runsDir = mkdtempSync(join(tmpdir(), "myco-trial-dead-"));
-    const report = await runTrial({ client, params: PARAMS, unoSocket: "2002", runsDir });
+    const report = await runTrial({
+      client,
+      params: PARAMS,
+      unoSocket: "2002",
+      runsDir,
+      skipGuestHealth: true, // this test faults write_file; probe uses that op too
+    });
     expect(report.verdict.status).toBe("uncertain");
     expect(report.completed).toBe(false);
     // Evidence is written even when the fixture convert failed.

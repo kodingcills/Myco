@@ -40,6 +40,8 @@ export class WindowsFixtureConverter implements FixtureConverter {
   readonly #profileDir: string;
   readonly #timeoutMs: number;
   #lastConvert: ConvertResult | null = null;
+  /** Set before the first await so a half-failed convert can still be cleaned. */
+  #lastDirs: { runDir: string; profile: string } | null = null;
 
   constructor(options: WindowsFixtureConverterOptions) {
     this.#client = options.client;
@@ -58,6 +60,7 @@ export class WindowsFixtureConverter implements FixtureConverter {
     const guestCsv = `${dir}\\fixture.csv`;
     const xlsx = `${dir}\\fixture.xlsx`;
     const profile = `${this.#profileDir}/${nonce()}`;
+    this.#lastDirs = { runDir: dir, profile };
 
     await this.#client.writeFile(guestCsv, csvBytes);
     await this.#client.launch([
@@ -98,6 +101,15 @@ export class WindowsFixtureConverter implements FixtureConverter {
   /** Guest path of the most recently converted `.xlsx` (fixture landing spot). */
   get lastXlsxPath(): string | null {
     return this.#lastConvert?.xlsxPath ?? null;
+  }
+  /** Guest run dir of the last convert attempt (set before any await). */
+  get lastRunDir(): string | null {
+    return this.#lastDirs?.runDir ?? null;
+  }
+
+  /** Throwaway UNO profile dir of the last convert attempt. */
+  get lastProfileDir(): string | null {
+    return this.#lastDirs?.profile ?? null;
   }
 }
 
