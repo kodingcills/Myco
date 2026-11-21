@@ -122,6 +122,9 @@ fn main() {
                 let _ = stdout.flush();
             }
             "observe" => {
+                // Bound the op: an AT-SPI/D-Bus call can block indefinitely when an
+                // app is wedged. Answer with a timeout rather than hanging the host.
+                let started = std::time::Instant::now();
                 // GUI-readiness gate: a fresh overlay runs cloud-init in the
                 // background after the channel is up. Report readiness explicitly
                 // rather than an empty tree that looks like "no apps".
@@ -177,6 +180,9 @@ fn main() {
                     }
                 }
                 let _ = stdout.flush();
+                if started.elapsed() > std::time::Duration::from_secs(8) {
+                    eprintln!("myco-rt-agent: observe took {:?}", started.elapsed());
+                }
             }
             "act" => {
                 // Refs are only meaningful against the observation that issued
