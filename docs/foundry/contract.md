@@ -169,27 +169,24 @@ src/foundry/
   types.ts           # public: shared contract, no answers
   screen.ts          # public: the trap reader (declared strings only)
   guard.ts           # public: trace guard
-  blind.ts           # public: scoring order + summary (imports the oracle; see §6.1)
+  baseline/          # public: arm interface, scripted policies, registry
   tasks/             # public: task text, fixture builders, app model, screen claims
-  oracles/           # HIDDEN: expected() implementations, answer derivation
-  hidden/            # HIDDEN (lazily created): generated ground-truth JSON, fault schedules
+  grader/            # grader-side: assembles baseline trials and scores reports
+  oracles/           # grader-side: persistent-state oracles and blind scoring
+  hidden-split/      # grader-side: generator and commitment checks (seed stays out of tree)
 ```
 
-`oracles/blind.ts` is the one file outside the hidden roots that imports `oracles/`, because scoring
-needs the answer. It is the grader entrypoint, not an implementer surface: it ships in the
-same excluded set as the hidden roots. `test/foundry/split.test.ts` asserts that no **other**
-file under `src/` reaches the oracle, so adding a second importer fails CI until the exclusion
-set is updated deliberately.
+`test/foundry/split.test.ts` rejects imports from public `src/` modules into grader modules,
+including re-exports. The host harness runs trusted reference policies in process. A live
+arm requires a separate process and an environment that omits the hidden seed path.
 
 Enforcement, strongest first:
 
-1. **Path**: `src/foundry/oracles/` and `src/foundry/hidden/` are excluded from the tree an
-   implementer is given, and CI enforces the import rule
-   (`test/foundry/split.test.ts`): exactly one file outside those roots may reach the
-   oracle — `oracles/blind.ts`, the grader entrypoint — and a second importer fails the build.
+1. **Path**: the grader modules are excluded from the implementer-facing import graph.
+   The real seed and generated held-out data live outside the worktree per ADR-0023.
 2. **Permissions**: the grading run is a separate process that reads the hidden root; the
    arm under test runs with the hidden root path absent from its environment.
-3. **Review**: a PR that touches `foundry/oracles/` or `foundry/hidden/` requires a
+3. **Review**: a PR that touches grader modules requires a
    Foundry-owner review, not a runtime-team review. The repo area is owned by P-TIF-6.
 
 A scored run is **blind** when the grader never sees the arm's self-report until after
