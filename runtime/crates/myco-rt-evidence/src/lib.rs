@@ -47,7 +47,8 @@ impl SessionRecorder {
                 "unsafe run id {run_id:?}: must be a plain path segment"
             )));
         }
-        let dir = root.join("runs").join(run_id);
+        // `root` is the runs directory: artifacts land in `<root>/<run_id>/`.
+        let dir = root.join(run_id);
         std::fs::create_dir_all(&dir)?;
         let mut rec = Self {
             run_id: run_id.to_string(),

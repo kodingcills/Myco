@@ -140,7 +140,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   with a verdict fails.
 
 ### RT-010 (TIF-39) MCP server + CLI front ends
-- **status:** pending
+- **status:** done (2026-11-20, RT owner) — pending PR/review. `myco-rt` CLI (JSON in/out, session state file) and `myco-rt-mcp` (stdio JSON-RPC 2.0, initialize/tools.list/tools.call, six tools, in-process sessions). Live: CLI create 1.3 s → act `DeliveredVerified` with guest-side confirmation → evidence artifacts; MCP create/observe/act/evidence verified over raw JSON-RPC. CLI `act` resolves targets by accessible name (refs are agent-process-scoped) and refuses a raw ref with an explanation.
 - **owner:** build
 - **blocked_by:** RT-005
 - **description:** `myco-rt-mcp` (stdio MCP server, tool discovery + typed schemas)

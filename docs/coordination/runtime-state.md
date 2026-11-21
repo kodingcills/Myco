@@ -155,3 +155,23 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   typeText verified with exact text in the app's state file, unresolvable ref fails.
 - Guest-side finding: typing immediately after focus drops leading characters on GTK;
   a 250 ms settle after focus fixes it.
+
+## Log 2026-11-20 (RT-009 merged, RT-010 built, AT-SPI regression fixed)
+- PR #22 (RT-009 evidence) MERGED (76cdda4) after two review rounds: atomic
+  temp+rename writes, reset counter invariant, RFC-3339 timestamps, step-level
+  schema validation, run-id sanitisation.
+- RT-010 built: `myco-rt` CLI (JSON in/out, session file) and `myco-rt-mcp`
+  (stdio JSON-RPC, six tools, in-process sessions). Both drive the same core.
+- ROOT CAUSE FOUND (long-standing, cost two 900 s failures): the AT-SPI bus
+  socket lived under /run/user/1000/at-spi, which is swept because this uid has no
+  logind session. The registry daemon kept running with a dead advertised address,
+  so every AT-SPI client (pyatspi AND xa11y) failed to connect while processes
+  looked healthy. Fix: the session pins AT_SPI_BUS_ADDRESS to /run/myco/at-spi
+  (the unit's RuntimeDirectory) and recreates it on every start.
+- Second fix: provision/reset now wait for `cloud-init status --wait` BEFORE
+  polling for the desktop. Polling first "succeeds" against a session that
+  cloud-init is about to restart.
+- Third fix: act reads its baseline AFTER focusing and settling (a baseline read
+  mid-settle made a correct write report delivered_unverified).
+- Evidence (live guest): CLI create 1.3 s (5 nodes) -> act DeliveredVerified with
+  the text confirmed in the app's own state file -> evidence artifacts written.
