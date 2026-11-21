@@ -401,3 +401,9 @@ Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MY
 - The sweep was NOT started, and the VM was NOT touched (per instruction). No pre-flight was run.
 - Awaiting mains power. On AC, the sequence is: pmset AC check -> guest health + guarded cold reset at main -> confirm no Linux qemu (lsof :2222 + runtime-owner check) -> start 30 trials from 0 under `caffeinate -dimsu`, fresh JSONL, no-VM-touch rule, honest count.
 - Prior attempt remains classified as a HOST-SLEEP abort (/tmp/m1-013/discarded-host-sleep/), never counted.
+
+## Cross-workstream: Screenshot Baseline Owner (TIF-19), recorded 2026-11-21
+- Thread: mcp:launch:1f1ac1ce7b00a783feb8c5a564d6dedf5ba6236c9155d5b9eb0188809f2d64e9 (cheaperinference/deepseek-v4.1-flash). Owns TIF-19 = the screenshot-agent baseline acceptance criterion.
+- Hard rule communicated: it must NOT touch myco-win11, UTM, or any VM script until the M1 coordinator declares the host free. The 30-trial sweep currently owns the VM.
+- Scheduling constraints I gave it: single VM user at a time; it must reuse the SAME snapshot (`clean-base`), the same `scripts/reset-trial-vm.sh` cold path, and the same deploy/agent flow as M1, so the baseline runs under IDENTICAL conditions (acceptance criterion #7 requires identical tasks, initial states and model settings). Any deviation must be recorded in its report.
+- Also flagged: the VM is shared with a Mac that must stay on AC power for long runs; and `pgrep qemu-system-aarch64` is NOT a reliable liveness test (the guest runs under UTM's QEMULauncher) — use `lsof -iTCP:2222`.
