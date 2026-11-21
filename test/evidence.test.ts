@@ -95,7 +95,7 @@ describe("evidence schema validation", () => {
         );
       }
     });
-    it("a claim is not a verdict: it cannot stand in for any other event type", () => {
+    it("rejects a claim missing a required field (a partial claim is not valid evidence)", () => {
       const { field: _omit, ...noField } = claim;
       expect(() => assertSchema(noField, traceEventSchema, "trace event")).toThrow(
         InvalidEvidenceError,
