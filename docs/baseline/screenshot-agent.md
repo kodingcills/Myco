@@ -163,9 +163,7 @@ model spend for 30 trials at the §8.1 token budget; "free" means $0 marginal.
    `myco-win11`.
 3. **It fits ARM64 by release artifact**, not by hope: a `windows-arm64` build of the current driver
    plus a proved Windows action ledger.
-4. **It can be free.** With a local planner it costs $0 marginal, and the harness/model choice stays
-   with Tiffany (§9) because the planner is swappable through MCP — that is the point of Cua being a
-   tool layer rather than a model.
+4. **It can be free.** With a local planner it costs $0 marginal, and Tiffany chose the Sonnet planner with local Ollama as the fallback (§9.0).
 5. **It converts the "credibility" question into a reportable one.** C1 vs C2 vs Myco gives three
    columns instead of an argument about whether the baseline was fair.
 
@@ -174,8 +172,7 @@ below). It keeps the $0 property but moves the credibility problem onto our loop
 
 **Not recommended as primary: (c) frontier API.** It buys the strongest baseline with money and an
 account, and its references ship as Linux Docker containers, so the Windows half is still ours to
-build. It stays on the table as a *third* column if Tiffany wants the strongest possible number and
-has a budget (§9 item 6).
+build. Tiffany deferred the frontier column for this run (§9.0).
 
 ### The one gate that can overturn the recommendation
 
@@ -521,7 +518,7 @@ arms must share all of the following. Anything that differs is a documented devi
 | Condition | How it is held constant |
 |---|---|
 | Task family and parameters | The sweep's final 30 parameter sets, copied verbatim into the baseline run (§4.4a) — same `{fixtureSeed,rowKey,column,newValue}` per trial. The generator that produced them (`generateParameterSets`, `src/tasks/intent.ts`) is the family definition; the *list used* is data, recorded with its hash in both reports. |
-| Initial state | Per-trial reset from **`clean-base`** via `scripts/reset-trial-vm.sh` (guarded, disk-only cold restore), identical for both arms — the same snapshot name, the same script, the same deploy flow (§2.1). Reset wall time recorded per trial. |
+| Initial state | Per-trial cold restore via `scripts/reset-trial-vm.sh`. Myco uses its preserved `clean-base`. C1 and C2 each restore a clean derivative of that base with Cua installed (§2.1). Record the snapshot name and reset wall time per row. |
 | Fixture file | Host-generated CSV → guest `.xlsx` by `WindowsFixtureConverter` (isolated throwaway profile). The **same fixture bytes** for trial *i* in both arms: the baseline gets fixture *i*, not a re-generated one. |
 | Guest software | Same VM, same LibreOffice 26.8.3 ARM64, same Windows build. No LibreOffice settings are changed for either arm (AutoCorrect stays on — see §3.4). |
 | Desktop geometry | Both arms run at the same display resolution; the baseline's `--grounding_width/height` equal the captured screenshot size. Resolution recorded. |
@@ -539,7 +536,7 @@ wherever it lives.
 
 | Step | Command (from `main`) | Success signal |
 |---|---|---|
-| Reset | `scripts/reset-trial-vm.sh` (default snapshot `clean-base`) | `reset-trial-vm: ready on 'clean-base'` |
+| Reset | `scripts/reset-trial-vm.sh` with the arm’s snapshot | The reset reports the selected snapshot ready |
 | Deploy | `agent/bootstrap/deploy-to-vm.sh` — **foreground**, never backgrounded | `DEPLOY OK` |
 | Reachability | `ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11` | agent `ping` answers |
 | Token | `vssh 'Get-Content C:\ProgramData\Myco\agent.token'` | non-empty; never committed |
@@ -578,12 +575,12 @@ every trial), and the trial itself. So:
 | One sub-arm (C1 **or** C2) | 140 + 100 + ~135 = 375 s | **≈3.1 h** |
 | Both sub-arms, each with its own reset+deploy | 2 × 375 = 750 s | **≈6.25 h** |
 
-**Each sub-arm gets its own reset.** An earlier draft of this section proposed sharing one reset
-between C1 and C2 to halve the cost. That is wrong and the design rejects it: C1 *edits the cell*,
-so C2 would start from a document C1 had already modified and its verdict would be meaningless. The
-saving is one reset+deploy per trial (~240 s of 750) — not worth an invalid arm. **Every row, in
-every sub-arm, begins from its own `clean-base` restore and its own deploy**, which is why the
-two-arm figure is 2× a single arm rather than less.
+**Each trial gets its own reset and deploy.** The Coordinator takes a new snapshot before Cua
+installation and preserves Myco's `clean-base`. During the authorized spike, record the name of
+the clean Cua-enabled derivative used for C1 and C2. The reset script currently allowlists snapshot
+names. Add support for the approved Cua snapshot and validate a reset during the spike before
+starting either arm. The Cua installation is a documented difference from Myco's base. Both
+sub-arms restore that derivative before each trial so C2 starts from a clean fixture after C1.
 
 Trial wall time is the least certain input: the running sweep's rows show 21–115 s, earlier verified
 trials were 34–40 s, and the Coordinator's planning figure is ~135 s. The report records actual
@@ -1100,19 +1097,16 @@ grounder** — that is measurement B in reverse, and §3.8 already shows it fail
 
 ### 8.4 Priced configurations (Tiffany's three options)
 
-**One arithmetic run, five sites.** Every figure in §1a, here, §9 and backlog M1-015 is computed by
-the same three lines below, so they agree by construction.
+These planning estimates predate the run caps in §9.1.
 
 Inputs and assumptions:
 
 - Input **0.44M–2.5M** and output **25k–45k** tokens per 30 trials (§8.1).
 - Tool-definition overhead **≈4,500 input tokens per request** (Anthropic's
-  `computer_toolset_20260801`). At 8–14 requests per trial that is **36,000–63,000** extra input
-  tokens over 30 trials — *not* per trial-batch. (An earlier revision multiplied this by 30 twice
-  and overstated every `high` cell; the correction is v4 of this section.)
-- The overhead is added to the `high` column only, because it represents the largest plausible
-  loop. The `low` column is the same budget without the toolset — what a plain screenshot loop
-  costs. No caching is assumed anywhere, so both columns are upper bounds.
+  `computer_toolset_20260801`). The high column in the planning table uses **63,000** extra input
+  tokens per arm. At 8–14 requests per trial, sending the full definition on every request would add
+  **1.08–1.89M** input tokens over 30 trials. The approved harness must project spend from its
+  actual request shape and honor §9.1. The low column excludes tool-definition overhead.
 - Image tokens are folded into the input budget via §8.1's per-call range; a screenshot-heavy
   descendant loop that re-sends more history lands near the `high` end.
 
@@ -1142,10 +1136,7 @@ column, and at `gpt-6.2-astra` that column is **$16/$60** per MTok, which would 
 short-context column is the correct one — but the report must state which column it used, and a
 future loop that re-sends much more history has to re-price.
 
-**The honest summary.** The local path is **$0**. Every paid configuration is **under $12 per 30
-trials** except the strongest frontier model, whose ceiling is **$22.30** — and that is the most
-expensive run anyone could buy here. Money is not the constraint on this baseline; VM time and
-credibility are.
+The local path costs $0 in API spend. Apply the §9.1 limits to the selected Sonnet run.
 
 ### 8.3 Cost, stated plainly
 
@@ -1166,9 +1157,43 @@ credibility are.
 
 ## 9. Escalation to the outer loop (Tiffany decides)
 
-The recommendation in §1a is **Cua Driver with a local planner**: $0 marginal, no account, no
-download beyond the driver itself (a 30.3 MB Windows ARM64 zip, MIT). It needs the following
-decisions, and none of them is answered here:
+### 9.0 Decisions recorded (Tiffany, 2026-11-21 4:04 PM EST)
+
+The numbered list in §9.2 records the original questions.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Install Cua Driver in the guest | **YES, gated.** Only after the M1-013 sweep **and** the corrupted run have finished, and only with the Coordinator's explicit go (it owns the host and VM). **Take a new snapshot before installing**, to preserve the Myco arm's `clean-base`. |
+| 2 | Planner model | **Paid Claude Sonnet 5.5 via the Anthropic API** (§8.4: $1.13-$5.58 per 30 trials). **Local Ollama (`qwen3.8-uncensored`) stays wired as the fallback.** See §9.1 for what the run needs. |
+| 3 | Run C2 | **YES.** C1 and C2 are reported separately. Each trial gets its own clean-base restore from the Cua-enabled snapshot (§2.1). |
+| 5, 7 | Frontier third column; public-score arm (B1/B2) | **Not now.** No frontier column, no public-score arm. |
+| 8 | External subset (M1-027 / TIF-58) | **Deferred until after M1 sign-off.** |
+| 6 | CheaperInference vision probe | Moot: that provider is out of credit and is not used. |
+
+The Coordinator schedules the VM. Allow about 30 minutes for the spike and 3.1 hours per full sub-arm
+(6.25 hours for C1 and C2 combined, with pauses between trials if needed).
+
+### 9.1 Sonnet planner credential and spend limits
+
+The outer loop manages the credential. The harness receives it at runtime.
+
+| Item | Value |
+|---|---|
+| Env var | `ANTHROPIC_API_KEY` in the host process environment. Keep the credential out of the worktree, logs, traces, transcripts, rows, and pull requests. |
+| Account | An Anthropic API key with billing enabled. |
+| Model | `claude-sonnet-5-5`, short-context pricing, $2 / $10 per MTok in/out. |
+| Expected spend, C1 | $1.13-$5.58 per 30 trials (§8.4 planning estimate; no caching assumed). |
+| Expected spend, C2 | $1.13-$5.58 per 30 trials, same envelope (estimate uses the same token budget). |
+| Estimated total, C1 + C2 | **$2.26–$11.16** for two full 30-trial arms, excluding the spike and retries. |
+| Run limits | **$9.00 hard total across C1 and C2**, with **$4.50 per arm by default**. Run C1 first. Before starting each trial, check projected spend against both limits. If the trial would cross either limit, stop at the row boundary and report the completed rows as partial results. |
+| Fallback | If the key is absent or a request is refused, the harness uses the local Ollama planner and the report says so per row. A row's planner is recorded in its row schema; rows from different planners are never pooled silently. |
+
+Record token usage and cost per trial. Report actual spend after each arm, including partial runs,
+and give the number of completed trials. The full-run estimate can exceed the approved cap.
+
+### 9.2 Original decision questions
+
+The initial recommendation was Cua Driver with a local planner. The options below record what was considered.
 
 1. **Install Cua Driver in the guest.** A third-party autostart daemon in the same interactive
    session as `myco-agent`, reached over a named pipe. No account, no payment, no licence fee — but
@@ -1212,10 +1237,6 @@ decisions, and none of them is answered here:
    generated-gold task or a WAA `cloud_file` (Google Drive) task. Recommended as post-M1 (M1-027),
    not an M1 criterion.
 
-Recommended default if nobody answers: **Cua Driver + local `qwen3.8-uncensored` planner, C1 and
-C2 both run**, because it spends nothing, needs no account, and produces the most defensible
-comparison. Its ceiling is whatever the local planner can do — stated plainly in the report.
-
 ---
 
 ## 10. Open questions
@@ -1224,9 +1245,7 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 |---|---|---|---|
 | 1 | Does Cua's driver actually reach LibreOffice Calc's grid on Windows ARM64 (the §1a spike)? | the whole option choice | baseline workstream, needs the VM |
 | 2 | Is the driver's pixel rung or element rung the one that lands on Calc cells? | C1 definition | baseline workstream, same spike |
-| 3 | Which planner model (local $0 vs paid §8.4) | any run | Tiffany via outer loop (§9.2) |
-| 4 | Is C2 (full ladder) in scope? | comparison credibility | Tiffany via outer loop (§9.3) |
-| 5 | VM time slot after the sweep | any run | M1 Coordinator |
+| 5 | VM time slot after the sweep and corrupted run | any run | M1 Coordinator |
 | 6 | Does the Myco sweep keep 30 columns varied, or only `name`? (runbook §7.3) | comparison honesty | M1 Coordinator (owner of the sweep) |
 
 
@@ -1235,7 +1254,8 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 ## 11. Definition of done for M1-015
 
 - `docs/baseline/screenshot-agent-report.md` with the §4 table filled from artefacts, both arms,
-  30 rows each, plus the deviations register and the prompt/model hashes.
+  30 rows each, plus the deviations register and the prompt/model hashes. If a spend cap ends an
+  arm early, deliver the completed rows as a partial run (§9.1). The full 30-trial comparison remains open.
 - Every row reproducible from `baseline/transcripts/` without re-running.
 - **A per-trial paired table** (§4.5.1) — Myco outcome beside each baseline outcome, not two
   independent rates — and the exact sign test's `b`, `c`, and `p` (§4.5.2). If `d < 6` the report
