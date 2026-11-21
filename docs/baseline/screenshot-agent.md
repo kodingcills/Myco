@@ -283,11 +283,14 @@ and Phi3-V / GPT-4o-mini / GPT-4o / GPT-4V-1106 per row, with a human ceiling of
 
 Transcribed from arXiv 2409.08264 Table 4's **Total** column, read from the paper's **LaTeX source**
 (`arxiv.org/e-print/2409.08264`, `inputs/results.tex`), where every row carries its model label
-explicitly and blocks are delimited by `\midrule`. The **HTML** rendering loses the row-to-column
-alignment entirely; the **PDF text layer** keeps each row's model label but prints the ✗/✓ block
-markers on their own lines, so a parser that splits on those markers shifts every block by one —
-which is what produced the earlier errors. Both are workable if parsed structurally; the LaTeX is
-the artifact of record and needs no inference.
+explicitly and blocks are delimited by `\midrule`. Both rendered forms keep every row's model
+label and its seven numbers in order; what they lose is **where the block marker belongs**. In the
+PDF text layer the `✗`/`✓` lands on the block's **second** row (the `GPT-4o-mini` line); in the
+ar5iv HTML the multirow cells are not `rowspan`'d, so the ✗/✓ marker alone sits on the block's
+**fourth** row, with the perception label on its own row nearby. Splitting either form on the
+marker therefore shifts every block — by a different amount in each — which is what produced the
+earlier errors. Only the LaTeX `\midrule` delimits blocks unambiguously, so it is the artifact of
+record.
 
 Human ceiling **74.5% overall**; **83.3% on LibreOffice Calc** (human avg 15.3 steps, difficulty
 2.0, Table 8). The four model rows print in the order **Phi3-V, GPT-4o-mini,
@@ -1113,7 +1116,6 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | **47** `libreoffice_calc` tasks in OSWorld v1, and **47** in OSWorld-V2 | directory listing counts, `evaluation_examples/examples/libreoffice_calc` on each repo, 2026-11-21 |
 | OSWorld task shape: `config[]` / `evaluator.func` + `expected` + `result` + `postconfig`; Calc uses `compare_table` | `evaluation_examples/examples/libreoffice_calc/4e6fcf72-daf3-439f-a232-c434ce416af6.json` |
 | OSWorld has an ARM64 image artefact (`Ubuntu-arm.zip`); its `if 'arm' in arch` check in `setup.py` is a **Chrome-profile branch**, not VM-architecture provider evidence | `huggingface.co/api/datasets/xlangai/ubuntu_osworld/tree/main`; `desktop_env/controllers/setup.py:1347-1356` |
-| OSWorld image datasets ship `Ubuntu-arm.zip`, `Ubuntu-x86.zip` | `huggingface.co/api/datasets/xlangai/ubuntu_osworld/tree/main` |
 | OSWorld Windows VM dataset exists but is **x64** (`Windows-x86.zip`, `Windows 10 x64.qcow2` 49 GB), VMware/VirtualBox, "depending on the machine architecture x86 or arm64" per its card | `huggingface.co/api/datasets/xlangai/windows_osworld` + dataset README |
 | WAA repo: MIT, 918 stars, pushed 2026-10-26 | `api.github.com/repos/microsoft/WindowsAgentArena` |
 | WAA runs its own Windows 11 VM in Docker/QEMU; `--use-kvm true` is the default and no-KVM "is not recommended due to performance issues" | `scripts/run-local.sh`, README §FAQ |
