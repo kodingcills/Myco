@@ -1,0 +1,2 @@
+// require
+const data = "require"; const required = 1, requires = 2; globalThis.fetch; globalThis["fetch"];
