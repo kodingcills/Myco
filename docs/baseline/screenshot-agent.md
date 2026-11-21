@@ -12,7 +12,7 @@ Scope: M1 acceptance row 7 — *the same tasks, initial states, and model settin
 a screenshot-based agent*. ADR-0009 fixed the baseline architecture as Agent S3 + UI-TARS-1.5-7B;
 **that is superseded here** — upstream `cua-agent` (the Agent-S-style framework) is deprecated by
 Cua, and Tiffany's 2026-11-21 direction requires a recognisable agent rather than a hand-rolled
-loop. ADR-0009 needs an amendment PR once Tiffany confirms §9.
+loop. ADR-0009 already carries a provisional supersession banner in `docs/architecture/m1.md`; its identical-conditions half is unchanged and binding, and the amendment is ratified with the M1-015 run.
 **Tiffany's 2026-11-21 direction supersedes that on one point**: the baseline must be a **real,
 recognizable screenshot-based desktop agent**, not a hand-rolled loop. So §1a evaluates the
 recognizable options (Cua, UI-TARS/open-model stacks, frontier computer-use APIs) on setup effort,
