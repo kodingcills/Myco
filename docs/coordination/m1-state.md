@@ -589,7 +589,7 @@ Docs only; no VM, no spend, no accounts.
 | ✗ | ✓ | — | **12.5** | 8.6 | 4.2 |
 | ✓ | ✓ | — | **19.5** | 13.3 | 7.3 |
 
-Human ceiling 74.5%. So the tree-free `omni` row is **12.5% with GPT-4V-1106 and 9.4% with GPT-4o** — not "12.5% with GPT-4V, 8.6% with GPT-4V" as several sites had it. *(The 9.4 figure is from the LaTeX source; this entry originally wrote 8.6, which is the headline row's GPT-4o cell — the same one-row-off error it was describing.)*
+Human ceiling 74.5% overall, **83.3% on LibreOffice Calc** (Table 8). So the tree-free `omni` row is **12.5% with GPT-4V-1106 and 8.6% with GPT-4o**. *(Amendment 2026-11-21: this line originally read "9.4% with GPT-4o", which was the off-by-one-model-row error; the authoritative figures are in docs/baseline/screenshot-agent.md §1b.2, rebuilt from both the PDF text layer and ar5iv.)*
 
 **What this replaces.** A parallel writer had already cut the table down to "only cells we can pin", having decided the GPT-4o values were unrecoverable. They were recoverable — the ambiguity was in my transcription, not the paper. The full five-block table is now in §1b.2 verbatim, with the reading rule stated, because a future reader will hit the same trap.
 
