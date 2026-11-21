@@ -89,7 +89,7 @@ describe("baseline", () => {
     if (name === "driver-action")
       expect(judge(f.transcript, f.driver, f.observation)).toEqual({
         status: "refuted",
-        reasons: ["step-budget"],
+        reasons: ["driver-action"],
       });
     if (name === "unavailable-ready")
       expect(judge(f.transcript, f.driver, f.observation)).toEqual({
@@ -98,6 +98,19 @@ describe("baseline", () => {
       });
     if (name.startsWith("v-"))
       expect(judge(f.transcript, f.driver, f.observation).reasons).toEqual(["driver-unreachable"]);
+  });
+  it.each([
+    ["row-driver-action", true],
+    ["row-budget", true],
+    ["row-driver-action-exhausted", false],
+    ["row-driver-action-uncertain", false],
+    ["row-budget-short", false],
+    ["row-driver-action-at-budget", true],
+  ])("validates fixture %s", (name, valid) => {
+    const patch: unknown = JSON.parse(
+      readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), "utf8"),
+    );
+    expect(isBaselineRow({ ...row, ...(patch as object) })).toBe(valid);
   });
   // Guards against permitting token addressing, unknown tools, and missing coordinates in C1.
   it("enforces purity and exempts C2", () => {
