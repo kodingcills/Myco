@@ -669,3 +669,35 @@ with the OpenCUA evidence (strong ScreenSpot-v2, weak OSWorld success) as the re
 
 **Not done:** nothing has been re-measured; these are design and backlog changes only. The sweep
 host remains blocked per logs 44–45.
+
+## Log 2026-11-21 (55) — Coordinator's scheduling facts folded in; no VM touched
+No VM script, no UTM command, no `vssh`, no stub — the sweep owns `myco-win11` and the no-touch
+rule applies to design work too. Docs only.
+
+**§2.1 added — the operator interface, pinned to `main`.** Reset (`scripts/reset-trial-vm.sh`,
+`clean-base`), deploy (`deploy-to-vm.sh`, foreground, "DEPLOY OK"), reachability
+(`ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765`), token via `vssh`, screenshots via
+the agent's in-guest op. All four exist on main; the baseline adds no new VM plumbing. Noted that
+`SshTunnel` already defaults to exactly these values, so the harness reuses it.
+
+**Two operational facts recorded**, both previously unstated in this doc:
+- Screenshots must be in-guest; UTM host capture returns a placeholder.
+- `pgrep qemu-system-aarch64` is not a liveness check — the guest runs under UTM's QEMULauncher;
+  use `lsof -iTCP:2222`. Same error class as the `pgrep` check in log 39.
+
+**Budget and resumability.** ~140 s reset + ~135 s trial ≈ 4.6 min/trial, so ~2.5 h for 30 trials.
+Each row is reset-isolated, so the arm is resumable trial-by-trial — a chunked window is as valid as
+one block and safer given logs 41/35. Recorded in the escalation item so the Coordinator can schedule
+2 × 1.25 h if that suits.
+
+**One design constraint promoted to a requirement:** C1 and C2 must share a single `clean-base`
+restore per trial, or the two-arm budget doubles. Written into M1-021's description rather than left
+as an assumption.
+
+**Acceptance criterion 7 held explicitly:** same `clean-base` snapshot, same
+`scripts/reset-trial-vm.sh`, same deploy flow, same 30 parameter sets, model and settings verbatim in
+the report, and every unavoidable deviation stated beside the numbers — which the design already
+required in §3.5 and now restates in §2 and §2.1.
+
+**Also noted:** the survey's §7.3 sign-test threshold was fixed at source by the research thread
+(PR #45, `≥6` not `≥5`), matching the correction in log 54. Main is 31f9083.
