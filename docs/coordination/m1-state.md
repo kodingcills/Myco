@@ -348,3 +348,30 @@ hook test note
 - PR #31 VERIFIED at fc05779 (kimi-k3): revert is exactly two pure deletions, `src/`/`agent/`/`test/` untouched, no history undone, no dangling references (only dated log entries, which are records not instructions), and the revert is genuinely needed (both scripts were present on main). 115/115 tests, 4/4 CI green at the SAME head SHA, then merged.
 - So PR #28 is fully backed out. M1-020 is NOT done; it stays open at TIF-49 with the follow-up conditions recorded in the revert PR: a restore sequence proven to preserve running state, a wait-for-stopped guard, and a content-hash staleness check.
 - This is the first merge in this project that followed the rule end-to-end: verifier PASS at head SHA + green CI, then merge. No breaches this turn.
+
+## Log 2026-11-21 (39) — reset acceptance PASSED; sweep starting
+UTM restarted by Tiffany (~19:59 EST). State inspection before anything else: UTM reported myco-win11=started but `pgrep -f qemu-system-aarch64` found NO process — the guest runs under UTM's `QEMULauncher` (pid 10538), so that ad-hoc check is misleading; `lsof -iTCP:2222` is the reliable liveness test. No Linux guest running.
+Guest was CONTAMINATED on arrival: live agent + token + 3 stale `C:\myco\runs` dirs from earlier attempts. Cold-reset to a known state first (147s).
+
+### Reset acceptance: 5 consecutive cold resets, spaced 20s, timings recorded
+| run | result | wall |
+|---|---|---|
+| 1 | OK | 143s |
+| 2 | OK | 134s |
+| 3 | OK | 145s |
+| 4 | OK | 152s |
+| 5 | OK | 139s |
+
+5/5 clean, **no wedge on any run**. Cold boot costs ~140s here (vs 21s warm) — the price of a reset that cannot wedge. Raw logs: /tmp/m1-013/reset-acceptance/.
+
+### Stuck-state detector: EXERCISED, not asserted
+- `resuming` (stubbed status) → exits in ~3s: "UTM is stuck in 'resuming' (the known -2700 wedge)… quit and reopen UTM in the GUI session" — NO hang. ✓
+- `starting` (non-stopped) → "VM did not reach 'stopped' within 2s (state: 'starting')" ✓
+- `evil-snapshot` → "refusing to restore unexpected snapshot 'evil-snapshot'" ✓
+(Exercised via a stub on MYCO_VM_SCRIPTS so the real VM was untouched.)
+
+### Sweep launch conditions
+- No reset-prebuilt (PR #28 reverted, PR #31 merged) ✓
+- M1-019 (PR #29) IS merged and therefore active in the sweep — the outer loop's "no M1-019 code until its verifier PASSes" condition is satisfied: #29 returned VERIFIED at d74dff9 and is on main.
+- No Linux qemu guest running ✓; VM up; 62% RAM free.
+- Honest count, no re-runs to reach 27.
