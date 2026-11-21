@@ -250,6 +250,24 @@ describe("verdict mapping", () => {
     expect(deriveVerdict(data).reason?.value).toContain(reason);
   });
 
+  test("a schema violation in the last result step blocks a positive verdict", async () => {
+    const data = await fromFolder(`${fixture}/verified`, (name, body) => {
+      if (name === "manifest.json") return;
+      if (name !== "result.json") return body;
+      const result = JSON.parse(body);
+      result.steps.at(-1).postconditionResults[0].passed = "true";
+      return JSON.stringify(result);
+    });
+    expect(deriveVerdict(data)).toMatchObject({
+      label: "Unknown",
+      reason: { value: "The result record could not be read" },
+    });
+    expect(data.parseErrors[0]).toMatchObject({
+      source: { file: "result.json", path: "" },
+      issues: [{ path: "$", keyword: "anyOf" }],
+    });
+  });
+
   test("invalid UTF-8 in a JSON string cannot produce a positive verdict", async () => {
     const folder = new URL(`${fixture}/verified/`, import.meta.url);
     const result = await readFile(new URL("result.json", folder));
