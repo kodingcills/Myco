@@ -1,0 +1,1 @@
+export type T = import("../../../src/integration/trial.ts").Trial;

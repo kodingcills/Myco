@@ -197,6 +197,12 @@ the state oracle has produced a verdict. `src/foundry/oracles/blind.ts` therefor
 work: read state → oracle verdict → only then attach the transcript (annotated, never
 overriding).
 
+### 6.2 Where the hidden split lives
+
+ADR-0023 places the generated hidden split outside every Git work tree. Its loader refuses
+directories inside a work tree, group- or world-accessible directories, missing or short
+seed files, and calls without a directory when `MYCO_FOUNDRY_HIDDEN_DIR` is unset.
+
 ## 7. Versioning and the change protocol
 
 | Change | Requirement |
