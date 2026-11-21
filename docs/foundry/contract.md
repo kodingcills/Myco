@@ -210,6 +210,9 @@ The point of the table is that **the report can always say which versions produc
 number**. A score without its version triple (`fixtureVersion`, `oracleVersion`,
 `faultVersion`) is not reportable.
 
+Permission-denied is seed-invariant because it writes nothing. A torn unreadable
+store is ledgered `uncertain`, never a proven false success, under the unreadable-state rule.
+
 ## 7a. Trial counts, reset cost, and what a number may claim (M2 round, fc4738e)
 
 Planned against the **real** reset cost, not the optimistic one: the sweep default

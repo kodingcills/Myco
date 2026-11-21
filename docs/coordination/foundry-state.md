@@ -77,3 +77,5 @@ Linear, secrets, paid services, accounts.
 - Still no VM touched, no sub-threads, no Linear access (outer loop owns it).
 - Switch note: owner thread moved off cheaperinference (402) to claudeAgent/Sonnet; builds go
   to Codex when delegated.
+
+EF-003: host-only fault injectors and verifier self-tests implemented; fault scores carry a schedule version.
