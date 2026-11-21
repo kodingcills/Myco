@@ -47,7 +47,7 @@ Primary: `README.md`; `libs/cua-driver/README.md`;
   `scroll`, `type_text`, `press_key`, `hotkey`, `set_value` return
   `path` (delivery rung: `ax`/`cgevent`/`pixel`/`x11_atspi`/`msaa`…),
   `verified` (`true`/`false`/absent), `effect`
-  (`confirmed` | `unverifiable` | `suspected_noop`), `escalation`
+  (`confirmed` | `unverifiable` | `suspected_noop` | `partial` | `refused`), `escalation`
   (`{recommended: "px"|"foreground"|"page", reason}`). SDK `ToolResult` carries
   `text`, `images`, `structured_json`, `is_error`, `error_code`, `verified`,
   `degraded` (use-the-sdk).
@@ -236,11 +236,67 @@ which serves the same landing page; downloads point at
   `not_reported`.
 - **(d) OS.** macOS Sonoma 14.2+; Windows 10/11.
 
+### 7. Additional competitors (added for MVP Discovery)
+
+Added 2026-11-21 so Discovery has three more data points against the same tests. Same definition of **proves outcome** as above. These do **not** change the framing: this section reports capability; choosing A, B or C is Discovery's call (P-TIF-5); task design routes to the Foundry (P-TIF-6).
+
+#### 7.1 Microsoft Hybrid Computer Use (`github.com/microsoft/Hybrid-Computer-Use`)
+
+Primary: `README.md`; `docs/MCP.md`; `docs/CODE.md`; `docs/ARCHITECTURE.md`; `LICENSE`. Repo metadata via `api.github.com` (created 2026-10-08, last push 2026-11-18, 65 stars, MIT).
+
+- **(a) Surface.** One stdio MCP server, `computer-use mcp` (newline-delimited JSON-RPC; MCP `2025-03-26` and `2025-06-18`), exposing exactly **two** tools: `AX` and `GUI` (`MCP.md` "Public tools"). `AX` takes `mode` ∈ `apps | observe | find | act`; `mode:"act"` accepts up to 64 ordered steps. `GUI` batches up to 64 pixel actions and returns one screenshot. Also a CLI, a per-desktop daemon (`computer-use serve`), a Python SDK `hcu_sdk`, and configs for Codex, Claude Code, Gemini CLI. Not a hosted service: it drives an already-running desktop.
+- **(b) Action response shape.** Every result starts with one JSON status line: `ok`, and on failure `code`, `path`, `message`, `hint`, then `input_emitted`, `completed`, `requested` (`MCP.md` "Errors"). Twelve public codes: `invalid_argument`, `stale_ref`, `gui_frame_stale`, `wait_timeout`, `window_changed`, `effect_unknown`, `global_input_forbidden`, `app_unavailable`, `ambiguous_window`, `window_not_found`, `no_focused_window`, `permission_denied`, `runtime_error`. Then per-target `effect:` lines, `windows:` lines, and a compact AX diff. `input_emitted` is three-valued: `true` / `false` / `None` (unknown).
+  **Correction to a common misreading: there is no `effect_confirmed` status token.** `effect_unknown` is a public error code; confirmation is expressed by the `effect:` evidence line's content, not a symmetric success code. A coordinate action whose window moved fails *before* input with `gui_frame_stale`, because the screenshot "establishes a private layout lease for the full desktop".
+- **(c) Does it prove the outcome?** **Partly, and it states the boundary more sharply than anyone else here.** Two things are read back from outside the act: pre-input guards (every `AX` mutation re-resolves its ref against the live tree; GUI rechecks the live window per point — "an action planned on a desktop that has since changed is rejected, not sent"), and the post-action `effect:` line diffed against the next tree read, with `unknown (reason)` when no read covers the element. It refuses to overclaim: *"Control readback does not prove that the document was saved or that a dialog applied its changes"*; *"Neither proves file contents, persistence or network state; agents should verify those through the shell or the application"* (`MCP.md` "What evidence proves"). So: negative-capable and non-self-reported **for accessibility state of the touched window**, and nothing for the saved artifact.
+- **(d) Pricing.** MIT, no hosted tier, no per-call fee: `not_reported` — there is nothing to price. Vendor-reported benchmark cost deltas exist (OSWorld 1.0 −59.1%, Windows Agent Arena −50.6% vs CUA Driver); those are eval costs, not a product price, and are **vendor-reported, not reproduced**.
+- **(e) OS.** Linux (X11/AT-SPI2), macOS 14+, Windows 10/11 (UIA3 via FlaUI).
+
+#### 7.2 Orgo (`orgo.ai`, `docs.orgo.ai`)
+
+Primary: `www.orgo.ai/orgo.md`, `www.orgo.ai/pricing.md`; `docs.orgo.ai` (`introduction`, `quickstart`, `guides/mcp`, `guides/workflows`, `guides/account-limits`); API reference (`computers/click`, `/type`, `/bash`, `/fork`, `/suspend`, `/get`).
+
+- **(a) Surface.** One HTTP API at `https://www.orgo.ai/api` over three transports: REST; Python (`orgo`) and TypeScript SDKs; CLI. MCP is hosted at `https://www.orgo.ai/mcp` (OAuth PKCE) or local `orgo-mcp-server`, one tool per `operationId`. Also an OpenAI-compatible `/api/v1/chat/completions` (`computer_id`, model `orgo-agent`) and preview Workflows.
+  **Fork/clone/suspend, precisely.** Fork = `POST /computers/{id}/fork` → `201 {id, name, status:"running"}`; copies *live memory*; Linux-only, running-only; source "pauses for about two seconds". Clone = disk only, fresh boot. Suspend = `POST /computers/{id}/suspend` → `{success, status:"suspended"|"suspending"}`; wake issues a new `instance_id`. This is the richest branch/restore surface in either table and the direct comparator for wedge **C**.
+- **(b) Action response shape.** An echo: `{success, action, details, error, error_type}`; `type` returns `details:{text_length}` in bytes; bash returns `{command, output, exit_code}` with `success:true` "whenever the command ran at all, regardless of what it exited with"; Windows answers a bare `{ok:true}`. Machine state has its own vocabulary (`creating|running|suspending|suspended|resuming|frozen|stopped|error|deleted`). **There is no verification tool** — a docs-index search for *verify/check/confirm/assert* returns only computer health checks and static workflow validation.
+- **(c) Does it prove the outcome?** **No.** The contract confirms delivery; `details` echoes the request. The one positive signal is the escape hatch: `bash`/`exec` return `output` and `exit_code`, so a caller *can* hash a saved file — but composed by the caller, with no verdict field, no three-valued `unknown`, and no receipt. Two honest non-proofs are documented rather than hidden: a missing `text` body "types the empty string and still returns `200`"; a Workflow run that "may or may not have gone out" lands in `needs_review` and "Orgo never sends it again by itself".
+- **(d) Pricing.** Published and granular: free $3 starting credit; PAYG $0; Starter $29/mo, Growth $99/mo, Scale $399/mo; hourly $0.023 (S) / $0.055 (M) / $0.11 (L) / $0.202 (XL) / $0.368 (2XL) per running hour; Windows +$15/mo; Mac from $100/mo. **Verification fee: none — billing is machine-time.** *Contested:* free credit is $3 in `pricing.md`/`orgo.md` but $5 in `quickstart`/`account-limits`; quote it as contested. Orgo's fork page body and its own OpenAPI block also disagree on UUID vs `instance_id`.
+- **(e) OS.** Linux and Windows self-serve; macOS and iPhone in stock or on request; API lists `android`, `ios`.
+
+#### 7.3 Simular Sai (platform) — distinct from Simular Agent S in §4
+
+- **Scope note.** These are one product line, not two competitors. §4 covers Agent S the *library* and the Sai *API*. Sai the **platform** is the hosted product built on it: same `POST /v1/agents/message`, plus six SDKs, six MCP tools, Organisations/Tenants, a **Judge** endpoint, and Direct Control `exec`. **§4's verification verdict must not be softened**: the `success_criteria` rules are unchanged ("A model decides"; "passes at 0.5 or above"; "The checks read the turn's record… so a page can influence them").
+- **(a) Surface.** `POST /v1/agents/message` (SSE or `wait:false` + poll), `/events`, `/approve`, `/abort`, `/machines`, `/models`; `POST /v1/agents/judge` (preview); `POST /v1/machines/{id}/control/exec` (preview, Simulang ≤300 s).
+- **(b) Action response shape.** Turn `{turnId, status, output, reason_code, evidence[], usage}` with `status` ∈ `running|needs_input|finalizing|succeeded|failed` and `reason_code` ∈ `agent_error|aborted|output_invalid|criteria_not_met|criteria_unchecked|machine_unavailable|not_started`. `succeeded` means "`output` is ready and every check passed" — a criteria verdict, not a next-state read. Judge returns `{verdict: passed|failed|**unverifiable**, criteria[{id, score, evidence}]}` — the only explicit three-valued verdict in either table — with its own warning: "**It does not see screenshots yet**" and "Treat the verdict as advice: text on the screen can try to steer a model judge."
+- **(c) Does it prove the outcome?** **No.** Judge is a *retrospective judge over the turn's own record* — sibling of `success_criteria`, not independent of it. `criteria_unchecked` and `unverifiable` are the right *shape* for "could not look", and both are still judgements about the record. `exec` lets a caller hash a file, but caller-composed. Nothing returns a persisted-artifact-vs-expected comparison.
+- **(d) Pricing.** Explore free; Pay as you go $50/month; Enterprise custom. Per-credit and per-task prices `not_reported` — `platform.simular.ai/pricing.md` returns HTTP 404 and `/pricing` resolves to the llms.txt feed, so these were **not obtained**, not asserted unpublished.
+- **(e) OS.** Cloud: Windows, Linux; bring-your-own: Mac, Windows.
+
+### Teardown table — additional rows
+
+| Product | Developer surface | Action response shape | Proves outcome? | Pricing | OS support |
+|---|---|---|---|---|---|
+| **Microsoft Hybrid Computer Use** | stdio MCP `computer-use mcp` (MCP `2025-03-26`/`2025-06-18`), exactly two tools `AX` (≤64 steps) and `GUI` (≤64 pixel actions); CLI; daemon; Python `hcu_sdk` (`docs/MCP.md`, `docs/CODE.md`) | Status line `ok`/`code`/`hint`/`input_emitted`/`completed`/`requested`; 12 codes incl. `effect_unknown`, `window_changed`, `stale_ref`, `gui_frame_stale`; then `effect:` per-target line + AX diff. `input_emitted` ∈ `true\|false\|None`. No `effect_confirmed` token | **Partly.** Pre-input ref/layout guards ("rejected, not sent"); post-action `effect:` is a tree diff with `unknown (reason)`. Stops at accessibility state by its own words: "Neither proves file contents, persistence or network state" | MIT, no hosted tier: `not_reported` (nothing to price) | Linux (X11/AT-SPI2), macOS 14+, Windows 10/11 (UIA3) |
+| **Orgo** | REST `/computers` (`click`, `type`, `key`, `bash`, `screenshot`, `fork`, `clone`, `suspend`, `resume`); Py/TS SDKs; CLI; hosted + local MCP; OpenAI-compatible chat; Workflows preview (`docs.orgo.ai`) | `{success, action, details, error, error_type}`; bash `{command, output, exit_code}`; Windows `{ok:true}`; machine `status` incl. `suspended`/`frozen`; fork `201 {id, status:"running"}`. No verify/assert tool | **No.** Echo + infra codes. Caller-composed readback via `bash`/`exec` (can hash a file) but no verdict, no `unknown`, no receipt. Workflow `needs_review` = "may or may not have gone out" | Free $3 (contested, docs elsewhere $5); PAYG $0; $29/$99/$399 per mo; $0.023–$0.368 per running hr; Windows +$15/mo; verification fee: none (machine-time billing) | Linux, Windows; macOS + iPhone in stock/on request |
+| **Simular Sai (platform)** | `POST /v1/agents/message` (+`/turns`, `/events`, `/approve`, `/abort`); Judge `POST /v1/agents/judge` (preview); Direct Control `/control/exec` (preview); 6 SDKs; `sai-mcp` | Turn `{status, reason_code, output, evidence[]}`; `succeeded` = "output is ready and every check passed". Judge `{verdict: passed\|failed\|**unverifiable**, criteria[]}`; control `exec` `{result, logs, observations}` | **No.** Checks and Judge read "the turn's record… a page can influence them"; Judge "does not see screenshots yet". `unverifiable`/`criteria_unchecked` are the right shape, still a judgement about the record | Explore free; PAYG $50/mo; Enterprise custom; per-credit `not_reported` (`/pricing.md` 404) | Cloud: Windows, Linux; BYO: Mac, Windows |
+
+### Do any of the three close the outcome-proof gap?
+
+**No — and two sharpen it rather than narrow it.** Only Hybrid Computer Use extends what is read from outside the act, moving the same witness Cua provides from "the one widget touched" to "the window's tree before/after", and it is unusually honest about its limit. It still has no postcondition object, no persisted-artifact check, no receipt, so the "Reopen if" trigger (a document- or file-level postcondition) is not met. Orgo and Sai both ship an escape hatch a host *could* use to verify a saved file, but neither returns a verdict, a three-valued `unknown`, or an artifact a second party can check — the host must author both the expectation and the comparison. The one shape worth stealing is Sai Judge's `unverifiable` (= Myco's `uncertain`), while noting it remains a model verdict over the turn's own record.
+
+Two notes for Discovery, not wedges: Orgo's fork/clone/suspend is the honest benchmark for **wedge C**; and Orgo's and Sai's pricing is per machine-hour or per credit, with verification effectively free if you write it yourself — the economic baseline any verified-outcome product is priced against.
+
+#### Citations not verified in §7
+
+- `platform.simular.ai/pricing.md` → HTTP 404; per-credit prices `not_reported` because **not fetched**, not asserted unpublished.
+- Orgo free-credit figure and fork UUID/`instance_id` are contested in Orgo's own docs; both quoted as contested.
+- HCU benchmark cost deltas are vendor-reported, taken at face value, **not reproduced**.
+- No login-walled content was used as a source anywhere in §7.
+
 ## Teardown table
 
 | Product | Developer surface | Action response shape | Proves outcome? | Pricing | OS support |
 |---|---|---|---|---|---|
-| **Cua** | MCP stdio (`cua-driver mcp`, MCP `2026-07-28`); SDKs Py/TS/Rust; CLI `cua-driver call` (`README.md`; `docs/mcp-protocol-and-skills.md`) | `{path, verified: true\|false\|absent, effect: confirmed\|unverifiable\|suspected_noop, escalation:{recommended,reason}}` (`reference/mcp-tools` §"Action results"); SDK `ToolResult{text,images,structured_json,is_error,error_code,verified,degraded}` | **Partly.** Per-action: accessibility read-back of the one widget only (`verified`). Separately, `verify_state` gives a deterministic predicate verdict `satisfied\|unsatisfied\|unknown` (`reference/mcp-tools/apps-windows-and-screen`) — still accessibility state, absence conservative `unknown`. No document/file postcondition. | Spaces Free / $180-yr Pro / $300-seat-yr Teams (`cua.ai/pricing`); Driver+SDK MIT, no per-call price `not_reported` | macOS, Linux, Windows (Spaces app: macOS 26+, Windows preview, Linux) |
+| **Cua** | MCP stdio (`cua-driver mcp`, MCP `2026-07-28`); SDKs Py/TS/Rust; CLI `cua-driver call` (`README.md`; `docs/mcp-protocol-and-skills.md`) | `{path, verified: true\|false\|absent, effect: confirmed\|unverifiable\|suspected_noop\|partial\|refused, escalation:{recommended,reason}}` (`reference/mcp-tools` §"Action results"); SDK `ToolResult{text,images,structured_json,is_error,error_code,verified,degraded}` | **Partly.** Per-action: accessibility read-back of the one widget only (`verified`). Separately, `verify_state` gives a deterministic predicate verdict `satisfied\|unsatisfied\|unknown` (`reference/mcp-tools/apps-windows-and-screen`) — still accessibility state, absence conservative `unknown`. No document/file postcondition. | Spaces Free / $180-yr Pro / $300-seat-yr Teams (`cua.ai/pricing`); Driver+SDK MIT, no per-call price `not_reported` | macOS, Linux, Windows (Spaces app: macOS 26+, Windows preview, Linux) |
 | **Anthropic computer use** | Messages API client toolset `computer_toolset_20260801` (17 members); earlier `computer_20251124`/`computer_20250124` + beta header; no executor | `tool_result` per `tool_use`: `{"type":"tool_result","tool_use_id":…,"toolset_name":"computer","content":[{"type":"text","text":"OK"}]}`; image only for `screenshot`/`zoom`; `is_error:true` on failure | **No.** Execution acknowledgment + screenshot; the app writes it. Docs: "a short text such as `OK` is enough", "Always carefully review and verify" | No feature fee; toolset adds ~4,500 input tokens (~4,590 Sonnet 5); `computer_20250124` def ~735 tokens; per-token price `not_reported` | None — caller's VM/container (reference: Docker) |
 | **OpenAI computer use / Operator** | Responses `tools:[{type:"computer"}]` + developer-supplied driver; legacy `computer_use_preview` (migration only); Operator sunset — agent mode is ChatGPT-app-only | `computer_call{call_id, actions[], pending_safety_checks}` → `computer_call_output{call_id, output:{type:"computer_screenshot", image_url, detail:"original"}}`; `status:"completed"` means model finished, "your application still needs to execute it" | **No.** Screenshot is a next-turn observation; no postcondition verdict. Driver may refuse actions | Token-based; computer-tool surcharge/rates `not_reported`; Operator consumer quotas (400/mo Pro) are not a dev price | None imposed; sample drivers Playwright and PyAutoGUI (Linux rehearsal container) |
 | **Simular Agent S** | `pip install gui-agents` (`AgentS3.predict()` → `(info, action)`, caller `exec`s); Sai API `POST /v1/agents/message`; `@simular-ai/sai-mcp` (`sai_task_start/wait/approve/abort`) | Turn record `{turnId,status,output,reason_code,raw_answer,usage,trajectory,evidence[],output_errors[]}`; `status` running\|needs_input\|finalizing\|succeeded\|failed | **No — model-judged.** `success_criteria` → `evidence[{id,passed,score,evidence?}]`, "a model decides", score ≥0.5 passes, "a page can influence them… verify high-stakes results in your own system". No `unknown`, no app-state readback | Explore free; Pay-as-you-go $50/mo; Enterprise custom (`/pricing`); library free | Cloud: Windows, Linux; BYO: Mac, Windows; library: macOS/Windows/Linux |
@@ -294,15 +350,15 @@ not in the engineering quality of any one product.
 that can do the task), and a verified-outcome contract would expose a
 false-success rate that a capability sale never has to publish. Myco's
 differentiator is not a better actor but a second, independent witness.
-differentiator is not a better actor but a second, independent witness.
 
 ## Decision
 
-**Adopt** — this teardown is the baseline Myco M2 compares against, with three
+**Adopt as the comparison baseline** — this teardown is what Discovery's A/B/C
+comparison measures candidates against, with three
 concrete consequences:
 
 - **Adopt Cua's vocabulary, not Cua's scope.** Myco's receipt should carry an
-  `effect`-style per-action truth (`confirmed | unverifiable | suspected_noop`)
+  `effect`-style per-action truth (`confirmed | unverifiable | suspected_noop | partial | refused`)
   *plus* a separate three-valued `verified | refuted | uncertain` postcondition —
   Myco already has the second (ADR-0002); the first is a receipt field worth
   adding, because it is the honest way to say "delivered, not applied".
@@ -341,7 +397,7 @@ confirmation is worth doing only when the comparison page is drafted:
    comparison doc as its spine — it is the thesis, and it now has a pointer per
    claim.
 2. Add an `effect`-class field design note to the M2 receipt schema (Cua's
-   `confirmed | unverifiable | suspected_noop`), keeping Myco's three-valued
+   `confirmed | unverifiable | suspected_noop | partial | refused`), keeping Myco's three-valued
    postcondition verdict separate.
 3. Cite `cua.ai/docs/cua-driver/concepts/how-cua-driver-works` in ADR-0002's
    "independent confirmation" list: an external vendor independently adopted

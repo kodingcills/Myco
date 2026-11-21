@@ -39,10 +39,10 @@ Sourced from `modelcontextprotocol.io/specification/{2025-06-18,2025-11-25,2026-
 | Output schema | "If an output schema is provided: Servers **MUST** provide structured results that conform to this schema. Clients **SHOULD** validate structured results against this schema." | Tools → Structured Content → Output Schema | Declare `outputSchema`; validate on the server before returning. |
 | Two error channels | "1. **Protocol Errors**: … Unknown tools / Invalid arguments / Server errors. 2. **Tool Execution Errors**: … API failures, invalid input data, business logic errors" | Tools → Error Handling | `StaleRefError` is a *tool execution* error, not `-32602`. |
 | Tool-execution error | `{"content":[…], "isError": true}` | Tools → Error Handling | Plus a structured payload; see §2.7. |
-| Invalid-args placement | "Invalid tool arguments are instead reported as tool execution errors, with `isError` set to true" | Schema → `InvalidParamsError` | Malformed `act` input ⇒ `isError:true`, not JSON-RPC error. |
+| Invalid-args placement | "Invalid tool arguments are instead reported as tool execution errors, with `isError` set to true" | Schema → `InvalidParamsError` (2026-07-28 schema; not present in 2025-06-18) | Malformed `act` input ⇒ `isError:true`, not JSON-RPC error. |
 | Annotations | `readOnlyHint`, `destructiveHint` (default **true**), `idempotentHint` (default **false**), `openWorldHint` (default **true**); "all properties in ToolAnnotations are **hints**" | Schema → `ToolAnnotations` | Hints are advisory only; they cannot carry the gating decision. `destructiveHint` defaults to true — Myco must set it explicitly. |
 | Human in the loop | "there **SHOULD** always be a human in the loop with the ability to deny tool invocations … Present confirmation prompts to the user for operations" | Tools → User Interaction Model | Spec pushes confirmation to the *client*, not the server. |
-| Tool naming | `name` 1–128 chars, `[A-Za-z0-9_.-]`, case-sensitive, unique per server | Tools → Tool Names (2026-07-28) | `myco.act` is a legal name. |
+| Tool naming | `name` 1–128 chars, `[A-Za-z0-9_.-]`, case-sensitive, unique per server (SHOULD-level, not a hard MUST) | Tools → Tool Names (2026-07-28) | `myco.act` is a legal name. |
 | Statelessness | "The protocol has no concept of a state handle; … a handle is an ordinary string in a tool result and an ordinary argument to subsequent tool calls." | Tools → Stateful Tools (2026-07-28, non-normative) | `session_id` as an explicit argument, minted by `create`. Already what `myco-rt-mcp` does. |
 | Handle hygiene | Authorization / Opacity / Lifetime / Expiry errors — "A call against an expired or unknown handle should return a tool execution error that says so" | Tools → Stateful Tools | Opaque refs and `StaleRefError` are the spec's own recommended shape. |
 
@@ -254,7 +254,7 @@ genuinely optional values are `type:["T","null"]`.
 |---|---|
 | in | `{ session_id, action: Action, idempotency_key: string, confirm: { grant: string } \| null }` |
 | `Action` | closed union, `kind`-discriminated: `launch{command,args}` \| `click{target: Ref}` \| `typeText{target: Ref,text}` \| `keyPress{keys}` — verbatim ADR-0004 |
-| `Ref` | `{ payload: string, issued_at: integer }` (matches `runtime/crates/myco-rt-core/src/state.rs` wire form) |
+| `Ref` | the Rust type is `ElementRef`, not `Ref`: `{ payload: string, issued_at: StateVersion }` where `StateVersion` is a `u64` newtype (`runtime/crates/myco-rt-core/src/state.rs:8-21`). The wire form is `payload: string, issued_at: integer`. |
 | out | `{ outcome: Outcome, session_id, state_version_after, receipt: Receipt }` |
 | `Outcome` | `{ kind:"delivered_verified", verification:{ scope:"element_value", application_commit:"not_verified", readback: object } }` \| `{ kind:"delivered_unverified", reason: string }` \| `{ kind:"failed", error: TypedError }` \| `{ kind:"needs_confirmation", grant: string, expires_at: string, pending: Action }` |
 | annotations | `readOnlyHint:false, destructiveHint:true, idempotentHint:false, openWorldHint:false` |

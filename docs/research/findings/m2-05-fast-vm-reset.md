@@ -1,4 +1,4 @@
-# Finding M2-05 — Sub-8.3 s reset, mid-trial reset, and concurrent sessions
+# Finding M2-05 — VM reset: what the live path costs, why it is not the default, and what could beat it
 
 > **Status: research input, not a product decision.**
 > The earlier "M2 = MCP/API" direction is **retracted** pending MVP Discovery
@@ -7,6 +7,15 @@
 > without APIs), and **C** (branchable desktops). Where this doc recommends a
 > surface or a build, read it as *one option's requirements*, not as the decided
 > wedge. Task-design implications route to the Evaluation Foundry (P-TIF-6).
+
+> **Correction (verifier round, 2026-11-21): the 8.3 s live path is NOT the default.**
+> `scripts/reset-trial-vm.sh` — the sweep default — uses a **disk-only cold restore**
+> and costs **~21 s warm / ~165 s from a fresh UTM start**, versus the live path's
+> ~7–8.6 s. It is cold *because* the live path wedges (see §3). This finding was
+> briefed as "get resets under 10 s" against a 10 s target; both framings were wrong
+> about which path is in use. Read every "8.3 s" below as *the live path's measured
+> cost*, and the comparison baseline for M2 as **~21 s (cold, default)**.
+> Mid-trial restore is therefore an **experiment to run**, not an adopted M2 primitive.
 
 Date: 2026-11-21. Branch: `myco/m2-research`. Level: L1 (primary sources only). Read-only; no VM touched.
 
@@ -164,7 +173,7 @@ So VZ's restore is, by Apple's own contract, **stopped→paused**: it cannot res
 | **Apple VZ save-state** | **Reject for M2** — restore requires `stopped`, save requires `paused`; no latency published; moving a working QEMU guest to VZ is unvalidated; VZ lists macOS/Linux only. |
 | **`-2700` as TCC** | **Reject the premise.** `-2700` is AppleScript "Unknown error." (catch-all); the TCC code in this repo is `-1743`. Treat `-2700` as an opaque UTM state-machine rejection until a UTM source pointer says otherwise. |
 
-**The sub-8.3 s answer:** no published benchmark shows a faster path, and the only available decomposition (E2) puts ≈2.2 s in RAM load, so headroom is in the ~6 s of process start + disk revert, not in cleverer disk tricks. Mid-trial reset removes the stop/start half; it is the only change with a documented mechanism behind it.
+**The sub-8.3 s answer:** no published benchmark shows a faster path, and the only available decomposition (E2) puts ≈2.2 s in RAM load, so headroom is in the ~6 s of process start + disk revert, not in cleverer disk tricks. Mid-trial reset removes the stop/start half; it is the only change with a documented mechanism behind it, and it remains a **hypothesis to test**, not a decision: the same live-resume cycling that wedges UTM in `resuming` (-2700) is what a mid-trial restore would do more often.
 
 ## 4. Proposed smallest experiment
 

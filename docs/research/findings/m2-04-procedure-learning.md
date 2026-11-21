@@ -238,7 +238,7 @@ and any LLM in the replay loop (PreAct shows none is needed for warm replays).
 
 1. Write M2-04-E1 as a backlog item under the M2/procedure heading, blocked on nothing (M1-013 evidence
    already exists), sized S.
-2. Open an ADR stub — **ADR-0011 "Procedure admission gate"** — recording the decision above: a compiled
+2. Open an ADR stub — **ADR-0017 "Procedure admission gate"** (0017 because ADR-0011..0016 are already taken in docs/architecture/runtime.md) — recording the decision above: a compiled
    program enters the registry **only** after re-running from a clean fixture and returning `verified` from
    the independent verifier; `uncertain` never admits; the gate never re-runs against the trial's own
    document when a save has been dispatched (ADR-0006 `relaunch:skipped-not-reversible`).
@@ -265,7 +265,7 @@ and any LLM in the replay loop (PreAct shows none is needed for warm replays).
   `export.arxiv.org/api/query`, all verification via `arxiv.org/abs/<id>`. Recorded because it bounds how
   much of the 2024–2026 space was actually swept.
 - Token estimate: ~180 K input, ~14 K output. Not reported precisely.
-- Papers cited with verified id + title: **17**. Marked UNVERIFIED: **0**. Wrong-id collisions caught and
+- Papers cited with verified id + title: **18**. Marked UNVERIFIED: **0**. Wrong-id collisions caught and
   discarded rather than cited: 3 (`2502.05914` → superconducting-film physics, not workflow induction;
   `2505.10610` → MMLongBench, not workflow induction; `2309.00938` → human-parsing robustness, not
   golden-ticket tampering).
