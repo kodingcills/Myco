@@ -311,7 +311,7 @@ satisfy the intent, so:
 - `refuted` / `uncertain` → correct, this is a true negative.
 - `verified` → **FALSE SUCCESS = stop the line.** Do not continue the sweep, do not re-run for a
   better number. The CLI already treats it as failure: kill mode exits **1** when the verdict is
-  `verified` (`run-live.ts:86`). Preserve the run directory and report it.
+  `verified`. Preserve the run directory and report it.
 
 One documented exception, and only this one: with `--recovery`, the ADR-0006 ladder may relaunch
 Calc and complete the trial, and the verdict then comes from the persisted-file check —
@@ -374,13 +374,56 @@ Sweep v2 completed five trial cycles in about 35 minutes on the 6 GB guest (20:1
 resets, deploys, trials and settles. Use the measured cycle time to plan a host window and
 update the estimate from the next run. Report every recorded outcome.
 
-### 7.4 The corrupted suite (M1-014) is not wired yet
+### 7.4 The corrupted suite
 
-`run-live` exposes only the kill class. `invalid-target`, `delayed-save` and `focus-change` exist
-as fault injectors (`src/fake/faults.ts`, exercised host-side in CI via
-`src/core/eval.ts` + `pnpm test`). The live entrypoint still needs those classes and the
-M1-019 guest-hygiene checklist. The state log's "0 false successes in 11/11 corrupted configs" is the fake-app harness
-(PR #7). Do not present CI numbers as live-trial numbers.
+Run from the repo root. The suite schedules 18 trials on distinct fixture seeds with a cold reset
+and deploy before each trial. It runs three trials per corruption class with recovery off, and
+also covers three kill and three invalid-target trials with ADR-0006 recovery enabled. The
+normal sweep and this suite share `/tmp/myco-win11.vm.lock`. The guard also checks for older
+sweep processes that started before the lock was introduced.
+
+```bash
+scripts/m1-corrupt-suite.sh /tmp/m1-014/corrupted
+python3 scripts/m1-corrupt-suite-record.py --final \
+  /tmp/m1-014/corrupted/params.json /tmp/m1-014/corrupted/trials.jsonl
+```
+
+Reissue the driver command to skip recorded indices. Recorded failures stay in the audit. The
+driver runs `--final` automatically and saves its output to `summary.txt`. The second command
+rebuilds the summary and ledger from existing artifacts. Keep the output directory and its
+`runs/` tree together for replay. Each live trial has a 900-second watchdog.
+
+| Mode | Injection |
+|---|---|
+| `kill` | Terminate `soffice.bin` after the edit and before save. The audited path waits for the kill acknowledgement. Recovery can relaunch Calc and resume the edit. |
+| `invalid-target` | After Locate, take a new observation between issuing and using the adapter's versioned UI target for the edit. The stale target is rejected before typing. Recovery retries with a newly resolved target. |
+| `dropped-save` | Withhold Ctrl+S. The edited Calc document stays dirty and the disk keeps the old value. |
+| `focus-change` | After the Name Box jump, transfer foreground focus to a disposable Windows window before typing, check ownership, and destroy the window. The temporary STATIC window has no explicit message pump during the short SendKeys call. Message handling and cleanup on Windows remain unverified. |
+
+`trials.jsonl` records the `recovery` flag, verdict, host-computed expected value, disk readback
+when available, `falseSuccess` and the reason. `refuted` means the verifier found evidence
+against success. `uncertain` means it could not verify the outcome. A verified verdict with
+a wrong disk value or without a completed recovery event in the saved trace is a false success.
+If the disk value is unreadable despite recovery evidence, the audit fails as unproven.
+A recovery trial needs evidence that the fault landed and the ladder ran to count toward coverage.
+
+| Driver exit | Meaning |
+|---|---|
+| 0 | Three eligible verdicts in each of the six class and recovery groups, with zero false successes, unproven verified claims, and unaccounted ledger rows. |
+| 1 | Driver or manifest error. |
+| 3 / 4 / 6 | Paused for loss of AC power, one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. |
+| 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
+| 8 | Final audit failed. Inspect `summary.json`, `summary.txt` and `ledger.jsonl`. |
+| 10 | VM in use. `REFUSED_VM_LOCKED` names the lock holder or the legacy driver process. |
+
+To inspect an individual live trial, use `pnpm exec tsx src/integration/run-live.ts --mode MODE`
+with `MYCO_AGENT_TOKEN` set and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
+`kill` for suite-style evidence and `--recovery` to exercise the ladder. An audited mode exits 0
+for a verdict of refuted, uncertain or proven recovery, 1 for an unsupported verified claim or a
+harness error, and 2 if the requested fault did not land.
+
+The final report includes the published OpenAdapt counts for context. Report live results only
+after this suite has run on the reserved guest.
 
 ## 8. Evidence
 
@@ -388,14 +431,15 @@ M1-019 guest-hygiene checklist. The state log's "0 false successes in 11/11 corr
 
 ```
 runs/
-  <runId>/                 every live trial (normal, kill, values)
+  <runId>/                 every live trial (normal, corruption modes, values)
     trace.jsonl            one JSON event per line: run-start, observation, action,
                            guard-evaluation, guard-failure, fault-injection, recovery (ADR-0007)
     result.json            RunRecord: taskParams, steps with pre/postcondition results,
                            stateVersion, verdict with per-check partial scores
   values/<runId>/          --mode values nests its trials here
   <evalId>/ledger.jsonl    conformance ledger — written ONLY by runEvaluation()
-                           (src/core/eval.ts); the live entrypoint emits no ledger
+                           (src/core/eval.ts) in the fake harness; the live corrupted suite writes its own
+                           ledger.jsonl in its OUT dir (§7.4); the normal sweep emits none
 ```
 
 A sweep (§7.3) writes under its own `OUT` dir instead:
@@ -433,9 +477,10 @@ which is what CI proves. Use `validate-live.ts` for your run directory.
 ### 8.3 Ledger
 
 `runs/<evalId>/ledger.jsonl` — one row per (trial, corruption-class, action-kind) with an explicit
-oracle and refusal code; `unaccounted` rows must be 0. Only the eval harness writes it. Any claim
-about "the ledger has no unaccounted rows" therefore refers to a harness run, never to a live
-trial directory.
+oracle and refusal code. The corrupted-suite recorder writes its live conformance ledger to
+`OUT_DIR/ledger.jsonl` during `--final`. False successes carry the `ground-truth:false` or
+`recovery:missing-proof` oracle. `OUT_DIR/summary.json` and the driver's `summary.txt` include
+the per-trial recovery results, `falseSuccesses` total and `auditLedgerRows` accounting.
 
 ## 9. Troubleshooting
 
@@ -472,11 +517,10 @@ Be explicit with whoever asks for an "independent reproduction":
 5. **Versions are pinned but one hash is missing**: LibreOffice 26.8.3 aarch64, Python 3.12.10,
    pywin32 312, comtypes 1.5.0, pywinauto 0.6.9, uiautomation 2.0.29 are recorded; the MSI
    SHA-256 that acceptance row 8 asks for is **not** recorded (M1-018 pending).
-6. **Parts of the evaluation do not exist yet**: the
-   ≥10-trial/4-class live corrupted suite (M1-014), and the screenshot baseline
-   (M1-015, Cua Driver as the agent with a local or approved planner — Agent S3/`cua-agent` is deprecated upstream; not started). A reproduction today can reach: reset → deploy
+6. **Live evidence is pending** for the corrupted suite (M1-014). The screenshot baseline
+   (M1-015, Cua Driver as the agent with a local or approved planner) is also pending. A reproduction today can reach: reset → deploy
    → desktop proof → 20/20 generator proof → the 30-trial sweep (`scripts/m1-sweep.sh`, §7.3) →
-   individual kill trials → validated per-trial evidence.
+   the corrupted suite (`scripts/m1-corrupt-suite.sh`, §7.4) → validated per-trial evidence.
 
 What an independent reproducer must obtain from the environment owner: the VM bundle with its
 snapshots (or a repaired `build-all.sh` plus its input ISOs), `ssh_config` + `id_ed25519`, the
