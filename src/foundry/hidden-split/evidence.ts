@@ -8,9 +8,12 @@ import type {
   ScreenView,
   TaskIntent,
 } from "../types.ts";
+import type { HiddenFixture } from "./index.ts";
 
 export interface EvidenceBundle {
   readonly fixture: FixtureManifest;
+  readonly hiddenFixture: HiddenFixture;
+  readonly fixtureHash: string;
   readonly intent: TaskIntent;
   readonly actual: ActualState;
   readonly screen: ScreenView;
@@ -20,6 +23,15 @@ export interface EvidenceBundle {
   readonly oracleVersion: number;
   readonly faultVersion: number;
   readonly hiddenSplitVersion: number;
+}
+export class EvidenceError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EvidenceError";
+  }
 }
 export const encode = (v: unknown) =>
   JSON.stringify(v, (_k, x: unknown) =>

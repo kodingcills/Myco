@@ -14,7 +14,7 @@ import type { FixtureManifest, TaskIntent } from "../types.ts";
 
 export const hiddenSplitVersion = 1;
 export class HiddenSplitError extends Error {
-  constructor(readonly code: "unset" | "in-tree" | "permissions" | "seed") {
+  constructor(readonly code: "unset" | "in-tree" | "permissions" | "seed" | "missing" | "owner") {
     super(`Hidden split: ${code}`);
   }
 }
@@ -28,15 +28,23 @@ function outsideTree(dir: string) {
   }
 }
 export function initHiddenSplit(dir: string): void {
+  let ancestor = resolve(dir);
+  while (!existsSync(ancestor)) ancestor = dirname(ancestor);
+  outsideTree(ancestor);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   outsideTree(dir);
+  if (typeof process.getuid === "function" && statSync(dir).uid !== process.getuid())
+    throw new HiddenSplitError("owner");
   if ((statSync(dir).mode & 0o077) !== 0) throw new HiddenSplitError("permissions");
   writeFileSync(join(dir, "seed"), randomBytes(32), { mode: 0o600, flag: "wx" });
 }
 export function loadHiddenSplit(dir = process.env.MYCO_FOUNDRY_HIDDEN_DIR): Uint8Array {
   if (!dir) throw new HiddenSplitError("unset");
   const path = resolve(dir);
+  if (!existsSync(path)) throw new HiddenSplitError("missing");
   outsideTree(path);
+  if (typeof process.getuid === "function" && statSync(path).uid !== process.getuid())
+    throw new HiddenSplitError("owner");
   if ((statSync(path).mode & 0o077) !== 0) throw new HiddenSplitError("permissions");
   const file = join(path, "seed");
   if (!existsSync(file) || (statSync(file).mode & 0o077) !== 0) throw new HiddenSplitError("seed");
@@ -103,13 +111,14 @@ function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object")
     return `{${Object.entries(value)
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`)
       .join(",")}}`;
   return JSON.stringify(value);
 }
+export const fixtureHash = (fixture: HiddenFixture) => hash(canonical(fixture));
 export function commitment(fixtures: readonly HiddenFixture[]) {
-  const perFixtureHash = fixtures.map((fixture) => hash(canonical(fixture))).sort();
+  const perFixtureHash = fixtures.map(fixtureHash).sort();
   return {
     hiddenSplitVersion,
     count: fixtures.length,

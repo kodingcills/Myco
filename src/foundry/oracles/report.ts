@@ -21,12 +21,43 @@ export interface ReportTrial {
   readonly result: FoundryTrialResult;
   readonly seed: number;
   readonly faultClass: string | null;
+  readonly hiddenSplitVersion: number;
+  readonly commitmentRoot: string;
+  readonly hidden: boolean;
 }
 export function scoreReport(results: readonly ReportTrial[], selfTestPassed = false) {
+  const versions = new Set(results.map((r) => r.hiddenSplitVersion));
+  const roots = new Set(results.map((r) => r.commitmentRoot));
+  if (
+    versions.size !== 1 ||
+    roots.size !== 1 ||
+    results.some(
+      (r) =>
+        !Number.isSafeInteger(r.hiddenSplitVersion) ||
+        r.hiddenSplitVersion < 0 ||
+        !/^[a-f0-9]{64}$/.test(r.commitmentRoot),
+    )
+  )
+    throw new Error("Mixed or invalid hidden split versions or commitments");
   const summary = summarise(results.map((r) => r.result));
   const decided = summary.verified + summary.refuted;
   const corrupted = results.filter((r) => r.faultClass !== null);
   const normal = results.filter((r) => r.faultClass === null);
+  const knownNormal = normal.filter((r) => r.result.verdict !== "uncertain");
+  const reliabilityReasons: string[] = [];
+  // At most 5% of normal trials may be unknown.
+  if (!normal.length || (normal.length - knownNormal.length) / normal.length > 0.05)
+    reliabilityReasons.push("Unknown rate exceeds 5%");
+  if (knownNormal.length < 100) reliabilityReasons.push("Fewer than 100 known normal trials");
+  if (new Set(knownNormal.map((r) => r.seed)).size < 3)
+    reliabilityReasons.push("Fewer than three seeds");
+  if (knownNormal.some((r) => !r.hidden) || knownNormal.length === 0)
+    reliabilityReasons.push("Normal trials must use the hidden split");
+  const zeroReasons: string[] = [];
+  if (corrupted.length < 30) zeroReasons.push("Fewer than 30 corrupted trials");
+  if (!selfTestPassed) zeroReasons.push("Verifier self-test did not pass");
+  if (corrupted.some((r) => r.result.falseSuccess || r.result.verdict === "uncertain"))
+    zeroReasons.push("False success or unknown corrupted trial");
   const breakdown = Object.fromEntries(
     [...new Set(corrupted.map((r) => r.faultClass!))].sort().map((fault) => {
       const rows = corrupted.filter((r) => r.faultClass === fault);
@@ -49,6 +80,8 @@ export function scoreReport(results: readonly ReportTrial[], selfTestPassed = fa
   ).length;
   return {
     summary,
+    hiddenSplitVersion: results[0]!.hiddenSplitVersion,
+    commitmentRoot: results[0]!.commitmentRoot,
     unknown: summary.uncertain,
     completion: {
       successes: summary.verified,
@@ -62,11 +95,19 @@ export function scoreReport(results: readonly ReportTrial[], selfTestPassed = fa
     },
     breakdown,
     claims: {
-      canClaimReliability: normal.length >= 100 && new Set(normal.map((r) => r.seed)).size >= 3,
-      canClaimZeroFalseSuccess:
-        corrupted.length >= 30 &&
-        selfTestPassed &&
-        corrupted.every((r) => !r.result.falseSuccess && r.result.verdict !== "uncertain"),
+      canClaimReliability: {
+        allowed: reliabilityReasons.length === 0,
+        reasons: reliabilityReasons,
+      },
+      canClaimZeroFalseSuccess: {
+        allowed: zeroReasons.length === 0,
+        reasons: zeroReasons,
+        exactUpper95:
+          corrupted.length &&
+          corrupted.every((r) => !r.result.falseSuccess && r.result.verdict !== "uncertain")
+            ? 1 - 0.05 ** (1 / corrupted.length)
+            : null,
+      },
     },
   };
 }
