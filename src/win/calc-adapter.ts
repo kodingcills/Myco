@@ -65,7 +65,7 @@ const HELPER_NAME = "myco_uia_act.py";
  *              ValuePattern.SetValue never commits).
  *   keys     — send a uiautomation SendKeys combo ({Ctrl}s …).
  */
-const HELPER_SOURCE = String.raw`
+const HELPER_SOURCE = `
 import ctypes, json, sys, time
 
 u32 = ctypes.windll.user32
