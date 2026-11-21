@@ -9,6 +9,8 @@
  * seam is {@link FixtureConverter}, which the Windows path implements.
  */
 
+import { createHash } from "node:crypto";
+
 /** FNV-1a 32-bit string hash. Stable across runs and processes, but not
  * collision-proof; eval seed lists are curated to avoid collisions. */
 export function hash32(input: string): number {
@@ -130,3 +132,24 @@ export const csvIdentityConverter: FixtureConverter = {
   format: "csv",
   convert: async (csvBytes) => csvBytes,
 };
+
+/**
+ * Identity of the exact fixture bytes a trial hands the guest (M1-013 sweep
+ * seed check). SHA-256 over the UTF-8 CSV, which is what the converter
+ * uploads. A sweep compares each trial's reported fingerprint with the one
+ * expected for that trial's `fixtureSeed`, so a seed that silently fails to
+ * reach the trial (every run on one sheet) fails loudly instead.
+ */
+export interface FixtureFingerprint {
+  seed: string;
+  dataRows: number;
+  csvSha256: string;
+}
+
+export function fixtureFingerprint(fixture: Fixture): FixtureFingerprint {
+  return {
+    seed: fixture.seed,
+    dataRows: fixture.dataRows,
+    csvSha256: createHash("sha256").update(Buffer.from(fixture.csv, "utf8")).digest("hex"),
+  };
+}

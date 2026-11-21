@@ -253,3 +253,28 @@ Recorded so they bind future work in this workstream; no change to in-flight tas
   never run against a guest since the deadline fixes. Next action on host return:
   boot, build agent in guest, run first_path with MYCO_RT_LIVE=1, report measured
   timings (including the honest 3-4 minute full reset), then shut the guest down.
+
+## Reframe — 2026-11-21 (Tiffany t80u, via T3 Code Bridge)
+
+**New goal: how easy can an arbitrary agent obtain and operate a safe isolated
+desktop without understanding the virtualization?** Not "ship more capabilities":
+the CLI + MCP front ends already merged and are the surface to reuse. One backend,
+made reliable. The earlier "M2 = MCP/API" lock-in is retracted pending discovery.
+
+- Tracked as **TIF-56** → backlog **RT-020** (`docs/backlog/runtime.md`).
+- Research landed: `docs/research/runtime-safety-isolation.md` — what isolation
+  actually is (VM boundary, 2 GB cap, loopback-only hostfwd, disposable overlay),
+  what it is NOT (no egress policy, no guest→host transfer, no idle reaping, static
+  token visible in guest ps), and a reproduced ease barrier.
+- **Measured, host-side, no VM:** an agent running `myco-rt-mcp` outside the repo
+  root fails with `script failed: boot.sh ... No such file`, because the workspace
+  is resolved from `cwd`. The ops work; discovery does not.
+- UI rule noted: any human-facing surface gets real design work (emil-design-eng,
+  apple-design, break-ui, choreograph, …) and screenshots in the PR; Details
+  (details.so/mcp) is the quality bar, and its MCP needs an account + paid plan —
+  **escalated, not installed**.
+- Evaluation: do not optimize against Foundry and do not claim eval wins until
+  EF-001 (TIF-50) fixtures and EF-002 (TIF-51) verifiers exist. First proof uses
+  dogfood/M1 surfaces only.
+- Host: M1 keeps priority. No VMs while the sweep runs; any host time goes through
+  the M1 Coordinator.
