@@ -29,39 +29,108 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = writeln!(stdout, "{}", json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":format!("parse error: {e}")}}));
-                let _ = stdout.flush();
-                continue;
-            }
-        };
-        // Notifications (no id) get no response.
-        let id = req.get("id").cloned();
-        let method = req["method"].as_str().unwrap_or("");
-        let params = req.get("params").cloned().unwrap_or(Value::Null);
-        let response = match method {
-            "initialize" => Some(Ok(json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "myco-rt", "version": env!("CARGO_PKG_VERSION")},
-            }))),
-            "notifications/initialized" => None,
-            "ping" => Some(Ok(json!({}))),
-            "tools/list" => Some(Ok(json!({"tools": tool_defs()}))),
-            "tools/call" => Some(srv.call_tool(&params)),
-            other => Some(Err((-32601, format!("method not found: {other}")))),
-        };
-        if let (Some(id), Some(res)) = (id, response) {
-            let msg = match res {
-                Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-                Err((code, message)) => json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}),
-            };
-            let _ = writeln!(stdout, "{msg}");
+        if let Some(reply) = handle_line(&mut srv, &line) {
+            let _ = writeln!(stdout, "{reply}");
             let _ = stdout.flush();
         }
     }
+}
+
+/// Handle one wire line. Returns the reply (if any); `None` for notifications.
+///
+/// Protocol rules this enforces (JSON-RPC 2.0 + MCP):
+/// - a batch (top-level array) is not supported by MCP here: `-32600`, not a
+///   misleading `-32601` with an empty method name;
+/// - `"id": null` is a *request* with a null id and MUST get a reply, unlike a
+///   notification which has no `id` member at all;
+/// - a missing/invalid `method` is `-32600` invalid request;
+/// - unknown methods are `-32601`;
+/// - malformed JSON is `-32700` and the server keeps running.
+fn handle_line(srv: &mut Server, line: &str) -> Option<String> {
+    let req: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => {
+            // Log the detail locally; keep the wire reply uniform and free of
+            // fragments of the offending input.
+            eprintln!("myco-rt-mcp: parse error: {e}");
+            return Some(
+                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}})
+                    .to_string(),
+            )
+        }
+    };
+
+    if req.is_array() {
+        return Some(
+            json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"batch requests are not supported"}})
+                .to_string(),
+        );
+    }
+
+    // `id: null` is a request (reply required); absent `id` is a notification.
+    let id_member = req.get("id").cloned();
+    let has_id = id_member.is_some();
+    let id = id_member.clone().unwrap_or(Value::Null);
+
+    // Invalid-request handling MUST also respect the no-reply rule: a message with
+    // no `id` is a notification, so a malformed one gets silence, not -32600
+    // with id:null (JSON-RPC 2.0 §4.1).
+    let invalid = |code: i64, msg: &str| -> Option<String> {
+        if !has_id {
+            return None;
+        }
+        Some(
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":msg}}).to_string(),
+        )
+    };
+
+    if req.get("jsonrpc").and_then(|v| v.as_str()) != Some("2.0") {
+        return invalid(-32600, "invalid request: jsonrpc must be \"2.0\"");
+    }
+
+    let Some(method) = req.get("method").and_then(|m| m.as_str()) else {
+        return invalid(-32600, "invalid request: missing method");
+    };
+    let params = req.get("params").cloned().unwrap_or(Value::Null);
+
+    let response = match method {
+        "initialize" => {
+            // Negotiation: echo the client's version when we support it, otherwise
+            // reply with ours so the client can decide whether to proceed.
+            let requested = params.get("protocolVersion").and_then(|v| v.as_str());
+            let negotiated = match requested {
+                Some(v) if v == PROTOCOL_VERSION => v,
+                _ => PROTOCOL_VERSION,
+            };
+            if requested != Some(PROTOCOL_VERSION) {
+                eprintln!(
+                    "myco-rt-mcp: client requested protocol {requested:?}, replying {PROTOCOL_VERSION}"
+                );
+            }
+            Some(Ok(json!({
+                "protocolVersion": negotiated,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "myco-rt", "version": env!("CARGO_PKG_VERSION")},
+            })))
+        }
+        "notifications/initialized" => None,
+        "ping" => Some(Ok(json!({}))),
+        "tools/list" => Some(Ok(json!({"tools": tool_defs()}))),
+        "tools/call" => Some(srv.call_tool(&params)),
+        other => Some(Err((-32601, format!("method not found: {other}")))),
+    };
+
+    let res = response?;
+    if !has_id {
+        // A notification that produced a result still gets no reply.
+        return None;
+    }
+    Some(match res {
+        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}).to_string(),
+        Err((code, message)) => {
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}).to_string()
+        }
+    })
 }
 
 fn tool_defs() -> Vec<Value> {
@@ -240,5 +309,150 @@ fn outcome_json(outcome: &myco_rt_core::ops::ActionOutcome) -> Value {
         DeliveredVerified => json!({"kind": "delivered_verified"}),
         DeliveredUnverified => json!({"kind": "delivered_unverified"}),
         Failed { reason } => json!({"kind": "failed", "reason": reason}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: PathBuf::from("."), next_id: 1 }
+    }
+
+    fn reply(s: &mut Server, line: &str) -> Value {
+        serde_json::from_str(&handle_line(s, line).expect("expected a reply")).unwrap()
+    }
+
+    #[test]
+    fn initialize_returns_protocol_and_server_info() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+        assert_eq!(r["id"], 1);
+        assert_eq!(r["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(r["result"]["serverInfo"]["name"], "myco-rt");
+    }
+
+    #[test]
+    fn notification_gets_no_reply() {
+        let mut s = srv();
+        assert!(handle_line(&mut s, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+    }
+
+    #[test]
+    fn null_id_is_a_request_and_gets_a_reply() {
+        // JSON-RPC: id:null is a request (reply required), unlike an absent id.
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#);
+        assert!(r.get("result").is_some(), "{r}");
+        assert!(r["id"].is_null());
+    }
+
+    #[test]
+    fn batch_is_invalid_request_not_unknown_method() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#);
+        assert_eq!(r["error"]["code"], -32600, "{r}");
+    }
+
+    #[test]
+    fn unknown_method_is_32601() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":2,"method":"bogus/method"}"#);
+        assert_eq!(r["error"]["code"], -32601);
+        assert!(r["error"]["message"].as_str().unwrap().contains("bogus/method"));
+    }
+
+    #[test]
+    fn missing_method_is_invalid_request() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":3}"#);
+        assert_eq!(r["error"]["code"], -32600, "{r}");
+    }
+
+    #[test]
+    fn malformed_json_is_parse_error_and_server_survives() {
+        let mut s = srv();
+        let r = reply(&mut s, "{not json");
+        assert_eq!(r["error"]["code"], -32700);
+        assert_eq!(r["error"]["message"], "parse error", "must not echo input fragments");
+        // and the next request still works
+        let r2 = reply(&mut s, r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#);
+        assert!(r2["result"]["tools"].as_array().unwrap().len() >= 6);
+    }
+
+    #[test]
+    fn tools_list_exposes_exactly_the_six_ops() {
+        let mut s = srv();
+        let r = reply(&mut s, r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#);
+        let mut names: Vec<&str> = r["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["act", "create", "destroy", "evidence", "observe", "reset"]);
+    }
+
+    #[test]
+    fn tool_call_with_unknown_session_is_a_tool_error_not_a_protocol_error() {
+        let mut s = srv();
+        let r = reply(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"observe","arguments":{"session_id":"nope"}}}"#,
+        );
+        // MCP convention: execution failures are results with isError, not JSON-RPC errors.
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown session"));
+    }
+}
+
+#[cfg(test)]
+mod protocol_edge_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: PathBuf::from("."), next_id: 1 }
+    }
+
+    #[test]
+    fn malformed_notification_gets_no_reply() {
+        // No `id` member => notification => MUST NOT reply, even though the
+        // message is invalid (-32600 would leak a reply with id:null).
+        let mut s = srv();
+        assert!(handle_line(&mut s, r#"{"jsonrpc":"2.0"}"#).is_none());
+        assert!(handle_line(&mut s, r#"{"method":"ping"}"#).is_none(), "missing jsonrpc, no id");
+    }
+
+    #[test]
+    fn missing_or_wrong_jsonrpc_member_is_invalid_request() {
+        let mut s = srv();
+        let r: Value = serde_json::from_str(
+            &handle_line(&mut s, r#"{"id":1,"method":"ping"}"#).expect("reply"),
+        ).unwrap();
+        assert_eq!(r["error"]["code"], -32600);
+
+        let r2: Value = serde_json::from_str(
+            &handle_line(&mut s, r#"{"jsonrpc":"1.0","id":2,"method":"ping"}"#).expect("reply"),
+        ).unwrap();
+        assert_eq!(r2["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn initialize_negotiates_protocol_version() {
+        let mut s = srv();
+        // Supported version: echoed.
+        let r: Value = serde_json::from_str(&handle_line(&mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}"#
+        ).expect("reply")).unwrap();
+        assert_eq!(r["result"]["protocolVersion"], PROTOCOL_VERSION);
+
+        // Unknown version: we reply with ours so the client can decide.
+        let r2: Value = serde_json::from_str(&handle_line(&mut s,
+            r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}"#
+        ).expect("reply")).unwrap();
+        assert_eq!(r2["result"]["protocolVersion"], PROTOCOL_VERSION);
     }
 }
