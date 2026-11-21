@@ -157,10 +157,27 @@ const rawLiteral = /#[\da-f]{3,8}(?![\w-])|(?:\d+(?:\.\d+)?|\.\d+)px\b/i;
 
 function classCandidates(source) {
   const candidates = new Set();
+  const constants = new Map();
+  const visitedValues = new Set();
+  function recordConstants(node) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const values = constants.get(node.name.text) ?? [];
+      values.push(node.initializer);
+      constants.set(node.name.text, values);
+    }
+    ts.forEachChild(node, recordConstants);
+  }
+  recordConstants(source);
+  function addClasses(text) {
+    for (const candidate of text.split(/\s+/)) if (candidate) candidates.add(candidate);
+  }
   function collect(node) {
-    if (!node) return;
+    if (!node || visitedValues.has(node)) return;
+    visitedValues.add(node);
     if (ts.isStringLiteralLike(node)) {
-      for (const candidate of node.text.split(/\s+/)) if (candidate) candidates.add(candidate);
+      addClasses(node.text);
+    } else if (ts.isIdentifier(node)) {
+      for (const value of constants.get(node.text) ?? []) collect(value);
     } else if (ts.isTemplateExpression(node)) {
       throw new Error("Use complete Tailwind class names instead of interpolating class names");
     } else if (ts.isConditionalExpression(node)) {
@@ -168,16 +185,30 @@ function classCandidates(source) {
       collect(node.whenFalse);
     } else if (
       ts.isBinaryExpression(node) &&
-      node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+      [
+        ts.SyntaxKind.AmpersandAmpersandToken,
+        ts.SyntaxKind.BarBarToken,
+        ts.SyntaxKind.QuestionQuestionToken,
+      ].includes(node.operatorToken.kind)
     ) {
+      if (node.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken) collect(node.left);
       collect(node.right);
-    } else if (ts.isJsxExpression(node) || ts.isParenthesizedExpression(node)) {
+    } else if (
+      ts.isJsxExpression(node) ||
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isSatisfiesExpression(node)
+    ) {
       collect(node.expression);
     } else if (ts.isArrayLiteralExpression(node)) {
       for (const element of node.elements) collect(element);
     } else if (ts.isObjectLiteralExpression(node)) {
       for (const property of node.properties) {
-        if (ts.isPropertyAssignment(property)) collect(property.name);
+        if (ts.isPropertyAssignment(property)) {
+          if (ts.isIdentifier(property.name)) addClasses(property.name.text);
+          else if (ts.isComputedPropertyName(property.name)) collect(property.name.expression);
+          else collect(property.name);
+        }
       }
     }
   }
@@ -248,7 +279,8 @@ export async function validateStyles(src, theme) {
     const source = ts.createSourceFile(name, body, ts.ScriptTarget.Latest, true);
     for (const candidate of classCandidates(source)) {
       if (checked.has(candidate)) continue;
-      if (candidate.includes("[") || /\([^)]*$/.test(candidate)) {
+      const withoutArbitraryVariants = candidate.replace(/\[[^\]]+\]:/g, "");
+      if (withoutArbitraryVariants.includes("[")) {
         throw new Error(`${name}: use theme variables for ${candidate}`);
       }
       const next = compiler.build([candidate]);

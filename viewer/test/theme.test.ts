@@ -31,7 +31,10 @@ test("style validation rejects unknown tokens, misspelled utilities, and raw des
     await expect(validateStyles(root, theme)).rejects.toThrow("raw design value");
     await writeFile(new URL("styles.css", root), "");
     await mkdir(new URL("components/", root));
-    await writeFile(new URL("components/App.tsx", root), '<div className="bg-bg-cavnas" />');
+    await writeFile(
+      new URL("components/App.tsx", root),
+      'const color = "bg-bg-cavnas" as const; <div className={color} />',
+    );
     await expect(validateStyles(root, theme)).rejects.toThrow("unknown Tailwind utility");
   } finally {
     await rm(dir, { recursive: true, force: true });

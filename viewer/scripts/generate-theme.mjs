@@ -7,4 +7,6 @@ const tokens = JSON.parse(
 const src = new URL("../src/", import.meta.url);
 const theme = generateTheme(tokens);
 await validateStyles(src, theme);
-await writeFile(new URL("theme.generated.css", src), theme);
+if (!process.argv.includes("--check")) {
+  await writeFile(new URL("theme.generated.css", src), theme);
+}

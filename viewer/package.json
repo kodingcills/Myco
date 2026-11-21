@@ -7,7 +7,8 @@
     "dev": "node scripts/generate-theme.mjs && vite",
     "build": "node scripts/generate-theme.mjs && vite build",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "node scripts/generate-theme.mjs --check"
   },
   "dependencies": {
     "@base-ui/react": "^1.0.0",

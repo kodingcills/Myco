@@ -1,7 +1,8 @@
 @layer theme, base, components, utilities;
 @import "tailwindcss/preflight.css" layer(base);
 @import "./theme.generated.css";
-@import "tailwindcss/utilities.css" layer(utilities);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "./";
 
 @layer base {
   body {
