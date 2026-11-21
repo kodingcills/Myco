@@ -444,6 +444,8 @@ Default if unanswered: option B (ShowUI-2B grounder, local) with the installed q
 **Not blocked by this decision:** M1-021 harness, import-graph and verdict tests (host-side, CI).
 **Blocked:** any baseline trial run (M1-015) until 1+2 are answered (or the default is taken as approved).
 
+**My own over-correction, caught after the PASS.** The verifier's verdict covered 7 claims and found 0 defects, but its aside flagged that `surferH` and `vlaa_gui` **do** exist in `mm_agents/` and only `manus` is absent. I re-checked the listing: the verifier is right and my removal was wrong. Both are restored in §1b.2; the note now says exactly one adapter was absent. Recorded because a verifier PASS does not mean the author's fixes were all correct — that is precisely why the aside is read, not just the verdict line.
+
 ## Log 2026-11-21 (45) — benchmarks checked by re-reading the primary sources; two provenance defects fixed in the design
 The 1b/1c sections (OSWorld + WAA as a source of scored agents and as methodology) landed on `myco/m1-baseline` in `c67c389`. Before accepting them I re-read the sources rather than the summary. What held, what did not, and what I changed:
 

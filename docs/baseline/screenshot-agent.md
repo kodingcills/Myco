@@ -240,12 +240,12 @@ This is the intersection Tiffany asked for. Three groups, honestly separated:
 `qwen25vl_agent.py`, `qwen3vl_agent.py`, `gemini_agent.py`, `o3_agent.py`, `gpt54_agent.py`,
 `anthropic/`, `openai_cua_agent.py`, `agi_agent.py`, `mobileagent_v3`·`muse_spark` adapters,
 `jedi_3b_agent.py`, `jedi_7b_agent.py`, `maestro`, `coact`, `dart_gui`, `evocua`, `autoglm`,
-`aworldguiagent`, `gta1`, `gui_som`, `pointer`, and more. Each is an **agent class with a
-`predict()`**, so each is in principle host-portable.
+`aworldguiagent`, `gta1`, `gui_som`, `pointer`, `surferH`, `vlaa_gui`, and more. Each is an
+**agent class with a `predict()`**, so each is in principle host-portable.
 
-(Read 2026-11-21; the earlier revision of this list carried `manus`, `surferH` and `vlaa_gui`,
-which are **not** in `mm_agents/` — `mm_agents/manus` returns 404. Adapters named here have been
-checked against the directory listing.)
+(Read 2026-11-21; the earlier revision of this list also carried `manus`, which is **not** in
+`mm_agents/` — `mm_agents/manus` returns 404. Every other adapter named here, including
+`surferH` and `vlaa_gui`, was checked against the directory listing and is present.)
 
 **But "can run against our VM" is not the same as "scored on OSWorld".** The OSWorld numbers those
 agents publish are measured on **Ubuntu 22.04 with GNOME**, not on Windows. Porting one is
