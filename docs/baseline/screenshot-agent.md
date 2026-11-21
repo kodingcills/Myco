@@ -272,22 +272,24 @@ paper's **Table 4** is the source. It varies **perception inputs**, not `--som-o
 independent toggles (UIA tree ✓/✗, Pytesseract+DOM+GroundingDINO OCR ✓/✗), an OmniParser toggle,
 and Phi3-V / GPT-4o-mini / GPT-4o / GPT-4V-1106 per row, with a human ceiling of 74.5%:
 
-| UIA tree | OmniParser | OCR | Published total |
+| UIA tree | OmniParser | Other perception | Published total (Total column, per model) |
 |---|---|---|---|
-| ✗ | ✗ | ✓ | **13.3%** (GPT-4V) — the best pure OCR/grounding row |
-| ✗ | ✓ | ✗ | **12.5%** (GPT-4V), **8.6%** (GPT-4o) — tree-free, OmniParser only |
-| **✓** | **✓** | ✗ | **19.5%** (GPT-4V-1106) — the paper's headline |
+| ✗ | ✗ | Pytesseract + DOM + GroundingDINO | 8.6% GPT-4V-1106 · 9.8% GPT-4o · 2.6% GPT-4o-mini |
+| ✓ | ✗ | Pytesseract + DOM + GroundingDINO | 13.1% GPT-4V-1106 · 9.3% GPT-4o · 5.3% GPT-4o-mini |
+| ✓ | ✗ | OneOCR | 13.1% GPT-4V-1106 · 9.4% GPT-4o · 2.7% GPT-4o-mini |
+| ✗ | ✓ | — | **12.5% GPT-4V-1106** · 8.6% GPT-4o · 4.2% GPT-4o-mini · 3.5% Phi3-V |
+| **✓** | **✓** | — | **19.5% GPT-4V-1106** — the paper's headline · 9.4% GPT-4o · 4.2% GPT-4o-mini · 3.5% Phi3-V |
 
-Only the cells this document's sources actually pin are listed. An earlier revision reproduced a
-fuller grid with GPT-4o values (9.8 / 9.4 / 14.3) that could not be re-confirmed against the paper
-text; they are **removed rather than guessed**. Anyone needing the complete table must read arXiv
-2409.08264 Table 4 directly.
+Transcribed from arXiv 2409.08264 Table 4's Total column, block by block (the four model rows are
+printed in the order Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106 above each modality label). Human
+ceiling: 74.5%.
 
-**Read the 8.6% correctly**: it is OmniParser **on the screenshot with no UIA tree** — which is
-what `--som-origin omni` actually does — and it comes from the GPT-4o row. The best published
-number for any *tree-free* configuration is **12.5%** (OmniParser only, GPT-4V). An earlier
-revision of this table attributed 8.6% to "OmniParser only" outright and listed 12.5% as a
-same-mode variant; the paper says otherwise, and the distinction matters for what B1 can claim.
+**Read the rows correctly.** `--som-origin omni` is the **fourth** row: screenshot + OmniParser, no
+UIA tree, i.e. **12.5% with GPT-4V-1106, 8.6% with GPT-4o**. The 19.5% headline is the **fifth**
+row, which adds the accessibility tree. Two errors are worth naming because this document made
+both: attributing 19.5% to `omni` (it is the tree-plus-OmniParser row), and pairing 12.5% with GPT-4o
+on that row (12.5% is the GPT-4V-1106 cell; the GPT-4o cell is 8.6%). B1's `publicScore.value` is
+**0.125** — the best published tree-free total — with `model: GPT-4V-1106` recorded beside it.
 
 **A correction to the earlier draft, because it matters for honesty:** `--som-origin omni` is **not
 "pure screenshot by construction."** In `mm_agents/navi/agent.py` the `omni` branch calls
@@ -349,9 +351,9 @@ our port is plausible — never proof that it is.
 **And the number itself must be quoted with its perception stack, not a mode name.** Navi's
 headline **19.5%** is Table 4's `UIA tree + OmniParser` row (GPT-4V-1106) — an
 accessibility-tree agent. The arm this document proposes runs `--som-origin omni`: screenshot +
-OmniParser, **no tree**, published at **8.6% with GPT-4o and 12.5% with GPT-4V**. B1's
+OmniParser, **no tree**, published at **12.5% with GPT-4V-1106 and 8.6% with GPT-4o**. B1's
 `publicScore.value` is therefore **0.125**, the maximum over its own configuration's published
-model rows; quoting the headline beside an `omni` run — or quoting 8.6% as if it were the best
+model rows, with `model: GPT-4V-1106` recorded as the model that produced it; quoting the headline beside an `omni` run — or quoting 8.6% as if it were the best
 that configuration has been measured at — would be exactly the kind of opaque comparison §1c.2
 warns about.
 
@@ -368,9 +370,9 @@ inferred):
 - **Which number belongs to which configuration.** Navi's headline **19.5%** is Table 4's
   `UIA ✓ + OmniParser ✓` row with GPT-4V-1106, and the human ceiling beside it is 74.5%. The
   configuration B1 runs (`--som-origin omni`: screenshot + OmniParser, no tree) is Table 4's
-  `UIA ✗ + OmniParser ✓` row — **8.6% with GPT-4o, 12.5% with GPT-4V**. So B1's row carries
-  `publicScore { benchmark: WindowsAgentArena, version: arXiv:2409.08264, value: 0.086,
-  model: GPT-4o, mode: omni }` and, in `portScope`, records that the **planner model is
+  `UIA ✗ + OmniParser ✓` row — **12.5% with GPT-4V-1106, 8.6% with GPT-4o**. So B1's row carries
+  `publicScore { benchmark: WindowsAgentArena, version: arXiv:2409.08264, value: 0.125,
+  model: GPT-4V-1106, mode: omni }` and, in `portScope`, records that the **planner model is
   substituted** for whichever local model runs. Quoting 19.5% beside an `omni` run would be the
   misrepresentation §1b.2 warns about.
 - **Navi's planner client is not base-URL configurable.** `mm_agents/navi/gpt/gpt4v_oai.py` builds
@@ -1008,8 +1010,8 @@ decisions, and none of them is answered here:
    minimal request answers it. Not required for the Cua path — the planner does not have to be a
    CheaperInference model — so this is now optional rather than blocking.
 7. **Which public-score arm to run (§1b.3).** **B1** = Navi in `--som-origin omni` — published
-   *Windows* score **8.6%** in that mode (12.5% with GPT-4V); **not** the 19.5% headline, which is
-   the `mixed-omni` + UIA configuration. **B2** = UI-TARS-1.5-7B in the OSWorld loop (published
+   *Windows* score **12.5%** for the tree-free row (`--som-origin omni`, GPT-4V-1106; 8.6% with
+   GPT-4o); **not** the 19.5% headline, which is the accessibility-tree-plus-OmniParser row. **B2** = UI-TARS-1.5-7B in the OSWorld loop (published
    *Linux* score; declared with `portScope`). Both are additive to C1/C2. **Neither is a day of
    work:** each needs an in-guest action executor for its own action grammar *and* a coordinate
    click + arbitrary keystroke channel that Myco's agent does not have (§3.1) — that channel is
@@ -1116,7 +1118,7 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | `preserve_cells` is in OSWorld **v1** (`metrics/table.py::_preserve_cells`, dispatched `:442`) and **absent from V2** | both `metrics/table.py` files |
 | 19.5% / 74.5% is the only pair on the WAA project page (no community leaderboard found) | `microsoft.github.io/WindowsAgentArena` |
 | WAA requires an OpenAI or Azure OpenAI key | README prerequisites |
-| Navi's published scores are **perception-row**, not per-mode: Table 4's `UIA on + OmniParser on` row is **19.5%** (GPT-4V-1106, the headline) and the tree-free `OmniParser` row is **12.5%** (GPT-4V) / **8.6%** (GPT-4o); human 74.5%. `mixed-omni` appears only in the README's CLI flags, never in the paper | arXiv **2409.08264** Table 4 and §4.2; WAA README §4.1 |
+| Navi's published scores are **perception-row**, not per-mode: Table 4's `UIA on + OmniParser on` row is **19.5%** (GPT-4V-1106, the headline) and the tree-free `OmniParser` row is **12.5%** (GPT-4V-1106) / **8.6%** (GPT-4o); human 74.5%. The four model rows are printed Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106 above each modality label, which is how the second and third values of a block are read. `mixed-omni` appears only in the README's CLI flags, never in the paper | arXiv **2409.08264** Table 4 and §4.2; WAA README §4.1 |
 | Navi's OpenAI planner builds `openai.OpenAI(api_key=...)` with **no `base_url`**; constructor is `__init__(self, model="gpt-4o")` | `src/win-arena-container/client/mm_agents/navi/gpt/gpt4v_oai.py` lines 21-27 |
 | Navi's `predict(instruction, obs)` takes screenshots + window rect/title via `obs` and returns a list of actions (its window ops such as `computer.os.maximize_window()` assume WAA's VM backend, so a heap of the transport is still ours) | `src/win-arena-container/client/mm_agents/navi/agent.py` line 138 onward |
 | Navi/OmniParser: OmniParser is MIT and is "the current top performing screen understanding model in our benchmark" | WAA README update 2024-10-23 |

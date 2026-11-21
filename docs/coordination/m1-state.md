@@ -498,6 +498,27 @@ No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-
 
 **Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
 
+## Log 2026-11-21 (49) — Table 4 read properly at last: the model order was the trap
+`134bb75` also REJECTed, this time for the score table. Fixing it required reading the paper's Table 4 as printed rather than as I had summarised it, and the error is instructive.
+
+**What Table 4 actually is.** For each perception-modality block, four model rows print in the order **Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106**, each with six category values and a Total. Reading the last value of a block gives GPT-4V-1106; the **second-to-last** gives GPT-4o. Transcribed Totals:
+
+| UIA | OmniParser | Other | GPT-4V-1106 | GPT-4o | GPT-4o-mini |
+|---|---|---|---|---|---|
+| ✗ | ✗ | Pytesseract+DOM+GroundingDINO | 8.6 | 9.8 | 2.6 |
+| ✓ | ✗ | Pytesseract+DOM+GroundingDINO | 13.1 | 9.3 | 5.3 |
+| ✓ | ✗ | OneOCR | 13.1 | 9.4 | 2.7 |
+| ✗ | ✓ | — | **12.5** | 8.6 | 4.2 |
+| ✓ | ✓ | — | **19.5** | 9.4 | 4.2 |
+
+Human ceiling 74.5%. So the tree-free `omni` row is **12.5% with GPT-4V-1106 and 8.6% with GPT-4o** — not "12.5% with GPT-4V, 8.6% with GPT-4V" as several sites had it. The two values are the same block read one row apart, and I had paired them as if they were two columns of one model.
+
+**What this replaces.** A parallel writer had already cut the table down to "only cells we can pin", having decided the GPT-4o values were unrecoverable. They were recoverable — the ambiguity was in my transcription, not the paper. The full five-block table is now in §1b.2 verbatim, with the reading rule stated, because a future reader will hit the same trap.
+
+**Also fixed:** `publicScore` still carried `value: 0.086, model: GPT-4o` in one place while the rule stated 0.125 elsewhere; the escalation item 7 and backlog M1-023 called the headline "`mixed-omni` + UIA" (a README flag, not a paper row). All sites now agree on **0.125, GPT-4V-1106, tree-free row**. Every `mixed-omni` mention left in the design is a disavowal saying it appears only in the README's flags.
+
+Docs only; no VM, no spend, no accounts.
+
 ## Log 2026-11-21 (48) — my own correction commit REJECTed on four counts; all four were mine
 `d3d64a6` returned **REJECT** from the delta verifier. Every defect it names is real, and three of them were introduced by me while "fixing" something else. Recorded in full because the pattern is the lesson: I corrected a document by editing prose, not by re-reading the source object each edit described.
 
