@@ -329,6 +329,7 @@ that contaminate the next verdict (log 27). The driver does it for you.
 
 ```bash
 OUT="/tmp/m1-013/sweep-$(date -u +%Y%m%dT%H%M%SZ)"   # keep this path for a same-protocol resume
+mkdir -p "$OUT"                        # the shell opens $OUT.runner.out before the driver runs
 nohup caffeinate -dimsu scripts/m1-sweep.sh "$OUT" > "$OUT.runner.out" 2>&1 < /dev/null &
 tail -f "$OUT/progress.log"            # what it is doing
 cat "$OUT/trials.jsonl"                # one record per finished index
@@ -354,6 +355,11 @@ cat "$OUT/trials.jsonl"                # one record per finished index
 - **Pin the code.** Run the driver from a dedicated worktree at a fixed commit
   (`git worktree add --detach /tmp/m1-013/ws <sha>`), so a checkout in your working tree cannot
   change the code mid-sweep.
+- **A `seed-mismatch` disqualifies the whole output directory.** Never resume over it: the
+  driver refuses to start on a `trials.jsonl` that contains one, and both `m1-sweep-record.py
+  --final` and `scripts/m1-scorecard.py` reject it. Start a fresh `OUT`. Resume is only for
+  the gate pauses (exit 3, 4, 6) and for an operator stop at a trial boundary, and only on the
+  same pinned commit.
 - **Statuses in `trials.jsonl`:** `verified` / `refuted` / `uncertain` are verdicts. `seed-mismatch`
   aborts the sweep. `harness-error`, `reset-failed`, `deploy-failed`, `token-failed` and
   `param-error` mean no verdict was produced. Count them as not verified, and report them
@@ -440,7 +446,7 @@ Every row is a failure we actually hit.
 | `session_info` → `session_id: 0`, `window_station: Service-0x0-…`; `uia_tree` returns ~6 title-bar nodes; trials fail at `adapter-available` | Agent in session 0: no window station, UIA blind. `schtasks /Run` from SSH does not move it | Redeploy (§4) so it starts via `run-interactive.ps1`; re-check §5. Delete trials run in this state (log 16/18) |
 | `scp: Connection closed` during deploy | Guest unreachable mid-resume, or UTM wedged | §2; if `resuming`, §3.3 (log 35) |
 | `UTM error -2700 "Operation not available"`; `status` stuck `resuming`; `kill` says "not running" while status says `resuming` | The live-resume wedge | **GUI-ONLY**: quit + reopen UTM, re-run the cold reset. §3.1 detects it (log 35/37) |
-| Trial `uncertain`, reason `fixture convert did not produce … within 60000ms`; resets take 1879 s / 847 s instead of 8–45 s | Host contention — another QEMU guest (e.g. the runtime workstream's Linux VM), Ollama, Chrome. Measures the Mac, not Myco | Shut down other guests; re-check `vm.sh status`/`wait-ssh.sh`; re-run. Do not report these numbers as reliability data (log 30) |
+| Trial `uncertain`, reason `fixture convert did not produce … within <N>ms` | The guest-side headless convert did not write the workbook before the deadline. A cold convert right after a reset was measured at 30.8 s and once at 169.4 s (`docs/research/experiments/m1-013-convert-timeout.md`), so this can happen on a healthy host. Heavy host contention (another QEMU guest, Ollama, swap exhaustion) makes it worse (log 30) | **Count it**: it is an `uncertain` verdict and stays in the denominator. Never drop it from reliability numbers. If it recurs, stop at a trial boundary and investigate; separately, check the host gates and that no other guest is running |
 | Text value `refuted`; persisted value is sentence-cased (`revised-908578` → `Revised-908578`) | Calc AutoCorrect rewrote a lowercase-leading value | Correct behaviour of the verifier. Use the generator's values (`REVISED-######`, numerics) or `--new-value` with an AutoCorrect-immune string. A case-insensitive check here would be a false success (log 21; `src/tasks/intent.ts`) |
 | Cell holds **another record's** value; several `soffice` alive; hundreds of `C:\myco\runs\myco-*` dirs | Cross-trial contamination: a failed trial leaked state and a later trial read a foreign document | Reset + redeploy, then re-run the same intent — it should flip to `verified`. Reset per trial, always. M1-019's host-side always-cleanup + `guest-contaminated` guard now aborts `uncertain` instead of guessing; its real-Windows behaviour is still unvalidated (log 27, 29, 36) |
 | Agent behaves like an older build right after a reset | Stale pre-deployed snapshot: `m1-agent-live` contains whatever agent existed when it was taken. `ping` cannot reveal this — `agent_version` is the constant `0.1.0` | Prefer cold reset + deploy (§3.1/§4). Trust a pre-deployed snapshot only if you know its commit; re-take it after any agent change (PR #28, reverted; PR #31) |

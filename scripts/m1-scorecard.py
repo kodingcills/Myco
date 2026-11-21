@@ -57,6 +57,13 @@ def score(path):
                 raise ValueError(f"line {line_number}: duplicate trial index {index}")
             if record.get("status") not in VERDICTS + NON_VERDICTS:
                 raise ValueError(f"line {line_number}: invalid status {record.get('status')!r}")
+            for field in ("fixtureSeed", "column", "reason", "fixtureSha256", "rowKey", "typed"):
+                value = record.get(field)
+                if value is not None and not isinstance(value, str):
+                    raise ValueError(f"line {line_number}: field {field!r} must be a string, got {type(value).__name__}")
+            sha = record.get("fixtureSha256")
+            if sha is not None and not (len(sha) == 64 and all(c in "0123456789abcdef" for c in sha)):
+                raise ValueError(f"line {line_number}: fixtureSha256 is not a lowercase SHA-256 hex digest")
             recs[index] = record
     status = Counter(recs[i].get("status") for i in recs)
     verified = status.get("verified", 0)
@@ -76,7 +83,8 @@ def score(path):
         "verified": verified,
         "byStatus": dict(sorted(status.items(), key=lambda kv: str(kv[0]))),
         "nonVerdict": sum(v for k, v in status.items() if k not in VERDICTS),
-        "meetsThreshold": not missing and verified >= TARGET_PASS,
+        "disqualified": status.get("seed-mismatch", 0) > 0,
+        "meetsThreshold": not missing and verified >= TARGET_PASS and status.get("seed-mismatch", 0) == 0,
         "stillReachable": verified + len(missing) >= TARGET_PASS,
         "wilson95": [round(bound, 3) for bound in interval] if interval else None,
         "seeds": dict(Counter(r.get("fixtureSeed") for r in recs.values() if r.get("status") == "verified")),
@@ -87,6 +95,12 @@ def score(path):
 
 
 def markdown(s):
+    if s["disqualified"]:
+        return (
+            "**Reliability: DISQUALIFIED.** The sweep recorded a seed-mismatch, so at least one trial "
+            "did not run on its intended fixture. The whole output directory is unusable for acceptance; "
+            "start a new sweep in a fresh directory."
+        )
     if not s["complete"]:
         reachability = "reachable" if s["stillReachable"] else "unreachable"
         verdict = f"INCOMPLETE (threshold {reachability})"
