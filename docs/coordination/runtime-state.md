@@ -221,3 +221,35 @@ yet demonstrated as a single scripted run**:
 The missing leg is one uninterrupted create->observe->act->evidence->reset->
 destroy run through MCP with the fixed binaries, plus measured reset cost. That
 needs the host, so it waits for the sweep to finish.
+
+## Process rules in force (outer loop, 2026-11-21) — queued, acknowledged
+
+Recorded so they bind future work in this workstream; no change to in-flight tasks.
+
+1. **main is protected.** Direct pushes, force pushes and deletions are blocked for
+   everyone including admins. Every change, docs included, goes through a PR with
+   the four required checks green and the branch up to date with main. Required
+   checks: `check (macos-latest)`, `check (ubuntu-latest)`,
+   `myco-agent tests (macos-latest)`, `myco-agent tests (ubuntu-latest)`.
+   0 required approvals, so self-merge is allowed **after an independent verifier
+   PASS and green CI at the same head SHA**. See docs/coordination/CONTRIBUTING-agents.md.
+   Docs-only flow: branch `docs/coord-*` -> PR -> squash-merge on green, no verifier.
+   Consequence for RT: the old habit of committing state-log updates straight to a
+   feature branch and pushing is still fine, but anything that must reach main is a PR.
+
+2. **Sub-threads/subagents** may be used when a task is too complex; each must have
+   its own verifier, and every one must be reported.
+
+3. **Model rule.** Verifier / reviewer / judgment subagents must use
+   `cheaperinference/deepseek-v4.1-flash`; builders stay on
+   `cheaperinference/glm-5.3`. **No new kimi-k3 threads** (cost); a kimi-k3 verifier
+   already running may finish. PR #30's final verifier finished under the old rule;
+   every review from here uses deepseek-v4.1-flash.
+
+### Current position when these arrived
+- PR #30 (MCP protocol conformance) merged (436ca51); RT-019 backlogged behind RT-011.
+- **host yielded** to M1's reliability sweep: no VM of mine running, no VM to be started.
+- **RT-011 not passed.** The one-command gate (tests/first_path.rs) is on main but has
+  never run against a guest since the deadline fixes. Next action on host return:
+  boot, build agent in guest, run first_path with MYCO_RT_LIVE=1, report measured
+  timings (including the honest 3-4 minute full reset), then shut the guest down.
