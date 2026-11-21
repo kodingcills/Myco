@@ -310,3 +310,15 @@ Children must be briefed with these rules, and reviewers must state the head SHA
 - TESTED: (a) a scratch commit adding `scratch-hooktest.txt` was REFUSED and never reached main; (b) a docs-only commit from `docs/coord` was ALLOWED. Both observed.
 - So the rule is now enforced by git, not by my memory. Children cannot violate it either: they push through the same hooks dir.
 hook test note
+
+## Log 2026-11-21 (35) — SWEEP BLOCKED: UTM state-machine wedge on live-snapshot resume
+- Runtime owner confirmed its Linux guest is down (verified here: no qemu-system-aarch64, only our VM running, 60-65% RAM free). So the earlier 1879s/847s resets WERE contention, and contention is now gone: a clean `reset.sh live` measured 55s and 42s.
+- BUT the sweep cannot run: after 2-3 rapid reset/deploy cycles, UTM wedged. Symptoms, in order:
+  1. Trial 0 deploy died with `scp: Connection closed` (ssh banner timeouts afterwards).
+  2. `vm.sh restore` then returned UTM error -2700 "Operation not available".
+  3. VM entered state `resuming` and stayed there 5+ minutes; SSH port forwards but the guest never boots (banner-exchange timeouts).
+  4. `vm.sh kill` now returns -2700 "The virtual machine is not running" while `vm.sh status` still says `resuming` — UTM's state machine is internally inconsistent.
+- Snapshots intact: m1-agent-live, clean-base-live, clean-base all present. No data lost.
+- HYPOTHESIS: repeated kill→restore→start cycles on a LIVE (RAM+disk) snapshot leave UTM/QEMU mid-resume; the 2 fatal errors are both -2700 "operation not available". This looks like a UTM limitation under rapid cycling, not a Myco defect.
+- Raw sweep output: /tmp/m1-013/sweep/{trials.jsonl,progress.log}. 1 trial attempted, 0 usable.
+- NEXT: recover UTM (likely: quit + relaunch UTM from the GUI session, which the coordinator cannot do over AppleScript while it is wedged), then either (a) slow the reset cadence, or (b) switch the sweep to the disk-only `cold` reset path (restore clean-base, cold boot ~20s) which uses plain qemu-img restore instead of a RAM resume.
