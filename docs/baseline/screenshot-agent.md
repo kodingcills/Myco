@@ -54,13 +54,13 @@ arms must share all of the following. Anything that differs is a documented devi
 
 | Condition | How it is held constant |
 |---|---|
-| Task family and parameters | `generateParameterSets(SEEDS)` (`src/tasks/intent.ts`) — 30 deterministic sets, same seeds, same index → same `{fixtureSeed,rowKey,column,newValue}`. Recorded per trial in `params.json`. |
+| Task family and parameters | The sweep's final 30 parameter sets, copied verbatim into the baseline run (§4.4a) — same `{fixtureSeed,rowKey,column,newValue}` per trial. The generator that produced them (`generateParameterSets`, `src/tasks/intent.ts`) is the family definition; the *list used* is data, recorded with its hash in both reports. |
 | Initial state | Per-trial reset from `clean-base` via `scripts/reset-trial-vm.sh` (cold disk restore), identical for both arms. Reset wall time recorded per trial. |
 | Fixture file | Host-generated CSV → guest `.xlsx` by `WindowsFixtureConverter` (isolated throwaway profile). The **same fixture bytes** for trial *i* in both arms: the baseline gets fixture *i*, not a re-generated one. |
 | Guest software | Same VM, same LibreOffice 26.8.3 ARM64, same Windows build. No LibreOffice settings are changed for either arm (AutoCorrect stays on — see §3.4). |
 | Desktop geometry | Both arms run at the same display resolution; the baseline's `--grounding_width/height` equal the captured screenshot size. Resolution recorded. |
 | Agent isolation | One trial per guest state, no concurrent sessions. After either arm's trial: cleanup + reset before the next trial (M1-019 semantics). |
-| Trial order | The Myco arm's 30 trials come from the M1-013 sweep (`/tmp/m1-013/sweep/trials.jsonl` at the time of writing; no in-repo sweep driver yet, runbook §7.3). The baseline arm runs the **same index → same parameter set**, in index order. |
+| Trial order | The Myco arm's 30 trials must come from the M1-013 sweep. **As of 2026-11-21 that artefact does not exist**: `/tmp/m1-013/sweep/` holds only `progress.log` (trial 0 in flight) and an empty `runs/`; the prior attempts are classified host-sleep and external-interference aborts and are never counted. The join in §4.4 is therefore **contingent on the sweep completing and the Coordinator declaring it final**; nothing in this doc presumes a sweep number. The baseline arm runs **the same parameter sets, in the same order**, as the sweep's final parameter list — not a re-derived index (§4.4a). |
 | Attempts | One attempt per trial. A retry is a new trial row, not a hidden re-run. |
 
 **Ordering of the two arms.** The baseline arm runs *after* the Myco arm produces its 30-trial
@@ -88,19 +88,34 @@ macOS host                                         Windows guest (myco-win11)
 
 - **Screenshots** come from the existing agent `screenshot` op (`windows_backend.py:526`, GDI
   capture of the Calc window) — already used and reviewed for M1-013 evidence. No new guest code.
-- **Actions** need an input channel the current agent does **not** expose. The agent has
-  `launch`, `kill`, `uia_*`, `uno_eval`, `read_file`, `write_file`, `screenshot`; it has **no
-  coordinate click and no arbitrary keystroke op** (verified by reading
-  `src/win/agent-client.ts`'s op union). Two candidate implementations, decided in M1-021 §1:
-  - **(a) in-guest PyAutoGUI runner** — PyAutoGUI is the reference implementation for synthetic
-    input on Windows (`pyautogui==0.9.54` in UFO's pinned requirements,
-    `docs/research/adapters.md:153-160`) but is **not** in the guest image today (P5 installs
-    `pywinauto uiautomation comtypes pywin32 pillow`, `docs/env/windows.md:481`). A small script
-    launched through the existing `launch` op reads a JSON action from a file and executes it;
-    installing PyAutoGUI is a guest provisioning change (outer loop, §9).
-  - **(b) new agent ops** `mouse/click/key` — cleaner, typed, but touches `agent/`, which is a
-    shared component mid-sweep.
-  Preference: **(a)** for M1 (baseline-only code, blast radius zero on the Myco path), (b)
+- **Actions** are the hard part. The agent's op union is exactly ten ops — `ping`,
+  `session_info`, `launch`, `uia_tree`, `uia_invoke`, `screenshot`, `read_file`, `write_file`,
+  `kill`, `uno_eval` (`src/win/agent-client.ts:19-29`) — and of those:
+  - **No coordinate-only click exists.** Clicks are UIA-only: `uia_invoke` needs a
+    `runtime_id` that came from `uia_tree` (`agent/myco_agent/ops.py:30-43`), and the backend
+    clicks that control.
+  - **A raw keystroke channel does exist**, contrary to an earlier draft of this doc:
+    `uia_invoke` with `action: "keys"` sends an arbitrary SendKeys string
+    (`ops.py:30-43`; `windows_backend.py:515-519` — `auto.SendKeys(keys)` after
+    `control.SetFocus()`). It is **not** goal-free input, because it still requires a
+    UIA-resolved `runtime_id`, i.e. it needs `uia_tree`, which §5.5 forbids the baseline from
+    using to locate the target. It is therefore usable for *blind* keys only (Ctrl+S, Enter,
+    Escape) on a control the baseline has no legitimate way to identify.
+
+  A screenshot agent needs coordinate input (it must click where the grounder said), so the
+  options are narrower than an earlier draft claimed:
+  - **(a) in-guest PyAutoGUI runner** — PyAutoGUI is the reference synthetic-input path on
+    Windows (`pyautogui==0.9.54` in UFO's pinned requirements, `docs/research/adapters.md:153-160`)
+    but is **not** in the guest image today (P5 installs `pywinauto uiautomation comtypes pywin32
+    pillow`, `docs/env/windows.md:481`). A small script launched through the existing `launch`
+    op reads a JSON action from a file and executes it; installing PyAutoGUI is a guest
+    provisioning change (outer loop, §9).
+  - **(b) new agent ops** `mouse/click/key` — cleaner and typed, but touches `agent/`, a shared
+    component mid-sweep.
+  - **(c) `uia_invoke action=keys` only + grounder-free navigation** — no coordinate input at all.
+    Rejected: without a click it is not a screenshot agent as M1 defines one, and the comparison
+    would be measuring a different baseline.
+  Preference: **(a)** for M1 (baseline-only code, zero blast radius on the Myco path), (b)
   recorded as the follow-up if the baseline is kept as a standing harness.
 - **Isolation discipline.** The baseline driver must not import anything from `src/tasks/`
   except the *parameter generator and ground truth* (host-side, never guest state). It must not
@@ -131,6 +146,19 @@ There is **no recovery, retry, or replanning that Myco does not also get**. The 
 screenshot-agent-as-shipped versus Myco, so the baseline's step budget must be generous enough
 that a loss is a loss of capability, not of budget: 30 steps is ~1 step per UI element touched in
 the guarded program (open/locate/set/save/close is 5 actions) times six. Recorded and reported.
+
+**The budgets are not symmetric and that is a deviation, not a neutral choice.** Myco's program is
+a fixed 5 guarded steps (`src/tasks/calc-record-edit.ts` `programFor()`), and the runner has no
+step-budget concept at all (`grep -rn 'MAX_STEPS\|maxSteps\|stepBudget' src/` is empty). The
+baseline gets 30. The generous direction is deliberate — a capped baseline is a straw man — but it
+goes in the deviations register (§3.5), and `steps` is reported per arm only, never as a
+side-by-side "fewer is better" column (§4.3).
+
+**Budget exhaustion is `refuted`, and cause is attributed first.** If the loop runs out of steps
+the trial is `refuted` with `reason: step-budget`. The one collision with §3.3's dead-app row is
+a baseline that killed Calc by its own budget actions: the harness attributes cause (our driver
+acted → `refuted`/`step-budget`) before applying the "could not look" rule, so a dead Calc is
+`uncertain` only when the baseline did **not** cause the death.
 
 ### 3.3 Verification, shared with Myco
 
@@ -169,6 +197,8 @@ entries (to be kept current in the report):
 |---|---|---|
 | Baseline uses a host-side driver; Myco uses its runtime | by design | scoring judge is shared and blind |
 | Baseline may need a PyAutoGUI runner in the guest | baseline only | runs through the reviewed `launch` op; no UIA/UNO |
+| **Step budget is asymmetric**: baseline 30 model actions, Myco a fixed 5-step program with no budget concept in the runner | by construction | generous direction, stated in §3.2; `steps` never compared side by side (§4.3) |
+| **Reset hygiene may differ in practice**: the baseline gets a scripted `clean-base` cold restore; the Myco rows inherit whatever the sweep did, including degraded resets under load | both intend identical, neither guaranteed | `resetMs` + AC/battery state recorded per row; a row whose `resetMs` exceeds 2× the 152 s measured maximum (log 39) is flagged and the comparison table reports how many were flagged |
 | Screenshot capture is GDI window-capture, not full-desktop | both capture, baseline-only consumer | same op, same rect policy |
 | VM reset cost differs by time of day (cold restore 134–152 s measured, log 39) | both | reset timing is a metric, not a deviation |
 | Host load changes task wall time | both | host load + battery state recorded from `pmset` |
@@ -181,7 +211,11 @@ entries (to be kept current in the report):
   transcript ending "sorry" with the right persisted value yields `verified` (the judge is blind
   to the agent's claims, in both directions).
 - Step-budget test: exceeding `MAX_STEPS` ends the trial as `refuted` with `reason:
-  step-budget`, never `uncertain`.
+  step-budget`, never `uncertain`; and a trial where the driver's own action killed Calc is
+  attributed `refuted`/`step-budget`, while a Calc that died for an unrelated reason is
+  `uncertain` (§3.2).
+- False-success test: an audit that throws yields `falseSuccess: null`, **not** `false` — an
+  unaudited `verified` must never read as a pass (§4).
 - Cost accounting test: token counts from the stub HTTP clients are summed per trial and land in
   the row.
 
@@ -202,7 +236,8 @@ side-by-side table is a join, not a manual reconciliation.
   "previousValue": "Cleo Larsen",
   "verdict": "verified" | "refuted" | "uncertain",
   "verdictReason": "…",
-  "falseSuccess": false,            // verified && independent audit says the value is absent
+  "falseSuccess": false,            // boolean | null — see below
+  "audited": true,                  // false when the independent audit could not run
   "elapsedMs": 34_300,              // task wall time: fixture present → scoring time
   "steps": 5,                       // Myco: program steps; baseline: model actions
   "modelCalls": 5,                  // baseline only
@@ -215,12 +250,30 @@ side-by-side table is a join, not a manual reconciliation.
 }
 ```
 
+**`falseSuccess` is tri-state, not boolean.** The driver's `independentValuePresent` is
+`boolean | null`: `null` when the audit conversion throws (`/tmp/m1-013/trial-one.ts`, the
+`catch` around the headless re-convert) or when the row is a harness error. Collapsing `null` to
+`false` would record an **unaudited `verified`** as a clean pass, which is precisely the silent
+success the whole milestone is about. So:
+
+| `verdict` | `independentValuePresent` | `falseSuccess` |
+|---|---|---|
+| `verified` | `true` | `false` |
+| `verified` | `false` | **`true`** |
+| `verified` | `null` | `null` — **not a pass** |
+| `refuted` / `uncertain` | any | `false` |
+
+An unaudited `verified` is counted in its own metric row (§4.1) and must be **0 for both arms**.
+If it is non-zero, the trial is re-run — the defect is in the audit, not in either agent, and the
+row is never quietly folded into the pass rate.
+
 ### 4.1 Primary metrics (the comparison table)
 
 | Metric | Definition | M1 target |
 |---|---|---|
 | **Pass rate** | `verified / 30` | Myco ≥ 27/30 (row 3) |
-| **False successes** | `verified` rows where the independent audit finds the value absent | 0 |
+| **False successes** | rows with `falseSuccess === true` | 0 |
+| **Unaudited `verified`** | rows with `verdict === verified && falseSuccess === null` | 0, both arms |
 | **Time per trial** | median and p95 of `elapsedMs` | reported, no target |
 | **Recovery** | rows with `resumed: true` that ended `verified` | Myco: interruption + invalid target both recovered |
 
@@ -242,28 +295,45 @@ table and cited in prose only.
 
 ### 4.4 Alignment with M1-013
 
-The Myco arm of the table **is** the M1-013 sweep's JSONL, not a re-run. Fields map:
+The Myco arm of the table **is** the M1-013 sweep's JSONL, not a re-run — once that artefact
+exists and the Coordinator declares the sweep final (§2, trial order). Field map:
 
 | M1-013 sweep JSONL field | Comparison row field |
 |---|---|
 | `index`, `runId` | `index` |
 | `rowKey`, `column`, `typed`, `cellRef`, `expected` | `params`, `cellRef`, `expected` |
 | `verdict`, `verdictReason` | `verdict`, `verdictReason` |
-| `independentValuePresent` | drives `falseSuccess` / `missedDetection` |
+| `independentValuePresent`, `auditError` | `falseSuccess` (tri-state, §4 above) |
 | `elapsedMs`, `completed` | `elapsedMs` |
-| `auditError` | `verdictReason` suffix |
+| — | `steps`, `modelCalls`, `tokens` are baseline-only and left `null` for Myco rows |
 
-The sweep's `falseSuccess` is defined as `verified && independentValuePresent === false`; the
-comparison table reuses exactly that predicate. The baseline's row is produced by the same
-predicate against the same independent audit (the trial-one driver's headless re-convert), so
-neither arm can be excused by a different definition of success. M1-013's remaining trial rows
-keep their own counts; if the sweep is invalidated and re-run, the comparison is regenerated, never
-patched.
+The sweep's `falseSuccess` is `verified && independentValuePresent === false`; the comparison
+loses nothing by using the same predicate, and gains the tri-state `null` the sweep's boolean
+collapses. The baseline's row is produced by the same predicate against the same independent audit
+(the driver's headless re-convert), so neither arm can be excused by a different definition of
+success. If the sweep is invalidated and re-run, the comparison is regenerated, never patched.
 
-**If the sweep's parameter sets are missing a column** (run-live always takes set 0, so its single
-`--seed` form always targets `name`; runbook §7.3), the comparison uses the driver's 30 sets from
-`generateParameterSets(SEEDS)` and reports which form produced the Myco rows. That is a documented
-deviation, not a silent substitution.
+### 4.4a The parameter list is data, not an index
+
+An earlier draft said "same index → same parameter set". **That is not achievable from the current
+in-repo entrypoint** and the assumption is retracted:
+
+- `generateParameterSets(seeds)[i]` cycles the column by index — `DATA_COLUMNS[i % 4]` — so set
+  *i* is `name`, `qty`, `joined`, `salary` by turn (`src/tasks/intent.ts:117-141`).
+- But `src/integration/run-live.ts:51-57` always takes `generateParameterSets([seed])[0]`, i.e.
+  **set 0, column `name`**, whatever `i` the sweep thinks it is running. The sweep driver that
+  actually ran (`/tmp/m1-013/trial-one.ts`) instead built 30 sets from
+  `SEEDS = [m1-013-live, seed-b … seed-f]` and indexed that array — a *third* list, neither of the
+  above.
+- Runbook §7.3 flags the same defect for the `--seed` form.
+
+So there is no single canonical "index". The comparison therefore treats the **sweep's final
+parameter list as the input**: the Coordinator's `params.json` (or the sweep JSONL's
+`rowKey/column/typed/cellRef` fields) is copied into the baseline run, and the baseline runs those
+exact sets in that exact order. If that list covers only `name`, the report says so and the
+comparison is honest about it; the baseline does **not** substitute a broader list to look
+thorougher. If the Coordinator instead re-runs the sweep through a fixed in-repo entrypoint, the
+list is whatever that entrypoint emits, recorded by hash in both reports.
 
 ---
 
@@ -273,8 +343,9 @@ The point of a baseline is to lose for the right reason. These are constraints o
 
 1. **Same judge, blind.** Verdict never reads the agent's own claims (§3.3). Both arms go through
    one verifier call site.
-2. **Same fixture bytes, same intent, same index.** No re-generation of a fixture for the second
-   arm "because the first one was awkward".
+2. **Same fixture bytes, same intent, same list.** No re-generation of a fixture for the second
+   arm "because the first one was awkward". The parameter list is copied from the sweep's final
+   output (§4.4a), not re-derived from an index that three different code paths disagree about.
 3. **No prompt engineering after a trial.** Prompts are frozen before trial 0 and hashed into the
    report. A prompt written after seeing trial failures turns the baseline into a straw man.
 4. **No retries, no step-budget stretching mid-run.** A step budget set before trial 0; a raised
@@ -434,7 +505,9 @@ and needs no account. Its ceiling is lower than UI-TARS — that gets stated in 
 | Local VLMs score 2/16 at cell grounding; Ollama `/v1` accepts `image_url` | §3.8 [measured] |
 | CheaperInference vision unknown; credits error | §3.8, §3.9 |
 | OpenAdapt 54/72 and 30/30 false-success shape | §3.7 |
-| Agent op surface (no coordinate click/key op) | `src/win/agent-client.ts:20-30`, `agent/myco_agent/ops.py` |
+| Agent op surface: 10 ops, no coordinate click, keystrokes only via `uia_invoke action=keys` (needs a UIA `runtime_id`) | `src/win/agent-client.ts:19-29`, `agent/myco_agent/ops.py:30-43`, `agent/myco_agent/windows_backend.py:515-519` |
+| Myco's program is 5 fixed steps; no step budget exists in `src/` | `src/tasks/calc-record-edit.ts` `programFor()`; `grep -rn 'MAX_STEPS\|maxSteps\|stepBudget' src/` empty |
+| `run-live.ts` always takes parameter set 0 (`name`); the sweep driver used its own 6-seed list | `src/integration/run-live.ts:51-57`, `src/tasks/intent.ts:117-141`, `/tmp/m1-013/trial-one.ts`, runbook §7.3 |
 | `pyautogui==0.9.54` is UFO's pinned input path, **not** in the guest image | `docs/research/adapters.md:153-160`; guest pip line `docs/env/windows.md:481` |
 | Cold reset 134–152 s, 5/5 no wedge | `docs/coordination/m1-state.md` log 39 |
 | Host contention distorts reset timing 45 s → 1879 s | logs 30, 41 |
