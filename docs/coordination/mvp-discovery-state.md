@@ -100,9 +100,9 @@ Facts established by reading the repo, not by running anything:
 - The exact 60-second experience and the report surface (design first, then build).
 - A task-package + run-report contract that consumes Foundry oracles and runtime
   evidence. No verifier implementation.
-- A run-report renderer over the **real** M1 artifacts already in the repo, with
-  design work and screenshots. This is the only UI that can be built before a
-  desktop run exists.
+- The v0 Myco Viewer (gui-spec §9) over the **real** M1 artifacts already in the repo.
+  This is the only UI that can be built before a desktop run exists. The earlier
+  standalone report renderer is retired (it predates the locked spec).
 - Exit: a person can look at an existing real run and understand verdict, claim,
   and evidence without opening JSON.
 
@@ -165,6 +165,11 @@ verifier, and every sub-thread is reported here and to the outer loop.
    duplicated here.
 
 ## Log
+
+- 2026-11-21 (GUI spec locked, PR #51 = ed2f1f9) · binding for every human surface.
+  Merged main. Retired the standalone report renderer (`src/report`, `docs/report`,
+  `pnpm report`) as a spec deviation; MVD-007 now means the v0 Viewer. Resolved gui-spec
+  Q3: SDK wraps `myco-rt-mcp` over stdio (`docs/product/dev-surface-decision.md`).
 
 - 2026-11-21 (provider switch) · outer loop moved this thread from cheaperinference
   (402, wallet exhausted) to the Claude Code subscription, claude-sonnet-5-5. Four

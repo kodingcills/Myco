@@ -40,6 +40,8 @@ criterion (TIF-60) decide the wedge.
   (RT-011) and on host release by M1.
 - **owner:** discovery-owner (design, DX surface), build (implementation), foundry (task set + oracle)
 - **blocked_by:** MVD-006 (host window), RT-first-path, RT-015
+- **surfaces:** developer surface per `docs/product/dev-surface-decision.md` (SDK over
+  MCP/stdio, thin CLI/SDK/MCP over one core); human output is a v0 Viewer trace (MVD-007).
 - **description:** One OMP/coding agent, one Myco desktop, one real GUI task, end
   to end: the agent requests a desktop, installs and launches the dogfood
   `myco-todo` app (seeded persistence bug), exercises the GUI, and receives an
@@ -173,22 +175,21 @@ criterion (TIF-60) decide the wedge.
   coordinator's host window is recorded with start/end and owner; no run starts
   outside it.
 
-### MVD-007 (TIF-pending) Developer-facing run report (UI)
-- **status:** spec in `docs/product/mvp-discovery-plan.md` §"The experience";
-  implementation after the first real run exists.
-- **owner:** discovery-owner (design), build (implementation), outer-loop (UI review)
-- **blocked_by:** MVD-001 first run
-- **description:** The report a developer actually sees: claim vs observed state,
-  verdict, per-step trace, recovery events, and the evidence paths. Real design work
-  per Tiffany t81u/t82u/t83u; screenshots required in the PR. It is a rendering of
-  the evidence schema, not a new format.
-- **acceptance:**
-  1. Screenshots at 1440px and 390px for a verified, a refuted, and an uncertain run.
-  2. Worst-case data pass (break-ui): long values, Unicode, 0/1/500 steps, missing
-     fields, a 200-char item name; no overflow, no invented values.
-  3. A refuted run never reads as success at a glance; `uncertain` is visually
-     distinct from both.
-  4. Renders from `result.json` + `trace.jsonl` only; no hand-authored numbers.
+### MVD-007 (TIF-pending) Developer-facing run report: the v0 Myco Viewer
+- **status:** the earlier standalone HTML renderer (`src/report`, `docs/report`) is
+  **retired**: it predated the locked GUI spec and deviated from it (no Now/Why/Proof
+  modes, no tokens, own layout). The deliverable is now the v0 Myco Viewer defined by
+  `docs/design/gui-spec.md` (PR #51), built to the spec, not a Discovery-specific UI.
+- **owner:** discovery-owner (brief, journeys), build (Codex), outer-loop (spec review)
+- **blocked_by:** none for v0 (opens the three real M1 runs in
+  `docs/research/experiments/m1-013-session1/`); Direction A's own trace needs MVD-001.
+- **description:** Direction A's human-facing output is a v0 Viewer trace. Scope is the
+  §9 v0 cut line only: open one trace offline, Verdict Bar, Proof (Comparator, Checks,
+  Failures and recovery), Why (step list, Inspector, Scrubber). Now, branches, compare,
+  replay, live are v1+ and are not built.
+- **acceptance:** gui-spec §11 in full, including 1440x900 screenshots of each state,
+  the verdict-mapping unit tests against the M1 sample runs, and journeys J1-J3 by
+  keyboard. Any deviation needs written outer-loop sign-off in the PR.
 
 ---
 
