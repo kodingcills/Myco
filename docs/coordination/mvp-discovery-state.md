@@ -61,6 +61,31 @@ Facts established by reading the repo, not by running anything:
    machine-checkable artifact produced without agent discipline, and it survives
    failure". MVD-004 adds the HCU+shell arm specifically to test this.
 
+6. **M2 research round landed (main fc4738e, PR #48; findings under
+   `docs/research/findings/m2-0*.md`).** Research input to A/B/C, not a plan; the
+   "M2 = MCP/API" lock-in stays retracted. It *independently confirms* item 4: nine
+   products surveyed against vendor primary docs, none returns a verdict on persisted
+   state. Closest: Cua per-action `effect`; Microsoft HCU window-level before/after
+   diff, which says "Neither proves file contents, persistence or network state."
+   What it changes for Discovery:
+   - **A:** m2-02 is "what A must get right", not the wedge. Two keepers whichever
+     wins: the verdict lives behind a tool the actuator cannot call as a claim
+     (structural, not conventional), and `application_commit: not_verified` in every
+     receipt (a widget read-back is not proof the app committed).
+   - **B:** the second bounded surface is **LibreOffice Writer** (m2-03: 23/25, in
+     the installed ARM64 MSI, table cells expose XCell+XText so the M1 UNO read
+     transfers; only the address changes). Notepad++ is the one non-UNO proof if
+     adapter generality matters. Office is licence-blocked.
+   - **C:** Orgo (fork live ~2s pause, clone, suspend; $0.023-0.368/running hr) is
+     the incumbent baseline and the price any verified-outcome product is compared
+     to. m2-04: one demo cannot identify a loop, so "reusable procedure" claims need a
+     verify-before-store gate; desktop-suite drift is unquantified. m2-05 correction:
+     **8.3 s reset is the live path and is not the default**; the sweep default is a
+     ~21 s warm disk-only cold restore because live wedges (-2700). Trial-heavy
+     designs should budget ~21 s, not 8.3 s. APFS clone buys concurrency, not speed.
+   - Effect on D1: strengthens "compete on verified outcome + durable artifact", and
+     weakens any C claim that rests on cheap resets or durable procedures.
+
 ## Plan
 
 ### Phase 0 — evidence and plan (this turn, host-free)
@@ -140,6 +165,13 @@ verifier, and every sub-thread is reported here and to the outer loop.
    duplicated here.
 
 ## Log
+
+- 2026-11-21 (provider switch) · outer loop moved this thread from cheaperinference
+  (402, wallet exhausted) to the Claude Code subscription, claude-sonnet-5-5. Four
+  queued M2-research messages had only received 402 replies; processed now by reading
+  the merged findings. Merged origin/main into this branch. No VM, no spend, no
+  accounts. Model policy for this thread now: owner/judgment on Sonnet, build to Codex
+  (backup Antigravity), no Opus children, no kimi-k3.
 
 - 2026-11-21 · workstream bootstrapped; read vision, M1/dogfood/runtime backlogs,
   coordination state, ADRs, dogfood app, real M1 evidence. Wrote MVD backlog, this

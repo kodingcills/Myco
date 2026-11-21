@@ -10,9 +10,9 @@ Ids are stable; never renumber. `blocked_by` lists markdown ids. Owner roles:
 (deepseek-v4.1-flash), `runtime` (Myco Desktop Runtime workstream), `foundry`
 (Evaluation Foundry workstream), `outer-loop`.
 
-Model policy (outer loop, 2026-11-21): owners/verifiers/judgment on
-`cheaperinference/deepseek-v4.1-flash`; builders on `cheaperinference/glm-5.3`;
-no kimi-k3.
+Model policy (outer loop, 2026-11-21, superseded at the provider switch): owner and
+judgment on Claude Sonnet (`claude-sonnet-5-5`); build subagents on Codex, backup
+Antigravity; no Opus children; no kimi-k3. cheaperinference is exhausted.
 
 ---
 
@@ -73,8 +73,11 @@ criterion (TIF-60) decide the wedge.
   state and report `verified`, `refuted` (and the operation not applied), or
   `uncertain` with the unresolved state — never a silent duplicate or a silent loss.
   Candidate surfaces, in order of availability: LibreOffice Calc plus the M1
-  UNO/persisted-file oracle (no account, already exercised), then a business app
-  with a documented object model that can be driven locally. No account creation.
+  UNO/persisted-file oracle (no account, already exercised), then **LibreOffice
+  Writer** as the second surface (m2-03: near-zero build cost, same UNO read,
+  address becomes (table,"D3")); Notepad++ only if evidence of a non-UNO adapter is
+  wanted. Office is licence-blocked. No account creation. Every receipt carries
+  `application_commit: not_verified` unless the persisted file was read (m2-02).
 - **acceptance:**
   1. On ≥10 trials of the same operation, including ≥3 interrupted mid-write, the
      outcome after recovery is `verified` or `uncertain`; 0 false successes; 0 silent
@@ -105,7 +108,8 @@ criterion (TIF-60) decide the wedge.
   2. Kill criterion stated before the run: if fork does not beat intent-log replay
      by a pre-declared margin at equal or lower cost, C is deferred and the memo
      says so.
-  3. Orgo's documented fork/clone semantics are cited as the incumbent baseline;
+  3. Budget resets at the measured default (~21 s warm cold restore), not the 8.3 s
+     live path, which wedges (m2-05). Orgo's documented fork/clone semantics are cited as the incumbent baseline;
      no claim of novelty for "branching exists".
 
 ### MVD-004 (TIF-59) Head-to-head on the same tasks, not feature lists
