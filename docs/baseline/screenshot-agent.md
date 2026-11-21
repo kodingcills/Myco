@@ -272,12 +272,16 @@ paper's **Table 4** is the source. It varies **perception inputs**, not `--som-o
 independent toggles (UIA tree ✓/✗, Pytesseract+DOM+GroundingDINO OCR ✓/✗), an OmniParser toggle,
 and Phi3-V / GPT-4o-mini / GPT-4o / GPT-4V-1106 per row, with a human ceiling of 74.5%:
 
-| UIA tree | OmniParser | OCR | Published total (GPT-4V-1106 / GPT-4o) |
+| UIA tree | OmniParser | OCR | Published total |
 |---|---|---|---|
-| ✗ | ✗ | ✓ | 8.6% / **9.8%** |
-| ✓ | ✗ | ✓ | 13.1% / 9.4% |
-| ✗ | ✓ | ✗ | 12.5% / 8.6% |
-| **✓** | **✓** | ✗ | **19.5%** — the paper's headline / 14.3% |
+| ✗ | ✗ | ✓ | **13.3%** (GPT-4V) — the best pure OCR/grounding row |
+| ✗ | ✓ | ✗ | **12.5%** (GPT-4V), **8.6%** (GPT-4o) — tree-free, OmniParser only |
+| **✓** | **✓** | ✗ | **19.5%** (GPT-4V-1106) — the paper's headline |
+
+Only the cells this document's sources actually pin are listed. An earlier revision reproduced a
+fuller grid with GPT-4o values (9.8 / 9.4 / 14.3) that could not be re-confirmed against the paper
+text; they are **removed rather than guessed**. Anyone needing the complete table must read arXiv
+2409.08264 Table 4 directly.
 
 **Read the 8.6% correctly**: it is OmniParser **on the screenshot with no UIA tree** — which is
 what `--som-origin omni` actually does — and it comes from the GPT-4o row. The best published
@@ -372,8 +376,8 @@ inferred):
 - **Navi's planner client is not base-URL configurable.** `mm_agents/navi/gpt/gpt4v_oai.py` builds
   `openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))` with no `base_url` argument, and its
   constructor is only `__init__(self, model="gpt-4o")`. Pointing it at a local endpoint is therefore
-  a **one-line patch we own** (or an `OPENAI_BASE_URL` proxy in front of it), and that patch is part
-  of what `ported: true` describes. The README's prerequisites confirm the intended path is a paid
+  a **one-line patch we own** (or an `OPENAI_BASE_URL` proxy in front of it), and that patch is
+  recorded in `portScope.planner`. The README's prerequisites confirm the intended path is a paid
   OpenAI or Azure key — which is why the $0 claim depends on that patch, not on Navi shipping
   local-first.
 
@@ -1003,15 +1007,20 @@ decisions, and none of them is answered here:
 6. **CheaperInference vision probe** (`deepseek-v4.1-flash`, `glm-5.3`): still unverified. A single
    minimal request answers it. Not required for the Cua path — the planner does not have to be a
    CheaperInference model — so this is now optional rather than blocking.
-7. **Which public-score arm to run (§1b.3).** **B1** = Navi in `--som-origin omni` (published
-   *Windows* score; needs OmniParser, whose local-on-this-Mac feasibility is unverified) and
-   **B2** = UI-TARS-1.5-7B in the OSWorld loop (published *Linux* score; must be labelled ported).
-   Both are additive to C1/C2, and both cost roughly a day of transport work. My recommendation:
-   B1 first, B2 second, C1/C2 as the engineering baseline. This is a scope decision for Tiffany
-   because three to four arms is a longer report than row 7 strictly requires.
+7. **Which public-score arm to run (§1b.3).** **B1** = Navi in `--som-origin omni` — published
+   *Windows* score **8.6%** in that mode (12.5% with GPT-4V); **not** the 19.5% headline, which is
+   the `mixed-omni` + UIA configuration. **B2** = UI-TARS-1.5-7B in the OSWorld loop (published
+   *Linux* score; declared with `portScope`). Both are additive to C1/C2. **Neither is a day of
+   work:** each needs an in-guest action executor for its own action grammar *and* a coordinate
+   click + arbitrary keystroke channel that Myco's agent does not have (§3.1) — that channel is
+   M1-021's, and it is the real gate. My recommendation: **C1/C2 first** (no porting, transport
+   already exists), **B1 second as a real port**, **B2 third**. Scope decision for Tiffany, because
+   three to four arms is a longer report than row 7 strictly requires.
 8. **External-benchmark subset (§1c.2).** Whether to build the 10-task transcribed OSWorld/WAA Calc
-   suite after M1, ~2–4 days, so Myco has an externally anchored number. Recommended as post-M1
-   (M1-027), not an M1 criterion.
+   suite after M1, so Myco has an externally anchored number. Cost is a **range**: 1.5–2.5 days if
+   the draw is plain `compare_table` over a downloadable gold file, **4–6 days** if it hits a
+   generated-gold task or a WAA `cloud_file` (Google Drive) task. Recommended as post-M1 (M1-027),
+   not an M1 criterion.
 
 Recommended default if nobody answers: **Cua Driver + local `qwen3.8-uncensored` planner, C1 and
 C2 both run**, because it spends nothing, needs no account, and produces the most defensible
@@ -1090,7 +1099,7 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | OSWorld repo: Apache-2.0, 3,273 stars, pushed 2026-11-14 | `api.github.com/repos/xlang-ai/OSWorld` |
 | **47** `libreoffice_calc` tasks in OSWorld v1, and **47** in OSWorld-V2 | directory listing counts, `evaluation_examples/examples/libreoffice_calc` on each repo, 2026-11-21 |
 | OSWorld task shape: `config[]` / `evaluator.func` + `expected` + `result` + `postconfig`; Calc uses `compare_table` | `evaluation_examples/examples/libreoffice_calc/4e6fcf72-daf3-439f-a232-c434ce416af6.json` |
-| OSWorld provider branches on ARM: `arch = controller.get_vm_machine().lower(); if 'arm' in arch or 'aarch' in arch` | `desktop_env/controllers/setup.py` |
+| OSWorld has an ARM64 image artefact (`Ubuntu-arm.zip`); its `if 'arm' in arch` check in `setup.py` is a **Chrome-profile branch**, not VM-architecture provider evidence | `huggingface.co/api/datasets/xlangai/ubuntu_osworld/tree/main`; `desktop_env/controllers/setup.py:1347-1356` |
 | OSWorld image datasets ship `Ubuntu-arm.zip`, `Ubuntu-x86.zip` | `huggingface.co/api/datasets/xlangai/ubuntu_osworld/tree/main` |
 | OSWorld Windows VM dataset exists but is **x64** (`Windows-x86.zip`, `Windows 10 x64.qcow2` 49 GB), VMware/VirtualBox, "depending on the machine architecture x86 or arm64" per its card | `huggingface.co/api/datasets/xlangai/windows_osworld` + dataset README |
 | WAA repo: MIT, 918 stars, pushed 2026-10-26 | `api.github.com/repos/microsoft/WindowsAgentArena` |
@@ -1099,7 +1108,6 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | WAA has **24** `libreoffice_calc` tasks across 12 app categories, each present twice (`examples/` and `examples_noctxt/`): a tree-wide recursive grep returns **48** files, 24 distinct ids | `git/trees/main?recursive=1`, paths under `src/win-arena-container/client/evaluation_examples_windows/`, 2026-11-21 |
 | WAA Calc task shape is OSWorld's with Windows paths; evaluator `compare_table`, `result.type: vm_file`, `expected.type: cloud_file` | `examples/libreoffice_calc/01b269ae-…-WOS.json` |
 | **44 of 47** OSWorld v1 Calc tasks run `pyautogui.hotkey("ctrl","s")` in `evaluator.postconfig` (the 3 exceptions use a `--convert-to csv` execute without the hotkey) | per-task sweeps of `evaluation_examples/examples/libreoffice_calc/*.json`, 2026-11-21 |
-| WAA's agent is **Navi**; Table 4's `UIA on + OmniParser on` row is **19.5%** (GPT-4V-1106, the headline), the tree-free `UIA off + OmniParser on` row is **8.6%** (GPT-4o) / 12.5% (GPT-4V); human 74.5%; six perception configs reported | arXiv 2409.08264 Table 4; README §4.1 |
 | `--som-origin omni` feeds the planner a SoM-annotated image **plus `list_of_text`** captions — not pixels-only | `client/mm_agents/navi/agent.py:351-362` |
 | Navi returns Python source strings for an in-guest `exec` executor; `requirements.txt` only; no `setup.py` or `pyproject.toml` in the repo (checked) | `client/mm_agents/navi/` |
 | WAA client takes `--emulator_ip` and speaks HTTP to a guest control server on :5000 + CDP :9222 | `client/run.py:112` |
