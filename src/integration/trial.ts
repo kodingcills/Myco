@@ -35,10 +35,19 @@ import { findNode } from "../core/state.ts";
 import type { TaskIntent, Verdict } from "../core/verify.ts";
 import { intentFor, validateIntent } from "../tasks/calc-record-edit.js";
 import { generateFixture } from "../tasks/fixture.js";
-import { type CalcRecordEditParams, groundTruth } from "../tasks/intent.js";
+import { type CalcRecordEditParams, type GroundTruth, groundTruth } from "../tasks/intent.js";
 import { unoVerifierOverAgent } from "../verify/uno-verifier.js";
 import type { AgentClient } from "../win/agent-client.js";
 import { unoModified, unoString, WindowsCalcAdapter } from "../win/calc-adapter.js";
+import {
+  cleanupTrialGuest,
+  describeGuestHealth,
+  type GuestCleanupResult,
+  type GuestHealthFinding,
+  guestContaminated,
+  probeGuestHealth,
+} from "./guest-health.js";
+import { guestBasename } from "./guest-shell.js";
 import { WindowsFixtureConverter } from "./windows-fixture.js";
 
 export interface TrialOptions {
@@ -65,6 +74,13 @@ export interface TrialOptions {
    * unchanged.
    */
   recovery?: boolean;
+  /**
+   * Skip the guest-health precondition. TESTS ONLY — the check is the whole
+   * point of M1-019 on a real guest.
+   */
+  skipGuestHealth?: boolean;
+  /** Bounded wait for the guest health/cleanup scripts (default 20s). */
+  guestHygieneTimeoutMs?: number;
 }
 
 export interface TrialReport {
@@ -73,17 +89,24 @@ export interface TrialReport {
   completed: boolean;
   elapsedMs: number;
   xlsxPath: string | null;
+  guardFailure?: GuardFailure;
+  /** M1-019: guest hygiene outcome, reported even when cleanup failed. */
+  cleanup: GuestCleanupResult;
 }
 
 /**
  * Run one trial end-to-end. Never throws for app-side failures: a program
  * guard failure, adapter error, or kill fault resolves to a verdict
- * (refuted/uncertain), and the evidence is written either way.
+ * (refuted/uncertain). M1-019 adds two guarantees: the guest-health
+ * precondition aborts uncertain on contamination, and everything the trial
+ * started is cleaned up in a finally on every exit path. Cleanup never
+ * changes the verdict and never throws out of the finally block.
  */
 export async function runTrial(options: TrialOptions): Promise<TrialReport> {
   const started = Date.now();
   const runId = randomUUID();
   const guestDir = options.guestDir ?? "C:\\myco\\runs";
+  const hygieneTimeoutMs = options.guestHygieneTimeoutMs ?? 20_000;
   mkdirSync(join(options.runsDir, runId), { recursive: true });
 
   const fixture = generateFixture(options.params.fixtureSeed);
@@ -92,10 +115,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
   const keyCell = `A${gt.location.dataRowIndex + 2}`;
   const observedCells = [keyCell, gt.cellRef];
 
-  const converter = new WindowsFixtureConverter({
-    client: options.client,
-    guestDir,
-  });
+  const converter = new WindowsFixtureConverter({ client: options.client, guestDir });
   const adapter = new WindowsCalcAdapter({
     client: options.client,
     xlsxPath: "", // set after the convert lands
@@ -103,57 +123,166 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     observedCells,
     helperDir: guestDir,
   });
-
   const trace: TraceEvent[] = [];
-  const _push = (event: TraceEvent) => trace.push(event);
 
-  // Phases that must never throw: a mid-trial app death (kill fault) or a
-  // failed launch folds into a guard-failure outcome + uncertain verdict,
-  // with evidence written either way. Only the harness itself being broken
-  // (no converter path) throws.
-  let launchFailure: GuardFailure | undefined;
+  let body: TrialBody | undefined;
+  let cleanup: GuestCleanupResult = { killed: [], removed: [], residue: [], errors: [] };
   try {
-    await converter.convert(Buffer.from(fixture.csv, "utf8"));
+    body = await runTrialBody({
+      options,
+      guestDir,
+      converter,
+      adapter,
+      fixtureCsv: Buffer.from(fixture.csv, "utf8"),
+      gt,
+      trace,
+      hygieneTimeoutMs,
+    });
+  } finally {
+    cleanup = await cleanupAfterTrial(options, guestDir, converter, hygieneTimeoutMs);
+    trace.push(...cleanupTraceEvents(cleanup));
+  }
+
+  // Reaching here means the body did not throw (a genuine harness bug would
+  // propagate after the finally; there is no verdict to write in that case).
+  const outcome = body as TrialBody;
+  writeTrialEvidence(options.runsDir, {
+    runId,
+    taskId: "calc-record-edit",
+    taskParams: options.params as unknown as Record<string, unknown>,
+    startedAt: new Date(started).toISOString(),
+    steps: outcome.steps.map(stepFromRecord),
+    guardFailure: outcome.guardFailure,
+    verdict: outcome.verdict,
+    trace,
+  });
+
+  return {
+    runId,
+    verdict: outcome.verdict,
+    guardFailure: outcome.guardFailure,
+    completed: outcome.completed,
+    elapsedMs: Date.now() - started,
+    xlsxPath: outcome.xlsxPath,
+    cleanup,
+  };
+}
+
+interface TrialBodyContext {
+  options: TrialOptions;
+  guestDir: string;
+  converter: WindowsFixtureConverter;
+  adapter: WindowsCalcAdapter;
+  fixtureCsv: Buffer;
+  gt: GroundTruth;
+  trace: TraceEvent[];
+  hygieneTimeoutMs: number;
+}
+
+interface TrialBody {
+  steps: RunOutcome["steps"];
+  guardFailure?: GuardFailure;
+  verdict: Verdict;
+  completed: boolean;
+  xlsxPath: string | null;
+}
+
+/** Uniform uncertain outcome for a precondition that never let the trial run. */
+function abortTrial(guardFailure: GuardFailure, reason: string): TrialBody {
+  return {
+    steps: [],
+    guardFailure,
+    verdict: { status: "uncertain", reasons: [reason] },
+    completed: false,
+    xlsxPath: null,
+  };
+}
+
+/**
+ * Everything before cleanup. Kept separate so runTrial's finally is the
+ * single, unconditional cleanup path — including thrown harness errors.
+ */
+async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
+  const { options, guestDir, converter, adapter, gt, trace } = ctx;
+
+  // 1. Adapter availability: the health probe is only meaningful when the
+  //    control plane answers. "Could not look" is never "contaminated".
+  try {
+    await options.client.ping();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    writeTrialEvidence(options.runsDir, {
-      runId,
-      taskId: "calc-record-edit",
-      taskParams: options.params as unknown as Record<string, unknown>,
-      startedAt: new Date(started).toISOString(),
-      steps: [],
-      guardFailure: {
+    return abortTrial(
+      {
+        step: -1,
+        phase: "precondition",
+        predicateName: "adapter-available",
+        observed: message,
+        reason: `agent unreachable: ${message}`,
+      },
+      `could not look: agent unreachable — ${message}`,
+    );
+  }
+
+  // 2. Guest health (M1-019). Runs BEFORE convert/launch: once the trial has
+  //    launched Calc, its own soffice and run dir would look like residue.
+  if (!options.skipGuestHealth) {
+    let finding: GuestHealthFinding;
+    try {
+      finding = await probeGuestHealth({
+        client: options.client,
+        runRoot: guestDir,
+        timeoutMs: ctx.hygieneTimeoutMs,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return abortTrial(
+        {
+          step: -1,
+          phase: "precondition",
+          predicateName: "guest-health",
+          observed: message,
+          reason: `guest health could not be determined: ${message}`,
+        },
+        `could not look: guest health probe failed — ${message}`,
+      );
+    }
+    if (guestContaminated(finding)) {
+      const observed = describeGuestHealth(finding);
+      return abortTrial(
+        {
+          step: -1,
+          phase: "precondition",
+          predicateName: "guest-contaminated",
+          observed,
+          reason: `guest contaminated: ${observed}`,
+        },
+        `could not look: guest contaminated — ${observed}; refusing to read a foreign document`,
+      );
+    }
+  }
+
+  // 3. Fixture convert.
+  try {
+    await converter.convert(ctx.fixtureCsv);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return abortTrial(
+      {
         step: -1,
         phase: "precondition",
         predicateName: "fixture-convert",
         observed: message,
         reason: `fixture convert failed: ${message}`,
       },
-      verdict: {
-        status: "uncertain",
-        reasons: [`could not look: fixture convert failed — ${message}`],
-      },
-      trace,
-    });
-    return {
-      runId,
-      verdict: {
-        status: "uncertain",
-        reasons: [`could not look: fixture convert failed — ${message}`],
-      },
-      completed: false,
-      elapsedMs: Date.now() - started,
-      xlsxPath: null,
-    };
+      `could not look: fixture convert failed — ${message}`,
+    );
   }
   const xlsxPath = converter.lastXlsxPath;
   if (!xlsxPath) throw new Error("fixture convert produced no guest path");
   adapter.setXlsxPath(xlsxPath);
 
-  // 2. Program: the family program, with Windows-mapped actions.
-  const program = windowsProgramFor(options.params);
-
-  // 3. Launch Calc on the fixture with the UNO socket, wait for observability.
+  // 4. Launch Calc on the fixture with the UNO socket, wait for observability.
+  let launchFailure: GuardFailure | undefined;
   try {
     await adapter.launchCalc();
   } catch (error) {
@@ -170,7 +299,8 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
   // pair proves the document opened. The ADR-0007 event vocabulary has no
   // launch event, and the schema rejects negative step indices.
 
-  // 4. Run the guarded program (skipped when the launch itself failed).
+  // 5. Run the guarded program (skipped when the launch itself failed).
+  const program = windowsProgramFor(options.params);
   const programAdapter =
     options.killAfterStep === undefined
       ? adapter
@@ -187,7 +317,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
       }
     : await runProgramSafe(programAdapter, program);
 
-  // 4b. Recovery ladder (ADR-0006, M1-011): only for a genuine mid-program
+  // 5b. Recovery ladder (ADR-0006, M1-011): only for a genuine mid-program
   //     interruption — steps already executed + a structured GuardFailure.
   //     Launch failures and convert failures have no known-good point to
   //     resume from and stay on the plain path.
@@ -260,7 +390,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
   }
   const finalOutcome = recovered;
 
-  // 5. Verdict: the independent UnoVerifier over the live document + the
+  // 6. Verdict: the independent UnoVerifier over the live document + the
   //    persisted file. It closes the document itself (check (c)).
   const intent = intentFor(options.params);
   let verdict: Verdict;
@@ -275,27 +405,68 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
       ],
     };
   }
-
-  // 6. Evidence: same writer the CI harness uses, so the artifacts are
-  //    schema-identical.
-  writeTrialEvidence(options.runsDir, {
-    runId,
-    taskId: "calc-record-edit",
-    taskParams: options.params as unknown as Record<string, unknown>,
-    startedAt: new Date(started).toISOString(),
-    steps: finalOutcome.steps.map(stepFromRecord),
-    guardFailure: finalOutcome.guardFailure,
-    verdict,
-    trace: [...trace, ...recoveryEvents],
-  });
+  trace.push(...recoveryEvents);
 
   return {
-    runId,
+    steps: finalOutcome.steps,
+    guardFailure: finalOutcome.guardFailure,
     verdict,
     completed: finalOutcome.completed,
-    elapsedMs: Date.now() - started,
     xlsxPath,
   };
+}
+
+/** Never throws: a failed cleanup is evidence, not a verdict change. */
+async function cleanupAfterTrial(
+  options: TrialOptions,
+  guestDir: string,
+  converter: WindowsFixtureConverter,
+  timeoutMs: number,
+): Promise<GuestCleanupResult> {
+  try {
+    return await cleanupTrialGuest({
+      client: options.client,
+      runRoot: guestDir,
+      runDirName: converter.lastRunDir ? guestBasename(converter.lastRunDir) : undefined,
+      profileDirName: converter.lastProfileDir
+        ? guestBasename(converter.lastProfileDir)
+        : undefined,
+      timeoutMs,
+    });
+  } catch (error) {
+    return {
+      killed: [],
+      removed: [],
+      residue: [],
+      errors: [`cleanup threw: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+}
+
+/**
+ * ADR-0007's trace vocabulary is closed and owned by M1-012, so cleanup
+ * outcomes use its free-form `fault-injection` detail bucket: `cleanup` for
+ * the always-emitted summary, `cleanup-failed` for residue/errors.
+ */
+function cleanupTraceEvents(cleanup: GuestCleanupResult): TraceEvent[] {
+  const timestamp = new Date().toISOString();
+  const events: TraceEvent[] = [
+    {
+      type: "fault-injection",
+      timestamp,
+      fault: "cleanup",
+      detail: `killed=[${cleanup.killed.join(",")}] removed=[${cleanup.removed.join(",")}] residue=[${cleanup.residue.join(",")}]`,
+    },
+  ];
+  if (cleanup.residue.length > 0 || cleanup.errors.length > 0) {
+    events.push({
+      type: "fault-injection",
+      timestamp,
+      fault: "cleanup-failed",
+      detail: `residue=[${cleanup.residue.join(",")}] errors=[${cleanup.errors.join(",")}] — next guest-health check will abort`,
+    });
+  }
+  return events;
 }
 
 /** runProgram, with adapter/UNO failures folded into a guard-failure outcome. */
