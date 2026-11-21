@@ -15,16 +15,17 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 struct Server {
     sessions: HashMap<String, Session<QemuLinuxBackend>>,
-    workspace: PathBuf,
+    /// `Err` carries the remediation message; tools/list still works, `create` reports it.
+    workspace: Result<PathBuf, String>,
     next_id: u64,
 }
 
 fn main() {
-    let workspace = myco_rt_backend_qemu::workspace::discover().unwrap_or_else(|e| {
-        // Don't die: tools/list must still work so the agent can read the fix.
+    let workspace = myco_rt_backend_qemu::workspace::discover();
+    if let Err(e) = &workspace {
+        // Don't die: tools/list must still work; `create` returns this to the agent.
         eprintln!("myco-rt-mcp: {e}");
-        PathBuf::from(".")
-    });
+    }
     let mut srv = Server { sessions: HashMap::new(), workspace, next_id: 1 };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -228,7 +229,8 @@ impl Server {
             return Err((-32602, format!("session {id} already exists")));
         }
         let token = args["token"].as_str().unwrap_or("myco-rt-mcp").to_string();
-        let mut cfg = QemuConfig::for_repo(&self.workspace, &token);
+        let workspace = self.workspace.as_ref().map_err(|e| (-32000, e.clone()))?;
+        let mut cfg = QemuConfig::for_repo(workspace, &token);
         cfg.session_id = id.clone();
         let mut session = Session::new_creating(
             SessionConfig {
@@ -321,7 +323,24 @@ mod tests {
     use super::*;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: PathBuf::from("."), next_id: 1 }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1 }
+    }
+
+    #[test]
+    fn create_without_workspace_returns_the_fix_and_never_boots() {
+        let mut s = Server {
+            sessions: HashMap::new(),
+            workspace: Err("no Myco workspace found. Fix: set MYCO_HOME=/path/to/Myco".into()),
+            next_id: 1,
+        };
+        let r = reply(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create","arguments":{}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("MYCO_HOME"), "{text}");
+        assert!(s.sessions.is_empty());
     }
 
     fn reply(s: &mut Server, line: &str) -> Value {
@@ -418,7 +437,7 @@ mod protocol_edge_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: PathBuf::from("."), next_id: 1 }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1 }
     }
 
     #[test]
