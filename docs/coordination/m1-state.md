@@ -303,4 +303,10 @@ Children must be briefed with these rules, and reviewers must state the head SHA
     git diff --name-only origin/main HEAD -- . ':(exclude)docs/' | grep . && { echo "REFUSING: non-docs changes"; exit 1; }
 - Also: `docs/coord` is the branch for state-log commits; feature branches never push to main.
 - LESSON for the file: the guard must run pre-push and compare the PUSH RANGE (origin/main..HEAD), not the working tree vs main.
+
+### STRUCTURAL GUARD INSTALLED (2026-11-21) — replaces all remembered checks
+- `~/Projects/Myco/.git/hooks/pre-push` (the SHARED hooks dir, so it covers all 41 worktrees of this repo) refuses any push to refs/heads/main whose introduced range contains a path outside `docs/`.
+- It names the offending paths, explains the PR+verifier rule, and permits a deliberate override via `MYCO_ALLOW_MAIN_PUSH=1`.
+- TESTED: (a) a scratch commit adding `scratch-hooktest.txt` was REFUSED and never reached main; (b) a docs-only commit from `docs/coord` was ALLOWED. Both observed.
+- So the rule is now enforced by git, not by my memory. Children cannot violate it either: they push through the same hooks dir.
 hook test note
