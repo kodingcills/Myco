@@ -148,7 +148,14 @@ describe("evidence loaders", () => {
   });
 
   test("keeps both primary and sidecar additive events and counts copied lines once", async () => {
-    const claim = { type: "claim", step: 2, field: "field", value: "value", source: "agent" };
+    const claim = {
+      type: "claim",
+      timestamp: result.startedAt,
+      step: 2,
+      field: "field",
+      value: "value",
+      source: "agent",
+    };
     const future = { type: "future-event", step: "a future format", payload: { count: 1 } };
     const data = await parseRun(
       await loadRunFiles([
@@ -164,7 +171,7 @@ describe("evidence loaders", () => {
       { kind: "standard", event: action, source: { file: "trace.jsonl", line: 1 }, step: 2 },
       { kind: "extended", event: future, source: { file: "trace.jsonl", line: 2 } },
       {
-        kind: "extended",
+        kind: "standard",
         event: claim,
         source: { file: "trace.extended.jsonl", line: 2 },
         step: 2,

@@ -122,7 +122,6 @@ export function deriveComparatorRows({ result, events = [] }: VerdictEvidence): 
   const params = result.taskParams;
   const claims = new Map<string, Sourced<unknown>>();
   for (const entry of events) {
-    if (entry.kind !== "extended") continue;
     const { event, source } = entry;
     if (
       event.type === "claim" &&
