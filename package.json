@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && pnpm --filter viewer typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
     "schema-validate": "tsx schemas/validate-artifacts.ts",
