@@ -148,6 +148,7 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     str(x.verdictReason) &&
     (typeof x.falseSuccess === "boolean" || x.falseSuccess === null) &&
     typeof x.audited === "boolean" &&
+    (x.audited || x.falseSuccess === null) &&
     count(x.elapsedMs) &&
     count(x.steps) &&
     count(x.stepBudget) &&
@@ -163,9 +164,10 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     count(x.tokens.in) &&
     count(x.tokens.out) &&
     count(x.resetMs) &&
-    typeof x.acPower === "boolean" &&
+    x.acPower === true &&
     typeof x.caffeinate === "boolean" &&
     str(x.screenshotSource) &&
+    x.screenshotSource !== "utm-host" &&
     typeof x.resumed === "boolean" &&
     count(x.recoveryEvents) &&
     typeof x.hostLoad.loadAvg1 === "number" &&
@@ -176,6 +178,13 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     str(d.guestVersion) &&
     typeof d.pipeReachable === "boolean" &&
     typeof d.sessionIdentityMatches === "boolean" &&
+    (driverReady({
+      hostVersion: d.hostVersion,
+      guestVersion: d.guestVersion,
+      pipeReachable: d.pipeReachable,
+      sessionIdentityMatches: d.sessionIdentityMatches,
+    }) ||
+      (x.verdict === "uncertain" && x.verdictReason === "driver-unreachable")) &&
     Array.isArray(t.claims) &&
     t.claims.every((c: unknown) => c === "done" || c === "failure") &&
     Array.isArray(t.actions) &&

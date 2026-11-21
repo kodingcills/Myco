@@ -21,20 +21,34 @@ function violations(entry: string, extraAllowed: string[] = []): string[] {
       ts.ScriptTarget.Latest,
       true,
     );
+    function checkSpecifier(spec: string): void {
+      if (!spec.startsWith(".")) {
+        errors.push(spec);
+        return;
+      }
+      const path = resolve(dirname(file), spec.replace(/\.js$/, ".ts"));
+      visit(path.endsWith(".ts") ? path : `${path}.ts`);
+    }
     function walk(node: ts.Node): void {
       if (
         (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
         node.moduleSpecifier &&
         ts.isStringLiteral(node.moduleSpecifier)
-      ) {
-        const spec = node.moduleSpecifier.text;
-        if (!spec.startsWith(".")) {
-          errors.push(spec);
-          return;
-        }
-        const path = resolve(dirname(file), spec.replace(/\.js$/, ".ts"));
-        visit(path.endsWith(".ts") ? path : `${path}.ts`);
-      }
+      )
+        checkSpecifier(node.moduleSpecifier.text);
+      if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference) &&
+        node.moduleReference.expression &&
+        ts.isStringLiteral(node.moduleReference.expression)
+      )
+        checkSpecifier(node.moduleReference.expression.text);
+      if (
+        ts.isImportTypeNode(node) &&
+        ts.isLiteralTypeNode(node.argument) &&
+        ts.isStringLiteral(node.argument.literal)
+      )
+        checkSpecifier(node.argument.literal.text);
       if (
         ts.isCallExpression(node) &&
         (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
@@ -64,4 +78,14 @@ describe("baseline import boundary", () => {
         "test/baseline/fixtures/offending.ts",
       ]),
     ).toContain(resolve("src/integration/trial.ts")));
+  // Guards against ignoring TypeScript import-equals dependencies.
+  it("detects import equals", () =>
+    expect(violations(resolve("test/baseline/fixtures/import-equals.txt"))).toContain(
+      resolve("src/integration/trial.ts"),
+    ));
+  // Guards against ignoring dependencies referenced by import types.
+  it("detects import types", () =>
+    expect(violations(resolve("test/baseline/fixtures/import-type.txt"))).toContain(
+      resolve("src/integration/trial.ts"),
+    ));
 });

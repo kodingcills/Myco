@@ -31,6 +31,10 @@ const names = [
   "iv-purity",
   "v-version",
   "v-pipe",
+  "v-session",
+  "modified",
+  "dialog",
+  "driver-action",
   "empty",
   "multiple",
   "case-flip",
@@ -73,6 +77,8 @@ describe("baseline", () => {
     expect(judge(f.transcript, f.driver, f.observation).status).toBe(f.status);
     if (name === "iii-budget")
       expect(judge(f.transcript, f.driver, f.observation).reasons).toEqual(["step-budget"]);
+    if (["modified", "dialog", "driver-action"].includes(name))
+      expect(judge(f.transcript, f.driver, f.observation).reasons).toEqual([name]);
     if (name.startsWith("v-"))
       expect(judge(f.transcript, f.driver, f.observation).reasons).toEqual(["driver-unreachable"]);
   });
@@ -108,6 +114,13 @@ describe("baseline", () => {
       { verdictReason: "step-budget" },
       { driver: { ...row.driver, hostVersion: "" } },
       { subArm: "other" },
+      { audited: false, falseSuccess: false },
+      { audited: false, falseSuccess: true },
+      { acPower: false },
+      { screenshotSource: "utm-host" },
+      { driver: { ...row.driver, guestVersion: "2" } },
+      { driver: { ...row.driver, pipeReachable: false } },
+      { driver: { ...row.driver, sessionIdentityMatches: false } },
     ])
       expect(isBaselineRow({ ...row, ...bad })).toBe(false);
     expect(
@@ -117,6 +130,17 @@ describe("baseline", () => {
         budgetExhausted: true,
         verdict: "refuted",
         verdictReason: "step-budget",
+      }),
+    ).toBe(true);
+    expect(isBaselineRow({ ...row, audited: false, falseSuccess: null })).toBe(true);
+    expect(
+      isBaselineRow({
+        ...row,
+        audited: false,
+        falseSuccess: null,
+        verdict: "uncertain",
+        verdictReason: "driver-unreachable",
+        driver: { ...row.driver, sessionIdentityMatches: false },
       }),
     ).toBe(true);
     expect(rowKey(row)).not.toBe(rowKey({ ...row, subArm: "c2" }));

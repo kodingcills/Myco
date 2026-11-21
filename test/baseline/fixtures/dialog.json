@@ -1,0 +1,16 @@
+{
+  "transcript": {
+    "actions": [],
+    "claims": []
+  },
+  "driver": {
+    "hostVersion": "1",
+    "guestVersion": "1",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "observation": {
+    "kind": "dialog"
+  },
+  "status": "refuted"
+}
