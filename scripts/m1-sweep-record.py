@@ -71,15 +71,15 @@ def final(log_path, fp_path):
             bad.append(f"seed {s!r} seen with two hashes")
         if hash_to_seed.setdefault(h, s) != s:
             bad.append(f"hash {h[:12]} seen for seeds {hash_to_seed[h]!r} and {s!r}")
+    missing = sorted(set(expected) - set(seed_to_hash))
+    if missing:
+        bad.append(f"no hash-bearing trial for seeds {missing}")
     print(
         "SEED_CHECK "
         + json.dumps(
             {"distinctSeeds": len(seed_to_hash), "distinctHashes": len(hash_to_seed), "problems": bad}
         )
     )
-    missing = sorted(set(expected) - set(seed_to_hash))
-    if missing:
-        bad.append(f"no hash-bearing trial for seeds {missing}")
     return 0 if not bad and len(seed_to_hash) == len(hash_to_seed) == len(expected) else 1
 
 
