@@ -358,7 +358,12 @@ export function App() {
       <div data-workspace>
         {run && showSidebar && <RunsSidebar mod={mod} />}
         <Screenshots files={run?.files}>
-          <Tabs.Root data-run-view value={mode} onValueChange={(value) => setMode(value as Mode)}>
+          <Tabs.Root
+            data-run-view
+            data-indexed={run && !run.loading && !run.error ? "true" : undefined}
+            value={mode}
+            onValueChange={(value) => setMode(value as Mode)}
+          >
             {run && <VerdictBar run={run} />}
             <div data-run-body>
               <main

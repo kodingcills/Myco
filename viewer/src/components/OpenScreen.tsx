@@ -24,7 +24,12 @@ export function OpenPicker({
   }
   return (
     <Menu.Root open={open} onOpenChange={setOpen}>
-      <Menu.Trigger ref={trigger} data-button="default" aria-keyshortcuts="Meta+O Control+O">
+      <Menu.Trigger
+        ref={trigger}
+        data-pick-open
+        data-button="default"
+        aria-keyshortcuts="Meta+O Control+O"
+      >
         {children}
       </Menu.Trigger>
       <Menu.Portal>

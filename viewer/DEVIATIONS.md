@@ -16,3 +16,9 @@
 - Screenshots require a step-linked event or a matching PNG/WebP and metadata file with an explicit step ID. An unscoped capture such as the M1 mid-typing artifact stays unassigned. Filmstrip slots are sampled from the visible axis and clipped at its edges. Raw shows original trace lines and pretty-prints JSON pointer excerpts. Step rows expose their evidence through the Inspector so the virtual listbox can keep a single Tab stop.
 - Inspector width persists locally and is constrained by the available center width on desktop. Below the minimum design viewport the Inspector overlays the center. Panel collapse and expand are immediate for both pointer and keyboard input. State-diff artifacts are accessible as source links and have no dedicated view in v0.
 - The opt-in browser render test uses MYCO_VIEWER_PERF_DIR after building the viewer and skips when the generated 1,000-step fixture is absent. MYCO_VIEWER_CHROMIUM optionally selects a local Chromium executable.
+
+## Stage 4 decisions
+
+- Proof includes recorded state-version transitions to cover J1. Every step and version links to its source. State-diff evidence stays under its existing Inspector source link.
+- The Verdict Bar now updates its rule immediately in this finished-run viewer. Seek updates commit during the pointer event. Range-brush updates remain frame-coalesced, and the sidebar resize handle stays inside the rail so it leaves the left edge of the playhead lane accessible.
+- Check rows retain the outcome badge specified by §2.6 for each check. A passing check in a refuted run can therefore be green inside Checks while the run verdict is Failed. This needs outer-loop clarification against §5's broader wording.

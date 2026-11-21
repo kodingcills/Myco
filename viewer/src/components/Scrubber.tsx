@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import tokens from "../../../docs/design/tokens.json";
 import { type Marker, markerTypes, type StepRow, stepLabel } from "../data/steps.ts";
 import {
@@ -301,7 +302,14 @@ export function Scrubber({
       setHover(clamp(event.clientX - size.left, 0, width));
       return;
     }
-    queued.current = { eventX: event.clientX, drag: drag.current };
+    const active = drag.current;
+    if (active.mode === "seek") {
+      // Chromium coalesces pointermove to the render loop. Commit the playhead and selection
+      // in that turn so the extra app-side frame used by brush updates cannot delay a seek.
+      flushSync(() => move(event.clientX, active));
+      return;
+    }
+    queued.current = { eventX: event.clientX, drag: active };
     frame.current ??= requestAnimationFrame(() => {
       frame.current = undefined;
       const next = queued.current;

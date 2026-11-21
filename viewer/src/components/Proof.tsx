@@ -1,5 +1,6 @@
 import { cloneElement, forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
+import { stepLabel } from "../data/steps.ts";
 import type { RunData, SourceRef } from "../data/types.ts";
 import {
   type CheckItem,
@@ -220,6 +221,22 @@ export function Proof({
   const rows = useMemo(() => deriveComparatorRows(data), [data]);
   const checks = useMemo(() => deriveChecks(data.result), [data.result]);
   const failures = useMemo(() => deriveFailuresAndRecovery(data), [data]);
+  const stateChanges = useMemo(
+    () =>
+      (data.result?.steps ?? []).flatMap((step, index) =>
+        step.stateVersionBefore === step.stateVersionAfter
+          ? []
+          : [
+              {
+                step,
+                path: `/steps/${index}`,
+                source: { file: "result.json", path: `/steps/${index}/step` },
+              },
+            ],
+      ),
+    [data.result],
+  );
+  const digits = Math.max(2, String(data.result?.steps.at(-1)?.step ?? 0).length);
   const filter = useViewer((state) => state.filter);
   const checkIndex = useViewer((state) => state.selection.check);
   useEffect(() => {
@@ -249,6 +266,35 @@ export function Proof({
             rows={checks}
             center={center}
             render={(check, virtual) => <CheckRow check={check} virtual={virtual} />}
+          />
+        </section>
+      )}
+      {!filter && (
+        <section aria-label="State changes" className="pb-3">
+          <h2 className="px-3 py-2 type-title">State changes</h2>
+          <EvidenceList
+            rows={stateChanges}
+            center={center}
+            render={({ step, path, source }, virtual) => {
+              const Row = virtual ? "div" : "li";
+              return (
+                <Row data-state-row className="type-data">
+                  <span>{stepLabel(step.step, digits)}</span>
+                  <SourceChip source={source} compact />
+                  <span>v{step.stateVersionBefore}</span>
+                  <SourceChip
+                    source={{ file: source.file, path: `${path}/stateVersionBefore` }}
+                    compact
+                  />
+                  <span>→</span>
+                  <span>v{step.stateVersionAfter}</span>
+                  <SourceChip
+                    source={{ file: source.file, path: `${path}/stateVersionAfter` }}
+                    compact
+                  />
+                </Row>
+              );
+            }}
           />
         </section>
       )}

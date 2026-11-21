@@ -222,7 +222,6 @@
   height: var(--layout-verdict-bar);
   border-bottom: var(--border-verdict-rule) solid var(--color-border-default);
   color: var(--color-text-primary);
-  transition: border-bottom-color var(--duration-verdict-settle) var(--ease-out);
 }
 
 [data-verdict-bar][data-verdict="Verified"] {
@@ -364,6 +363,10 @@
   touch-action: none;
 }
 
+[data-rail] [data-resize] {
+  right: 0;
+}
+
 [data-resize]:hover {
   background: var(--color-bg-surface2);
 }
@@ -419,6 +422,7 @@
 }
 
 [data-check-row],
+[data-state-row],
 [data-failure-row] {
   display: flex;
   align-items: center;
@@ -433,6 +437,7 @@
 }
 
 [data-check-row]:hover,
+[data-state-row]:hover,
 [data-failure-row]:hover {
   background-color: var(--color-bg-surface2);
 }
