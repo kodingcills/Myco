@@ -407,3 +407,15 @@ Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MY
 - Hard rule communicated: it must NOT touch myco-win11, UTM, or any VM script until the M1 coordinator declares the host free. The 30-trial sweep currently owns the VM.
 - Scheduling constraints I gave it: single VM user at a time; it must reuse the SAME snapshot (`clean-base`), the same `scripts/reset-trial-vm.sh` cold path, and the same deploy/agent flow as M1, so the baseline runs under IDENTICAL conditions (acceptance criterion #7 requires identical tasks, initial states and model settings). Any deviation must be recorded in its report.
 - Also flagged: the VM is shared with a Mac that must stay on AC power for long runs; and `pgrep qemu-system-aarch64` is NOT a reliable liveness test (the guest runs under UTM's QEMULauncher) — use `lsof -iTCP:2222`.
+
+## Log 2026-11-21 (43) — sweep BLOCKED: host saturated by Spotlight, not by Myco
+- Attempt at 15:31Z: trial 0 reset OK, then deploy hung at "registering MycoAgent task" for ~13 min and the 400s alarm fired → deploy-failed. Trial 1 started and the same pattern.
+- Guest inspection: SSH returns "Connection timed out during banner exchange" in 3/3 attempts while UTM reports started and :2222 listens. So the GUEST OS is starved, not UTM-wedged (this is a different failure from the log-35 `resuming` wedge, and reset-trial-vm.sh's detector would not catch it).
+- Root cause found on the HOST: load average 16.14 / 14.77 / 14.45 with `corespotlightd` at 821MB RSS and 705MB, plus `mdworker_shared` newly spawned (1.5 min old). `mdutil -s /` says indexing is enabled. Spotlight is indexing (most likely the UTM bundles / new worktrees), starving both QEMU and the guest.
+- DECISION: stopped the sweep after 20 min rather than burn trials against a starved host. Trial 0 was deploy-failed by this, not by Myco.
+- NOT DONE (needs the operator): either `sudo mdutil -i off /` (or exclude ~/VMs and ~/.t3/worktrees from Spotlight), or wait for indexing to finish and re-check load < ~4 before restarting. I have not changed any system setting.
+- Raw output: /tmp/m1-013/sweep/{trials.jsonl,progress.log}.
+
+## Backlog item from the baseline workstream (NOT for now, guest change)
+- Cua (cua-driver-rs windows-arm64, MIT, 29MB) is the chosen screenshot baseline. It needs a SECOND autostart interactive-session daemon alongside MycoAgent, on a named pipe rather than a port (same session-1 fix we use). It is a GUEST CHANGE: waits for the coordinator to declare the host free, never during a sweep.
+- Risk to manage in the spike (~30 min): whether both daemons coexist cleanly in session 1 without UIA/COM interference. If they do not, the baseline moves to a second VM. Cua's own ledger covers WPF/WinUI3/WebView2 and deliberately SKIPS LibreOffice, so the spike gates everything.
