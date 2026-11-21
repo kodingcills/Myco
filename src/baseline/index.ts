@@ -92,8 +92,6 @@ export function judge(
         : { status: "refuted", reasons: ["persisted-mismatch"] };
     case "unavailable":
       return { status: "uncertain", reasons: ["unavailable"] };
-    case "driver-action":
-      return { status: "refuted", reasons: ["step-budget"] };
     default:
       return { status: "refuted", reasons: [observation.kind] };
   }
@@ -232,6 +230,8 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     x.stepBudget > 0 &&
     x.steps <= x.stepBudget &&
     typeof x.budgetExhausted === "boolean" &&
+    (x.verdictReason !== "driver-action" || x.verdict === "refuted") &&
+    (x.verdictReason !== "driver-action" || !x.budgetExhausted) &&
     x.budgetExhausted === (x.verdictReason === "step-budget") &&
     (!x.budgetExhausted || (x.steps === x.stepBudget && x.verdict === "refuted")) &&
     typeof x.cost === "number" &&

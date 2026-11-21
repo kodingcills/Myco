@@ -1,0 +1,6 @@
+{
+  "steps": 30,
+  "budgetExhausted": true,
+  "verdict": "refuted",
+  "verdictReason": "driver-action"
+}

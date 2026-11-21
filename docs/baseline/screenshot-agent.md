@@ -688,8 +688,8 @@ side-by-side "fewer is better" column (§4.2, where per-arm step counts are repo
 
 **Budget exhaustion is `refuted`, and cause is attributed first.** If the loop runs out of steps
 the trial is `refuted` with `reason: step-budget`. The one collision with §3.3's dead-app row is
-a baseline that killed Calc by its own budget actions: the harness attributes cause (our driver
-acted → `refuted`/`step-budget`) before applying the "could not look" rule, so a dead Calc is
+a baseline that killed Calc by its own action before the budget was spent: the harness attributes cause (our driver
+acted → `refuted`/`driver-action`) before applying the "could not look" rule, so a dead Calc is
 `uncertain` only when the baseline did **not** cause the death.
 
 ### 3.3 Verification, shared with Myco
@@ -744,8 +744,8 @@ entries (to be kept current in the report):
   transcript ending "sorry" with the right persisted value yields `verified` (the judge is blind
   to the agent's claims, in both directions).
 - Step-budget test: exceeding `MAX_STEPS` ends the trial as `refuted` with `reason:
-  step-budget`, never `uncertain`; and a trial where the driver's own action killed Calc is
-  attributed `refuted`/`step-budget`, while a Calc that died for an unrelated reason is
+  step-budget`, never `uncertain`; and a trial where the driver's own action killed Calc before the budget was spent is
+  attributed `refuted`/`driver-action`, while a Calc that died for an unrelated reason is
   `uncertain` (§3.2).
 - False-success test: an audit that throws yields `falseSuccess: null`, **not** `false` — an
   unaudited `verified` must never read as a pass (§4).
