@@ -253,7 +253,11 @@ export function isRecovery(event: { type: string; event?: unknown }) {
     typeof event.event === "string" &&
     event.event.trim() !== "" &&
     event.event !== "none" &&
-    event.event !== "aborted-uncertain"
+    event.event !== "aborted-uncertain" &&
+    event.event !== "relaunch:resumed" &&
+    event.event !== "relaunch:skipped-not-reversible" &&
+    !event.event.endsWith("-failed") &&
+    !event.event.endsWith(":failed")
   );
 }
 
@@ -339,35 +343,103 @@ export function deriveVerdict({
   }
 
   let recovery: SourceRef | undefined;
-  let abort: SourceRef | undefined;
-  let pendingGuard: SourceRef | undefined;
+  let incompleteAttempt: SourceRef | undefined;
+  let pendingGuard:
+    | {
+        source: SourceRef;
+        event: Extract<TraceEvent, { type: "guard-failure" }>;
+        record?: RunRecord["steps"][number];
+        next?: RunRecord["steps"][number];
+        continuation?: RunRecord["steps"][number];
+      }
+    | undefined;
+  const completedSteps = new Set<number>();
   for (const entry of events) {
     if (entry.kind !== "standard") continue;
-    const event = entry.event;
-    if (event.type === "recovery" && event.event === "aborted-uncertain") {
-      abort = entry.source;
-    } else if (event.type === "recovery" && isRecovery(event)) {
-      recovery = entry.source;
-      pendingGuard = undefined;
-      abort = undefined;
+    const { event, source } = entry;
+    if (event.type === "recovery") {
+      if (event.event === "aborted-uncertain") {
+        return unknown({ value: "Recovery ended in uncertainty", source });
+      }
+      if (isRecovery(event)) {
+        recovery = source;
+        if (!pendingGuard || pendingGuard.event.step === entry.step) pendingGuard = undefined;
+        incompleteAttempt = undefined;
+      } else if (event.event !== "none") {
+        incompleteAttempt = source;
+      }
     } else if (event.type === "guard-failure") {
-      pendingGuard = entry.source;
+      if (pendingGuard && pendingGuard.event.step !== event.step) {
+        return unknown({
+          value: "No completion follows the guard failure",
+          source: pendingGuard.source,
+        });
+      }
+      const index = result.steps.findIndex((step) => step.step === event.step);
+      const record = result.steps[index];
+      const next = record && result.steps[index + 1];
+      pendingGuard = {
+        event,
+        source,
+        record,
+        next:
+          next && next.step > event.step && next.stateVersionBefore === record.stateVersionAfter
+            ? next
+            : undefined,
+      };
+    } else if (
+      event.type === "action" &&
+      pendingGuard?.next &&
+      event.step > pendingGuard.event.step
+    ) {
+      const { next } = pendingGuard;
+      if (
+        event.step === next.step &&
+        source.file === pendingGuard.source.file &&
+        equalJson(event.action, next.action)
+      ) {
+        pendingGuard.continuation = next;
+      }
+      pendingGuard.next = undefined;
     } else if (
       event.type === "guard-evaluation" &&
       event.phase === "post" &&
-      pendingGuard &&
-      event.results.every(({ passed }) => passed === true) &&
-      result.steps.some(
-        (step) => step.step === event.step && equalJson(step.postconditionResults, event.results),
-      )
+      event.results.length > 0 &&
+      event.results.every(({ passed }) => passed === true)
     ) {
-      recovery = pendingGuard;
-      pendingGuard = undefined;
+      const candidate =
+        pendingGuard?.record?.step === event.step
+          ? pendingGuard.record
+          : pendingGuard?.continuation;
+      if (
+        pendingGuard &&
+        candidate?.step === event.step &&
+        source.file === pendingGuard.source.file &&
+        !completedSteps.has(event.step) &&
+        pendingGuard.event.step === pendingGuard.event.guard.step &&
+        event.stateVersionBefore === candidate.stateVersionBefore &&
+        event.stateVersionAfter === candidate.stateVersionAfter &&
+        (pendingGuard.event.phase === "precondition" ||
+          event.results.some(
+            ({ predicateName }) => predicateName === pendingGuard?.event.guard.predicateName,
+          )) &&
+        equalJson(candidate.postconditionResults, event.results)
+      ) {
+        recovery = pendingGuard.source;
+        pendingGuard = undefined;
+        incompleteAttempt = undefined;
+      }
+      completedSteps.add(event.step);
     }
   }
-  if (abort) return unknown({ value: "Recovery ended in uncertainty", source: abort });
   if (pendingGuard) {
-    return unknown({ value: "No completion follows the guard failure", source: pendingGuard });
+    return unknown({
+      value: "No completion follows the guard failure",
+      source: pendingGuard.source,
+    });
+  }
+  if (incompleteAttempt) {
+    return unknown({ value: "Recovery has no recorded completion", source: incompleteAttempt });
   }
   const sources = [statusRef, resultRef("/verdict/checks")];
   return recovery

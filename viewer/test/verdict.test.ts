@@ -114,6 +114,55 @@ describe("verdict mapping", () => {
     expect(deriveVerdict(data).label).toBe(label);
   });
 
+  test("a failed retry does not clear an aborted recovery", async () => {
+    const data = await fromFolder(`${fixture}/verified`, (name, body) => {
+      if (name === "manifest.json") return;
+      if (name !== "trace.jsonl") return body;
+      return (
+        body +
+        ["aborted-uncertain", "retry:1-failed"]
+          .map(
+            (event) =>
+              `${JSON.stringify({
+                type: "recovery",
+                event,
+                timestamp: "2026-11-21T12:00:05Z",
+                stateVersion: 12,
+              })}\n`,
+          )
+          .join("")
+      );
+    });
+    expect(deriveVerdict(data)).toMatchObject({
+      label: "Unknown",
+      reason: {
+        value: "Recovery ended in uncertainty",
+        source: { file: "trace.jsonl", line: 110 },
+      },
+    });
+  });
+
+  test.each([7, 11])(
+    "a replayed step %s postcondition cannot complete a step 6 guard failure",
+    async (step) => {
+      const recovered = await fromFolder(`${fixture}/recovered`);
+      const guard = recovered.events.find(({ event }) => event.type === "guard-failure");
+      const data = await fromFolder(`${fixture}/verified`, (name, body) => {
+        if (name === "manifest.json") return;
+        if (name !== "trace.jsonl") return body;
+        const post = body
+          .split("\n")
+          .find((line) => line.includes(`"step":${step},"phase":"post"`));
+        if (!guard?.raw || !post) throw new Error("Expected guard and passing postcondition");
+        return `${body}${guard.raw}\n${post}\n`;
+      });
+      expect(deriveVerdict(data)).toMatchObject({
+        label: "Unknown",
+        reason: { value: "No completion follows the guard failure" },
+      });
+    },
+  );
+
   test("only complete evidence can promote a verified result", async () => {
     const data = await fromFolder(`${fixture}/recovered`);
     for (const events of [[], data.events.slice(0, 64), data.events]) {
