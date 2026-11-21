@@ -6,6 +6,8 @@ members = [
     "crates/myco-rt-transport",
     "crates/myco-rt-backend-qemu",
     "crates/myco-rt-evidence",
+    "crates/myco-rt-cli",
+    "crates/myco-rt-mcp",
 ]
 
 [workspace.package]

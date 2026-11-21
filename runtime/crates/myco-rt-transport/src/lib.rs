@@ -76,7 +76,10 @@ impl SshConfig {
 pub struct Channel {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// Parsed responses, produced by one long-lived reader thread. Owning the pipe
+    /// in a thread is what makes deadlines enforceable: a grandchild holding the
+    /// write end can no longer block the calling thread (only the reader).
+    rx: std::sync::mpsc::Receiver<Result<serde_json::Value, TransportError>>,
     op_timeout: Duration,
 }
 
@@ -96,7 +99,24 @@ impl Channel {
         let mut child = cmd.spawn().map_err(|e| TransportError::Spawn(e.to_string()))?;
         let stdin = child.stdin.take().ok_or(TransportError::Closed)?;
         let stdout = BufReader::new(child.stdout.take().ok_or(TransportError::Closed)?);
-        let mut ch = Self { child, stdin, stdout, op_timeout: Duration::from_secs(10) };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = stdout;
+            loop {
+                let mut buf = String::new();
+                match reader.read_line(&mut buf) {
+                    Ok(0) => { let _ = tx.send(Err(TransportError::Closed)); break; }
+                    Ok(_) => {
+                        let parsed = serde_json::from_str(buf.trim_end())
+                            .map_err(|e| TransportError::Protocol(e.to_string()));
+                        let failed = parsed.is_err();
+                        if tx.send(parsed).is_err() || failed { break; }
+                    }
+                    Err(_) => { let _ = tx.send(Err(TransportError::Closed)); break; }
+                }
+            }
+        });
+        let mut ch = Self { child, stdin, rx, op_timeout: Duration::from_secs(10) };
         ch.authenticate(token)?;
         Ok(ch)
     }
@@ -120,38 +140,7 @@ impl Channel {
     }
 
     fn roundtrip(&mut self, request: serde_json::Value) -> Result<serde_json::Value, TransportError> {
-        // Bounded behaviour (adversarial review finding #2): a hung guest app can
-        // block an op forever. A watchdog kills the channel at the deadline; the
-        // blocked read then fails and we report Timeout instead of hanging.
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        let deadline = self.op_timeout;
-        let done = Arc::new(AtomicBool::new(false));
-        let expired = Arc::new(AtomicBool::new(false));
-        let pid = self.child.id();
-        let (done_w, expired_w) = (done.clone(), expired.clone());
-        // Detached thread: sleeps at most `deadline`, then exits. Dropping the
-        // JoinHandle is intentional (std detaches).
-        std::thread::spawn(move || {
-            std::thread::sleep(deadline);
-            if !done_w.load(Ordering::SeqCst) {
-                expired_w.store(true, Ordering::SeqCst);
-                // Negative pid = process group: kills descendants that hold the pipe.
-                let _ = Command::new("kill")
-                    .args(["-9", &format!("-{pid}")])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
-        });
-
-        let result = self.roundtrip_inner(request);
-        done.store(true, Ordering::SeqCst);
-        if expired.load(Ordering::SeqCst) {
-            return Err(TransportError::Timeout(deadline));
-        }
-        result
+        self.roundtrip_inner(request)
     }
 
     fn roundtrip_inner(
@@ -166,15 +155,21 @@ impl Channel {
     }
 
     fn read_line(&mut self) -> Result<serde_json::Value, TransportError> {
-        // v0: blocking reads; op-level deadlines are enforced by the caller's
-        // session timeouts (the agent's own ops are bounded per ADR-0014). A
-        // malformed or EOF'd channel is a hard error, never a silent retry.
-        let mut buf = String::new();
-        let n = self.stdout.read_line(&mut buf).map_err(|_| TransportError::Closed)?;
-        if n == 0 {
-            return Err(TransportError::Closed);
+        // The deadline is enforced HERE, on the receiver — the reader thread may stay
+        // blocked on a dead pipe, but the caller never does.
+        match self.rx.recv_timeout(self.op_timeout) {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                let pid = self.child.id();
+                let _ = Command::new("kill")
+                    .args(["-9", &format!("-{pid}")])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                Err(TransportError::Timeout(self.op_timeout))
+            }
         }
-        serde_json::from_str(buf.trim_end()).map_err(|e| TransportError::Protocol(e.to_string()))
     }
 
     fn authenticate(&mut self, token: &str) -> Result<(), TransportError> {

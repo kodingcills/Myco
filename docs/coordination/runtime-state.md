@@ -155,3 +155,69 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   typeText verified with exact text in the app's state file, unresolvable ref fails.
 - Guest-side finding: typing immediately after focus drops leading characters on GTK;
   a 250 ms settle after focus fixes it.
+
+## Log 2026-11-20 (RT-009 merged, RT-010 built, AT-SPI regression fixed)
+- PR #22 (RT-009 evidence) MERGED (76cdda4) after two review rounds: atomic
+  temp+rename writes, reset counter invariant, RFC-3339 timestamps, step-level
+  schema validation, run-id sanitisation.
+- RT-010 built: `myco-rt` CLI (JSON in/out, session file) and `myco-rt-mcp`
+  (stdio JSON-RPC, six tools, in-process sessions). Both drive the same core.
+- ROOT CAUSE FOUND (long-standing, cost two 900 s failures): the AT-SPI bus
+  socket lived under /run/user/1000/at-spi, which is swept because this uid has no
+  logind session. The registry daemon kept running with a dead advertised address,
+  so every AT-SPI client (pyatspi AND xa11y) failed to connect while processes
+  looked healthy. Fix: the session pins AT_SPI_BUS_ADDRESS to /run/myco/at-spi
+  (the unit's RuntimeDirectory) and recreates it on every start.
+- Second fix: provision/reset now wait for `cloud-init status --wait` BEFORE
+  polling for the desktop. Polling first "succeeds" against a session that
+  cloud-init is about to restart.
+- Third fix: act reads its baseline AFTER focusing and settling (a baseline read
+  mid-settle made a correct write report delivered_unverified).
+- Evidence (live guest): CLI create 1.3 s (5 nodes) -> act DeliveredVerified with
+  the text confirmed in the app's own state file -> evidence artifacts written.
+
+- Transport deadline bug (found during RT-010 verification): killing the child did
+  not unblock read_line when a grandchild held the pipe's write end, so a reset
+  hung 17 minutes with the agent already dead. The channel now owns a reader
+  thread and the caller uses recv_timeout — a wedged guest can only block the
+  reader. commit 0308094.
+- Verified after the fix: CLI create 1.0 s (5 nodes) -> act DeliveredVerified with
+  {"entry_text":"v3-probe"} in the app's own file. Reset under measurement.
+
+## Log 2026-11-20 (host contention with M1)
+- M1 coordinator reported my guest competing with myco-win11 (their reset took
+  1879s vs the usual 8-45s). Verified: PID 30897 was already gone; no
+  qemu-system-aarch64 running; guest shut down at end of the previous turn.
+- Cause was mine: two runs hung on the transport bug and I left the VM up while
+  debugging instead of tearing it down between attempts — a violation of
+  ADR-0011's idle-shutdown rule. Underlying hang fixed in d4c7b34.
+- Standing rule reaffirmed: the guest runs only during an active live test and is
+  shut down at the end of every turn. If a qemu from this worktree is ever seen
+  idle, it is a leak — kill it, do not wait.
+- Told the coordinator to continue their sweep (no yield needed).
+
+## Host yielded — 2026-11-20
+
+**host yielded.** The Mac is handed to M1 for its 30-trial reliability sweep
+(~3 h). Verified at handover: `pgrep -f qemu-system-aarch64` rc=1 (no matches),
+`pgrep -f myco-rt` rc=1, no guest pidfile. No VM of mine is running.
+
+M1 measured resets at 847-1879 s for myco-win11 while my guest ran alongside
+(usual 8-45 s). Cause: my guest outlived two hung test runs during the transport
+bug (fixed in d4c7b34). Rule from here: no VM is started while the host is
+yielded; work continues host-side only (PR #26 review fixes, tests, docs).
+
+### RT-011 reset check — result, recorded honestly
+The reset leg was exercised repeatedly against the live guest and the findings
+are conclusive, but **RT-011 is NOT passed and the first end-to-end path is not
+yet demonstrated as a single scripted run**:
+- create 1.0 s -> 5 AT-SPI nodes, state_version 2                (PASS)
+- act DeliveredVerified, guest-side state file shows the typed text (PASS)
+- evidence writes trace.jsonl + result.json, schema-valid        (PASS)
+- reset: guest is genuinely reset (marker file cleared, fresh overlay, GUI and
+  AT-SPI bus healthy afterwards) but takes **3-4 minutes**, not seconds, and two
+  earlier attempts hung indefinitely on the pre-d4c7b34 transport bug.
+- destroy: overlay deleted, no qemu left                          (PASS)
+The missing leg is one uninterrupted create->observe->act->evidence->reset->
+destroy run through MCP with the fixed binaries, plus measured reset cost. That
+needs the host, so it waits for the sweep to finish.

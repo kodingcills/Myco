@@ -592,6 +592,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "myco-rt-cli"
+version = "0.1.0"
+dependencies = [
+ "myco-rt-backend-qemu",
+ "myco-rt-core",
+ "myco-rt-transport",
+ "serde_json",
+]
+
+[[package]]
 name = "myco-rt-core"
 version = "0.1.0"
 dependencies = [
@@ -606,6 +616,15 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "myco-rt-mcp"
+version = "0.1.0"
+dependencies = [
+ "myco-rt-backend-qemu",
+ "myco-rt-core",
+ "serde_json",
 ]
 
 [[package]]
