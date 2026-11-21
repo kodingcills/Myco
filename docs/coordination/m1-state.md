@@ -686,12 +686,13 @@ the agent's in-guest op. Two of those scripts are in this repo and the SSH confi
   use `lsof -iTCP:2222`. Same error class as the `pgrep` check in log 39.
 
 **Budget, corrected after a verifier rejected my first version.** ~140 s reset + ~100 s redeploy +
-~135 s trial = 375 s/trial → **≈3.1 h** for one sub-arm; with two sub-arms at 510 s/trial →
-**≈4.25 h**. My first figure (2.5 h) omitted the mandatory redeploy and used the wrong multiplier.
+~135 s trial = 375 s/trial → **≈3.1 h** for one sub-arm; with two sub-arms, each with its own
+reset and deploy, 2 × 375 = 750 s/trial → **≈6.25 h** *(corrected again: this entry first said
+510 s / 4.25 h, which assumed a shared reset — see below)*. My first figure (2.5 h) omitted the mandatory redeploy and used the wrong multiplier.
 
 **A design idea I proposed and then rejected on review:** sharing one reset between C1 and C2 to
 halve the cost. C1 *edits the cell*, so C2 would read a document C1 had already changed — the arm
-would be invalid. The saving was one reset per trial (~140 s of 510), nowhere near worth it. **Each
+would be invalid. The saving was one reset per trial (~240 s of 750, reset plus deploy), nowhere near worth it. **Each
 sub-arm now gets its own `clean-base` restore**, and M1-021 carries a C1/C2 discriminator in the row
 schema so the two cannot collide in transcripts.
 

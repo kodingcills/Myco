@@ -1158,9 +1158,9 @@ credibility are.
   accept images at all — the one prior check returned a credits error — and what a dedicated
   UI-TARS endpoint costs, since those are metered by GPU-hour and not published per token. Both are
   §9 items, and neither is needed if Cua + a local planner works.
-- **Time is not $0 to the project.** A cold reset is 134–152 s (log 39) and a Myco trial is 35–90 s.
-  A 30-trial baseline run is ≈ 1.5–2 h of VM time at Myco's step count, and a screenshot agent's
-  higher step count pushes it toward 2.5–3 h. It is VM time the M1-013 sweep and M1-014 also need.
+- **Time is not $0 to the project.** A cold reset is 134–152 s (log 39), a redeploy ~100 s, and a Myco trial is 35–90 s.
+  A 30-trial baseline sub-arm is ≈ 3.1 h of VM time (§2.1) and C1 plus C2 is ≈ 6.25 h, each
+  sub-arm with its own reset and deploy. It is VM time the M1-013 sweep and M1-014 also need.
 
 ---
 
