@@ -500,6 +500,18 @@ No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-
 
 **Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
 
+## Log 2026-11-21 (53) — the "PDF reorders rows" claim in the merged doc is wrong
+Post-merge review of the report sent to Tiffany found one surviving error, in the design's own account of why this table took five attempts.
+
+**The claim:** "HTML and PDF rendering both lose the row-to-column alignment."
+**The fact:** the PDF text layer **keeps every row's model label** — `line 390: 'Phi3-V 0% 0% 4.2% ... 1.3%'`, `line 391: '✗ GPT-4o-mini 2.3% ... 7.2%'`, `line 392: 'Pytesseract + DOM Grounding DINO GPT-4o 0.0% ... 5.2%'`, `line 393: 'GPT-4V-1106 ... 8.6%'`. What the PDF *does* do is print each ✗/✓ block marker on its own line, so a parser that splits on the markers attaches each block's four rows to the previous label — a **parsing** error, not missing data. A structural parse (sequence model labels, group by four) yields the correct table from the PDF alone; that is exactly how the current values were eventually read.
+
+**Why it matters:** the merged document was telling future readers that the PDF is unusable, when the real rule is "parse structurally, and prefer the LaTeX because it needs no inference at all." The error was mine and it was in the *explanation* of my own error, which is the most misleading place for one to live.
+
+**Corrected in the design** (§1b.2 sourcing paragraph), keeping the substance of the lesson — HTML is genuinely lossy, LaTeX is the artifact of record — while stating the PDF limitation accurately.
+
+Docs only; no VM, no spend, no accounts.
+
 ## Log 2026-11-21 (52) — Table 4 confirmed against the LaTeX source; the stale REJECT was aimed at 611ae58
 A second verifier returned REJECT against **`611ae58`**, not the head. Its defects describe the two-versions-ago table, so the verdict is stale — but its method is the right one and settles the table for good: it read `arxiv.org/e-print/2409.08264`, i.e. **`inputs/results.tex`**, where every row names its model and the block boundaries are `\\midrule`.
 
