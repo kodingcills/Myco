@@ -5,7 +5,7 @@ export type DisplayVerdict = {
   sources: SourceRef[];
   reason?: Sourced<string>;
 } & (
-  | { label: "Verified" | "Recovered" | "Running"; subtype?: never }
+  | { label: "Verified" | "Recovered"; subtype?: never }
   | { label: "Failed"; subtype?: "False success" }
   | { label: "Unknown"; subtype?: "Not scored" }
 );
