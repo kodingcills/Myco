@@ -49,7 +49,7 @@ export interface WindowsAdapterOptions {
   helperTimeoutMs?: number;
   /** M1-014: inject one fault at the UI dispatch boundary. */
   fault?: {
-    mode: "delayed-save" | "focus-change";
+    mode: "dropped-save" | "focus-change" | "invalid-target";
     onApplied(detail: string): void;
   };
 }
@@ -347,6 +347,18 @@ export class WindowsCalcAdapter implements AppAdapter {
       case "click":
       case "typeText":
       case "setValue": {
+        if (action.kind === "setValue" && this.#fault?.mode === "invalid-target") {
+          // The runner has issued a versioned target for this edit. Advance
+          // the adapter's observation before using it, as when the UI
+          // target changes between resolution and dispatch.
+          await this.observe();
+          try {
+            this.#resolveRef(action.ref);
+          } catch (error) {
+            if (error instanceof StaleRefError) this.#recordFault(error.message);
+            throw error;
+          }
+        }
         const nodeId = this.#resolveRef(action.ref);
         const text =
           action.kind === "click" ? "" : action.kind === "typeText" ? action.text : action.value;
@@ -379,12 +391,17 @@ export class WindowsCalcAdapter implements AppAdapter {
         };
       }
       case "keyPress": {
+        if (action.keys === "ctrl+s" && this.#fault?.mode === "dropped-save") {
+          this.#recordFault("Ctrl+S withheld at dispatch");
+          return {
+            outcome: "delivered_unverified",
+            details: "Ctrl+S withheld",
+            stateVersionAfter: this.#stateVersion,
+          };
+        }
         const keys = sendKeysFor(action.keys);
-        const holdSave = action.keys === "ctrl+s" && this.#fault?.mode === "delayed-save";
-        if (holdSave) this.#recordFault("withheld Ctrl+S at dispatch during the save wait");
-        const result = holdSave
-          ? { ok: true }
-          : action.keys === "ctrl+s"
+        const result =
+          action.keys === "ctrl+s"
             ? // Ctrl+S on a converted .xlsx raises the "Non-standard file
               // format" dialog; the save op answers it (keep Excel format).
               await this.#runHelper({ op: "save", title: titleNeedle(this.#xlsxPath) })
@@ -420,7 +437,7 @@ export class WindowsCalcAdapter implements AppAdapter {
         this.#stateVersion += 1;
         return {
           outcome: "delivered_unverified",
-          details: holdSave ? "Ctrl+S withheld and discarded" : `sent ${action.keys} to Calc`,
+          details: `sent ${action.keys} to Calc`,
           stateVersionAfter: this.#stateVersion,
         };
       }

@@ -356,10 +356,11 @@ re-run to reach 27/30.
 
 ### 7.4 The corrupted suite
 
-Run from the repo root with the Windows VM reserved for this suite. The driver runs twelve
-trials, three per class on distinct fixture seeds. It cold-resets and deploys before each trial.
-Reissue the same command to resume at the first index missing from the JSONL. Recorded failures
-stay in the audit.
+Run from the repo root. The suite schedules 18 trials on distinct fixture seeds with a cold reset
+and deploy before each trial. It runs three trials per corruption class with recovery off, and
+also covers three kill and three invalid-target trials with ADR-0006 recovery enabled. The
+normal sweep and this suite share `/tmp/myco-win11.vm.lock`. The guard also checks for older
+sweep processes that started before the lock was introduced.
 
 ```bash
 scripts/m1-corrupt-suite.sh /tmp/m1-014/corrupted
@@ -367,37 +368,39 @@ python3 scripts/m1-corrupt-suite-record.py --final \
   /tmp/m1-014/corrupted/params.json /tmp/m1-014/corrupted/trials.jsonl
 ```
 
-The driver runs `--final` automatically. Use the second command to rebuild the summary and ledger
-from saved artifacts without using the VM.
+Reissue the driver command to skip recorded indices. Recorded failures stay in the audit. The
+driver runs `--final` automatically and saves its output to `summary.txt`. The second command
+rebuilds the summary and ledger from existing artifacts. Keep the output directory and its
+`runs/` tree together for replay. Each live trial has a 900-second watchdog.
 
 | Mode | Injection |
 |---|---|
-| `kill` | Existing step-triggered termination of `soffice.bin` after the edit and before save. The suite checks the agent's kill acknowledgement. |
-| `invalid-target` | The guarded program receives a record key one past the end of the seeded sheet. The existing intent guard rejects it before any edit. The verifier still checks the original valid intent. |
-| `delayed-save` | Hold Ctrl+S at the dispatch boundary, wait through the normal save deadline, and discard that attempt. The real edited Calc document remains dirty and the normal verifier and disk readback inspect it. |
-| `focus-change` | After the Name Box jump, the actuation helper brings a disposable Windows window to the foreground before typing. It checks foreground ownership and destroys the window when done. |
+| `kill` | Terminate `soffice.bin` after the edit and before save. The audited path waits for the kill acknowledgement. Recovery can relaunch Calc and resume the edit. |
+| `invalid-target` | After Locate, take a new observation between issuing and using the adapter's versioned UI target for the edit. The stale target is rejected before typing. Recovery retries with a newly resolved target. |
+| `dropped-save` | Withhold Ctrl+S. The edited Calc document stays dirty and the disk keeps the old value. |
+| `focus-change` | After the Name Box jump, transfer foreground focus to a disposable Windows window before typing, check ownership, and destroy the window. The temporary STATIC window has no explicit message pump during the short SendKeys call. Message handling and cleanup on Windows remain unverified. |
 
-`trials.jsonl` contains one row per index with the verdict, host-computed expected value,
-disk readback when available, `falseSuccess` and the reason. `refuted` means the verifier found
-evidence against success. `uncertain` means it could not verify the outcome. A `verified` claim
-with a wrong disk value is a false success. A matching value and a completed retry or relaunch
-event are required for verified recovery. `fault-not-applied`, `reset-failed`, `deploy-failed`,
-`token-failed` and `harness-error` do not qualify for class coverage.
+`trials.jsonl` records the `recovery` flag, verdict, host-computed expected value, disk readback
+when available, `falseSuccess` and the reason. `refuted` means the verifier found evidence
+against success. `uncertain` means it could not verify the outcome. A verified verdict with
+a wrong disk value or without a completed recovery event in the saved trace is a false success.
+If the disk value is unreadable despite recovery evidence, the audit fails as unproven.
+A recovery trial needs evidence that the fault landed and the ladder ran to count toward coverage.
 
 | Driver exit | Meaning |
 |---|---|
-| 0 | All four classes have three verdicts with applied faults, zero false successes and zero unproven verified claims. |
+| 0 | Three eligible verdicts in each of the six class and recovery groups, with zero false successes, unproven verified claims, and unaccounted ledger rows. |
 | 1 | Driver or manifest error. |
 | 3 / 4 / 6 | Paused for loss of AC power, one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
-| 8 | Final audit failed. Inspect `summary.txt` and `ledger.jsonl`. |
+| 8 | Final audit failed. Inspect `summary.json`, `summary.txt` and `ledger.jsonl`. |
+| 10 | VM in use. `REFUSED_VM_LOCKED` names the lock holder or the legacy driver process. |
 
 To inspect an individual live trial, use `pnpm exec tsx src/integration/run-live.ts --mode MODE`
 with `MYCO_AGENT_TOKEN` set and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
-`kill` for suite-style evidence. The driver leaves recovery off. For a standalone recovery trial
-add `--recovery`.
-An audited mode exits 0 for a verdict of refuted, uncertain or proven recovery, 1 for an
-unsupported verified claim or a harness error, and 2 if the requested fault did not land.
+`kill` for suite-style evidence and `--recovery` to exercise the ladder. An audited mode exits 0
+for a verdict of refuted, uncertain or proven recovery, 1 for an unsupported verified claim or a
+harness error, and 2 if the requested fault did not land.
 
 The final report includes the published OpenAdapt counts for context. Report live results only
 after this suite has run on the reserved guest.
@@ -441,8 +444,9 @@ which is what CI proves. Use `validate-live.ts` for your run directory.
 
 `runs/<evalId>/ledger.jsonl` — one row per (trial, corruption-class, action-kind) with an explicit
 oracle and refusal code. The corrupted-suite recorder writes its live conformance ledger to
-`OUT_DIR/ledger.jsonl` during `--final`. False successes carry the `ground-truth:false` oracle.
-Rows for recorded trials without an applied fault or usable verdict carry the `gap` state.
+`OUT_DIR/ledger.jsonl` during `--final`. False successes carry the `ground-truth:false` or
+`recovery:missing-proof` oracle. `OUT_DIR/summary.json` and the driver's `summary.txt` include
+the per-trial recovery results, `falseSuccesses` total and `auditLedgerRows` accounting.
 
 ## 9. Troubleshooting
 

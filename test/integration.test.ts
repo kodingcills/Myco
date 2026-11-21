@@ -296,8 +296,8 @@ describe("trial evidence artifacts", () => {
 
 describe("live corruption modes over the fake agent", () => {
   it.each([
-    ["invalid-target", false, "invalid target"],
-    ["delayed-save", true, "not dirty after save"],
+    ["invalid-target", false, "stale ref"],
+    ["dropped-save", true, "not dirty after save"],
     ["focus-change", false, "holds"],
   ] as const)("%s lands and leaves the persisted intent refuted", async (fault, typed, guard) => {
     const gt = groundTruth(PARAMS);
@@ -322,7 +322,6 @@ describe("live corruption modes over the fake agent", () => {
         guard,
       );
       expect(agent.desktopCells.get(gt.cellRef)).toBe(typed ? gt.expectedValue : undefined);
-      if (fault === "delayed-save") expect(report.elapsedMs).toBeGreaterThanOrEqual(20_000);
       const launches = agent.requests.filter((request) => request.op === "launch");
       expect(
         launches.some((request) => JSON.stringify(request.params.argv).includes("steal_focus")),
@@ -334,6 +333,55 @@ describe("live corruption modes over the fake agent", () => {
       ).toBe(false);
       const trace = readFileSync(join(runsDir, report.runId, "trace.jsonl"), "utf8");
       expect(trace).toContain(`"fault":"${fault}"`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["invalid-target", "retry:1-completed"],
+    ["kill", "relaunch:completed"],
+  ] as const)("recovers from %s and independently verifies the saved edit", async (mode, event) => {
+    const gt = groundTruth(PARAMS);
+    const fixture = generateFixture(PARAMS.fixtureSeed);
+    const { client } = clientWith({
+      desktopOverlay: true,
+      killCalcDesktop: mode === "kill",
+      unoBehavior: () => gt.previousValue,
+      csvBytes: Buffer.from(fixture.csv),
+      csvBytesAfterSave: csvWithTarget(PARAMS, gt),
+    });
+    const runsDir = mkdtempSync(join(tmpdir(), "myco-recovery-trial-"));
+    vi.useFakeTimers();
+    try {
+      const pending = runTrial({
+        client,
+        params: PARAMS,
+        unoSocket: "2002",
+        runsDir,
+        recovery: true,
+        ...(mode === "kill" ? { killAfterStep: 3, auditKill: true } : { fault: mode }),
+      });
+      await vi.runAllTimersAsync();
+      const report = await pending;
+      expect(report).toMatchObject({
+        completed: true,
+        verdict: { status: "verified" },
+        corruption: {
+          mode,
+          applied: true,
+          recovery: true,
+          recoveryEvents: expect.arrayContaining([event]),
+          persistedValue: gt.expectedValue,
+        },
+      });
+      const trace = readFileSync(join(runsDir, report.runId, "trace.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(trace[1]).toMatchObject({ type: "fault-injection", fault: mode });
+      if (mode === "invalid-target") expect(trace[1]?.detail).toContain("stale ref");
+      expect(trace).toContainEqual(expect.objectContaining({ type: "recovery", event }));
     } finally {
       vi.useRealTimers();
     }

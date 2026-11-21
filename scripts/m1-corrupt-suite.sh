@@ -11,6 +11,9 @@ LOG="$OUT/trials.jsonl"
 PROGRESS="$OUT/progress.log"
 RECORDER=scripts/m1-corrupt-suite-record.py
 cd "$WS" || exit 1
+source "$WS/scripts/vm-lock.sh"
+vm_lock_acquire m1-corrupt-suite.sh "$PROGRESS" || exit "$?"
+trap vm_lock_release EXIT
 
 # Refuse a mismatched run before doing any VM work, including on resume.
 if [ -f "$LOG" ] && grep -q '"status": "seed-mismatch"' "$LOG"; then
@@ -19,7 +22,7 @@ if [ -f "$LOG" ] && grep -q '"status": "seed-mismatch"' "$LOG"; then
 fi
 NEW_PARAMS=$(mktemp "$OUT/params.XXXXXX") || exit 1
 PENDING=$(mktemp "$OUT/pending.XXXXXX") || { rm -f "$NEW_PARAMS"; exit 1; }
-trap 'rm -f "$NEW_PARAMS" "$PENDING"' EXIT
+trap 'rm -f "$NEW_PARAMS" "$PENDING"; vm_lock_release' EXIT
 pnpm exec tsx scripts/m1-corrupt-suite-params.ts > "$NEW_PARAMS" || exit 1
 if [ -s "$PARAMS" ]; then
   cmp -s "$PARAMS" "$NEW_PARAMS" || {
@@ -41,7 +44,7 @@ append_record() {
   fi
 }
 
-while IFS=$'\t' read -r i MODE FS RK CL NV <&3; do
+while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   echo "=== trial $i ($MODE) $(date -u +%FT%TZ)" >> "$PROGRESS"
 
   if ! pmset -g batt | head -1 | grep -q "AC Power"; then
@@ -68,8 +71,10 @@ while IFS=$'\t' read -r i MODE FS RK CL NV <&3; do
 
   # The Python recorder consumes the report even when the entrypoint exits
   # nonzero. The Node process receives the watchdog signal directly.
-  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 600; exec @ARGV' node --import tsx src/integration/run-live.ts \
-    --mode "$MODE" --audit-corruption --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
+  ARGS=(--mode "$MODE" --audit-corruption)
+  if [ "$RECOVERY" = True ]; then ARGS+=(--recovery); fi
+  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 900; exec @ARGV' node --import tsx src/integration/run-live.ts \
+    "${ARGS[@]}" --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial-$i.out" 2> "$OUT/trial-$i.err" 3<&-
   unset TOK
   append_record "$i" report "$OUT/trial-$i.out"

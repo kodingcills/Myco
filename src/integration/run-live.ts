@@ -5,7 +5,7 @@
  *   tsx src/integration/run-live.ts --mode normal   [--seed s] [--runs-dir runs]
  *       [--row-key K --column C --new-value V]   (sweep: pass --seed with the set's fixtureSeed)
  *   tsx src/integration/run-live.ts --mode kill    [--kill-after-step 3] [--recovery]
- *   tsx src/integration/run-live.ts --mode invalid-target|delayed-save|focus-change [--recovery]
+ *   tsx src/integration/run-live.ts --mode invalid-target|dropped-save|focus-change [--recovery]
  *
  * The token is never committed: it is read from MYCO_AGENT_TOKEN (fetched
  * from the guest over vssh by the caller) or from the .myco-token file.
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
     if (report.corruption && !report.corruption.applied) process.exit(2);
     if (report.verdict.status !== "verified") process.exit(0);
     if (
-      report.corruption &&
+      report.corruption?.recovery &&
       report.corruption.persistedValue === params.newValue &&
       report.corruption.recoveryEvents.some(
         (event) => event === "relaunch:completed" || /^retry:\d+-completed$/.test(event),

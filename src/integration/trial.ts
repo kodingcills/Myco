@@ -34,12 +34,7 @@ import { type RunOutcome, runProgram } from "../core/runner.ts";
 import { findNode } from "../core/state.ts";
 import type { TaskIntent, Verdict } from "../core/verify.ts";
 import { intentFor, validateIntent } from "../tasks/calc-record-edit.js";
-import {
-  type FixtureFingerprint,
-  fixtureFingerprint,
-  generateFixture,
-  recordKey,
-} from "../tasks/fixture.js";
+import { type FixtureFingerprint, fixtureFingerprint, generateFixture } from "../tasks/fixture.js";
 import { type CalcRecordEditParams, type GroundTruth, groundTruth } from "../tasks/intent.js";
 import { unoVerifierOverAgent } from "../verify/uno-verifier.js";
 import type { AgentClient } from "../win/agent-client.js";
@@ -58,7 +53,7 @@ import { type ConvertTiming, WindowsFixtureConverter } from "./windows-fixture.j
 export const LIVE_CORRUPTION_MODES = [
   "kill",
   "invalid-target",
-  "delayed-save",
+  "dropped-save",
   "focus-change",
 ] as const;
 export type LiveCorruptionMode = (typeof LIVE_CORRUPTION_MODES)[number];
@@ -66,6 +61,7 @@ export type LiveCorruptionMode = (typeof LIVE_CORRUPTION_MODES)[number];
 interface CorruptionAudit {
   mode: LiveCorruptionMode;
   applied: boolean;
+  recovery: boolean;
   persistedValue: string | null;
   persistedReadError?: string;
   recoveryEvents: string[];
@@ -160,6 +156,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
   const corruption: CorruptionAudit | undefined = mode && {
     mode,
     applied: false,
+    recovery: options.recovery ?? false,
     persistedValue: null,
     recoveryEvents: [],
     actionKinds: [],
@@ -186,10 +183,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     unoSocket: options.unoSocket,
     observedCells,
     helperDir: guestDir,
-    fault:
-      options.fault === "focus-change" || options.fault === "delayed-save"
-        ? { mode: options.fault, onApplied: onFaultApplied }
-        : undefined,
+    fault: options.fault ? { mode: options.fault, onApplied: onFaultApplied } : undefined,
   });
 
   let body: TrialBody | undefined;
@@ -206,7 +200,6 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
       hygieneTimeoutMs,
       corruption,
       onFaultApplied,
-      absentRowKey: recordKey(fixture.dataRows),
     });
   } finally {
     cleanup = await cleanupAfterTrial(options, guestDir, converter, hygieneTimeoutMs);
@@ -252,7 +245,6 @@ interface TrialBodyContext {
   hygieneTimeoutMs: number;
   corruption: CorruptionAudit | undefined;
   onFaultApplied(detail: string): void;
-  absentRowKey: string;
 }
 
 interface TrialBody {
@@ -376,12 +368,7 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
   // launch event, and the schema rejects negative step indices.
 
   // 5. Run the guarded program (skipped when the launch itself failed).
-  const programParams =
-    options.fault === "invalid-target"
-      ? { ...options.params, rowKey: ctx.absentRowKey }
-      : options.params;
-  const program = windowsProgramFor(programParams);
-  let killAcknowledgement: Promise<void> | undefined;
+  const program = windowsProgramFor(options.params);
   const programAdapter =
     options.killAfterStep === undefined
       ? adapter
@@ -389,16 +376,7 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
           adapter,
           options.killAfterStep,
           options.client,
-          options.auditKill
-            ? (result) => {
-                killAcknowledgement = result
-                  .then((killed) => {
-                    if (killed.length > 0)
-                      onFaultApplied(`killed soffice.bin after action ${options.killAfterStep}`);
-                  })
-                  .catch(() => {});
-              }
-            : undefined,
+          options.auditKill ? onFaultApplied : undefined,
         );
   const outcome: RunOutcome = launchFailure
     ? {
@@ -411,15 +389,6 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
         lastGoodStateVersion: null,
       }
     : await runProgramSafe(programAdapter, program);
-
-  const failure = outcome.guardFailure;
-  if (
-    options.fault === "invalid-target" &&
-    failure &&
-    failure.predicateName === program.steps[0]?.preconditions[0]?.name
-  ) {
-    onFaultApplied(failure.observed);
-  }
 
   // 5b. Recovery ladder (ADR-0006, M1-011): only for a genuine mid-program
   //     interruption — steps already executed + a structured GuardFailure.
@@ -513,7 +482,6 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
     corruption.actionKinds = [
       ...new Set(finalOutcome.steps.map((step) => String(step.action.kind))),
     ];
-    await killAcknowledgement;
     const persisted = await verifier.readPersisted(xlsxPath);
     if ("error" in persisted) {
       corruption.persistedReadError = persisted.error;
@@ -596,7 +564,7 @@ function killAfterStepAdapter(
   inner: AppAdapter,
   afterStep: number,
   client: AgentClient,
-  onKill?: (result: ReturnType<AgentClient["kill"]>) => void,
+  onKilled?: (detail: string) => void,
 ): AppAdapter {
   let completed = 0;
   return {
@@ -609,8 +577,16 @@ function killAfterStepAdapter(
       if (completed === afterStep) {
         process.stderr.write(`[kill-fault] killing soffice.bin after step ${completed}\n`);
         const killing = client.kill({ image_name: "soffice.bin" });
-        if (onKill) onKill(killing);
-        else void killing.catch(() => {});
+        if (onKilled) {
+          // Wait for the kill before an audited trial can observe or recover.
+          // Standalone kill retains its original fire-and-forget behavior.
+          const killed = await killing.catch(() => []);
+          if (killed.length > 0 && result.outcome !== "failed") {
+            onKilled(`killed soffice.bin after action ${completed}`);
+          }
+        } else {
+          void killing.catch(() => {});
+        }
       }
       return result;
     },

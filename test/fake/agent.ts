@@ -16,6 +16,8 @@ export interface FakeAgentScript {
   unoEval?: ("error" | UnoEvalResult)[];
   /** CSV bytes returned by read_file (the converted persisted file). */
   csvBytes?: Buffer;
+  /** Persisted CSV returned after the desktop has received a save. */
+  csvBytesAfterSave?: Buffer;
   /** When set, read_file fails (persisted file unreadable). */
   readFileError?: boolean;
   /** When set, this op fails with OP_FAILED (fault injection). */
@@ -29,6 +31,8 @@ export interface FakeAgentScript {
   unoBehavior?: (params: Record<string, unknown>) => "error" | string | boolean | UnoEvalResult;
   /** When set, helper-launched mutations answer uno_eval (stateful desktop). */
   desktopOverlay?: boolean;
+  /** Make a killed Calc desktop lose unsaved changes and stop answering UNO. */
+  killCalcDesktop?: boolean;
   /** Stray processes by image name, killed (and cleared) by the kill op. */
   strayProcesses?: Record<string, number[]>;
   /**
@@ -51,6 +55,8 @@ export class FakeAgent {
   /** In-memory fake desktop: cell values the UIA "helper" mutations wrote. */
   readonly desktopCells = new Map<string, string>();
   private modified = false;
+  private saved = false;
+  private calcOpen = false;
   /** Guest filesystem: scripts/reports written via write_file, then read. */
   private readonly files: Map<string, Buffer>;
   private readonly strays: Map<string, number[]>;
@@ -94,6 +100,13 @@ export class FakeAgent {
         };
       case "uno_eval": {
         const params = request.params as Record<string, unknown>;
+        if (this.script.killCalcDesktop && !this.calcOpen) {
+          return {
+            ok: false,
+            id: request.id,
+            error: { code: "OP_FAILED", message: "UNO socket unreachable" },
+          };
+        }
         // Helper mutations shadow the scripted behavior (opt-in via
         // `desktopOverlay`) — otherwise scripted verdicts stay deterministic
         // for the verifier tests.
@@ -130,6 +143,7 @@ export class FakeAgent {
       }
       case "launch": {
         const argv = (request.params.argv ?? []) as string[];
+        if (argv.some((arg) => arg.startsWith("--accept="))) this.calcOpen = true;
         // Guest hygiene batches (M1-019): the host writes a .cmd, then
         // launches cmd.exe /c on it; emulate the batch's report output.
         if (argv[0] === "cmd.exe" && argv[1] === "/c") {
@@ -158,6 +172,7 @@ export class FakeAgent {
             }
             if (cmd.op === "save" || (cmd.op === "keys" && cmd.keys === "{Ctrl}s")) {
               this.modified = false;
+              this.saved = true;
             }
           } catch {
             // not a helper command — plain launch
@@ -167,6 +182,12 @@ export class FakeAgent {
       }
       case "kill": {
         const params = request.params as { pid?: number; image_name?: string };
+        if (this.script.killCalcDesktop && this.calcOpen && params.image_name === "soffice.bin") {
+          this.calcOpen = false;
+          this.desktopCells.clear();
+          this.modified = false;
+          return { ok: true, id: request.id, result: { killed: [4242] } };
+        }
         let killed: Array<number | string>;
         if (params.image_name !== undefined) {
           killed = this.strays.get(params.image_name) ?? [];
@@ -205,7 +226,9 @@ export class FakeAgent {
             error: { code: "OP_FAILED", message: "file not found" },
           };
         }
-        const bytes = this.script.csvBytes ?? Buffer.from("");
+        const afterSave =
+          this.saved && path.endsWith(".csv") ? this.script.csvBytesAfterSave : undefined;
+        const bytes = afterSave ?? this.script.csvBytes ?? Buffer.from("");
         return { ok: true, id: request.id, result: { data_b64: bytes.toString("base64") } };
       }
       default:

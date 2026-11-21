@@ -6,8 +6,11 @@ import { fixtureFingerprint, generateFixture } from "../src/tasks/fixture.ts";
 import { generateParameterSets, groundTruth } from "../src/tasks/intent.ts";
 
 export function corruptionPlan() {
-  const trials = Array.from({ length: 3 }, () => LIVE_CORRUPTION_MODES).flat();
-  const plan = trials.map((mode, index) => {
+  const trials = Array.from({ length: 3 }, () => [
+    ...LIVE_CORRUPTION_MODES.map((mode) => ({ mode, recovery: false })),
+    ...(["kill", "invalid-target"] as const).map((mode) => ({ mode, recovery: true })),
+  ]).flat();
+  const plan = trials.map(({ mode, recovery }, index) => {
     const seed = `m1-014-${mode}-${index}`;
     // Vary record and value on every sheet. The generator's first parameter
     // set uses its AutoCorrect-immune name value, minimizing unrelated
@@ -17,6 +20,7 @@ export function corruptionPlan() {
     return {
       index,
       class: mode,
+      recovery,
       ...params,
       expectedValue: groundTruth(params).expectedValue,
       fixtureSha256: fixtureFingerprint(generateFixture(seed)).csvSha256,
