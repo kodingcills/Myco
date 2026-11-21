@@ -77,7 +77,7 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   environment (path test); a score report cannot be produced without its version triple.
 
 ### EF-005 (TIF-58) Baseline harness on the same tasks
-- **status:** blocked
+- **status:** in progress
 - **owner:** foundry-owner
 - **blocked_by:** EF-001, EF-002
 - **description:** Screenshot-only first. Microsoft Hybrid Computer Use (MIT, public repo)
