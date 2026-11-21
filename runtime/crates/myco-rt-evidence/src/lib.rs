@@ -47,8 +47,10 @@ impl SessionRecorder {
                 "unsafe run id {run_id:?}: must be a plain path segment"
             )));
         }
-        // `root` is the runs directory: artifacts land in `<root>/<run_id>/`.
-        let dir = root.join(run_id);
+        // Contract (unchanged since RT-009): `root` is a workspace/evidence root and
+        // artifacts land in `<root>/runs/<run_id>/`. Changing this silently breaks
+        // consumers that follow the documented layout (review M3).
+        let dir = root.join("runs").join(run_id);
         std::fs::create_dir_all(&dir)?;
         let mut rec = Self {
             run_id: run_id.to_string(),
