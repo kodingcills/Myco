@@ -69,3 +69,11 @@ being executed in this thread because it is one coherent contract.
 
 `myco-win11`, any VM, `agent/`, `src/win/`, `src/integration/`, `.github/workflows/`,
 Linear, secrets, paid services, accounts.
+## 2026-11-21 update (provider switch to Claude Sonnet 5.5)
+
+- Merged main (M2 research, fc4738e) into `myco/eval-foundry`; typecheck, lint and 160 tests green.
+- Contract §7a/§7b added: trial-count/CI policy, real ~21 s reset budget, verifier self-test
+  as the standing "catches class X" claim, Writer AutoCorrect as a second-family fault class.
+- Still no VM touched, no sub-threads, no Linear access (outer loop owns it).
+- Switch note: owner thread moved off cheaperinference (402) to claudeAgent/Sonnet; builds go
+  to Codex when delegated.

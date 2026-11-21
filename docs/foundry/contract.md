@@ -201,6 +201,37 @@ The point of the table is that **the report can always say which versions produc
 number**. A score without its version triple (`fixtureVersion`, `oracleVersion`,
 `faultVersion`) is not reportable.
 
+## 7a. Trial counts, reset cost, and what a number may claim (M2 round, fc4738e)
+
+Planned against the **real** reset cost, not the optimistic one: the sweep default
+(`scripts/reset-trial-vm.sh`) is a disk-only cold restore, ~21 s warm and ~165 s from a
+fresh UTM start. The 8.3 s figure is the live-snapshot path, which is not the default (it
+wedges UTM in `resuming`, -2700). At 100 trials that is ~35 min of reset time. Budget with
+21 s.
+
+| Claim in a report | Minimum evidence | Why |
+|---|---|---|
+| "Completion rate X" | ~100 normal trials, 3 seeds, Wilson 95% CI reported | 27/30 has CI [0.735, 0.979]; an 80%-reliable system passes 27/30 12.3% of the time. A point estimate alone is not reportable. |
+| "Zero false successes" | ~30 corrupted trials **and** the verifier self-test (§7b) | 0/10 only bounds the rate below 26%. Trials show a rate; the self-test shows the verifier catches a named class. |
+| "Drift robustness" | Evidence the Foundry generates itself | No published number covers desktop office suites (m2-04); mobile (PACE 29-42% silent) and mock-app (OpenApps 63%->4%) figures are analogies, never citations for our claim. |
+
+## 7b. Verifier self-test (WorkArena method)
+
+The mutation audit in `test/foundry/oracle.test.ts` is the self-test: hand-written near-misses
+of a correct run, each of which must be `refuted`, plus the unmutated run, which must stay
+`verified`. WorkArena's audit found its own verifier passing 36/36 runs that filled an
+unrequested field; "unrequested field filled" is therefore a standing mutation. Every new
+oracle ships its mutation list, and a family is not reportable until it does. A report may
+say "the verifier catches class X" only for classes in a committed mutation list.
+
+**Second family (Writer).** LibreOffice Writer's AutoCorrect silently rewrites typed text, a
+genuine app-side mutation the runner did not request and Calc cannot produce. It is the
+corrupted-trial class for a Writer family (an `autocorrect-rewrite` fault: the oracle compares
+persisted text to intent, never to what the runner typed) and a hazard for any *normal*
+Writer task, which must pre-disable or avoid trigger strings. Table cells are read through the
+same UNO call shape as Calc; persisted-file checks parse `word/document.xml` host-side
+(`[INFERENCE]` per m2-03). Design only; no Writer fixture is built until host time is granted.
+
 ## 8. What the Foundry does not own
 
 - Product comparison writeup — MVP Discovery owner (TIF-59 consumes EF-001/EF-002 only).
