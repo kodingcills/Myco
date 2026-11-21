@@ -303,3 +303,4 @@ Children must be briefed with these rules, and reviewers must state the head SHA
     git diff --name-only origin/main HEAD -- . ':(exclude)docs/' | grep . && { echo "REFUSING: non-docs changes"; exit 1; }
 - Also: `docs/coord` is the branch for state-log commits; feature branches never push to main.
 - LESSON for the file: the guard must run pre-push and compare the PUSH RANGE (origin/main..HEAD), not the working tree vs main.
+hook test note
