@@ -55,18 +55,31 @@ Windows-over-SSH design is the same shape as Myco's:
 
 That is the identical **session-0 problem** Myco solved for `myco-agent` (coordination log 16), and
 Cua solves it the same way: an autostart interactive-session daemon plus an SSH-side client over a
-local IPC channel. So Cua needs **no VNC and no RDP**: `ssh -T myco-win11 cua-driver mcp --socket
-\\.\pipe\cua-driver`. On the guest the daemon runs in session 1 (owned by the same Windows account —
-the pipe is ACL'd to that account, and `cua-driver status` reports a SID mismatch rather than
-acting).
+local IPC channel. So once the daemon exists, Cua needs **no VNC and no RDP**: `ssh -T myco-win11 cua-driver mcp
+--socket \\.\pipe\cua-driver`. On the guest the daemon runs in session 1 (owned by the same Windows
+account — the pipe is ACL'd to that account, and `cua-driver status` reports a SID mismatch rather
+than acting).
+
+**Two qualifications, because they are the ones that could sink the setup and Cua's own page states
+them plainly:**
+
+- **The install is not headless.** "From RDP or the local console, register and start the task:
+  `cua-driver autostart enable`, `cua-driver autostart kick`", and "Do initial consent and GUI
+  checks in the VM display, not over SSH." So the first install needs the UTM console *once*; a
+  human or a GUI-automation step opens the window, and from then on SSH + pipe is enough. The VM's
+  auto-logon desktop makes this very likely to be a one-off, but it is **UNVERIFIED** until the
+  spike runs, and it is the first thing the spike checks.
+- **"No RDP needed" holds only after a session has existed.** Cua requires `query session` to show
+  the user `Active` or `Disc`, and says to sign in once if you never have. Auto-logon on a cold boot
+  should satisfy this; the spike asserts it via `query session` rather than assuming it.
 
 **Axis 2 — Windows ARM64.** Three independent primary sources agree:
 
 | Evidence | Source |
 |---|---|
-| Published release asset `cua-driver-rs-0.56.4-windows-arm64.zip` (28.9 MB) alongside `-windows-x86_64` | GitHub release `cua-driver-rs-v0.56.4` |
+| Published release asset `cua-driver-rs-0.56.4-windows-arm64.zip` (**30.3 MB**) alongside `-windows-x86_64` and a `win_arm64` wheel | GitHub release `cua-driver-rs-v0.56.4` (flagged **prerelease** by the publisher — pin the exact tag, and re-check when a stable tag lands) |
 | Windows support is **"Supported"** (not experimental): Win32, UI Automation, native input, window messages; coverage Electron/Tauri/WPF/WinUI3/WebView2 | Cua docs, *Platform support* |
-| Accepted Windows/Win32 baseline: run `29257963004`, **122/122 rows, 99 delivered, 23 exact refusals** | `libs/cua-driver/docs/action-support.md` |
+| Accepted Windows/Win32 baseline: run `29257963004`, **122/122 rows, 99 delivered, 23 exact refusals** — note this is Cua's fixture catalog on x64 Windows, so it is app-and-API evidence, **not ARM64 evidence** | `libs/cua-driver/docs/action-support.md` |
 | `ghcr.io/trycua/windows:11` image is `arch: [amd64, arm64]`: "On an Apple silicon Mac it is ARM64 Windows at full speed" | `libs/images/sandbox-images.json` |
 
 The Windows ledger is the honest caveat: the proven fixtures are WPF, WinUI3 and WebView2 — **not
@@ -99,6 +112,20 @@ M1's thesis, the Cua arm runs **twice**, as two labelled sub-arms, and both are 
 Same harness, same tasks, same judge; only the addressing mode differs, and it is recorded per
 trial. Two labelled arms cost the same as one run plus a third of the time, not a second project.
 
+**How C1 can and cannot be read — the honest limit.** Cua's accepted Windows evidence (122/122)
+exercises the *element* route on WPF/WinUI3/WebView2. C1 disables exactly that route and drives
+pixels into a Calc grid the repo already knows refuses UIA (`uia_cell found:false`, M1-008). So:
+
+- if C1 **succeeds**, it is a genuine screenshot-agent result and strengthens the baseline;
+- if C1 **fails or refuses**, the cause is ambiguous — "screenshot agents cannot do this" versus
+  "Cua's pixel route was never proven for this app". The report must attribute the cause from the
+  spike (which tests both rungs on Calc *before* the 30 trials) and score a refusal as
+  `refused: <code>`, never silently as a loss.
+
+Third column for completeness: Myco itself reads the UIA tree, so the three columns are C1
+(pixels only), C2 (tree + pixels), Myco (tree only, verified through UNO). The report names all
+three rather than implying the C1–Myco delta is the whole thesis.
+
 ### Option comparison
 
 Setup effort is in engineer-days (≈) for one person who knows the repo but not the tool. Cost is
@@ -112,8 +139,8 @@ model spend for 30 trials at the §8.1 token budget; "free" means $0 marginal.
 | VNC needed | **No** | No | No (reference impl uses Docker/vnc for Linux) |
 | Credibility as "a real screenshot agent" | **High** — 32.7k stars, MIT, 122/122 Windows action rows, active today | **Medium-high** — the model is the published SOTA grounder; the loop would be ours | **Highest** — the actual commercial state of the art |
 | "Homemade" objection | Low: framework is theirs, only the task wiring is ours | **High**: we write the loop, so we own the result | Low |
-| Setup | **~2–4 d**: install arm64 driver in guest, autostart task + named pipe, MCP client on host, Calc task wiring, C1/C2 mode switch | **~3–6 d**: Ollama GGUF serve, grounding parse, loop, transport ops | **~3–5 d**: transport ops + vendor client + prompt/tool wiring + key management |
-| Model spend / 30 trials | **$0** if the planner is a local Ollama model; **~$1.3–10** if the planner is Claude Haiku 5.5; see §8 | **$0** (all local) | **~$0.06–3.7** per the §8 arithmetic, depending on model and resolution |
+| Setup | **~2–4 d**: install arm64 driver in guest **from the VM console once** (Cua's own docs require `autostart enable` from an interactive session, not SSH), autostart task + named pipe, MCP client on host, Calc task wiring, C1/C2 mode switch | **~3–6 d**: Ollama GGUF serve, grounding parse, loop, transport ops | **~3–5 d**: transport ops + vendor client + prompt/tool wiring + key management |
+| Model spend / 30 trials | **$0** with the local Ollama planner; **$0.06–$0.46** with Claude Haiku 5.5 (the §8.4 table, one arithmetic run) | **$0** (all local) | **$0.06–$36.92** across the frontier models in §8.4 — the low end is `gpt-6-luna`, the ceiling is `gpt-6.2-astra` with its toolset overhead |
 | Account needed | **None** for the local path | **None** | **Yes** — API key + billing |
 | Biggest risk | LibreOffice is unproven in Cua's Windows ledger | Our loop becomes the weak link, and the report is open to "you built a bad agent" | Credibility bought with money and vendor data handling |
 | Fair for row 7? | **Yes** (C1 as the screenshot arm, C2 as the SOTA arm) | Yes, but weakest read: risk of *understating* the baseline | Yes — but it is the most expensive way to learn that |
@@ -593,35 +620,44 @@ grounder** — that is measurement B in reverse, and §3.8 already shows it fail
 
 ### 8.4 Priced configurations (Tiffany's three options)
 
-Prices below are **published list prices, 2026-11-21**, and the token budget is §8.1's
-(0.44M–2.5M input, 25k–45k output per 30 trials). Two cost drivers are noted per row because they
-dominate: **image resolution** (a screenshot's token count is `⌈w/28⌉ × ⌈h/28⌉` for the current
-Claude high-res tier per Anthropic's docs — 1280×800 ≈ 1,334 tokens; 1024×768 ≈ 1,000–1,800 per
-their guidance) and **per-request tool-definition overhead** (Anthropic's `computer_toolset_20260801`
-adds ≈ **4,500 input tokens per request** — 8–14 requests/trial × 30 trials ≈ **1.1M–1.9M extra
-tokens**, which doubles the input side before a single screenshot).
+**Every figure below is one arithmetic run over the stated budget**, so the numbers quoted in §1a,
+here, and in backlog M1-015 are identical by construction. Prices are published list prices read
+2026-11-21 (§12).
 
-| Config | Planner model | Price (in / out per MTok) | 30 trials, low | 30 trials, high | Notes |
-|---|---|---|---|---|---|
-| **Cua + local Ollama** | `qwen3.8-uncensored` (installed) | $0 | **$0** | **$0** | RAM-bound: ~9 GB model + 8 GB VM on a 24 GB Mac. Grounding measured weak (2/16), so C2's element rung is what makes it viable |
-| **Cua + Claude Haiku 5.5** | `claude-haiku-5-5` | $0.10 in / $0.50 out (≤100k prompts) | ≈ **$0.36** | ≈ **$2.6** | + tool overhead pushes the high end up; a 30-trial run is still single-digit dollars |
-| **Cua + Claude Sonnet 5.5** | `claude-sonnet-5-5` | $2 in / $10 out | ≈ **$2.20** | ≈ **$9.5** | Strongest planner at a price that is still trivial relative to VM time |
-| **Frontier API, budget** | `gpt-6-luna` | $0.10 in / $0.50 out | ≈ **$0.06** | ≈ **$0.25** | Cheapest credible frontier planner; capability unproven on screenshots |
-| **Frontier API, mainstream** | `gpt-6.2-sol` / `gpt-6.1-sol` | $2 in / $10 out | ≈ **$1.1** | ≈ **$5.5** | |
-| **Frontier API, strongest** | `gpt-6.2-astra` | $8 in / $40 out | ≈ **$3.7** | ≈ **$17** | Plus Gemini 3.1 Pro at $2 / $12 ≈ $2.2–$12 |
-| **UI-TARS local** | UI-TARS-1.5-7B (apache-2.0, 228k downloads, GGUF quants exist) | $0 | **$0** | **$0** | Download only; RAM is the constraint |
+Inputs and assumptions:
 
-Arithmetic for the Sonnet row, so anyone can check it:
-`low` = 0.44M × $2/M + 0.025M × $10/M = $0.88 + $0.25 = **$1.13** (model tokens only);
-adding 1.1M tokens of tool-definition overhead at the same input rate → **≈ $3.3**;
-`high` = 2.5M × $2/M + 0.045M × $10/M = $5.00 + $0.45 = **$5.45**, + overhead → **≈ $7.7**.
-The table's ranges bracket those two figures. **The conclusion does not move under any assumption
-in this table: the local configuration is $0, and every paid configuration for 30 trials is under
-$20.** Money is not the constraint on this baseline; VM time and credibility are.
+- Input **0.44M–2.5M** and output **25k–45k** tokens per 30 trials (§8.1).
+- Tool-definition overhead **≈4,500 input tokens per request** (Anthropic's
+  `computer_toolset_20260801`; §12). At 8–14 requests per trial that is **1.08M–1.89M** extra
+  input tokens on top of the budget. **It is applied to every row in the `high` column**, because a
+  frontier computer-use loop declares a toolset whichever vendor serves it; the `low` column is the
+  same model without the toolset (what a plain screenshot loop costs).
+- No caching assumed. Prompt caching would cut both columns and is deliberately excluded, so these
+  are upper bounds rather than optimised prices.
+
+| Config | Plan (in / out, $ per MTok) | 30 trials, low (no toolset) | 30 trials, high (+toolset) |
+|---|---|---|---|
+| **Cua + local Ollama** (`qwen3.8-uncensored`) | 0 / 0 | **$0** | **$0** |
+| **Cua + Claude Haiku 5.5** | 0.10 / 0.50 | $0.06 | $0.46 |
+| **Cua + Claude Sonnet 5.5** | 2.00 / 10.00 | $1.13 | $9.23 |
+| **Cua + Claude Opus 5.5** | 4.00 / 20.00 | $2.26 | $18.46 |
+| **Frontier API, cheapest** (`gpt-6-luna`) | 0.10 / 0.50 | $0.06 | $0.46 |
+| **Frontier API, mainstream** (`gpt-6.2-sol` / `gpt-6.1-sol`) | 2.00 / 10.00 | $1.13 | $9.23 |
+| **Frontier API, strongest** (`gpt-6.2-astra`) | 8.00 / 40.00 | $4.52 | **$36.92** |
+| **Frontier API, Gemini** (Gemini 3.1 Pro) | 2.00 / 12.00 | $1.18 | $9.32 |
+| **UI-TARS local** (UI-TARS-1.5-7B) | 0 / 0 | **$0** | **$0** |
+
+Worked example, Sonnet, `high`: `(2.5M + 1.89M) × $2/M + 45k × $10/M = $8.78 + $0.45 = $9.23`.
+The same run without the toolset is `2.5M × $2/M + $0.45 = $5.45`.
+
+**The honest summary.** The local path is **$0**. Every paid configuration is **single-digit dollars
+per 30 trials** except the strongest frontier model, whose worst case is **$36.92** — still less
+than an hour of anyone's time, and it is a price nobody has to pay because the recommended
+configuration is free. Money is not the constraint on this baseline; VM time and credibility are.
 
 ### 8.3 Cost, stated plainly
 
-- **A, B, C cost $0 in marginal spend.** They cost disk (4–20 GB), RAM during the run, and host
+- **The local rows (Cua + Ollama, UI-TARS) cost $0 in marginal spend.** They cost disk (4–20 GB), RAM during the run, and host
   time. On this Mac RAM is the binding constraint (log 15: Ollama at 9.1 GB + the VM at 8 GB
   starved the guest). A baseline run must therefore happen when the VM is the only heavy guest and
   the Mac is on AC power.
@@ -639,7 +675,7 @@ $20.** Money is not the constraint on this baseline; VM time and credibility are
 ## 9. Escalation to the outer loop (Tiffany decides)
 
 The recommendation in §1a is **Cua Driver with a local planner**: $0 marginal, no account, no
-download beyond the driver itself (a 29 MB Windows ARM64 zip, MIT). It needs the following
+download beyond the driver itself (a 30.3 MB Windows ARM64 zip, MIT). It needs the following
 decisions, and none of them is answered here:
 
 1. **Install Cua Driver in the guest.** A third-party autostart daemon in the same interactive
@@ -720,7 +756,7 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | Sweep row schema and the independent audit | `/tmp/m1-013/trial-one.ts` (throwaway), runbook §7.3 |
 | Installed local vision models | `ollama list` on this host, 2026-11-21: `eriktonon/gemma4-uncensored:12b`, `eriktonon/qwen3.8-uncensored:latest`, both `vision` |
 | Cua repo: MIT, 32.7k stars, pushed 2026-11-21 | `https://api.github.com/repos/trycua/cua` |
-| Cua Driver `windows-arm64` release asset (28.9 MB) beside `windows-x86_64` | release `cua-driver-rs-v0.56.4` |
+| Cua Driver `windows-arm64` release asset (30.3 MB = 30,296,604 B) beside `windows-x86_64`; release is marked prerelease | release `cua-driver-rs-v0.56.4`, GitHub API |
 | Windows marked **Supported**; Win32/UIA/window messages; Electron/Tauri/WPF/WinUI3/WebView2 coverage | `https://cua.ai/docs/cua-driver/concepts/platform-support` |
 | Windows/Win32 accepted baseline: run `29257963004`, 122/122 rows, 99 delivered, 23 exact refusals | `libs/cua-driver/docs/action-support.md` |
 | Windows ledger fixtures are WPF/WinUI3/WebView2; LibreOffice intentionally skipped | same file; `libs/cua-driver/tests/runners/windows/README.md` |
