@@ -90,7 +90,8 @@ them plainly:**
 The Windows ledger is the honest caveat: the proven fixtures are WPF, WinUI3 and WebView2 — **not
 LibreOffice**. Cua's own Windows runner says it "intentionally skips optional external-app suites
 such as LibreOffice because those require extra software on the environment image". LibreOffice has
-no native UIA (only a lossy MSAA→UIA proxy, `docs/research/adapters.md` §4.5), so the driver will
+no native UIA (only a lossy MSAA→UIA proxy — `docs/research/adapters.md`, its own §4.5, not this
+document's §4.5), so the driver will
 land on its **pixel/UIA-hit-test rung** rather than the verified element rung. That is fine — it is
 what a screenshot agent is — but it must be *reported*, not assumed.
 
