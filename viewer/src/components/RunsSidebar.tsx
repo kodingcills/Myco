@@ -58,6 +58,7 @@ export function RunsSidebar({ mod }: { mod: boolean }) {
                 else rows.current.delete(run.key);
               }}
               data-run-row
+              data-focus-key={run.key}
               role="treeitem"
               aria-selected={run.key === selected}
               title={run.name}

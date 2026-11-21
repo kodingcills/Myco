@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { strToU8, zipSync } from "fflate";
 import { describe, expect, test } from "vitest";
 import type { RunFiles } from "../src/data/loaders.ts";
@@ -28,10 +29,30 @@ const ledger = {
   oracle: "ground-truth:true",
   refusalCode: null,
 };
+const archiveEntries = {
+  "result.json": JSON.stringify(result),
+  "trace.jsonl":
+    JSON.stringify({
+      type: "run-start",
+      runId: result.runId,
+      taskId: "example",
+      startedAt: result.startedAt,
+    }) +
+    "\r\n" +
+    trace,
+  "ledger.jsonl": JSON.stringify(ledger),
+  "artifacts/screenshot-meta.json": '{"step":2}',
+  "README.md": "Ancillary file declared by the manifest",
+};
 const manifest = {
   format: "mycotrace/1",
   runId: result.runId,
-  files: { "trace.jsonl": "e".repeat(64) },
+  files: Object.fromEntries(
+    Object.entries(archiveEntries).map(([file, body]) => [
+      file,
+      createHash("sha256").update(body).digest("hex"),
+    ]),
+  ),
 };
 
 function selectedFile(name: string, text: string, webkitRelativePath: string) {
@@ -48,11 +69,13 @@ describe("evidence loaders", () => {
         [
           zipSync(
             {
-              "run/result.json": strToU8(JSON.stringify(result)),
-              "run/trace.jsonl": strToU8(trace),
-              "run/ledger.jsonl": strToU8(JSON.stringify(ledger)),
+              ...Object.fromEntries(
+                Object.entries(archiveEntries).map(([path, body]) => [
+                  `run/${path}`,
+                  strToU8(body),
+                ]),
+              ),
               "run/manifest.json": strToU8(JSON.stringify(manifest)),
-              "run/artifacts/screenshot-meta.json": strToU8('{"step":2}'),
             },
             { level },
           ),
@@ -65,6 +88,7 @@ describe("evidence loaders", () => {
       expect(data.byStep.get(2)?.[0]?.event).toEqual(action);
       expect(data.ledger).toEqual([{ value: ledger, source: { file: "ledger.jsonl", line: 1 } }]);
       expect(data.manifest).toEqual(manifest);
+      expect(data.validation).toEqual({ kind: "complete", manifestChecked: true });
       expect(data.artifactPaths).toEqual(["artifacts/screenshot-meta.json"]);
       expect(await files.read("artifacts/screenshot-meta.json")?.text()).toBe('{"step":2}');
       expect(data.parseErrors).toEqual([]);

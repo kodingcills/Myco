@@ -6,6 +6,8 @@ export interface RunFiles {
   paths: readonly string[];
   /** Archive entries are expanded only when requested. */
   read(path: string): Blob | undefined;
+  /** Manifest entries can also name ancillary files in the run directory. */
+  readManifestEntry?(path: string): Blob | undefined;
 }
 
 const evidenceFiles = new Set([
@@ -33,9 +35,11 @@ function runLayout<T>(entries: Map<string, T>) {
   if (!trace) throw new Error("Run is missing trace.jsonl");
   const prefix = trace.slice(0, -"trace.jsonl".length);
   const layout = new Map<string, T>();
+  const runEntries = new Map<string, T>();
   for (const [path, value] of entries) {
     if (!path.startsWith(prefix)) continue;
     const relative = path.slice(prefix.length);
+    runEntries.set(relative, value);
     if (evidenceFiles.has(relative) || relative.startsWith("artifacts/")) {
       layout.set(relative, value);
     }
@@ -43,7 +47,7 @@ function runLayout<T>(entries: Map<string, T>) {
   if (traces.some((path) => !path.startsWith(`${prefix}artifacts/`) && path !== trace)) {
     throw new Error("Expected exactly one run folder");
   }
-  return layout;
+  return { layout, runEntries };
 }
 
 async function archiveFiles(file: File): Promise<RunFiles> {
@@ -55,16 +59,17 @@ async function archiveFiles(file: File): Promise<RunFiles> {
       return false;
     },
   });
-  const layout = runLayout(entries);
+  const { layout, runEntries } = runLayout(entries);
+  function read(entry: string | undefined) {
+    if (!entry) return undefined;
+    const content = unzipSync(zip, { filter: ({ name }) => name === entry })[entry];
+    if (!content) throw new Error(`Could not read archive entry: ${entry}`);
+    return new Blob([content]);
+  }
   return {
     paths: [...layout.keys()],
-    read(path) {
-      const entry = layout.get(path);
-      if (!entry) return undefined;
-      const content = unzipSync(zip, { filter: ({ name }) => name === entry })[entry];
-      if (!content) throw new Error(`Could not read archive entry: ${path}`);
-      return new Blob([content]);
-    },
+    read: (path) => read(layout.get(path)),
+    readManifestEntry: (path) => read(runEntries.get(path)),
   };
 }
 
@@ -83,6 +88,10 @@ export async function loadRunFiles(inputs: readonly RunFileInput[]): Promise<Run
     throw new Error("Select a .mycotrace, a run folder, or a result.json and trace.jsonl pair");
   }
   for (const { file, relativePath } of files) addEntry(entries, relativePath || file.name, file);
-  const layout = runLayout(entries);
-  return { paths: [...layout.keys()], read: (path) => layout.get(path) };
+  const { layout, runEntries } = runLayout(entries);
+  return {
+    paths: [...layout.keys()],
+    read: (path) => layout.get(path),
+    readManifestEntry: (path) => runEntries.get(path),
+  };
 }

@@ -269,6 +269,7 @@
 }
 [data-verdict-summary] {
   grid-area: 2 / 3 / 3 / 5;
+  contain: inline-size;
   gap: var(--spacing-2);
 }
 [data-verdict-summary] > :first-child {
@@ -779,4 +780,14 @@
 [data-scrub-seek]:focus-visible,
 [data-scrub-brush]:focus-visible {
   outline-offset: calc(-1 * var(--border-focus-ring-offset));
+}
+
+[data-step-sources] {
+  display: flex;
+  flex-wrap: wrap;
+  flex: none;
+  align-items: center;
+  padding-inline: var(--spacing-3);
+  gap: var(--spacing-2);
+  border-top: var(--border-width) solid var(--color-border-default);
 }

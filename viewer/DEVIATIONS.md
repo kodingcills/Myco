@@ -22,3 +22,24 @@
 - Proof includes recorded state-version transitions to cover J1. Every step and version links to its source. State-diff evidence stays under its existing Inspector source link.
 - The Verdict Bar now updates its rule immediately in this finished-run viewer. Seek updates commit during the pointer event. Range-brush updates remain frame-coalesced, and the sidebar resize handle stays inside the rail so it leaves the left edge of the playhead lane accessible.
 - Check rows retain the outcome badge specified by §2.6 for each check. A passing check in a refuted run can therefore be green inside Checks while the run verdict is Failed. This needs outer-loop clarification against §5's broader wording.
+
+## v0 conformance decisions
+
+- The viewer parses the result first. A scored result can display a sourced Unknown while the worker checks the remaining evidence. The worker must finish trace validation, integrity checks, and cross-file checks before a positive run verdict can display. J1 timing measures the final verdict. See [PERF.md](PERF.md) for the 10,000-step budget miss.
+- A supplied manifest must identify the result and cover the required files and supplied viewer evidence. The viewer checks every listed SHA-256 against the original bytes. A folder or pair without a manifest can still be scored using its schema and cross-file evidence. That form can detect missing run starts, mismatched identity, missing recorded actions or guards, and failed steps whose corresponding failure and recovery events are both missing. A matching unsigned manifest establishes consistency within the selected files. It does not authenticate the producer.
+- The recovery classification ignores `none`. An `aborted-uncertain` recovery without a later recorded recovery stays Unknown for a verified result. A guard-failure fallback requires a later successful postcondition from the result's steps.
+- Up/Down move the playhead globally when the focused widget leaves those keys available. A multi-row Comparator keeps its roving Up/Down. J/K remain available from every Comparator row. Collapsing a focused sidebar or Inspector moves focus to the Verdict Bar or center respectively. Reopening from that fallback restores focus to the previous control when available.
+- Why row time and guard summaries name their sources in their tooltips. A source strip alongside the selected row's list exposes the corresponding controls in the next Tab stop sequence. The listbox has one Tab stop and its options remain free of nested controls. Clicking a Verdict Bar count opens the contributing evidence list. The result/trace links still open Raw or J2's Why Detail as appropriate.
+- A recorded screenshot shows a loading state while neither size is decoded. The decoded thumbnail stays visible until the browser has decoded the full image. Decode failure has its own unavailable state. The image lifecycle test uses an independent viewer-only session with a generated image.
+
+## Remaining v0 gates
+
+- Exact J2 evidence. The checked-in M1 normal run passed verification, and its mid-typing capture lacks a step association. The refuted M1 result is a live-document mismatch before persisted readback. The Foundry false-success fixture verifies the keyboard journey using its own claim, absent value, and check source. The exact B39 disagreement, trace line, and step-linked capture require the corresponding authoritative run.
+- Full J3 screenshot experience on a real run. The viewer-only test verifies the loading, preview, full-image and lightbox states. It leaves the real evidence unchanged.
+- The 150 ms final Verdict Bar limit at 10,000 steps. The diagnostic result and hard limit are recorded in [PERF.md](PERF.md).
+- Scrub input to playhead and selected-row rendering. This gate uses its own input-to-render measurement. The adjacent rAF interval is reported separately.
+- Screenshot budgets. Cached and cold full-image latency and memory at 1,000 screenshots remain unmeasured.
+- Chrome Stable and CI. Repeat on the specified M-series Chrome Stable setup and enforce the hard limits in CI. Printed diagnostics and the current fixture test do not enforce those limits.
+- §2.6 CheckRow and §5 color conflict. Passing checks still use their check-level Verified badge. Outer-loop interpretation is pending.
+- Written sign-off for the earlier layout tokens and individual deviations remains pending.
+- Grok Bot screenshot review and attaching the refreshed screenshots to PR #69 remain pending.

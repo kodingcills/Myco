@@ -1,5 +1,65 @@
 # Myco Viewer performance
 
+## v0 conformance rerun
+
+Apple M4 Pro, 24 GiB, macOS 27.0 (26A428), Playwright Chromium Headless Shell 159.0.8154.6, offline at 1440×900. The standard headless executable launch failed macOS Mach-port registration in this sandbox. Installed Chrome Stable 157.0.8103.79 exited on launch. A disposable executable wrapper ran the pinned browser with `--single-process --disable-gpu`. These are diagnostic measurements. Chrome Stable verification remains open.
+
+The benchmark uses the same five bare result/trace pairs as the original run. It preloads local file handles, discards one warmup, then uses 15 fresh pages per case in one browser context. Generated cases contribute 300 scrub movements each. The final-verdict marker excludes provisional Unknown. On scrub and keyboard input, the render proxy requires the playhead, mounted selected Why row, and matching Inspector heading, followed by the next rAF. The Inspector commit mark is measured independently of the selected row. The rAF interval measures adjacent frame timestamps around the update. Neither timing records compositor presentation.
+
+**150 ms miss** · The 10,000-step run took **236.2 ms median, 271.6 ms max** to reach a final verdict. The previous branch record measured 115.6 ms median and 119.6 ms max using an early verdict and a different Chromium launch configuration. The current verdict waits for complete evidence, including the full trace and recovery classification. A supplied manifest must also finish file digest checks. Large manifested inputs were outside this pair benchmark.
+
+### §8 measurements
+
+Times are milliseconds. The hard budgets stay unchanged. Where a budget applies, pass or fail compares the maximum with that budget.
+
+| Run | Metric | Budget | N | Min | Median | p95 | Max | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| normal | Open screen first paint | 300 | 15 | 24 | 32 | 32 | 32 | Pass |
+| normal | Final verdict visible | 150 | 15 | 25 | 34.7 | 39.5 | 39.5 | Pass |
+| normal | First Why rows | — | 15 | 73.3 | 85.5 | 88.3 | 88.3 | — |
+| normal | Indexed and usable | — | 15 | 73.3 | 85.5 | 88.3 | 88.3 | — |
+| normal | Keyboard input → render proxy | 50 | 15 | 4.7 | 10.4 | 14.2 | 14.2 | Pass |
+| refuted-autocorrect | Open screen first paint | 300 | 15 | 24 | 32 | 32 | 32 | Pass |
+| refuted-autocorrect | Final verdict visible | 150 | 15 | 30.9 | 33.4 | 44 | 44 | Pass |
+| refuted-autocorrect | First Why rows | — | 15 | 81.2 | 85.2 | 99.3 | 99.3 | — |
+| refuted-autocorrect | Indexed and usable | — | 15 | 81.2 | 85.2 | 99.3 | 99.3 | — |
+| refuted-autocorrect | Keyboard input → render proxy | 50 | 15 | 3.5 | 11.6 | 19 | 19 | Pass |
+| kill | Open screen first paint | 300 | 15 | 32 | 32 | 32 | 32 | Pass |
+| kill | Final verdict visible | 150 | 15 | 33.5 | 37.4 | 39.8 | 39.8 | Pass |
+| kill | Indexed and usable | — | 15 | 65.1 | 70 | 72.7 | 72.7 | — |
+| perf-1000 | Open screen first paint | 300 | 15 | 24 | 32 | 76 | 76 | Pass |
+| perf-1000 | Final verdict visible | 150 | 15 | 49.6 | 67.8 | 104.2 | 104.2 | Pass |
+| perf-1000 | First Why rows | — | 15 | 99.7 | 118.2 | 152.9 | 152.9 | — |
+| perf-1000 | Indexed and usable | 800 | 15 | 99.7 | 118.2 | 152.9 | 152.9 | Pass |
+| perf-1000 | Keyboard input → render proxy | 50 | 15 | 5.9 | 9.9 | 17.6 | 17.6 | Pass |
+| perf-1000 | Scrub input → playhead and selected row render proxy | 16 | 300 | 3.1 | 4.3 | 4.8 | 5.5 | Pass |
+| perf-1000 | Scrub input → Inspector commit | 50 | 300 | 2 | 2.8 | 3 | 3.3 | Pass |
+| perf-10000 | Open screen first paint | 300 | 15 | 24 | 32 | 36 | 36 | Pass |
+| perf-10000 | Final verdict visible | 150 | 15 | 226.3 | 236.2 | 271.6 | 271.6 | **Fail** |
+| perf-10000 | First Why rows | 500 | 15 | 266.2 | 285.8 | 316.3 | 316.3 | Pass |
+| perf-10000 | Indexed and usable | 4000 | 15 | 266.2 | 285.8 | 316.3 | 316.3 | Pass |
+| perf-10000 | Keyboard input → render proxy | 50 | 15 | 7.1 | 11.4 | 13.2 | 13.2 | Pass |
+| perf-10000 | Scrub input → playhead and selected row render proxy | 16 | 300 | 3.3 | 4.5 | 5.1 | 5.6 | Pass |
+| perf-10000 | Scrub input → Inspector commit | 50 | 300 | 2.1 | 2.9 | 3.3 | 4.2 | Pass |
+
+### Adjacent rAF interval
+
+The frame interval is distinct from input-to-render latency. It is above the original 16 ms reference at the measured 60 Hz cadence.
+
+| Run | N | Min | Median | p95 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| perf-1000 | 300 | 16.5 | 16.63 | 16.7 | 16.8 |
+| perf-10000 | 300 | 16.5 | 16.63 | 16.7 | 16.73 |
+
+### Bundle and outstanding measurements
+
+Initial JS is **186,211 B gzip** (563,338 B raw, limit 200,000 B gzip). The two fonts total **88,912 B** (limit 120,000 B). CSS alone is 33,253 B raw / 6,721 B gzip. The single HTML is 715,526 B raw.
+
+The generated pair cases passed the mounted-row check of fewer than 50 steps. The rerun does not measure responsiveness throughout indexing, cached or cold screenshot latency, or memory at 1,000 screenshots. The synthetic image test checks loading and decode handoff independently. A dedicated Chrome Stable run and CI thresholds remain gates.
+
+Reproduce the benchmark with the standard command below. The diagnostic rerun additionally set `MYCO_VIEWER_CHROMIUM` to the wrapper described above and reused the existing generated fixtures in `/private/tmp/myco-viewer-perf.Jx3XIA`.
+
+## Original Stage 4 measurements
 Apple M4 Pro, 24 GiB RAM, macOS 27.0 (26A428), Playwright Chromium Headless Shell 159.0.8154.6, 1440×900 CSS pixels, offline. This is Playwright's pinned headless Chromium. The GUI spec names Chrome stable, so the results describe this browser build. Cases ran serially. Each timed run discarded one warmup and then used 15 fresh pages. Each scrub pass contributed 20 measured drag movements, for 300 samples per fixture. Sizes are deterministic measurements of the built file and use decimal byte limits.
 
 **Budget misses** · perf-1000 drag frame interval 16.8 ms max against 16 ms, perf-10000 drag frame interval 16.8 ms max against 16 ms.

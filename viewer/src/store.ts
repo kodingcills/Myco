@@ -82,6 +82,7 @@ function writeHash(selection: Selection) {
 
 const jobs = new Map<string, AbortController>();
 const emptyData = (): RunData => ({
+  validation: { kind: "pending" },
   events: [],
   byStep: new Map(),
   ledger: [],
@@ -210,7 +211,24 @@ export const useViewer = create<ViewerStore>((set, get) => ({
     } catch (error) {
       if (!controller.signal.aborted) {
         publishPreview();
-        update({ error: error instanceof Error ? error.message : String(error), loading: false });
+        const message = error instanceof Error ? error.message : String(error);
+        const current = get().runs.find((item) => item.key === key);
+        if (current) {
+          update({
+            error: message,
+            loading: false,
+            data: {
+              ...current.data,
+              validation: {
+                kind: "invalid",
+                reason: {
+                  value: "Run evidence could not be read",
+                  source: { file: "trace.jsonl", path: "" },
+                },
+              },
+            },
+          });
+        }
       }
     } finally {
       if (previewFrame !== undefined) cancelAnimationFrame(previewFrame);

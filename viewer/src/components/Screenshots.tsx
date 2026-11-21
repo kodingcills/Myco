@@ -3,11 +3,15 @@ import type { ImageRequest } from "../data/images.worker.ts";
 import ImageWorker from "../data/images.worker.ts?worker&inline";
 import type { RunFileInput } from "../data/loaders.ts";
 
+type SettledImage = { kind: "ready"; url: string } | { kind: "unavailable" };
+type ImageAsset = SettledImage | { kind: "loading" } | { kind: "unrecorded" };
+
 type ImageEntry = {
   count: number;
   id: number;
   url?: string;
-  listeners: Set<(url: string) => void>;
+  asset?: SettledImage;
+  listeners: Set<(asset: SettledImage) => void>;
 };
 
 class RunImages {
@@ -18,7 +22,7 @@ class RunImages {
 
   constructor(private files: readonly RunFileInput[]) {}
 
-  acquire(path: string, full: boolean, onLoad: (url: string) => void) {
+  acquire(path: string, full: boolean, onLoad: (asset: SettledImage) => void) {
     const key = JSON.stringify([path, full]);
     let entry = this.entries.get(key);
     if (!entry) {
@@ -32,9 +36,24 @@ class RunImages {
         this.worker.onmessage = ({ data }: MessageEvent<{ id: number; blob?: Blob }>) => {
           const requested = this.pending.get(data.id);
           this.pending.delete(data.id);
-          if (!requested || !data.blob) return;
-          requested.url = URL.createObjectURL(data.blob);
-          for (const listener of requested.listeners) listener(requested.url);
+          if (!requested) return;
+          function publish(asset: SettledImage) {
+            if (!requested?.count) return;
+            requested.asset = asset;
+            for (const listener of requested.listeners) listener(asset);
+          }
+          if (!data.blob) {
+            publish({ kind: "unavailable" });
+            return;
+          }
+          const url = URL.createObjectURL(data.blob);
+          requested.url = url;
+          const image = new Image();
+          image.src = url;
+          void image.decode().then(
+            () => publish({ kind: "ready", url }),
+            () => publish({ kind: "unavailable" }),
+          );
         };
       }
       entry = { count: 0, id: ++this.nextId, listeners: new Set() };
@@ -44,7 +63,7 @@ class RunImages {
     }
     entry.count++;
     entry.listeners.add(onLoad);
-    if (entry.url) onLoad(entry.url);
+    if (entry.asset) onLoad(entry.asset);
     return () => {
       entry.listeners.delete(onLoad);
       entry.count -= 1;
@@ -82,11 +101,20 @@ export function Screenshots({
   return <ImageContext.Provider value={images}>{children}</ImageContext.Provider>;
 }
 
-export function useScreenshot(path?: string, full = false) {
+export function useScreenshotAsset(path?: string, full = false): ImageAsset {
   const images = useContext(ImageContext);
-  const [asset, setAsset] = useState<{ images: RunImages; path: string; url: string }>();
+  const [state, setState] = useState<{
+    images: RunImages;
+    path: string;
+    full: boolean;
+    asset: SettledImage;
+  }>();
   useEffect(() => {
-    if (path && images) return images.acquire(path, full, (url) => setAsset({ images, path, url }));
+    if (path && images) {
+      return images.acquire(path, full, (asset) => setState({ images, path, full, asset }));
+    }
   }, [path, full, images]);
-  return asset?.images === images && asset?.path === path ? asset?.url : undefined;
+  if (!path) return { kind: "unrecorded" };
+  if (state?.images === images && state?.path === path && state.full === full) return state.asset;
+  return { kind: "loading" };
 }

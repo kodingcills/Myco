@@ -64,7 +64,10 @@ async function dropRun(page: Page, folder: string, hasSteps: boolean) {
     };
     const indexed = new Promise<void>((resolve) => {
       const observer = new MutationObserver(() => {
-        if (document.querySelector("[data-verdict-bar][data-verdict]") && !pending.has("verdict")) {
+        if (
+          document.querySelector('[data-verdict-bar][data-verdict-final="true"]') &&
+          !pending.has("verdict")
+        ) {
           markPaint("verdict");
           // Expose Why at the earliest opportunity after the initial Proof paint.
           void pending.get("verdict")!.then(() => {
@@ -109,7 +112,11 @@ async function measureKeyboard(page: Page) {
             const slider = document.querySelector("[data-scrub-seek]");
             const inspector = document.querySelector("[data-detail-heading] h2");
             const label = slider?.getAttribute("aria-valuetext");
-            if (!label || label !== inspector?.textContent) return;
+            const selected = document.querySelector(
+              '[data-step-row][aria-selected="true"] [data-step-index]',
+            );
+            if (!label || label !== inspector?.textContent || label !== selected?.textContent)
+              return;
             observer.disconnect();
             requestAnimationFrame(() => {
               clearTimeout(timeout);
@@ -186,17 +193,27 @@ async function measureScrub(page: Page, lastStep: number) {
           "pointermove",
           () => {
             performance.mark("scrub-input");
+            let commit: number | undefined;
             const observer = new MutationObserver(() => {
               if (slider.getAttribute("aria-valuenow") === previous) return;
               const label = slider.getAttribute("aria-valuetext");
-              if (document.querySelector("[data-detail-heading] h2")?.textContent !== label) return;
+              if (
+                commit === undefined &&
+                document.querySelector("[data-detail-heading] h2")?.textContent === label
+              ) {
+                performance.mark("scrub-commit");
+                commit = performance.measure(
+                  "scrub-commit",
+                  "scrub-input",
+                  "scrub-commit",
+                ).duration;
+              }
+              const selected = document.querySelector(
+                '[data-step-row][aria-selected="true"] [data-step-index]',
+              );
+              if (commit === undefined || selected?.textContent !== label) return;
+              const inspectorCommit = commit;
               observer.disconnect();
-              performance.mark("scrub-commit");
-              const commit = performance.measure(
-                "scrub-commit",
-                "scrub-input",
-                "scrub-commit",
-              ).duration;
               cancelAnimationFrame(raf);
               const before = previousFrame;
               requestAnimationFrame((time) => {
@@ -207,7 +224,7 @@ async function measureScrub(page: Page, lastStep: number) {
                   "scrub-render",
                 ).duration;
                 clearTimeout(timeout);
-                resolve({ update, frame: time - before, commit });
+                resolve({ update, frame: time - before, commit: inspectorCommit });
               });
             });
             observer.observe(document.body, { subtree: true, childList: true, attributes: true });
@@ -232,7 +249,7 @@ async function measureScrub(page: Page, lastStep: number) {
   return { updates, frames, inspector };
 }
 
-test("measure GUI spec §8 on real and generated runs", async ({ browser }) => {
+test("measure GUI spec §8 on real and generated runs", async ({ browser, context }) => {
   test.skip(!perfDir, "Set MYCO_VIEWER_PERF_DIR to enable benchmarking");
   test.setTimeout(240_000);
   const cases = [
@@ -252,12 +269,7 @@ test("measure GUI spec §8 on real and generated runs", async ({ browser }) => {
     const frames: number[] = [];
     const inspector: number[] = [];
     for (let i = 0; i <= sampleCount; i++) {
-      const page = await browser.newPage({
-        offline: true,
-        viewport: { width: 1440, height: 900 },
-        timezoneId: "America/New_York",
-        reducedMotion: "reduce",
-      });
+      const page = await context.newPage();
       try {
         const offline = checkOffline(page);
         await boot(page);

@@ -38,10 +38,16 @@ export type ViewTraceEvent = (
 export interface RunManifest {
   format: "mycotrace/1";
   runId: string;
-  files: Record<string, string>;
+  files: Record<string, unknown>;
 }
 
+export type EvidenceValidation =
+  | { kind: "pending" }
+  | { kind: "complete"; manifestChecked: boolean }
+  | { kind: "invalid"; reason: Sourced<string> };
+
 export interface RunData {
+  validation: EvidenceValidation;
   result?: ResultRecord;
   events: ViewTraceEvent[];
   byStep: Map<number, ViewTraceEvent[]>;

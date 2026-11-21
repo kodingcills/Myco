@@ -43,6 +43,16 @@ for (const { name, folder, verdict } of runs) {
     await shot(page, `${name}-proof-1440`);
     if (name === "normal") {
       await page.setViewportSize({ width: 1280, height: 800 });
+      const startsFits = await page.locator("[data-run-start]").evaluate((start) => {
+        const parent = start.parentElement!;
+        const range = document.createRange();
+        range.selectNodeContents(start);
+        return range.getBoundingClientRect().right <= parent.getBoundingClientRect().right;
+      });
+      expect(startsFits).toBe(true);
+      expect(await page.locator("[data-run-id]").evaluate((id) => id.clientWidth)).toBeGreaterThan(
+        0,
+      );
       await shot(page, `${name}-proof-1280`);
       await page.keyboard.press("2");
       await expect(page.getByRole("listbox", { name: "Run steps" })).toBeVisible();
@@ -153,5 +163,95 @@ test("J3 steps and moves the playhead by keyboard with missing artifacts", async
       .first(),
   ).toBeVisible();
   await shot(page, "unknown-missing-artifacts-1440");
+  offline();
+});
+
+test("global step keys, local widget keys and panel focus follow the keyboard order", async ({
+  page,
+}) => {
+  const offline = checkOffline(page);
+  await boot(page);
+  await (await pickerByKeyboard(page, "folder")).setFiles(runs[0]!.folder);
+  await waitForRun(page, "Verified");
+
+  const first = page.locator("[data-comparison]").first();
+  const playhead = page.getByRole("slider", { name: "Playhead" });
+  await expect(first).toBeFocused();
+  for (const key of ["ArrowDown", "j", "ArrowUp"]) await page.keyboard.press(key);
+  await expect(first).toBeFocused();
+  await expect(playhead).toHaveAttribute("aria-valuetext", "#00");
+
+  const region = (name: string) =>
+    page.locator(`[data-region="${name}"]:focus, [data-region="${name}"] :focus`);
+  await page.keyboard.press("2");
+  const list = page.getByRole("listbox", { name: "Run steps" });
+  await expect(list).toBeFocused();
+  await page.keyboard.press("F6");
+  const detail = page.getByRole("tab", { name: "Detail", selected: true });
+  await expect(detail).toBeFocused();
+  await page.keyboard.press(`${mod}+d`);
+  await expect(list).toBeFocused();
+  await page.keyboard.press(`${mod}+d`);
+  await expect(detail).toBeFocused();
+  for (const name of ["scrubber", "runs"]) {
+    await page.keyboard.press("F6");
+    await expect(region(name)).toHaveCount(1);
+  }
+  const treeItem = page.getByRole("treeitem", { selected: true });
+  await expect(treeItem).toBeFocused();
+  await page.keyboard.press(`${mod}+b`);
+  await expect(region("verdict")).toHaveCount(1);
+  await page.keyboard.press(`${mod}+b`);
+  await expect(treeItem).toBeFocused();
+  for (const name of ["scrubber", "inspector", "center", "verdict", "runs"]) {
+    await page.keyboard.press("Shift+F6");
+    await expect(region(name)).toHaveCount(1);
+  }
+
+  await (await pickerByKeyboard(page, "folder")).setFiles(
+    runs.find(({ name }) => name === "false-success")!.folder,
+  );
+  await waitForRun(page, "Failed");
+  await page.keyboard.press("3");
+  await expect(first).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("[data-comparison]").nth(1)).toBeFocused();
+  await expect(playhead).toHaveAttribute("aria-valuetext", "No step selected");
+  await page.keyboard.press("j");
+  await expect(playhead).toHaveAttribute("aria-valuetext", "#00");
+  offline();
+});
+
+test("Why row facts and Verdict Bar counts lead to their contributing evidence", async ({
+  page,
+}) => {
+  const offline = checkOffline(page);
+  await boot(page);
+  await (await pickerByKeyboard(page, "folder")).setFiles(
+    runs.find(({ name }) => name === "recovered")!.folder,
+  );
+  await waitForRun(page, "Recovered");
+  await page.keyboard.press("2");
+  await page.keyboard.press("j");
+  const refs = page.getByRole("group", { name: "Sources for step #00" });
+  await expect(refs.getByRole("button")).toHaveCount(4);
+  await page.keyboard.press("Tab");
+  await expect(refs.getByRole("button").first()).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("tab", { name: "Raw", selected: true })).toBeVisible();
+  await expect(page.locator("[data-raw-body]")).toContainText('"type":"action"');
+  await page.keyboard.press("Escape");
+
+  const count = page.getByRole("button", { name: "guard failures 1" });
+  await count.focus();
+  await page.keyboard.press("Enter");
+  const evidence = page.getByRole("region", { name: "Failures & recovery" });
+  await expect(evidence).toBeFocused();
+  await expect(evidence.getByRole("button", { name: "Open source trace.jsonl:60" })).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(evidence.getByRole("button", { name: "Open source trace.jsonl:60" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("tab", { name: "Detail", selected: true })).toBeVisible();
+  await expect(page.getByRole("option", { selected: true })).toHaveAttribute("id", "step-row-6");
   offline();
 });

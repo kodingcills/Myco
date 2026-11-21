@@ -25,7 +25,14 @@ function Count({
   const toggle = useViewer((state) => state.toggleFilter);
   return (
     <span data-count>
-      <button type="button" data-button aria-pressed={active} onClick={() => toggle(filter)}>
+      <button
+        type="button"
+        data-button
+        aria-pressed={active}
+        aria-controls={active ? "proof-filter" : undefined}
+        title={`Show all ${label} and their sources`}
+        onClick={() => toggle(filter)}
+      >
         {label} <span className="type-data">{value ?? <Missing />}</span>
       </button>
       {source && <SourceChip source={source} compact />}
@@ -63,7 +70,9 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
   const guards = failures.filter(
     (item) => item.kind === "guardFailure" || item.kind === "guard-failure",
   );
-  const recoveries = failures.filter((item) => item.kind === "recovery");
+  const recoveries = failures.filter(
+    (item) => item.kind === "recovery" && "event" in item.value && item.value.event !== "none",
+  );
   const checks = useMemo(() => deriveChecks(result), [result]);
   const scored = result?.recordKind !== "session" ? result?.verdict : undefined;
   const started = result?.startedAt && new Date(result.startedAt);
@@ -82,6 +91,7 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
       data-region="verdict"
       data-verdict-bar
       data-verdict={waitingForResult || (error && !result) ? undefined : verdict.label}
+      data-verdict-final={!loading && !error ? "true" : undefined}
       aria-label="Verdict bar"
       tabIndex={-1}
     >
@@ -97,10 +107,10 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
         </div>
       </div>
       <div data-verdict-sources>
-        {result && verdict.sources[0] && <SourceChip source={verdict.sources[0]} compact />}
-        {verdict.subtype &&
+        {verdict.sources[0] && <SourceChip source={verdict.sources[0]} compact />}
+        {(verdict.subtype || verdict.label === "Recovered") &&
           verdict.sources
-            .slice(1)
+            .slice(verdict.label === "Recovered" ? 2 : 1)
             .map((source) => <SourceChip key={JSON.stringify(source)} source={source} compact />)}
       </div>
       <div data-task data-inline-evidence>
@@ -116,13 +126,13 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
         )}
       </div>
       <div data-run-line data-inline-evidence className="type-data-small text-text-tertiary">
-        <span className="truncate" title={result?.runId}>
+        <span data-run-id className="truncate" title={result?.runId}>
           {result?.runId ?? <Missing />}
         </span>
         {result && <SourceChip source={resultSource("/runId")} compact />}
         {startedLabel && (
           <>
-            <span className="truncate" title={result?.startedAt}>
+            <span data-run-start className="whitespace-nowrap" title={result?.startedAt}>
               · started {startedLabel}
             </span>
             <SourceChip source={resultSource("/startedAt")} compact />
@@ -169,17 +179,11 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
           filter="checks"
           source={checksSource}
         />
-        <Count
-          label="guard failures"
-          value={loading && !guards.length ? undefined : guards.length}
-          filter="guards"
-          source={guards[0]?.source}
-        />
+        <Count label="guard failures" value={loading ? undefined : guards.length} filter="guards" />
         <Count
           label="recoveries"
-          value={loading && !recoveries.length ? undefined : recoveries.length}
+          value={loading ? undefined : recoveries.length}
           filter="recoveries"
-          source={recoveries[0]?.source}
         />
       </fieldset>
       <ModeTabs />

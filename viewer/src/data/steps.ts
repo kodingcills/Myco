@@ -1,5 +1,6 @@
 import type { EvidenceStep, TraceEvent } from "../../../src/core/evidence.ts";
-import type { RunData, Sourced, ViewTraceEvent } from "./types.ts";
+import type { RunData, Sourced, SourceRef, ViewTraceEvent } from "./types.ts";
+import { isRecovery } from "./verdict.ts";
 
 export const markerTypes = ["failed", "recovered", "unknown", "fault"] as const;
 export type Marker = (typeof markerTypes)[number];
@@ -31,6 +32,7 @@ export interface StepRow {
   screenshot?: Sourced<string>;
   offset?: number;
   timestamp?: string;
+  timestampSource?: SourceRef;
   recovers?: number;
 }
 
@@ -98,7 +100,7 @@ export function joinSteps(data: RunData) {
       guard?.value.results.some(({ passed }) => passed === false)
     )
       failedStep = row;
-    if (event.type === "recovery" && event.event !== "aborted-uncertain" && failedStep === row) {
+    if (isRecovery(event) && failedStep === row) {
       recovery = { row, entries: [entry] };
     }
   }
@@ -106,8 +108,9 @@ export function joinSteps(data: RunData) {
   const started = Date.parse(result?.startedAt ?? "");
   for (const row of rows) {
     row.markers = deriveMarkers(row, result?.guardFailure?.step === row.step);
-    const first = row.actions[0]?.value ?? row.guards[0]?.value ?? row.observations[0]?.value;
-    row.timestamp = first?.timestamp;
+    const first = row.actions[0] ?? row.guards[0] ?? row.observations[0];
+    row.timestamp = first?.value.timestamp;
+    row.timestampSource = first?.source;
     const timestamp = Date.parse(row.timestamp ?? "");
     if (Number.isFinite(timestamp - started)) row.offset = (timestamp - started) / 1000;
   }
@@ -122,9 +125,7 @@ export function deriveMarkers(row: StepRow, terminalGuardFailure = false): Marke
     ) ||
     row.guards.some(({ value }) => value.results.some((guard) => guard.passed === false)) ||
     row.events.some(({ event }) => event.type === "guard-failure");
-  const recovered = row.events.some(
-    ({ event }) => event.type === "recovery" && event.event !== "aborted-uncertain",
-  );
+  const recovered = row.events.some(({ event }) => isRecovery(event));
   const unknown =
     row.guards.some(({ value }) => value.results.some((guard) => guard.passed === null)) ||
     row.events.some(

@@ -98,7 +98,7 @@ function comparisonOf(claimed: Sourced<unknown> | undefined, persisted: Persiste
   return "value" in persisted && equalJson(claimed.value, persisted.value) ? "agree" : "disagree";
 }
 
-function equalJson(left: unknown, right: unknown): boolean {
+export function equalJson(left: unknown, right: unknown): boolean {
   if (left === right) return true;
   if (Array.isArray(left) && Array.isArray(right)) {
     return (
@@ -240,12 +240,36 @@ export function deriveFailuresAndRecovery({
   return items;
 }
 
+export function isRecovery(event: { type: string; event?: unknown }) {
+  return (
+    event.type === "recovery" &&
+    typeof event.event === "string" &&
+    event.event.trim() !== "" &&
+    event.event !== "none" &&
+    event.event !== "aborted-uncertain"
+  );
+}
+
+function unknown(reason: Sourced<string>): DisplayVerdict {
+  return { label: "Unknown", reason, sources: [reason.source] };
+}
+
 export function deriveVerdict({
   result,
   events = [],
   ledger = [],
-}: VerdictEvidence): DisplayVerdict {
-  if (!result) return { label: "Unknown", sources: [] };
+  validation = { kind: "pending" },
+  parseErrors = [],
+}: VerdictEvidence & Partial<Pick<RunData, "validation" | "parseErrors">>): DisplayVerdict {
+  if (validation.kind === "invalid") return unknown(validation.reason);
+  if (!result) {
+    const issue = parseErrors[0];
+    return issue
+      ? unknown({ value: "The result record could not be read", source: issue.source })
+      : validation.kind === "complete"
+        ? unknown({ value: "Result record is missing", source: resultRef("") })
+        : { label: "Unknown", sources: [] };
+  }
   if (result.recordKind === "session") {
     return { label: "Unknown", subtype: "Not scored", sources: [resultRef("/recordKind")] };
   }
@@ -266,13 +290,20 @@ export function deriveVerdict({
       sources: [statusRef, ...(unresolved ? [unresolved.source] : [])],
     };
   }
+  if (validation.kind === "pending") {
+    return unknown({
+      value: "Checking run evidence",
+      source: { file: "trace.jsonl", path: "" },
+    });
+  }
   if (verdict.status === "refuted") {
     const oracle = ledger.find(
       ({ value }) => value.runId === result.runId && value.oracle === "ground-truth:false",
     );
-    const disagreement = deriveComparatorRows({ result, events }).find(
-      (row) => row.comparison === "disagree" && row.claimed,
-    );
+    const disagreement = deriveComparatorRows({
+      result,
+      events: parseErrors.length ? [] : events,
+    }).find((row) => row.comparison === "disagree" && row.claimed);
     const evidence = oracle
       ? [oracle.source]
       : disagreement?.claimed
@@ -285,19 +316,54 @@ export function deriveVerdict({
       sources: [statusRef, ...evidence],
     };
   }
+  if (result.unresolvedState !== undefined && reason) return unknown(reason);
+  const issue = parseErrors[0];
+  if (issue) {
+    return unknown({ value: `Incomplete evidence in ${issue.source.file}`, source: issue.source });
+  }
   if (!verdict.checks.every((check) => check.passed === true)) {
     return { label: "Unknown", reason, sources: [statusRef, resultRef("/verdict/checks")] };
   }
+  if (result.guardFailure) {
+    return unknown({
+      value: "The result records a terminal guard failure",
+      source: resultRef("/guardFailure"),
+    });
+  }
 
-  const recovery = events.find(
-    (entry) =>
-      entry.kind === "standard" &&
-      ((entry.event.type === "recovery" && entry.event.event !== "aborted-uncertain") ||
-        // A verified terminal record without an abort records completion.
-        (entry.event.type === "guard-failure" && !result.guardFailure)),
-  );
+  let recovery: SourceRef | undefined;
+  let abort: SourceRef | undefined;
+  let pendingGuard: SourceRef | undefined;
+  for (const entry of events) {
+    if (entry.kind !== "standard") continue;
+    const event = entry.event;
+    if (event.type === "recovery" && event.event === "aborted-uncertain") {
+      abort = entry.source;
+    } else if (event.type === "recovery" && isRecovery(event)) {
+      recovery = entry.source;
+      pendingGuard = undefined;
+      abort = undefined;
+    } else if (event.type === "guard-failure") {
+      pendingGuard = entry.source;
+    } else if (
+      event.type === "guard-evaluation" &&
+      event.phase === "post" &&
+      pendingGuard &&
+      event.results.every(({ passed }) => passed === true) &&
+      result.steps.some(
+        (step) => step.step === event.step && equalJson(step.postconditionResults, event.results),
+      )
+    ) {
+      recovery = pendingGuard;
+      pendingGuard = undefined;
+    }
+  }
+  if (abort) return unknown({ value: "Recovery ended in uncertainty", source: abort });
+  if (pendingGuard) {
+    return unknown({ value: "No completion follows the guard failure", source: pendingGuard });
+  }
   const sources = [statusRef, resultRef("/verdict/checks")];
   return recovery
-    ? { label: "Recovered", sources: [...sources, recovery.source] }
+    ? { label: "Recovered", sources: [...sources, recovery] }
     : { label: "Verified", sources };
 }

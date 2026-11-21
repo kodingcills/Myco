@@ -24,7 +24,7 @@ import {
   zoomSpan,
 } from "../data/timeline.ts";
 import { useViewer } from "../store.ts";
-import { useScreenshot } from "./Screenshots.tsx";
+import { useScreenshotAsset } from "./Screenshots.tsx";
 import { Missing } from "./SourceRef.tsx";
 
 const { ruler, filmstrip, marker, brush, markerWidth, markerHeight, playheadCap } =
@@ -53,10 +53,18 @@ function canvasContext(canvas: HTMLCanvasElement | null, width: number, scale: n
 }
 
 function Thumbnail({ row, x, label }: { row: StepRow; x: number; label: string }) {
-  const url = useScreenshot(row.screenshot?.value);
+  const image = useScreenshotAsset(row.screenshot?.value);
   return (
     <div data-film-thumb style={{ transform: `translateX(${x}px)` }} title={label}>
-      {url ? <img src={url} alt={`Screenshot for ${label}`} /> : <Missing />}
+      {image.kind === "ready" ? (
+        <img src={image.url} alt={`Screenshot for ${label}`} />
+      ) : image.kind === "unrecorded" ? (
+        <Missing />
+      ) : (
+        <span className="text-text-tertiary">
+          {image.kind === "loading" ? "Loading screenshot" : "Screenshot unavailable"}
+        </span>
+      )}
     </div>
   );
 }

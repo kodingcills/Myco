@@ -57,6 +57,36 @@ function focusMode(mode: Mode) {
   )?.focus({ preventScroll: true });
 }
 
+function focusRegion(name: string, lastFocus: Map<string, HTMLElement>) {
+  const region = document.querySelector<HTMLElement>(`[data-region="${name}"]`);
+  if (!region) return;
+  const previous = lastFocus.get(name);
+  const key = previous?.dataset.focusKey ?? previous?.getAttribute("aria-label");
+  const replacement =
+    key &&
+    [...region.querySelectorAll<HTMLElement>("[data-focus-key], [aria-label]")].find(
+      (element) =>
+        (element.dataset.focusKey ?? element.getAttribute("aria-label")) === key &&
+        element.getClientRects().length,
+    );
+  const target =
+    (previous && region.contains(previous) && previous.getClientRects().length
+      ? previous
+      : undefined) ||
+    replacement ||
+    [
+      ...region.querySelectorAll<HTMLElement>(
+        '[data-inspector-tabs] [aria-selected="true"], [data-step-options], [data-comparison][tabindex="0"]',
+      ),
+    ].find((element) => element.getClientRects().length) ||
+    [...region.querySelectorAll<HTMLElement>('[tabindex="0"], button:not([disabled])')].find(
+      (element) => element.tabIndex >= 0 && element.getClientRects().length,
+    ) ||
+    region;
+  target.focus({ preventScroll: true });
+  return target;
+}
+
 export function App() {
   const run = useActiveRun();
   const mode = useViewer((state) => state.mode);
@@ -85,7 +115,9 @@ export function App() {
   const [dropError, setDropError] = useState<string>();
   const openTrigger = useRef<HTMLButtonElement>(null);
   const helpTrigger = useRef<HTMLButtonElement>(null);
-  const lastFocus = useRef(new Map<HTMLElement, HTMLElement>());
+  const lastFocus = useRef(new Map<string, HTMLElement>());
+  const panelFallback = useRef<{ panel: string; element: HTMLElement }>(null);
+  const restorePanel = useRef<string>(null);
 
   const focusAfterModeChange = useRef<Mode>(null);
   useLayoutEffect(() => {
@@ -94,14 +126,21 @@ export function App() {
     focusMode(mode);
   }, [mode]);
 
+  useLayoutEffect(() => {
+    const reopened = restorePanel.current === "runs" ? showSidebar : inspector;
+    if (!reopened || !restorePanel.current) return;
+    focusRegion(restorePanel.current, lastFocus.current);
+    restorePanel.current = null;
+  }, [showSidebar, inspector]);
+
   useEffect(() => {
     function trackFocus(event: FocusEvent) {
       if (!(event.target instanceof HTMLElement)) return;
-      const region = event.target.closest<HTMLElement>("[data-region]");
+      const region = event.target.closest<HTMLElement>("[data-region]")?.dataset.region;
       if (region) lastFocus.current.set(region, event.target);
     }
     function cycleRegion(backwards: boolean) {
-      const regions = Array.from(document.querySelectorAll<HTMLElement>("[data-region]"));
+      const regions = [...document.querySelectorAll<HTMLElement>("[data-region]")];
       const current = regions.findIndex((region) => region.contains(document.activeElement));
       const index =
         current < 0
@@ -109,18 +148,27 @@ export function App() {
             ? regions.length - 1
             : 0
           : (current + (backwards ? -1 : 1) + regions.length) % regions.length;
-      const region = regions[index];
-      if (!region) return;
-      const previous = lastFocus.current.get(region);
-      if (previous?.isConnected && previous.getClientRects().length) previous.focus();
-      else
-        (
-          region.querySelector<HTMLElement>('[tabindex="0"],button:not([disabled])') ?? region
-        ).focus();
+      const region = regions[index]?.dataset.region;
+      if (region) focusRegion(region, lastFocus.current);
+    }
+    function togglePanel(panel: "runs" | "inspector", open: boolean) {
+      const active = document.activeElement;
+      if (open && active?.closest("[data-region]")?.getAttribute("data-region") === panel) {
+        const fallback = focusRegion(panel === "runs" ? "verdict" : "center", lastFocus.current);
+        if (fallback) panelFallback.current = { panel, element: fallback };
+      } else if (!open && panelFallback.current?.panel === panel) {
+        if (active === panelFallback.current.element) restorePanel.current = panel;
+        panelFallback.current = null;
+      }
+      useViewer.setState(panel === "runs" ? { sidebarOpen: !open } : { inspectorOpen: !open });
     }
     function keys(event: KeyboardEvent) {
       setMod(event.metaKey || event.ctrlKey);
-      if (event.defaultPrevented) return;
+      if (
+        event.defaultPrevented ||
+        (event.target instanceof Element && event.target.closest('[role="dialog"]'))
+      )
+        return;
       const state = useViewer.getState();
       const modified = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
@@ -135,10 +183,10 @@ export function App() {
         setPicker(true);
       } else if (modified && key === "b") {
         event.preventDefault();
-        useViewer.setState({ sidebarOpen: !showSidebar });
+        togglePanel("runs", showSidebar);
       } else if (modified && key === "d" && state.selection.run) {
         event.preventDefault();
-        useViewer.setState({ inspectorOpen: !state.inspectorOpen });
+        togglePanel("inspector", state.inspectorOpen);
       } else if (event.key === "F6") {
         event.preventDefault();
         cycleRegion(event.shiftKey);
@@ -185,11 +233,12 @@ export function App() {
       ) {
         const inList =
           event.target instanceof HTMLElement && event.target.matches("[data-step-options]");
+        const arrowMovesStep = !(event.target instanceof HTMLInputElement);
         const current =
           state.selection.step === undefined ? undefined : index.get(state.selection.step);
         let next: number | undefined;
-        if (key === "j" || (inList && key === "arrowdown")) next = (current ?? -1) + 1;
-        if (key === "k" || (inList && key === "arrowup"))
+        if (key === "j" || (arrowMovesStep && key === "arrowdown")) next = (current ?? -1) + 1;
+        if (key === "k" || (arrowMovesStep && key === "arrowup"))
           next = current === undefined ? 0 : current - 1;
         if (inList && key === "home") next = 0;
         if (inList && key === "end") next = rows.length - 1;
@@ -226,7 +275,7 @@ export function App() {
         !document.activeElement?.closest('[role="menu"]')
       ) {
         if (narrow && state.inspectorOpen && (state.mode === "why" || state.selection.source))
-          useViewer.setState({ inspectorOpen: false });
+          togglePanel("inspector", true);
         else state.select({ run: state.selection.run });
       }
     }
@@ -379,7 +428,7 @@ export function App() {
                     {error && <p className="type-data wrap-anywhere">{error}</p>}
                     {parseError && (
                       <>
-                        <p>Incomplete trace</p>
+                        <p>Incomplete evidence in {parseError.source.file}</p>
                         {parseError.issues.map(({ path, keyword, message }) => (
                           <p
                             key={JSON.stringify([path, keyword, message])}

@@ -55,7 +55,7 @@ function Comparator({ rows }: { rows: ComparatorRow[] }) {
               inspect(row.persisted.source);
             }
             const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-            if (offset) {
+            if (offset && rows.length > 1) {
               event.preventDefault();
               refs.current[index + offset]?.focus();
             }
@@ -150,7 +150,7 @@ function FailureRow({ item, virtual }: { item: FailureRecoveryItem; virtual?: bo
   const badge =
     label === "Guard failure"
       ? "Failed"
-      : label === "Recovery"
+      : label === "Recovery" && value !== "none"
         ? value === "aborted-uncertain"
           ? "Unknown"
           : "Recovered"
@@ -162,6 +162,9 @@ function FailureRow({ item, virtual }: { item: FailureRecoveryItem; virtual?: bo
       <span className="type-data">{value ?? <Missing />}</span>
       {detail && <span className="type-data">{detail}</span>}
       <SourceChip source={item.source} />
+      {"alsoRecordedAt" in item && item.alsoRecordedAt && (
+        <SourceChip source={item.alsoRecordedAt} />
+      )}
     </Row>
   );
 }
@@ -239,6 +242,12 @@ export function Proof({
   const digits = Math.max(2, String(data.result?.steps.at(-1)?.step ?? 0).length);
   const filter = useViewer((state) => state.filter);
   const checkIndex = useViewer((state) => state.selection.check);
+  const filterResult = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (filter && document.activeElement?.getAttribute("aria-controls") === "proof-filter") {
+      filterResult.current?.focus();
+    }
+  }, [filter]);
   useEffect(() => {
     if (
       checkIndex === undefined &&
@@ -260,7 +269,13 @@ export function Proof({
     <>
       {!filter && <Comparator rows={rows} />}
       {(!filter || filter === "checks") && (
-        <section aria-label="Checks" className="pb-3">
+        <section
+          aria-label="Checks"
+          className="pb-3"
+          ref={filter === "checks" ? filterResult : undefined}
+          id={filter === "checks" ? "proof-filter" : undefined}
+          tabIndex={filter === "checks" ? -1 : undefined}
+        >
           <h2 className="px-3 py-2 type-title">Checks</h2>
           <EvidenceList
             rows={checks}
@@ -299,14 +314,20 @@ export function Proof({
         </section>
       )}
       {filter !== "checks" && (
-        <section aria-label="Failures & recovery" className="pb-3">
+        <section
+          aria-label="Failures & recovery"
+          className="pb-3"
+          ref={filter ? filterResult : undefined}
+          id={filter ? "proof-filter" : undefined}
+          tabIndex={filter ? -1 : undefined}
+        >
           <h2 className="px-3 py-2 type-title">Failures &amp; recovery</h2>
           <EvidenceList
             rows={failures.filter(
               (item) =>
                 !filter ||
                 (filter === "recoveries"
-                  ? item.kind === "recovery"
+                  ? item.kind === "recovery" && "event" in item.value && item.value.event !== "none"
                   : item.kind === "guard-failure" || item.kind === "guardFailure"),
             )}
             center={center}

@@ -8,7 +8,7 @@ import { loadRunFiles } from "../data/loaders.ts";
 import { type StepRow, stepLabel } from "../data/steps.ts";
 import type { SourceRef } from "../data/types.ts";
 import { type InspectorTab, type OpenedRun, useViewer } from "../store.ts";
-import { useScreenshot } from "./Screenshots.tsx";
+import { useScreenshotAsset } from "./Screenshots.tsx";
 import { formatValue, Missing, SourceChip, sourceLabel } from "./SourceRef.tsx";
 
 function sourceValue(run: OpenedRun, source: SourceRef) {
@@ -277,25 +277,44 @@ function DetailSection({ label, children }: { label: string; children: React.Rea
 
 function Screenshot({ row }: { row: StepRow }) {
   const path = row.screenshot?.value;
-  const full = useScreenshot(path, true);
-  const thumb = useScreenshot(path);
-  const url = full ?? thumb;
-  if (!url) return <Missing />;
+  const full = useScreenshotAsset(path, true);
+  const thumb = useScreenshotAsset(path);
+  if (!path) return <Missing />;
+  const image = full.kind === "ready" ? full : thumb.kind === "ready" ? thumb : undefined;
   return (
     <>
-      <Dialog.Root>
-        <Dialog.Trigger data-screenshot-trigger aria-label="Enlarge screenshot">
-          <img src={url} alt="Step screenshot" />
-        </Dialog.Trigger>
-        <Dialog.Portal>
-          <Dialog.Backdrop data-screenshot-backdrop />
-          <Dialog.Popup data-screenshot-lightbox>
-            <Dialog.Title className="sr-only">Step screenshot</Dialog.Title>
-            <Dialog.Close data-button>Close</Dialog.Close>
-            <img src={url} alt="Step screenshot at original size" />
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {image ? (
+        <Dialog.Root>
+          <Dialog.Trigger data-screenshot-trigger aria-label="Enlarge screenshot">
+            <img
+              src={image.url}
+              alt="Step screenshot"
+              data-image-size={full.kind === "ready" ? "full" : "preview"}
+            />
+          </Dialog.Trigger>
+          <Dialog.Portal>
+            <Dialog.Backdrop data-screenshot-backdrop />
+            <Dialog.Popup data-screenshot-lightbox>
+              <Dialog.Title className="sr-only">Step screenshot</Dialog.Title>
+              <Dialog.Close data-button>Close</Dialog.Close>
+              <img
+                src={image.url}
+                alt={
+                  full.kind === "ready"
+                    ? "Step screenshot at original size"
+                    : "Step screenshot preview"
+                }
+              />
+            </Dialog.Popup>
+          </Dialog.Portal>
+        </Dialog.Root>
+      ) : (
+        <p role="status" className="text-text-tertiary">
+          {full.kind === "unavailable" && thumb.kind === "unavailable"
+            ? "Screenshot unavailable"
+            : "Loading screenshot"}
+        </p>
+      )}
       {row.screenshot && <SourceChip source={row.screenshot.source} />}
     </>
   );
@@ -542,7 +561,14 @@ export function Inspector({
   }
 
   return (
-    <div ref={slot} data-inspector-slot data-overlay={narrow || undefined} style={{ width }}>
+    <div
+      ref={slot}
+      data-inspector-slot
+      data-region="inspector"
+      tabIndex={-1}
+      data-overlay={narrow || undefined}
+      style={{ width }}
+    >
       <input
         type="range"
         data-resize
@@ -566,7 +592,7 @@ export function Inspector({
           drag.current = null;
         }}
       />
-      <aside data-region="inspector" aria-label="Inspector" tabIndex={-1}>
+      <aside aria-label="Inspector">
         <Tabs.Root
           data-inspector
           value={tab}
@@ -574,10 +600,20 @@ export function Inspector({
         >
           <header data-inspector-tabs>
             <Tabs.List aria-label="Inspector view" data-modes activateOnFocus>
-              <Tabs.Tab ref={detailTab} data-button value="detail">
+              <Tabs.Tab
+                ref={detailTab}
+                data-button
+                value="detail"
+                data-focus-key="inspector-detail"
+              >
                 Detail
               </Tabs.Tab>
-              <Tabs.Tab data-button value="raw" aria-keyshortcuts="R">
+              <Tabs.Tab
+                data-button
+                value="raw"
+                aria-keyshortcuts="R"
+                data-focus-key="inspector-raw"
+              >
                 Raw
               </Tabs.Tab>
             </Tabs.List>
@@ -588,7 +624,12 @@ export function Inspector({
               title="Close Inspector (Mod+D)"
               onClick={() => {
                 useViewer.setState({ inspectorOpen: false });
-                document.querySelector<HTMLElement>("[data-step-options], [data-center]")?.focus();
+                (
+                  document.querySelector<HTMLElement>("[data-step-options]") ??
+                  document.querySelector<HTMLElement>(
+                    '[data-comparison][tabindex="0"], [data-center]',
+                  )
+                )?.focus();
               }}
             >
               <PanelRightClose aria-hidden="true" />

@@ -15,6 +15,8 @@ import type {
   ViewTraceEvent,
 } from "./types.ts";
 
+import { checkManifest, checkRunEvidence } from "./validation.ts";
+
 const traceSchemas = new Map(
   traceEventSchema.oneOf?.map((branch) => [
     branch.properties?.type?.const,
@@ -67,29 +69,53 @@ async function readJson<T>(
   const blob = files.read(file);
   if (!blob) return undefined;
   const source = { file, path: "" };
-  const value = json(await blob.text(), source, errors);
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(await blob.arrayBuffer());
+  } catch {
+    errors.push({
+      source,
+      issues: [{ path: "$", keyword: "read", message: "Could not read UTF-8 JSON" }],
+    });
+    return undefined;
+  }
+  const value = json(text, source, errors);
   return valid(value, schema, source, errors) ? (value as T) : undefined;
 }
 
-async function* jsonLines(blob: Blob) {
-  const reader = blob.stream().pipeThrough(new TextDecoderStream()).getReader();
+async function readLines(
+  blob: Blob,
+  file: string,
+  errors: ParseError[],
+  consume: (line: number, text: string) => void,
+) {
+  const stream = new TextDecoderStream("utf-8", { fatal: true });
+  const reader = blob.stream().pipeThrough(stream).getReader();
   let pending = "";
   let line = 0;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const next = await reader.read().catch(() => undefined);
+      if (!next) {
+        errors.push({
+          source: { file, path: "" },
+          issues: [{ path: "$", keyword: "read", message: "Could not read UTF-8 JSON Lines" }],
+        });
+        return;
+      }
+      const { done, value } = next;
       if (done) break;
       pending += value;
       let start = 0;
       let end = pending.indexOf("\n");
       while (end !== -1) {
-        yield { line: ++line, text: pending.slice(start, end).replace(/\r$/, "") };
+        consume(++line, pending.slice(start, end).replace(/\r$/, ""));
         start = end + 1;
         end = pending.indexOf("\n", start);
       }
       pending = pending.slice(start);
     }
-    if (pending) yield { line: ++line, text: pending.replace(/\r$/, "") };
+    if (pending) consume(++line, pending.replace(/\r$/, ""));
   } finally {
     reader.releaseLock();
   }
@@ -105,30 +131,42 @@ export async function parseRun(
   emit?: (update: RunUpdate) => void,
 ): Promise<RunData> {
   const parseErrors: ParseError[] = [];
+  const cached = new Map<string, Blob | undefined>();
+  function read(path: string) {
+    if (path.startsWith("artifacts/")) return files.read(path);
+    if (!cached.has(path)) cached.set(path, files.read(path));
+    return cached.get(path);
+  }
+  const evidence = { paths: files.paths, read };
   const result = await readJson<ResultRecord>(
-    files,
+    evidence,
     "result.json",
     resultRecordSchema,
     parseErrors,
   );
   emit?.({ type: "result", result, parseErrors: [...parseErrors] });
 
+  const manifest = files.paths.includes("manifest.json")
+    ? await readJson<RunManifest>(evidence, "manifest.json", manifestSchema, parseErrors)
+    : undefined;
+  const manifestCheck = checkManifest({ files, manifest, result, read });
+
   const events: ViewTraceEvent[] = [];
   const byStep = new Map<number, ViewTraceEvent[]>();
   const seen = files.paths.includes("trace.extended.jsonl") ? new Set<string>() : undefined;
   let batch: ViewTraceEvent[] = [];
   for (const file of ["trace.jsonl", "trace.extended.jsonl"]) {
-    const blob = files.read(file);
+    const blob = read(file);
     if (!blob) continue;
-    for await (const { line, text } of jsonLines(blob)) {
-      if (!text.trim()) continue;
+    await readLines(blob, file, parseErrors, (line, text) => {
+      if (!text.trim()) return;
       // The extended artifact may be a full copy of the trace with extra lines.
-      if (file === "trace.extended.jsonl" && seen?.has(text.trim())) continue;
+      if (file === "trace.extended.jsonl" && seen?.has(text.trim())) return;
       const source = { file, line };
       const value = json(text, source, parseErrors);
       const schema = traceSchemas.get(eventType(value));
       if (!valid(value, schema ?? additiveEventSchema, source, parseErrors)) {
-        continue;
+        return;
       }
 
       const entry: ViewTraceEvent = schema
@@ -158,31 +196,33 @@ export async function parseRun(
           batch = [];
         }
       }
-    }
+    });
   }
   if (batch.length > 0) emit?.({ type: "trace", events: batch });
 
   const ledger: RunData["ledger"] = [];
-  const ledgerFile = files.read("ledger.jsonl");
+  const ledgerFile = read("ledger.jsonl");
   if (ledgerFile) {
-    for await (const { line, text } of jsonLines(ledgerFile)) {
-      if (!text.trim()) continue;
+    await readLines(ledgerFile, "ledger.jsonl", parseErrors, (line, text) => {
+      if (!text.trim()) return;
       const source = { file: "ledger.jsonl", line };
       const value = json(text, source, parseErrors);
       if (valid(value, ledgerRowSchema, source, parseErrors)) {
         ledger.push({ value: value as LedgerRow, source });
       }
-    }
-  }
-  let manifest = await readJson<RunManifest>(files, "manifest.json", manifestSchema, parseErrors);
-  if (manifest && Object.values(manifest.files).some((hash) => !/^[a-f0-9]{64}$/i.test(hash))) {
-    parseErrors.push({
-      source: { file: "manifest.json", path: "/files" },
-      issues: [{ path: "$.files", keyword: "pattern", message: "Expected SHA-256 hex digests" }],
     });
-    manifest = undefined;
+  }
+  const manifestError = await manifestCheck;
+  const manifestChecked = manifest !== undefined && !manifestError;
+  const reason = manifestError ?? checkRunEvidence(result, events, byStep, ledger, manifestChecked);
+  if (reason) {
+    parseErrors.push({
+      source: reason.source,
+      issues: [{ path: "$", keyword: "evidence", message: reason.value }],
+    });
   }
   return {
+    validation: reason ? { kind: "invalid", reason } : { kind: "complete", manifestChecked },
     result,
     events,
     byStep,

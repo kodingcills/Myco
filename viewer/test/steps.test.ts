@@ -28,6 +28,7 @@ function runData(events: ViewTraceEvent[] = []): RunData {
   }));
   return {
     result: { recordKind: "session", runId: "test", startedAt: "2026-11-21T12:00:00Z", steps },
+    validation: { kind: "complete", manifestChecked: false },
     events,
     byStep: new Map(),
     ledger: [],

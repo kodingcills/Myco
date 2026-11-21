@@ -1,11 +1,11 @@
 import { ImageOff, Zap } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import tokens from "../../../docs/design/tokens.json";
 import { actionLabel, markerLabels, type StepRow, stepLabel } from "../data/steps.ts";
 import { useViewer } from "../store.ts";
-import { useScreenshot } from "./Screenshots.tsx";
-import { Missing } from "./SourceRef.tsx";
+import { useScreenshotAsset } from "./Screenshots.tsx";
+import { Missing, SourceChip, sourceLabel } from "./SourceRef.tsx";
 import { VerdictBadge } from "./VerdictBadge.tsx";
 
 const localTime = new Intl.DateTimeFormat(undefined, {
@@ -21,7 +21,10 @@ const guardSummary = (row: StepRow, phase: "pre" | "post") => {
   const guards = row.guards.filter(({ value }) => value.phase === phase);
   if (!guards.length) return undefined;
   const results = guards.flatMap(({ value }) => value.results);
-  return `${phase} ${results.filter(({ passed }) => passed === true).length}/${results.length}`;
+  return {
+    text: `${phase} ${results.filter(({ passed }) => passed === true).length}/${results.length}`,
+    sources: guards.map(({ source }) => source),
+  };
 };
 
 function StepOption({
@@ -39,7 +42,15 @@ function StepOption({
   selected: boolean;
   onSelect(step: number): void;
 }) {
-  const image = useScreenshot(row.screenshot?.value);
+  const image = useScreenshotAsset(row.screenshot?.value);
+  const imageLabel =
+    image.kind === "loading"
+      ? "Loading screenshot"
+      : image.kind === "unavailable"
+        ? "Screenshot unavailable"
+        : image.kind === "unrecorded"
+          ? "Screenshot not recorded"
+          : undefined;
   const action = row.actions[0] && actionLabel(row.actions[0].value.action);
   const pre = guardSummary(row, "pre");
   const post = guardSummary(row, "post");
@@ -62,11 +73,13 @@ function StepOption({
       <span className="type-data-strong" data-step-index>
         {stepLabel(row.step, digits)}
       </span>
-      <span data-step-thumb title={image ? undefined : "Screenshot not recorded"}>
-        {image ? (
-          <img src={image} alt="Step screenshot" />
+      <span data-step-thumb title={imageLabel}>
+        {image.kind === "ready" ? (
+          <img src={image.url} alt="Step screenshot" />
+        ) : image.kind === "loading" ? (
+          <span className="sr-only">{imageLabel}</span>
         ) : (
-          <ImageOff aria-label="Screenshot not recorded" />
+          <ImageOff aria-label={imageLabel} />
         )}
       </span>
       <span className="type-data truncate" title={action}>
@@ -100,13 +113,19 @@ function StepOption({
         </span>
       )}
       <span className="type-data-small whitespace-nowrap">
-        {pre ?? <Missing />} · {post ?? <Missing />}
+        <span title={pre?.sources.map(sourceLabel).join(", ")}>{pre?.text ?? <Missing />}</span>
+        {" · "}
+        <span title={post?.sources.map(sourceLabel).join(", ")}>{post?.text ?? <Missing />}</span>
       </span>
       <span className="type-data-small">{version}</span>
       <span
         className="type-data-small"
         data-step-time
-        title={Number.isFinite(stamp) ? localTime.format(stamp) : undefined}
+        title={
+          Number.isFinite(stamp) && row.timestampSource
+            ? `${localTime.format(stamp)} · ${sourceLabel(row.timestampSource)}`
+            : undefined
+        }
       >
         {row.offset === undefined ? (
           <Missing />
@@ -117,6 +136,13 @@ function StepOption({
     </div>
   );
 }
+
+const stepComponents = {
+  // The outer listbox handles keyboard input and aria-activedescendant.
+  Scroller: forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<"div">>((props, ref) => (
+    <div {...props} ref={ref} tabIndex={-1} />
+  )),
+};
 
 export function StepList({
   rows,
@@ -133,6 +159,7 @@ export function StepList({
   const list = useRef<HTMLDivElement>(null);
   const [window, setWindow] = useState({ startIndex: 0, endIndex: -1 });
   const selected = step === undefined ? undefined : index.get(step);
+  const activeRow = selected === undefined ? undefined : rows[selected];
   const [finding, setFinding] = useState(false);
   const [search, setSearch] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -213,6 +240,7 @@ export function StepList({
         {rows.length ? (
           <Virtuoso
             ref={virtual}
+            components={stepComponents}
             data={rows}
             initialTopMostItemIndex={selected ?? 0}
             rangeChanged={setWindow}
@@ -238,6 +266,35 @@ export function StepList({
           </p>
         )}
       </div>
+      {activeRow && (activeRow.timestampSource || activeRow.guards.length > 0) && (
+        <fieldset
+          data-step-sources
+          aria-label={`Sources for step ${stepLabel(activeRow.step, digits)}`}
+        >
+          {activeRow.timestampSource && (
+            <span data-inline-evidence>
+              Time
+              <SourceChip source={activeRow.timestampSource} compact />
+              {activeRow.offset !== undefined && (
+                <SourceChip source={{ file: "result.json", path: "/startedAt" }} compact />
+              )}
+            </span>
+          )}
+          {(["pre", "post"] as const).map((phase) => {
+            const guard = guardSummary(activeRow, phase);
+            return (
+              guard && (
+                <span key={phase} data-inline-evidence>
+                  <span className="type-data-small">{guard.text}</span>
+                  {guard.sources.map((source) => (
+                    <SourceChip key={sourceLabel(source)} source={source} compact />
+                  ))}
+                </span>
+              )
+            );
+          })}
+        </fieldset>
+      )}
     </div>
   );
 }

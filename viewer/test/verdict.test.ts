@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { loadRunFiles } from "../src/data/loaders.ts";
 import { parseRun } from "../src/data/parse.ts";
-import type { ResultRecord, RunData, ViewTraceEvent } from "../src/data/types.ts";
+import type { ResultRecord, RunData } from "../src/data/types.ts";
 import {
   deriveChecks,
   deriveComparatorRows,
@@ -10,18 +10,23 @@ import {
   deriveVerdict,
 } from "../src/data/verdict.ts";
 
-async function fromFolder(path: string) {
+async function fromFolder(
+  path: string,
+  edit = (_name: string, body: string): string | undefined => body,
+) {
   const folder = new URL(`${path}/`, import.meta.url);
   const entries = await readdir(folder, { withFileTypes: true });
   const files = await Promise.all(
     entries
       .filter((entry) => entry.isFile())
-      .map(async ({ name }) => ({
-        file: new File([await readFile(new URL(name, folder))], name),
-        relativePath: `run/${name}`,
-      })),
+      .map(async ({ name }) => {
+        const body = edit(name, await readFile(new URL(name, folder), "utf8"));
+        return body === undefined
+          ? []
+          : [{ file: new File([body], name), relativePath: `run/${name}` }];
+      }),
   );
-  return parseRun(await loadRunFiles(files));
+  return parseRun(await loadRunFiles(files.flat()));
 }
 
 const sample = "../../docs/research/experiments/m1-013-session1";
@@ -72,32 +77,150 @@ describe("verdict mapping", () => {
   });
 
   test("a guard failure followed by completion counts as recovery", async () => {
-    const data = await fromFolder(`${fixture}/recovered`);
-    const events = data.events.filter(
-      (entry) => entry.kind !== "standard" || entry.event.type !== "recovery",
-    );
-    expect(deriveVerdict({ ...data, events })).toMatchObject({ label: "Recovered" });
-    const guard = events.find(
+    const data = await fromFolder(`${fixture}/recovered`, (name, body) => {
+      if (name === "manifest.json") return;
+      if (name !== "trace.jsonl") return body;
+      return body
+        .split("\n")
+        .filter((line) => !line.includes('"type":"recovery"'))
+        .join("\n");
+    });
+    expect(deriveVerdict(data)).toMatchObject({ label: "Recovered" });
+    const guard = data.events.find(
       (entry) => entry.kind === "standard" && entry.event.type === "guard-failure",
     );
-    expect(deriveVerdict({ ...data, events }).sources).toContainEqual(guard?.source);
+    expect(deriveVerdict(data).sources).toContainEqual(guard?.source);
   });
 
-  test("an aborted-uncertain event alone does not count as recovery", async () => {
-    const { result } = await fromFolder(`${fixture}/verified`);
-    const events: ViewTraceEvent[] = [
-      {
-        kind: "standard",
-        event: { type: "recovery", event: "aborted-uncertain", timestamp: "now", stateVersion: 0 },
-        source: { file: "trace.jsonl", line: 1 },
-      },
-    ];
-    expect(deriveVerdict({ result, events }).label).toBe("Verified");
+  test.each([
+    ["none", "Verified"],
+    ["retry-after-refresh", "Recovered"],
+    ["aborted-uncertain", "Unknown"],
+  ])("classifies recovery event %s as %s", async (event, label) => {
+    const data = await fromFolder(`${fixture}/verified`, (name, body) => {
+      if (name === "manifest.json") return;
+      if (name !== "trace.jsonl") return body;
+      return (
+        body +
+        JSON.stringify({
+          type: "recovery",
+          event,
+          timestamp: "2026-11-21T12:00:04Z",
+          stateVersion: 12,
+        }) +
+        "\n"
+      );
+    });
+    expect(deriveVerdict(data).label).toBe(label);
+  });
+
+  test("only complete evidence can promote a verified result", async () => {
+    const data = await fromFolder(`${fixture}/recovered`);
+    for (const events of [[], data.events.slice(0, 64), data.events]) {
+      expect(deriveVerdict({ ...data, events, validation: { kind: "pending" } })).toMatchObject({
+        label: "Unknown",
+        reason: { value: "Checking run evidence" },
+      });
+    }
+  });
+
+  test.each([true, false])(
+    "detects removed recovery and guard failure (manifest supplied: %s)",
+    async (withManifest) => {
+      const data = await fromFolder(`${fixture}/recovered`, (name, body) => {
+        if (name === "manifest.json" && !withManifest) return;
+        if (name !== "trace.jsonl") return body;
+        return body
+          .split("\n")
+          .filter((line) => !/"type":"(?:guard-failure|recovery)"/.test(line))
+          .join("\n");
+      });
+      expect(deriveVerdict(data)).toMatchObject({
+        label: "Unknown",
+        reason: {
+          value: withManifest
+            ? "SHA-256 mismatch for trace.jsonl"
+            : "Trace is missing failure or recovery evidence for step 6",
+        },
+      });
+    },
+  );
+
+  test.each([
+    ["different manifest ID", "run ID", (body: string) => body.replace("viewer-verified", "other")],
+    [
+      "uncovered result",
+      "missing the digest for result.json",
+      (body: string) => body.replace(/.*"result.json".*\n/, ""),
+    ],
+    [
+      "uncovered trace",
+      "missing the digest for trace.jsonl",
+      (body: string) => body.replace(/.*"trace.jsonl".*\n/, ""),
+    ],
+    [
+      "missing listed file",
+      "missing file missing.json",
+      (body: string) => body.replace('"files": {', `"files": {"missing.json":"${"e".repeat(64)}",`),
+    ],
+    [
+      "malformed digest",
+      "Invalid SHA-256 digest",
+      (body: string) => body.replace(/"[a-f0-9]{64}"/, "42"),
+    ],
+  ] as const)("fails closed for %s", async (_name, reason, edit) => {
+    const data = await fromFolder(`${fixture}/verified`, (name, body) =>
+      name === "manifest.json" ? edit(body) : body,
+    );
+    expect(deriveVerdict(data).label).toBe("Unknown");
+    expect(deriveVerdict(data).reason?.value).toContain(reason);
+  });
+
+  test.each([
+    ["malformed JSON", (body: string) => `${body}{\n`, "Incomplete evidence"],
+    [
+      "another run",
+      (body: string) => body.replace("viewer-verified", "other"),
+      "Trace run identity",
+    ],
+    [
+      "missing final action",
+      (body: string) =>
+        body
+          .split("\n")
+          .filter((line) => !line.includes('"step":11,"action":'))
+          .join("\n"),
+      "missing the recorded action",
+    ],
+  ] as const)("detects %s without a manifest", async (_label, edit, reason) => {
+    const data = await fromFolder(`${fixture}/verified`, (name, body) => {
+      if (name === "manifest.json") return;
+      return name === "trace.jsonl" ? edit(body) : body;
+    });
+    expect(deriveVerdict(data).label).toBe("Unknown");
+    expect(deriveVerdict(data).reason?.value).toContain(reason);
+  });
+
+  test("invalid UTF-8 in a JSON string cannot produce a positive verdict", async () => {
+    const folder = new URL(`${fixture}/verified/`, import.meta.url);
+    const result = await readFile(new URL("result.json", folder));
+    const trace = await readFile(new URL("trace.jsonl", folder));
+    const data = await parseRun(
+      await loadRunFiles([
+        new File([result], "result.json"),
+        new File([trace, '{"type":"future","value":"', Uint8Array.of(0xff), '"}\n'], "trace.jsonl"),
+      ]),
+    );
+    expect(deriveVerdict(data).label).toBe("Unknown");
+    expect(data.parseErrors[0]).toMatchObject({
+      source: { file: "trace.jsonl" },
+      issues: [{ message: "Could not read UTF-8 JSON Lines" }],
+    });
   });
 
   test("a matching ledger oracle supports False success without a recorded claim", async () => {
-    const { result, ledger } = await fromFolder(`${fixture}/false-success`);
-    expect(deriveVerdict({ result, ledger })).toMatchObject({
+    const { result, ledger, validation } = await fromFolder(`${fixture}/false-success`);
+    expect(deriveVerdict({ result, ledger, validation })).toMatchObject({
       label: "Failed",
       subtype: "False success",
       sources: [
