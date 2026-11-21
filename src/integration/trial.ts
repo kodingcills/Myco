@@ -48,7 +48,7 @@ import {
   probeGuestHealth,
 } from "./guest-health.js";
 import { guestBasename } from "./guest-shell.js";
-import { WindowsFixtureConverter } from "./windows-fixture.js";
+import { type ConvertTiming, WindowsFixtureConverter } from "./windows-fixture.js";
 
 export interface TrialOptions {
   client: AgentClient;
@@ -59,6 +59,8 @@ export interface TrialOptions {
   runsDir: string;
   /** Guest dir for fixtures + helper (created in the guest by the converter). */
   guestDir?: string;
+  /** Override FIXTURE_CONVERT_DEADLINE_MS. TESTS ONLY: live trials use the approved default. */
+  fixtureConvertDeadlineMs?: number;
   /**
    * Kill soffice after this many adapter actions have been dispatched. A timer
    * cannot land mid-program reliably: launching Calc and making it observable
@@ -83,6 +85,15 @@ export interface TrialOptions {
   guestHygieneTimeoutMs?: number;
 }
 
+/**
+ * Deadline for the guest-side fixture `.xlsx` to appear (M1-013 decision, approved
+ * 2026-11-21). A cold headless convert right after a reset was measured at 30.8 s and
+ * once at 169.4 s, so the earlier 60 s converter default could mark a healthy trial
+ * uncertain. It stays inside the sweep's 600 s per-trial watchdog. Each agent RPC keeps
+ * its own timeout; this bounds only the arrival poll.
+ */
+export const FIXTURE_CONVERT_DEADLINE_MS = 240_000;
+
 export interface TrialReport {
   runId: string;
   verdict: Verdict;
@@ -92,6 +103,8 @@ export interface TrialReport {
   guardFailure?: GuardFailure;
   /** M1-019: guest hygiene outcome, reported even when cleanup failed. */
   cleanup: GuestCleanupResult;
+  /** How long the guest-side fixture convert took, against its deadline; null if never attempted. */
+  fixtureConvert: ConvertTiming | null;
   /** Identity of the fixture bytes this trial uploaded (M1-013 sweep seed check). */
   fixture: FixtureFingerprint;
 }
@@ -117,7 +130,11 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
   const keyCell = `A${gt.location.dataRowIndex + 2}`;
   const observedCells = [keyCell, gt.cellRef];
 
-  const converter = new WindowsFixtureConverter({ client: options.client, guestDir });
+  const converter = new WindowsFixtureConverter({
+    client: options.client,
+    guestDir,
+    timeoutMs: options.fixtureConvertDeadlineMs ?? FIXTURE_CONVERT_DEADLINE_MS,
+  });
   const adapter = new WindowsCalcAdapter({
     client: options.client,
     xlsxPath: "", // set after the convert lands
@@ -167,6 +184,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     elapsedMs: Date.now() - started,
     xlsxPath: outcome.xlsxPath,
     cleanup,
+    fixtureConvert: converter.lastTiming,
     fixture: fixtureFingerprint(fixture),
   };
 }

@@ -15,8 +15,10 @@
 #   - per trial: reported seed == requested seed AND hash == expected hash for
 #     that seed (from m1-sweep-params.ts fingerprints). A mismatch is recorded
 #     as status "seed-mismatch" and the sweep ABORTS (exit 7).
-#   - at the end: the distinct hashes seen must equal the distinct seeds seen,
-#     one to one. Otherwise SEED_CHECK_FAILED and exit 8.
+#   - at the end: no seed-mismatch row, and every sweep seed seen with exactly
+#     one hash. Otherwise SEED_CHECK_FAILED and exit 8.
+#   - on start: a trials.jsonl that already holds a seed-mismatch is refused
+#     (exit 9); resume is only for gate pauses / operator stops.
 #
 # Host gates, checked before each trial (exit and resume later; never run
 # through them): AC power (exit 3), 1-min load > 14 (exit 4), swap free
@@ -30,6 +32,13 @@ LOG="$OUT/trials.jsonl"
 PROGRESS="$OUT/progress.log"
 cd "$WS" || exit 1
 mkdir -p "$OUT/runs"
+
+# A recorded seed-mismatch means a trial ran on the wrong fixture. Resume-skip would
+# keep that row and continue, so refuse: the directory is unusable for acceptance.
+if [ -f "$LOG" ] && grep -q '"status": "seed-mismatch"' "$LOG"; then
+  echo "REFUSED_SEED_MISMATCH_PRESENT $(date -u +%FT%TZ): $LOG contains a seed-mismatch; start a fresh OUT" >> "$PROGRESS"
+  exit 9
+fi
 
 if [ ! -s "$PARAMS" ]; then
   pnpm exec tsx scripts/m1-sweep-params.ts params > "$PARAMS" || { echo "FATAL: params generation failed" >> "$PROGRESS"; exit 1; }

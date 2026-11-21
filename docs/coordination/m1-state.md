@@ -1,5 +1,21 @@
 # Myco M1 — coordinator state
 
+## Current handoff — 2026-11-21, sweep v2 stopped
+
+- **M1-013:** recorded indices 0–4 at pinned commit `29369ce`. Three verified,
+  two fixture-convert timeouts (`uncertain`), 25 unrun. Stop marker at
+  20:47:24 UTC in `/tmp/m1-013/sweep-v2/progress.log`.
+- **Decision pending with the outer loop:** a cold diagnostic workbook landed
+  after 169.4 s. Proposed 240 s conversion deadline, two cold canaries and a
+  fresh sweep from index 0. Keep v2 for diagnosis. See
+  [the experiment and restart plan](../research/experiments/m1-013-convert-timeout.md).
+- **Non-VM work:** [runbook](../eval-runbook.md) and [scorecard](../m1-scorecard.md)
+  are updated. The scorecard lists the remaining evidence for the corrupted
+  suite, recovery, screenshot baseline and independent reproduction.
+- **Next:** await the restart decision and reserve the host. The diagnostic
+  was interrupted and the host process check found no leftover runner. Backlog is
+  [M1](../backlog/m1.md).
+
 ## Objective
 Milestone 1: verified, recoverable desktop execution in one real Windows GUI app (LibreOffice Calc record edits, default suggestion). Acceptance: 27/30 reliability, 0 false successes in ≥10 corrupted trials, recovery from app interruption and invalid target, machine-readable evidence, screenshot-agent baseline on identical conditions, reproducible by another agent. Full spec: docs/product/vision.md.
 
@@ -707,3 +723,12 @@ required in §3.5 and now restates in §2 and §2.1.
 
 **Also noted:** the survey's §7.3 sign-test threshold was fixed at source by the research thread
 (PR #45, `≥6` not `≥5`), matching the correction in log 54. Main is 31f9083.
+
+## Log 2026-11-21 (56) — Tiffany's TIF-19 decisions recorded; no VM touched
+Decided 2026-11-21 4:04 PM EST (design §9.0 now carries the table):
+1. **Cua install: YES, gated.** Only after the M1-013 sweep **and** the corrupted run finish, only with the Coordinator's go, and **a new snapshot is taken before installing** so the Myco arm's `clean-base` stays reproducible.
+2. **Planner: paid Claude Sonnet 5.5 via the Anthropic API**, local Ollama `qwen3.8-uncensored` kept wired as the fallback. Needs `ANTHROPIC_API_KEY` with billing (design §9.1): **$1.13-$5.58 per 30 trials per arm, $2.26-$11.16 for C1+C2.** The outer loop manages the credential. The later run limits are **$9.00 total** and **$4.50 per arm by default**. Run C1 first, stop at a row boundary before crossing a cap, and report partial results and actual spend for each arm.
+3. **C2: YES.** C1 and C2 reported separately, with an independent clean-base restore from the Cua-enabled snapshot for each trial.
+4. **External subset (M1-027/TIF-58): deferred** until after M1 sign-off. **No public-score arm and no frontier third column** for now.
+
+The Screenshot Baseline Owner received the planner, arm, spend, and VM requirements for M1-021. Installation and trial execution await the Coordinator's go.
