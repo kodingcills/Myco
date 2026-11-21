@@ -45,6 +45,7 @@ function normalise(text: string): string {
 }
 
 export interface AppState {
+  readonly windowGone?: boolean;
   /** Titles on screen, in order, exactly as rendered. */
   readonly listbox: readonly string[];
   /** The raw text each screen row came from, in the same order (what Save serialises from). */
@@ -217,6 +218,7 @@ function readMeta(content: string | undefined): { count?: number } {
 
 /** What an agent can see: every listbox row plus the status line, as screen lines. */
 export function visibleScreen(state: AppState): string[] {
+  if (state.windowGone) return [];
   const lines = [...state.listbox];
   if (state.status !== "") lines.push(state.status);
   return lines;

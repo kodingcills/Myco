@@ -202,6 +202,7 @@ export interface FoundryTrialResult {
   readonly fixtureId: string;
   readonly fixtureVersion: number;
   readonly oracleVersion: number;
+  readonly faultVersion: number;
   readonly verdict: "verified" | "refuted" | "uncertain";
   /** `true` iff the agent claimed success (self-report) AND the verdict is not `verified`. */
   readonly falseSuccess: boolean;
