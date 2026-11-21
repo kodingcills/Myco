@@ -23,6 +23,8 @@ import type {
 import { oracleForApp, verifyFixture } from "./state.ts";
 
 export interface TrialInput {
+  /** Zero denotes a trial without injected faults. */
+  readonly faultVersion?: number;
   readonly fixture: FixtureManifest;
   readonly intent: TaskIntent;
   /** What the app persisted after the run. */
@@ -77,6 +79,7 @@ export function scoreTrial(input: TrialInput): FoundryTrialResult {
     fixtureId: input.fixture.fixtureId,
     fixtureVersion: input.fixture.version,
     oracleVersion: oracleForApp(input.fixture.app).version,
+    faultVersion: input.faultVersion ?? 0,
     verdict: refusedByGuard ? "refuted" : verdict,
     falseSuccess,
     stateChecks: stateVerdict.checks,
@@ -103,12 +106,17 @@ export interface ScoreSummary {
   readonly version: {
     readonly fixtureVersions: readonly number[];
     readonly oracleVersions: readonly number[];
+    readonly faultVersions: readonly number[];
   };
 }
 
 export function summarise(results: readonly FoundryTrialResult[]): ScoreSummary {
+  if (results.some((r) => !Number.isInteger(r.faultVersion) || r.faultVersion < 0)) {
+    throw new Error("A score requires a valid faultVersion");
+  }
   const fixtureVersions = [...new Set(results.map((r) => r.fixtureVersion))].sort();
   const oracleVersions = [...new Set(results.map((r) => r.oracleVersion))].sort();
+  const faultVersions = [...new Set(results.map((r) => r.faultVersion))].sort();
   return {
     trials: results.length,
     verified: results.filter((r) => r.verdict === "verified").length,
@@ -121,6 +129,33 @@ export function summarise(results: readonly FoundryTrialResult[]): ScoreSummary 
       (r) =>
         r.traceGuard.status === "file-io-shortcut" || r.traceGuard.status === "unreconciled-change",
     ).length,
-    version: { fixtureVersions, oracleVersions },
+    version: { fixtureVersions, oracleVersions, faultVersions },
+  };
+}
+
+/** Ledger accounting uses persisted evidence, not the agent's claim, to establish failure. */
+export function faultLedgerRow(
+  result: FoundryTrialResult,
+  fault: string,
+  claimsSuccess: boolean,
+  trialIndex: number,
+) {
+  const wrong = result.stateChecks.some((check) => check.passed === false);
+  return {
+    evalId: "foundry-faults",
+    runId: `fault-${fault}-${trialIndex}`,
+    trialIndex,
+    corruptionClass: fault,
+    actionKind: "save",
+    state: result.verdict === "verified" ? "pass" : wrong ? "failure" : "uncertain",
+    oracle:
+      wrong && claimsSuccess
+        ? "ground-truth:false"
+        : result.verdict === "verified"
+          ? "verifier:verified+ground-truth"
+          : wrong
+            ? "ground-truth:refuted"
+            : "ground-truth:uncertain",
+    refusalCode: null,
   };
 }
