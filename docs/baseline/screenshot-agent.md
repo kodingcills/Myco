@@ -311,7 +311,7 @@ stories are present in one table:**
 
 | Arm | Agent | Public score exists? | Runs on our VM? | What it establishes |
 |---|---|---|---|---|
-| **B1** | **Navi, `--som-origin omni`** (WAA's agent) | **Yes — on Windows: 8.6% total** (best of its four model rows: 12.5% with GPT-4V) | **No — needs real porting.** Navi emits Python source strings for an in-guest executor; no pip package, no transport abstraction we can satisfy with the current ten agent ops | "An agent with a *published Windows score* also scores this on our Calc suite" |
+| **B1** | **Navi, `--som-origin omni`** (WAA's agent) | **Yes — on Windows: 12.5% with GPT-4V, 8.6% with GPT-4o** (tree-free row) | **No — needs real porting.** Navi emits Python source strings for an in-guest executor; no pip package, no transport abstraction we can satisfy with the current ten agent ops | "An agent with a *published Windows score* also scores this on our Calc suite" |
 | **B2** | **UI-TARS-1.5-7B** in the OSWorld loop (`uitars15_v2.py`) | Yes — on OSWorld (Linux) | Ported, with the same action-grammar caveat, plus a coordinate-input transport we do not have yet | "A publicly scored OSWorld agent also works here" — with the port declared |
 | **C1/C2** | **Cua Driver** (§1a) | No public benchmark score | Yes, natively (SSH + named pipe), once the §1a spike passes | Recognisable framework, best-in-class action model |
 
@@ -342,10 +342,14 @@ while `publicScore` keeps the published number attached as context. Row 7's comp
 what we measure here, on identical tasks; the published number is what lets a reader judge whether
 our port is plausible — never proof that it is.
 
-**And the number itself must be quoted with its mode.** Navi's headline 19.5% is `mixed-omni` +
-UIA, i.e. an accessibility-tree agent. The arm this document proposes runs `omni`, whose published
-total is **8.6%**. Quoting 19.5% beside a `omni` run would be exactly the kind of opaque
-comparison §1c.2 warns about.
+**And the number itself must be quoted with its perception stack, not a mode name.** Navi's
+headline **19.5%** is Table 4's `UIA tree + OmniParser` row (GPT-4V-1106) — an
+accessibility-tree agent. The arm this document proposes runs `--som-origin omni`: screenshot +
+OmniParser, **no tree**, published at **8.6% with GPT-4o and 12.5% with GPT-4V**. B1's
+`publicScore.value` is therefore **0.125**, the maximum over its own configuration's published
+model rows; quoting the headline beside an `omni` run — or quoting 8.6% as if it were the best
+that configuration has been measured at — would be exactly the kind of opaque comparison §1c.2
+warns about.
 
 **Cost consequence.** Navi needs an LLM backend (its `config.json` takes OpenAI/Azure keys) and,
 in every screenshot mode, OmniParser (MIT, Microsoft) plus its captioning model — `omni` needs
@@ -383,10 +387,10 @@ An OSWorld task is one JSON file. The Calc example above (`4e6fcf72…`), reduce
 {
   "id": "4e6fcf72-…", "snapshot": "libreoffice_calc",
   "instruction": "Please calculate the ages … don't touch irrelevant regions, even if they are blank.",
-  "config":    [ {"type":"launch", …}, {"type":"download", …}, {"type":"open", …} ],
+  "config":    [ {"type":"host_reference_date", …}, {"type":"download", …}, {"type":"open", …} ],
   "evaluator": {
     "func": "compare_table",
-    "expected": {"type":"vm_file", …},          // or a computed getter such as the age reference
+    "expected": {"type":"employee_age_reference", "source":"…Employee_Age_By_Birthday.xlsx", …},
     "result":   {"type":"vm_file", "path":"/home/user/Employee_Age_By_Birthday.xlsx", "dest":"…xlsx"},
     "postconfig": [ {"type":"activate_window", …}, {"type":"execute", "parameters":{"command":["python","-c","import pyautogui; pyautogui.hotkey(\"ctrl\",\"s\")"]}} ]
   },
@@ -453,8 +457,9 @@ preconditions.** Here is the honest assessment.
 That gives an external anchor without pretending to be on their leaderboard. Cost is a **range
 conditioned on the task draw**: 1.5–2.5 days for ten tasks whose evaluators are plain
 `compare_table` over a downloaded gold file, **4–6 days** if the draw includes a *generated*-gold
-task (the very task quoted in 1c.1 builds its `expected` from a `host_reference_date` getter rather
-than a downloadable workbook) or a WAA task whose gold is a `cloud_file` on Google Drive. It
+task (the very task quoted in 1c.1 has `expected.type: employee_age_reference`, a getter that
+computes the gold from a workbook **plus** a `reference_date_path` written by its
+`host_reference_date` setup step, rather than comparing against a downloadable gold outright) or a WAA task whose gold is a `cloud_file` on Google Drive. It
 belongs *after* M1-015 — a credibility artefact, not an M1 acceptance criterion. Recommended as
 **M1-027 (TIF-58), post-M1, not blocking**.
 
@@ -1103,7 +1108,7 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | `preserve_cells` is in OSWorld **v1** (`metrics/table.py::_preserve_cells`, dispatched `:442`) and **absent from V2** | both `metrics/table.py` files |
 | 19.5% / 74.5% is the only pair on the WAA project page (no community leaderboard found) | `microsoft.github.io/WindowsAgentArena` |
 | WAA requires an OpenAI or Azure OpenAI key | README prerequisites |
-| Navi's published score: **19.5%** success on the Windows domain, human baseline 74.5%, measured in the paper's `mixed-omni` config — no `--som-origin omni`-only number is published | arXiv **2409.08264** abstract; README configuration table |
+| Navi's published scores are **perception-row**, not per-mode: Table 4's `UIA on + OmniParser on` row is **19.5%** (GPT-4V-1106, the headline) and the tree-free `OmniParser` row is **12.5%** (GPT-4V) / **8.6%** (GPT-4o); human 74.5%. `mixed-omni` appears only in the README's CLI flags, never in the paper | arXiv **2409.08264** Table 4 and §4.2; WAA README §4.1 |
 | Navi's OpenAI planner builds `openai.OpenAI(api_key=...)` with **no `base_url`**; constructor is `__init__(self, model="gpt-4o")` | `src/win-arena-container/client/mm_agents/navi/gpt/gpt4v_oai.py` lines 21-27 |
 | Navi's `predict(instruction, obs)` takes screenshots + window rect/title via `obs` and returns a list of actions (its window ops such as `computer.os.maximize_window()` assume WAA's VM backend, so a heap of the transport is still ours) | `src/win-arena-container/client/mm_agents/navi/agent.py` line 138 onward |
 | Navi/OmniParser: OmniParser is MIT and is "the current top performing screen understanding model in our benchmark" | WAA README update 2024-10-23 |

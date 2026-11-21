@@ -498,6 +498,18 @@ No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-
 
 **Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
 
+## Log 2026-11-21 (48) — my own correction commit REJECTed on four counts; all four were mine
+`d3d64a6` returned **REJECT** from the delta verifier. Every defect it names is real, and three of them were introduced by me while "fixing" something else. Recorded in full because the pattern is the lesson: I corrected a document by editing prose, not by re-reading the source object each edit described.
+
+1. **The example task JSON was right before I broke it.** `4e6fcf72…json` really does have `config[0] = {"type":"host_reference_date", …}` and `evaluator.expected.type = "employee_age_reference"`. I had asserted the opposite, added `"launch"` and `"vm_file"`, and told a verifier those two fields were wrong — the verifier caught the invention. Both restored.
+2. **`host_reference_date` is the config *step*; the getter is `employee_age_reference`.** The sentence in §1c.2 said "builds its `expected` from a `host_reference_date` getter". Wrong before and after my edit. Now describes the actual mechanism: `expected` computes gold from a workbook plus a `reference_date_path` written by the `host_reference_date` setup step.
+3. **`mixed-omni` is a flag name, not a paper result.** The paper reports Table 4 rows varying perception inputs; `mixed-omni` appears only in WAA's README CLI. Two places still described 19.5% as "`mixed-omni`" and denied a `--som-origin omni`-only number — both now state the row and cite Table 4 / §4.2.
+4. **B1's headline should be the *maximum* over its configuration's published rows: 12.5% (GPT-4V), not 8.6% (GPT-4o).** `publicScore.value` is now 0.125 with the 8.6% kept as the other published row.
+
+**Lesson taken into the next commit:** a number that appears in a table, a JSON field, or a CLI flag gets re-fetched from the source before it is written, not recalled from the previous draft. Three of these four were recall errors in a document whose entire value is that its numbers are checkable.
+
+Docs only; no VM, no spend, no accounts.
+
 ## Log 2026-11-21 (47) — benchmark sections verified at source; a wrong score and a wrong ARM claim corrected
 *(47, not 46: the sibling entry above was renumbered to 46 while this was being written. Numbering is assigned at commit time, not at draft time.)*
 `8a32ff2` passed full verification at `aaf7290` and delta verification at `8a32ff2` (2 independent verifiers, no VM access, no tree writes). Acting on their asides produced real corrections, plus one the verifiers could not produce because it needed the paper's tables rather than the README.
