@@ -1,32 +1,67 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
 import ts from "typescript";
+import { describe, expect, it } from "vitest";
 
-function violations(entry: string): string[] {
+const allowed = new Set(
+  ["src/tasks/intent.ts", "src/tasks/fixture.ts", "src/core/verify.ts"].map((p) => resolve(p)),
+);
+function violations(entry: string, extraAllowed: string[] = []): string[] {
+  const permitted = new Set([...allowed, ...extraAllowed.map((p) => resolve(p))]);
   const seen = new Set<string>();
-  const visit = (file: string): void => {
+  const errors: string[] = [];
+  function visit(file: string): void {
     if (seen.has(file)) return;
     seen.add(file);
+    if (file !== entry && !permitted.has(file)) errors.push(file);
     if (/\/src\/(integration|win|verify)\//.test(file)) return;
-    const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
     function walk(node: ts.Node): void {
-      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
         const spec = node.moduleSpecifier.text;
-        if (!spec.startsWith(".")) throw new Error(`External import: ${spec}`);
+        if (!spec.startsWith(".")) {
+          errors.push(spec);
+          return;
+        }
         const path = resolve(dirname(file), spec.replace(/\.js$/, ".ts"));
         visit(path.endsWith(".ts") ? path : `${path}.ts`);
       }
+      if (
+        ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+      )
+        errors.push(`dynamic import in ${file}`);
       ts.forEachChild(node, walk);
     }
     walk(source);
-  };
+  }
   visit(entry);
-  return [...seen].filter((p) => /\/src\/(integration|win|verify)\//.test(p));
+  return errors;
 }
 describe("baseline import boundary", () => {
-  // Guards the harness against reaching live adapters or trial orchestration.
-  it("keeps the entry isolated", () => expect(violations(resolve("src/baseline/index.ts"))).toEqual([]));
-  // Guards the graph walker itself against silently ignoring an offending import.
-  it("detects a deliberate forbidden import", () => expect(violations(resolve("test/baseline/fixtures/offending.ts")).length).toBeGreaterThan(0));
+  // Guards against any dependency outside the host task modules and shared verdict types.
+  it("enforces the allowlist", () =>
+    expect(violations(resolve("src/baseline/index.ts"))).toEqual([]));
+  // Guards against missing a direct forbidden integration import.
+  it("detects the offending fixture", () =>
+    expect(violations(resolve("test/baseline/fixtures/offending.ts"))).toContain(
+      resolve("src/integration/trial.ts"),
+    ));
+  // Guards against stopping at an allowed intermediate module.
+  it("detects a two-hop forbidden import", () =>
+    expect(
+      violations(resolve("test/baseline/fixtures/two-hop.ts"), [
+        "test/baseline/fixtures/offending.ts",
+      ]),
+    ).toContain(resolve("src/integration/trial.ts")));
 });

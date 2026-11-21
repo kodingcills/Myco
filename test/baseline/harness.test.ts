@@ -1,38 +1,124 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { checkPurity, driverReady, isBaselineRow, judge, rowKey, type BaselineRow, type Transcript } from "../../src/baseline/index.ts";
+import {
+  type BaselineRow,
+  checkPurity,
+  type DriverPrecondition,
+  isBaselineRow,
+  judge,
+  type Observation,
+  rowKey,
+  type Transcript,
+} from "../../src/baseline/index.ts";
+import type { VerdictStatus } from "../../src/core/verify.ts";
 
-const driver = { hostVersion: "1", guestVersion: "1", pipeReachable: true, sessionIdentityMatches: true };
-const transcript = (claims: Transcript["claims"]): Transcript => ({ actions: [], claims });
-const row: BaselineRow = { subArm: "c1", index: 0, params: { fixtureSeed: "1", rowKey: "r", column: "c", newValue: "x" }, cellRef: "A1", expected: "x", previousValue: "y", verdict: "verified", verdictReason: "persisted-match", falseSuccess: false, audited: true, elapsedMs: 1, steps: 1, stepBudget: 30, modelCalls: 1, tokens: { in: 1, out: 1 }, resetMs: 1, acPower: true, caffeinate: true, screenshotSource: "agent-op", resumed: false, recoveryEvents: 0, hostLoad: { loadAvg1: 1 }, deviations: [], driver, transcript: transcript([]) };
+type Fixture = {
+  transcript: Transcript;
+  driver: DriverPrecondition;
+  observation: Observation;
+  status: VerdictStatus;
+};
+function fixture(name: string): Fixture {
+  return JSON.parse(
+    readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), "utf8"),
+  ) as Fixture;
+}
+const names = [
+  "i-wrong-done",
+  "i-right-failure",
+  "ii-import-boundary",
+  "iii-budget",
+  "iv-purity",
+  "v-version",
+  "v-pipe",
+  "empty",
+  "multiple",
+  "case-flip",
+  "numeric-format",
+];
+const base = fixture("empty");
+const row: BaselineRow = {
+  subArm: "c1",
+  index: 0,
+  params: { fixtureSeed: "1", rowKey: "r", column: "c", newValue: "x" },
+  cellRef: "A1",
+  expected: "x",
+  previousValue: "y",
+  verdict: "verified",
+  verdictReason: "persisted-match",
+  falseSuccess: false,
+  audited: true,
+  elapsedMs: 1,
+  steps: 1,
+  stepBudget: 30,
+  budgetExhausted: false,
+  cost: 0,
+  modelCalls: 1,
+  tokens: { in: 1, out: 1 },
+  resetMs: 1,
+  acPower: true,
+  caffeinate: true,
+  screenshotSource: "agent-op",
+  resumed: false,
+  recoveryEvents: 0,
+  hostLoad: { loadAvg1: 1 },
+  deviations: [],
+  driver: base.driver,
+  transcript: base.transcript,
+};
 describe("baseline", () => {
-  // Guards against trusting the terminal claim instead of persisted state.
-  it("scores both contradictory claims and exact values", () => {
-    expect(judge(transcript(["done"]), driver, { kind: "persisted", actual: "wrong", expected: "right" }).status).toBe("refuted");
-    expect(judge(transcript(["failure"]), driver, { kind: "persisted", actual: "right", expected: "right" }).status).toBe("verified");
-    expect(judge(transcript([]), driver, { kind: "persisted", actual: "Hello", expected: "hello" }).status).toBe("refuted");
-    expect(judge(transcript(["done", "failure"]), driver, { kind: "persisted", actual: "1.0", expected: 1 }).status).toBe("refuted");
+  // Guards against ignoring persisted evidence, driver preconditions, or budget attribution.
+  it.each(names)("scores fixture %s", (name) => {
+    const f = fixture(name);
+    expect(judge(f.transcript, f.driver, f.observation).status).toBe(f.status);
+    if (name === "iii-budget")
+      expect(judge(f.transcript, f.driver, f.observation).reasons).toEqual(["step-budget"]);
+    if (name.startsWith("v-"))
+      expect(judge(f.transcript, f.driver, f.observation).reasons).toEqual(["driver-unreachable"]);
   });
-  // Guards against treating budget exhaustion or driver failures as ordinary observations.
-  it("attributes budget and precondition failures", () => {
-    expect(judge(transcript([]), driver, { kind: "step-budget" })).toEqual({ status: "refuted", reasons: ["step-budget"] });
-    for (const bad of [{ ...driver, guestVersion: "2" }, { ...driver, pipeReachable: false }, { ...driver, sessionIdentityMatches: false }]) {
-      expect(driverReady(bad)).toBe(false);
-      expect(judge(transcript([]), bad, { kind: "step-budget" })).toEqual({ status: "uncertain", reasons: ["driver-unreachable"] });
-    }
+  // Guards against permitting token addressing, unknown tools, and missing coordinates in C1.
+  it("enforces purity and exempts C2", () => {
+    const valid = fixture("iv-purity").transcript;
+    expect(checkPurity("c1", valid)).toEqual({ ok: true });
+    const token = {
+      actions: [{ tool: "click", arguments: { nested: { element_token: "x" } } }],
+      claims: [],
+    };
+    expect(checkPurity("c1", token)).toEqual({ ok: false, code: "element-token", actionIndex: 0 });
+    expect(checkPurity("c2", token)).toEqual({ ok: true });
+    expect(
+      checkPurity("c1", { actions: [{ tool: "unknown", arguments: {} }], claims: [] }),
+    ).toMatchObject({ code: "tool-not-allowed" });
+    expect(
+      checkPurity("c1", { actions: [{ tool: "click", arguments: { x: 1 } }], claims: [] }),
+    ).toMatchObject({ code: "missing-coordinates" });
+    const extraToken = { ...valid, extra: { element_token: "x" } };
+    expect(checkPurity("c1", extraToken)).toMatchObject({
+      code: "element-token",
+    });
   });
-  // Guards against nested token addressing and unapproved tools escaping the C1 guard.
-  it("enforces C1 purity and exempts C2", () => {
-    const t = { actions: [{ tool: "click", arguments: { nested: { element_token: "x" } } }], claims: [] };
-    expect(checkPurity("c1", t)).toEqual({ ok: false, code: "element-token", actionIndex: 0 });
-    expect(checkPurity("c2", t).ok).toBe(true);
-    expect(checkPurity("c1", { actions: [{ tool: "unknown", arguments: {} }], claims: [] }).ok).toBe(false);
-    expect(checkPurity("c1", transcript([])).ok).toBe(true);
-  });
-  // Guards required accounting and distinct sub-arm keys.
-  it("validates rows and distinguishes arms", () => {
+  // Guards against invalid budget, cost, version, and colliding sub-arm keys.
+  it("validates row semantics", () => {
     expect(isBaselineRow(row)).toBe(true);
-    expect(isBaselineRow({ ...row, stepBudget: 0 })).toBe(false);
-    expect(isBaselineRow({ ...row, tokens: {} })).toBe(false);
+    for (const bad of [
+      { steps: 31 },
+      { steps: -1 },
+      { cost: -1 },
+      { budgetExhausted: true },
+      { verdictReason: "step-budget" },
+      { driver: { ...row.driver, hostVersion: "" } },
+      { subArm: "other" },
+    ])
+      expect(isBaselineRow({ ...row, ...bad })).toBe(false);
+    expect(
+      isBaselineRow({
+        ...row,
+        steps: 30,
+        budgetExhausted: true,
+        verdict: "refuted",
+        verdictReason: "step-budget",
+      }),
+    ).toBe(true);
     expect(rowKey(row)).not.toBe(rowKey({ ...row, subArm: "c2" }));
   });
 });
