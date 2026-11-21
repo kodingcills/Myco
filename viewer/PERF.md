@@ -1,5 +1,41 @@
 # Myco Viewer performance
 
+## PR #69 review follow-up
+
+The isolated before/after runs use the same five bare file pairs, Apple M4 Pro (24 GiB, macOS 27.0), and Playwright Chromium Headless Shell 159.0.8154.6 with `--single-process --disable-gpu` at 1440×900 offline. Each case used one discarded warmup and 15 fresh timed pages per build. The baseline was `81f6549`. Timing starts on drop and ends on the second animation frame after the final Verdict Bar commit. Each budget compares the maximum. At N=15, nearest-rank p95 is the maximum.
+
+| Final verdict | Before median / p95 / max (ms) | After median / p95 / max (ms) | 150 ms |
+| --- | ---: | ---: | --- |
+| normal | 33.2 / 36 / 36 | 31.3 / 40.9 / 40.9 | Pass |
+| refuted-autocorrect | 33.6 / 35.5 / 35.5 | 31.8 / 34.2 / 34.2 | Pass |
+| kill | 34 / 36.2 / 36.2 | 32.7 / 35.7 / 35.7 | Pass |
+| perf-1000 | 49.4 / 50.3 / 50.3 | 47.4 / 67.2 / 67.2 | Pass |
+| perf-10000 | 149.7 / 182.2 / 182.2 | 133.2 / 179.9 / 179.9 | **Fail** |
+
+The 10,000-step median improved by 16.5 ms. **The 150 ms maximum remains open.** The benchmark embedded in the full browser suite measured 162.7 / 181.1 / 181.1 ms (median / p95 / max) on the same updated build. The dedicated rerun matches the baseline's standalone invocation.
+
+In the isolated after run, the 1,000-step pair was fully interactive in 118 ms max. The 10,000-step pair reached first Why rows and full indexing in 287 ms max. Scrub input to the playhead and selection render proxy took 5.7 / 5.4 ms max at 1,000 / 10,000 steps (300 movements each). The adjacent rAF interval reached 16.8 ms and remains a separate diagnostic. Initial JS was 572,186 B raw and 188,271 B gzip. Fonts totaled 88,912 B.
+
+The shared validator now collects diagnostics in one buffer and stops evaluating `anyOf` after a matching branch. The full result, trace and cross-file checks still gate a positive verdict, including file digests when a manifest is supplied. The same test harness retains its final-verdict marker and limits.
+
+Separate instrumented probes on the 33.6 MB, 90,001-event bare pair used five measured loads per build after a warmup. The baseline profile used the original validator, parser and worker. Times are medians in milliseconds. The main thread markers span message receipt, DOM commit, and the benchmark's paint proxy.
+
+| Stage | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| Drop to worker entry | 6.8 | 6.6 |
+| Result read, parse, and schema validation | 45.9 | 22.5 |
+| Result post and trace setup | 8.3 | 6.6 |
+| Trace read, parse, schema validation, and collection | 83.2 | 68.5 |
+| Ledger and cross-file validation | 9.6 | 11.2 |
+| Proof selection and verdict classification | 3.3 | 2.9 |
+| Verdict post to main-thread receipt | 0.1 | <0.1 |
+| Main-thread receipt to DOM commit | 2.6 | 2.3 |
+| DOM commit to second animation frame | 17.3 | 11.7 |
+
+The trace scan remains the largest cost. These short probes separate typical stage costs and do not explain the slower loads seen in the full benchmark. Large manifested inputs and dedicated Chrome Stable verification remain open.
+
+Use the commands in [Reproduce](#reproduce), with `MYCO_VIEWER_PERF_DIR=/private/tmp/myco-viewer-perf.Jx3XIA`, `MYCO_VIEWER_CHROMIUM=/private/tmp/myco-viewer-single-process-chromium` and a distinct `MYCO_VIEWER_PERF_REPORT` path for each build.
+
 ## Final verdict before Why indexing
 
 The worker publishes the final verdict and its Proof evidence after full result, trace, ledger, and cross-file validation, including manifest checks when supplied. The Viewer shows a bounded trace preview during validation and starts bulk transfer and screenshot indexing after the verdict has had a render opportunity. J1 timing still starts on drop and ends at the second animation frame after the final Verdict Bar commits.

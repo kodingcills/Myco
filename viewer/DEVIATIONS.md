@@ -27,10 +27,16 @@
 
 - The viewer parses the result first. A scored result can display a sourced Unknown while the worker checks the remaining evidence. The worker must finish trace validation, integrity checks, and cross-file checks before a positive run verdict can display. J1 timing measures the final verdict. See [PERF.md](PERF.md) for the 10,000-step budget miss.
 - A supplied manifest must identify the result and cover the required files and supplied viewer evidence. The viewer checks every listed SHA-256 against the original bytes. A folder or pair without a manifest can still be scored using its schema and cross-file evidence. That form can detect missing run starts, mismatched identity, missing recorded actions or guards, and failed steps whose corresponding failure and recovery events are both missing. A matching unsigned manifest establishes consistency within the selected files. It does not authenticate the producer.
-- The recovery classification ignores `none`. An `aborted-uncertain` recovery without a later recorded recovery stays Unknown for a verified result. A guard-failure fallback requires a later successful postcondition from the result's steps.
+- The recovery classification ignores `none`. Aborted recovery remains Unknown. Failed and incomplete attempts require recorded completion. The guard-failure fallback accepts a new passing postcondition from the failed step or its immediate continuation in the recorded state. A continuation needs a matching action after the failure. The postcondition must match the result and the step must have no earlier passing postcondition.
 - Up/Down move the playhead globally when the focused widget leaves those keys available. A multi-row Comparator keeps its roving Up/Down. J/K remain available from every Comparator row. Collapsing a focused sidebar or Inspector moves focus to the Verdict Bar or center respectively. Reopening from that fallback restores focus to the previous control when available.
 - Why row time and guard summaries name their sources in their tooltips. A source strip alongside the selected row's list exposes the corresponding controls in the next Tab stop sequence. The listbox has one Tab stop and its options remain free of nested controls. Clicking a Verdict Bar count opens the contributing evidence list. The result/trace links still open Raw or J2's Why Detail as appropriate.
 - A recorded screenshot shows a loading state while neither size is decoded. The decoded thumbnail stays visible until the browser has decoded the full image. Decode failure has its own unavailable state. The image lifecycle test uses an independent viewer-only session with a generated image.
+
+## PR #69 review follow-up
+
+- An unscoped recovery or fault source carries the preceding scoped step in the staged trace payload. Its chip resolves to the same step in Why before and after indexing. A source without step context opens Raw.
+- The Runs sidebar keeps the newest open for each known run ID. A superseded worker is aborted as soon as the duplicate is identified. Different run IDs keep separate entries in open order.
+- The 10,000-step verdict improved to **133.2 ms median and 179.9 ms max** in the isolated Chromium benchmark. The 150 ms maximum remains open. See [PERF.md](PERF.md) for the comparable runs and worker/main profile.
 
 ## Remaining v0 gates
 

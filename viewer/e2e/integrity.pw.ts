@@ -80,6 +80,7 @@ for (const scenario of ["manifest mismatch", "malformed trace", "no-op recovery"
     );
     if (scenario === "manifest mismatch") {
       await expect(verdict).toContainText("SHA-256 mismatch for trace.jsonl");
+      await expect(page.locator("[data-run-view]")).toHaveAttribute("data-indexed", "true");
       await page.screenshot({
         path: join(screenshotDir, "unknown-manifest-mismatch-1440.png"),
         animations: "disabled",
