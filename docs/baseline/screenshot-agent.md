@@ -1168,7 +1168,7 @@ credibility are.
 
 ### 9.0 Decisions recorded (Tiffany, 2026-11-21 4:04 PM EST)
 
-These supersede the open items below; the numbered list is kept as the question record.
+The numbered list in §9.2 records the original questions.
 
 | # | Question | Decision |
 |---|---|---|
@@ -1179,29 +1179,30 @@ These supersede the open items below; the numbered list is kept as the question 
 | 8 | External subset (M1-027 / TIF-58) | **Deferred until after M1 sign-off.** |
 | 6 | CheaperInference vision probe | Moot: that provider is out of credit and is not used. |
 
-Item 4 (VM time) is unchanged and owned by the Coordinator: spike ~30 min, then ~3.1 h per sub-arm
-(~6.25 h for C1+C2, chunkable).
+The Coordinator schedules the VM. Allow about 30 minutes for the spike and 3.1 hours per full sub-arm
+(6.25 hours for C1 and C2 combined, with pauses between trials if needed).
 
-### 9.1 What the Sonnet planner needs (written down so the outer loop can obtain it)
+### 9.1 Sonnet planner credential and spend limits
 
-Nobody in this repo reads, searches for, or stores a key. The harness takes it from the environment at run time only.
+The outer loop manages the credential. The harness receives it at runtime.
 
 | Item | Value |
 |---|---|
-| Env var | `ANTHROPIC_API_KEY`, set in the host shell that launches the harness. Never written to disk, a log, a transcript row or a PR. |
+| Env var | `ANTHROPIC_API_KEY` in the host process environment. Keep the credential out of the worktree, logs, traces, transcripts, rows, and pull requests. |
 | Account | An Anthropic API key with billing enabled. |
 | Model | `claude-sonnet-5-5`, short-context pricing, $2 / $10 per MTok in/out. |
 | Expected spend, C1 | $1.13-$5.58 per 30 trials (§8.4; upper bound, no caching). |
 | Expected spend, C2 | $1.13-$5.58 per 30 trials, same envelope (the element rung sends less pixel data, so the true figure is likely lower, but it is not assumed). |
-| **Total, C1 + C2** | **$2.26-$11.16** (2 x 30 trials). |
-| Not included | Spike runs and re-runs of failed or wedged rows. A key limit of about **$20** covers the total with roughly 2x headroom; this is a recommendation, not a measured figure. |
+| Estimated total, C1 + C2 | **$2.26–$11.16** for two full 30-trial arms, excluding the spike and retries. |
+| Run limits | **$9.00 hard total across C1 and C2**, with **$4.50 per arm by default**. Run C1 first. Before starting each trial, check projected spend against both limits. If the trial would cross either limit, stop at the row boundary and report the completed rows as partial results. |
 | Fallback | If the key is absent or a request is refused, the harness uses the local Ollama planner and the report says so per row. A row's planner is recorded in its row schema; rows from different planners are never pooled silently. |
 
-The report states the model, the price column used, and the actual token counts next to the cost, so the estimate is checked against what was spent.
+Record token usage and cost per trial. Report actual spend after each arm, including partial runs,
+and give the number of completed trials. The full-run estimate can exceed the approved cap.
 
-The recommendation in §1a is **Cua Driver with a local planner**: $0 marginal, no account, no
-download beyond the driver itself (a 30.3 MB Windows ARM64 zip, MIT). It needs the following
-decisions, and none of them is answered here:
+### 9.2 Original decision questions
+
+The initial recommendation was Cua Driver with a local planner. The options below record what was considered.
 
 1. **Install Cua Driver in the guest.** A third-party autostart daemon in the same interactive
    session as `myco-agent`, reached over a named pipe. No account, no payment, no licence fee — but
@@ -1244,10 +1245,6 @@ decisions, and none of them is answered here:
    the draw is plain `compare_table` over a downloadable gold file, **4–6 days** if it hits a
    generated-gold task or a WAA `cloud_file` (Google Drive) task. Recommended as post-M1 (M1-027),
    not an M1 criterion.
-
-*(Superseded by §9.0: the decided configuration is Cua Driver + Sonnet 5.5 planner with the Ollama fallback, C1 and C2 both run.)* Earlier recommended default: **Cua Driver + local `qwen3.8-uncensored` planner, C1 and
-C2 both run**, because it spends nothing, needs no account, and produces the most defensible
-comparison. Its ceiling is whatever the local planner can do — stated plainly in the report.
 
 ---
 
