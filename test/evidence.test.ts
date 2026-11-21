@@ -67,6 +67,42 @@ describe("evidence schema validation", () => {
     ).toThrow(InvalidEvidenceError);
   });
 
+  describe("claim event (gui-spec §6.4, additive)", () => {
+    const claim = {
+      type: "claim",
+      timestamp: "2026-11-21T12:00:00.000Z",
+      step: 3,
+      source: "app-ui",
+      field: "status",
+      value: "Saved 2 items",
+    };
+    it("accepts a well-formed claim from the app UI or the agent", () => {
+      expect(() => assertSchema(claim, traceEventSchema, "trace event")).not.toThrow();
+      expect(() =>
+        assertSchema({ ...claim, source: "agent" }, traceEventSchema, "trace event"),
+      ).not.toThrow();
+    });
+    it("is closed: rejects unknown source, extra keys, missing keys, and negative step", () => {
+      for (const bad of [
+        { ...claim, source: "verifier" },
+        { ...claim, extra: true },
+        { ...claim, field: "" },
+        { ...claim, step: -1 },
+        { ...claim, value: undefined },
+      ]) {
+        expect(() => assertSchema(bad, traceEventSchema, "trace event")).toThrow(
+          InvalidEvidenceError,
+        );
+      }
+    });
+    it("rejects a claim missing a required field (a partial claim is not valid evidence)", () => {
+      const { field: _omit, ...noField } = claim;
+      expect(() => assertSchema(noField, traceEventSchema, "trace event")).toThrow(
+        InvalidEvidenceError,
+      );
+    });
+  });
+
   it("rejects a ledger row missing its oracle", () => {
     const row = {
       evalId: "e",

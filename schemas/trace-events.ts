@@ -123,6 +123,22 @@ export const traceEventSchema: JsonSchema = {
       },
     },
     {
+      // Additive (gui-spec §6.4): what a party CLAIMED, recorded at the moment it claimed
+      // it, so a viewer can set it beside the verifier's persisted readback. Never consulted
+      // by a verifier or oracle; it is evidence for display and audit only.
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "timestamp", "step", "source", "field", "value"],
+      properties: {
+        type: { type: "string", const: "claim" },
+        timestamp: { type: "string", minLength: 1 },
+        step: { type: "integer", minimum: 0 },
+        source: { type: "string", enum: ["agent", "app-ui"] },
+        field: { type: "string", minLength: 1 },
+        value: { type: "string" },
+      },
+    },
+    {
       type: "object",
       additionalProperties: false,
       required: ["type", "timestamp", "event", "stateVersion"],
