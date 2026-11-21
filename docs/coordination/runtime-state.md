@@ -175,3 +175,11 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
   mid-settle made a correct write report delivered_unverified).
 - Evidence (live guest): CLI create 1.3 s (5 nodes) -> act DeliveredVerified with
   the text confirmed in the app's own state file -> evidence artifacts written.
+
+- Transport deadline bug (found during RT-010 verification): killing the child did
+  not unblock read_line when a grandchild held the pipe's write end, so a reset
+  hung 17 minutes with the agent already dead. The channel now owns a reader
+  thread and the caller uses recv_timeout — a wedged guest can only block the
+  reader. commit 0308094.
+- Verified after the fix: CLI create 1.0 s (5 nodes) -> act DeliveredVerified with
+  {"entry_text":"v3-probe"} in the app's own file. Reset under measurement.
