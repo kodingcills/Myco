@@ -5,6 +5,7 @@
  * its own interfaces.
  */
 
+import { GUEST_BATCH_END } from "../../src/integration/guest-shell.js";
 import type { AgentRequest, AgentResponse, UnoEvalResult } from "../../src/win/agent-client.ts";
 
 export interface FakeAgentScript {
@@ -28,6 +29,14 @@ export interface FakeAgentScript {
   unoBehavior?: (params: Record<string, unknown>) => "error" | string | boolean | UnoEvalResult;
   /** When set, helper-launched mutations answer uno_eval (stateful desktop). */
   desktopOverlay?: boolean;
+  /** Stray processes by image name, killed (and cleared) by the kill op. */
+  strayProcesses?: Record<string, number[]>;
+  /**
+   * Emulates a guest cmd.exe batch: receives the generated .cmd text and
+   * returns the lines the script would have written to its report. The fake
+   * appends the host's per-invocation end marker, like cmd's final echo.
+   */
+  batch?: (script: string) => string;
 }
 
 /**
@@ -42,9 +51,16 @@ export class FakeAgent {
   /** In-memory fake desktop: cell values the UIA "helper" mutations wrote. */
   readonly desktopCells = new Map<string, string>();
   private modified = false;
+  /** Guest filesystem: scripts/reports written via write_file, then read. */
+  private readonly files: Map<string, Buffer>;
+  private readonly strays: Map<string, number[]>;
 
   constructor(script: FakeAgentScript) {
     this.script = script;
+    this.files = script.writtenFiles ?? new Map<string, Buffer>();
+    this.strays = new Map<string, number[]>(
+      Object.entries(script.strayProcesses ?? {}).map(([image, pids]) => [image, [...pids]]),
+    );
   }
 
   call(request: AgentRequest): Promise<AgentResponse> {
@@ -113,8 +129,19 @@ export class FakeAgent {
         return { ok: true, id: request.id, result: step };
       }
       case "launch": {
-        // Model the deployed UIA helper: argv is [python, script, <json cmd>, out].
         const argv = (request.params.argv ?? []) as string[];
+        // Guest hygiene batches (M1-019): the host writes a .cmd, then
+        // launches cmd.exe /c on it; emulate the batch's report output.
+        if (argv[0] === "cmd.exe" && argv[1] === "/c") {
+          const scriptPath = argv[2] ?? "";
+          const script = this.files.get(scriptPath)?.toString("utf8") ?? "";
+          const body = this.script.batch?.(script) ?? "";
+          const marker = script.match(/echo\s+(__MYCO_BATCH_END__\S+)>>/)?.[1] ?? GUEST_BATCH_END;
+          const reportPath = scriptPath.replace(/\.cmd$/, ".out");
+          this.files.set(reportPath, Buffer.from(`${body}${marker}\r\n`, "utf8"));
+          return { ok: true, id: request.id, result: { pid: 9999 } };
+        }
+        // Model the deployed UIA helper: argv is [python, script, <json cmd>, out].
         const helperArg = argv.find((a) => a.includes('"op"'));
         if (helperArg) {
           try {
@@ -137,15 +164,22 @@ export class FakeAgent {
         }
         return { ok: true, id: request.id, result: { pid: 4242 } };
       }
-      case "kill":
-        return {
-          ok: true,
-          id: request.id,
-          result: { killed: [(request.params.image_name as string) ?? 4242] },
-        };
+      case "kill": {
+        const params = request.params as { pid?: number; image_name?: string };
+        let killed: Array<number | string>;
+        if (params.image_name !== undefined) {
+          killed = this.strays.get(params.image_name) ?? [];
+          this.strays.delete(params.image_name);
+        } else {
+          killed = params.pid === undefined ? [] : [params.pid];
+        }
+        return { ok: true, id: request.id, result: { killed } };
+      }
       case "write_file": {
         const { path, data_b64 } = request.params as { path: string; data_b64: string };
-        this.script.writtenFiles?.set(path, Buffer.from(data_b64, "base64"));
+        const bytes = Buffer.from(data_b64, "base64");
+        this.files.set(path, bytes);
+        this.script.writtenFiles?.set(path, bytes);
         return { ok: true, id: request.id, result: { bytes: data_b64.length / 2 } };
       }
       case "read_file": {
@@ -158,6 +192,10 @@ export class FakeAgent {
             id: request.id,
             result: { data_b64: Buffer.from('{"ok": true}', "utf8").toString("base64") },
           };
+        }
+        const stored = this.files.get(path);
+        if (stored !== undefined) {
+          return { ok: true, id: request.id, result: { data_b64: stored.toString("base64") } };
         }
         if (this.script.readFileError) {
           return {
