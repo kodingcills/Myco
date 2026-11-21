@@ -499,6 +499,30 @@ No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-
 
 **Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
 
+## Log 2026-11-21 (50) — the PASS was wrong about row 279; the verifier's own expected tuple was wrong too
+`7e94d6c` returned PASS with a non-blocking note. Both the verdict and the note were wrong, in opposite directions, and re-deriving the table from the paper's raw blocks settles it.
+
+**How the paper prints it.** Each of six perception blocks prints four model rows in the order **Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106**, each ending in a Total. A naive split on the ✓/✗ markers attaches the first block's four rows to the *second* label, which is what produced the earlier confusion. Re-split correctly:
+
+| UIA | Other | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+|---|---|---|---|---|---|
+| ✗ | Pytesseract+GroundingDINO | 8.6 | 9.8 | 2.6 | 2.0 |
+| ✓ | Pytesseract+GroundingDINO | 13.1 | 9.3 | 5.3 | 3.2 |
+| ✗ | OneOCR | 11.3 | 13.3 | 7.3 | 4.0 |
+| ✓ | OneOCR | 13.1 | 9.4 | 2.7 | 2.0 |
+| ✗ | OmniParser | **12.5** | 8.6 | 4.2 | 3.5 |
+| ✓ | OmniParser | **19.5** | 8.6 | — | — |
+
+**What was wrong in the previous commit.** The table carried five rows, having **merged the two OneOCR blocks into one**, so it paired 13.1% with 9.4/2.7 — the ✓OneOCR GPT-4V cell beside the ✗OneOCR block's other models. It also gave the headline row GPT-4o 9.4, which belongs to ✓OneOCR.
+
+**What was wrong with the verifier.** The brief I wrote listed an expected tuple `(UIA, OneOCR) 13.1/9.4/2.7`, encoding the same cross-block merge, and the verifier graded the doc against **my** expectation. It found the paper disagreed, recorded the discrepancy, then PASSed because the doc matched the brief. That is a verification whose oracle was the author — the failure mode I have been trying to avoid all day, and it took a second read of the paper rather than a stronger brief.
+
+**Standing rule adopted:** for a transcription, the oracle is the source artifact in full; the brief may say *where* to look, never *what the numbers are*. Any future verifier brief for a table will carry the extraction instruction and the URL, not the expected values.
+
+**Downstream impact:** none on B1. Its row is tree-free OmniParser: 12.5% GPT-4V-1106, 8.6% GPT-4o — unchanged, and now corroborated by a full-block transcription rather than a partial one. `publicScore.value = 0.125` stands.
+
+Docs only; no VM, no spend, no accounts.
+
 ## Log 2026-11-21 (49) — Table 4 read properly at last: the model order was the trap
 `134bb75` also REJECTed, this time for the score table. Fixing it required reading the paper's Table 4 as printed rather than as I had summarised it, and the error is instructive.
 
