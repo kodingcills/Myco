@@ -47,6 +47,9 @@ pub struct QemuConfig {
     pub introspection_file: Option<String>,
     /// Per-op deadline for the control channel.
     pub op_timeout_secs: u64,
+    /// How long `provision`/`reset` wait for a usable desktop (cloud-init installs
+    /// packages for minutes on a fresh overlay).
+    pub desktop_timeout_secs: u64,
     /// Session id, used as the evidence run id.
     pub session_id: String,
     /// Root directory for `runs/<session>/` evidence artifacts.
@@ -62,6 +65,7 @@ impl QemuConfig {
             boot_timeout: Duration::from_secs(180),
             introspection_file: None,
             op_timeout_secs: 10,
+            desktop_timeout_secs: 900,
             session_id: format!("session-{}", std::process::id()),
             evidence_root: workspace_root.join("runs"),
         }
@@ -214,6 +218,46 @@ impl QemuLinuxBackend {
         Ok(())
     }
 
+    /// Poll until the GUI session answers with at least one AT-SPI application.
+    ///
+    /// Two waits, deliberately ordered: cloud-init FIRST (a fresh overlay installs
+    /// packages and restarts services mid-run, which tears down the X session and
+    /// the AT-SPI bus), then the desktop. Polling the desktop first "works" only
+    /// by accident — it sees a session that is about to be replaced.
+    fn wait_desktop(&mut self) -> Result<(), BackendError> {
+        let ci_deadline = Instant::now() + Duration::from_secs(self.config.desktop_timeout_secs);
+        loop {
+            match self.guest_exec("cloud-init status --wait >/dev/null 2>&1; echo READY") {
+                Ok(out) if out.contains("READY") => break,
+                Ok(_) | Err(_) if Instant::now() < ci_deadline => {
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+                Ok(_) | Err(_) => {
+                    return Err(BackendError::Protocol(
+                        "cloud-init did not settle within the desktop timeout".into(),
+                    ))
+                }
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(self.config.desktop_timeout_secs);
+        let mut last = String::new();
+        loop {
+            match self.observe() {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    last = e.to_string();
+                    if Instant::now() > deadline {
+                        return Err(BackendError::Protocol(format!(
+                            "desktop not ready within {}s: {last}",
+                            self.config.desktop_timeout_secs
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+            }
+        }
+    }
+
     /// Install the agent binary into the guest (idempotent, and required after every
     /// fresh overlay — the base image carries no agent).
     ///
@@ -359,6 +403,8 @@ impl Backend for QemuLinuxBackend {
                 )
                 .map_err(|e| BackendError::Evidence(e.to_string()))?,
             );
+            // `provision` promises a usable desktop, not just a live channel.
+            self.wait_desktop()?;
             Ok(())
         })();
         if result.is_err() {
@@ -506,6 +552,8 @@ impl Backend for QemuLinuxBackend {
         // The guest restarts its state counter on a fresh overlay; mirror it so a
         // pre-reset ref can never validate against post-reset state.
         self.last_state_version = 0;
+        // A recreated overlay re-runs cloud-init: wait for a usable desktop again.
+        self.wait_desktop()?;
         Ok(())
     }
 
@@ -542,6 +590,7 @@ mod tests {
             boot_timeout: Duration::from_secs(1),
             introspection_file: None,
             op_timeout_secs: 10,
+            desktop_timeout_secs: 1,
             session_id: "test-session".into(),
             evidence_root: dir.join("runs"),
         }

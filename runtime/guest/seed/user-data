@@ -89,7 +89,15 @@ write_files:
     content: |
       #!/bin/sh
       # Runs INSIDE dbus-run-session with DISPLAY=:0 already set.
-      # Start the AT-SPI2 registry; apps register on org.a11y.Bus over the session bus.
+      #
+      # The AT-SPI bus socket must live somewhere that survives: /run/user/<uid>
+      # is swept (no logind session for this uid), which silently orphaned the
+      # registry daemon and made every AT-SPI client fail to connect while the
+      # processes still looked healthy. Pin it to the unit's RuntimeDirectory.
+      export XDG_RUNTIME_DIR=/run/myco
+      mkdir -p /run/myco/at-spi
+      chmod 0700 /run/myco/at-spi
+      export AT_SPI_BUS_ADDRESS="unix:path=/run/myco/at-spi/bus_0"
       /usr/libexec/at-spi-bus-launcher --launch-immediately &
       openbox &
 
@@ -99,8 +107,8 @@ write_files:
       #    /run/myco is the unit's RuntimeDirectory (systemd-owned, recreated each
       #    start; /run/user/<uid> is unreliable without a logind session).
       ENVFILE=/run/myco/gui.env
-      printf 'DISPLAY=%s\nDBUS_SESSION_BUS_ADDRESS=%s\nXDG_RUNTIME_DIR=%s\nNO_AT_BRIDGE=%s\n' \
-        "$DISPLAY" "$DBUS_SESSION_BUS_ADDRESS" "${XDG_RUNTIME_DIR:-/run/user/1000}" "${NO_AT_BRIDGE:-0}" \
+      printf 'DISPLAY=%s\nDBUS_SESSION_BUS_ADDRESS=%s\nXDG_RUNTIME_DIR=%s\nNO_AT_BRIDGE=%s\nAT_SPI_BUS_ADDRESS=%s\n' \
+        "$DISPLAY" "$DBUS_SESSION_BUS_ADDRESS" "${XDG_RUNTIME_DIR:-/run/myco}" "${NO_AT_BRIDGE:-0}" "$AT_SPI_BUS_ADDRESS" \
         > "$ENVFILE"
       chmod 0644 "$ENVFILE"
       python3 /opt/myco/myco-tk-app.py &
@@ -166,6 +174,10 @@ write_files:
     content: |
       #!/bin/sh
       # Headless GUI session: Xvfb :0 + dbus-run-session (session bus + AT-SPI) + Tk app.
+      # /run is tmpfs: after a reset (fresh overlay) nothing here survives, so the
+      # session recreates its own runtime dir and AT-SPI bus path every start.
+      mkdir -p /run/myco/at-spi
+      chmod 0700 /run/myco/at-spi
       Xvfb :0 -screen 0 1280x800x24 -nolisten tcp &
       XPID=$!
       for i in $(seq 1 50); do xdpyinfo -display :0 >/dev/null 2>&1 && break; sleep 0.2; done
