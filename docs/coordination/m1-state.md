@@ -426,3 +426,10 @@ Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MY
 - Top-20 RSS sums to only ~5.6 GB on a 24 GB machine, so the pressure is CUMULATIVE — 11 days of uptime, swap filled across it. Not caused by one runaway process, and not by the VM: the wedged guest recovered on its own and a guarded cold reset then took 25.8s (vs 332s earlier), yet load stayed ~11.
 - NOT DONE (operator decision): freeing swap needs a host reboot (`sudo shutdown -r now`). I will not reboot Tiffany's Mac.
 - Consequence: the sweep cannot run honestly at load ~11 — a trial would measure the machine, not Myco. Trial 0 of this attempt is uncounted.
+
+## Log 2026-11-21 (45) — HOST BLOCKED: swap 13.4/14.3 GB, load oscillating 4-10
+- Re-polled 30 min after the log-44 diagnosis: load bounced 4.01-10.35 with NO downward trend, and swap grew from 9.99 GB to **13.39 GB of 14.34 GB** used (949 MB free). Pageouts 667,757.
+- No CPU-hot process (QEMULauncher 2.6%, a Python 2.4%, homeenergyd 0.9%); top-20 RSS ~5.6 GB on 24 GB. So this is cumulative swap pressure from 11 days of uptime, worsening under normal load, not a runaway process and not the VM.
+- I will NOT start the 30 trials here: at this pressure each trial would measure the host, and a mid-sweep collapse would corrupt a third attempt. The gate (load <4) has not been met in 90 minutes of polling.
+- NEEDS OPERATOR: `sudo shutdown -r now` (reboot reclaims swap). Nothing else I can do from inside the session; I have not changed any system setting.
+- No usable trials this session. Counts remain 0/30, and no attempt is counted as a Myco failure.
