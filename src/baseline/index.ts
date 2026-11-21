@@ -217,9 +217,12 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
           (typeof u.cost === "number" && Number.isFinite(u.cost) && u.cost >= 0)),
     ) &&
     // Allow rounding error from floating-point summation, scaled for larger totals.
-    typeof x.cost === "number" && Number.isFinite(x.cost) && x.cost >= 0 &&
+    typeof x.cost === "number" &&
+    Number.isFinite(x.cost) &&
+    x.cost >= 0 &&
     Number.isFinite(sumUsage(x.usage).cost) &&
-    Math.abs(x.cost - sumUsage(x.usage).cost) <= 1e-9 * (1 + Math.max(x.cost, sumUsage(x.usage).cost)) &&
+    Math.abs(x.cost - sumUsage(x.usage).cost) <=
+      1e-9 * (1 + Math.max(x.cost, sumUsage(x.usage).cost)) &&
     x.modelCalls === sumUsage(x.usage).modelCalls &&
     x.tokens.in === sumUsage(x.usage).tokens.in &&
     x.tokens.out === sumUsage(x.usage).tokens.out &&

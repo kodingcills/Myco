@@ -58,10 +58,13 @@ function violations(entry: string, extraAllowed: string[] = []): string[] {
       if (ts.isIdentifier(node) && node.text === "require")
         errors.push(`require reference in ${file}`);
       if (ts.isElementAccessExpression(node)) {
-        const root = node.expression.getText(source).split(".")[0];
+        const root = node.expression.getText(source).split(".")[0] ?? "";
         const key = node.argumentExpression;
-        if (["globalThis", "process", "module"].includes(root) &&
-          (!(ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) || key.text === "require"))
+        if (
+          ["globalThis", "process", "module"].includes(root) &&
+          (!(ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) ||
+            key.text === "require")
+        )
           errors.push(`unsafe element access in ${file}`);
       }
       ts.forEachChild(node, walk);
@@ -99,11 +102,19 @@ describe("baseline import boundary", () => {
     ));
 });
 
-it.each(["alias-require.txt", "property-require.txt", "double-require.txt", "single-require.txt", "process-require.txt", "template-require.txt", "computed-global.txt", "computed-process.txt", "computed-module.txt"])(
-  "detects require references in %s",
-  (name) => {
-    expect(violations(resolve(`test/baseline/fixtures/${name}`))).not.toEqual([]);
-  },
-);
+it.each([
+  "alias-require.txt",
+  "property-require.txt",
+  "double-require.txt",
+  "single-require.txt",
+  "process-require.txt",
+  "template-require.txt",
+  "computed-global.txt",
+  "computed-process.txt",
+  "computed-module.txt",
+])("detects require references in %s", (name) => {
+  expect(violations(resolve(`test/baseline/fixtures/${name}`))).not.toEqual([]);
+});
 
-it("allows benign references and data", () => expect(violations(resolve("test/baseline/fixtures/benign.txt"))).toEqual([]));
+it("allows benign references and data", () =>
+  expect(violations(resolve("test/baseline/fixtures/benign.txt"))).toEqual([]));

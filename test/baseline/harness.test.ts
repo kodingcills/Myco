@@ -87,9 +87,15 @@ describe("baseline", () => {
     if (["modified", "dialog"].includes(name))
       expect(judge(f.transcript, f.driver, f.observation).reasons).toEqual([name]);
     if (name === "driver-action")
-      expect(judge(f.transcript, f.driver, f.observation)).toEqual({ status: "refuted", reasons: ["step-budget"] });
+      expect(judge(f.transcript, f.driver, f.observation)).toEqual({
+        status: "refuted",
+        reasons: ["step-budget"],
+      });
     if (name === "unavailable-ready")
-      expect(judge(f.transcript, f.driver, f.observation)).toEqual({ status: "uncertain", reasons: ["unavailable"] });
+      expect(judge(f.transcript, f.driver, f.observation)).toEqual({
+        status: "uncertain",
+        reasons: ["unavailable"],
+      });
     if (name.startsWith("v-"))
       expect(judge(f.transcript, f.driver, f.observation).reasons).toEqual(["driver-unreachable"]);
   });
@@ -186,10 +192,21 @@ describe("accounting and preconditions", () => {
     });
     expect(isBaselineRow({ ...row, modelCalls: 2 })).toBe(false);
   });
-  it("rejects a wrong cost total", () => expect(isBaselineRow({ ...row, cost: 0.001 })).toBe(false));
-  it("rejects a wrong input token total", () => expect(isBaselineRow({ ...row, tokens: { ...row.tokens, in: 2 } })).toBe(false));
-  it("rejects a wrong output token total", () => expect(isBaselineRow({ ...row, tokens: { ...row.tokens, out: 2 } })).toBe(false));
-  it("accepts floating point summation rounding", () => expect(isBaselineRow({ ...row, usage: [{ prompt: 1, completion: 1, cost: 0.1 }, { cost: 0.2 }], modelCalls: 2, cost: 0.3 })).toBe(true));
+  it("rejects a wrong cost total", () =>
+    expect(isBaselineRow({ ...row, cost: 0.001 })).toBe(false));
+  it("rejects a wrong input token total", () =>
+    expect(isBaselineRow({ ...row, tokens: { ...row.tokens, in: 2 } })).toBe(false));
+  it("rejects a wrong output token total", () =>
+    expect(isBaselineRow({ ...row, tokens: { ...row.tokens, out: 2 } })).toBe(false));
+  it("accepts floating point summation rounding", () =>
+    expect(
+      isBaselineRow({
+        ...row,
+        usage: [{ prompt: 1, completion: 1, cost: 0.1 }, { cost: 0.2 }],
+        modelCalls: 2,
+        cost: 0.3,
+      }),
+    ).toBe(true));
   it("rejects nonfinite and negative costs", () => {
     for (const cost of [NaN, Infinity, -1]) expect(isBaselineRow({ ...row, cost })).toBe(false);
   });
