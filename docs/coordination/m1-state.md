@@ -381,3 +381,10 @@ Guest was CONTAMINATED on arrival: live agent + token + 3 stale `C:\myco\runs` d
 - The verifier mechanically checked EVERY command against the repo and found zero wrong: package scripts, host scripts (correctly marked not-in-repo), reset-trial-vm.sh flags/model, deploy-to-vm.sh output strings, MYCO_AGENT_TOKEN plumbing, the SSH tunnel args, all three run-live modes and their exit codes, and validate-live.ts. Honesty checks passed: VM-dependent output marked UNVERIFIED; troubleshooting covers all seven real failures; §10 states plainly that build-all.sh is unproven and the ISOs/snapshots/fixtures are not in the repo.
 - Coordinator applied its nice-to-fix: the cold-reset timing now cites the MEASURED 134-152s over 5 runs (log 39) rather than the script header's single ~165s sample.
 - Still open: PR #32 (cold-reset script) verifier — code review + raw-log read + stub test, NO VM access while the sweep runs. Its VM-dependent part is deferred, so the sweep result stays provisional.
+
+## EXCLUSION RULE (outer loop, 2026-11-21) — applies to the coordinator AND every child
+While an M1-013 sweep is running, **no child may execute any VM-adjacent script, stubbed or not.** Allowed: code reads, log reads, pure unit tests (no agent transport, no cmd generation executed). Forbidden: `vm.sh`, `reset.sh`, `reset-trial-vm.sh`, `vssh`, `wait-ssh.sh`, `deploy-to-vm.sh`, and any stub whose purpose is to exercise those scripts.
+
+Why: a PR #32 verifier ran a stub test intending `MYCO_VM_SCRIPTS=/tmp/stub` but did not export the variable in the same tool call, so `reset-trial-vm.sh` fell back to the REAL VM, killed the agent mid-trial and wedged the next reset. Trials 0 and 1 of that sweep were destroyed and are preserved under /tmp/m1-013/discarded-external-interference/ labelled as EXTERNAL INTERFERENCE — not Myco results, never counted.
+
+Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MYCO_VM_SCRIPTS` refuse instead of falling back to the real guest; (2) this rule. Children must be briefed with it.
