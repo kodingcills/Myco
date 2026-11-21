@@ -234,3 +234,27 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   image and VM lifecycle.
 - **acceptance:** runbook committed; a test or script demonstrates idle shutdown;
   concurrency cap configurable and defaulting to 1.
+
+### RT-019 Fast-reset mode: provisioned-overlay snapshot (post-RT-011)
+- **status:** pending — **decision (outer loop, 2026-11-20): after RT-011, not before.**
+- **owner:** build
+- **blocked_by:** RT-011
+- **description:** Add an explicitly named **fast-reset mode** that restores a
+  snapshot of the *provisioned* overlay instead of recreating the overlay from the
+  base image and re-running cloud-init. Motivation: a full reset costs 3–4 minutes
+  (measured), which lengthens every live run and the host-contention window.
+  **The full reset stays the default contract** — fast reset is opt-in and named,
+  never a silent substitution, because a snapshot base can drift from the declared
+  base image in a way a fresh overlay cannot.
+- **acceptance:**
+  1. `reset` keeps full-reset semantics by default; fast reset is selected
+     explicitly (config/flag) and reported in the session's evidence.
+  2. **State-integrity check**: after a fast reset, everything the verifier reads
+     is equivalent to a full reset — AT-SPI tree shape, process set (no leftovers
+     from the previous session), the app's published state file, and the absence
+     of files written before the reset. Proven by a test that runs both reset
+     modes and compares those observations.
+  3. Timings recorded for both modes in docs/env/linux-runtime.md, with the
+     measured full-reset number kept alongside (no replacing the honest figure).
+  4. Snapshot provenance recorded: which overlay, when taken, and how it is
+     invalidated when the base image or provisioning changes.
