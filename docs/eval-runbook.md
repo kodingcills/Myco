@@ -331,7 +331,7 @@ that contaminate the next verdict (log 27). The driver does it for you.
 OUT="/tmp/m1-013/sweep-$(date -u +%Y%m%dT%H%M%SZ)"   # keep this path for a same-protocol resume
 mkdir -p "$OUT"                        # the shell opens $OUT.runner.out before the driver runs
 nohup caffeinate -dimsu scripts/m1-sweep.sh "$OUT" > "$OUT.runner.out" 2>&1 < /dev/null &
-tail -f "$OUT/progress.log"            # what it is doing
+tail -F "$OUT/progress.log"            # what it is doing (-F: the file appears a few seconds in)
 cat "$OUT/trials.jsonl"                # one record per finished index
 ```
 
@@ -370,7 +370,7 @@ in `trials.jsonl`. If the fixture timeout recurs, stop at a trial boundary, reta
 directory, and report the failure before resuming. The sweep v2 stop was recorded by the
 operator in `progress.log`.
 
-Sweep v2 completed five trial cycles in about 35 minutes on the 6 GB guest, including cold
+Sweep v2 completed five trial cycles in about 35 minutes on the 6 GB guest (20:12:30Z → 20:47:24Z in `/tmp/m1-013/sweep-v2/progress.log`), including cold
 resets, deploys, trials and settles. Use the measured cycle time to plan a host window and
 update the estimate from the next run. Report every recorded outcome.
 
