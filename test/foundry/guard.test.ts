@@ -142,6 +142,7 @@ describe("EF-004 blind scoring", () => {
     }
     const saved = saveApp(findSpec(), state);
     const result = scoreTrial({
+      faultVersion: 0,
       fixture: fixture(),
       intent: TODO_TASKS[0]!.intent,
       actual: { kind: "myco-todo", files: persistedFiles(saved) },
@@ -165,6 +166,7 @@ describe("EF-004 blind scoring", () => {
       },
     };
     const result = scoreTrial({
+      faultVersion: 0,
       fixture: emptyFixture,
       intent: { kind: "todo.add-items", items: ["write the incident summary"] },
       actual: {
@@ -185,6 +187,7 @@ describe("EF-004 blind scoring", () => {
 
   it("refuses a verified state whose bytes cannot be explained by GUI acts", () => {
     const result = scoreTrial({
+      faultVersion: 0,
       fixture: fixture(),
       intent: { kind: "todo.add-items", items: ["write the incident summary"] },
       actual: {
@@ -211,6 +214,7 @@ describe("EF-004 blind scoring", () => {
 
   it("summary separates verified, false successes and guard refusals", () => {
     const base = scoreTrial({
+      faultVersion: 0,
       fixture: fixture(),
       intent: { kind: "todo.add-items", items: ["x"] },
       actual: { kind: "myco-todo", files: {} },
@@ -226,6 +230,7 @@ describe("EF-004 blind scoring", () => {
 
   it("scores an unreadable store as uncertain rather than failure", () => {
     const result = scoreTrial({
+      faultVersion: 0,
       fixture: fixture(),
       intent: { kind: "todo.add-items", items: ["x"] },
       actual: { kind: "myco-todo", files: { "store.json": new Uint8Array([0, 1, 2]) } },

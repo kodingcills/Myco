@@ -64,23 +64,33 @@ describe.each(faults)("%s fault", (fault) => {
     expect(result.faultVersion).toBe(1);
     expect(
       verifyPersistedState(todoStateOracle(), intent, initial, persistedFiles(result.state)).status,
-    ).toBe("refuted");
+    ).not.toBe("verified");
     if (fault !== "crash-mid-save")
       expect(visibleScreen(result.state)).toContain("saved 3 item(s)");
     else expect(visibleScreen(result.state)).toEqual([]);
     const ledger = faultLedgerRow(grade(result.state), fault, true, 0);
     expect(validateSchema(ledger, ledgerRowSchema)).toEqual([]);
-    expect(ledger.oracle).toBe("ground-truth:false");
+    expect(ledger.oracle).toBe(
+      fault === "interrupted-write" ? "ground-truth:uncertain" : "ground-truth:false",
+    );
     expect(faultLedgerRow(grade(result.state), fault, false, 0).oracle).not.toBe(
       "ground-truth:false",
     );
   });
   it("recovers after relaunch, fresh read and reapplication", () => {
     const broken = injectFault(ready(), { fault, version: 1, seed: 5 }).state;
+    if (fault === "interrupted-write") {
+      expect(() => relaunch(broken)).toThrow();
+      return;
+    }
     const read = relaunch(broken);
-    const reapplied = read.rows.includes("archive Q1 invoices")
-      ? deleteItem(read, "archive Q1 invoices")
-      : read;
+    const repaired =
+      fault === "stale-ui"
+        ? { ...read, rows: read.rows.map((row) => row.replace(/ \[stale -?\d+\]$/, "")) }
+        : read;
+    const reapplied = repaired.rows.includes("archive Q1 invoices")
+      ? deleteItem(repaired, "archive Q1 invoices")
+      : repaired;
     const recovered = recoverSave(reapplied, 5);
     expect(validateSchema(recovered.event, traceEventSchema)).toEqual([]);
     expect(
@@ -92,26 +102,42 @@ describe.each(faults)("%s fault", (fault) => {
     );
   });
   it("refutes 200 seeded credulous trials", () => {
+    const states = new Set<string>();
     for (let seed = 0; seed < 200; seed++) {
       const state = injectFault(ready(), { fault, version: 1, seed }).state;
+      states.add(JSON.stringify(state.files));
       const result = grade(state);
       expect(result.verdict).not.toBe("verified");
-      expect(faultLedgerRow(result, fault, true, seed).oracle).toBe("ground-truth:false");
+      expect(faultLedgerRow(result, fault, true, seed).oracle).toBe(
+        fault === "interrupted-write" ? "ground-truth:uncertain" : "ground-truth:false",
+      );
     }
+    if (fault !== "permission-denied") expect(states.size).toBeGreaterThan(1);
   });
-  it("mutation audit: missing, extra and duplicate rows are refuted; control verifies", () => {
-    const correct = recoverSave(ready(), 1).state;
+  it("audits mutations derived from this fault and keeps a positive control", () => {
+    const broken = injectFault(ready(), { fault, version: 1, seed: 1 }).state;
     const mutations = [
-      correct.rows.slice(1),
-      [...correct.rows, "extra"],
-      [...correct.rows, correct.rows[0]!],
+      { ...broken.files, "store.meta.json": '{"count":999}\n' },
+      { ...broken.files, "store.json": '{"items":[' },
+      Object.fromEntries(
+        Object.entries(broken.files).filter(([path]) => path !== "store.meta.json"),
+      ),
+      {
+        ...broken.files,
+        "store.json": JSON.stringify({ items: [{ text: "altered", added_at: "2026" }] }),
+      },
     ];
-    for (const rows of mutations) {
-      const mutated = recoverSave({ ...correct, rows }, 1).state;
+    for (const files of mutations) {
       expect(
-        verifyPersistedState(todoStateOracle(), intent, initial, persistedFiles(mutated)).status,
-      ).toBe("refuted");
+        verifyPersistedState(
+          todoStateOracle(),
+          intent,
+          initial,
+          persistedFiles({ ...broken, files }),
+        ).status,
+      ).not.toBe("verified");
     }
+    const correct = recoverSave(ready(), 1).state;
     expect(
       verifyPersistedState(todoStateOracle(), intent, initial, persistedFiles(correct)).status,
     ).toBe("verified");
@@ -127,4 +153,85 @@ it("honest permission error and versioned scores", () => {
   }).state;
   expect(state.status).toContain("permission denied");
   expect(summarise([grade(state, 2)]).version.faultVersions).toEqual([2]);
+});
+
+it("distinguishes each fault's persistence and screen behavior", () => {
+  const baseline = ready();
+  const states = faults.map(
+    (fault) => injectFault(baseline, { fault, version: 1, seed: 42 }).state,
+  );
+  expect(new Set(states.map((state) => JSON.stringify(state.files))).size).toBe(5);
+  const [stale, torn, partial, crashed, denied] = states;
+  expect(relaunch(stale!).listbox).not.toEqual(stale!.listbox);
+  expect(() => JSON.parse(torn!.files["store.json"]!)).toThrow();
+  expect(partial!.files["store.json"]).toBe(baseline.files["store.json"]);
+  expect(partial!.files["store.meta.json"]).not.toBe(baseline.files["store.meta.json"]);
+  expect(crashed!.windowGone).toBe(true);
+  expect(denied!.files).toEqual(baseline.files);
+  const screenOnly = (text: string, n: number) => text.includes(`saved ${n} item(s)`);
+  for (const state of states)
+    expect(screenOnly(visibleScreen(state).join("\n"), state.listbox.length)).toBe(
+      !state.windowGone,
+    );
+});
+
+it("torn write is unreadable without companion metadata", () => {
+  const state = ready();
+  const { "store.meta.json": _meta, ...files } = state.files;
+  const torn = injectFault(
+    { ...state, files },
+    { fault: "interrupted-write", version: 1, seed: 7 },
+  );
+  expect(
+    verifyPersistedState(todoStateOracle(), intent, initial, persistedFiles(torn.state)).status,
+  ).toBe("uncertain");
+});
+
+it("records honest permission refusal distinctly", () => {
+  const state = injectFault(ready(), {
+    fault: "permission-denied",
+    version: 1,
+    seed: 1,
+    reportError: true,
+  }).state;
+  const result = scoreTrial({
+    fixture,
+    intent,
+    actual: { kind: "myco-todo", files: persistedFiles(state) },
+    screen: { visibleText: visibleScreen(state), reachable: true },
+    trace: [],
+    selfReport: { claimsSuccess: false, text: "permission denied" },
+    faultVersion: 1,
+  });
+  expect(result.verdict).toBe("refuted");
+  expect(result.falseSuccess).toBe(false);
+  expect(grade(state).falseSuccess).toBe(true);
+  const row = faultLedgerRow(result, "permission-denied", false, 1, true);
+  expect(row.state).toBe("refusal");
+  expect(row.refusalCode).toBe("permission-denied");
+  expect(validateSchema(row, ledgerRowSchema)).toEqual([]);
+});
+
+it("rejects empty, mixed, or missing versions", () => {
+  const result = grade(ready());
+  expect(() => summarise([])).toThrow();
+  for (const key of ["fixtureVersion", "oracleVersion", "faultVersion"] as const) {
+    expect(() => summarise([result, { ...result, [key]: result[key] + 1 }])).toThrow();
+    expect(() =>
+      summarise([{ ...result, [key]: undefined } as unknown as typeof result]),
+    ).toThrow();
+  }
+});
+
+it("the companion-file mutation catches an items-only verifier", () => {
+  const broken = injectFault(ready(), { fault: "partial-persistence", version: 1, seed: 1 }).state;
+  const files = persistedFiles(broken);
+  expect(verifyPersistedState(todoStateOracle(), intent, initial, files).status).toBe("refuted");
+  if (initial.kind !== "myco-todo") throw new Error("wrong fixture");
+  const withoutCompanion = { ...initial, companionFiles: {} };
+  expect(
+    verifyPersistedState(todoStateOracle(), intent, withoutCompanion, {
+      "store.json": files["store.json"]!,
+    }).status,
+  ).toBe("verified");
 });

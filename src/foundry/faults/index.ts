@@ -39,17 +39,48 @@ export function injectFault(state: AppState, spec: FaultSpec): FaultResult {
   const saved = `saved ${state.listbox.length} item(s)`;
   let next: AppState;
   switch (spec.fault) {
-    case "stale-ui":
-      next = { ...state, status: saved };
+    case "stale-ui": {
+      const rows = [...state.rows];
+      if (!rows.length) throw new Error("stale-ui requires a visible row");
+      const index = Math.abs(spec.seed) % rows.length;
+      rows[index] = `${rows[index]} [stale ${spec.seed}]`;
+      next = {
+        ...state,
+        status: saved,
+        files: { ...state.files, "store.json": itemFile(rows, spec.seed), "store.meta.json": meta },
+      };
       break;
-    case "interrupted-write":
-      next = { ...state, status: saved, files: { ...state.files, "store.json": items } };
+    }
+    case "interrupted-write": {
+      const arrayStart = items.indexOf("[") + 1;
+      const arrayEnd = items.lastIndexOf("]");
+      const cut = arrayStart + 1 + (Math.abs(spec.seed) % (arrayEnd - arrayStart - 1));
+      next = {
+        ...state,
+        status: saved,
+        files: { ...state.files, "store.json": items.slice(0, cut) },
+      };
       break;
+    }
     case "partial-persistence":
-      next = { ...state, status: saved, files: { ...state.files, "store.meta.json": meta } };
+      next = {
+        ...state,
+        status: saved,
+        files:
+          spec.seed % 2 === 0
+            ? { ...state.files, "store.meta.json": meta }
+            : { ...state.files, "store.json": items },
+      };
       break;
     case "crash-mid-save":
-      next = { ...state, windowGone: true };
+      next = {
+        ...state,
+        windowGone: true,
+        files: {
+          ...state.files,
+          "store.meta.json": `${JSON.stringify({ count: state.rows.length + 1, interrupted: spec.seed })}\n`,
+        },
+      };
       break;
     case "permission-denied":
       next = { ...state, status: spec.reportError ? "save failed: permission denied" : saved };
