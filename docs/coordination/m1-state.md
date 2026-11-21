@@ -395,3 +395,9 @@ Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MY
 - Prevention for the next attempt: (1) gate on `pmset -g batt` reporting AC Power; (2) wrap the sweep in `caffeinate -dimsu` so the host cannot sleep mid-run.
 - At 11:30Z the host was STILL on battery (55%, discharging), so the sweep was NOT restarted. Reported to the outer loop.
 - PR status confirmed: #32 MERGED 01:46:39Z (delta-verified at 9dc4c32), #33 MERGED 01:38:12Z (verified at 67c1961). Both match the outer loop's record.
+
+## Log 2026-11-21 (42) — 90-minute AC-power poll: still on battery, sweep not started
+- Polled `pmset -g batt` every 2 min for 90 min (06:40 → 08:10 EST). Result at timeout: "Now drawing from 'Battery Power'", 44%, discharging, ~8:35 remaining.
+- The sweep was NOT started, and the VM was NOT touched (per instruction). No pre-flight was run.
+- Awaiting mains power. On AC, the sequence is: pmset AC check -> guest health + guarded cold reset at main -> confirm no Linux qemu (lsof :2222 + runtime-owner check) -> start 30 trials from 0 under `caffeinate -dimsu`, fresh JSONL, no-VM-touch rule, honest count.
+- Prior attempt remains classified as a HOST-SLEEP abort (/tmp/m1-013/discarded-host-sleep/), never counted.
