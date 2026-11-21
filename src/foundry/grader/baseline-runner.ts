@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ArmAdapter, ArmEnvironment } from "../baseline/arms/index.ts";
 import { type FaultSpec, injectFault, recoverSave, relaunch } from "../faults/index.ts";
 import { fixtureHash, publicFixtureHash } from "../hidden-split/index.ts";
@@ -32,6 +33,7 @@ export function runArm(
 ) {
   const seeds = [...new Set(options.seeds)];
   if (seeds.length < 3) throw new Error("At least three distinct seeds required");
+  const budget = options.budget ?? 100;
   const rows = [];
   for (const task of tasks) {
     const { fixture, committedFault } = (options.taskSource ?? publicSource).resolve(task);
@@ -42,6 +44,7 @@ export function runArm(
     const hash = committedFault
       ? fixtureHash({ fixture, intent: task.intent, fault: committedFault })
       : publicFixtureHash(fixture, task.intent);
+    const promptHash = createHash("sha256").update(task.prompt).digest("hex");
     const decoder = new TextDecoder();
     const loaded = relaunch({
       rows: [],
@@ -72,7 +75,7 @@ export function runArm(
           { type: "save-observed", timestamp: "", files: persistedFiles(state) },
         ];
         const act = (kind: "click" | "typeText" | "keyPress" | "launch", target: string) => {
-          if (++steps > (options.budget ?? 100)) throw new Error("Arm budget exceeded");
+          if (++steps > budget) throw new Error("Arm budget exceeded");
           trace.push({ type: "action", timestamp: "", step: steps, action: { kind, target } });
         };
         const env: ArmEnvironment = {
@@ -156,7 +159,7 @@ export function runArm(
         const selfReport = arm.run(
           { prompt: task.prompt, intent: structuredClone(task.intent) },
           env,
-          options.budget ?? 100,
+          budget,
         );
         const result = scoreTrial({
           fixture,
@@ -174,6 +177,8 @@ export function runArm(
           faultClass: fault?.fault ?? null,
           reportError,
           fixtureHash: hash,
+          promptHash,
+          budget,
           recovered: events.recovery !== null,
           steps,
           selfReport,

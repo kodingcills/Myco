@@ -77,6 +77,8 @@ export function baselineReport(
       const keys = group.rows.map((row) =>
         JSON.stringify([
           row.fixtureHash,
+          row.promptHash,
+          row.budget,
           row.seed,
           row.faultClass,
           row.result.faultVersion,

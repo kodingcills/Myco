@@ -186,6 +186,11 @@ describe("baseline", () => {
     expect(() => baselineReport([...a, ...b.slice(1)], true, trusted)).toThrow(
       /identical trial schedules/,
     );
+    for (const changes of [{ promptHash: "0".repeat(64) }, { budget: 200 }]) {
+      expect(() =>
+        baselineReport([...a, ...b.map((row) => ({ ...row, ...changes }))], true, trusted),
+      ).toThrow(/identical trial schedules/);
+    }
     expect(() => baselineReport([...a, a[0]!], true, trusted)).toThrow(/Duplicate baseline trials/);
   });
   it("keeps unknown measurements separate and rejects mixed versions", () => {
