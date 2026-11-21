@@ -444,6 +444,27 @@ Default if unanswered: option B (ShowUI-2B grounder, local) with the installed q
 **Not blocked by this decision:** M1-021 harness, import-graph and verdict tests (host-side, CI).
 **Blocked:** any baseline trial run (M1-015) until 1+2 are answered (or the default is taken as approved).
 
+## Log 2026-11-21 (45) — benchmarks checked by re-reading the primary sources; two provenance defects fixed in the design
+The 1b/1c sections (OSWorld + WAA as a source of scored agents and as methodology) landed on `myco/m1-baseline` in `c67c389`. Before accepting them I re-read the sources rather than the summary. What held, what did not, and what I changed:
+
+**Held (independently reproduced today):**
+- **47** `libreoffice_calc` tasks in OSWorld v1, **47** in OSWorld-V2 (GitHub contents API, JSON count). WAA: **24** distinct ids — a tree-wide recursive grep returns **48** because each task exists twice, in `evaluation_examples_windows/examples/` and `.../examples_noctxt/`. The count is right; the method note did not say so, and now does.
+- The `postconfig` autosave critique is correct and *worse than stated*: **44 of the 47** OSWorld v1 Calc tasks run `pyautogui.hotkey("ctrl","s")` inside `evaluator.postconfig`. It is the default, not an exception.
+- `--som-origin omni` really is OmniParser-only, and the ⭐ "recommended for best results" row is `mixed-omni --a11y-backend uia`, as the doc says.
+- `uitars15_v2.py` exists in `mm_agents/`.
+- The cost table re-derives exactly ($0.06/$0.28, $1.13/$5.58, $2.26/$11.15, $1.18/$5.67, $4.52/$22.30) from the stated inputs. The `gpt-6.2-astra` price is real: the cited pricing page 301s to `developers.openai.com/api/docs/pricing.md`, whose **standard** table lists `gpt-6.2-astra` at $8/$40.
+
+**Did not hold — fixed in the design:**
+1. **Navi's public score was never recorded.** The doc and M1-023 required a `publicScore {value}` field without ever naming a value. The published number is **Navi 19.5% on Windows vs 74.5% human (arXiv:2409.08264)**, and the paper's configuration is **mixed-omni (accessibility tree + OmniParser)** — there is no published `--som-origin omni`-only number. So B1 is a *lower* configuration than the scored one and its row must be `ported: true` with 19.5% as an upper reference. Writing that into §1b.3 and M1-023 is the whole point of the `ported` flag; leaving it blank made the flag decorative.
+2. **"Local LLM behind an OpenAI-compatible base URL keeps the $0 property" was not free.** `mm_agents/navi/gpt/gpt4v_oai.py` builds `openai.OpenAI(api_key=...)` with no `base_url`, so a local endpoint needs a patch we own. §1b.3 and M1-023 now say so, and it is part of the `ported` definition.
+3. **The `mm_agents/` adapter list named three adapters that are not there** (`manus`, `surferH`, `vlaa_gui`; `mm_agents/manus` → 404). Corrected against the directory listing, with a dated note.
+4. **Two stale cross-references**: the `preserve_cells` row pointed at §1c.2 (it is §1c.1), and the M1-024 backlog entry said "§1c.1" for the same reason — the doc anchor is right, the row was wrong.
+5. **Worked-example arithmetic** in §8.4 wrote `$5.13` for `2.5M × $2/M`; that is `$5.00`, the line now sums correctly and states the `low` column separately. Also added the price-basis sentence the numbers needed: every `gpt-6*` figure is the **standard short-context** column, not long-context (ASTRA's long-context row is $16/$60 and would roughly double the ceiling).
+
+**Unchanged conclusion:** Cua remains the engineering baseline (B0/C1/C2), Navi/omni the public-score arm (B1), UI-TARS the tie to the literature (B2), and the transcribed 10-task subset is post-M1 (M1-027). The bugs above are provenance defects in a credibility document, not a reversal of the plan; but they are exactly the class of defect that turns "publicly scored" into a claim we cannot defend.
+
+**No money spent, no accounts, VM untouched.** Every check above was an HTTP read of a public source plus arithmetic.
+
 ## Log 2026-11-21 (44) — Cua decision written; option choice closed; three governance questions open
 Resolves log 43 (superseded: that entry's ShowUI-2B/UI-TARS default and its four questions were written before the Cua evaluation landed). Design doc §1a/§8.4/§9 is the source of truth; PR #35 head `c22e36f` (this commit).
 

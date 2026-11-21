@@ -236,12 +236,16 @@ This is the intersection Tiffany asked for. Three groups, honestly separated:
 
 **(i) Publicly scored on OSWorld *and* shipping code inside the OSWorld repo.** OSWorld's
 `mm_agents/` directory contains working adapters for a large set of scored agents: `uitars_agent.py`,
-`uitars15_v1.py`, `uitars15_v2.py`, `owl15_agent.py`, `aguvis_agent.py`, `opencua/`,
-`qwen3vl_agent.py`, `gemini_agent.py`, `o3_agent.py`, `gpt54_agent.py`, `anthropic/`,
-`openai_cua_agent.py`, `agi_agent.py`, `manus`·`mobileagent_v3`·`muse_spark` adapters, `jedi_3b/7b`,
-`maestro`, `coact`, `dart_gui`, `evocua`, `autoglm`, `aworldguiagent`, `gta1`, `surferH`, `gui_som`,
-`pointer`, `vlaa_gui`, and more. Each is an **agent class with a `predict()`**, so each is in
-principle host-portable.
+`uitars15_v1.py`, `uitars15_v2.py`, `owl15_agent.py`, `owl_agent.py`, `aguvis_agent.py`, `opencua/`,
+`qwen25vl_agent.py`, `qwen3vl_agent.py`, `gemini_agent.py`, `o3_agent.py`, `gpt54_agent.py`,
+`anthropic/`, `openai_cua_agent.py`, `agi_agent.py`, `mobileagent_v3`·`muse_spark` adapters,
+`jedi_3b_agent.py`, `jedi_7b_agent.py`, `maestro`, `coact`, `dart_gui`, `evocua`, `autoglm`,
+`aworldguiagent`, `gta1`, `gui_som`, `pointer`, and more. Each is an **agent class with a
+`predict()`**, so each is in principle host-portable.
+
+(Read 2026-11-21; the earlier revision of this list carried `manus`, `surferH` and `vlaa_gui`,
+which are **not** in `mm_agents/` — `mm_agents/manus` returns 404. Adapters named here have been
+checked against the directory listing.)
 
 **But "can run against our VM" is not the same as "scored on OSWorld".** The OSWorld numbers those
 agents publish are measured on **Ubuntu 22.04 with GNOME**, not on Windows. Porting one is
@@ -302,6 +306,27 @@ OpenAI-compatible base URL keeps the $0 property; OmniParser is the one componen
 feasibility on this Mac is **UNVERIFIED** — it is the first thing M1-023 checks, and if it fails
 the fallback is B2/UI-TARS which needs no separate perception model.
 
+**Two source facts read on 2026-11-21 that decide how much porting B1 really is** (both verified
+this revision, not inferred):
+
+- **The published number is Navi's, not the mode's.** WAA's paper reports *Navi* at **19.5%
+  success on the Windows domain** (human baseline 74.5%) — arXiv 2409.08264. The README's
+  configuration table (the ⭐ row) says `--som-origin mixed-omni --a11y-backend uia` is "recommended
+  for best results", i.e. **the paper's headline was measured in mixed-omni mode, which uses the
+  accessibility tree.** There is no published `--som-origin omni`-only number. So B1's row must
+  carry `publicScore { benchmark: WindowsAgentArena, value: 0.195, mode: mixed-omni, source:
+  arXiv:2409.08264 }` **and** `ported: true` — the arm we run is a mode *below* the scored one, and
+  calling its number "the published score" would be exactly the misrepresentation §1b.2 warns
+  about. This does not weaken B1; it is still the only arm with a Windows-published number, it just
+  means the number is an upper reference, not an expectation.
+- **Navi's planner client is not base-URL configurable.** `mm_agents/navi/gpt/gpt4v_oai.py` builds
+  `openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))` with no `base_url` argument, and its
+  constructor is only `__init__(self, model="gpt-4o")`. Pointing it at a local endpoint is therefore
+  a **one-line patch we own** (or an `OPENAI_BASE_URL` proxy in front of it), and that patch is part
+  of what `ported: true` describes. The README's prerequisites confirm the intended path is a paid
+  OpenAI or Azure key — which is why the $0 claim depends on that patch, not on Navi shipping
+  local-first.
+
 ## 1c. Methodology: what to borrow from OSWorld and WAA, and the external-benchmark question
 
 ### 1c.1 Their task format, and what ours already matches
@@ -334,8 +359,8 @@ source of its task framework. So the two benchmarks share one format, and there 
 | `instruction` as free text | `TaskIntent` as typed parameters | **Deliberate difference** — M1 tests verified execution, not instruction parsing |
 | `evaluator.func` + `expected` + `result` (getter → metric) | `UnoVerifier` + persisted-file parse + declarative predicates | **Match in spirit**; ours adds a third state (`uncertain`) they lack |
 | `compare_table` `sheet_data` whole-sheet `DataFrame.equals` | per-cell assertion at a known `cellRef` | **Ours is stricter** for M1's purpose and gives a per-cell diagnostic; theirs is all-or-nothing per sheet |
-| `preserve_cells` ("never touch irrelevant regions") | not implemented | **Borrow this — see 1c.2** |
-| `postconfig` pressing Ctrl+S via pyautogui | Myco's `save` step is part of the program, verified afterwards | **Do not borrow**: it makes the evaluator depend on GUI keystrokes, which the existing research already flagged |
+| `preserve_cells` ("never touch irrelevant regions") | not implemented | **Borrow this — see 1c.1** |
+| `postconfig` pressing Ctrl+S via pyautogui | Myco's `save` step is part of the program, verified afterwards | **Do not borrow**: it makes the evaluator depend on GUI keystrokes, which the existing research already flagged. Not a corner case — **44 of the 47 OSWorld v1 Calc tasks** carry a `pyautogui.hotkey("ctrl","s")` step in `postconfig` (counted today), so any port that kept `postconfig` would silently move the save into the judge |
 | Weighted `partial_scores` (OSWorld 2.0) | `scoreVerdict` per-check weights (`src/core/eval.ts`) | **Already adopted** in shape |
 | Executable-file check (`vm_file` → host parse) | close + host-side `.xlsx` parse | **Match** — our verifier already reads the persisted artifact, not the screen |
 
@@ -367,7 +392,7 @@ preconditions.** Here is the honest assessment.
 
 | Requirement | Status | Notes |
 |---|---|---|
-| A Calc task set with host-side gold | **Have it** — 47 OSWorld v1/2 `libreoffice_calc` JSONs, 24 WAA Calc tasks | Apache-2.0 / MIT; both counted in the trees today |
+| A Calc task set with host-side gold | **Have it** — 47 OSWorld v1 `libreoffice_calc` JSONs, 47 in V2, 24 WAA Calc tasks (WAA's appear twice on disk, `examples/` + `examples_noctxt/`: 48 files, 24 distinct ids) | Apache-2.0 / MIT; counted from the GitHub API today, counts reproducible |
 | A checker Myco can call | **Nearly have it** — `compare_table` is a Python function over two `.xlsx` paths | We would re-implement the *call*, not the semantics, and cross-check against their `compare_table` on the gold pair |
 | An environment those tasks run in | **Do not have** — they assume `/home/user/…` Linux paths (OSWorld) or `C:\Users\Docker\…` (WAA) on their own image | Our Windows ARM64 VM can host the WAA-shaped tasks; the OSWorld ones need path remapping and a LibreOffice that matches theirs |
 | A Myco adapter that accepts an *instruction* rather than typed parameters | **Do not have** | `calc-record-edit` takes `{rowKey, column, newValue}`. An OSWorld task is prose. Myco would need an intent-from-prose step, which is exactly the "agent judgment" layer M1 deliberately excludes |
@@ -861,8 +886,19 @@ Inputs and assumptions:
 | **Frontier API, Gemini** (Gemini 3.1 Pro) | 2.00 / 12.00 | $1.18 | $5.67 |
 | **UI-TARS local** (UI-TARS-1.5-7B) | 0 / 0 | **$0** | **$0** |
 
-Worked example, Sonnet, `high`: `(2.5M + 63k) × $2/M + 45k × $10/M = $5.13 + $0.45 = $5.58`.
-The same run without the toolset is `2.5M × $2/M + $0.45 = $5.45`.
+Worked example, Sonnet, `high`: `(2.5M + 63k) × $2/M + 45k × $10/M = $5.00 + $0.13 + $0.45 = $5.58`.
+The same budget without the toolset (but still at `high`'s 2.5M input and 45k output) is
+`2.5M × $2/M + 45k × $10/M = $5.00 + $0.45 = $5.45`; the `low` column is the same formula at
+0.44M / 25k and is what the table's `$1.13` cell reports.
+
+**Price basis for the `gpt-6` rows.** All `gpt-6*` and Claude figures are the **standard,
+short-context** rates on the vendors' published tables (OpenAI's standard table lists exactly
+these seven models). They are not long-context rates: OpenAI's table also publishes a long-context
+column, and at `gpt-6.2-astra` that column is **$16/$60** per MTok, which would roughly double the
+`$22.30` ceiling to ≈$43 if a trial's prompt ever crossed the long-context boundary. §8.1's budgets
+(≤2.5M input per 30 trials, ≈1834–5836 tokens per request) are far below any such boundary, so the
+short-context column is the correct one — but the report must state which column it used, and a
+future loop that re-sends much more history has to re-price.
 
 **The honest summary.** The local path is **$0**. Every paid configuration is **under $12 per 30
 trials** except the strongest frontier model, whose ceiling is **$22.30** — and that is the most
@@ -994,7 +1030,7 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | Claude prices: Haiku 5.5 $0.10/$0.50, Sonnet 5.5 $2/$10, Opus 5.5 $4/$20 per MTok | `docs.claude.com/en/docs/about-claude/pricing.md` |
 | `computer_toolset_20260801` adds ≈4,500 input tokens per request; screenshots billed as image input | `docs.claude.com/en/docs/agents-and-tools/computer-use.md` |
 | Screenshot token rule `ceil(w/28) x ceil(h/28)`, ≤4,784 visual tokens for current models | same file |
-| OpenAI prices: gpt-6-luna $0.10/$0.50, gpt-6.2-sol and gpt-6.1-sol $2/$10, gpt-6.2-astra $8/$40 | `platform.openai.com/docs/pricing.md` |
+| OpenAI prices, **standard / short-context** column only: gpt-6-luna $0.10/$0.50, gpt-6.2-sol and gpt-6.1-sol $2/$10, gpt-6.2-astra $8/$40 (long-context column: gpt-6.2-astra $16/$60) | `platform.openai.com/docs/pricing.md` → 301 → `developers.openai.com/api/docs/pricing.md` |
 | Gemini 3.1 Pro: $2 input / $12 output per MTok (≤200k prompts) | `ai.google.dev/gemini-api/docs/pricing.md` |
 | Computer-use reference implementation runs in a Linux Docker container | Anthropic computer-use docs |
 | OSWorld repo: Apache-2.0, 3,273 stars, pushed 2026-11-14 | `api.github.com/repos/xlang-ai/OSWorld` |
@@ -1006,10 +1042,14 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | WAA repo: MIT, 918 stars, pushed 2026-10-26 | `api.github.com/repos/microsoft/WindowsAgentArena` |
 | WAA runs its own Windows 11 VM in Docker/QEMU; `--use-kvm true` is the default and no-KVM "is not recommended due to performance issues" | `scripts/run-local.sh`, README §FAQ |
 | WAA golden image is the **Windows 11 Enterprise Evaluation x64** ISO via Dockur; no ARM64 path documented | README §3.1-3.2 |
-| WAA has **24** `libreoffice_calc` tasks across 12 app categories | directory counts, `client/evaluation_examples_windows/examples` |
+| WAA has **24** `libreoffice_calc` tasks across 12 app categories, each present twice (`examples/` and `examples_noctxt/`): a tree-wide recursive grep returns **48** files, 24 distinct ids | `git/trees/main?recursive=1`, paths under `src/win-arena-container/client/evaluation_examples_windows/`, 2026-11-21 |
 | WAA Calc task shape is OSWorld's with Windows paths; evaluator `compare_table`, `result.type: vm_file`, `expected.type: cloud_file` | `examples/libreoffice_calc/01b269ae-…-WOS.json` |
+| **44 of 47** OSWorld v1 Calc tasks run `pyautogui.hotkey("ctrl","s")` in `evaluator.postconfig` (the 3 exceptions use a `--convert-to csv` execute without the hotkey) | per-task sweeps of `evaluation_examples/examples/libreoffice_calc/*.json`, 2026-11-21 |
 | WAA's agent is **Navi**; `--som-origin omni` is pure screenshot, `mixed-omni + uia` is the paper's best mode | README §4.1 configuration table |
 | WAA requires an OpenAI or Azure OpenAI key | README prerequisites |
+| Navi's published score: **19.5%** success on the Windows domain, human baseline 74.5%, measured in the paper's `mixed-omni` config — no `--som-origin omni`-only number is published | arXiv **2409.08264** abstract; README configuration table |
+| Navi's OpenAI planner builds `openai.OpenAI(api_key=...)` with **no `base_url`**; constructor is `__init__(self, model="gpt-4o")` | `src/win-arena-container/client/mm_agents/navi/gpt/gpt4v_oai.py` lines 21-27 |
+| Navi's `predict(instruction, obs)` takes screenshots + window rect/title via `obs` and returns a list of actions (its window ops such as `computer.os.maximize_window()` assume WAA's VM backend, so a heap of the transport is still ours) | `src/win-arena-container/client/mm_agents/navi/agent.py` line 138 onward |
 | Navi/OmniParser: OmniParser is MIT and is "the current top performing screen understanding model in our benchmark" | WAA README update 2024-10-23 |
 | OSWorld agent adapters that ship in-repo (UI-TARS v1/v2, OpenCUA, Qwen3-VL, Gemini, o3, gpt54, Owl, AGUVIS, …) | `mm_agents/` directory listing, 2026-11-21 |
 | Published OSWorld number is only *verified* when maintainers run the agent | OSWorld README §"Public evaluation" |
