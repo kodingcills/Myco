@@ -286,8 +286,8 @@ Transcribed from arXiv 2409.08264 Table 4's **Total** column, read from the pape
 explicitly and blocks are delimited by `\midrule`. Both rendered forms keep every row's model
 label and its seven numbers in order; what they lose is **where the block marker belongs**. In the
 PDF text layer the `✗`/`✓` lands on the block's **second** row (the `GPT-4o-mini` line); in the
-ar5iv HTML the multirow cells are not `rowspan`'d, so marker and perception labels sit on the
-block's **fourth** row. Splitting either form on the marker therefore shifts every block — by a
+ar5iv HTML the multirow cells are not `rowspan`'d, so the ✗/✓ marker alone sits on the block's
+**fourth** row, with the perception label on its own row nearby. Splitting either form on the marker therefore shifts every block — by a
 different amount in each — which is what produced the earlier errors. Only the LaTeX `\midrule`
 delimits blocks unambiguously, so it is the artifact of record.
 
