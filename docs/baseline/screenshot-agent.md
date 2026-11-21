@@ -1113,7 +1113,6 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | **47** `libreoffice_calc` tasks in OSWorld v1, and **47** in OSWorld-V2 | directory listing counts, `evaluation_examples/examples/libreoffice_calc` on each repo, 2026-11-21 |
 | OSWorld task shape: `config[]` / `evaluator.func` + `expected` + `result` + `postconfig`; Calc uses `compare_table` | `evaluation_examples/examples/libreoffice_calc/4e6fcf72-daf3-439f-a232-c434ce416af6.json` |
 | OSWorld has an ARM64 image artefact (`Ubuntu-arm.zip`); its `if 'arm' in arch` check in `setup.py` is a **Chrome-profile branch**, not VM-architecture provider evidence | `huggingface.co/api/datasets/xlangai/ubuntu_osworld/tree/main`; `desktop_env/controllers/setup.py:1347-1356` |
-| OSWorld image datasets ship `Ubuntu-arm.zip`, `Ubuntu-x86.zip` | `huggingface.co/api/datasets/xlangai/ubuntu_osworld/tree/main` |
 | OSWorld Windows VM dataset exists but is **x64** (`Windows-x86.zip`, `Windows 10 x64.qcow2` 49 GB), VMware/VirtualBox, "depending on the machine architecture x86 or arm64" per its card | `huggingface.co/api/datasets/xlangai/windows_osworld` + dataset README |
 | WAA repo: MIT, 918 stars, pushed 2026-10-26 | `api.github.com/repos/microsoft/WindowsAgentArena` |
 | WAA runs its own Windows 11 VM in Docker/QEMU; `--use-kvm true` is the default and no-KVM "is not recommended due to performance issues" | `scripts/run-local.sh`, README §FAQ |
