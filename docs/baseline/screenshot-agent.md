@@ -345,9 +345,10 @@ Per trial, on the Myco task family:
 | Image tokens per call | large | 1280×800 screenshot. At the common ~1 image-token per 28×28 patch rule: (1280/28)×(800/28) ≈ 46×29 ≈ **1330 tokens**; a UI-tuned model with a finer patch (14 px) is ~5300. History re-sends add a fraction of this |
 | Text tokens | small | instruction + history, ≈ 200–800 per call |
 
-So a trial is roughly **8–14 calls × (1.3–5.3k image tokens + ~0.5k text)** ≈ **15k–75k input
+So a trial is roughly **8–14 calls × (1.3–5.3k image tokens + ~0.5k text)** ≈ **15k–80k input
 tokens** and **0.3k–1.5k output tokens**. Use 30k in / 0.8k out per trial as the central estimate
-and 75k / 1.5k as the pessimistic one. **30 trials ≈ 0.9M–2.3M input, 25k–45k output.**
+and 80k / 1.5k as the pessimistic one. **30 trials ≈ 0.44M–2.5M input, 25k–45k output**
+(recomputed: 8 calls × 1834 ≈ 14.7k; 14 calls × 5836 ≈ 81.7k; × 30 = 0.44M / 2.45M).
 
 ### 8.2 Shortlist
 
