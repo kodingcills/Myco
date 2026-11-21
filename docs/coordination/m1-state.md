@@ -572,7 +572,7 @@ paper that means the `.tex`, not a rendering of it.)*
 
 **Standing rule adopted:** for a transcription, the oracle is the source artifact in full; the brief may say *where* to look, never *what the numbers are*. Any future verifier brief for a table will carry the extraction instruction and the URL, not the expected values.
 
-**Downstream impact:** none on B1. Its row is tree-free OmniParser: 12.5% GPT-4V-1106, 8.6% GPT-4o — unchanged, and now corroborated by a full-block transcription rather than a partial one. `publicScore.value = 0.125` stands.
+**Downstream impact:** none on B1. Its row is tree-free OmniParser: 12.5% GPT-4V-1106, 9.4% GPT-4o — the maximum and the value `publicScore` records are unchanged. *(Amendment 2026-11-21: this line originally gave the GPT-4o cell as 8.6%, the headline row's value; corrected from the LaTeX source.)* `publicScore.value = 0.125` stands.
 
 Docs only; no VM, no spend, no accounts.
 
@@ -581,15 +581,16 @@ Docs only; no VM, no spend, no accounts.
 
 **What Table 4 actually is.** For each perception-modality block, four model rows print in the order **Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106**, each with six category values and a Total. Reading the last value of a block gives GPT-4V-1106; the **second-to-last** gives GPT-4o. Transcribed Totals:
 
-| UIA | OmniParser | Other | GPT-4V-1106 | GPT-4o | GPT-4o-mini |
-|---|---|---|---|---|---|
-| ✗ | ✗ | Pytesseract+DOM+GroundingDINO | 8.6 | 5.2 | 7.2 |
-| ✓ | ✗ | Pytesseract+DOM+GroundingDINO | 13.1 | 9.8 | 2.6 |
-| ✓ | ✗ | OneOCR | 13.1 | 9.3 | 5.3 |
-| ✗ | ✓ | — | **12.5** | 8.6 | 4.2 |
-| ✓ | ✓ | — | **19.5** | 13.3 | 7.3 |
+| UIA | OmniParser | Other | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+|---|---|---|---|---|---|---|
+| ✗ | ✗ | Pytesseract+DOM+GroundingDINO | 8.6 | 5.2 | 7.2 | 1.3 |
+| ✓ | ✗ | Pytesseract+DOM+GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
+| ✗ | ✗ | OneOCR | 11.3 | 9.3 | 5.3 | 3.2 |
+| ✓ | ✗ | OneOCR | 13.1 | 13.3 | 7.3 | 4.0 |
+| ✗ | ✓ | — | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | ✓ | — | **19.5** | 8.6 | 4.2 | 3.5 |
 
-Human ceiling 74.5% overall, **83.3% on LibreOffice Calc** (Table 8). So the tree-free `omni` row is **12.5% with GPT-4V-1106 and 8.6% with GPT-4o**. *(Amendment 2026-11-21: this line originally read "9.4% with GPT-4o", which was the off-by-one-model-row error; the authoritative figures are in docs/baseline/screenshot-agent.md §1b.2, rebuilt from both the PDF text layer and ar5iv.)*
+Human ceiling 74.5% overall, **83.3% on LibreOffice Calc** (Table 8). So the tree-free `omni` row is **12.5% with GPT-4V-1106 and 9.4% with GPT-4o**. *(Amendment 2026-11-21, twice: this table first carried five rows with the two OneOCR blocks merged, then a six-row version with the OmniParser rows off by one model. The values above are from the paper's LaTeX source, `inputs/results.tex`, which labels every row explicitly; the authoritative copy is docs/baseline/screenshot-agent.md §1b.2.)*
 
 **What this replaces.** A parallel writer had already cut the table down to "only cells we can pin", having decided the GPT-4o values were unrecoverable. They were recoverable — the ambiguity was in my transcription, not the paper. The full five-block table is now in §1b.2 verbatim, with the reading rule stated, because a future reader will hit the same trap.
 
