@@ -508,7 +508,7 @@ Post-merge review of the report sent to Tiffany found one surviving error, in th
 
 **Why it matters:** the merged document was telling future readers that the PDF is unusable, when the real rule is "parse structurally, and prefer the LaTeX because it needs no inference at all." The error was mine and it was in the *explanation* of my own error, which is the most misleading place for one to live.
 
-**Corrected in the design** (§1b.2 sourcing paragraph), keeping the substance of the lesson — HTML is genuinely lossy, LaTeX is the artifact of record — while stating the PDF limitation accurately.
+**Corrected in the design** (§1b.2 sourcing paragraph). *(Amendment 2026-11-21, round 15: the first correction said the markers sit "on their own lines" and that HTML "loses row-to-column alignment entirely". Both were wrong. A verifier checked the artifacts: the PDF puts each ✗/✓ on the block's SECOND row (the GPT-4o-mini line), and the ar5iv HTML keeps all 12 columns per row with the model at index 4 — it simply does not rowspan the multirow cells, so the marker lands on the block's FOURTH row. Both forms keep per-row labels; both misplace the marker, by a different amount. The design now says exactly that.)*
 
 Docs only; no VM, no spend, no accounts.
 

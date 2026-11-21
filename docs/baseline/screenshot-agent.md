@@ -283,11 +283,13 @@ and Phi3-V / GPT-4o-mini / GPT-4o / GPT-4V-1106 per row, with a human ceiling of
 
 Transcribed from arXiv 2409.08264 Table 4's **Total** column, read from the paper's **LaTeX source**
 (`arxiv.org/e-print/2409.08264`, `inputs/results.tex`), where every row carries its model label
-explicitly and blocks are delimited by `\midrule`. The **HTML** rendering loses the row-to-column
-alignment entirely; the **PDF text layer** keeps each row's model label but prints the ✗/✓ block
-markers on their own lines, so a parser that splits on those markers shifts every block by one —
-which is what produced the earlier errors. Both are workable if parsed structurally; the LaTeX is
-the artifact of record and needs no inference.
+explicitly and blocks are delimited by `\midrule`. Both rendered forms keep every row's model
+label and its seven numbers in order; what they lose is **where the block marker belongs**. In the
+PDF text layer the `✗`/`✓` lands on the block's **second** row (the `GPT-4o-mini` line); in the
+ar5iv HTML the multirow cells are not `rowspan`'d, so marker and perception labels sit on the
+block's **fourth** row. Splitting either form on the marker therefore shifts every block — by a
+different amount in each — which is what produced the earlier errors. Only the LaTeX `\midrule`
+delimits blocks unambiguously, so it is the artifact of record.
 
 Human ceiling **74.5% overall**; **83.3% on LibreOffice Calc** (human avg 15.3 steps, difficulty
 2.0, Table 8). The four model rows print in the order **Phi3-V, GPT-4o-mini,
