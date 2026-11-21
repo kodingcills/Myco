@@ -521,13 +521,73 @@ arms must share all of the following. Anything that differs is a documented devi
 | Condition | How it is held constant |
 |---|---|
 | Task family and parameters | The sweep's final 30 parameter sets, copied verbatim into the baseline run (§4.4a) — same `{fixtureSeed,rowKey,column,newValue}` per trial. The generator that produced them (`generateParameterSets`, `src/tasks/intent.ts`) is the family definition; the *list used* is data, recorded with its hash in both reports. |
-| Initial state | Per-trial reset from `clean-base` via `scripts/reset-trial-vm.sh` (cold disk restore), identical for both arms. Reset wall time recorded per trial. |
+| Initial state | Per-trial reset from **`clean-base`** via `scripts/reset-trial-vm.sh` (guarded, disk-only cold restore), identical for both arms — the same snapshot name, the same script, the same deploy flow (§2.1). Reset wall time recorded per trial. |
 | Fixture file | Host-generated CSV → guest `.xlsx` by `WindowsFixtureConverter` (isolated throwaway profile). The **same fixture bytes** for trial *i* in both arms: the baseline gets fixture *i*, not a re-generated one. |
 | Guest software | Same VM, same LibreOffice 26.8.3 ARM64, same Windows build. No LibreOffice settings are changed for either arm (AutoCorrect stays on — see §3.4). |
 | Desktop geometry | Both arms run at the same display resolution; the baseline's `--grounding_width/height` equal the captured screenshot size. Resolution recorded. |
 | Agent isolation | One trial per guest state, no concurrent sessions. After either arm's trial: cleanup + reset before the next trial (M1-019 semantics). |
-| Trial order | The Myco arm's 30 trials must come from the M1-013 sweep. **As of 2026-11-21 that artefact does not exist**: `/tmp/m1-013/sweep/` holds only `progress.log` (trial 0 in flight) and an empty `runs/`; the prior attempts are classified host-sleep and external-interference aborts and are never counted. The join in §4.4 is therefore **contingent on the sweep completing and the Coordinator declaring it final**; nothing in this doc presumes a sweep number. The baseline arm runs **the same parameter sets, in the same order**, as the sweep's final parameter list — not a re-derived index (§4.4a). |
+| Trial order | The Myco arm's 30 trials must come from the M1-013 sweep. **As of 2026-11-21 the sweep is in progress, not finished**: `/tmp/m1-013/sweep/trials.jsonl` had four rows and `progress.log` had reached trial 4 at 19:02Z when this was written; it is still running and the numbers will change. Prior attempts are classified host-sleep and external-interference aborts and are never counted. The join in §4.4 is therefore **contingent on the sweep completing and the Coordinator declaring it final**; nothing in this doc presumes a sweep number. The baseline arm runs **the same parameter sets, in the same order**, as the sweep's final parameter list — not a re-derived index (§4.4a). |
 | Attempts | One attempt per trial. A retry is a new trial row, not a hidden re-run. |
+
+### 2.1 The operator interface — pinned to `main`, not invented here
+
+The baseline must drive the guest through **the same entry points the Myco arm uses**, or criterion
+7 is void. **`reset-trial-vm.sh` and `deploy-to-vm.sh` are in this repo; the SSH config, the key and
+the `vssh` wrapper are host scripts under `~/VMs/myco-win11/` and are deliberately not in the repo**
+(the runbook says so). The baseline adds no new VM plumbing — it drives exactly what already exists,
+wherever it lives.
+
+| Step | Command (from `main`) | Success signal |
+|---|---|---|
+| Reset | `scripts/reset-trial-vm.sh` (default snapshot `clean-base`) | `reset-trial-vm: ready on 'clean-base'` |
+| Deploy | `agent/bootstrap/deploy-to-vm.sh` — **foreground**, never backgrounded | `DEPLOY OK` |
+| Reachability | `ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11` | agent `ping` answers |
+| Token | `vssh 'Get-Content C:\ProgramData\Myco\agent.token'` | non-empty; never committed |
+| Screenshot | the agent's `screenshot` op, **in-guest** | PNG bytes |
+
+`SshTunnel` in `src/win/agent-client.ts` already defaults to exactly this (`ssh_config`,
+local 8765 → guest 8765), so the baseline reuses it rather than shelling out.
+
+**Two operational facts that have already cost this project time:**
+
+- **Screenshots must be taken in-guest.** UTM host capture returns a placeholder, so a baseline that
+  captured on the host would be measuring a grey rectangle. The agent's `screenshot` op is the only
+  valid source, and it is the same op the Myco arm's evidence uses.
+- **`pgrep qemu-system-aarch64` is not a liveness check.** The guest runs under UTM's
+  `QEMULauncher`, so that pattern finds nothing even when the VM is healthy. Use
+  `lsof -iTCP:2222`. (This is the same class of error as the `pgrep` check in log 39.)
+
+**Host conditions for a valid run**, recorded per trial in the row (§4): AC power, `caffeinate
+-dimsu` for the duration, and no other VM running. A baseline run on a contended Mac measures the
+Mac — logs 30/41 show resets swinging 45 s → 1879 s under load.
+
+**The no-touch rule is absolute while a sweep runs**, and it covers stubs. The incident that
+created it: a verifier set `MYCO_VM_SCRIPTS` for a stub but did not export it in the same tool call,
+so `reset-trial-vm.sh` fell through to the real VM, killed the agent mid-trial and wedged the next
+reset — two sweep trials destroyed. So during a sweep the baseline workstream runs **no** VM script,
+**no** UTM command and **no** `vssh`, "just a quick check" included. `reset-trial-vm.sh` now refuses
+rather than falling back (commit `9dc4c32`), but the rule is the defence, not the guard.
+
+**Budget, from measured figures — and the two-arm figure is larger than a single arm, not equal to
+it.** Per trial: cold reset **140 s** (measured 143/134/145/152/139 over five runs, log 39), a
+**redeploy ~100 s** (clean-base predates the agent — log 27; the running sweep does a `DEPLOY OK`
+every trial), and the trial itself. So:
+
+| Arm | Per trial | 30 trials |
+|---|---|---|
+| One sub-arm (C1 **or** C2) | 140 + 100 + ~135 = 375 s | **≈3.1 h** |
+| Both sub-arms, each with its own reset+deploy | 2 × 375 = 750 s | **≈6.25 h** |
+
+**Each sub-arm gets its own reset.** An earlier draft of this section proposed sharing one reset
+between C1 and C2 to halve the cost. That is wrong and the design rejects it: C1 *edits the cell*,
+so C2 would start from a document C1 had already modified and its verdict would be meaningless. The
+saving is one reset+deploy per trial (~240 s of 750) — not worth an invalid arm. **Every row, in
+every sub-arm, begins from its own `clean-base` restore and its own deploy**, which is why the
+two-arm figure is 2× a single arm rather than less.
+
+Trial wall time is the least certain input: the running sweep's rows show 21–115 s, earlier verified
+trials were 34–40 s, and the Coordinator's planning figure is ~135 s. The report records actual
+`elapsedMs` per row; the budget above uses the cautious 135 s.
 
 **Ordering of the two arms.** The baseline arm runs *after* the Myco arm produces its 30-trial
 result, on the same VM, because M1-013 owns the host first. If the Myco sweep is re-run (e.g. a
@@ -711,7 +771,7 @@ side-by-side table is a join, not a manual reconciliation.
 
 ```jsonc
 {
-  "arm": "myco" | "screenshot",
+  "arm": "myco" | "c1" | "c2",     // C1 and C2 are separate rows; never one "screenshot" bucket
   "index": 0,                       // 0..29, index into generateParameterSets(SEEDS)
   "params": { "fixtureSeed": "…", "rowKey": "EMP-0038", "column": "name", "newValue": "…" },
   "cellRef": "B39",
@@ -726,9 +786,12 @@ side-by-side table is a join, not a manual reconciliation.
   "modelCalls": 5,                  // baseline only
   "tokens": { "in": 0, "out": 0 },  // baseline only
   "resetMs": 140_000,               // per-trial reset, both arms
+  "acPower": true,                  // §2.1: a battery run is not a valid trial
+  "caffeinate": true,               // host held awake for the duration
+  "screenshotSource": "agent-op",   // never "utm-host" — that returns a placeholder
   "resumed": false,                 // the app or harness was interrupted and resumed
   "recoveryEvents": 0,
-  "hostLoad": { "battery": "AC", "loadAvg1": 2.1 },
+  "hostLoad": { "loadAvg1": 2.1 },   // AC state is "acPower" above — one field, not two
   "deviations": []
 }
 ```
@@ -849,13 +912,17 @@ a per-trial table with both outcomes:
 | 3 | uncertain | refuted | refuted | `agree_fail` |
 | … | | | | |
 
-Discordant trials (rows where the two arms differ) are the only evidence. Trials where both pass,
-or both fail, carry no information about the difference and must not be counted as agreement
-towards it.
+**Each baseline sub-arm is tested against Myco separately, never pooled.** C1 and C2 are different
+agents; merging them into one "baseline" column would produce a number that describes neither. So
+the table is emitted **twice** — once Myco×C1, once Myco×C2 — and each gets its own `b`, `c`, `p`.
+
+Within one such table, discordant trials (rows where Myco and that sub-arm differ) are the only
+evidence. Trials where both pass, or both fail, carry no information about the difference and must
+not be counted as agreement towards it.
 
 **4.5.2 The exact threshold — corrected.** The survey states that "≥5 discordant trials all
 favouring Myco" reaches p<0.05. **That is wrong.** A two-sided exact sign test on the discordant
-pairs (b = Myco-only wins, c = baseline-only wins) gives:
+pairs (b = Myco-only wins, c = that sub-arm-only wins) gives:
 
 | discordant `d`, all favouring Myco | p (two-sided exact) |
 |---|---|
@@ -1091,9 +1158,9 @@ credibility are.
   accept images at all — the one prior check returned a credits error — and what a dedicated
   UI-TARS endpoint costs, since those are metered by GPU-hour and not published per token. Both are
   §9 items, and neither is needed if Cua + a local planner works.
-- **Time is not $0 to the project.** A cold reset is 134–152 s (log 39) and a Myco trial is 35–90 s.
-  A 30-trial baseline run is ≈ 1.5–2 h of VM time at Myco's step count, and a screenshot agent's
-  higher step count pushes it toward 2.5–3 h. It is VM time the M1-013 sweep and M1-014 also need.
+- **Time is not $0 to the project.** A cold reset is 134–152 s (log 39), a redeploy ~100 s, and a Myco trial is 35–90 s.
+  A 30-trial baseline sub-arm is ≈ 3.1 h of VM time (§2.1) and C1 plus C2 is ≈ 6.25 h, each
+  sub-arm with its own reset and deploy. It is VM time the M1-013 sweep and M1-014 also need.
 
 ---
 
@@ -1113,9 +1180,15 @@ decisions, and none of them is answered here:
 3. **Whether to run C2 at all.** §1a proposes two labelled sub-arms (C1 pixel-only, C2 full ladder).
    C2 is what makes the comparison credible and also what could make Myco look worse. Tiffany's
    call; both are cheap, and dropping C2 weakens the baseline.
-4. **VM time after the M1-013 sweep**: the §1a spike (~30 min: install, `get_window_state` on Calc,
-   one typed edit through each rung) then 2–3 h for the arm, plus the same for the corrupted arm if
-   §7 is in scope. Scheduling is the M1 Coordinator's.
+4. **VM time after the M1-013 sweep**: the §1a spike (~30 min), then **≈3.1 h** for one 30-trial
+   sub-arm and **≈6.25 h** for C1 and C2 together, each with its own reset and deploy (per-trial arithmetic in §2.1), plus the same
+   again for the corrupted arm if §7 is in scope. The Coordinator owns the host and is running the
+   sweep now.
+   **Ask for it chunked if that helps**: every row begins from its own `clean-base` restore, so a
+   chunk boundary is just another row boundary and the run is resumable — so the window can be split
+   however suits (for the two-arm run, 2 × ~3.1 h is as valid as one ~6.25 h block), and *safer*,
+   because a host sleep or a UTM wedge otherwise costs the whole run
+   (logs 41/35).
 5. **Frontier API as a third column** (`gpt-6.2-sol`/`gpt-6.2-astra`, Gemini 3.1 Pro): est.
    **$0.06–$22.30 per 30 trials** (§8.4: `gpt-6-luna` low, `gpt-6.2-astra` with toolset overhead
    high), but requires an API key, billing, and vendor data handling of
@@ -1156,12 +1229,6 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | 5 | VM time slot after the sweep | any run | M1 Coordinator |
 | 6 | Does the Myco sweep keep 30 columns varied, or only `name`? (runbook §7.3) | comparison honesty | M1 Coordinator (owner of the sweep) |
 
----|---|---|---|
-| 1 | PyAutoGUI runner via `launch` (a) vs new agent ops (b) | harness implementation | baseline workstream |
-| 2 | Does the host-side agent harness run on the Mac against the guest over `ssh -T` MCP, or inside the guest? (Mac is preferred: it keeps the transcript and the judge on one machine.) | harness implementation | baseline workstream, decided in the M1-021 spike |
-| 3 | Grounding model choice (escalation §9.1/2) | any run | Tiffany via outer loop |
-| 4 | VM time slot after the sweep | any run | M1 Coordinator |
-| 5 | Does the Myco sweep keep 30 columns varied, or only `name`? (runbook §7.3) | comparison honesty | M1 Coordinator (owner of the sweep) |
 
 ---
 

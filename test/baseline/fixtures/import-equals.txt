@@ -1,0 +1,1 @@
+import x = require("../../../src/integration/trial.ts"); export { x };
