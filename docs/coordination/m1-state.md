@@ -453,7 +453,7 @@ The 1b/1c sections (OSWorld + WAA as a source of scored agents and as methodolog
 **Held (independently reproduced today):**
 - **47** `libreoffice_calc` tasks in OSWorld v1, **47** in OSWorld-V2 (GitHub contents API, JSON count). WAA: **24** distinct ids — a tree-wide recursive grep returns **48** because each task exists twice, in `evaluation_examples_windows/examples/` and `.../examples_noctxt/`. The count is right; the method note did not say so, and now does.
 - The `postconfig` autosave critique is correct and *worse than stated*: **44 of the 47** OSWorld v1 Calc tasks run `pyautogui.hotkey("ctrl","s")` inside `evaluator.postconfig`. It is the default, not an exception.
-- `--som-origin omni` is OmniParser-only, and the ⭐ "recommended for best results" row is `mixed-omni --a11y-backend uia`. **Corrected 2026-11-21 (round 7):** `omni` is **not** pure screenshot — `agent.py` feeds the planner a SoM-annotated image **plus `list_of_text` captions** — and the tree-free `omni` number is 8.6% (GPT-4o) / 12.5% (GPT-4V), not the 19.5% headline.
+- `--som-origin omni` is OmniParser-only, and the ⭐ "recommended for best results" row is `mixed-omni --a11y-backend uia`. **Corrected 2026-11-21 (round 7):** `omni` is **not** pure screenshot — `agent.py` feeds the planner a SoM-annotated image **plus `list_of_text` captions** — and the tree-free `omni` number is 12.5% (GPT-4V-1106) / 9.4% (GPT-4o), not the 19.5% headline. *(Values corrected in log 52 from the LaTeX source.)*
 - `uitars15_v2.py` exists in `mm_agents/`.
 - The cost table re-derives exactly ($0.06/$0.28, $1.13/$5.58, $2.26/$11.15, $1.18/$5.67, $4.52/$22.30) from the stated inputs. The `gpt-6.2-astra` price is real: the cited pricing page 301s to `developers.openai.com/api/docs/pricing.md`, whose **standard** table lists `gpt-6.2-astra` at $8/$40.
 
@@ -529,8 +529,8 @@ A parallel thread's `f6d2671` replaced the sourcing row with a new set of totals
 |---|---|---|---|---|---|
 | ✗ | Pytesseract+GroundingDINO | 8.6 | **5.2** | 7.2 | 1.3 |
 | ✓ | Pytesseract+GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
-| ✗ | OneOCR | 11.3 | 9.3 | 5.3 | 3.2 |
-| ✓ | OneOCR | 13.1 | 13.3 | 7.3 | 4.0 |
+| ✓ | OneOCR | 13.1 | 9.3 | 5.3 | 3.2 |
+| ✗ | OneOCR | 11.3 | 13.3 | 7.3 | 1.0 |
 | ✗ | OmniParser | **12.5** | **9.4** | 2.7 | 2.0 |
 | ✓ | OmniParser | **19.5** | **8.6** | 4.2 | 3.5 |
 
@@ -553,16 +553,18 @@ Docs only; no VM, no spend, no accounts.
 |---|---|---|---|---|---|
 | ✗ | Pytesseract+GroundingDINO | 8.6 | **5.2** | 7.2 | 1.3 |
 | ✓ | Pytesseract+GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
-| ✗ | OneOCR | 11.3 | 9.3 | 5.3 | 3.2 |
-| ✓ | OneOCR | 13.1 | 13.3 | 7.3 | 4.0 |
-| ✗ | OmniParser | **12.5** | **8.6** | 4.2 | 3.5 |
-| ✓ | OmniParser | **19.5** | **13.3** | 7.3 | 4.0 |
+| ✓ | OneOCR | 13.1 | 9.3 | 5.3 | 3.2 |
+| ✗ | OneOCR | 11.3 | 13.3 | 7.3 | 1.0 |
+| ✗ | OmniParser | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | OmniParser | **19.5** | **8.6** | 4.2 | 3.5 |
 
-*(Amendment 2026-11-21, after a later independent double extraction: the two OmniParser rows above were off by one model row — the tree-free row is 8.6% with GPT-4o, not 9.4%, and the tree+OmniParser row is 13.3%, not 8.6%. Corrected in place rather than silently rewritten, and the authoritative figures now live in docs/baseline/screenshot-agent.md §1b.2, which was rebuilt from both the PDF text layer and ar5iv. The lesson in the paragraph above still stands: the oracle is the artifact.)*
-*(Corrected by log 51: the first version of this table, written from HTML, attached each block's
-model rows to the preceding ✗/✓ marker and so shifted every column by one block. The values above
-come from the PDF text layer. The lesson stands — verification whose oracle is the author is not
-verification — but the table it was attached to was itself wrong.)*
+*(This table has been rewritten twice. The first version, written from HTML, attached each block's
+model rows to the preceding ✗/✓ marker and shifted every column by one block. A second version,
+written from the PDF text layer, still had the two OmniParser rows off by one model row. The values
+above are from the paper's **LaTeX source** (`inputs/results.tex`), which labels every row
+explicitly; see log 52. The lesson in the paragraph above stands — verification whose oracle is the
+author is not verification — and so does its corollary: the oracle is the artifact, and for a LaTeX
+paper that means the `.tex`, not a rendering of it.)*
 
 **What was wrong in the previous commit.** The table carried five rows, having **merged the two OneOCR blocks into one**, so it paired 13.1% with 9.4/2.7 — the ✓OneOCR GPT-4V cell beside the ✗OneOCR block's other models. It also gave the headline row GPT-4o 9.4, which belongs to ✓OneOCR.
 
@@ -581,13 +583,13 @@ Docs only; no VM, no spend, no accounts.
 
 | UIA | OmniParser | Other | GPT-4V-1106 | GPT-4o | GPT-4o-mini |
 |---|---|---|---|---|---|
-| ✗ | ✗ | Pytesseract+DOM+GroundingDINO | 8.6 | 9.8 | 2.6 |
-| ✓ | ✗ | Pytesseract+DOM+GroundingDINO | 13.1 | 9.3 | 5.3 |
-| ✓ | ✗ | OneOCR | 13.1 | 9.4 | 2.7 |
+| ✗ | ✗ | Pytesseract+DOM+GroundingDINO | 8.6 | 5.2 | 7.2 |
+| ✓ | ✗ | Pytesseract+DOM+GroundingDINO | 13.1 | 9.8 | 2.6 |
+| ✓ | ✗ | OneOCR | 13.1 | 9.3 | 5.3 |
 | ✗ | ✓ | — | **12.5** | 8.6 | 4.2 |
-| ✓ | ✓ | — | **19.5** | 9.4 | 4.2 |
+| ✓ | ✓ | — | **19.5** | 13.3 | 7.3 |
 
-Human ceiling 74.5%. So the tree-free `omni` row is **12.5% with GPT-4V-1106 and 8.6% with GPT-4o** — not "12.5% with GPT-4V, 8.6% with GPT-4V" as several sites had it. The two values are the same block read one row apart, and I had paired them as if they were two columns of one model.
+Human ceiling 74.5%. So the tree-free `omni` row is **12.5% with GPT-4V-1106 and 9.4% with GPT-4o** — not "12.5% with GPT-4V, 8.6% with GPT-4V" as several sites had it. *(The 9.4 figure is from the LaTeX source; this entry originally wrote 8.6, which is the headline row's GPT-4o cell — the same one-row-off error it was describing.)*
 
 **What this replaces.** A parallel writer had already cut the table down to "only cells we can pin", having decided the GPT-4o values were unrecoverable. They were recoverable — the ambiguity was in my transcription, not the paper. The full five-block table is now in §1b.2 verbatim, with the reading rule stated, because a future reader will hit the same trap.
 
@@ -601,7 +603,7 @@ Docs only; no VM, no spend, no accounts.
 1. **The example task JSON was right before I broke it.** `4e6fcf72…json` really does have `config[0] = {"type":"host_reference_date", …}` and `evaluator.expected.type = "employee_age_reference"`. I had asserted the opposite, added `"launch"` and `"vm_file"`, and told a verifier those two fields were wrong — the verifier caught the invention. Both restored.
 2. **`host_reference_date` is the config *step*; the getter is `employee_age_reference`.** The sentence in §1c.2 said "builds its `expected` from a `host_reference_date` getter". Wrong before and after my edit. Now describes the actual mechanism: `expected` computes gold from a workbook plus a `reference_date_path` written by the `host_reference_date` setup step.
 3. **`mixed-omni` is a flag name, not a paper result.** The paper reports Table 4 rows varying perception inputs; `mixed-omni` appears only in WAA's README CLI. Two places still described 19.5% as "`mixed-omni`" and denied a `--som-origin omni`-only number — both now state the row and cite Table 4 / §4.2.
-4. **B1's headline should be the *maximum* over its configuration's published rows: 12.5% (GPT-4V), not 8.6% (GPT-4o).** `publicScore.value` is now 0.125 with the 8.6% kept as the other published row.
+4. **B1's headline should be the *maximum* over its configuration's published rows: 12.5% (GPT-4V-1106), not 8.6% (GPT-4o).** `publicScore.value` is 0.125. *(The 8.6% here was the headline row's GPT-4o cell; the tree-free row's GPT-4o value is 9.4%, per the LaTeX source — see log 52.)*
 
 **Lesson taken into the next commit:** a number that appears in a table, a JSON field, or a CLI flag gets re-fetched from the source before it is written, not recalled from the previous draft. Three of these four were recall errors in a document whose entire value is that its numbers are checkable.
 
