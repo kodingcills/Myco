@@ -286,3 +286,12 @@ Children must be briefed with these rules, and reviewers must state the head SHA
 ## Log 2026-11-21 (32)
 - PR #27 VERIFIED at fee8bc8. Byte-identity proof for the String.raw removal: extracted HELPER_SOURCE from before/after, interpreted both, `cmp` → BYTE-IDENTICAL (6325 chars, 0 backslashes in the emitted Python). Lint now 0 errors on main, 108/108 tests, 4/4 CI.
 - RECURRENCE: PR #27 merged at 00:29Z before its verifier reported. Third breach of the merge rule (#24, #25, #27). Diagnosis: I open a PR and then a later `git push origin HEAD:main` of a docs commit carries the branch content with it when the branch is checked out in my worktree — that is how code reaches main without a merge. RULE FIX (mechanical, not a promise): before every docs push to main, assert the worktree has NO code changes — `git diff --name-only origin/main -- src/ app/ agent/ schemas/` must be empty; only docs/ and the state log may be pushed directly.
+
+## Log 2026-11-21 (33) — M1-020 pre-deployed snapshot built (host priority granted)
+- Outer loop granted M1 priority on the Mac for the sweep; Runtime owner asked to finish RT-011 then shut its Linux guest and post the yield.
+- Contention had already eased when I checked: `reset.sh live` measured 44s (baseline) with their guest up between builds.
+- Built M1-020 while myco-win11 was idle: deployed the agent, took NEW snapshot `m1-agent-live` (clean-base* untouched), wrote scripts/reset-prebuilt.sh + take-prebuilt-snapshot.sh.
+- MEASURED: reset-prebuilt.sh = 24.1s wall, agent alive in session 1 after restore (session_info verified), token present. vs reset ~45s + deploy ~100-180s. Saving ~2 min/trial. Scripts syntax-checked and run end-to-end twice.
+- Accepted risk documented in the PR: a snapshot can go stale vs the repo's agent; mitigated by the re-take script + a health check that should assert agent version (M1-019 territory).
+- PR #28 open, verifier spawned WITH VM access authorised (it re-runs the reset twice and checks clean-base* are unmodified).
+- NEXT: when the runtime guest is confirmed down (no qemu-system process), run the full 30-trial sweep using reset-prebuilt.sh. ~3h budget. If resets stay >>45s with the guest down, stop and report that as OUR bug with raw JSONL.
