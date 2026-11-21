@@ -34,7 +34,12 @@ import { type RunOutcome, runProgram } from "../core/runner.ts";
 import { findNode } from "../core/state.ts";
 import type { TaskIntent, Verdict } from "../core/verify.ts";
 import { intentFor, validateIntent } from "../tasks/calc-record-edit.js";
-import { type FixtureFingerprint, fixtureFingerprint, generateFixture } from "../tasks/fixture.js";
+import {
+  type FixtureFingerprint,
+  fixtureFingerprint,
+  generateFixture,
+  recordKey,
+} from "../tasks/fixture.js";
 import { type CalcRecordEditParams, type GroundTruth, groundTruth } from "../tasks/intent.js";
 import { unoVerifierOverAgent } from "../verify/uno-verifier.js";
 import type { AgentClient } from "../win/agent-client.js";
@@ -49,6 +54,23 @@ import {
 } from "./guest-health.js";
 import { guestBasename } from "./guest-shell.js";
 import { type ConvertTiming, WindowsFixtureConverter } from "./windows-fixture.js";
+
+export const LIVE_CORRUPTION_MODES = [
+  "kill",
+  "invalid-target",
+  "delayed-save",
+  "focus-change",
+] as const;
+export type LiveCorruptionMode = (typeof LIVE_CORRUPTION_MODES)[number];
+
+interface CorruptionAudit {
+  mode: LiveCorruptionMode;
+  applied: boolean;
+  persistedValue: string | null;
+  persistedReadError?: string;
+  recoveryEvents: string[];
+  actionKinds: string[];
+}
 
 export interface TrialOptions {
   client: AgentClient;
@@ -70,6 +92,9 @@ export interface TrialOptions {
    * step record only exists once its post-act observation succeeded.
    */
   killAfterStep?: number;
+  /** Opt into suite evidence for the existing kill mode. */
+  auditKill?: boolean;
+  fault?: Exclude<LiveCorruptionMode, "kill">;
   /**
    * Enable the ADR-0006 recovery ladder (M1-011). Off by default: the
    * non-recovery behavior (interrupted trial → honest uncertain) is
@@ -107,6 +132,7 @@ export interface TrialReport {
   fixtureConvert: ConvertTiming | null;
   /** Identity of the fixture bytes this trial uploaded (M1-013 sweep seed check). */
   fixture: FixtureFingerprint;
+  corruption?: CorruptionAudit;
 }
 
 /**
@@ -129,6 +155,25 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
   // Key cell of the record row: header is row 1, data rows start at row 2.
   const keyCell = `A${gt.location.dataRowIndex + 2}`;
   const observedCells = [keyCell, gt.cellRef];
+  const trace: TraceEvent[] = [];
+  const mode = options.fault ?? (options.auditKill ? "kill" : undefined);
+  const corruption: CorruptionAudit | undefined = mode && {
+    mode,
+    applied: false,
+    persistedValue: null,
+    recoveryEvents: [],
+    actionKinds: [],
+  };
+  const onFaultApplied = (detail: string) => {
+    if (!corruption) return;
+    corruption.applied = true;
+    trace.push({
+      type: "fault-injection",
+      timestamp: new Date().toISOString(),
+      fault: corruption.mode,
+      detail,
+    });
+  };
 
   const converter = new WindowsFixtureConverter({
     client: options.client,
@@ -141,8 +186,11 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     unoSocket: options.unoSocket,
     observedCells,
     helperDir: guestDir,
+    fault:
+      options.fault === "focus-change" || options.fault === "delayed-save"
+        ? { mode: options.fault, onApplied: onFaultApplied }
+        : undefined,
   });
-  const trace: TraceEvent[] = [];
 
   let body: TrialBody | undefined;
   let cleanup: GuestCleanupResult = { killed: [], removed: [], residue: [], errors: [] };
@@ -156,6 +204,9 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
       gt,
       trace,
       hygieneTimeoutMs,
+      corruption,
+      onFaultApplied,
+      absentRowKey: recordKey(fixture.dataRows),
     });
   } finally {
     cleanup = await cleanupAfterTrial(options, guestDir, converter, hygieneTimeoutMs);
@@ -186,6 +237,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     cleanup,
     fixtureConvert: converter.lastTiming,
     fixture: fixtureFingerprint(fixture),
+    corruption,
   };
 }
 
@@ -198,6 +250,9 @@ interface TrialBodyContext {
   gt: GroundTruth;
   trace: TraceEvent[];
   hygieneTimeoutMs: number;
+  corruption: CorruptionAudit | undefined;
+  onFaultApplied(detail: string): void;
+  absentRowKey: string;
 }
 
 interface TrialBody {
@@ -224,7 +279,7 @@ function abortTrial(guardFailure: GuardFailure, reason: string): TrialBody {
  * single, unconditional cleanup path — including thrown harness errors.
  */
 async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
-  const { options, guestDir, converter, adapter, gt, trace } = ctx;
+  const { options, guestDir, converter, adapter, gt, trace, corruption, onFaultApplied } = ctx;
 
   // 1. Adapter availability: the health probe is only meaningful when the
   //    control plane answers. "Could not look" is never "contaminated".
@@ -321,11 +376,30 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
   // launch event, and the schema rejects negative step indices.
 
   // 5. Run the guarded program (skipped when the launch itself failed).
-  const program = windowsProgramFor(options.params);
+  const programParams =
+    options.fault === "invalid-target"
+      ? { ...options.params, rowKey: ctx.absentRowKey }
+      : options.params;
+  const program = windowsProgramFor(programParams);
+  let killAcknowledgement: Promise<void> | undefined;
   const programAdapter =
     options.killAfterStep === undefined
       ? adapter
-      : killAfterStepAdapter(adapter, options.killAfterStep, options.client);
+      : killAfterStepAdapter(
+          adapter,
+          options.killAfterStep,
+          options.client,
+          options.auditKill
+            ? (result) => {
+                killAcknowledgement = result
+                  .then((killed) => {
+                    if (killed.length > 0)
+                      onFaultApplied(`killed soffice.bin after action ${options.killAfterStep}`);
+                  })
+                  .catch(() => {});
+              }
+            : undefined,
+        );
   const outcome: RunOutcome = launchFailure
     ? {
         program: program.name,
@@ -337,6 +411,15 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
         lastGoodStateVersion: null,
       }
     : await runProgramSafe(programAdapter, program);
+
+  const failure = outcome.guardFailure;
+  if (
+    options.fault === "invalid-target" &&
+    failure &&
+    failure.predicateName === program.steps[0]?.preconditions[0]?.name
+  ) {
+    onFaultApplied(failure.observed);
+  }
 
   // 5b. Recovery ladder (ADR-0006, M1-011): only for a genuine mid-program
   //     interruption — steps already executed + a structured GuardFailure.
@@ -397,6 +480,7 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
       );
       recovered = result.outcome;
       recoveryEvents.push(...recoveryTraceEvents(result.attempts));
+      if (corruption) corruption.recoveryEvents = result.attempts.map((attempt) => attempt.event);
     } catch (error) {
       // The ladder itself failed (not the app): record it and fall through
       // with the original outcome — the verifier still runs.
@@ -411,12 +495,11 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
   }
   const finalOutcome = recovered;
 
-  // 6. Verdict: the independent UnoVerifier over the live document + the
-  //    persisted file. It closes the document itself (check (c)).
+  // 6. Verdict: the independent UnoVerifier over the live document and file.
   const intent = intentFor(options.params);
+  const verifier = unoVerifierOverAgent(options.client, options.unoSocket);
   let verdict: Verdict;
   try {
-    const verifier = unoVerifierOverAgent(options.client, options.unoSocket);
     verdict = await verifier.verify(intent, xlsxPath);
   } catch (error) {
     verdict = {
@@ -425,6 +508,18 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
         `could not look: verifier failed — ${error instanceof Error ? error.message : String(error)}`,
       ],
     };
+  }
+  if (corruption) {
+    corruption.actionKinds = [
+      ...new Set(finalOutcome.steps.map((step) => String(step.action.kind))),
+    ];
+    await killAcknowledgement;
+    const persisted = await verifier.readPersisted(xlsxPath);
+    if ("error" in persisted) {
+      corruption.persistedReadError = persisted.error;
+    } else {
+      corruption.persistedValue = persisted.cells[gt.cellRef] ?? null;
+    }
   }
   trace.push(...recoveryEvents);
 
@@ -501,6 +596,7 @@ function killAfterStepAdapter(
   inner: AppAdapter,
   afterStep: number,
   client: AgentClient,
+  onKill?: (result: ReturnType<AgentClient["kill"]>) => void,
 ): AppAdapter {
   let completed = 0;
   return {
@@ -512,7 +608,9 @@ function killAfterStepAdapter(
       completed += 1;
       if (completed === afterStep) {
         process.stderr.write(`[kill-fault] killing soffice.bin after step ${completed}\n`);
-        void client.kill({ image_name: "soffice.bin" }).catch(() => {});
+        const killing = client.kill({ image_name: "soffice.bin" });
+        if (onKill) onKill(killing);
+        else void killing.catch(() => {});
       }
       return result;
     },

@@ -47,6 +47,11 @@ export interface WindowsAdapterOptions {
   helperDir?: string;
   /** Timeout for one helper actuation, ms. */
   helperTimeoutMs?: number;
+  /** M1-014: inject one fault at the UI dispatch boundary. */
+  fault?: {
+    mode: "delayed-save" | "focus-change";
+    onApplied(detail: string): void;
+  };
 }
 
 const HELPER_NAME = "myco_uia_act.py";
@@ -67,6 +72,7 @@ const HELPER_NAME = "myco_uia_act.py";
  */
 const HELPER_SOURCE = `
 import ctypes, json, sys, time
+from ctypes import wintypes
 
 u32 = ctypes.windll.user32
 k32 = ctypes.windll.kernel32
@@ -133,6 +139,29 @@ def wake_a11y(hwnd):
         hwnd, 0xFFFFFFFC, ctypes.byref(IAccessible._iid_), ctypes.byref(acc))
     return acc.accChildCount
 
+def type_in_other_window(auto, text):
+    # Use a disposable top-level control on the interactive desktop. The
+    # helper owns its lifetime and can prove where the keyboard input went.
+    create = u32.CreateWindowExW
+    create.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                       wintypes.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                       ctypes.c_int, wintypes.HWND, wintypes.HMENU,
+                       wintypes.HINSTANCE, wintypes.LPVOID]
+    create.restype = wintypes.HWND
+    # WS_VISIBLE | WS_OVERLAPPEDWINDOW
+    window = create(0, "STATIC", "Myco focus fault", 0x10CF0000,
+                    20, 20, 320, 120, None, None, None, None)
+    if not window:
+        raise RuntimeError("could not create the focus fault window")
+    try:
+        if not bring_to_front(window):
+            raise RuntimeError("could not move focus away from Calc")
+        auto.SendKeys(text + "{Enter}", interval=0.02, waitTime=0.4)
+        if u32.GetForegroundWindow() != window:
+            raise RuntimeError("focus fault window lost foreground during typing")
+    finally:
+        u32.DestroyWindow(window)
+
 def main():
     cmd = json.loads(sys.argv[1])
     out = sys.argv[2]
@@ -177,7 +206,11 @@ def main():
             time.sleep(0.3)
             auto.SendKeys("{Ctrl}a", waitTime=0.1)
             auto.SendKeys(cmd["cell"] + "{Enter}", waitTime=0.3)
-            if cmd.get("text"):
+            if cmd.get("steal_focus"):
+                if u32.GetForegroundWindow() != hwnd:
+                    raise RuntimeError("Calc lost focus before the fault could be injected")
+                type_in_other_window(auto, cmd["text"])
+            elif cmd.get("text"):
                 auto.SendKeys(cmd["text"] + "{Enter}", interval=0.02, waitTime=0.4)
             rep["ok"] = True
         elif cmd["op"] == "save":
@@ -241,6 +274,7 @@ export class WindowsCalcAdapter implements AppAdapter {
   readonly #observedCells: readonly string[];
   readonly #helperPath: string;
   readonly #helperTimeoutMs: number;
+  #fault: WindowsAdapterOptions["fault"];
   #stateVersion = 0;
   #calcPid: number | null = null;
   #helperDeployed = false;
@@ -253,6 +287,7 @@ export class WindowsCalcAdapter implements AppAdapter {
     this.#observedCells = options.observedCells;
     this.#helperPath = `${options.helperDir ?? "C:\\myco\\runs"}\\${HELPER_NAME}`;
     this.#helperTimeoutMs = options.helperTimeoutMs ?? 30_000;
+    this.#fault = options.fault;
   }
 
   /** Set after the fixture convert lands (guest path known post-convert). */
@@ -315,11 +350,13 @@ export class WindowsCalcAdapter implements AppAdapter {
         const nodeId = this.#resolveRef(action.ref);
         const text =
           action.kind === "click" ? "" : action.kind === "typeText" ? action.text : action.value;
+        const focusFault = action.kind === "setValue" && this.#fault?.mode === "focus-change";
         const result = await this.#runHelper({
           op: "nametype",
           title: titleNeedle(this.#xlsxPath),
           cell: nodeId,
           text,
+          ...(focusFault ? { steal_focus: true } : {}),
         });
         if (!result.ok) {
           return {
@@ -327,11 +364,15 @@ export class WindowsCalcAdapter implements AppAdapter {
             details: `nametype on ${nodeId}: ${result.error ?? "failed"}`,
           };
         }
+        if (focusFault) {
+          this.#recordFault("foreground moved to a disposable window before typing");
+        }
         this.#stateVersion += 1;
         return {
           outcome: "delivered_unverified",
-          details:
-            text === ""
+          details: focusFault
+            ? "foreground changed during edit dispatch"
+            : text === ""
               ? `jumped to ${nodeId} via Name Box`
               : `typed "${text}" into ${nodeId} via Name Box + keyboard`,
           stateVersionAfter: this.#stateVersion,
@@ -339,8 +380,11 @@ export class WindowsCalcAdapter implements AppAdapter {
       }
       case "keyPress": {
         const keys = sendKeysFor(action.keys);
-        const result =
-          action.keys === "ctrl+s"
+        const holdSave = action.keys === "ctrl+s" && this.#fault?.mode === "delayed-save";
+        if (holdSave) this.#recordFault("withheld Ctrl+S at dispatch during the save wait");
+        const result = holdSave
+          ? { ok: true }
+          : action.keys === "ctrl+s"
             ? // Ctrl+S on a converted .xlsx raises the "Non-standard file
               // format" dialog; the save op answers it (keep Excel format).
               await this.#runHelper({ op: "save", title: titleNeedle(this.#xlsxPath) })
@@ -376,7 +420,7 @@ export class WindowsCalcAdapter implements AppAdapter {
         this.#stateVersion += 1;
         return {
           outcome: "delivered_unverified",
-          details: `sent ${action.keys} to Calc`,
+          details: holdSave ? "Ctrl+S withheld and discarded" : `sent ${action.keys} to Calc`,
           stateVersionAfter: this.#stateVersion,
         };
       }
@@ -393,6 +437,12 @@ export class WindowsCalcAdapter implements AppAdapter {
           details: `unknown action kind ${String((action as { kind: unknown }).kind)}`,
         };
     }
+  }
+
+  #recordFault(detail: string): void {
+    const fault = this.#fault;
+    this.#fault = undefined;
+    fault?.onApplied(detail);
   }
 
   /**

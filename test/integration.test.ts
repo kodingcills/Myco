@@ -8,8 +8,12 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { FIXTURE_CONVERT_DEADLINE_MS, windowsProgramFor } from "../src/integration/trial.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  FIXTURE_CONVERT_DEADLINE_MS,
+  runTrial,
+  windowsProgramFor,
+} from "../src/integration/trial.ts";
 import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
 import { type CalcRecordEditParams, groundTruth } from "../src/tasks/intent.ts";
@@ -287,6 +291,52 @@ describe("trial evidence artifacts", () => {
     const result = JSON.parse(readFileSync(join(runsDir, report.runId, "result.json"), "utf8"));
     expect(result.verdict.status).toBe("uncertain");
     expect(result.guardFailure.predicateName).toBe("fixture-convert");
+  });
+});
+
+describe("live corruption modes over the fake agent", () => {
+  it.each([
+    ["invalid-target", false, "invalid target"],
+    ["delayed-save", true, "not dirty after save"],
+    ["focus-change", false, "holds"],
+  ] as const)("%s lands and leaves the persisted intent refuted", async (fault, typed, guard) => {
+    const gt = groundTruth(PARAMS);
+    const fixture = generateFixture(PARAMS.fixtureSeed);
+    const { client, agent } = clientWith({
+      desktopOverlay: true,
+      unoBehavior: () => gt.previousValue,
+      csvBytes: Buffer.from(fixture.csv),
+    });
+    const runsDir = mkdtempSync(join(tmpdir(), "myco-corrupt-trial-"));
+    vi.useFakeTimers();
+    try {
+      const pending = runTrial({ client, params: PARAMS, unoSocket: "2002", runsDir, fault });
+      await vi.runAllTimersAsync();
+      const report = await pending;
+      expect(report).toMatchObject({
+        completed: false,
+        verdict: { status: "refuted" },
+        corruption: { mode: fault, applied: true, persistedValue: gt.previousValue },
+      });
+      expect(`${report.guardFailure?.predicateName} ${report.guardFailure?.observed}`).toContain(
+        guard,
+      );
+      expect(agent.desktopCells.get(gt.cellRef)).toBe(typed ? gt.expectedValue : undefined);
+      if (fault === "delayed-save") expect(report.elapsedMs).toBeGreaterThanOrEqual(20_000);
+      const launches = agent.requests.filter((request) => request.op === "launch");
+      expect(
+        launches.some((request) => JSON.stringify(request.params.argv).includes("steal_focus")),
+      ).toBe(fault === "focus-change");
+      expect(
+        launches.some((request) =>
+          (request.params.argv as string[]).some((arg) => arg.includes('"op":"save"')),
+        ),
+      ).toBe(false);
+      const trace = readFileSync(join(runsDir, report.runId, "trace.jsonl"), "utf8");
+      expect(trace).toContain(`"fault":"${fault}"`);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

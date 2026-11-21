@@ -354,14 +354,52 @@ Budget: reset (~20–45 s) + deploy (~100–180 s) + trial (~35–90 s) ≈ 3–
 estimated 1.5–2 h for 30 trials on the live path. Report exactly what the artifacts say; do not
 re-run to reach 27/30.
 
-### 7.4 The corrupted suite (M1-014) is not wired yet
+### 7.4 The corrupted suite
 
-`run-live` exposes only the kill class. `invalid-target`, `delayed-save` and `focus-change` exist
-as fault injectors (`src/fake/faults.ts`, exercised host-side in CI via
-`src/core/eval.ts` + `pnpm test`), but there is no committed live entrypoint for them, and
-M1-014 is blocked on M1-019 for trustworthy results (backlog status note). A ≥10-trial, 4-class live suite cannot be reproduced from `main`
-today; the state log's "0 false successes in 11/11 corrupted configs" is the fake-app harness
-(PR #7). Do not present CI numbers as live-trial numbers.
+Run from the repo root with the Windows VM reserved for this suite. The driver runs twelve
+trials, three per class on distinct fixture seeds. It cold-resets and deploys before each trial.
+Reissue the same command to resume at the first index missing from the JSONL. Recorded failures
+stay in the audit.
+
+```bash
+scripts/m1-corrupt-suite.sh /tmp/m1-014/corrupted
+python3 scripts/m1-corrupt-suite-record.py --final \
+  /tmp/m1-014/corrupted/params.json /tmp/m1-014/corrupted/trials.jsonl
+```
+
+The driver runs `--final` automatically. Use the second command to rebuild the summary and ledger
+from saved artifacts without using the VM.
+
+| Mode | Injection |
+|---|---|
+| `kill` | Existing step-triggered termination of `soffice.bin` after the edit and before save. The suite checks the agent's kill acknowledgement. |
+| `invalid-target` | The guarded program receives a record key one past the end of the seeded sheet. The existing intent guard rejects it before any edit. The verifier still checks the original valid intent. |
+| `delayed-save` | Hold Ctrl+S at the dispatch boundary, wait through the normal save deadline, and discard that attempt. The real edited Calc document remains dirty and the normal verifier and disk readback inspect it. |
+| `focus-change` | After the Name Box jump, the actuation helper brings a disposable Windows window to the foreground before typing. It checks foreground ownership and destroys the window when done. |
+
+`trials.jsonl` contains one row per index with the verdict, host-computed expected value,
+disk readback when available, `falseSuccess` and the reason. `refuted` means the verifier found
+evidence against success. `uncertain` means it could not verify the outcome. A `verified` claim
+with a wrong disk value is a false success. A matching value and a completed retry or relaunch
+event are required for verified recovery. `fault-not-applied`, `reset-failed`, `deploy-failed`,
+`token-failed` and `harness-error` do not qualify for class coverage.
+
+| Driver exit | Meaning |
+|---|---|
+| 0 | All four classes have three verdicts with applied faults, zero false successes and zero unproven verified claims. |
+| 1 | Driver or manifest error. |
+| 3 / 4 / 6 | Paused for loss of AC power, one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. |
+| 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
+| 8 | Final audit failed. Inspect `summary.txt` and `ledger.jsonl`. |
+
+To inspect an individual live trial, use `pnpm exec tsx src/integration/run-live.ts --mode MODE`
+with `MYCO_AGENT_TOKEN` set and `--seed SEED` to choose the fixture. Use `--audit-corruption` with `kill` for suite-style
+evidence. The driver leaves recovery off. For a standalone recovery trial add `--recovery`.
+An audited mode exits 0 for a verdict of refuted, uncertain or proven recovery, 1 for an
+unproven verified claim or a harness error, and 2 if the requested fault did not land.
+
+The final report includes the published OpenAdapt counts for context. Report live results only
+after this suite has run on the reserved guest.
 
 ## 8. Evidence
 
@@ -369,14 +407,14 @@ today; the state log's "0 false successes in 11/11 corrupted configs" is the fak
 
 ```
 runs/
-  <runId>/                 every live trial (normal, kill, values)
+  <runId>/                 every live trial (normal, corruption modes, values)
     trace.jsonl            one JSON event per line: run-start, observation, action,
                            guard-evaluation, guard-failure, fault-injection, recovery (ADR-0007)
     result.json            RunRecord: taskParams, steps with pre/postcondition results,
                            stateVersion, verdict with per-check partial scores
   values/<runId>/          --mode values nests its trials here
   <evalId>/ledger.jsonl    conformance ledger — written ONLY by runEvaluation()
-                           (src/core/eval.ts); the live entrypoint emits no ledger
+                           (src/core/eval.ts) in the fake harness
   sweep.log                your own sweep log, if you follow §7.3
 ```
 
@@ -401,9 +439,9 @@ which is what CI proves. Use `validate-live.ts` for your run directory.
 ### 8.3 Ledger
 
 `runs/<evalId>/ledger.jsonl` — one row per (trial, corruption-class, action-kind) with an explicit
-oracle and refusal code; `unaccounted` rows must be 0. Only the eval harness writes it. Any claim
-about "the ledger has no unaccounted rows" therefore refers to a harness run, never to a live
-trial directory.
+oracle and refusal code. The corrupted-suite recorder writes its live conformance ledger to
+`OUT_DIR/ledger.jsonl` during `--final`. False successes carry the `ground-truth:false` oracle.
+Rows for recorded trials without an applied fault or usable verdict carry the `gap` state.
 
 ## 9. Troubleshooting
 
@@ -440,11 +478,8 @@ Be explicit with whoever asks for an "independent reproduction":
 5. **Versions are pinned but one hash is missing**: LibreOffice 26.8.3 aarch64, Python 3.12.10,
    pywin32 312, comtypes 1.5.0, pywinauto 0.6.9, uiautomation 2.0.29 are recorded; the MSI
    SHA-256 that acceptance row 8 asks for is **not** recorded (M1-018 pending).
-6. **Parts of the evaluation do not exist yet**: the 30-trial sweep driver (lived in `/tmp`), the
-   ≥10-trial/4-class live corrupted suite (M1-014, blocked on M1-019), and the screenshot baseline
-   (M1-015, Cua Driver as the agent with a local or approved planner — Agent S3/`cua-agent` is deprecated upstream; not started). A reproduction today can reach: reset → deploy
-   → desktop proof → 20/20 generator proof → individual normal and kill trials → validated
-   per-trial evidence.
+6. **Live evidence is pending** for the corrupted suite (M1-014). The screenshot baseline
+   (M1-015, Cua Driver as the agent with a local or approved planner) is also pending.
 
 What an independent reproducer must obtain from the environment owner: the VM bundle with its
 snapshots (or a repaired `build-all.sh` plus its input ISOs), `ssh_config` + `id_ed25519`, the

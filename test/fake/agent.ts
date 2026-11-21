@@ -150,8 +150,9 @@ export class FakeAgent {
               cell?: string;
               text?: string;
               keys?: string;
+              steal_focus?: boolean;
             };
-            if (cmd.op === "nametype" && cmd.cell && cmd.text) {
+            if (cmd.op === "nametype" && cmd.cell && cmd.text && !cmd.steal_focus) {
               this.desktopCells.set(cmd.cell, cmd.text);
               this.modified = true;
             }
