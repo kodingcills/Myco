@@ -330,7 +330,11 @@ hook test note
   2. `dir /b /ad` parsing against real cmd.exe output (CRLF, 'File Not Found', localized labels) — the fake emits idealized listings.
   3. `taskkill` by image name reports killed pids and soffice.bin actually dies, releasing the UNO socket and file locks.
   4. The nonce-marker report protocol under real cmd.exe (redirection, truncation, visibility timing over the agent's filesystem view).
-  5. End-to-end: a genuinely contaminated guest (a hand-started soffice with a foreign doc) aborts `guest-contaminated`; after abort+cleanup, a second trial verifies.
+  5. End-to-end: a genuinely contaminated guest (leftover soffice.bin + leftover C:\myco\runs\myco-* dir) aborts `uncertain`/`guest-contaminated` AND the stray process/dir are actually gone afterwards.
+  6. After a kill-mid-program trial on the VM, a SUBSEQUENT trial proceeds normally — i.e. cleanup's `rd /s /q` really removes the nonce run dir and throwaway profile when a live soffice held the xlsx lock (only a real guest exercises file-lock timing and the 500ms retry; the fake models the listing).
+  7. The cmd.exe batches actually execute via the real agent's `launch` in the interactive session — report-file creation, the nonce end-marker, and `%REPORT%` quoting under the real agent dir (the 'C:\Program Files\Myco\agent' space) are unproven host-side.
+  8. No false positive: a clean guest yields `verified` against REAL `dir /b /ad` output format (CRLF, 'File Not Found', localized labels) — the fake emits idealized listings.
+  (Refined from the PR #29 verifier's second pass, 2026-11-21.)
 - Nice-to-fix noted: probeGuestHealth uses `kill` as its observation mechanism and therefore races a soffice starting between probe and launch — inherent TOCTOU, acceptable with serialized trials, worth an ADR line.
 
 ## Log 2026-11-21 (37) — outer loop directives; cold-reset path written
