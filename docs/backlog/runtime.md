@@ -258,3 +258,37 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
      measured full-reset number kept alongside (no replacing the honest figure).
   4. Snapshot provenance recorded: which overlay, when taken, and how it is
      invalidated when the base image or provisioning changes.
+
+### RT-020 (TIF-56) Arbitrary agent obtains a safe isolated desktop, end to end
+- **status:** in progress — reframed by outer loop 2026-11-21 (Tiffany t80u).
+  **Goal is ease, not more capability.** Reuse the merged CLI + MCP front ends;
+  keep ONE backend reliable.
+- **owner:** build
+- **blocked_by:** none for research/design/code; the live end-to-end run needs host
+  time (M1 has priority — coordinate via the M1 Coordinator).
+- **description:** One agent, one Myco-managed desktop, end to end: lifecycle,
+  screenshots, semantic observations, actions, artifacts, cleanup — usable
+  independently of the custom Grok Bot setup. Supports Discovery direction A
+  (verified desktops for coding agents, TIF-53).
+- **findings so far** (docs/research/runtime-safety-isolation.md):
+  - The six ops work; **discovery does not**. An agent running the MCP server
+    outside the repo root fails with
+    `script failed: boot.sh ... No such file` because the workspace is resolved
+    from `cwd`. Reproduced 2026-11-21.
+  - Isolation is the VM boundary + 2 GB cap + loopback-only hostfwd + disposable
+    overlay. **Not** guaranteed: egress policy, guest→host file transfer, idle
+    reaping, per-agent attribution, multi-tenant credentials.
+- **acceptance:**
+  1. A single documented entry point gets an agent from "nothing running" to a
+     usable desktop with no repo-layout knowledge and no `cd` requirement; the
+     failure message for a missing asset names the one command that fixes it.
+  2. One uninterrupted end-to-end run by an agent: create → observe (semantic tree
+     + screenshot) → act (verified) → evidence (artifacts) → destroy, with the run
+     recorded as evidence and the destroy proven to leave no VM.
+  3. Safety claims limited to what is tested: the VM boundary and memory cap are
+     stated as guarantees; §2 of the research note is stated as gaps, not claims.
+  4. Works without the custom Grok Bot setup.
+  5. Human-facing surfaces (if any) meet the UI bar: real design work, screenshots
+     in the PR.
+- **not in scope:** Foundry tasks/evals (EF-001/EF-002 do not exist yet; no eval
+  claims before they land), new backends, and capability expansion for its own sake.
