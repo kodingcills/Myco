@@ -23,6 +23,18 @@ export interface WindowsFixtureConverterOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Machine-readable record of the last convert (M1-013, convert-timeout decision):
+ * how long the workbook took to appear in the guest, against which deadline.
+ * `arrived` = the xlsx was readable before the deadline; `deadline` = it never
+ * appeared in time; `error` = writing the CSV or launching soffice failed.
+ */
+export interface ConvertTiming {
+  deadlineMs: number;
+  durationMs: number;
+  outcome: "arrived" | "deadline" | "error";
+}
+
 interface ConvertResult {
   xlsxPath: string;
   guestCsvPath: string;
@@ -40,6 +52,7 @@ export class WindowsFixtureConverter implements FixtureConverter {
   readonly #profileDir: string;
   readonly #timeoutMs: number;
   #lastConvert: ConvertResult | null = null;
+  #lastTiming: ConvertTiming | null = null;
   /** Set before the first await so a half-failed convert can still be cleaned. */
   #lastDirs: { runDir: string; profile: string } | null = null;
 
@@ -61,6 +74,12 @@ export class WindowsFixtureConverter implements FixtureConverter {
     const xlsx = `${dir}\\fixture.xlsx`;
     const profile = `${this.#profileDir}/${nonce()}`;
     this.#lastDirs = { runDir: dir, profile };
+    const started = Date.now();
+    const timing = (outcome: ConvertTiming["outcome"]): ConvertTiming => {
+      this.#lastTiming = { deadlineMs: this.#timeoutMs, durationMs: Date.now() - started, outcome };
+      return this.#lastTiming;
+    };
+    timing("error"); // overwritten below; stays "error" if the write/launch throws
 
     await this.#client.writeFile(guestCsv, csvBytes);
     await this.#client.launch([
@@ -90,12 +109,19 @@ export class WindowsFixtureConverter implements FixtureConverter {
       }
     }
     if (stat === undefined) {
+      timing("deadline");
       throw new Error(`fixture convert did not produce ${xlsx} within ${this.#timeoutMs}ms`);
     }
+    timing("arrived");
     this.#lastConvert = { xlsxPath: xlsx, guestCsvPath: guestCsv };
     // The Buffer return value is unused on the Windows path (the fixture is
     // consumed guest-side by Calc); the contract keeps it for the fake path.
     return Buffer.alloc(0);
+  }
+
+  /** Timing of the most recent convert attempt, or null if none was attempted. */
+  get lastTiming(): ConvertTiming | null {
+    return this.#lastTiming;
   }
 
   /** Guest path of the most recently converted `.xlsx` (fixture landing spot). */

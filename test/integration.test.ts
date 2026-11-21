@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { windowsProgramFor } from "../src/integration/trial.ts";
+import { FIXTURE_CONVERT_DEADLINE_MS, windowsProgramFor } from "../src/integration/trial.ts";
 import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
 import { type CalcRecordEditParams, groundTruth } from "../src/tasks/intent.ts";
@@ -139,6 +139,22 @@ describe("WindowsFixtureConverter", () => {
     await expect(converter.convert(Buffer.from("a,b\n1,2\n", "utf8"))).rejects.toThrow(
       /did not produce .* within 1000ms/,
     );
+    const timing = converter.lastTiming;
+    expect(timing?.outcome).toBe("deadline");
+    expect(timing?.deadlineMs).toBe(1_000);
+    expect(timing?.durationMs ?? 0).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("records an arrived timing when the workbook appears", async () => {
+    const { client } = clientWith({ unoEval: [], csvBytes: Buffer.from("zz") });
+    const converter = new WindowsFixtureConverter({ client, guestDir: "C:\\myco\\runs" });
+    expect(converter.lastTiming).toBeNull();
+    await converter.convert(Buffer.from("a,b\n1,2\n", "utf8"));
+    expect(converter.lastTiming).toMatchObject({ outcome: "arrived", deadlineMs: 60_000 });
+  });
+
+  it("live trials wait 240 s for the workbook (approved M1-013 deadline)", () => {
+    expect(FIXTURE_CONVERT_DEADLINE_MS).toBe(240_000);
   });
 });
 
