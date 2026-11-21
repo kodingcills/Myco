@@ -124,8 +124,10 @@ the state is `resuming` → restore → start → `wait-ssh.sh 600` → resync t
 accepts only `clean-base`, `clean-base-live`, `m1-agent-live` as snapshot names and never
 restores onto a running VM.
 
-Expected: `reset-trial-vm: ready on 'clean-base'`. Cold boot costs ~21 s warm / ~165 s from a
-fresh UTM start (script header), versus the live path's ~7 s.
+Expected: `reset-trial-vm: ready on 'clean-base'`. Cold boot costs ~21 s once UTM is warm, and
+~134-152 s measured across 5 consecutive resets immediately after a UTM restart (m1-state log 39);
+the script header's ~165 s figure is a single earlier sample. That is the price of a reset that
+cannot wedge, versus the live path's ~7 s when healthy.
 
 ### 3.2 Fallback — `reset.sh cold`
 
