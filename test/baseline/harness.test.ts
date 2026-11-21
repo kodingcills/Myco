@@ -105,6 +105,9 @@ describe("baseline", () => {
     ["row-driver-action-exhausted", false],
     ["row-driver-action-uncertain", false],
     ["row-budget-short", false],
+    // Guards the budget row rule: step-budget exhaustion must be refuted, never uncertain or verified.
+    ["row-budget-uncertain", false],
+    ["row-budget-verified", false],
     ["row-driver-action-at-budget", true],
   ])("validates fixture %s", (name, valid) => {
     const patch: unknown = JSON.parse(
@@ -144,6 +147,8 @@ describe("baseline", () => {
       { verdictReason: "step-budget" },
       { driver: { ...row.driver, hostVersion: "" } },
       { subArm: "other" },
+      // Guards the verdict enum check: an unknown verdict string must not validate.
+      { verdict: "bogus" },
       { audited: false, falseSuccess: false },
       { audited: false, falseSuccess: true },
       { acPower: false },
