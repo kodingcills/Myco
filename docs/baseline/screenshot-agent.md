@@ -295,7 +295,7 @@ Windows number exists for one.
 
 Also: Navi's `predict()` returns a list of **Python source strings** that the harness `exec`s
 against an in-guest `computer` object, and the package has a `requirements.txt` but **no packaging
-metadata** (no `setup.py`, no `pyproject.toml`, no PyPI package). "`pip install` and point it at our
+metadata** (no `setup.py` or `pyproject.toml` anywhere in the repo — checked). "`pip install` and point it at our
 VM" — which the earlier draft implied — is wrong. Porting Navi means writing an execution shim that
 honours its action grammar inside the guest, which is real work, not a transport tweak.
 
@@ -383,10 +383,10 @@ An OSWorld task is one JSON file. The Calc example above (`4e6fcf72…`), reduce
 {
   "id": "4e6fcf72-…", "snapshot": "libreoffice_calc",
   "instruction": "Please calculate the ages … don't touch irrelevant regions, even if they are blank.",
-  "config":    [ {"type":"host_reference_date", …}, {"type":"download", …}, {"type":"open", …} ],
+  "config":    [ {"type":"launch", …}, {"type":"download", …}, {"type":"open", …} ],
   "evaluator": {
     "func": "compare_table",
-    "expected": {"type":"employee_age_reference", "source":"…Employee_Age_By_Birthday.xlsx", …},
+    "expected": {"type":"vm_file", …},          // or a computed getter such as the age reference
     "result":   {"type":"vm_file", "path":"/home/user/Employee_Age_By_Birthday.xlsx", "dest":"…xlsx"},
     "postconfig": [ {"type":"activate_window", …}, {"type":"execute", "parameters":{"command":["python","-c","import pyautogui; pyautogui.hotkey(\"ctrl\",\"s\")"]}} ]
   },
@@ -1094,9 +1094,9 @@ comparison. Its ceiling is whatever the local planner can do — stated plainly 
 | WAA has **24** `libreoffice_calc` tasks across 12 app categories, each present twice (`examples/` and `examples_noctxt/`): a tree-wide recursive grep returns **48** files, 24 distinct ids | `git/trees/main?recursive=1`, paths under `src/win-arena-container/client/evaluation_examples_windows/`, 2026-11-21 |
 | WAA Calc task shape is OSWorld's with Windows paths; evaluator `compare_table`, `result.type: vm_file`, `expected.type: cloud_file` | `examples/libreoffice_calc/01b269ae-…-WOS.json` |
 | **44 of 47** OSWorld v1 Calc tasks run `pyautogui.hotkey("ctrl","s")` in `evaluator.postconfig` (the 3 exceptions use a `--convert-to csv` execute without the hotkey) | per-task sweeps of `evaluation_examples/examples/libreoffice_calc/*.json`, 2026-11-21 |
-| WAA's agent is **Navi**; `mixed-omni + uia` is the paper's best mode (**19.5%**, GPT-4V-1106), `omni`-only is **8.6%** (GPT-4o) / 12.5% (GPT-4V); human 74.5%; six perception configs reported | arXiv 2409.08264 Table 4; README §4.1 |
+| WAA's agent is **Navi**; Table 4's `UIA on + OmniParser on` row is **19.5%** (GPT-4V-1106, the headline), the tree-free `UIA off + OmniParser on` row is **8.6%** (GPT-4o) / 12.5% (GPT-4V); human 74.5%; six perception configs reported | arXiv 2409.08264 Table 4; README §4.1 |
 | `--som-origin omni` feeds the planner a SoM-annotated image **plus `list_of_text`** captions — not pixels-only | `client/mm_agents/navi/agent.py:351-362` |
-| Navi returns Python source strings for an in-guest `exec` executor; `requirements.txt` only, no `setup.py`/`pyproject.toml`/PyPI package | `client/mm_agents/navi/` |
+| Navi returns Python source strings for an in-guest `exec` executor; `requirements.txt` only; no `setup.py` or `pyproject.toml` in the repo (checked) | `client/mm_agents/navi/` |
 | WAA client takes `--emulator_ip` and speaks HTTP to a guest control server on :5000 + CDP :9222 | `client/run.py:112` |
 | WAA `run.sh` silently sets `--use-kvm false` when `/dev/kvm` is missing | `scripts/run.sh:205-208` |
 | OSWorld has twelve providers, none of which attaches to an external VM over SSH | `desktop_env/providers/` |

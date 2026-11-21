@@ -497,3 +497,19 @@ No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-
 **External benchmark:** Myco on a small OSWorld/WAA Calc subset is **feasible but is a post-M1 item** — they assume `/home/user/…` or `C:\\Users\\Docker\\…` paths on their own image, and their tasks are prose instructions where M1's family takes typed parameters. The useful artefact is a **transcribed 10-task suite scored by Myco's verifier and by a re-implementation of their `compare_table`**, not "Myco's OSWorld number".
 
 **Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
+
+## Log 2026-11-21 (46) — benchmark sections verified at source; a wrong score and a wrong ARM claim corrected
+`8a32ff2` passed full verification at `aaf7290` and delta verification at `8a32ff2` (2 independent verifiers, no VM access, no tree writes). Acting on their asides produced real corrections, plus one the verifiers could not produce because it needed the paper's tables rather than the README.
+
+**Corrections committed after the PASSes:**
+1. **Navi's per-mode score was wrong.** The design attributed **8.6%** to `--som-origin omni` and described 12.5% as a same-mode variant. Pulling the paper's **Table 4** (arXiv 2409.08264 HTML) shows perception *inputs*, not `--som-origin` values: the tree-free `UIA off + OmniParser on` row is **8.6% (GPT-4o) / 12.5% (GPT-4V)**, and the headline **19.5%** is `UIA on + OmniParser on` with GPT-4V-1106, beside a human ceiling of 74.5%. The doc now carries the four-row table with both models and names which row B1 actually runs. This changes what B1 may claim: its published reference is 8.6–12.5%, not 19.5%.
+2. **The ARM evidence was misattributed.** The doc cited OSWorld's `if 'arm' in arch or 'aarch' in arch` as a provider/architecture branch. It is a Chrome-profile branch. The genuine ARM64 evidence is the published `Ubuntu-arm.zip` artefact. Corrected in §1b.1.
+3. **"OSWorld boots its own VM" was too strong.** `desktop_env/providers/` holds twelve providers (`aliyun aws azure daytona docker fastvm gcp modal pyromind virtualbox vmware volcengine`); several boot a VM the user supplies. The real blocker is that none attach an external VM **over SSH**, which is the only handle our guest offers. Stated accurately.
+4. **The example task JSON was wrong in two fields** (`host_reference_date` in `config`, and an `expected.type` that the source task does not use). Fixed; the same `host_reference_date` is a real *evaluator getter* in that task, which is a different thing and now said correctly.
+5. **The "no PyPI package" claim was unverified** — a 404 on `setup.py` does not establish absence from PyPI. Narrowed to what was checked (no packaging metadata in the repo).
+
+**Also recorded upstream of the brief:** OmniParser-only is not pixels-only (it feeds SoM marks **plus** `list_of_text` captions), so no published Windows agent here is bare-pixel; Navi emits Python source strings for an in-guest `exec` executor, so "pip install and point it at our VM" was wrong and B1 is a days-not-hours port; and every arm except C1/C2 needs coordinate click + arbitrary keystroke in the guest, which the current agent op union lacks — that dependency belongs to M1-021 and is the real gate for B1/B2.
+
+**Verification status:** both verifiers returned PASS at their heads; the changes above are post-hoc corrections of prose their briefs did not cover (Table 4 arithmetic, provider-set enumeration). They are in the same commit as the state log, docs only.
+
+**Constraints:** no VM touch, no VM script executed, no spend, no accounts.
