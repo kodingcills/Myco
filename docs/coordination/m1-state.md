@@ -433,3 +433,32 @@ Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MY
 - I will NOT start the 30 trials here: at this pressure each trial would measure the host, and a mid-sweep collapse would corrupt a third attempt. The gate (load <4) has not been met in 90 minutes of polling.
 - NEEDS OPERATOR: `sudo shutdown -r now` (reboot reclaims swap). Nothing else I can do from inside the session; I have not changed any system setting.
 - No usable trials this session. Counts remain 0/30, and no attempt is counted as a Myco failure.
+**Escalation for Tiffany (model/cost choice, design doc §9). Four answers needed:**
+1. Local grounder download — ShowUI-2B (~4 GB, MIT) and/or UI-TARS-1.5-7B (~15 GB, Apache-2.0). No account, no payment; costs disk + a multi-hour download + RAM during runs. Approve which?
+2. One minimal CheaperInference vision request (`deepseek-v4.1-flash`, `glm-5.3`) to establish whether either accepts images. This is the only way option D (cloud planner) exists; it spends a trivial but non-zero amount. Approve or decline?
+3. Hosted UI-TARS endpoint (option E) — rule out, or approve in principle with a budget cap? Only relevant if 1 and 2 both fail.
+4. VM time — ~2–3 h of `myco-win11` after the M1-013 sweep, plus the same again if the corrupted arm (design §7) is in scope. Scheduling is the M1 Coordinator's; Tiffany only needs to say whether the time is available.
+
+Default if unanswered: option B (ShowUI-2B grounder, local) with the installed qwen model as planner fallback — $0 marginal, no account, lower ceiling than UI-TARS; the report states the ceiling.
+
+**Not blocked by this decision:** M1-021 harness, import-graph and verdict tests (host-side, CI).
+**Blocked:** any baseline trial run (M1-015) until 1+2 are answered (or the default is taken as approved).
+
+## Log 2026-11-21 (44) — Cua decision written; option choice closed; three governance questions open
+Resolves log 43 (superseded: that entry's ShowUI-2B/UI-TARS default and its four questions were written before the Cua evaluation landed). Design doc §1a/§8.4/§9 is the source of truth; PR #35 head `c22e36f` (this commit).
+
+**Decided (Tiffany, 2026-11-21):** the baseline agent is **Cua (trycua/cua), Cua Driver as the computer layer**. It is the only one of the three options that is simultaneously a recognised open-source computer-use framework, shipped as a Windows ARM64 release asset, and drivable over SSH with no VNC and no RDP — its session-1 daemon + named pipe is the same session-0 fix Myco needed (coordination log 16). $0 with a local planner, no account. Runs as two labelled sub-arms: **C1** pixel-only (the honest screenshot agent) and **C2** the driver's full accessibility+pixel ladder (the honest state of the art).
+
+**Cost per 30 trials**, one arithmetic run, consistent at every site in the doc: local Ollama **$0**; Haiku 5.5 **$0.06–0.28**; Sonnet 5.5 **$1.13–5.58**; Gemini 3.1 Pro **$1.18–5.67**; Opus 5.5 **$2.26–11.15**; gpt-6.2-astra **$4.52–22.30**. Low = no tool-definition overhead, high = with the ≈4.5k-token-per-request `computer_toolset` overhead. An earlier report quoted figures 30x too high from a double-counted request count; corrected in `22a58b1`.
+
+**Decisions still open with Tiffany (design §9):**
+1. Approve installing Cua Driver in the guest — a second autostart daemon beside `myco-agent`, installed once from the VM console. No money, no account; it changes the guest the Myco arm runs in, so it waits for the M1-013 sweep.
+2. Planner model: local Ollama at $0 (recommended) or a paid row above.
+3. C2 as a second column, or C1 only. C2 is what makes the comparison credible and is also the column that could make Myco look worse. Recommendation: run both.
+4. Frontier API as a third column — only if Tiffany wants the strongest number and accepts an API key. Not needed for the plan.
+
+**Verification:** four adversarial review rounds, three rejections; every rejection identified a real defect (false transport claim, silent null→pass in the false-success metric, phantom artefact citation, 30x cost arithmetic). Latest verdict **PASS at head `22a58b1`**.
+
+**Gates unchanged:** TIF-19 blocked on M1-013 plus M1-021 pending decisions 1–3. TIF-51 (M1-021) leads with the Calc spike, which gates the whole option choice. TIF-52 (M1-022) is now **optional, not blocking** — the Cua path needs no CheaperInference vision probe.
+
+**Constraints honoured:** no money spent, no accounts created, VM untouched while the sweep runs (including this docs-only commit: it edits no script and executes none).
