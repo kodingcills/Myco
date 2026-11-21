@@ -442,7 +442,7 @@ Be explicit with whoever asks for an "independent reproduction":
    SHA-256 that acceptance row 8 asks for is **not** recorded (M1-018 pending).
 6. **Parts of the evaluation do not exist yet**: the 30-trial sweep driver (lived in `/tmp`), the
    ≥10-trial/4-class live corrupted suite (M1-014, blocked on M1-019), and the screenshot baseline
-   (M1-015, Agent S3 + UI-TARS-1.5-7B, not started). A reproduction today can reach: reset → deploy
+   (M1-015, Cua Driver as the agent with a local or approved planner — Agent S3/`cua-agent` is deprecated upstream; not started). A reproduction today can reach: reset → deploy
    → desktop proof → 20/20 generator proof → individual normal and kill trials → validated
    per-trial evidence.
 

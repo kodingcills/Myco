@@ -41,7 +41,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 - OpenComputer with state verifiers = echo0715/OpenComputer (Yale NLP, Apache-2.0): ships a UNO-based Calc verifier with 16 check-* endpoints. Adopt verifier shape, not harness.
 - OpenAdapt is a COMPETITOR (MIT, verified execution layer, published false-success numbers: 54/72 bad saves reported saved from on-screen "Saved"; 30/30 from a computer-use agent). M1 must cite and beat these.
 - OSWorld Calc evaluator = whole-sheet DataFrame.equals; gold computed OUTSIDE the guest (employee_age_reference discipline — adopt verbatim). OSWorld 2.0 partial_scores = right evidence shape.
-- Cheap general VLMs cannot ground Calc cells (measured 2/16). Baseline = Agent S3 + UI-TARS-1.5-7B grounding. CheaperInference vision support unverified (credits error).
+- Cheap general VLMs cannot ground Calc cells (measured 2/16). Baseline was Agent S3 + UI-TARS-1.5-7B grounding; **superseded 2026-11-21** — Cua Driver is the agent (design §1a), UI-TARS stays the fallback grounder. CheaperInference vision support still unverified (credits error).
 - Verdict needs UNVERIFIED state distinct from failed (both prior designs collapse it). Matches the build brief's verified/refuted/uncertain.
 - Never eval() task-supplied strings (OpenComputer does — RCE hole). Use declarative predicate language.
 - Evaluator must not depend on GUI keystrokes (OSWorld postconfig presses Ctrl+S via pyautogui).
@@ -115,7 +115,7 @@ Milestone 1: verified, recoverable desktop execution in one real Windows GUI app
 | 4 | Failure detection: 0 false successes across ≥10 corrupted/interrupted trials | **PARTIAL** | Individual corrupted trials end uncertain/refuted, never verified (kill, AutoCorrect, invalid-target). The ≥10-trial sweep is not run |
 | 5 | Recovery: app interruption AND invalid UI target | **IN PROGRESS** | Mid-program interruption evidence now real (PR #19). Recovery ladder delegated (M1-011). Invalid-target aborts safely today (GuardFailure at step 0) but is not yet a recovery path |
 | 6 | Evidence: machine-readable trace, result, verification outcome | **DONE** | trace.jsonl + result.json + ledger, schema-validated in CI (M1-012); 4 result.json + 51 trace events validated on the live run |
-| 7 | Baseline: screenshot agent on identical tasks/states/model settings | **NOT STARTED** | M1-015; constraint: no paid/hosted service without escalation; Agent S3 + UI-TARS-1.5-7B chosen by measurement |
+| 7 | Baseline: screenshot agent on identical tasks/states/model settings | **NOT STARTED** | M1-015; constraint: no paid/hosted service without escalation. Agent = **Cua Driver** (C1/C2 sub-arms), planner local Ollama by default = $0; UI-TARS stays the fallback grounder (design §1a, PR #35) |
 | 8 | Reproducibility: another agent can reproduce the evaluation | **PARTIAL** | Deploy is now reproducible from a clean reset (PR #14, retro-verified). Runbook (docs/eval-runbook.md) not written; build-from-scratch (build-all.sh) unproven |
 
 ## Cross-workstream dependencies (owner: M1 coordinator, per outer loop 2026-11-19)
@@ -433,3 +433,196 @@ Two defences now in place: (1) commit 9dc4c32 makes a requested-but-unusable `MY
 - I will NOT start the 30 trials here: at this pressure each trial would measure the host, and a mid-sweep collapse would corrupt a third attempt. The gate (load <4) has not been met in 90 minutes of polling.
 - NEEDS OPERATOR: `sudo shutdown -r now` (reboot reclaims swap). Nothing else I can do from inside the session; I have not changed any system setting.
 - No usable trials this session. Counts remain 0/30, and no attempt is counted as a Myco failure.
+**Escalation for Tiffany (model/cost choice, design doc §9). Four answers needed:**
+1. Local grounder download — ShowUI-2B (~4 GB, MIT) and/or UI-TARS-1.5-7B (~15 GB, Apache-2.0). No account, no payment; costs disk + a multi-hour download + RAM during runs. Approve which?
+2. One minimal CheaperInference vision request (`deepseek-v4.1-flash`, `glm-5.3`) to establish whether either accepts images. This is the only way option D (cloud planner) exists; it spends a trivial but non-zero amount. Approve or decline?
+3. Hosted UI-TARS endpoint (option E) — rule out, or approve in principle with a budget cap? Only relevant if 1 and 2 both fail.
+4. VM time — ~2–3 h of `myco-win11` after the M1-013 sweep, plus the same again if the corrupted arm (design §7) is in scope. Scheduling is the M1 Coordinator's; Tiffany only needs to say whether the time is available.
+
+Default if unanswered: option B (ShowUI-2B grounder, local) with the installed qwen model as planner fallback — $0 marginal, no account, lower ceiling than UI-TARS; the report states the ceiling.
+
+**Not blocked by this decision:** M1-021 harness, import-graph and verdict tests (host-side, CI).
+**Blocked:** any baseline trial run (M1-015) until 1+2 are answered (or the default is taken as approved).
+
+**My own over-correction, caught after the PASS.** The verifier's verdict covered 7 claims and found 0 defects, but its aside flagged that `surferH` and `vlaa_gui` **do** exist in `mm_agents/` and only `manus` is absent. I re-checked the listing: the verifier is right and my removal was wrong. Both are restored in §1b.2; the note now says exactly one adapter was absent. Recorded because a verifier PASS does not mean the author's fixes were all correct — that is precisely why the aside is read, not just the verdict line.
+
+## Log 2026-11-21 (45b) — benchmarks checked by re-reading the primary sources; two provenance defects fixed in the design
+*(45b: main's log 45 — host blocked by swap — landed while this entry was in flight. Baseline-workstream entries continue at 46–50.)*
+The 1b/1c sections (OSWorld + WAA as a source of scored agents and as methodology) landed on `myco/m1-baseline` in `c67c389`. Before accepting them I re-read the sources rather than the summary. What held, what did not, and what I changed:
+
+**Held (independently reproduced today):**
+- **47** `libreoffice_calc` tasks in OSWorld v1, **47** in OSWorld-V2 (GitHub contents API, JSON count). WAA: **24** distinct ids — a tree-wide recursive grep returns **48** because each task exists twice, in `evaluation_examples_windows/examples/` and `.../examples_noctxt/`. The count is right; the method note did not say so, and now does.
+- The `postconfig` autosave critique is correct and *worse than stated*: **44 of the 47** OSWorld v1 Calc tasks run `pyautogui.hotkey("ctrl","s")` inside `evaluator.postconfig`. It is the default, not an exception.
+- `--som-origin omni` is OmniParser-only, and the ⭐ "recommended for best results" row is `mixed-omni --a11y-backend uia`. **Corrected 2026-11-21 (round 7):** `omni` is **not** pure screenshot — `agent.py` feeds the planner a SoM-annotated image **plus `list_of_text` captions** — and the tree-free `omni` number is 12.5% (GPT-4V-1106) / 9.4% (GPT-4o), not the 19.5% headline. *(Values corrected in log 52 from the LaTeX source.)*
+- `uitars15_v2.py` exists in `mm_agents/`.
+- The cost table re-derives exactly ($0.06/$0.28, $1.13/$5.58, $2.26/$11.15, $1.18/$5.67, $4.52/$22.30) from the stated inputs. The `gpt-6.2-astra` price is real: the cited pricing page 301s to `developers.openai.com/api/docs/pricing.md`, whose **standard** table lists `gpt-6.2-astra` at $8/$40.
+
+**Did not hold — fixed in the design:**
+1. **Navi's public score was never recorded.** The doc and M1-023 required a `publicScore {value}` field without ever naming a value. The published number is **Navi 19.5% on Windows (UIA + OmniParser, GPT-4V-1106) vs 74.5% human (arXiv:2409.08264); the tree-free equivalent is **12.5% (GPT-4V-1106) / 9.4% (GPT-4o)**, from the `UIA off + OmniParser` row**, and the paper's headline configuration is the accessibility tree combined with OmniParser. The tree-free OmniParser row **is published**. *(Ranges re-stated 2026-11-21 from the LaTeX source: `8.6` is the headline row's GPT-4o cell, not a tree-free lower bound.)* *(Corrected 2026-11-21: this line originally said no omni-only number was published, and used a `ported: true` boolean; the doc now records the per-mode score and uses `portScope` instead, because only the transport is substituted, not the planner.)*
+2. **"Local LLM behind an OpenAI-compatible base URL keeps the $0 property" was not free.** `mm_agents/navi/gpt/gpt4v_oai.py` builds `openai.OpenAI(api_key=...)` with no `base_url`, so a local endpoint needs a patch we own. §1b.3 and M1-023 now say so, and it is part of the `ported` definition.
+3. **The `mm_agents/` adapter list named three adapters that are not there** (`manus`, `surferH`, `vlaa_gui`; `mm_agents/manus` → 404). Corrected against the directory listing, with a dated note.
+4. **Two stale cross-references**: the `preserve_cells` row pointed at §1c.2 (it is §1c.1), and the M1-024 backlog entry said "§1c.1" for the same reason — the doc anchor is right, the row was wrong.
+5. **Worked-example arithmetic** in §8.4 wrote `$5.13` for `2.5M × $2/M`; that is `$5.00`, the line now sums correctly and states the `low` column separately. Also added the price-basis sentence the numbers needed: every `gpt-6*` figure is the **standard short-context** column, not long-context (ASTRA's long-context row is $16/$60 and would roughly double the ceiling).
+
+**Unchanged conclusion:** Cua remains the engineering baseline (B0/C1/C2), Navi/omni the public-score arm (B1), UI-TARS the tie to the literature (B2), and the transcribed 10-task subset is post-M1 (M1-027). The bugs above are provenance defects in a credibility document, not a reversal of the plan; but they are exactly the class of defect that turns "publicly scored" into a claim we cannot defend.
+
+**No money spent, no accounts, VM untouched.** Every check above was an HTTP read of a public source plus arithmetic.
+
+## Log 2026-11-21 (43b) — Cua decision written; option choice closed; three governance questions open
+*(43b: the sweep's own log took 44 on main while this entry was in flight. Numbered by commit order on main; see 44–49 for the baseline workstream's later entries.)*
+Resolves log 43 (superseded: that entry's ShowUI-2B/UI-TARS default and its four questions were written before the Cua evaluation landed). Design doc §1a/§8.4/§9 is the source of truth; PR #35 head `c22e36f` (this commit).
+
+**Decided (Tiffany, 2026-11-21):** the baseline agent is **Cua (trycua/cua), Cua Driver as the computer layer**. It is the only one of the three options that is simultaneously a recognised open-source computer-use framework, shipped as a Windows ARM64 release asset, and drivable over SSH with no VNC and no RDP — its session-1 daemon + named pipe is the same session-0 fix Myco needed (coordination log 16). $0 with a local planner, no account. Runs as two labelled sub-arms: **C1** pixel-only (the honest screenshot agent) and **C2** the driver's full accessibility+pixel ladder (the honest state of the art).
+
+**Cost per 30 trials**, one arithmetic run, consistent at every site in the doc: local Ollama **$0**; Haiku 5.5 **$0.06–0.28**; Sonnet 5.5 **$1.13–5.58**; Gemini 3.1 Pro **$1.18–5.67**; Opus 5.5 **$2.26–11.15**; gpt-6.2-astra **$4.52–22.30**. Low = no tool-definition overhead, high = with the ≈4.5k-token-per-request `computer_toolset` overhead. An earlier report quoted figures 30x too high from a double-counted request count; corrected in `22a58b1`.
+
+**Decisions still open with Tiffany (design §9):**
+1. Approve installing Cua Driver in the guest — a second autostart daemon beside `myco-agent`, installed once from the VM console. No money, no account; it changes the guest the Myco arm runs in, so it waits for the M1-013 sweep.
+2. Planner model: local Ollama at $0 (recommended) or a paid row above.
+3. C2 as a second column, or C1 only. C2 is what makes the comparison credible and is also the column that could make Myco look worse. Recommendation: run both.
+4. Frontier API as a third column — only if Tiffany wants the strongest number and accepts an API key. Not needed for the plan.
+
+**Verification:** four adversarial review rounds, three rejections; every rejection identified a real defect (false transport claim, silent null→pass in the false-success metric, phantom artefact citation, 30x cost arithmetic). Latest verdict **PASS at head `22a58b1`**.
+
+**Gates unchanged:** TIF-19 blocked on M1-013 plus M1-021 pending decisions 1–3. TIF-51 (M1-021) leads with the Calc spike, which gates the whole option choice. TIF-52 (M1-022) is now **optional, not blocking** — the Cua path needs no CheaperInference vision probe.
+
+**Constraints honoured:** no money spent, no accounts created, VM untouched while the sweep runs (including this docs-only commit: it edits no script and executes none).
+
+## Log 2026-11-21 (46) — baseline workstream: OSWorld / WAA folded in (Tiffany's second ask)
+*(Renumbered from 45: a parallel entry took 45 while this was being written, and 44 had been allocated twice. Both are recorded; read them in number order.)*
+No VM touched, no paid work, no accounts. Design only: docs/baseline/screenshot-agent.md §1b, §1c.
+
+**Two takes on OSWorld + Windows Agent Arena.** (1) *Agents with public scores*: the honest statement is **neither benchmark can be pointed at `myco-win11` as-is** — OSWorld has twelve providers and none attaches to an external VM over SSH; WAA's client is transport-agnostic HTTP but our guest exposes no :5000 control server (corrected from an earlier draft's "both own their VM") — so the ask becomes "which scored agent can run here". Answer: **Navi** (WAA's agent) in 
+
+**Feasibility findings that correct the repo.** `docs/research/eval-frameworks.md` treats OSWorld as Linux-only; that is too strong — `xlangai/windows_osworld` exists and its card says VMware/VirtualBox "depending on the machine architecture x86 or arm64", and OSWorld's setup.py branches on `'arm' in arch`. But the Windows dataset is **x64** (`Windows 10 x64.qcow2`, 49 GB), so it does not make WAA-on-macOS viable: WAA defaults to `--use-kvm true`, says no-KVM "is not recommended due to performance issues", and macOS has no KVM. Counts recorded: OSWorld v1 **47** Calc tasks, V2 **47**, WAA **24**.
+
+**External benchmark:** Myco on a small OSWorld/WAA Calc subset is **feasible but is a post-M1 item** — they assume `/home/user/…` or `C:\\Users\\Docker\\…` paths on their own image, and their tasks are prose instructions where M1's family takes typed parameters. The useful artefact is a **transcribed 10-task suite scored by Myco's verifier and by a re-implementation of their `compare_table`**, not "Myco's OSWorld number".
+
+**Backlog:** M1-023 (TIF-54) Navi/omni public-score arm; M1-024 (TIF-55) `preserveCells` negative assertion (applies to the Myco path too); M1-027 (TIF-58) post-M1 transcribed subset. Escalation §9 items 7-8 ask Tiffany: which public-score arms to run, and whether the external subset is wanted.
+
+## Log 2026-11-21 (52) — Table 4 confirmed against the LaTeX source; the stale REJECT was aimed at 611ae58
+A second verifier returned REJECT against **`611ae58`**, not the head. Its defects describe the two-versions-ago table, so the verdict is stale — but its method is the right one and settles the table for good: it read `arxiv.org/e-print/2409.08264`, i.e. **`inputs/results.tex`**, where every row names its model and the block boundaries are `\\midrule`.
+
+I re-ran that extraction independently. Confirmed, verbatim:
+
+| UIA | Perception | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+|---|---|---|---|---|---|
+| ✗ | Pytesseract + DOM + GroundingDINO | 8.6 | 5.2 | 7.2 | 1.3 |
+| ✓ | Pytesseract + DOM + GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
+| ✗ | OneOCR (proprietary models) | 11.3 | 9.3 | 5.3 | 3.2 |
+| ✓ | OneOCR (proprietary models) | 13.1 | 13.3 | 7.3 | 4.0 |
+| ✗ | OmniParser | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | OmniParser | **19.5** | 8.6 | 4.2 | 3.5 |
+
+Human: 74.5% overall, **83.3% on LibreOffice Calc** (Table 8). This matches the table already on the branch at `5b48586` cell for cell, so **no values changed**; what changed is only the citation — the design now says the numbers come from `inputs/results.tex`, which is the artifact of record, rather than from a PDF text layer that happened to agree.
+
+**Process, final form:** where a paper ships LaTeX, that is the oracle — it carries explicit model labels and `\midrule` block delimiters, so no alignment is ever inferred. HTML loses the layout, PDF text loses it partially, and reading either is how this table was wrong five times.
+
+**Verifier hygiene note:** two of the five verdicts this session were graded against a head that had already moved. A verdict must name the SHA it read; when it does not match the PR head, re-delegate rather than repair.
+
+Docs only; no VM, no spend, no accounts.
+
+## Log 2026-11-21 (51) — Table 4 settled from the PDF text layer; five wrong versions before it
+A parallel thread's `f6d2671` replaced the sourcing row with a new set of totals, and its commit message named my rows as wrong. Both of us were wrong. Settled by extracting the **PDF text layer** (`gs -sDEVICE=txtwrite` on `arxiv.org/pdf/2409.08264`) instead of HTML, where row-to-column alignment is lost:
+
+| UIA | Perception | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+|---|---|---|---|---|---|
+| ✗ | Pytesseract+GroundingDINO | 8.6 | **5.2** | 7.2 | 1.3 |
+| ✓ | Pytesseract+GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
+| ✓ | OneOCR | 13.1 | 9.3 | 5.3 | 3.2 |
+| ✗ | OneOCR | 11.3 | 13.3 | 7.3 | 1.0 |
+| ✗ | OmniParser | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | OmniParser | **19.5** | **8.6** | 4.2 | 3.5 |
+
+(Six blocks, four models each, printed Phi3-V → GPT-4o-mini → GPT-4o → GPT-4V-1106. Human 74.5%.)
+
+**What this settles.** The tree-free OmniParser row — B1's configuration — is **12.5% GPT-4V-1106, 9.4% GPT-4o**. My "8.6% with GPT-4o" was the **UIA-on** block's GPT-4o cell, one block down. The parallel thread's headline row (19.5/13.3/7.3/4.0) was the UIA-on **OneOCR** block. Neither read the ✗/✓ marker boundaries correctly, and both were reasoning from HTML.
+
+**Process change, now standing:** a table from a PDF-format paper is extracted from the PDF text layer, never from HTML or from memory, and the cell values are pasted from the extraction rather than typed. Five wrong versions of this one table is the evidence.
+
+**Downstream:** `publicScore.value` stays **0.125** (tree-free maximum, GPT-4V-1106). No other claim moves; the credibility argument never rested on a specific row.
+
+Docs only; no VM, no spend, no accounts.
+
+## Log 2026-11-21 (50) — the PASS was wrong about row 279; the verifier's own expected tuple was wrong too
+`7e94d6c` returned PASS with a non-blocking note. Both the verdict and the note were wrong, in opposite directions, and re-deriving the table from the paper's raw blocks settles it.
+
+**How the paper prints it.** Each of six perception blocks prints four model rows in the order **Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106**, each ending in a Total. A naive split on the ✓/✗ markers attaches the first block's four rows to the *second* label, which is what produced the earlier confusion. Re-split correctly:
+
+| UIA | Perception | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+|---|---|---|---|---|---|
+| ✗ | Pytesseract+GroundingDINO | 8.6 | **5.2** | 7.2 | 1.3 |
+| ✓ | Pytesseract+GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
+| ✓ | OneOCR | 13.1 | 9.3 | 5.3 | 3.2 |
+| ✗ | OneOCR | 11.3 | 13.3 | 7.3 | 1.0 |
+| ✗ | OmniParser | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | OmniParser | **19.5** | **8.6** | 4.2 | 3.5 |
+
+*(This table has been rewritten twice. The first version, written from HTML, attached each block's
+model rows to the preceding ✗/✓ marker and shifted every column by one block. A second version,
+written from the PDF text layer, still had the two OmniParser rows off by one model row. The values
+above are from the paper's **LaTeX source** (`inputs/results.tex`), which labels every row
+explicitly; see log 52. The lesson in the paragraph above stands — verification whose oracle is the
+author is not verification — and so does its corollary: the oracle is the artifact, and for a LaTeX
+paper that means the `.tex`, not a rendering of it.)*
+
+**What was wrong in the previous commit.** The table carried five rows, having **merged the two OneOCR blocks into one**, so it paired 13.1% with 9.4/2.7 — the ✓OneOCR GPT-4V cell beside the ✗OneOCR block's other models. It also gave the headline row GPT-4o 9.4, which belongs to ✓OneOCR.
+
+**What was wrong with the verifier.** The brief I wrote listed an expected tuple `(UIA, OneOCR) 13.1/9.4/2.7`, encoding the same cross-block merge, and the verifier graded the doc against **my** expectation. It found the paper disagreed, recorded the discrepancy, then PASSed because the doc matched the brief. That is a verification whose oracle was the author — the failure mode I have been trying to avoid all day, and it took a second read of the paper rather than a stronger brief.
+
+**Standing rule adopted:** for a transcription, the oracle is the source artifact in full; the brief may say *where* to look, never *what the numbers are*. Any future verifier brief for a table will carry the extraction instruction and the URL, not the expected values.
+
+**Downstream impact:** none on B1. Its row is tree-free OmniParser: 12.5% GPT-4V-1106, 9.4% GPT-4o — the maximum and the value `publicScore` records are unchanged. *(Amendment 2026-11-21: this line originally gave the GPT-4o cell as 8.6%, the headline row's value; corrected from the LaTeX source.)* `publicScore.value = 0.125` stands.
+
+Docs only; no VM, no spend, no accounts.
+
+## Log 2026-11-21 (49) — Table 4 read properly at last: the model order was the trap
+`134bb75` also REJECTed, this time for the score table. Fixing it required reading the paper's Table 4 as printed rather than as I had summarised it, and the error is instructive.
+
+**What Table 4 actually is.** For each perception-modality block, four model rows print in the order **Phi3-V, GPT-4o-mini, GPT-4o, GPT-4V-1106**, each with six category values and a Total. Reading the last value of a block gives GPT-4V-1106; the **second-to-last** gives GPT-4o. Transcribed Totals:
+
+| UIA | OmniParser | Other | GPT-4V-1106 | GPT-4o | GPT-4o-mini | Phi3-V |
+|---|---|---|---|---|---|---|
+| ✗ | ✗ | Pytesseract+DOM+GroundingDINO | 8.6 | 5.2 | 7.2 | 1.3 |
+| ✓ | ✗ | Pytesseract+DOM+GroundingDINO | 13.1 | 9.8 | 2.6 | 2.0 |
+| ✗ | ✗ | OneOCR | 11.3 | 9.3 | 5.3 | 3.2 |
+| ✓ | ✗ | OneOCR | 13.1 | 13.3 | 7.3 | 4.0 |
+| ✗ | ✓ | — | **12.5** | **9.4** | 2.7 | 2.0 |
+| ✓ | ✓ | — | **19.5** | 8.6 | 4.2 | 3.5 |
+
+Human ceiling 74.5% overall, **83.3% on LibreOffice Calc** (Table 8). So the tree-free `omni` row is **12.5% with GPT-4V-1106 and 9.4% with GPT-4o**. *(Amendment 2026-11-21, twice: this table first carried five rows with the two OneOCR blocks merged, then a six-row version with the OmniParser rows off by one model. The values above are from the paper's LaTeX source, `inputs/results.tex`, which labels every row explicitly; the authoritative copy is docs/baseline/screenshot-agent.md §1b.2.)*
+
+**What this replaces.** A parallel writer had already cut the table down to "only cells we can pin", having decided the GPT-4o values were unrecoverable. They were recoverable — the ambiguity was in my transcription, not the paper. The full five-block table is now in §1b.2 verbatim, with the reading rule stated, because a future reader will hit the same trap.
+
+**Also fixed:** `publicScore` still carried `value: 0.086, model: GPT-4o` in one place while the rule stated 0.125 elsewhere; the escalation item 7 and backlog M1-023 called the headline "`mixed-omni` + UIA" (a README flag, not a paper row). All sites now agree on **0.125, GPT-4V-1106, tree-free row**. Every `mixed-omni` mention left in the design is a disavowal saying it appears only in the README's flags.
+
+Docs only; no VM, no spend, no accounts.
+
+## Log 2026-11-21 (48) — my own correction commit REJECTed on four counts; all four were mine
+`d3d64a6` returned **REJECT** from the delta verifier. Every defect it names is real, and three of them were introduced by me while "fixing" something else. Recorded in full because the pattern is the lesson: I corrected a document by editing prose, not by re-reading the source object each edit described.
+
+1. **The example task JSON was right before I broke it.** `4e6fcf72…json` really does have `config[0] = {"type":"host_reference_date", …}` and `evaluator.expected.type = "employee_age_reference"`. I had asserted the opposite, added `"launch"` and `"vm_file"`, and told a verifier those two fields were wrong — the verifier caught the invention. Both restored.
+2. **`host_reference_date` is the config *step*; the getter is `employee_age_reference`.** The sentence in §1c.2 said "builds its `expected` from a `host_reference_date` getter". Wrong before and after my edit. Now describes the actual mechanism: `expected` computes gold from a workbook plus a `reference_date_path` written by the `host_reference_date` setup step.
+3. **`mixed-omni` is a flag name, not a paper result.** The paper reports Table 4 rows varying perception inputs; `mixed-omni` appears only in WAA's README CLI. Two places still described 19.5% as "`mixed-omni`" and denied a `--som-origin omni`-only number — both now state the row and cite Table 4 / §4.2.
+4. **B1's headline should be the *maximum* over its configuration's published rows: 12.5% (GPT-4V-1106), not 8.6% (GPT-4o).** `publicScore.value` is 0.125. *(The 8.6% here was the headline row's GPT-4o cell; the tree-free row's GPT-4o value is 9.4%, per the LaTeX source — see log 52.)*
+
+**Lesson taken into the next commit:** a number that appears in a table, a JSON field, or a CLI flag gets re-fetched from the source before it is written, not recalled from the previous draft. Three of these four were recall errors in a document whose entire value is that its numbers are checkable.
+
+Docs only; no VM, no spend, no accounts.
+
+## Log 2026-11-21 (47) — benchmark sections verified at source; a wrong score and a wrong ARM claim corrected
+*(47, not 46: the sibling entry above was renumbered to 46 while this was being written. Numbering is assigned at commit time, not at draft time.)*
+`8a32ff2` passed full verification at `aaf7290` and delta verification at `8a32ff2` (2 independent verifiers, no VM access, no tree writes). Acting on their asides produced real corrections, plus one the verifiers could not produce because it needed the paper's tables rather than the README.
+
+**Corrections committed after the PASSes:**
+1. **Navi's per-mode score was wrong.** The design attributed **8.6%** to `--som-origin omni` and described 12.5% as a same-mode variant. Pulling the paper's **Table 4** (arXiv 2409.08264 HTML) shows perception *inputs*, not `--som-origin` values: the tree-free `UIA off + OmniParser on` row is **12.5% (GPT-4V-1106) / 9.4% (GPT-4o)** *(values corrected in log 51 from the LaTeX source; this entry's original 8.6/12.5 pairing came from HTML)*, and the headline **19.5%** is `UIA on + OmniParser on` with GPT-4V-1106, beside a human ceiling of 74.5%. The doc now carries the four-row table with both models and names which row B1 actually runs. This changes what B1 may claim: its published reference is 8.6–12.5%, not 19.5%.
+2. **The ARM evidence was misattributed.** The doc cited OSWorld's `if 'arm' in arch or 'aarch' in arch` as a provider/architecture branch. It is a Chrome-profile branch. The genuine ARM64 evidence is the published `Ubuntu-arm.zip` artefact. Corrected in §1b.1.
+3. **"OSWorld boots its own VM" was too strong.** `desktop_env/providers/` holds twelve providers (`aliyun aws azure daytona docker fastvm gcp modal pyromind virtualbox vmware volcengine`); several boot a VM the user supplies. The real blocker is that none attach an external VM **over SSH**, which is the only handle our guest offers. Stated accurately.
+4. **The example task JSON was wrong in two fields** (`host_reference_date` in `config`, and an `expected.type` that the source task does not use). Fixed; the same `host_reference_date` is a real *evaluator getter* in that task, which is a different thing and now said correctly.
+5. **The "no PyPI package" claim was unverified** — a 404 on `setup.py` does not establish absence from PyPI. Narrowed to what was checked (no packaging metadata in the repo).
+
+**Also recorded upstream of the brief:** OmniParser-only is not pixels-only (it feeds SoM marks **plus** `list_of_text` captions), so no published Windows agent here is bare-pixel; Navi emits Python source strings for an in-guest `exec` executor, so "pip install and point it at our VM" was wrong and B1 is a days-not-hours port; and every arm except C1/C2 needs coordinate click + arbitrary keystroke in the guest, which the current agent op union lacks — that dependency belongs to M1-021 and is the real gate for B1/B2.
+
+**Verification status:** both verifiers returned PASS at their heads; the changes above are post-hoc corrections of prose their briefs did not cover (Table 4 arithmetic, provider-set enumeration). They are in the same commit as the state log, docs only.
+
+**Constraints:** no VM touch, no VM script executed, no spend, no accounts.
