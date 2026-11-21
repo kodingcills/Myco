@@ -15,7 +15,8 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "schema-validate": "tsx schemas/validate-artifacts.ts",
-    "test": "vitest run && pnpm schema-validate"
+    "test": "vitest run && pnpm schema-validate",
+    "report": "tsx src/report/report-cli.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
