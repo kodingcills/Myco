@@ -13,6 +13,7 @@ import {
 import {
   findTodoFixture,
   TODO_FIXTURE_SPECS,
+  TODO_FIXTURES,
   withExactInitialText,
 } from "../../src/foundry/tasks/todo.ts";
 import type { FixtureManifest, TaskIntent } from "../../src/foundry/types.ts";
@@ -149,6 +150,34 @@ describe("EF-001 save path: only a rename leaves a row stale", () => {
     const saved = saveApp(spec(), deleteItem(bootApp(spec()), "Triage inbox"));
     expect(storeOfRun(saved)).toEqual(["Draft release notes", "update docs"]);
     expect(visibleScreen(saved)).not.toContain("Triage inbox");
+  });
+
+  it("a rename after an add stales the row the user renamed, not the fixture's target", () => {
+    // Regression: keying the stale text on the fixture's designated target wrote the wrong
+    // row's text whenever the user renamed a different row.
+    let state = addItem(bootApp(spec()), "Something new");
+    state = renameItemInPlace(state, "update docs", "update the documentation");
+    const saved = saveApp(spec(), state);
+    expect(storeOfRun(saved)).toEqual([
+      "Draft release notes",
+      "update docs",
+      "triage inbox",
+      "Something new",
+    ]);
+    expect(visibleScreen(saved)).toContain("Update the documentation");
+  });
+
+  it("a no-op save is byte-identical to the fixture's initial store, on every fixture", () => {
+    for (const manifest of TODO_FIXTURES) {
+      const fixtureSpec = specFor(manifest.fixtureId);
+      const saved = saveApp(fixtureSpec, bootApp(fixtureSpec));
+      const written = persistedFiles(saved)["store.json"]!;
+      const initial =
+        manifest.initialState.kind === "myco-todo" ? manifest.initialState.bytes : new Uint8Array();
+      expect(Buffer.compare(Buffer.from(written), Buffer.from(initial)), manifest.fixtureId).toBe(
+        0,
+      );
+    }
   });
 
   it("a rename writes the stale text at the renamed position only", () => {

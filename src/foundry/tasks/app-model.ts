@@ -44,6 +44,12 @@ export interface AppState {
   readonly listbox: readonly string[];
   /** The raw text each screen row came from, in the same order (what Save serialises from). */
   readonly rows: readonly string[];
+  /**
+   * The raw text each row had when the app loaded, parallel to `rows`. This is what the
+   * stale-row defect serialises: a renamed row keeps its load-time text, whichever row the
+   * user renamed. A row added after boot has its own text as its load-time text.
+   */
+  readonly loadedRows: readonly string[];
   /** The last status-bar text. */
   readonly status: string;
   /** Files currently on disk. */
@@ -78,6 +84,7 @@ export function bootApp(spec: TodoFixtureSpec, variant: StoreVariant = "rewritte
   return {
     listbox: stored.map(renderEntry),
     rows: stored,
+    loadedRows: stored,
     status: "",
     files: { [ITEMS_FILE]: new TextDecoder().decode(initialBytes) },
     deleted: [],
@@ -100,6 +107,7 @@ export function addItem(state: AppState, text: string): AppState {
     ...state,
     listbox: [...state.listbox, renderEntry(trimmed)],
     rows: [...state.rows, trimmed],
+    loadedRows: [...state.loadedRows, trimmed],
     status: `added: ${trimmed}`,
     lastOp: { kind: "add", text: trimmed },
   };
@@ -131,11 +139,16 @@ export function deleteItem(state: AppState, renderedOrRaw: string): AppState {
   const target = renderEntry(normalise(renderedOrRaw));
   const index = state.listbox.indexOf(target);
   if (index === -1) return { ...state, status: `not found: ${renderedOrRaw}` };
-  const kept = state.listbox.map((entry, index) => ({ entry, raw: state.rows[index] ?? entry }));
+  const kept = state.listbox.map((entry, index) => ({
+    entry,
+    raw: state.rows[index] ?? entry,
+    loaded: state.loadedRows[index] ?? entry,
+  }));
   return {
     ...state,
     listbox: kept.filter((row) => row.entry !== target).map((row) => row.entry),
     rows: kept.filter((row) => row.entry !== target).map((row) => row.raw),
+    loadedRows: kept.filter((row) => row.entry !== target).map((row) => row.loaded),
     deleted: [...state.deleted, target],
     status: `deleted: ${target}`,
     lastOp: { kind: "delete", text: target },
@@ -179,13 +192,13 @@ export function saveApp(
     }
     case "stale-row": {
       // The rename repaints the listbox in place, but the store serialises the row's text as
-      // it was when the app loaded. Only a rename triggers this: an add or a delete writes
-      // exactly what the user did. The stale text is substituted at the renamed INDEX, so
-      // untouched rows keep their stored form and a no-op save round-trips the initial bytes.
-      const slot = renameTarget(spec);
+      // it was when the app loaded. Only a rename triggers this, and the stale text is the
+      // renamed row's own load-time text — not the fixture's designated target, because the
+      // user may rename any row. Untouched rows keep their stored form, so a no-op save
+      // round-trips the initial bytes.
       const renamedIndex = state.lastOp?.kind === "rename" ? state.lastOp.index : -1;
       const items = state.rows.map((raw, index) =>
-        index === renamedIndex && slot !== undefined ? slot.stored : normalise(raw),
+        index === renamedIndex ? normalise(state.loadedRows[index] ?? raw) : normalise(raw),
       );
       return {
         ...state,
@@ -221,14 +234,18 @@ function renameTarget(spec: TodoFixtureSpec): { rendered: string; stored: string
   return { rendered: renderEntry(normalise(target.text)), stored: normalise(target.text) };
 }
 
-function initialTimestamps(spec: TodoFixtureSpec, variant: StoreVariant): () => string {
+function initialTimestamps(
+  spec: TodoFixtureSpec,
+  variant: StoreVariant,
+): (index: number) => string {
   const parsed = JSON.parse(
     new TextDecoder().decode(buildTodoInitialState(spec, variant).bytes),
   ) as {
     items: { added_at: string }[];
   };
   const last = parsed.items.at(-1)?.added_at ?? "2026-11-21T09:00:00.000Z";
-  return () => last;
+  // Rows that existed at boot keep their own timestamp; rows added later take the last one.
+  return (index) => parsed.items[index]?.added_at ?? last;
 }
 
 function readMeta(content: string | undefined): { count?: number } {

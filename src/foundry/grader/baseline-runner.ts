@@ -48,6 +48,7 @@ export function runArm(
     const decoder = new TextDecoder();
     const loaded = relaunch({
       rows: [],
+      loadedRows: [],
       listbox: [],
       status: "",
       deleted: [],
