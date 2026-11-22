@@ -16,6 +16,14 @@ export interface DriverPrecondition {
   guestVersion: string;
   pipeReachable: boolean;
   sessionIdentityMatches: boolean;
+  /**
+   * The preflight's precise failure cause (`session-command-failed`,
+   * `session-mismatch`, `pipe-unreachable`, `daemon-missing`, ...). Recorded so
+   * a driver-unreachable verdict names *why*: without it, an arm that aborts on
+   * a too-tight timeout and one that aborts on a genuinely dead driver produce
+   * byte-identical artifacts, and neither is diagnosable from the row.
+   */
+  diagnostic?: string;
 }
 export function driverReady(d: DriverPrecondition): boolean {
   return (
@@ -31,7 +39,14 @@ export function planActions(
 ): { actions: Action[]; verdict: Verdict | null } {
   return driverReady(driver)
     ? { actions, verdict: null }
-    : { actions: [], verdict: { status: "uncertain", reasons: ["driver-unreachable"] } };
+    : {
+        actions: [],
+        // Same reason shape as judge(): name the cause, not just the class.
+        verdict: {
+          status: "uncertain",
+          reasons: ["driver-unreachable", ...(driver.diagnostic ? [driver.diagnostic] : [])],
+        },
+      };
 }
 export function falseSuccess(
   verdict: VerdictStatus,
@@ -85,7 +100,11 @@ export function judge(
   driver: DriverPrecondition,
   observation: Observation,
 ): Verdict {
-  if (!driverReady(driver)) return { status: "uncertain", reasons: ["driver-unreachable"] };
+  if (!driverReady(driver))
+    return {
+      status: "uncertain",
+      reasons: ["driver-unreachable", ...(driver.diagnostic ? [driver.diagnostic] : [])],
+    };
   switch (observation.kind) {
     case "persisted":
       return observation.actual === observation.expected

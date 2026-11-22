@@ -84,7 +84,7 @@ function classifySession(output: string): string {
   // Interactivity before identity: an unreadable id is its own condition.
   if (!interactive(snapshot.calcSession) || !interactive(daemons[0]))
     return "session-noninteractive";
-  return daemons[0] === snapshot.calcSession ? "match" : "session-mismatch";
+  return daemons[0] === snapshot.calcSession ? MATCH_DIAGNOSTIC : "session-mismatch";
 }
 
 /**
@@ -118,6 +118,22 @@ function queryGuest(command: string): string {
     timeout: GUEST_QUERY_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+/**
+ * The session classification that means the preflight succeeded. It is a
+ * sentinel, not a cause: carrying it into `DriverPrecondition.diagnostic` would
+ * put `diagnostic: "match"` on every healthy row and contradict the field's
+ * stated contract ("the preflight's precise failure cause").
+ */
+export const MATCH_DIAGNOSTIC = "match";
+
+/**
+ * The diagnostic to persist for a preflight result: the cause on failure, and
+ * nothing on success. Split out so it is testable without a guest.
+ */
+export function persistedDiagnostic(diagnostic: string): { diagnostic?: string } {
+  return diagnostic === MATCH_DIAGNOSTIC ? {} : { diagnostic };
 }
 
 export function probeC1Driver(calcPid: number, pipeReachable: boolean, query = queryGuest) {
