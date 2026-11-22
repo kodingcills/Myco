@@ -517,13 +517,29 @@ def execute_scenario(
                    "postconditionResults": [predicate("launch_delivered", outcome)],
                    "stateVersionBefore": v_before, "stateVersionAfter": v_before + 1}, {}))
 
+    # --- resolve widget refs before acting -------------------------------
+    # Tk registers no AT-SPI nodes, and the runtime's closed Action union needs
+    # an AT-SPI ref for BOTH `click` and `typeText` (act.rs resolves the ref and
+    # fails with `unresolved_ref` otherwise). XTEST can type into a focused
+    # window, but the runtime exposes no focus-relative typing or coordinate
+    # click. So with no refs the run cannot be driven: that is a runtime gap
+    # (REQ-04), never something the harness may paper over.
+    entry_ref = find_ref_by_role(obs, ("entry", "text", "text-field"))
+    if entry_ref is None:
+        unavailable = introspection_unavailable(obs)
+        why = f"; introspection: {unavailable}" if unavailable else ""
+        cleanup(mcp, sid)
+        return gap("REQ-04",
+                   "no AT-SPI entry ref for the app window and no focus-relative "
+                   f"typing action in the runtime's Action union{why}")
+
     # --- add the scenario's items through the GUI ------------------------
     step = 2
     for item in sc.adds:
-        # Clear the entry field first so an add never concatenates on leftovers.
         for action in (
-            {"kind": "keyPress", "keys": "ctrl+a"},
-            {"kind": "typeText", "target": ENTRY, "text": item},
+            {"kind": "click", "target": entry_ref},
+            {"kind": "keyPress", "keys": "ctrl+a"},          # clear leftovers
+            {"kind": "typeText", "target": entry_ref, "text": item},
             {"kind": "keyPress", "keys": "Return"},
         ):
             try:
@@ -540,8 +556,13 @@ def execute_scenario(
 
     # --- save ------------------------------------------------------------
     if sc.save:
+        save_ref = find_ref_by_role(obs, ("push-button", "button"), name="Save")
+        if save_ref is None:
+            cleanup(mcp, sid)
+            return gap("REQ-04",
+                       "no AT-SPI button ref named Save and no coordinate-click action")
         try:
-            act(mcp, sid, {"kind": "click", "target": SAVE})
+            act(mcp, sid, {"kind": "click", "target": save_ref})
         except McpError as e:
             cleanup(mcp, sid)
             return gap("REQ-04", f"save click failed: {e}")
@@ -598,8 +619,64 @@ def execute_scenario(
     return finish(RunResult(bucket=bucket, checks=checks, ledger_state=state, oracle=oracle))
 
 
-ENTRY = "sanity-entry"   # the runtime's introspection ref for the entry field
-SAVE = "Save"            # ... and for the Save button
+# Widget targets are never hardcoded. `sanity-entry` belongs to the runtime's GTK
+# sanity window, not to myco-todo; every target is resolved from the observed
+# a11y tree, and a missing target is a diagnosed REQ-04 gap.
+def find_ref_by_role(obs: dict[str, Any], roles: tuple[str, ...],
+                     name: str | None = None) -> str | None:
+    """First node in the a11y tree whose role matches, optionally by name."""
+    def walk(node: Any) -> str | None:
+        if isinstance(node, dict):
+            role = str(node.get("role") or "").lower()
+            if (any(r in role for r in roles)
+                    and (name is None or node.get("name") == name)
+                    and node.get("ref")):
+                return str(node["ref"])
+            for v in node.values():
+                found = walk(v)
+                if found:
+                    return found
+        elif isinstance(node, list):
+            for v in node:
+                found = walk(v)
+                if found:
+                    return found
+        return None
+    return walk(obs.get("a11y_tree") or {})
+
+
+def introspection_record(obs: dict[str, Any]) -> dict[str, Any] | None:
+    """The app-published widget record, or None when absent/unavailable.
+
+    ADR-0016 tri-state: null (channel unset) | record | {"unavailable": reason}.
+    """
+    rec = (obs.get("a11y_tree") or {}).get("introspection")
+    if isinstance(rec, dict) and "unavailable" not in rec:
+        return rec
+    return None
+
+
+def introspection_unavailable(obs: dict[str, Any]) -> str | None:
+    """The channel's failure reason, when it exists but could not be read."""
+    rec = (obs.get("a11y_tree") or {}).get("introspection")
+    if isinstance(rec, dict) and "unavailable" in rec:
+        return str(rec["unavailable"])
+    return None
+
+
+def observe_until_introspection(mcp: McpClient, sid: str, tries: int = 20,
+                                delay: float = 0.25) -> dict[str, Any]:
+    """Poll observe() until the introspection record appears, or the budget ends."""
+    last: dict[str, Any] = {}
+    for _ in range(tries):
+        try:
+            last = mcp.call_tool("observe", {"session_id": sid})
+        except McpError:
+            return last
+        if introspection_record(last) is not None:
+            return last
+        time.sleep(delay)
+    return last
 
 
 def count_nodes(tree: Any) -> int:
