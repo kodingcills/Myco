@@ -469,6 +469,40 @@ fn kill_zero(pid: u32) -> bool {
 }
 
 /// The element ref an action carries, if any.
+/// Lower an action to the JSON the guest agent parses (RT-008).
+///
+/// Extracted from `act` so the wire form is testable without a guest (RT-022): the
+/// agent crate does not depend on this one, so the agent-side tests necessarily
+/// assert against a hand-copied literal. Without a test here, a rename on THIS side
+/// -- "x" to "px" -- passed every deterministic test and failed only inside a VM.
+///
+/// Pure: no `self`, no channel. Keep it that way; that is what makes it testable.
+fn action_to_wire(action: &Action) -> serde_json::Value {
+    match action {
+        Action::Launch { command, args } => serde_json::json!({
+            "kind": "launch", "command": command, "args": args
+        }),
+        Action::Click { target } => serde_json::json!({
+            "kind": "click", "target": target.payload
+        }),
+        Action::TypeText { target, text } => serde_json::json!({
+            "kind": "typeText", "target": target.payload, "text": text
+        }),
+        Action::TypeTextGlobal { text } => serde_json::json!({
+            "kind": "typeTextGlobal",
+            "text": text,
+        }),
+        Action::ClickAt { x, y } => serde_json::json!({
+            "kind": "clickAt",
+            "x": x,
+            "y": y,
+        }),
+        Action::KeyPress { keys } => serde_json::json!({
+            "kind": "keyPress", "keys": keys
+        }),
+    }
+}
+
 fn action_ref(action: &Action) -> Option<&myco_rt_core::ElementRef> {
     match action {
         Action::Click { target } | Action::TypeText { target, .. } => Some(target),
@@ -616,29 +650,7 @@ impl Backend for QemuLinuxBackend {
             .channel
             .as_mut()
             .ok_or_else(|| BackendError::Protocol("act before provision".into()))?;
-        let wire = match action {
-            Action::Launch { command, args } => serde_json::json!({
-                "kind": "launch", "command": command, "args": args
-            }),
-            Action::Click { target } => serde_json::json!({
-                "kind": "click", "target": target.payload
-            }),
-            Action::TypeText { target, text } => serde_json::json!({
-                "kind": "typeText", "target": target.payload, "text": text
-            }),
-            Action::TypeTextGlobal { text } => serde_json::json!({
-                "kind": "typeTextGlobal",
-                "text": text,
-            }),
-            Action::ClickAt { x, y } => serde_json::json!({
-                "kind": "clickAt",
-                "x": x,
-                "y": y,
-            }),
-            Action::KeyPress { keys } => serde_json::json!({
-                "kind": "keyPress", "keys": keys
-            }),
-        };
+        let wire = action_to_wire(action);
         let resp = ch.act(wire.clone(), version)?;
         let outcome = resp
             .get("outcome")
@@ -733,6 +745,114 @@ impl Drop for QemuLinuxBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RT-022: the backend half of the act wire contract.
+    ///
+    /// The agent crate does not depend on this one, so its tests assert against a
+    /// hand-copied literal. These assert the REAL output, so a rename here fails
+    /// deterministically instead of only inside a guest.
+    ///
+    /// The literals below are the contract. Changing one on either side must fail
+    /// exactly one of the two suites, and both are VM-free.
+    mod action_to_wire_tests {
+        use super::*;
+        use myco_rt_core::{Action, ElementRef, StateVersion};
+
+        fn r(payload: &str) -> ElementRef {
+            ElementRef { payload: payload.into(), issued_at: StateVersion(0) }
+        }
+
+        #[test]
+        fn launch_carries_command_and_args() {
+            let w = action_to_wire(&Action::Launch {
+                command: "x".into(),
+                args: vec!["-a".into()],
+            });
+            assert_eq!(w["kind"], "launch");
+            assert_eq!(w["command"], "x");
+            assert_eq!(w["args"][0], "-a");
+        }
+
+        #[test]
+        fn click_carries_the_ref_payload_not_the_version() {
+            let w = action_to_wire(&Action::Click { target: r("e1") });
+            assert_eq!(w["kind"], "click");
+            assert_eq!(
+                w["target"], "e1",
+                "the wire carries the opaque payload; the version stays host-side"
+            );
+            assert!(w.get("issued_at").is_none(), "version must not leak onto the wire");
+        }
+
+        #[test]
+        fn type_text_carries_the_target_payload_and_text() {
+            let w = action_to_wire(&Action::TypeText { target: r("e1"), text: "t".into() });
+            assert_eq!(w["kind"], "typeText");
+            assert_eq!(w["target"], "e1");
+            assert_eq!(w["text"], "t");
+        }
+
+        /// The S0 primitive. Field name and kind are exactly what the agent parses.
+        #[test]
+        fn type_text_global_carries_only_text() {
+            let w = action_to_wire(&Action::TypeTextGlobal { text: "buy milk".into() });
+            assert_eq!(w["kind"], "typeTextGlobal");
+            assert_eq!(w["text"], "buy milk");
+            assert!(
+                w.get("target").is_none(),
+                "a targetless action must not emit a target field, or the agent would \
+                 expect one"
+            );
+        }
+
+        #[test]
+        fn click_at_carries_xy_as_integers() {
+            let w = action_to_wire(&Action::ClickAt { x: 320, y: 240 });
+            assert_eq!(w["kind"], "clickAt");
+            assert_eq!(w["x"], 320);
+            assert_eq!(w["y"], 240);
+            assert!(w["x"].is_i64(), "coordinates must stay integers, not strings");
+        }
+
+        /// Negative coordinates must reach the wire unchanged, so the agent can
+        /// refuse them with a real message rather than the backend silently
+        /// clamping them to 0.
+        #[test]
+        fn negative_coordinates_survive_to_the_wire() {
+            let w = action_to_wire(&Action::ClickAt { x: -5, y: 10 });
+            assert_eq!(w["x"], -5, "clamping here would make the agent's refusal untestable");
+        }
+
+        #[test]
+        fn key_press_carries_the_chord() {
+            let w = action_to_wire(&Action::KeyPress { keys: "ctrl+Return".into() });
+            assert_eq!(w["kind"], "keyPress");
+            assert_eq!(w["keys"], "ctrl+Return");
+        }
+
+        /// Every variant must produce a `kind` the agent accepts. This is the
+        /// check that would have caught a new variant added to core but never
+        /// wired here -- the compiler catches a missing match arm, but not a
+        /// kind string that spells the variant differently.
+        #[test]
+        fn every_variant_carries_a_camel_case_kind() {
+            let all = [
+                action_to_wire(&Action::Launch { command: "c".into(), args: vec![] }),
+                action_to_wire(&Action::Click { target: r("e") }),
+                action_to_wire(&Action::TypeText { target: r("e"), text: "t".into() }),
+                action_to_wire(&Action::TypeTextGlobal { text: "t".into() }),
+                action_to_wire(&Action::ClickAt { x: 0, y: 0 }),
+                action_to_wire(&Action::KeyPress { keys: "Return".into() }),
+            ];
+            for w in all {
+                let kind = w["kind"].as_str().expect("every action carries a kind");
+                assert!(
+                    !kind.contains('_'),
+                    "kind {kind:?} is not camelCase; the agent's serde rename expects camelCase"
+                );
+            }
+        }
+    }
 
     fn config_for(dir: &Path) -> QemuConfig {
         QemuConfig {
