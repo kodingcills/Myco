@@ -18,8 +18,9 @@ if [[ -z "$MAKER" ]]; then
   MAKER="mkisofs"
 fi
 
-[[ -f "$PUBKEY_FILE" ]] || {
-  echo "$PUBKEY_FILE missing; generating keypair." >&2
+[[ -f "$KEYS_DIR/id_ed25519" && -f "$PUBKEY_FILE" ]] || {
+  echo "Keypair missing in $KEYS_DIR; generating keypair." >&2
+  rm -f "$KEYS_DIR/id_ed25519" "$PUBKEY_FILE"
   ssh-keygen -t ed25519 -N '' -C myco-rt-guest -f "$KEYS_DIR/id_ed25519" -q
 }
 

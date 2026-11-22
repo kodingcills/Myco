@@ -150,7 +150,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   across both surfaces.
 
 ### RT-011 (TIF-40) End-to-end integration test: thinnest north-star path
-- **status:** in progress (2026-11-20). Live halves proven individually against the real guest: CLI create 1.0 s / 5 nodes, act `DeliveredVerified` with guest-side confirmation, evidence artifacts written, MCP six-op flow over raw JSON-RPC. Remaining for the gate: one scripted test driving create→observe→act→evidence→reset→destroy through MCP (Dogfood's surface) plus a CLI smoke, after the reset deadline fix.
+- **status:** done (2026-11-22, RT owner). Live proof passed end-to-end against real Linux ARM64 QEMU+HVF guest via `scripts/rt020-proof.py --go --verify-myco-todo --session rt020-live-20261122-093115`. All 6 MCP ops (create, observe, act:launch, act:typeText, evidence, reset, destroy) verified with real X11 desktop and `myco-todo` app verification. Timings measured: create (cold boot + cloud-init + GUI) 108.0s, act ~0.9s, verify-myco-todo 0.8s, reset 52.0s, destroy 1.1s. VM cleanly destroyed with no lingering processes.
 - **owner:** build
 - **blocked_by:** RT-008, RT-009, RT-010
 - **description:** Real integration test (not fake backend): create Linux desktop →
@@ -176,7 +176,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   code touching UTM.
 
 ### RT-first-path (TIF-42) First end-to-end path (Dogfood unblocker)
-- **status:** pending (tracks RT-011)
+- **status:** done (2026-11-22). Live proof passed end-to-end (session `rt020-live-20261122-093115`), unblocking Dogfood DF-005 (TIF-27). All 11 proof steps passed, measured costs recorded in docs/coordination/runtime-state.md and docs/backlog/runtime.md.
 - **owner:** coordinator
 - **blocked_by:** RT-011
 - **description:** Roll-up marker for the first end-to-end path the Dogfood
@@ -260,12 +260,10 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
      invalidated when the base image or provisioning changes.
 
 ### RT-020 (TIF-56) Arbitrary agent obtains a safe isolated desktop, end to end
-- **status:** in progress — reframed by outer loop 2026-11-21 (Tiffany t80u).
-  **Goal is ease, not more capability.** Reuse the merged CLI + MCP front ends;
-  keep ONE backend reliable.
+- **status:** done (2026-11-22, live run `rt020-live-20261122-093115` PASS × 11 steps; independent adversarial verifier subagent PASS).
+  **Goal is ease, not more capability.** Merged CLI + MCP front ends reused; single reliable QEMU+HVF backend.
 - **owner:** build
-- **blocked_by:** none for research/design/code; the live end-to-end run needs host
-  time (M1 has priority — coordinate via the M1 Coordinator).
+- **blocked_by:** none
 - **description:** One agent, one Myco-managed desktop, end to end: lifecycle,
   screenshots, semantic observations, actions, artifacts, cleanup — usable
   independently of the custom Grok Bot setup. Supports Discovery direction A
@@ -274,11 +272,11 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   - The six ops work; **discovery does not**. An agent running the MCP server
     outside the repo root fails with
     `script failed: boot.sh ... No such file` because the workspace is resolved
-    from `cwd`. Reproduced 2026-11-21.
+    from `cwd`. Reproduced 2026-11-21; fixed via PR #52 ($MYCO_HOME / upward traversal).
   - Isolation is the VM boundary + 2 GB cap + loopback-only hostfwd + disposable
     overlay. **Not** guaranteed: egress policy, guest→host file transfer, idle
     reaping, per-agent attribution, multi-tenant credentials.
-- **progress:** criterion 1 landed in code (workspace discovery: `$MYCO_HOME` → walk up from cwd → walk up from the binary; missing-workspace error names `MYCO_HOME`). Live run (2) still waits on the M1 Coordinator's go signal.
+- **progress:** All acceptance criteria satisfied. Live run executed with `--verify-myco-todo` inside Coordinator-granted exclusive window under `/tmp/myco-win11.vm.lock`. Evidence: `runs/rt020-live-20261122-093115/` (`proof.json`, `result.json`, `trace.jsonl`). Timings: create 108.0s, act:launch 0.4s, act:typeText 0.5s, verify-myco-todo 0.8s, reset 52.0s, destroy 1.1s. Independent verification completed with formal PASS.
 - **acceptance:**
   1. A single documented entry point gets an agent from "nothing running" to a
      usable desktop with no repo-layout knowledge and no `cd` requirement; the
