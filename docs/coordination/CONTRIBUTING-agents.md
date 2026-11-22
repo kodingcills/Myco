@@ -104,3 +104,21 @@ The only gates that remain:
 Removed by this rule: the AC-power gate, the swap-free gate (swap grows on demand on macOS, so it is not a pressure signal), and the "load under 8 sustained" watcher. The watcher script was deleted rather than left dormant, so it cannot be restarted by habit.
 
 **Consequence for owner code:** any harness that refuses to run because of charger state must drop that check. `src/baseline/c1-trial.ts` had `if (!prepared.acPower) throw new Error("AC power required")`; that gate is to be removed, and the same edit must move the precondition inside the cleanup scope so an abort at entry cannot leave guest processes behind.
+
+## Worktree isolation (standing rule, 2026-11-22)
+
+**One worktree per agent. A verifier never reads the working tree of the agent it is reviewing.**
+
+Two incidents on 2026-11-22, same class:
+
+1. A verifier returned REJECT claiming a PR contained no `runtime/` changes. It was false: the author had reset a shared worktree while the verifier was reading it, so the verifier saw `main`'s files.
+2. A verifier's mutation edits landed in another agent's working tree because that worktree was switched out from under it mid-review (to `origin/main`, then to a feature branch).
+
+Rules:
+
+- **Authors:** never reset, checkout, rebase, or stash a worktree while a review is reading it. If you must switch branches, do it in your own worktree and tell the reviewer.
+- **Verifiers:** read objects, not files — `git show <sha>:<path>`, `git diff <sha>..<sha>`, `git cat-file`. Never trust the working tree of a checkout you did not create.
+- **Verifiers:** run mutation tests and any write-touching check in an **isolated worktree at the pinned SHA**, then remove it. Never mutate a shared checkout.
+- **Coordinators:** when briefing a verifier, give it the exact SHA and say "read objects, not the working tree". A verdict is only meaningful for the SHA it names.
+
+Why it matters: a verifier reading a mutated worktree produces a confident, wrong verdict — either a false REJECT that wastes a fix cycle, or a false PASS that lets unverified code land. Both are worse than no review.

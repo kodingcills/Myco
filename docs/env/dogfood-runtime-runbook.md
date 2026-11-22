@@ -42,8 +42,10 @@ runtime/target/debug/myco-rt-mcp
 ```
 
 ### Handshake
-Call `initialize` followed by `tools/list`. The server reports exactly 6 tools:
-`["create", "observe", "act", "evidence", "reset", "destroy"]`.
+Call `initialize` followed by `tools/list`. The server reports 7 tools:
+`["create", "observe", "act", "evidence", "read_file", "reset", "destroy"]`.
+Six are the v0 lifecycle; `read_file` is an opt-in seventh (RT-015) that only
+works for a session created with `read_root`.
 
 ### Tool Calling (`tools/call`)
 
@@ -179,6 +181,32 @@ Every action returns a three-way outcome: `delivered_verified`, `delivered_unver
 ```
 - **Behavior:** Clean guest shutdown, qemu process termination, overlay deletion.
 - **Timing:** ~1.1s.
+
+#### 7. `read_file` — Bounded Guest File Read (RT-015, opt-in)
+
+Only available for a session created with `read_root`:
+`create {"session_id": "...", "read_root": "/home/ubuntu/project"}`. An absolute
+directory is required; `/` is refused, because a grant rooted there is not a grant.
+
+```json
+{
+  "name": "read_file",
+  "arguments": {
+    "session_id": "df-s01-run-1",
+    "path": "out/build.log"
+  }
+}
+```
+- **Behavior:** `path` is resolved with `openat2` under `RESOLVE_BENEATH`, so it
+  cannot escape the grant root; symlinks are refused (`NO_SYMLINKS`) and so is
+  crossing into another mount (`NO_XDEV`). Traversal components and absolute paths
+  are rejected before any syscall, and anything that is not a regular file is
+  refused. Content is returned base64 with `raw_bytes` (the pre-encoding length);
+  files over 1 MiB are refused.
+- **Without a grant:** a session created without `read_root` has no filesystem
+  reach at all — this is deliberate, so an agent gets no host-adjacent reads unless
+  the harness asked for them at `create` time.
+- **Timing:** one guest round trip (~0.1s).
 
 ---
 
