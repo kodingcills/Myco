@@ -51,7 +51,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-say "0/6 preflight (fail in seconds, not after a boot)"
+say "0/7 preflight (fail in seconds, not after a boot)"
 [[ -f "$GUEST_DIR/state/noble-server-cloudimg-arm64.img" ]] \
   || fail "base image missing: run runtime/guest/fetch-image.sh"
 [[ -f "$GUEST_DIR/keys/id_ed25519" ]] \
@@ -63,10 +63,10 @@ if pgrep -f qemu-system-aarch64 >/dev/null; then
 fi
 echo "OK: image, key, qemu, cargo present; no guest running"
 
-say "1/6 building the workspace"
+say "1/7 building the workspace"
 cargo build --workspace --manifest-path runtime/Cargo.toml 2>&1 | tail -2 || fail "cargo build"
 
-say "2/6 booting the guest and building the agent in-guest"
+say "2/7 booting the guest and building the agent in-guest"
 "$GUEST_DIR/boot.sh" 2>&1 | tail -1
 # SSH answering is NOT readiness: cloud-init is still installing packages, and a
 # build that starts now races it. Observed: ssh up at ~15s, cloud-init "done" at
@@ -86,22 +86,27 @@ if ! "$GUEST_DIR/build-agent-in-guest.sh" 2>&1 | grep -q "OK:"; then
   "$GUEST_DIR/build-agent-in-guest.sh" 2>&1 | grep -E "OK:|error" | tail -3 || fail "agent build (after retry)"
 fi
 
-say "3/6 RT-011 end-to-end (create -> observe -> act -> evidence -> reset -> destroy)"
+say "3/7 RT-011 end-to-end (create -> observe -> act -> evidence -> reset -> destroy)"
 MYCO_RT_LIVE=1 cargo test --manifest-path runtime/Cargo.toml \
   -p myco-rt-backend-qemu --test first_path -- --ignored --nocapture 2>&1 \
   | grep -vE "Warning: Permanently" | tail -30 || fail "first_path"
 
-say "4/6 RT-015 read_file (round-trip, escapes, ungranted refusal)"
+say "4/7 RT-015 read_file (round-trip, escapes, ungranted refusal)"
 MYCO_RT_LIVE=1 cargo test --manifest-path runtime/Cargo.toml \
   -p myco-rt-backend-qemu --test read_file_live -- --ignored --nocapture \
   live_read_file_round_trips_and_refuses_escapes 2>&1 \
   | grep -vE "Warning: Permanently" | tail -25 || fail "read_file_live"
 
-say "5/6 progress heartbeat during create"
+say "5/7 progress heartbeat during create"
 MYCO_RT_LIVE=1 cargo test --manifest-path runtime/Cargo.toml \
   -p myco-rt-backend-qemu --test read_file_live -- --ignored --nocapture \
   live_create_emits_progress_heartbeat 2>&1 \
   | grep -vE "Warning: Permanently" | tail -10 || fail "progress heartbeat"
 
-say "6/6 done"
+say "6/7 act primitives for AT-SPI-blind apps (typeTextGlobal, clickAt)"
+MYCO_RT_LIVE=1 cargo test --manifest-path runtime/Cargo.toml \
+  -p myco-rt-backend-qemu --test act_global_live -- --ignored --nocapture 2>&1 \
+  | grep -vE "Warning: Permanently" | tail -15 || fail "act_global_live"
+
+say "7/7 done"
 echo "All live proofs passed. Timings are printed above by each test."
