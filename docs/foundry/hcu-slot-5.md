@@ -58,5 +58,21 @@ these checks without starting the guest or calling the planner.
 These checks are acceptance criteria for the adapter implementation. No live
 adapter or guest smoke result has been validated yet.
 
+## Frozen input preflight
+
+The SHA-256 checks on `/tmp/m1-013/sweep-v3/params.json` and
+`fingerprints.json` matched the Coordinator's frozen values. All 30 rows in
+`src/baseline/sweep-v3.json` joined in order to the v3 trial records on index,
+parameters, run ID and verdict. The six seed fingerprints matched every
+recorded fixture hash, and all 30 recorded result-file hashes matched. This
+checks the frozen evidence and recorded fixture fingerprints. Compare the
+actual staged workbook against the frozen fixture evidence before a live trial.
+
+The v3 scorecard records 30 trials and zero omissions. The invalidated C1
+ledger reports indices 0 and 1 as driver-unreachable and 2 as interrupted.
+The other 27 indices have no rows in that ledger. Keep these distinct from
+omissions in a finalized C1 run. No finalized C1 report was present in the
+local baseline output directories checked.
+
 The 30 normal Calc trials are descriptive for Discovery. EF myco-todo tasks and
 hidden pairs require separate validated deployment and authorized slots.

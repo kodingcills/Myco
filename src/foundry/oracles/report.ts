@@ -1,23 +1,14 @@
 import type { commitment } from "../hidden-split/index.ts";
+import { scoreClaim, wilson, zeroEventUpperBound } from "../stats.ts";
 import type { FoundryTrialResult } from "../types.ts";
 import { summarise } from "./blind.ts";
 
-export function wilson(successes: number, n: number): readonly [number, number] | null {
-  if (
-    !Number.isSafeInteger(n) ||
-    !Number.isSafeInteger(successes) ||
-    successes < 0 ||
-    successes > n
-  )
-    throw new Error("Invalid counts");
-  if (!n) return null;
-  const z = 1.96,
-    p = successes / n,
-    d = 1 + (z * z) / n;
-  const center = (p + (z * z) / (2 * n)) / d;
-  const margin = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
-  return [Math.max(0, center - margin), Math.min(1, center + margin)];
-}
+/**
+ * Re-exported from `../stats.ts`, which owns the interval math. Kept here because callers
+ * import it from the report module; there is exactly one implementation.
+ */
+export { wilson } from "../stats.ts";
+
 export interface ReportTrial {
   readonly result: FoundryTrialResult;
   readonly seed: number;
@@ -27,6 +18,7 @@ export interface ReportTrial {
   readonly fixtureHash: string;
   readonly faultArmed?: boolean;
 }
+
 export function scoreReport(
   results: readonly ReportTrial[],
   selfTestPassed: boolean,
@@ -108,6 +100,9 @@ export function scoreReport(
       successes: summary.verified,
       trials: decided,
       interval: wilson(summary.verified, decided),
+      // The exact interval and the caveats the report must print. `scoreClaim` is the only
+      // place these are computed, so a report cannot publish a rate without them.
+      claim: scoreClaim(decided, summary.verified, falseSuccesses),
     },
     falseSuccess: {
       successes: falseSuccesses,
@@ -127,7 +122,7 @@ export function scoreReport(
           !unarmed &&
           corrupted.length &&
           corrupted.every((r) => !r.result.falseSuccess && r.result.verdict !== "uncertain")
-            ? 1 - 0.05 ** (1 / corrupted.length)
+            ? zeroEventUpperBound(corrupted.length)
             : null,
       },
     },

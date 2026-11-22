@@ -22,7 +22,7 @@ const faults: Fault[] = [
   "crash-mid-save",
   "permission-denied",
 ];
-const fixture = findTodoFixture("ef-todo-partial-write-v1")!;
+const fixture = findTodoFixture("ef-todo-partial-write-v2")!;
 const spec = TODO_FIXTURE_SPECS.find((s) => s.fixtureId === fixture.fixtureId)!;
 const intent: TaskIntent = { kind: "todo.delete-items", items: ["archive Q1 invoices"] };
 const initial = fixture.initialState;

@@ -52,7 +52,7 @@ export function buildViewerRun(spec: ViewerRunSpec): ViewerRun {
   const { name, kind, steps } = spec;
   if (steps < 4) throw new Error("a viewer run needs at least 4 steps");
   const runId = `viewer-${name}`;
-  const taskId = "ef-todo-silent-drop-v1";
+  const taskId = "ef-todo-silent-drop-v2";
   const taskParams = { items: ["buy milk", TARGET] };
   const trace: string[] = [];
   const extended: string[] = [];

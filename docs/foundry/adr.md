@@ -143,3 +143,39 @@ account".
 **Consequences.** Hidden scores are only reproducible by someone holding the seed; the report
 therefore names the commitment hash it was scored against. Rotating the seed bumps
 `hiddenSplitVersion` (part of the score triple's context) and invalidates comparisons.
+
+---
+
+## ADR-0023 — A trap test must assert the reason, not just the verdict
+
+**Decision.** Every fixture proves its disagreement at statement level: for each class the
+test asserts what is on screen, what is in the store, and which field differs. A test that
+only asserts `refuted` is not sufficient for a trap fixture.
+
+**Why.** The stale-row fixture shipped with a defect that could never fire — the app model
+looked the rename target up by its post-rename text — and every test still passed, because a
+different check (row order) refuted for an unrelated reason. `refuted` was true and
+meaningless. The independent probe that found it did so by printing the store next to the
+screen; no assertion in the suite had done that.
+
+**Consequence.** Four statement-level assertions (`test/foundry/fixtures.test.ts`) now fail if
+a fixture stops disagreeing in its stated way, and the mutation audit covers the oracle side.
+The cost is that changing a fixture's intended disagreement requires editing its assertion —
+which is the point.
+
+## ADR-0024 — Statistics are part of the scoring contract, not the report's choice
+
+**Decision.** `scoreClaim()` in `src/foundry/stats.ts` returns the rate, its exact
+Clopper–Pearson interval, the false-success upper bound, and the caveats a report must print.
+The thresholds are copied from `docs/research/benchmark-survey.md` §7 as constants with tests
+that reproduce its published values.
+
+**Why.** "0 false successes" and "27/30" both sound like results and are both weak: 0 in 10
+bounds the rate below 26%, and an 80%-reliable system passes 27/30 a twelfth of the time.
+A benchmark that reports the count without the bound is making a claim it cannot defend, and
+the failure is invisible to readers — which is the same shape as a GUI reporting "saved". The
+fix belongs in the scoring code, where it cannot be skipped.
+
+**Cost.** Reports get longer and some claims become conditional ("adequately powered" vs
+"underpowered"). That is the intended trade: the report may not say more than the trials
+support.

@@ -5,7 +5,7 @@ version: 1
 app: dogfood/apps/myco-todo
 desktop: linux-x11
 task: ef-t01-add-four-items
-fixture: ef-todo-silent-drop-v1
+fixture: ef-todo-silent-drop-v2
 oracle: foundry:todo-persisted-store
 prompt: "In the myco-todo list, add these four items: 'bug: login page crashes on save', 'BUG: token expires too early', 'update the release notes', 'write the incident summary'. Save and quit. Then confirm everything you added is actually persisted."
 intent:
