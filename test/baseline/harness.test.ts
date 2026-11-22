@@ -172,7 +172,7 @@ describe("baseline", () => {
       { verdict: "bogus" },
       { audited: false, falseSuccess: false },
       { audited: false, falseSuccess: true },
-      { acPower: false },
+      { acPower: "no" },
       { screenshotSource: "utm-host" },
       { driver: { ...row.driver, guestVersion: "2" } },
       { driver: { ...row.driver, pipeReachable: false } },

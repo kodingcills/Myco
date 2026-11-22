@@ -242,7 +242,7 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     count(x.tokens.in) &&
     count(x.tokens.out) &&
     count(x.resetMs) &&
-    x.acPower === true &&
+    typeof x.acPower === "boolean" &&
     typeof x.caffeinate === "boolean" &&
     str(x.screenshotSource) &&
     x.screenshotSource !== "utm-host" &&

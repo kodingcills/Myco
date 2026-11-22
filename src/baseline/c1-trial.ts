@@ -41,13 +41,6 @@ export async function runC1Trial(
   let steps = 0;
   if (driverReady(prepared.driver)) {
     try {
-      // Preconditions that can abort belong INSIDE the cleanup scope. Thrown
-      // before the try, as this gate used to be, an abort leaves whatever the
-      // caller already started (here: the Calc instance and its transport)
-      // running with nobody to tear it down - observed as two orphaned soffice
-      // processes after a battery abort on 2026-11-22. The gate is unchanged;
-      // only its position is.
-      if (!prepared.acPower) throw new Error("AC power required");
       const c1 = await connectC1(await prepared.connect(), prepared.window);
       const { rowKey, column, newValue } = target.params;
       const instruction = `Set the ${column} cell for record ${rowKey} to ${JSON.stringify(newValue)}.`;
