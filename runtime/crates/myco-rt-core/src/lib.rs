@@ -51,6 +51,11 @@ impl Default for Permissions {
                 "click".into(),
                 "typeText".into(),
                 "keyPress".into(),
+                // The targetless variants. Without these, Discovery's S0 would be
+                // refused by the permission set rather than reaching the guest --
+                // and the refusal would look like an XTEST failure.
+                "typeTextGlobal".into(),
+                "clickAt".into(),
             ],
         }
     }
