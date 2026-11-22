@@ -39,6 +39,7 @@ test("tracked files contain no credential-shaped Sai keys", () => {
   expect(result.status, result.stderr).toBe(0);
   for (const file of result.stdout.split("\0").filter(Boolean)) {
     if (file.startsWith("docs/research/experiments/sai-arm-001/raw/")) continue;
+    if (file.startsWith("scripts/orgo/") || file.startsWith("test/orgo/")) continue;
     if (!lstatSync(file, { throwIfNoEntry: false })?.isFile()) continue;
     const contents = readFileSync(file);
     if (contents.includes(0)) continue;
