@@ -17,6 +17,8 @@ describe("C1 driver session preflight", () => {
     [snapshot([daemon], 1), "session-mismatch"],
     [snapshot([process("cua-driver.exe serve", 0)]), "session-noninteractive"],
     [snapshot([daemon]), "match"],
+    [snapshot([process("cua-driver.exe\tserve\t--socket pipe")]), "match"],
+    [snapshot([process("cua-driver.exe serve\u00a0--socket pipe")]), "daemon-missing"],
     [snapshot([process('C:\\serve\\cua-driver.exe call --argument "serve"')]), "daemon-missing"],
     [
       snapshot([process("cua-driver.exe call --name serve"), process("cua-driver.exe serve", 1)]),

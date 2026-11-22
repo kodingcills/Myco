@@ -28,11 +28,11 @@ function classifySession(output: string): string {
     // Accept quoted and unquoted Windows executable paths. Only the first
     // argument can identify the serve subcommand.
     const command =
-      /^\s*(?:"[^"]*\\cua-driver\.exe"|"cua-driver\.exe"|(?:[^"\s]*\\)?cua-driver\.exe)(?=\s|$)(?:\s+("[^"]*"|[^"\s]+)(?=\s|$))?/i.exec(
+      /^[ \t]*(?:"[^"]*\\cua-driver\.exe"|"cua-driver\.exe"|(?:[^" \t]*\\)?cua-driver\.exe)(?=[ \t]|$)(?:[ \t]+("[^"]*"|[^" \t]+)(?=[ \t]|$))?/i.exec(
         CommandLine,
       );
     if (!command) return "daemon-command-line-unreadable";
-    if (/\S/.test(CommandLine.slice(command[0].length)) && !command[1])
+    if (/[^ \t]/.test(CommandLine.slice(command[0].length)) && !command[1])
       return "daemon-command-line-unreadable";
     if (command[1] === "serve" || command[1] === '"serve"') daemons.push(SessionId);
   }
