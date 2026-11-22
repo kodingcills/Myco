@@ -19,7 +19,7 @@ import {
 } from "../../src/foundry/hidden-split/index.ts";
 import { summarise } from "../../src/foundry/oracles/blind.ts";
 import { scoreReport } from "../../src/foundry/oracles/report.ts";
-import { TODO_TASKS, taskFixture } from "../../src/foundry/tasks/bank.ts";
+import { findTask, TODO_TASKS, taskFixture } from "../../src/foundry/tasks/bank.ts";
 
 const faults: Fault[] = [
   "stale-ui",
@@ -349,6 +349,28 @@ describe("baseline", () => {
     expect(m.completion.interval![0]).toBeCloseTo(0.06149, 4);
     expect(m.completion.interval![1]).toBeCloseTo(0.79235, 4);
   });
+  it("refuses a fixture whose store path the model harness does not hardcode", () => {
+    // The simulation reads and writes "store.json" in relaunch, injectFault, recoverSave and
+    // the oracle. A fixture designating another path must be refused up front, not fail deep
+    // inside a JSON parse or, worse, grade against a companion file it never designated.
+    const task = findTask("ef-t01-add-four-items")!;
+    const base = taskFixture(task);
+    if (base.initialState.kind !== "myco-todo") throw new Error("expected a myco-todo fixture");
+    const moved = {
+      ...base,
+      initialState: { ...base.initialState, storePath: "store.v2.json" },
+    };
+    expect(() =>
+      runArm(credulous, [task], {
+        faults: [],
+        seeds: [1, 2, 3],
+        hiddenSplitVersion: 1,
+        commitmentRoot: "r",
+        taskSource: { resolve: () => ({ fixture: moved }) },
+      }),
+    ).toThrow(/hardcodes store\.json/);
+  });
+
   it("names the live path when asked to simulate an app it cannot", () => {
     // A Writer or Calc task is not an error to hide: the message has to say where it goes
     // instead, or the next agent reads "Unsupported fixture" and re-implements the harness.

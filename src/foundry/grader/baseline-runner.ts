@@ -46,10 +46,20 @@ export function runArm(
   for (const task of tasks) {
     const { fixture, committedFault } = (options.taskSource ?? publicSource).resolve(task);
     const { initialState: initial } = fixture;
+    // Two independent conditions, both load-bearing. The app check says which apps this
+    // harness simulates; the store-path check says the simulation's hardcoded "store.json"
+    // (relaunch, injectFault, recoverSave, the oracle) is the file this fixture designates.
+    // Dropping either one widens what the harness accepts.
     if (initial.kind !== "myco-todo" || !SUPPORTED_APPS.includes(fixture.app)) {
       throw new Error(
         `runArm simulates ${SUPPORTED_APPS.join(", ")}; a ${fixture.app} fixture needs a live ` +
           "transport (see baseline/executor.ts) rather than the model harness",
+      );
+    }
+    if (initial.storePath !== "store.json") {
+      throw new Error(
+        `runArm's model harness hardcodes store.json; fixture ${fixture.fixtureId} designates ` +
+          `${initial.storePath}. Use a live transport for a different store layout.`,
       );
     }
     if (fixture.fixtureId !== task.fixtureId) throw new Error("Task and fixture IDs differ");
