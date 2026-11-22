@@ -50,9 +50,37 @@ What *is* confirmed against the live guest is the fix's effect:
 | 15s | `session-command-failed` |
 | 45s | `match`, `sessionIdentityMatches: true` (13.76s end-to-end) |
 
-Fixed in PR #156, along with the six **unbounded** `vssh` calls in `c1-sweep.ts`
-that had no timeout at all. The check was right; charging a liveness
-precondition a performance budget was not.
+Fixed in PR #156 — **open at the time of writing, not merged**. On the `main`
+this evidence was produced from, `c1-driver-preflight.ts` still carries
+`timeout: 15_000` and `c1-sweep.ts` has **six unbounded `vssh` calls** (eight
+`execFileSync` sites, none bounded); the fix bounds six of them. Recorded this
+way deliberately: an unmerged fix described as landed is the exact defect the
+repo's merge-discipline rule exists to prevent.
+
+The preflight check itself was right; charging a liveness precondition a
+performance budget was not. The `15s -> 45s` measurement table above was taken
+by hand against the live guest and its only durable record (until #156 lands) is
+this file and the PR description.
+
+### Note on `Cua Driver daemon is not running`
+
+`arm-abort-progress.log` carries this line immediately above
+`[0] Cua driver pipe reachable: true`, and the string appears nowhere in the
+repo. It is raw `cua-driver.exe status` stdout passed through `execFileSync`'s
+inherited output at `c1-sweep.ts:58-68` — that call sets `{encoding: "utf8"}`
+with no `stdio`, so a failing `status` invocation prints directly to the log.
+It describes the *daemon* service, not the pipe: reachability is decided by the
+next line, `[0] Cua driver pipe reachable: true`, which the sweep acts on. The
+two are not in contradiction.
+
+### Note on two lines a reader will trip over
+
+- `rows[0].planner == "planner:none"` while the log says `Paid Claude Sonnet`:
+  `sweep.ts` derives `planner` from `row.deviations.find(n => n.startsWith("planner:"))`,
+  and an aborted trial's deviations end with `planner:none`. Expected.
+- `rows[3].mycoVerdict == "refuted"` on a row that never ran: that is the
+  *manifest ground truth* for index 3, carried through because rows 1-29 were
+  omitted. It is a statement about the fixture, not about a run.
 
 ## Files
 
