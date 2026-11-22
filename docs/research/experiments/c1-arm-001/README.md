@@ -89,7 +89,7 @@ two are not in contradiction.
 ### Note on two lines a reader will trip over (in `report.json` / `accounting.json`)
 
 - `report.json` `rows[0].planner == "planner:none"` while the log says
-  `Paid Claude Sonnet`: `sweep.ts` derives `planner` from
+  `Paid Claude Sonnet`: `src/baseline/sweep.ts` derives `planner` from
   `row.deviations.find(n => n.startsWith("planner:"))`, and the aborted trial's
   deviations are `["reset:cua-c1-base", "step-budget-asymmetry", "planner:none"]`
   — it scored with `modelCalls: 0` because the preflight failed before the
@@ -98,7 +98,7 @@ two are not in contradiction.
   `planner:claude-sonnet-5-5` (26 model calls, a real run).
 - `report.json` `rows[3].mycoVerdict == "refuted"` on a row that never ran: that
   is the *manifest ground truth* for index 3, carried through because rows 1-29
-  were omitted. `sweep.ts:178` copies `mycoVerdict` from the manifest for every
+  were omitted. `src/baseline/sweep.ts:178` copies `mycoVerdict` from the manifest for every
   row, scored or omitted. A statement about the fixture, not about a run.
 
 ## Files
