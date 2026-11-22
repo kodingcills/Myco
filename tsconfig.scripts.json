@@ -1,0 +1,27 @@
+{
+  // The C1 spike is a one-shot runnable, not library code: it was previously
+  // excluded from tsconfig.json entirely, so `pnpm typecheck` never compiled it.
+  // That blind spot shipped a ReferenceError (a const declared inside a try but
+  // read in its finally) that passed every gate and would have failed on the
+  // first real run. This config puts the spike back under a compiler.
+  //
+  // Deliberately narrower than the root config: only the spike, so the other
+  // runnables' pre-existing errors stay out of the gate until they are fixed on
+  // their own terms rather than being silently adopted here.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["scripts/c1-spike.ts"]
+}

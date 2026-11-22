@@ -10,6 +10,22 @@ import { createPlanner, MAX_CALL_MICROS, type Planner } from "../../src/baseline
 import { runC1Sweep } from "../../src/baseline/sweep.ts";
 
 const shot = { type: "image", mimeType: "image/png", data: "eA==" } as const;
+const targetParams = {
+  fixtureSeed: "s",
+  rowKey: "EMP-0001",
+  column: "name",
+  newValue: "REVISED-1",
+};
+/** A planner that never gets consulted when a precondition aborts first. */
+function planner(): Planner {
+  return {
+    paid: true,
+    act: async () => ({
+      calls: [{ model: "claude-sonnet-5-5", usage: { prompt: 1, completion: 1, cost: 0 } }],
+      decision: "failure",
+    }),
+  };
+}
 const action = { tool: "click", arguments: { x: 1, y: 2 } };
 const directories: string[] = [];
 function directory() {
@@ -56,6 +72,40 @@ function prepared(): PreparedC1 {
 }
 
 describe("C1 host harness", () => {
+  it("runs teardown before an aborting precondition, so an abort cannot leak", async () => {
+    // Regression: the AC gate used to throw before the try that owns teardown,
+    // so a battery abort left the caller's Calc instance running with nobody to
+    // close it - observed as two orphaned soffice processes on 2026-11-22.
+    // The gate must sit INSIDE the cleanup scope: firing is fine, leaking is not.
+    const closed = vi.fn(async () => {});
+    await expect(
+      runC1Trial(
+        { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
+        { ...prepared(), acPower: false, closeTransport: closed },
+        planner(),
+      ),
+    ).rejects.toThrow(/AC power required/);
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
+  it("still runs teardown when the trial itself throws", async () => {
+    const closed = vi.fn(async () => {});
+    await expect(
+      runC1Trial(
+        { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
+        {
+          ...prepared(),
+          closeTransport: closed,
+          connect: async () => {
+            throw new Error("guest went away");
+          },
+        },
+        planner(),
+      ),
+    ).rejects.toThrow(/guest went away/);
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
   it("negotiates JSON-RPC over stdio and exposes pixels only", async () => {
     const input = new PassThrough();
     const output = new PassThrough();
