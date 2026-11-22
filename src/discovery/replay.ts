@@ -88,7 +88,7 @@ export function parseC1Accounting(value: unknown, source: string): ReplayParseRe
       decisionEligible: false,
       source,
       falseSuccessKnown: typeof row.falseSuccess === "boolean",
-      note: "C1 is a Calc arm; it cannot supply ef-t01b pairs.",
+      note: "C1 runs calc-record-edit (a different app); it cannot supply paired trials for the todo decision and is reported descriptively.",
     });
   }
   return { trials, skipped };

@@ -199,6 +199,14 @@ below runs now, offline, in parallel with M1.
 | N4 | **Direction A live preflight**: script + checklist (guest up, `myco-todo` deployed, store path, oracle path, abort conditions), unit-tested with mocks | the checks are host-side; only the final run needs the guest | **done** — `src/discovery/preflight.ts`, `scripts/discovery-preflight.ts`; 8 checks, abort on any missing, 5 tests |
 | N5 | **Direction B/C dry-run validation**: all three task packages run offline and emit schema-valid evidence | done 2026-11-22: A `REFUTED` (false success caught), B `UNCERTAIN` (interrupted write, 0 duplicates), C `VERIFIED` (modeled timings, explicitly not evidence) | done |
 | N6 | **Docs**: keep plan/teardown/state current; no science moves without data | — | ongoing |
+| N7 | **S3 resolved with Foundry** (`docs/foundry/answer-discovery-s3-gap.md`, PR #176): a todo screenshot arm is EF-005's, and `not-run` + C1-descriptive is the correct report today. Foundry asked for one wording nit in the C1 note | coordination, no code | done |
+
+**Next non-VM work, in order:** (a) Foundry's offline item — generalise `runArm` past its
+model-only guard so a todo arm can be scored at all (Foundry owns the harness; Discovery
+consumes it); (b) a report section for the Cua/HCU arms once EF-005 produces pairs;
+(c) the Viewer's head-to-head view over the same report input, since the v0 Viewer only
+reads a single run.
+
 
 ### What actually needs the guest (batched, M1 first)
 
