@@ -335,3 +335,29 @@ unchanged during prep.
   - RT-011 (TIF-40) and RT-first-path (TIF-42) are **DONE**.
   - Dogfood DF-005 (TIF-27) is **UNBLOCKED**.
   - VM lock is **FREE** for Screenshot Baseline C1 / subsequent runs.
+
+## Near-miss — a stale branch silently reverted security work (2026-11-22)
+
+While resolving PR #97 after the merge-rule reinstatement, `git diff --stat
+origin/main..HEAD` showed:
+
+```
+src/baseline/planner.ts      | 33 +---
+test/baseline/c1-live.test.ts | 60 -------
+```
+
+on a **docs-only PR**. Cause: the branch was based on `a958cab`, and `b4f79c3`
+("Fix Sonnet Messages sampling and redact HTTP 400 details", PR #104) landed on
+main afterwards. Rebasing the branch forward makes the diff *appear* to delete
+`scrubBadRequestMessage` (credential/header redaction) and a test — not because
+anyone wrote that revert, but because the branch was behind.
+
+**Rule adopted here:** before verifying or merging anything, run
+`git diff --stat origin/main..HEAD` and confirm every path is one the PR claims to
+touch. A docs-only PR that shows `src/` or `test/` paths is a stale base, not a
+docs change. The stat is cheap and it caught a security regression before merge.
+
+Note: the same shape produced the earlier merge-rule breaches (#24/#25/#27/#28) via
+`git push origin HEAD:main` from a worktree on a feature branch. Main is now
+protected, so that vector is closed; the stale-base vector is not, and this is the
+check for it.
