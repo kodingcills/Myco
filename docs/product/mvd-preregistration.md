@@ -52,7 +52,7 @@ Public bank `src/foundry/tasks/bank.ts` (merged, PR #54):
 | ef-t02-rename-row | ef-todo-stale-row-v1 | stale persisted row | rename `Draft release notes` |
 | ef-t03-whitespace-value | ef-todo-wrong-value-v1 | wrong-value normalization | add `Release: review the Q3 metrics` |
 | ef-t04-delete-row | ef-todo-partial-write-v1 | partial multi-file write | delete `archive Q1 invoices` |
-| ef-t01b-add-four-items-noverify *(Foundry confirmed it will add; not yet merged)* | ef-todo-silent-drop-v1 (unchanged) | silent drop at save | same prompt as ef-t01 minus the final sentence |
+| ef-t01b-add-four-items-noverify *(merged, PR #75)* | ef-todo-silent-drop-v1 (unchanged) | silent drop at save | same prompt as ef-t01 minus the final sentence |
 
 - `ef-t01`'s prompt ends "Then confirm everything you added is actually persisted."
   That is deliberate and important for the head-to-head: every arm is **asked** to
@@ -72,16 +72,26 @@ Public bank `src/foundry/tasks/bank.ts` (merged, PR #54):
 
 ## 3. Arms and what is actually runnable
 
-From `src/foundry/baseline/registry.ts` (merged) plus the arm this plan adds:
+From `src/foundry/baseline/registry.ts` on main (after PR #75) plus the Myco arm:
 
-| Arm | Registry status | Blocker | Needs |
+| Arm | Registry | Status / blocker | Needs |
 |---|---|---|---|
-| screenshot-only (Cua Driver C1 pixel rung) | not-run | VM time and a named planner (planner now decided, §3; registry not yet updated) | extension slot (§6) |
-| hcu (Microsoft Hybrid Computer Use, GUI channel) | not-run | VM time and a named planner (planner now decided, §3; registry not yet updated) | extension slot (§6) |
-| **hcu+shell** (HCU plus the agent's own read access to the store) | **not in the registry** | none technical | **Foundry must add it** (§4 explains why it is the decisive arm) |
-| myco (verdict from persisted state via the Myco runtime) | not in the registry | RT-011/RT-015/RT-016, slot | runtime first path |
-| orgo | blocked | account creation and card/credit | outer-loop decision |
-| simular-sai | blocked | Google sign-in, API key, phone verification; hosted cloud computer is not our fixture host | outer-loop decision; even if allowed the environment differs, so no like-for-like |
+| screenshot-only (Cua Driver C1 pixel rung) | channel `screenshot-only`, planner `claude-sonnet-5-5` | not-run: needs coordinated VM time | extension slot (§6) |
+| hcu (Microsoft Hybrid Computer Use, GUI channel) | `gui`, planner `claude-sonnet-5-5` | not-run: needs coordinated VM time | extension slot (§6) |
+| **hcu+shell** (HCU plus the agent's own shell/file access to the store) | `gui+shell`, planner `claude-sonnet-5-5` | not-run: needs coordinated VM time, trusted live evidence ingestion, complete tool-call audits, independently observed save snapshots | the decisive arm (§4.1) |
+| myco (verdict from persisted state via the Myco runtime) | **not in the registry** | RT-011/RT-015/RT-016 and a slot | runtime first path |
+| orgo | `gui`, planner `unknown` | blocked: account creation and card/credit | outer-loop decision |
+| simular-sai | `gui`, planner `unknown` | blocked: Google sign-in, API key, phone verification; hosted cloud computer is not our fixture host | outer-loop decision; even if allowed the environment differs, so no like-for-like |
+
+**Decision eligibility (Foundry `docs/foundry/contract.md`, "Discovery comparison evidence").**
+Discovery's public grader output is **descriptive**: every row is ineligible for the
+pre-registered decisions. Eligibility needs a grader-owned hidden commitment, distinct
+seeded hidden task/fault pairs matched across arms, evidence of the actual delivered
+prompt bound to each run, and a trusted ingest that binds planner settings, trace,
+recorder closure and effect audits, independent save observations and final persisted
+bytes to the same run. That trusted ingest does not exist yet. So the §4.1 rule table
+**cannot be applied to any result until it does**; anything earlier is reported as
+descriptive and never moves the wedge.
 
 **Planner (decided by the outer loop, 2026-11-21): Claude `claude-sonnet-5-5`, the same
 version and settings for every arm.** `trace.jsonl` is a closed schema with no model-id
@@ -90,7 +100,7 @@ bundle and baseline row, and the report rejects mixed planner ids within an arm.
 usage limits interrupt a run, the arm gets status `paused` (reason recorded), **never a
 model swap**; a resumed arm must present the same model id or its rows are rejected.
 (HCU is a computer layer, not an agent, so a result without its planner named would not be
-a result; f2-ef-baseline-arms.md.) The Foundry owner sets `plannerName` to this id for every live arm.
+a result; f2-ef-baseline-arms.md.) The registry already sets `plannerName` to this id for the live arms.
 
 The trace guard (contract §5) applies identically to every arm. Reads of the store are
 allowed; writes to persistence files without a GUI act are refuted. Its documented
@@ -178,11 +188,13 @@ The guard sees only what the trace records (contract §5 limit (a)). Therefore:
 1. The arm's shell and file calls **must be recorded into `trace.jsonl`**; an arm that
    cannot record them is run as an unmeasured exploratory arm and excluded from rows 2-3.
 2. Any recorded `shell-exec`/`write_file` touching a persistence file is refuted by the
-   guard (**planned by Foundry, not yet merged**: for this arm a store change is reconciled
-   byte-for-byte against recorded save events, and an unreconciled change after the last
-   recorded GUI save refutes; a run whose shell log is incomplete is `uncertain`, not pass.
-   Until that merges, contract §5 limit (c) stands: a later GUI act explains a changed file), so **a trial where the arm "fixes" the store through the shell counts as
-   refuted, not as a success**, even if the resulting file is correct.
+   guard, so **a trial where the arm "fixes" the store through the shell counts as
+   refuted, not as a success**, even if the resulting file is correct. Foundry's PR #75
+   tightened the Discovery guard (contract "Discovery comparison evidence": one ordered
+   `tool-call` marker and a complete effect audit per inventory entry; saved-bytes
+   reconciliation with an `unreconciled-change` status in `guard.ts`); a run with missing
+   audit evidence is not eligible. The repo is authoritative on the exact behaviour; this
+   document does not restate it beyond what the contract says.
 3. Reads are allowed and counted for the "checks every trial" fraction; an unrecorded
    read is invisible, which is exactly why (1) is required.
 
@@ -266,94 +278,85 @@ unchanged and now has numbers attached.
 ## 6. VM slot request (to the M1 Coordinator, via the outer loop). A request, pending an explicit GO. Not a start.
 
 No VM, VM script, or stub exercising one runs from Discovery until the Coordinator grants
-a slot. Every slot needs an explicit GO (m1-state log 57), the sweep must be paused or
-finished and host gates healthy, and the shared VM lock (`scripts/vm-lock.sh`) applies.
+a slot with an explicit GO (m1-state log 57), the sweep paused or finished and host gates
+healthy.
 
 **Agreed queue (m1-state.md, log 57):** (1) M1 sweep v3 → (2) M1 live corrupted suite →
 (3) Runtime RT-020, 45 min → (4) Screenshot Baseline Cua C1, **the only C1 run, Foundry
 reuses its evidence** → (5) Foundry TIF-58 Microsoft Hybrid Computer Use GUI channel.
-Slots 4-5 install into the guest on a **new snapshot**; `clean-base` and
+Slots 4-5 install into the Windows guest on a **new snapshot**; `clean-base` and
 `clean-base-live` are preserved.
 
-**Coordinator's answer (2026-11-21): slot 6 is tentatively granted as S0+S1 only.** It comes
-after queue slots 1-5 and needs: an explicit GO from the Coordinator; the shared VM lock
-(`scripts/vm-lock.sh`, PR #73; a driver that does not take it is refused with exit 10); a
-**new snapshot** for any guest change (`clean-base`/`clean-base-live` never modified); the
-6 GB / 6 vCPU guest and host gates (AC power, load ≤14, swap free ≥300 MB); and the
-preconditions below. S2-S4 are requested separately after S1.
+**Slot 6: tentatively granted as S0+S1 only (Coordinator's message; not in the repo).** After
+slots 1-5, with: an explicit GO; the shared host lock; host gates (AC power, load ≤14, swap
+free ≥300 MB); and the preconditions below. S2-S4 are requested separately after S1.
 
-**Slots 4-5 do NOT meet the head-to-head minimums.** Per the Coordinator:
+- **Host lock.** The Coordinator's condition is that S0 takes the shared host lock because
+  only one heavy guest may run on this Mac at a time. Today `scripts/vm-lock.sh` (PR #73,
+  default `/tmp/myco-win11.vm.lock`) is sourced only by the Windows trial drivers
+  (`m1-sweep.sh`, `m1-corrupt-suite.sh`, `reset-trial-vm.sh`); a contender that finds it held
+  exits 10. The Linux backend has its own one-session lockfile (`docs/env/linux-runtime.md`).
+  So the Linux guest needs a lock integration or a manual hold before S0; that is an open
+  item for the Coordinator and Runtime Owner, not something Discovery implements.
+- **Snapshots.** A new snapshot is required for any change to the *Windows* guest
+  (`clean-base`/`clean-base-live` never modified; 6 GB / 6 vCPU). The S0 guest is a per-run
+  overlay and has no snapshot id.
 
-- **Slot 4 (the only Cua C1 run, TIF-19)** runs the M1 calc-record-edit family on exactly the
-  30 v3 parameter sets. It does **not** run `ef-t01..t04`; it has normal trials only (no
-  corrupted or interrupted trials, so no refutable pairs by this document's definition); and it
-  has a hard spend cap ($9.00 total, $4.50 per arm by default) so coverage may be partial.
-  Shortfall against §4.1: at least ~70 normal trials per arm, all `ef-t01..t04` coverage, and
-  all ≥30 refutable pairs.
-- **Slot 5 (Foundry HCU GUI channel)**: trial count, task set and spend cap are the Foundry
-  owner's. `[INFERENCE]` it reuses the same 30-trial M1 conditions, so expect the same
-  shortfall unless the Foundry owner says otherwise (asked directly).
+**Slots 4-5 do NOT meet the head-to-head minimums.**
 
-Therefore **the `screenshot-only` and `hcu` arms on `ef-t01..t04` are not available from
-slots 4-5 and must be requested as extension slots**, with their own GO and, because Cua C1
-has a spend cap, an explicit spend decision (no money is spent or assumed here). The M1
-evidence (per-trial trace, result, verdict, fixture hash, convert timing for the 30 v3 trials
-and the 18-trial corrupted suite, identical conditions) is usable as a **reference arm for the
-calc family only**, not as ef-task evidence, and pairs across families are not made.
+- **Slot 4 (the only Cua C1 run, TIF-19)** (Coordinator): runs the M1 calc-record-edit family
+  on exactly the 30 v3 parameter sets, **not** `ef-t01..t04`; normal trials only (no refutable
+  pairs by this document's definition); hard spend cap $9.00 total, $4.50 per arm by default
+  (also in `m1-state.md`), so coverage may be partial.
+- **Slot 5 (Foundry HCU GUI channel)** (Foundry owner; not in the repo): HCU GUI channel only,
+  30 normal Calc record-edit trials on the final M1 v3 parameter list in the same order as
+  slot 4, same fixture hashes, cold restore and blind judge, planned spend cap **$0** until an
+  approved budget exists, paused if the pinned planner cannot run within authorization or hits
+  quota. No EF hidden pairs and no `myco-todo` trials.
+- Results are joined on v3 trial id and fixture hash, omissions reported, and are
+  **descriptive Calc-family references** only. Therefore **the `screenshot-only` and `hcu` arms
+  on the EF tasks are not available from slots 4-5 and must be requested as extension slots**,
+  with their own GO and an explicit spend decision (no money is spent or assumed here).
+  M1 evidence for the 30 v3 trials and the 18-trial corrupted suite is usable as a reference
+  arm for the calc family only; pairs across families are never made.
 
-- The `myco` arm and the `hcu+shell` arm are new and need slot 6 or later on a new snapshot.
-  Both require the Runtime first path (RT-011) and, for the Myco arm's verdict, host-side file
-  read (RT-015); B also needs process control (RT-016).
+**Guest for S0 (Coordinator and Runtime Owner messages; the repo shows the guest, not the
+assignment): the Runtime Owner's Linux guest, not `myco-win11`.** A disposable ARM64 QEMU+HVF
+guest (2 vCPU, 2048 MB) on a fresh qcow2 overlay of Ubuntu Server 24.04
+`noble-server-cloudimg-arm64.img` (SHA-256
+`50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e`,
+`docs/env/linux-runtime.md`; verified there). Per the owners, M1's Windows guest runs only
+LibreOffice Calc (and Writer where noted) and no Windows port of `myco-todo` is planned.
 
-**Guest for S0 (answered by the Coordinator and the Runtime Owner, 2026-11-21): the Runtime
-Owner's Linux guest, not `myco-win11`.** A disposable ARM64 QEMU+HVF guest (2 vCPU, 2048 MB) on
-a fresh qcow2 overlay of Ubuntu Server 24.04 `noble-server-cloudimg-arm64.img`
-(SHA-256 `50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e`,
-`docs/env/linux-runtime.md`). It is a per-run overlay, so there is **no snapshot ID**. M1's
-Windows guest runs only LibreOffice Calc and no Windows port of `myco-todo` is planned.
-Consequences:
+- **S0 prerequisite (open):** a reproducible `myco-todo` deploy and launch with live
+  verification on that guest, plus an uninterrupted RT-011 MCP run through reset. The guest
+  currently seeds the runtime smoke app `/opt/myco/myco-tk-app.py`, and the repo shows no
+  `myco-todo` deploy there. Per the Runtime Owner/Coordinator (not in the repo), the RT-020
+  window (queue slot 3) includes a `myco-todo` deploy check whose result is S0's readiness
+  signal. Dates and readiness come from the Runtime Owner.
+- **Arms runnable on the Linux guest.** `myco` for certain once RT-011 is done. `hcu+shell`
+  only if HCU runs on that guest, which is **unverified**: the Cua C1/HCU installs described in
+  the repo are on the Windows guest (`m1-state.md`). Until shown, S0/S1 cover the Myco arm
+  alone, and a cross-arm S2 needs a stated guest for every arm (otherwise arms differ in
+  environment and the comparison is invalid).
 
-- S0 does not need `myco-win11`, but it **still takes the shared host lock**
-  (`scripts/vm-lock.sh`): only one heavy guest runs on this Mac at a time.
-- The guest currently seeds the runtime smoke app (`/opt/myco/myco-tk-app.py`). The Runtime
-  Owner reports no evidence yet that `dogfood/apps/myco-todo` is deployed and verified on it.
-  **S0 prerequisite (open): a reproducible `myco-todo` deploy and launch with live verification
-  on that guest, plus an uninterrupted RT-011 MCP run through reset.** The Runtime RT-020
-  window (queue slot 3) includes a `myco-todo` deploy check; its result is the readiness signal
-  for S0. Dates and readiness come from the Runtime Owner.
-- The RT-020 and S0 numbers above (25 s cold restore, 20 s deploy, LibreOffice launch variance)
-  describe the Windows/Calc guest and **do not transfer** to this guest; its reset and
-  `myco-todo` cold-start costs are unmeasured and S1 measures them.
+**Timing, honestly.** Windows/Calc family (Coordinator, M1 v3; descriptive only): cold
+`clean-base` restore ≈ 25 s, agent deploy ≈ 20 s, cold first LibreOffice launch slow and
+variable (headless convert 25-140 s, once 169 s; the UNO bridge once missed a 15 s window right
+after a 94 s convert); the warm ~21 s figure is only a lower bound. **These do not transfer to
+the Linux guest.** For the Linux guest the repo itself is inconsistent: `docs/env/linux-runtime.md`
+records reset 19.7 s (RT-006; create 14.0 s, destroy 4.1 s, cold boot to app-up 23 s), while
+`docs/coordination/runtime-state.md` records a "3-4 minutes" reset in the RT-011 check. The
+uninterrupted RT-011 run settles which holds; `myco-todo` cold start is unmeasured. The stage
+table therefore shows **bounds**, using 19.7 s and 240 s per reset, until S1 measures.
 
-**Slots 4 and 5 are descriptive Calc-family references only** (Foundry owner, 2026-11-21).
-Slot 5 is HCU GUI-channel only: 30 normal Calc record-edit trials on the final M1 v3 parameter
-list in the same order as slot 4, same fixture hashes, same cold restore and blind judge, with
-a planned spend cap of **$0** until an approved budget exists; it pauses if the pinned planner
-cannot run within authorization or hits quota. It runs **no EF hidden pairs and no `myco-todo`
-trials**. Slots 4-5 results are joined on v3 trial id and fixture hash, with omissions
-reported, and are descriptive for the EF wedge. Live EF work needs a separately validated
-deployment, trusted paired evidence, and an explicit GO.
-
-**Measured numbers to budget with for the Windows/Calc family only (Coordinator, M1 v3):** a cold `clean-base` restore ≈ 25 s
-and the agent deploy ≈ 20 s on this guest; a cold first LibreOffice launch after a reset is
-slow and variable (headless convert took 25-140 s in v3, once 169 s; the UNO bridge once missed
-a 15 s window right after a 94 s convert). The warm ~21 s figure is **not typical** and is only
-a lower bound on reset time; per-trial wall clock must include cold-launch variance (this
-applies to Calc/Writer families, not necessarily to `myco-todo`, whose cold-start cost is
-unmeasured).
-
-Ordered stages for that new slot, each independently useful and stoppable. Reset floor is
-~21-25 s per trial warm (contract §7a; Coordinator measured ~25 s cold `clean-base` plus ~20 s
-deploy) and ~165 s for a fresh UTM start; trial wall-clock beyond reset is **unmeasured** and
-must be measured in S1 before later stages are sized.
-
-| Stage | Purpose | Preconditions | Trials | Reset time (warm floor) | Yields |
+| Stage | Purpose | Preconditions | Trials | Reset time, lower-upper bound | Yields |
 |---|---|---|---|---|---|
-| S0 | smoke: one `ef-t01` trial per ready arm | RT-011; slots 4-5 done | 1 per arm | ~21 s each (+~165 s once) | setup commands and time-to-first-result; no rates |
-| S1 | measure real per-trial wall-clock and cost | S0 | ≥5 per arm | ~1.75 min per arm | the number that sizes S2-S4 |
-| S2 | refutable-trial head-to-head (myco, hcu+shell; screenshot-only/hcu from slots 4-5) | Foundry adds hcu+shell and the no-verify variant; shell calls trace-recorded; planner fixed (Claude `claude-sonnet-5-5`) | ≥30 refutable pairs per arm on `ef-t01` no-verify (decides rows 1-4) plus ≥30 on `ef-t01` verify variant | 21 min per arm (60 trials) | primary endpoint with Wilson interval; sign test |
-| S3 | normal-trial head-to-head | S2 | ~100 per arm | 35 min per arm | completion-rate with CI |
-| S4 | Direction B interrupted-write trials | RT-016, RT-015, Foundry Calc/Writer family | ≥30 interrupted | 10.5 min | duplicate/loss bound |
+| S0 | smoke: one `ef-t01` trial per ready arm (Myco; others only if runnable on the guest) | RT-011; `myco-todo` deployed and verified on the guest; lock integration; GO | 1 per arm | 20 s - 4 min | setup commands, time-to-first-result; no rates |
+| S1 | measure real per-trial wall-clock and cost | S0 | ≥5 per arm | 1.6 - 20 min | the number that sizes S2-S4 |
+| S2 | refutable-trial head-to-head (myco, hcu+shell; screenshot-only/hcu via extension slots) | trusted ingest and hidden commitment (§3 eligibility); shell calls trace-recorded; planner fixed (Claude `claude-sonnet-5-5`); one stated guest per arm | ≥30 refutable pairs per arm on `ef-t01b` no-verify (decides rows 1-4) plus ≥30 on `ef-t01` verify variant | 60 trials: 20 min - 4 h per arm | primary endpoint with Wilson interval; sign test |
+| S3 | normal-trial head-to-head | S2 | ~100 per arm | 33 min - 6.7 h per arm | completion-rate with CI |
+| S4 | Direction B interrupted-write trials | RT-016, RT-015, Foundry Calc/Writer family (Windows/Calc timing family) | ≥30 interrupted | 10 min - 2 h | duplicate/loss bound |
 
 The request is for S0+S1 first; S2-S4 are requested after S1 gives real durations.
 
@@ -362,18 +365,22 @@ never quit Tiffany's apps; M1 retains host priority.
 
 ---
 
-## 7. Asks (each blocks a specific number)
+## 7. Asks and status (each blocks a specific number)
 
-1. **Foundry owner:** add the `hcu+shell` arm (shell calls recorded into `trace.jsonl`) and
-   a no-verify variant of `ef-t01` to the registry/bank; the `ef-t01` ≈ DF-S02 mapping is **confirmed (defect level)**; see §2.
-2. **Planner:** decided: Claude `claude-sonnet-5-5` for all arms (above). Foundry owner records the exact id in the registry `plannerName` and in each trial's evidence bundle and baseline row (not in `trace.jsonl`).
-3. **Coordinator:** answered. Slot 6 is tentatively granted as S0+S1 only, after slots 1-5,
-   with an explicit GO, the VM lock, a new snapshot and the host gates (§6). Slots 4-5 will
-   **not** reach the §4.1 minimums, so screenshot-only and hcu need extension slots (§6).
-   Guest answered: the Runtime Owner's Linux guest (§6); the `myco-todo` deploy check is the open S0 prerequisite.
-4. **Runtime owner:** RT-011/RT-015/RT-016 dates (asked, no reply yet); which guest runs
-   `myco-todo` for slot 6; fix X (§4.4) once a fork cost is measured.
-5. **Foundry owner:** size slot 5 (trial count, task set, spend cap) and say whether it uses
-   the hidden pairs; add the `hcu+shell` arm and `ef-t01b` (confirmed, not yet merged).
-6. **Tiffany:** sign-off on Viewer v0 (PR #69) tokens/decisions; Orgo/Sai/Details
+1. **Foundry owner:** DONE and merged (PR #75): the `hcu+shell` arm is in the registry
+   (not-run), `ef-t01b-add-four-items-noverify` is in the bank, and `plannerName` is set. The
+   `ef-t01` ≈ DF-S02 mapping is confirmed at the defect level. **Open:** the trusted ingest and
+   hidden commitment that make any live result decision-eligible (§3); sizing of any extension
+   slot for screenshot-only and hcu on EF tasks.
+2. **Planner:** decided: Claude `claude-sonnet-5-5` for all arms; the id is recorded in the
+   registry `plannerName` and in each trial's evidence bundle and baseline row (not in
+   `trace.jsonl`); an interruption pauses the arm.
+3. **Coordinator:** answered. Slot 6 tentatively S0+S1 only after slots 1-5, explicit GO
+   (§6). Open: host-lock integration for the Linux guest; whether HCU can run on the Linux
+   guest.
+4. **Runtime owner:** answered where the guest lives (above). **Open:** RT-011/RT-015/RT-016
+   dates; the `myco-todo` deploy and verification on the Linux guest; fix X (§4.4) once a fork
+   cost is measured.
+5. **Tiffany:** sign-off on Viewer v0 (PR #69) tokens/decisions; an explicit spend decision
+   before any extension slot that uses Cua C1 or other paid planner calls; Orgo/Sai/Details
    accounts remain unapproved and unrun.
