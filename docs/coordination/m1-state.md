@@ -19,10 +19,7 @@
   land. PR #79's audit correctly excludes it from coverage and clears the old
   false-success flag. Original indices 2 and 16 also lacked landed faults.
   Four kill recoveries and three invalid-target recoveries verified from disk.
-- **VM queue:** RT-020 received its 45-minute GO, including the myco-todo
-  deploy check. Cua C1 and Foundry HCU await sequential handback. Discovery
-  S0+S1 is tentative. Its disposable ARM64 QEMU+HVF guest uses a fresh Ubuntu
-  24.04 cloud image overlay with no snapshot ID. RT-011 proof remains open.
+- **VM queue:** RT-020 received its 45-minute GO (granted 2026-11-22 07:18 EST / 12:18Z, active until 08:05 EST / 13:05Z), including the myco-todo live reset and deploy check. PR #90 (C1 live harness) and PR #88 (Rule 8 honest-count) are under independent verifier review. Cua C1 and Foundry slot 5 await sequential handback. Discovery S0+S1 is tentative. Its disposable ARM64 QEMU+HVF guest uses a fresh Ubuntu 24.04 cloud image overlay with no snapshot ID. RT-011 proof remains open. M1-016 independent reproduction has launched its preflight phase.
 - [M1 backlog](../backlog/m1.md)
 
 ## Objective
