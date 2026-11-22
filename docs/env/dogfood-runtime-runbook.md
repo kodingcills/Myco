@@ -221,6 +221,13 @@ Dogfood scenarios require host-side oracle checks against guest state (REQ-08, R
 - **Guest User:** `myco`
 - **Private Key:** `runtime/guest/keys/id_ed25519` (permissions `0600`)
 
+> **If the private key is missing** (it is gitignored, so a fresh clone has only
+> `README.md` and `id_ed25519.pub`), every command below fails with
+> `Identity file not accessible`. Generate it per
+> [`runtime/guest/keys/README.md`](../../runtime/guest/keys/README.md) and
+> re-provision the guest — cloud-init bakes the public key in, so a key generated
+> after provisioning will not authenticate.
+
 ### Standard SSH Execution Command
 ```bash
 ssh -i runtime/guest/keys/id_ed25519 \
