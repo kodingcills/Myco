@@ -1,3 +1,22 @@
+# Sign-off record
+
+**Approved by Tiffany, 2026-11-21 22:39 ET** (relayed by the outer loop, T3 Code Bridge), for
+merge of PR #69. The approval covers, as written in this file at the time of approval:
+
+1. the 10 `tokens.json` layout additions in commit `e59491c` (`leftRailBounds`,
+   `inspectorBounds`, `centerMin`, `openColumn`, `comparatorGutter`, `comparatorMaxHeight`,
+   `stepIndexWidth`, `stepThumb`, `scrubberLanes`, `verdictGlyphXl`), each stated verbatim in
+   `docs/design/gui-spec.md`;
+2. the two verdict rules beyond the literal §6.2 table (an explicit claim that contradicts the
+   persisted value, or a ledger `ground-truth:false`, maps a stored Verified/Recovered result to
+   Failed · False success);
+3. the eight decisions listed under "Open decisions for outer loop" below, as currently written.
+
+**Not covered, still outstanding (do not block merge):** a Chrome Stable spot-check by Tiffany
+(Chrome Stable could not be run in the build environment; everything was measured on Playwright's
+headless Chromium), and screenshot latency and memory with 1,000 screenshots (tracked as MVD-008
+in `docs/backlog/mvp-discovery.md`).
+
 # Viewer Stage 2 decisions
 
 - Now is omitted per §9. Why can be selected with its tab or `2` and shows a short unavailable state until Stage 3. Source chips open Raw in Proof, including trace references that will navigate to Why in Stage 3.
@@ -47,12 +66,12 @@
 - Screenshot budgets. Cached and cold full-image latency and memory at 1,000 screenshots remain unmeasured.
 - Chrome Stable. Repeat on the specified M-series Chrome Stable setup.
 - §2.6 CheckRow and §5 color conflict. Passing checks still use their check-level Verified badge. Outer-loop interpretation is pending.
-- Written sign-off for the earlier layout tokens and individual deviations remains pending.
+- Written sign-off: given 2026-11-21 22:39 ET for the layout tokens, the two beyond-§6.2 verdict rules and the eight open decisions (see Sign-off record).
 - Grok Bot screenshot review and attaching the refreshed screenshots to PR #69 remain pending.
 
 ## PR #69 fix round 2
 
-- **Beyond the literal §6.2 table (needs outer-loop sign-off).** A stored `verified` or `recovered` result never reads as success when other evidence contradicts it. (A) An explicit `claim` event (`claimed`, not `claimed (derived)`) that disagrees with the persisted check value maps to Failed · False success. The bar reason reads "Stored verdict says verified, but claim X contradicts persisted Y (field)". Derived-only claims keep the stored verdict. (B) A ledger row for the same run with oracle `ground-truth:false` maps to Failed · False success with the reason "Stored verdict says verified, but the ledger oracle is ground-truth:false". §6.2 lists both as Failed / False success triggers but only attaches them to a stored `refuted` status. The three real M1 runs and the four Foundry fixtures map exactly as before (`verdict.test.ts`).
+- **Beyond the literal §6.2 table (approved by Tiffany 2026-11-21; see Sign-off record).** A stored `verified` or `recovered` result never reads as success when other evidence contradicts it. (A) An explicit `claim` event (`claimed`, not `claimed (derived)`) that disagrees with the persisted check value maps to Failed · False success. The bar reason reads "Stored verdict says verified, but claim X contradicts persisted Y (field)". Derived-only claims keep the stored verdict. (B) A ledger row for the same run with oracle `ground-truth:false` maps to Failed · False success with the reason "Stored verdict says verified, but the ledger oracle is ground-truth:false". §6.2 lists both as Failed / False success triggers but only attaches them to a stored `refuted` status. The three real M1 runs and the four Foundry fixtures map exactly as before (`verdict.test.ts`).
 - The per-step source strip under the Why list (Time, pre, post) is removed. It was not a spec component and added four extra Tab stops. Its sources stay reachable: the Action and Preconditions/Postconditions sections in Inspector › Detail carry the same trace lines, and the Time cell tooltip names its source. The `result.json#/startedAt` offset chip is only in that tooltip.
 - Verdict Bar source chips form one Tab stop (roving tabindex; Left/Right/Home/End move between them). Every chip names what it backs through its `aria-label` and tooltip.
 - Proof › State changes lists every recorded step. A step whose version does not change shows `vN → vN unchanged` in tertiary text instead of being skipped.
