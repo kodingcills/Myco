@@ -6,20 +6,6 @@ import {
   parseHeadToHead,
 } from "../data/head-to-head.ts";
 import { useViewer } from "../store.ts";
-import { VerdictBadge } from "./VerdictBadge.tsx";
-
-/** The decision maps onto the four display verdicts; only the row decides which. */
-function display(
-  decision: HeadToHeadDecision,
-):
-  | { label: "Verified"; subtype?: undefined }
-  | { label: "Failed"; subtype?: undefined }
-  | { label: "Unknown"; subtype?: undefined } {
-  if (decision.status === "refused") return { label: "Unknown" };
-  if (decision.row === "A-stands") return { label: "Verified" };
-  if (decision.row === "myco-has-a-false-success") return { label: "Failed" };
-  return { label: "Unknown" };
-}
 
 function pct(value: number | null): string {
   return value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
@@ -117,13 +103,12 @@ export function CompareApp() {
 
 export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
   const { decision } = report;
-  const verdict = display(decision);
   const settled = decision.status === "decided";
   return (
     <section data-head-to-head aria-label="Head-to-head report">
-      <header data-report-header data-verdict={verdict.label}>
-        <VerdictBadge label={verdict.label} size="xl" />
+      <header data-report-header>
         <div>
+          <p className="type-micro text-text-secondary">Decision</p>
           <p className="type-title text-text-primary">
             {settled ? (decision.row ?? "No row") : "Not decided"}
           </p>
@@ -144,7 +129,12 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
           value={decision.signTestP === null ? "n/a" : decision.signTestP.toFixed(4)}
         />
         <Fact label="Ineligible rows" value={String(decision.ineligibleRows)} />
-        {report.generatedAt && <Fact label="Generated" value={report.generatedAt} />}
+        {report.generatedAt && (
+          <Fact
+            label="Generated"
+            value={report.generatedAt.replace("T", " ").replace(/\.\d+Z$/, "Z")}
+          />
+        )}
       </div>
 
       <section aria-label="Arms">

@@ -35,7 +35,8 @@ test("a refused decision renders as not decided, never as a pass", () => {
   const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
   expect(html).toContain("Not decided");
   expect(html).toContain("Refused: insufficient-pairs");
-  expect(html).toContain('data-verdict="Unknown"');
+  // The decision is a rule row, not a verdict: a decided A-stands must not render
+  // as a Verified badge, because Verified means "this run's outcome was proven".
   expect(html).not.toContain('data-verdict="Verified"');
 });
 
