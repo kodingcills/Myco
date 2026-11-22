@@ -440,3 +440,63 @@ describe("C1 host harness", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("C1 sweep abort-early", () => {
+  // Defensive engineering rule 7: two consecutive identical exclusion causes
+  // mean the sweep is measuring the harness, not the agent. The pre-existing
+  // single-strike rule only watches `driver-unreachable` verdicts on scored
+  // rows; this covers the general case, where a repeated *omission* cause
+  // (here a failed prepare) burns the arm without ever scoring a row.
+  // Reverting noteCause makes this fail: the sweep walks all 30 rows and
+  // prepares 30 times instead of stopping at 2.
+  it("stops after two consecutive identical exclusion causes", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-early-"));
+    directories.push(directory);
+    let prepares = 0;
+    const report = await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      planner: planner(),
+      prepare: async () => {
+        prepares += 1;
+        // The arm's real failure shape: the driver answers but its session
+        // command fails, so prepare throws and the trial is omitted.
+        throw new Error("session-command-failed");
+      },
+    });
+    // It must stop early rather than walking all 30 rows.
+    expect(prepares).toBeLessThan(5);
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
+      .map((e) => e.reason)
+      .filter(Boolean);
+    expect(reasons).toContain("repeated-cause");
+    expect(report.completed).toBe(0);
+  });
+
+  // Mutation B in the earlier review: dropping the reset (`else consecutive += 1`)
+  // left the suite green, because the only test used one cause. This pins the
+  // reset — alternating causes must never accumulate into an abort.
+  it("does not abort when the cause alternates", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-reset-"));
+    directories.push(directory);
+    let prepares = 0;
+    await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      planner: planner(),
+      prepare: async () => {
+        prepares += 1;
+        // Alternate the throw message so the cause string changes every trial.
+        throw new Error(`session-command-failed-${prepares % 2}`);
+      },
+    });
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
+      .map((e) => e.reason)
+      .filter(Boolean);
+    // Alternating causes must not trip abort-early: no repeated-cause stop.
+    expect(reasons).not.toContain("repeated-cause");
+    expect(prepares).toBeGreaterThan(2);
+  });
+});

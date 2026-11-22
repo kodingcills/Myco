@@ -25,6 +25,94 @@
   24.04 cloud image overlay with no snapshot ID. RT-011 proof remains open.
 - [M1 backlog](../backlog/m1.md)
 
+## Standing rule — defensive engineering (Tiffany-approved, 2026-11-22 16:00 ET)
+
+Applies to **every owner, builder and verifier**, and is repeated in every owner
+brief. Full text: `docs/coordination/CONTRIBUTING-agents.md`, PR #162.
+
+1. **Pre-mortem** before touching VM/guest/host: list the top ~5 real-target
+   failure modes (timeouts, partial cleanup, stale locks, cross-language field
+   loss, resource exhaustion, provider/API errors) and write a test or guard for
+   each.
+2. **Measure, don't guess**: every timeout/budget/threshold cites a recorded
+   real-guest measurement plus explicit headroom.
+3. **Fault injection for cleanup/recovery**: a forced failure must report
+   **dirty, never clean**, and must block scoring.
+4. **Contract tests across boundaries**: every field (including error fields)
+   must survive a TS/Python/PowerShell/JSON round trip.
+5. **Mutation check**: a fix's test must fail when the fix is reverted.
+6. **Real-target smoke before sweeps**: one end-to-end trial with recorded
+   timings before any multi-trial run.
+7. **Abort early**: stop after 2 consecutive identical exclusion causes.
+8. A stale `node_modules` is a **false red** — `pnpm install --frozen-lockfile`
+   before diagnosing a gate.
+
+Verifiers check 1–5 **by name** in their verdict, with pasted evidence.
+
+**Applied to the C1 restart:** abort-early (item 7) is implemented in
+`runC1Sweep` as `reason: "repeated-cause"`. **Scope, stated precisely after
+independent verification corrected an earlier overclaim:** the new rule fires
+only on a repeated cause that reaches the sweep loop — a repeated `prepare`
+failure or a repeated `planner-failed`. It does **not** cover the scored
+`driver-unreachable` shape:
+
+- That shape (1 scored row + 29 omissions, one cause) was **already** handled by
+  the pre-existing single-strike rule, which sets `stopReason` on the first
+  scored `driver-unreachable` and omits every later row before `prepare` runs.
+  Measured: old and new both produce `prepares=1`, identical ledgers.
+- On that shape `repeated-cause` is **unreachable**: the scored row calls
+  `noteCause` once, and the 29 omissions short-circuit on `stopReason` before
+  reaching it.
+
+The real improvement is over the **spend cap**: with a throwing `prepare`, the
+old code walked 11 trials before the cap stopped it; the new code stops at 2.
+
+## C1 arm-001 — FAILED, 0 scored rows, $0.00
+
+- **Result:** 0 of 30 produced a usable row; 30 of 30 excluded; **all one
+  reason** (`driver-unreachable`). No pass rate is computable and none is
+  claimed. Honest denominator: 0/30.
+- **Root cause:** `queryGuest` used a **15 s timeout**. Measured live:
+  `cua-driver.exe --version` 5.7/6.4/6.8 s, CIM enumeration 11.8 s. Two queries
+  plus enumeration cross 15 s under sweep load. Proven by running the real
+  preflight on the same guest: 15 s -> `session-command-failed`; 45 s ->
+  `match`, 13.76 s. **Fix: PR #156.**
+- **Orphans:** two `soffice.bin` (2096, 2508) survived, on a trial with zero
+  planner steps — cleanup had reported `killed=[]`. **Fixed by #153 (merged
+  3321b23):** the agent's `kill` now returns `{killed, errors}`, `agent-client.ts`
+  surfaces `errors`, and `guest-health.ts:57` pushes them into
+  `strayProcesses`/`result.errors`, so a failed kill reads as contamination
+  rather than a clean no-op.
+- **Evidence:** preserved on branch `docs/c1-arm-001-evidence` (5 files) —
+  **not yet merged to main**. `/tmp/baseline/c1-arm/accounting.json` is the
+  live copy.
+
+## Open defects
+
+- **#153 — REJECTED by verifier.** Python half correct and mutation-verified,
+  but `AgentClient.kill` (`src/win/agent-client.ts:422`) still projects the
+  reply to `.killed` and **drops `errors[]`**, so a failed kill still reaches
+  `guest-health.ts` as `killed=[]` with `errors=[]`. Verified by driving the
+  real client against the fixed payload. Requires: surface `errors` in
+  `AgentClient.kill`; fold into `CleanupResult.errors` (`guest-health.ts:50`,
+  `:120`); update `trial.ts:593`/`:756`/`:758` (593 currently emits "agent did
+  not report a terminated process" while the real message is discarded); add a
+  cross-boundary test through the client.
+- **#156 — open**, 15 s -> measured value with headroom. Do not restart the arm
+  before it lands.
+- **#162 — open**, defensive rule + abort-early, verifier running.
+
+## Next actions
+
+1. #156 must-fixes: propagate `preflight.diagnostic` into the row/omission, and
+   add a test that fails when the timeout reverts (mutation currently survives
+   the full 666-test suite). Then verify at the new head and merge by hand.
+2. Merge the arm-001 evidence branch (#157) once re-verification passes.
+3. Drain the host before arming: guest down, confirm `sysctl vm.swapusage`
+   falls from 82% used, re-measure the guest round trip and record it.
+4. Re-run the C1 arm with abort-early, per-trial guest verification, and the
+   spend/credit watch ($4.00 -> report, $4.50 cap).
+
 ## Objective
 Milestone 1: verified, recoverable desktop execution in one real Windows GUI app (LibreOffice Calc record edits, default suggestion). Acceptance: 27/30 reliability, 0 false successes in ≥10 corrupted trials, recovery from app interruption and invalid target, machine-readable evidence, screenshot-agent baseline on identical conditions, reproducible by another agent. Full spec: docs/product/vision.md.
 
