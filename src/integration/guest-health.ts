@@ -47,8 +47,14 @@ export interface GuestHealthOptions {
 export async function probeGuestHealth(options: GuestHealthOptions): Promise<GuestHealthFinding> {
   const strayProcesses: Array<number | string> = [];
   for (const image of SOFFICE_IMAGES) {
-    const killed = await options.client.kill({ image_name: image });
+    // A kill that FAILED leaves the process running; the agent now says so in
+    // `errors` instead of silently returning an empty `killed`. Both are
+    // contamination evidence, so both are collected - otherwise a foreign
+    // soffice that survives the probe would look like a clean guest and the
+    // trial could be scored on a contaminated session.
+    const { killed, errors } = await options.client.kill({ image_name: image });
     strayProcesses.push(...killed);
+    if (errors.length > 0) strayProcesses.push(...errors);
   }
   const listing = await listTrialDirs(options.client, options.runRoot, options);
   const strayRunDirs = listing.runDirs.filter(
@@ -117,7 +123,9 @@ export async function cleanupTrialGuest(options: GuestCleanupOptions): Promise<G
   // Kill before deleting: an open document locks its xlsx on Windows.
   for (const image of SOFFICE_IMAGES) {
     try {
-      result.killed.push(...(await options.client.kill({ image_name: image })));
+      const { killed, errors } = await options.client.kill({ image_name: image });
+      result.killed.push(...killed);
+      result.errors.push(...errors);
     } catch (error) {
       result.errors.push(
         `kill ${image}: ${error instanceof Error ? error.message : String(error)}`,

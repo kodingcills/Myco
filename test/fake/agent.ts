@@ -35,6 +35,12 @@ export interface FakeAgentScript {
   desktopOverlay?: boolean;
   /** Make a killed Calc desktop lose unsaved changes and stop answering UNO. */
   killCalcDesktop?: boolean;
+  /**
+   * Image name whose kill is reported as FAILED: the agent returns an `errors`
+   * entry and leaves the process listed. Models the 2026-11-22 case where a
+   * kill did not take and the caller was told nothing.
+   */
+  killFailsFor?: string;
   /** Stray processes by image name, killed (and cleared) by the kill op. */
   strayProcesses?: Record<string, number[]>;
   /**
@@ -192,6 +198,20 @@ export class FakeAgent {
         }
         let killed: Array<number | string>;
         if (params.image_name !== undefined) {
+          if (this.script.killFailsFor === params.image_name) {
+            // The kill did not take: report the failure rather than an empty
+            // success, and leave the process in the stray list.
+            return {
+              ok: true,
+              id: request.id,
+              result: {
+                killed: [],
+                errors: [
+                  `taskkill /IM ${params.image_name}: rc=1 survivors=[4242] ERROR: could not terminate`,
+                ],
+              },
+            };
+          }
           killed = this.strays.get(params.image_name) ?? [];
           this.strays.delete(params.image_name);
         } else {
