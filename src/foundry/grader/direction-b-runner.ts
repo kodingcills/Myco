@@ -9,8 +9,9 @@
  * - 0 false successes
  * - Outcome after interrupted write is either clean rollback or uncertain (never false success)
  *
- * IMPORTANT:
+ * IMPORTANT / NOTICE:
  * This is a simulated contract dry-run harness for Direction B discovery.
+ * All states and simulated timings are modelled contract representations, not measured live desktop evidence.
  * Live desktop runs require Runtime's desktop environment and Coordinator sign-off.
  */
 

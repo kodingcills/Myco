@@ -1,7 +1,7 @@
 # Direction A Live Execution Plan: Verified Desktop for Coding Agents on RT-020
 
 - **Workstream:** MVP Discovery (MVD-001 / Linear TIF-53)
-- **Status:** **Ready for Execution** (pending Runtime RT-020 proof verification and Coordinator VM slot grant)
+- **Status:** **Unblocked & Queued for VM Slot** (RT-020 verified live proof PASS 14:33Z; queued with M1 Coordinator after C1, M1-016, and Foundry)
 - **Target Desktop:** Linux X11 Desktop (`RT-020`), 1440×900 display
 - **Target Application:** Dogfood `myco-todo` (`dogfood/apps/myco-todo/myco_todo.py`)
 - **Companion Documents:**
@@ -32,10 +32,13 @@ No live execution may commence until all four gates are signed off:
 
 | Gate | Requirement | Responsible Workstream | Status / Verification Command |
 | :--- | :--- | :--- | :--- |
-| **G1: RT-011** | First end-to-end path verified (`create → observe → act → evidence → reset → destroy`) | Runtime | Confirmed passing in runtime CI/check |
-| **G2: RT-015** | Host-side guest file read operational (`REQ-08`) | Runtime | `vssh 'cat ~/.local/share/myco-todo/store.json'` or host bridge read |
-| **G3: RT-016** | Process control & signal dispatch operational (`REQ-09`) | Runtime | Process kill/relaunch verified clean |
-| **G4: Coordinator GO** | Dedicated host execution window granted | M1 Coordinator | Explicit start/stop window recorded in coordination log |
+| **G1: RT-011** | First end-to-end path verified (`create → observe → act → evidence → reset → destroy`) | Runtime | **PASS** (14:33Z RT-020 live proof verified) |
+| **G2: RT-015** | Host-side guest file read operational (`REQ-08`) | Runtime | **PASS** (RT-020 host file read verified) |
+| **G3: RT-016** | Process control & signal dispatch operational (`REQ-09`) | Runtime | **PASS** (RT-020 process lifecycle verified) |
+| **G4: Coordinator GO** | Dedicated host execution window granted | M1 Coordinator | Queued after C1, M1-016, and Foundry |
+
+> [!NOTE]
+> **Direction B & C Dry-Run Scope Notice:** Direction B and C task packages (`tasks/calc-invoice-update.yaml`, `tasks/branch-retry-experiment.yaml`) and runners are dry-run harnesses. Their timings (e.g. 36.4s replay / 12.8s fork / 2048 MB memory delta) are modelled estimates, not measured live desktop evidence, and must NOT be cited as Direction C kill-criterion evidence.
 
 > [!CAUTION]
 > **Host Safety Rule:** Under no circumstances should host processes outside the VM be touched. Specifically, personal Google Chrome sessions (e.g. PID 69583) must never be inspected, signaled, or attached to.

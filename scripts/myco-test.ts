@@ -47,6 +47,9 @@ async function main() {
     process.stdout.write("========================================================\n");
     process.stdout.write(`[myco] DIRECTION B RUN EXECUTION COMPLETE: ${result.runId}\n`);
     process.stdout.write(`[myco] Final Verdict: ${result.verdict.toUpperCase()}\n`);
+    process.stdout.write(
+      "[myco] NOTE: Dry-run harness with MODELED contract states (not measured live desktop numbers).\n",
+    );
     process.stdout.write(`[myco] Interrupted Mid-Write: ${result.interrupted ? "YES" : "NO"}\n`);
     process.stdout.write(`[myco] Silent Duplicates: ${result.duplicateCount} (Expected: 0)\n`);
     process.stdout.write(`[myco] Exit Code: ${result.exitCode}\n`);
@@ -76,16 +79,22 @@ async function main() {
     process.stdout.write(`[myco] DIRECTION C RUN EXECUTION COMPLETE: ${result.runId}\n`);
     process.stdout.write(`[myco] Final Verdict: ${result.verdict.toUpperCase()}\n`);
     process.stdout.write(
-      `[myco] Arm A (Intent-Log Replay): ${result.armA.wallClockSec}s wall-clock, ${result.armA.memoryOverheadMb}MB delta\n`,
+      "[myco] NOTE: Dry-run harness with MODELED timings (not measured live desktop evidence).\n",
     );
     process.stdout.write(
-      `[myco] Arm B (Snapshot Fork):     ${result.armB.wallClockSec}s wall-clock, ${result.armB.memoryOverheadMb}MB delta\n`,
+      "[myco] CAUTION: Do not cite modeled numbers as Direction C kill-criterion evidence.\n",
     );
     process.stdout.write(
-      `[myco] Fork Speedup:              ${result.killCriterionEvaluation.speedupSec}s (${result.killCriterionEvaluation.speedupRatio}x)\n`,
+      `[myco] Arm A (Intent-Log Replay): ${result.armA.wallClockSec}s wall-clock (modeled), ${result.armA.memoryOverheadMb}MB delta\n`,
     );
     process.stdout.write(
-      `[myco] Kill Criterion Eval:       ${result.killCriterionEvaluation.recommendation}\n`,
+      `[myco] Arm B (Snapshot Fork):     ${result.armB.wallClockSec}s wall-clock (modeled), ${result.armB.memoryOverheadMb}MB delta (modeled)\n`,
+    );
+    process.stdout.write(
+      `[myco] Fork Speedup (Modeled):    ${result.killCriterionEvaluation.speedupSec}s (${result.killCriterionEvaluation.speedupRatio}x)\n`,
+    );
+    process.stdout.write(
+      `[myco] Modeled Evaluation:       ${result.killCriterionEvaluation.recommendation}\n`,
     );
     process.stdout.write(`[myco] Exit Code: ${result.exitCode}\n`);
     process.stdout.write("========================================================\n\n");

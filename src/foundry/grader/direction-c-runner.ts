@@ -9,8 +9,11 @@
  * - Reset overhead: 21.0 s warm cold restore (m2-05)
  * - Fork overhead: 2.0 s pause (Orgo baseline) + 2048 MB snapshot memory
  *
- * IMPORTANT:
+ * IMPORTANT / CAUTION:
  * This is a simulated contract dry-run harness for Direction C discovery.
+ * All timings (e.g. 36.4s / 12.8s / 2048 MB) are modelled estimates, not measured live desktop evidence.
+ * These modelled numbers MUST NOT be cited as Direction C kill-criterion evidence.
+ * Live evaluation requires runtime fork/snapshot capability and Coordinator sign-off.
  */
 
 import { createHash } from "node:crypto";
@@ -300,10 +303,11 @@ export async function runDirectionCTask(
   // Pre-declared Kill Criterion:
   // Fork saves 23.6s wall-clock, but requires 2048 MB extra host RAM per candidate branch.
   // When running multiple parallel arms on a development laptop (e.g. 16GB host), RAM contention is critical.
+  // NOTE: Modelled estimate only; not measured live desktop evidence and not cited as kill-criterion evidence.
   const recommendation =
     speedupSec > 15
-      ? "Forking delivers 2.8x speedup under high-latency resets, but 2GB RAM per branch incurs severe host memory pressure. Maintain Direction A wedge."
-      : "Forking does not justify snapshot complexity; intent-log replay remains the cost-effective default.";
+      ? "[MODELED ESTIMATE ONLY - not live evidence] Forking delivers 2.8x modeled speedup under high-latency resets, but 2GB RAM per branch incurs severe host memory pressure. Maintain Direction A wedge."
+      : "[MODELED ESTIMATE ONLY - not live evidence] Forking does not justify snapshot complexity; intent-log replay remains the cost-effective default.";
 
   const checks = [
     {
@@ -363,7 +367,7 @@ export async function runDirectionCTask(
       score: 1.0,
       reasons: [
         "Paired evaluation complete: candidate branch resolved correctly",
-        `Fork saves ${speedupSec}s (${speedupRatio}x speedup) at the cost of ${armBMemory}MB RAM`,
+        `Modeled estimate (not live evidence): fork saves ${speedupSec}s (${speedupRatio}x) at the modeled cost of ${armBMemory}MB RAM`,
       ],
     },
     simulated: true,
