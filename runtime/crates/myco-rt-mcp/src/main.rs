@@ -25,10 +25,11 @@ struct Server {
 
 /// The client's progress token, if it supplied one.
 ///
-/// MCP puts `_meta` on the request params, but clients in the wild also nest it
-/// inside the tool `arguments`, so accept both. `params._meta` wins when both are
-/// present. Returning `None` is what keeps a token-less client from receiving
-/// unsolicited notifications, so this is the single gate for that rule.
+/// MCP puts `_meta` on the request params. The tool `arguments` are also read, as
+/// permissive tolerance for a client that nests `_meta` there; no client is known
+/// to do so, and a conforming client is unaffected because `params._meta` wins
+/// when both are present. Returning `None` is what keeps a token-less client from
+/// receiving unsolicited notifications, so this is the single gate for that rule.
 fn progress_token(params: &Value, args: &Value) -> Option<Value> {
     params
         .get("_meta")
