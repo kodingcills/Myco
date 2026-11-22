@@ -63,7 +63,7 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   # charger state must not block a run, and a row that ran on battery is still
   # valid evidence. The value goes into the row so the JSONL shows it.
   AC_POWER=no; pmset -g batt | head -1 | grep -q "AC Power" && AC_POWER=yes
-  echo "ac_power=$AC_POWER" >> "$PROGRESS"
+  echo "ac_power=$AC_POWER trial=$i" >> "$PROGRESS"
   LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
   SWAP_FREE=$(sysctl -n vm.swapusage | sed -E 's/.*free = ([0-9.]+)M.*/\1/')
   if awk -v l="$LOAD1" 'BEGIN{exit !(l>14.0)}'; then

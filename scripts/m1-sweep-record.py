@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """M1-013 sweep: turn one run-live report into a JSONL record, with the seed check.
 
-  m1-sweep-record.py IDX SEED ROWKEY COLUMN VALUE TRIAL_OUT FINGERPRINTS  -> one JSON line
+  m1-sweep-record.py IDX SEED ROWKEY COLUMN VALUE TRIAL_OUT FINGERPRINTS [AC]  -> one JSON line
+
+AC is optional ("yes"/"no") and is recorded as `acPower`; it is never enforced.
   m1-sweep-record.py --final TRIALS_JSONL FINGERPRINTS                    -> exit 0/1
 
 Per trial: the report's `fixture.seed` must equal the requested seed and its
@@ -21,10 +23,13 @@ import sys
 
 
 def record(argv):
-    idx, seed, rk, cl, nv, out_path, fp_path = argv
+    # `*rest` keeps the 7-arg call working: a fixed 7-tuple unpack raises
+    # ValueError on the 8-arg call, which would write a traceback instead of a
+    # row and make the resume check never match.
+    idx, seed, rk, cl, nv, out_path, fp_path, *rest = argv
     expected = json.load(open(fp_path)).get(seed)
     # acPower is recorded as evidence, never enforced: a battery row is valid.
-    ac = "yes" if len(argv) > 7 and argv[7] == "yes" else "no"
+    ac = "yes" if rest and rest[0] == "yes" else "no"
     rec = {
         "index": int(idx), "fixtureSeed": seed, "rowKey": rk, "column": cl,
         "typed": nv, "acPower": ac,
