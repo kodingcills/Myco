@@ -114,8 +114,10 @@ mod tests {
     #[test]
     fn refuses_a_relative_root() {
         let err = FileGrant::open(Path::new("relative/dir")).unwrap_err();
-        // Symmetry with the sibling test: pin the kind, not just the message, so a
-        // different failure cannot masquerade as this guard.
+        // Pin the kind as well as the message. This shows the *absolute* guard is
+        // what fired, but it does not fix the ordering: `"relative/dir".parent()`
+        // is `Some("relative")`, so checking parent() first would still land here
+        // with the same kind and message. Ordering is not pinned by any test.
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert!(err.to_string().contains("absolute"), "{err}");
     }
