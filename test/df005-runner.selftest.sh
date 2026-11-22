@@ -70,4 +70,52 @@ if [ "$line_count" -ne 5 ]; then
     exit 1
 fi
 
+echo "4. Validating emitted artifacts against M1-012 schemas"
+node --experimental-strip-types -e '
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { traceEventSchema } from "./schemas/trace-events.ts";
+import { resultRecordSchema } from "./schemas/result-record.ts";
+import { ledgerRowSchema } from "./schemas/ledger-row.ts";
+import { validateSchema } from "./schemas/validate.ts";
+
+const evalDir = process.argv[1];
+const ledgerPath = join(evalDir, "ledger.jsonl");
+const ledgerLines = readFileSync(ledgerPath, "utf8").trim().split("\n");
+for (let i = 0; i < ledgerLines.length; i++) {
+  const row = JSON.parse(ledgerLines[i]);
+  const issues = validateSchema(row, ledgerRowSchema);
+  if (issues.length > 0) {
+    console.error("Ledger row schema issue:", issues);
+    process.exit(1);
+  }
+}
+
+for (const entry of readdirSync(evalDir)) {
+  const runDir = join(evalDir, entry);
+  const resultPath = join(runDir, "result.json");
+  if (existsSync(resultPath)) {
+    const res = JSON.parse(readFileSync(resultPath, "utf8"));
+    const issues = validateSchema(res, resultRecordSchema);
+    if (issues.length > 0) {
+      console.error("Result schema issue in " + entry + ":", issues);
+      process.exit(1);
+    }
+  }
+  const tracePath = join(runDir, "trace.jsonl");
+  if (existsSync(tracePath)) {
+    const lines = readFileSync(tracePath, "utf8").trim().split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const ev = JSON.parse(lines[i]);
+      const issues = validateSchema(ev, traceEventSchema);
+      if (issues.length > 0) {
+        console.error("Trace schema issue in " + entry + " line " + i + ":", issues);
+        process.exit(1);
+      }
+    }
+  }
+}
+console.log("   M1-012 schema validation confirmed (ledger, results, traces valid)");
+' "$eval_dir"
+
 echo "df005-runner selftest OK: all 5 scenarios executed and evidenced cleanly"

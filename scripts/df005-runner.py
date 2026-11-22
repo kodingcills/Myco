@@ -552,11 +552,43 @@ def main() -> int:
                 run_dir = eval_dir / run_id
                 run_dir.mkdir(parents=True, exist_ok=True)
 
-                # trace.jsonl
+                # trace.jsonl (M1-012 traceEventSchema conforming)
                 trace_path = run_dir / "trace.jsonl"
                 with open(trace_path, "w", encoding="utf-8") as f:
-                    for idx, st in enumerate(run_res["steps"]):
-                        f.write(json.dumps({"seq": idx, "at": run_res["startedAt"], "step": st}) + "\n")
+                    f.write(json.dumps({
+                        "type": "run-start",
+                        "runId": run_id,
+                        "taskId": s_id.lower(),
+                        "startedAt": run_res["startedAt"],
+                    }) + "\n")
+                    for st in run_res["steps"]:
+                        step_idx = st["step"]
+                        if st.get("preconditionResults"):
+                            f.write(json.dumps({
+                                "type": "guard-evaluation",
+                                "timestamp": run_res["startedAt"],
+                                "step": step_idx,
+                                "phase": "pre",
+                                "results": st["preconditionResults"],
+                                "stateVersionBefore": st.get("stateVersionBefore", 0),
+                                "stateVersionAfter": st.get("stateVersionBefore", 0),
+                            }) + "\n")
+                        f.write(json.dumps({
+                            "type": "action",
+                            "timestamp": run_res["startedAt"],
+                            "step": step_idx,
+                            "action": st["action"],
+                        }) + "\n")
+                        if st.get("postconditionResults"):
+                            f.write(json.dumps({
+                                "type": "guard-evaluation",
+                                "timestamp": run_res["startedAt"],
+                                "step": step_idx,
+                                "phase": "post",
+                                "results": st["postconditionResults"],
+                                "stateVersionBefore": st.get("stateVersionBefore", 0),
+                                "stateVersionAfter": st.get("stateVersionAfter", 1),
+                            }) + "\n")
 
                 # result.json conforming to RunRecord or SessionRecord
                 # We emit RunRecord when scored with checks
