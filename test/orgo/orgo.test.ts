@@ -517,6 +517,9 @@ describe("probe spend and inventory guard", () => {
       const call = fake.calls.at(-1) ?? "";
       const action = call.split("/").at(-1) ?? "";
       if (call.startsWith("POST ")) {
+        if (after === "1 stop" && crossed && action === "bash") {
+          counts.set("bash after stop", (counts.get("bash after stop") ?? 0) + 1);
+        }
         if (action === "bash" && String(init?.body).includes("MYCO_STATE_MARKER")) {
           counts.set("plants", (counts.get("plants") ?? 0) + 1);
         }
@@ -547,6 +550,7 @@ describe("probe spend and inventory guard", () => {
     expect(crossed).toBe(true);
     expect(raw.errors).toEqual(["Observed spend reached the 15c stop rule"]);
     expect(counts.get(blocked) ?? 0).toBe(allowed);
+    expect(counts.get("bash after stop") ?? 0).toBe(0);
     expect(raw.cleanup.finalCount).toBe(0);
   });
 });
@@ -847,7 +851,7 @@ describe("independent review reproductions", () => {
     },
   );
 
-  it.each(["create balance", "E0 running poll", "E5 detail"])(
+  it.each(["create balance", "E0 running poll", "E5 detail", "final balance"])(
     "aborts an in-flight %s at the experiment deadline and still cleans up",
     async (target) => {
       const fake = fakeOrgo({ scenario: "free" });
@@ -862,6 +866,9 @@ describe("independent review reproductions", () => {
           created &&
           ((target === "create balance" && call === "GET /api/credits") ||
             (target === "E0 running poll" && poll) ||
+            (target === "final balance" &&
+              call === "GET /api/credits" &&
+              fake.calls.filter((entry) => entry.endsWith("/clone")).length === 2) ||
             (target === "E5 detail" &&
               poll &&
               fake.calls.some((call) => call.endsWith("/suspend"))))
@@ -877,7 +884,7 @@ describe("independent review reproductions", () => {
       const raw = await runFake(dir, { ...fake, request }, ["--deadline-ms", "450"]);
       expect(stalled).toMatchObject({ aborted: true });
       expect(raw.errors.join()).toMatch(/run bound/);
-      expect(raw.experiments.E5?.n ?? 0).toBe(0);
+      expect(raw.experiments.E5?.n ?? 0).toBe(target === "final balance" ? 1 : 0);
       expect(raw.cleanup.finalCount).toBe(0);
       expect(fake.computers.size).toBe(0);
       if (target === "create balance") expect((await recoveryAt(dir)).created).toHaveLength(1);

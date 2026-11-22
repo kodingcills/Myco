@@ -150,6 +150,7 @@ async function billable(
     delayedCents,
     spendCents: ctx.startCents - ctx.lastCents,
   });
+  checkDeadline(ctx);
   return { ...reply, beforeCents, immediateCents, delayedCents };
 }
 
@@ -609,6 +610,7 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
   );
   const frozen = await until(ctx, source, status("frozen"), 120_000, getComputer(ctx, source));
   if (!succeeded(stopped) || !frozen.reply) throw new Error("E4 source did not stop");
+  await allow(ctx, 0);
   const asleep = await bash(ctx, source, "true", 20);
   await allow(ctx, 0);
   const resumedFromStop = await billable(ctx, "E4 start", source, () =>
