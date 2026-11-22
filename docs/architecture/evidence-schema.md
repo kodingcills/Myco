@@ -107,6 +107,7 @@ Every line is a JSON object with a discriminating `type`:
 | `guard-failure` | `timestamp`, `step`, `phase` (`precondition`\|`postcondition`), `guard` (GuardFailure) | Runner aborts on a guard. |
 | `fault-injection` | `timestamp`, `fault`, `detail` | FaultInjector arms (`beforeTrial`, `beforeSave`). |
 | `recovery` | `timestamp`, `event`, `stateVersion` | Recovery events (ADR-0006); M1-012 emits `aborted-uncertain` when a run ends unresolved. Full recovery event stream lands with M1-011. |
+| `claim` | `timestamp`, `step`, `source` (`agent`\|`app-ui`), `field`, `value` | A party asserts an outcome (the app's status bar says "Saved 2 items"; the agent states it finished). Additive (gui-spec §6.4). Display and audit only: verifiers, oracles and scoring never read it, so a claim can never raise a verdict. The viewer pairs it with the verifier's persisted readback in the Comparator. Absent = the viewer shows `claimed (derived)`. |
 
 All timestamps are ISO-8601. `ActionRecord` mirrors the closed ADR-0004 union: `kind` plus `ref`/`text`/`value`/`keys`/`timeoutMs` as applicable. `ActionRecord` is intentionally open (no `additionalProperties: false`): adapters may attach delivery metadata to recorded actions without breaking evidence validation; the `kind` discriminator stays authoritative.
 

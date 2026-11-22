@@ -74,7 +74,15 @@ export type TraceEvent =
       guard: GuardFailure;
     }
   | { type: "fault-injection"; timestamp: string; fault: string; detail: string }
-  | { type: "recovery"; timestamp: string; event: string; stateVersion: number };
+  | { type: "recovery"; timestamp: string; event: string; stateVersion: number }
+  | {
+      type: "claim";
+      timestamp: string;
+      step: number;
+      source: "agent" | "app-ui";
+      field: string;
+      value: string;
+    };
 
 /** ADR-0007 conformance ledger row (Cua action-support ledger format). */
 export interface LedgerRow {

@@ -264,24 +264,29 @@ export class UnoVerifier {
       }
     }
     // --- (c) edit persisted: convert + parse the persisted file -------------
+    const readback = await this.readPersisted(xlsxPath);
+    if ("error" in readback) return uncertain(readback.error);
+    return calcRecordEditVerifier.verify(readback, intent);
+  }
+
+  /** Read the disk state even when an earlier live check ended verification. */
+  async readPersisted(xlsxPath: string): Promise<PersistedState | { error: string }> {
     let csv: Buffer;
     try {
       this.opsIssued.push("launch", "read_file");
       csv = await this.files.readCsvViaSoffice(xlsxPath);
     } catch (error) {
-      return uncertain(
-        `could not look: persisted file not convertible/readable — ${error instanceof Error ? error.message : String(error)}`,
-      );
+      return {
+        error: `could not look: persisted file not convertible/readable — ${error instanceof Error ? error.message : String(error)}`,
+      };
     }
-    let persisted: PersistedState;
     try {
-      persisted = parseCsvBytes(csv, xlsxPath);
+      return parseCsvBytes(csv, xlsxPath);
     } catch (error) {
-      return uncertain(
-        `could not look: persisted CSV unparseable — ${error instanceof Error ? error.message : String(error)}`,
-      );
+      return {
+        error: `could not look: persisted CSV unparseable — ${error instanceof Error ? error.message : String(error)}`,
+      };
     }
-    return calcRecordEditVerifier.verify(persisted, intent);
   }
 }
 

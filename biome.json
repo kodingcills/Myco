@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/*.md"]
+    "includes": ["**", "!**/*.md", "!foundry/viewer-fixtures"]
   },
   "assist": {
     "actions": {

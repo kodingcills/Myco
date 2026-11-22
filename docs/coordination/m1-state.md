@@ -1,5 +1,21 @@
 # Myco M1 — coordinator state
 
+## Current handoff — 2026-11-21, sweep v2 stopped
+
+- **M1-013:** recorded indices 0–4 at pinned commit `29369ce`. Three verified,
+  two fixture-convert timeouts (`uncertain`), 25 unrun. Stop marker at
+  20:47:24 UTC in `/tmp/m1-013/sweep-v2/progress.log`.
+- **Decision pending with the outer loop:** a cold diagnostic workbook landed
+  after 169.4 s. Proposed 240 s conversion deadline, two cold canaries and a
+  fresh sweep from index 0. Keep v2 for diagnosis. See
+  [the experiment and restart plan](../research/experiments/m1-013-convert-timeout.md).
+- **Non-VM work:** [runbook](../eval-runbook.md) and [scorecard](../m1-scorecard.md)
+  are updated. The scorecard lists the remaining evidence for the corrupted
+  suite, recovery, screenshot baseline and independent reproduction.
+- **Next:** await the restart decision and reserve the host. The diagnostic
+  was interrupted and the host process check found no leftover runner. Backlog is
+  [M1](../backlog/m1.md).
+
 ## Objective
 Milestone 1: verified, recoverable desktop execution in one real Windows GUI app (LibreOffice Calc record edits, default suggestion). Acceptance: 27/30 reliability, 0 false successes in ≥10 corrupted trials, recovery from app interruption and invalid target, machine-readable evidence, screenshot-agent baseline on identical conditions, reproducible by another agent. Full spec: docs/product/vision.md.
 
@@ -669,3 +685,68 @@ with the OpenCUA evidence (strong ScreenSpot-v2, weak OSWorld success) as the re
 
 **Not done:** nothing has been re-measured; these are design and backlog changes only. The sweep
 host remains blocked per logs 44–45.
+
+## Log 2026-11-21 (55) — Coordinator's scheduling facts folded in; no VM touched
+No VM script, no UTM command, no `vssh`, no stub — the sweep owns `myco-win11` and the no-touch
+rule applies to design work too. Docs only.
+
+**§2.1 added — the operator interface, pinned to `main`.** Reset (`scripts/reset-trial-vm.sh`,
+`clean-base`), deploy (`deploy-to-vm.sh`, foreground, "DEPLOY OK"), reachability
+(`ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765`), token via `vssh`, screenshots via
+the agent's in-guest op. Two of those scripts are in this repo and the SSH config, key and `vssh` are host scripts deliberately outside it; the baseline adds no new VM plumbing. Noted that
+`SshTunnel` already defaults to exactly these values, so the harness reuses it.
+
+**Two operational facts recorded**, both previously unstated in this doc:
+- Screenshots must be in-guest; UTM host capture returns a placeholder.
+- `pgrep qemu-system-aarch64` is not a liveness check — the guest runs under UTM's QEMULauncher;
+  use `lsof -iTCP:2222`. Same error class as the `pgrep` check in log 39.
+
+**Budget, corrected after a verifier rejected my first version.** ~140 s reset + ~100 s redeploy +
+~135 s trial = 375 s/trial → **≈3.1 h** for one sub-arm; with two sub-arms, each with its own
+reset and deploy, 2 × 375 = 750 s/trial → **≈6.25 h** *(corrected again: this entry first said
+510 s / 4.25 h, which assumed a shared reset — see below)*. My first figure (2.5 h) omitted the mandatory redeploy and used the wrong multiplier.
+
+**A design idea I proposed and then rejected on review:** sharing one reset between C1 and C2 to
+halve the cost. C1 *edits the cell*, so C2 would read a document C1 had already changed — the arm
+would be invalid. The saving was one reset per trial (~240 s of 750, reset plus deploy), nowhere near worth it. **Each
+sub-arm now gets its own `clean-base` restore**, and M1-021 carries a C1/C2 discriminator in the row
+schema so the two cannot collide in transcripts.
+
+**Resumability stands:** every row begins from its own restore, so a chunk boundary is just another
+row boundary and a chunked window is as valid as one block — and safer, since a host sleep (log 41)
+or a UTM wedge (log 35) otherwise costs the whole run.
+
+**Acceptance criterion 7 held explicitly:** same `clean-base` snapshot, same
+`scripts/reset-trial-vm.sh`, same deploy flow, same 30 parameter sets, model and settings verbatim in
+the report, and every unavoidable deviation stated beside the numbers — which the design already
+required in §3.5 and now restates in §2 and §2.1.
+
+**Also noted:** the survey's §7.3 sign-test threshold was fixed at source by the research thread
+(PR #45, `≥6` not `≥5`), matching the correction in log 54. Main is 31f9083.
+
+## Log 2026-11-21 (56) — Tiffany's TIF-19 decisions recorded; no VM touched
+Decided 2026-11-21 4:04 PM EST (design §9.0 now carries the table):
+1. **Cua install: YES, gated.** Only after the M1-013 sweep **and** the corrupted run finish, only with the Coordinator's go, and **a new snapshot is taken before installing** so the Myco arm's `clean-base` stays reproducible.
+2. **Planner: paid Claude Sonnet 5.5 via the Anthropic API**, local Ollama `qwen3.8-uncensored` kept wired as the fallback. Needs `ANTHROPIC_API_KEY` with billing (design §9.1): **$1.13-$5.58 per 30 trials per arm, $2.26-$11.16 for C1+C2.** The outer loop manages the credential. The later run limits are **$9.00 total** and **$4.50 per arm by default**. Run C1 first, stop at a row boundary before crossing a cap, and report partial results and actual spend for each arm.
+3. **C2: YES.** C1 and C2 reported separately, with an independent clean-base restore from the Cua-enabled snapshot for each trial.
+4. **External subset (M1-027/TIF-58): deferred** until after M1 sign-off. **No public-score arm and no frontier third column** for now.
+
+The Screenshot Baseline Owner received the planner, arm, spend, and VM requirements for M1-021. Installation and trial execution await the Coordinator's go.
+
+## Log 2026-11-21 (57) — consolidated: provider switch, 6 GB guest, seed fix, v2 stop, 240 s deadline, v3 plan
+(Folds in the coordinator logs numbered 46-47 on the unmerged `docs/host-block` branch, renumbered into 57. Main already has unrelated logs 46-48.)
+- **Provider switch:** cheaperinference is exhausted (402). The coordinator now runs on Claude Opus. Builders go to Codex (gpt-6.2-sol), verifiers to Claude Sonnet or Codex, never kimi-k3. Delegate audit (2026-11-21 22:05Z): the only cheaperinference child not completed is "Build: M1-011 recovery" (interrupted 2026-11-19). It must NOT be restarted: it was resumed, completed and verified as PR #23. Nothing needs re-spawning.
+- **ENV CHANGE (Tiffany-approved):** myco-win11 memory 8192 → 6144 MB, 6 vCPU unchanged, applied 2026-11-21 20:00Z via UTM AppleScript while stopped. Verified: cold reset 25 s, DEPLOY OK 20 s, token present, guest reports 6,435,897,344 bytes. Recorded in ~/VMs/myco-win11/README.md (Changelog).
+- **Pilot (NOT counted):** /tmp/m1-013/pilot-8gb-single-fixture/. Idx 0-4: 3 verified, 1 harness-error, 1 uncertain. Every trial ran on one fixture, because the old /tmp runner never passed the seed.
+- **PR #53 (seed fix):** `scripts/m1-sweep.sh` is now in the repo. It passes `--seed` per trial; every trial reports its fixture CSV SHA-256, which is checked per trial (exit 7 on mismatch); the final check requires all 6 seeds (exit 8).
+- **Sweep v2 (NOT counted), stopped:** /tmp/m1-013/sweep-v2/, on 6 GB with the seed fix. Idx 0-4: 3 verified, 2 uncertain (idx 1 seed-b and idx 3 seed-d, both "fixture convert did not produce fixture.xlsx within 60000ms"). Stopped at the trial boundary after idx 4, per the stop rule.
+- **Diagnosis:** a cold headless convert right after a reset took 30.8 s, and once 169.4 s (/tmp/m1-013/convert-diag/). Warm converts took 13 s and 6 s. Write-up: docs/research/experiments/m1-013-convert-timeout.md.
+- **Outer loop APPROVED a 240 s deadline.** PR #71, merged as 4996913: `FIXTURE_CONVERT_DEADLINE_MS = 240_000` at the live call site; `fixtureConvert` = {deadlineMs, durationMs, outcome} in the report and the sweep record. Also closes the PR #68 P1: a seed-mismatch fails `--final`, and the driver refuses to resume over one (exit 9). Verified by a Sonnet verifier: budget 240 s convert ≈ 400 s worst case, inside the 600 s alarm.
+- **PR #68 merged (aa96974):** runbook §7.3 sweep driver; docs/m1-scorecard.md (only row 2 fully DONE; rows 1, 5, 6 and 8 PARTIAL; rows 3, 4 and 7 OPEN); scripts/m1-scorecard.py with a seed-mismatch disqualifier. Verified after one REJECT round.
+- **PR #56 (Foundry `claim` event):** reviewed as schema owner. Approved: nothing in the verdict path reads trace events.
+- **M1-014 live corrupted suite:** delegated to Codex ("Build: M1-014 live corrupted suite") to add live modes for invalid-target, delayed-save and focus-change, plus `scripts/m1-corrupt-suite.sh` with a false-success audit. No VM use by the builder.
+- **Canaries:** seed-b and seed-d, cold, on aa96974, output in /tmp/m1-013/canary-240s/. Then sweep v3 from index 0 in a fresh OUT, pinned at aa96974 (worktree /tmp/m1-013/ws).
+- **VM queue after v3 (agreed with the owners):** (1) v3 → (2) M1 live corrupted suite → (3) Runtime RT-020, 45 min → (4) Screenshot Baseline Cua C1, the ONLY C1 run (Foundry reuses its evidence) → (5) Foundry TIF-58 Microsoft Hybrid Computer Use GUI channel. Slots 4-5 install into the guest on a NEW snapshot; clean-base and clean-base-live are preserved. Every slot needs an explicit GO from the coordinator.
+- **Open gap (scorecard row 6):** the live entrypoints emit no conformance ledger. Needs a ledger, or a documented trials.jsonl → ledger mapping, before row 6 closes.
+- **Update 23:05Z:** the canaries are DONE (/tmp/m1-013/canary-240s/): seed-b idx 1 verified, convert 45.0 s; seed-d idx 3 verified, convert 31.4 s; both fixture hashes match. Two earlier canary runs were mis-parameterized (zsh did not split the arguments). They are kept only as timing samples (116.9 s and 19.7 s) in /tmp/m1-013/canary-240s-misparam/ and are NOT canaries. **Sweep v3 started 22:39:34Z** in /tmp/m1-013/sweep-v3/, pinned at aa96974. First results: idx 0, 1 and 2 verified, with converts of 39.9 s, 71.5 s (would have failed at 60 s) and 25.0 s.
+- **M1-014 merged:** PR #73 → fb910d6, two verifier rounds. It adds `scripts/m1-corrupt-suite.sh`: 18 trials, 4 classes × 3 without recovery plus kill × 3 and invalid-target × 3 with recovery, a host-ground-truth false-success audit, and a ledger. It also adds a shared VM lock, `scripts/vm-lock.sh` at /tmp/myco-win11.vm.lock, used by both drivers and by reset-trial-vm.sh; it refuses with exit 10 and also refuses while the pre-lock v3 sweep runs. The builder ran nothing on the VM. The injections are unverified on real Calc until the suite runs (queue slot 2).

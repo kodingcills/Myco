@@ -2,7 +2,7 @@
 
 Canonical in-repo backlog for the MVP Discovery workstream. The outer loop mirrors
 this into Linear, team TIF, project **P-TIF-5 Myco MVP Discovery**. Agents in this
-repo do not have Linear access (docs/agents/issue-tracker.md); MVD ids are the record,
+repo may read Linear and update only the issue they work on, never create or restructure issues (AGENTS.md, docs/agents/issue-tracker.md); MVD ids are the record,
 and the `(TIF-nn)` tag is copied from the Linear issue it mirrors.
 
 Ids are stable; never renumber. `blocked_by` lists markdown ids. Owner roles:

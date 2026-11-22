@@ -4,8 +4,8 @@ Issues and specs for this repo live in **Linear**, team **TIF**.
 
 ## Access model
 
-- **Tiffany's outer-loop assistant** (T3 Code Bridge, Grok Bot) owns Linear. It is the only writer.
-- Agents working in this repo (including the M1 coordinator) do **not** have Linear credentials. They MUST NOT attempt Linear API calls, create Linear accounts, or install Linear tooling.
+- **Tiffany's outer-loop assistant** (T3 Code Bridge, Grok Bot) owns Linear. It is the only party that creates, deletes, re-parents, or moves issues, or edits scope.
+- Agents working in this repo (including Claude cloud sessions) MAY read Linear and MAY update status, comment on, and link PRs to the TIF issue they are working on. They MUST NOT create, delete, re-parent, or move issues between projects, edit other issues' scope, create Linear accounts, or install Linear tooling beyond what the session already provides.
 - The canonical backlog lives in this repo as markdown: `docs/backlog/m1.md` (Milestone 1). Each entry carries a stable id, title, description, acceptance criteria, owner role, and explicit `blocked_by` ids.
 - The outer loop mirrors `docs/backlog/*.md` into Linear (team TIF) and reports back the Linear identifiers. Until then, refer to issues by their markdown ids (e.g. `M1-007`).
 - Status flow: an agent updates `docs/backlog/m1.md` and `docs/coordination/m1-state.md`; the outer loop propagates to Linear. Escalations (blockers, decisions needing Tiffany) go in the coordinator's end-of-turn report, not in Linear.

@@ -23,6 +23,14 @@ fn main() {
         .map(|s| serde_json::from_str(s).unwrap_or(Value::Null))
         .unwrap_or(Value::Null);
 
+    // A failed workspace lookup stops here with the remediation; never continue with a
+    // guessed path (the old fallback to "." made later errors misleading).
+    if !op.is_empty() {
+        if let Err(e) = myco_rt_backend_qemu::workspace::discover() {
+            println!("{}", json!({"ok": false, "op": op, "error": e}));
+            std::process::exit(1);
+        }
+    }
     match run(&op, payload) {
         Ok(v) => println!("{v}"),
         Err(e) => {
@@ -35,11 +43,14 @@ fn main() {
 fn state_path() -> PathBuf {
     std::env::var("MYCO_RT_STATE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("runtime/state/session.json"))
+        .unwrap_or_else(|_| workspace().join("runtime/state/session.json"))
 }
 
 fn workspace() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    myco_rt_backend_qemu::workspace::discover().unwrap_or_else(|e| {
+        eprintln!("myco-rt: {e}");
+        PathBuf::from(".")
+    })
 }
 
 fn load_session(state: &PathBuf) -> Result<(String, String), String> {

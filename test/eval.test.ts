@@ -148,28 +148,34 @@ describe("eval harness", () => {
     expect(summary.falseSuccesses).toBe(0);
   });
 
-  it("returns an uncertain verdict when the persisted file is unreadable", async () => {
-    const { file } = freshSheet("corrupt");
-    const summary = await runEvaluation({
-      adapterFor: (t) => new FakeSpreadsheetApp({ filePath: file(t) }),
-      verifier: cellVerifier,
-      family: setCellFamily,
-      faults: [
-        {
-          name: "corrupt-persisted-file",
-          afterProgram(ctx) {
-            const p = file(ctx.trialIndex);
-            writeFileSync(p, "garbage that parses as a blank cell");
-            chmodSync(p, 0o000);
+  // chmod 000 does not block root, so the file stays readable and the fault never arms
+  // (seen in the Claude cloud container, which runs as root). Skip there rather than
+  // weaken the assertion.
+  it.skipIf(process.getuid?.() === 0)(
+    "returns an uncertain verdict when the persisted file is unreadable",
+    async () => {
+      const { file } = freshSheet("corrupt");
+      const summary = await runEvaluation({
+        adapterFor: (t) => new FakeSpreadsheetApp({ filePath: file(t) }),
+        verifier: cellVerifier,
+        family: setCellFamily,
+        faults: [
+          {
+            name: "corrupt-persisted-file",
+            afterProgram(ctx) {
+              const p = file(ctx.trialIndex);
+              writeFileSync(p, "garbage that parses as a blank cell");
+              chmodSync(p, 0o000);
+            },
           },
-        },
-      ],
-      trials: 1,
-      filePathFor: file,
-    });
-    const result = summary.results[0];
-    expect(result?.verdict?.status).toBe("uncertain");
-    expect(result?.verdict?.status).not.toBe("refuted");
-    expect(result?.verdict?.status).not.toBe("verified");
-  });
+        ],
+        trials: 1,
+        filePathFor: file,
+      });
+      const result = summary.results[0];
+      expect(result?.verdict?.status).toBe("uncertain");
+      expect(result?.verdict?.status).not.toBe("refuted");
+      expect(result?.verdict?.status).not.toBe("verified");
+    },
+  );
 });
