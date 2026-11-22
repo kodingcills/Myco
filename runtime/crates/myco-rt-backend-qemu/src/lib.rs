@@ -515,6 +515,14 @@ fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
     newest
 }
 
+impl myco_rt_core::ops::GuestFileRead for QemuLinuxBackend {
+    type ReadErr = BackendError;
+
+    fn read_guest_file(&mut self, path: &str) -> Result<Vec<u8>, BackendError> {
+        self.read_guest_file(path) // inherent method
+    }
+}
+
 impl Backend for QemuLinuxBackend {
     type Err = BackendError;
 

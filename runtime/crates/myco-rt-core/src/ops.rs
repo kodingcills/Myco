@@ -77,6 +77,14 @@ pub struct EvidenceArtifacts {
     pub result_path: String,
 }
 
+/// Extension capability (RT-015): a backend that can read guest files under an
+/// explicit grant. Separate from `Backend` so a backend without file access is
+/// still a valid backend.
+pub trait GuestFileRead {
+    type ReadErr: std::error::Error + Send + Sync + 'static;
+    fn read_guest_file(&mut self, path: &str) -> Result<Vec<u8>, Self::ReadErr>;
+}
+
 /// The host backend seam. Implementations: QemuLinuxBackend (RT-006), later
 /// UtmWindowsBackend (RT-012) and CloudBackend. The six runtime ops route here.
 pub trait Backend: Send {
