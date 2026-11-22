@@ -57,11 +57,13 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   the hidden split has separate roots and an import test proves `src/` cannot reach it.
 
 ### EF-003 (TIF-52) Fault injection for GUI-specific failure modes
-- **status:** in progress — six classes implemented and tested (`src/foundry/faults/`):
-  stale-ui, interrupted-write, partial-persistence, crash-mid-save, permission-denied, and
-  **autocorrect-rewrite** on the new Writer table family (`src/foundry/tasks/writer.ts`,
-  `src/foundry/oracles/writer.ts`). Remaining: the 30-corrupted-trial run and its
-  zero-event bound, which needs the VM.
+- **status:** **partial — six classes built and verified** (PR #122 merged c37d944, verifier
+  PASS at 91c3371): stale-ui, interrupted-write, partial-persistence, crash-mid-save,
+  permission-denied, and **autocorrect-rewrite** on the Writer table family
+  (`src/foundry/tasks/writer.ts`, `src/foundry/oracles/writer.ts`), wired into the public
+  task bank as `ef-t05-writer-total`. **Remaining and blocking "done":** the 30-corrupted-trial
+  run and its zero-event bound, which needs VM time; and a live Writer/UNO read to replace the
+  model, which needs the same.
 - **owner:** foundry-owner
 - **blocked_by:** EF-001, EF-002
 - **description:** Failures that a screenshot-only agent mishandles: interrupted writes, stale
