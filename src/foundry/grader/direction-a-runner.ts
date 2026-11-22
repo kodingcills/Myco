@@ -218,7 +218,7 @@ export async function renderStepScreenshots(
   let browser: { close: () => Promise<void> } | null = null;
   let page: {
     setContent: (html: string) => Promise<void>;
-    screenshot: (opt: { path: string; animations: string }) => Promise<Buffer>;
+    screenshot: (opt: { path: string; animations: "disabled" }) => Promise<Buffer>;
   } | null = null;
 
   try {
