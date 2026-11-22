@@ -5,7 +5,7 @@ import { ledgerRowSchema } from "../../schemas/ledger-row.ts";
 import { resultRecordSchema } from "../../schemas/result-record.ts";
 import { traceEventSchema } from "../../schemas/trace-events.ts";
 import { validateSchema } from "../../schemas/validate.ts";
-import { loadTaskPackage, runDirectionATask } from "../../src/tasks/direction-a-runner.ts";
+import { loadTaskPackage, runDirectionATask } from "../../src/foundry/grader/direction-a-runner.ts";
 
 describe("Direction A: Verified GUI Task Package & Runner", () => {
   it("parses tasks/todo-save.yaml cleanly", () => {

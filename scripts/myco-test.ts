@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { loadTaskPackage, runDirectionATask } from "../src/tasks/direction-a-runner.ts";
+import { loadTaskPackage, runDirectionATask } from "../src/foundry/grader/direction-a-runner.ts";
 
 async function main() {
   const yamlArg = process.argv[2] ?? "tasks/todo-save.yaml";
@@ -11,7 +11,12 @@ async function main() {
   process.stdout.write(`[myco] App: ${taskPkg.app} on ${taskPkg.desktop}\n`);
   process.stdout.write(`[myco] Prompt: "${taskPkg.prompt}"\n\n`);
 
-  process.stdout.write("[myco] Executing task package under Myco verification harness...\n\n");
+  process.stdout.write(
+    "[myco] Executing task package under Myco simulated contract dry-run harness...\n",
+  );
+  process.stdout.write(
+    "[myco] NOTE: Dry-run harness only. Live Direction A head-to-head evidence requires Runtime RT-020 desktop + Coordinator VM/host GO.\n\n",
+  );
   const result = await runDirectionATask(taskPkg);
 
   process.stdout.write("========================================================\n");

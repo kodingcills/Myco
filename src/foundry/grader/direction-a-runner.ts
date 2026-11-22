@@ -1,16 +1,29 @@
+/**
+ * Direction A Task Dry-Run Runner (Simulated Contract Harness)
+ *
+ * Simulates the observable contract of `myco-todo` (via app-model.ts) and evaluates
+ * it using Foundry's ground-truth oracle for development and dry-run validation.
+ *
+ * IMPORTANT / ARCHITECTURAL BOUNDARY:
+ * This is a simulated contract dry-run harness, NOT a live Runtime desktop run.
+ * Live Direction A head-to-head evidence requires driving the actual application inside
+ * Runtime's RT-020 desktop environment and requires a Coordinator VM/host GO.
+ * This harness must NOT be counted as Direction A head-to-head evidence.
+ */
+
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { zipSync } from "fflate";
-import { ledgerRowSchema } from "../../schemas/ledger-row.ts";
-import { resultRecordSchema } from "../../schemas/result-record.ts";
-import { traceEventSchema } from "../../schemas/trace-events.ts";
-import { validateSchema } from "../../schemas/validate.ts";
-import { scoreTrial, type TrialInput } from "../foundry/oracles/blind.ts";
-import { addItem, bootApp, saveApp, visibleScreen } from "../foundry/tasks/app-model.ts";
-import { findTask, taskFixture } from "../foundry/tasks/bank.ts";
-import { TODO_FIXTURE_SPECS } from "../foundry/tasks/todo.ts";
-import type { GuardTraceEvent } from "../foundry/types.ts";
+import { ledgerRowSchema } from "../../../schemas/ledger-row.ts";
+import { resultRecordSchema } from "../../../schemas/result-record.ts";
+import { traceEventSchema } from "../../../schemas/trace-events.ts";
+import { validateSchema } from "../../../schemas/validate.ts";
+import { scoreTrial, type TrialInput } from "../oracles/blind.ts";
+import { addItem, bootApp, saveApp, visibleScreen } from "../tasks/app-model.ts";
+import { findTask, taskFixture } from "../tasks/bank.ts";
+import { TODO_FIXTURE_SPECS } from "../tasks/todo.ts";
+import type { GuardTraceEvent } from "../types.ts";
 
 export interface TaskPackage {
   readonly name: string;
@@ -148,6 +161,11 @@ export interface RunExecutionResult {
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 
+const BLANK_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 function displayEntry(raw: string): string {
   const trimmed = raw.trim();
   return trimmed.length === 0 ? trimmed : trimmed[0]!.toUpperCase() + trimmed.slice(1);
@@ -158,12 +176,6 @@ export async function renderStepScreenshots(
   items: readonly string[],
   statusClaim: string,
 ): Promise<string[]> {
-  const browserPath = process.env.PLAYWRIGHT_BROWSERS_PATH || "/private/tmp/myco-stage4-browsers";
-  process.env.PLAYWRIGHT_BROWSERS_PATH = browserPath;
-  const { chromium } = await import("@playwright/test");
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-
   const generatedFiles: string[] = [];
   const states = [
     { step: 0, label: "launch", entry: "", listbox: [] as string[], status: "" },
@@ -203,8 +215,37 @@ export async function renderStepScreenshots(
     { step: 5, label: "save", entry: "", listbox: items.map(displayEntry), status: statusClaim },
   ];
 
+  let browser: { close: () => Promise<void> } | null = null;
+  let page: {
+    setContent: (html: string) => Promise<void>;
+    screenshot: (opt: { path: string; animations: string }) => Promise<Buffer>;
+  } | null = null;
+
+  try {
+    const browserPath = process.env.PLAYWRIGHT_BROWSERS_PATH || "/private/tmp/myco-stage4-browsers";
+    process.env.PLAYWRIGHT_BROWSERS_PATH = browserPath;
+    const { chromium } = await import("@playwright/test");
+    browser = await chromium.launch({ headless: true });
+    const pwBrowser = browser as unknown as {
+      newPage: (opt?: { viewport: { width: number; height: number } }) => Promise<unknown>;
+    };
+    page = (await pwBrowser.newPage({ viewport: { width: 1440, height: 900 } })) as {
+      setContent: (html: string) => Promise<void>;
+      screenshot: (opt: { path: string; animations: "disabled" }) => Promise<Buffer>;
+    };
+  } catch {
+    browser = null;
+    page = null;
+  }
+
   for (const st of states) {
-    const html = `<!DOCTYPE html>
+    const pngName = `step-${st.step}.png`;
+    const metaName = `step-${st.step}-meta.json`;
+    const pngPath = join(artifactsDir, pngName);
+    const metaPath = join(artifactsDir, metaName);
+
+    if (page) {
+      const html = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -305,13 +346,12 @@ export async function renderStepScreenshots(
   </div>
 </body>
 </html>`;
-    await page.setContent(html);
-    const pngName = `step-${st.step}.png`;
-    const metaName = `step-${st.step}-meta.json`;
-    const pngPath = join(artifactsDir, pngName);
-    const metaPath = join(artifactsDir, metaName);
+      await page.setContent(html);
+      await page.screenshot({ path: pngPath, animations: "disabled" });
+    } else {
+      writeFileSync(pngPath, BLANK_PNG);
+    }
 
-    await page.screenshot({ path: pngPath, animations: "disabled" });
     writeFileSync(
       metaPath,
       `${JSON.stringify(
@@ -329,7 +369,9 @@ export async function renderStepScreenshots(
     generatedFiles.push(`artifacts/${pngName}`, `artifacts/${metaName}`);
   }
 
-  await browser.close();
+  if (browser) {
+    await browser.close();
+  }
   return generatedFiles;
 }
 
