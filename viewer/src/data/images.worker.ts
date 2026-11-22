@@ -1,7 +1,21 @@
 import tokens from "../../../docs/design/tokens.json";
 import { loadRunFiles, type RunFileInput, type RunFiles } from "./loaders.ts";
 
-type ImageJob = { id: number; path: string; full: boolean; priority: boolean };
+import { inspectScreenshot } from "./screenshot-format.ts";
+
+/** thumb: 96 px preview. view: decoded at display width for the Inspector. original: 1:1 for the lightbox. */
+export type ImageSize = "thumb" | "view" | "original";
+export type ImageResponse = {
+  id: number;
+  blob?: Blob;
+  bitmap?: ImageBitmap;
+  /** Pixel size declared by the source image (the bitmap can be smaller for the view size). */
+  width?: number;
+  height?: number;
+  incomplete?: boolean;
+};
+
+type ImageJob = { id: number; path: string; size: ImageSize; priority: boolean; viewWidth: number };
 export type ImageRequest =
   | { files: RunFileInput[] }
   | { cancel: number }
@@ -16,7 +30,10 @@ const canceled = new Set<number>();
 function drain() {
   while (active.size < 2 && queue.size) {
     const jobs = [...queue.values()];
-    const job = jobs.find(({ full }) => full) ?? jobs.find(({ priority }) => priority) ?? jobs[0]!;
+    const job =
+      jobs.find(({ size }) => size !== "thumb") ??
+      jobs.find(({ priority }) => priority) ??
+      jobs[0]!;
     queue.delete(job.id);
     active.add(job.id);
     void respond(job).finally(() => {
@@ -42,18 +59,56 @@ async function thumbnail(source: Blob) {
   return canvas.convertToBlob({ type: "image/webp" });
 }
 
-async function respond({ id, path, full }: ImageJob) {
+async function respond({ id, path, size, viewWidth }: ImageJob) {
   try {
-    const source = (await files).read(path);
-    if (!source || canceled.has(id)) {
-      if (!canceled.has(id)) self.postMessage({ id });
+    const run = await files;
+    if (canceled.has(id)) return;
+    const source = run.read(path);
+    if (!source) {
+      self.postMessage({ id });
       return;
     }
-    // The browser decodes the original image for the Inspector and lightbox. Round-tripping
-    // through a worker bitmap and PNG encoder would duplicate the full decode on every miss.
-    const type = /\.webp$/i.test(path) ? "image/webp" : "image/png";
-    const blob = full ? source.slice(0, source.size, type) : await thumbnail(source);
-    if (!canceled.has(id)) self.postMessage({ id, blob });
+    const format = /\.webp$/i.test(path) ? "webp" : "png";
+    const { container, width, height } = await inspectScreenshot(source, format);
+    if (canceled.has(id)) return;
+    if (container === "complete" && width && height) {
+      if (size === "thumb") {
+        const blob = await thumbnail(source).catch(() => undefined);
+        if (blob) {
+          if (!canceled.has(id)) self.postMessage({ id, blob } satisfies ImageResponse);
+          return;
+        }
+      } else {
+        const resize = size === "view" && width > viewWidth;
+        const bitmap = await createImageBitmap(
+          source,
+          resize ? { resizeWidth: viewWidth, resizeQuality: "high" } : undefined,
+        ).catch(() => undefined);
+        if (bitmap) {
+          if (canceled.has(id)) bitmap.close();
+          else {
+            try {
+              self.postMessage({ id, bitmap, width, height } satisfies ImageResponse, {
+                transfer: [bitmap],
+              });
+            } catch (error) {
+              bitmap.close();
+              throw error;
+            }
+          }
+          return;
+        }
+      }
+    }
+    if (!canceled.has(id)) {
+      const incomplete = container !== "unavailable";
+      // The DOM decoder can display partial evidence. Only the larger views carry the marker.
+      const blob =
+        size !== "thumb" && incomplete
+          ? source.slice(0, source.size, `image/${format}`)
+          : undefined;
+      self.postMessage({ id, blob, incomplete } satisfies ImageResponse);
+    }
   } catch {
     if (!canceled.has(id)) self.postMessage({ id });
   }

@@ -74,7 +74,7 @@ function StepOption({
         {stepLabel(row.step, digits)}
       </span>
       <span data-step-thumb title={imageLabel}>
-        {image.kind === "ready" ? (
+        {image.kind === "ready" && "url" in image ? (
           <img src={image.url} alt="Step screenshot" />
         ) : image.kind === "loading" ? (
           <span className="sr-only">{imageLabel}</span>

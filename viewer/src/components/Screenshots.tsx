@@ -7,79 +7,92 @@ import {
   useMemo,
   useSyncExternalStore,
 } from "react";
-import type { ImageRequest } from "../data/images.worker.ts";
+import type { ImageRequest, ImageResponse, ImageSize } from "../data/images.worker.ts";
 import ImageWorker from "../data/images.worker.ts?worker&inline";
 import type { RunFileInput } from "../data/loaders.ts";
 
-type SettledImage = { kind: "ready"; url: string } | { kind: "unavailable" };
+type SettledImage =
+  | { kind: "ready"; id: number; bitmap: ImageBitmap; width: number; height: number }
+  | { kind: "ready"; url: string; incomplete: boolean }
+  | { kind: "unavailable"; incomplete?: boolean };
 type ImageAsset = SettledImage | { kind: "loading" } | { kind: "unrecorded" };
 
 type ImageEntry = {
   id: number;
   key: string;
-  full: boolean;
+  size: ImageSize;
   url?: string;
   image?: HTMLImageElement;
+  bitmap?: ImageBitmap;
   asset?: SettledImage;
   listeners: Set<() => void>;
 };
 
-const fullImageLimit = 64;
-// 64 desktop captures can exceed 300 MB of decoded pixels on their own.
-const fullImageByteLimit = 64 * 1024 * 1024;
+// Cached Inspector bitmaps are decoded at display width, so the spec's 64 entries fit the budget.
+// The byte limit still bounds a high-density display, where each view is larger.
+const viewImageLimit = 64;
+const viewImageByteLimit = 64 * 1024 * 1024;
 const loading = { kind: "loading" } as const;
 const unrecorded = { kind: "unrecorded" } as const;
-const imageKey = (path: string, full: boolean) => JSON.stringify([path, full]);
+type ViewSize = { width: number; dpr: number };
+const imageKey = (path: string, size: ImageSize, view?: ViewSize) =>
+  JSON.stringify([path, size, view?.width, view?.dpr]);
 
 class RunImages {
   private worker?: Worker;
   private nextId = 0;
   private entries = new Map<string, ImageEntry>();
   private pending = new Map<number, ImageEntry>();
-  private fullLRU = new Map<ImageEntry, number>();
-  private fullBytes = 0;
+  private viewLRU = new Map<ImageEntry, number>();
+  private viewBytes = 0;
 
   constructor(private files: readonly RunFileInput[]) {}
 
-  get(path: string, full: boolean) {
-    return this.entries.get(imageKey(path, full))?.asset ?? loading;
+  get(path: string, size: ImageSize, view?: ViewSize) {
+    return this.entries.get(imageKey(path, size, view))?.asset ?? loading;
   }
 
-  acquire(path: string, full: boolean, priority: boolean, listener: () => void) {
-    const key = imageKey(path, full);
+  acquire(path: string, size: ImageSize, priority: boolean, listener: () => void, view?: ViewSize) {
+    const key = imageKey(path, size, view);
     let entry = this.entries.get(key);
     if (!entry) {
       this.startWorker();
-      entry = { id: ++this.nextId, key, full, listeners: new Set() };
+      entry = { id: ++this.nextId, key, size, listeners: new Set() };
       this.entries.set(key, entry);
       this.pending.set(entry.id, entry);
-      this.worker?.postMessage({ id: entry.id, path, full, priority } satisfies ImageRequest);
+      this.worker?.postMessage({
+        id: entry.id,
+        path,
+        size,
+        priority,
+        viewWidth: view ? Math.ceil(view.width * view.dpr) : 0,
+      } satisfies ImageRequest);
     } else if (priority && this.pending.has(entry.id)) {
       this.worker?.postMessage({ prioritize: entry.id } satisfies ImageRequest);
     }
 
-    const bytes = this.fullLRU.get(entry);
+    const bytes = this.viewLRU.get(entry);
     if (bytes !== undefined) {
-      this.fullLRU.delete(entry);
-      this.fullLRU.set(entry, bytes);
+      this.viewLRU.delete(entry);
+      this.viewLRU.set(entry, bytes);
     }
 
     const acquired = entry;
     acquired.listeners.add(listener);
     return () => {
       acquired.listeners.delete(listener);
-      if (!acquired.listeners.size && !this.fullLRU.has(acquired)) this.release(acquired);
+      if (!acquired.listeners.size && !this.viewLRU.has(acquired)) this.release(acquired);
     };
   }
 
   private retain(entry: ImageEntry, bytes: number) {
-    if (bytes > fullImageByteLimit) return;
-    this.fullLRU.set(entry, bytes);
-    this.fullBytes += bytes;
-    for (const [oldest, cost] of this.fullLRU) {
-      if (this.fullLRU.size <= fullImageLimit && this.fullBytes <= fullImageByteLimit) break;
-      this.fullLRU.delete(oldest);
-      this.fullBytes -= cost;
+    if (bytes > viewImageByteLimit) return;
+    this.viewLRU.set(entry, bytes);
+    this.viewBytes += bytes;
+    for (const [oldest, cost] of this.viewLRU) {
+      if (this.viewLRU.size <= viewImageLimit && this.viewBytes <= viewImageByteLimit) break;
+      this.viewLRU.delete(oldest);
+      this.viewBytes -= cost;
       if (!oldest.listeners.size) this.release(oldest);
     }
   }
@@ -91,23 +104,40 @@ class RunImages {
     }
     if (entry.url) URL.revokeObjectURL(entry.url);
     entry.image?.removeAttribute("src");
+    entry.bitmap?.close();
   }
 
   private startWorker() {
     if (this.worker) return;
     this.worker = new ImageWorker();
-    this.worker.onmessage = ({ data }: MessageEvent<{ id: number; blob?: Blob }>) => {
+    this.worker.onmessage = ({ data }: MessageEvent<ImageResponse>) => {
       const entry = this.pending.get(data.id);
       this.pending.delete(data.id);
-      if (!entry) return;
+      if (!entry) {
+        data.bitmap?.close();
+        return;
+      }
 
       const publish = (asset: SettledImage) => {
         if (!entry.listeners.size || this.entries.get(entry.key) !== entry) return;
         entry.asset = asset;
         for (const listener of entry.listeners) listener();
       };
+      if (data.bitmap) {
+        entry.bitmap = data.bitmap;
+        // Only the Inspector's view size is cached. The lightbox's 1:1 bitmap lives while it is open.
+        if (entry.size === "view") this.retain(entry, data.bitmap.width * data.bitmap.height * 4);
+        publish({
+          kind: "ready",
+          bitmap: data.bitmap,
+          id: data.id,
+          width: data.width ?? data.bitmap.width,
+          height: data.height ?? data.bitmap.height,
+        });
+        return;
+      }
       if (!data.blob) {
-        publish({ kind: "unavailable" });
+        publish({ kind: "unavailable", incomplete: data.incomplete });
         return;
       }
 
@@ -117,13 +147,13 @@ class RunImages {
       entry.image = image;
       image.src = url;
       void image.decode().then(
+        () => publish({ kind: "ready", url, incomplete: data.incomplete ?? false }),
         () => {
-          if (entry.full && entry.listeners.size && this.entries.get(entry.key) === entry) {
-            this.retain(entry, image.naturalWidth * image.naturalHeight * 4);
-          }
-          publish({ kind: "ready", url });
+          URL.revokeObjectURL(url);
+          entry.url = undefined;
+          entry.image = undefined;
+          publish({ kind: "unavailable", incomplete: data.incomplete });
         },
-        () => publish({ kind: "unavailable" }),
       );
     };
     this.worker.postMessage({
@@ -137,8 +167,8 @@ class RunImages {
     this.worker?.terminate();
     this.worker = undefined;
     for (const entry of this.entries.values()) this.release(entry);
-    this.fullLRU.clear();
-    this.fullBytes = 0;
+    this.viewLRU.clear();
+    this.viewBytes = 0;
   }
 }
 
@@ -156,13 +186,18 @@ export function Screenshots({
   return <ImageContext.Provider value={images}>{children}</ImageContext.Provider>;
 }
 
-export function useScreenshotAsset(path?: string, full = false, priority = false): ImageAsset {
+export function useScreenshotAsset(
+  path?: string,
+  size: ImageSize = "thumb",
+  priority = false,
+  view?: ViewSize,
+): ImageAsset {
   const images = useContext(ImageContext);
   const subscribe = useCallback(
     (listener: () => void) =>
-      path && images ? images.acquire(path, full, priority, listener) : () => {},
-    [path, full, priority, images],
+      path && images ? images.acquire(path, size, priority, listener, view) : () => {},
+    [path, size, priority, images, view],
   );
-  const snapshot = () => (path ? (images?.get(path, full) ?? loading) : unrecorded);
+  const snapshot = () => (path ? (images?.get(path, size, view) ?? loading) : unrecorded);
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
