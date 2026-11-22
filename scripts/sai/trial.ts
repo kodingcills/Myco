@@ -3,7 +3,7 @@
  * read the turn record. One attempt, no retries. Launch-to-terminal wall time is measured here.
  */
 
-import { type Approval, type ApprovalPolicy, decideApproval } from "./approvals.ts";
+import { type ApprovalPolicy, decideApproval } from "./approvals.ts";
 import type { SaiClient } from "./client.ts";
 import { GuardStop } from "./guard.ts";
 
@@ -149,7 +149,7 @@ export async function runAgentTurn(client: SaiClient, req: TurnRequest): Promise
     if (typeof body.text === "string") out.finalText = body.text;
     const status = body.status;
     if (status === "needs_approval") {
-      const approval = (body.approval ?? {}) as Approval;
+      const approval = ev.approval ?? {};
       const decision = decideApproval(approval, req.policy);
       if (decision.action === "approve" && approval.approvalId) {
         client.ledger.append({
@@ -157,10 +157,10 @@ export async function runAgentTurn(client: SaiClient, req: TurnRequest): Promise
           label: `${req.label}:approval`,
           kind: "event",
           note: `approving ordinary approval: ${decision.reason}`,
-          data: { approvalType: approval.approvalType, command: approval.command },
+          data: { approvalType: "exec" },
         });
         out.approvals.push({
-          approvalType: approval.approvalType ?? null,
+          approvalType: approval.approvalType === "exec" ? "exec" : null,
           isLinkOnly: false,
           decision: "approve",
           reason: decision.reason,
@@ -177,7 +177,7 @@ export async function runAgentTurn(client: SaiClient, req: TurnRequest): Promise
       } else {
         const linkOnly = decision.action === "capture_and_abort";
         out.approvals.push({
-          approvalType: approval.approvalType ?? null,
+          approvalType: approval.approvalType === "exec" ? "exec" : null,
           isLinkOnly: linkOnly,
           decision: decision.action === "approve" ? "abort" : decision.action,
           reason: decision.action === "approve" ? "missing approvalId" : decision.reason,
@@ -189,7 +189,7 @@ export async function runAgentTurn(client: SaiClient, req: TurnRequest): Promise
           label: `${req.label}:approval`,
           kind: "event",
           note: linkOnly
-            ? `LINK-ONLY approval (${approval.approvalType ?? "unknown"}): URL captured to a private file outside the repo; task aborted; never opened or answered`
+            ? "LINK-ONLY approval: URL captured to a private file outside the repo; task aborted; never opened or answered"
             : `approval not allowed by policy; aborting: ${decision.action === "abort" ? decision.reason : ""}`,
         });
         await client.call({

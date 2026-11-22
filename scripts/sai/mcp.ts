@@ -51,7 +51,8 @@ export async function checkMcpServer(
 ): Promise<McpCheck> {
   const t0 = Date.now();
   const command = opts.command ?? "npx";
-  const args = opts.args ?? ["-y", "@simular-ai/sai-mcp"];
+  // Match the exact MCP version recorded in the S0 results.
+  const args = opts.args ?? ["-y", "@simular-ai/sai-mcp@0.6.0"];
   const timeoutMs = opts.timeoutMs ?? 180_000;
   const result: McpCheck = {
     ok: false,
@@ -69,7 +70,7 @@ export async function checkMcpServer(
   let buffer = "";
   try {
     child = spawn(command, args, {
-      env: { ...process.env, SAI_API_KEY: apiKey, SAI_LOCAL_VIEW: "0" },
+      env: { PATH: process.env.PATH, SAI_API_KEY: apiKey },
       stdio: ["pipe", "pipe", "pipe"],
     });
     child.stderr.on("data", () => undefined); // never surfaced: may echo configuration

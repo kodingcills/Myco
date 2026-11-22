@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import type { Approval } from "./approvals.ts";
 import { type AccountView, type Guard, GuardStop, parseAccount, type SpendKind } from "./guard.ts";
 import { excerpt, type Ledger } from "./ledger.ts";
 import { registerSecret, scrub } from "./redact.ts";
@@ -38,7 +39,7 @@ export interface HttpResult {
   status: number | null;
   ok: boolean;
   body: unknown;
-  text: string;
+  approval?: Approval;
   ms: number;
   error?: string;
 }
@@ -60,6 +61,61 @@ export type FetchLike = (
   url: string,
   init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal },
 ) => Promise<{ status: number; text: () => Promise<string> }>;
+
+const APPROVAL_SECRET = /(?:url|uri|link|token|code|secret|credential|password|key)$/i;
+
+function approvalSafeBody(body: unknown): unknown {
+  const secrets = new Set<string>();
+  let longestFirst: string[] = [];
+  const remember = (secret: string): void => {
+    if (!secret) return;
+    secrets.add(secret);
+    if (!/^https?:/i.test(secret)) return;
+    try {
+      const url = new URL(secret);
+      for (const [key, value] of url.searchParams) {
+        if (value && key !== "from") secrets.add(value);
+      }
+    } catch {
+      // An unparseable link is still sensitive in its entirety.
+    }
+  };
+  function visit(value: unknown, collect: boolean, insideApproval = false): unknown {
+    if (Array.isArray(value)) return value.map((item) => visit(item, collect, insideApproval));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([name, item]) => {
+          if (/^approval$/i.test(name)) {
+            if (collect) visit(item, true, true);
+            return ["approval", { present: true }];
+          }
+          if (
+            /^approval.*(?:url|uri|link|token|code|secret|credential|password|key)$/i.test(name)
+          ) {
+            if (collect && typeof item === "string") remember(item);
+            return ["approvalSecretPresent", true];
+          }
+          if (collect && insideApproval && APPROVAL_SECRET.test(name) && typeof item === "string")
+            remember(item);
+          return [String(visit(name, false)), visit(item, collect, insideApproval)];
+        }),
+      );
+    }
+    if (collect && insideApproval && typeof value === "string") {
+      for (const url of value.match(/https?:\/\/[^\s"'<>]+/gi) ?? []) remember(url);
+    }
+    if (!collect && typeof value === "string") {
+      let safe = value;
+      for (const secret of longestFirst) safe = safe.replaceAll(secret, "[REDACTED]");
+      return safe;
+    }
+    return value;
+  }
+  visit(body, true);
+  longestFirst = [...secrets].sort((a, b) => b.length - a.length);
+  for (const secret of longestFirst) registerSecret(secret);
+  return visit(body, false);
+}
 
 export class SaiClient {
   constructor(
@@ -108,6 +164,11 @@ export class SaiClient {
         body = text;
       }
     }
+    const approval =
+      o.path.split("?")[0] === "/v1/agents/events"
+        ? (body as { approval?: Approval } | null)?.approval
+        : undefined;
+    body = approvalSafeBody(body);
     const ok = status !== null && status >= 200 && status < 300;
     const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
     const displayPath = o.hideQuery ? o.path.split("?")[0] : o.path;
@@ -125,13 +186,13 @@ export class SaiClient {
         typeof b.code === "string"
           ? b.code
           : typeof b.error === "string"
-            ? b.error.slice(0, 80)
+            ? scrub(b.error).slice(0, 80)
             : null,
       usage: b.usage ?? "not_reported",
       excerpt: excerpt(error ? { networkError: error } : body),
     });
     if (status !== null) this.guard.observeResponse(status, body, o.label);
-    return { status, ok, body, text, ms, ...(error ? { error } : {}) };
+    return { status, ok, body, ms, ...(approval ? { approval } : {}), ...(error ? { error } : {}) };
   }
 
   /** GET /account → guard observation. Also ledgers the balance. */

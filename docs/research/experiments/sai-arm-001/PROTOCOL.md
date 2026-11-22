@@ -67,3 +67,9 @@ T1 attempt 2 ran under Amendment 1 and ended `succeeded`. Its disk readback was 
 ## Resumption record
 
 The resumed implementation used the existing S0 and T1 artifacts. Attempt 3 is the sole scored observation. The superseding execution constraints require an authenticated integration that does not expose credentials and prohibit answering approval prompts. No such integration was available, so the resume made no live calls. T2, T3 and T5 runner paths prepared offline remain unverified against the hosted service.
+
+## Amendment 3 (2026-11-22)
+
+- T1 approves only an exact no-argument Notepad launch or a literal read of that attempt's note. The setup commands still use Direct Control. Paths with traversal, alternate streams, variable expansion or extra command syntax are outside the allowlist.
+- The eight-start cap and the conversion, repair, Judge and local 20-per-hour message caps apply across runner invocations. The runner reserves each call in private state before sending it and locks state for the duration of a live invocation. Missing, corrupt or pre-counter state blocks live execution until the operator reconciles prior usage and provisions valid counters. An interrupted invocation may leave a lock that requires operator reconciliation before removal.
+- S0 runs the MCP check only with the explicit `--check-mcp` flag. The check uses `@simular-ai/sai-mcp@0.6.0` and passes only `PATH` and `SAI_API_KEY` to the child.

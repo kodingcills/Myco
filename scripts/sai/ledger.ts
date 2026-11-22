@@ -4,7 +4,7 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { scrubDeep } from "./redact.ts";
+import { scrub, scrubDeep } from "./redact.ts";
 
 export interface LedgerRow {
   seq: number;
@@ -54,6 +54,6 @@ export class Ledger {
 /** Truncate a body to a bounded, printable excerpt; screenshots/base64 blobs are dropped first. */
 export function excerpt(value: unknown, max = 600): string {
   const text = typeof value === "string" ? value : JSON.stringify(value);
-  const cleaned = (text ?? "").replace(/"base64":"[^"]*"/g, '"base64":"[omitted]"');
+  const cleaned = scrub((text ?? "").replace(/"base64":"[^"]*"/g, '"base64":"[omitted]"'));
   return cleaned.length > max ? `${cleaned.slice(0, max)}…[+${cleaned.length - max}]` : cleaned;
 }

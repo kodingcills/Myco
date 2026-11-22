@@ -24,16 +24,16 @@ const SHAPES: ReadonlyArray<readonly [RegExp, string]> = [
   [/sk-ant-[A-Za-z0-9_-]*/g, "[REDACTED:sk-ant]"],
   [/\bsk[-_][A-Za-z0-9_-]{8,}/g, "[REDACTED:sk]"],
   [
-    /\b(?:api[-_]?key|access[-_]?token|id[-_]?token|secret|password)["']?\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{8,}/gi,
+    /\b(?:api[-_]?key|(?:access[-_]?|id[-_]?)?token|secret|password)["']?\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]+/gi,
     "[REDACTED:credential]",
   ],
 ];
 
 /** Vendor ids are kept recognisable but never carry 20+ token characters. */
 const ID_PREFIXED =
-  /\b(turn|cs|learn|judgement|ap|tc|msg|m|ses|file|f)_([A-Za-z0-9]{4})[A-Za-z0-9]{4,}/g;
+  /\b(turn|cs|learn|judgement|ap|tc|msg|user|m|ses|file|f)_([A-Za-z0-9]{4})[A-Za-z0-9]{4,}/g;
 const FREE_MACHINE = /\bfree-[A-Za-z0-9]{8,}/g;
-const LONG_RUN = /[A-Za-z0-9_-]{20,}/g;
+const LONG_RUN = /https?:\/\/[a-z0-9.-]+(?::[0-9]+)?|[A-Za-z0-9_+/-]{20,}={0,2}/gi;
 
 function escapeForRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -41,14 +41,14 @@ function escapeForRegExp(text: string): string {
 
 export function scrub(input: string): string {
   let out = input;
-  for (const secret of registered) {
+  for (const secret of [...registered].sort((a, b) => b.length - a.length)) {
     out = out.replace(new RegExp(escapeForRegExp(secret), "g"), "[REDACTED]");
   }
   for (const [pattern, replacement] of SHAPES) out = out.replace(pattern, replacement);
   out = out.replace(ID_PREFIXED, "$1_$2…");
   out = out.replace(FREE_MACHINE, "free-[account]");
   out = out.replace(LONG_RUN, (run) =>
-    /[0-9]/.test(run) && /[A-Za-z]/.test(run) ? `[REDACTED:long-token:${run.length}]` : run,
+    /^https?:/i.test(run) ? run : `[REDACTED:long-token:${run.length}]`,
   );
   return out;
 }

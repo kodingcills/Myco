@@ -52,7 +52,7 @@ export interface ApprovalPolicy {
 }
 
 const NOTEPAD_NO_ARGS =
-  /^(?:(?:cmd(?:\.exe)?\s+\/c\s+)?start\s+(?:""\s+)?|start-process\s+)?["']?notepad(?:\.exe)?["']?\s*$/i;
+  /^(?:(?:cmd(?:\.exe)? +\/c +)?start +(?:"" +)?|start-process +)?(?:notepad(?:\.exe)?|"notepad(?:\.exe)?"|'notepad(?:\.exe)?')$/i;
 
 /** T1 policy: exact no-argument Notepad launch only. */
 export function notepadOnlyPolicy(
@@ -77,11 +77,7 @@ export function decideApproval(approval: Approval, policy: ApprovalPolicy): Appr
     const file = approvalFile(policy.nextFileNumber(), policy.dir);
     const url = approval.approvalUrl ?? "";
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(
-      file,
-      `${url}\n# type=${approval.approvalType ?? "unknown"} title=${approval.title ?? ""}\n# private: never commit, never open for the user\n`,
-      { mode: 0o600 },
-    );
+    writeFileSync(file, url, { mode: 0o600, flag: "wx" });
     return {
       action: "capture_and_abort",
       reason: "link_only",
@@ -92,40 +88,32 @@ export function decideApproval(approval: Approval, policy: ApprovalPolicy): Appr
   if (approval.approvalType === "exec" && typeof approval.command === "string") {
     const why = policy.allowCommand(approval.command, approval.cwd);
     if (why) return { action: "approve", response: "yes", reason: why };
-    return {
-      action: "abort",
-      reason: `exec approval outside allow-list: ${approval.command.slice(0, 120)}`,
-    };
+    return { action: "abort", reason: "exec approval outside allow-list" };
   }
-  return {
-    action: "abort",
-    reason: `non-exec approval (${approval.approvalType ?? "unknown"}) is never auto-approved`,
-  };
+  return { action: "abort", reason: "non-exec approval is never auto-approved" };
 }
 
-const DENY_TOKENS =
-  /\b(invoke-webrequest|invoke-restmethod|iwr|irm|iex|invoke-expression|curl|wget|start-bitstransfer|new-service|set-service|sc\.exe|schtasks|reg|reg\.exe|set-itemproperty|remove-item|del|rd|rmdir|format-volume|netsh|net|stop-computer|restart-computer|shutdown|add-type|downloadstring|encodedcommand|certutil|bitsadmin|mshta|rundll32|regsvr32|taskkill|stop-process|kill)\b|-enc\b/i;
-
-/**
- * Amended policy (see PROTOCOL.md amendment 1): approve an exec command only when it is the exact
- * no-argument Notepad launch, or when it touches no network/registry/service/delete verb and every
- * absolute Windows path in it lies under the task's sandbox directory, with at least one such path.
- */
+/** T1 requests a GUI save. Allow the no-argument launch and an exact read of its saved note. */
 export function sandboxScopedPolicy(
   sandboxRoot: string,
   nextFileNumber: () => number,
   dir = APPROVAL_DIR,
 ): ApprovalPolicy {
-  const root = sandboxRoot.toLowerCase().replace(/\//g, "\\");
+  const root = sandboxRoot.toLowerCase();
+  const note = "note.txt";
   return {
     allowCommand: (command) => {
       const trimmed = command.trim();
       if (NOTEPAD_NO_ARGS.test(trimmed)) return "exact no-argument Notepad launch";
-      if (DENY_TOKENS.test(trimmed)) return null;
-      const paths = trimmed.match(/[A-Za-z]:\\[^\s"'|;)<>]*/g) ?? [];
-      if (paths.length === 0) return null;
-      const inside = paths.every((p) => p.toLowerCase().replace(/\//g, "\\").startsWith(root));
-      return inside ? "harmless command confined to this task's sandbox directory" : null;
+      const read = /^get-content +(?:-literalpath +)?(?:'([^']+)'|"([^"]+)"|([^ ]+))$/i.exec(
+        trimmed,
+      );
+      const path = (read?.[1] ?? read?.[2] ?? read?.[3])?.toLowerCase();
+      const prefix = `${root}\\`;
+      if (path?.startsWith(prefix) && path.slice(prefix.length) === note) {
+        return "read the T1 note";
+      }
+      return null;
     },
     nextFileNumber,
     dir,

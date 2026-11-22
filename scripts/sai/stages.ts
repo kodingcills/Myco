@@ -35,7 +35,7 @@ export interface StageContext {
   state: RunnerState;
   persist: () => void;
   control: Control;
-  mcp: typeof checkMcpServer;
+  mcp?: typeof checkMcpServer;
 }
 
 export const LABEL = "descriptive, hosted environment, not decision-eligible";
@@ -130,7 +130,7 @@ async function s0(ctx: StageContext): Promise<void> {
   };
   setResult(ctx, "s0", record);
 
-  record.mcp = await ctx.mcp(loadApiKey());
+  record.mcp = ctx.mcp ? await ctx.mcp(loadApiKey()) : "skipped";
   setResult(ctx, "s0", record);
 
   const control = await ensureControl(ctx, "s0");
@@ -174,7 +174,7 @@ async function t1(ctx: StageContext): Promise<void> {
     "mkdir",
     `New-Item -ItemType Directory -Force -Path '${dir}' | Out-Null`,
   );
-  const policy = sandboxScopedPolicy(SANDBOX_ROOT, () => ++ctx.state.approvalCount);
+  const policy = sandboxScopedPolicy(dir, () => ++ctx.state.approvalCount);
   const outcome = await runAgentTurn(client, {
     stage: "t1",
     label: "T1",
