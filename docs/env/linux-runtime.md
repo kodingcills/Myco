@@ -114,3 +114,67 @@ must additionally gate on the GUI session being up (RT-007). Concurrency cap: on
 session, enforced by an atomic lockfile with stale-pid reclaim; a second live
 `acquire_lock` fails with `CapReached` (unit-tested). Destroy is crash-tolerant
 (best-effort shutdown; a dead guest is not an error) per REQ-12.
+
+## Using the desktop from an agent (TIF-56)
+
+This is the whole story an agent needs. It does not need to know that a VM, a
+cloud image, or AT-SPI exist.
+
+### 1. Point an MCP client at the server
+
+```json
+{
+  "mcpServers": {
+    "myco-desktop": {
+      "command": "/absolute/path/to/Myco/runtime/target/debug/myco-rt-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Build it once with `cargo build --manifest-path runtime/Cargo.toml -p myco-rt-mcp`.
+The server finds its own assets: `$MYCO_HOME`, then upward from the current
+directory, then upward from the executable — so the client's working directory
+does not matter. If it cannot find them, `create` returns the exact fix
+(`set MYCO_HOME=/path/to/Myco`).
+
+### 2. The tools
+
+| Tool | What it does |
+|---|---|
+| `create` | Provision a desktop. Returns a `session_id`. Takes **minutes** on a cold host. |
+| `observe` | Accessibility tree with opaque refs, windows, processes, screenshot path. |
+| `act` | `launch` / `click` / `typeText` / `keyPress`, with a three-way outcome. |
+| `evidence` | Writes `trace.jsonl` + `result.json` for the session. |
+| `reset` | Back to a clean desktop (recreates the overlay; also minutes). |
+| `destroy` | Tear down and free the resources. |
+| `read_file` | Opt-in: read a guest file, bounded to a grant set at `create` via `read_root`. |
+
+### 3. Two things that will otherwise confuse you
+
+- **`create` is slow and that is not a hang.** Pass `_meta.progressToken` in the
+  `tools/call` params and the server emits `notifications/progress` every 5
+  seconds with elapsed time. Without a token it stays silent.
+- **Refs are scoped to one observation.** A ref from `observe` is valid only for
+  the `state_version` it came from; acting on an older one returns `stale_ref`
+  rather than guessing. Re-observe after any action.
+
+### 4. What "safe isolated" means here, and what it does not
+
+Guaranteed: a whole VM boundary (an agent can run arbitrary code inside without
+touching the host), a fixed 2 GB memory cap, QEMU user-mode networking with a
+single loopback-only forwarded port, and a disposable overlay so `destroy` deletes
+writes rather than rolling them back.
+
+**Not** guaranteed, and not to be claimed: network egress policy, guest→host file
+transfer beyond `read_file`'s grant, idle reaping (a session left alone stays up
+until `destroy`), per-agent attribution, or multi-tenant credentials. The full
+list with evidence is in [docs/research/runtime-safety-isolation.md](../research/runtime-safety-isolation.md).
+
+### 5. Verifying the path yourself
+
+`runtime/guest/live-proof.sh --go` runs the whole thing against a real guest —
+create → observe → act → evidence → reset → destroy, plus `read_file` and the
+progress heartbeat — and shuts the guest down on every exit path. It refuses to
+run without `--go` because it boots a VM.
