@@ -124,10 +124,21 @@ export class Guard {
 
   /** Called with every GET /account result. First sighting fixes the initial balance. */
   observeAccount(view: AccountView): void {
-    if (view.free !== true) {
+    if (
+      view.free !== true ||
+      (view.planTitle !== null &&
+        (PAID_SIGNAL.test(view.planTitle) ||
+          !/^(?:explore|free)(?:[- ]tier)?$/i.test(view.planTitle.trim())))
+    ) {
       this.stop({
         reason: "plan_not_free",
         detail: `account reports plan "${view.planTitle ?? "unknown"}" free=${String(view.free)}; free Explore tier only`,
+      });
+    }
+    if (view.userState !== null && PAID_SIGNAL.test(view.userState)) {
+      this.stop({
+        reason: "paid_signal",
+        detail: `account reports userState "${view.userState}"`,
       });
     }
     if (view.usd === null || !Number.isFinite(view.usd) || view.usd < 0) {
@@ -195,11 +206,37 @@ export class Guard {
         for (const item of value) inspect(item, includeText);
         return;
       }
-      if (typeof value === "string" && includeText && PAID_SIGNAL.test(value)) {
-        this.stop({ reason: "paid_signal", detail: label });
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (LIMIT_CODES.has(trimmed)) {
+          this.stop({ reason: trimmed, detail: label });
+        }
+        for (const code of LIMIT_CODES) {
+          if (value.includes(code)) {
+            this.stop({ reason: code, detail: label });
+          }
+        }
+        if (includeText && PAID_SIGNAL.test(value)) {
+          this.stop({ reason: "paid_signal", detail: label });
+        }
+        return;
       }
       if (!value || typeof value !== "object") return;
       const o = value as Record<string, unknown>;
+      if (o.plan && typeof o.plan === "object") {
+        const plan = o.plan as Record<string, unknown>;
+        if (
+          plan.free !== true ||
+          (typeof plan.title === "string" &&
+            (PAID_SIGNAL.test(plan.title) ||
+              !/^(?:explore|free)(?:[- ]tier)?$/i.test(plan.title.trim())))
+        ) {
+          this.stop({
+            reason: "plan_not_free",
+            detail: `plan "${String(plan.title)}" free=${String(plan.free)}; free Explore tier only`,
+          });
+        }
+      }
       const diagnostics = [
         o.error,
         o.errorText,
@@ -208,16 +245,41 @@ export class Guard {
         o.code,
         o.reason_code,
         o.status,
+        o.description,
+        o.detail,
+        o.title,
       ];
       if (includeText) diagnostics.push(o.text);
       for (const text of diagnostics) {
         if (typeof text !== "string") continue;
-        if (LIMIT_CODES.has(text)) this.stop({ reason: text, detail: label });
+        const trimmed = text.trim();
+        if (LIMIT_CODES.has(trimmed)) this.stop({ reason: trimmed, detail: label });
+        for (const code of LIMIT_CODES) {
+          if (text.includes(code)) this.stop({ reason: code, detail: label });
+        }
         if (PAID_SIGNAL.test(text)) this.stop({ reason: "paid_signal", detail: label });
       }
       if (o.error && typeof o.error === "object") inspect(o.error, true);
-      if (Array.isArray(o.events)) inspect(o.events, false);
-      if (typeof o.type === "string" && /error|progress|limit|plan/i.test(o.type)) {
+      if (o.approval && typeof o.approval === "object") inspect(o.approval, true);
+      if (Array.isArray(o.events)) {
+        for (const ev of o.events) {
+          if (ev && typeof ev === "object") {
+            const evObj = ev as Record<string, unknown>;
+            if (evObj.approval && typeof evObj.approval === "object") {
+              inspect(evObj.approval, true);
+            }
+            if (
+              typeof evObj.type === "string" &&
+              /error|progress|limit|plan|approval/i.test(evObj.type)
+            ) {
+              inspect(evObj.data, true);
+            } else {
+              inspect(ev, false);
+            }
+          }
+        }
+      }
+      if (typeof o.type === "string" && /error|progress|limit|plan|approval/i.test(o.type)) {
         inspect(o.data, true);
       }
     };

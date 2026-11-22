@@ -73,9 +73,29 @@ export function denyAllPolicy(nextFileNumber: () => number, dir = APPROVAL_DIR):
 }
 
 export function decideApproval(approval: Approval, policy: ApprovalPolicy): ApprovalDecision {
-  if (approval.isLinkOnly === true || approval.approvalUrl !== undefined) {
+  let url = approval.approvalUrl;
+  if (!url) {
+    const candidates = [
+      approval.description,
+      approval.title,
+      (approval as Record<string, unknown>).message,
+      (approval as Record<string, unknown>).error,
+      (approval as Record<string, unknown>).errorText,
+      (approval as Record<string, unknown>).text,
+    ];
+    for (const c of candidates) {
+      if (typeof c === "string") {
+        const match = c.match(/https?:\/\/[^\s"'<>]+/i);
+        if (match) {
+          url = match[0];
+          break;
+        }
+      }
+    }
+  }
+  if (approval.isLinkOnly === true || url !== undefined) {
     const file = approvalFile(policy.nextFileNumber(), policy.dir);
-    const url = approval.approvalUrl ?? "";
+    url ??= "";
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, url, { mode: 0o600, flag: "wx" });
     return {

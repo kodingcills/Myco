@@ -64,6 +64,53 @@ export type FetchLike = (
 
 const APPROVAL_SECRET = /(?:url|uri|link|token|code|secret|credential|password|key)$/i;
 
+function hasApprovalPresent(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasApprovalPresent);
+  const o = value as Record<string, unknown>;
+  if ("approval" in o || o.status === "needs_approval" || o.isLinkOnly === true) return true;
+  return Object.values(o).some(hasApprovalPresent);
+}
+
+function extractApprovalUrl(approval: Approval | undefined, body: unknown): string | undefined {
+  if (approval?.approvalUrl) return approval.approvalUrl;
+  const findIn = (v: unknown): string | undefined => {
+    if (typeof v === "string") {
+      const match = v.match(/https?:\/\/[^\s"'<>]+/i);
+      if (match) return match[0];
+    } else if (Array.isArray(v)) {
+      for (const item of v) {
+        const u = findIn(item);
+        if (u) return u;
+      }
+    } else if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      const priority = [
+        o.approvalUrl,
+        o.url,
+        o.uri,
+        o.link,
+        o.message,
+        o.error,
+        o.errorText,
+        o.description,
+        o.text,
+        o.reason,
+      ];
+      for (const p of priority) {
+        const u = findIn(p);
+        if (u) return u;
+      }
+      for (const val of Object.values(o)) {
+        const u = findIn(val);
+        if (u) return u;
+      }
+    }
+    return undefined;
+  };
+  return findIn(approval) ?? findIn(body);
+}
+
 function approvalSafeBody(body: unknown): unknown {
   const secrets = new Set<string>();
   let longestFirst: string[] = [];
@@ -80,6 +127,7 @@ function approvalSafeBody(body: unknown): unknown {
       // An unparseable link is still sensitive in its entirety.
     }
   };
+  const approvalActive = hasApprovalPresent(body);
   function visit(value: unknown, collect: boolean, insideApproval = false): unknown {
     if (Array.isArray(value)) return value.map((item) => visit(item, collect, insideApproval));
     if (value && typeof value === "object") {
@@ -101,7 +149,7 @@ function approvalSafeBody(body: unknown): unknown {
         }),
       );
     }
-    if (collect && insideApproval && typeof value === "string") {
+    if (collect && (insideApproval || approvalActive) && typeof value === "string") {
       for (const url of value.match(/https?:\/\/[^\s"'<>]+/gi) ?? []) remember(url);
     }
     if (!collect && typeof value === "string") {
@@ -164,11 +212,43 @@ export class SaiClient {
         body = text;
       }
     }
-    const approval =
-      o.path.split("?")[0] === "/v1/agents/events"
-        ? (body as { approval?: Approval } | null)?.approval
-        : undefined;
-    body = approvalSafeBody(body);
+    const rawBody = body;
+    const isEvents = o.path.split("?")[0] === "/v1/agents/events";
+    let approval = isEvents ? (rawBody as { approval?: Approval } | null)?.approval : undefined;
+    if (
+      isEvents &&
+      !approval &&
+      Array.isArray((rawBody as Record<string, unknown> | null)?.events)
+    ) {
+      for (const ev of (rawBody as Record<string, unknown>).events as unknown[]) {
+        if (ev && typeof ev === "object") {
+          const rec = ev as Record<string, unknown>;
+          if (rec.approval && typeof rec.approval === "object") {
+            approval = rec.approval as Approval;
+            break;
+          }
+          if (rec.data && typeof rec.data === "object") {
+            const data = rec.data as Record<string, unknown>;
+            if (data.approval && typeof data.approval === "object") {
+              approval = data.approval as Approval;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (
+      isEvents &&
+      !approval &&
+      (rawBody as Record<string, unknown> | null)?.status === "needs_approval"
+    ) {
+      approval = { isLinkOnly: true };
+    }
+    if (isEvents && approval && !approval.approvalUrl) {
+      const url = extractApprovalUrl(approval, rawBody);
+      if (url) approval.approvalUrl = url;
+    }
+    body = approvalSafeBody(rawBody);
     const ok = status !== null && status >= 200 && status < 300;
     const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
     const displayPath = o.hideQuery ? o.path.split("?")[0] : o.path;
@@ -191,7 +271,7 @@ export class SaiClient {
       usage: b.usage ?? "not_reported",
       excerpt: excerpt(error ? { networkError: error } : body),
     });
-    if (status !== null) this.guard.observeResponse(status, body, o.label);
+    if (status !== null) this.guard.observeResponse(status, rawBody, o.label);
     return { status, ok, body, ms, ...(approval ? { approval } : {}), ...(error ? { error } : {}) };
   }
 

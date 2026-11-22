@@ -200,9 +200,97 @@ test.each([
   [200, { events: [{ type: "data-progress", data: { text: "select a plan" } }] }, "paid_signal"],
   [200, { code: "insufficient_credits" }, "insufficient_credits"],
   [200, { events: [{ type: "error", data: { reason_code: "rate_limited" } }] }, "rate_limited"],
+  [200, "storage_quota_exceeded", "storage_quota_exceeded"],
+  [200, { plan: { free: true, title: "Paid plan" } }, "plan_not_free"],
+  [200, { approval: { description: "Upgrade required to run command" } }, "paid_signal"],
+  [200, { approval: { error: "storage_quota_exceeded" } }, "storage_quota_exceeded"],
 ])("stops on HTTP %s vendor signal %#", (status, body, reason) => {
   const guard = new Guard();
   expect(() => guard.observeResponse(status, body, "test")).toThrow(reason);
+});
+
+test("rejects accounts with paid plans even if free flag is true", () => {
+  const guard = new Guard();
+  expect(() =>
+    guard.observeAccount({ free: true, usd: 10, planTitle: "Paid plan", userState: "active" }),
+  ).toThrow("plan_not_free");
+});
+
+test("link-only approval in diagnostic message redacts ledger and populates approval capture", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sai-approval-test-"));
+  try {
+    const guard = new Guard();
+    guard.observeAccount({ free: true, usd: 1, planTitle: "Explore", userState: "active_free" });
+    const ledger = new Ledger(null);
+    const secretUrl = "https://example.invalid/approve?token=secret123&user=user_456";
+    const client = new SaiClient("key", ledger, guard, {
+      fetchImpl: async () => ({
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            status: "needs_approval",
+            approval: { approvalId: "app_1", isLinkOnly: true },
+            message: `User approval required: ${secretUrl}`,
+          }),
+      }),
+    });
+    const result = await client.call({
+      stage: "test",
+      label: "t_approval",
+      path: "/v1/agents/events",
+    });
+    expect(result.approval?.approvalUrl).toBe(secretUrl);
+
+    // Ledger excerpt must be redacted: no URL, no token, no user query value
+    const ledgerJson = JSON.stringify(ledger.rows);
+    expect(ledgerJson).not.toContain("https://example.invalid");
+    expect(ledgerJson).not.toContain("secret123");
+    expect(ledgerJson).not.toContain("user_456");
+    expect(ledgerJson).toContain("[REDACTED]");
+
+    // The private capture file must contain the full URL
+    const decision = decideApproval(
+      result.approval!,
+      denyAllPolicy(() => 1, dir),
+    );
+    expect(decision.action).toBe("capture_and_abort");
+    if (decision.action === "capture_and_abort") {
+      expect(decision.embedsToken).toBe(true);
+      expect(readFileSync(decision.file, "utf8")).toBe(secretUrl);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("upgrade diagnostic inside approval stops guard while ledger remains redacted", async () => {
+  const guard = new Guard();
+  guard.observeAccount({ free: true, usd: 1, planTitle: "Explore", userState: "active_free" });
+  const ledger = new Ledger(null);
+  const secretUrl = "https://example.invalid/upgrade?tok=abc";
+  const client = new SaiClient("key", ledger, guard, {
+    fetchImpl: async () => ({
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          status: "needs_approval",
+          approval: {
+            approvalId: "app_2",
+            isLinkOnly: true,
+            description: `Upgrade required to run this command: ${secretUrl}`,
+          },
+        }),
+    }),
+  });
+  await expect(
+    client.call({ stage: "test", label: "t_upgrade", path: "/v1/agents/events" }),
+  ).rejects.toThrow("paid_signal");
+
+  // Ledger must have recorded the call, and excerpt must be redacted
+  expect(ledger.rows).toHaveLength(1);
+  const ledgerJson = JSON.stringify(ledger.rows);
+  expect(ledgerJson).not.toContain("https://example.invalid");
+  expect(ledgerJson).not.toContain("abc");
 });
 
 test("ignores echoed documentation in request metadata", () => {
