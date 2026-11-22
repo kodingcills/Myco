@@ -652,3 +652,35 @@ slot is still needed — everything else has already passed.
 Each test binary boots its own guest (~60s cloud-init each). Running `first_path`
 alone is ~2min; adding `read_file_live` adds ~2min. The script runs them in one
 guest session where it can, so batching is roughly half the cost of splitting.
+
+## Measured cost: the proof re-provisions between test binaries
+
+Worth knowing before a slot, because it is window time spent on cloud-init rather
+than on the thing under test.
+
+`QemuLinuxBackend::destroy` deletes the overlay (`lib.rs:729-732`), and every live
+test binary ends by calling it. `provision` does **not** recreate the overlay (it
+only runs `boot.sh`), so the *next* binary finds no overlay and pays a full
+cloud-init install to rebuild it.
+
+`live-proof.sh` runs four test invocations across three binaries:
+
+| step | binary | ends with |
+|---|---|---|
+| 3 | `first_path` | `destroy` |
+| 4 | `read_file_live` | `destroy` (twice -- two sessions) |
+| 5 | `read_file_live` | progress test, its own session |
+| 6 | `act_global_live` | `destroy` |
+
+Against the measured 4m42s run, with reset at 49.5s and `read_file_live` at 113s,
+roughly **one to two minutes of that window was re-provisioning** rather than
+verification.
+
+**Not changed here**, because the obvious fix is wrong: making `destroy` keep the
+overlay would break its contract (`destroy` promises to delete on-disk state, and a
+test asserts it). The correct fix is for the proof to reuse one guest across steps
+where it can, which means restructuring `live-proof.sh` around a single long-lived
+session -- a change worth making deliberately, not in a hurry inside a window.
+
+**For the next slot:** expect ~5 minutes for the full set, and do not treat the
+second cloud-init as a hang.
