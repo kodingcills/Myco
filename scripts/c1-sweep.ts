@@ -14,7 +14,7 @@ import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
 import { groundTruth } from "../src/tasks/intent.ts";
 import { AgentClient, SshTunnel } from "../src/win/agent-client.ts";
-import { probeC1Driver } from "./c1-driver-preflight.ts";
+import { persistedDiagnostic, probeC1Driver } from "./c1-driver-preflight.ts";
 
 async function main() {
   if (!process.argv.includes("--coordinator-go")) throw new Error("Coordinator GO required");
@@ -272,7 +272,12 @@ async function main() {
         // Carry the cause into the row: a driver-unreachable verdict must name
         // its reason, or a too-tight timeout and a dead driver are the same
         // artifact. See DriverPrecondition.diagnostic.
-        driver: { ...driver, diagnostic },
+        //
+        // `classifySession` returns the sentinel `match` on success, and `match`
+        // is not a cause. Persisting it would put `diagnostic: "match"` on every
+        // healthy row and contradict the field's contract, so success records
+        // nothing.
+        driver: { ...driver, ...persistedDiagnostic(diagnostic) },
         resetMs,
         acPower,
         caffeinate,

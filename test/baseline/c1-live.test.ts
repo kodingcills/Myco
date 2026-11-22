@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { persistedDiagnostic } from "../../scripts/c1-driver-preflight.ts";
 import { connectC1, type Mcp } from "../../src/baseline/c1.ts";
 import { type PreparedC1, runC1Trial } from "../../src/baseline/c1-trial.ts";
 import { judge } from "../../src/baseline/index.ts";
@@ -560,5 +561,47 @@ describe("judge names the driver cause", () => {
     expect(verdict.status).toBe("uncertain");
     expect(verdict.reasons).toContain("driver-unreachable");
     expect(verdict.reasons).toContain("session-command-failed");
+  });
+});
+
+describe("judge leaves an unnamed cause unnamed", () => {
+  // The judge() spread's own fallback was untested: `driver.diagnostic ??
+  // "driver-cause-unknown"` passed every other test. A fabricated cause is
+  // worse than none, so this pins the exact array.
+  it("returns exactly ['driver-unreachable'] when the diagnostic is absent", () => {
+    const verdict = judge(
+      { actions: [], claims: [] },
+      {
+        hostVersion: "0.56.4",
+        guestVersion: "0.56.4",
+        pipeReachable: true,
+        sessionIdentityMatches: false,
+      },
+      { kind: "unavailable" },
+    );
+    expect(verdict.reasons).toEqual(["driver-unreachable"]);
+  });
+});
+
+describe("the success sentinel is not a cause", () => {
+  // classifySession returns `match` on success, and the sweep builds the driver
+  // via persistedDiagnostic(). Carrying the sentinel into the row would put
+  // `diagnostic: "match"` on every healthy row, contradicting the field's
+  // contract ("the preflight's precise failure cause"). Reverting the helper to
+  // always spread `diagnostic` fails this.
+  it("records nothing for the success sentinel", () => {
+    expect(persistedDiagnostic("match")).toEqual({});
+  });
+
+  it("records the cause for every real failure", () => {
+    for (const cause of [
+      "session-command-failed",
+      "session-mismatch",
+      "pipe-unreachable",
+      "daemon-missing",
+      "version-mismatch",
+    ]) {
+      expect(persistedDiagnostic(cause)).toEqual({ diagnostic: cause });
+    }
   });
 });

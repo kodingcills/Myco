@@ -39,7 +39,14 @@ export function planActions(
 ): { actions: Action[]; verdict: Verdict | null } {
   return driverReady(driver)
     ? { actions, verdict: null }
-    : { actions: [], verdict: { status: "uncertain", reasons: ["driver-unreachable"] } };
+    : {
+        actions: [],
+        // Same reason shape as judge(): name the cause, not just the class.
+        verdict: {
+          status: "uncertain",
+          reasons: ["driver-unreachable", ...(driver.diagnostic ? [driver.diagnostic] : [])],
+        },
+      };
 }
 export function falseSuccess(
   verdict: VerdictStatus,
