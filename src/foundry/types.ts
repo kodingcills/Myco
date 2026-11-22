@@ -14,7 +14,7 @@
  */
 
 /** Apps the Foundry knows how to read persisted state for. */
-export type AppId = "myco-todo" | "ledger-csv";
+export type AppId = "myco-todo" | "ledger-csv" | "writer-table";
 
 /**
  * What the task asks for, in the app's own vocabulary. Kept deliberately small:
@@ -25,7 +25,8 @@ export type TaskIntent =
   | { kind: "todo.add-items"; items: readonly string[] }
   | { kind: "todo.rename-item"; from: string; to: string }
   | { kind: "todo.delete-items"; items: readonly string[] }
-  | { kind: "ledger.set-cell"; rowKey: string; column: string; value: string };
+  | { kind: "ledger.set-cell"; rowKey: string; column: string; value: string }
+  | { kind: "writer.set-cell"; table: string; cell: string; value: string };
 
 /** The one row a `ledger.set-cell` intent targets, so a fixture can seed a table. */
 export interface LedgerSeedRow {
@@ -91,12 +92,20 @@ export type InitialState =
       readonly bytes: Uint8Array;
       readonly columns: readonly string[];
       readonly rows: readonly LedgerSeedRow[];
+    }
+  | {
+      readonly kind: "writer-table";
+      readonly storePath: string;
+      readonly bytes: Uint8Array;
+      /** The table's cell names in document order, e.g. ["A1","B1","A2","B2"]. */
+      readonly cells: readonly string[];
     };
 
 /** What the grader actually read back from the app after the trial. */
 export type ActualState =
   | { readonly kind: "myco-todo"; readonly files: Readonly<Record<string, Uint8Array>> }
-  | { readonly kind: "ledger-csv"; readonly files: Readonly<Record<string, Uint8Array>> };
+  | { readonly kind: "ledger-csv"; readonly files: Readonly<Record<string, Uint8Array>> }
+  | { readonly kind: "writer-table"; readonly files: Readonly<Record<string, Uint8Array>> };
 
 /** A single assertion result. `passed: null` means "could not look" (ADR-0002). */
 export interface OracleCheck {
