@@ -467,11 +467,22 @@ mod tests {
 #[cfg(test)]
 mod wire_contract_tests {
     //! The backend builds these JSON objects by hand and this module parses them.
-    //! Nothing tested the pair, so a rename on either side -- "typeTextGlobal" vs
-    //! "typeText_global", or a field the parser expects under another name --
-    //! would only surface as an unexplained failure in a live guest.
+    //! Nothing deterministic tested that, so a mismatch would surface only as an
+    //! unexplained failure inside a live guest -- the most expensive place to find
+    //! it, arriving as what looks like an XTEST problem rather than a schema one.
     //!
-    //! These tests therefore assert on the WIRE FORM, not on Rust values: each
+    //! **What this covers, exactly.** `myco-rt-agent` does not depend on the
+    //! backend crate, so the JSON below is a HAND-COPIED literal of the backend's
+    //! `json!` blocks, not the backend's actual output. These tests pin the AGENT
+    //! parser against the documented form. They cannot catch a backend-side rename:
+    //! if `lib.rs` changed `"x"` to `"px"`, every test here still passes.
+    //!
+    //! Closing that half needs the wire-building code out of `QemuLinuxBackend::act`
+    //! (it is inline and needs a live channel), which is a production refactor and
+    //! belongs in its own change. Until then, a backend rename is caught only by the
+    //! live tests in `backend-qemu/tests/` -- which need a VM.
+    //!
+    //! These tests assert on the WIRE FORM, not on Rust values: each
     //! case is the exact JSON the backend emits for that action.
 
     use super::Action;
@@ -513,12 +524,33 @@ mod wire_contract_tests {
 
     /// The camelCase tag is the contract: a snake_case spelling must NOT parse,
     /// or both spellings would silently work and one would be dead code.
+    ///
+    /// Asserts on the ERROR KIND, not merely `is_err()`. A bare `is_err()` is
+    /// satisfied by *any* parse failure -- a renamed field, a type error -- so this
+    /// test would still pass against a parser that was broken in some unrelated
+    /// way, and the assertion would read as if the casing were the reason. Checking
+    /// for "unknown variant" is what makes the casing the actual subject.
+    ///
+    /// Scope limits, both measured rather than assumed:
+    /// - It covers one spelling for one variant. A parser that gained
+    ///   case-insensitivity, or an alias on another variant (`click_at`), is not
+    ///   caught.
+    /// - The strength rests on serde's wording. A verifier renamed the `text` field
+    ///   so the whole shape failed to parse, and this test still passed -- serde
+    ///   reported "unknown variant" anyway. So it is not a proof against unrelated
+    ///   breakage; it is stronger than a bare `is_err()` and no more.
     #[test]
-    fn a_wrongly_cased_kind_is_rejected() {
-        let r = serde_json::from_value::<Action>(
+    fn a_wrongly_cased_kind_is_rejected_for_the_casing_and_not_some_other_reason() {
+        let err = serde_json::from_value::<Action>(
             serde_json::json!({"kind": "type_text_global", "text": "x"}),
+        )
+        .expect_err("snake_case kind must not parse; the wire form is camelCase");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown variant") && msg.contains("type_text_global"),
+            "the failure must be the unrecognised kind itself, not an unrelated parse \
+             error that happens to make is_err() true: {msg}"
         );
-        assert!(r.is_err(), "snake_case kind must not parse; the wire form is camelCase");
     }
 
     /// Every variant the backend can emit round-trips through this parser.
