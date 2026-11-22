@@ -163,7 +163,7 @@ criterion (TIF-60) decide the wedge.
   3. Explicit statement of what Myco should **not** build (transport coverage that
      HCU/Cua already provide; features without a measured job).
 
-### MVD-006 (TIF-pending) Coordination: public task set + host window
+### MVD-006 (TIF-61) Coordination: public task set + host window
 - **status:** in progress (escalations filed).
 - **owner:** discovery-owner; foundry (task set/verifiers); runtime (RT-011/RT-015/RT-016); M1 coordinator (host)
 - **blocked_by:** none
@@ -178,8 +178,8 @@ criterion (TIF-60) decide the wedge.
   coordinator's host window is recorded with start/end and owner; no run starts
   outside it.
 
-### MVD-007 (TIF-pending) Developer-facing run report: the v0 Myco Viewer
-- **status:** the earlier standalone HTML renderer (`src/report`, `docs/report`) is
+### MVD-007 (TIF-62) Developer-facing run report: the v0 Myco Viewer
+- **status:** **done**: Viewer v0 merged as PR #69 (`e0b5a9e`), approved by Tiffany 2026-11-21 22:39 ET (`viewer/DEVIATIONS.md`). The earlier standalone HTML renderer (`src/report`, `docs/report`) is
   **retired**: it predated the locked GUI spec and deviated from it (no Now/Why/Proof
   modes, no tokens, own layout). The deliverable is now the v0 Myco Viewer defined by
   `docs/design/gui-spec.md` (PR #51), built to the spec, not a Discovery-specific UI.
@@ -194,8 +194,8 @@ criterion (TIF-60) decide the wedge.
   the verdict-mapping unit tests against the M1 sample runs, and journeys J1-J3 by
   keyboard. Any deviation needs written outer-loop sign-off in the PR.
 
-### MVD-008 (TIF-pending) Viewer: screenshot latency and memory at 1,000 screenshots; Chrome Stable check
-- **status:** follow-up from Viewer v0 (PR #69), not blocking v0.
+### MVD-008 (TIF-63) Viewer: screenshot latency and memory at 1,000 screenshots; Chrome Stable check
+- **status:** in progress (GO from the outer loop, 2026-11-21). Follow-up from Viewer v0 (PR #69), not blocking v0; needs no VM and no host-time grant. The Chrome Stable result is Tiffany's and is a placeholder in `viewer/PERF.md` until she supplies it.
 - **owner:** discovery-owner (spec), build; outer-loop mirrors this item into Linear (agents do not create issues).
 - **description:** gui-spec §8 budgets that Viewer v0 never measured: full screenshot shown on
   select (<=100 ms cached, <=250 ms cold, thumbnail first) and memory with 1,000 screenshots
