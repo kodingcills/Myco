@@ -10,6 +10,12 @@ This document exists to be falsified. Every claim below is either sourced or mar
 
 ---
 
+> **Superseded in part:** sample sizes and decision rules in §4–§7 are replaced by
+> [mvd-preregistration.md](mvd-preregistration.md) (Foundry §7a trial policy; 10-run rules
+> were underpowered). The wedge reasoning below stands.
+
+---
+
 ## 1. The question, stated so it can lose
 
 M1 proved Myco can execute a desktop operation, verify the persisted outcome, and
