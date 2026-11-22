@@ -12,7 +12,18 @@
  *  - The rule table is evaluated top to bottom, first match wins, exactly as
  *    written before any data existed. Changing the order here is a protocol
  *    change, not a refactor.
+ *  - The ≥30-pair gate is applied before every row, including row 1. §4.1's
+ *    preamble puts the sample size on every row, so this is the conservative
+ *    reading: never decide on underpowered data. Rows 4 and 5 in the document
+ *    also carry "hcu+shell has ≥1 false success"; the code reaches row 4 on ≥1
+ *    discordant pair, which is the same condition whenever the comparator's
+ *    false successes are the ones Myco avoided. The divergence is recorded here
+ *    so a future reader does not "fix" the document to match the code.
  */
+
+import { wilson } from "../foundry/oracles/report.ts";
+
+export { wilson };
 
 export type Verdict = "verified" | "refuted" | "uncertain";
 
@@ -54,7 +65,12 @@ export type RuleRow =
 
 export interface Decision {
   readonly status: "decided" | "refused";
-  readonly reason?: "ineligible-rows" | "insufficient-pairs" | "missing-arm";
+  readonly reason?:
+    | "ineligible-rows"
+    | "insufficient-pairs"
+    | "missing-arm"
+    | "duplicate-pair"
+    | "invalid-input";
   readonly row?: RuleRow;
   readonly taskId: string;
   readonly promptVariant: string;
@@ -70,24 +86,6 @@ export interface Decision {
   readonly comparatorFalseSuccessInterval: readonly [number, number] | null;
   readonly ineligibleRows: number;
   readonly notes: readonly string[];
-}
-
-/** Wilson score interval, 95%, two-sided. Returns null for n = 0. */
-export function wilson(successes: number, n: number): readonly [number, number] | null {
-  if (
-    !Number.isSafeInteger(n) ||
-    !Number.isSafeInteger(successes) ||
-    successes < 0 ||
-    successes > n
-  )
-    throw new Error("wilson: invalid counts");
-  if (n === 0) return null;
-  const z = 1.96;
-  const p = successes / n;
-  const denominator = 1 + (z * z) / n;
-  const centre = (p + (z * z) / (2 * n)) / denominator;
-  const margin = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / denominator;
-  return [Math.max(0, centre - margin), Math.min(1, centre + margin)];
 }
 
 /**
@@ -117,6 +115,33 @@ export function evaluateDecision(input: DecisionInput): Decision {
   const promptVariant = input.promptVariant ?? "no-verify";
   const minimumPairs = input.minimumPairs ?? 30;
 
+  const checksEveryTrial = input.comparatorChecksEveryTrial;
+  const costRatio = input.comparatorCostRatio;
+  if (
+    (checksEveryTrial !== undefined &&
+      (!Number.isFinite(checksEveryTrial) || checksEveryTrial < 0 || checksEveryTrial > 1)) ||
+    (costRatio !== undefined && (!Number.isFinite(costRatio) || costRatio <= 0))
+  ) {
+    return {
+      status: "refused",
+      reason: "invalid-input",
+      taskId,
+      promptVariant,
+      pairs: 0,
+      mycoFalseSuccesses: 0,
+      comparatorFalseSuccesses: 0,
+      discordantFavouringMyco: 0,
+      discordantFavouringComparator: 0,
+      signTestP: null,
+      mycoFalseSuccessInterval: null,
+      comparatorFalseSuccessInterval: null,
+      ineligibleRows: 0,
+      notes: [
+        "comparatorChecksEveryTrial must be a finite fraction in [0,1] and comparatorCostRatio a finite number > 0.",
+      ],
+    };
+  }
+
   const scoped = input.trials.filter(
     (trial) =>
       trial.taskId === taskId &&
@@ -127,12 +152,14 @@ export function evaluateDecision(input: DecisionInput): Decision {
 
   const myco = new Map<string, ScoredTrial>();
   const comparator = new Map<string, ScoredTrial>();
+  let duplicatePairs = 0;
   for (const trial of scoped) {
     if (!trial.decisionEligible) continue;
     if (trial.faultClass === null) continue;
     const key = JSON.stringify([trial.seed, trial.faultClass]);
-    if (trial.armId === mycoArmId) myco.set(key, trial);
-    else comparator.set(key, trial);
+    const target = trial.armId === mycoArmId ? myco : comparator;
+    if (target.has(key)) duplicatePairs += 1;
+    target.set(key, trial);
   }
 
   const keys = [...myco.keys()].filter((key) => comparator.has(key));
@@ -165,6 +192,16 @@ export function evaluateDecision(input: DecisionInput): Decision {
     ineligibleRows,
   };
 
+  if (duplicatePairs > 0) {
+    return {
+      ...base,
+      status: "refused",
+      reason: "duplicate-pair",
+      notes: [
+        `${duplicatePairs} duplicate (seed, fault) row(s) for one arm; a replayed or re-ingested trial must not silently overwrite another.`,
+      ],
+    };
+  }
   if (ineligibleRows > 0) {
     return {
       ...base,
@@ -196,8 +233,6 @@ export function evaluateDecision(input: DecisionInput): Decision {
   }
 
   const notes: string[] = [];
-  const checksEveryTrial = input.comparatorChecksEveryTrial;
-  const costRatio = input.comparatorCostRatio;
 
   if (mycoFalseSuccesses >= 1) {
     return {

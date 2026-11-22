@@ -75,11 +75,37 @@ describe("pre-registered decision rule", () => {
     expect(decision.ineligibleRows).toBe(1);
   });
 
-  it("refuses below the pre-registered pair count, whatever the counts look like", () => {
-    const decision = evaluateDecision({ trials: pairsWith(12, 0, 12) });
+  it("refuses at 29 pairs and decides at 30", () => {
+    const below = evaluateDecision({ trials: pairsWith(29, 0, 6) });
+    expect(below.status).toBe("refused");
+    expect(below.reason).toBe("insufficient-pairs");
+    expect(below.row).toBe("underpowered");
+    const at = evaluateDecision({ trials: pairsWith(30, 0, 6) });
+    expect(at.status).toBe("decided");
+    expect(at.row).toBe("A-stands");
+  });
+
+  it("refuses duplicate (seed, fault) rows instead of letting the last one win", () => {
+    const trials = [
+      ...pairsWith(30, 0, 6),
+      ...pair(1, { falseSuccess: false }, { falseSuccess: false }),
+    ];
+    const decision = evaluateDecision({ trials });
     expect(decision.status).toBe("refused");
-    expect(decision.reason).toBe("insufficient-pairs");
-    expect(decision.row).toBe("underpowered");
+    expect(decision.reason).toBe("duplicate-pair");
+  });
+
+  it("refuses invalid comparator inputs instead of deciding on them", () => {
+    for (const input of [
+      { comparatorCostRatio: -5 },
+      { comparatorCostRatio: Number.NaN },
+      { comparatorChecksEveryTrial: 1.2 },
+      { comparatorChecksEveryTrial: Number.NaN },
+    ]) {
+      const decision = evaluateDecision({ trials: pairsWith(30, 0, 0), ...input });
+      expect(decision.status).toBe("refused");
+      expect(decision.reason).toBe("invalid-input");
+    }
   });
 
   it("row 1: Myco's own false success outranks every other row", () => {
@@ -112,17 +138,26 @@ describe("pre-registered decision rule", () => {
   it("row 3 does not fire when the comparator does not check every trial", () => {
     const decision = evaluateDecision({
       trials: pairsWith(30, 0, 0),
-      comparatorChecksEveryTrial: 0.6,
+      comparatorChecksEveryTrial: 0.9499,
       comparatorCostRatio: 1.2,
     });
     expect(decision.row).toBe("no-change");
+  });
+
+  it("pins the row-3 boundaries at exactly 0.95 and 1.5", () => {
+    const decision = evaluateDecision({
+      trials: pairsWith(30, 0, 0),
+      comparatorChecksEveryTrial: 0.95,
+      comparatorCostRatio: 1.5,
+    });
+    expect(decision.row).toBe("A-reduces-to-the-artifact");
   });
 
   it("row 3 does not fire when the comparator is more than 1.5× the cost", () => {
     const decision = evaluateDecision({
       trials: pairsWith(30, 0, 0),
       comparatorChecksEveryTrial: 1,
-      comparatorCostRatio: 3,
+      comparatorCostRatio: 1.5000001,
     });
     expect(decision.row).toBe("no-change");
   });
