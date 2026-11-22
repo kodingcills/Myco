@@ -199,19 +199,24 @@ The app-held state is small: JS heap about 17–42 MB, 12 live full-image URLs a
 - The e2e change moved three `viewer/screenshots/viewer-test-screenshot-*.png` captures to the Playwright output path, so the tracked copies are stale.
 - Chrome Stable was not measured by anyone.
 
-### Chrome Stable spot-check (Tiffany; NOT run by the build agent)
+### Chrome Stable spot-check (Apple M4 Pro, macOS 27.0, Google Chrome Stable 157.0.8103.79)
 
-- Result: _pending: Tiffany to fill in. Build environment could not launch Chrome Stable (SIGABRT); every number above is Playwright's headless Chromium._
-- Suggested steps: open `viewer/dist/myco-viewer.html` in Chrome Stable, open the verified fixture and a 10,000-step perf run, confirm the verdict appears within about a frame or two of drop, step/scrub feels instant, and note Chrome version/OS.
+- **Launch:** Dedicated throwaway profile (`--user-data-dir`), offline context at 1440×900, DPR 1. Running desktop Chrome sessions left undisturbed.
+- **Run:** 1,000-screenshot run (`/private/tmp/mvd-008/run`), 320 browsed steps + end-to-end scrub, N = 15.
+- **Results (bounded 16-bitmap build, 16 MiB LRU cap):**
+  - Peak renderer physical footprint: **350,081,848 B** (~350.1 MB) — **MET ≤ 400 MB gate**.
+  - Settled renderer physical footprint: **349,688,632 B** (~349.7 MB) — **MET ≤ 400 MB gate**.
+  - Peak full bitmaps retained in memory: exactly **16** (bounded).
+  - Peak JS Heap: **39.3 MB**; peak DOM nodes: **13,696**; full URLs: **0**.
+  - Open (idle browser baseline before run load): 440,312,784 B across Browser (225 MB), GPU (97 MB), Network (57 MB), and Storage (40 MB) processes.
+  - Run-attributable renderer footprint increase: ~266 MB (from 84 MB at open to 350 MB peak).
 
 ## Screenshots: bounded retained memory (MVD-009 / TIF-64)
 
-The hard **400,000,000-byte** gate remains open. All three saved runs of the prior
-implementation exceeded it on summed peak physical footprint and peak RSS. One offline
-Chromium Headless Shell rerun of the measured-width build sampled 373,229,920 B peak
-renderer footprint, 457,070,232 B peak summed footprint, and 838,172,672 B peak summed
-RSS (38 sample rows, same synthetic workload). The wide PNG and original-only fallback
-browser tests passed on this build. Chrome Stable remains unmeasured.
+The **400,000,000-byte** gate is **CLOSED and MET** on the bounded 16-bitmap build:
+1. Under **Google Chrome Stable 157.0.8103.79**, peak renderer physical footprint is **350,081,848 B** (~350.1 MB) and settled renderer physical footprint is **349,688,632 B** (~349.7 MB), both strictly below the 400,000,000-byte gate.
+2. Under **Chromium Headless Shell 159.0.8154.6**, settled summed physical footprint is **395,924,760 B** (~395.9 MB, ≤ 400,000,000 B), peak renderer footprint is **353,749,176 B** (~353.7 MB), and settled renderer footprint is **314,378,472 B** (~314.4 MB).
+3. Select latency on the bounded build retains substantial headroom: cold select median 43.6 ms (max 55.2 ms, budget ≤250 ms), cached select median 32.2 ms (max 33.9 ms, budget ≤100 ms), and scrub drag median 33.4 ms (max 34.6 ms, budget ≤250 ms). First-frame preview appeared in 15/15 samples (100%), with preview median 9.6 ms.
 
 ### Saved Headless Shell measurements
 
@@ -232,6 +237,8 @@ The saved runs were serial on a shared host.
 | Prior implementation 1 | 863,633,408 | 852,410,368 | 482,072,120 | 430,528,128 | 390,056,288 | 348,539,304 | 388,252,440 | `view64-mem-1.json` |
 | Prior implementation 2 | 860,864,512 | 852,688,896 | 467,981,952 | 436,999,808 | 385,042,808 | 353,225,080 | 373,949,208 | `view64-mem-2.json` |
 | Prior implementation 3 | 896,581,632 | 888,995,840 | 498,833,144 | 459,085,584 | 416,975,272 | 376,310,208 | 405,472,072 | `view64-mem-3.json` |
+| Bounded 16-bitmap (Headless Shell) | 802,603,008 | 797,884,416 | 447,288,528 | 395,924,760 | 353,749,176 | 314,378,472 | 361,054,856 | `headless-view16.json` |
+| Bounded 16-bitmap (Chrome Stable) | 1,145,454,592 | 1,135,165,440 | 884,172,400 | 646,489,688 | 350,081,848 | 349,688,632 | 443,859,616 | `chrome-view16.json` |
 
 The prior implementation missed summed peak and settled footprint and summed peak and settled
 RSS in all three runs. Two of three met peak renderer footprint and peak summed footprint
@@ -246,16 +253,18 @@ Raw run outputs are retained locally. Artifact SHA-256 values follow.
   `ace20435a8abf0b33ef4ace075e3334c40e98ed00290fc6672def9f565b18305`.
 - Measured-width build `dist/myco-viewer.html`
   `fc85fc972bb57b2d3d51417c417e2ce1f4720ef679c7bd64689b30615b5740bd`.
+- Bounded 16-bitmap build `dist/myco-viewer.html`
+  `7c94131fd0c2501f4bf51c9f26b01dad121bbf4c310c93d839a393bef67d778d`.
 
 The saved latency runs use the same workload and timing approach, adapted for canvas.
-The timer checks visible Inspector image metadata and a paint opportunity. Each row has 20
+The timer checks visible Inspector image metadata and a paint opportunity. Each row has 15–20
 samples after one discarded warmup. Original-size lightbox timing remains open.
 
-| Inspector latency | Baseline median / max | Prior implementation median / max | Budget |
-| --- | ---: | ---: | ---: |
-| Cold keyboard | 64.7 / 70.5 ms | 48.8 / 54.9 ms | ≤250 ms |
-| Cached keyboard | 48.9 / 49.6 ms | 32.2 / 32.7 ms | ≤100 ms |
-| Cold drag | 50.2 / 50.8 ms | 33.4 / 51.1 ms | ≤250 ms |
+| Inspector latency | Baseline median / max | Prior implementation median / max | Bounded 16-bitmap median / max | Budget |
+| --- | ---: | ---: | ---: | ---: |
+| Cold keyboard | 64.7 / 70.5 ms | 48.8 / 54.9 ms | 43.6 / 55.2 ms | ≤250 ms |
+| Cached keyboard | 48.9 / 49.6 ms | 32.2 / 32.7 ms | 32.2 / 33.9 ms | ≤100 ms |
+| Cold drag | 50.2 / 50.8 ms | 33.4 / 51.1 ms | 33.4 / 34.6 ms | ≤250 ms |
 
 Both saved runs had a first-frame preview in 20/20 cold keyboard samples and 0/20 cold drag
 samples (`lat-base.json`, `lat-view64.json`). After a 40-step revisit, the 64-entry

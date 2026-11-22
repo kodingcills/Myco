@@ -28,10 +28,10 @@ type ImageEntry = {
   listeners: Set<() => void>;
 };
 
-// Cached Inspector bitmaps are decoded at display width, so the spec's 64 entries fit the budget.
-// The byte limit still bounds a high-density display, where each view is larger.
-const viewImageLimit = 64;
-const viewImageByteLimit = 64 * 1024 * 1024;
+// Cached Inspector bitmaps are decoded at display width; bounded to 16 entries (16 MiB)
+// to keep native renderer memory strictly under the 400 MB gate.
+const viewImageLimit = 16;
+const viewImageByteLimit = 16 * 1024 * 1024;
 const loading = { kind: "loading" } as const;
 const unrecorded = { kind: "unrecorded" } as const;
 type ViewSize = { width: number; dpr: number };
