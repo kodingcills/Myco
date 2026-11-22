@@ -19,7 +19,7 @@
   land. PR #79's audit correctly excludes it from coverage and clears the old
   false-success flag. Original indices 2 and 16 also lacked landed faults.
   Four kill recoveries and three invalid-target recoveries verified from disk.
-- **VM queue & C1 policy (14:18Z):** RT-020 holds the active VM window for its 45-minute live proof with `myco-todo` GUI verification (VM SSH verified ready). Per Tiffany's 9:17 AM ET directive, local Ollama is officially approved for the C1 screenshot baseline (due to lack of paid compute), even during the sweep. C1 Owner must prove real local-model calls in one spike trial before re-sweeping. Scorecard and DEVIATIONS must explicitly record exact model and settings. Fixed queue order: (1) RT-020 (active now) -> (2) C1 Baseline (after local-model spike proof) -> (3) M1-016 Live Reproduction -> (4) Evaluation Foundry (TIF-58, $0 cap). PR #88 merged at `34973b5`; PR #90 merged at `7587e89`. M1-016 preflight passed cleanly with 0 discrepancies.
+- **VM queue & C1 policy (14:20Z):** RT-020 holds the active VM window for its 45-minute live proof with `myco-todo` GUI verification (VM SSH verified ready). Per Tiffany's 9:18 AM ET correction (superseding the 9:17 AM ET note), NO Ollama is permitted for C1: it uses the paid Claude Sonnet planner on Anthropic credits with a $9 hard cap, failing closed with NO local-model fallback. One spike trial must show real Anthropic calls before re-sweep. Fixed queue order: (1) RT-020 (active now) -> (2) C1 Baseline (after Anthropic spike proof) -> (3) M1-016 Live Reproduction -> (4) Evaluation Foundry (TIF-58, $0 cap). PR #88 merged at `34973b5`; PR #90 merged at `7587e89`. M1-016 preflight passed cleanly with 0 discrepancies.
 - [M1 backlog](../backlog/m1.md)
 
 ## Objective
@@ -799,3 +799,10 @@ The Screenshot Baseline Owner received the planner, arm, spend, and VM requireme
 - **Spike proof requirement:** The Screenshot Baseline Owner must prove real local-model calls in one spike trial demonstrating actual token/inference activity before re-sweeping.
 - **Reporting & DEVIATIONS contract:** The scorecard and `DEVIATIONS` must explicitly document that the baseline used a local model, detailing the exact model name and runtime parameters.
 - **VM Queue Sequence:** Confirmed as (1) RT-020 live proof (active, VM SSH up) -> (2) C1 screenshot baseline -> (3) M1-016 independent live evaluation reproduction -> (4) Evaluation Foundry (TIF-58, $0 cap).
+
+## Log 2026-11-22 (62) — CORRECTION: Paid Claude Sonnet on Anthropic credits for C1; $9 cap; fail-closed; no Ollama
+- **Tiffany policy correction (9:18 AM ET / 14:18Z, supersedes 9:17 AM ET):** NO Ollama for the C1 screenshot baseline.
+- **Planner & spend cap:** C1 uses the paid Claude Sonnet planner on Tiffany's Anthropic credits under the approved $9.00 hard cap.
+- **Fail-closed contract:** The baseline must fail closed with NO local-model fallback. If Anthropic calls fail or credits expire, the trial fails closed immediately.
+- **Spike proof requirement:** One spike trial must show real Anthropic API calls with non-zero token usage and recorded cost before the re-sweep window is granted.
+- **VM Queue Sequence:** Confirmed as (1) RT-020 live proof (active, myco-todo live run underway) -> (2) C1 screenshot baseline -> (3) M1-016 independent live evaluation reproduction -> (4) Evaluation Foundry (TIF-58, $0 cap).
