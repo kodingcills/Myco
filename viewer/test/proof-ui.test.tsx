@@ -1,9 +1,12 @@
+import { Tabs } from "@base-ui/react/tabs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { OpenScreen } from "../src/components/OpenScreen.tsx";
 import { CheckRow } from "../src/components/Proof.tsx";
 import { VerdictBadge } from "../src/components/VerdictBadge.tsx";
+import { VerdictBar } from "../src/components/VerdictBar.tsx";
 import type { DisplayVerdict } from "../src/data/verdict.ts";
+import type { OpenedRun } from "../src/store.ts";
 
 const verdicts = [
   ["Verified", undefined, "check"],
@@ -52,4 +55,40 @@ test("Open screen exposes both picker inputs with the specified empty-state copy
   expect(html).toContain(">Open…</button>");
   expect(html).toContain('accept=".mycotrace,.json,.jsonl"');
   expect(html).toContain('webkitdirectory=""');
+});
+
+test("VerdictBar renders Simulated badge when manifest or result is simulated", () => {
+  const run: OpenedRun = {
+    key: "test-run",
+    name: "test-run",
+    files: [],
+    opened: Date.now(),
+    loading: false,
+    data: {
+      manifest: { format: "mycotrace/1", runId: "run-sim", files: {}, simulated: true },
+      result: {
+        runId: "run-sim",
+        taskId: "todo-save",
+        taskParams: {},
+        startedAt: "2026-11-22T13:30:00.000Z",
+        steps: [],
+        verdict: { status: "refuted", checks: [], score: 0.5, reasons: [] },
+        simulated: true,
+      },
+      events: [],
+      byStep: new Map(),
+      ledger: [],
+      artifactPaths: [],
+      parseErrors: [],
+      validation: { kind: "complete", manifestChecked: true },
+    },
+    verdict: { label: "Failed", subtype: "False success", sources: [] },
+  };
+  const html = renderToStaticMarkup(
+    <Tabs.Root defaultValue="proof">
+      <VerdictBar run={run} />
+    </Tabs.Root>,
+  );
+  expect(html).toContain("data-simulated-badge");
+  expect(html).toContain(">Simulated</span>");
 });

@@ -124,6 +124,11 @@ async function runViewerVerification() {
   await expect(statusEl).toContainText("Failed");
   await expect(statusEl).toContainText("False success");
 
+  // Verify simulated / dry-run badge is visibly rendered in VerdictBar
+  const simBadge = page.locator("[data-simulated-badge]").first();
+  await expect(simBadge).toBeVisible();
+  await expect(simBadge).toHaveText("Simulated");
+
   // Check counts: 2 passed out of 4 checks
   const countsEl = page.locator("[data-counts]");
   await expect(countsEl).toContainText("checks 2/4");

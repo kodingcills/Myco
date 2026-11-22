@@ -38,6 +38,8 @@ const manifestSchema: JsonSchema = {
     format: { const: "mycotrace/1" },
     runId: { type: "string", minLength: 1 },
     files: { type: "object" },
+    simulated: { type: "boolean" },
+    dryRun: { type: "boolean" },
   },
 };
 

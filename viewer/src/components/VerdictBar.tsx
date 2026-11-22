@@ -131,6 +131,12 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
   const reasons = scored?.reasons ?? [];
   const reasonRef =
     verdict.reason?.source ?? (reasons.length ? resultSource("/verdict/reasons") : undefined);
+  const isSimulated = Boolean(
+    data.manifest?.simulated ||
+      data.manifest?.dryRun ||
+      (result && "simulated" in result && result.simulated) ||
+      (result && "dryRun" in result && result.dryRun),
+  );
   return (
     <section
       {...roving}
@@ -172,6 +178,15 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
         <h1 className="type-title truncate" title={result?.taskId}>
           {result?.taskId ?? <Missing />}
         </h1>
+        {isSimulated && (
+          <span
+            data-simulated-badge
+            className="type-data-small px-1 border border-border-default rounded-control text-text-secondary bg-bg-surface2 whitespace-nowrap"
+            title="Simulated / dry-run harness execution: not live runtime evidence"
+          >
+            Simulated
+          </span>
+        )}
         {result?.taskId && <SourceChip source={resultSource("/taskId")} compact subject="task" />}
         {result?.taskParams && (
           <SourceChip source={resultSource("/taskParams")} compact subject="task parameters" />
