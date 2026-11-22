@@ -56,7 +56,7 @@ function Thumbnail({ row, x, label }: { row: StepRow; x: number; label: string }
   const image = useScreenshotAsset(row.screenshot?.value);
   return (
     <div data-film-thumb style={{ transform: `translateX(${x}px)` }} title={label}>
-      {image.kind === "ready" ? (
+      {image.kind === "ready" && "url" in image ? (
         <img src={image.url} alt={`Screenshot for ${label}`} />
       ) : image.kind === "unrecorded" ? (
         <Missing />
