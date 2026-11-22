@@ -434,6 +434,41 @@ advance via GUI act events) exists. This is the cheapest high-signal experiment 
 the document: a small family of answer-writing traps, scored by trace as well as
 state.
 
+## 3.8 The decisive competitor arm: HCU + Agent Shell/File Verification (`hcu+shell`)
+
+Issue: TIF-59 / MVD-004. Pre-registered in `docs/product/mvd-preregistration.md` §4.1
+and registered in Foundry's baseline (`src/foundry/baseline/registry.ts`).
+
+**Architecture.** An agent configured with Microsoft HCU's `AX` and `GUI` tools
+alongside its native shell/file execution tools (`bash`, `read_file`). The planner is
+pinned to Claude `claude-sonnet-5-5` under identical settings.
+
+**The strongest fair competitor hypothesis.** A competent coding agent equipped with
+both GUI manipulation and shell access does not need an external oracle to inspect a local
+JSON store. Given a prompt asking to confirm persistence (`ef-t01`), the agent can run
+`cat ~/.local/share/myco-todo/store.json | jq .` via its shell tool, discover that the
+two `bug:`-prefixed items were dropped, and refuse to claim success. If `hcu+shell`
+reliably catches the false-success trap on its own, Myco cannot claim that "verifying
+outcomes" is unique to Myco.
+
+**Evaluation protocol and four structural differences:**
+
+1. **Prompt sensitivity and the no-verify variant (`ef-t01b`):**
+   - On `ef-t01` ("...Then confirm everything you added is actually persisted"), `hcu+shell` is explicitly steered to inspect disk state.
+   - On `ef-t01b` (identical task with the final sentence omitted), the agent relies on the GUI status banner ("saved 4 item(s)"). Without prompt steering, `hcu+shell` exhibits the classic false-success trap.
+   - Myco's host-side oracle is decoupled from prompt phrasing: it derives the verdict from ground-truth storage invariants on every run, regardless of whether the user remembered to instruct the agent to double-check.
+
+2. **Durable, inspectable evidence vs ephemeral transcript:**
+   - When `hcu+shell` catches a failure, the evidence is buried in raw agent stdout/stderr text. It is not easily reviewable by human engineers or CI gates without replaying or reading voluminous logs.
+   - Myco produces a standardized, tamper-evident `.mycotrace` archive containing synchronized 1440×900 screenshots, JSON-L event streams, and exact check breakdown (`itemsPersisted` vs `itemsMissing`), instantly viewable in the v0 Myco Viewer (`VerdictBar`, `Proof`, `Why`).
+
+3. **Structured recovery vs unhandled termination:**
+   - When `hcu+shell` encounters a discrepancy between UI and disk, the agent typically halts or enters an unconstrained retry loop without recovery boundaries.
+   - Myco classifies outcomes into three distinct states (`verified`, `refuted`, `uncertain`), isolating faults and recording structured recovery events.
+
+4. **Trace guard enforcement:**
+   - In Foundry's discovery grading (`src/foundry/grader/discovery.ts`), `hcu+shell` must execute under the same trace guard: any direct write to persistence files via `file-io` or `shell-exec` is flagged as a `file-io-shortcut` and refuted. Only reads are permitted.
+
 ## 4. What we can run on 2026-11-21 with no account and no payment
 
 1. **HCU from source on this Mac** — MIT, no key; `make build-macos` +
