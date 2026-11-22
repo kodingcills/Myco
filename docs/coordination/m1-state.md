@@ -113,6 +113,35 @@ old code walked 11 trials before the cap stopped it; the new code stops at 2.
 4. Re-run the C1 arm with abort-early, per-trial guest verification, and the
    spend/credit watch ($4.00 -> report, $4.50 cap).
 
+## Operating rules (Tiffany-approved, 2026-11-22 17:20 ET)
+
+Recorded in full in `CONTRIBUTING-agents.md`; summarised here.
+
+**A — Adaptive verification (replaces "verifier at exact head for every PR").** Classify before merging, state the tier in the PR body, verifiers may bump up but never down.
+- **Tier 0** (docs/prose/comments/state, no code): green CI, no verifier. Prose nits never block.
+- **Tier 1** (<~100 lines, tests/tooling/viewer/refactors with tests, no scoring/cleanup/VM/secrets/spend paths): **one** verifier round; nits become follow-ups, not re-rounds. A post-PASS push touching only docs/tests does **not** need re-verification.
+- **Tier 2** (scoring, trial cleanup/recovery, VM/guest control, locks, spend caps, secrets, schemas, M1 evidence numbers): full verifier PASS at exact head + green CI + defensive checklist. **Max 3 rounds**, then escalate with the disagreement.
+
+Today's classification: #162 → tier 2, #157 → tier 2, #152/#149 → tier 0, #148 → tier 1.
+
+**B — Stop serializing on one VM.** The queue is only for work that needs the Windows guest. Waiting owners do non-VM work in parallel now: code, unit/contract tests, fixtures, mocks, **offline replays of recorded traces**, docs. Runtime: RT-011 prep + mocked e2e. Foundry: EF-005 offline. Discovery/Dogfood: anything without the guest. Batch VM needs; **M1 first** in the queue.
+
+**Second VM — measured answer (do not create; Tiffany approved it only after M1):**
+- Host: 24 GiB (`hw.memsize` 25,769,803,776), macOS on an M4 Pro.
+- Existing guest: **6 GiB** with `MemoryLock = true`, 6 CPUs (`myco-win11.utm/config.plist`).
+- Current: swap **5559/7168 MB used**, 62% memory free, load ~15 with the arm running.
+- **Verdict: a second 6 GiB guest does not fit comfortably today.** MemoryLock pins the first guest's 6 GiB unreserved-able, swap is already 78% consumed, and the host is paging under one guest. A second guest would push swap past capacity and degrade both. **After M1**, a second VM is plausible only with (a) a reboot to clear the 5.6 GB of accumulated swap, and (b) `MemoryLock` off or a smaller second guest (4 GiB), and (c) 2 guests' worth of headroom verified before creating it.
+
+**C — Long runs are detached.** Anything over a few minutes: `nohup`/`setsid`, log to file, pid file, watchdog that resumes or reports. Never tied to an agent turn. `scripts/c1-baseline.sh` is the model — it holds a lock, logs to `progress.log`, and outlives the turn that started it.
+
+## C1 arm-002 — RUNNING (started ~16:10, not by this coordinator)
+
+- Live ledger `/tmp/baseline/c1-arm2/accounting.json`, log `progress.log`, lock held, QEMU up.
+- At last read: **9 scored / 1 omitted / 1 reserved**, spend **$0.3728**, all `refuted`, `falseSuccess: False` throughout.
+- Reasons observed: `modified` ×5, `persisted-mismatch` ×2, `step-budget` ×2 — all plausible refutations, **zero `driver-unreachable`**.
+- This confirms in production: #156's 45 s preflight (trial-5 preflight logged `match`), #163's sentinel filter (healthy rows show `driver: None`, not `"match"`), and no false successes.
+- **Do not interfere.** Read the final denominator from the ledger when it stops.
+
 ## Objective
 Milestone 1: verified, recoverable desktop execution in one real Windows GUI app (LibreOffice Calc record edits, default suggestion). Acceptance: 27/30 reliability, 0 false successes in ≥10 corrupted trials, recovery from app interruption and invalid target, machine-readable evidence, screenshot-agent baseline on identical conditions, reproducible by another agent. Full spec: docs/product/vision.md.
 
