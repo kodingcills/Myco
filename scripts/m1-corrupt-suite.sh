@@ -4,8 +4,20 @@
 set -u
 WS=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-/tmp/m1-014/corrupted}
+PARAM_ARGS=(scripts/m1-corrupt-suite-params.ts)
+FINAL=--final
+if [ "$#" -gt 1 ]; then
+  if [ "$#" -ne 3 ] || [ "$2" != --groups ] || [ -z "$3" ]; then
+    echo "Usage: $0 [OUT_DIR [--groups GROUP:COUNT[,GROUP:COUNT]]]" >&2
+    exit 1
+  fi
+  FINAL=--final-supplement
+fi
 mkdir -p "$OUT/runs" || exit 1
 OUT=$(cd "$OUT" && pwd) || exit 1
+if [ "$FINAL" = --final-supplement ]; then
+  PARAM_ARGS+=(--groups "$3" "${OUT##*/}")
+fi
 PARAMS="$OUT/params.json"
 LOG="$OUT/trials.jsonl"
 PROGRESS="$OUT/progress.log"
@@ -23,7 +35,7 @@ fi
 NEW_PARAMS=$(mktemp "$OUT/params.XXXXXX") || exit 1
 PENDING=$(mktemp "$OUT/pending.XXXXXX") || { rm -f "$NEW_PARAMS"; exit 1; }
 trap 'rm -f "$NEW_PARAMS" "$PENDING"; vm_lock_release' EXIT
-pnpm exec tsx scripts/m1-corrupt-suite-params.ts > "$NEW_PARAMS" || exit 1
+pnpm exec tsx "${PARAM_ARGS[@]}" > "$NEW_PARAMS" || exit 1
 if [ -s "$PARAMS" ]; then
   cmp -s "$PARAMS" "$NEW_PARAMS" || {
     echo "FATAL: suite parameters changed; start with a fresh OUT" | tee -a "$PROGRESS" >&2
@@ -73,7 +85,7 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   # nonzero. The Node process receives the watchdog signal directly.
   ARGS=(--mode "$MODE" --audit-corruption)
   if [ "$RECOVERY" = True ]; then ARGS+=(--recovery); fi
-  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 900; exec @ARGV' node --import tsx src/integration/run-live.ts \
+  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 1500; exec @ARGV' node --import tsx src/integration/run-live.ts \
     "${ARGS[@]}" --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial-$i.out" 2> "$OUT/trial-$i.err" 3<&-
   unset TOK
@@ -81,7 +93,7 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   sleep 20
 done 3< "$PENDING"
 
-if ! python3 "$RECORDER" --final "$PARAMS" "$LOG" > "$OUT/summary.txt"; then
+if ! python3 "$RECORDER" "$FINAL" "$PARAMS" "$LOG" > "$OUT/summary.txt"; then
   cat "$OUT/summary.txt"
   echo "SUITE_FAILED $(date -u +%FT%TZ)" >> "$PROGRESS"
   exit 8

@@ -56,6 +56,12 @@ export interface WindowsAdapterOptions {
 
 const HELPER_NAME = "myco_uia_act.py";
 
+// M1-014 corrupted trial 2: the first Name Box action timed out at 30 s
+// immediately after cold launch. Sweep trial 3: the 30 s UNO readiness
+// deadline expired after a 94 s cold fixture convert (host load 7–11).
+export const CALC_HELPER_TIMEOUT_MS = 90_000;
+export const CALC_UNO_READY_TIMEOUT_MS = 90_000;
+
 /**
  * Guest-side one-shot actuator (runs under LibreOffice's bundled Python so it
  * can import uiautomation; deployed by the adapter over write_file).
@@ -71,7 +77,10 @@ const HELPER_NAME = "myco_uia_act.py";
  *   keys     — send a uiautomation SendKeys combo ({Ctrl}s …).
  */
 const HELPER_SOURCE = `
-import ctypes, json, sys, time
+import time
+started = time.perf_counter()
+
+import ctypes, json, sys
 from ctypes import wintypes
 
 u32 = ctypes.windll.user32
@@ -251,6 +260,7 @@ def main():
             raise RuntimeError("unknown op " + cmd["op"])
     except Exception as e:
         rep["error"] = repr(e)
+    rep["elapsedMs"] = round((time.perf_counter() - started) * 1000)
     with open(out, "w") as fh:
         json.dump(rep, fh)
 
@@ -260,6 +270,24 @@ main()
 interface HelperResult {
   ok: boolean;
   error?: string;
+  elapsedMs?: number;
+}
+
+type HelperOperation = "focus" | "nametype" | "save" | "keys";
+
+export interface CalcTimings {
+  helpers: {
+    op: HelperOperation;
+    elapsedMs: number | null;
+    durationMs: number;
+    deadlineMs: number;
+    outcome: "ok" | "error" | "deadline";
+  }[];
+  unoReady: {
+    durationMs: number;
+    deadlineMs: number;
+    outcome: "ready" | "deadline";
+  }[];
 }
 
 /** Window title needle: Calc shows "<basename> - LibreOffice Calc". */
@@ -279,6 +307,7 @@ export class WindowsCalcAdapter implements AppAdapter {
   #calcPid: number | null = null;
   #helperDeployed = false;
   #refs = new Map<string, { nodeId: string; refVersion: number }>();
+  readonly timings: CalcTimings = { helpers: [], unoReady: [] };
 
   constructor(options: WindowsAdapterOptions) {
     this.#client = options.client;
@@ -286,7 +315,7 @@ export class WindowsCalcAdapter implements AppAdapter {
     this.#unoSocket = options.unoSocket;
     this.#observedCells = options.observedCells;
     this.#helperPath = `${options.helperDir ?? "C:\\myco\\runs"}\\${HELPER_NAME}`;
-    this.#helperTimeoutMs = options.helperTimeoutMs ?? 30_000;
+    this.#helperTimeoutMs = options.helperTimeoutMs ?? CALC_HELPER_TIMEOUT_MS;
     this.#fault = options.fault;
   }
 
@@ -538,7 +567,8 @@ export class WindowsCalcAdapter implements AppAdapter {
     // observe() before it listens fails with NoConnect. Poll read-only until
     // the bridge answers (bounded — a dead UNO still fails the trial, just
     // not instantly).
-    const deadline = Date.now() + 30_000;
+    const started = Date.now();
+    const deadline = started + CALC_UNO_READY_TIMEOUT_MS;
     for (;;) {
       try {
         // Probe with a cell readback, not is_modified: the frame window (and
@@ -550,9 +580,19 @@ export class WindowsCalcAdapter implements AppAdapter {
           cell: this.#observedCells[0],
           socket: this.#unoSocket,
         });
+        this.timings.unoReady.push({
+          durationMs: Date.now() - started,
+          deadlineMs: CALC_UNO_READY_TIMEOUT_MS,
+          outcome: "ready",
+        });
         break;
       } catch (error) {
         if (Date.now() >= deadline) {
+          this.timings.unoReady.push({
+            durationMs: Date.now() - started,
+            deadlineMs: CALC_UNO_READY_TIMEOUT_MS,
+            outcome: "deadline",
+          });
           throw new Error(
             `UNO bridge on socket ${this.#unoSocket} never answered: ${error instanceof Error ? error.message : String(error)}`,
           );
@@ -572,30 +612,53 @@ export class WindowsCalcAdapter implements AppAdapter {
     await this.#client.writeFile(this.#helperPath, Buffer.from(HELPER_SOURCE, "utf8"));
     this.#helperDeployed = true;
   }
-  async #runHelper(cmd: Record<string, unknown>): Promise<HelperResult> {
+  async #runHelper(cmd: { op: HelperOperation } & Record<string, unknown>): Promise<HelperResult> {
     await this.#deployHelper();
     // Unique result file per invocation: a shared name would let the poll
     // read the PREVIOUS invocation's result before the new helper run has
     // written anything (observed live as a silent no-op race).
     const nonceId = `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
     const outFile = `${this.#helperPath}.${nonceId}.result.json`;
-    await this.#client.launch([
-      "C:\\Program Files\\LibreOffice\\program\\python.exe",
-      this.#helperPath,
-      JSON.stringify(cmd),
-      outFile,
-    ]);
-    const deadline = Date.now() + this.#helperTimeoutMs;
-    while (Date.now() < deadline) {
-      await sleep(300);
-      try {
-        const bytes = await this.#client.readFile(outFile);
-        return JSON.parse(bytes.toString("utf8")) as HelperResult;
-      } catch {
-        // result file not written yet — keep polling
+    const started = Date.now();
+    let elapsedMs: number | null = null;
+    let outcome: CalcTimings["helpers"][number]["outcome"] = "error";
+    try {
+      await this.#client.launch([
+        "C:\\Program Files\\LibreOffice\\program\\python.exe",
+        this.#helperPath,
+        JSON.stringify(cmd),
+        outFile,
+      ]);
+      const deadline = Date.now() + this.#helperTimeoutMs;
+      while (Date.now() < deadline) {
+        await sleep(300);
+        try {
+          const bytes = await this.#client.readFile(outFile);
+          const result = JSON.parse(bytes.toString("utf8")) as HelperResult;
+          if (
+            typeof result.elapsedMs === "number" &&
+            Number.isFinite(result.elapsedMs) &&
+            result.elapsedMs >= 0
+          ) {
+            elapsedMs = result.elapsedMs;
+          }
+          outcome = result.ok ? "ok" : "error";
+          return result;
+        } catch {
+          // result file not written yet — keep polling
+        }
       }
+      outcome = "deadline";
+      return { ok: false, error: `helper timed out after ${this.#helperTimeoutMs}ms` };
+    } finally {
+      this.timings.helpers.push({
+        op: cmd.op,
+        elapsedMs,
+        durationMs: Date.now() - started,
+        deadlineMs: this.#helperTimeoutMs,
+        outcome,
+      });
     }
-    return { ok: false, error: `helper timed out after ${this.#helperTimeoutMs}ms` };
   }
 }
 
