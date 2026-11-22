@@ -230,6 +230,32 @@ ADR-0023 places the generated hidden split outside every Git work tree. Its load
 directories inside a work tree, group- or world-accessible directories, missing or short
 seed files, and calls without a directory when `MYCO_FOUNDRY_HIDDEN_DIR` is unset.
 
+## 6.1 A score is a count and its interval
+
+Every published Foundry number goes through `scoreClaim()` in `src/foundry/stats.ts`, which
+returns the rate, its exact Clopper–Pearson interval, the false-success upper bound, and the
+caveats the report must print. The thresholds are not the Foundry's opinion — they are
+`docs/research/benchmark-survey.md` §7, reproduced as constants so the doc and the code
+cannot drift:
+
+| Count | What it buys | Source |
+|---|---|---|
+| 27/30 verified | exact 95% CI **[0.735, 0.979]**; an 80%-reliable system passes this 12.3% of the time | survey §7.1 |
+| ~100 normal trials | CI lower bound **≥ 0.80** at ~90% observed | survey §7.1 |
+| 0 false successes in 10 | bounds the true rate only below **25.9%** | survey §7.2 |
+| 0 false successes in 30 | bounds it below **9.5%** — the smallest meaningful count | survey §7.2 |
+| 6 discordant of 30 | smallest sign-test result with p < 0.05 (5 of 5 is p = 0.0625) | survey §7.3 |
+
+Consequences the contract imposes:
+
+1. A report on fewer than 100 normal trials MUST carry the "underpowered" caveat. A report
+   that ran 10 corrupted trials MUST say its bound is 26%, not "zero false successes".
+2. Two arms MUST be compared as a paired per-trial table with a sign test, never as two
+   independent rates — at n=30, two rates cannot distinguish a real gap from noise.
+3. A drift claim is not available from any published source (m2-04): the nearest evidence is
+   synthetic mobile config changes (29–42% of failures silent) and mock apps (63%→4%). If the
+   Foundry needs a drift number it has to generate it, and the report says so.
+
 ## 7. Versioning and the change protocol
 
 | Change | Requirement |
