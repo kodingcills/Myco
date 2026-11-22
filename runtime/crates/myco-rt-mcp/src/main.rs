@@ -87,22 +87,18 @@ fn main() {
         progress: Some(sink),
     };
     let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
         if let Some(reply) = handle_line(&mut srv, &line) {
-            // Replies go through the same sink as progress notifications, so
-            // "one line per message, never interleaved" is an invariant this code
-            // enforces rather than a property of Stdout's internal LineWriter.
-            if let Some(sink) = srv.progress.clone() {
-                sink.write_line(&reply);
-            } else {
-                let _ = writeln!(stdout, "{reply}");
-                let _ = stdout.flush();
-            }
+            // Every stdout write in the running server goes through this sink, as
+            // do progress notifications, so "one line per message, never
+            // interleaved" is an invariant this code enforces rather than a
+            // property of Stdout's internal LineWriter. `main` always builds the
+            // server with a sink, so there is no unlocked fallback path.
+            srv.progress.as_ref().expect("server is built with a progress sink").write_line(&reply);
         }
     }
 }
