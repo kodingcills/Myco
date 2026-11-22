@@ -64,16 +64,27 @@ describe("calc-record-edit parameter generation", () => {
   });
 
   it("emits AutoCorrect-immune newValues for a 5,000-seed sweep across all columns", () => {
+    // Same 150,000 values checked as before; the assertions are collected and reported once.
+    // 300,000 individual `expect()` calls cost ~3.8 s on a shared ubuntu runner against a
+    // 5 s default timeout, which made this test flake on load rather than on a real defect.
+    // Collecting violations keeps every check and removes the timing dependence.
+    const violations: string[] = [];
+    let checked = 0;
     for (let i = 0; i < 5_000; i++) {
       for (const set of generateParameterSets([`sweep-${i}`])) {
         const col = DATA_COLUMNS.find((c) => c.name === set.column);
-        expect(col, set.column).toBeDefined();
-        if (!col) continue;
-        expect(isAutoCorrectImmune(set.newValue, col.type), `${set.newValue} / ${set.column}`).toBe(
-          true,
-        );
+        if (!col) {
+          violations.push(`unknown column ${set.column}`);
+          continue;
+        }
+        checked += 1;
+        if (!isAutoCorrectImmune(set.newValue, col.type))
+          violations.push(`${JSON.stringify(set.newValue)} is not immune in column ${set.column}`);
       }
     }
+    // Guard the guard: a sweep that silently checked nothing would otherwise pass.
+    expect(checked).toBe(150_000);
+    expect(violations.slice(0, 10)).toEqual([]);
   });
 });
 
