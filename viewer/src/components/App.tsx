@@ -329,6 +329,8 @@ export function App() {
 
   const parseError = run?.data.parseErrors[0];
   const error = compareError ?? dropError ?? run?.error;
+  if (comparison) return <CompareApp />;
+
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: The window-wide drop zone has an equivalent keyboard picker.
     <div
