@@ -30,7 +30,23 @@ host without a desktop. Any future VM work is scheduled through the M1 Coordinat
 | TIF-51 | EF-002 | in progress | `src/foundry/oracles/` (state oracles, hidden by path), mutation audit, hidden split scaffolding |
 | TIF-52 | EF-003 | blocked on EF-001 + EF-002 | `src/foundry/faults/` (planned) + `docs/research/findings/f1-ef-fault-taxonomy.md` |
 | TIF-57 | EF-004 | blocked on EF-001 + EF-002 | blind scoring in `src/foundry/oracles/blind.ts`; split roots `foundry/hidden/` |
-| TIF-58 | EF-005 | blocked on EF-001 + EF-002 | baselines over the same tasks; escalation list in the report |
+| TIF-58 | EF-005 | host harness merged; live run awaits Coordinator GO | [baseline status](../foundry/baseline-status.md), PRs #70 and #75 |
+
+### TIF-58 slot 5
+
+The proposed HCU GUI run covers 30 normal Calc record-edit trials using the finalized
+M1 v3 parameter list in order. TIF-19 owns the single Cua C1 run in slot 4. Join the two
+runs on v3 trial ID and fixture hash, use the same cold restore and blind judge, and
+report skipped or unfinished trials separately. The current spend cap is $0. Pause if
+the pinned planner is unavailable within that cap or hits its quota.
+
+The Calc rows are descriptive for the Discovery wedge. Slot 5 contains no EF myco-todo
+tasks or hidden pairs. Those need a validated guest deployment, trusted paired evidence,
+and a separate run window. Orgo and Simular Sai remain parked.
+
+Wait for explicit Coordinator GO before touching the guest. Guest-changing work uses a
+new snapshot and preserves both clean-base snapshots. Apply the Coordinator's host
+gates, then stop the guest and report back when the run ends.
 
 ## Design decisions already taken
 
