@@ -14,9 +14,10 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
 ---
 
 ### EF-001 (TIF-50) GUI-required task fixtures where visible success can disagree with persisted state
-- **status:** done pending merge (2026-11-22). Four `myco-todo` fixtures across four defect
-  classes, each with a statement-level screen-vs-store disagreement assertion; seed task is
-  the extended dogfood app; live on `myco/eval-foundry`. Contract: docs/foundry/contract.md §3. Fixture
+- **status:** **done** (PR #110 merged d09f209, verified PASS at e802a19 after three
+  verifier rounds). Four `myco-todo` fixtures across four defect classes, each with a
+  statement-level screen-vs-store disagreement assertion; seed task is the extended dogfood
+  app. Contract: docs/foundry/contract.md §3. Fixture
   manifests + builder/loader under `foundry/tasks/`; public task bank in
   `src/foundry/tasks/`. Seed task is the extended `myco-todo` GUI-disagreement family; further
   application-specific tasks follow the same contract.
@@ -35,11 +36,12 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   bug contract is proven by a test, not only described in a docstring.
 
 ### EF-002 (TIF-51) Application-specific state verifiers and ground truth
-- **status:** done pending merge (2026-11-22). Derived ground truth, three-valued verdicts,
-  mutation audit (7 hand-written near-misses refused, unmutated run still verified),
-  hidden-split commitment regenerated; an independent probe's two findings (a stale-row
-  defect that could not fire, and a rename accepted in the wrong position) are fixed with
-  tests that would fail if either came back. State oracles under `src/foundry/oracles/`
+- **status:** **done** (PR #110 merged d09f209, verified PASS at e802a19). Derived ground
+  truth, three-valued verdicts, mutation audit (7 hand-written near-misses refused, unmutated
+  run still verified), hidden-split commitment regenerated. An independent probe found the
+  stale-row defect could not fire and a rename was accepted in the wrong position; both are
+  fixed, and the save path now has five cases (no-op, add, delete, rename, rename-after-add)
+  each asserting the store and the screen. State oracles under `src/foundry/oracles/`
   (hidden by path, contract §6); mutation audit in `test/foundry/`.
 - **owner:** foundry-owner
 - **blocked_by:** EF-001
