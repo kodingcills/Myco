@@ -132,3 +132,49 @@ Rules:
 - **Coordinators:** when briefing a verifier, give it the exact SHA and say "read objects, not the working tree". A verdict is only meaningful for the SHA it names.
 
 Why it matters: a verifier reading a mutated worktree produces a confident, wrong verdict — either a false REJECT that wastes a fix cycle, or a false PASS that lets unverified code land. Both are worse than no review.
+
+## Defensive engineering (standing rule, 2026-11-22)
+
+**Every owner, builder and verifier applies this. It exists because two C1 bugs — a 15 s timeout nobody measured and a cleanup that reported a failed kill as clean — were unmeasured assumptions, not coding errors.**
+
+### 1. Pre-mortem before touching VM/guest/host
+
+Before building anything that touches the VM, guest or host, the owner writes the **top ~5 ways it can fail on the real target** and a test or guard for each. The categories to sweep: timeouts, partial cleanup, stale locks, missing fields across language boundaries, resource exhaustion, provider/API errors.
+
+A build without a written pre-mortem is not ready for review.
+
+### 2. Measure, don't guess
+
+Every **timeout, budget or threshold** comes from a **recorded measurement on the real guest**, referenced in the code or comment, plus **explicit headroom**. `--version` through vssh: 5.7/6.4/6.8 s. CIM enumeration: 11.8 s. Therefore 15 s is not a budget, it is a guess; 45 s is a budget with headroom.
+
+The measurement file is cited where the constant lives. Uncited constants are rejected in review.
+
+### 3. Fault injection for cleanup/recovery
+
+Any **cleanup, kill, reset or recovery** path needs a test that **forces it to fail** and asserts the failure is reported as **dirty, never clean — and blocks scoring**. A cleanup whose failure renders as `killed=[]` is worse than no cleanup, because it is indistinguishable from success.
+
+### 4. Contract tests across boundaries
+
+When data crosses **TS / Python / Rust / PowerShell / JSON**, a test asserts **every field survives the round trip** — including error fields. PR #153's Python tests all passed while `AgentClient.kill` dropped `errors[]` on the TS side; the field never reached a caller. A layer's tests never prove the wire.
+
+### 5. Mutation check
+
+A fix's test **must fail when the fix is reverted**. Verifiers perform this themselves and paste both runs. A test that passes with the fix restored and with it removed is not a test.
+
+### 6. Real-target smoke before sweeps
+
+One end-to-end trial on the **real guest** with **timings recorded** before any multi-trial run. A green unit suite is not evidence that a sweep will start.
+
+### 7. Abort early
+
+Sweeps **stop after 2 consecutive identical exclusion or failure causes** and report for diagnosis instead of burning the remainder of the budget. The C1 arm spent a full reset on 30 identically-failing trials; the second identical cause was the signal.
+
+### Verifier obligations
+
+Verifiers check items **1–5 explicitly** in their verdict, by name, with pasted evidence. "Tests pass" is not a verdict on any of them.
+
+### 8. A stale `node_modules` is a false red
+
+`pnpm typecheck` failed on `error TS2307: Cannot find module 'fflate'` and two test files failed to load — on a clean `origin/main`. `fflate` was in `package.json` but not installed. The failures looked like real regressions and were not.
+
+Run `pnpm install --frozen-lockfile` **before** diagnosing a failing gate, and before reporting a failure as pre-existing. A gate result from a tree whose dependencies do not match the lockfile is not evidence either way.

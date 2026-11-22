@@ -22,7 +22,12 @@ const DEFAULT_ARM_LIMIT = 4_500_000;
 const MAX_TRIAL_MICROS = STEP_BUDGET * MAX_CALL_MICROS;
 const manifestSha256 = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 
-type Omission = "trial-interrupted" | "spend-limit" | "driver-unreachable" | "planner-failed";
+type Omission =
+  | "trial-interrupted"
+  | "spend-limit"
+  | "driver-unreachable"
+  | "planner-failed"
+  | "repeated-cause";
 
 type Entry =
   | { status: "reserved"; micros: number }
@@ -109,12 +114,30 @@ export async function runC1Sweep(options: {
     const rowDirectory = join(directory, "trials", "c1");
     mkdirSync(rowDirectory, { recursive: true });
     let stopReason: Omission | undefined;
+    // Abort-early (defensive engineering rule 7): two consecutive identical
+    // exclusion causes mean the sweep is measuring the harness, not the agent.
+    // Stop and surface it for diagnosis instead of burning the rest of the arm.
+    let lastCause: string | undefined;
+    let consecutive = 0;
+    const noteCause = (cause: string) => {
+      if (cause === lastCause) consecutive += 1;
+      else {
+        lastCause = cause;
+        consecutive = 1;
+      }
+      if (consecutive >= 2 && !stopReason) {
+        stopReason = "repeated-cause";
+      }
+    };
     for (const target of manifest.rows) {
       const { index, params } = target;
       const prior = ledger.c1[index];
       if (prior?.status === "scored") {
         writeJson(join(rowDirectory, `${index}.json`), prior.row);
-        if (prior.row.verdictReason === "driver-unreachable") stopReason = "driver-unreachable";
+        if (prior.row.verdictReason === "driver-unreachable") {
+          stopReason = "driver-unreachable";
+          noteCause("driver-unreachable");
+        }
         continue;
       }
       if (prior?.status === "reserved") {
@@ -123,7 +146,10 @@ export async function runC1Sweep(options: {
         continue;
       }
       if (prior?.status === "omitted") {
-        if (prior.reason !== "trial-interrupted") stopReason = prior.reason;
+        if (prior.reason !== "trial-interrupted") {
+          stopReason ??= prior.reason;
+          noteCause(prior.reason);
+        }
         continue;
       }
       const reservation = planner.paid ? MAX_TRIAL_MICROS : 0;
@@ -158,6 +184,7 @@ export async function runC1Sweep(options: {
       } catch (error) {
         const failed = error instanceof PlannerFailure;
         if (failed) stopReason = "planner-failed";
+        noteCause(failed ? `planner-failed:${error.message}` : "trial-interrupted");
         ledger.c1[index] = {
           status: "omitted",
           micros: reservation,
@@ -170,7 +197,10 @@ export async function runC1Sweep(options: {
       const micros = Math.round(row.cost * 1_000_000);
       if (!isBaselineRow(row) || micros > reservation)
         throw new Error("invalid C1 row or reservation overrun");
-      if (row.verdictReason === "driver-unreachable") stopReason = "driver-unreachable";
+      if (row.verdictReason === "driver-unreachable") {
+        stopReason = "driver-unreachable";
+        noteCause("driver-unreachable");
+      }
       ledger.c1[index] = { status: "scored", micros, row };
       persist();
       writeJson(join(rowDirectory, `${index}.json`), row);
