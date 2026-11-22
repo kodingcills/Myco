@@ -25,10 +25,11 @@ struct Server {
 
 /// The client's progress token, if it supplied one.
 ///
-/// MCP puts `_meta` on the request params, but clients in the wild also nest it
-/// inside the tool `arguments`, so accept both. `params._meta` wins when both are
-/// present. Returning `None` is what keeps a token-less client from receiving
-/// unsolicited notifications, so this is the single gate for that rule.
+/// MCP puts `_meta` on the request params. The tool `arguments` are also read, as
+/// permissive tolerance for a client that nests `_meta` there; no client is known
+/// to do so, and a conforming client is unaffected because `params._meta` wins
+/// when both are present. Returning `None` is what keeps a token-less client from
+/// receiving unsolicited notifications, so this is the single gate for that rule.
 fn progress_token(params: &Value, args: &Value) -> Option<Value> {
     params
         .get("_meta")
@@ -755,11 +756,33 @@ mod read_root_validation_tests {
         serde_json::from_str(&handle_line(s, body).expect("reply")).unwrap()
     }
 
+    /// `create` derives the guest directory from the server's workspace, so a
+    /// throwaway workspace lets a test see whether provisioning was ever reached:
+    /// `provision` takes `state/SESSION.lock` as its very first action.
+    fn srv_in(tmp: &std::path::Path) -> Server {
+        Server {
+            sessions: HashMap::new(),
+            workspace: Ok(tmp.to_path_buf()),
+            next_id: 1,
+            progress: None,
+        }
+    }
+
+    fn lock_taken(tmp: &std::path::Path) -> bool {
+        tmp.join("runtime").join("guest").join("state").join("SESSION.lock").exists()
+    }
+
     /// A bad read_root must be refused BEFORE provisioning, so no VM boots and no
     /// lock is taken (review must-fix 1).
+    ///
+    /// `sessions.is_empty()` alone cannot show this — it holds on every error path,
+    /// booted or not. The lock file is what distinguishes "refused early" from
+    /// "booted, then refused", and the order is the whole point of the guard.
     #[test]
     fn relative_read_root_is_refused_without_booting() {
-        let mut s = srv();
+        let tmp = std::env::temp_dir().join(format!("myco-rt-rel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mut s = srv_in(&tmp);
         let r = call(
             &mut s,
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create","arguments":{"session_id":"x","read_root":"relative/dir"}}}"#,
@@ -767,12 +790,16 @@ mod read_root_validation_tests {
         assert_eq!(r["result"]["isError"], true);
         let text = r["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("absolute"), "{text}");
+        assert!(!lock_taken(&tmp), "provisioning was reached before the guard fired");
         assert!(s.sessions.is_empty(), "no session may be registered");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn root_read_root_is_refused_without_booting() {
-        let mut s = srv();
+        let tmp = std::env::temp_dir().join(format!("myco-rt-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mut s = srv_in(&tmp);
         let r = call(
             &mut s,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create","arguments":{"session_id":"x","read_root":"/"}}}"#,
@@ -780,7 +807,23 @@ mod read_root_validation_tests {
         assert_eq!(r["result"]["isError"], true);
         let text = r["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("filesystem root"), "{text}");
+        assert!(!lock_taken(&tmp), "provisioning was reached before the guard fired");
         assert!(s.sessions.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The sentinel the tests above rely on must be real: if provisioning were
+    /// reached, the lock would exist. Without this, `!lock_taken` could pass
+    /// merely because the path was never used.
+    #[test]
+    fn reachable_lock_sentinel_exists_once_create_proceeds() {
+        let tmp = std::env::temp_dir().join(format!("myco-rt-sentinel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("runtime").join("guest").join("state")).unwrap();
+        let p = tmp.join("runtime").join("guest").join("state").join("SESSION.lock");
+        std::fs::write(&p, "sentinel").unwrap();
+        assert!(lock_taken(&tmp), "lock_taken must find the file provisioning writes");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
 
