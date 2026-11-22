@@ -156,6 +156,46 @@ describe("EF-001 trap: a GUI-trusting verifier fails, the state oracle refuses",
     }
   });
 
+  it("each defect disagrees in its own way, not four labels for one behaviour", () => {
+    // Statement-level check per class: what separates the screen from the store.
+    const expectations = {
+      // Two named items are on screen but absent from the store.
+      "ef-todo-silent-drop-v1": (screen: string[], store: string[]) =>
+        screen.some((line) => line.includes("BUG: token expires too early")) &&
+        !store.some((text) => text.toUpperCase().startsWith("BUG")),
+      // The renamed row shows the new text; the store keeps the row's old text at its old index.
+      "ef-todo-stale-row-v1": (screen: string[], store: string[]) =>
+        screen.includes("Release notes for 2.4") &&
+        store[0] === "Draft release notes" &&
+        !store.includes("Release notes for 2.4"),
+      // The label the user typed is on screen; the store holds the value without it.
+      "ef-todo-wrong-value-v1": (screen: string[], store: string[]) =>
+        screen.some((line) => line.includes("Bug: review the Q3 metrics")) &&
+        store.includes("review the Q3 metrics") &&
+        !store.includes("Bug: review the Q3 metrics"),
+      // The items array is right; the companion metadata still counts the pre-edit rows.
+      "ef-todo-partial-write-v1": (screen: string[], store: string[], meta?: string) =>
+        !store.includes("archive Q1 invoices") &&
+        meta !== undefined &&
+        (JSON.parse(meta) as { count: number }).count !== store.length,
+    };
+    for (const spec of TODO_FIXTURE_SPECS) {
+      const saved = performTask(spec.fixtureId);
+      const files = persistedFiles(saved);
+      const store = (
+        JSON.parse(new TextDecoder().decode(files["store.json"]!)) as {
+          items: { text: string }[];
+        }
+      ).items.map((item) => item.text);
+      const meta = files["store.meta.json"]
+        ? new TextDecoder().decode(files["store.meta.json"]!)
+        : undefined;
+      const holds = expectations[spec.fixtureId as keyof typeof expectations];
+      expect(holds, spec.fixtureId).toBeDefined();
+      expect(holds(visibleScreen(saved), store, meta), spec.fixtureId).toBe(true);
+    }
+  });
+
   it("a run that does nothing is refuted and is never reported as a false success", () => {
     for (const spec of TODO_FIXTURE_SPECS) {
       const fixture = fixtureFor(spec.fixtureId);
