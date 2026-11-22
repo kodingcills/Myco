@@ -107,6 +107,13 @@ export interface Decision {
   readonly mycoFalseSuccessInterval: readonly [number, number] | null;
   readonly comparatorFalseSuccessInterval: readonly [number, number] | null;
   readonly ineligibleRows: number;
+  /** One row per paired refutable trial, for the report's paired table. */
+  readonly pairRows: readonly {
+    readonly seed: number;
+    readonly faultClass: string;
+    readonly mycoFalseSuccess: boolean;
+    readonly comparatorFalseSuccess: boolean;
+  }[];
   readonly notes: readonly string[];
 }
 
@@ -160,6 +167,7 @@ export function evaluateDecision(input: DecisionInput): Decision {
       mycoFalseSuccessInterval: null,
       comparatorFalseSuccessInterval: null,
       ineligibleRows: 0,
+      pairRows: [],
       notes: [
         "minimumPairs must be a positive integer; comparatorChecksEveryTrial a finite fraction in [0,1]; comparatorCostRatio a finite number > 0.",
       ],
@@ -192,6 +200,12 @@ export function evaluateDecision(input: DecisionInput): Decision {
   let comparatorFalseSuccesses = 0;
   let discordantFavouringMyco = 0;
   let discordantFavouringComparator = 0;
+  const pairRows: {
+    seed: number;
+    faultClass: string;
+    mycoFalseSuccess: boolean;
+    comparatorFalseSuccess: boolean;
+  }[] = [];
   for (const key of keys) {
     const mine = myco.get(key);
     const theirs = comparator.get(key);
@@ -200,6 +214,12 @@ export function evaluateDecision(input: DecisionInput): Decision {
     if (theirs.falseSuccess) comparatorFalseSuccesses += 1;
     if (theirs.falseSuccess && !mine.falseSuccess) discordantFavouringMyco += 1;
     if (mine.falseSuccess && !theirs.falseSuccess) discordantFavouringComparator += 1;
+    pairRows.push({
+      seed: mine.seed,
+      faultClass: mine.faultClass ?? "unknown",
+      mycoFalseSuccess: mine.falseSuccess,
+      comparatorFalseSuccess: theirs.falseSuccess,
+    });
   }
 
   const base = {
@@ -214,6 +234,7 @@ export function evaluateDecision(input: DecisionInput): Decision {
     mycoFalseSuccessInterval: wilson(mycoFalseSuccesses, pairs),
     comparatorFalseSuccessInterval: wilson(comparatorFalseSuccesses, pairs),
     ineligibleRows,
+    pairRows,
   };
 
   if (duplicatePairs > 0) {
