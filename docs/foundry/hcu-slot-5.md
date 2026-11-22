@@ -16,9 +16,9 @@ requires explicit Coordinator GO. The spend cap is $0.
   calls the shared blind Calc judge on independently captured workbook evidence.
   Preserve unknown verdicts and unavailable measurements. A driver acknowledgement
   or planner claim contributes no verification credit.
-- Reuse the M1 judge and row fields with an explicit HCU arm identity. The M1
-  baseline's `SubArm` type admits only C1 and C2, so the handoff needs an HCU
-  evidence mapping before it can write comparable rows. Bind the evidence to the v3 trial ID,
+- Use `subArm: "hcu"` in the shared evidence row and call the existing blind
+  judge. The C1/C2 sweep and purity checker still take only Cua arms.
+  Bind the evidence to the v3 trial ID,
   parameter-list hash, exact fixture hash, snapshot and reset identifiers, judge
   version, HCU revision and bundle hash, and planner model and settings.
 

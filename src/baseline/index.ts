@@ -1,6 +1,7 @@
 import type { Verdict, VerdictStatus } from "../core/verify.ts";
 
 export type SubArm = "c1" | "c2";
+export type BaselineEvidenceArm = SubArm | "hcu";
 export type Claim = "done" | "failure";
 export interface Action {
   tool: string;
@@ -135,7 +136,7 @@ export function checkPurity(arm: SubArm, transcript: Transcript): PurityResult {
   return { ok: true };
 }
 export interface BaselineRow {
-  subArm: SubArm;
+  subArm: BaselineEvidenceArm;
   index: number;
   params: { fixtureSeed: string; rowKey: string; column: string; newValue: string | number };
   cellRef: string;
@@ -189,7 +190,7 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     d = x.driver,
     t = x.transcript;
   return (
-    (x.subArm === "c1" || x.subArm === "c2") &&
+    (x.subArm === "c1" || x.subArm === "c2" || x.subArm === "hcu") &&
     count(x.index) &&
     str(p.fixtureSeed) &&
     str(p.rowKey) &&
