@@ -8,7 +8,7 @@ import {
   saveApp,
   visibleScreen,
 } from "../../src/foundry/tasks/app-model.ts";
-import { promptLiterals, TODO_TASKS } from "../../src/foundry/tasks/bank.ts";
+import { promptLiterals, TODO_TASKS, WRITER_TASKS } from "../../src/foundry/tasks/bank.ts";
 import {
   findTodoFixture,
   TODO_FIXTURE_SPECS,
@@ -262,13 +262,15 @@ describe("EF-001 task bank", () => {
   });
 
   it("no prompt names a path an agent could write directly", () => {
-    for (const task of TODO_TASKS) {
-      expect(task.prompt).not.toMatch(/\.json|\.csv|\/tmp\//);
+    for (const task of [...TODO_TASKS, ...WRITER_TASKS]) {
+      expect(task.prompt, task.taskId).not.toMatch(/\.json|\.csv|\.xml|\.docx|\/tmp\//);
     }
   });
 
   it("every task's minimum GUI acts exceed zero (no task is a no-op)", () => {
-    for (const task of TODO_TASKS) expect(task.minimumGuiActs).toBeGreaterThan(0);
+    for (const task of [...TODO_TASKS, ...WRITER_TASKS]) {
+      expect(task.minimumGuiActs, task.taskId).toBeGreaterThan(0);
+    }
   });
 });
 

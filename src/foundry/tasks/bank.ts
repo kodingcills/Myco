@@ -13,6 +13,7 @@
 
 import type { FixtureManifest, TaskIntent } from "../types.ts";
 import { findTodoFixture, TODO_FIXTURES } from "./todo.ts";
+import { findWriterFixture, WRITER_FIXTURES } from "./writer.ts";
 
 export interface FoundryTask {
   readonly taskId: string;
@@ -85,20 +86,40 @@ export const TODO_TASKS: readonly FoundryTask[] = [
   },
 ];
 
+/**
+ * The Writer family's task. It exists so the second application surface is reachable from
+ * the same bank as the todo tasks — a fixture that only a test can find is not a task.
+ */
+export const WRITER_TASKS: readonly FoundryTask[] = [
+  {
+    taskId: "ef-t05-writer-total",
+    fixtureId: "ef-writer-autocorrect-v1",
+    prompt:
+      "In the Writer invoice table, set the Total cell (B3) to '1,200.00 (c) 2026' exactly as " +
+      "written, then save the document.",
+    intent: { kind: "writer.set-cell", table: "Invoice", cell: "B3", value: "1,200.00 (c) 2026" },
+    minimumGuiActs: 3,
+  },
+];
+
 export function findTask(taskId: string): FoundryTask | undefined {
   return (
     TODO_TASKS.find((task) => task.taskId === taskId) ??
-    DISCOVERY_TODO_TASKS.find((task) => task.taskId === taskId)
+    DISCOVERY_TODO_TASKS.find((task) => task.taskId === taskId) ??
+    WRITER_TASKS.find((task) => task.taskId === taskId)
   );
 }
 
 export function taskFixture(task: FoundryTask): FixtureManifest {
-  const fixture = findTodoFixture(task.fixtureId);
+  const fixture = findTodoFixture(task.fixtureId) ?? findWriterFixture(task.fixtureId);
   if (!fixture) throw new Error(`task ${task.taskId} names unknown fixture ${task.fixtureId}`);
   return fixture;
 }
 
-export const ASSIGNABLE_FIXTURES: readonly FixtureManifest[] = TODO_FIXTURES;
+export const ASSIGNABLE_FIXTURES: readonly FixtureManifest[] = [
+  ...TODO_FIXTURES,
+  ...WRITER_FIXTURES,
+];
 
 /**
  * Every literal the task's prompt puts on screen, so a task-level test can assert it
