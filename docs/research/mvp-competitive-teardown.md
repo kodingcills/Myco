@@ -357,6 +357,29 @@ Misses the Absent Row" (`OSW2`).
 
 ---
 
+## 2.6 Cross-check against the M2 research teardown (finding m2-01)
+
+Written independently, on a different day, from a different source page for each
+product, against the same claim. Where the two disagree, the disagreement is the
+finding — it is listed, not smoothed.
+
+| Point | This document | `docs/research/findings/m2-01-competitive-teardown.md` | Resolution |
+|---|---|---|---|
+| Orgo free credit | "an internal inconsistency: $3 vs $5/$2" | the same, and **explicitly marked contested** in its pricing table | confirm: quote as contested, never as a number |
+| Orgo fork source identifier | "the prose accepts UUID or instance_id while the OpenAPI spec says a UUID returns 404" | the same contradiction, independently found | confirm: an upstream defect, not a transcription error |
+| Orgo verdict | none; `needs_review` is an honest "we don't know" | the same, plus the specific non-proof that "a missing `text` body types the empty string and still returns `200`" | m2-01 is more specific; adopt its example |
+| Sai `unverifiable` | three-valued but transcript-adjudicated | the same, and names `unverifiable` as **the one shape worth stealing** | confirm; the shape is worth stealing, the oracle is not |
+| Closest to a proof | Cua (per-action `effect`) and HCU (window before/after + layout guard) | the same two | confirm |
+| HCU's limit | quoted from `PLATFORMS.md` and `MCP.md` | quoted: *"Neither proves file contents, persistence or network state."* | both; m2-01's sentence is the sharper one |
+| Scope | HCU, Cua, Orgo, Sai, screenshot-only (5) | Cua, Anthropic, OpenAI, Simular Agent S, UiPath, heyclicky (6), plus HCU/Orgo/Sai added | complementary; neither is a superset. Union = 11 products, 0 with a persisted-outcome verdict |
+| Economic baseline | "zero licence" for HCU/Cua; per-task benchmark cost for HCU/Sai | Orgo/Sai bill machine-time, so verification is free if the customer writes it | adopt: machine-time is the price Myco is compared to, and it is why the **hcu+shell** arm decides the wedge |
+
+The joint conclusion both documents reach independently: **the gap is not access,
+observation or actuation; it is a verdict on state that survives the agent.** That
+makes the deciding question not "does anything verify" but "does verification happen
+without agent discipline, and does the artifact outlive the run" — which is exactly
+the hcu+shell arm in `mvd-preregistration.md` §4.1.
+
 ## 3. Capability matrix (TIF-59 axes)
 
 ### 3.1 First-use setup
@@ -550,6 +573,11 @@ state.
 
 ## 8. Revision log
 
+- **v3, 2026-11-22.** §2.6 added: cross-check against finding m2-01 (independent
+  teardown of 11 products in total; six sources, three overlaps). Overlapping claims
+  agree wherever both could be checked — Orgo's contested credit and its UUID/instance_id
+  contradiction were found twice, independently — and m2-01's machine-time pricing
+  argument is adopted as the economic baseline for the hcu+shell decision rule.
 - **v2, 2026-11-21 (after independent verification).** Fifteen must-fix corrections applied,
   all reproduced by the verifier against the same sources: evaluated-vs-released HCU rows
   separated (Table 2 vs Table 4 costs and latencies); the evaluated version's `assert_ax`
