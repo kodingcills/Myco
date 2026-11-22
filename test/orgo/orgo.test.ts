@@ -9,11 +9,13 @@ import {
   createApi,
   guard,
   parseOffers,
+  probeLimits,
   redact,
   stats,
 } from "../../scripts/orgo/core.ts";
-import { fakeOrgo } from "../../scripts/orgo/fake.ts";
+import { fakeOrgo, type Scenario } from "../../scripts/orgo/fake.ts";
 import {
+  allow,
   DeadlineError,
   fetchHistory,
   liveApproved,
@@ -93,7 +95,7 @@ describe("spend guard", () => {
     expect(() => guard(300, 100, 0, 1)).toThrow(/stop rule/);
   });
   it("refuses more than two computers and unknown credit", () => {
-    expect(() => guard(300, 290, 2, 1)).toThrow(/limit is two/);
+    expect(() => guard(300, 290, 2, 1)).toThrow(/limit is 2/);
     expect(() => guard(300, 290, 1, 1)).not.toThrow();
     expect(() => guard(300, Number.NaN, 0, 1)).toThrow(/credit/);
     expect(() => guard(300, 20, 0, 1)).toThrow(/credit/);
@@ -150,17 +152,30 @@ describe("ledger", () => {
 
 describe("preflight", () => {
   const medium = { name: "Medium", cpu: 2, ramGb: 8, diskGb: 40, usdPerHour: 0.055 };
-  it("gates a Free account that offers only Medium", () => {
-    const result = assessPreflight({
-      tier: "free",
-      mode: "free",
-      balanceCents: 300,
+  it("admits the Free probe only with the exact offer, enough credit and empty inventory", () => {
+    const eligible = {
+      tier: "Free",
+      mode: "hourly",
+      balanceCents: 25,
       offers: [medium],
       inventoryCount: 0,
-    });
-    expect(result.ok).toBe(false);
-    expect(result.reasons.join(" ")).toMatch(/Free account/);
-    expect(result.reasons.join(" ")).toMatch(/no Small/);
+    };
+    expect(assessPreflight(eligible)).toMatchObject({ ok: true, profile: "probe" });
+    expect(assessPreflight({ ...eligible, tier: "unknown", mode: "free" }).ok).toBe(true);
+    for (const change of [
+      { offers: [] },
+      { offers: [medium, medium] },
+      { offers: [{ ...medium, name: "Large" }] },
+      { offers: [{ ...medium, cpu: 1 }] },
+      { offers: [{ ...medium, ramGb: 4 }] },
+      { offers: [{ ...medium, usdPerHour: 0.054 }] },
+      { inventoryCount: 1 },
+      { inventoryCount: null },
+      { balanceCents: 24 },
+      { balanceCents: null },
+      { balanceCents: Number.NaN },
+    ])
+      expect(assessPreflight({ ...eligible, ...change }).ok).toBe(false);
   });
   it("passes a paid account offering Small with an empty inventory", () => {
     const small = { ...medium, name: "Small", cpu: 0.5, ramGb: 4 };
@@ -198,18 +213,52 @@ describe("preflight", () => {
 });
 
 describe("dry run (fake service, no network)", () => {
-  async function dry(scenario: "free" | "paid-gated" | "paid-open") {
+  async function dry(scenario: Scenario) {
     const dir = await mkdtemp(join(tmpdir(), "orgo-dry-test-"));
     const raw = await main(["run", "--dry-run", "--scenario", scenario, "--out", dir]);
     return { raw, dir, ledger: await readFile(join(dir, "ledger.jsonl"), "utf8") };
   }
 
-  it("stops before any POST on a free account", async () => {
-    const { raw, ledger } = await dry("free");
-    expect(raw.preflight.ok).toBe(false);
-    expect(raw.experiments).toEqual({});
-    expect(ledger).not.toContain("create");
+  it.each([
+    ["free", 403, "HOURLY_LIMIT"],
+    ["free-quote", 409, "HOURLY_QUOTE_REQUIRED"],
+  ] as const)("runs the %s probe through cleanup", async (scenario, status, code) => {
+    const { raw, ledger } = await dry(scenario);
+    expect(raw.errors).toEqual([]);
+    expect(raw.preflight).toMatchObject({ ok: true, profile: "probe" });
+    expect(raw.experiments.E0?.observations[0]).toEqual({ sizeObtained: { cpu: 2, ramGb: 8 } });
+    for (const experiment of [raw.experiments.E2, raw.experiments.E3]) {
+      expect(experiment).toMatchObject({ planned: 1, n: 0, rejected: [{ status, code }] });
+      expect(experiment?.rejected).toHaveLength(1);
+    }
+    expect(raw.experiments.E0?.metrics.createToRunningMs?.p95).toBeNull();
+    expect(ledger).toContain("HOURLY_USE_STOP");
+    expect(ledger).not.toContain("E4 resume");
+    expect(raw.experiments.E5?.observations).toEqual([
+      { status: 409, code: "NOT_FORKABLE", body: '{"error":"Not running","code":"NOT_FORKABLE"}' },
+      {
+        cloneStatus: 400,
+        cloneCode: "NOT_CLONABLE",
+        body: '{"error":"No host on record","code":"NOT_CLONABLE"}',
+      },
+    ]);
+    expect(raw.cleanup.finalCount).toBe(0);
   });
+
+  it.each(["fork", "clone"] as const)(
+    "deletes an unexpected %s before any further work",
+    async (action) => {
+      const fake = fakeOrgo({ scenario: `free-${action}-open` });
+      const dir = await mkdtemp(join(tmpdir(), "orgo-unexpected-"));
+      const raw = await main(["--dry-run", "--out", dir], { fake: () => fake });
+      expect(raw.errors).toEqual([`Unexpected probe ${action} success; ending the run`]);
+      expect(raw.cleanup.finalCount).toBe(0);
+      expect(fake.computers.size).toBe(0);
+      const index = fake.calls.findIndex((call) => call.endsWith(`/${action}`));
+      expect(fake.calls[index + 1]).toMatch(/^DELETE \/api\/computers\/00000002-/);
+      expect(fake.calls.slice(index + 1).filter((call) => call.startsWith("POST "))).toEqual([]);
+    },
+  );
 
   it("records the fork gate and cleans up", async () => {
     const { raw } = await dry("paid-gated");
@@ -256,11 +305,13 @@ describe("dry run (fake service, no network)", () => {
     expect(forks.length).toBeLessThan(5);
   });
 
-  it("renders a gated report", async () => {
-    const { raw } = await dry("free");
+  it("renders the historical gate without suggesting a probe ran", async () => {
+    const raw = JSON.parse(
+      await readFile("docs/research/experiments/orgo-arm-001/raw.json", "utf8"),
+    );
     const md = await renderResults(raw);
     expect(md).toContain("precondition failed");
-    expect(md).toContain("not measured (gated)");
+    expect(md).toContain("No computer created");
   });
 });
 
@@ -376,9 +427,11 @@ describe("report wording (P2-2) and history (P2-3)", () => {
     expect(md).toContain("NOT CLEARED FOR LIVE USE");
     expect(md).not.toContain("retrieved at run time");
     expect(md).not.toContain("21-25");
-    expect(md).toContain("~21 s warm");
+    expect(md).not.toContain("~21 s warm");
     expect(md).not.toMatch(/cold boot/);
-    expect(md).toContain("only offered Medium at $0.055/h");
+    expect(md).toContain("2 vCPU, 8 GB (create response)");
+    expect(md).toContain("p95 is omitted for N=1");
+    expect(md).not.toContain("Eligible for Small");
   });
 
   it("reads billing history over REST, never through npx", async () => {
@@ -402,7 +455,7 @@ describe("strict arguments (P2-4) and live approval", () => {
     expect(() => parseArgs(["--bogus"])).toThrow(/Unknown option/);
     expect(() => parseArgs(["--charge-cents", "abc"])).toThrow(/number/);
     expect(() => parseArgs(["launch"])).toThrow(/Unknown command/);
-    expect(parseArgs(["--scenario", "paid-gated"]).scenario).toBe("paid-gated");
+    expect(parseArgs(["--scenario", "paid-gated", "--dry-run"]).scenario).toBe("paid-gated");
   });
 
   it("requires an explicit approval switch for live experiments", () => {
@@ -410,4 +463,172 @@ describe("strict arguments (P2-4) and live approval", () => {
     expect(liveApproved({ ORGO_LIVE_APPROVED: "1" })).toBe(false);
     expect(liveApproved({ ORGO_LIVE_APPROVED: "yes" })).toBe(true);
   });
+});
+
+describe("probe spend and inventory guard", () => {
+  it("allow refuses at 15c and grants the one-copy exception only from a valid inventory", async () => {
+    let balance = 285;
+    let count = 1;
+    const ctx = {
+      probe: true,
+      startCents: 300,
+      lastCents: 300,
+      lowestCents: 300,
+      deadlineAt: performance.now() + 10_000,
+      workspaceId: "workspace",
+      api: async (_method: string, path: string) => ({
+        status: 200,
+        ms: 0,
+        body: "",
+        data: path.endsWith("credits")
+          ? { balanceCents: balance }
+          : {
+              desktops: Array.from({ length: count }, (_, i) => ({ id: String(i) })),
+            },
+      }),
+    };
+    await expect(allow(ctx, 1, true)).rejects.toThrow(/15c stop rule/);
+    await expect(allow(ctx, 0)).rejects.toThrow(/15c stop rule/);
+    balance = 286;
+    ctx.lowestCents = 300;
+    await expect(allow(ctx, 1)).rejects.toThrow(/Computer limit is 1/);
+    await expect(allow(ctx, 1, true)).resolves.toBeUndefined();
+    count = 2;
+    await expect(allow(ctx, 1, true)).rejects.toThrow(/Computer limit is 1/);
+    expect(() => guard(300, 285, 0, 1, probeLimits)).toThrow(/15c stop rule/);
+  });
+
+  it.each([
+    { phase: "E2 fork", after: "plant read", blocked: "fork", allowed: 0 },
+    { phase: "E3 clone", after: "1 fork", blocked: "clone", allowed: 0 },
+    { phase: "E4 stop", after: "1 clone", blocked: "stop", allowed: 0 },
+    { phase: "E4 start", after: "1 stop", blocked: "start", allowed: 0 },
+    { phase: "E4 suspend", after: "replant read", blocked: "suspend", allowed: 0 },
+    { phase: "E4 resume", after: "1 suspend", blocked: "resume", allowed: 0 },
+    { phase: "E5 fork", after: "2 stop", blocked: "fork", allowed: 1 },
+    { phase: "E5 clone", after: "2 fork", blocked: "clone", allowed: 1 },
+  ])("refuses $phase after spend crosses to exactly 15c", async ({ after, blocked, allowed }) => {
+    const fake = fakeOrgo({ scenario: "free" });
+    const counts = new Map<string, number>();
+    let crossed = false;
+    const request: typeof fetch = async (input, init) => {
+      const response = await fake.request(input, init);
+      const call = fake.calls.at(-1) ?? "";
+      const action = call.split("/").at(-1) ?? "";
+      if (call.startsWith("POST ")) {
+        if (action === "bash" && String(init?.body).includes("MYCO_STATE_MARKER")) {
+          counts.set("plants", (counts.get("plants") ?? 0) + 1);
+        }
+        const occurrence = (counts.get(action) ?? 0) + 1;
+        counts.set(action, occurrence);
+        const isStateRead =
+          action === "bash" &&
+          typeof init?.body === "string" &&
+          JSON.parse(init.body).command === "python3 /root/myco-state.py read";
+        if (
+          after === `${occurrence} ${action}` ||
+          (isStateRead &&
+            (after === "plant read" || (after === "replant read" && counts.get("plants") === 2)))
+        ) {
+          crossed = true;
+        }
+        if (action === "suspend" && after === "1 suspend")
+          return new Response('{"success":true}', { status: 200 });
+      }
+      if (crossed && call === "GET /api/credits")
+        return new Response('{"balanceCents":285,"tier":"free"}');
+      return response;
+    };
+    const dir = await mkdtemp(join(tmpdir(), "orgo-spend-"));
+    const raw = await main(["--dry-run", "--out", dir], {
+      fake: () => ({ ...fake, request }),
+    });
+    expect(crossed).toBe(true);
+    expect(raw.errors).toEqual(["Observed spend reached the 15c stop rule"]);
+    expect(counts.get(blocked) ?? 0).toBe(allowed);
+    expect(raw.cleanup.finalCount).toBe(0);
+  });
+});
+
+describe("API and live-run gating", () => {
+  it("uses exactly the approved method and path set across dry runs", async () => {
+    const calls = new Set<string>();
+    for (const scenario of ["free", "paid-open"] as const) {
+      const fake = fakeOrgo({ scenario });
+      const dir = await mkdtemp(join(tmpdir(), "orgo-routes-"));
+      const request: typeof fetch = async (input, init) => {
+        const reply = await fake.request(input, init);
+        return fake.calls.at(-1)?.endsWith("/suspend")
+          ? new Response('{"success":true}', { status: 200 })
+          : fake.calls.at(-1)?.endsWith("/resume")
+            ? new Response('{"success":true}', { status: 200 })
+            : reply;
+      };
+      const raw = await main(["--dry-run", "--out", dir], {
+        fake: () => ({ ...fake, request }),
+        loadKey: async () => {
+          throw new Error("dry run attempted to load a key");
+        },
+        fetch: async () => {
+          throw new Error("dry run attempted network");
+        },
+      });
+      expect(raw.errors).toEqual([]);
+      expect(raw.cleanup.finalCount).toBe(0);
+      for (const call of fake.calls) calls.add(call.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, ":id"));
+    }
+    expect([...calls].sort()).toEqual([
+      "DELETE /api/computers/:id",
+      "GET /api/billing/compute",
+      "GET /api/computers/:id",
+      "GET /api/credits",
+      "GET /api/credits/transactions",
+      "GET /api/workspaces",
+      "GET /api/workspaces/:id",
+      "POST /api/computers",
+      ...["bash", "clone", "fork", "resume", "start", "stop", "suspend"].map(
+        (action) => `POST /api/computers/:id/${action}`,
+      ),
+    ]);
+    const fake = fakeOrgo({ scenario: "free" });
+    const api = createApi(key, fake.request);
+    for (const path of [
+      "/billing",
+      "/api/credits/top-up",
+      "/api/billing/portal",
+      "/api/billing/plan",
+      "/api/billing/quote",
+      "/api/computers/x/confirm",
+      "/api/../credits",
+    ]) {
+      await expect(api("POST", path)).rejects.toThrow(/Unexpected API path/);
+    }
+    await expect(api("GET", "/api/computers/x/fork")).rejects.toThrow(/Unexpected API path/);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it.each([{}, { ORGO_LIVE_APPROVED: "yes" }, { ORGO_PROBE_APPROVED: "yes" }])(
+    "refuses a Free live experiment with incomplete switches %j",
+    async (env) => {
+      const fake = fakeOrgo({ scenario: "free" });
+      const dir = await mkdtemp(join(tmpdir(), "orgo-approval-"));
+      const raw = await main(["run", "--out", dir], {
+        env,
+        loadKey: async () => key,
+        fetch: fake.request,
+      });
+      expect(raw.preflight.ok).toBe(true);
+      expect(raw.errors.join()).toContain("Live run refused");
+      expect(fake.calls.every((call) => call.startsWith("GET "))).toBe(true);
+    },
+  );
+
+  it.each([
+    ["--scenario", "free"],
+    ["--charge-cents", "0"],
+    ["--deadline-ms", "1"],
+    ["--fail-mid-e2"],
+  ])("rejects live-only misuse of %s", (...flags) =>
+    expect(() => parseArgs(["run", ...flags])).toThrow(/require --dry-run/),
+  );
 });

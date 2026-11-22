@@ -1,6 +1,6 @@
 # Orgo arm 001 results
 
-> **NOT CLEARED FOR LIVE USE.** The runner has not been approved for a live compute pass. Live `run` refuses to start experiments unless `ORGO_LIVE_APPROVED=yes` is set, which requires explicit outer-loop approval. Only the read-only preflight has run live.
+> **NOT CLEARED FOR LIVE USE.** The runner has not been approved for a live compute pass. Live experiments require `ORGO_LIVE_APPROVED=yes`. A Free probe also requires `ORGO_PROBE_APPROVED=yes`. The committed evidence is from the read-only preflight.
 
 Generated 2026-11-22T04:46:49.846Z (live). Authoritative tables below; raw data in `raw.json`, per-operation ledger in `ledger.jsonl`.
 
@@ -13,7 +13,10 @@ Generated 2026-11-22T04:46:49.846Z (live). Authoritative tables below; raw data 
 | Credit balance | $3.00 |
 | Computers in workspace | 0 |
 | Offers | Medium (2 vCPU, 8 GB, 40 GB disk, $0.055/h) |
-| Eligible for Small | NO |
+| Eligibility check | Small protocol: gated |
+| Size obtained | No computer created |
+
+p95 is omitted for N=1.
 
 **Gate: precondition failed. No compute call was made, so E0-E5 have zero samples.**
 
@@ -63,16 +66,6 @@ Billing history (amounts only):
 ]
 ```
 
-
-## Wedge-C: Orgo vs what Myco would need
-
-| Dimension | Orgo (this account) | Myco comparison |
-| --- | --- | --- |
-| Fork latency / source pause | not measured (gated); docs claim ~2 s source pause | Myco reset is ~21 s warm and ~165 s from a fresh UTM start (contract section 7a); a Myco `fork()` would need to beat both without the live-restore wedge seen in m2-05 |
-| Clone latency | not measured unless E3 above has samples | not applicable: Myco has no clone or fork operation |
-| Suspend on a credit-only account | not measured (gated); docs: an hourly computer answers 409 HOURLY_USE_STOP | Myco snapshot/restore must keep RAM for credit-only use |
-| State semantics | docs: fork copies live memory; clone and stop/start keep disk only | Myco needs both plus verified reset state |
-| Cost per branch | docs: Small about $0.023/h; this account is only offered Medium at $0.055/h (preflight above); a fork needs its own purchase on an hourly source (HOURLY_QUOTE_REQUIRED) | local branch cost is host CPU and disk only |
 
 ## Not measured
 

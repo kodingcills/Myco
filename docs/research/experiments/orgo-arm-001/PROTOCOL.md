@@ -35,4 +35,4 @@ Added in a new commit after the pre-registered text above and after the prefligh
 6. Medium results are not Small results: report the size obtained, and do not compare latency or price across sizes.
 7. The raw preflight JSON stays committed.
 
-Still not approved: any paid Orgo plan, top-up or purchase. Fork and clone timing remain documented, gated results. The runner stays marked NOT CLEARED FOR LIVE USE until the outer loop confirms an independent re-verification of the fixes, and the probe mode is not yet implemented in `scripts/orgo`.
+Still not approved: any paid Orgo plan, top-up or purchase. Fork and clone timing remain documented, gated results. The runner stays marked NOT CLEARED FOR LIVE USE until the outer loop confirms an independent re-verification of the fixes, and explicitly clears a live run. The probe mode in `scripts/orgo` has been exercised with the in-memory service.

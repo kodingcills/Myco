@@ -15,15 +15,18 @@ import {
   inventory,
   type JsonObject,
   type LedgerRow,
+  medium,
   object,
   type Preflight,
   parseOffers,
   prefix,
+  probeLimits,
   type Reply,
   redact,
   requireOk,
   shortId,
   small,
+  smallLimits,
   stats,
 } from "./core.ts";
 import { fakeOrgo, type Scenario } from "./fake.ts";
@@ -48,7 +51,7 @@ export type Raw = {
   preflight: Preflight;
   experiments: Record<string, Experiment>;
   spend: { startCents: number | null; endCents: number | null; ledgerCents: number | null };
-  cleanup: { deleted: string[]; finalCount: number | null };
+  cleanup: { deleted: string[]; finalCount: number | null; errors?: string[] };
   history: unknown[] | null;
   errors: string[];
 };
@@ -71,13 +74,15 @@ export type Context = {
   baseline: Set<string>;
   /** `performance.now()` value after which no further polling or allocation happens. */
   deadlineAt: number;
+  probe: boolean;
+  lowestCents: number;
 };
 
-export const runBoundMs = 30 * 60_000;
+export const runBoundMs = 20 * 60_000;
 
 export class DeadlineError extends Error {
   constructor() {
-    super("30 minute run bound reached");
+    super("20 minute run bound reached");
   }
 }
 
@@ -110,7 +115,7 @@ async function ledger(ctx: Context, row: Partial<LedgerRow> & { operation: strin
   await appendLedger(ctx.ledgerPath, full, ctx.key);
 }
 
-async function credit(ctx: Context): Promise<number> {
+async function credit(ctx: Pick<Context, "api">): Promise<number> {
   return balanceCents(await ctx.api("GET", "/api/credits"));
 }
 
@@ -130,6 +135,7 @@ async function billable(
   const delayedCents = await credit(ctx).catch(() => null);
   const observed = delayedCents ?? immediateCents;
   if (observed !== null) ctx.lastCents = observed;
+  ctx.lowestCents = Math.min(ctx.lowestCents, immediateCents ?? Infinity, delayedCents ?? Infinity);
   await ledger(ctx, {
     operation,
     computer: computer ? shortId(computer) : null,
@@ -156,19 +162,73 @@ async function _readOnly(ctx: Context, operation: string, path: string): Promise
   return reply;
 }
 
-async function liveInventory(ctx: Context): Promise<Computer[]> {
-  return inventory(
-    requireOk(await ctx.api("GET", `/api/workspaces/${ctx.workspaceId}`), "Inventory"),
-  );
+async function liveInventory(ctx: Pick<Context, "api" | "workspaceId">): Promise<Computer[]> {
+  const data = requireOk(await ctx.api("GET", `/api/workspaces/${ctx.workspaceId}`), "Inventory");
+  if (
+    !Array.isArray(data.desktops) ||
+    data.desktops.some((row) => typeof object(row).id !== "string")
+  ) {
+    throw new Error("Inventory is missing or invalid");
+  }
+  return inventory(data);
 }
 
-/** Refresh balance and inventory, then enforce the spend and two-computer guard before an allocation. */
-async function allow(ctx: Context, additional: number) {
+const limitsFor = (ctx: Pick<Context, "probe">) => (ctx.probe ? probeLimits : smallLimits);
+const checkDeadline = (ctx: Pick<Context, "deadlineAt">) => {
   if (performance.now() >= ctx.deadlineAt) throw new DeadlineError();
+};
+
+/** Refresh credit and inventory before a potentially billable transition. */
+export async function allow(
+  ctx: Pick<
+    Context,
+    "api" | "workspaceId" | "probe" | "startCents" | "lastCents" | "lowestCents" | "deadlineAt"
+  >,
+  additional: number,
+  gateObservation = false,
+) {
+  checkDeadline(ctx);
   const balance = await credit(ctx);
   ctx.lastCents = balance;
+  ctx.lowestCents = Math.min(ctx.lowestCents, balance);
   const live = await liveInventory(ctx);
-  guard(ctx.startCents, balance, live.length, additional);
+  guard(ctx.startCents, ctx.lowestCents, live.length, additional, limitsFor(ctx), gateObservation);
+  checkDeadline(ctx);
+}
+
+const succeeded = (reply: Reply) => reply.status >= 200 && reply.status < 300;
+
+async function copyComputer(
+  ctx: Context,
+  source: string,
+  action: "fork" | "clone",
+  payload: JsonObject,
+) {
+  const reply = await ctx.api("POST", `/api/computers/${source}/${action}`, payload);
+  if (!succeeded(reply)) return reply;
+  const id = reply.data.id;
+  if (typeof id !== "string" || id === source)
+    throw new Error("Copy response has no new computer id");
+  ctx.created.add(id);
+  if (ctx.probe) {
+    const deleted = await ctx.api("DELETE", `/api/computers/${id}`).catch(() => null);
+    if (deleted && succeeded(deleted)) ctx.created.delete(id);
+    await ledger(ctx, {
+      operation: `delete unexpected probe ${action}`,
+      computer: shortId(id),
+      status: deleted?.status ?? null,
+      code: deleted?.code ?? null,
+      body: deleted?.body,
+    });
+  }
+  return reply;
+}
+
+function checkProbeCopy(ctx: Context, experiment: Experiment, reply: Reply, action: string) {
+  if (ctx.probe && succeeded(reply)) {
+    experiment.observations.push({ unexpectedSuccess: action, status: reply.status });
+    throw new Error(`Unexpected probe ${action} success; ending the run`);
+  }
 }
 
 /** Read-only eligibility check; no compute is created. Resolves the workspace and start balance. */
@@ -193,7 +253,10 @@ export async function preflight(api: Api, ledgerPath: string, key: string, works
     );
   const credits = await ctx.api("GET", "/api/credits");
   await note("preflight credits", credits);
-  const balance = typeof credits.data.balanceCents === "number" ? credits.data.balanceCents : null;
+  const balance =
+    credits.status === 200 && typeof credits.data.balanceCents === "number"
+      ? credits.data.balanceCents
+      : null;
   const workspaces = await ctx.api("GET", "/api/workspaces");
   await note("preflight workspaces", workspaces);
   const owned = (Array.isArray(workspaces.data.workspaces) ? workspaces.data.workspaces : [])
@@ -213,12 +276,24 @@ export async function preflight(api: Api, ledgerPath: string, key: string, works
   await note("preflight compute offers", compute);
   const detail = await ctx.api("GET", `/api/workspaces/${workspaceId}`);
   await note("preflight inventory", detail);
+  const offers = compute.status === 200 ? parseOffers(compute.data) : [];
+  const tier = typeof credits.data.tier === "string" ? credits.data.tier : "unknown";
+  const mode = typeof compute.data.mode === "string" ? compute.data.mode : "unknown";
+  const free = tier.toLowerCase() === "free" || mode.toLowerCase() === "free";
   const result = assessPreflight({
-    tier: typeof credits.data.tier === "string" ? credits.data.tier : "unknown",
-    mode: typeof compute.data.mode === "string" ? compute.data.mode : "unknown",
+    tier,
+    mode,
     balanceCents: balance,
-    offers: parseOffers(compute.data),
-    inventoryCount: detail.status === 200 ? inventory(detail.data).length : null,
+    offers:
+      free && Array.isArray(compute.data.entries) && compute.data.entries.length !== offers.length
+        ? []
+        : offers,
+    inventoryCount:
+      detail.status === 200 &&
+      Array.isArray(detail.data.desktops) &&
+      detail.data.desktops.every((row) => typeof object(row).id === "string")
+        ? inventory(detail.data).length
+        : null,
   });
   const baseline = detail.status === 200 ? inventory(detail.data).map(({ id }) => id) : [];
   return { workspaceId, result, baseline };
@@ -240,6 +315,7 @@ const guest = {
 };
 
 async function bash(ctx: Context, id: string, command: string, timeout = 60): Promise<Reply> {
+  checkDeadline(ctx);
   return ctx.api("POST", `/api/computers/${id}/bash`, { command, timeout });
 }
 
@@ -257,8 +333,9 @@ export async function until(
 ): Promise<{ ms: number; reply: Reply | null }> {
   const started = performance.now();
   while (performance.now() - started < limitMs) {
-    if (performance.now() >= ctx.deadlineAt) throw new DeadlineError();
+    checkDeadline(ctx);
     const reply = await poll().catch(() => null);
+    checkDeadline(ctx);
     if (reply && ready(reply)) return { ms: performance.now() - started, reply };
     await ctx.sleep(1_000);
   }
@@ -294,7 +371,9 @@ function pushRejected(experiment: Experiment, reply: Reply) {
 }
 
 async function plant(ctx: Context, id: string) {
+  await allow(ctx, 0);
   const installed = await bash(ctx, id, await guest.install());
+  await allow(ctx, 0);
   const planted = await bash(ctx, id, guest.plant);
   await ctx.sleep(2_000);
   const probe = parseJson(await bash(ctx, id, guest.read));
@@ -302,7 +381,7 @@ async function plant(ctx: Context, id: string) {
 }
 
 function affordable(ctx: Context): boolean {
-  return ctx.startCents - ctx.lastCents < 120;
+  return ctx.startCents - ctx.lowestCents < limitsFor(ctx).stopCents;
 }
 
 /** E0 to E5 against the live service. Only called after a passing preflight; cleanup runs in `finally`. */
@@ -315,14 +394,15 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
   await allow(ctx, 1);
   const name = `${prefix}base`;
   const started = performance.now();
-  const created = await billable(ctx, "E0 create small linux", null, () =>
+  const size = ctx.probe ? medium : small;
+  const created = await billable(ctx, "E0 create linux", null, () =>
     ctx.api("POST", "/api/computers", {
       workspace_id: ctx.workspaceId,
       name,
       billing_mode: "hourly",
-      os: small.os,
-      ram: small.ram,
-      cpu: small.cpu,
+      os: size.os,
+      ram: size.ram,
+      cpu: size.cpu,
       ends_in_hours: 1,
     }),
   );
@@ -330,9 +410,27 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
     pushRejected(e0, created);
     return;
   }
-  const source = String(created.data.id);
+  const source = created.data.id;
+  if (typeof source !== "string") throw new Error("Create response has no computer id");
   ctx.created.add(source);
-  await writeFile(ctx.watchPath, `https://www.orgo.ai/computers/${source}\n`, { mode: 0o600 });
+  const obtained = {
+    cpu: created.data.cpu ?? null,
+    ramGb: created.data.ram ?? created.data.ram_gb ?? null,
+  };
+  e0.observations.push({ sizeObtained: obtained });
+  if (
+    ctx.probe &&
+    ((obtained.cpu !== null && obtained.cpu !== size.cpu) ||
+      (obtained.ramGb !== null && obtained.ramGb !== size.ram))
+  ) {
+    throw new Error("Create returned a size outside the Medium probe");
+  }
+  await mkdir(dirname(ctx.watchPath), { recursive: true });
+  await writeFile(
+    ctx.watchPath,
+    `https://www.orgo.ai/computers/${source.replaceAll(ctx.key, "[redacted]")}\n`,
+    { mode: 0o600 },
+  );
   const running = await until(ctx, source, status("running"), 180_000, getComputer(ctx, source));
   const ready = await firstBash(ctx, source);
   e0.n = 1;
@@ -357,18 +455,20 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
   });
   const sourceProbe = planted.probe;
 
-  const e2 = exp("E2", 5);
+  const repetitions = ctx.probe ? 1 : 5;
+  const e2 = exp("E2", repetitions);
   const apiMs: number[] = [];
   const bashMs: number[] = [];
   const pauseMs: number[] = [];
-  for (let i = 0; i < 5 && affordable(ctx); i += 1) {
-    await allow(ctx, 1);
-    const from = text(await bash(ctx, source, guest.now));
+  for (let i = 0; i < repetitions && (i === 0 || affordable(ctx)); i += 1) {
+    const from = ctx.probe ? "" : text(await bash(ctx, source, guest.now));
+    await allow(ctx, 1, ctx.probe);
     const t0 = performance.now();
     const forked = await billable(ctx, `E2 fork ${i + 1}`, source, () =>
-      ctx.api("POST", `/api/computers/${source}/fork`, {}),
+      copyComputer(ctx, source, "fork", {}),
     );
-    if (forked.status !== 201) {
+    checkProbeCopy(ctx, e2, forked, "fork");
+    if (!succeeded(forked)) {
       pushRejected(e2, forked);
       e2.notes.push(
         "A gate ends repetitions of this operation. The fork docs list no quote or confirm parameter, so no follow-up was attempted.",
@@ -413,16 +513,17 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
     sourcePauseMaxGapMs: stats(pauseMs),
   };
 
-  const e3 = exp("E3", 5);
+  const e3 = exp("E3", repetitions);
   const cloneApi: number[] = [];
   const cloneBash: number[] = [];
-  for (let i = 0; i < 5 && affordable(ctx); i += 1) {
-    await allow(ctx, 1);
+  for (let i = 0; i < repetitions && (i === 0 || affordable(ctx)); i += 1) {
+    await allow(ctx, 1, ctx.probe);
     const t0 = performance.now();
     const cloned = await billable(ctx, `E3 clone ${i + 1}`, source, () =>
-      ctx.api("POST", `/api/computers/${source}/clone`, { name: `${prefix}clone-${i + 1}` }),
+      copyComputer(ctx, source, "clone", { name: `${prefix}clone-${i + 1}` }),
     );
-    if (cloned.status !== 201) {
+    checkProbeCopy(ctx, e3, cloned, "clone");
+    if (!succeeded(cloned)) {
       pushRejected(e3, cloned);
       break;
     }
@@ -447,11 +548,14 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
   e3.metrics = { apiMs: stats(cloneApi), firstBashMs: stats(cloneBash.filter(Number.isFinite)) };
 
   const e4 = exp("E4", 1);
+  await allow(ctx, 0);
   const stopped = await billable(ctx, "E4 stop", source, () =>
     ctx.api("POST", `/api/computers/${source}/stop`, {}),
   );
   const frozen = await until(ctx, source, status("frozen"), 120_000, getComputer(ctx, source));
+  if (!succeeded(stopped) || !frozen.reply) throw new Error("E4 source did not stop");
   const asleep = await bash(ctx, source, "true", 20);
+  await allow(ctx, 0);
   const resumedFromStop = await billable(ctx, "E4 start", source, () =>
     ctx.api("POST", `/api/computers/${source}/start`, {}),
   );
@@ -463,6 +567,7 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
     180_000,
     getComputer(ctx, source),
   );
+  if (!succeeded(resumedFromStop) || !backRunning.reply) throw new Error("E4 source did not start");
   const backBash = await firstBash(ctx, source);
   const afterStart = parseJson(await bash(ctx, source, guest.read));
   e4.n = stopped.status < 300 && resumedFromStop.status < 300 ? 1 : 0;
@@ -486,6 +591,7 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
   });
   const replanted = await plant(ctx, source);
   e4.observations.push({ replanted: replanted.probe });
+  await allow(ctx, 0);
   const suspended = await billable(ctx, "E4 suspend", source, () =>
     ctx.api("POST", `/api/computers/${source}/suspend`, {}),
   );
@@ -497,6 +603,7 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
     },
   });
   if (suspended.status >= 200 && suspended.status < 300) {
+    await allow(ctx, 0);
     const resumed = await billable(ctx, "E4 resume", source, () =>
       ctx.api("POST", `/api/computers/${source}/resume`, {}),
     );
@@ -511,61 +618,78 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
   const e5 = exp("E5", 1);
   const current = await ctx.api("GET", `/api/computers/${source}`);
   if (current.data.status === "running") {
-    await billable(ctx, "E5 stop", source, () =>
+    await allow(ctx, 0);
+    const stoppedForE5 = await billable(ctx, "E5 stop", source, () =>
       ctx.api("POST", `/api/computers/${source}/stop`, {}),
     );
-    await until(ctx, source, status("frozen"), 120_000, getComputer(ctx, source));
+    const frozenForE5 = await until(
+      ctx,
+      source,
+      status("frozen"),
+      120_000,
+      getComputer(ctx, source),
+    );
+    if (!succeeded(stoppedForE5) || !frozenForE5.reply) throw new Error("E5 source did not stop");
+  } else if (!status("frozen")(current)) {
+    throw new Error("E5 source is not frozen");
   }
-  await allow(ctx, 1);
+  await allow(ctx, 1, ctx.probe);
   const stoppedFork = await billable(ctx, "E5 fork stopped source", source, () =>
-    ctx.api("POST", `/api/computers/${source}/fork`, {}),
+    copyComputer(ctx, source, "fork", {}),
   );
   e5.n = 1;
   e5.observations.push({
     status: stoppedFork.status,
     code: stoppedFork.code ?? null,
-    body: stoppedFork.body.slice(0, 600),
+    body: stoppedFork.body,
   });
-  if (stoppedFork.status === 201) ctx.created.add(String(stoppedFork.data.id));
-  await allow(ctx, 1);
+  checkProbeCopy(ctx, e5, stoppedFork, "stopped fork");
+  await allow(ctx, 1, ctx.probe);
   const stoppedClone = await billable(ctx, "E5 clone stopped source", source, () =>
-    ctx.api("POST", `/api/computers/${source}/clone`, { name: `${prefix}clone-stopped` }),
+    copyComputer(ctx, source, "clone", { name: `${prefix}clone-stopped` }),
   );
   e5.observations.push({
     cloneStatus: stoppedClone.status,
     cloneCode: stoppedClone.code ?? null,
-    body: stoppedClone.body.slice(0, 600),
+    body: stoppedClone.body,
   });
-  if (stoppedClone.status === 201) ctx.created.add(String(stoppedClone.data.id));
+  checkProbeCopy(ctx, e5, stoppedClone, "stopped clone");
 }
 
 /**
  * Delete every computer this run created plus every computer absent at preflight (regardless of
  * name, since Orgo auto-names forks), plus `myco-discovery-*` names; then re-list. Safe to repeat.
  */
-export async function cleanup(
-  ctx: Context,
-): Promise<{ deleted: string[]; finalCount: number | null }> {
+export async function cleanup(ctx: Context): Promise<Raw["cleanup"]> {
   const deleted: string[] = [];
-  const live = await liveInventory(ctx);
+  const errors: string[] = [];
+  const record = (error: unknown) => {
+    errors.push(redact(error instanceof Error ? error.message : "Cleanup failed", ctx.key));
+    return null;
+  };
+  const live = (await liveInventory(ctx).catch(record)) ?? (await liveInventory(ctx).catch(record));
   const ids = new Set([
-    ...cleanupSelection(live, { created: ctx.created, baseline: ctx.baseline }).map(({ id }) => id),
+    ...cleanupSelection(live ?? [], { created: ctx.created, baseline: ctx.baseline }).map(
+      ({ id }) => id,
+    ),
     ...ctx.created,
   ]);
   for (const id of ids) {
     const reply = await billable(ctx, "cleanup delete", id, () =>
       ctx.api("DELETE", `/api/computers/${id}`),
-    );
-    if (reply.status >= 200 && reply.status < 300) {
+    ).catch(record);
+    if (reply && succeeded(reply)) {
       deleted.push(shortId(id));
       ctx.created.delete(id);
+    } else if (reply && reply.status !== 404) {
+      errors.push(`Cleanup delete returned HTTP ${reply.status} ${reply.body}`);
     }
   }
-  const remaining = await liveInventory(ctx).catch(() => null);
+  const remaining = await liveInventory(ctx).catch(record);
   await ledger(ctx, {
     operation: `cleanup final list (${remaining?.length ?? "unknown"} computers)`,
-  });
-  return { deleted, finalCount: remaining ? remaining.length : null };
+  }).catch(record);
+  return { deleted, finalCount: remaining?.length ?? null, ...(errors.length ? { errors } : {}) };
 }
 
 export async function renderResults(raw: Raw): Promise<string> {
@@ -575,7 +699,7 @@ export async function renderResults(raw: Raw): Promise<string> {
   const lines: string[] = [
     "# Orgo arm 001 results",
     "",
-    "> **NOT CLEARED FOR LIVE USE.** The runner has not been approved for a live compute pass. Live `run` refuses to start experiments unless `ORGO_LIVE_APPROVED=yes` is set, which requires explicit outer-loop approval. Only the read-only preflight has run live.",
+    "> **NOT CLEARED FOR LIVE USE.** The runner has not been approved for a live compute pass. Live experiments require `ORGO_LIVE_APPROVED=yes`. A Free probe also requires `ORGO_PROBE_APPROVED=yes`. The committed evidence is from the read-only preflight.",
     "",
   ];
   lines.push(
@@ -598,7 +722,16 @@ export async function renderResults(raw: Raw): Promise<string> {
   lines.push(
     `| Offers | ${p.offers.map((o) => `${o.name} (${o.cpu} vCPU, ${o.ramGb} GB, ${o.diskGb} GB disk, $${o.usdPerHour}/h)`).join("; ") || "none"} |`,
   );
-  lines.push(`| Eligible for Small | ${p.ok ? "yes" : "NO"} |`, "");
+  const obtained = object(
+    raw.experiments.E0?.observations.find((o) => o.sizeObtained)?.sizeObtained,
+  );
+  lines.push(
+    `| Eligibility check | ${p.profile === "probe" ? "Free Medium probe" : "Small protocol"}: ${p.ok ? "passed" : "gated"} |`,
+    `| Size obtained | ${Object.keys(obtained).length ? `${obtained.cpu ?? "unknown"} vCPU, ${obtained.ramGb ?? "unknown"} GB (create response)` : "No computer created"} |`,
+    "",
+    "p95 is omitted for N=1.",
+    "",
+  );
   if (!p.ok) {
     lines.push(
       "**Gate: precondition failed. No compute call was made, so E0-E5 have zero samples.**",
@@ -688,34 +821,6 @@ export async function renderResults(raw: Raw): Promise<string> {
   for (const error of raw.errors) lines.push(`- Error: ${redact(error, "")}`);
   lines.push(
     "",
-    "## Wedge-C: Orgo vs what Myco would need",
-    "",
-    "| Dimension | Orgo (this account) | Myco comparison |",
-    "| --- | --- | --- |",
-  );
-  const ran = raw.experiments.E2;
-  const forkLatency = ran?.metrics.apiMs
-    ? `${fmt(ran.metrics.apiMs.median)} ms median API (N=${ran.metrics.apiMs.n})`
-    : "not measured (gated)";
-  lines.push(
-    `| Fork latency / source pause | ${forkLatency}; docs claim ~2 s source pause | Myco reset is ~21 s warm and ~165 s from a fresh UTM start (contract section 7a); a Myco \`fork()\` would need to beat both without the live-restore wedge seen in m2-05 |`,
-  );
-  lines.push(
-    "| Clone latency | not measured unless E3 above has samples | not applicable: Myco has no clone or fork operation |",
-  );
-  lines.push(
-    `| Suspend on a credit-only account | ${raw.experiments.E4 ? "see E4" : "not measured (gated)"}; docs: an hourly computer answers 409 HOURLY_USE_STOP | Myco snapshot/restore must keep RAM for credit-only use |`,
-  );
-  lines.push(
-    "| State semantics | docs: fork copies live memory; clone and stop/start keep disk only | Myco needs both plus verified reset state |",
-  );
-  const offered =
-    p.offers.map((o) => `${o.name} at $${o.usdPerHour}/h`).join(", ") || "no offers recorded";
-  lines.push(
-    `| Cost per branch | docs: Small about $0.023/h; this account is only offered ${offered} (preflight above); a fork needs its own purchase on an hourly source (HOURLY_QUOTE_REQUIRED) | local branch cost is host CPU and disk only |`,
-  );
-  lines.push(
-    "",
     "## Not measured",
     "",
     "- Plan-only features (plan-funded suspend/resume, plan-funded forks), other sizes, other operating systems (Windows is documented, not tested), scale, and any account that is not credit-only Free.",
@@ -738,7 +843,14 @@ type Args = {
 };
 
 const commands = new Set(["run", "preflight", "cleanup", "render"]);
-const scenarios = new Set<string>(["free", "paid-gated", "paid-open"]);
+const scenarios = new Set<string>([
+  "free",
+  "free-quote",
+  "free-fork-open",
+  "free-clone-open",
+  "paid-gated",
+  "paid-open",
+]);
 
 /** Strict parser: unknown flags, missing values, unknown scenarios and unknown commands all throw. */
 export function parseArgs(argv: string[]): Args {
@@ -750,6 +862,7 @@ export function parseArgs(argv: string[]): Args {
     failMidE2: false,
   };
   const positional: string[] = [];
+  let scenarioSpecified = false;
   const number = (name: string, value: string | undefined) => {
     const parsed = Number(value);
     if (value === undefined || value === "" || !Number.isFinite(parsed) || parsed < 0) {
@@ -782,6 +895,7 @@ export function parseArgs(argv: string[]): Args {
         const scenario = value();
         if (!scenarios.has(scenario)) throw new Error(`Unknown scenario: ${scenario}`);
         args.scenario = scenario as Scenario;
+        scenarioSpecified = true;
         break;
       }
       case "--charge-cents":
@@ -798,6 +912,17 @@ export function parseArgs(argv: string[]): Args {
   if (positional.length > 1) throw new Error("Only one command is accepted");
   args.command = positional[0] ?? "run";
   if (!commands.has(args.command)) throw new Error(`Unknown command: ${args.command}`);
+  if (
+    !args.dryRun &&
+    (scenarioSpecified ||
+      args.charge !== undefined ||
+      args.deadlineMs !== undefined ||
+      args.failMidE2)
+  ) {
+    throw new Error(
+      "--scenario, --charge-cents, --deadline-ms and --fail-mid-e2 require --dry-run",
+    );
+  }
   return args;
 }
 
@@ -823,11 +948,19 @@ export async function fetchHistory(api: Api): Promise<unknown[] | null> {
 }
 
 /** Live experiments need an explicit approval switch; the read-only preflight does not. */
-export function liveApproved(env: Record<string, string | undefined>): boolean {
-  return env.ORGO_LIVE_APPROVED === "yes";
+export function liveApproved(env: Record<string, string | undefined>, probe = false): boolean {
+  return env.ORGO_LIVE_APPROVED === "yes" && (!probe || env.ORGO_PROBE_APPROVED === "yes");
 }
 
-export async function main(argv: string[]): Promise<Raw> {
+export async function main(
+  argv: string[],
+  dependencies: {
+    env?: Record<string, string | undefined>;
+    loadKey?: () => Promise<string>;
+    fetch?: typeof fetch;
+    fake?: typeof fakeOrgo;
+  } = {},
+): Promise<Raw> {
   const args = parseArgs(argv);
   if (args.command === "render") {
     // Re-render RESULTS.md from the committed raw.json: no key, no network.
@@ -840,16 +973,16 @@ export async function main(argv: string[]): Promise<Raw> {
     dryRun && args.out === defaultOut ? await mkdtemp(join(tmpdir(), "orgo-dry-")) : args.out;
   await mkdir(out, { recursive: true });
   const fake = dryRun
-    ? fakeOrgo({
+    ? (dependencies.fake ?? fakeOrgo)({
         scenario: args.scenario,
         chargeCents: args.charge,
         failOnForkBash: args.failMidE2,
       })
     : null;
-  const key = dryRun ? "sk_dry_run_placeholder" : await loadKey();
-  const api = createApi(key, fake ? fake.request : fetch);
+  const key = dryRun ? "sk_dry_run_placeholder" : await (dependencies.loadKey ?? loadKey)();
+  const api = createApi(key, fake?.request ?? dependencies.fetch ?? fetch);
   const ledgerPath = join(out, "ledger.jsonl");
-  const log = (message: string) => process.stderr.write(`${message}\n`);
+  const log = (message: string) => process.stderr.write(`${redact(message, key)}\n`);
   const { workspaceId, result, baseline } = await preflight(api, ledgerPath, key, args.workspace);
   const startCents = result.balanceCents ?? 0;
   const ctx: Context = {
@@ -861,6 +994,8 @@ export async function main(argv: string[]): Promise<Raw> {
     workspaceId,
     startCents,
     lastCents: startCents,
+    lowestCents: startCents,
+    probe: result.profile === "probe",
     sleep: dryRun ? async () => undefined : (ms) => delay(ms),
     balanceWait: dryRun ? async () => undefined : () => delay(3_000),
     history: () => fetchHistory(api),
@@ -884,31 +1019,34 @@ export async function main(argv: string[]): Promise<Raw> {
   } else if (args.command === "preflight" || !result.ok) {
     if (!result.ok)
       log(`Preflight gate: ${result.reasons.length} reason(s); no compute call made.`);
-  } else if (!dryRun && !liveApproved(process.env)) {
+  } else if (!dryRun && !liveApproved(dependencies.env ?? process.env, ctx.probe)) {
     raw.errors.push(
-      "Live run refused: NOT CLEARED FOR LIVE USE (set ORGO_LIVE_APPROVED=yes only with outer-loop approval). Only the preflight ran.",
+      "Live run refused: NOT CLEARED FOR LIVE USE (set ORGO_LIVE_APPROVED to yes and, for the Free probe, set ORGO_PROBE_APPROVED to yes). Only the preflight ran.",
     );
     log(raw.errors[0] ?? "");
   } else {
     try {
       await runExperiments(ctx, raw);
     } catch (error) {
-      raw.errors.push(error instanceof Error ? error.message : "unknown error");
+      raw.errors.push(redact(error instanceof Error ? error.message : "unknown error", key));
     } finally {
-      raw.cleanup = await cleanup(ctx).catch((error: unknown) => {
-        raw.errors.push(`cleanup: ${error instanceof Error ? error.message : "failed"}`);
-        return raw.cleanup;
-      });
+      raw.cleanup = await cleanup(ctx);
     }
   }
+  raw.errors.push(...(raw.cleanup.errors ?? []));
   const end = await credit(ctx).catch(() => null);
   raw.spend.endCents = end;
   raw.spend.ledgerCents = end === null ? null : startCents - end;
   raw.history = await ctx.history();
   const target = dryRun ? out : args.out;
-  await writeFile(join(target, "raw.json"), `${JSON.stringify(raw, null, 2)}\n`);
-  await writeFile(join(target, "RESULTS.md"), await renderResults(raw));
-  return raw;
+  const sanitized = JSON.parse(
+    JSON.stringify(raw, (_, value: unknown) =>
+      typeof value === "string" ? redact(value, key) : value,
+    ),
+  ) as Raw;
+  await writeFile(join(target, "raw.json"), `${JSON.stringify(sanitized, null, 2)}\n`);
+  await writeFile(join(target, "RESULTS.md"), await renderResults(sanitized));
+  return sanitized;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

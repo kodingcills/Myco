@@ -3,11 +3,19 @@ import { object } from "./core.ts";
 /**
  * In-memory stand-in for the Orgo HTTP API. It backs `--dry-run` and the unit tests so no live
  * call is ever needed; it is NOT evidence about the real service.
- *   free        Free account: only a Medium is offered (what the real account returned).
+ *   free        Free account: only Medium is offered, and running copies hit HOURLY_LIMIT.
+ *   free-quote  Running copies hit HOURLY_QUOTE_REQUIRED.
+ *   free-*-open One copy operation unexpectedly succeeds.
  *   paid-gated  Small offered, but fork/clone answer 409 HOURLY_QUOTE_REQUIRED.
  *   paid-open   Small offered and fork/clone succeed.
  */
-export type Scenario = "free" | "paid-gated" | "paid-open";
+export type Scenario =
+  | "free"
+  | "free-quote"
+  | "free-fork-open"
+  | "free-clone-open"
+  | "paid-gated"
+  | "paid-open";
 
 type FakeComputer = {
   id: string;
@@ -52,13 +60,13 @@ export function fakeOrgo(options: FakeOptions) {
     balance -= options.chargeCents ?? 2;
     return computer;
   };
-  const sizes =
-    options.scenario === "free"
-      ? [{ name: "Medium", cpu: 2, ramGb: 8 }]
-      : [
-          { name: "Small", cpu: 0.5, ramGb: 4 },
-          { name: "Medium", cpu: 2, ramGb: 8 },
-        ];
+  const free = options.scenario.startsWith("free");
+  const sizes = free
+    ? [{ name: "Medium", cpu: 2, ramGb: 8 }]
+    : [
+        { name: "Small", cpu: 0.5, ramGb: 4 },
+        { name: "Medium", cpu: 2, ramGb: 8 },
+      ];
 
   const request = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
@@ -69,7 +77,7 @@ export function fakeOrgo(options: FakeOptions) {
     if (method === "GET" && path === "/api/credits") {
       return json(200, {
         balanceCents: balance,
-        tier: options.scenario === "free" ? "free" : "starter",
+        tier: free ? "free" : "starter",
       });
     }
     if (method === "GET" && path === "/api/credits/transactions") {
@@ -91,7 +99,7 @@ export function fakeOrgo(options: FakeOptions) {
     }
     if (method === "GET" && path === "/api/billing/compute") {
       return json(200, {
-        mode: options.scenario === "free" ? "free" : "hourly",
+        mode: free ? "free" : "hourly",
         entries: sizes.map((size) => ({
           sku: { name: size.name, specification: { cpu: size.cpu, ramGb: size.ramGb, diskGb: 20 } },
           offer: { price: { activeMicrosPerHour: size.name === "Small" ? 23_000 : 55_000 } },
@@ -105,14 +113,27 @@ export function fakeOrgo(options: FakeOptions) {
       });
     }
     if (method === "POST" && path === "/api/computers") {
-      if (options.scenario === "free")
+      if (free && computers.size >= 1)
         return json(403, { error: "Free includes 1 computer.", code: "HOURLY_LIMIT" });
+      const size = sizes[0];
+      if (
+        !size ||
+        body.os !== "linux" ||
+        body.cpu !== size.cpu ||
+        body.ram !== size.ramGb ||
+        body.billing_mode !== "hourly" ||
+        body.ends_in_hours !== 1
+      ) {
+        return json(400, { error: "Unexpected create configuration" });
+      }
       const computer = add(String(body.name), "source");
       return json(201, {
         id: computer.id,
         name: computer.name,
         status: "running",
         instance_id: "fake0001",
+        cpu: size.cpu,
+        ram: size.ramGb,
       });
     }
     const match = /^\/api\/computers\/([^/]+)(?:\/([a-z]+))?$/.exec(path);
@@ -142,12 +163,14 @@ export function fakeOrgo(options: FakeOptions) {
             ? json(409, { error: "Not running", code: "NOT_FORKABLE" })
             : json(400, { error: "No host on record", code: "NOT_CLONABLE" });
         }
-        if (options.scenario === "paid-gated") {
+        if (options.scenario === "paid-gated" || options.scenario === "free-quote") {
           return json(409, {
             error: "A copy needs its own purchase.",
             code: "HOURLY_QUOTE_REQUIRED",
           });
         }
+        if (free && computers.size >= 1 && options.scenario !== `free-${action}-open`)
+          return json(403, { error: "Free includes 1 computer.", code: "HOURLY_LIMIT" });
         // Docs: forks are auto-named `agent-N (fork)`, so they never carry the myco-discovery- prefix.
         const copy = add(
           typeof body.name === "string" ? body.name : `agent-${counter + 1} (${action})`,

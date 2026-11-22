@@ -5,10 +5,9 @@ export const origin = "https://www.orgo.ai";
 export const prefix = "myco-discovery-";
 export const small = { cpu: 0.5, ram: 4, os: "linux" } as const;
 export const uuid = /\b[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\b/gi;
-/** Observed spend (cents) at which every allocation is refused and cleanup starts. */
-export const stopCents = 120;
-const budgetCents = 150;
-const reserveCents = 30;
+export const medium = { cpu: 2, ram: 8, os: "linux" } as const;
+export const smallLimits = { stopCents: 120, budgetCents: 150, reserveCents: 30, maxComputers: 2 };
+export const probeLimits = { stopCents: 15, budgetCents: 25, reserveCents: 5, maxComputers: 1 };
 const trustedHosts = new Set(["www.orgo.ai", "docs.orgo.ai"]);
 
 export type Computer = { id: string; name: string; status: string };
@@ -73,9 +72,24 @@ export function redact(value: string, key: string): string {
     );
 }
 
+const apiRoutes = {
+  GET: [
+    /^\/api\/credits(?:\/transactions)?$/,
+    /^\/api\/workspaces(?:\/[\w-]+)?$/,
+    /^\/api\/billing\/compute\?workspace_id=[\w-]+$/,
+    /^\/api\/computers\/[\w-]+$/,
+  ],
+  POST: [
+    /^\/api\/computers$/,
+    /^\/api\/computers\/[\w-]+\/(?:bash|fork|clone|stop|start|suspend|resume)$/,
+  ],
+  DELETE: [/^\/api\/computers\/[\w-]+$/],
+};
+
 export function createApi(key: string, request: typeof fetch = fetch): Api {
   return async (method, path, payload) => {
-    if (!path.startsWith("/api/")) throw new Error("Unexpected API path");
+    if (!path.startsWith("/api/") || !apiRoutes[method].some((route) => route.test(path)))
+      throw new Error("Unexpected API path");
     const started = performance.now();
     try {
       const response = await request(origin + path, {
@@ -121,19 +135,31 @@ export function balanceCents(reply: Reply): number {
   return cents;
 }
 
-/**
- * Hard guard: refuses any create/fork/clone when observed spend has reached the $1.20 stop rule,
- * when credit cannot be established, or when the allocation would exceed two live computers.
- */
-export function guard(start: number, balance: number, count: number, additional: number) {
-  if (![start, balance, count, additional].every(Number.isFinite) || balance < reserveCents) {
+/** Refuse a transition when credit, spend or inventory exceeds its limit. */
+export function guard(
+  start: number,
+  balance: number,
+  count: number,
+  additional: number,
+  limits = smallLimits,
+  gateObservation = false,
+) {
+  if (
+    ![start, balance, count, additional].every(Number.isFinite) ||
+    balance < limits.reserveCents
+  ) {
     throw new Error("Cannot establish available credit");
   }
   const spent = start - balance;
-  if (spent >= stopCents || spent + reserveCents > budgetCents) {
-    throw new Error("Observed spend reached the $1.20 stop rule");
+  if (spent >= limits.stopCents || spent + limits.reserveCents > limits.budgetCents) {
+    throw new Error(`Observed spend reached the ${limits.stopCents}c stop rule`);
   }
-  if (count + additional > 2) throw new Error("Computer limit is two, including the new copy");
+  if (
+    count > limits.maxComputers ||
+    count + additional > limits.maxComputers + Number(gateObservation)
+  ) {
+    throw new Error(`Computer limit is ${limits.maxComputers}, including the new copy`);
+  }
 }
 
 export function inventory(workspace: JsonObject): Computer[] {
@@ -175,6 +201,7 @@ export type Offer = {
 };
 export type Preflight = {
   ok: boolean;
+  profile?: "probe" | "small";
   reasons: string[];
   tier: string;
   mode: string;
@@ -208,11 +235,7 @@ export function parseOffers(compute: JsonObject): Offer[] {
   });
 }
 
-/**
- * Read-only eligibility check from PROTOCOL.md: an explicit Small (0.5 vCPU, 4 GB) hourly create
- * must be offered, the account must not be Free (docs: Free always gets a Medium), the balance must
- * clear the reserve and the inventory must be empty. Anything else stops before the POST.
- */
+/** Read-only eligibility for the Free Medium probe or the paid Small run. */
 export function assessPreflight(input: {
   tier: string;
   mode: string;
@@ -221,25 +244,31 @@ export function assessPreflight(input: {
   inventoryCount: number | null;
 }): Preflight {
   const reasons: string[] = [];
-  const free = input.tier === "free" || input.mode === "free";
+  const free = input.tier.toLowerCase() === "free" || input.mode.toLowerCase() === "free";
   if (free) {
-    reasons.push(
-      "Free account: Orgo runs hourly computers as Medium only and a create naming another size still gets a Medium (docs: create, account-limits, instance-types)",
-    );
+    const [offer] = input.offers;
+    if (
+      input.offers.length !== 1 ||
+      offer?.name !== "Medium" ||
+      offer.cpu !== medium.cpu ||
+      offer.ramGb !== medium.ram ||
+      offer.usdPerHour !== 0.055
+    ) {
+      reasons.push("Free probe requires exactly Medium (2 vCPU, 8 GB, $0.055/h)");
+    }
+  } else if (!input.offers.some((offer) => offer.cpu === small.cpu && offer.ramGb === small.ram)) {
+    reasons.push("billing/compute offers no Small (0.5 vCPU, 4 GB)");
   }
-  const hasSmall = input.offers.some(
-    (offer) => offer.cpu === small.cpu && offer.ramGb === small.ram,
-  );
-  if (!hasSmall) {
-    reasons.push(
-      `billing/compute offers no Small (0.5 vCPU, 4 GB): ${input.offers.map((o) => `${o.name} ${o.cpu} vCPU ${o.ramGb} GB`).join("; ") || "no offers"}`,
-    );
+  const needed = free ? probeLimits.budgetCents : smallLimits.reserveCents;
+  if (
+    input.balanceCents === null ||
+    !Number.isFinite(input.balanceCents) ||
+    input.balanceCents < needed
+  ) {
+    reasons.push(`Balance is missing or below the ${needed}c preflight minimum`);
   }
-  if (input.balanceCents === null || input.balanceCents < reserveCents) {
-    reasons.push("Balance is missing or below the reserve");
-  }
-  if (input.inventoryCount !== 0) reasons.push("Workspace inventory is not empty");
-  return { ok: reasons.length === 0, reasons, ...input };
+  if (input.inventoryCount !== 0) reasons.push("Workspace inventory is unknown or nonempty");
+  return { ok: reasons.length === 0, reasons, profile: free ? "probe" : "small", ...input };
 }
 
 export function stats(samples: number[]) {
@@ -250,7 +279,7 @@ export function stats(samples: number[]) {
     n,
     min: sorted[0] ?? null,
     median: ((sorted[Math.floor((n - 1) / 2)] ?? 0) + (sorted[Math.floor(n / 2)] ?? 0)) / 2,
-    p95: sorted[Math.ceil(n * 0.95) - 1] ?? null,
+    p95: n < 2 ? null : (sorted[Math.ceil(n * 0.95) - 1] ?? null),
     max: sorted[n - 1] ?? null,
   };
 }
