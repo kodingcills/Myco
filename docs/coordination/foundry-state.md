@@ -194,6 +194,37 @@ asserts only "refuted" cannot distinguish a working fixture from a broken one (A
 and two of the three rejections were regressions introduced *while fixing an earlier
 finding*, which is why the save path now has five cases each asserting store and screen.
 
+## Open issue for the outer loop — `viewer verdict budget (macos-latest)` is flaky on shared runners
+
+Observed 2026-11-22 while landing PR #129 (a **docs-only** diff, one coordination file):
+
+| Branch | Result | Time (UTC) |
+|---|---|---|
+| `myco/eval-foundry` @ 200b072 | **fail** 518.8 ms (limit 425.8) | 18:59:45 |
+| `myco/eval-foundry` @ 3587513 | **fail** 506.4 ms (median, limit 425.8) | 19:03:12 |
+| `myco/eval-foundry` @ earlier heads | **pass** | 18:55:30, 18:53:15 |
+| `docs/c1-stack-proof` | **fail** | 19:01:13 |
+| `feat/rt015-read-file-tool` | **fail** then pass then pass | 18:55:00 → 18:59:50 |
+
+The diff under test touches no viewer code and no `src/`. The same commit passed the check
+twice and failed it twice, and two unrelated branches failed it in the same window while
+`main` passed. That is runner variance, not a regression — the samples are bimodal
+(384–435 ms good runs, 672–860 ms bad runs), which is what a noisy-neighbour macOS runner
+looks like on a 315 ms workload.
+
+**Not my call to fix** (`.github/workflows/` is out of scope for this workstream and the
+repo rule is that no agent edits it). Options for whoever owns CI, cheapest first:
+
+1. Raise `relativeTolerance` above 35%, or drop the 10000-step case to a p95 rather than a
+   median — the median is already robust; the tail is what moves.
+2. Run the perf job only on `main` post-merge and on PRs labelled `perf`, so a docs PR is
+   not gated by a timing race.
+3. Pin the runner label and measure the baseline on that image, rather than reusing a
+   darwin baseline that may not match the runner's CPU.
+
+**Consequence for this PR:** #129 cannot merge on a green run without either a re-run or a
+CI change. It is docs-only and the other five checks pass at the same head.
+
 ## Not touched
 
 `myco-win11`, any VM, `agent/`, `src/win/`, `src/integration/`, `.github/workflows/`,
