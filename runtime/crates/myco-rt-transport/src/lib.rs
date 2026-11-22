@@ -6,7 +6,7 @@
 //! agent binary directly (no VM, no SSH).
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, thiserror::Error)]
@@ -72,16 +72,17 @@ impl SshConfig {
     }
 }
 
-/// A connected, authenticated channel to one agent process.
+/// Exit status for a managed guest process.
 #[derive(Debug, serde::Deserialize)]
 pub struct ProcessExit {
     pub code: Option<i32>,
     pub signal: Option<i32>,
 }
 
+/// A connected, authenticated channel to one agent process.
 pub struct Channel {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     /// Parsed responses, produced by one long-lived reader thread. Owning the pipe
     /// in a thread is what makes deadlines enforceable: a grandchild holding the
     /// write end can no longer block the calling thread (only the reader).
@@ -122,7 +123,7 @@ impl Channel {
                 }
             }
         });
-        let mut ch = Self { child, stdin, rx, op_timeout: Duration::from_secs(10) };
+        let mut ch = Self { child, stdin: Some(stdin), rx, op_timeout: Duration::from_secs(10) };
         ch.authenticate(token)?;
         Ok(ch)
     }
@@ -155,8 +156,9 @@ impl Channel {
     ) -> Result<serde_json::Value, TransportError> {
         let mut line = serde_json::to_string(&request).map_err(|e| TransportError::Protocol(e.to_string()))?;
         line.push('\n');
-        self.stdin.write_all(line.as_bytes()).map_err(|_| TransportError::Closed)?;
-        self.stdin.flush().map_err(|_| TransportError::Closed)?;
+        let stdin = self.stdin.as_mut().ok_or(TransportError::Closed)?;
+        stdin.write_all(line.as_bytes()).map_err(|_| TransportError::Closed)?;
+        stdin.flush().map_err(|_| TransportError::Closed)?;
         self.read_line()
     }
 
@@ -296,7 +298,6 @@ impl Channel {
     /// `shutdown`: clean agent exit (NOT a VM poweroff).
     pub fn shutdown(mut self) -> Result<(), TransportError> {
         let resp = self.roundtrip(serde_json::json!({"op": "shutdown"}))?;
-        let _ = self.child.wait();
         if resp.get("ok").and_then(|v| v.as_bool()) == Some(true) {
             Ok(())
         } else {
@@ -307,6 +308,17 @@ impl Channel {
 
 impl Drop for Channel {
     fn drop(&mut self) {
+        drop(self.stdin.take());
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                _ => break,
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -376,6 +388,33 @@ mod tests {
         assert!(next.kill_process(&replacement).is_err());
         assert_eq!(next.kill_process(&current).unwrap().signal, Some(9));
         next.shutdown().unwrap();
+    }
+
+    #[test]
+    fn closing_channel_reaps_managed_child() {
+        let dir = std::env::temp_dir().join(format!("myco-channel-child-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let pid_path = dir.join("pid");
+        let mut ch = Channel::spawn(agent_command("s3cret"), "s3cret").unwrap();
+        ch.launch_process("sh", &[
+            "-c".into(), "echo $$ > \"$1\"; exec sleep 60".into(),
+            "fixture".into(), pid_path.to_string_lossy().into_owned()
+        ]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let pid = loop {
+            if let Ok(pid) = std::fs::read_to_string(&pid_path) {
+                if let Ok(pid) = pid.trim().parse::<u32>() {
+                    break pid;
+                }
+            }
+            assert!(Instant::now() < deadline, "fixture did not publish its PID");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        drop(ch);
+        let alive = Command::new("kill").args(["-0", &pid.to_string()])
+            .stderr(Stdio::null()).status().unwrap().success();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(!alive, "managed child survived disconnect");
     }
 
     #[test]

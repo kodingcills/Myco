@@ -116,14 +116,17 @@ impl QemuLinuxBackend {
     }
 
     pub fn launch_guest_process(&mut self, command: &str, args: &[String]) -> Result<String, BackendError> {
+        self.last_state_version = 0;
         Ok(self.control_channel()?.launch_process(command, args)?)
     }
 
     pub fn kill_guest_process(&mut self, handle: &str) -> Result<myco_rt_transport::ProcessExit, BackendError> {
+        self.last_state_version = 0;
         Ok(self.control_channel()?.kill_process(handle)?)
     }
 
     pub fn relaunch_guest_process(&mut self, handle: &str) -> Result<String, BackendError> {
+        self.last_state_version = 0;
         Ok(self.control_channel()?.relaunch_process(handle)?)
     }
 

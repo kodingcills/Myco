@@ -92,7 +92,7 @@ fn main() {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("myco-rt-agent: read error: {e}");
-                std::process::exit(3);
+                break;
             }
         }
         let req: serde_json::Value = match serde_json::from_str(line.trim_end()) {
