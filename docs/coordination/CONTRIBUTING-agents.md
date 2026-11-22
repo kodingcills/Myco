@@ -59,3 +59,33 @@ Every verifier brief must state, explicitly:
 - whether VM access is allowed (during a sweep: **never**, stubbed or not);
 - `MYCO_VM_SCRIPTS=... bash script.sh` must be one command, never a preceding export — a separated export silently fell through to the real VM and killed a live sweep (PR #32 incident);
 - what evidence to paste, and the exact final-line format.
+
+## Content-identity merge rule (coordinator ruling, 2026-11-22)
+
+**Problem it solves:** branch protection requires "up to date with main", and main moves faster than a ~2 minute CI cycle. Every `update-branch` creates a new head, which invalidates a verifier PASS; the run then needs re-verification while main moves again. One verified 6-line change was rebased seven times without landing.
+
+**Rule — all four must hold, and all four are stated in the PR body:**
+
+1. `git diff <verified-head> <merge-head> -- <every path in origin/main...merge-head>` is **empty for all non-docs paths**.
+2. Any remaining difference is docs only (`docs/coordination/`, `docs/backlog/`) — never a doc a reader could mistake for specification.
+3. CI is green on the merge head.
+4. The PR records the verified SHA, the merge SHA, and the command output proving zero non-docs change.
+
+If any non-docs path differs, it needs a fresh PASS. No exceptions. Docs drift alone does not reopen verification, because a state-log line cannot change what code does.
+
+### Test-only extension (2026-11-22, after #112)
+
+A delta that is **provably test-only** may merge without a fresh PASS when ALL of:
+
+1. **Zero deletions** in the delta.
+2. **Every hunk lies inside a test module** (`mod tests` / `#[cfg(test)]`) — verify by comparing the hunk header line number against the module's start line.
+3. **CI green on the merge head** (CI executes the tests, so CI *is* the verification for a test-only delta).
+4. The PR records the verified SHA, the merge SHA, and the proof: deletion count, hunk header, and the test-module start line.
+
+**Production code differing from the verified head still requires a fresh PASS. No exceptions.** A test cannot change what production code does; a production change can alter behaviour in ways CI does not cover.
+
+Worked example (#112 at `246cd302`): one runtime path differed from all three verified heads, so content-identity did **not** hold. The delta was 0 deletions / 19 additions / a single hunk `@@ -97,0 +98,21 @@ mod tests {` with `mod tests` at line 67 — two new tests, no production line touched. Mergeable under this extension.
+
+**Why not a merge queue:** enabling one is a repository-settings decision for the outer loop, not the coordinator. Auto-merge is already on and helps throughput but does not fix verifier invalidation, since `update-branch` still produces a new head.
+
+**Verifier reading rule (from a false REJECT):** a verifier claimed a PR contained no `runtime/` changes because the author had reset a shared worktree while it was reading. Verifiers must be given the SHA and must read objects (`git show <sha>:<path>`), never the working tree, and authors must not mutate a worktree while a review is reading it.
