@@ -95,6 +95,45 @@ search, workflow compilation, multi-OS support beyond Linux ARM64, product UI.
   with seeded bug present, and live X11 window visibility (window ID 16777242).
   Independent adversarial verification PASSED. RT-first-path is verified.
 
+## Non-VM queue (operating rule B, 2026-11-22)
+
+Ordered by what unblocks the most downstream work. Nothing here needs the guest.
+
+| # | Item | State |
+|---|---|---|
+| 1 | DF-005 harness hardening (PR #169) — the shipped runner graded an offline stub `pass/verified`. Gates, uncertain-vs-failure split, guest-readback oracle, M1-012 `nodeCount`, offline contract tests + mutation check. | in PR, Tier 2 verifier running (`deepseek-v4.1-flash`) |
+| 2 | Rebase #169 on `main` once verified; re-run gates | queued (blocked by 1) |
+| 3 | Per-scenario live-step implementations for DF-S02/S05 beyond the shared add+save path (each oracle is written; the actuation recipe is not) | queued, no guest needed to write |
+| 4 | Replay harness: grade recorded traces from a prior run without a guest, so a scoring change can be re-scored offline | queued |
+| 5 | `--agent-report` intake: capture the agent-under-test transcript into the run dir automatically (clause (b) currently needs a manual path) | queued |
+| 6 | Scoring doc reconciliation: verifier model policy updated to `deepseek-v4.1-flash` in the scenario oracles and `dogfood/scoring.md` | done (079f026 / b1f04eb) |
+
+Deliberately **not** queued: porting the fixture to GTK (option A rejected — it
+would rewrite a fixture whose bug and oracles are already verified), and any
+DF-S02 work under TIF-27 (it belongs to TIF-28, a finding about the agent).
+
+## VM needs (batched, for the Coordinator queue — M1 first)
+
+One slot, one contiguous window, everything below in a single run:
+
+1. **DF-S01 ×3, DF-S05 ×3** — first live proof of the hardened runner. This is
+   the highest-value guest time dogfood has: it is the first time the harness's
+   oracle runs against a real store. Expected to surface actuation gaps (does
+   `ctrl+a`, `Return`, and the `Save` click land via XTEST on the Tk entry?).
+2. **DF-S02 ×3** with a captured agent transcript — needs the runtime's
+   `read_file` (PR #112) live-validated, which is already pending a slot.
+3. **Deploy check** — `scripts/deploy-verify-myco-todo.sh --go` once, to confirm
+   the app deploys and its window maps after the DF-005 changes (it does not
+   touch the app, but the runbook path should be proven on this guest).
+
+Not requested: DF-S03 (needs REQ-10/REQ-11 tools, absent) and DF-S04 (needs
+REQ-09 `killProcess`, absent). Both stay `gap` with the requirement attributed;
+asking for guest time on them would waste the slot.
+
+**Estimated guest cost:** ~15 min for all of the above, dominated by DF-S01/S05
+runs and app startup. No Windows guest involvement — this is the Linux RT-020
+desktop.
+
 ## Status
 Phase 1 (DF-005 / TIF-27) is **UNBLOCKED** (2026-11-22):
 - Runtime first path (RT-011 / TIF-40) and arbitrary-agent safe desktop (RT-020 / TIF-56) passed live proof (`rt020-live-20261122-093115`) and independent verification, merged via PR #96.
