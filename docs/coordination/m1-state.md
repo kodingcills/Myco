@@ -19,7 +19,7 @@
   land. PR #79's audit correctly excludes it from coverage and clears the old
   false-success flag. Original indices 2 and 16 also lacked landed faults.
   Four kill recoveries and three invalid-target recoveries verified from disk.
-- **VM queue (14:06Z):** RT-020 granted immediate exclusive VM access (45 min window) under the shared lock protocol for its live proof with myco-todo GUI verification. C1 sweep was stopped by outer loop directive after trials 0 and 1 were refuted at $0.00 spend with document unmodified (no model calls, skipped single-trial spike). C1 lock released. Per design doc §3.5/§9.1 and Rule 8, aborted trials are classified as harness/infrastructure faults (omitted from model scoring at $0.00 spend). C1 is re-queued following RT-020, contingent on proving a real single-trial spike demonstrating actual model calls and token spend. Followed by M1-016 live reproduction and Evaluation Foundry slot 5 ($0 cap). PR #88 merged at `34973b5`; PR #90 merged at `7587e89`. M1-016 preflight passed with 0 discrepancies (installer hash match, 88-row v3 ledger byte-for-byte, 53-row corrupted ledger byte-for-byte, 20/20 generator proof, 506 tests passing).
+- **VM queue & C1 policy (14:18Z):** RT-020 holds the active VM window for its 45-minute live proof with `myco-todo` GUI verification (VM SSH verified ready). Per Tiffany's 9:17 AM ET directive, local Ollama is officially approved for the C1 screenshot baseline (due to lack of paid compute), even during the sweep. C1 Owner must prove real local-model calls in one spike trial before re-sweeping. Scorecard and DEVIATIONS must explicitly record exact model and settings. Fixed queue order: (1) RT-020 (active now) -> (2) C1 Baseline (after local-model spike proof) -> (3) M1-016 Live Reproduction -> (4) Evaluation Foundry (TIF-58, $0 cap). PR #88 merged at `34973b5`; PR #90 merged at `7587e89`. M1-016 preflight passed cleanly with 0 discrepancies.
 - [M1 backlog](../backlog/m1.md)
 
 ## Objective
@@ -793,3 +793,9 @@ The Screenshot Baseline Owner received the planner, arm, spend, and VM requireme
   - **Slot 4 (Re-queued):** Screenshot Baseline C1 (re-queued; requires offline fix and verified single-trial spike demonstrating real model calls and token spend before new sweep window).
   - **Slot 5 (Queued):** M1-016 Independent Live Evaluation Reproduction.
   - **Slot 6 (Queued):** Evaluation Foundry (TIF-58, $0 cap).
+
+## Log 2026-11-22 (61) — Local Ollama approved for C1 screenshot baseline; DEVIATIONS requirement; queue confirmed
+- **Tiffany policy decision (9:17 AM ET / 14:17Z):** Local Ollama is approved for the C1 screenshot baseline, including during the VM sweep, because paid compute is unavailable.
+- **Spike proof requirement:** The Screenshot Baseline Owner must prove real local-model calls in one spike trial demonstrating actual token/inference activity before re-sweeping.
+- **Reporting & DEVIATIONS contract:** The scorecard and `DEVIATIONS` must explicitly document that the baseline used a local model, detailing the exact model name and runtime parameters.
+- **VM Queue Sequence:** Confirmed as (1) RT-020 live proof (active, VM SSH up) -> (2) C1 screenshot baseline -> (3) M1-016 independent live evaluation reproduction -> (4) Evaluation Foundry (TIF-58, $0 cap).
