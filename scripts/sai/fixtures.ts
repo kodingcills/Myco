@@ -160,7 +160,7 @@ export const T1_BYTES_CHECK = {
 } as const;
 
 export function t1Message(path: string): string {
-  return `Open Notepad, type exactly this text and nothing else, with no trailing newline: ${T1_TEXT}. Then use File > Save As and save the file at this exact path: ${path}. Tell me the exact path you saved to.`;
+  return `Open Notepad. Type exactly the 15 characters between the quotation marks below. Do not type the quotation marks, do not type any punctuation after the last letter, and do not press Enter. "${T1_TEXT}". Then use File > Save As and save the file at this exact path: ${path}. Tell me the exact path you saved to.`;
 }
 
 export function itemsMessage(): string {

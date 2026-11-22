@@ -54,3 +54,12 @@ The original text above is unchanged. This amendment records what the first live
 4. *Retry rule.* "No repeats to replace failures" still holds for scored trials. A harness-aborted attempt (above) may be rerun once under the amended policy; both attempts are reported.
 5. *Desktop reset.* Before each agent trial the harness stops leftover Notepad processes and fixture apps (`powershell.exe` whose command line contains `myco_sai` and `app.ps1`), because an aborted trial leaves dialogs open. This touches only the hosted computer.
 6. *Free-computer lifetime.* The docs say the free computer is deleted when a lease closes. The harness therefore never closes the lease explicitly during the run (idle release is left to happen) and records marker-file persistence across a lease → task → lease sequence in S0/T1 as an observation.
+
+## Amendment 2 (after T1 attempt 2, before any scored result)
+
+T1 attempt 2 ran under Amendment 1 and ended `succeeded`. Its disk readback was 16 bytes (`Myco sample one.`, no BOM, no trailing newline), not the pre-registered 15. Cause: the harness's own message ended the quoted text with a sentence period (`... nothing else, with no trailing newline: Myco sample one. Then use ...`), so the instruction was ambiguous and Sai typed the period. That is a defect in the task text, not evidence about Sai.
+
+- Attempt 2 is kept in the ledger and RESULTS with its verbatim status, evidence and readback, marked **task-text defect, not scored**. It is not counted as a false pass; the readback does show that Notepad saved exactly what was typed (no BOM, no newline).
+- T1 is rerun once as attempt 3 with an unambiguous message (the text is quoted, the number of characters is stated, and punctuation and Enter are excluded). The expected bytes are unchanged (`Myco sample one`, 15 bytes). This is the T1 trial that is scored.
+- The same defect class is checked for T2–T4 messages before they run: every literal the agent must type is quoted and counted, and the status-line report is requested verbatim.
+- Agent-start cap (Amendment 1, item 3) now stands at eight starts, of which attempts 1 and 2 of T1 used two.
