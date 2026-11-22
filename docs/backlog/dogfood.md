@@ -12,11 +12,11 @@ workstream), `agent-under-test` (cheaperinference/glm-5.3), `verifier`
 ---
 
 ### DF-001 (TIF-23) Sample app: myco-todo with seeded persistence bug
-- **status:** done (2026-11-19, this branch)
+- **status:** done (2026-11-19, this branch; repaired 2026-11-22 via PR #89)
 - **owner:** dogfood-owner
 - **blocked_by:** none
-- **description:** Tiny Tkinter GUI todo app under `dogfood/apps/myco-todo/`, Linux-first, JSON-persisted store, seeded bug: `BUG`-prefixed items silently dropped at save while UI reports success.
-- **acceptance:** `--self-test` passes headless; save/load logic verified against edge cases (case-insensitive prefix, empty store); README documents the bug contract.
+- **description:** Tiny Tkinter GUI todo app under `dogfood/apps/myco-todo/`, Linux-first, JSON-persisted store, seeded bug: `BUG`-prefixed items silently dropped at save while UI reports success. Repaired via PR #89 to fix lazy `import tkinter as tk` NameError with `global tk`, atomic state publication, and headless `test_myco_todo.py`. Verified in guest during RT-020 live run.
+- **acceptance:** `--self-test` passes headless; save/load logic verified against edge cases (case-insensitive prefix, empty store); README documents the bug contract; GUI startup and window visibility verified.
 
 ### DF-002 (TIF-24) Dogfood scenarios DF-S01..DF-S05
 - **status:** done (2026-11-19, this branch)
@@ -40,9 +40,9 @@ workstream), `agent-under-test` (cheaperinference/glm-5.3), `verifier`
 - **acceptance:** every scenario's required capabilities resolve to a REQ-id; coordinator + runtime owner can read the table without further context.
 
 ### DF-005 (TIF-27) Phase 1: run DF-S01..DF-S05 through the real runtime
-- **status:** blocked
+- **status:** ready (unblocked 2026-11-22 by RT-020; queued for VM slot)
 - **owner:** dogfood-owner (execution), agent-under-test, verifier
-- **blocked_by:** DF-001, DF-002, DF-003, RT-first-path
+- **blocked_by:** none (RT-first-path complete)
 - **description:** For each scenario: provision a desktop via the runtime, run cheaperinference/glm-5.3 as the agent under test on the scenario task, grade with the scenario's oracle plus cheaperinference/kimi-k3 as independent verifier of the agent's report, emit M1-012 evidence (trace.jsonl, result.json, ledger.jsonl), score per dogfood/scoring.md.
 - **acceptance:** 5 scenarios × ≥3 runs each scored with schema-valid evidence; false-success count reported separately; median time cost per scenario reported; all gaps attributed to REQ-ids.
 

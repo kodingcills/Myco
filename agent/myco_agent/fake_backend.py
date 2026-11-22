@@ -123,9 +123,11 @@ class FakeBackend(OpsBackend):
             ]
         return node
 
-    def uia_invoke(self, runtime_id, action, value=None):
+    def uia_invoke(self, runtime_id, action, value=None, keys=None, cell=None):
         if "uia_invoke" in self._crash_on:
             raise RuntimeError("fake crash on uia_invoke")
+        if action not in ("invoke", "select", "set_value", "keys"):
+            raise ValueError("action must be invoke, select, set_value or keys")
         if len(runtime_id) < 3:
             raise KeyError("runtime_id must be [1, <window>, <control>]")
         _, window_title, control_name = runtime_id[:3]

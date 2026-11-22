@@ -14,6 +14,14 @@ export interface RunOutcome {
   steps: StepRecord[];
   guardFailure?: GuardFailure;
   finalState: AppState | null;
+  /**
+   * Known-good point (ADR-0006): index of the last step whose postconditions
+   * all held — the resume point for recovery. -1 means "before any step"
+   * (only the initial observation held); null means never observed.
+   */
+  lastGoodStep: number | null;
+  /** stateVersion of the state the known-good point was established on. */
+  lastGoodStateVersion: number | null;
 }
 
 function evaluatePredicates(
@@ -40,6 +48,14 @@ function describeAction(action: unknown): Record<string, unknown> {
       return rec;
   }
 }
+export interface RunProgramOptions {
+  /**
+   * Resume after this step index (recovery): steps 0..startStep are assumed
+   * already executed — their actions are not re-dispatched and their records
+   * are not re-created. Default: full run from step 0.
+   */
+  startStep?: number;
+}
 
 function delay(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -47,11 +63,19 @@ function delay(ms: number): Promise<void> {
   return promise;
 }
 
-export async function runProgram(adapter: AppAdapter, program: Program): Promise<RunOutcome> {
+export async function runProgram(
+  adapter: AppAdapter,
+  program: Program,
+  options: RunProgramOptions = {},
+): Promise<RunOutcome> {
   const steps: StepRecord[] = [];
   let state = await adapter.observe();
-
-  for (let i = 0; i < program.steps.length; i++) {
+  // Known-good point (ADR-0006): starts at the initial observation; advanced
+  // to (step, stateVersion) each time a step's postconditions all hold.
+  let lastGoodStep = -1;
+  let lastGoodStateVersion = state.stateVersion;
+  const startStep = options.startStep ?? 0;
+  for (let i = startStep; i < program.steps.length; i++) {
     const step = program.steps[i];
     if (!step) throw new Error(`missing step ${i}`);
     const stateVersionBefore = state.stateVersion;
@@ -71,6 +95,8 @@ export async function runProgram(adapter: AppAdapter, program: Program): Promise
         steps,
         guardFailure: failure,
         finalState: state,
+        lastGoodStep,
+        lastGoodStateVersion,
       };
     }
 
@@ -92,6 +118,8 @@ export async function runProgram(adapter: AppAdapter, program: Program): Promise
         steps,
         guardFailure: failure,
         finalState: state,
+        lastGoodStep,
+        lastGoodStateVersion,
       };
     }
     if (actResult.outcome === "failed") {
@@ -108,19 +136,46 @@ export async function runProgram(adapter: AppAdapter, program: Program): Promise
         steps,
         guardFailure: failure,
         finalState: state,
+        lastGoodStep,
+        lastGoodStateVersion,
       };
     }
 
-    if (step.action.kind === "waitFor") {
-      const deadline = Date.now() + step.action.timeoutMs;
-      let after = await adapter.observe();
-      while (!step.action.predicate(after) && Date.now() < deadline) {
-        await delay(10);
-        after = await adapter.observe();
+    // A mid-program app death (killed process, lost window) surfaces here as a
+    // throwing observe(). It must become a structured guard failure carrying
+    // the steps already executed — otherwise the evidence cannot distinguish
+    // "died after the edit" from "never launched", which is exactly the
+    // distinction recovery and the corrupted-trial audit depend on.
+    try {
+      if (step.action.kind === "waitFor") {
+        const deadline = Date.now() + step.action.timeoutMs;
+        let after = await adapter.observe();
+        while (!step.action.predicate(after) && Date.now() < deadline) {
+          await delay(10);
+          after = await adapter.observe();
+        }
+        state = after;
+      } else {
+        state = await adapter.observe();
       }
-      state = after;
-    } else {
-      state = await adapter.observe();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failure: GuardFailure = {
+        step: i,
+        phase: "postcondition",
+        predicateName: "observe-after-action",
+        observed: message,
+        reason: `app became unobservable after step ${i}: ${message}`,
+      };
+      return {
+        program: program.name,
+        completed: false,
+        steps,
+        guardFailure: failure,
+        finalState: state,
+        lastGoodStep,
+        lastGoodStateVersion,
+      };
     }
 
     const postconditionResults = evaluatePredicates(step.postconditions, state);
@@ -133,6 +188,11 @@ export async function runProgram(adapter: AppAdapter, program: Program): Promise
       stateVersionBefore,
       stateVersionAfter: actResult.stateVersionAfter,
     });
+    if (!failedPost) {
+      // All postconditions held: this is the new known-good point (ADR-0006).
+      lastGoodStep = i;
+      lastGoodStateVersion = state.stateVersion;
+    }
     if (failedPost) {
       const failure: GuardFailure = {
         step: i,
@@ -147,11 +207,20 @@ export async function runProgram(adapter: AppAdapter, program: Program): Promise
         steps,
         guardFailure: failure,
         finalState: state,
+        lastGoodStep,
+        lastGoodStateVersion,
       };
     }
   }
 
-  return { program: program.name, completed: true, steps, finalState: state };
+  return {
+    program: program.name,
+    completed: true,
+    steps,
+    finalState: state,
+    lastGoodStep,
+    lastGoodStateVersion,
+  };
 }
 
 function resolveAction(action: ProgramAction, adapter: AppAdapter): Action {

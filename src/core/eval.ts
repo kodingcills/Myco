@@ -88,7 +88,7 @@ export interface EvalConfig {
 }
 
 /** Wrap a verifier verdict as a single-check scored verdict. */
-function scoreVerdict(verdict: Verdict, oracleName: string): ScoredVerdict {
+export function scoreVerdict(verdict: Verdict, oracleName: string): ScoredVerdict {
   if (verdict.status === "verified") {
     return {
       status: "verified",
@@ -284,6 +284,13 @@ async function runTrial(
         steps: [...pre.steps, ...post.steps],
         guardFailure: pre.guardFailure ?? post.guardFailure,
         finalState: post.finalState ?? pre.finalState,
+        // Post-save segment's own good point, offset back to absolute step
+        // indices (the segment ran program.steps.slice(saveStepIndex)).
+        lastGoodStep:
+          post.lastGoodStep === null || post.lastGoodStep < 0
+            ? pre.lastGoodStep
+            : saveStepIndex + post.lastGoodStep,
+        lastGoodStateVersion: post.lastGoodStateVersion ?? pre.lastGoodStateVersion,
       };
     } else {
       outcome = await runProgram(adapter, program);
@@ -302,6 +309,8 @@ async function runTrial(
         reason: `adapter unusable during trial ${trialIndex}`,
       },
       finalState: null,
+      lastGoodStep: null,
+      lastGoodStateVersion: null,
     };
   }
 

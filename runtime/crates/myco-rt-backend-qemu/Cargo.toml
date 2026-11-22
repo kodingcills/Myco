@@ -1,0 +1,13 @@
+[package]
+name = "myco-rt-backend-qemu"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "QEMU+HVF Linux ARM64 backend for the Myco runtime (RT-006, ADR-0011/0015)"
+
+[dependencies]
+myco-rt-core = { path = "../myco-rt-core" }
+myco-rt-transport = { path = "../myco-rt-transport" }
+myco-rt-evidence = { path = "../myco-rt-evidence" }
+serde_json = "1"
+thiserror = "2"

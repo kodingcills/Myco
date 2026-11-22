@@ -80,8 +80,25 @@ search, workflow compilation, multi-OS support beyond Linux ARM64, product UI.
   reads `$MYCO_INTROSPECTION_FILE` and maps at the session layer. Observation's
   `introspection` field is tri-state: null (unset) | record | {unavailable}.
 
+- **2026-11-22 — Tk GUI startup fix (PR #89 merged @ `1f4619a`).** Runtime Owner
+  discovered `NameError: name 'tk' is not defined` when launching GUI due to lazy
+  `import tkinter as tk` inside `main()`. Dogfood Owner approved fix with constraints:
+  `global tk` before import in `main()`, keep seeded bug untouched, preserve headless
+  `--self-test` without Tk/display, retain ADR-0016 atomic write
+  (`tempfile.NamedTemporaryFile` + replace), trace `entry_text` with `StringVar`, and
+  add `test_myco_todo.py` skipping cleanly without display.
+  `myco_todo.py` SHA-256: `c9671a046ecd1cc4c21475d570bbef029e4ee32e2d85c9ff85c720b24f379b57`.
+
+- **2026-11-22 — RT-020 live proof passes end-to-end (`08b3863`).** Runtime Owner
+  executed live proof script (`rt020-proof.py --go --verify-myco-todo`, 11/11 steps
+  passed). Step 7 (`verify-myco-todo`) verified SHA-256 upload, `--self-test` pass
+  with seeded bug present, and live X11 window visibility (window ID 16777242).
+  Independent adversarial verification PASSED. RT-first-path is verified.
+
 ## Status
 Phase 0 complete: PR #8 merged to main (2026-11-19, head 3ffcceb; VERIFIED by
 independent kimi-k3 review at a491f71 + docs-only hardening delta, CI 4/4 green).
-Phase 1 blocked on the runtime's first end-to-end path. Not polling; will be
-woken.
+Tk GUI startup repair merged via PR #89.
+Phase 1 (DF-005, TIF-27) is **UNBLOCKED** by RT-020 completion (2026-11-22).
+Dogfood test harness prepared against RT-020 entry points; queued for M1 Coordinator
+VM slot allocation (queue: C1, M1-016, Foundry first). Not touching VM without GO.

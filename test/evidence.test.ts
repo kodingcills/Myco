@@ -67,6 +67,42 @@ describe("evidence schema validation", () => {
     ).toThrow(InvalidEvidenceError);
   });
 
+  describe("claim event (gui-spec §6.4, additive)", () => {
+    const claim = {
+      type: "claim",
+      timestamp: "2026-11-21T12:00:00.000Z",
+      step: 3,
+      source: "app-ui",
+      field: "status",
+      value: "Saved 2 items",
+    };
+    it("accepts a well-formed claim from the app UI or the agent", () => {
+      expect(() => assertSchema(claim, traceEventSchema, "trace event")).not.toThrow();
+      expect(() =>
+        assertSchema({ ...claim, source: "agent" }, traceEventSchema, "trace event"),
+      ).not.toThrow();
+    });
+    it("is closed: rejects unknown source, extra keys, missing keys, and negative step", () => {
+      for (const bad of [
+        { ...claim, source: "verifier" },
+        { ...claim, extra: true },
+        { ...claim, field: "" },
+        { ...claim, step: -1 },
+        { ...claim, value: undefined },
+      ]) {
+        expect(() => assertSchema(bad, traceEventSchema, "trace event")).toThrow(
+          InvalidEvidenceError,
+        );
+      }
+    });
+    it("rejects a claim missing a required field (a partial claim is not valid evidence)", () => {
+      const { field: _omit, ...noField } = claim;
+      expect(() => assertSchema(noField, traceEventSchema, "trace event")).toThrow(
+        InvalidEvidenceError,
+      );
+    });
+  });
+
   it("rejects a ledger row missing its oracle", () => {
     const row = {
       evalId: "e",
@@ -92,6 +128,89 @@ describe("evidence schema validation", () => {
       refusalCode: null,
     };
     expect(() => assertSchema(row, ledgerRowSchema, "ledger row")).not.toThrow();
+  });
+
+  describe("result.json recordKind discriminator (ADR-0012)", () => {
+    const validVerdict = {
+      status: "verified",
+      checks: [
+        { name: "check-a", passed: true, reason: "a", partial_score: { score: 1, weight: 1 } },
+      ],
+      score: 1,
+      reasons: ["ok"],
+    } as const;
+    const runRecord = {
+      runId: "r1",
+      taskId: "fake-set-cell",
+      taskParams: { trial: 0 },
+      startedAt: "2026-01-01T00:00:00Z",
+      steps: [],
+      verdict: validVerdict,
+    };
+
+    it("accepts an existing run record with no recordKind (absent = run)", () => {
+      expect(() => assertSchema(runRecord, resultRecordSchema, "result.json")).not.toThrow();
+    });
+
+    it("accepts a run record with explicit recordKind: run", () => {
+      expect(() =>
+        assertSchema({ ...runRecord, recordKind: "run" }, resultRecordSchema, "result.json"),
+      ).not.toThrow();
+    });
+
+    it("accepts a session record without a verdict", () => {
+      const session = {
+        recordKind: "session",
+        runId: "r1",
+        startedAt: "2026-01-01T00:00:00Z",
+        steps: [],
+      };
+      expect(() => assertSchema(session, resultRecordSchema, "result.json")).not.toThrow();
+    });
+
+    it("accepts a session record with optional checks", () => {
+      const session = {
+        recordKind: "session",
+        runId: "r1",
+        startedAt: "2026-01-01T00:00:00Z",
+        steps: [],
+        checks: [
+          {
+            name: "check-a",
+            passed: null,
+            reason: "could not look",
+            partial_score: { score: 0, weight: 1 },
+          },
+        ],
+      };
+      expect(() => assertSchema(session, resultRecordSchema, "result.json")).not.toThrow();
+    });
+
+    it("rejects a session record carrying a verdict", () => {
+      const session = {
+        recordKind: "session",
+        runId: "r1",
+        startedAt: "2026-01-01T00:00:00Z",
+        steps: [],
+        verdict: validVerdict,
+      };
+      expect(() => assertSchema(session, resultRecordSchema, "result.json")).toThrow(
+        InvalidEvidenceError,
+      );
+    });
+
+    it("rejects a run record without a verdict", () => {
+      const { verdict: _verdict, ...noVerdict } = runRecord;
+      expect(() => assertSchema(noVerdict, resultRecordSchema, "result.json")).toThrow(
+        InvalidEvidenceError,
+      );
+    });
+
+    it("rejects an unknown recordKind", () => {
+      expect(() =>
+        assertSchema({ ...runRecord, recordKind: "other" }, resultRecordSchema, "result.json"),
+      ).toThrow(InvalidEvidenceError);
+    });
   });
 
   it("rejects a verdict whose partial_score weights do not sum to 1.0", () => {

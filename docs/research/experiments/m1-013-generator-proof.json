@@ -1,0 +1,142 @@
+[
+  {
+    "column": "name",
+    "typed": "REVISED-908578",
+    "status": "verified",
+    "reason": "cell B39 (record EMP-0038, column name) persisted as \"REVISED-908578\"",
+    "elapsedMs": 60330
+  },
+  {
+    "column": "qty",
+    "typed": "9733",
+    "status": "verified",
+    "reason": "cell C24 (record EMP-0023, column qty) persisted as \"9733\"",
+    "elapsedMs": 33438
+  },
+  {
+    "column": "joined",
+    "typed": "2024-05-28",
+    "status": "verified",
+    "reason": "cell D60 (record EMP-0059, column joined) persisted as \"2024-05-28\"",
+    "elapsedMs": 36662
+  },
+  {
+    "column": "salary",
+    "typed": "$12458.13",
+    "status": "verified",
+    "reason": "cell E10 (record EMP-0009, column salary) persisted as \"$12458.13\"",
+    "elapsedMs": 34598
+  },
+  {
+    "column": "name",
+    "typed": "REVISED-465160",
+    "status": "verified",
+    "reason": "cell B12 (record EMP-0011, column name) persisted as \"REVISED-465160\"",
+    "elapsedMs": 30893
+  },
+  {
+    "column": "qty",
+    "typed": "9986",
+    "status": "verified",
+    "reason": "cell C23 (record EMP-0022, column qty) persisted as \"9986\"",
+    "elapsedMs": 33986
+  },
+  {
+    "column": "joined",
+    "typed": "2024-03-26",
+    "status": "verified",
+    "reason": "cell D6 (record EMP-0005, column joined) persisted as \"2024-03-26\"",
+    "elapsedMs": 33538
+  },
+  {
+    "column": "salary",
+    "typed": "$36824.23",
+    "status": "verified",
+    "reason": "cell E96 (record EMP-0095, column salary) persisted as \"$36824.23\"",
+    "elapsedMs": 39266
+  },
+  {
+    "column": "name",
+    "typed": "REVISED-545101",
+    "status": "verified",
+    "reason": "cell B126 (record EMP-0125, column name) persisted as \"REVISED-545101\"",
+    "elapsedMs": 34428
+  },
+  {
+    "column": "qty",
+    "typed": "7897",
+    "status": "verified",
+    "reason": "cell C5 (record EMP-0004, column qty) persisted as \"7897\"",
+    "elapsedMs": 53058
+  },
+  {
+    "column": "joined",
+    "typed": "2024-06-29",
+    "status": "verified",
+    "reason": "cell D35 (record EMP-0034, column joined) persisted as \"2024-06-29\"",
+    "elapsedMs": 41578
+  },
+  {
+    "column": "salary",
+    "typed": "$33579.52",
+    "status": "verified",
+    "reason": "cell E13 (record EMP-0012, column salary) persisted as \"$33579.52\"",
+    "elapsedMs": 74044
+  },
+  {
+    "column": "name",
+    "typed": "REVISED-72912",
+    "status": "verified",
+    "reason": "cell B21 (record EMP-0020, column name) persisted as \"REVISED-72912\"",
+    "elapsedMs": 44984
+  },
+  {
+    "column": "qty",
+    "typed": "4140",
+    "status": "verified",
+    "reason": "cell C97 (record EMP-0096, column qty) persisted as \"4140\"",
+    "elapsedMs": 34437
+  },
+  {
+    "column": "joined",
+    "typed": "2024-10-09",
+    "status": "verified",
+    "reason": "cell D107 (record EMP-0106, column joined) persisted as \"2024-10-09\"",
+    "elapsedMs": 35861
+  },
+  {
+    "column": "salary",
+    "typed": "$24827.84",
+    "status": "verified",
+    "reason": "cell E59 (record EMP-0058, column salary) persisted as \"$24827.84\"",
+    "elapsedMs": 37966
+  },
+  {
+    "column": "name",
+    "typed": "REVISED-723439",
+    "status": "verified",
+    "reason": "cell B29 (record EMP-0028, column name) persisted as \"REVISED-723439\"",
+    "elapsedMs": 35832
+  },
+  {
+    "column": "qty",
+    "typed": "9513",
+    "status": "verified",
+    "reason": "cell C33 (record EMP-0032, column qty) persisted as \"9513\"",
+    "elapsedMs": 32369
+  },
+  {
+    "column": "joined",
+    "typed": "2024-09-19",
+    "status": "verified",
+    "reason": "cell D27 (record EMP-0026, column joined) persisted as \"2024-09-19\"",
+    "elapsedMs": 35189
+  },
+  {
+    "column": "salary",
+    "typed": "$6286.05",
+    "status": "verified",
+    "reason": "cell E60 (record EMP-0059, column salary) persisted as \"$6286.05\"",
+    "elapsedMs": 36200
+  }
+]

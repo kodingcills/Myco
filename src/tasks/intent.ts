@@ -34,7 +34,9 @@ export function columnByName(name: string): FixtureColumn | undefined {
 function formatValueFor(type: FixtureColumn["type"], r: () => number): string {
   switch (type) {
     case "text":
-      return `revised-${Math.floor(r() * 1_000_000)}`;
+      // AutoCorrect-immune by construction (M1-013): uppercase first letter,
+      // never looks like a formula, date, or number.
+      return `REVISED-${Math.floor(r() * 1_000_000)}`;
     case "integer":
       return String(Math.floor(r() * 10_000));
     case "date":
@@ -48,6 +50,49 @@ function formatValueFor(type: FixtureColumn["type"], r: () => number): string {
   }
 }
 
+/** Characters Calc treats as formula-input or text-escape triggers when leading. */
+const LEADING_TRIGGERS = /^[=+\-@]/;
+
+/** Matches ISO dates (2024-01-01) and slash date forms Calc recognizes on input. */
+const LOOKS_LIKE_DATE = /^\d{4}-\d{2}-\d{2}$|^\d{1,2}\/\d{1,2}(\/\d{2,4})?$/;
+
+/**
+ * Shapes Calc's input path rewrites in a text column even though they are not
+ * dates: leading-zero integers (`007` -> 7), exponents (`1e5` -> 100000),
+ * grouped numbers (`1,234`), percentages (`100%` -> 1), booleans (`TRUE`), and
+ * non-ISO date forms (`2024-1-1`). Each is a rewrite risk found in review; the
+ * generator never emits them, but the predicate is exported and must not
+ * vouch for values it cannot guarantee.
+ */
+const REWRITTEN_AS_NUMBER_OR_BOOLEAN =
+  /^0\d|\d[eE][+-]?\d|\d,\d|%$|^(?:TRUE|FALSE|T|F)$|^\d{4}-\d{1,2}-\d{1,2}$|^\d{1,2}:\d{2}/;
+
+/**
+ * True when Calc's input path cannot mutate `value` typed into a cell of
+ * `columnType` (M1-013, LibreOffice AutoCorrect finding 2026-11-23):
+ * no sentence-casing (leading lowercase letter), no formula/escape triggers
+ * (=, +, -, @, '), and — in a text column — nothing Calc might parse or
+ * reformat as a date, number, percentage, or boolean. Integer/date/currency
+ * columns receive values of their own type, which Calc stores verbatim.
+ *
+ * A plain digit string (`908578`) is accepted: Calc stores it as a number
+ * whose displayed text equals the input. Digit strings Calc would REWRITE
+ * (`007`, `1e5`, `1,234`, `100%`) are rejected — see
+ * REWRITTEN_AS_NUMBER_OR_BOOLEAN.
+ */
+export function isAutoCorrectImmune(value: string, columnType: FixtureColumn["type"]): boolean {
+  if (value.length === 0 || /^[='@]/.test(value) || LEADING_TRIGGERS.test(value)) {
+    return false;
+  }
+  if (columnType === "text" || columnType === "key") {
+    if (!/[A-Z0-9]/.test(value[0] ?? "")) {
+      return false; // leading lowercase → AutoCorrect sentence-case risk
+    }
+    return !LOOKS_LIKE_DATE.test(value) && !REWRITTEN_AS_NUMBER_OR_BOOLEAN.test(value);
+  }
+  return true;
+}
+
 /**
  * Deterministic value for an intent's target cell. Same PRNG shape as the
  * fixture generator (`hash32` + slice), keyed by seed + params — never by
@@ -55,7 +100,11 @@ function formatValueFor(type: FixtureColumn["type"], r: () => number): string {
  */
 function newCellValue(seed: string, rowKey: string, column: string, index: number): string {
   const type = columnByName(column)?.type ?? "text";
-  return formatValueFor(type, seededRandom(`value:${seed}:${rowKey}:${column}:${index}`));
+  const value = formatValueFor(type, seededRandom(`value:${seed}:${rowKey}:${column}:${index}`));
+  if (!isAutoCorrectImmune(value, type)) {
+    throw new Error(`generated non-immune value "${value}" for column type ${type}`);
+  }
+  return value;
 }
 
 /**

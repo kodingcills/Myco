@@ -34,7 +34,8 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>C:\Program Files\Myco\agent\run-agent.cmd</Command>
+      <Command>C:\Windows\System32\cmd.exe</Command>
+      <Arguments>/c "C:\Program Files\Myco\agent\run-agent.cmd"</Arguments>
     </Exec>
   </Actions>
 </Task>

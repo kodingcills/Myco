@@ -1,0 +1,1 @@
+globalThis.require("x"); process.mainModule.require("x");
