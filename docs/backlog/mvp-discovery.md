@@ -141,6 +141,9 @@ criterion (TIF-60) decide the wedge.
   4. Economics: wall-clock, model tokens/cost, infrastructure overhead per trial.
   5. The report states which numbers are comparable and which are not.
 
+> Protocols, sample sizes and the VM slot request for MVD-001..005 are pre-registered in
+> `docs/product/mvd-preregistration.md`.
+
 ### MVD-005 (TIF-60) Recommendation and product criterion
 - **status:** provisional recommendation in `docs/product/mvp-discovery-plan.md`;
   final after MVD-004.
