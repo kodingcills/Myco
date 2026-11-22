@@ -464,3 +464,80 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod wire_contract_tests {
+    //! The backend builds these JSON objects by hand and this module parses them.
+    //! Nothing tested the pair, so a rename on either side -- "typeTextGlobal" vs
+    //! "typeText_global", or a field the parser expects under another name --
+    //! would only surface as an unexplained failure in a live guest.
+    //!
+    //! These tests therefore assert on the WIRE FORM, not on Rust values: each
+    //! case is the exact JSON the backend emits for that action.
+
+    use super::Action;
+
+    /// Parse the way the request loop does (`serde_json::from_value`).
+    fn parse(v: serde_json::Value) -> Action {
+        serde_json::from_value::<Action>(v).expect("the backend's wire form must parse")
+    }
+
+    #[test]
+    fn targetless_typing_parses_from_the_backends_wire_form() {
+        // Exactly what `Action::TypeTextGlobal { text }` serializes to.
+        match parse(serde_json::json!({"kind": "typeTextGlobal", "text": "buy milk"})) {
+            Action::TypeTextGlobal { text } => assert_eq!(text, "buy milk"),
+            other => panic!("expected TypeTextGlobal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn click_at_parses_from_the_backends_wire_form() {
+        match parse(serde_json::json!({"kind": "clickAt", "x": 320, "y": 240})) {
+            Action::ClickAt { x, y } => {
+                assert_eq!((x, y), (320, 240));
+            }
+            other => panic!("expected ClickAt, got {other:?}"),
+        }
+    }
+
+    /// Negative coordinates must survive parsing so the handler can refuse them
+    /// with a real message. Silently clamping during deserialization would make
+    /// the refusal untestable.
+    #[test]
+    fn negative_coordinates_parse_and_are_left_for_the_handler_to_refuse() {
+        match parse(serde_json::json!({"kind": "clickAt", "x": -5, "y": 10})) {
+            Action::ClickAt { x, y } => assert_eq!((x, y), (-5, 10)),
+            other => panic!("expected ClickAt, got {other:?}"),
+        }
+    }
+
+    /// The camelCase tag is the contract: a snake_case spelling must NOT parse,
+    /// or both spellings would silently work and one would be dead code.
+    #[test]
+    fn a_wrongly_cased_kind_is_rejected() {
+        let r = serde_json::from_value::<Action>(
+            serde_json::json!({"kind": "type_text_global", "text": "x"}),
+        );
+        assert!(r.is_err(), "snake_case kind must not parse; the wire form is camelCase");
+    }
+
+    /// Every variant the backend can emit round-trips through this parser.
+    #[test]
+    fn every_action_the_backend_emits_parses_here() {
+        let forms = [
+            serde_json::json!({"kind": "launch", "command": "x", "args": ["-a"]}),
+            serde_json::json!({"kind": "click", "target": "e1"}),
+            serde_json::json!({"kind": "typeText", "target": "e1", "text": "t"}),
+            serde_json::json!({"kind": "typeTextGlobal", "text": "t"}),
+            serde_json::json!({"kind": "clickAt", "x": 1, "y": 2}),
+            serde_json::json!({"kind": "keyPress", "keys": "Return"}),
+        ];
+        for f in forms {
+            let kind = f["kind"].as_str().unwrap().to_string();
+            assert!(
+                serde_json::from_value::<Action>(f.clone()).is_ok(),
+                "the backend can emit {kind:?} but this parser rejects it: {f}"
+            );
+        }
+    }
+}
