@@ -9,6 +9,10 @@ log="$(mktemp)"
 FAKE_LOG="$log" FAKE_FAIL=evidence python3 "$here/scripts/rt020-proof.py" --server-cmd "$stub" >/dev/null \
   && { echo "FAIL: broken evidence not detected"; fail=1; }
 grep -q destroy "$log" || { echo "FAIL: no cleanup destroy after failure"; fail=1; }
+: > "$log"
+FAKE_LOG="$log" FAKE_FAIL=reset python3 "$here/scripts/rt020-proof.py" --server-cmd "$stub" >/dev/null \
+  && { echo "FAIL: broken reset not detected"; fail=1; }
+grep -q destroy "$log" || { echo "FAIL: no cleanup destroy after failed reset"; fail=1; }
 rm -f "$log"
 python3 "$here/scripts/rt020-proof.py" >/dev/null 2>&1 && { echo "FAIL: ran a VM without --go"; fail=1; }
 [ "$fail" = 0 ] && echo "rt020-proof selftest OK"
