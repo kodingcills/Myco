@@ -1,0 +1,184 @@
+VM lock acquired. Starting C1 sweep at 2026-11-22T20:20:06Z...
+=== Starting C1 Screenshot Baseline Sweep in /tmp/baseline/c1-arm ===
+--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]
+
+--- Preparing Trial 0 (fixtureSeed: m1-013-live) ---
+[0] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[0] Reset complete in 179798ms
+Cua Driver daemon is not running
+[0] Cua driver pipe reachable: true
+[0] Starting myco-agent in Session 1...
+[0] Opening SSH tunnel for myco-agent...
+[0] myco-agent ping verified: windows
+[0] Converting fixture for seed: m1-013-live...
+[0] Fixture converted: C:/myco/runs/0/myco-96414-1795379065227-241468632\fixture.xlsx
+[0] Launching Calc on fixture with UNO accept socket 2002...
+[0] Finding Calc window in Cua...
+[0] Found Calc window: pid=2096, window_id=262762
+[0] Polling UNO socket readiness...
+[0] UNO socket ready (initial B39 readable)
+C1 driver preflight: session-command-failed
+
+=== C1 SWEEP COMPLETE ===
+{
+  "manifestSha256": "bb256a9b2b28ee929c94352887a3d4bc402f4a14181a2a41a16e82bf76351995",
+  "completed": 1,
+  "partial": true,
+  "c1ChargedMicros": 0,
+  "combinedChargedMicros": 0,
+  "rows": [
+    {
+      "index": 0,
+      "mycoVerdict": "verified",
+      "verdict": "uncertain",
+      "planner": "planner:none"
+    },
+    {
+      "index": 1,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 2,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 3,
+      "mycoVerdict": "refuted",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 4,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 5,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 6,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 7,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 8,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 9,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 10,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 11,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 12,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 13,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 14,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 15,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 16,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 17,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 18,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 19,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 20,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 21,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 22,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 23,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 24,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 25,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 26,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 27,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 28,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 29,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    }
+  ]
+}
+C1 sweep finished at 2026-11-22T20:26:07Z.

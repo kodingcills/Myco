@@ -1,0 +1,208 @@
+{
+  "manifestSha256": "bb256a9b2b28ee929c94352887a3d4bc402f4a14181a2a41a16e82bf76351995",
+  "c1": {
+    "0": {
+      "status": "scored",
+      "micros": 0,
+      "row": {
+        "index": 0,
+        "params": {
+          "fixtureSeed": "m1-013-live",
+          "rowKey": "EMP-0038",
+          "column": "name",
+          "newValue": "REVISED-908578"
+        },
+        "cellRef": "B39",
+        "expected": "REVISED-908578",
+        "previousValue": "Enzo Nakamura",
+        "subArm": "c1",
+        "verdict": "uncertain",
+        "verdictReason": "driver-unreachable",
+        "transcript": {
+          "actions": [],
+          "claims": []
+        },
+        "usage": [],
+        "cost": 0,
+        "tokens": {
+          "in": 0,
+          "out": 0
+        },
+        "modelCalls": 0,
+        "steps": 0,
+        "stepBudget": 30,
+        "budgetExhausted": false,
+        "audited": false,
+        "independentValuePresent": null,
+        "falseSuccess": false,
+        "elapsedMs": 0,
+        "resetMs": 179798,
+        "acPower": false,
+        "caffeinate": true,
+        "hostLoad": {
+          "loadAvg1": 10.6669921875
+        },
+        "screenshotSource": "cua-window",
+        "resumed": false,
+        "recoveryEvents": 0,
+        "driver": {
+          "hostVersion": "0.56.4",
+          "guestVersion": "0.56.4",
+          "pipeReachable": true,
+          "sessionIdentityMatches": false
+        },
+        "deviations": [
+          "reset:cua-c1-base",
+          "step-budget-asymmetry",
+          "planner:none"
+        ]
+      }
+    },
+    "1": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "2": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "3": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "4": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "5": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "6": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "7": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "8": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "9": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "10": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "11": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "12": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "13": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "14": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "15": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "16": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "17": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "18": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "19": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "20": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "21": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "22": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "23": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "24": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "25": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "26": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "27": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "28": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    },
+    "29": {
+      "status": "omitted",
+      "micros": 0,
+      "reason": "driver-unreachable"
+    }
+  },
+  "c2": {}
+}
