@@ -166,6 +166,10 @@ verifier, and every sub-thread is reported here and to the outer loop.
 
 ## Log
 
+- 2026-11-21 (late) · PR #74 merged (pre-registration). Planner for every arm: Claude `claude-sonnet-5-5`, pause never swap (outer loop). Foundry owner: `ef-t01b` and host-only grading merged (PR #75); `hcu+shell` is in the registry (not-run). Coordinator (message, not in repo): slot 6 tentatively S0+S1 only, after queue slots 1-5, with explicit GO and the host lock. Foundry owner (message): slots 4-5 are Calc-family descriptive references (slot 5 planned $0 cap). Coordinator + Runtime Owner (messages): S0 runs on the Runtime Owner's Linux ARM64 guest, not myco-win11; open prerequisite: `myco-todo` deploy and verify there and an uninterrupted RT-011 run. Viewer v0 (PR #69) awaits Tiffany's sign-off. No VM, no spend, no accounts.
+
+- 2026-11-21 (evening) · PR #50 merged; Viewer v0 (PR #69) built and independently verified, awaiting Tiffany's sign-off (tokens, two beyond-§6.2 verdict rules, DEVIATIONS.md). Wrote `docs/product/mvd-preregistration.md`: pre-declared head-to-head, A/B/C rules at Foundry §7a sample sizes (corrected the plan's underpowered 10-run rules), decisive hcu+shell arm (not yet in Foundry's registry), VM slot request S0-S4 (a request, not a start). Wedge stays provisional (A, narrowed). No VM, no spend, no accounts.
+
 - 2026-11-21 (GUI spec locked, PR #51 = ed2f1f9) · binding for every human surface.
   Merged main. Retired the standalone report renderer (`src/report`, `docs/report`,
   `pnpm report`) as a spec deviation; MVD-007 now means the v0 Viewer. Resolved gui-spec

@@ -1,20 +1,29 @@
 # Myco M1 — coordinator state
 
-## Current handoff — 2026-11-21, sweep v2 stopped
+## Current handoff — 2026-11-22, corrupted audit passed
 
-- **M1-013:** recorded indices 0–4 at pinned commit `29369ce`. Three verified,
-  two fixture-convert timeouts (`uncertain`), 25 unrun. Stop marker at
-  20:47:24 UTC in `/tmp/m1-013/sweep-v2/progress.log`.
-- **Decision pending with the outer loop:** a cold diagnostic workbook landed
-  after 169.4 s. Proposed 240 s conversion deadline, two cold canaries and a
-  fresh sweep from index 0. Keep v2 for diagnosis. See
-  [the experiment and restart plan](../research/experiments/m1-013-convert-timeout.md).
-- **Non-VM work:** [runbook](../eval-runbook.md) and [scorecard](../m1-scorecard.md)
-  are updated. The scorecard lists the remaining evidence for the corrupted
-  suite, recovery, screenshot baseline and independent reproduction.
-- **Next:** await the restart decision and reserve the host. The diagnostic
-  was interrupted and the host process check found no leftover runner. Backlog is
-  [M1](../backlog/m1.md).
+- **M1-013:** 29 verified, one refuted, 30 recorded at `aa96974`. The final
+  seed check found six distinct expected hashes. All 30 rows match the pinned
+  parameters and all 30 result records and 525 trace events passed validation.
+  Evidence is under `/tmp/m1-013/sweep-v3/`, including `final-scorecard.json`
+  and `schema-validation.log`. Index 3 refuted after the `adapter-available` guard (UNO startup) timed out
+  before any UI action; the cell kept its pristine value, so it is not a false success. Eleven fixture conversions exceeded the old
+  60 s deadline. The slowest was 140.125 s against the 240 s deadline.
+- **M1-014:** the original 18 trials and six targeted supplemental trials
+  finished. Combined audit at `6c4524e` passed with 21 eligible trials, zero
+  false successes and zero unaccounted ledger entries. All 24 result records
+  and 404 trace events validated. The independent Codex audit regenerated the
+  summary and ledger byte for byte. Host artifacts are in
+  `/tmp/m1-014/{corrupted-v1,supplement-01,combined-audit}/`.
+- Original index 4 had a verified persisted value, but the kill did not
+  land. PR #79's audit correctly excludes it from coverage and clears the old
+  false-success flag. Original indices 2 and 16 also lacked landed faults.
+  Four kill recoveries and three invalid-target recoveries verified from disk.
+- **VM queue:** RT-020 received its 45-minute GO, including the myco-todo
+  deploy check. Cua C1 and Foundry HCU await sequential handback. Discovery
+  S0+S1 is tentative. Its disposable ARM64 QEMU+HVF guest uses a fresh Ubuntu
+  24.04 cloud image overlay with no snapshot ID. RT-011 proof remains open.
+- [M1 backlog](../backlog/m1.md)
 
 ## Objective
 Milestone 1: verified, recoverable desktop execution in one real Windows GUI app (LibreOffice Calc record edits, default suggestion). Acceptance: 27/30 reliability, 0 false successes in ≥10 corrupted trials, recovery from app interruption and invalid target, machine-readable evidence, screenshot-agent baseline on identical conditions, reproducible by another agent. Full spec: docs/product/vision.md.

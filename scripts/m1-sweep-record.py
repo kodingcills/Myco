@@ -49,6 +49,8 @@ def record(argv):
             convertDeadlineMs=conv.get("deadlineMs"),
             convertOutcome=conv.get("outcome"),
         )
+    if isinstance(d.get("timings"), dict):
+        rec["timings"] = d["timings"]
     problems = []
     if expected is None:
         problems.append(f"no expected fingerprint for seed {seed!r}")

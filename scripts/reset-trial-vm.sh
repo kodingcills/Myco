@@ -41,8 +41,10 @@ die() { echo "reset-trial-vm: $*" >&2; exit 1; }
 status() { "$VM_SCRIPTS/vm.sh" status 2>/dev/null | tr -d '\r' || true; }
 
 # Refuse to touch a snapshot we do not own the name of; these are protected.
+# cua-c1-base (M1 Coordinator-approved): a derivative taken from a cold clean-base
+# restore with Cua installed, for the screenshot-baseline C1/C2 arms only.
 case "$SNAPSHOT" in
-  clean-base|clean-base-live|m1-agent-live) ;;
+  clean-base|clean-base-live|m1-agent-live|cua-c1-base) ;;
   *) die "refusing to restore unexpected snapshot '$SNAPSHOT'" ;;
 esac
 

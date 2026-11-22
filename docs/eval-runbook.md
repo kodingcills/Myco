@@ -56,7 +56,7 @@ VM; do it before any VM work so a later failure is unambiguous.
 | `~/VMs/myco-win11/ssh_config`, `id_ed25519` | environment owner | Hosts the port, user, key path; `AgentClient`/`SshTunnel` default to these paths (`src/win/agent-client.ts:202-208`) |
 | `~/VMs/myco-win11/scripts/*` | environment owner | The reset/sanity primitives live outside the repo on purpose (PR #28's in-repo reset was reverted, PR #31) |
 | The agent token | produced by the deploy | Rotated on every deploy (§4); read it from the guest, never from a file committed or cached |
-| LibreOffice MSI SHA-256 | **not recorded anywhere yet** | Backlog M1-018 is still pending; acceptance row 8 asks for it. The pinned artefact is `LibreOffice_26.8.3_Win_aarch64.msi` only |
+| LibreOffice MSI SHA-256 | `8ee2ef81ca4103d3eeb06ca9f4ef0b5cbb83357d21d14a449f767bfb29183158` | SHA-256 of the retained `LibreOffice_26.8.3_Win_aarch64.msi` in the environment owner’s offline payload |
 
 Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 (`~/VMs/myco-win11/scripts`), `VM_SSH_CONFIG` (`~/VMs/myco-win11/ssh_config`), `VM_SSH_HOST`
@@ -366,7 +366,8 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   separately.
 
 The driver applies the host and seed gates. The operator also watches conversion failures
-in `trials.jsonl`. If the fixture timeout recurs, stop at a trial boundary, retain the run
+in `trials.jsonl`. The normal trial watchdog is 1,500 seconds. If the fixture timeout recurs,
+stop at a trial boundary, retain the run
 directory, and report the failure before resuming. The sweep v2 stop was recorded by the
 operator in `progress.log`.
 
@@ -391,11 +392,32 @@ python3 scripts/m1-corrupt-suite-record.py --final \
 Reissue the driver command to skip recorded indices. Recorded failures stay in the audit. The
 driver runs `--final` automatically and saves its output to `summary.txt`. The second command
 rebuilds the summary and ledger from existing artifacts. Keep the output directory and its
-`runs/` tree together for replay. Each live trial has a 900-second watchdog.
+`runs/` tree together for replay. Each live trial has a 1,500-second watchdog.
+
+Use a supplemental batch when a group needs more eligible trials. Give each batch a distinct
+output directory basename using letters, digits, hyphens or underscores. The basename names
+its fixture seeds. Resume with the same directory and group selection.
+
+```bash
+scripts/m1-corrupt-suite.sh /tmp/myco-evals/supplement-01 --groups dropped-save:3,kill+recovery:1
+python3 scripts/m1-corrupt-suite-record.py --final-combined --out /tmp/myco-evals/combined \
+  /tmp/m1-014/corrupted /tmp/myco-evals/supplement-01
+```
+
+The four corruption modes are valid group names. Use `kill+recovery` or
+`invalid-target+recovery` for the two recovery groups. The supplemental driver audits its
+recorded batch and leaves the six-group coverage decision to `--final-combined`.
+
+The host-only combined audit reads each directory's `params.json`, `trials.jsonl` and saved
+traces. It refuses duplicate fixture seeds across the manifests and checks at least three
+eligible verdicts per group and at least ten in total. False successes, unproven verified
+claims, fixture mismatches and unaccounted ledger rows fail the audit. The output directory
+receives `summary.json` and `ledger.jsonl`. Ineligible records stay visible in both artifacts.
+The supplemental run and new Calc timing instrumentation are **UNVERIFIED** on a real guest.
 
 | Mode | Injection |
 |---|---|
-| `kill` | Terminate `soffice.bin` after the edit and before save. The audited path waits for the kill acknowledgement. Recovery can relaunch Calc and resume the edit. |
+| `kill` | Request termination of `soffice.bin` after Set and before Ctrl+S. An unconfirmed kill stops the trial before save or recovery. After a confirmed kill, recovery can relaunch Calc and resume the edit. |
 | `invalid-target` | After Locate, take a new observation between issuing and using the adapter's versioned UI target for the edit. The stale target is rejected before typing. Recovery retries with a newly resolved target. |
 | `dropped-save` | Withhold Ctrl+S. The edited Calc document stays dirty and the disk keeps the old value. |
 | `focus-change` | After the Name Box jump, transfer foreground focus to a disposable Windows window before typing, check ownership, and destroy the window. The temporary STATIC window has no explicit message pump during the short SendKeys call. Message handling and cleanup on Windows remain unverified. |
@@ -403,13 +425,16 @@ rebuilds the summary and ledger from existing artifacts. Keep the output directo
 `trials.jsonl` records the `recovery` flag, verdict, host-computed expected value, disk readback
 when available, `falseSuccess` and the reason. `refuted` means the verifier found evidence
 against success. `uncertain` means it could not verify the outcome. A verified verdict with
-a wrong disk value or without a completed recovery event in the saved trace is a false success.
-If the disk value is unreadable despite recovery evidence, the audit fails as unproven.
-A recovery trial needs evidence that the fault landed and the ladder ran to count toward coverage.
+a readable disk value that differs from host ground truth is a false success. A verified
+verdict with an unreadable disk value fails the audit as `unprovenVerified`.
+A verified recovery trial with a matching disk value, a landed fault and missing trace proof
+of completed recovery is recorded separately as `unprovenRecovery` and is ineligible. A
+fault that never landed is also ineligible. Both audit commands recompute the classification
+from recorded evidence and print a `RECLASSIFIED` line when the stored false-success flag changes.
 
 | Driver exit | Meaning |
 |---|---|
-| 0 | Three eligible verdicts in each of the six class and recovery groups, with zero false successes, unproven verified claims, and unaccounted ledger rows. |
+| 0 | Full suite passed all coverage and evidence gates, or the supplemental batch recorded its manifest and passed its evidence checks. |
 | 1 | Driver or manifest error. |
 | 3 / 4 / 6 | Paused for loss of AC power, one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
@@ -439,7 +464,7 @@ runs/
   values/<runId>/          --mode values nests its trials here
   <evalId>/ledger.jsonl    conformance ledger — written ONLY by runEvaluation()
                            (src/core/eval.ts) in the fake harness; the live corrupted suite writes its own
-                           ledger.jsonl in its OUT dir (§7.4); the normal sweep emits none
+                           ledger.jsonl in its OUT dir (§7.4); derive the normal sweep ledger (§8.3)
 ```
 
 A sweep (§7.3) writes under its own `OUT` dir instead:
@@ -475,6 +500,26 @@ Expected: `validated N result.json + M trace events in runs: ALL OK` (recorded: 
 which is what CI proves. Use `validate-live.ts` for your run directory.
 
 ### 8.3 Ledger
+
+For normal sweep v3, join each `trials.jsonl` row to
+`runs/<index>/<runId>/{result.json,trace.jsonl}`. Require indices 0–29,
+matching run IDs and verdicts, a passing seed check, and validated result
+and trace schemas. Emit one row per distinct `action.kind` in the run's
+`action` trace events. Use `none` when no action ran.
+
+| Ledger field | Sweep v3 source |
+|---|---|
+| `evalId`, `corruptionClass` | `sweep-v3`, `none` |
+| `trialIndex`, `runId` | `trials.jsonl` index and run ID |
+| `actionKind` | Distinct traced action kinds, or `none` |
+| `state`, `oracle`, `refusalCode` | Verified trials map to `pass`, `UnoVerifier:verified`, and null. Index 3 maps to `refusal`, `UnoVerifier:refuted`, and `guard:adapter-available` |
+
+Each action kind inherits the trial-level persisted-state verdict. V3
+produces 88 schema-valid rows, with 87 passes (three action kinds each
+for 29 verified trials) and one refusal (no action at index 3). All rows
+are accounted for. The reliability denominator remains 30 trials.
+Validate the derived artifact at `/tmp/m1-013/sweep-v3/ledger.jsonl`
+with `node --import tsx scripts/m1-corrupt-suite-ledger.ts <ledger-path>`.
 
 `runs/<evalId>/ledger.jsonl` — one row per (trial, corruption-class, action-kind) with an explicit
 oracle and refusal code. The corrupted-suite recorder writes its live conformance ledger to
@@ -514,10 +559,9 @@ Be explicit with whoever asks for an "independent reproduction":
    ISO with the auto-logon password.
 4. **The snapshots are not in the repo.** `clean-base` / `clean-base-live` are the only known-good
    states; nothing regenerates them but a successful `build-all.sh`.
-5. **Versions are pinned but one hash is missing**: LibreOffice 26.8.3 aarch64, Python 3.12.10,
-   pywin32 312, comtypes 1.5.0, pywinauto 0.6.9, uiautomation 2.0.29 are recorded; the MSI
-   SHA-256 that acceptance row 8 asks for is **not** recorded (M1-018 pending).
-6. **Live evidence is pending** for the corrupted suite (M1-014). The screenshot baseline
+5. **Verify the pinned installer** against the SHA-256 in §1 before building
+   a fresh guest. The hash identifies the retained offline payload.
+6. **The corrupted suite has live evidence** (M1-014). The screenshot baseline
    (M1-015, Cua Driver as the agent with a local or approved planner) is also pending. A reproduction today can reach: reset → deploy
    → desktop proof → 20/20 generator proof → the 30-trial sweep (`scripts/m1-sweep.sh`, §7.3) →
    the corrupted suite (`scripts/m1-corrupt-suite.sh`, §7.4) → validated per-trial evidence.

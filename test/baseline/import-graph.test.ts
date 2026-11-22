@@ -3,6 +3,15 @@ import { dirname, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+const driverModules = [
+  "src/baseline/index.ts",
+  "src/baseline/c1.ts",
+  "src/baseline/c1-trial.ts",
+  "src/baseline/planner.ts",
+  "src/baseline/mcp-stdio.ts",
+];
+const stdioImports = new Set(["node:readline", "node:stream"]);
+
 const allowed = new Set(
   ["src/tasks/intent.ts", "src/tasks/fixture.ts", "src/core/verify.ts"].map((p) => resolve(p)),
 );
@@ -23,6 +32,7 @@ function violations(entry: string, extraAllowed: string[] = []): string[] {
     );
     function checkSpecifier(spec: string): void {
       if (!spec.startsWith(".")) {
+        if (file === resolve("src/baseline/mcp-stdio.ts") && stdioImports.has(spec)) return;
         errors.push(spec);
         return;
       }
@@ -78,6 +88,9 @@ describe("baseline import boundary", () => {
   // Guards against any dependency outside the host task modules and shared verdict types.
   it("enforces the allowlist", () =>
     expect(violations(resolve("src/baseline/index.ts"))).toEqual([]));
+  it.each(driverModules)("keeps %s isolated from the grader and structural adapters", (entry) =>
+    expect(violations(resolve(entry), driverModules)).toEqual([]),
+  );
   // Guards against missing a direct forbidden integration import.
   it("detects the offending fixture", () =>
     expect(violations(resolve("test/baseline/fixtures/offending.ts"))).toContain(
