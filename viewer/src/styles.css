@@ -697,7 +697,8 @@
   width: 100%;
   min-height: var(--layout-control-height);
 }
-[data-screenshot-trigger] img {
+[data-screenshot-trigger] img,
+[data-screenshot-trigger] canvas {
   width: 100%;
   border-radius: var(--radius-thumb);
 }
@@ -717,7 +718,8 @@
   background: var(--color-bg-surface1);
   border: var(--border-width) solid var(--color-border-strong);
 }
-[data-screenshot-lightbox] img {
+[data-screenshot-lightbox] img,
+[data-screenshot-lightbox] canvas {
   max-width: none;
 }
 
