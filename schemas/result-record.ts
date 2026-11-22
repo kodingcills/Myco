@@ -121,6 +121,8 @@ export const resultRecordSchema: JsonSchema = {
         guardFailure: { $ref: "#/$defs/GuardFailure" },
         verdict: { $ref: "#/$defs/Verdict" },
         unresolvedState: { type: "string" },
+        simulated: { type: "boolean" },
+        dryRun: { type: "boolean" },
       },
     },
     // ADR-0012 session record: runtime-layer summary, no verdict. `verdict` is

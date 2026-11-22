@@ -647,6 +647,8 @@ export async function runDirectionATask(
     startedAt,
     steps: evidenceSteps,
     verdict,
+    simulated: true,
+    dryRun: true,
   };
 
   // Validate resultRecord against schema
@@ -731,6 +733,8 @@ export async function runDirectionATask(
   const manifest = {
     format: "mycotrace/1",
     runId,
+    simulated: true,
+    dryRun: true,
     files: manifestFiles,
   };
   const manifestBody = `${JSON.stringify(manifest, null, 2)}\n`;

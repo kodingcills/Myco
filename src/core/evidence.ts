@@ -34,6 +34,8 @@ export interface RunRecord {
   guardFailure?: GuardFailure;
   verdict: ScoredVerdict;
   unresolvedState?: string;
+  simulated?: boolean;
+  dryRun?: boolean;
 }
 
 export interface EvidenceStep {

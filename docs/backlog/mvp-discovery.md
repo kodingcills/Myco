@@ -233,6 +233,18 @@ criterion (TIF-60) decide the wedge.
     scrub drag median 33.4 ms (budget ≤250 ms), first-frame preview 15/15 (100%), median 9.6 ms.
   See [the measurement record](../../viewer/PERF.md#screenshots-bounded-retained-memory-mvd-009--tif-64).
 
+### MVD-010 (TIF-TBD) Viewer: simulated/dry-run run indication and filmstrip frame spacing review
+- **status:** in progress. Follow-up from Direction A dry-run review (PR #93, MVD-001); outer loop mirrors this item into Linear (agents do not create issues directly in Linear).
+- **owner:** discovery-owner, build
+- **blocked_by:** MVD-001
+- **description:** Direction A runner generates simulated runs with placeholder step frames. The archive must carry an explicit simulated/dry-run flag, and the Viewer must visibly render a "Simulated" badge next to the run identifier so users do not mistake simulated runs for live desktop execution evidence. Additionally, check filmstrip thumbnail spacing on sparse runs against gui-spec §2.8 and clamp edge thumbnail positioning to prevent negative-offset clipping.
+- **acceptance:**
+  1. Archive manifest (`manifest.json`) and run record carry `simulated: true`.
+  2. Viewer VerdictBar and RunsSidebar display an in-spec `Simulated` badge next to the task/run name when `simulated` is set.
+  3. Filmstrip thumbnails in Scrubber clamp within visible bounds (`[0, width - thumbWidth]`), eliminating negative offset clipping on the first frame.
+  4. Vitest unit tests cover simulated badge rendering and manifest parsing.
+  5. Playwright headless verification script captures updated 1440x900 screenshots with the badge rendered.
+
 ---
 
 ## Dependencies owned by other workstreams
