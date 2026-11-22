@@ -166,7 +166,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   idle leak).
 
 ### RT-012 (TIF-41) Windows/UTM backend interface anticipation (design only)
-- **status:** pending
+- **status:** done (2026-11-22, coordinator). Architectural design note committed in `docs/architecture/windows-utm-backend.md` mapping the `Backend` trait to M1's `myco-agent` (loopback TCP 8765, NDJSON) and live snapshot reset primitive. Design only; zero code touching UTM.
 - **owner:** coordinator
 - **blocked_by:** RT-005
 - **description:** Write the design note for a future `UtmWindowsBackend` that would
