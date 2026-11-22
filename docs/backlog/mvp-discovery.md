@@ -207,8 +207,8 @@ criterion (TIF-60) decide the wedge.
   with N>=15 and the machine described; results in `viewer/PERF.md` against the §8 numbers; any
   budget miss reported plainly; Chrome Stable result recorded.
 
-### MVD-009 (TIF-pending) Viewer: find and bound the retained native renderer memory with many screenshots
-- **status:** follow-up from MVD-008 (PR #80); not started; outer-loop mirrors this item into Linear (agents do not create issues).
+### MVD-009 (TIF-64) Viewer: find and bound the retained native renderer memory with many screenshots
+- **status:** in progress (GO from the outer loop, timeboxed, needs no VM or host grant). Follow-up from MVD-008 (PR #80, TIF-63 Done); outer-loop mirrors this item into Linear (agents do not create issues).
 - **owner:** discovery-owner (spec), build
 - **description:** With 1,000 step-linked 1440x900 screenshots the Viewer's renderer retains about
   0.9 GB of native memory on Playwright's headless shell that GC, a JS-memory purge and a critical
