@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { persistedDiagnostic } from "../../scripts/c1-driver-preflight.ts";
 import { connectC1, type Mcp } from "../../src/baseline/c1.ts";
 import { type PreparedC1, runC1Trial } from "../../src/baseline/c1-trial.ts";
+import { judge } from "../../src/baseline/index.ts";
 import { mcpStdio } from "../../src/baseline/mcp-stdio.ts";
 import { createPlanner, MAX_CALL_MICROS, type Planner } from "../../src/baseline/planner.ts";
 import { runC1Sweep } from "../../src/baseline/sweep.ts";
@@ -498,5 +500,108 @@ describe("C1 sweep abort-early", () => {
     // Alternating causes must not trip abort-early: no repeated-cause stop.
     expect(reasons).not.toContain("repeated-cause");
     expect(prepares).toBeGreaterThan(2);
+  });
+});
+
+describe("driver diagnostic propagation", () => {
+  // Standing rule 4 (contract tests across boundaries) and the reason #156 had
+  // to ship twice: the preflight computed a precise diagnostic, logged it, and
+  // dropped it, so a too-tight timeout and a dead driver produced byte-identical
+  // artifacts (`driver-unreachable`) and the arm could not name its own cause.
+  it("carries the preflight diagnostic into the row for a driver-unreachable verdict", async () => {
+    const row = await runC1Trial(
+      { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
+      {
+        ...prepared(),
+        driver: {
+          hostVersion: "0.56.4",
+          guestVersion: "0.56.4",
+          pipeReachable: true,
+          sessionIdentityMatches: false,
+          diagnostic: "session-command-failed",
+        },
+        judge: async () => ({ kind: "unavailable" }),
+      },
+      planner(),
+    );
+    expect(row.verdict).toBe("uncertain");
+    expect(row.verdictReason).toBe("driver-unreachable");
+    // The cause must survive to the persisted artifact, not just the console.
+    expect(row.driver.diagnostic).toBe("session-command-failed");
+  });
+
+  it("omits the diagnostic when the preflight did not supply one", async () => {
+    // Absent must stay absent: an older call site that does not pass it must
+    // not fabricate a cause.
+    const row = await runC1Trial(
+      { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
+      prepared(),
+      planner(),
+    );
+    expect(row.driver.diagnostic).toBeUndefined();
+  });
+});
+
+describe("judge names the driver cause", () => {
+  // The row's driver field is set by prepare(); the *verdict* is what the
+  // sweep diff reads. Reverting the reasons spread leaves this passing only if
+  // the assertion targets the wrong field, so it targets the verdict.
+  it("includes the diagnostic in the verdict reasons", () => {
+    const verdict = judge(
+      { actions: [], claims: [] },
+      {
+        hostVersion: "0.56.4",
+        guestVersion: "0.56.4",
+        pipeReachable: true,
+        sessionIdentityMatches: false,
+        diagnostic: "session-command-failed",
+      },
+      { kind: "unavailable" },
+    );
+    expect(verdict.status).toBe("uncertain");
+    expect(verdict.reasons).toContain("driver-unreachable");
+    expect(verdict.reasons).toContain("session-command-failed");
+  });
+});
+
+describe("judge leaves an unnamed cause unnamed", () => {
+  // The judge() spread's own fallback was untested: `driver.diagnostic ??
+  // "driver-cause-unknown"` passed every other test. A fabricated cause is
+  // worse than none, so this pins the exact array.
+  it("returns exactly ['driver-unreachable'] when the diagnostic is absent", () => {
+    const verdict = judge(
+      { actions: [], claims: [] },
+      {
+        hostVersion: "0.56.4",
+        guestVersion: "0.56.4",
+        pipeReachable: true,
+        sessionIdentityMatches: false,
+      },
+      { kind: "unavailable" },
+    );
+    expect(verdict.reasons).toEqual(["driver-unreachable"]);
+  });
+});
+
+describe("the success sentinel is not a cause", () => {
+  // classifySession returns `match` on success, and the sweep builds the driver
+  // via persistedDiagnostic(). Carrying the sentinel into the row would put
+  // `diagnostic: "match"` on every healthy row, contradicting the field's
+  // contract ("the preflight's precise failure cause"). Reverting the helper to
+  // always spread `diagnostic` fails this.
+  it("records nothing for the success sentinel", () => {
+    expect(persistedDiagnostic("match")).toEqual({});
+  });
+
+  it("records the cause for every real failure", () => {
+    for (const cause of [
+      "session-command-failed",
+      "session-mismatch",
+      "pipe-unreachable",
+      "daemon-missing",
+      "version-mismatch",
+    ]) {
+      expect(persistedDiagnostic(cause)).toEqual({ diagnostic: cause });
+    }
   });
 });
