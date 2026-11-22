@@ -87,10 +87,35 @@ function classifySession(output: string): string {
   return daemons[0] === snapshot.calcSession ? "match" : "session-mismatch";
 }
 
+/**
+ * Per-command budget for a guest round trip.
+ *
+ * 15s was too tight for this guest and it cost a whole arm: on 2026-11-22 the
+ * preflight threw session-command-failed, aborting the run at trial 0 with every
+ * later trial omitted as driver-unreachable, after Calc, Cua and UNO had all
+ * come up cleanly.
+ *
+ * The margin is per call, not per preflight. `execFileSync` budgets each call
+ * independently, so sequential calls cannot sum into one timeout. Measured here:
+ * a guest round trip runs 6-11s (version up to 9.35s under load, the CIM
+ * enumeration 7.8-10.9s), against a 15s budget - roughly 1.4x headroom at the
+ * worst measured call, and less under the load this arm ran at.
+ *
+ * The exact tripping call was never measured, so this is a fix for a budget
+ * that is too tight for the observed distribution, not a proven reproduction.
+ * Saying which single call exceeded 15s would require a per-call duration log
+ * that does not exist.
+ *
+ * 45s is deliberately generous: this is a liveness precondition, not a
+ * performance measurement, and a slow guest should cost seconds rather than the
+ * run. A genuinely dead guest still fails, just later.
+ */
+const GUEST_QUERY_TIMEOUT_MS = 45_000;
+
 function queryGuest(command: string): string {
   return execFileSync(join(homedir(), "VMs/myco-win11/scripts/vssh"), [command], {
     encoding: "utf8",
-    timeout: 15_000,
+    timeout: GUEST_QUERY_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }

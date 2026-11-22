@@ -23,6 +23,18 @@ async function main() {
 
   let activeTunnel: SshTunnel | undefined;
 
+  /**
+   * Per-command budget for a guest round trip, matching the preflight's.
+   *
+   * These calls had NO timeout: execFileSync waits forever, so a wedged guest
+   * hangs the sweep instead of failing it, and the arm reports nothing at all.
+   * On 2026-11-22 a guest round trip measured 6-11s under sweep load, which is
+   * why an unbounded call is a real hazard rather than a theoretical one. This
+   * is a liveness budget, not a performance target: a slow guest costs seconds,
+   * a dead one fails.
+   */
+  const GUEST_TIMEOUT_MS = 45_000;
+
   async function prepare(
     target: (typeof manifest.rows)[number],
     snapshot: typeof RESET_SNAPSHOT,
@@ -58,7 +70,7 @@ async function main() {
         const statusCheck = execFileSync(
           join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
           ["C:\\myco\\bin\\cua-driver.exe status"],
-          { encoding: "utf8" },
+          { encoding: "utf8", timeout: GUEST_TIMEOUT_MS },
         );
         if (statusCheck.includes("Cua Driver daemon is running")) {
           pipeReachable = true;
@@ -75,7 +87,7 @@ async function main() {
       [
         "& powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\myco\\bin\\run-interactive.ps1' -Exe 'C:\\Program Files\\LibreOffice\\program\\python.exe' -ArgList '-m myco_agent --host 127.0.0.1 --port 8765 --token-file C:\\ProgramData\\Myco\\agent.token --backend windows' -Name 'myco-agent' -WorkDir 'C:\\Program Files\\Myco\\agent'",
       ],
-      { stdio: "ignore" },
+      { stdio: "ignore", timeout: GUEST_TIMEOUT_MS },
     );
     let token = "";
     for (let i = 0; i < 10; i++) {
@@ -84,7 +96,7 @@ async function main() {
         token = execFileSync(
           join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
           ["Get-Content C:\\ProgramData\\Myco\\agent.token"],
-          { encoding: "utf8" },
+          { encoding: "utf8", timeout: GUEST_TIMEOUT_MS },
         ).trim();
         if (token.length > 20) break;
       } catch {}
@@ -157,7 +169,7 @@ async function main() {
           const resJson = execFileSync(
             join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
             ["C:\\myco\\bin\\cua-driver.exe call list_windows '{}'"],
-            { input: "", encoding: "utf8" },
+            { input: "", encoding: "utf8", timeout: GUEST_TIMEOUT_MS },
           );
           const parsed = JSON.parse(resJson);
           const win = parsed.windows?.find(
@@ -228,7 +240,7 @@ async function main() {
             const resJson = execFileSync(
               join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
               ["C:\\myco\\bin\\cua-driver.exe call list_windows '{}'"],
-              { input: "", encoding: "utf8" },
+              { input: "", encoding: "utf8", timeout: GUEST_TIMEOUT_MS },
             );
             const parsed = JSON.parse(resJson);
             const win = parsed.windows?.find(
