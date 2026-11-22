@@ -1,4 +1,5 @@
 import { Tabs } from "@base-ui/react/tabs";
+import { AlertTriangle } from "lucide-react";
 import { type KeyboardEvent, useLayoutEffect, useMemo, useRef } from "react";
 import type { SourceRef } from "../data/types.ts";
 import { deriveChecks, deriveFailuresAndRecovery, deriveVerdict } from "../data/verdict.ts";
@@ -181,9 +182,14 @@ export function VerdictBar({ run }: { run: OpenedRun }) {
         {isSimulated && (
           <span
             data-simulated-badge
-            className="type-data-small px-1 border border-border-default rounded-control text-text-secondary bg-bg-surface2 whitespace-nowrap"
+            className="type-data-small inline-flex items-center gap-1 px-1 border border-border-strong rounded-control text-text-primary bg-bg-surface3 whitespace-nowrap"
             title="Simulated / dry-run harness execution: not live runtime evidence"
           >
+            <AlertTriangle
+              className="size-3 shrink-0 text-text-primary"
+              strokeWidth={1.5}
+              aria-hidden="true"
+            />
             Simulated
           </span>
         )}

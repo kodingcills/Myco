@@ -1,0 +1,28 @@
+# Direction B: verified operation on business software
+# Task package contract (docs/product/mvp-discovery-plan.md §4.3, docs/product/mvd-preregistration.md §4.3)
+name: calc-invoice-update
+version: 1
+app: libreoffice/calc
+desktop: linux-x11
+task: df-b01-interrupted-record-update
+fixture: calc-invoice-ledger-v1
+oracle: foundry:calc-persisted-store
+prompt: "In LibreOffice Calc, open the Q4 invoice ledger, insert row for invoice INV-2026-088 for $4,250.00 to Acme Corp, save and close. Then verify the row is persisted without duplicate entries."
+intent:
+  kind: calc.update-row
+  record:
+    id: "INV-2026-088"
+    client: "Acme Corp"
+    amount: "$4,250.00"
+    status: "PAID"
+interruption:
+  simulateKillMidWrite: true
+  checkpointStep: 3
+evidence:
+  pattern: "runs/{runId}"
+  artifacts:
+    - trace.jsonl
+    - trace.extended.jsonl
+    - result.json
+    - ledger.jsonl
+    - manifest.json

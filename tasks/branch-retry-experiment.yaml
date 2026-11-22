@@ -1,0 +1,31 @@
+# Direction C: branchable desktops for agent experimentation
+# Task package contract (docs/product/mvp-discovery-plan.md §4.4, docs/product/mvd-preregistration.md §4.4)
+name: branch-retry-experiment
+version: 1
+app: desktop/experiment-workflow
+desktop: linux-x11
+task: df-c01-ambiguous-branch-search
+fixture: ambiguous-branch-v1
+oracle: foundry:branch-search-oracle
+prompt: "In the workflow configuration dialog, locate and configure the production data sink. Two ambiguous plugin paths exist ('v2-legacy-sink' and 'v3-cloud-sink'). Select the verified compatible plugin, apply settings, and verify the persistent connection."
+intent:
+  kind: workflow.branch-search
+  branches:
+    - name: "branch-a-legacy"
+      valid: false
+      defect: "incompatible-protocol"
+    - name: "branch-b-cloud"
+      valid: true
+      defect: "none"
+comparison:
+  linearRetryRestoreSec: 21.0
+  forkSnapshotOverheadSec: 2.0
+  forkMemoryOverheadMb: 2048
+evidence:
+  pattern: "runs/{runId}"
+  artifacts:
+    - trace.jsonl
+    - trace.extended.jsonl
+    - result.json
+    - ledger.jsonl
+    - manifest.json
