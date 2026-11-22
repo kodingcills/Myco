@@ -472,6 +472,9 @@ fn kill_zero(pid: u32) -> bool {
 fn action_ref(action: &Action) -> Option<&myco_rt_core::ElementRef> {
     match action {
         Action::Click { target } | Action::TypeText { target, .. } => Some(target),
+        // TypeTextGlobal/ClickAt address focus or a raw point, not an observation
+        // ref, so there is no version to bind -- see the same note in session.rs.
+        Action::KeyPress { .. } | Action::TypeTextGlobal { .. } | Action::ClickAt { .. } => None,
         _ => None,
     }
 }
@@ -622,6 +625,15 @@ impl Backend for QemuLinuxBackend {
             }),
             Action::TypeText { target, text } => serde_json::json!({
                 "kind": "typeText", "target": target.payload, "text": text
+            }),
+            Action::TypeTextGlobal { text } => serde_json::json!({
+                "kind": "typeTextGlobal",
+                "text": text,
+            }),
+            Action::ClickAt { x, y } => serde_json::json!({
+                "kind": "clickAt",
+                "x": x,
+                "y": y,
             }),
             Action::KeyPress { keys } => serde_json::json!({
                 "kind": "keyPress", "keys": keys
