@@ -116,3 +116,13 @@ Recorded 2026-11-22 from the outer loop. These are not Tiffany's sign-off.
 2. **Up to 16 view bitmaps under a 16 MiB LRU cap.** View keys include the Inspector width bucket and DPR. Decoded display-sized bitmaps are bounded to 16 entries, preventing Chromium's native decoder cache from exceeding the 400 MB budget. The original bitmap lives while the lightbox is open.
 3. **Cold arbitrary-position drag preview remains an accepted v0 deviation.** The prior implementation’s cold drag completed in 51.1 ms maximum (20 samples), with 0/20 first-frame previews.
 4. **Incomplete screenshot marker implemented.** The Inspector and lightbox mark incomplete evidence when the PNG or WebP container checks or the worker decoder detect it. The thumbnail reports unavailable. These checks cover container structure and decoder rejection.
+
+## Compare surface (MVD-004 / N10) — pending outer-loop sign-off
+
+A new full-screen view, not in `gui-spec.md` §2. It renders the pre-registered
+head-to-head decision and its per-arm evidence; it is not a run view, so it has no
+sidebar, inspector, or scrubber. It uses the locked tokens and the existing app bar,
+and adds three layout tokens (`reportMaxWidth`, `reportOpenMaxWidth`, `reportFactMin`)
+to `tokens.json`. The decision header is deliberately neutral: a rule row is not a
+verification verdict, so no verdict color or badge is used for it. Screenshots:
+`viewer/screenshots/head-to-head-1440.png` and `-1280.png`.
