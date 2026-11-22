@@ -155,7 +155,7 @@ and make no rate claim below 30.
 | 5 | anything else (e.g. hcu+shell ≈ 0 but not within 1.5×, or shell calls not trace-recorded) | No wedge change; report the table as measured. |
 
 Rows for the `hcu` (GUI-only) and `screenshot-only` arms are reported against Myco the
-same way (row 0, then the false-success counts), but they do not decide the wedge.
+same way (the power rule above, then the false-success counts), but they do not decide the wedge.
 
 **hcu+shell must run under the Foundry trace guard, which constrains what it can mean.**
 The guard sees only what the trace records (contract §5 limit (a)). Therefore:
