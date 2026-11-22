@@ -26,8 +26,9 @@
  *
  * Kept local on purpose: `test/foundry/split.test.ts` forbids any `src/` file
  * outside the Foundry grader roots from importing them, so the decision rule
- * cannot reuse `src/foundry/oracles/report.ts` without weakening hidden-split
- * isolation. The formula is the same one; the isolation rule wins.
+ * cannot import the Foundry grader roots (`oracles`, `hidden`, `hidden-split`,
+ * `grader`) without weakening hidden-split isolation. The formula is the same
+ * one; the isolation rule wins.
  */
 export function wilson(successes: number, n: number): readonly [number, number] | null {
   if (
@@ -139,6 +140,8 @@ export function evaluateDecision(input: DecisionInput): Decision {
   const checksEveryTrial = input.comparatorChecksEveryTrial;
   const costRatio = input.comparatorCostRatio;
   if (
+    !Number.isSafeInteger(minimumPairs) ||
+    minimumPairs < 1 ||
     (checksEveryTrial !== undefined &&
       (!Number.isFinite(checksEveryTrial) || checksEveryTrial < 0 || checksEveryTrial > 1)) ||
     (costRatio !== undefined && (!Number.isFinite(costRatio) || costRatio <= 0))
@@ -158,7 +161,7 @@ export function evaluateDecision(input: DecisionInput): Decision {
       comparatorFalseSuccessInterval: null,
       ineligibleRows: 0,
       notes: [
-        "comparatorChecksEveryTrial must be a finite fraction in [0,1] and comparatorCostRatio a finite number > 0.",
+        "minimumPairs must be a positive integer; comparatorChecksEveryTrial a finite fraction in [0,1]; comparatorCostRatio a finite number > 0.",
       ],
     };
   }
@@ -302,6 +305,13 @@ export function evaluateDecision(input: DecisionInput): Decision {
   if (checksEveryTrial === undefined || costRatio === undefined) {
     notes.push(
       "Comparator checks-every-trial or cost ratio is unmeasured, so row 3 cannot be evaluated; no wedge change.",
+    );
+  } else {
+    const missed: string[] = [];
+    if (checksEveryTrial < 0.95) missed.push(`checks-every-trial ${checksEveryTrial} < 0.95`);
+    if (costRatio > 1.5) missed.push(`cost ratio ${costRatio} > 1.5`);
+    notes.push(
+      `Comparator measured: checks-every-trial ${checksEveryTrial}, cost ratio ${costRatio}. Row 3 not asserted because ${missed.join(" and ")}.`,
     );
   }
   return { ...base, status: "decided", row: "no-change", notes };

@@ -47,7 +47,7 @@ describe("exact sign test", () => {
   it("matches the pre-registration's stated thresholds", () => {
     expect(exactSignTest(5, 0)).toBeCloseTo(0.0625, 10);
     expect(exactSignTest(6, 0)).toBeCloseTo(0.03125, 10);
-    expect(exactSignTest(8, 1)).toBeCloseTo(0.0391, 3);
+    expect(exactSignTest(8, 1)).toBeCloseTo(0.0390625, 10);
     expect(exactSignTest(0, 0)).toBe(1);
     expect(exactSignTest(3, 3)).toBe(1);
   });
@@ -101,6 +101,9 @@ describe("pre-registered decision rule", () => {
       { comparatorCostRatio: Number.NaN },
       { comparatorChecksEveryTrial: 1.2 },
       { comparatorChecksEveryTrial: Number.NaN },
+      { minimumPairs: Number.NaN },
+      { minimumPairs: 0 },
+      { minimumPairs: -1 },
     ]) {
       const decision = evaluateDecision({ trials: pairsWith(30, 0, 0), ...input });
       expect(decision.status).toBe("refused");
@@ -166,6 +169,22 @@ describe("pre-registered decision rule", () => {
     const decision = evaluateDecision({ trials: pairsWith(30, 0, 0) });
     expect(decision.row).toBe("no-change");
     expect(decision.notes.join(" ")).toContain("unmeasured");
+  });
+
+  it("row 5 explains which measured threshold row 3 missed", () => {
+    const slow = evaluateDecision({
+      trials: pairsWith(30, 0, 0),
+      comparatorChecksEveryTrial: 1,
+      comparatorCostRatio: 3,
+    });
+    expect(slow.row).toBe("no-change");
+    expect(slow.notes.join(" ")).toContain("cost ratio 3 > 1.5");
+    const blind = evaluateDecision({
+      trials: pairsWith(30, 0, 0),
+      comparatorChecksEveryTrial: 0.5,
+      comparatorCostRatio: 1,
+    });
+    expect(blind.notes.join(" ")).toContain("checks-every-trial 0.5 < 0.95");
   });
 
   it("never pools prompt variants", () => {
