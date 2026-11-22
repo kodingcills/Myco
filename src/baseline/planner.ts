@@ -2,6 +2,18 @@ import { pixelAction, record, type Screenshot } from "./c1.ts";
 import type { Action, Claim, Usage } from "./index.ts";
 
 const SONNET = "claude-sonnet-5-5";
+const PROVIDER_ERROR_TYPES = new Set([
+  "invalid_request_error",
+  "authentication_error",
+  "billing_error",
+  "permission_error",
+  "not_found_error",
+  "request_too_large",
+  "rate_limit_error",
+  "api_error",
+  "overloaded_error",
+  "timeout_error",
+]);
 const OLLAMA = "qwen3.8-uncensored";
 const MAX_INPUT = 5_000;
 const MAX_OUTPUT = 256;
@@ -45,8 +57,9 @@ export function createPlanner(
   }
 
   async function post(url: string, body: object, key?: string, timeoutMs = 60_000) {
+    let response: Response;
     try {
-      const response = await request(url, {
+      response = await request(url, {
         method: "POST",
         redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
@@ -56,10 +69,24 @@ export function createPlanner(
         },
         body: JSON.stringify(body),
       });
-      return response.ok ? record(await response.json()) : null;
     } catch {
       // Request exceptions and provider bodies may contain credentials.
-      return null;
+      return { failure: "transport failure" };
+    }
+    if (!response.ok) {
+      let errorType = "unknown error type";
+      try {
+        const type = record(record(await response.json()).error).type;
+        if (typeof type === "string" && PROVIDER_ERROR_TYPES.has(type)) errorType = type;
+      } catch {
+        // Keep the status when the error body cannot be decoded.
+      }
+      return { failure: `HTTP ${response.status} (${errorType})` };
+    }
+    try {
+      return { data: record(await response.json()) };
+    } catch {
+      return { failure: "invalid JSON" };
     }
   }
 
@@ -88,14 +115,18 @@ export function createPlanner(
             },
           ],
         };
-        const count = await post(`${base}/count_tokens`, message, apiKey);
+        const { data: count, failure: countFailure } = await post(
+          `${base}/count_tokens`,
+          message,
+          apiKey,
+        );
         if (
           typeof count?.input_tokens === "number" &&
           Number.isSafeInteger(count.input_tokens) &&
           count.input_tokens > 0 &&
           count.input_tokens <= MAX_INPUT - 1_000
         ) {
-          const data = await post(
+          const { data, failure } = await post(
             base,
             { ...message, max_tokens: MAX_OUTPUT, temperature: 0 },
             apiKey,
@@ -124,7 +155,14 @@ export function createPlanner(
             });
           } else {
             calls.push({ model: SONNET, usage: { cost: MAX_CALL_MICROS / 1_000_000 } });
-            if (!allowFallback) throw new Error("Anthropic usage could not be verified");
+            if (!allowFallback) {
+              const reason =
+                failure ??
+                (usage.cache_creation_input_tokens || usage.cache_read_input_tokens
+                  ? "unexpected cache usage"
+                  : "missing, invalid, or out-of-bounds token usage");
+              throw new Error(`Anthropic Messages usage could not be verified: ${reason}`);
+            }
             // Stop the paid path when the charge cannot be verified.
             useSonnet = false;
           }
@@ -141,7 +179,11 @@ export function createPlanner(
             useSonnet = false;
           }
         } else {
-          if (!allowFallback) throw new Error("Anthropic token count API call failed or exceeded limit");
+          if (!allowFallback) {
+            throw new Error(
+              `Anthropic token count rejected: ${countFailure ?? "missing, invalid, or out-of-bounds token count"}`,
+            );
+          }
           useSonnet = false;
         }
       }
@@ -149,9 +191,8 @@ export function createPlanner(
         if (!allowFallback) {
           throw new Error("Anthropic planner unavailable and Ollama fallback is disabled");
         }
-        const ollamaTimeout =
-          Number((env as Record<string, string>).OLLAMA_TIMEOUT_MS) || 180_000;
-        const data = await post(
+        const ollamaTimeout = Number((env as Record<string, string>).OLLAMA_TIMEOUT_MS) || 180_000;
+        const { data } = await post(
           "http://127.0.0.1:11434/api/chat",
           {
             model: OLLAMA,

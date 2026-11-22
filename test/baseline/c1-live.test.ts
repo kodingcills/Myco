@@ -245,6 +245,47 @@ describe("C1 host harness", () => {
       expect(readFileSync(join(root, filename), "utf8")).not.toContain(key);
   });
 
+  it.each([
+    [
+      "transport failure",
+      () => {
+        throw new Error("synthetic-secret");
+      },
+    ],
+    ["HTTP 429 (unknown error type)", () => new Response("synthetic-secret", { status: 429 })],
+    [
+      "HTTP 402 (billing_error)",
+      () =>
+        Response.json(
+          { error: { type: "billing_error", message: "synthetic-secret" } },
+          { status: 402 },
+        ),
+    ],
+    ["invalid JSON", () => new Response("synthetic-secret")],
+    ["missing, invalid, or out-of-bounds token usage", () => Response.json({})],
+    [
+      "missing, invalid, or out-of-bounds token usage",
+      () => Response.json({ usage: { input_tokens: 5001, output_tokens: 1 } }),
+    ],
+    [
+      "unexpected cache usage",
+      () =>
+        Response.json({
+          usage: { input_tokens: 100, output_tokens: 1, cache_read_input_tokens: 1 },
+        }),
+    ],
+  ] as const)("fails closed with a redacted Messages diagnostic for %s", async (reason, reply) => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ input_tokens: 100 }))
+      .mockImplementationOnce(async () => reply());
+    const planner = createPlanner(request, { ANTHROPIC_API_KEY: "synthetic-secret" });
+    await expect(planner.act("test", { mimeType: "image/png", data: "AA==" })).rejects.toThrow(
+      new Error(`Anthropic Messages usage could not be verified: ${reason}`),
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("fails closed without Ollama fallback when Anthropic call fails", async () => {
     const key = "fake-test-key";
     const request = vi.fn<typeof fetch>(async () => {
