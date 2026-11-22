@@ -35,14 +35,18 @@ transient UNO disposal. Reset and deploy run before the trial alarm.
 | Save settling and trailing UNO retries | 67 |
 | Verifier UNO checks and persisted readback | 121 |
 | Cleanup kills and up to two cleanup scripts | 161 |
-| Total | 2,191 |
+| Sum of every configured ceiling (stages cannot all co-occur) | 2,191 |
 
 Even with prompt RPC responses, conversion (240 s), focus and readiness (180 s) and
-four helper actions (360 s) can already total 780 seconds. The sweep alarm increases
-from 600 to 2,400 seconds to cover the configured waits with headroom for local work and
-scheduling. It now signals the Node process directly.
+four helper actions (360 s) can already total 780 seconds. The 2,191 s sum is NOT a reachable worst case: the first helper or UNO-readiness deadline
+fails the step and ends the program, so at most one wait can expire. A pessimistic
+slow-but-passing path is about 1,170 s (convert 240 + focus 90 + UNO 90 + four helpers 360,
+plus tunnel and health ~110, verify ~120, cleanup ~160). Observed trial maxima are 129.6 s
+(sweep v2), 204.7 s (sweep v3) and 207.8 s (corrupted v1). The sweep alarm therefore moves
+from 600 to 1,500 seconds, about 7× the observed maximum, so a hung trial costs at most
+25 minutes. It now signals the Node process directly.
 
-The corrupted suite retains its 900-second cap. A kill recovery can consume up to 1,170
+The corrupted suite's alarm also moves from 900 to 1,500 seconds. A kill recovery can consume up to 1,170
 seconds in configured polls alone (240 s conversion, 360 s across two launches, 450 s for
 the five action helpers, and 120 s for verification and audit readbacks). An exhausted
 watchdog can leave no report. The combined audit retains that recorded gap and requires

@@ -143,7 +143,7 @@ def record(trial, status, out_path, out_dir):
     elif audit.get("recovery") is not trial["recovery"]:
         row.update(status="harness-error", reason="entrypoint recovery flag does not match the manifest")
     elif not row["faultApplied"]:
-        row.update(status="fault-not-applied", reason=f"fault did not land: {row['reason']}")
+        row.update(status="fault-not-applied", reason=f"fault did not land: {row.get('reason', '')}")
     else:
         row["status"] = row["verdict"]
     return row
@@ -197,7 +197,7 @@ def ledger_rows(eval_id, row):
             "state": state,
             "oracle": oracle,
             "refusalCode": f"guard:{guard}" if state == "refusal" else None,
-            "detail": f"recovery={str(row['recovery']).lower()} | {row['reason']}",
+            "detail": f"recovery={str(row['recovery']).lower()} | {row.get('reason', '')}",
         }
 
 
@@ -221,6 +221,8 @@ def audit_batch(plan, rows, source, counts, problems, *, allow_missing_reports):
         if "falseSuccess" in stored and stored["falseSuccess"] != row["falseSuccess"]:
             before, after = json.dumps(stored["falseSuccess"]), json.dumps(row["falseSuccess"])
             print(f"RECLASSIFIED index {index}: stored {before} → recomputed {after} ({reclassification_reason(row)}) [{source}]")
+        if row["unprovenVerified"] and not stored.get("unprovenVerified"):
+            print(f"RECLASSIFIED index {index}: unprovenVerified stored {json.dumps(stored.get('unprovenVerified'))} → recomputed true (verified, persisted value unreadable) [{source}]")
         mode_counts["recorded"] += 1
         mode_counts["falseSuccesses"] += row["falseSuccess"]
         mode_counts["unprovenVerified"] += row["unprovenVerified"]
@@ -287,7 +289,7 @@ def final(batches, out_dir, *, combined=False, supplement=False):
     if accounting["unaccounted"] != 0:
         problems.append("conformance ledger has unaccounted rows")
 
-    print("class           recovery  recorded  eligible  verified   refuted uncertain  falseSuccesses  unprovenRecovery")
+    print("class           recovery  recorded  eligible  verified   refuted uncertain  falseSuccesses  unprovenVerified  unprovenRecovery")
     totals = Counter()
     group_results = []
     for (mode, recovery), count in counts.items():
@@ -298,11 +300,11 @@ def final(batches, out_dir, *, combined=False, supplement=False):
             "class": mode,
             "recovery": recovery,
             "eligible": eligible,
-            **{k: count[k] for k in ("recorded", *VERDICTS, "falseSuccesses", "unprovenRecovery")},
+            **{k: count[k] for k in ("recorded", *VERDICTS, "falseSuccesses", "unprovenVerified", "unprovenRecovery")},
         })
         print(f"{mode:15} {label:8} {count['recorded']:9} {eligible:9} " + " ".join(
             f"{count[k]:9}" for k in VERDICTS
-        ) + f" {count['falseSuccesses']:15} {count['unprovenRecovery']:17}")
+        ) + f" {count['falseSuccesses']:15} {count['unprovenVerified']:17} {count['unprovenRecovery']:17}")
         if not supplement and eligible < 3:
             problems.append(f"{mode} (recovery={label}): fewer than 3 eligible verdicts")
     with_verdict = sum(totals[k] for k in VERDICTS)

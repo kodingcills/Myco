@@ -366,7 +366,7 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   separately.
 
 The driver applies the host and seed gates. The operator also watches conversion failures
-in `trials.jsonl`. The normal trial watchdog is 2,400 seconds. If the fixture timeout recurs,
+in `trials.jsonl`. The normal trial watchdog is 1,500 seconds. If the fixture timeout recurs,
 stop at a trial boundary, retain the run
 directory, and report the failure before resuming. The sweep v2 stop was recorded by the
 operator in `progress.log`.
@@ -392,7 +392,7 @@ python3 scripts/m1-corrupt-suite-record.py --final \
 Reissue the driver command to skip recorded indices. Recorded failures stay in the audit. The
 driver runs `--final` automatically and saves its output to `summary.txt`. The second command
 rebuilds the summary and ledger from existing artifacts. Keep the output directory and its
-`runs/` tree together for replay. Each live trial has a 900-second watchdog.
+`runs/` tree together for replay. Each live trial has a 1,500-second watchdog.
 
 Use a supplemental batch when a group needs more eligible trials. Give each batch a distinct
 output directory basename using letters, digits, hyphens or underscores. The basename names

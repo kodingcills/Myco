@@ -85,7 +85,7 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   # nonzero. The Node process receives the watchdog signal directly.
   ARGS=(--mode "$MODE" --audit-corruption)
   if [ "$RECOVERY" = True ]; then ARGS+=(--recovery); fi
-  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 900; exec @ARGV' node --import tsx src/integration/run-live.ts \
+  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 1500; exec @ARGV' node --import tsx src/integration/run-live.ts \
     "${ARGS[@]}" --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial-$i.out" 2> "$OUT/trial-$i.err" 3<&-
   unset TOK

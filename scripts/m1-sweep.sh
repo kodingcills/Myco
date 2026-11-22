@@ -86,7 +86,7 @@ for i in $(seq 0 29); do
 
   # Allow the sequential cold-start polls and agent RPCs to finish (see the
   # M1-014 cold-start note in docs/research/experiments).
-  MYCO_AGENT_TOKEN="$TOK" perl -e "alarm 2400; exec @ARGV" node --import tsx src/integration/run-live.ts \
+  MYCO_AGENT_TOKEN="$TOK" perl -e "alarm 1500; exec @ARGV" node --import tsx src/integration/run-live.ts \
     --mode normal --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial.out" 2> "$OUT/trial.err"
 
