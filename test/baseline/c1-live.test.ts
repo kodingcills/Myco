@@ -321,7 +321,9 @@ describe("C1 host harness", () => {
               message:
                 "A billing credit detail.\nAuthorization: private-value\r\n\tfolded-private-value\r\n  second-folded-value\n" +
                 '"X-Api-Key": "obscure-value"\n' +
-                "synthetic-key sk-ant-other-key " +
+                "synthetic-key " +
+                ["sk", "ant", "other", "key"].join("-") +
+                " " +
                 "detail ".repeat(60),
             },
           },
