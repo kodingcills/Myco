@@ -236,12 +236,79 @@ describe("C1 host harness", () => {
       directory: root,
       coordinatorGo: true,
       prepare,
-      planner: createPlanner(request, { ANTHROPIC_API_KEY: key }),
+      planner: createPlanner(request, { ANTHROPIC_API_KEY: key, ALLOW_FALLBACK: "true" }),
     });
     const row = readFileSync(join(root, "trials/c1/0.json"), "utf8");
     expect(row).toContain("planner:claude-sonnet-5-5+qwen3.8-uncensored");
     expect(JSON.parse(row).transcript.actions).toEqual([]);
     for (const filename of ["accounting.json", "report.json", "trials/c1/0.json"])
       expect(readFileSync(join(root, filename), "utf8")).not.toContain(key);
+  });
+
+  it.each([
+    [
+      "transport failure",
+      () => {
+        throw new Error("synthetic-secret");
+      },
+    ],
+    ["HTTP 429 (unknown error type)", () => new Response("synthetic-secret", { status: 429 })],
+    [
+      "HTTP 402 (billing_error)",
+      () =>
+        Response.json(
+          { error: { type: "billing_error", message: "synthetic-secret" } },
+          { status: 402 },
+        ),
+    ],
+    ["invalid JSON", () => new Response("synthetic-secret")],
+    ["missing, invalid, or out-of-bounds token usage", () => Response.json({})],
+    [
+      "missing, invalid, or out-of-bounds token usage",
+      () => Response.json({ usage: { input_tokens: 5001, output_tokens: 1 } }),
+    ],
+    [
+      "unexpected cache usage",
+      () =>
+        Response.json({
+          usage: { input_tokens: 100, output_tokens: 1, cache_read_input_tokens: 1 },
+        }),
+    ],
+  ] as const)("fails closed with a redacted Messages diagnostic for %s", async (reason, reply) => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ input_tokens: 100 }))
+      .mockImplementationOnce(async () => reply());
+    const planner = createPlanner(request, { ANTHROPIC_API_KEY: "synthetic-secret" });
+    await expect(planner.act("test", { mimeType: "image/png", data: "AA==" })).rejects.toThrow(
+      `Anthropic Messages usage could not be verified: ${reason}`,
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed without Ollama fallback when Anthropic call fails", async () => {
+    const key = "fake-test-key";
+    const request = vi.fn<typeof fetch>(async () => {
+      return Response.json(
+        { error: { type: "authentication_error", message: key } },
+        { status: 401 },
+      );
+    });
+    const root = directory();
+    const prepare = vi.fn(async () => prepared());
+    const report = await runC1Sweep({
+      directory: root,
+      coordinatorGo: true,
+      prepare,
+      planner: createPlanner(request, { ANTHROPIC_API_KEY: key }),
+    });
+    expect(report.completed).toBe(0);
+    expect(report.rows[0]).toMatchObject({
+      omitted: "planner-failed",
+      detail: "Anthropic token count rejected: HTTP 401 (authentication_error)",
+    });
+    expect(JSON.stringify(report)).not.toContain(key);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });
