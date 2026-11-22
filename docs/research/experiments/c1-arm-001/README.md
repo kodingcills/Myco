@@ -29,21 +29,30 @@ ended.
 
 ## Why
 
-`queryGuest` allowed **15s** per guest command. Measured on this guest:
-`cua-driver.exe --version` takes **5.7–6.8s** through `vssh`, and the CIM
-enumeration query takes **11.8s** idle. Two version calls plus the enumeration
-cross 15s under sweep load, `execFileSync` throws, and the preflight reports
-`session-command-failed`.
+`queryGuest` allowed **15s** per guest command. Measured on this guest a round
+trip runs **6–11s**: `cua-driver.exe --version` up to **9.35s** under load, and
+the CIM enumeration query **7.8–10.9s**. Against a 15s budget that is roughly
+1.4× headroom at the worst measured call — thin, and thinner under the load this
+arm ran at.
 
-Confirmed against the live guest, same query, same machine:
+**What is measured, and what is not.** The budget is per call: `execFileSync`
+times each call independently, so sequential calls cannot sum into one timeout.
+The exact call that exceeded 15s was never measured — there is no per-call
+duration log — so this is a fix for a budget too tight for the observed
+distribution, not a proven reproduction. An earlier revision of this file
+claimed the two calls crossed 15s together; that reasoning was wrong on both the
+arithmetic and the mechanism, and is retracted here.
+
+What *is* confirmed against the live guest is the fix's effect:
 
 | Timeout | Result |
 |---|---|
 | 15s | `session-command-failed` |
-| 45s | `match`, `sessionIdentityMatches: true` (13.76s) |
+| 45s | `match`, `sessionIdentityMatches: true` (13.76s end-to-end) |
 
-Fixed in PR #156. The check was right; charging a liveness precondition a
-performance budget was not.
+Fixed in PR #156, along with the six **unbounded** `vssh` calls in `c1-sweep.ts`
+that had no timeout at all. The check was right; charging a liveness
+precondition a performance budget was not.
 
 ## Files
 
