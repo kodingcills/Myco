@@ -145,9 +145,9 @@ A build without a written pre-mortem is not ready for review.
 
 ### 2. Measure, don't guess
 
-Every **timeout, budget or threshold** comes from a **recorded measurement on the real guest**, referenced in the code or comment, plus **explicit headroom**. `--version` through vssh: 5.7/6.4/6.8 s. CIM enumeration: 11.8 s. Therefore 15 s is not a budget, it is a guess; 45 s is a budget with headroom.
+Every **timeout, budget or threshold** comes from a **recorded measurement on the real guest**, plus **explicit headroom**. `--version` through vssh: 5.7/6.4/6.8 s. CIM enumeration: 11.8 s. Therefore 15 s is not a budget, it is a guess; 45 s is a budget with headroom.
 
-The measurement file is cited where the constant lives. Uncited constants are rejected in review.
+The **citation is the durable record of the measurement** — the PR, commit or evidence file that contains it — referenced from the constant's code comment. The measurement need not be inlined at the constant; it must be *findable from it*. A constant with no recorded measurement anywhere is rejected in review.
 
 ### 3. Fault injection for cleanup/recovery
 
@@ -167,11 +167,13 @@ One end-to-end trial on the **real guest** with **timings recorded** before any 
 
 ### 7. Abort early
 
-Sweeps **stop after 2 consecutive identical exclusion or failure causes** and report for diagnosis instead of burning the remainder of the budget. The C1 arm spent a full reset on 30 identically-failing trials; the second identical cause was the signal.
+A sweep **stops after 2 consecutive identical causes that reach the sweep loop** — a repeated `prepare` failure, or a repeated `planner-failed` — reporting `reason: "repeated-cause"`. This is the reachable scope in `runC1Sweep`; do not claim it covers a scored `driver-unreachable` row, which the pre-existing single-strike rule already stops on and which short-circuits before this counter increments.
+
+Motivation: the C1 arm walked iteratively toward a spend-cap stop rather than an explicit one. The second identical cause is the signal; report it for diagnosis instead of burning the remainder of the budget.
 
 ### Verifier obligations
 
-Verifiers check items **1–5 explicitly** in their verdict, by name, with pasted evidence. "Tests pass" is not a verdict on any of them.
+Verifiers check items **1–7 explicitly** in their verdict, by name, with pasted evidence. "Tests pass" is not a verdict on any of them. For item 5 (mutation check), paste both runs — mutated and restored. For item 7, state whether the code change's stated trigger is reachable.
 
 ### 8. A stale `node_modules` is a false red
 

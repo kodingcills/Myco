@@ -135,7 +135,7 @@ export async function runC1Sweep(options: {
       if (prior?.status === "scored") {
         writeJson(join(rowDirectory, `${index}.json`), prior.row);
         if (prior.row.verdictReason === "driver-unreachable") {
-          stopReason = "driver-unreachable";
+          stopReason ??= "driver-unreachable";
           noteCause("driver-unreachable");
         }
         continue;
@@ -184,7 +184,18 @@ export async function runC1Sweep(options: {
       } catch (error) {
         const failed = error instanceof PlannerFailure;
         if (failed) stopReason = "planner-failed";
-        noteCause(failed ? `planner-failed:${error.message}` : "trial-interrupted");
+        // Carry the message into the cause for BOTH branches: a bare
+        // `trial-interrupted` made every distinct prepare failure look like the
+        // same cause, so abort-early fired on two *different* faults and the
+        // ledger could not say which. The cause string is the diagnosis.
+        // `trial-interrupted` remains the recorded reason for an unexpected
+        // throw (runC1Trial swallows PlannerFailure inside its own try, so in
+        // practice only prepare() throws here), but the cause carries detail.
+        noteCause(
+          failed
+            ? `planner-failed:${error.message}`
+            : `trial-interrupted:${(error as Error)?.message ?? String(error)}`,
+        );
         ledger.c1[index] = {
           status: "omitted",
           micros: reservation,
@@ -198,7 +209,7 @@ export async function runC1Sweep(options: {
       if (!isBaselineRow(row) || micros > reservation)
         throw new Error("invalid C1 row or reservation overrun");
       if (row.verdictReason === "driver-unreachable") {
-        stopReason = "driver-unreachable";
+        stopReason ??= "driver-unreachable";
         noteCause("driver-unreachable");
       }
       ledger.c1[index] = { status: "scored", micros, row };

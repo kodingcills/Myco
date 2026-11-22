@@ -473,4 +473,30 @@ describe("C1 sweep abort-early", () => {
     expect(reasons).toContain("repeated-cause");
     expect(report.completed).toBe(0);
   });
+
+  // Mutation B in the earlier review: dropping the reset (`else consecutive += 1`)
+  // left the suite green, because the only test used one cause. This pins the
+  // reset — alternating causes must never accumulate into an abort.
+  it("does not abort when the cause alternates", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-reset-"));
+    directories.push(directory);
+    let prepares = 0;
+    await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      planner: planner(),
+      prepare: async () => {
+        prepares += 1;
+        // Alternate the throw message so the cause string changes every trial.
+        throw new Error(`session-command-failed-${prepares % 2}`);
+      },
+    });
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
+      .map((e) => e.reason)
+      .filter(Boolean);
+    // Alternating causes must not trip abort-early: no repeated-cause stop.
+    expect(reasons).not.toContain("repeated-cause");
+    expect(prepares).toBeGreaterThan(2);
+  });
 });

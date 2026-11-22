@@ -49,10 +49,23 @@ brief. Full text: `docs/coordination/CONTRIBUTING-agents.md`, PR #162.
 
 Verifiers check 1–5 **by name** in their verdict, with pasted evidence.
 
-**Applied to the C1 restart:** abort-early (item 7) is now implemented in
-`runC1Sweep` (`reason: "repeated-cause"`), not just documented — the previous
-single-strike rule only watched `driver-unreachable` on *scored* rows, so the
-real failure shape (1 scored row + 29 omissions, one cause) was never caught.
+**Applied to the C1 restart:** abort-early (item 7) is implemented in
+`runC1Sweep` as `reason: "repeated-cause"`. **Scope, stated precisely after
+independent verification corrected an earlier overclaim:** the new rule fires
+only on a repeated cause that reaches the sweep loop — a repeated `prepare`
+failure or a repeated `planner-failed`. It does **not** cover the scored
+`driver-unreachable` shape:
+
+- That shape (1 scored row + 29 omissions, one cause) was **already** handled by
+  the pre-existing single-strike rule, which sets `stopReason` on the first
+  scored `driver-unreachable` and omits every later row before `prepare` runs.
+  Measured: old and new both produce `prepares=1`, identical ledgers.
+- On that shape `repeated-cause` is **unreachable**: the scored row calls
+  `noteCause` once, and the 29 omissions short-circuit on `stopReason` before
+  reaching it.
+
+The real improvement is over the **spend cap**: with a throwing `prepare`, the
+old code walked 11 trials before the cap stopped it; the new code stops at 2.
 
 ## C1 arm-001 — FAILED, 0 scored rows, $0.00
 
@@ -65,8 +78,11 @@ real failure shape (1 scored row + 29 omissions, one cause) was never caught.
   preflight on the same guest: 15 s -> `session-command-failed`; 45 s ->
   `match`, 13.76 s. **Fix: PR #156.**
 - **Orphans:** two `soffice.bin` (2096, 2508) survived, on a trial with zero
-  planner steps — cleanup had reported `killed=[]`. **Fix: PR #153, TS half
-  still missing (see below).**
+  planner steps — cleanup had reported `killed=[]`. **Fixed by #153 (merged
+  3321b23):** the agent's `kill` now returns `{killed, errors}`, `agent-client.ts`
+  surfaces `errors`, and `guest-health.ts:57` pushes them into
+  `strayProcesses`/`result.errors`, so a failed kill reads as contamination
+  rather than a clean no-op.
 - **Evidence:** preserved on branch `docs/c1-arm-001-evidence` (5 files) —
   **not yet merged to main**. `/tmp/baseline/c1-arm/accounting.json` is the
   live copy.
@@ -88,10 +104,12 @@ real failure shape (1 scored row + 29 omissions, one cause) was never caught.
 
 ## Next actions
 
-1. Merge #156 (preflight timeout) after its verifier passes.
-2. Land #153's TS half — without it the orphan bug is unfixed and per-trial
-   guest verification is the *only* thing protecting the denominator.
-3. Merge the arm-001 evidence branch to main so the rows survive.
+1. #156 must-fixes: propagate `preflight.diagnostic` into the row/omission, and
+   add a test that fails when the timeout reverts (mutation currently survives
+   the full 666-test suite). Then verify at the new head and merge by hand.
+2. Merge the arm-001 evidence branch (#157) once re-verification passes.
+3. Drain the host before arming: guest down, confirm `sysctl vm.swapusage`
+   falls from 82% used, re-measure the guest round trip and record it.
 4. Re-run the C1 arm with abort-early, per-trial guest verification, and the
    spend/credit watch ($4.00 -> report, $4.50 cap).
 
