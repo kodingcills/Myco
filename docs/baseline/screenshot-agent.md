@@ -523,8 +523,8 @@ arms must share all of the following. Anything that differs is a documented devi
 | Guest software | Same VM, same LibreOffice 26.8.3 ARM64, same Windows build. No LibreOffice settings are changed for either arm (AutoCorrect stays on — see §3.4). |
 | Desktop geometry | Both arms run at the same display resolution; the baseline's `--grounding_width/height` equal the captured screenshot size. Resolution recorded. |
 | Agent isolation | One trial per guest state, no concurrent sessions. After either arm's trial: cleanup + reset before the next trial (M1-019 semantics). |
-| Trial order | The Myco arm's 30 trials must come from the M1-013 sweep. **As of 2026-11-21 the sweep is in progress, not finished**: `/tmp/m1-013/sweep/trials.jsonl` had four rows and `progress.log` had reached trial 4 at 19:02Z when this was written; it is still running and the numbers will change. Prior attempts are classified host-sleep and external-interference aborts and are never counted. The join in §4.4 is therefore **contingent on the sweep completing and the Coordinator declaring it final**; nothing in this doc presumes a sweep number. The baseline arm runs **the same parameter sets, in the same order**, as the sweep's final parameter list — not a re-derived index (§4.4a). |
-| Attempts | One attempt per trial. A retry is a new trial row, not a hidden re-run. |
+| Trial order | The Myco arm's 30 trials must come from the M1-013 sweep. **As of 2026-11-21 the sweep is in progress, not finished**: `/tmp/m1-013/sweep/trials.jsonl` had four rows and `progress.log` had reached trial 4 at 19:02Z when this was written; it is still running and the numbers will change. Earlier sweep attempts outside the Coordinator-declared final sweep are excluded. Every trial started in the final sweep counts, even if it fails before emitting a row (rule 8, §5). The join in §4.4 is therefore **contingent on the sweep completing and the Coordinator declaring it final**; nothing in this doc presumes a sweep number. The baseline arm runs **the same parameter sets, in the same order**, as the sweep's final parameter list — not a re-derived index (§4.4a). |
+| Attempts | One scored attempt per trial, in both arms. There are **no scored retries** (rule 8, §5): only the first attempt counts. A re-run for diagnosis is recorded as a separate row labelled `diagnostic re-run` and is never used in the pass rate or the paired sign test. |
 
 ### 2.1 The operator interface — pinned to `main`, not invented here
 
@@ -807,14 +807,17 @@ success the whole milestone is about. So:
 | `refuted` / `uncertain` | any | `false` |
 
 An unaudited `verified` is counted in its own metric row (§4.1) and must be **0 for both arms**.
-If it is non-zero, the trial is re-run — the defect is in the audit, not in either agent, and the
-row is never quietly folded into the pass rate.
+If it is non-zero, the first-attempt row **stays in the table, counted as a non-pass** (`verified` with
+`falseSuccess: null` is not a pass), and is reported prominently — the defect is in the audit, not in
+either agent, but the row is never quietly folded into the pass rate and never replaced by a retry. The
+audit may be fixed and the trial re-run for diagnosis; that row is a separate `diagnostic re-run` row
+that never enters the pass rate or the paired sign test (rule 8, §5).
 
 ### 4.1 Primary metrics (the comparison table)
 
 | Metric | Definition | M1 target |
 |---|---|---|
-| **Pass rate** | `verified / 30`, reported **with a Wilson 95% interval** (§4.5.7) | Myco ≥ 27/30 (row 3) |
+| **Pass rate** | rows with `verdict === verified && falseSuccess === false`, over 30 planned Myco trials or over started trials for each baseline arm (an unaudited `verified` with `falseSuccess: null`, or a false success, is **not** a pass), reported **with a Wilson 95% interval** (§4.5.7). Baseline reports also show coverage against the 30 planned trials. | Myco ≥ 27/30 (row 3) |
 | **False successes** | rows with `falseSuccess === true` | 0 |
 | **Unaudited `verified`** | rows with `verdict === verified && falseSuccess === null` | 0, both arms |
 | **Time per trial** | median and p95 of `elapsedMs` | reported, no target |
@@ -887,7 +890,8 @@ but no `fixtureSeed`; `/tmp/m1-013/params.json` is currently empty). So:
 
 If a sweep row has no `runId` or no `result.json` (harness failure before evidence), that trial has
 no baseline counterpart and is reported as `no-parameter-set` in both columns — never silently
-dropped. The baseline runs those exact sets, in that exact order. If the list covers only `name`,
+dropped. For Myco it is a **non-success** inside the 30-trial denominator (rule 8); for the baseline it
+is an explicit omission from the started-trial denominator and listed by trial ID with its omission reason (§4.4a, rule 8), since the baseline cannot start it without a frozen parameter set. The baseline runs those exact sets, in that exact order. If the list covers only `name`,
 the report says so; the baseline does **not** substitute a broader list to look thorough. If the
 Coordinator instead re-runs the sweep through a fixed in-repo entrypoint, the list is whatever that
 entrypoint emits, recorded by hash in both reports.
@@ -998,7 +1002,8 @@ The point of a baseline is to lose for the right reason. These are constraints o
 3. **No prompt engineering after a trial.** Prompts are frozen before trial 0 and hashed into the
    report. A prompt written after seeing trial failures turns the baseline into a straw man.
 4. **No retries, no step-budget stretching mid-run.** A step budget set before trial 0; a raised
-   budget after a loss is a deviation entry and a re-run of all 30.
+   budget after a loss is a deviation entry and a re-run of all 30, reported as a separate run: it never
+   replaces or patches a first-attempt score (rule 8).
 5. **The baseline gets what a screenshot agent gets — and C2's extra is declared, not hidden.**
    Both sub-arms receive the task instruction, screenshots, and their own action history. Neither
    receives: the cell address resolved by Myco's adapter, the UNO tree, the `.xlsx` by path, or the
@@ -1011,8 +1016,19 @@ The point of a baseline is to lose for the right reason. These are constraints o
 7. **Host conditions are the same and disclosed.** Both arms record reset time, host load, and
    battery/AC state. A baseline run on a contended Mac is not comparable to a quiet Myco run —
    log 30/41 show resets varying 45 s → 1879 s under load, so this is a real hazard.
-8. **Honest count.** No re-runs to reach a better number; every started trial is a row, including
-   harness failures (recorded as such, and excluded from the pass rate but listed).
+8. **Honest count — every started trial is scored, first attempt only, in both arms.** (Coordinator
+   ruling, 2026-11-22.) Every started trial is a row in both arms. An arm's own harness or
+   infrastructure failure — including a host or VM fault that stops a trial before the agent acts,
+   such as a reset failure — counts as a **non-success for that arm** (`refuted` or `uncertain` per the
+   §4 tri-state table), is never dropped from the denominator, and has its cause in a footnote. This is
+   how the M1-013 v3 sweep scored Myco's trial index 3 (UNO-readiness guard failed before any UI action,
+   cell pristine, not a false success): Myco = refuted, never retried, never excluded. There are **no
+   scored retries**. A re-run from a fresh restore for diagnosis is recorded as a separate, clearly
+   labelled `diagnostic re-run` row that is never used in the pass rate or the paired sign test. The
+   baseline denominator excludes trials **never started** because the frozen parameter set is missing
+   (§4.4a) or the spend cap prevents admission. List each omission by trial ID and reason,
+   label incomplete baseline arms **partial**, and report actual spend per arm. A missing frozen
+   set remains a Myco non-pass within its 30 planned trials.
 9. **The baseline may win.** If the screenshot agent passes 30/30, the report says so. The
    measured claim then moves to time, cost, false successes under corruption, and recovery — the
    M1-014 corrupted suite is where the difference is expected to appear, and the baseline should
@@ -1341,3 +1357,32 @@ The initial recommendation was Cua Driver with a local planner. The options belo
 | OSWorld agent adapters that ship in-repo (UI-TARS v1/v2, OpenCUA, Qwen3-VL, Gemini, o3, gpt54, Owl, AGUVIS, …) | `mm_agents/` directory listing, 2026-11-21 |
 | Published OSWorld number is only *verified* when maintainers run the agent | OSWorld README §"Public evaluation" |
 | OSWorld-Verified's own warning about opaque, incomparable self-run scores | `xlang.ai/blog/osworld-verified`, quoted in `docs/research/eval-frameworks.md` §1.5 |
+
+## Host-side C1 harness
+
+`src/baseline/sweep.ts` runs the frozen v3 pairs in order. The manifest records the SHA-256 of
+the source `trials.jsonl` and each joined `result.json`. Index 3 retains its Myco refutation and
+its task parameters. Use one durable output directory for both arms. The accounting file holds
+the reservation before preparation starts, stores the completed row before publishing
+`trials/c1/<index>.json`, and retains an interrupted trial's charge. The report lists every
+index and its omission reason when applicable. A restart republishes committed rows and skips
+previously reserved, scored, and omitted indices. If a process dies while holding `.run-lock`,
+the Coordinator must confirm it has exited before removing that lock. Keep the accounting file.
+
+The Coordinator's live caller supplies fresh preparation from `cua-c1-base` (PR #86), the Cua
+version and pipe/session preflight, the exact Calc window, AC/caffeinate/load measurements, and
+a Cua stdio connection. The caller also supplies an independent document/health state probe for
+the grader, including driver-caused app death attribution. The harness expects the planner to
+save and close via the exposed UI tools. It reads persisted state for closed or unmodified
+documents and performs a separate audit conversion for verified rows.
+
+The hosted planner preflights each image request with Anthropic token counting and reserves
+30 calls at a padded 5,000 input and 256 output tokens each, using the frozen rates in §9.1.
+Unknown usage is held at the call reservation. Hosted rows and rows that switch to Ollama carry
+their model names in the existing deviations field. Before paid use, confirm the configured
+model, rates, token-count behavior and the applicable provider-side spend control. The host cap depends on
+provider billing staying within the reserved envelope.
+
+Live validation still requires Coordinator GO, the reset dependency, and the Windows Calc
+spike. Confirm the pinned driver's MCP response shape, pixel typing and shortcuts, and the
+grader's window/document probes before any scored run.
