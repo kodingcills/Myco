@@ -186,6 +186,35 @@ is written down: it merged a live runner whose gates could be bypassed; PR #100
 reverted it (`8396c93` — that revert reached `main` via PR #101), and its archives are
 excluded from Discovery evidence.
 
+## Non-VM queue (2026-11-22 17:20 ET, operating rule B)
+
+The guest queue is only for work that needs the Windows/Linux desktop. Everything
+below runs now, offline, in parallel with M1.
+
+| # | Work | Why it does not need the guest | Status |
+|---|---|---|---|
+| N1 | **Offline replay harness**: normalize recorded arm rows (`/tmp/baseline/c1-arm2/accounting.json`, `docs/research/experiments/*`) into the decision rule's `ScoredTrial` shape and print the rule's refusal/row plus what is missing | rows and traces are on disk; the rule is pure | next |
+| N2 | **Head-to-head report generator**: decision + per-arm metrics → the report (paired table, Wilson intervals, rule row, not-run arms) | pure function over rows; synthetic + recorded C1 rows exercise it | next |
+| N3 | **Direction A first-use quickstart**: the exact commands a fresh agent follows, validated against the dry-run path; measure command count and wall-clock | dry-run harness runs offline (`pnpm test:task`) | next |
+| N4 | **Direction A live preflight**: script + checklist (guest up, `myco-todo` deployed, store path, oracle path, abort conditions), unit-tested with mocks | the checks are host-side; only the final run needs the guest | next |
+| N5 | **Direction B/C dry-run validation**: all three task packages run offline and emit schema-valid evidence | done 2026-11-22: A `REFUTED` (false success caught), B `UNCERTAIN` (interrupted write, 0 duplicates), C `VERIFIED` (modeled timings, explicitly not evidence) | done |
+| N6 | **Docs**: keep plan/teardown/state current; no science moves without data | — | ongoing |
+
+### What actually needs the guest (batched, M1 first)
+
+| Slot | Need | Depends on |
+|---|---|---|
+| S0 | RT-020 Linux guest up, `myco-todo` deployed, store path + oracle reachable; one Direction A run (DF-S01 then DF-S02) with an OMP agent | Coordinator GO + host lock; RT-011/RT-015/RT-016 |
+| S1 | `ef-t01b` no-verify, **Myco arm**, ≥30 refutable pairs | Foundry hidden split + trusted ingest |
+| S2 | `hcu+shell` arm on the **same pairs**, shell calls trace-recorded | HCU in the guest; Foundry's audit ingest |
+| S3 | screenshot-only arm on the same pairs | C1 is Windows/Calc today; it cannot supply `ef-t01b` pairs without a Windows todo run — flag to Foundry |
+| S4 | Direction B interrupted-write trials, ≥30 | RT-016 process control |
+| — | Direction C | **no guest need**: the runtime has no `snapshot()`/`fork()`; C stays design-only until it does |
+
+The decision rule cannot fire on any recorded data today: the C1 arm is Calc, the
+dry-runs are simulated, and no Myco/hcu+shell pair exists on `ef-t01b`. That is the
+honest state, and it is why S1/S2 are the only slots that move the wedge.
+
 ## Log
 
 - 2026-11-22 (afternoon, second) · Pre-registered decision rule implemented
