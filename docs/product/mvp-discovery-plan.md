@@ -63,17 +63,19 @@ The honest competitive picture:
   discipline, is reproducible when the agent is gone, and is the same object in local
   and CI runs". The head-to-head adds an **HCU + agent shell** arm to test exactly this.
 
-**Independently confirmed (research finding m2-01, nine products, vendor primary
-docs).** None of Cua, Anthropic computer use, OpenAI computer use/Operator, Simular
+**Independently confirmed (research finding m2-01, nine listed products — 8 distinct
+product lines once Simular's Agent S and Sai are counted as one, per m2-01 §7.3 —
+against vendor primary docs).** None of Cua, Anthropic computer use, OpenAI computer use/Operator, Simular
 Agent S, UiPath, heyclicky, Microsoft HCU, Orgo, or Simular Sai returns a verdict on
 the persisted outcome. The closest two are Cua's per-action `effect` (five values,
 including `refused` and `partial`) and HCU's window-level before/after tree diff with
 pre-input guards — and HCU is explicit: *"Neither proves file contents, persistence or
 network state."* Orgo and Sai both ship an escape hatch a host *could* use to hash a
 file, but neither returns a verdict, a three-valued unknown, or an artifact a second
-party can check; the host authors both the expectation and the comparison. Pricing on
-both is machine-time ($0.023–$0.368 per running hour for Orgo), so **verification is
-free if the customer writes it themselves** — the economic baseline any
+party can check; the host authors both the expectation and the comparison. Both bill
+for the machine, not the outcome — Orgo per running hour ($0.023–$0.368), Sai per
+credit (m2-01 records its per-credit prices as not reported) — so **verification is
+free if the customer writes it themselves**: the economic baseline any
 verified-outcome product is priced against.
 
 [INFERENCE] The durable-test framing is the difference between an agent that happens
@@ -180,7 +182,8 @@ pre-declared decision rule. No proof expands into a product.
     verified-result ≤ 15 min from a clean checkout; the run is reproducible from the
     README by a second agent. A completion *rate* needs ≥100 trials over ≥3 seeds and
     0 false successes needs ≥30 refutable trials — the 10-run "≥90%" form declared
-    here first was underpowered (Wilson upper bound 27.8% at n=10) and is withdrawn.
+    here first was underpowered — at 0 false successes in 10 trials the failure-rate upper
+bound is 27.8% — and is withdrawn.
   - Fail if: the setup cannot reach 15 min on a developer machine, or the HCU+shell
     arm also gets 0 false successes **and** a comparable time — then A's only
     remaining value is the durable artifact, and the wedge moves to B.

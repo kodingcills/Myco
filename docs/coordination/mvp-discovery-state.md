@@ -76,8 +76,9 @@ Facts established by reading the repo, not by running anything:
 6. **M2 research round landed (main fc4738e, PR #48; findings under
    `docs/research/findings/m2-0*.md`).** Research input to A/B/C, not a plan; the
    "M2 = MCP/API" lock-in stays retracted. It *independently confirms* item 4: nine
-   products surveyed against vendor primary docs, none returns a verdict on persisted
-   state. Closest: Cua per-action `effect`; Microsoft HCU window-level before/after
+   listed products surveyed against vendor primary docs (8 distinct product lines, with
+   Simular Agent S and Sai counted together per m2-01 §7.3), none returns a verdict on
+   persisted state. Closest: Cua per-action `effect`; Microsoft HCU window-level before/after
    diff, which says "Neither proves file contents, persistence or network state."
    What it changes for Discovery:
    - **A:** m2-02 is "what A must get right", not the wedge. Two keepers whichever
@@ -182,8 +183,8 @@ No PR merges, and no auto-merge is enabled, without **an independent verifier PA
 the exact PR head**, then **green CI at that same head**. Any head change — including
 merging `main` in — needs a fresh verification before merge. PR #99 is the reason this
 is written down: it merged a live runner whose gates could be bypassed; PR #100
-reverted it (`8396c93`, reachable from the C1 branches but not yet an ancestor of
-`main`), and its archives are excluded from Discovery evidence.
+reverted it (`8396c93` — that revert reached `main` via PR #101), and its archives are
+excluded from Discovery evidence.
 
 ## Log
 
@@ -192,7 +193,7 @@ reverted it (`8396c93`, reachable from the C1 branches but not yet an ancestor o
   - `docs/research/mvp-competitive-teardown.md` §2.6: cross-check against finding
     m2-01. 8 named products plus a screenshot-only control across the two documents
     (Simular Agent S and Sai counted as one product line, per m2-01 §7.3), none with a
-    persisted-outcome verdict; the three overlapping products agree, including two
+    persisted-outcome verdict; the four overlapping products (HCU, Cua, Orgo, Sai) agree, including two
     defects both documents found separately (Orgo's $3-vs-$5 credit, Orgo's
     UUID-vs-`instance_id` spec contradiction). Adopted m2-01's billing point in its own
     hedge (Orgo bills machine-hours, Sai credits), so verification is free *if the
