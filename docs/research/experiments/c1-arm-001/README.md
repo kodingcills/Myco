@@ -10,8 +10,8 @@ can be reaped, so the artefacts are copied here rather than referenced.
 | | |
 |---|---|
 | Trials producing a usable row | **0** |
-| Trials excluded | **30** |
-| Exclusion reason | `driver-unreachable` (all 30) |
+| Trials excluded | **29 omitted + 1 scored-but-unusable** (trial 0: `driver-unreachable`) |
+| Exclusion reason | `driver-unreachable` — the single cause for all 30 |
 | Spend | **$0.00** |
 
 There is no C1 pass rate from this run and none should be computed from it. A
@@ -50,13 +50,23 @@ What *is* confirmed against the live guest is the fix's effect:
 | 15s | `session-command-failed` |
 | 45s | `match`, `sessionIdentityMatches: true` (13.76s end-to-end) |
 
-Fixed in PR #156 — **open at the time of writing, not merged**. On the `main`
-this evidence was produced from, `c1-driver-preflight.ts:93` still carries
+These two figures were **measured by hand against the live guest** and have no
+automated artefact; they are the basis for #156's budget, not output of the
+harness.
+
+**State at the time this evidence was produced (branch predates the fix).** On
+the `main` this run came from, `c1-driver-preflight.ts` carried
 `timeout: 15_000`, and **every `vssh` call site in `c1-sweep.ts` was unbounded**:
-measured on this tree, 5 sites call `VMs/myco-win11/scripts/vssh` and none
-passes a `timeout:` (`timeoutMs: 90_000` at line 132 is an `SshTunnel` option,
-not an `execFileSync` budget). PR #156 adds `timeout: GUEST_TIMEOUT_MS` to all
-five.
+measured on this tree, 5 sites call `VMs/myco-win11/scripts/vssh` and none passes
+a `timeout:`. (The `timeoutMs: 90_000` at line 132 is a
+`WindowsFixtureConverter` option — `new SshTunnel()` at line 102 takes no
+arguments — and is the convert deadline, not an `execFileSync` budget.)
+
+**PR #156 has since merged** (`a3272a8`, 2026-11-22T21:09:55Z): it sets
+`GUEST_QUERY_TIMEOUT_MS = 45_000` and adds `timeout: GUEST_TIMEOUT_MS` to all
+five of those `vssh` sites, so none is unbounded on current `main`. The line
+numbers quoted in this file are therefore branch-relative and do not apply to
+`main`.
 
 Recorded this way deliberately: an unmerged fix described as landed is the exact
 defect the repo's merge-discipline rule exists to prevent, and a count asserted
