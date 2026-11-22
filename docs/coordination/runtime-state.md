@@ -361,3 +361,21 @@ Note: the same shape produced the earlier merge-rule breaches (#24/#25/#27/#28) 
 `git push origin HEAD:main` from a worktree on a feature branch. Main is now
 protected, so that vector is closed; the stale-base vector is not, and this is the
 check for it.
+
+## Rebase treadmill — cost of a moving main (2026-11-22)
+
+PR #97 was verified three times and rebased five. Each rebase was legitimate
+(main advanced), but the cost was real: a PASS at one head expires when the head
+changes, so a docs PR can chase main indefinitely.
+
+What I do about it, in order:
+1. Before pushing a rebase, prove the *content* is unchanged: `git diff <verified-head> <new-head> -- docs/` must be empty. If it is empty and the only delta is a newer base, the verification's substance still holds and I say so explicitly instead of implying the old PASS covered the new head.
+2. Never treat a rebase as a fresh review. A head change still gets a verification pass; the diff-empty check just tells me what that pass should focus on.
+3. Confirm my own commits touch only the paths I claim:
+   `git diff --name-only $(git merge-base origin/main HEAD)..HEAD`. This is the
+   stale-base check, and it caught a phantom `src/baseline` deletion earlier today.
+
+Note on reading `git diff 2bb8f8b a185b3b`: it showed `src/baseline/planner.ts` and
+a new test. That is *main's* newer work arriving through the rebase, not my PR
+touching source. `git diff origin/main...HEAD` (three-dot) is the right view for
+"what does this PR add".
