@@ -176,11 +176,57 @@ UNO read. What it proves is that the class fires and is caught, host-side, with 
   on that endpoint). Research in this workstream therefore uses direct primary-source reads
   (arXiv API, project sites, GitHub API), which is the repo's citation discipline anyway.
 
-## Sub-threads
+## Sub-threads (verifier runs, reported to the outer loop)
 
-Each sub-thread carries its own independent verifier and is reported back here and to the
-outer loop. As of 2026-11-21: none spawned yet; the first wave (fixtures + verifiers) is
-being executed in this thread because it is one coherent contract.
+Every distinct verification is a separate spawn against a named SHA, never a re-use of an
+earlier verdict. All ran on `cheaperinference/deepseek-v4.1-flash` (judgment), no VM access.
+
+| # | Verifier | Target | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | FoundryVerifier | EF-001/EF-002 at 3c7d6ba | aborted | Provider quota (402) killed it mid-run; it had already found two real defects, both carried forward. |
+| 2 | PR110Verifier | PR #110 at f1f7bbb | REJECT | Seven findings: the stale-row defect could not fire; two regressions introduced by the first fix; a sign-test row wrong by 15 orders of magnitude; `stats.ts` dead code; hidden fixtures at version 0; three fixtures content-changed without a version bump; an assertion that ignored the screen. |
+| 3 | PR110Recheck | PR #110 at 5d21862 | REJECT | One regression left: the stale text was keyed on the fixture's designated target, so renaming any other row wrote the wrong text. |
+| 4 | PR110Final | PR #110 at e802a19 | **PASS** | All prior findings confirmed fixed; two minor cleanups applied after. Merged d09f209. |
+| 5 | EF003Verifier | PR #122 at 91c3371 | **PASS** | Three quality findings — the Writer family was dead surface, a recovery test claimed a re-read it did not perform, a comment implied nondeterminism. All fixed. Merged c37d944. |
+
+What the verifier rounds changed in the work itself, beyond the defects: a trap test that
+asserts only "refuted" cannot distinguish a working fixture from a broken one (ADR-0023),
+and two of the three rejections were regressions introduced *while fixing an earlier
+finding*, which is why the save path now has five cases each asserting store and screen.
+
+## Open issue for the outer loop — `viewer verdict budget (macos-latest)` is flaky on shared runners
+
+Observed 2026-11-22 while landing PR #129 (a **docs-only** diff, one coordination file):
+
+| Branch | Result | Time (UTC) |
+|---|---|---|
+| `myco/eval-foundry` @ 200b072 | **fail** 518.8 ms (limit 425.8) | 18:59:45 |
+| `myco/eval-foundry` @ 3587513 | **fail** 506.4 ms (median, limit 425.8) | 19:03:12 |
+| `myco/eval-foundry` @ b02cbe8 | **fail 160.95 ms against a limit of 150** — a *different* budget at a *different* step | 19:07:37 |
+| `myco/eval-foundry` @ earlier heads | **pass** | 18:55:30, 18:53:15 |
+| `docs/c1-stack-proof` | **fail** | 19:01:13 |
+| `feat/rt015-read-file-tool` | **fail** then pass then pass | 18:55:00 → 18:59:50 |
+
+The diff under test touches no viewer code and no `src/`. The same commit passed the check
+twice and failed it twice, and two unrelated branches failed it in the same window while
+`main` passed. That is runner variance, not a regression — the samples are bimodal
+(384–435 ms good runs, 672–860 ms bad runs), which is what a noisy-neighbour macOS runner
+looks like on a 315 ms workload. The third failure only missing a **150 ms** budget by
+10.95 ms, at a different assertion, is the same conclusion from a tighter budget: the
+workload sits close enough to its limit that runner noise decides the outcome.
+
+**Not my call to fix** (`.github/workflows/` is out of scope for this workstream and the
+repo rule is that no agent edits it). Options for whoever owns CI, cheapest first:
+
+1. Raise `relativeTolerance` above 35%, or drop the 10000-step case to a p95 rather than a
+   median — the median is already robust; the tail is what moves.
+2. Run the perf job only on `main` post-merge and on PRs labelled `perf`, so a docs PR is
+   not gated by a timing race.
+3. Pin the runner label and measure the baseline on that image, rather than reusing a
+   darwin baseline that may not match the runner's CPU.
+
+**Consequence for this PR:** #129 cannot merge on a green run without either a re-run or a
+CI change. It is docs-only and the other five checks pass at the same head.
 
 ## Not touched
 
