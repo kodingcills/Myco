@@ -22,6 +22,12 @@ packages:
   - gir1.2-atspi-2.0
   # The AT-SPI sanity window is a GTK3 app; python3-gi alone has no Gtk namespace.
   - gir1.2-gtk-3.0
+  # A C toolchain: the agent is built natively in the guest, and rust build scripts
+  # link through `cc`. Without it the build dies with "linker `cc` not found" --
+  # which is confusing, because it surfaces as a proc-macro2 compile error.
+  - build-essential
+  - pkg-config
+  - libxkbcommon-dev
 write_files:
   - path: /opt/myco/myco-tk-app.py
     permissions: '0755'
@@ -259,6 +265,10 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 runcmd:
+  # If a prior cloud-init install was interrupted (e.g. the overlay was discarded
+  # mid-install), dpkg stays unconfigured and EVERY later apt command fails until
+  # it is repaired. Make the guest self-healing on boot.
+  - dpkg --configure -a || true
   - systemctl daemon-reload
   - systemctl enable --now myco-gui.service
   - echo 'myco-runtime-v0 provisioned' > /var/lib/myco-provisioned
