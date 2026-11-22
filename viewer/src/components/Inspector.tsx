@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { Tabs } from "@base-ui/react/tabs";
 import { PanelRightClose } from "lucide-react";
-import { cloneElement, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { cloneElement, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import tokens from "../../../docs/design/tokens.json";
 import { loadRunFiles } from "../data/loaders.ts";
@@ -273,48 +273,180 @@ function DetailSection({ label, children }: { label: string; children: React.Rea
   );
 }
 
-function Screenshot({ row }: { row: StepRow }) {
-  const path = row.screenshot?.value;
-  const full = useScreenshotAsset(path, true);
-  const thumb = useScreenshotAsset(path, false, true);
-  if (!path) return <Missing />;
-  const image = full.kind === "ready" ? full : thumb.kind === "ready" ? thumb : undefined;
+function BitmapCanvas({
+  bitmap,
+  label,
+  ...attributes
+}: { bitmap: ImageBitmap; label: string } & React.CanvasHTMLAttributes<HTMLCanvasElement>) {
+  const draw = useCallback(
+    (canvas: HTMLCanvasElement | null) => {
+      const context = canvas?.getContext("2d", { willReadFrequently: true });
+      if (!context) return;
+      context.globalCompositeOperation = "copy";
+      context.drawImage(bitmap, 0, 0);
+    },
+    [bitmap],
+  );
+  return (
+    <canvas
+      ref={draw}
+      width={bitmap.width}
+      height={bitmap.height}
+      role="img"
+      aria-label={label}
+      {...attributes}
+    />
+  );
+}
+
+/** The 1:1 image is decoded only while the lightbox is open and closed when it unmounts. */
+function Lightbox({
+  path,
+  incomplete,
+  preview,
+}: {
+  path: string;
+  incomplete: boolean;
+  preview: boolean;
+}) {
+  const original = useScreenshotAsset(path, "original", true);
+  const showMarker = incomplete || ("incomplete" in original && original.incomplete);
   return (
     <>
-      {image ? (
+      {showMarker && <ScreenshotMarker />}
+      {original.kind === "ready" && "bitmap" in original ? (
+        <BitmapCanvas bitmap={original.bitmap} label="Step screenshot at original size" />
+      ) : original.kind === "ready" && "url" in original ? (
+        <img
+          src={original.url}
+          alt={preview ? "Step screenshot preview" : "Step screenshot at original size"}
+        />
+      ) : original.kind === "unavailable" ? (
+        !showMarker && (
+          <p role="status" className="text-text-tertiary">
+            Screenshot unavailable
+          </p>
+        )
+      ) : (
+        <p role="status" className="text-text-tertiary">
+          Loading screenshot
+        </p>
+      )}
+    </>
+  );
+}
+
+function ScreenshotMarker() {
+  return (
+    <p role="status" className="type-small text-text-secondary">
+      Screenshot truncated or incomplete
+    </p>
+  );
+}
+
+function Screenshot({ row }: { row: StepRow }) {
+  const container = useRef<HTMLDivElement>(null);
+  const [viewSize, setViewSize] = useState<{ width: number; dpr: number }>();
+  const hasScreenshot = Boolean(row.screenshot?.value);
+  useLayoutEffect(() => {
+    const element = container.current;
+    if (!hasScreenshot || !element) return;
+    let timer: ReturnType<typeof setTimeout>;
+    let resolution: MediaQueryList;
+    const measure = () => {
+      const width = Math.ceil(element.clientWidth / 32) * 32;
+      const dpr = window.devicePixelRatio;
+      if (width > 0) {
+        setViewSize((previous) =>
+          previous?.width === width && previous.dpr === dpr ? previous : { width, dpr },
+        );
+      }
+    };
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(measure, 100);
+    };
+    const watchResolution = () => {
+      resolution?.removeEventListener("change", watchResolution);
+      resolution = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      resolution.addEventListener("change", watchResolution);
+      schedule();
+    };
+    measure();
+    watchResolution();
+    const observer = new ResizeObserver(schedule);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      resolution.removeEventListener("change", watchResolution);
+      clearTimeout(timer);
+    };
+  }, [hasScreenshot]);
+  const path = row.screenshot?.value;
+  const view = useScreenshotAsset(viewSize ? path : undefined, "view", true, viewSize);
+  const thumb = useScreenshotAsset(path, "thumb", true);
+  const bitmap = view.kind === "ready" && "bitmap" in view ? view : undefined;
+  const image =
+    view.kind === "ready" && "url" in view
+      ? view
+      : thumb.kind === "ready" && "url" in thumb
+        ? thumb
+        : undefined;
+  // A truncated file whose manifest digest still matches is real evidence, but it must never
+  // look complete: every view of it, and the list thumbnail, says so or says unavailable.
+  const incomplete =
+    ("incomplete" in view && view.incomplete) ||
+    (view.kind === "loading" && thumb.kind === "unavailable" && thumb.incomplete);
+  if (!path) return <Missing />;
+  return (
+    <div ref={container} className="w-full">
+      {incomplete && <ScreenshotMarker />}
+      {bitmap || image ? (
         <Dialog.Root>
           <Dialog.Trigger data-screenshot-trigger aria-label="Enlarge screenshot">
-            <img
-              src={image.url}
-              alt="Step screenshot"
-              data-image-size={full.kind === "ready" ? "full" : "preview"}
-            />
+            {bitmap ? (
+              <BitmapCanvas
+                bitmap={bitmap.bitmap}
+                label="Step screenshot"
+                data-image-width={bitmap.width}
+                data-image-height={bitmap.height}
+                data-image-size="full"
+                data-image-id={bitmap.id}
+              />
+            ) : (
+              image && (
+                <img
+                  src={image.url}
+                  alt="Step screenshot"
+                  data-image-size={view.kind === "ready" ? "full" : "preview"}
+                />
+              )
+            )}
           </Dialog.Trigger>
           <Dialog.Portal>
             <Dialog.Backdrop data-screenshot-backdrop />
             <Dialog.Popup data-screenshot-lightbox>
               <Dialog.Title className="sr-only">Step screenshot</Dialog.Title>
               <Dialog.Close data-button>Close</Dialog.Close>
-              <img
-                src={image.url}
-                alt={
-                  full.kind === "ready"
-                    ? "Step screenshot at original size"
-                    : "Step screenshot preview"
-                }
+              <Lightbox
+                path={path}
+                incomplete={Boolean(incomplete)}
+                preview={view.kind !== "ready"}
               />
             </Dialog.Popup>
           </Dialog.Portal>
         </Dialog.Root>
       ) : (
-        <p role="status" className="text-text-tertiary">
-          {full.kind === "unavailable" && thumb.kind === "unavailable"
-            ? "Screenshot unavailable"
-            : "Loading screenshot"}
-        </p>
+        !incomplete && (
+          <p role="status" className="text-text-tertiary">
+            {view.kind === "unavailable" && thumb.kind === "unavailable"
+              ? "Screenshot unavailable"
+              : "Loading screenshot"}
+          </p>
+        )
       )}
       {row.screenshot && <SourceChip source={row.screenshot.source} />}
-    </>
+    </div>
   );
 }
 
