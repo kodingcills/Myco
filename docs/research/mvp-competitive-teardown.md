@@ -144,7 +144,7 @@ headline number must come from a third party until cua.ai publishes its own.
 MIT"; those two are **FSL-1.1-MIT**. Cua Spaces "Free for individuals. Pro is $18
 a month and Teams is $30 per seat a month" (repo README of trycua/cua).
 
-**Outcome verification.** The most rigorous vocabulary of the four, and it stops
+**Outcome verification.** The most rigorous vocabulary of the products surveyed, and it stops
 at accessibility read-back:
 
 > "1. **Element, background.** Act by `element_token`: UI Automation Invoke on
@@ -357,6 +357,33 @@ Misses the Absent Row" (`OSW2`).
 
 ---
 
+## 2.6 Cross-check against the M2 research teardown (finding m2-01)
+
+Written in a separate workstream, as a different reading pass over the same primary
+pages, against the same claim. m2-01 read four product lines this
+document does not cover (Anthropic computer use, OpenAI computer use/Operator, UiPath,
+heyclicky); this document read one control m2-01 does not (screenshot-only). Simular
+Agent S is not in that complement: m2-01 §7.3 treats it and Sai as one product line, and
+this document covers that line as Sai (§2.4). Where the two disagree, the disagreement
+is the finding — it is listed, not smoothed.
+
+| Point | This document | `docs/research/findings/m2-01-competitive-teardown.md` | Resolution |
+|---|---|---|---|
+| Orgo free credit | "an internal inconsistency: $3 vs $5/$2" | the same, and **explicitly marked contested** in its pricing table | confirm: quote as contested, never as a number |
+| Orgo fork source identifier | "the prose accepts UUID or instance_id while the OpenAPI spec says a UUID returns 404" | the same contradiction, found in both documents | confirm: an upstream defect, not a transcription error |
+| Orgo verdict | none; `needs_review` is an honest "we don't know" | the same, plus the specific non-proof that "a missing `text` body types the empty string and still returns `200`" | m2-01 is more specific; adopt its example |
+| Sai `unverifiable` | three-valued but transcript-adjudicated | the same, and names `unverifiable` as **the one shape worth stealing** | confirm; the shape is worth stealing, the oracle is not |
+| Closest to a proof | Cua (per-action `effect`) and HCU (window before/after + layout guard) | the same two | confirm |
+| HCU's limit | quoted from `PLATFORMS.md` and `MCP.md` | quoted: *"Neither proves file contents, persistence or network state."* | both; m2-01's sentence is the sharper one |
+| Scope | HCU, Cua, Orgo, Sai, screenshot-only control (4 products + 1 control) | m2-01 §1–§6: Cua, Anthropic, OpenAI, Simular Agent S, UiPath, heyclicky (6); §7 adds HCU, Orgo, Sai (3, "added 2026-11-21 so Discovery has three more data points"). §7.3 treats **Agent S and Sai as one product line**, so its comparable inventory is 8 | complementary; neither is a superset. **Union = 8 named products + the screenshot-only control, 0 with a persisted-outcome verdict** |
+| Economic baseline | MIT for HCU (Apache-2.0 OSWorld-V2 subtree, not pure MIT) and Cua (FSL-1.1-MIT for Spaces/Driver Bench); per-task benchmark cost $10.03 vs $10.05 on OSWorld 2.0 (§3.5) | "per machine-hour or per credit" (m2-01's closing "Two notes for Discovery"): Orgo bills machine-time ($0.023-$0.368/running hr), Sai bills credits (per-credit prices not reported), so verification is effectively free if the customer writes it | adopt m2-01's hedge, not a stronger one: either billing model prices verification at zero *when the customer writes it*, which is why the **hcu+shell** arm decides the wedge |
+
+The joint conclusion both documents reach independently: **the gap is not access,
+observation or actuation; it is a verdict on state that survives the agent.** That
+makes the deciding question not "does anything verify" but "does verification happen
+without agent discipline, and does the artifact outlive the run" — which is exactly
+the hcu+shell arm in `mvd-preregistration.md` §4.1.
+
 ## 3. Capability matrix (TIF-59 axes)
 
 ### 3.1 First-use setup
@@ -550,6 +577,12 @@ state.
 
 ## 8. Revision log
 
+- **v3, 2026-11-22.** §2.6 added: cross-check against finding m2-01 (in total, 8
+  named products plus a screenshot-only control; four overlaps). Overlapping claims
+  agree wherever both could be checked — Orgo's contested credit and its UUID/instance_id
+  contradiction were found in both documents — and m2-01's billing argument is adopted
+  with its own hedge (machine-hour or credit) as the economic baseline for the hcu+shell
+  decision rule.
 - **v2, 2026-11-21 (after independent verification).** Fifteen must-fix corrections applied,
   all reproduced by the verifier against the same sources: evaluated-vs-released HCU rows
   separated (Table 2 vs Table 4 costs and latencies); the evaluated version's `assert_ax`
