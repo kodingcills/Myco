@@ -13,17 +13,27 @@ import { type ReplayInput, renderReplaySummary, replay } from "../src/discovery/
 import { renderHeadToHeadReport } from "../src/discovery/report.ts";
 
 const args = process.argv.slice(2);
-const outIndex = args.indexOf("--out");
-const reportIndex = args.indexOf("--report");
-const outPath = outIndex >= 0 ? args[outIndex + 1] : undefined;
-const reportPath = reportIndex >= 0 ? args[reportIndex + 1] : undefined;
-const files = args.filter(
-  (_, index) =>
-    index !== outIndex &&
-    index !== outIndex + 1 &&
-    index !== reportIndex &&
-    index !== reportIndex + 1,
-);
+const optionValue = (flag: string): string | undefined => {
+  const index = args.indexOf(flag);
+  if (index < 0) return undefined;
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) {
+    process.stderr.write(`discovery-replay: ${flag} needs a value\n`);
+    process.exit(2);
+  }
+  return value;
+};
+const outPath = optionValue("--out");
+const reportPath = optionValue("--report");
+const optionIndexes = new Set<number>();
+for (const flag of ["--out", "--report"]) {
+  const index = args.indexOf(flag);
+  if (index >= 0) {
+    optionIndexes.add(index);
+    optionIndexes.add(index + 1);
+  }
+}
+const files = args.filter((_, index) => !optionIndexes.has(index));
 if (files.length === 0) {
   process.stderr.write(
     "usage: discovery-replay <file...> [--out <summary.md>] [--report <report.md>]\n",

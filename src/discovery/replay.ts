@@ -245,7 +245,7 @@ export function renderReplaySummary(summary: ReplaySummary): string {
     `- Pairs: ${summary.decision.pairs}; Myco false successes: ${summary.decision.mycoFalseSuccesses}; comparator false successes: ${summary.decision.comparatorFalseSuccesses}`,
   );
   lines.push(
-    `- Discordant: ${summary.decision.discordantFavouringMyco} favour Myco, ${summary.decision.discordantFavouringComparator} favour the comparator; sign test p = ${summary.decision.signTestP ?? "n/a"}`,
+    `- Discordant: ${summary.decision.discordantFavouringMyco} favour Myco, ${summary.decision.discordantFavouringComparator} favour the comparator; sign test p = ${summary.decision.pairs === 0 ? "n/a (no pairs)" : (summary.decision.signTestP ?? "n/a")}`,
   );
   for (const note of summary.decision.notes) lines.push(`- ${note}`);
   lines.push("");

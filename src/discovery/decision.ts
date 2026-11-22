@@ -62,6 +62,8 @@ export interface ScoredTrial {
   readonly falseSuccess: boolean;
   /** Foundry's trusted-ingest gate. A false row cannot contribute to a decision. */
   readonly decisionEligible: boolean;
+  /** False when the artifact does not carry the agent's claim (e.g. a bare result.json). */
+  readonly falseSuccessKnown?: boolean;
 }
 
 export interface DecisionInput {

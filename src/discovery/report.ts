@@ -80,8 +80,9 @@ export function renderHeadToHeadReport(input: HeadToHeadReportInput): string {
   lines.push("|---|---:|---:|---:|---:|---:|---|");
   for (const arm of input.arms) {
     const falseSuccesses = arm.trials.filter((trial) => trial.falseSuccess).length;
+    const unknown = arm.trials.some((trial) => trial.falseSuccessKnown === false);
     lines.push(
-      `| ${cell(arm.label ?? arm.armId)} | ${arm.trials.length} | ${arm.trials.filter((trial) => trial.verdict === "verified").length} | ${arm.trials.filter((trial) => trial.verdict === "refuted").length} | ${arm.trials.filter((trial) => trial.verdict === "uncertain").length} | ${falseSuccesses} | ${interval(wilson(falseSuccesses, arm.trials.length))} |`,
+      `| ${cell(arm.label ?? arm.armId)} | ${arm.trials.length} | ${arm.trials.filter((trial) => trial.verdict === "verified").length} | ${arm.trials.filter((trial) => trial.verdict === "refuted").length} | ${arm.trials.filter((trial) => trial.verdict === "uncertain").length} | ${unknown ? "n/a (unknown)" : falseSuccesses} | ${unknown ? "n/a" : interval(wilson(falseSuccesses, arm.trials.length))} |`,
     );
   }
   if (input.arms.length === 0) lines.push("| (no arms) | 0 | 0 | 0 | 0 | 0 | n/a |");
