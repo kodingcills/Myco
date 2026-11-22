@@ -76,8 +76,8 @@ From `src/foundry/baseline/registry.ts` (merged) plus the arm this plan adds:
 
 | Arm | Registry status | Blocker | Needs |
 |---|---|---|---|
-| screenshot-only (Cua Driver C1 pixel rung) | not-run | VM time | slots 4-5 evidence (§6) |
-| hcu (Microsoft Hybrid Computer Use, GUI channel) | not-run | VM time | slots 4-5 evidence (§6) |
+| screenshot-only (Cua Driver C1 pixel rung) | not-run | VM time and a named planner (planner now decided, §3; registry not yet updated) | extension slot (§6) |
+| hcu (Microsoft Hybrid Computer Use, GUI channel) | not-run | VM time and a named planner (planner now decided, §3; registry not yet updated) | extension slot (§6) |
 | **hcu+shell** (HCU plus the agent's own read access to the store) | **not in the registry** | none technical | **Foundry must add it** (§4 explains why it is the decisive arm) |
 | myco (verdict from persisted state via the Myco runtime) | not in the registry | RT-011/RT-015/RT-016, slot | runtime first path |
 | orgo | blocked | account creation and card/credit | outer-loop decision |
@@ -150,7 +150,10 @@ across variants. The wedge-deciding comparison is `ef-t01` no-verify; it needs *
 refutable pairs per arm** on that variant, drawn by the grader as **seeded variants of the
 silent-drop family from the hidden split** (repeating the one public fixture gives repeats,
 not independent samples). Decision-row trials therefore come only from the grader-supplied
-hidden source; Discovery sees the commitment root and counts, never the fixtures. `ef-t01` with the verify sentence needs its own ≥30. The ≥30-pair unit is a
+hidden source; Discovery sees the commitment root and counts, never the fixtures (and never
+reads `src/foundry/oracles/` or the hidden directory). Screenshot-only and hcu evidence counts
+toward §4.1 **only if produced on the same grader-supplied hidden pairs**; otherwise the
+"identical pairs for every arm" rule cannot be checked and that arm is reported descriptively. `ef-t01` with the verify sentence needs its own ≥30. The ≥30-pair unit is a
 **comparison unit, not a reliability claim**: reliability claims still need Foundry §7a's
 ≥100 known trials over ≥3 seeds, and the report labels the two differently.
 `ef-t02..t04` are reported at whatever n they reach, descriptively, with the interval,
@@ -175,9 +178,10 @@ The guard sees only what the trace records (contract §5 limit (a)). Therefore:
 1. The arm's shell and file calls **must be recorded into `trace.jsonl`**; an arm that
    cannot record them is run as an unmeasured exploratory arm and excluded from rows 2-3.
 2. Any recorded `shell-exec`/`write_file` touching a persistence file is refuted by the
-   guard (Foundry also tightens the guard for this arm: a store change is reconciled
+   guard (**planned by Foundry, not yet merged**: for this arm a store change is reconciled
    byte-for-byte against recorded save events, and an unreconciled change after the last
-   recorded GUI save refutes; a run whose shell log is incomplete is `uncertain`, not pass), so **a trial where the arm "fixes" the store through the shell counts as
+   recorded GUI save refutes; a run whose shell log is incomplete is `uncertain`, not pass.
+   Until that merges, contract §5 limit (c) stands: a later GUI act explains a changed file), so **a trial where the arm "fixes" the store through the shell counts as
    refuted, not as a success**, even if the resulting file is correct.
 3. Reads are allowed and counted for the "checks every trial" fraction; an unrecorded
    read is invisible, which is exactly why (1) is required.
@@ -271,19 +275,56 @@ reuses its evidence** → (5) Foundry TIF-58 Microsoft Hybrid Computer Use GUI c
 Slots 4-5 install into the guest on a **new snapshot**; `clean-base` and
 `clean-base-live` are preserved.
 
-Consequences for Discovery:
+**Coordinator's answer (2026-11-21): slot 6 is tentatively granted as S0+S1 only.** It comes
+after queue slots 1-5 and needs: an explicit GO from the Coordinator; the shared VM lock
+(`scripts/vm-lock.sh`, PR #73; a driver that does not take it is refused with exit 10); a
+**new snapshot** for any guest change (`clean-base`/`clean-base-live` never modified); the
+6 GB / 6 vCPU guest and host gates (AC power, load ≤14, swap free ≥300 MB); and the
+preconditions below. S2-S4 are requested separately after S1.
 
-- The `screenshot-only` and `hcu` arms are **not** requested separately. Discovery consumes
-  the evidence from slots 4-5. Whether their trial counts reach the §4.1 minimums
-  (≥30 refutable, ~100 normal) is unknown until those slots finish; if they fall short,
-  an extension is requested as an additional slot, not assumed.
-- The `myco` arm and the `hcu+shell` arm are new and need a **slot 6 or later** on a new
-  snapshot, with their own GO. Both require the Runtime first path (RT-011) and, for the
-  Myco arm's verdict, host-side file read (RT-015); B also needs process control (RT-016).
+**Slots 4-5 do NOT meet the head-to-head minimums.** Per the Coordinator:
+
+- **Slot 4 (the only Cua C1 run, TIF-19)** runs the M1 calc-record-edit family on exactly the
+  30 v3 parameter sets. It does **not** run `ef-t01..t04`; it has normal trials only (no
+  corrupted or interrupted trials, so no refutable pairs by this document's definition); and it
+  has a hard spend cap ($9.00 total, $4.50 per arm by default) so coverage may be partial.
+  Shortfall against §4.1: at least ~70 normal trials per arm, all `ef-t01..t04` coverage, and
+  all ≥30 refutable pairs.
+- **Slot 5 (Foundry HCU GUI channel)**: trial count, task set and spend cap are the Foundry
+  owner's. `[INFERENCE]` it reuses the same 30-trial M1 conditions, so expect the same
+  shortfall unless the Foundry owner says otherwise (asked directly).
+
+Therefore **the `screenshot-only` and `hcu` arms on `ef-t01..t04` are not available from
+slots 4-5 and must be requested as extension slots**, with their own GO and, because Cua C1
+has a spend cap, an explicit spend decision (no money is spent or assumed here). The M1
+evidence (per-trial trace, result, verdict, fixture hash, convert timing for the 30 v3 trials
+and the 18-trial corrupted suite, identical conditions) is usable as a **reference arm for the
+calc family only**, not as ef-task evidence, and pairs across families are not made.
+
+- The `myco` arm and the `hcu+shell` arm are new and need slot 6 or later on a new snapshot.
+  Both require the Runtime first path (RT-011) and, for the Myco arm's verdict, host-side file
+  read (RT-015); B also needs process control (RT-016).
+
+**Open precondition: which guest runs `myco-todo`?** The sample app is a Tkinter app,
+"Linux-first" (`docs/coordination/dogfood-state.md`), and the runtime's REQ-01 is a Linux ARM64
+desktop session; the queue's guest is the Windows `myco-win11` (6 GB / 6 vCPU) running
+LibreOffice Calc. Nothing in the repo shows `ef-t01..t04` running on a live desktop yet. Until
+the Runtime owner or Coordinator says which guest and snapshot carry `myco-todo` for slot 6,
+S0 cannot be scheduled; this may also mean a Linux guest or a Windows port of the app, which is
+a new snapshot at minimum. Asked of both owners.
+
+**Measured numbers to budget with (Coordinator, M1 v3):** a cold `clean-base` restore ≈ 25 s
+and the agent deploy ≈ 20 s on this guest; a cold first LibreOffice launch after a reset is
+slow and variable (headless convert took 25-140 s in v3, once 169 s; the UNO bridge once missed
+a 15 s window right after a 94 s convert). The warm ~21 s figure is **not typical** and is only
+a lower bound on reset time; per-trial wall clock must include cold-launch variance (this
+applies to Calc/Writer families, not necessarily to `myco-todo`, whose cold-start cost is
+unmeasured).
 
 Ordered stages for that new slot, each independently useful and stoppable. Reset floor is
-~21 s per trial warm and ~165 s for a fresh UTM start (contract §7a); trial wall-clock
-beyond reset is **unmeasured** and must be measured in S1 before later stages are sized.
+~21-25 s per trial warm (contract §7a; Coordinator measured ~25 s cold `clean-base` plus ~20 s
+deploy) and ~165 s for a fresh UTM start; trial wall-clock beyond reset is **unmeasured** and
+must be measured in S1 before later stages are sized.
 
 | Stage | Purpose | Preconditions | Trials | Reset time (warm floor) | Yields |
 |---|---|---|---|---|---|
@@ -304,10 +345,14 @@ never quit Tiffany's apps; M1 retains host priority.
 
 1. **Foundry owner:** add the `hcu+shell` arm (shell calls recorded into `trace.jsonl`) and
    a no-verify variant of `ef-t01` to the registry/bank; the `ef-t01` ≈ DF-S02 mapping is **confirmed (defect level)**; see §2.
-2. **Planner:** decided: Claude `claude-sonnet-5-5` for all arms (above). Foundry owner records the exact id in the registry and each trace.
-3. **Coordinator (via outer loop):** a slot 6 (S0+S1) after queue slots 1-5, on a new
-   snapshot, with an explicit GO; RT-011 first path completed beforehand. Please also
-   confirm whether slots 4-5 will reach the §4.1 trial minimums.
-4. **Runtime owner:** fix X (§4.4) once a fork cost is measured; RT-015/RT-016 dates.
-5. **Tiffany:** sign-off on Viewer v0 (PR #69) tokens/decisions; Orgo/Sai/Details
+2. **Planner:** decided: Claude `claude-sonnet-5-5` for all arms (above). Foundry owner records the exact id in the registry `plannerName` and in each trial's evidence bundle and baseline row (not in `trace.jsonl`).
+3. **Coordinator:** answered. Slot 6 is tentatively granted as S0+S1 only, after slots 1-5,
+   with an explicit GO, the VM lock, a new snapshot and the host gates (§6). Slots 4-5 will
+   **not** reach the §4.1 minimums, so screenshot-only and hcu need extension slots (§6).
+   Still open: which guest and snapshot carry `myco-todo` (§6, open precondition).
+4. **Runtime owner:** RT-011/RT-015/RT-016 dates (asked, no reply yet); which guest runs
+   `myco-todo` for slot 6; fix X (§4.4) once a fork cost is measured.
+5. **Foundry owner:** size slot 5 (trial count, task set, spend cap) and say whether it uses
+   the hidden pairs; add the `hcu+shell` arm and `ef-t01b` (confirmed, not yet merged).
+6. **Tiffany:** sign-off on Viewer v0 (PR #69) tokens/decisions; Orgo/Sai/Details
    accounts remain unapproved and unrun.
