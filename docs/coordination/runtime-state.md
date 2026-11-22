@@ -468,3 +468,62 @@ makes them real. The live tests are ready and gated (`MYCO_RT_LIVE=1 ... --ignor
   separate `hardMedian` of 580 ms that all of these satisfy, so the tolerance check
   is what flakes. Escalated; not touched, because `viewer/` is another workstream's
   and changing a perf threshold is a judgment call about the benchmark's intent.
+
+## VM window — granted conditionally by the M1 Coordinator (2026-11-22)
+
+**Status: waiting for the "host free" message. No VM will be started before it.**
+
+Coordinator's terms, recorded so the window is used correctly:
+- One window, one uninterrupted proof: create → observe → act → evidence →
+  **honest full reset** (overlay recreated, cloud-init re-run) → destroy, then shut
+  the guest down inside the window and report measured numbers.
+- Queue ahead of me: Screenshot Baseline spike (criterion 7, blocked on an
+  Anthropic HTTP 400 diagnosis) and the row-8 live reproduction by a fresh operator.
+- Host gates they enforce: 1-minute load under ~14, swap free above ~300 MB
+  (preferably >2 GB), Mac on AC. At the time of writing swap free was ~628 MB, so
+  the window is a host condition, not a queue position.
+- Absolute rule on both sides: no VM before the message. A verifier once drove the
+  real VM during a live sweep and destroyed two trials.
+
+### What I will run, in order (pre-staged so the window is short)
+1. `cargo build --workspace` (already green; rebuild only if the tree moved).
+2. `runtime/guest/boot.sh`, wait for SSH, `build-agent-in-guest.sh`.
+3. `MYCO_RT_LIVE=1 cargo test -p myco-rt-backend-qemu --test first_path -- --nocapture`
+   — asserts on the guest's own state file, not on our claims; prints per-step timings.
+4. `runtime/guest/shutdown.sh`; verify `pgrep -f qemu-system-aarch64` is empty.
+5. Report measured create/observe/act/evidence/reset/destroy numbers, including the
+   honest 3–4 minute reset, and the exact head SHA the run used.
+
+### Known cost, stated up front
+The full reset is 3–4 minutes because it recreates the overlay and re-runs cloud-init.
+That is the contract the outer loop chose to keep as default (RT-019 fast-reset mode
+is backlogged behind this proof). The window therefore needs roughly 10 minutes of
+wall clock, not 2.
+
+### Not in this window
+RT-015 `read_file` live validation (PR #112 is in review, not on main) and RT-016
+process control. Both are separate, smaller windows if the Coordinator prefers.
+
+### Corrected finding: discovery works today (measured 2026-11-22)
+
+My earlier note said an agent must run from the repo root. That is **no longer
+true**, and I checked rather than assuming. `myco-rt-backend-qemu::workspace::discover()`
+resolves `$MYCO_HOME` -> walk up from the current directory -> **walk up from the
+executable**, and the executable path is what saves a bare-directory caller.
+
+Measured from `/tmp/myco-bare-test` with the in-tree binary:
+- `initialize` -> answered normally;
+- `tools/call observe` on an unknown session -> `unknown session` immediately, i.e.
+  discovery succeeded and the call reached business logic;
+- `tools/call create` -> **blocked**, because it genuinely tried to boot a VM.
+
+So the ease barrier is not discovery any more; it is that `create` takes minutes
+and gives no progress feedback. That is the thing to fix for TIF-56, and it is a
+different fix than the one my write-up implied.
+
+**Incident, recorded because it is mine:** that `create` probe ran while M1 held
+the host. No VM started (`pgrep -f qemu-system-aarch64` empty, no pidfile) because
+`boot.sh` was killed before it could, but the probe did leave a
+`runtime/guest/state/SESSION.lock`, which I cleared (stale pid). I should not have
+called `create` to test discovery; `observe` on a bogus session proves the same
+thing without touching the VM, and I used that afterwards.
