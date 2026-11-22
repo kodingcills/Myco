@@ -339,7 +339,6 @@ unchanged during prep.
   - Dogfood DF-005 (TIF-27) is **UNBLOCKED**; complete runbook and entry points delivered at [`docs/env/dogfood-runtime-runbook.md`](../env/dogfood-runtime-runbook.md).
   - RT-012 (TIF-41) Windows/UTM backend anticipation completed (design note at [`docs/architecture/windows-utm-backend.md`](../architecture/windows-utm-backend.md)); zero code touching UTM.
   - VM lock is **FREE** for Screenshot Baseline C1 / subsequent runs.
-
 ## Near-miss — a stale branch silently reverted security work (2026-11-22)
 
 While resolving PR #97 after the merge-rule reinstatement, `git diff --stat
@@ -365,3 +364,8 @@ Note: the same shape produced the earlier merge-rule breaches (#24/#25/#27/#28) 
 `git push origin HEAD:main` from a worktree on a feature branch. Main is now
 protected, so that vector is closed; the stale-base vector is not, and this is the
 check for it.
+
+  - Dogfood PR #98 decisions answered and ratified in `docs/coordination/dogfood-state.md`:
+    1. REQ-08: Oracles keep using authenticated SSH directly (independent ground truth); RT-015 `read_file` ships for agents/control channel.
+    2. REQ-09: RT-016 process control will be exposed symmetrically under `act` as `{"kind": "killProcess"}` and `{"kind": "relaunchProcess"}` (with tool aliases).
+    3. REQ-10/11: DF-S03 scores missing file edit / exec tools as `gap`, never pass.

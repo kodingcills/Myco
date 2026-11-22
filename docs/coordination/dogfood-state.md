@@ -104,3 +104,19 @@ Phase 1 (DF-005 / TIF-27) is **UNBLOCKED** (2026-11-22):
   - Dogfood test harness & oracles: CLI `runtime/target/debug/myco-rt` + SSH port forward `127.0.0.1:10022` (`runtime/guest/keys/id_ed25519`).
   - Target app verification: `scripts/deploy-verify-myco-todo.sh --go`.
 - Host discipline: VM time is queued through the M1 Coordinator (C1, M1-016, Foundry first); no VM is taken without GO.
+
+## Runtime Owner Decisions for DF-005 Runner & Oracles (2026-11-22)
+Handoff to [Myco Dogfood Owner](t3-thread://v2/b1bc9145-909e-40e7-87e6-eb7568f09bd3/mcp:launch:a4cad102668e27328e4726db527286133e1d90b3a6884a507edbd4fb1a0a5ebc) (PR #98):
+
+1. **REQ-08 (Oracle guest file reads):**
+   - **Decision:** Oracles **should keep reading guest store files directly over the authenticated SSH channel** (`127.0.0.1:10022`, user `myco`, key `runtime/guest/keys/id_ed25519`).
+   - **Rationale:** Ground-truth oracles are host-side and must remain strictly out-of-band and independent of the agent under test (ADR-0002).
+   - **RT-015 MCP tool:** A `read_file` tool will still ship for agents under test with bounded path grants. Core backend logic is already in place; MCP tool exposure lands today in the next runtime PR (~30m), with live VM validation scheduled at the next Coordinator slot.
+2. **REQ-09 (Process control — kill & relaunch):**
+   - **Decision:** When RT-016 lands on the MCP surface, process control will be exposed symmetrically under `act` (matching `launch`):
+     - Action kind `{"kind": "killProcess", "handle": "<opaque_handle>"}`.
+     - Action kind `{"kind": "relaunchProcess", "handle": "<opaque_handle>"}`.
+   - **Rationale:** Routing process lifecycle actions through `act` guarantees three-way outcome reporting (`DeliveredVerified`, `DeliveredUnverified`, `Failed`), monotonic `StateVersion` advances, and structured event emission into `trace.jsonl`. Convenience top-level tools (`kill_process`, `relaunch_process`) will also be aliased for tool discovery.
+3. **REQ-10 / REQ-11 (File edit & Shell exec for DF-S03):**
+   - **Decision:** Until RT-017 (`write_file`/edit) and RT-018 (`exec`) land on the MCP surface, DF-S03 (fix-seeded-bug) MUST score missing tools as an expected **`gap`** bucket (attributing to REQ-10 and REQ-11 per `dogfood/scoring.md`), **never pass**.
+   - **Rationale:** An agent without file-edit capabilities cannot fix the code in the guest; claiming pass without tool execution is a false-success trap. Marking missing tools as `gap` allows the DF-005 matrix to cleanly transition from `gap` to `success` as RT-017/018 land.
