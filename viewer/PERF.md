@@ -54,7 +54,21 @@ A positive verdict still waits for every check it waited for before: the result 
 `viewer/e2e/verdict-budget.pw.ts` runs in the standard `pnpm --filter viewer e2e`. It generates the 1,000- and 10,000-step runs itself (or reuses `MYCO_VIEWER_PERF_DIR`) and takes N = 20 loads (plus a discarded warmup) with the method above.
 
 - `MYCO_VIEWER_STRICT_BUDGET=1` asserts a 150 ms **maximum** for both sizes. This is the spec limit and is what to use on a development machine. It passes on the machine above and **fails on the pre-change build** (163.5 ms max at 10,000 steps).
-- Without the flag (shared CI runners) the 1,000-step limit stays at 150 ms and the **10,000-step limit is 250 ms**. Shared runners are noisy and several times slower than the M4 Pro the spec was written against, so an exact 150 ms assertion would be flaky there. This looser bound is a CI accommodation only. It does not change the budget. The strict run is the record.
+- A local run without the flag keeps the 150 ms (1,000 steps) and 250 ms (10,000 steps) maximum smoke-test limits.
+- The `viewer-perf` job in `.github/workflows/ci.yml` runs this file on both GitHub Actions runner images for PRs and pushes to main. The root CI commands do not run the full Playwright suite. The job uses the Chromium headless shell pinned by the frozen Playwright lockfile and caches it by OS and lockfile hash. It publishes the raw timings even when an assertion fails.
+
+### GitHub Actions calibration
+
+[PR #69 CI runs 307](https://github.com/kodingcills/Myco/actions/runs/44967228840) and [308](https://github.com/kodingcills/Myco/actions/runs/44967388441) measured the generated result/trace pair in Chromium. Each job measured 20 drops after one warmup. Run 307 printed the samples to 0.1 ms in its assertion failures. Run 308 returned identical macOS samples for all six requested job IDs, so only one macOS job from that run counts. All times are in milliseconds.
+
+| Runner | Jobs × 10,000-step drops | Pooled median / p95 / max | Highest job p95 | Hard median limit | Effective median limit |
+|---|---:|---:|---:|---:|---:|
+| macos-latest (provisional) | 2 × 20 | 315.4 / 499.9 / 586.8 | 503.5 | 580 | 425.8 |
+| ubuntu-latest | 7 × 20 | 403.0 / 519.8 / 655.1 | 544.3 | 630 | 544.1 |
+
+At 10,000 steps the job median must clear both limits in `viewer/e2e/perf-baseline.json`. The hard limit is the highest observed job p95 plus 15%, rounded upward to the next 10 ms. The relative limit allows 35% above the pooled median, rounded to 0.1 ms before storage. Ubuntu job medians ranged from 277.0 to 505.4 ms, leaving about 39 ms above the slowest job. The two macOS medians were 289.4 and 370.6 ms. The 1,000-step CI median limit stays at 150 ms. A single delayed sample has little effect on the median of 20. Runner-wide contention still shifts the median, and two macOS jobs give limited evidence of its frequency.
+
+Both hosted runner images already exceed 150 ms at baseline. Their checks can detect drift relative to runner performance. The strict local check still enforces the 150 ms spec maximum.
 
 ## Other §8 measurements (current build)
 
@@ -97,7 +111,6 @@ Further headroom, if the 10–14 ms margin proves too thin on other hardware: sp
 - Chrome Stable (the browser named in the spec) could not run here, so the numbers are for Playwright Chromium headless shell 159.
 - One machine, one sitting, N = 20. The nearest-rank p95 at N = 20 is the second-largest sample.
 - Large manifested inputs beyond the generated 33.6 MB run, cached and cold full-image screenshot latency, memory at 1,000 screenshots, and responsiveness throughout the full indexing window were not measured.
-- The 250 ms CI bound for 10,000 steps is looser than the spec. Only the strict-flag run asserts 150 ms.
 
 ## Timing definitions
 

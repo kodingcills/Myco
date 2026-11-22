@@ -1,11 +1,8 @@
-// Enforces gui-spec §8: "10,000 steps: Verdict <= 150 ms" and "Verdict visible after drop <= 150 ms".
-// Always runs in the standard e2e suite. It generates the 1k and 10k perf runs itself unless
-// MYCO_VIEWER_PERF_DIR already holds them.
-//   MYCO_VIEWER_STRICT_BUDGET=1  -> 150 ms maximum for both sizes (the spec; use on a dev machine)
-//   default (shared CI runners)  -> a drift guard, not the spec: the MEDIAN of N samples must stay under
-//   a per-OS hard threshold and (when CI=true) within a tolerance of the recorded per-OS baseline, both
-//   in perf-baseline.json and explained in viewer/PERF.md. A single slow sample cannot fail it.
-//   MYCO_VIEWER_BUDGET_REPORT=<file>  -> append one JSON line of the measured samples per size.
+// Measures the final painted verdict after a drop using generated 1k and 10k traces.
+// MYCO_VIEWER_STRICT_BUDGET=1 checks the GUI spec's 150 ms maximum for both sizes.
+// CI checks the median against the runner limits documented in viewer/PERF.md.
+// Local runs without the strict flag retain the existing smoke-test limits.
+// MYCO_VIEWER_BUDGET_REPORT=<file>  -> append one JSON line of the measured samples per size.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +12,8 @@ import { expect, test } from "@playwright/test";
 import { boot } from "./support.ts";
 
 const strict = process.env.MYCO_VIEWER_STRICT_BUDGET === "1";
-const samples = Number(process.env.MYCO_VIEWER_BUDGET_SAMPLES ?? 20);
+const ci = process.env.CI === "true";
+const samples = ci ? 20 : Number(process.env.MYCO_VIEWER_BUDGET_SAMPLES ?? 20);
 
 type Thresholds = { baselineMedian: number | null; hardMedian: number };
 type Baseline = {
@@ -137,18 +135,19 @@ for (const steps of [1000, 10000] as const) {
       );
     }
     const all = `samples: ${timings.map((t) => t.toFixed(1))}`;
-    if (strict) {
-      // The spec limit, judged on the maximum.
-      expect(max, `final verdict at ${steps} steps (spec 150 ms max). ${all}`).toBeLessThanOrEqual(
-        150,
-      );
+    if (strict || !ci) {
+      const limit = strict || steps === 1000 ? 150 : 250;
+      expect(
+        max,
+        `final verdict at ${steps} steps (maximum ${limit} ms). ${all}`,
+      ).toBeLessThanOrEqual(limit);
       return;
     }
     expect(
       median,
       `final verdict median at ${steps} steps over the hard threshold ${limits.hardMedian} ms. ${all}`,
     ).toBeLessThanOrEqual(limits.hardMedian);
-    if (process.env.CI && limits.baselineMedian !== null) {
+    if (limits.baselineMedian !== null) {
       const allowed = limits.baselineMedian * (1 + baseline.relativeTolerance);
       expect(
         median,
