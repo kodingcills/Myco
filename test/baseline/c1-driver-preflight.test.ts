@@ -2,16 +2,30 @@ import { describe, expect, it, vi } from "vitest";
 import { probeC1Driver } from "../../scripts/c1-driver-preflight.ts";
 import { driverReady } from "../../src/baseline/index.ts";
 
+const process = (CommandLine: string | null, SessionId = 2) => ({ CommandLine, SessionId });
+const daemon = process('"C:\\Program Files\\Cua\\cua-driver.exe" serve --socket pipe');
+const snapshot = (processes: ReturnType<typeof process>[], calcSession = 2) =>
+  JSON.stringify({ calcSession, processes });
+
 describe("C1 driver session preflight", () => {
   it.each([
     ["C1_CALC_PID_UNRESOLVED", "calc-pid-unresolved"],
     ["C1_DAEMON_ENUMERATION_FAILED", "daemon-enumeration-failed"],
-    ["C1_DAEMON_MISSING", "daemon-missing"],
-    ["C1_DAEMON_AMBIGUOUS", "daemon-ambiguous"],
-    ["C1_SESSION_NONINTERACTIVE", "session-noninteractive"],
-    ["C1_SESSION_MISMATCH", "session-mismatch"],
-    ["\r\nC1_SESSION_MATCH\r\n", "match"],
+    [snapshot([]), "daemon-missing"],
+    [snapshot([daemon, daemon]), "daemon-ambiguous"],
+    [snapshot([daemon], 0), "session-noninteractive"],
+    [snapshot([daemon], 1), "session-mismatch"],
+    [snapshot([process("cua-driver.exe serve", 0)]), "session-noninteractive"],
+    [snapshot([daemon]), "match"],
+    [snapshot([process('C:\\serve\\cua-driver.exe call --argument "serve"')]), "daemon-missing"],
+    [
+      snapshot([process("cua-driver.exe call --name serve"), process("cua-driver.exe serve", 1)]),
+      "session-mismatch",
+    ],
+    [snapshot([daemon, process(null)]), "daemon-command-line-unreadable"],
+    [snapshot([daemon, process("private guest output")]), "daemon-command-line-unreadable"],
     ["private guest output\nC1_SESSION_MATCH", "session-marker-invalid"],
+    ["C1_SESSION_MATCH", "session-marker-invalid"],
     ["", "session-marker-invalid"],
   ])("classifies %j without exposing raw guest output", (output, diagnostic) => {
     const query = vi
