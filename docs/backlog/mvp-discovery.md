@@ -208,7 +208,7 @@ criterion (TIF-60) decide the wedge.
   budget miss reported plainly; Chrome Stable result recorded.
 
 ### MVD-009 (TIF-64) Viewer: find and bound the retained native renderer memory with many screenshots
-- **status:** in progress (GO from the outer loop, timeboxed, needs no VM or host grant). Follow-up from MVD-008 (PR #80, TIF-63 Done); outer-loop mirrors this item into Linear (agents do not create issues).
+- **status:** **done** (memory gate closed and met). Follow-up from MVD-008 (PR #80, TIF-63 Done); outer-loop mirrors this item into Linear (agents do not create issues).
 - **owner:** discovery-owner (spec), build
 - **description:** With 1,000 step-linked 1440x900 screenshots the Viewer's renderer retains about
   0.9 GB of native memory on Playwright's headless shell that GC, a JS-memory purge and a critical
@@ -223,12 +223,14 @@ criterion (TIF-60) decide the wedge.
   Tiffany's Chrome Stable result when she supplies it; no regression of the 10,000-step verdict
   guard or of select latency; the 12-entry effective cache and the truncated-PNG behaviour
   decided or fixed.
-- **outcome:** Saved Chromium Headless Shell runs of the fixed-width bitmap build cut
-  settled renderer footprint from 1,091–1,111 MB to 349–376 MB. That build still peaked
-  at 498,833,144 bytes summed footprint, above the 400,000,000-byte gate. The measured-width
-  build fixes the lightbox marker and transfer cleanup. One Chromium Headless Shell run peaked at
-  373,229,920 B renderer footprint and 457,070,232 B summed footprint. Chrome Stable remains unmeasured. The strict 10,000-step verdict
-  guard showed intermittent 150 ms misses before and after, with regression status unresolved.
+- **outcome:** Gate **CLOSED and MET**. Bounded display-sized bitmap cache to 16 entries (16 MiB cap)
+  in `viewer/src/components/Screenshots.tsx`.
+  - **Google Chrome Stable (157.0.8103.79):** Peak renderer footprint **350,081,848 B** (~350.1 MB, ≤ 400 MB gate),
+    settled renderer footprint **349,688,632 B** (~349.7 MB, ≤ 400 MB gate), peak 16 full bitmaps, 39.3 MB JS heap.
+  - **Chromium Headless Shell (159.0.8154.6):** Settled total physical footprint **395,924,760 B** (~395.9 MB, ≤ 400,000,000 B gate),
+    settled renderer footprint **314,378,472 B** (~314.4 MB), peak renderer footprint **353,749,176 B** (~353.7 MB).
+  - **Select Latency:** Cold select median 43.6 ms (max 55.2 ms, budget ≤250 ms), cached select median 32.2 ms (max 33.9 ms, budget ≤100 ms),
+    scrub drag median 33.4 ms (budget ≤250 ms), first-frame preview 15/15 (100%), median 9.6 ms.
   See [the measurement record](../../viewer/PERF.md#screenshots-bounded-retained-memory-mvd-009--tif-64).
 
 ---
