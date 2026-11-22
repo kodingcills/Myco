@@ -23,6 +23,7 @@ fn find_ref(obs: &myco_rt_core::Observation, name: &str) -> Option<ElementRef> {
 }
 
 #[test]
+#[ignore = "live: needs the guest VM; run with MYCO_RT_LIVE=1 and --ignored"]
 fn live_act_launch_type_and_stale_ref() {
     if std::env::var("MYCO_RT_LIVE").as_deref() != Ok("1") {
         eprintln!("skipped: set MYCO_RT_LIVE=1");

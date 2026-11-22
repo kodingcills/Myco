@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 #[test]
+#[ignore = "live: needs the guest VM; run with MYCO_RT_LIVE=1 and --ignored"]
 fn live_lifecycle_create_reset_destroy() {
     if std::env::var("MYCO_RT_LIVE").as_deref() != Ok("1") {
         eprintln!("skipped: set MYCO_RT_LIVE=1 to run against the real guest");
