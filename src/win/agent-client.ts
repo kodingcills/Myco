@@ -381,8 +381,15 @@ export class AgentClient {
     return response.result;
   }
 
-  ping(): Promise<{ agent_version: string; session_id: string }> {
-    return this.request("ping") as Promise<{ agent_version: string; session_id: string }>;
+  ping(): Promise<{ agent_version: string; session_id: string; backend?: string }> {
+    // `backend` is present in the agent's wire response (observed: "windows")
+    // but was missing from this type, so callers logging it appeared to read a
+    // non-existent field. Optional because older agents may omit it.
+    return this.request("ping") as Promise<{
+      agent_version: string;
+      session_id: string;
+      backend?: string;
+    }>;
   }
 
   /** Read-only UNO readback (getValue/getString/getError/isModified). */
