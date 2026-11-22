@@ -1,4 +1,4 @@
-import { ArrowRight, CircleHelp, Minus } from "lucide-react";
+import { AlertTriangle, ArrowRight, CircleHelp, Minus } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { HeadToHeadReport } from "../data/head-to-head.ts";
 import { useViewer } from "../store.ts";
@@ -61,13 +61,35 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
       <header data-report-header>
         <div>
           <p className="type-micro text-text-secondary">Decision</p>
-          <h1 className="type-title text-text-primary" tabIndex={-1}>
-            {settled ? (decision.row ?? "No row") : "Not decided"}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="type-title text-text-primary" tabIndex={-1}>
+              {settled ? (decision.row ?? "No row") : "Not decided"}
+            </h1>
+            {report.provenance && report.provenance.kind !== "live" && (
+              <span
+                data-simulated-badge
+                className="type-data-small inline-flex items-center gap-1 px-1 border border-border-strong rounded-control text-text-primary bg-bg-surface3 whitespace-nowrap"
+                title="Not live guest evidence: this report is simulated, modelled, or replayed"
+              >
+                <AlertTriangle
+                  className="size-3 shrink-0 text-text-primary"
+                  strokeWidth={1.5}
+                  aria-hidden="true"
+                />
+                {report.provenance.kind === "simulated"
+                  ? "Simulated"
+                  : report.provenance.kind === "mixed"
+                    ? "Mixed"
+                    : "Unknown source"}
+              </span>
+            )}
+          </div>
           <p className="type-small text-text-secondary">
             {decision.status === "refused"
               ? `Refused: ${decision.reason ?? "no reason recorded"}`
-              : "The pre-registered rule returned this row"}
+              : report.provenance && report.provenance.kind !== "live"
+                ? "Not a live result: the arms below are not guest trials"
+                : "The pre-registered rule returned this row"}
           </p>
         </div>
       </header>
@@ -206,6 +228,44 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
               ))}
             </tbody>
           </table>
+        </section>
+      )}
+
+      {report.provenance && (
+        <section aria-label="Provenance">
+          <h2 className="type-micro text-text-secondary">Provenance</h2>
+          <p className="type-small text-text-primary">
+            {report.provenance.kind === "live"
+              ? "Live guest trials."
+              : report.provenance.kind === "simulated"
+                ? "Simulated: no guest trials back these numbers."
+                : report.provenance.kind === "mixed"
+                  ? "Mixed: at least one arm is not live guest evidence."
+                  : "Unknown source: the report does not say whether these are live trials."}
+          </p>
+          {report.provenance.note && (
+            <p className="type-small text-text-secondary">{report.provenance.note}</p>
+          )}
+          {report.provenance.arms && report.provenance.arms.length > 0 && (
+            <table data-report-table>
+              <thead className="type-micro text-text-secondary">
+                <tr>
+                  <th scope="col">Arm</th>
+                  <th scope="col">Source</th>
+                  <th scope="col">Live</th>
+                </tr>
+              </thead>
+              <tbody className="type-data">
+                {report.provenance.arms.map((arm) => (
+                  <tr key={arm.armId}>
+                    <td className="type-data-strong">{arm.armId}</td>
+                    <td>{arm.source}</td>
+                    <td>{arm.live ? "yes" : "no"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
       )}
 

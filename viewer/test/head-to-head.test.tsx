@@ -32,6 +32,9 @@ test("renders the decided row, the exact arm numbers, and the paired table", () 
   expect(text).toContain("1 silent-drop no yes");
   expect(text).toContain("screenshot-only");
   expect(text).toContain("A refused decision is a result");
+  expect(text).toContain("Simulated");
+  expect(text).toContain("Not a live result");
+  expect(text).toContain("viewer/fixtures/head-to-head.json (synthetic)");
   // A decision row is not a run verdict: no verdict badge anywhere.
   expect(html).not.toContain('data-verdict="Verified"');
 });
