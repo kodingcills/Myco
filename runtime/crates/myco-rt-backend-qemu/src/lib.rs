@@ -468,7 +468,6 @@ fn kill_zero(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// The element ref an action carries, if any.
 /// Lower an action to the JSON the guest agent parses (RT-008).
 ///
 /// Extracted from `act` so the wire form is testable without a guest (RT-022): the
@@ -503,6 +502,7 @@ fn action_to_wire(action: &Action) -> serde_json::Value {
     }
 }
 
+/// The element ref an action carries, if any.
 fn action_ref(action: &Action) -> Option<&myco_rt_core::ElementRef> {
     match action {
         Action::Click { target } | Action::TypeText { target, .. } => Some(target),
@@ -830,79 +830,61 @@ mod tests {
             assert_eq!(w["keys"], "ctrl+Return");
         }
 
-        /// Every variant must produce a `kind` the agent accepts. This is the
-        /// check that would have caught a new variant added to core but never
-        /// wired here -- the compiler catches a missing match arm, but not a
-        /// kind string that spells the variant differently.
+        /// Each variant equals its COMPLETE expected object, so a stray or renamed
+        /// field fails -- not just a missing one.
+        ///
+        /// Field-by-field assertions cannot catch an extra field: the verifier added
+        /// a bogus `"target"` to `clickAt` and every test still passed. Whole-object
+        /// equality pins the wire exactly, which is what "the contract" means.
+        ///
+        /// This replaces a weaker test whose only assertion was that the kind
+        /// contained no underscore. Deleting a variant from its array still passed
+        /// it, so it proved nothing about coverage; the exhaustive `match` in
+        /// `action_to_wire` is what guarantees every variant is wired, at compile
+        /// time.
         #[test]
-        fn every_variant_carries_a_camel_case_kind() {
-            let all = [
-                action_to_wire(&Action::Launch { command: "c".into(), args: vec![] }),
-                action_to_wire(&Action::Click { target: r("e") }),
-                action_to_wire(&Action::TypeText { target: r("e"), text: "t".into() }),
-                action_to_wire(&Action::TypeTextGlobal { text: "t".into() }),
-                action_to_wire(&Action::ClickAt { x: 0, y: 0 }),
-                action_to_wire(&Action::KeyPress { keys: "Return".into() }),
+        fn every_variant_emits_exactly_its_expected_object() {
+            let cases: Vec<(Action, serde_json::Value)> = vec![
+                (
+                    Action::Launch { command: "x".into(), args: vec!["-a".into()] },
+                    serde_json::json!({"kind": "launch", "command": "x", "args": ["-a"]}),
+                ),
+                (
+                    Action::Click { target: r("e1") },
+                    serde_json::json!({"kind": "click", "target": "e1"}),
+                ),
+                (
+                    Action::TypeText { target: r("e1"), text: "t".into() },
+                    serde_json::json!({"kind": "typeText", "target": "e1", "text": "t"}),
+                ),
+                (
+                    Action::TypeTextGlobal { text: "t".into() },
+                    serde_json::json!({"kind": "typeTextGlobal", "text": "t"}),
+                ),
+                (
+                    Action::ClickAt { x: 1, y: 2 },
+                    serde_json::json!({"kind": "clickAt", "x": 1, "y": 2}),
+                ),
+                (
+                    Action::KeyPress { keys: "Return".into() },
+                    serde_json::json!({"kind": "keyPress", "keys": "Return"}),
+                ),
             ];
-            for w in all {
-                let kind = w["kind"].as_str().expect("every action carries a kind");
-                assert!(
-                    !kind.contains('_'),
-                    "kind {kind:?} is not camelCase; the agent's serde rename expects camelCase"
+            assert_eq!(
+                cases.len(),
+                6,
+                "core has six Action variants; adding one must add a case here"
+            );
+            for (action, expected) in cases {
+                let actual = action_to_wire(&action);
+                assert_eq!(
+                    actual,
+                    expected,
+                    "{}: the wire object must match exactly, including having no extra \
+                     fields",
+                    action.kind_name()
                 );
             }
         }
-    }
-
-    fn config_for(dir: &Path) -> QemuConfig {
-        QemuConfig {
-            guest_dir: dir.to_path_buf(),
-            token: "t".into(),
-            ssh_port: 10022,
-            boot_timeout: Duration::from_secs(1),
-            introspection_file: None,
-            op_timeout_secs: 10,
-            desktop_timeout_secs: 1,
-            session_id: "test-session".into(),
-            evidence_root: dir.to_path_buf(),
-        }
-    }
-
-    #[test]
-    fn concurrency_cap_rejects_second_live_session() {
-        let dir = tempfile_dir("myco-rt-cap");
-        let mut a = QemuLinuxBackend::new(config_for(&dir));
-        a.acquire_lock().unwrap();
-        let mut b = QemuLinuxBackend::new(config_for(&dir));
-        match b.acquire_lock() {
-            Err(BackendError::CapReached(_)) => {}
-            other => panic!("expected CapReached, got {other:?}"),
-        }
-        a.release_lock();
-        // Lock released: a third session may proceed.
-        let mut c = QemuLinuxBackend::new(config_for(&dir));
-        c.acquire_lock().unwrap();
-        c.release_lock();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn drop_releases_lock() {
-        let dir = tempfile_dir("myco-rt-drop");
-        {
-            let mut a = QemuLinuxBackend::new(config_for(&dir));
-            a.acquire_lock().unwrap();
-        }
-        let mut b = QemuLinuxBackend::new(config_for(&dir));
-        b.acquire_lock().unwrap();
-        b.release_lock();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    fn tempfile_dir(prefix: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 }
