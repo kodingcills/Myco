@@ -90,6 +90,101 @@ fn guest_exec(workspace: &PathBuf, remote: &str) -> String {
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
+/// TIF-56: can an arbitrary agent drive the runtime from an unrelated directory?
+///
+/// The other tests start the MCP server with `cwd` = the repo root, so they pass
+/// whether or not discovery works. This one starts it from a directory with no
+/// relationship to the repo and no `MYCO_HOME`, which is the situation an external
+/// agent is actually in. If discovery only worked by cwd, this would fail.
+///
+/// It asserts on a real `create` through that server -- not on `initialize`, which
+/// answers without touching the workspace. Stage 3 of the proof covers the rest of
+/// the lifecycle; this covers the entry point.
+#[test]
+#[ignore = "live: needs the guest VM; run with MYCO_RT_LIVE=1 and --ignored"]
+fn mcp_discovers_the_workspace_from_an_unrelated_directory() {
+    if std::env::var("MYCO_RT_LIVE").as_deref() != Ok("1") {
+        eprintln!("skipped: set MYCO_RT_LIVE=1 (needs the guest and the host)");
+        return;
+    }
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent().and_then(|p| p.parent()).and_then(|p| p.parent())
+        .unwrap().to_path_buf();
+    let mcp_bin = workspace.join("runtime/target/debug/myco-rt-mcp");
+    assert!(mcp_bin.exists(), "build the MCP server first: cargo build --workspace");
+
+    // A directory that is deliberately unrelated to the repo, and a cleared
+    // MYCO_HOME so the executable-path fallback is what has to work.
+    let elsewhere = std::env::temp_dir().join(format!("myco-discovery-{}", std::process::id()));
+    std::fs::create_dir_all(&elsewhere).expect("temp dir");
+    assert!(
+        !elsewhere.starts_with(&workspace),
+        "the whole point is a cwd unrelated to the repo"
+    );
+    std::env::remove_var("MYCO_HOME");
+
+    let session = format!("rt020-disc-{}", std::process::id());
+    let mut mcp = Mcp::start(&mcp_bin, &elsewhere);
+    println!("started myco-rt-mcp with cwd={}", elsewhere.display());
+
+    let (err, created) = mcp.tool("create", serde_json::json!({"session_id": session}));
+    assert!(!err, "create from an unrelated cwd failed: {created}");
+    println!("CREATE FROM ELSEWHERE -> {created}");
+
+    // A second observation proves the session is live, not merely registered.
+    let (err, obs) = mcp.tool("observe", serde_json::json!({"session_id": session}));
+    assert!(!err, "observe from an unrelated cwd failed: {obs}");
+    println!("OBSERVE FROM ELSEWHERE -> v{}", obs["state_version"]);
+
+    let (err, _) = mcp.tool("destroy", serde_json::json!({"session_id": session}));
+    assert!(!err, "destroy failed");
+    println!("DISCOVERY FROM UNRELATED CWD PASS");
+}
+
+/// TIF-56: can an arbitrary agent drive the runtime from an unrelated directory?
+///
+/// The other tests start the MCP server with `cwd` = the repo root, so they pass
+/// whether or not discovery works. This one starts it from a directory with no
+/// relationship to the repo and no `MYCO_HOME`, which is the situation an external
+/// agent is actually in. If discovery only worked by cwd, this would fail.
+///
+/// It asserts on a real `create` through that server -- not on `initialize`, which
+/// answers without touching the workspace.
+#[test]
+#[ignore = "live: needs the guest VM; run with MYCO_RT_LIVE=1 and --ignored"]
+fn mcp_discovers_the_workspace_from_an_unrelated_directory() {
+    if std::env::var("MYCO_RT_LIVE").as_deref() != Ok("1") {
+        eprintln!("skipped: set MYCO_RT_LIVE=1 (needs the guest and the host)");
+        return;
+    }
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent().and_then(|p| p.parent()).and_then(|p| p.parent())
+        .unwrap().to_path_buf();
+    let mcp_bin = workspace.join("runtime/target/debug/myco-rt-mcp");
+    assert!(mcp_bin.exists(), "build the MCP server first: cargo build --workspace");
+
+    let elsewhere = std::env::temp_dir().join(format!("myco-discovery-{}", std::process::id()));
+    std::fs::create_dir_all(&elsewhere).expect("temp dir");
+    assert!(!elsewhere.starts_with(&workspace), "the whole point is an unrelated cwd");
+    std::env::remove_var("MYCO_HOME");
+
+    let session = format!("rt020-disc-{}", std::process::id());
+    let mut mcp = Mcp::start(&mcp_bin, &elsewhere);
+    println!("started myco-rt-mcp with cwd={}", elsewhere.display());
+
+    let (err, created) = mcp.tool("create", serde_json::json!({"session_id": session}));
+    assert!(!err, "create from an unrelated cwd failed: {created}");
+    println!("CREATE FROM ELSEWHERE -> {created}");
+
+    let (err, obs) = mcp.tool("observe", serde_json::json!({"session_id": session}));
+    assert!(!err, "observe from an unrelated cwd failed: {obs}");
+    println!("OBSERVE FROM ELSEWHERE -> v{}", obs["state_version"]);
+
+    let (err, _) = mcp.tool("destroy", serde_json::json!({"session_id": session}));
+    assert!(!err, "destroy failed");
+    println!("DISCOVERY FROM UNRELATED CWD PASS");
+}
+
 #[test]
 #[ignore = "live: needs the guest VM; run with MYCO_RT_LIVE=1 and --ignored"]
 fn first_path_create_observe_act_evidence_reset_destroy() {
