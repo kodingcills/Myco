@@ -361,7 +361,11 @@ export function Scrubber({
           <Thumbnail
             key={rows[i]!.step}
             row={rows[i]!}
-            x={toX(positions[i]!, span, width) - thumbWidth / 2}
+            x={clamp(
+              toX(positions[i]!, span, width) - thumbWidth / 2,
+              0,
+              Math.max(0, width - thumbWidth),
+            )}
             label={stepLabel(rows[i]!.step, digits)}
           />
         ))}

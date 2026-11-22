@@ -755,7 +755,10 @@
   place-items: center;
   width: var(--layout-filmstrip-thumb-width);
   height: var(--layout-filmstrip-thumb-height);
-  border-right: var(--border-width) solid var(--color-border-subtle);
+  border: var(--border-width) solid var(--color-border-subtle);
+  border-radius: var(--radius-thumb);
+  background-color: var(--color-bg-surface2);
+  overflow: hidden;
   font-size: var(--text-small);
   line-height: var(--text-small--line-height);
 }

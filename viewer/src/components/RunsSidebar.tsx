@@ -50,6 +50,12 @@ export function RunsSidebar({ mod }: { mod: boolean }) {
       <div data-run-tree role="tree" aria-label="Runs opened this session">
         {runs.map((run, index) => {
           const task = run.error ? "Can't read file" : (run.data.result?.taskId ?? run.name);
+          const isSimulated = Boolean(
+            run.data.manifest?.simulated ||
+              run.data.manifest?.dryRun ||
+              (run.data.result && "simulated" in run.data.result && run.data.result.simulated) ||
+              (run.data.result && "dryRun" in run.data.result && run.data.result.dryRun),
+          );
           return (
             <div
               key={run.key}
@@ -103,6 +109,15 @@ export function RunsSidebar({ mod }: { mod: boolean }) {
               <span className="type-body-strong truncate" title={task}>
                 {task}
               </span>
+              {isSimulated && (
+                <span
+                  data-simulated-badge
+                  className="type-data-small px-1 border border-border-default rounded-control text-text-secondary bg-bg-surface2 whitespace-nowrap"
+                  title="Simulated / dry-run harness"
+                >
+                  Simulated
+                </span>
+              )}
               {mod && index < 9 ? (
                 <kbd data-kbd>
                   {navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+"}

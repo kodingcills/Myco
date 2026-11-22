@@ -40,6 +40,8 @@ export interface RunManifest {
   format: "mycotrace/1";
   runId: string;
   files: Record<string, unknown>;
+  simulated?: boolean;
+  dryRun?: boolean;
 }
 
 export type EvidenceValidation =
