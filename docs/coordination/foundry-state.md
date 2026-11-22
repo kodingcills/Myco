@@ -176,11 +176,23 @@ UNO read. What it proves is that the class fires and is caught, host-side, with 
   on that endpoint). Research in this workstream therefore uses direct primary-source reads
   (arXiv API, project sites, GitHub API), which is the repo's citation discipline anyway.
 
-## Sub-threads
+## Sub-threads (verifier runs, reported to the outer loop)
 
-Each sub-thread carries its own independent verifier and is reported back here and to the
-outer loop. As of 2026-11-21: none spawned yet; the first wave (fixtures + verifiers) is
-being executed in this thread because it is one coherent contract.
+Every distinct verification is a separate spawn against a named SHA, never a re-use of an
+earlier verdict. All ran on `cheaperinference/deepseek-v4.1-flash` (judgment), no VM access.
+
+| # | Verifier | Target | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | FoundryVerifier | EF-001/EF-002 at 3c7d6ba | aborted | Provider quota (402) killed it mid-run; it had already found two real defects, both carried forward. |
+| 2 | PR110Verifier | PR #110 at f1f7bbb | REJECT | Seven findings: the stale-row defect could not fire; two regressions introduced by the first fix; a sign-test row wrong by 15 orders of magnitude; `stats.ts` dead code; hidden fixtures at version 0; three fixtures content-changed without a version bump; an assertion that ignored the screen. |
+| 3 | PR110Recheck | PR #110 at 5d21862 | REJECT | One regression left: the stale text was keyed on the fixture's designated target, so renaming any other row wrote the wrong text. |
+| 4 | PR110Final | PR #110 at e802a19 | **PASS** | All prior findings confirmed fixed; two minor cleanups applied after. Merged d09f209. |
+| 5 | EF003Verifier | PR #122 at 91c3371 | **PASS** | Three quality findings — the Writer family was dead surface, a recovery test claimed a re-read it did not perform, a comment implied nondeterminism. All fixed. Merged c37d944. |
+
+What the verifier rounds changed in the work itself, beyond the defects: a trap test that
+asserts only "refuted" cannot distinguish a working fixture from a broken one (ADR-0023),
+and two of the three rejections were regressions introduced *while fixing an earlier
+finding*, which is why the save path now has five cases each asserting store and screen.
 
 ## Not touched
 
