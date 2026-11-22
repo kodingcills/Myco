@@ -158,6 +158,12 @@ describe("baseline", () => {
     });
   });
   // Guards against invalid budget, cost, version, and colliding sub-arm keys.
+  it("accepts a battery row as valid evidence", () => {
+    // acPower is recorded, never enforced: reverting the schema to
+    // `acPower === true` would silently invalidate every battery row.
+    expect(isBaselineRow({ ...row, acPower: false })).toBe(true);
+  });
+
   it("validates row semantics", () => {
     expect(isBaselineRow(row)).toBe(true);
     for (const bad of [
@@ -191,10 +197,6 @@ describe("baseline", () => {
     expect(
       isBaselineRow({ ...row, audited: false, independentValuePresent: null, falseSuccess: null }),
     ).toBe(true);
-    // A battery row is VALID evidence: acPower is recorded, never enforced.
-    // Without this, reverting the schema to `acPower === true` would silently
-    // mark every battery row invalid and no test would notice.
-    expect(isBaselineRow({ ...row, acPower: false })).toBe(true);
     expect(
       isBaselineRow({
         ...row,
