@@ -69,10 +69,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--go", action="store_true", help="authorise a real VM boot")
     ap.add_argument("--server-cmd", help="MCP server command (default: built myco-rt-mcp)")
+    ap.add_argument("--verify-myco-todo", action="store_true", help="deploy and smoke-test myco-todo inside the live session")
     ap.add_argument("--session", default=f"rt020-{int(time.time())}")
     a = ap.parse_args()
 
     live = a.server_cmd is None
+    if a.verify_myco_todo and not live:
+        ap.error("--verify-myco-todo requires a live session")
     if live:
         if not a.go:
             sys.exit("refusing to boot a VM without --go (wait for the M1 Coordinator's go message)")
@@ -145,6 +148,14 @@ def main():
             assert result.get("recordKind") == "session", result.get("recordKind")
             return {"trace": e["trace"], "result": e["result"], "trace_events": len(trace)}
         step("evidence", evidence)
+
+        if a.verify_myco_todo:
+            def verify_myco_todo():
+                return subprocess.check_output(
+                    [os.path.join(REPO, "scripts", "deploy-verify-myco-todo.sh"), "--go"],
+                    text=True, timeout=60,
+                ).strip()
+            step("verify-myco-todo", verify_myco_todo)
 
         def destroy():
             nonlocal created

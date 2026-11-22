@@ -77,6 +77,7 @@ impl QemuConfig {
 pub struct QemuLinuxBackend {
     config: QemuConfig,
     channel: Option<Channel>,
+    read_root: Option<String>,
     lock_path: PathBuf,
     locked: bool,
     /// State version of the last successful `observe`; refs are bound to it.
@@ -96,11 +97,41 @@ impl QemuLinuxBackend {
         Self {
             config,
             channel: None,
+            read_root: None,
             lock_path,
             locked: false,
             last_state_version: 0,
             recorder: None,
         }
+    }
+
+    /// Enable host-oracle reads under one existing guest directory at provision and reset.
+    pub fn with_read_grant(mut self, root: String) -> Self {
+        self.read_root = Some(root);
+        self
+    }
+
+    pub fn read_guest_file(&mut self, relative_path: &str) -> Result<Vec<u8>, BackendError> {
+        Ok(self.control_channel()?.read_file(relative_path)?)
+    }
+
+    pub fn launch_guest_process(&mut self, command: &str, args: &[String]) -> Result<String, BackendError> {
+        self.last_state_version = 0;
+        Ok(self.control_channel()?.launch_process(command, args)?)
+    }
+
+    pub fn kill_guest_process(&mut self, handle: &str) -> Result<myco_rt_transport::ProcessExit, BackendError> {
+        self.last_state_version = 0;
+        Ok(self.control_channel()?.kill_process(handle)?)
+    }
+
+    pub fn relaunch_guest_process(&mut self, handle: &str) -> Result<String, BackendError> {
+        self.last_state_version = 0;
+        Ok(self.control_channel()?.relaunch_process(handle)?)
+    }
+
+    fn control_channel(&mut self) -> Result<&mut Channel, BackendError> {
+        self.channel.as_mut().ok_or_else(|| BackendError::Protocol("no active guest control channel".into()))
     }
 
     fn run_script(&self, name: &str, args: &[&str]) -> Result<String, BackendError> {
@@ -216,6 +247,9 @@ impl QemuLinuxBackend {
     fn connect(&mut self) -> Result<(), BackendError> {
         let mut ch = Channel::connect_ssh(&self.ssh_config())?;
         ch.require_ops(&["ping", "observe"])?;
+        if let Some(root) = &self.read_root {
+            ch.grant_read(root)?;
+        }
         self.channel = Some(ch);
         Ok(())
     }
