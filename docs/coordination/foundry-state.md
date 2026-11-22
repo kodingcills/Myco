@@ -27,8 +27,8 @@ host without a desktop. Any future VM work is scheduled through the M1 Coordinat
 
 | Linear | Id | Status | Artefact |
 |---|---|---|---|
-| TIF-50 | EF-001 | **done, PR #110 pending verifier** | Four fixtures across four defect classes, each with a statement-level screen-vs-store assertion; `docs/foundry/contract.md` §3 |
-| TIF-51 | EF-002 | **done, PR #110 pending verifier** | `src/foundry/oracles/state.ts` (derived truth, no-leak by type), mutation audit, hidden split commitment |
+| TIF-50 | EF-001 | **done, PR #110 verified PASS** | Four fixtures across four defect classes, each with a statement-level screen-vs-store assertion; `docs/foundry/contract.md` §3 |
+| TIF-51 | EF-002 | **done, PR #110 verified PASS** | `src/foundry/oracles/state.ts` (derived truth, no-leak by type), mutation audit, hidden split commitment |
 | TIF-52 | EF-003 | blocked on EF-001 + EF-002 | `src/foundry/faults/` (planned) + `docs/research/findings/f1-ef-fault-taxonomy.md` |
 | TIF-57 | EF-004 | blind scoring + hidden split landed (PR #64); `src/foundry/stats.ts` adds the interval/caveat contract (PR #110) | `src/foundry/oracles/blind.ts`, `foundry/hidden-commitment.json`, `src/foundry/stats.ts` |
 | TIF-58 | EF-005 | host harness merged; live run awaits Coordinator GO | [baseline status](../foundry/baseline-status.md), PRs #70 and #75 |
@@ -104,6 +104,33 @@ derived from the id and the hidden commitment is regenerated.
   mutation Calc cannot produce, and Writer table cells read through the same UNO call shape.
 - **No drift claim is available** from published sources (m2-04); if the Foundry needs one it
   must generate the evidence and say so.
+
+## Log 2026-11-22 (2) — PR #110 through three verifier rounds to PASS
+
+The first verifier rejected with seven findings. Six were mine, introduced while fixing the
+stale-row defect; one was a doc error. All are fixed, and each fix has a test that fails if
+it comes back:
+
+| Round | Verdict | What it caught |
+|---|---|---|
+| 1 | REJECT | Stale-row save corrupted the store on a plain Add (it inferred "rename" from the typed text, which Add also sets); a no-op save capitalised untouched rows; contract §6.1's sign-test row was wrong by 15 orders of magnitude; `stats.ts` was dead code so its caveats could never reach a report; hidden fixtures had silently dropped to version 0; three fixtures changed content without the version bump §7 mandates; the partial-write assertion ignored the screen. |
+| 2 | REJECT | One regression left: the stale text was keyed on the fixture's designated target, so renaming any *other* row wrote the wrong text and duplicated an untouched row. |
+| 3 | **PASS** | Fixed by carrying each row's load-time text (`loadedRows`) and substituting at the renamed index — the defect is now stated generally ("a renamed row keeps its load-time text") and is correct for any row. |
+
+Two things worth keeping from this:
+
+1. **The verifier's probes were better than my tests.** Every rejection came from a script
+   that printed the store next to the screen for a sequence I had not tried. ADR-0023 now
+   requires statement-level assertions for exactly this reason.
+2. **A fix can be worse than the bug.** Rounds 1 and 2 were both regressions I introduced
+   while fixing the original defect. The lesson is in the tests, not the prose: the save
+   path now has four cases (no-op, add, delete, rename) and a rename-after-add case, each
+   asserting the store and the screen.
+
+`stats.ts` is no longer dead: `oracles/report.ts` owns the single `wilson` implementation and
+puts `scoreClaim()` into `completion.claim`, so a report cannot publish a rate without its
+interval and caveats. Verified end to end — a 10-trial report carries both underpowered
+caveats.
 
 ## Escalations (queued for the outer loop; the Foundry does not act on them)
 
