@@ -80,23 +80,38 @@ PY
 }
 
 vm_lock_owned_by_parent() {
-  local pid driver
-  [ "${MYCO_VM_LOCK_OWNER:-}" = "$PPID" ] &&
+  local pid driver owner="${MYCO_VM_LOCK_OWNER:-}"
+  [ -n "$owner" ] &&
     read -r pid driver < "$VM_LOCK_PATH" &&
-    [ "$pid" = "$PPID" ] &&
+    [ "$pid" = "$owner" ] &&
     case "$driver" in
-      m1-sweep.sh|m1-corrupt-suite.sh)
+      m1-sweep.sh|m1-corrupt-suite.sh|c1-baseline.sh|c1-sweep.sh|c1-spike.sh)
         kill -0 "$pid" 2>/dev/null &&
-          python3 - "$VM_LOCK_PATH" <<'PY'
+          python3 - "$VM_LOCK_PATH" "$owner" <<'PY'
 import os
+import subprocess
 import sys
 
-# Darwin's /dev/fd entries have different stat() identities from the
-# files they open. Compare the inherited descriptor itself.
+path, owner_str = sys.argv[1:3]
+owner = int(owner_str)
+
 try:
-    sys.exit(not os.path.samestat(os.fstat(9), os.stat(sys.argv[1])))
+    if os.path.samestat(os.fstat(9), os.stat(path)):
+        sys.exit(0)
 except OSError:
-    sys.exit(1)
+    pass
+
+curr = os.getppid()
+while curr > 1:
+    if curr == owner:
+        sys.exit(0)
+    try:
+        out = subprocess.check_output(["ps", "-o", "ppid=", "-p", str(curr)], text=True)
+        curr = int(out.strip())
+    except Exception:
+        break
+
+sys.exit(1)
 PY
         ;;
       *) return 1 ;;
