@@ -183,6 +183,51 @@ describe("EF-005 executor records what the grader audits", () => {
     expect(scored.result.traceGuard.status).toBe("file-io-shortcut");
   });
 
+  it("a GUI action the transport never delivered does not appear in the trace", async () => {
+    // A trace is a record of what happened. Recording an undelivered input would let the
+    // oracle reason about an edit the guest never received.
+    const guest = fakeGuest({ failOnAct: "typeText" });
+    const run = await executeTrial(
+      new ArmRecorder(),
+      guest.transport,
+      async (surface) => {
+        try {
+          await surface.act({ kind: "typeText", target: "entry", detail: "buy milk" });
+        } catch {
+          // the executor does not rethrow; the arm simply proceeds
+        }
+        return { claimsSuccess: true, text: "claimed" };
+      },
+      options(),
+    );
+    const actions = run.trace.filter((event) => event.type === "action");
+    expect(actions).toHaveLength(0);
+    expect(run.transportFailed).toBe(true);
+  });
+
+  it("stops at the tool-call ceiling instead of recording past it", async () => {
+    const guest = fakeGuest();
+    const recorder = new ArmRecorder({ maxCalls: 2 });
+    const run = await executeTrial(
+      recorder,
+      guest.transport,
+      async (surface) => {
+        for (let i = 0; i < 5; i++) {
+          try {
+            await surface.tool("shell-exec", { operation: "exec", command: "cat store.json" });
+          } catch {
+            break;
+          }
+        }
+        return { claimsSuccess: false, text: "limited" };
+      },
+      options(),
+    );
+    expect(recorder.callLimitExceeded).toBe(true);
+    expect(run.evidence.recordedCalls.length).toBe(2);
+    expect(run.evidence.status).toBe("quota-exhausted");
+  });
+
   it("a transport failure mid-action yields an incomplete trial, never a finished one", async () => {
     const guest = fakeGuest({ failOnAct: "typeText" });
     const run = await executeTrial(

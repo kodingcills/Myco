@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { credulous, fileOnly, honestReread } from "../../src/foundry/baseline/arms/index.ts";
-import { armRegistry, baselineStatusMarkdown } from "../../src/foundry/baseline/registry.ts";
+import {
+  armRegistry,
+  baselineArmTable,
+  baselineStatusMarkdown,
+} from "../../src/foundry/baseline/registry.ts";
 import type { Fault } from "../../src/foundry/faults/index.ts";
 import { baselineReport, metrics } from "../../src/foundry/grader/baseline-report.ts";
 import { runArm } from "../../src/foundry/grader/baseline-runner.ts";
@@ -347,6 +351,10 @@ describe("baseline", () => {
   });
   it("documents every blocked arm and planner", () => {
     expect(armRegistry.every((a) => a.blocker && a.plannerName)).toBe(true);
-    expect(readFileSync("docs/foundry/baseline-status.md", "utf8")).toBe(baselineStatusMarkdown());
+    // The doc also carries prose sections the registry cannot know about, so pin the
+    // generated arm table rather than the whole file.
+    const doc = readFileSync("docs/foundry/baseline-status.md", "utf8");
+    expect(doc).toContain(baselineArmTable());
+    expect(doc.startsWith(baselineStatusMarkdown().split("## Live arms")[0]!)).toBe(true);
   });
 });

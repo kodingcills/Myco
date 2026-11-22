@@ -76,6 +76,7 @@ export class ArmRecorder {
   readonly #trace: GuardTraceEvent[] = [];
   readonly #open = new Map<string, { via: CallVia; accesses: RecordedAccess[] }>();
   #closed = false;
+  #limitHit = false;
   #tick = 0;
 
   constructor(options: RecorderOptions = {}) {
@@ -86,9 +87,9 @@ export class ArmRecorder {
     return this.#calls.length;
   }
 
-  /** True once the arm went past its tool-call ceiling; the trial is then not a clean trial. */
+  /** True once the arm hit its tool-call ceiling; the trial is then not a clean trial. */
   get callLimitExceeded(): boolean {
-    return this.#options.maxCalls !== undefined && this.#calls.length > this.#options.maxCalls;
+    return this.#limitHit;
   }
 
   #timestamp(): string {
@@ -107,6 +108,12 @@ export class ArmRecorder {
     if (callId.trim() === "") throw new Error("callId must not be empty");
     if (this.#calls.some((call) => call.callId === callId))
       throw new Error(`callId ${callId} is already recorded`);
+    if (this.#options.maxCalls !== undefined && this.#calls.length >= this.#options.maxCalls) {
+      // Refuse rather than record: an arm that ignores its ceiling must not produce evidence
+      // that reconciles cleanly, or the ceiling is decorative.
+      this.#limitHit = true;
+      throw new Error(`tool-call ceiling of ${this.#options.maxCalls} reached`);
+    }
     this.#calls.push({ callId, via });
     this.#open.set(callId, { via, accesses: [] });
     this.#trace.push({ type: "tool-call", timestamp: this.#timestamp(), callId, via });
@@ -155,7 +162,13 @@ export class ArmRecorder {
     this.#open.delete(callId);
   }
 
-  /** Close every still-open call as incomplete, then freeze the recording. */
+  /**
+   * Close every still-open call as incomplete, then freeze the recording.
+   *
+   * `evidence()` reports `quota-exhausted` when the call ceiling was hit, which the grader
+   * already routes to a paused trial — the ceiling and the pause are the same condition seen
+   * from two sides.
+   */
   close(): {
     trace: readonly GuardTraceEvent[];
     calls: readonly RecordedCall[];
@@ -179,7 +192,7 @@ export class ArmRecorder {
       armId: meta.armId,
       taskId: meta.taskId,
       promptHash: meta.promptHash,
-      status: meta.status ?? "finished",
+      status: meta.status ?? (this.#limitHit ? "quota-exhausted" : "finished"),
       ...(meta.planner ? { planner: meta.planner } : {}),
       recordedCalls: calls,
       recordedCallCount: calls.length,

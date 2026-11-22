@@ -41,7 +41,7 @@ export interface PairedComparison {
   readonly neither: number;
   /** Two-sided exact sign test p-value over the discordant trials. */
   readonly p: number;
-  /** The smallest p reachable at this discordance; equal to `p` when the split is unanimous. */
+  /** One arm won every discordant trial, with at least one discordant trial. */
   readonly unanimous: boolean;
   readonly verdict: "left" | "right" | "tie" | "underpowered";
   readonly leftRate: { readonly rate: number; readonly interval: Interval };
@@ -55,6 +55,15 @@ export interface PairedComparison {
  * nothing — which is why a comparison where both arms agree is uninformative, not neutral.
  */
 export function signTest(leftOnly: number, rightOnly: number): number {
+  // A negative count is not a small count; it is a caller bug, and returning p = 0 for it
+  // would hand out the most significant possible result from nonsense input.
+  if (
+    !Number.isSafeInteger(leftOnly) ||
+    !Number.isSafeInteger(rightOnly) ||
+    leftOnly < 0 ||
+    rightOnly < 0
+  )
+    throw new Error(`signTest needs non-negative safe integers, got (${leftOnly}, ${rightOnly})`);
   const n = leftOnly + rightOnly;
   if (n === 0) return 1;
   const k = Math.min(leftOnly, rightOnly);
@@ -108,7 +117,11 @@ export function compareArms(
 
   const paired = both + neither + leftOnly + rightOnly;
   const p = signTest(leftOnly, rightOnly);
-  const unanimous = leftOnly === 0 || rightOnly === 0;
+  // Unanimous means one arm won every discordant trial. Zero discordance is not unanimous:
+  // the arms agreed, which proves nothing, and calling that unanimous is the misreading
+  // contract §6.1 warns about.
+  const discordant = leftOnly + rightOnly;
+  const unanimous = discordant > 0 && (leftOnly === 0 || rightOnly === 0);
   const leftRate = rate(leftOnly + both, paired);
   const rightRate = rate(rightOnly + both, paired);
 

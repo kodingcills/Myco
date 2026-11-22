@@ -90,7 +90,6 @@ export async function executeTrial(
   let budgetExhausted = false;
   let transportFailed = false;
   let failure: string | undefined;
-  let currentGuiCall: string | null = null;
   let callSeq = 0;
   const nextCallId = () => `${options.armId}-${++callSeq}`;
 
@@ -102,7 +101,6 @@ export async function executeTrial(
     } finally {
       // A transport failure inside the call leaves the audit incomplete, not absent.
       recorder.end(callId, transportFailed ? "incomplete" : "complete");
-      currentGuiCall = null;
     }
   };
 
@@ -127,13 +125,17 @@ export async function executeTrial(
       }
       steps += 1;
       await withGuiCall(async (callId) => {
-        currentGuiCall = callId;
+        let delivered = true;
         try {
           await transport.act(action);
         } catch (error) {
+          // The input never reached the guest. Record the attempt on the trial, not an
+          // action in the trace: a trace is a list of things that happened, and the state
+          // oracle must never be asked to reason about an edit that never occurred.
+          delivered = false;
           fail(error);
         }
-        if (currentGuiCall) recorder.act(callId, action, steps);
+        if (delivered) recorder.act(callId, action, steps);
       });
     },
     async tool(via, request) {

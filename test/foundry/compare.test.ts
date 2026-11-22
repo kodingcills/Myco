@@ -33,6 +33,19 @@ describe("EF-005 sign test", () => {
     expect(signTest(10, 20)).toBeGreaterThan(0.05);
   });
 
+  it("rejects nonsense counts instead of returning the most significant p", () => {
+    for (const [a, b] of [
+      [-1, 0],
+      [0, -1],
+      [-5, 3],
+      [1, -9],
+      [Number.NaN, 2],
+      [1.5, 2],
+    ] as const) {
+      expect(() => signTest(a, b), `${a},${b}`).toThrow(/non-negative safe integers/);
+    }
+  });
+
   it("is symmetric and never exceeds 1", () => {
     for (const [a, b] of [
       [1, 0],
