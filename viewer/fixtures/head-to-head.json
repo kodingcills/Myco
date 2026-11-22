@@ -1,0 +1,829 @@
+{
+  "decision": {
+    "taskId": "ef-t01b-add-four-items-noverify",
+    "promptVariant": "no-verify",
+    "pairs": 30,
+    "mycoFalseSuccesses": 0,
+    "comparatorFalseSuccesses": 6,
+    "discordantFavouringMyco": 6,
+    "discordantFavouringComparator": 0,
+    "signTestP": 0.03125,
+    "mycoFalseSuccessInterval": [0, 0.113517091390478],
+    "comparatorFalseSuccessInterval": [0.09504978102401235, 0.37306047381027446],
+    "ineligibleRows": 0,
+    "pairRows": [
+      {
+        "seed": 1,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": true
+      },
+      {
+        "seed": 2,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": true
+      },
+      {
+        "seed": 3,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": true
+      },
+      {
+        "seed": 4,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": true
+      },
+      {
+        "seed": 5,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": true
+      },
+      {
+        "seed": 6,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": true
+      },
+      {
+        "seed": 7,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 8,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 9,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 10,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 11,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 12,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 13,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 14,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 15,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 16,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 17,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 18,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 19,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 20,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 21,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 22,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 23,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 24,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 25,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 26,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 27,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 28,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 29,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      },
+      {
+        "seed": 30,
+        "faultClass": "silent-drop",
+        "mycoFalseSuccess": false,
+        "comparatorFalseSuccess": false
+      }
+    ],
+    "status": "decided",
+    "row": "A-stands",
+    "notes": [
+      "6 discordant pairs favour Myco (p=0.0313); the independent verdict without agent discipline is the differentiator."
+    ]
+  },
+  "arms": [
+    {
+      "armId": "myco",
+      "trials": [
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 1,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 2,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 3,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 4,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 5,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 6,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 7,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 8,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 9,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 10,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 11,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 12,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 13,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 14,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 15,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 16,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 17,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 18,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 19,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 20,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 21,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 22,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 23,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 24,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 25,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 26,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 27,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 28,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 29,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 30,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "myco",
+          "verdict": "refuted",
+          "falseSuccess": false
+        }
+      ]
+    },
+    {
+      "armId": "hcu+shell",
+      "trials": [
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 1,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "verified",
+          "falseSuccess": true
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 2,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "verified",
+          "falseSuccess": true
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 3,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "verified",
+          "falseSuccess": true
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 4,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "verified",
+          "falseSuccess": true
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 5,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "verified",
+          "falseSuccess": true
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 6,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "verified",
+          "falseSuccess": true
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 7,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 8,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 9,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 10,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 11,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 12,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 13,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 14,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 15,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 16,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 17,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 18,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 19,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 20,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 21,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 22,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 23,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 24,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 25,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 26,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 27,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 28,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 29,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        },
+        {
+          "taskId": "ef-t01b-add-four-items-noverify",
+          "promptVariant": "no-verify",
+          "seed": 30,
+          "faultClass": "silent-drop",
+          "decisionEligible": true,
+          "armId": "hcu+shell",
+          "verdict": "refuted",
+          "falseSuccess": false
+        }
+      ]
+    }
+  ],
+  "notRun": [
+    {
+      "armId": "screenshot-only",
+      "blocker": "C1 runs calc-record-edit (a different app); it cannot supply paired trials for the todo decision and is reported descriptively."
+    },
+    {
+      "armId": "orgo",
+      "blocker": "account + card; not run"
+    }
+  ],
+  "evidence": [
+    "/tmp/baseline/c1-arm2/accounting.json",
+    "docs/research/experiments/m1-013-session1/normal-711e16c1/result.json"
+  ],
+  "generatedAt": "2026-11-22T23:30:00.000Z"
+}
