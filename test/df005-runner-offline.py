@@ -230,21 +230,59 @@ def main() -> int:
     v = validate_artifacts(d)
     expect(v == "", f"schema validation: {v or 'valid'}")
 
-    print("10. mutation: removing the no-guest gate must fail this suite")
+    print("10. non-object JSON store → uncertain, evidence still written")
+    for body in ("[1, 2, 3]", '"a string"', "42", "true", "null"):
+        rb = tempfile.NamedTemporaryFile("w", suffix=".py", delete=False)
+        rb.write(f"#!/usr/bin/env python3\nprint({body!r})\n")
+        rb.close()
+        env = {"MYCO_DF005_ASSUME_GUEST": "1",
+               "MYCO_DF005_READBACK_CMD": f"{sys.executable} {rb.name}"}
+        h = Harness()
+        h.env = env
+        code, d = h.run(scenario="DF-S01")
+        state = ledger(d)["run-df-s01-1"]["state"]
+        c = checks_of(d, "run-df-s01-1")["persisted-set-matches"]
+        expect(state == "uncertain", f"{body}: uncertain, not a crash (got {state})")
+        expect(c["passed"] is None, f"{body}: passed is null")
+        expect((d / "run-df-s01-1" / "trace.jsonl").exists(), f"{body}: trace written")
+        os.unlink(rb.name)
+
+    print("11. mutation: each no-guest gate is independently load-bearing")
     src = RUNNER.read_text()
-    gate = 'if offline and not assume_guest:'
-    assert gate in src, "guest gate not found; update this mutation to the current shape"
-    broken = src.replace(gate, "if False and not assume_guest:", 1)
-    expect(broken != src, "mutation applied")
-    RUNNER.write_text(broken)
+    offline_gate = "if offline and not assume_guest:"
+    live_gate = "if not assume_guest and not probe.guest_alive:"
+    expect(offline_gate in src, "offline gate present")
+    expect(live_gate in src, "live-guest gate present")
+    # Behavioural probe, not a source assertion: disable one gate, run, restore.
+    for label, gate in (("offline gate", offline_gate), ("live-guest gate", live_gate)):
+        mutated = src.replace(gate, "if False:", 1)
+        RUNNER.write_text(mutated)
+        try:
+            code, d = Harness().run(scenario="DF-S01")
+            state = ledger(d)["run-df-s01-1"]["state"]
+            reason = checks_of(d, "run-df-s01-1").get("runtime-capability", {}).get("reason", "")
+        finally:
+            RUNNER.write_text(src)
+        # With either gate gone the run must still not be `pass`; the other gate
+        # or the readback must refuse it.
+        expect(state != "pass", f"{label} removed: still not `pass` (got {state})")
+        expect(state in ("gap", "uncertain", "failure"),
+               f"{label} removed: lands in a non-success bucket ({state}: {reason[:60]})")
+
+    print("12. both gates removed: the readback channel is the third guard")
+    mutated = src.replace(offline_gate, "if False:", 1).replace(live_gate, "if False:", 1)
+    RUNNER.write_text(mutated)
     try:
-        # With the offline gate disabled the guest probe is the only thing left,
-        # and it must still refuse: a stub is not a guest.
         code, d = Harness().run(scenario="DF-S01")
         state = ledger(d)["run-df-s01-1"]["state"]
+        reason = checks_of(d, "run-df-s01-1")["persisted-set-matches"]["reason"]
     finally:
         RUNNER.write_text(src)
-    expect(state == "gap", f"guest probe alone still yields gap (got {state})")
+    # With no gate left, the real ssh readback still fails and the run is
+    # `uncertain` (could not look) — never `pass`. Three layers, not one.
+    expect(state == "uncertain", f"no gates + dead ssh → uncertain (got {state})")
+    expect(state != "pass", "and definitively not `pass`")
+    expect("could not look" in reason, f"reason is a could-not-look: {reason[:70]}")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0

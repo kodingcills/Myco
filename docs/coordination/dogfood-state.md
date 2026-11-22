@@ -106,7 +106,7 @@ Ordered by what unblocks the most downstream work. Nothing here needs the guest.
 | 3 | Per-scenario live-step implementations for DF-S02/S05 beyond the shared add+save path (each oracle is written; the actuation recipe is not) | queued, no guest needed to write |
 | 4 | Replay harness: grade recorded traces from a prior run without a guest, so a scoring change can be re-scored offline | queued |
 | 5 | `--agent-report` intake: capture the agent-under-test transcript into the run dir automatically (clause (b) currently needs a manual path) | queued |
-| 6 | Scoring doc reconciliation: `dogfood/scoring.md` still says clause-(b) is kimi-k3-graded; model policy is now `deepseek-v4.1-flash` | queued (docs, Tier 0) |
+| 6 | Scoring doc reconciliation: verifier model policy updated to `deepseek-v4.1-flash` in the scenario oracles and `dogfood/scoring.md` | done (079f026 / b1f04eb) |
 
 Deliberately **not** queued: porting the fixture to GTK (option A rejected — it
 would rewrite a fixture whose bug and oracles are already verified), and any

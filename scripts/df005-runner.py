@@ -111,6 +111,7 @@ SCENARIOS: dict[str, Scenario] = {
 
 SCENARIO_ORDER = ["DF-S01", "DF-S02", "DF-S03", "DF-S04", "DF-S05"]
 
+
 # The op the runtime would need to gain for a scenario to be runnable at all.
 OP_REQUIREMENT = {
     "DF-S03": ("REQ-11", "exec/read_file/write_file not exposed by the runtime MCP"),
@@ -271,11 +272,19 @@ def default_readback(guest_path: str) -> tuple[str | None, str]:
 
 
 def parse_store(raw: str) -> tuple[list[str] | None, str]:
-    """Parse the myco-todo store. Returns (texts, reason_when_unparseable)."""
+    """Parse the myco-todo store. Returns (texts, reason_when_unparseable).
+
+    Every malformed shape returns a reason instead of raising: a valid-JSON
+    store of the wrong type (list, string, number, bool, null) is `uncertain`,
+    not a crash. A crash here would abort the run before its evidence is written
+    and leave the ledger empty — the verifier found exactly that on 2026-11-22.
+    """
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
         return None, f"store is not valid JSON: {e}"
+    if not isinstance(data, dict):
+        return None, f"store is not a JSON object (got {type(data).__name__})"
     items = data.get("items")
     if not isinstance(items, list):
         return None, "store has no items list"
@@ -785,6 +794,11 @@ def main() -> int:
                 return None, f"readback stub rc={r.returncode}"
             return r.stdout, ""
 
+    # How the oracle channel was reached. A stub readback can only grade offline
+    # runs, which the guest gate already stops; recording the channel means no
+    # artifact is ambiguous about whether a live guest stood behind it.
+    readback_channel = "stub" if (offline and os.environ.get("MYCO_DF005_READBACK_CMD")) else "ssh"
+
     results: dict[str, list[RunResult]] = {s.sid: [] for s in scenarios}
     rows: list[dict[str, Any]] = []
     trial = 0
@@ -816,7 +830,12 @@ def main() -> int:
                 write_run_evidence(
                     eval_dir, run_id, sc.slug, res,
                     {"scenario": sc.sid, "run": n, "store": sc.store,
-                     "offline": offline, "agentReport": report_why or bool(report)},
+                     "offline": offline,
+                     # A stub-backed pass must never be mistakable for a live
+                     # one by a consumer filtering `state == pass`.
+                     "simulated": offline,
+                     "readback": readback_channel,
+                     "agentReport": report_why or bool(report)},
                 )
                 rows.append(ledger_row(args.eval_id, trial, run_id, res, sc))
                 trial += 1

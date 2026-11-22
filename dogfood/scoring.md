@@ -57,8 +57,16 @@ fixed in PR #169):
    `delivered_verified` outcome is *not* evidence; it is a claim by the thing
    under test.
 2. **Ungraded is never graded.** A stub/offline server, or a session whose guest
-   never answered ssh, is `gap`. There is no path where a run with no guest
-   behind it records `success` or the `verifier:verified+ground-truth` oracle.
+   never answered ssh, is `gap`. In the production path there is no way for a run
+   with no guest behind it to record `success` or the
+   `verifier:verified+ground-truth` oracle. The one exception is the test-only
+   latch (`--server-cmd` + `MYCO_DF005_ASSUME_GUEST=1` + a scripted readback),
+   which exists so this contract can be tested without a guest; such runs record
+   `simulated: true` and `readback: "stub"` in `taskParams`, so no artifact is
+   ambiguous about whether a live guest stood behind it.
+   Three independent layers guard the production path: the offline gate, the
+   guest-probe gate, and the ssh readback itself — removing either gate still
+   leaves the run `gap` or `uncertain`, never `pass`.
 3. **Could-not-look is `uncertain`.** Unreadable file, unparseable store, dead
    channel → `passed: null` and a `verifier:uncertain` oracle (ADR-0002). Never
    `failure` (that asserts the intent failed), never `success`.
