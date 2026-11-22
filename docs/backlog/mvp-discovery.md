@@ -207,6 +207,23 @@ criterion (TIF-60) decide the wedge.
   with N>=15 and the machine described; results in `viewer/PERF.md` against the §8 numbers; any
   budget miss reported plainly; Chrome Stable result recorded.
 
+### MVD-009 (TIF-pending) Viewer: find and bound the retained native renderer memory with many screenshots
+- **status:** follow-up from MVD-008 (PR #80); not started; outer-loop mirrors this item into Linear (agents do not create issues).
+- **owner:** discovery-owner (spec), build
+- **description:** With 1,000 step-linked 1440x900 screenshots the Viewer's renderer retains about
+  0.9 GB of native memory on Playwright's headless shell that GC, a JS-memory purge and a critical
+  memory-pressure notification do not release, and it grows about 0.4 MB per distinct step viewed
+  (gui-spec §8 budget: 400 MB). App-held state is small (JS heap ~17-42 MB, 12 full-image URLs,
+  ~35 thumbnail URLs). Isolate the cause (suspects: Chromium decode/resource caches; worker
+  allocator retention of full-size PNG decodes, including the thumbnail path) and bound it in-spec
+  (e.g. resize thumbnails without a full decode, release decoded images, or bound the retained set).
+- **acceptance:** the root cause named with evidence; peak and settled renderer memory re-measured
+  with the MVD-008 harness (`viewer/scripts/screenshot-bench.mjs`) on the same run with N>=15 and
+  the machine described; budget status stated plainly (met, missed, or undecidable) including
+  Tiffany's Chrome Stable result when she supplies it; no regression of the 10,000-step verdict
+  guard or of select latency; the 12-entry effective cache and the truncated-PNG behaviour
+  decided or fixed.
+
 ---
 
 ## Dependencies owned by other workstreams

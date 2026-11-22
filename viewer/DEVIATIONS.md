@@ -90,3 +90,12 @@ These are recorded as found, not decided here.
 6. The recovery-step indent uses a heuristic (the next step after a recovery) versus the spec's "indent recovery steps under the step they recover".
 7. Staged verdict: a provisional `Checking run evidence` (Unknown) appears at about 77 ms, then the final verdict.
 8. Chrome Stable could not run here (SIGABRT); measurements use the Playwright Chromium headless shell 159.
+
+## MVD-008 (TIF-63) findings: open decisions for the outer loop
+
+Not covered by Tiffany's 2026-11-21 sign-off; each needs a decision:
+
+1. **Memory budget missed** (gui-spec §8: ≤400 MB with 1,000 screenshots). Measured on Playwright's headless shell only: about 1.5 GB total RSS and about 1.1 GB private footprint, of which the idle viewer is about 382 MB RSS. The retained memory is native renderer memory that the LRU does not bound. Root cause not isolated; tracked as MVD-009 in `docs/backlog/mvp-discovery.md`. Undecided on Chrome Stable (not measured; Tiffany's spot-check is pending, see `viewer/PERF.md`).
+2. **Effective full-image cache is 12 entries at 1440×900**, not 64 (64 MiB decoded-pixel estimate cap).
+3. **Cold filmstrip drag preview**: a first-frame preview is missing when the seek target has no decoded thumbnail (1-2 frames of "Loading screenshot"); clicks on visible thumbnails show the preview in the first frame.
+4. **Truncated or partially corrupt PNG with a matching manifest** now renders partially in the Inspector (the browser's permissive decoder) while the list thumbnail says "Screenshot unavailable"; `main` said "Screenshot unavailable" in both places.
