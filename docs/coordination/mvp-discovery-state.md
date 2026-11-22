@@ -193,8 +193,8 @@ excluded from Discovery evidence.
   - `docs/research/mvp-competitive-teardown.md` §2.6: cross-check against finding
     m2-01. 8 named products plus a screenshot-only control across the two documents
     (Simular Agent S and Sai counted as one product line, per m2-01 §7.3), none with a
-    persisted-outcome verdict; the four overlapping products (HCU, Cua, Orgo, Sai) agree, including two
-    defects both documents found separately (Orgo's $3-vs-$5 credit, Orgo's
+    persisted-outcome verdict; the four overlapping products (HCU, Cua, Orgo, Sai)
+    agree, including two defects both documents found separately (Orgo's $3-vs-$5 credit, Orgo's
     UUID-vs-`instance_id` spec contradiction). Adopted m2-01's billing point in its own
     hedge (Orgo bills machine-hours, Sai credits), so verification is free *if the
     customer writes it* — which is precisely why the `hcu+shell` arm is the decisive one.

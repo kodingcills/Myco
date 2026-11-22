@@ -65,9 +65,9 @@ The honest competitive picture:
 
 **Independently confirmed (research finding m2-01, nine listed products — 8 distinct
 product lines once Simular's Agent S and Sai are counted as one, per m2-01 §7.3 —
-against vendor primary docs).** None of Cua, Anthropic computer use, OpenAI computer use/Operator, Simular
-Agent S, UiPath, heyclicky, Microsoft HCU, Orgo, or Simular Sai returns a verdict on
-the persisted outcome. The closest two are Cua's per-action `effect` (five values,
+against vendor primary docs).** None of Cua, Anthropic computer use, OpenAI computer
+use/Operator, Simular Agent S, UiPath, heyclicky, Microsoft HCU, Orgo, or Simular Sai
+returns a verdict on the persisted outcome. The closest two are Cua's per-action `effect` (five values,
 including `refused` and `partial`) and HCU's window-level before/after tree diff with
 pre-input guards — and HCU is explicit: *"Neither proves file contents, persistence or
 network state."* Orgo and Sai both ship an escape hatch a host *could* use to hash a

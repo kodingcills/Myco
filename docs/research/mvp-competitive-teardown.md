@@ -360,10 +360,12 @@ Misses the Absent Row" (`OSW2`).
 ## 2.6 Cross-check against the M2 research teardown (finding m2-01)
 
 Written in a separate workstream, on different days, as a different reading pass over
-the same primary pages, against the same claim. m2-01 read five products this document
-does not cover (Anthropic computer use, OpenAI computer use/Operator, Simular Agent S,
-UiPath, heyclicky); this document read one control m2-01 does not (screenshot-only). Where the two disagree, the disagreement is the
-finding — it is listed, not smoothed.
+the same primary pages, against the same claim. m2-01 read four product lines this
+document does not cover (Anthropic computer use, OpenAI computer use/Operator, UiPath,
+heyclicky); this document read one control m2-01 does not (screenshot-only). Simular
+Agent S is not in that complement: m2-01 §7.3 treats it and Sai as one product line, and
+this document covers that line as Sai (§2.4). Where the two disagree, the disagreement
+is the finding — it is listed, not smoothed.
 
 | Point | This document | `docs/research/findings/m2-01-competitive-teardown.md` | Resolution |
 |---|---|---|---|
