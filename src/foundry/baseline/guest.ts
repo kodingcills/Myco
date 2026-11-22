@@ -13,6 +13,7 @@
  * lacking.
  */
 
+import { createHash } from "node:crypto";
 import type { AppState } from "../tasks/app-model.ts";
 import {
   addItem,
@@ -68,6 +69,9 @@ export interface FakeGuest extends GuestProtocol {
   received(): readonly string[];
 }
 
+/** PNG signature, so a consumer can tell a frame from arbitrary bytes. */
+const PNG_MAGIC = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 /** The fixed layout a pixel arm clicks against. */
 export const LAYOUT = {
   listbox: { x: 20, y: 20, width: 380, height: 240 },
@@ -98,14 +102,14 @@ export function fakeGuest(options: FakeGuestOptions): FakeGuest {
     },
     async screenshot() {
       tick("screenshot");
-      // A 1x1 PNG is enough to prove the channel carries bytes; the real guest sends a frame.
-      return new Uint8Array([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
-        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00,
-        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
-        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-      ]);
+      // Derived from the state, not a canned literal: a frame that is identical for a
+      // correct run and a silent-drop run would be worthless as evidence, and this file's
+      // own rule is that a mock returning canned strings proves nothing. The bytes are a
+      // digest of what is on screen, which is enough to tell two states apart.
+      const digest = createHash("sha256")
+        .update(JSON.stringify({ rows: state.rows, status: state.status }))
+        .digest();
+      return new Uint8Array([...PNG_MAGIC, ...digest]);
     },
     async click(x, y) {
       tick("click");

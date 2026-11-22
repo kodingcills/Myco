@@ -14,7 +14,7 @@ decision input today.**
 | Artefact | Path | State |
 |---|---|---|
 | Seeded hidden fixture generator | `src/foundry/hidden-split/index.ts` | merged |
-| Evidence bundle writer | `src/foundry/hidden-split/evidence.ts` | merged |
+| Evidence bundle writer | `src/foundry/hidden-split/evidence.ts` | merged, **no production consumer** |
 | Committed commitment (root hash + per-fixture hashes) | `foundry/hidden-commitment.json` | merged |
 | Tests: uniqueness, tamper detection, swap detection, missing-fixture detection | `test/foundry/hidden-split.test.ts` | merged, passing |
 
@@ -22,6 +22,12 @@ decision input today.**
 fixtures, and `commitment()` hashes them so a later run can prove it used the same set. The
 committed commitment verifies against a fresh generation (asserted in the suite), so the
 split is reproducible and tamper-evident.
+
+**One caveat on the bundle writer**, found while writing this: `collectEvidence` has no
+production caller. `grep -rn collectEvidence src/ test/` returns its definition plus three
+calls in `test/foundry/hidden-split.test.ts`. Nothing in the scoring or replay path loads a
+bundle, so the per-run artifact is a host-only writer whose round-trip is self-tested. It is
+a prerequisite for the ingest, not evidence that the ingest exists.
 
 **This half of S1 is ready.** Discovery can be given the commitment root and counts without
 seeing the fixtures, which is the access model the pre-registration requires.
@@ -56,8 +62,9 @@ to one run. Four of the six are already produced; two are not.
 | Trace, recorder closure and effect audits bound to the run | **partial** — `reconcileAudit` checks that calls, count and audits agree, but nothing attests that the recorder itself was not tampered with between the run and the ingest |
 | **Independent save observations** | **missing** — the only account of what was saved is the arm's own recorder. `requireSavedBytes` exists for `hcu+shell` but there is no second observer that is not the arm |
 | **Final persisted bytes bound to that same run** | **partial** — bytes are read and hashed, but nothing ties them to the run's identity beyond the caller's own claim |
+| **The screen reading bound as a claim, not an observation** | **missing** — `todoTransport.screen()` returns `readText()` verbatim for the structural channel, and `observeScreenClaims` reports whichever fixture trap strings appear in it. A caller-supplied screen is therefore treated as a visible claim with no requirement binding it to what the guest displayed |
 
-So the gap is not "write a function". It is two properties:
+So the gap is not "write a function". It is three properties:
 
 1. **A second observer.** Something outside the arm must record that the store was saved and
    what it held, so a false success cannot be manufactured by the arm's own recorder. Without
@@ -65,7 +72,8 @@ So the gap is not "write a function". It is two properties:
 2. **An attestation boundary.** The ingest must be able to tell a run it observed from a run
    it was told about. Today `scoreDiscoveryTrial` takes the trace and the bytes as arguments,
    which means a caller can supply anything; that is why the contract says "caller-supplied
-   claims about this provenance cannot establish eligibility".
+   claims about this provenance cannot establish eligibility". The same applies to the screen:
+   a `visibleText` array is currently an unchecked claim, and it feeds the screen oracle.
 
 ## 3. What this means for S1
 

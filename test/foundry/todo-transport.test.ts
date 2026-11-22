@@ -98,6 +98,21 @@ describe("EF-005 todo transport: contract", () => {
     );
   });
 
+  it("a screenshot distinguishes two different states", async () => {
+    // A canned frame would be identical for a correct run and a silent-drop run, which
+    // makes it worthless as evidence. The fake guest derives its bytes from the state.
+    const a = fakeGuest({ spec: SPEC });
+    const b = fakeGuest({ spec: SPEC });
+    const first = await a.screenshot();
+    await b.launch(["python3", "myco_todo.py"]);
+    await b.type("buy milk");
+    await b.click(LAYOUT.add.x, LAYOUT.add.y);
+    const second = await b.screenshot();
+    expect(Buffer.compare(Buffer.from(first), Buffer.from(second))).not.toBe(0);
+    // Still recognisably a PNG, so a consumer can tell a frame from arbitrary bytes.
+    expect([...first.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  });
+
   it("a guest that dies mid-trial yields an unreadable screen, not an empty one", async () => {
     const guest = fakeGuest({ spec: SPEC, dieAfter: 2 });
     const run = await executeTrial(
