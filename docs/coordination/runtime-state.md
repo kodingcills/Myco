@@ -303,8 +303,9 @@ unchanged during prep.
   kill, reap, relaunch, and rejection of unknown or stale handles. Live acceptance
   still needs the demo app to disappear, reappear, and remain usable in the guest.
 
-## RT-020 live run pre-emption (2026-11-22 12:52Z)
-- **Status:** Live proof run pre-empted by Coordinator VM handoff to Screenshot Baseline (C1); NOT a product failure.
-- **Context:** Task-141 started at 12:40:38Z under the shared lock protocol. At 12:40:59Z, task-141 was halted by platform cancellation during server restart/turn boundary. Meanwhile, the Coordinator reassigned the VM slot to C1 at 12:46Z, and `reset-trial-vm.sh` (PID 64024) initiated `clean-base` restore on `myco-win11` at 12:48Z.
+## RT-020 live run pre-emption and re-queue (2026-11-22 12:54Z)
+- **Status:** Officially excluded from scoring per Rule 8; recorded by Coordinator as pre-empted without fault.
+- **Context:** Task-141 started at 12:40:38Z under the shared lock protocol and was halted by platform cancellation at 12:40:59Z during turn/restart transition. At 12:48Z, Screenshot Baseline restored clean-base on `myco-win11` for C1.
 - **Clean host teardown:** Linux ARM64 QEMU guest (PID 44312) was cleanly shut down over SSH via `runtime/guest/shutdown.sh`. Ephemeral overlay `myco-runtime-v0.qcow2`, `SESSION.lock`, and `qemu.pid` were removed. No `qemu-system-aarch64` processes remain. `myco-win11` was untouched and is owned by C1.
-- **Next step:** Await the Coordinator's next available VM slot for Runtime to complete the RT-020 live proof and independent verifier review.
+- **Coordinator resolution:** Screenshot Baseline holds the VM through 16:15Z on `cua-c1-base`. RT-020 is re-queued as the **IMMEDIATE next slot** with a fresh clean-base restore right after C1 releases the lock.
+- **Next step:** Standing by for the Coordinator's new GO signal upon C1 completion.
