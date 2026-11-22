@@ -238,7 +238,7 @@ RSS in all three runs. Two of three met peak renderer footprint and peak summed 
 minus idle. All three met settled renderer footprint. The worst summed peak footprint missed
 by 98,833,144 B. Renderer-only, settled and idle-subtracted figures describe separate metrics.
 
-Raw results and HTML are saved under `/private/tmp/tif64-m`. Artifact SHA-256 values follow.
+Raw run outputs are retained locally. Artifact SHA-256 values follow.
 
 - Baseline `base.html` (recorded as `3379ab3` in the builder handoff)
   `f8f4c482fd9b49191eff2632fe494dcd9a389f68cf858e8a47f6fb60e814b591`.
@@ -296,16 +296,17 @@ steps, footprint grew more slowly and nonmonotonically with bitmaps (`base-cycle
 
 ```sh
 pnpm install --offline --frozen-lockfile
-node viewer/scripts/gen-screenshot-run.mjs /private/tmp/mvd-008/run   # skip if it already exists
+bench_dir="$(mktemp -d)"
+node viewer/scripts/gen-screenshot-run.mjs "$bench_dir/run"
 pnpm --filter viewer build
-export PLAYWRIGHT_BROWSERS_PATH=/private/tmp/myco-stage4-browsers
+pnpm --filter viewer exec playwright install --only-shell chromium
 cd viewer
 # memory: footprint of the launched PIDs, one fresh browser per run
 MYCO_SCREENSHOT_BENCH_PHASE=memory MYCO_SCREENSHOT_BENCH_FOOTPRINT=1 \
-  node scripts/screenshot-bench.mjs dist/myco-viewer.html /private/tmp/mvd-008/run 15 > after-mem.json
+  node scripts/screenshot-bench.mjs dist/myco-viewer.html "$bench_dir/run" 15 > after-mem.json
 # one-factor diagnostics: MYCO_SCREENSHOT_BENCH_DIAGNOSTIC=control|no-full|no-thumbs (160 steps),
 # MYCO_SCREENSHOT_BENCH_CYCLE=100 (700 presses over 100 distinct steps),
 # MYCO_SCREENSHOT_BENCH_NATIVE_DUMP=<prefix> (vmmap and footprint of the renderer at the end)
 # latency (N = 20): MYCO_SCREENSHOT_BENCH_PHASE=latency; MYCO_SCREENSHOT_BENCH_REVISIT=40 reselects after 40 steps
-MYCO_SCREENSHOT_BENCH_PHASE=latency node scripts/screenshot-bench.mjs dist/myco-viewer.html /private/tmp/mvd-008/run 20 > after-lat.json
+MYCO_SCREENSHOT_BENCH_PHASE=latency node scripts/screenshot-bench.mjs dist/myco-viewer.html "$bench_dir/run" 20 > after-lat.json
 ```

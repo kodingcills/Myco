@@ -112,7 +112,7 @@ Recorded 2026-11-22 from the outer loop. These are not Tiffany's sign-off.
 
 ### TIF-64 implementation and measurements
 
-1. **Memory gate remains open.** The saved fixed-width build peaked at 896,581,632 B summed RSS, 498,833,144 B summed footprint and 416,975,272 B renderer footprint. The measured-width build hit a sandbox launch error. Chrome Stable remains unmeasured. [Measurement record](PERF.md#screenshots-bounded-retained-memory-mvd-009--tif-64)
+1. **Memory gate remains open.** The saved fixed-width build peaked at 896,581,632 B summed RSS, 498,833,144 B summed footprint and 416,975,272 B renderer footprint. One measured-width Chromium Headless Shell run peaked at 373,229,920 B renderer footprint and 457,070,232 B summed footprint. Chrome Stable remains unmeasured. [Measurement record](PERF.md#screenshots-bounded-retained-memory-mvd-009--tif-64)
 2. **Up to 64 view bitmaps under a 64 MiB LRU cap.** View keys include the Inspector width bucket and DPR. The original bitmap lives while the lightbox is open.
 3. **Cold arbitrary-position drag preview remains an accepted v0 deviation.** The prior implementation’s cold drag completed in 51.1 ms maximum (20 samples), with 0/20 first-frame previews.
 4. **Incomplete screenshot marker implemented.** The Inspector and lightbox mark incomplete evidence when the PNG or WebP container checks or the worker decoder detect it. The thumbnail reports unavailable. These checks cover container structure and decoder rejection.
