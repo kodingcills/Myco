@@ -12,7 +12,40 @@ if python3 "$here/scripts/df005-runner.py" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "2. Running all 5 scenarios (1 run each) with fake MCP server"
+echo "2. Checking refusal when VM lock is held (exit code 10)"
+mock_lock="$(mktemp)"
+# Hold lock in background process
+python3 -c "
+import fcntl, time, sys
+fd = open('$mock_lock', 'w')
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+fd.write('99999 holder-test\n')
+fd.flush()
+time.sleep(3)
+" &
+lock_pid=$!
+# Give python process a moment to acquire
+sleep 0.2
+
+lock_out=""
+set +e
+lock_out=$(MYCO_VM_LOCK_PATH="$mock_lock" python3 "$here/scripts/df005-runner.py" --go 2>&1)
+lock_code=$?
+set -e
+kill -9 "$lock_pid" 2>/dev/null || true
+rm -f "$mock_lock"
+
+if [ "$lock_code" -ne 10 ]; then
+    echo "FAIL: expected exit 10 when VM locked, got $lock_code (output: $lock_out)"
+    exit 1
+fi
+if [[ "$lock_out" != *"REFUSED_VM_LOCKED"* ]]; then
+    echo "FAIL: expected REFUSED_VM_LOCKED message, got: $lock_out"
+    exit 1
+fi
+echo "   VM lock refusal confirmed (exit 10 REFUSED_VM_LOCKED)"
+
+echo "3. Running all 5 scenarios (1 run each) with fake MCP server"
 eval_id="selftest-$(date +%s)"
 python3 "$here/scripts/df005-runner.py" \
     --scenario all \

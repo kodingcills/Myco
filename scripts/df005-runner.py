@@ -12,6 +12,7 @@ Safety rule: Refuses to boot or touch any VM without explicit --go authorization
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shlex
@@ -25,6 +26,52 @@ from typing import Any
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_SERVER = REPO / "runtime" / "target" / "debug" / "myco-rt-mcp"
 GUEST_DIR = REPO / "runtime" / "guest"
+VM_LOCK_PATH = os.environ.get("MYCO_VM_LOCK_PATH", "/tmp/myco-win11.vm.lock")
+
+
+def acquire_vm_lock(driver: str = "df005-runner.py") -> int:
+    """Acquires the Coordinator's exclusive VM lock (/tmp/myco-win11.vm.lock).
+
+    Exits with code 10 (REFUSED_VM_LOCKED) if another driver or runner holds the lock,
+    matching scripts/vm-lock.sh protocol.
+    """
+    lock_file = Path(VM_LOCK_PATH)
+    try:
+        fd = os.open(str(lock_file), os.O_RDWR | os.O_CREAT, 0o666)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        holder = "initializing lock owner"
+        if lock_file.exists():
+            try:
+                raw = lock_file.read_text(encoding="utf-8").strip()
+                if raw:
+                    holder = raw
+                    try:
+                        pid = int(holder.split()[0])
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        holder += " (driver exited; a child still holds the lock)"
+                    except (ValueError, PermissionError):
+                        pass
+            except Exception:
+                pass
+        sys.stderr.write(f"REFUSED_VM_LOCKED: holder {holder}\n")
+        sys.exit(10)
+
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()} {driver}\n".encode())
+    except Exception:
+        pass
+    return fd
+
+
+def release_vm_lock(fd: int) -> None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    except Exception:
+        pass
 
 
 class McpClient:
@@ -446,12 +493,16 @@ def main() -> int:
     args = parser.parse_args()
 
     live = args.server_cmd is None
+    lock_fd = None
     if live:
         if not args.go:
             sys.exit("refusing to boot a VM without --go (wait for M1 Coordinator GO)")
+        lock_fd = acquire_vm_lock("df005-runner.py")
         if qemu_running():
+            release_vm_lock(lock_fd)
             sys.exit("refusing: a qemu guest is already running. Not touching it.")
         if not DEFAULT_SERVER.exists():
+            release_vm_lock(lock_fd)
             sys.exit(f"build server first: cargo build -p myco-rt-mcp ({DEFAULT_SERVER})")
 
     server_cmd = shlex.split(args.server_cmd) if args.server_cmd else [str(DEFAULT_SERVER)]
@@ -466,92 +517,96 @@ def main() -> int:
     ledger_entries = []
     summary_results: dict[str, list[dict[str, Any]]] = {s: [] for s in scenarios}
 
-    trial_idx = 0
-    for s_id in scenarios:
-        for r_num in range(1, args.runs + 1):
-            run_id = f"run-{s_id.lower()}-{r_num}"
-            print(f"  Executing {s_id} trial {r_num}/{args.runs} ({run_id})...", end=" ", flush=True)
+    try:
+        trial_idx = 0
+        for s_id in scenarios:
+            for r_num in range(1, args.runs + 1):
+                run_id = f"run-{s_id.lower()}-{r_num}"
+                print(f"  Executing {s_id} trial {r_num}/{args.runs} ({run_id})...", end=" ", flush=True)
 
-            mcp = McpClient(server_cmd)
-            try:
-                # initialize
-                mcp.request("initialize", {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "df005-runner", "version": "0.1.0"},
-                })
-                mcp.request("tools/list")
+                mcp = McpClient(server_cmd)
+                try:
+                    # initialize
+                    mcp.request("initialize", {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "df005-runner", "version": "0.1.0"},
+                    })
+                    mcp.request("tools/list")
 
-                run_res = execute_scenario(
-                    scenario_id=s_id,
-                    run_id=run_id,
-                    eval_id=args.eval_id,
-                    mcp=mcp,
-                    live=live,
-                    mock_guest_dir=Path(args.mock_guest_dir) if args.mock_guest_dir else None,
-                )
-            finally:
-                mcp.close()
+                    run_res = execute_scenario(
+                        scenario_id=s_id,
+                        run_id=run_id,
+                        eval_id=args.eval_id,
+                        mcp=mcp,
+                        live=live,
+                        mock_guest_dir=Path(args.mock_guest_dir) if args.mock_guest_dir else None,
+                    )
+                finally:
+                    mcp.close()
 
-            print(f"[{run_res['bucket']}] ({run_res['duration']:.2f}s)")
-            summary_results[s_id].append(run_res)
+                print(f"[{run_res['bucket']}] ({run_res['duration']:.2f}s)")
+                summary_results[s_id].append(run_res)
 
-            # Write run evidence
-            run_dir = eval_dir / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+                # Write run evidence
+                run_dir = eval_dir / run_id
+                run_dir.mkdir(parents=True, exist_ok=True)
 
-            # trace.jsonl
-            trace_path = run_dir / "trace.jsonl"
-            with open(trace_path, "w", encoding="utf-8") as f:
-                for idx, st in enumerate(run_res["steps"]):
-                    f.write(json.dumps({"seq": idx, "at": run_res["startedAt"], "step": st}) + "\n")
+                # trace.jsonl
+                trace_path = run_dir / "trace.jsonl"
+                with open(trace_path, "w", encoding="utf-8") as f:
+                    for idx, st in enumerate(run_res["steps"]):
+                        f.write(json.dumps({"seq": idx, "at": run_res["startedAt"], "step": st}) + "\n")
 
-            # result.json conforming to RunRecord or SessionRecord
-            # We emit RunRecord when scored with checks
-            score = 1.0 if run_res["bucket"] == "success" else 0.0
-            reasons = [c["reason"] for c in run_res["checks"]]
-            result_record = {
-                "recordKind": "run",
-                "runId": run_id,
-                "taskId": s_id.lower(),
-                "taskParams": {
-                    "scenario": s_id,
-                    "run": r_num,
-                    "agentModel": "gemini-3.8-flash-high",
-                    "verifierModel": "gemini-3.8-flash",
-                },
-                "startedAt": run_res["startedAt"],
-                "steps": run_res["steps"],
-                "verdict": {
-                    "status": "verified" if run_res["bucket"] == "success" else ("uncertain" if run_res["bucket"] == "gap" else "refuted"),
-                    "checks": run_res["checks"],
-                    "score": score,
-                    "reasons": reasons,
-                },
-            }
-            result_path = run_dir / "result.json"
-            with open(result_path, "w", encoding="utf-8") as f:
-                json.dump(result_record, f, indent=2)
+                # result.json conforming to RunRecord or SessionRecord
+                # We emit RunRecord when scored with checks
+                score = 1.0 if run_res["bucket"] == "success" else 0.0
+                reasons = [c["reason"] for c in run_res["checks"]]
+                result_record = {
+                    "recordKind": "run",
+                    "runId": run_id,
+                    "taskId": s_id.lower(),
+                    "taskParams": {
+                        "scenario": s_id,
+                        "run": r_num,
+                        "agentModel": "gemini-3.8-flash-high",
+                        "verifierModel": "gemini-3.8-flash",
+                    },
+                    "startedAt": run_res["startedAt"],
+                    "steps": run_res["steps"],
+                    "verdict": {
+                        "status": "verified" if run_res["bucket"] == "success" else ("uncertain" if run_res["bucket"] == "gap" else "refuted"),
+                        "checks": run_res["checks"],
+                        "score": score,
+                        "reasons": reasons,
+                    },
+                }
+                result_path = run_dir / "result.json"
+                with open(result_path, "w", encoding="utf-8") as f:
+                    json.dump(result_record, f, indent=2)
 
-            # ledger row conforming to ledgerRowSchema
-            ledger_row = {
-                "evalId": args.eval_id,
-                "runId": run_id,
-                "trialIndex": trial_idx,
-                "corruptionClass": "none",
-                "actionKind": "gui",
-                "state": run_res["ledger_state"],
-                "oracle": run_res["oracle_str"],
-                "refusalCode": None,
-                "detail": f"{s_id} trial {r_num}: bucket={run_res['bucket']}, missing={run_res['missing_req']}",
-            }
-            ledger_entries.append(ledger_row)
-            trial_idx += 1
+                # ledger row conforming to ledgerRowSchema
+                ledger_row = {
+                    "evalId": args.eval_id,
+                    "runId": run_id,
+                    "trialIndex": trial_idx,
+                    "corruptionClass": "none",
+                    "actionKind": "gui",
+                    "state": run_res["ledger_state"],
+                    "oracle": run_res["oracle_str"],
+                    "refusalCode": None,
+                    "detail": f"{s_id} trial {r_num}: bucket={run_res['bucket']}, missing={run_res['missing_req']}",
+                }
+                ledger_entries.append(ledger_row)
+                trial_idx += 1
 
-    # Write ledger.jsonl
-    with open(ledger_path, "w", encoding="utf-8") as f:
-        for entry in ledger_entries:
-            f.write(json.dumps(entry) + "\n")
+        # Write ledger.jsonl
+        with open(ledger_path, "w", encoding="utf-8") as f:
+            for entry in ledger_entries:
+                f.write(json.dumps(entry) + "\n")
+    finally:
+        if lock_fd is not None:
+            release_vm_lock(lock_fd)
 
     print("\nDF-005 Execution Summary:")
     print("--------------------------------------------------")
