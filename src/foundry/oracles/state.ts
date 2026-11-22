@@ -22,6 +22,7 @@ import type {
   TaskIntent,
 } from "../types.ts";
 import { decodeBytes, FoundryReadError } from "../types.ts";
+import { writerStateOracle } from "./writer.ts";
 
 // ---------------------------------------------------------------------------
 // Parsing: narrow `unknown` at the boundary, then read typed values.
@@ -150,10 +151,11 @@ function expectedTodoState(intent: TaskIntent, initial: InitialState): TodoState
       const doomed = new Set(intent.items.map(normalisedForStore));
       return withMeta(current.filter((text) => !doomed.has(text)));
     }
+    case "writer.set-cell":
     case "ledger.set-cell":
       throw new FoundryReadError(
         "unreadable",
-        "the myco-todo oracle cannot evaluate a ledger intent",
+        `the myco-todo oracle cannot evaluate a ${intent.kind} intent`,
       );
   }
 }
@@ -314,6 +316,8 @@ export function oracleForApp(app: AppId): StateOracle {
   switch (app) {
     case "myco-todo":
       return todoStateOracle();
+    case "writer-table":
+      return writerStateOracle();
     case "ledger-csv":
       throw new FoundryReadError(
         "unreadable",

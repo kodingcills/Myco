@@ -29,7 +29,7 @@ host without a desktop. Any future VM work is scheduled through the M1 Coordinat
 |---|---|---|---|
 | TIF-50 | EF-001 | **done, PR #110 verified PASS** | Four fixtures across four defect classes, each with a statement-level screen-vs-store assertion; `docs/foundry/contract.md` §3 |
 | TIF-51 | EF-002 | **done, PR #110 verified PASS** | `src/foundry/oracles/state.ts` (derived truth, no-leak by type), mutation audit, hidden split commitment |
-| TIF-52 | EF-003 | blocked on EF-001 + EF-002 | `src/foundry/faults/` (planned) + `docs/research/findings/f1-ef-fault-taxonomy.md` |
+| TIF-52 | EF-003 | six classes built and tested; PR #122 pending merge | `src/foundry/faults/`, `src/foundry/tasks/writer.ts`, `src/foundry/oracles/writer.ts`, `docs/research/findings/f1-ef-fault-taxonomy.md` |
 | TIF-57 | EF-004 | blind scoring + hidden split landed (PR #64); `src/foundry/stats.ts` adds the interval/caveat contract (PR #110) | `src/foundry/oracles/blind.ts`, `foundry/hidden-commitment.json`, `src/foundry/stats.ts` |
 | TIF-58 | EF-005 | host harness merged; live run awaits Coordinator GO | [baseline status](../foundry/baseline-status.md), PRs #70 and #75 |
 
@@ -131,6 +131,34 @@ Two things worth keeping from this:
 puts `scoreClaim()` into `completion.claim`, so a report cannot publish a rate without its
 interval and caveats. Verified end to end — a 10-trial report carries both underpowered
 caveats.
+
+## Log 2026-11-22 (3) — EF-003's sixth class: Writer AutoCorrect
+
+The M2 recommendation, built host-side. Writer's AutoCorrect rewrites typed text at save,
+which is a silent in-app mutation Calc cannot produce: the agent typed one thing and the
+document holds another. It is the one fault class where a screenshot-only agent is wrong for
+a reason it never caused, and the only one that produces a **well-formed document holding
+the wrong text** rather than an absence of state.
+
+- `src/foundry/tasks/writer.ts` — a Writer table with cells addressed `A1`, `B2` (the same
+  addressing `XTextTable.getCellByName` uses live, so the task survives the move to a real
+  UNO read), the AutoCorrect replace table, and a save path where the **screen keeps the
+  typed text and the file holds the rewrite**.
+- `src/foundry/oracles/writer.ts` (hidden by path) — reads the modelled `word/document.xml`,
+  derives the expected cell from the intent only, and reports `uncertain` for a missing,
+  corrupt, or unknown-cell document.
+- `autocorrect-rewrite` is a sixth fault class with its own entry point, so the todo-store
+  and Writer document shapes never share a switch.
+- The Writer family is wired into the public task bank (`ef-t05-writer-total`), so it is a
+  task rather than a fixture only a test can find.
+
+Verifier PASS at 91c3371 with three quality findings, all fixed: the family was dead
+surface (now in the bank), the recovery test claimed a re-read it did not perform (it now
+reads the persisted bytes through the oracle), and a comment implied screen nondeterminism
+the model does not have (real Writer repaint timing is a live-run measurement).
+
+**What this does not do:** it is a model, not a Writer driver. A live run needs the VM and a
+UNO read. What it proves is that the class fires and is caught, host-side, with no guest.
 
 ## Escalations (queued for the outer loop; the Foundry does not act on them)
 
