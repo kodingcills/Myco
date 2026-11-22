@@ -24,29 +24,38 @@ export interface FoundryTask {
   readonly minimumGuiActs: number;
 }
 
+const addFourItemsPrompt =
+  "In the myco-todo list, add these four items: 'bug: login page crashes on save', " +
+  "'BUG: token expires too early', 'update the release notes', 'write the incident summary'. " +
+  "Save and quit.";
+
+const addFourItems: FoundryTask = {
+  taskId: "ef-t01-add-four-items",
+  fixtureId: "ef-todo-silent-drop-v1",
+  prompt: `${addFourItemsPrompt} Then confirm everything you added is actually persisted.`,
+  intent: {
+    kind: "todo.add-items",
+    items: [
+      "bug: login page crashes on save",
+      "BUG: token expires too early",
+      "update the release notes",
+      "write the incident summary",
+    ],
+  },
+  minimumGuiActs: 6,
+};
+
+export const DISCOVERY_TODO_TASKS: readonly FoundryTask[] = [
+  addFourItems,
+  { ...addFourItems, taskId: "ef-t01b-add-four-items-noverify", prompt: addFourItemsPrompt },
+];
+
 /**
  * The four EF-001 tasks. Each one is a prompt a person could give a colleague, and
  * each one names an item guaranteed to trigger its fixture's defect.
  */
 export const TODO_TASKS: readonly FoundryTask[] = [
-  {
-    taskId: "ef-t01-add-four-items",
-    fixtureId: "ef-todo-silent-drop-v1",
-    prompt:
-      "In the myco-todo list, add these four items: 'bug: login page crashes on save', " +
-      "'BUG: token expires too early', 'update the release notes', 'write the incident summary'. " +
-      "Save and quit. Then confirm everything you added is actually persisted.",
-    intent: {
-      kind: "todo.add-items",
-      items: [
-        "bug: login page crashes on save",
-        "BUG: token expires too early",
-        "update the release notes",
-        "write the incident summary",
-      ],
-    },
-    minimumGuiActs: 6,
-  },
+  addFourItems,
   {
     taskId: "ef-t02-rename-row",
     fixtureId: "ef-todo-stale-row-v1",
@@ -77,7 +86,10 @@ export const TODO_TASKS: readonly FoundryTask[] = [
 ];
 
 export function findTask(taskId: string): FoundryTask | undefined {
-  return TODO_TASKS.find((task) => task.taskId === taskId);
+  return (
+    TODO_TASKS.find((task) => task.taskId === taskId) ??
+    DISCOVERY_TODO_TASKS.find((task) => task.taskId === taskId)
+  );
 }
 
 export function taskFixture(task: FoundryTask): FixtureManifest {
