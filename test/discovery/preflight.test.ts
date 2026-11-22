@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type PreflightProbe,
@@ -39,6 +43,23 @@ describe("Direction A preflight", () => {
       expect(result.ok).toBe(false);
       expect(result.abort).toHaveLength(8);
     }
+  });
+
+  it("CLI exit codes: 0 pass, 2 abort, 3 unreadable", () => {
+    const root = join(import.meta.dirname, "..", "..");
+    const dir = mkdtempSync(join(tmpdir(), "myco-preflight-"));
+    const run = (content: string) => {
+      const probe = join(dir, "probe.json");
+      writeFileSync(probe, content);
+      return spawnSync(
+        "pnpm",
+        ["exec", "tsx", "scripts/discovery-preflight.ts", "--probe", probe],
+        { cwd: root, encoding: "utf8" },
+      );
+    };
+    expect(run(JSON.stringify(allPass)).status).toBe(0);
+    expect(run(JSON.stringify({ ...allPass, guestClean: false })).status).toBe(2);
+    expect(run("{not json").status).toBe(3);
   });
 
   it("does not accept truthy non-boolean values", () => {
