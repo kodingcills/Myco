@@ -308,4 +308,30 @@ unchanged during prep.
 - **Context:** Task-141 started at 12:40:38Z under the shared lock protocol and was halted by platform cancellation at 12:40:59Z during turn/restart transition. At 12:48Z, Screenshot Baseline restored clean-base on `myco-win11` for C1.
 - **Clean host teardown:** Linux ARM64 QEMU guest (PID 44312) was cleanly shut down over SSH via `runtime/guest/shutdown.sh`. Ephemeral overlay `myco-runtime-v0.qcow2`, `SESSION.lock`, and `qemu.pid` were removed. No `qemu-system-aarch64` processes remain. `myco-win11` was untouched and is owned by C1.
 - **Coordinator resolution:** Screenshot Baseline holds the VM through 16:15Z on `cua-c1-base`. RT-020 is re-queued as the **IMMEDIATE next slot** with a fresh clean-base restore right after C1 releases the lock.
-- **Next step:** Standing by for the Coordinator's new GO signal upon C1 completion.
+
+## RT-020 Live Proof & Verification Completion (2026-11-22 14:36Z)
+- **Coordinator GO:** Received at 14:06Z granting 45-minute exclusive window. Fresh restore to `clean-base` on `myco-win11` verified before execution.
+- **Lock Management:** Exclusive lock `/tmp/myco-win11.vm.lock` acquired under `scripts/vm-lock.sh` and released cleanly upon completion at 14:33:58Z.
+- **Live Proof Execution:**
+  - Script: `python3 scripts/rt020-proof.py --go --verify-myco-todo --session rt020-live-20261122-093115`
+  - Result: **`passed: true`**, exit code 0.
+  - All 11 steps passed:
+    1. `handshake`: 0.0s — 6 MCP tools listed (`act`, `create`, `destroy`, `evidence`, `observe`, `reset`).
+    2. `create`: 108.0s — cold boot, cloud-init package installation, GUI session start, agent install.
+    3. `observe`: 0.0s — 5 nodes, screenshot `/tmp/myco-observe-2.png`, state_version 2.
+    4. `act:launch`: 0.4s — `delivered_verified` (process alive).
+    5. `act:typeText`: 0.5s — `delivered_verified` (read-back confirmed).
+    6. `evidence`: 0.0s — `trace_events`: 6, M1 schema `recordKind: "session"`, no `verdict` field.
+    7. `verify-myco-todo`: 0.8s — sha256 upload OK, self-test OK with seeded bug present, live X11 GUI window verified (window ID 16777242).
+    8. `reset`: 52.0s — clean overlay recreate, reboot, desktop recovery.
+    9. `observe:after-reset`: 0.0s — 5 nodes, state_version 2.
+    10. `destroy`: 1.1s — clean teardown, overlay removed.
+    11. `no-vm-left`: 0.0s — no lingering QEMU processes.
+- **Independent Adversarial Verification:**
+  - Performed by native Antigravity `flash` subagent (`312c1bf6-f5c5-406d-9616-7f5f621040b0`).
+  - Formal verdict: **PASS** across `proof.json`, `result.json`, `trace.jsonl`, load/swap telemetry, and host process cleanliness.
+- **Status & Dogfood Impact:**
+  - RT-020 (TIF-56) is **DONE**.
+  - RT-011 (TIF-40) and RT-first-path (TIF-42) are **DONE**.
+  - Dogfood DF-005 (TIF-27) is **UNBLOCKED**.
+  - VM lock is **FREE** for Screenshot Baseline C1 / subsequent runs.
