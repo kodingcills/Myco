@@ -163,7 +163,7 @@ criterion (TIF-60) decide the wedge.
   3. Explicit statement of what Myco should **not** build (transport coverage that
      HCU/Cua already provide; features without a measured job).
 
-### MVD-006 (TIF-pending) Coordination: public task set + host window
+### MVD-006 (TIF-61) Coordination: public task set + host window
 - **status:** in progress (escalations filed).
 - **owner:** discovery-owner; foundry (task set/verifiers); runtime (RT-011/RT-015/RT-016); M1 coordinator (host)
 - **blocked_by:** none
@@ -178,8 +178,8 @@ criterion (TIF-60) decide the wedge.
   coordinator's host window is recorded with start/end and owner; no run starts
   outside it.
 
-### MVD-007 (TIF-pending) Developer-facing run report: the v0 Myco Viewer
-- **status:** the earlier standalone HTML renderer (`src/report`, `docs/report`) is
+### MVD-007 (TIF-62) Developer-facing run report: the v0 Myco Viewer
+- **status:** **done**: Viewer v0 merged as PR #69 (`e0b5a9e`), approved by Tiffany 2026-11-21 22:39 ET (`viewer/DEVIATIONS.md`). The earlier standalone HTML renderer (`src/report`, `docs/report`) is
   **retired**: it predated the locked GUI spec and deviated from it (no Now/Why/Proof
   modes, no tokens, own layout). The deliverable is now the v0 Myco Viewer defined by
   `docs/design/gui-spec.md` (PR #51), built to the spec, not a Discovery-specific UI.
@@ -194,8 +194,8 @@ criterion (TIF-60) decide the wedge.
   the verdict-mapping unit tests against the M1 sample runs, and journeys J1-J3 by
   keyboard. Any deviation needs written outer-loop sign-off in the PR.
 
-### MVD-008 (TIF-pending) Viewer: screenshot latency and memory at 1,000 screenshots; Chrome Stable check
-- **status:** follow-up from Viewer v0 (PR #69), not blocking v0.
+### MVD-008 (TIF-63) Viewer: screenshot latency and memory at 1,000 screenshots; Chrome Stable check
+- **status:** in progress (GO from the outer loop, 2026-11-21). Follow-up from Viewer v0 (PR #69), not blocking v0; needs no VM and no host-time grant. The Chrome Stable result is Tiffany's and is a placeholder in `viewer/PERF.md` until she supplies it.
 - **owner:** discovery-owner (spec), build; outer-loop mirrors this item into Linear (agents do not create issues).
 - **description:** gui-spec §8 budgets that Viewer v0 never measured: full screenshot shown on
   select (<=100 ms cached, <=250 ms cold, thumbnail first) and memory with 1,000 screenshots
@@ -206,6 +206,23 @@ criterion (TIF-60) decide the wedge.
   fixture generator or a documented script); measured cached/cold select latency and peak memory
   with N>=15 and the machine described; results in `viewer/PERF.md` against the §8 numbers; any
   budget miss reported plainly; Chrome Stable result recorded.
+
+### MVD-009 (TIF-pending) Viewer: find and bound the retained native renderer memory with many screenshots
+- **status:** follow-up from MVD-008 (PR #80); not started; outer-loop mirrors this item into Linear (agents do not create issues).
+- **owner:** discovery-owner (spec), build
+- **description:** With 1,000 step-linked 1440x900 screenshots the Viewer's renderer retains about
+  0.9 GB of native memory on Playwright's headless shell that GC, a JS-memory purge and a critical
+  memory-pressure notification do not release, and it grows about 0.4 MB per distinct step viewed
+  (gui-spec §8 budget: 400 MB). App-held state is small (JS heap ~17-42 MB, 12 full-image URLs,
+  ~35 thumbnail URLs). Isolate the cause (suspects: Chromium decode/resource caches; worker
+  allocator retention of full-size PNG decodes, including the thumbnail path) and bound it in-spec
+  (e.g. resize thumbnails without a full decode, release decoded images, or bound the retained set).
+- **acceptance:** the root cause named with evidence; peak and settled renderer memory re-measured
+  with the MVD-008 harness (`viewer/scripts/screenshot-bench.mjs`) on the same run with N>=15 and
+  the machine described; budget status stated plainly (met, missed, or undecidable) including
+  Tiffany's Chrome Stable result when she supplies it; no regression of the 10,000-step verdict
+  guard or of select latency; the 12-entry effective cache and the truncated-PNG behaviour
+  decided or fixed.
 
 ---
 

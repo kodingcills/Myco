@@ -1,4 +1,12 @@
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import type { ImageRequest } from "../data/images.worker.ts";
 import ImageWorker from "../data/images.worker.ts?worker&inline";
 import type { RunFileInput } from "../data/loaders.ts";
@@ -7,83 +15,130 @@ type SettledImage = { kind: "ready"; url: string } | { kind: "unavailable" };
 type ImageAsset = SettledImage | { kind: "loading" } | { kind: "unrecorded" };
 
 type ImageEntry = {
-  count: number;
   id: number;
+  key: string;
+  full: boolean;
   url?: string;
+  image?: HTMLImageElement;
   asset?: SettledImage;
-  listeners: Set<(asset: SettledImage) => void>;
+  listeners: Set<() => void>;
 };
+
+const fullImageLimit = 64;
+// 64 desktop captures can exceed 300 MB of decoded pixels on their own.
+const fullImageByteLimit = 64 * 1024 * 1024;
+const loading = { kind: "loading" } as const;
+const unrecorded = { kind: "unrecorded" } as const;
+const imageKey = (path: string, full: boolean) => JSON.stringify([path, full]);
 
 class RunImages {
   private worker?: Worker;
   private nextId = 0;
   private entries = new Map<string, ImageEntry>();
   private pending = new Map<number, ImageEntry>();
+  private fullLRU = new Map<ImageEntry, number>();
+  private fullBytes = 0;
 
   constructor(private files: readonly RunFileInput[]) {}
 
-  acquire(path: string, full: boolean, onLoad: (asset: SettledImage) => void) {
-    const key = JSON.stringify([path, full]);
+  get(path: string, full: boolean) {
+    return this.entries.get(imageKey(path, full))?.asset ?? loading;
+  }
+
+  acquire(path: string, full: boolean, priority: boolean, listener: () => void) {
+    const key = imageKey(path, full);
     let entry = this.entries.get(key);
     if (!entry) {
-      if (!this.worker) {
-        this.worker = new ImageWorker();
-        this.send({
-          files: this.files.map((file) =>
-            "file" in file ? file : { file, relativePath: file.webkitRelativePath },
-          ),
-        });
-        this.worker.onmessage = ({ data }: MessageEvent<{ id: number; blob?: Blob }>) => {
-          const requested = this.pending.get(data.id);
-          this.pending.delete(data.id);
-          if (!requested) return;
-          function publish(asset: SettledImage) {
-            if (!requested?.count) return;
-            requested.asset = asset;
-            for (const listener of requested.listeners) listener(asset);
-          }
-          if (!data.blob) {
-            publish({ kind: "unavailable" });
-            return;
-          }
-          const url = URL.createObjectURL(data.blob);
-          requested.url = url;
-          const image = new Image();
-          image.src = url;
-          void image.decode().then(
-            () => publish({ kind: "ready", url }),
-            () => publish({ kind: "unavailable" }),
-          );
-        };
-      }
-      entry = { count: 0, id: ++this.nextId, listeners: new Set() };
+      this.startWorker();
+      entry = { id: ++this.nextId, key, full, listeners: new Set() };
       this.entries.set(key, entry);
       this.pending.set(entry.id, entry);
-      this.send({ id: entry.id, path, full });
+      this.worker?.postMessage({ id: entry.id, path, full, priority } satisfies ImageRequest);
+    } else if (priority && this.pending.has(entry.id)) {
+      this.worker?.postMessage({ prioritize: entry.id } satisfies ImageRequest);
     }
-    entry.count++;
-    entry.listeners.add(onLoad);
-    if (entry.asset) onLoad(entry.asset);
+
+    const bytes = this.fullLRU.get(entry);
+    if (bytes !== undefined) {
+      this.fullLRU.delete(entry);
+      this.fullLRU.set(entry, bytes);
+    }
+
+    const acquired = entry;
+    acquired.listeners.add(listener);
     return () => {
-      entry.listeners.delete(onLoad);
-      entry.count -= 1;
-      if (entry.count) return;
-      this.entries.delete(key);
-      if (this.pending.delete(entry.id)) this.send({ cancel: entry.id });
-      if (entry.url) URL.revokeObjectURL(entry.url);
+      acquired.listeners.delete(listener);
+      if (!acquired.listeners.size && !this.fullLRU.has(acquired)) this.release(acquired);
     };
   }
 
-  private send(request: ImageRequest) {
-    this.worker?.postMessage(request);
+  private retain(entry: ImageEntry, bytes: number) {
+    if (bytes > fullImageByteLimit) return;
+    this.fullLRU.set(entry, bytes);
+    this.fullBytes += bytes;
+    for (const [oldest, cost] of this.fullLRU) {
+      if (this.fullLRU.size <= fullImageLimit && this.fullBytes <= fullImageByteLimit) break;
+      this.fullLRU.delete(oldest);
+      this.fullBytes -= cost;
+      if (!oldest.listeners.size) this.release(oldest);
+    }
+  }
+
+  private release(entry: ImageEntry) {
+    if (this.entries.get(entry.key) === entry) this.entries.delete(entry.key);
+    if (this.pending.delete(entry.id)) {
+      this.worker?.postMessage({ cancel: entry.id } satisfies ImageRequest);
+    }
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    entry.image?.removeAttribute("src");
+  }
+
+  private startWorker() {
+    if (this.worker) return;
+    this.worker = new ImageWorker();
+    this.worker.onmessage = ({ data }: MessageEvent<{ id: number; blob?: Blob }>) => {
+      const entry = this.pending.get(data.id);
+      this.pending.delete(data.id);
+      if (!entry) return;
+
+      const publish = (asset: SettledImage) => {
+        if (!entry.listeners.size || this.entries.get(entry.key) !== entry) return;
+        entry.asset = asset;
+        for (const listener of entry.listeners) listener();
+      };
+      if (!data.blob) {
+        publish({ kind: "unavailable" });
+        return;
+      }
+
+      const url = URL.createObjectURL(data.blob);
+      entry.url = url;
+      const image = new Image();
+      entry.image = image;
+      image.src = url;
+      void image.decode().then(
+        () => {
+          if (entry.full && entry.listeners.size && this.entries.get(entry.key) === entry) {
+            this.retain(entry, image.naturalWidth * image.naturalHeight * 4);
+          }
+          publish({ kind: "ready", url });
+        },
+        () => publish({ kind: "unavailable" }),
+      );
+    };
+    this.worker.postMessage({
+      files: this.files.map((file) =>
+        "file" in file ? file : { file, relativePath: file.webkitRelativePath },
+      ),
+    } satisfies ImageRequest);
   }
 
   dispose() {
     this.worker?.terminate();
     this.worker = undefined;
-    for (const entry of this.entries.values()) if (entry.url) URL.revokeObjectURL(entry.url);
-    this.entries.clear();
-    this.pending.clear();
+    for (const entry of this.entries.values()) this.release(entry);
+    this.fullLRU.clear();
+    this.fullBytes = 0;
   }
 }
 
@@ -101,20 +156,13 @@ export function Screenshots({
   return <ImageContext.Provider value={images}>{children}</ImageContext.Provider>;
 }
 
-export function useScreenshotAsset(path?: string, full = false): ImageAsset {
+export function useScreenshotAsset(path?: string, full = false, priority = false): ImageAsset {
   const images = useContext(ImageContext);
-  const [state, setState] = useState<{
-    images: RunImages;
-    path: string;
-    full: boolean;
-    asset: SettledImage;
-  }>();
-  useEffect(() => {
-    if (path && images) {
-      return images.acquire(path, full, (asset) => setState({ images, path, full, asset }));
-    }
-  }, [path, full, images]);
-  if (!path) return { kind: "unrecorded" };
-  if (state?.images === images && state?.path === path && state.full === full) return state.asset;
-  return { kind: "loading" };
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      path && images ? images.acquire(path, full, priority, listener) : () => {},
+    [path, full, priority, images],
+  );
+  const snapshot = () => (path ? (images?.get(path, full) ?? loading) : unrecorded);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
 }

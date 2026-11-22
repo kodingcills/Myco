@@ -276,7 +276,7 @@ function DetailSection({ label, children }: { label: string; children: React.Rea
 function Screenshot({ row }: { row: StepRow }) {
   const path = row.screenshot?.value;
   const full = useScreenshotAsset(path, true);
-  const thumb = useScreenshotAsset(path);
+  const thumb = useScreenshotAsset(path, false, true);
   if (!path) return <Missing />;
   const image = full.kind === "ready" ? full : thumb.kind === "ready" ? thumb : undefined;
   return (

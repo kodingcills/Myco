@@ -12,10 +12,8 @@ merge of PR #69. The approval covers, as written in this file at the time of app
    Failed · False success);
 3. the eight decisions listed under "Open decisions for outer loop" below, as currently written.
 
-**Not covered, still outstanding (do not block merge):** a Chrome Stable spot-check by Tiffany
-(Chrome Stable could not be run in the build environment; everything was measured on Playwright's
-headless Chromium), and screenshot latency and memory with 1,000 screenshots (tracked as MVD-008
-in `docs/backlog/mvp-discovery.md`).
+**Not covered, still outstanding (do not block merge):** see the MVD-008 / TIF-63 measurements
+and Tiffany’s pending spot-check in [PERF.md](PERF.md#screenshots-select-latency-and-memory-at-1000-screenshots-mvd-008).
 
 # Viewer Stage 2 decisions
 
@@ -63,7 +61,7 @@ in `docs/backlog/mvp-discovery.md`).
 - Full J3 screenshot experience on a real run. The viewer-only test verifies the loading, preview, full-image and lightbox states. It leaves the real evidence unchanged.
 - The 150 ms final Verdict Bar limit at 10,000 steps now passes on the measured machine (122.7 / 126.0 / 136.4 ms median / p95 / max, N=20; [PERF.md](PERF.md)). Chrome Stable has not been run, and hosted CI checks the 10,000-step median against runner-specific caps. The strict local flag enforces the 150 ms maximum at both sizes.
 - Scrub input to playhead and selected-row rendering. This gate uses its own input-to-render measurement. The adjacent rAF interval is reported separately.
-- Screenshot budgets. Cached and cold full-image latency and memory at 1,000 screenshots remain unmeasured.
+- Screenshot budgets. See the measured limits and outstanding misses in [PERF.md](PERF.md#screenshots-select-latency-and-memory-at-1000-screenshots-mvd-008).
 - Chrome Stable. Repeat on the specified M-series Chrome Stable setup.
 - §2.6 CheckRow and §5 color conflict. Passing checks still use their check-level Verified badge. Outer-loop interpretation is pending.
 - Written sign-off: given 2026-11-21 22:39 ET for the layout tokens, the two beyond-§6.2 verdict rules and the eight open decisions (see Sign-off record).
@@ -92,3 +90,12 @@ These are recorded as found, not decided here.
 6. The recovery-step indent uses a heuristic (the next step after a recovery) versus the spec's "indent recovery steps under the step they recover".
 7. Staged verdict: a provisional `Checking run evidence` (Unknown) appears at about 77 ms, then the final verdict.
 8. Chrome Stable could not run here (SIGABRT); measurements use the Playwright Chromium headless shell 159.
+
+## MVD-008 (TIF-63) findings: open decisions for the outer loop
+
+Not covered by Tiffany's 2026-11-21 sign-off; each needs a decision:
+
+1. **Memory budget missed** (gui-spec §8: ≤400 MB with 1,000 screenshots). Measured on Playwright's headless shell only: about 1.5 GB total RSS and about 1.1 GB private footprint, of which the idle viewer is about 382 MB RSS. The retained memory is native renderer memory that the LRU does not bound. Root cause not isolated; tracked as MVD-009 in `docs/backlog/mvp-discovery.md`. Undecided on Chrome Stable (not measured; Tiffany's spot-check is pending, see `viewer/PERF.md`).
+2. **Effective full-image cache is 12 entries at 1440×900**, not 64 (64 MiB decoded-pixel estimate cap).
+3. **Cold filmstrip drag preview**: a first-frame preview is missing when the seek target has no decoded thumbnail (1-2 frames of "Loading screenshot"); clicks on visible thumbnails show the preview in the first frame.
+4. **Truncated or partially corrupt PNG with a matching manifest** now renders partially in the Inspector (the browser's permissive decoder) while the list thumbnail says "Screenshot unavailable"; `main` said "Screenshot unavailable" in both places.
