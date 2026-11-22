@@ -26,7 +26,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { GuardTraceEvent, ScreenView } from "../types.ts";
+import type { FixtureManifest, GuardTraceEvent, ScreenView } from "../types.ts";
 import type { RecordedTrialEvidence } from "./recorder.ts";
 
 /** One observation of one persistence file, taken by a reader that is not the arm. */
@@ -93,11 +93,11 @@ export interface AttestInput {
   /** The observer that produced `observations`, so the result can name it. */
   readonly observerId: string;
   /**
-   * The fixture's authoritative `persistenceFiles`. This must come from the fixture
-   * manifest, never from the caller's convenience: a caller-supplied list with no lower
-   * bound is how a gate ends up admitting a run that observed nothing.
+   * The fixture itself, so the required file set comes from the manifest rather than from
+   * the caller. A caller-supplied list is how a gate ends up admitting a run that observed
+   * nothing, or hiding a file by omitting it.
    */
-  readonly requiredPaths: readonly string[];
+  readonly fixture: Pick<FixtureManifest, "fixtureId" | "persistenceFiles">;
   /** Whether the screen reading came from the observer rather than the arm. */
   readonly screenObserved: boolean;
 }
@@ -111,6 +111,8 @@ export interface Attestation {
   readonly accepted: readonly SaveObservation[];
   /** False when the screen oracle had no text to match, which is not the same as agreeing. */
   readonly screenConstrained: boolean;
+  /** Files the final state holds that the fixture does not designate. Reported, not required. */
+  readonly unexpectedFiles: readonly string[];
 }
 
 /**
@@ -123,12 +125,18 @@ export function attest(input: AttestInput): Attestation {
   const blockers: string[] = [];
   const { evidence, observations, finalFiles } = input;
 
-  // The set that must be observed is the fixture's list UNION whatever the final state
-  // actually holds. A file present in the final state but absent from the fixture list is
-  // still a file the run wrote, and an empty set is a caller error, not a clean run.
-  const required = [...new Set([...input.requiredPaths, ...Object.keys(finalFiles)])].sort();
+  // The required set is the fixture's own list. Files the app wrote beyond it (a log, a
+  // sidecar) are reported but not required to be observed: demanding an observation for
+  // every file in the final state refuses honest runs, which is a worse failure than the
+  // one it would prevent.
+  const required = [...new Set(input.fixture.persistenceFiles)].sort();
   if (required.length === 0)
-    blockers.push("fixture: no persistence files are designated, so nothing can be attested");
+    blockers.push(
+      `fixture: ${input.fixture.fixtureId} designates no persistence files, so nothing can be attested`,
+    );
+  const unexpected = Object.keys(finalFiles)
+    .filter((path) => !required.includes(path))
+    .sort();
 
   // 1. The recorder must be closed and internally consistent. An open or inconsistent
   //    recording means the arm's account of itself is incomplete.
@@ -140,12 +148,21 @@ export function attest(input: AttestInput): Attestation {
     blockers.push("recorder: an audit is incomplete");
   // Cardinality is not identity: an audit must name a call that was actually recorded, on
   // the same channel. Without this a ghost audit satisfies the count.
-  const recorded = new Map(evidence.recordedCalls.map((call) => [call.callId, call.via]));
+  const recorded = new Map<string, string>();
+  for (const call of evidence.recordedCalls) {
+    if (recorded.has(call.callId))
+      blockers.push(`recorder: call ${call.callId} is recorded more than once`);
+    else recorded.set(call.callId, call.via);
+  }
   for (const audit of evidence.toolCallAudits) {
     const via = recorded.get(audit.callId);
     if (via === undefined) blockers.push(`recorder: audit ${audit.callId} names no recorded call`);
     else if (via !== audit.via)
       blockers.push(`recorder: audit ${audit.callId} is ${audit.via}, recorded as ${via}`);
+    if (audit.via !== "gui" && audit.accesses.length === 0)
+      blockers.push(
+        `recorder: ${audit.via} call ${audit.callId} reports no accesses, so a direct write cannot be ruled out`,
+      );
   }
   if (evidence.status !== "finished")
     blockers.push(`recorder: trial status is ${evidence.status}, not finished`);
@@ -215,5 +232,6 @@ export function attest(input: AttestInput): Attestation {
     observerId: input.observerId,
     accepted,
     screenConstrained,
+    unexpectedFiles: unexpected,
   };
 }

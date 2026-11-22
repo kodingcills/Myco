@@ -100,9 +100,11 @@ which `replay.ts` already does.
    when any persistence file lacks an observation, when an observation predates the last
    save, when the bytes changed after observation, when the screen reading came from the
    arm, or when the last save's bytes disagree with the observation. The required file set
-   is the fixture's list **union** whatever the final state holds, and an empty set is
-   refused — a caller-supplied list with no lower bound was the first defect the verifier
-   found. It also reports `screenConstrained`, so an empty pixel-arm screen reads as
+   comes from the **fixture manifest**, not from the caller, and a fixture designating
+   nothing is refused. Files the app wrote beyond that set are reported as
+   `unexpectedFiles` rather than required: demanding an observation for every file in the
+   final state refuses honest runs that wrote a log, which is a worse failure than the one
+   it prevents. It also reports `screenConstrained`, so an empty pixel-arm screen reads as
    "nothing to match" rather than "agreed".
 3. **The eligibility flip** — **not done, and deliberately so.** `scoreDiscoveryTrial` still
    hardcodes `decisionEligible: false`. Wiring `attest()` into it is the one change that can

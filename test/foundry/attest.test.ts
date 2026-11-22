@@ -63,7 +63,7 @@ function baseInput(run: FinishedRun) {
     observations: observer.observe(["store.json"], run.files),
     screen: run.screen,
     observerId: observer.id,
-    requiredPaths: ["store.json"],
+    fixture: { fixtureId: SPEC.fixtureId, persistenceFiles: ["store.json"] },
     screenObserved: true,
   };
 }
@@ -182,21 +182,23 @@ describe("EF-005 attestation gate", () => {
     // The P1 the verifier found: a caller-supplied list with no lower bound let
     // `requiredPaths: []` pass with zero observations.
     const input = baseInput(await finishedRun());
-    const result = attest({ ...input, requiredPaths: [], finalFiles: {} });
+    const result = attest({
+      ...input,
+      fixture: { fixtureId: "empty", persistenceFiles: [] },
+      finalFiles: {},
+    });
     expect(result.eligible).toBe(false);
-    expect(result.blockers.join(" ")).toContain("no persistence files are designated");
+    expect(result.blockers.join(" ")).toContain("designates no persistence files");
   });
 
-  it("requires an observation for a file the final state holds but the list omits", async () => {
-    // A file the run wrote is a file that must be observed, whatever the caller listed.
+  it("reports an app-written file the fixture does not designate, without refusing the run", async () => {
+    // Demanding an observation for every file in the final state refuses honest runs that
+    // wrote a log. The fixture says what matters; anything else is reported.
     const input = baseInput(await finishedRun());
-    const withExtra = {
-      ...input.finalFiles,
-      "store.meta.json": new TextEncoder().encode('{"count":1}'),
-    };
+    const withExtra = { ...input.finalFiles, "app.log": new TextEncoder().encode("started\n") };
     const result = attest({ ...input, finalFiles: withExtra });
-    expect(result.eligible).toBe(false);
-    expect(result.blockers.join(" ")).toContain("no observation of store.meta.json");
+    expect(result.eligible).toBe(true);
+    expect(result.unexpectedFiles).toEqual(["app.log"]);
   });
 
   it("refuses an audit that names no recorded call", async () => {
@@ -224,6 +226,38 @@ describe("EF-005 attestation gate", () => {
     const result = attest({ ...input, evidence });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("recorded as");
+  });
+
+  it("refuses a duplicate call id instead of letting the map hide it", async () => {
+    const input = baseInput(await finishedRun());
+    const first = input.evidence.recordedCalls[0]!;
+    const evidence = {
+      ...input.evidence,
+      recordedCalls: [...input.evidence.recordedCalls, first],
+      recordedCallCount: input.evidence.recordedCalls.length + 1,
+      toolCallAudits: [...input.evidence.toolCallAudits, input.evidence.toolCallAudits[0]!],
+    };
+    const result = attest({ ...input, evidence });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("recorded more than once");
+  });
+
+  it("refuses a non-GUI audit that reports no accesses", async () => {
+    // Empty accesses erase the only signal that identifies a direct write to a persistence
+    // path, which is exactly what a file-io audit exists to expose.
+    const input = baseInput(await finishedRun());
+    const evidence = {
+      ...input.evidence,
+      recordedCalls: [...input.evidence.recordedCalls, { callId: "io-1", via: "file-io" as const }],
+      recordedCallCount: input.evidence.recordedCalls.length + 1,
+      toolCallAudits: [
+        ...input.evidence.toolCallAudits,
+        { callId: "io-1", via: "file-io" as const, status: "complete" as const, accesses: [] },
+      ],
+    };
+    const result = attest({ ...input, evidence });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("reports no accesses");
   });
 
   it("refuses a save event whose bytes disagree with the observation", async () => {
