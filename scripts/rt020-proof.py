@@ -6,7 +6,7 @@
 
 Drives `myco-rt-mcp` exactly as an agent or the SDK would (JSON-RPC over stdio):
 create -> observe (tree + screenshot) -> act (launch, typeText) -> evidence ->
-destroy, then asserts no VM is left. Prints one JSON report; exit 0 only if every
+reset -> destroy, then asserts no VM is left. Prints one JSON report; exit 0 only if every
 step passed. It runs from any directory (workspace discovery, PR #52).
 
 Refuses a real run without --go, and refuses if a qemu guest is already running
@@ -163,6 +163,13 @@ def main():
                 return result.stdout.strip()
             step("verify-myco-todo", verify_myco_todo)
 
+        def reset():
+            result = mcp.call("reset", {"session_id": sid})
+            assert result.get("ok") is True, result
+            return result
+        step("reset", reset)
+        step("observe:after-reset", observe)
+
         def destroy():
             nonlocal created
             r = mcp.call("destroy", {"session_id": sid})
@@ -190,7 +197,7 @@ def main():
                 steps.append({"step": "cleanup-destroy", "ok": False, "error": str(e)})
         mcp.close()
 
-    ok = len(steps) >= 8 and all(s["ok"] for s in steps)
+    ok = steps[-1]["step"] == "no-vm-left" and all(s["ok"] for s in steps)
     print(json.dumps({"proof": "RT-020", "live": live, "session": sid, "passed": ok, "steps": steps}, indent=2))
     sys.exit(0 if ok else 1)
 
