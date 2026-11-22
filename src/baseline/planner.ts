@@ -36,7 +36,7 @@ function scrubBadRequestMessage(message: string, key: string): string {
       .replaceAll(key, "[redacted]")
       .replace(/\bsk-ant-[a-z0-9_-]*/gi, "[redacted]")
       .replace(
-        /["']?(?:[\w-]*api[-_]?key|authorization|proxy-authorization|cookie|set-cookie|anthropic-version|anthropic-beta|content-type)["']?\s*[:=][^\r\n]*/gi,
+        /["']?(?:[\w-]*api[-_]?key|authorization|proxy-authorization|cookie|set-cookie|anthropic-version|anthropic-beta|content-type)["']?\s*[:=][^\r\n]*(?:(?:\r\n|\r|\n)[ \t]+[^\r\n]*)*/gi,
         "[redacted header]",
       )
       .replace(/\b(?:Bearer|Basic)[ \t]+[^\s,;"']+/gi, "[redacted]")

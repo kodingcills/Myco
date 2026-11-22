@@ -319,7 +319,7 @@ describe("C1 host harness", () => {
             error: {
               type: "invalid_request_error",
               message:
-                "A billing credit detail.\nAuthorization: private-value\n" +
+                "A billing credit detail.\nAuthorization: private-value\r\n\tfolded-private-value\r\n  second-folded-value\n" +
                 '"X-Api-Key": "obscure-value"\n' +
                 "synthetic-key sk-ant-other-key " +
                 "detail ".repeat(60),
@@ -336,9 +336,11 @@ describe("C1 host harness", () => {
     const message = (error as Error).message;
     const prefix =
       "Anthropic Messages usage could not be verified: HTTP 400 (invalid_request_error): ";
-    expect(message.startsWith(prefix + "A billing credit detail.")).toBe(true);
+    expect(message.startsWith(`${prefix}A billing credit detail.`)).toBe(true);
     expect(message.slice(prefix.length)).toHaveLength(300);
-    expect(message).not.toMatch(/private-value|obscure-value|synthetic-key|sk-ant|[\r\n]/);
+    expect(message).not.toMatch(
+      /private-value|second-folded-value|obscure-value|synthetic-key|sk-ant|[\r\n]/,
+    );
     expect(request).toHaveBeenCalledTimes(2);
   });
 
