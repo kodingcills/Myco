@@ -22,6 +22,13 @@ before moving on.
 
 ## 1. Preconditions
 
+Before reserving the guest for a live reproduction, install dependencies in
+the pinned checkout with `pnpm install --frozen-lockfile`. In the GUI host
+shell that will run the drivers, confirm AC power with `pmset -g batt` and
+read `sysctl -n vm.loadavg` and `sysctl -n vm.swapusage`. Require a one-minute
+load of at most 14 and at least 300 MB of free swap. If either command is
+denied or returns no metric, resolve host access before starting a driver.
+
 ### 1.1 What must already exist
 
 | Item | Where | Notes |
@@ -110,10 +117,8 @@ the agent install, so a reset deletes the agent (log 10).
 
 ### 3.1 COLD path — primary
 
-**UNVERIFIED** — `scripts/reset-trial-vm.sh` is the deliverable of PR #32
-(`feat/m1-013-cold-reset`), still open and pending its 5-consecutive-cold-reset check (log 37).
-It is **not on `main`** (`main` has no `scripts/` directory). Get it from the PR branch, or use
-§3.2.
+Use the reset driver from the pinned main checkout. Sweep v3 used this
+driver for all 30 normal trials. For the Myco reproduction use `clean-base`.
 
 ```bash
 scripts/reset-trial-vm.sh            # optional arg: snapshot name; default clean-base
@@ -121,8 +126,8 @@ scripts/reset-trial-vm.sh            # optional arg: snapshot name; default clea
 
 What it does (read from the script): force-stop → wait for `stopped` (30 s cap) → **refuse** if
 the state is `resuming` → restore → start → `wait-ssh.sh 600` → resync the guest clock. It
-accepts only `clean-base`, `clean-base-live`, `m1-agent-live` as snapshot names and never
-restores onto a running VM.
+accepts only `clean-base`, `clean-base-live`, `m1-agent-live`, and
+`cua-c1-base` as snapshot names and requires the VM to stop before restoring.
 
 Expected: `reset-trial-vm: ready on 'clean-base'`. Cold boot costs ~21 s once UTM is warm, and
 ~134-152 s measured across 5 consecutive resets immediately after a UTM restart (m1-state log 39);

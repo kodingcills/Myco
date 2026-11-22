@@ -828,3 +828,86 @@ The Screenshot Baseline Owner received the planner, arm, spend, and VM requireme
   5. Slot 7: Discovery live Direction A execution (`docs/product/direction-a-live-execution-plan.md`).
   6. Slot 8: Dogfood DF-005 (TIF-27).
 
+
+## C1 rerun authorization — 2026-11-22, 10:38 AM ET
+
+Tiffany approved one paid Sonnet spike rerun. The kernel lock was free and
+no matching trial or reset driver was running when the coordinator sent the
+GO. PID 9338 was stale lock-file metadata. The lock inode was preserved.
+The owner must acquire it and freshly restore `cua-c1-base`. The $9 hard cap
+and fail-closed planner apply. The 30-trial sweep has no GO.
+
+Queue after a separately authorized C1 sweep: M1-016 live reproduction,
+Foundry slot 5 ($0 cap), then Discovery Direction A and Dogfood DF-005.
+
+### C1 rerun result
+
+The fresh restore completed in 159,984 ms and Calc/UNO became ready. The
+first Messages attempt failed closed on unverifiable usage (exit 1). One
+count_tokens and one Messages attempt were recorded. The $0.01256 reserve
+was against the $9 cap. Actual billed tokens and cost are unknown. No
+planner-driven guest actions, blind verdict or scored row were produced.
+The kernel lock was free after exit. Evidence is in
+`/tmp/baseline/c1-sonnet-rerun.sEL0xd/`. The C1 sweep has no GO.
+
+### C1 diagnostic gate — 2026-11-22, 10:52 AM ET
+
+The outer loop pre-approved one diagnostic re-spike after independent PASS
+at the exact diagnostic patch head and a fresh kernel lock check. A sweep
+GO requires measured Anthropic usage in that spike and the same $9 hard cap.
+An Anthropic auth, billing or credit failure goes to Tiffany. The VM queue
+remains C1, M1-016, Foundry ($0 HCU handoff), then Discovery and Dogfood.
+The owners received the exact-head verifier rule before merge or auto-merge.
+
+### C1 diagnostic spike result — 2026-11-22, 17:09 UTC
+
+The single authorized spike at `cb89faba` finished after a fresh
+`cua-c1-base` restore (347.961 s). Calc and UNO were ready. Cua host and
+guest both reported 0.56.4 and the pipe was reachable, but the session
+identity check failed. Preflight produced an unscored `uncertain` /
+`driver-unreachable` row before any planner call or guest action. No
+Anthropic usage or billing conclusion can be drawn from this run.
+Artifacts: `/tmp/baseline/c1-classified.C43fzT/{0.json,progress.log}`.
+The owner confirmed the kernel lock was free after exit. PR #101 merged as
+`76baaa07`. No retry, fallback or sweep has GO. The next actionable work
+is offline diagnosis of the session identity check.
+
+### C1 session diagnostic gate — 2026-11-22, 12:14 PM ET
+
+The outer loop pre-approved one diagnostic spike after the new preflight PR
+has an independent PASS and green CI at the same exact head. Confirm the
+kernel lock is free before issuing GO. Use paid Sonnet only, fail closed
+under the $9 cap, and freshly restore `cua-c1-base`.
+
+If the next spike confirms a Cua daemon in a different Windows session than
+Calc, reserve a coordinator-owned VM repair window. Preserve `clean-base`
+and `clean-base-live`. Correct the daemon startup in a new Cua-derived
+snapshot and validate that exactly one daemon and Calc share the nonzero
+interactive session after a fresh restore. Confirm pipe reachability and
+the session guard before any planner calls. Record the snapshot identifier
+and restore proof before resuming scored runs. A missing PID, failed command,
+or unrecognized marker calls for diagnosis of that failure first.
+
+### C1 Messages rejection — 2026-11-22
+
+The authorized spike at `c085031` restored `cua-c1-base` in 176.144 s and
+passed session identity preflight. One Count Tokens request passed the gate,
+then one Messages request returned HTTP 400 (`invalid_request_error`). The
+harness reserved $0.01256 against $9. Actual billed cost and token usage are
+unknown. No planner actions, blind verdict, scored row, fallback, retry or
+sweep. The owner confirmed the kernel lock was free after exit.
+Evidence: `/tmp/baseline/c1-session-diagnostic.MGUtvO/`.
+
+Diagnose the Messages request offline from safe request structure and mocks.
+The matched session does not establish a guest configuration defect. The
+provider error class alone does not establish an auth, billing or credit issue.
+
+## Log 2026-11-21 (58) — post-handoff reconciliation
+Reconstructed actual state after a provider switch and a long gap. Recorded so the next reader does not re-derive it.
+
+- **M1-013 30-trial sweep: COMPLETE** at `/tmp/m1-013/sweep-v3/trials.jsonl`. 29 verified, 1 refuted, 0 not-run. Wilson 95% **0.83-0.99**. Regenerated from `scripts/m1-scorecard.py`, so the number is reproducible, not asserted.
+- **The single refuted row (idx 3)** is a HARNESS/ENVIRONMENT failure, not a Myco execution failure: `guardFailure = adapter-available`, `observed = "UNO bridge on socket 2002 never answered: agent at 127.0.0.1:8765 timed out after 15000ms"`, `steps: 0`. The program never ran, so the "live document has $77544.00" is a stale document from a prior trial. It was `refuted`, NOT `verified` — so it is also not a false success.
+- **VM memory 6144 MB / 6 vCPU: ALREADY APPLIED** (log 57) and recorded in ~/VMs/myco-win11/README.md line 10 + Changelog line 115. Verified now by PlistBuddy (`System:MemorySize = 6144`, `CPUCount = 6`). Guest healthy, token present. Nothing to do.
+- **Criterion 7 (screenshot baseline): BLOCKED**, not failed. Spike at `c085031` restored `cua-c1-base`, passed session preflight and Count Tokens, then the first Messages attempt returned HTTP 400 `invalid_request_error`. No scored row exists. Diagnosis is offline/host-side per the outer loop; a separately authorized spike with verified paid Sonnet usage is required before a scored run.
+- **Host state at this check:** load 5.66, swap free ~660 MB (below the >2 GB preference), VM started. No sweep running. I am NOT starting new VM work; the queue waits on host swap and the C1 diagnosis.
+- Runtime Owner answered: they get a VM window after the queue clears, gated on load/swap, and must wait for my explicit go signal.

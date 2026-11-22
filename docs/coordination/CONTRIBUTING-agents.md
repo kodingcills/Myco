@@ -23,11 +23,12 @@ git switch -c docs/coord-$(date -u +%Y%m%d-%H%M) origin/main
 git commit -am "docs(coordination): <what>"
 git push -u origin HEAD
 gh pr create --fill --base main
-gh pr merge --squash --auto   # merges itself once CI is green and branch is current
+# Obtain an independent verifier PASS at the exact head and check CI first.
+gh pr merge --squash --match-head-commit "$(git rev-parse HEAD)"
 ```
 
-- No verifier needed for docs-only diffs, but the PR diff must contain **only** `docs/**` — if it touches anything else, the full code rules (verifier PASS + CI at the exact head) apply.
-- `--auto` lets GitHub merge when the 4 required checks pass; if the branch falls behind, `git fetch origin && git rebase origin/main && git push --force-with-lease` (allowed on your own feature branch; force is only blocked on `main`).
+- The exact-head independent verifier PASS and required green CI apply to docs-only PRs as well. Obtain the PASS before merging or enabling auto-merge.
+- If the branch falls behind, update it and repeat review and CI at the new head. Disable any existing auto-merge before updating the branch.
 - Never check out a feature branch in a worktree and then push `HEAD:main` — that path is now closed and was the source of past breaches.
 
 ## Code changes (unchanged)
