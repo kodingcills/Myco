@@ -464,3 +464,112 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod wire_contract_tests {
+    //! The backend builds these JSON objects by hand and this module parses them.
+    //! Nothing deterministic tested that, so a mismatch would surface only as an
+    //! unexplained failure inside a live guest -- the most expensive place to find
+    //! it, arriving as what looks like an XTEST problem rather than a schema one.
+    //!
+    //! **What this covers, exactly.** `myco-rt-agent` does not depend on the
+    //! backend crate, so the JSON below is a HAND-COPIED literal of the backend's
+    //! `json!` blocks, not the backend's actual output. These tests pin the AGENT
+    //! parser against the documented form. They cannot catch a backend-side rename:
+    //! if `lib.rs` changed `"x"` to `"px"`, every test here still passes.
+    //!
+    //! Closing that half needs the wire-building code out of `QemuLinuxBackend::act`
+    //! (it is inline and needs a live channel), which is a production refactor and
+    //! belongs in its own change. Until then, a backend rename is caught only by the
+    //! live tests in `backend-qemu/tests/` -- which need a VM.
+    //!
+    //! These tests assert on the WIRE FORM, not on Rust values: each
+    //! case is the exact JSON the backend emits for that action.
+
+    use super::Action;
+
+    /// Parse the way the request loop does (`serde_json::from_value`).
+    fn parse(v: serde_json::Value) -> Action {
+        serde_json::from_value::<Action>(v).expect("the backend's wire form must parse")
+    }
+
+    #[test]
+    fn targetless_typing_parses_from_the_backends_wire_form() {
+        // Exactly what `Action::TypeTextGlobal { text }` serializes to.
+        match parse(serde_json::json!({"kind": "typeTextGlobal", "text": "buy milk"})) {
+            Action::TypeTextGlobal { text } => assert_eq!(text, "buy milk"),
+            other => panic!("expected TypeTextGlobal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn click_at_parses_from_the_backends_wire_form() {
+        match parse(serde_json::json!({"kind": "clickAt", "x": 320, "y": 240})) {
+            Action::ClickAt { x, y } => {
+                assert_eq!((x, y), (320, 240));
+            }
+            other => panic!("expected ClickAt, got {other:?}"),
+        }
+    }
+
+    /// Negative coordinates must survive parsing so the handler can refuse them
+    /// with a real message. Silently clamping during deserialization would make
+    /// the refusal untestable.
+    #[test]
+    fn negative_coordinates_parse_and_are_left_for_the_handler_to_refuse() {
+        match parse(serde_json::json!({"kind": "clickAt", "x": -5, "y": 10})) {
+            Action::ClickAt { x, y } => assert_eq!((x, y), (-5, 10)),
+            other => panic!("expected ClickAt, got {other:?}"),
+        }
+    }
+
+    /// The camelCase tag is the contract: a snake_case spelling must NOT parse,
+    /// or both spellings would silently work and one would be dead code.
+    ///
+    /// Asserts on the ERROR KIND, not merely `is_err()`. A bare `is_err()` is
+    /// satisfied by *any* parse failure -- a renamed field, a type error -- so this
+    /// test would still pass against a parser that was broken in some unrelated
+    /// way, and the assertion would read as if the casing were the reason. Checking
+    /// for "unknown variant" is what makes the casing the actual subject.
+    ///
+    /// Scope limits, both measured rather than assumed:
+    /// - It covers one spelling for one variant. A parser that gained
+    ///   case-insensitivity, or an alias on another variant (`click_at`), is not
+    ///   caught.
+    /// - The strength rests on serde's wording. A verifier renamed the `text` field
+    ///   so the whole shape failed to parse, and this test still passed -- serde
+    ///   reported "unknown variant" anyway. So it is not a proof against unrelated
+    ///   breakage; it is stronger than a bare `is_err()` and no more.
+    #[test]
+    fn a_wrongly_cased_kind_is_rejected_for_the_casing_and_not_some_other_reason() {
+        let err = serde_json::from_value::<Action>(
+            serde_json::json!({"kind": "type_text_global", "text": "x"}),
+        )
+        .expect_err("snake_case kind must not parse; the wire form is camelCase");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown variant") && msg.contains("type_text_global"),
+            "the failure must be the unrecognised kind itself, not an unrelated parse \
+             error that happens to make is_err() true: {msg}"
+        );
+    }
+
+    /// Every variant the backend can emit round-trips through this parser.
+    #[test]
+    fn every_action_the_backend_emits_parses_here() {
+        let forms = [
+            serde_json::json!({"kind": "launch", "command": "x", "args": ["-a"]}),
+            serde_json::json!({"kind": "click", "target": "e1"}),
+            serde_json::json!({"kind": "typeText", "target": "e1", "text": "t"}),
+            serde_json::json!({"kind": "typeTextGlobal", "text": "t"}),
+            serde_json::json!({"kind": "clickAt", "x": 1, "y": 2}),
+            serde_json::json!({"kind": "keyPress", "keys": "Return"}),
+        ];
+        for f in forms {
+            let kind = f["kind"].as_str().unwrap().to_string();
+            assert!(
+                serde_json::from_value::<Action>(f.clone()).is_ok(),
+                "the backend can emit {kind:?} but this parser rejects it: {f}"
+            );
+        }
+    }
+}
