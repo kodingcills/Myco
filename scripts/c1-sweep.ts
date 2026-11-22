@@ -31,8 +31,9 @@ async function main() {
     );
 
     // 1. Health & power checks
+    // Recorded, not enforced: a battery run is evidence worth keeping, not a
+    // reason to refuse the trial. Power source is a data point, not a gate.
     const acPower = execFileSync("pmset", ["-g", "batt"]).toString().includes("AC Power");
-    if (!acPower) throw new Error("AC power lost before trial reset");
     let caffeinate = false;
     try {
       caffeinate = execFileSync("pgrep", ["caffeinate"]).toString().trim().length > 0;

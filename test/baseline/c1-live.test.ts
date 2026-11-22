@@ -72,20 +72,21 @@ function prepared(): PreparedC1 {
 }
 
 describe("C1 host harness", () => {
-  it("runs teardown before an aborting precondition, so an abort cannot leak", async () => {
-    // Regression: the AC gate used to throw before the try that owns teardown,
-    // so a battery abort left the caller's Calc instance running with nobody to
-    // close it - observed as two orphaned soffice processes on 2026-11-22.
-    // The gate must sit INSIDE the cleanup scope: firing is fine, leaking is not.
+  it("does not gate a trial on AC power, and still tears down on battery", async () => {
+    // Tiffany, 2026-11-22: never pause or gate C1 runs on charger power.
+    // Power source is recorded evidence, not a precondition - so a battery trial
+    // must run to completion AND still close its transport. Both halves matter:
+    // the 2026-11-22 leak happened because an abort skipped teardown, so simply
+    // deleting the gate would hide that regression class rather than prevent it.
+    // Fails if the gate returns (verified by reinstating it: "AC power required").
     const closed = vi.fn(async () => {});
-    await expect(
-      runC1Trial(
-        { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
-        { ...prepared(), acPower: false, closeTransport: closed },
-        planner(),
-      ),
-    ).rejects.toThrow(/AC power required/);
+    const row = await runC1Trial(
+      { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
+      { ...prepared(), acPower: false, closeTransport: closed },
+      planner(),
+    );
     expect(closed).toHaveBeenCalledTimes(1);
+    expect(row.acPower).toBe(false);
   });
 
   it("still runs teardown when the trial itself throws", async () => {
@@ -104,6 +105,18 @@ describe("C1 host harness", () => {
       ),
     ).rejects.toThrow(/guest went away/);
     expect(closed).toHaveBeenCalledTimes(1);
+=======
+  it("does not gate a trial on AC power", async () => {
+    // Tiffany, 2026-11-22: never pause or gate C1 runs on charger power.
+    // Power source is recorded evidence, not a precondition - so a battery trial
+    // must run rather than throw, and the row must still report acPower: false.
+    // Verified load-bearing by reinstating the gate: this fails "AC power required".
+    const row = await runC1Trial(
+      { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
+      { ...prepared(), acPower: false },
+      planner(),
+    );
+    expect(row.acPower).toBe(false);
   });
 
   it("negotiates JSON-RPC over stdio and exposes pixels only", async () => {
