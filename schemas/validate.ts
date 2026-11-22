@@ -40,7 +40,9 @@ export interface SchemaIssue {
 }
 
 export function validateSchema(value: unknown, schema: JsonSchema, path = "$"): SchemaIssue[] {
-  return validateNode(value, schema, path, schema);
+  const issues: SchemaIssue[] = [];
+  validateNode(value, schema, path, schema, issues);
+  return issues;
 }
 
 function validateNode(
@@ -48,26 +50,26 @@ function validateNode(
   schema: JsonSchema,
   path: string,
   root: JsonSchema,
-): SchemaIssue[] {
+  issues: SchemaIssue[],
+): void {
   if (schema.$ref !== undefined) {
     const resolved = resolveRef(schema.$ref, root);
     if (resolved === undefined) {
-      return [{ path, keyword: "$ref", message: `unresolvable $ref "${schema.$ref}"` }];
+      issues.push({ path, keyword: "$ref", message: `unresolvable $ref "${schema.$ref}"` });
+      return;
     }
-    return validateNode(value, resolved, path, root);
+    validateNode(value, resolved, path, root, issues);
+    return;
   }
 
-  const issues: SchemaIssue[] = [];
-
   if (schema.anyOf !== undefined) {
-    const branches = schema.anyOf.map((branch) => validateNode(value, branch, path, root));
-    if (!branches.some((branchIssues) => branchIssues.length === 0)) {
+    if (!schema.anyOf.some((branch) => matchesBranch(value, branch, path, root, issues))) {
       issues.push({ path, keyword: "anyOf", message: "value matches none of the anyOf branches" });
     }
   }
   if (schema.oneOf !== undefined) {
-    const passes = schema.oneOf.filter(
-      (branch) => validateNode(value, branch, path, root).length === 0,
+    const passes = schema.oneOf.filter((branch) =>
+      matchesBranch(value, branch, path, root, issues),
     );
     if (passes.length !== 1) {
       issues.push({
@@ -79,14 +81,18 @@ function validateNode(
   }
 
   if (schema.type !== undefined) {
-    const expected = Array.isArray(schema.type) ? schema.type : [schema.type];
-    if (!expected.some((type) => matchesType(value, type))) {
+    const type = schema.type;
+    const matches =
+      typeof type === "string"
+        ? matchesType(value, type)
+        : type.some((entry) => matchesType(value, entry));
+    if (!matches) {
       issues.push({
         path,
         keyword: "type",
-        message: `expected ${expected.join("|")}, got ${typeName(value)}`,
+        message: `expected ${typeof type === "string" ? type : type.join("|")}, got ${typeName(value)}`,
       });
-      return issues; // further keywords assume the declared shape
+      return; // further keywords assume the declared shape
     }
   }
 
@@ -106,19 +112,32 @@ function validateNode(
   }
 
   if (typeof value === "string") {
-    issues.push(...checkString(value, schema, path));
+    checkString(value, schema, path, issues);
   } else if (typeof value === "number") {
-    issues.push(...checkNumber(value, schema, path));
+    checkNumber(value, schema, path, issues);
   } else if (Array.isArray(value)) {
-    issues.push(...checkArray(value, schema, path, root));
+    checkArray(value, schema, path, root, issues);
   } else if (isPlainObject(value)) {
-    issues.push(...checkObject(value, schema, path, root));
+    checkObject(value, schema, path, root, issues);
   }
-  return issues;
 }
 
-function checkString(value: string, schema: JsonSchema, path: string): SchemaIssue[] {
-  const issues: SchemaIssue[] = [];
+// A union reports its own error. Discard branch-local details and reuse the caller's buffer.
+function matchesBranch(
+  value: unknown,
+  schema: JsonSchema,
+  path: string,
+  root: JsonSchema,
+  issues: SchemaIssue[],
+): boolean {
+  const start = issues.length;
+  validateNode(value, schema, path, root, issues);
+  if (issues.length === start) return true;
+  issues.length = start;
+  return false;
+}
+
+function checkString(value: string, schema: JsonSchema, path: string, issues: SchemaIssue[]): void {
   if (schema.minLength !== undefined && value.length < schema.minLength) {
     issues.push({
       path,
@@ -140,11 +159,9 @@ function checkString(value: string, schema: JsonSchema, path: string): SchemaIss
       message: `string does not match pattern ${schema.pattern}`,
     });
   }
-  return issues;
 }
 
-function checkNumber(value: number, schema: JsonSchema, path: string): SchemaIssue[] {
-  const issues: SchemaIssue[] = [];
+function checkNumber(value: number, schema: JsonSchema, path: string, issues: SchemaIssue[]): void {
   if (schema.minimum !== undefined && value < schema.minimum) {
     issues.push({
       path,
@@ -159,7 +176,6 @@ function checkNumber(value: number, schema: JsonSchema, path: string): SchemaIss
       message: `value ${value} is above maximum ${schema.maximum}`,
     });
   }
-  return issues;
 }
 
 function checkArray(
@@ -167,8 +183,8 @@ function checkArray(
   schema: JsonSchema,
   path: string,
   root: JsonSchema,
-): SchemaIssue[] {
-  const issues: SchemaIssue[] = [];
+  issues: SchemaIssue[],
+): void {
   if (schema.minItems !== undefined && value.length < schema.minItems) {
     issues.push({
       path,
@@ -183,13 +199,12 @@ function checkArray(
       message: `array length ${value.length} is above maximum ${schema.maxItems}`,
     });
   }
-  if (schema.items !== undefined) {
-    for (const [index, item] of value.entries()) {
-      const itemIssues = validateNode(item, schema.items, `${path}[${index}]`, root);
-      issues.push(...itemIssues);
+  const { items } = schema;
+  if (items !== undefined) {
+    for (let index = 0; index < value.length; index++) {
+      validateNode(value[index], items, `${path}[${index}]`, root, issues);
     }
   }
-  return issues;
 }
 
 function checkObject(
@@ -197,23 +212,28 @@ function checkObject(
   schema: JsonSchema,
   path: string,
   root: JsonSchema,
-): SchemaIssue[] {
-  const issues: SchemaIssue[] = [];
+  issues: SchemaIssue[],
+): void {
   for (const key of schema.required ?? []) {
     if (value[key] === undefined) {
       issues.push({ path, keyword: "required", message: `missing required property "${key}"` });
     }
   }
-  for (const [key, propertySchema] of Object.entries(schema.properties ?? {})) {
-    if (value[key] !== undefined) {
-      issues.push(...validateNode(value[key], propertySchema, `${path}.${key}`, root));
+  const { properties } = schema;
+  if (properties) {
+    for (const key in properties) {
+      if (Object.hasOwn(properties, key) && value[key] !== undefined) {
+        validateNode(value[key], properties[key]!, `${path}.${key}`, root, issues);
+      }
     }
   }
 
   if (schema.additionalProperties === false) {
-    const declared = new Set(Object.keys(schema.properties ?? {}));
     for (const key of Object.keys(value)) {
-      if (value[key] !== undefined && !declared.has(key)) {
+      if (
+        value[key] !== undefined &&
+        !Object.prototype.propertyIsEnumerable.call(properties ?? {}, key)
+      ) {
         issues.push({
           path,
           keyword: "additionalProperties",
@@ -222,8 +242,8 @@ function checkObject(
       }
     }
   }
-  return issues;
 }
+
 function matchesType(value: unknown, type: string): boolean {
   switch (type) {
     case "null":
