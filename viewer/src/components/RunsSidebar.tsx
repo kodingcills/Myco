@@ -1,4 +1,4 @@
-import { FileWarning } from "lucide-react";
+import { AlertTriangle, FileWarning } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { deriveVerdict } from "../data/verdict.ts";
 import { type OpenedRun, useViewer } from "../store.ts";
@@ -112,9 +112,14 @@ export function RunsSidebar({ mod }: { mod: boolean }) {
               {isSimulated && (
                 <span
                   data-simulated-badge
-                  className="type-data-small px-1 border border-border-default rounded-control text-text-secondary bg-bg-surface2 whitespace-nowrap"
+                  className="type-data-small inline-flex items-center gap-1 px-1 border border-border-strong rounded-control text-text-primary bg-bg-surface3 whitespace-nowrap"
                   title="Simulated / dry-run harness"
                 >
+                  <AlertTriangle
+                    className="size-3 shrink-0 text-text-primary"
+                    strokeWidth={1.5}
+                    aria-hidden="true"
+                  />
                   Simulated
                 </span>
               )}
