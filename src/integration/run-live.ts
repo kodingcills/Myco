@@ -1,11 +1,11 @@
 /**
- * Live-VM trial entrypoint (M1-013 / TIF-17): run one normal and one
- * kill-mid-program corrupted calc-record-edit trial against the real VM.
+ * Live-VM entrypoint for normal and corrupted calc-record-edit trials.
  *
  * Usage (host, with the ssh tunnel and MYCO_AGENT_TOKEN set):
  *   tsx src/integration/run-live.ts --mode normal   [--seed s] [--runs-dir runs]
  *       [--row-key K --column C --new-value V]   (sweep: pass --seed with the set's fixtureSeed)
  *   tsx src/integration/run-live.ts --mode kill    [--kill-after-step 3] [--recovery]
+ *   tsx src/integration/run-live.ts --mode invalid-target|dropped-save|focus-change [--recovery]
  *
  * The token is never committed: it is read from MYCO_AGENT_TOKEN (fetched
  * from the guest over vssh by the caller) or from the .myco-token file.
@@ -17,7 +17,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { generateParameterSets } from "../tasks/intent.ts";
 import { AgentClient, SshTunnel } from "../win/agent-client.ts";
-import { runTrial } from "./trial.ts";
+import { LIVE_CORRUPTION_MODES, runTrial } from "./trial.ts";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -71,24 +71,39 @@ async function main(): Promise<void> {
     process.exit(report.verdict.status === "verified" ? 0 : 1);
   }
 
-  if (mode === "kill") {
+  const corruption = LIVE_CORRUPTION_MODES.find((fault) => fault === mode);
+  if (corruption) {
     // Corrupted trial: kill soffice after the edit lands and before the save.
     // A wall-clock timer cannot do this reliably — launching Calc and making
     // it observable takes ~30 s, so a 12 s timer fires during launch and the
     // trial never executes a step (observed: steps: [], precondition
     // adapter-available failure). The kill is therefore step-triggered.
-    const killAfterStep = Number(arg("kill-after-step") ?? 3);
     const report = await runTrial({
       client,
       params,
       unoSocket: socket,
       runsDir,
-      killAfterStep,
+      ...(corruption === "kill"
+        ? {
+            killAfterStep: Number(arg("kill-after-step") ?? 3),
+            auditKill: process.argv.includes("--audit-corruption"),
+          }
+        : { fault: corruption }),
       recovery,
     });
     process.stdout.write(JSON.stringify(report, null, 2));
     await tunnel.stop();
-    process.exit(report.verdict.status === "verified" ? 1 : 0);
+    if (report.corruption && !report.corruption.applied) process.exit(2);
+    if (report.verdict.status !== "verified") process.exit(0);
+    if (
+      report.corruption?.recovery &&
+      report.corruption.persistedValue === params.newValue &&
+      report.corruption.recoveryEvents.some(
+        (event) => event === "relaunch:completed" || /^retry:\d+-completed$/.test(event),
+      )
+    )
+      process.exit(0);
+    process.exit(1);
   }
 
   if (mode === "values") {

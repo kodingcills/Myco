@@ -15,6 +15,12 @@
 # usage: reset-trial-vm.sh [snapshot]   (default clean-base)
 set -euo pipefail
 
+source "$(dirname "$0")/vm-lock.sh"
+if ! vm_lock_owned_by_parent; then
+  vm_lock_acquire reset-trial-vm.sh || exit "$?"
+  trap vm_lock_release EXIT
+fi
+
 SNAPSHOT=${1:-clean-base}
 # Where vm.sh lives. Override with MYCO_VM_SCRIPTS to point at a stub.
 #
