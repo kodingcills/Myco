@@ -14,6 +14,7 @@ import {
 import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
 import { createPlanner, MAX_CALL_MICROS } from "../src/baseline/planner.ts";
 import manifest from "../src/baseline/sweep-v3.json" with { type: "json" };
+import { cleanupTrialGuest } from "../src/integration/guest-health.ts";
 import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
 import { groundTruth } from "../src/tasks/intent.ts";
@@ -131,6 +132,13 @@ async function main() {
     }
     if (!pingOk) throw new Error("myco-agent did not answer ping");
 
+    // Guest state this attempt may create, so the abort path can tear it down.
+    // A precondition that aborts must not leave the guest dirtier than it found
+    // it: on 2026-11-22 the battery gate threw before any cleanup scope existed
+    // and left two orphaned soffice processes behind. Held in an object so the
+    // finally block can read what this scope learned without mutable captures.
+    const guest = { client, runRoot: "", runDirName: undefined as string | undefined };
+
     // 6. Convert fixture
     console.log("--> Converting fixture for seed:", target.params.fixtureSeed);
     const fixture = generateFixture(target.params.fixtureSeed);
@@ -140,6 +148,9 @@ async function main() {
       timeoutMs: 90_000,
     });
     await converter.convert(Buffer.from(fixture.csv, "utf8"));
+    guest.runRoot = `C:\\myco\\runs\\${target.index}`;
+    const runDir = converter.lastRunDir;
+    guest.runDirName = runDir ? runDir.split(/[\\/]/).pop() : undefined;
     const xlsxPath = converter.lastXlsxPath;
     if (!xlsxPath) throw new Error("fixture convert produced no path");
     console.log("--> Fixture converted at:", xlsxPath);
@@ -295,6 +306,22 @@ async function main() {
     writeFileSync(join(directory, "0.json"), `${JSON.stringify(row, null, 2)}\n`);
     console.log(`Saved spike result to ${join(directory, "0.json")}`);
   } finally {
+    if (guest.runRoot) {
+      try {
+        const cleanup = await cleanupTrialGuest({
+          client: guest.client,
+          runRoot: guest.runRoot,
+          runDirName: guest.runDirName,
+        });
+        // Report what happened rather than assuming it worked: a cleanup that
+        // silently fails is how a leak becomes invisible.
+        console.log(
+          `--> Guest cleanup: killed=${JSON.stringify(cleanup.killed)} removed=${JSON.stringify(cleanup.removed)} residue=${JSON.stringify(cleanup.residue)}`,
+        );
+      } catch (error) {
+        console.error("--> Guest cleanup failed:", error instanceof Error ? error.message : error);
+      }
+    }
     try {
       tunnel.stop();
     } catch {}
