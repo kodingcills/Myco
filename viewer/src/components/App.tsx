@@ -2,9 +2,11 @@ import { Popover } from "@base-ui/react/popover";
 import { Tabs } from "@base-ui/react/tabs";
 import { PanelLeft, PanelRight } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { parseHeadToHead } from "../data/head-to-head.ts";
 import { joinSteps } from "../data/steps.ts";
 import { droppedFiles, selectionName } from "../open-files.ts";
 import { type Mode, useActiveRun, useViewer } from "../store.ts";
+import { CompareApp } from "./HeadToHead.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { OpenPicker, OpenScreen } from "./OpenScreen.tsx";
 import { Proof } from "./Proof.tsx";
@@ -116,6 +118,26 @@ export function App() {
   const [drag, setDrag] = useState(false);
   const dragDepth = useRef(0);
   const [dropError, setDropError] = useState<string>();
+  const [compareError, setCompareError] = useState<string>();
+  const compareInput = useRef<HTMLInputElement>(null);
+  const comparison = useViewer((state) => state.comparison);
+  useEffect(() => {
+    const url = new URLSearchParams(location.search).get("compare");
+    if (!url) return;
+    let cancelled = false;
+    void fetch(url)
+      .then((response) => response.json())
+      .then((value: unknown) => {
+        const report = parseHeadToHead(value);
+        if (!cancelled && report) useViewer.getState().openComparison(url, report);
+      })
+      .catch(() => {
+        if (!cancelled) setCompareError("That report could not be loaded.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const openTrigger = useRef<HTMLButtonElement>(null);
   const helpTrigger = useRef<HTMLButtonElement>(null);
   const lastFocus = useRef(new Map<string, HTMLElement>());
@@ -306,7 +328,7 @@ export function App() {
   }, [center, mode, run?.key]);
 
   const parseError = run?.data.parseErrors[0];
-  const error = dropError ?? run?.error;
+  const error = compareError ?? dropError ?? run?.error;
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: The window-wide drop zone has an equivalent keyboard picker.
     <div
@@ -378,6 +400,37 @@ export function App() {
             <PanelRight aria-hidden="true" />
           </button>
         )}
+        <button
+          type="button"
+          data-button
+          onClick={() => compareInput.current?.click()}
+          title="Open a head-to-head report"
+        >
+          Compare
+        </button>
+        <input
+          ref={compareInput}
+          hidden
+          type="file"
+          accept=".json"
+          aria-label="Head-to-head report"
+          onChange={async (event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (!file) return;
+            try {
+              const parsed = parseHeadToHead(JSON.parse(await file.text()));
+              if (!parsed) {
+                setCompareError("That file is not a head-to-head report.");
+                return;
+              }
+              setCompareError(undefined);
+              useViewer.getState().openComparison(file.name, parsed);
+            } catch {
+              setCompareError("That file could not be read as JSON.");
+            }
+          }}
+        />
         <OpenPicker trigger={openTrigger} open={picker} setOpen={setPicker}>
           Open
         </OpenPicker>

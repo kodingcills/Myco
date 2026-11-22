@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { HeadToHeadReport } from "./data/head-to-head.ts";
 import type { RunFileInput } from "./data/loaders.ts";
 import { joinSteps } from "./data/steps.ts";
 import type { RunData, RunUpdate, SourceRef } from "./data/types.ts";
@@ -29,6 +30,10 @@ export interface OpenedRun {
 
 interface ViewerStore {
   runs: OpenedRun[];
+  comparison?: HeadToHeadReport;
+  comparisonName?: string;
+  openComparison(name: string, report: HeadToHeadReport): void;
+  closeComparison(): void;
   selection: Selection;
   mode: Mode;
   sidebarOpen?: boolean;
@@ -119,6 +124,12 @@ function saveRunReferences(runs: OpenedRun[]) {
 
 export const useViewer = create<ViewerStore>((set, get) => ({
   runs: [],
+  openComparison(name, report) {
+    set({ comparison: report, comparisonName: name });
+  },
+  closeComparison() {
+    set({ comparison: undefined, comparisonName: undefined });
+  },
   selection: typeof location === "undefined" ? {} : readHash(),
   mode: "proof",
   inspectorOpen: true,
