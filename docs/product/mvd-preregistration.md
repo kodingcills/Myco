@@ -72,17 +72,20 @@ From `src/foundry/baseline/registry.ts` (merged) plus the arm this plan adds:
 
 | Arm | Registry status | Blocker | Needs |
 |---|---|---|---|
-| screenshot-only (Cua Driver C1 pixel rung) | not-run | VM time, named planner | slots 4-5 evidence (§6), planner |
-| hcu (Microsoft Hybrid Computer Use, GUI channel) | not-run | VM time, named planner | slots 4-5 evidence (§6), planner |
+| screenshot-only (Cua Driver C1 pixel rung) | not-run | VM time | slots 4-5 evidence (§6) |
+| hcu (Microsoft Hybrid Computer Use, GUI channel) | not-run | VM time | slots 4-5 evidence (§6) |
 | **hcu+shell** (HCU plus the agent's own read access to the store) | **not in the registry** | none technical | **Foundry must add it** (§4 explains why it is the decisive arm) |
 | myco (verdict from persisted state via the Myco runtime) | not in the registry | RT-011/RT-015/RT-016, slot | runtime first path |
 | orgo | blocked | account creation and card/credit | outer-loop decision |
 | simular-sai | blocked | Google sign-in, API key, phone verification; hosted cloud computer is not our fixture host | outer-loop decision; even if allowed the environment differs, so no like-for-like |
 
-Planner: every arm uses **one** named planner model at identical settings, recorded
-per trial. HCU is a computer layer, not an agent (f2-ef-baseline-arms.md), so a result
-without the planner named is not a result. Planner choice is an outer-loop decision;
-the registry currently says `planner: unknown`.
+**Planner (decided by the outer loop, 2026-11-21): Claude `claude-sonnet-5-5`, the same
+version and settings for every arm.** The exact model id is recorded in each trial's
+trace. If Claude usage limits interrupt a run, **that arm is paused, not switched to
+another model**: a comparison whose arms used different planners is not a comparison.
+(HCU is a computer layer, not an agent, so a result without its planner named would not be
+a result; f2-ef-baseline-arms.md.) The registry's `planner: unknown` entries should be
+updated to this id by the Foundry owner.
 
 The trace guard (contract §5) applies identically to every arm. Reads of the store are
 allowed; writes to persistence files without a GUI act are refuted. Its documented
@@ -273,9 +276,9 @@ beyond reset is **unmeasured** and must be measured in S1 before later stages ar
 
 | Stage | Purpose | Preconditions | Trials | Reset time (warm floor) | Yields |
 |---|---|---|---|---|---|
-| S0 | smoke: one `ef-t01` trial per ready arm | RT-011; planner named; slots 4-5 done | 1 per arm | ~21 s each (+~165 s once) | setup commands and time-to-first-result; no rates |
+| S0 | smoke: one `ef-t01` trial per ready arm | RT-011; slots 4-5 done | 1 per arm | ~21 s each (+~165 s once) | setup commands and time-to-first-result; no rates |
 | S1 | measure real per-trial wall-clock and cost | S0 | ≥5 per arm | ~1.75 min per arm | the number that sizes S2-S4 |
-| S2 | refutable-trial head-to-head (myco, hcu+shell; screenshot-only/hcu from slots 4-5) | Foundry adds hcu+shell and the no-verify variant; shell calls trace-recorded; planner fixed | ≥30 refutable pairs per arm on `ef-t01` no-verify (decides rows 1-4) plus ≥30 on `ef-t01` verify variant | 21 min per arm (60 trials) | primary endpoint with Wilson interval; sign test |
+| S2 | refutable-trial head-to-head (myco, hcu+shell; screenshot-only/hcu from slots 4-5) | Foundry adds hcu+shell and the no-verify variant; shell calls trace-recorded; planner fixed (Claude `claude-sonnet-5-5`) | ≥30 refutable pairs per arm on `ef-t01` no-verify (decides rows 1-4) plus ≥30 on `ef-t01` verify variant | 21 min per arm (60 trials) | primary endpoint with Wilson interval; sign test |
 | S3 | normal-trial head-to-head | S2 | ~100 per arm | 35 min per arm | completion-rate with CI |
 | S4 | Direction B interrupted-write trials | RT-016, RT-015, Foundry Calc/Writer family | ≥30 interrupted | 10.5 min | duplicate/loss bound |
 
@@ -290,7 +293,7 @@ never quit Tiffany's apps; M1 retains host priority.
 
 1. **Foundry owner:** add the `hcu+shell` arm (shell calls recorded into `trace.jsonl`) and
    a no-verify variant of `ef-t01` to the registry/bank; confirm `ef-t01` ≈ DF-S02 mapping.
-2. **Outer loop:** name the planner (one model, fixed settings) for all arms.
+2. **Planner:** decided: Claude `claude-sonnet-5-5` for all arms (above). Foundry owner records the exact id in the registry and each trace.
 3. **Coordinator (via outer loop):** a slot 6 (S0+S1) after queue slots 1-5, on a new
    snapshot, with an explicit GO; RT-011 first path completed beforehand. Please also
    confirm whether slots 4-5 will reach the §4.1 trial minimums.
