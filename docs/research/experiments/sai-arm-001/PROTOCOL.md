@@ -63,3 +63,7 @@ T1 attempt 2 ran under Amendment 1 and ended `succeeded`. Its disk readback was 
 - T1 is rerun once as attempt 3 with an unambiguous message (the text is quoted, the number of characters is stated, and punctuation and Enter are excluded). The expected bytes are unchanged (`Myco sample one`, 15 bytes). This is the T1 trial that is scored.
 - The same defect class is checked for T2–T4 messages before they run: every literal the agent must type is quoted and counted, and the status-line report is requested verbatim.
 - Agent-start cap (Amendment 1, item 3) now stands at eight starts, of which attempts 1 and 2 of T1 used two.
+
+## Resumption record
+
+The resumed implementation used the existing S0 and T1 artifacts. Attempt 3 is the sole scored observation. The superseding execution constraints require an authenticated integration that does not expose credentials and prohibit answering approval prompts. No such integration was available, so the resume made no live calls. T2, T3 and T5 runner paths prepared offline remain unverified against the hosted service.

@@ -1,16 +1,24 @@
 /** Stage implementations. Each stage appends one self-describing record to `results`. */
 
-import { sandboxScopedPolicy } from "./approvals.ts";
+import { denyAllPolicy, sandboxScopedPolicy } from "./approvals.ts";
 import type { SaiClient } from "./client.ts";
 import { loadApiKey } from "./client.ts";
-import { compareBytes } from "./comparator.ts";
+import { compareBytes, compareItems, parseItemStore } from "./comparator.ts";
 import { Control } from "./control.ts";
 import {
+  APP_PS1,
+  type AppConfig,
+  ITEMS_PERSIST_CHECK,
+  itemsMessage,
+  launchScript,
   resetDesktopScript,
   runDir,
   SANDBOX_ROOT,
+  stopAllAppsScript,
+  T1_BYTES_CHECK,
   T1_EXPECTED_BYTES,
   T1_PERSIST_CHECK,
+  T2_ITEMS,
   t1Message,
 } from "./fixtures.ts";
 import type { Guard } from "./guard.ts";
@@ -176,7 +184,7 @@ async function t1(ctx: StageContext): Promise<void> {
     policy,
     deadlineMs: 8 * 60_000,
   });
-  if (outcome.turnId && outcome.sessionId) {
+  if (outcome.turnId && outcome.sessionId && outcome.endedBy === "idle") {
     ctx.state.turns.T1 = { turnId: outcome.turnId, sessionId: outcome.sessionId };
   }
   ctx.control.leaseOpen = false; // a task may have taken the computer; reopen for readback
@@ -192,12 +200,109 @@ async function t1(ctx: StageContext): Promise<void> {
   });
 }
 
+async function itemsTrial(
+  ctx: StageContext,
+  stage: "t2" | "t3",
+  label: string,
+  config: AppConfig,
+): Promise<void> {
+  const dir = runDir(stage);
+  const appPath = `${dir}\\app.ps1`;
+  const storePath = `${dir}\\items.json`;
+  const control = await ensureControl(ctx, stage);
+  await control.powershell(stage, "stop-prior-fixture", stopAllAppsScript());
+  const placed = await control.placeFile(stage, "place-fixture", appPath, APP_PS1);
+  if (placed.httpStatus !== 200 || placed.error || placed.vendorError)
+    throw new Error(`${label}: fixture placement failed`);
+  const launch = await control.powershell(
+    stage,
+    "launch-fixture",
+    launchScript(storePath, config, appPath),
+  );
+  if (launch.exitCode !== 0 || launch.exec.error || launch.exec.vendorError)
+    throw new Error(`${label}: fixture launch failed`);
+
+  const outcome = await runAgentTurn(ctx.client, {
+    stage,
+    label,
+    message: itemsMessage(),
+    machineId: ctx.state.machineId as string,
+    options: { success_criteria: [ITEMS_PERSIST_CHECK], recordTrajectory: true },
+    policy: denyAllPolicy(() => ++ctx.state.approvalCount),
+    deadlineMs: 8 * 60_000,
+  });
+  if (outcome.turnId && outcome.sessionId && outcome.endedBy === "idle") {
+    ctx.state.turns[label] = { turnId: outcome.turnId, sessionId: outcome.sessionId };
+  }
+  control.leaseOpen = false;
+  const readback = await ensureControl(ctx, stage);
+  const bytes = await readback.readBytes(stage, "readback", storePath);
+  const persisted =
+    bytes === "absent"
+      ? []
+      : bytes === null
+        ? null
+        : parseItemStore(new TextDecoder().decode(bytes));
+  addAttempt(ctx, stage, {
+    label: LABEL,
+    trial: label,
+    config,
+    outcome: { ...outcome, startBody: undefined },
+    truthSource: "Direct Control exec: file bytes read independently and compared on the host",
+    truth: compareItems(T2_ITEMS, persisted),
+  });
+}
+
+async function judgeRecordedTurns(ctx: StageContext): Promise<void> {
+  const cases = [
+    { label: "T1", check: T1_PERSIST_CHECK },
+    { label: "T2", check: ITEMS_PERSIST_CHECK },
+    { label: "T3-drop", check: ITEMS_PERSIST_CHECK },
+    { label: "T3-keep", check: ITEMS_PERSIST_CHECK },
+    { label: "T1", check: T1_BYTES_CHECK },
+  ];
+  const done =
+    (ctx.results.t5 as { attempts?: Array<{ trial: string; criterion: string }> } | undefined)
+      ?.attempts ?? [];
+  for (const { label, check } of cases) {
+    const turn = ctx.state.turns[label];
+    if (!turn || done.some((entry) => entry.trial === label && entry.criterion === check.id))
+      continue;
+    const before = await ctx.client.account("t5", `${label}:balance-before`);
+    const response = await ctx.client.call({
+      stage: "t5",
+      label: `${label}:judge:${check.id}`,
+      method: "POST",
+      path: "/v1/agents/judge",
+      body: { turns: [turn.turnId], criteria: [check] },
+      spend: "judge",
+    });
+    addAttempt(ctx, "t5", {
+      label: LABEL,
+      trial: label,
+      criterion: check.id,
+      httpStatus: response.status,
+      wallMs: response.ms,
+      creditsBefore: before.usd,
+      judgment: response.body,
+    });
+    await ctx.client.account("t5", `${label}:balance-after`);
+  }
+}
+
 export async function runStage(stage: string, ctx: StageContext): Promise<void> {
   switch (stage) {
     case "s0":
       return s0(ctx);
     case "t1":
       return t1(ctx);
+    case "t2":
+      return itemsTrial(ctx, "t2", "T2", { mode: "drop", banner: "none", layout: "A" });
+    case "t3":
+      await itemsTrial(ctx, "t3", "T3-drop", { mode: "drop", banner: "success", layout: "A" });
+      return itemsTrial(ctx, "t3", "T3-keep", { mode: "keep", banner: "failure", layout: "A" });
+    case "t5":
+      return judgeRecordedTurns(ctx);
     default:
       throw new Error(`stage ${stage} is not implemented yet`);
   }
