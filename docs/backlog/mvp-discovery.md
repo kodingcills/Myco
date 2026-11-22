@@ -223,6 +223,13 @@ criterion (TIF-60) decide the wedge.
   Tiffany's Chrome Stable result when she supplies it; no regression of the 10,000-step verdict
   guard or of select latency; the 12-entry effective cache and the truncated-PNG behaviour
   decided or fixed.
+- **outcome:** Saved Chromium Headless Shell runs of the fixed-width bitmap build cut
+  settled renderer footprint from 1,091–1,111 MB to 349–376 MB. That build still peaked
+  at 498,833,144 bytes summed footprint, above the 400,000,000-byte gate. The measured-width
+  build fixes the lightbox marker and transfer cleanup. Its measurements were blocked at
+  browser launch, and Chrome Stable remains unmeasured. The strict 10,000-step verdict
+  guard showed intermittent 150 ms misses before and after, with regression status unresolved.
+  See [the measurement record](../../viewer/PERF.md#screenshots-bounded-retained-memory-mvd-009--tif-64).
 
 ---
 

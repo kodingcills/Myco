@@ -109,3 +109,10 @@ Recorded 2026-11-22 from the outer loop. These are not Tiffany's sign-off.
 3. **Cold-drag preview gap** (1-2 frames with no decoded thumbnail): accepted for v0 and noted in TIF-64.
 4. **Truncated PNG whose manifest digest still matches:** partial rendering is acceptable **only with a visible "screenshot truncated/incomplete" marker in the Inspector**; a partial image must never look complete. If the marker does not exist yet, it is added in TIF-64 or a small fix PR.
 
+
+### TIF-64 implementation and measurements
+
+1. **Memory gate remains open.** The saved fixed-width build peaked at 896,581,632 B summed RSS, 498,833,144 B summed footprint and 416,975,272 B renderer footprint. The measured-width build hit a sandbox launch error. Chrome Stable remains unmeasured. [Measurement record](PERF.md#screenshots-bounded-retained-memory-mvd-009--tif-64)
+2. **Up to 64 view bitmaps under a 64 MiB LRU cap.** View keys include the Inspector width bucket and DPR. The original bitmap lives while the lightbox is open.
+3. **Cold arbitrary-position drag preview remains an accepted v0 deviation.** The prior implementation’s cold drag completed in 51.1 ms maximum (20 samples), with 0/20 first-frame previews.
+4. **Incomplete screenshot marker implemented.** The Inspector and lightbox mark incomplete evidence when the PNG or WebP container checks or the worker decoder detect it. The thumbnail reports unavailable. These checks cover container structure and decoder rejection.
