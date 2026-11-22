@@ -21,8 +21,10 @@
 #     (exit 9); resume is only for gate pauses / operator stops.
 #
 # Host gates, checked before each trial (exit and resume later; never run
-# through them): AC power (exit 3), 1-min load > 14 (exit 4), swap free
-# < 300 MB (exit 6). A healthy run sits at load 8-10 because QEMU is the load.
+# through them): 1-min load > 14 (exit 4), swap free < 300 MB (exit 6). Power is
+# NOT a gate - it is recorded in $PROGRESS as NOTE_ON_BATTERY and the trial runs
+# (standing rule: no harness refuses to run on charger state). A healthy run
+# sits at load 8-10 because QEMU is the load.
 set -u
 WS=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-/tmp/m1-013/sweep}
@@ -60,9 +62,11 @@ for i in $(seq 0 29); do
   fi
   echo "=== trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"
 
-  if ! pmset -g batt | head -1 | grep -q "AC Power"; then
-    echo "PAUSED_AC_POWER_LOST at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 3
-  fi
+  # Power is RECORDED, never enforced: a harness must not refuse to run because
+  # of charger state (standing rule, CONTRIBUTING-agents.md). The trial proceeds
+  # on battery; the line below leaves a trace in the progress log instead.
+  pmset -g batt | head -1 | grep -q "AC Power" || \
+    echo "NOTE_ON_BATTERY at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"
   LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
   SWAP_FREE=$(sysctl -n vm.swapusage | sed -E 's/.*free = ([0-9.]+)M.*/\1/')
   if awk -v l="$LOAD1" 'BEGIN{exit !(l>14.0)}'; then

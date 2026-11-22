@@ -59,9 +59,11 @@ append_record() {
 while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   echo "=== trial $i ($MODE) $(date -u +%FT%TZ)" >> "$PROGRESS"
 
-  if ! pmset -g batt | head -1 | grep -q "AC Power"; then
-    echo "PAUSED_AC_POWER_LOST at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 3
-  fi
+  # Power is RECORDED, never enforced: a harness must not refuse to run because
+  # of charger state (standing rule, CONTRIBUTING-agents.md). The trial proceeds
+  # on battery; the line below leaves a trace in the progress log instead.
+  pmset -g batt | head -1 | grep -q "AC Power" || \
+    echo "NOTE_ON_BATTERY at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"
   LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
   SWAP_FREE=$(sysctl -n vm.swapusage | sed -E 's/.*free = ([0-9.]+)M.*/\1/')
   if awk -v l="$LOAD1" 'BEGIN{exit !(l>14.0)}'; then
