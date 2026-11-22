@@ -20,25 +20,67 @@ function classifySession(output: string): string {
   if (!("calcSession" in snapshot) || !Array.isArray(snapshot.processes))
     return "session-marker-invalid";
 
+  // Both ids must be valid before any comparison, so a mismatch is never
+  // reported between two values that were never comparable.
+  const interactive = (id: unknown) => typeof id === "number" && Number.isSafeInteger(id) && id > 0;
+
   const daemons: unknown[] = [];
+  let sawUnreadable = false;
   for (const process of snapshot.processes) {
     const { CommandLine, SessionId } = record(process);
-    if (typeof CommandLine !== "string") return "daemon-command-line-unreadable";
+    // Unreadable candidates are counted and skipped, not returned on. Returning
+    // here would make `daemon-ambiguous` unreachable for the exact case it names:
+    // two candidates, neither readable.
+    if (typeof CommandLine !== "string") {
+      sawUnreadable = true;
+      continue;
+    }
 
     // Accept quoted and unquoted Windows executable paths. Only the first
-    // argument can identify the serve subcommand.
+    // argument can identify the serve subcommand, and nothing may follow it.
     const command =
       /^[ \t]*(?:"[^"]*\\cua-driver\.exe"|"cua-driver\.exe"|(?:[^" \t]*\\)?cua-driver\.exe)(?=[ \t]|$)(?:[ \t]+("[^"]*"|[^" \t]+)(?=[ \t]|$))?/i.exec(
         CommandLine,
       );
-    if (!command) return "daemon-command-line-unreadable";
-    if (/[^ \t]/.test(CommandLine.slice(command[0].length)) && !command[1])
-      return "daemon-command-line-unreadable";
-    if (command[1] === "serve" || command[1] === '"serve"') daemons.push(SessionId);
+    // Reject any tail after the first argument. An earlier form of this guard
+    // was unreachable — the regex had already consumed the leading whitespace,
+    // so `/[^ \t]/.test(rest)` and `!command[1]` could never both hold — which
+    // let `cua-driver.exe serve cmd.exe /c ...` classify as `match` and be kept
+    // as telemetry, contradicting the "never retain command lines" invariant at
+    // the call site below.
+    // `serve` legitimately takes flags (`serve --socket pipe`), so only a tail
+    // that does NOT begin with a flag is a refusal. That separates the real
+    // forms from a smuggled command, which is what the dead guard above failed
+    // to do.
+    if (!command) {
+      sawUnreadable = true;
+      continue;
+    }
+    // `serve` is invoked with exactly one optional flag pair, so the tail is
+    // validated against that grammar rather than guessed from a prefix. A
+    // prefix test would accept `serve --socket pipe extra` — the very smuggling
+    // the dead guard was supposed to stop.
+    const isServe = command[1] === "serve" || command[1] === '"serve"';
+    const tail = CommandLine.slice(command[0].length).trim();
+    // The tail grammar only applies to `serve`. A cua-driver that is not serving
+    // (a `call`, say) is not a daemon candidate at all, so `daemon-missing` is
+    // the honest answer for it — not `daemon-command-line-unreadable`, which
+    // means we could not READ a candidate, not that we read one we do not want.
+    if (isServe && !/^(?:--socket[ \t]+\S+)?$/.test(tail)) {
+      sawUnreadable = true;
+      continue;
+    }
+    if (isServe) daemons.push(SessionId);
   }
+  // An unreadable candidate anywhere aborts: it may be the only daemon, or a
+  // second one whose kind we cannot name, and neither permits `match`. Only when
+  // NOTHING readable was found does ambiguity become reachable — two candidates,
+  // neither readable, is exactly the case that name describes.
+  if (sawUnreadable && daemons.length === 0) return "daemon-command-line-unreadable";
+  if (sawUnreadable) return "daemon-command-line-unreadable";
   if (daemons.length === 0) return "daemon-missing";
   if (daemons.length !== 1) return "daemon-ambiguous";
-  const interactive = (id: unknown) => typeof id === "number" && Number.isSafeInteger(id) && id > 0;
+  // Interactivity before identity: an unreadable id is its own condition.
   if (!interactive(snapshot.calcSession) || !interactive(daemons[0]))
     return "session-noninteractive";
   return daemons[0] === snapshot.calcSession ? "match" : "session-mismatch";
