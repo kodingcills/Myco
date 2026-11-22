@@ -52,14 +52,18 @@ Public bank `src/foundry/tasks/bank.ts` (merged, PR #54):
 | ef-t02-rename-row | ef-todo-stale-row-v1 | stale persisted row | rename `Draft release notes` |
 | ef-t03-whitespace-value | ef-todo-wrong-value-v1 | wrong-value normalization | add `Release: review the Q3 metrics` |
 | ef-t04-delete-row | ef-todo-partial-write-v1 | partial multi-file write | delete `archive Q1 invoices` |
+| ef-t01b-add-four-items-noverify *(Foundry confirmed it will add; not yet merged)* | ef-todo-silent-drop-v1 (unchanged) | silent drop at save | same prompt as ef-t01 minus the final sentence |
 
 - `ef-t01`'s prompt ends "Then confirm everything you added is actually persisted."
   That is deliberate and important for the head-to-head: every arm is **asked** to
   verify. The question is whether the arm's own check is reliable, and whether the
   verdict exists when the agent does not check.
-- The dogfood DF-S01/DF-S02 remain the 60-second demo narrative (plan §3.2).
-  `[INFERENCE]` ef-t01 is the Foundry-owned scored equivalent of the DF-S02 seeded bug;
-  confirm the mapping with the Foundry owner before citing it as the same task.
+- The dogfood DF-S01/DF-S02 remain the 60-second demo narrative (plan §3.2). Foundry
+  confirmed the mapping at the defect/oracle level, **not** the prompt level: the silent-drop
+  fixture is DF-S02's seeded bug (BUG-prefix, case-insensitive; the listbox shows it, save
+  drops it, status says saved N), but DF-S02 is a 'find the seeded bug' investigation prompt
+  while ef-t01 is 'add four items then confirm persisted'. Cite as: *ef-t01 (silent-drop
+  defect = DF-S02's seeded bug; Foundry-scored)*. DF-S02's own prompt is not a Foundry task.
 - Oracles live under `src/foundry/oracles/` (hidden by path). **Discovery must not
   import them**, and a live arm must run with the hidden root absent from its
   environment (contract §6).
@@ -80,12 +84,13 @@ From `src/foundry/baseline/registry.ts` (merged) plus the arm this plan adds:
 | simular-sai | blocked | Google sign-in, API key, phone verification; hosted cloud computer is not our fixture host | outer-loop decision; even if allowed the environment differs, so no like-for-like |
 
 **Planner (decided by the outer loop, 2026-11-21): Claude `claude-sonnet-5-5`, the same
-version and settings for every arm.** The exact model id is recorded in each trial's
-trace. If Claude usage limits interrupt a run, **that arm is paused, not switched to
-another model**: a comparison whose arms used different planners is not a comparison.
+version and settings for every arm.** `trace.jsonl` is a closed schema with no model-id
+field, so (per the Foundry owner) the exact model id is recorded in each trial's evidence
+bundle and baseline row, and the report rejects mixed planner ids within an arm. If Claude
+usage limits interrupt a run, the arm gets status `paused` (reason recorded), **never a
+model swap**; a resumed arm must present the same model id or its rows are rejected.
 (HCU is a computer layer, not an agent, so a result without its planner named would not be
-a result; f2-ef-baseline-arms.md.) The registry's `planner: unknown` entries should be
-updated to this id by the Foundry owner.
+a result; f2-ef-baseline-arms.md.) The Foundry owner sets `plannerName` to this id for every live arm.
 
 The trace guard (contract §5) applies identically to every arm. Reads of the store are
 allowed; writes to persistence files without a GUI act are refuted. Its documented
@@ -142,8 +147,12 @@ counts and need no pairing.
 
 **Unit of analysis.** Claims are made **per (task, prompt variant)**, never pooled
 across variants. The wedge-deciding comparison is `ef-t01` no-verify; it needs **≥30
-refutable pairs per arm** on that variant, produced by repeating seeds/fault schedules
-(Foundry owns the schedule). `ef-t01` with the verify sentence needs its own ≥30.
+refutable pairs per arm** on that variant, drawn by the grader as **seeded variants of the
+silent-drop family from the hidden split** (repeating the one public fixture gives repeats,
+not independent samples). Decision-row trials therefore come only from the grader-supplied
+hidden source; Discovery sees the commitment root and counts, never the fixtures. `ef-t01` with the verify sentence needs its own ≥30. The ≥30-pair unit is a
+**comparison unit, not a reliability claim**: reliability claims still need Foundry §7a's
+≥100 known trials over ≥3 seeds, and the report labels the two differently.
 `ef-t02..t04` are reported at whatever n they reach, descriptively, with the interval,
 and make no rate claim below 30.
 
@@ -166,7 +175,9 @@ The guard sees only what the trace records (contract §5 limit (a)). Therefore:
 1. The arm's shell and file calls **must be recorded into `trace.jsonl`**; an arm that
    cannot record them is run as an unmeasured exploratory arm and excluded from rows 2-3.
 2. Any recorded `shell-exec`/`write_file` touching a persistence file is refuted by the
-   guard, so **a trial where the arm "fixes" the store through the shell counts as
+   guard (Foundry also tightens the guard for this arm: a store change is reconciled
+   byte-for-byte against recorded save events, and an unreconciled change after the last
+   recorded GUI save refutes; a run whose shell log is incomplete is `uncertain`, not pass), so **a trial where the arm "fixes" the store through the shell counts as
    refuted, not as a success**, even if the resulting file is correct.
 3. Reads are allowed and counted for the "checks every trial" fraction; an unrecorded
    read is invisible, which is exactly why (1) is required.
@@ -176,7 +187,7 @@ The thresholds in this section (≥6 discordant, ≥95%, 1.5×, 0-in-30) are dec
 ### 4.2 Direction A (MVD-001 / TIF-53)
 
 - Pass: `refuted` with the missing items named from persisted state on the seeded-bug
-  task (DF-S02, or `ef-t01` once the Foundry owner confirms it is the scored equivalent);
+  task (DF-S02, or `ef-t01`: silent-drop defect = DF-S02's seeded bug, Foundry-scored);
   an agent that claims success on that run is recorded as a false success by the
   oracle; schema-valid `trace.jsonl`+`result.json`; the same flow from OMP and one of
   Codex/Claude Code; the v0 Myco Viewer (PR #69) opens the run's evidence offline and
@@ -292,7 +303,7 @@ never quit Tiffany's apps; M1 retains host priority.
 ## 7. Asks (each blocks a specific number)
 
 1. **Foundry owner:** add the `hcu+shell` arm (shell calls recorded into `trace.jsonl`) and
-   a no-verify variant of `ef-t01` to the registry/bank; confirm `ef-t01` ≈ DF-S02 mapping.
+   a no-verify variant of `ef-t01` to the registry/bank; the `ef-t01` ≈ DF-S02 mapping is **confirmed (defect level)**; see §2.
 2. **Planner:** decided: Claude `claude-sonnet-5-5` for all arms (above). Foundry owner records the exact id in the registry and each trace.
 3. **Coordinator (via outer loop):** a slot 6 (S0+S1) after queue slots 1-5, on a new
    snapshot, with an explicit GO; RT-011 first path completed beforehand. Please also
