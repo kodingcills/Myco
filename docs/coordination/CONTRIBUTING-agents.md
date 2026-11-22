@@ -73,6 +73,19 @@ Every verifier brief must state, explicitly:
 
 If any non-docs path differs, it needs a fresh PASS. No exceptions. Docs drift alone does not reopen verification, because a state-log line cannot change what code does.
 
+### Test-only extension (2026-11-22, after #112)
+
+A delta that is **provably test-only** may merge without a fresh PASS when ALL of:
+
+1. **Zero deletions** in the delta.
+2. **Every hunk lies inside a test module** (`mod tests` / `#[cfg(test)]`) — verify by comparing the hunk header line number against the module's start line.
+3. **CI green on the merge head** (CI executes the tests, so CI *is* the verification for a test-only delta).
+4. The PR records the verified SHA, the merge SHA, and the proof: deletion count, hunk header, and the test-module start line.
+
+**Production code differing from the verified head still requires a fresh PASS. No exceptions.** A test cannot change what production code does; a production change can alter behaviour in ways CI does not cover.
+
+Worked example (#112 at `246cd302`): one runtime path differed from all three verified heads, so content-identity did **not** hold. The delta was 0 deletions / 19 additions / a single hunk `@@ -97,0 +98,21 @@ mod tests {` with `mod tests` at line 67 — two new tests, no production line touched. Mergeable under this extension.
+
 **Why not a merge queue:** enabling one is a repository-settings decision for the outer loop, not the coordinator. Auto-merge is already on and helps throughput but does not fix verifier invalidation, since `update-branch` still produces a new head.
 
 **Verifier reading rule (from a false REJECT):** a verifier claimed a PR contained no `runtime/` changes because the author had reset a shared worktree while it was reading. Verifiers must be given the SHA and must read objects (`git show <sha>:<path>`), never the working tree, and authors must not mutate a worktree while a review is reading it.
