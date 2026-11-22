@@ -6,6 +6,7 @@ use myco_rt_core::Backend;
 use std::path::PathBuf;
 
 #[test]
+#[ignore = "live: needs the guest VM; run with MYCO_RT_LIVE=1 and --ignored"]
 fn live_observe_tree_screenshot_processes() {
     if std::env::var("MYCO_RT_LIVE").as_deref() != Ok("1") {
         eprintln!("skipped: set MYCO_RT_LIVE=1");
