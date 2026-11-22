@@ -140,21 +140,21 @@ export function attest(input: AttestInput): Attestation {
 
   // 1. The recorder must be closed and internally consistent. An open or inconsistent
   //    recording means the arm's account of itself is incomplete.
-  if (evidence.recordedCalls.length !== evidence.recordedCallCount)
+  if ((evidence.recordedCalls ?? []).length !== evidence.recordedCallCount)
     blockers.push("recorder: call count does not match the recorded calls");
-  if (evidence.toolCallAudits.length !== evidence.recordedCalls.length)
+  if ((evidence.toolCallAudits ?? []).length !== (evidence.recordedCalls ?? []).length)
     blockers.push("recorder: not every call has an audit");
-  if (evidence.toolCallAudits.some((audit) => audit.status !== "complete"))
+  if ((evidence.toolCallAudits ?? []).some((audit) => audit.status !== "complete"))
     blockers.push("recorder: an audit is incomplete");
   // Cardinality is not identity: an audit must name a call that was actually recorded, on
   // the same channel. Without this a ghost audit satisfies the count.
   const recorded = new Map<string, string>();
-  for (const call of evidence.recordedCalls) {
+  for (const call of evidence.recordedCalls ?? []) {
     if (recorded.has(call.callId))
       blockers.push(`recorder: call ${call.callId} is recorded more than once`);
     else recorded.set(call.callId, call.via);
   }
-  for (const audit of evidence.toolCallAudits) {
+  for (const audit of evidence.toolCallAudits ?? []) {
     const via = recorded.get(audit.callId);
     if (via === undefined) blockers.push(`recorder: audit ${audit.callId} names no recorded call`);
     else if (via !== audit.via)
@@ -210,9 +210,21 @@ export function attest(input: AttestInput): Attestation {
   //    that save's bytes must agree with what the observer saw. Checking only the event
   //    type lets any fabricated event of the right shape satisfy the binding.
   const saves = input.trace.filter((event) => event.type === "save-observed");
+  // A save the app did not perform is not a save. Require at least one GUI call, and
+  // require the last save to follow a GUI action in the trace: bytes conjured out of band
+  // with no act to explain them are the exact false success this gate exists to catch.
+  const guiCalls = (evidence.recordedCalls ?? []).filter((call) => call.via === "gui");
+  if (guiCalls.length === 0)
+    blockers.push("recorder: no GUI call was recorded, so no save can be attributed to the app");
   if (saves.length === 0) {
     blockers.push("trace: no save was observed, so the observation cannot be placed");
   } else {
+    const lastSaveIndex = input.trace.lastIndexOf(saves[saves.length - 1]!);
+    const guiActBefore = input.trace
+      .slice(0, lastSaveIndex)
+      .some((event) => event.type === "action" && event.callId !== undefined);
+    if (!guiActBefore)
+      blockers.push("trace: the last save follows no GUI action, so the app did not perform it");
     const lastSave = saves[saves.length - 1]!;
     for (const observation of accepted) {
       const saved = lastSave.files[observation.path];

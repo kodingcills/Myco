@@ -228,6 +228,46 @@ describe("EF-005 attestation gate", () => {
     expect(result.blockers.join(" ")).toContain("recorded as");
   });
 
+  it("refuses a save no GUI act can explain", async () => {
+    // The round-3 P1: an arm that did nothing could append a fabricated save-observed event
+    // and be admitted, because checkTrace is clean when nothing changed and reconcileAudit
+    // accepts an empty call set. Bytes conjured out of band are the false success itself.
+    const input = baseInput(await finishedRun());
+    const result = attest({
+      ...input,
+      evidence: {
+        ...input.evidence,
+        recordedCalls: [],
+        recordedCallCount: 0,
+        toolCallAudits: [],
+      },
+      trace: [saveEvent(input.finalFiles)],
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("no GUI call was recorded");
+    expect(result.blockers.join(" ")).toContain("follows no GUI action");
+  });
+
+  it("refuses a save that precedes every GUI action", async () => {
+    const input = baseInput(await finishedRun());
+    const save = saveEvent(input.finalFiles);
+    const actions = input.trace.filter((e) => e.type === "action");
+    const result = attest({ ...input, trace: [save, ...actions] });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("follows no GUI action");
+  });
+
+  it("returns a blocker rather than throwing on malformed evidence", async () => {
+    // A gate that crashes on bad input is a gate an arm can disable by sending bad input.
+    const input = baseInput(await finishedRun());
+    const result = attest({
+      ...input,
+      evidence: { ...input.evidence, recordedCalls: undefined, toolCallAudits: undefined } as never,
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.length).toBeGreaterThan(0);
+  });
+
   it("refuses a duplicate call id instead of letting the map hide it", async () => {
     const input = baseInput(await finishedRun());
     const first = input.evidence.recordedCalls[0]!;

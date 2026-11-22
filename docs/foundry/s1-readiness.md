@@ -123,3 +123,30 @@ connection to the guest, which is VM work.
 - `docs/foundry/contract.md` §"Discovery comparison evidence" — the six bindings.
 - `docs/product/mvd-preregistration.md` §3 — decision eligibility.
 - `foundry/hidden-commitment.json`, `src/foundry/hidden-split/` — the merged split.
+## 5. The limit that no in-process gate can close — escalated
+
+Verification round 3 found two remaining issues. One is fixed (a save must now be explained
+by a GUI act, and malformed evidence returns a blocker instead of throwing). The other is
+**structural and needs a decision, not another round**:
+
+`attest()` takes the fixture as an argument. A caller can pass an object that keeps the real
+`fixtureId` but names a benign file as its `persistenceFiles`, and the gate will require an
+observation of the wrong file. Equally, a caller can supply the observations and the final
+bytes together, and a match between two things the caller controls proves nothing.
+
+**This is not fixable inside `attest()`.** The gate's premise is that the observer and the
+artifacts come from a channel the arm does not control, and no function can verify its own
+inputs' provenance. What the gate *can* do — and now does — is refuse an eligible verdict
+when anything is missing, inconsistent, or unattributable.
+
+**Decision needed (outer loop / Tiffany):** before `attest()` is wired into
+`scoreDiscoveryTrial`, the fixture identity must come from the hidden commitment rather than
+from a caller argument. Concretely, either:
+
+1. the ingest resolves the fixture itself from the hidden split and passes only a commitment
+   id, rejecting any fixture whose hash does not match `foundry/hidden-commitment.json`; or
+2. the ingest runs in a process the arm cannot call, and `attest()` is not exported to arm
+   code at all.
+
+Option 1 is cheaper and testable offline. Option 2 is the stronger guarantee. Both are
+changes to *where* the gate runs, which is why they are not part of this PR.
