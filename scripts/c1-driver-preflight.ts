@@ -73,10 +73,9 @@ function classifySession(output: string): string {
     if (isServe) daemons.push(SessionId);
   }
   // An unreadable candidate anywhere aborts: it may be the only daemon, or a
-  // second one whose kind we cannot name, and neither permits `match`. Only when
-  // NOTHING readable was found does ambiguity become reachable — two candidates,
-  // neither readable, is exactly the case that name describes.
-  if (sawUnreadable && daemons.length === 0) return "daemon-command-line-unreadable";
+  // second one whose kind we cannot name, and neither permits `match`. So this
+  // precedes the missing/ambiguous split — "we could not read a candidate" is a
+  // different statement from "there were none" or "there were too many".
   if (sawUnreadable) return "daemon-command-line-unreadable";
   if (daemons.length === 0) return "daemon-missing";
   if (daemons.length !== 1) return "daemon-ambiguous";
