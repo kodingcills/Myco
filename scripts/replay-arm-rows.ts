@@ -100,7 +100,15 @@ export function replayRow(row: BaselineRow): ReplayResult {
 export function replayDirectory(directory: string): ReplayResult[] {
   const files = readdirSync(directory)
     .filter((f) => f.endsWith(".json"))
-    .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
+    // Numeric where both names are numeric, so 2 sorts before 10; otherwise fall
+    // back to lexical order. Parsing alone gives NaN for a non-numeric name,
+    // which silently produces an arbitrary order rather than an obvious one.
+    .sort((a, b) => {
+      const na = Number.parseInt(a, 10);
+      const nb = Number.parseInt(b, 10);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return a.localeCompare(b);
+      return na - nb;
+    });
   return files.map((f) =>
     replayRow(JSON.parse(readFileSync(join(directory, f), "utf8")) as BaselineRow),
   );
@@ -120,7 +128,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       );
     }
     const bad = results.filter((r) => !r.matched);
+    const drift = results.filter((r) => r.costDelta !== 0);
     console.log(`\n${results.length - bad.length}/${results.length} reproduced`);
-    if (bad.length > 0) process.exitCode = 1;
+    if (drift.length > 0) {
+      // Recomputed cost disagreeing with the recorded cost is a real finding:
+      // the usage records and the stored total have diverged, so the stored
+      // figure would misreport spend. It was previously printed and ignored.
+      console.log(`cost drift in ${drift.length} row(s):`);
+      for (const d of drift) console.log(`  idx=${d.index} costDelta=${d.costDelta}`);
+    }
+    if (bad.length > 0 || drift.length > 0) process.exitCode = 1;
   }
 }

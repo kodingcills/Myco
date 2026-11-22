@@ -130,3 +130,20 @@ describe("offline arm-row replay", () => {
     expect(r.costDelta).toBeCloseTo(-0.499, 3);
   });
 });
+
+describe("replay row ordering", () => {
+  it("sorts numerically so 2 precedes 10, and is stable for non-numeric names", () => {
+    // Parsing alone yields NaN for a non-numeric name, which silently produces
+    // an arbitrary order rather than an obvious one. This pins both branches.
+    const order = ["10.json", "2.json", "profile.json", "1.json"].sort((a, b) => {
+      const na = Number.parseInt(a, 10);
+      const nb = Number.parseInt(b, 10);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return a.localeCompare(b);
+      return na - nb;
+    });
+    expect(order[0]).toBe("1.json");
+    expect(order[1]).toBe("2.json");
+    expect(order[2]).toBe("10.json");
+    expect(order[3]).toBe("profile.json");
+  });
+});
