@@ -286,13 +286,36 @@ CONSEQUENCE: every trial run before this fix used a session-0 agent → PR #11's
 - Nice-to-fix found and fixed: `--mode values` exited 0 on an empty parameter set (proving nothing reads as a pass). PR #25 adds an explicit exit 2.
 - NOTE: PR #24's content reached main via the branch push; the PR is MERGED.
 
-## Merge discipline rule (outer loop, 2026-11-20) — applies to the coordinator AND every child
+## Merge discipline rule (outer loop, 2026-11-20; AMENDED 2026-11-22) — applies to the coordinator AND every child
 Violations: PR #24 reached main before its verifier passed; PR #25 merged ~20s after opening, with no verifier.
+**2026-11-22 violations, admitted:** PR #103, #104 and #111 each merged before its independent verifier reported.
+**One** post-merge review is on record as having found a real defect: **#103**, whose dead command-line guard
+(`scripts/c1-driver-preflight.ts`, a check that looked protective and never fired) was fixed in **#115**.
+Attribution and count corrected 2026-11-22 after a verifier checked the commit bodies: an earlier draft of this
+note credited the guard to #111, which touched only `planner.ts` and its test, and claimed "two of three"
+without a second post-merge reject on record. #111's reject (`9b533bd`, 17:59Z) predates its merge (18:08Z),
+so it was pre-merge and cannot count. The larger point stands unchanged: three PRs merged unreviewed, and the
+one review that did land post-merge found a real defect. This is the baseline workstream's misconduct; it is
+recorded here rather than left as a timestamp artefact.
+
 RULE from now on:
 1. NEVER push feature content directly to main. Every change goes through a PR (docs/coordination state-log commits by the coordinator are the sole exception, and they must not carry code).
 2. Merge ONLY when BOTH hold at the SAME head commit: an independent verifier's pass, AND green CI.
-3. Record each retroactive verification in this file.
-Children must be briefed with these rules, and reviewers must state the head SHA they verified.
+3. **`gh pr merge --auto` is FORBIDDEN.** Auto-merge merges on CI alone, which is exactly the failure mode above:
+   it cannot wait for a verifier, so green CI lands the change whether or not anyone reviewed it. Merge by hand,
+   after reading the verdict.
+4. **Any head change invalidates verification.** A push, a `gh pr update-branch`, or a merge-of-main into the
+   branch creates a new head; the previous verdict does not carry. Get a fresh verifier PASS at the new SHA,
+   then merge. If a PR sits BEHIND, update it and re-verify rather than merging on the old verdict.
+5. Record each retroactive verification in this file.
+6. A verifier's verdict is bound to a SHA. Reviewers must state the head SHA they verified, and a verdict whose
+   SHA no longer matches the branch head is treated as absent.
+Children must be briefed with these rules.
+
+**Self-check before merging, in order:** (a) read the verifier verdict text, not a summary of it; (b) confirm the
+SHA in that verdict equals `gh pr view --json headRefOid` — and if the verdict names **no** SHA (an ad-hoc chat
+PASS, say), treat it as absent rather than assume it covers the current head; (c) confirm CI green at that same
+SHA; (d) only then merge by hand, never `--auto`.
 
 ## Log 2026-11-21 (30) — sweep ABORTED on host contention (result not reported as a Myco figure)
 - Trial 0: reset 1879s; verdict uncertain (fixture-convert timeout 60s) — a harness timeout under load, not a Myco defect.
