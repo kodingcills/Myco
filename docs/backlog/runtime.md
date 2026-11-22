@@ -320,3 +320,39 @@ push (no `workflow` scope). Until someone with that scope adds:
 ```
 
 …no runtime test result may be described as CI-verified. Local evidence only.
+
+## RT-021 — `evidence` has no `require_ready()` guard
+
+**Found by:** the mocked e2e added in #167, which asserted the op would be refused
+on a destroyed session and observed that it is not.
+
+**The asymmetry.** Every non-terminal op checks `require_ready()` before touching
+the backend — `observe`, `act`, `reset`, `read_guest_file`. `destroy` is also
+unguarded, and that is deliberate: it must work from `Failed` so a failed reset
+cannot strand a live guest (REQ-12). `evidence` is the only remaining op with no
+guard, so:
+
+```rust
+s.destroy().expect("destroy");
+s.evidence()  // Ok(...) -- reaches a torn-down backend
+```
+
+That is what the test now pins, as observed behaviour rather than as correct.
+
+**Why it is probably an oversight rather than a decision:** the op reads artifacts
+that `destroy` deletes, and the documented order is evidence-then-destroy
+(`first_path` prints EVIDENCE before DESTROY). Nothing documents evidence as
+intentionally callable on a dead session. If it is intentional — e.g. to re-read a
+trace after teardown — the doc comment should say so, because the current comment
+describes only the happy path.
+
+**Not fixed here** because the fix is a behaviour change on the MCP surface: a
+client that currently gets a trace path after destroy would start getting
+`IllegalTransition`. That is Tier 2 and belongs in its own change with a note to
+Dogfood, not folded into a test PR.
+
+**Acceptance:**
+- `evidence` either refuses on a destroyed session (with a test that fails if the
+  guard is removed), or is documented as deliberately unguarded — and the mocked
+  e2e assertion is updated to match the decision either way.
+- The MCP `evidence` handler's error path is covered for the destroyed case.
