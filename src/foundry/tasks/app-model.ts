@@ -222,18 +222,6 @@ export function saveApp(
   }
 }
 
-/**
- * The row a rename targets, and the text the store keeps for it: the one seed whose ROLE
- * says "rename-target". Resolving by text would fail exactly where the defect lives — the
- * user renames "Draft release notes", so the post-rename text can never identify the row
- * that has to keep its old text.
- */
-function renameTarget(spec: TodoFixtureSpec): { rendered: string; stored: string } | undefined {
-  const target = spec.seedItems.find((item) => item.role === "rename-target");
-  if (target === undefined) return undefined;
-  return { rendered: renderEntry(normalise(target.text)), stored: normalise(target.text) };
-}
-
 function initialTimestamps(
   spec: TodoFixtureSpec,
   variant: StoreVariant,
