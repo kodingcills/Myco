@@ -10,6 +10,9 @@
 //! act lands at RT-008.
 
 mod act;
+#[cfg(target_os = "linux")]
+mod file_grant;
+mod processes;
 mod observe;
 
 use std::io::{BufRead, BufReader, Write};
@@ -77,6 +80,9 @@ fn main() {
     let _ = stdout.flush();
 
     // --- Op loop: one JSON request per line, one JSON response per line.
+    #[cfg(target_os = "linux")]
+    let mut grant = None;
+    let mut processes = processes::Processes::default();
     let mut last_observation: Option<act::RefCache> = None;
     let mut line = String::new();
     loop {
@@ -86,7 +92,7 @@ fn main() {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("myco-rt-agent: read error: {e}");
-                std::process::exit(3);
+                break;
             }
         }
         let req: serde_json::Value = match serde_json::from_str(line.trim_end()) {
@@ -108,6 +114,10 @@ fn main() {
                     kernel: uname_kernel(),
                     arch: std::env::consts::ARCH.to_string(),
                 };
+                let mut ops = vec!["ping", "observe", "shutdown", "launch_process", "kill_process", "relaunch_process"];
+                if cfg!(target_os = "linux") {
+                    ops.extend(["grant_read", "read_file"]);
+                }
                 let _ = writeln!(
                     stdout,
                     "{}",
@@ -115,7 +125,7 @@ fn main() {
                         "ok": true,
                         "op": "ping",
                         "protocol_version": PROTOCOL_VERSION,
-                        "ops": ["ping", "observe", "shutdown"],
+                        "ops": ops,
                         "guest": guest,
                     })
                 );
@@ -213,6 +223,50 @@ fn main() {
                 );
                 let _ = stdout.flush();
             }
+            #[cfg(target_os = "linux")]
+            "grant_read" => {
+                let result = (|| {
+                    if grant.is_some() {
+                        return Err(std::io::Error::other("file grant already set"));
+                    }
+                    let path = request_path(&req, "root")?;
+                    grant = Some(file_grant::FileGrant::open(path)?);
+                    Ok(serde_json::Value::Null)
+                })();
+                send_result(&mut stdout, op, result);
+            }
+            #[cfg(target_os = "linux")]
+            "read_file" => {
+                let result = (|| {
+                    let grant = grant.as_ref().ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no file grant")
+                    })?;
+                    Ok(serde_json::json!(grant.read(request_path(&req, "path")?)?))
+                })();
+                send_result(&mut stdout, op, result);
+            }
+            "launch_process" => {
+                let result = (|| {
+                    let spec: LaunchSpec = serde_json::from_value(req.clone())?;
+                    load_gui_env();
+                    Ok(serde_json::json!(processes.launch(spec.command, spec.args)?.to_string()))
+                })();
+                send_result(&mut stdout, op, result);
+            }
+            "kill_process" | "relaunch_process" => {
+                let result = (|| {
+                    let handle = req.get("handle").and_then(|v| v.as_str())
+                        .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                        .ok_or_else(|| std::io::Error::other("invalid process handle"))?;
+                    if op == "relaunch_process" {
+                        return Ok(serde_json::json!(processes.relaunch(handle)?.to_string()));
+                    }
+                    let status = processes.kill(handle)?;
+                    use std::os::unix::process::ExitStatusExt;
+                    Ok(serde_json::json!({"code": status.code(), "signal": status.signal()}))
+                })();
+                send_result(&mut stdout, op, result);
+            }
             "shutdown" => {
                 let _ = writeln!(stdout, "{}", serde_json::json!({"ok": true, "op": "shutdown"}));
                 let _ = stdout.flush();
@@ -302,4 +356,23 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+#[derive(serde::Deserialize)]
+struct LaunchSpec {
+    command: String,
+    args: Vec<String>,
+}
+
+#[cfg(target_os = "linux")]
+fn request_path<'a>(req: &'a serde_json::Value, field: &str) -> std::io::Result<&'a std::path::Path> {
+    req.get(field).and_then(|v| v.as_str()).map(std::path::Path::new)
+        .ok_or_else(|| std::io::Error::other("missing file path"))
+}
+
+fn send_result(out: &mut impl Write, op: &str, result: std::io::Result<serde_json::Value>) {
+    match result {
+        Ok(value) => send(out, serde_json::json!({"ok": true, "op": op, "value": value})),
+        Err(error) => send(out, error_resp(op, &error.to_string())),
+    }
 }

@@ -278,3 +278,27 @@ made reliable. The earlier "M2 = MCP/API" lock-in is retracted pending discovery
   dogfood/M1 surfaces only.
 - Host: M1 keeps priority. No VMs while the sweep runs; any host time goes through
   the M1 Coordinator.
+
+## RT-015 and RT-016 host-side implementation prep
+
+Both live acceptance tests follow RT-011 and require a coordinated Linux guest
+window. The following are implementation notes. The six-tool MCP surface stays
+unchanged during prep.
+
+- **RT-015 (guest file read).** Reuse RT-004's authenticated control channel for
+  a typed read request. The session must carry an explicit path grant with a
+  deny-by-default policy. Enforce that grant in the guest when opening the file,
+  since host lexical checks cannot resolve guest symlinks. Open relative to the
+  granted directory with kernel-enforced containment, accept regular files only,
+  and bound the response size. Return bytes to the host oracle. Persisted-state
+  interpretation stays with the caller. VM-free checks can exercise the channel
+  with a stub and exercise the guest file handler against temporary directories,
+  including valid bytes, out-of-grant paths, symlink escapes, and non-regular files.
+- **RT-016 (kill and relaunch).** The current launch handler drops its
+  `Child` handle after the initial liveness check. Retain launched children and
+  their launch arguments in guest-agent session state. Target an opaque
+  session-owned handle so the operation can reap and report the exit status of
+  the exact child, then relaunch with the same command and arguments. Reset
+  invalidates the handles. VM-free checks can use a local fixture child to verify
+  kill, reap, relaunch, and rejection of unknown or stale handles. Live acceptance
+  still needs the demo app to disappear, reappear, and remain usable in the guest.
