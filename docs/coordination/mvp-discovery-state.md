@@ -166,6 +166,8 @@ verifier, and every sub-thread is reported here and to the outer loop.
 
 ## Log
 
+- 2026-11-21 (late) · PR #74 merged (pre-registration). Planner for every arm: Claude `claude-sonnet-5-5`, pause never swap. Foundry: `ef-t01b` and the host-only grading merged (PR #75); hcu+shell arm planned. Coordinator: slot 6 tentatively S0+S1 only, after queue slots 1-5, VM lock + explicit GO; slots 4-5 are Calc-family descriptive references (no EF pairs, no myco-todo; slot 5 $0 cap). S0 runs on the Runtime Owner's Linux ARM64 guest (not myco-win11); open prerequisite: myco-todo deploy+verify there and an uninterrupted RT-011 run. Viewer v0 (PR #69) awaits Tiffany's sign-off; hosted perf guard added there. No VM, no spend, no accounts.
+
 - 2026-11-21 (evening) · PR #50 merged; Viewer v0 (PR #69) built and independently verified, awaiting Tiffany's sign-off (tokens, two beyond-§6.2 verdict rules, DEVIATIONS.md). Wrote `docs/product/mvd-preregistration.md`: pre-declared head-to-head, A/B/C rules at Foundry §7a sample sizes (corrected the plan's underpowered 10-run rules), decisive hcu+shell arm (not yet in Foundry's registry), VM slot request S0-S4 (a request, not a start). Wedge stays provisional (A, narrowed). No VM, no spend, no accounts.
 
 - 2026-11-21 (GUI spec locked, PR #51 = ed2f1f9) · binding for every human surface.

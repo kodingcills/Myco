@@ -305,15 +305,36 @@ calc family only**, not as ef-task evidence, and pairs across families are not m
   Both require the Runtime first path (RT-011) and, for the Myco arm's verdict, host-side file
   read (RT-015); B also needs process control (RT-016).
 
-**Open precondition: which guest runs `myco-todo`?** The sample app is a Tkinter app,
-"Linux-first" (`docs/coordination/dogfood-state.md`), and the runtime's REQ-01 is a Linux ARM64
-desktop session; the queue's guest is the Windows `myco-win11` (6 GB / 6 vCPU) running
-LibreOffice Calc. Nothing in the repo shows `ef-t01..t04` running on a live desktop yet. Until
-the Runtime owner or Coordinator says which guest and snapshot carry `myco-todo` for slot 6,
-S0 cannot be scheduled; this may also mean a Linux guest or a Windows port of the app, which is
-a new snapshot at minimum. Asked of both owners.
+**Guest for S0 (answered by the Coordinator and the Runtime Owner, 2026-11-21): the Runtime
+Owner's Linux guest, not `myco-win11`.** A disposable ARM64 QEMU+HVF guest (2 vCPU, 2048 MB) on
+a fresh qcow2 overlay of Ubuntu Server 24.04 `noble-server-cloudimg-arm64.img`
+(SHA-256 `50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e`,
+`docs/env/linux-runtime.md`). It is a per-run overlay, so there is **no snapshot ID**. M1's
+Windows guest runs only LibreOffice Calc and no Windows port of `myco-todo` is planned.
+Consequences:
 
-**Measured numbers to budget with (Coordinator, M1 v3):** a cold `clean-base` restore ≈ 25 s
+- S0 does not need `myco-win11`, but it **still takes the shared host lock**
+  (`scripts/vm-lock.sh`): only one heavy guest runs on this Mac at a time.
+- The guest currently seeds the runtime smoke app (`/opt/myco/myco-tk-app.py`). The Runtime
+  Owner reports no evidence yet that `dogfood/apps/myco-todo` is deployed and verified on it.
+  **S0 prerequisite (open): a reproducible `myco-todo` deploy and launch with live verification
+  on that guest, plus an uninterrupted RT-011 MCP run through reset.** The Runtime RT-020
+  window (queue slot 3) includes a `myco-todo` deploy check; its result is the readiness signal
+  for S0. Dates and readiness come from the Runtime Owner.
+- The RT-020 and S0 numbers above (25 s cold restore, 20 s deploy, LibreOffice launch variance)
+  describe the Windows/Calc guest and **do not transfer** to this guest; its reset and
+  `myco-todo` cold-start costs are unmeasured and S1 measures them.
+
+**Slots 4 and 5 are descriptive Calc-family references only** (Foundry owner, 2026-11-21).
+Slot 5 is HCU GUI-channel only: 30 normal Calc record-edit trials on the final M1 v3 parameter
+list in the same order as slot 4, same fixture hashes, same cold restore and blind judge, with
+a planned spend cap of **$0** until an approved budget exists; it pauses if the pinned planner
+cannot run within authorization or hits quota. It runs **no EF hidden pairs and no `myco-todo`
+trials**. Slots 4-5 results are joined on v3 trial id and fixture hash, with omissions
+reported, and are descriptive for the EF wedge. Live EF work needs a separately validated
+deployment, trusted paired evidence, and an explicit GO.
+
+**Measured numbers to budget with for the Windows/Calc family only (Coordinator, M1 v3):** a cold `clean-base` restore ≈ 25 s
 and the agent deploy ≈ 20 s on this guest; a cold first LibreOffice launch after a reset is
 slow and variable (headless convert took 25-140 s in v3, once 169 s; the UNO bridge once missed
 a 15 s window right after a 94 s convert). The warm ~21 s figure is **not typical** and is only
@@ -349,7 +370,7 @@ never quit Tiffany's apps; M1 retains host priority.
 3. **Coordinator:** answered. Slot 6 is tentatively granted as S0+S1 only, after slots 1-5,
    with an explicit GO, the VM lock, a new snapshot and the host gates (§6). Slots 4-5 will
    **not** reach the §4.1 minimums, so screenshot-only and hcu need extension slots (§6).
-   Still open: which guest and snapshot carry `myco-todo` (§6, open precondition).
+   Guest answered: the Runtime Owner's Linux guest (§6); the `myco-todo` deploy check is the open S0 prerequisite.
 4. **Runtime owner:** RT-011/RT-015/RT-016 dates (asked, no reply yet); which guest runs
    `myco-todo` for slot 6; fix X (§4.4) once a fork cost is measured.
 5. **Foundry owner:** size slot 5 (trial count, task set, spend cap) and say whether it uses
