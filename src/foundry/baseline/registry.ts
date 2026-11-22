@@ -36,8 +36,10 @@ export const armRegistry = [
     status: "not-run",
     blocker: "Cua Driver C1 pixel arm needs coordinated VM time",
     economics: {
-      kind: "free",
-      basis: "MIT driver, no account; planner is the already-paid Claude subscription",
+      kind: "unmeasured",
+      basis:
+        "driver is MIT and free; planner is a paid Anthropic API key (Sonnet 5.5), " +
+        "$1.13-$5.58 per 30 trials per docs/baseline/screenshot-agent.md §8.4",
     },
   },
   {
@@ -47,8 +49,10 @@ export const armRegistry = [
     status: "not-run",
     blocker: "Microsoft Hybrid Computer Use GUI channel needs coordinated VM time",
     economics: {
-      kind: "free",
-      basis: "MIT repo, no account; planner is the already-paid Claude subscription",
+      kind: "unmeasured",
+      basis:
+        "repo is MIT and free; planner is a paid Anthropic API key (Sonnet 5.5), " +
+        "$1.13-$5.58 per 30 trials per docs/baseline/screenshot-agent.md §8.4",
     },
   },
   {
@@ -59,8 +63,10 @@ export const armRegistry = [
     blocker:
       "Needs coordinated VM time, trusted live evidence ingestion, complete tool-call audits, and independently observed save snapshots",
     economics: {
-      kind: "free",
-      basis: "MIT repo, no account; planner is the already-paid Claude subscription",
+      kind: "unmeasured",
+      basis:
+        "repo is MIT and free; planner is a paid Anthropic API key (Sonnet 5.5), " +
+        "$1.13-$5.58 per 30 trials per docs/baseline/screenshot-agent.md §8.4",
     },
   },
   {
@@ -80,7 +86,9 @@ export const armRegistry = [
       "Google sign-in + API key + phone verification; hosted cloud computer is not our fixture host",
     economics: {
       kind: "blocked",
-      reason: "account required (Google sign-in, phone verification, API key)",
+      reason:
+        "account required (Google sign-in, phone verification, API key) AND its hosted " +
+        "computer is not our fixture host, so an account alone would not give a comparable run",
     },
   },
 ] as const;

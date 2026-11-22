@@ -273,10 +273,15 @@ describe("baseline", () => {
     expect(free.economics.declared).toBe("unregistered");
 
     const registered = armRegistry.map((arm) => economicsLine(arm.economics));
-    expect(registered).toContain(
-      "$0 marginal (MIT driver, no account; planner is the already-paid Claude subscription)",
+    // The planner is a paid API key, so no live arm may claim $0 marginal.
+    expect(registered.some((line) => line.startsWith("$0 marginal"))).toBe(false);
+    expect(registered.some((line) => line.startsWith("unmeasured (driver is MIT and free"))).toBe(
+      true,
     );
     expect(registered.some((line) => line.startsWith("blocked: account required"))).toBe(true);
+    // Sai is blocked on access AND environment; an account alone would not make it comparable.
+    const sai = armRegistry.find((arm) => arm.id === "simular-sai")!;
+    expect(economicsLine(sai.economics)).toContain("not our fixture host");
     // Every arm states something; none falls through to a bare "unknown".
     expect(registered.every((line) => line.length > 0 && line !== "unknown")).toBe(true);
   });
