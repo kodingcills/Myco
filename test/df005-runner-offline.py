@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -300,6 +301,41 @@ def main() -> int:
     expect(state == "uncertain", f"no gates + dead ssh → uncertain (got {state})")
     expect(state != "pass", "and definitively not `pass`")
     expect("could not look" in reason, f"reason is a could-not-look: {reason[:70]}")
+
+    print("14. preflight is read-only and fails closed")
+    out = Path(tempfile.mkdtemp(prefix="df005-pf-"))
+    proc = subprocess.run(
+        [sys.executable, str(RUNNER), "--preflight"],
+        capture_output=True, text=True, cwd=ROOT,
+        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out / "free.lock")},
+    )
+    expect(proc.returncode == 1, "exit 1 when the server binary is missing")
+    expect("mcp-server" in proc.stdout, "names the missing server")
+    expect("no session is created" in proc.stdout, "states it is read-only")
+    expect(not (out / "free.lock").exists() or (out / "free.lock").stat().st_size == 0,
+           "does not write a lock it does not hold")
+
+    print("15. preflight reports a held lock without contending for it")
+    held = out / "held.lock"
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import fcntl,time,sys;"
+         f"fd=open({str(held)!r},'w');"
+         "fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);"
+         "fd.write('99999 test-holder');fd.flush();time.sleep(5)"],
+    )
+    time.sleep(0.4)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(RUNNER), "--preflight"],
+            capture_output=True, text=True, cwd=ROOT,
+            env={**os.environ, "MYCO_VM_LOCK_PATH": str(held)},
+        )
+        expect("test-holder" in proc.stdout, f"names the holder: {proc.stdout.strip()[-120:]}")
+        expect(proc.returncode == 1, "exit 1 while the lock is held")
+    finally:
+        holder.kill()
+        holder.wait()
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0
