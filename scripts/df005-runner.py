@@ -820,6 +820,107 @@ def summarize(results: dict[str, list[RunResult]]) -> None:
             print("gaps by requirement: " + ", ".join(f"{k}={v}" for k, v in sorted(gaps.items())))
 
 
+def preflight() -> int:
+    """Read-only readiness check, run inside an approved guest window.
+
+    Every check here is something that, if wrong, wastes the slot: a missing
+    server binary, an unreachable guest, an undeployed or stale app, a dead
+    introspection channel, or a held lock. Nothing is mutated — no create, no
+    launch, no reset — so this is safe to run first and cheap to repeat.
+
+    Exit 0 when every check passes, 1 otherwise. Prints one line per check.
+    """
+    results: list[tuple[str, bool, str]] = []
+
+    def record(name: str, ok: bool, detail: str) -> None:
+        results.append((name, ok, detail))
+        print(f"  {'ok  ' if ok else 'FAIL'} {name}: {detail}")
+
+    print("DF-005 preflight (read-only; no session is created)")
+
+    # 1. Server binary.
+    if DEFAULT_SERVER.exists() and os.access(DEFAULT_SERVER, os.X_OK):
+        record("mcp-server", True, str(DEFAULT_SERVER))
+    else:
+        record("mcp-server", False,
+               f"missing or not executable: {DEFAULT_SERVER} "
+               "(cargo build -p myco-rt-mcp)")
+
+    # 2. VM lock free.
+    lock_path = Path(VM_LOCK_PATH)
+    lock_free = True
+    holder = ""
+    if lock_path.exists():
+        try:
+            fd = os.open(str(lock_path), os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+        except (BlockingIOError, OSError):
+            lock_free = False
+            holder = lock_path.read_text(encoding="utf-8").strip()[:80]
+    record("vm-lock", lock_free,
+           "free" if lock_free else f"held by {holder or 'another driver'}")
+
+    # 3. Guest reachable, and it is the expected platform.
+    key = GUEST_DIR / "keys" / "id_ed25519"
+    ssh_base = [
+        "ssh", "-i", str(key), "-p", "10022",
+        "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+        "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null", "myco@localhost",
+    ]
+
+    def guest(cmd: str, timeout: int = 15) -> tuple[int, str]:
+        try:
+            r = subprocess.run([*ssh_base, cmd], capture_output=True, text=True,
+                               timeout=timeout)
+            return r.returncode, (r.stdout or r.stderr).strip()
+        except Exception as e:  # noqa: BLE001
+            return 1, str(e)
+
+    rc, out = guest("uname -sm")
+    record("guest-ssh", rc == 0 and "Linux" in out, out[:80] or "no answer")
+
+    if rc == 0:
+        # 4. App deployed and current.
+        rc2, deployed = guest(f"sha256sum {APP_PATH} 2>/dev/null | cut -d' ' -f1")
+        local_app = REPO / "dogfood" / "apps" / "myco-todo" / "myco_todo.py"
+        local_sha = ""
+        if local_app.exists():
+            import hashlib
+            local_sha = hashlib.sha256(local_app.read_bytes()).hexdigest()
+        if rc2 != 0 or not deployed:
+            record("app-deployed", False,
+                   f"{APP_PATH} not found (scripts/deploy-verify-myco-todo.sh --go)")
+        elif local_sha and deployed != local_sha:
+            record("app-deployed", False,
+                   f"stale: guest {deployed[:12]} != repo {local_sha[:12]}")
+        else:
+            record("app-deployed", True, deployed[:12])
+
+        # 5. App self-test (headless; proves the fixture runs in this guest).
+        rc3, st = guest(f"python3 {APP_PATH} --self-test 2>&1 | tail -1")
+        record("app-self-test", rc3 == 0 and "self-test OK" in st, st[:80])
+
+        # 6. Introspection channel configured for the session.
+        rc4, env = guest("grep -c MYCO_INTROSPECTION_FILE /run/myco/gui.env 2>/dev/null || echo 0")
+        record("introspection-env", rc4 == 0 and env.strip() not in ("", "0"),
+               "MYCO_INTROSPECTION_FILE present in gui.env" if env.strip() not in ("", "0")
+               else "absent: the app's widget state will be unobservable (REQ-03)")
+
+    failed = [n for n, ok, _ in results if not ok]
+    print()
+    if failed:
+        print(f"preflight FAILED: {len(failed)} check(s): {', '.join(failed)}")
+        print("Fix these before spending the guest slot.")
+        return 1
+    print(f"preflight OK: {len(results)} checks passed")
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Dogfood DF-005 scenario runner")
     p.add_argument("--scenario", choices=SCENARIO_ORDER + ["all"], default="all")
@@ -829,7 +930,12 @@ def main() -> int:
     p.add_argument("--eval-id", default=f"df-phase1-{int(time.time())}")
     p.add_argument("--output-dir", default=str(REPO / "runs"))
     p.add_argument("--agent-report", help="agent transcript for verifier-graded clause (b)")
+    p.add_argument("--preflight", action="store_true",
+                   help="read-only readiness check; creates no session, mutates nothing")
     args = p.parse_args()
+
+    if args.preflight:
+        return preflight()
 
     # A custom server command means "do not touch the real guest": such a run
     # can never be graded on guest state, so every trial is a gap by design.
