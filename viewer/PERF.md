@@ -207,9 +207,11 @@ The app-held state is small: JS heap about 17–42 MB, 12 live full-image URLs a
 ## Screenshots: bounded retained memory (MVD-009 / TIF-64)
 
 The hard **400,000,000-byte** gate remains open. All three saved runs of the prior
-implementation exceeded it on summed peak physical footprint and peak RSS. The measured-width
-build has no samples because the workspace sandbox denied Chromium's Mach-port registration
-at launch. Chrome Stable remains unmeasured.
+implementation exceeded it on summed peak physical footprint and peak RSS. One offline
+Chromium Headless Shell rerun of the measured-width build sampled 373,229,920 B peak
+renderer footprint, 457,070,232 B peak summed footprint, and 838,172,672 B peak summed
+RSS (38 sample rows, same synthetic workload). The wide PNG and original-only fallback
+browser tests passed on this build. Chrome Stable remains unmeasured.
 
 ### Saved Headless Shell measurements
 
