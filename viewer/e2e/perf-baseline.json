@@ -1,0 +1,14 @@
+{
+  "note": "CI drift guard for e2e/verdict-budget.pw.ts. PROVISIONAL until measured on the CI runners; see viewer/PERF.md for the data and the rule. hardMedian = ms the median of N samples may not exceed. baselineMedian = recorded CI median, or null to skip the relative check.",
+  "relativeTolerance": 0.25,
+  "platforms": {
+    "darwin": {
+      "1000": { "baselineMedian": null, "hardMedian": 150 },
+      "10000": { "baselineMedian": null, "hardMedian": 200 }
+    },
+    "linux": {
+      "1000": { "baselineMedian": null, "hardMedian": 150 },
+      "10000": { "baselineMedian": null, "hardMedian": 200 }
+    }
+  }
+}

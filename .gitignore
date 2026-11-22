@@ -7,3 +7,5 @@ __pycache__/
 .myco-token
 
 /viewer/src/theme.generated.css
+/.playwright-browsers/
+verdict-budget.ndjson

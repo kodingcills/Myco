@@ -49,3 +49,52 @@ jobs:
         run: pip install -e . pytest
       - name: Test
         run: pytest -v
+
+  # The viewer's e2e suite is not part of CI. This job runs only the 10k-step verdict budget test
+  # (viewer/e2e/verdict-budget.pw.ts) so a drift above the 150 ms spec budget is caught. It asserts
+  # the median of 20 samples against per-OS thresholds in viewer/e2e/perf-baseline.json; the exact
+  # 150 ms maximum is the local gate (MYCO_VIEWER_STRICT_BUDGET=1). See viewer/PERF.md.
+  viewer-perf:
+    name: viewer verdict budget (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+      MYCO_VIEWER_BUDGET_REPORT: ${{ github.workspace }}/verdict-budget.ndjson
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: .playwright-browsers
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium (headless shell)
+        run: pnpm --filter viewer exec playwright install --only-shell ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+      - name: Build viewer
+        run: pnpm --filter viewer build
+      - name: Verdict budget
+        run: pnpm --filter viewer e2e verdict-budget.pw.ts
+      - name: Report samples
+        if: always()
+        run: |
+          echo '### Verdict budget samples (${{ matrix.os }})' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$MYCO_VIEWER_BUDGET_REPORT" ]; then
+            node -e 'for (const l of require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n")) { const r = JSON.parse(l); console.log(`- ${r.steps} steps, N=${r.samples.length}: median ${r.median.toFixed(1)}, p95 ${r.p95.toFixed(1)}, max ${r.max.toFixed(1)} ms`); }' "$MYCO_VIEWER_BUDGET_REPORT" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verdict-budget-${{ matrix.os }}
+          path: verdict-budget.ndjson
+          if-no-files-found: ignore
