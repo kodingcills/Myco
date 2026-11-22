@@ -114,6 +114,9 @@ mod tests {
     #[test]
     fn refuses_a_relative_root() {
         let err = FileGrant::open(Path::new("relative/dir")).unwrap_err();
+        // Symmetry with the sibling test: pin the kind, not just the message, so a
+        // different failure cannot masquerade as this guard.
+        assert_eq!(err.kind(), io::ErrorKind::Other);
         assert!(err.to_string().contains("absolute"), "{err}");
     }
 }
