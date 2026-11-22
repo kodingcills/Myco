@@ -64,17 +64,33 @@ def trace_recovery_events(row, out_dir):
 
 
 def score(row):
-    if row.get("verdict") != "verified":
-        return False, False
+    verified = row.get("verdict") == "verified"
     persisted = row.get("persistedValue")
-    recovered = row["recovery"] and any(
+    readable = isinstance(persisted, str)
+    matches = readable and persisted == row["expectedValue"]
+    recovered = any(
         event == "relaunch:completed" or re.fullmatch(r"retry:\d+-completed", event)
         for event in row.get("recoveryEvents", [])
     )
-    wrong_disk_value = isinstance(persisted, str) and persisted != row["expectedValue"]
-    false_success = wrong_disk_value or not recovered
-    unproven = not false_success and (persisted != row["expectedValue"] or row.get("faultApplied") is not True)
-    return false_success, unproven
+    return {
+        "falseSuccess": verified and readable and not matches,
+        "unprovenVerified": verified and not readable,
+        "unprovenRecovery": verified and matches and row["recovery"] and row.get("faultApplied") is True and not recovered,
+    }
+
+
+def reclassification_reason(row):
+    if row["falseSuccess"]:
+        return "verified disk value differs from host ground truth"
+    if row["unprovenVerified"]:
+        return "verified disk value is unreadable"
+    if row["unprovenRecovery"]:
+        return "verified disk value matches, but recovery completion lacks trace evidence"
+    if row.get("verdict") != "verified":
+        return "verdict is not verified"
+    if row.get("faultApplied") is not True:
+        return "verified disk value matches and fault did not land"
+    return "verified disk value matches host ground truth"
 
 
 def record(trial, status, out_path, out_dir):
@@ -115,7 +131,7 @@ def record(trial, status, out_path, out_dir):
         faultApplied=audit.get("mode") == trial["class"] and audit.get("applied") is True,
     )
     row["recoveryEvents"] = trace_recovery_events(row, out_dir)
-    row["falseSuccess"], row["unprovenVerified"] = score(row)
+    row.update(score(row))
     if fixture.get("seed") != trial["fixtureSeed"] or fixture.get("csvSha256") != trial["fixtureSha256"]:
         row.update(
             status="seed-mismatch",
@@ -146,16 +162,16 @@ def pending(plan, rows):
     return 0
 
 
-def ledger_rows(eval_id, row, false_success, unproven, eligible):
+def ledger_rows(eval_id, row):
     verdict = row.get("verdict")
     guard = row.get("guardPredicate")
-    if false_success:
-        state = "failure"
-        persisted = row.get("persistedValue")
-        oracle = "ground-truth:false" if isinstance(persisted, str) and persisted != row["expectedValue"] else "recovery:missing-proof"
-    elif unproven:
-        state, oracle = "failure", "recovery:unproven"
-    elif not eligible:
+    if row["falseSuccess"]:
+        state, oracle = "failure", "ground-truth:false"
+    elif row["unprovenVerified"]:
+        state, oracle = "failure", "ground-truth:unreadable"
+    elif row["unprovenRecovery"]:
+        state, oracle = "gap", "recovery:missing-proof"
+    elif not row["countsTowardCoverage"]:
         state = "gap"
         oracle = (
             "recovery:no-attempt-evidence"
@@ -163,7 +179,8 @@ def ledger_rows(eval_id, row, false_success, unproven, eligible):
             else f"driver:{row['status']}"
         )
     elif verdict == "verified":
-        state, oracle = "pass", "verifier:verified+ground-truth+recovery"
+        state = "pass"
+        oracle = "verifier:verified+ground-truth" + ("+recovery" if row["recovery"] else "")
     elif verdict == "refuted" and guard:
         state, oracle = "refusal", "verifier:refuted"
     elif verdict == "refuted":
@@ -187,7 +204,8 @@ def ledger_rows(eval_id, row, false_success, unproven, eligible):
 def audit_batch(plan, rows, source, counts, problems, *, allow_missing_reports):
     expected = {p["index"]: p for p in plan}
     seen = set()
-    for row in rows:
+    for stored in rows:
+        row = dict(stored)
         index = row.get("index")
         trial = expected.get(index)
         if trial is None or index in seen:
@@ -199,10 +217,14 @@ def audit_batch(plan, rows, source, counts, problems, *, allow_missing_reports):
             continue
         mode_counts = counts[(trial["class"], trial["recovery"])]
         row["recoveryEvents"] = trace_recovery_events(row, source)
+        row.update(score(row))
+        if "falseSuccess" in stored and stored["falseSuccess"] != row["falseSuccess"]:
+            before, after = json.dumps(stored["falseSuccess"]), json.dumps(row["falseSuccess"])
+            print(f"RECLASSIFIED index {index}: stored {before} → recomputed {after} ({reclassification_reason(row)}) [{source}]")
         mode_counts["recorded"] += 1
-        false_success, unproven = score(row)
-        mode_counts["falseSuccesses"] += false_success
-        mode_counts["unprovenVerified"] += unproven
+        mode_counts["falseSuccesses"] += row["falseSuccess"]
+        mode_counts["unprovenVerified"] += row["unprovenVerified"]
+        mode_counts["unprovenRecovery"] += row["unprovenRecovery"]
         fixture_matches = row.get("status") != "seed-mismatch" and row.get("fixtureSha256") == trial["fixtureSha256"]
         eligible = (
             fixture_matches
@@ -210,6 +232,7 @@ def audit_batch(plan, rows, source, counts, problems, *, allow_missing_reports):
             and row["status"] == row.get("verdict")
             and row.get("faultApplied") is True
             and (not trial["recovery"] or bool(row["recoveryEvents"]))
+            and not row["unprovenRecovery"]
         )
         no_report = (
             row.get("status") in ("reset-failed", "deploy-failed", "token-failed", "harness-error")
@@ -220,7 +243,11 @@ def audit_batch(plan, rows, source, counts, problems, *, allow_missing_reports):
             problems.append(f"{source}: trial {index}: missing or mismatched fixture hash")
         if eligible:
             mode_counts[row["verdict"]] += 1
-        row.update(falseSuccess=false_success, unprovenVerified=unproven, countsTowardCoverage=eligible)
+        row.update(
+            storedFalseSuccess=stored.get("falseSuccess"),
+            storedRecoveryEvents=stored.get("recoveryEvents"),
+            countsTowardCoverage=eligible,
+        )
         yield row
 
 
@@ -228,6 +255,7 @@ def final(batches, out_dir, *, combined=False, supplement=False):
     ledger_path = out_dir / "ledger.jsonl"
     counts = {group: Counter() for group in GROUPS}
     recovery_results = []
+    unproven_recovery_results = []
     ineligible = []
     problems = []
     ledger = []
@@ -238,14 +266,15 @@ def final(batches, out_dir, *, combined=False, supplement=False):
             problems.append("supplemental batch has unrecorded trials")
         eval_id = str(source) if combined else out_dir.name or "m1-014"
         for row in audit_batch(plan, rows, source, counts, problems, allow_missing_reports=combined or supplement):
-            eligible = row["countsTowardCoverage"]
             if combined:
                 row["sourceDir"] = str(source)
             if row["recovery"]:
                 recovery_results.append(row)
-            if not eligible:
+            if row["unprovenRecovery"]:
+                unproven_recovery_results.append(row)
+            if not row["countsTowardCoverage"]:
                 ineligible.append(row)
-            ledger.extend(ledger_rows(eval_id, row, row["falseSuccess"], row["unprovenVerified"], eligible))
+            ledger.extend(ledger_rows(eval_id, row))
 
     ledger_path.write_text("".join(json.dumps(row) + "\n" for row in ledger))
 
@@ -258,7 +287,7 @@ def final(batches, out_dir, *, combined=False, supplement=False):
     if accounting["unaccounted"] != 0:
         problems.append("conformance ledger has unaccounted rows")
 
-    print("class           recovery  recorded  eligible  verified   refuted uncertain  falseSuccesses")
+    print("class           recovery  recorded  eligible  verified   refuted uncertain  falseSuccesses  unprovenRecovery")
     totals = Counter()
     group_results = []
     for (mode, recovery), count in counts.items():
@@ -269,11 +298,11 @@ def final(batches, out_dir, *, combined=False, supplement=False):
             "class": mode,
             "recovery": recovery,
             "eligible": eligible,
-            **{k: count[k] for k in ("recorded", *VERDICTS, "falseSuccesses")},
+            **{k: count[k] for k in ("recorded", *VERDICTS, "falseSuccesses", "unprovenRecovery")},
         })
-        print(f"{mode:15} {label:8} " + " ".join(
-            f"{n:9}" for n in (count["recorded"], eligible, *(count[k] for k in (*VERDICTS, "falseSuccesses")))
-        ))
+        print(f"{mode:15} {label:8} {count['recorded']:9} {eligible:9} " + " ".join(
+            f"{count[k]:9}" for k in VERDICTS
+        ) + f" {count['falseSuccesses']:15} {count['unprovenRecovery']:17}")
         if not supplement and eligible < 3:
             problems.append(f"{mode} (recovery={label}): fewer than 3 eligible verdicts")
     with_verdict = sum(totals[k] for k in VERDICTS)
@@ -286,6 +315,8 @@ def final(batches, out_dir, *, combined=False, supplement=False):
         **{k: totals[k] for k in VERDICTS},
         "falseSuccesses": totals["falseSuccesses"],
         "unprovenVerified": totals["unprovenVerified"],
+        "unprovenRecovery": totals["unprovenRecovery"],
+        "unprovenRecoveryResults": unproven_recovery_results,
         "groups": group_results,
         "ineligible": ineligible,
         "recoveryResults": recovery_results,

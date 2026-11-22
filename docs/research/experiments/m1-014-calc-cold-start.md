@@ -50,3 +50,14 @@ eligible coverage from other trials. Explicit fixture identity mismatches still 
 
 **UNVERIFIED on real Calc:** the revised timeouts, the timing fields, and whether the
 supplemental batches close live coverage gaps. Host-only tests use synthetic evidence.
+
+## Kill acknowledgement
+
+The coordinator reported that corrupted-suite index 4 (kill with recovery) produced a
+verified verdict with the expected disk value and no landed fault. The program dispatches
+Open, Locate, Set, then Ctrl+S. The kill counter counts dispatched actions in both modes,
+so action 3 was Set. The old log line showed a kill request. The adapter treated an empty
+acknowledgement or RPC error as permission to continue to the edit observation and save.
+The saved row cannot distinguish those two acknowledgement failures. Both modes now stop
+before saving if the agent cannot confirm termination. After confirmation, the save can
+run on the recovery path. This behavior is **UNVERIFIED** on real Calc.

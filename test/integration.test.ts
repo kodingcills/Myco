@@ -437,6 +437,68 @@ describe("live corruption modes over the fake agent", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([
+    { recovery: false, acknowledged: true },
+    { recovery: true, acknowledged: true },
+    { recovery: false, acknowledged: false },
+    { recovery: true, acknowledged: false },
+  ])(
+    "requests the kill after Set and before save (recovery=$recovery, acknowledged=$acknowledged)",
+    async ({ recovery, acknowledged }) => {
+      const gt = groundTruth(PARAMS);
+      const { client, agent } = clientWith({
+        desktopOverlay: true,
+        killCalcDesktop: acknowledged,
+        unoBehavior: () => gt.previousValue,
+        csvBytes: Buffer.from(generateFixture(PARAMS.fixtureSeed).csv),
+        csvBytesAfterSave: csvWithTarget(PARAMS, gt),
+      });
+      vi.useFakeTimers();
+      try {
+        const pending = runTrial({
+          client,
+          params: PARAMS,
+          unoSocket: "2002",
+          runsDir: mkdtempSync(join(tmpdir(), "myco-kill-order-")),
+          killAfterStep: 3,
+          auditKill: true,
+          recovery,
+        });
+        await vi.runAllTimersAsync();
+        const report = await pending;
+        const operations = agent.requests.flatMap((request) => {
+          if (request.op === "kill" && request.params.image_name === "soffice.bin") return ["kill"];
+          if (request.op !== "launch") return [];
+          const argv = request.params.argv as string[];
+          if (argv.some((arg) => arg.startsWith("--accept="))) return ["launch-calc"];
+          if (argv.some((arg) => arg.includes('"op":"save"'))) return ["ctrl+s"];
+          if (argv.some((arg) => arg.includes('"op":"nametype"') && arg.includes(gt.expectedValue)))
+            return ["set"];
+          return [];
+        });
+        const edit = operations.indexOf("set");
+        expect(edit).toBeGreaterThan(0);
+        expect(operations[edit + 1]).toBe("kill");
+        expect(operations.slice(edit + 2)).toEqual(
+          recovery && acknowledged ? ["kill", "launch-calc", "set", "ctrl+s", "kill"] : ["kill"],
+        );
+        expect(report.corruption?.applied).toBe(acknowledged);
+        if (!acknowledged) {
+          expect(report).toMatchObject({
+            completed: false,
+            guardFailure: { step: 2, predicateName: "act:setValue" },
+            corruption: { persistedValue: gt.previousValue, recoveryEvents: [] },
+          });
+          expect(report.guardFailure?.observed).toContain(
+            "agent did not report a terminated process",
+          );
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 function csvWithTarget(params: CalcRecordEditParams, gt: ReturnType<typeof groundTruth>): Buffer {

@@ -417,7 +417,7 @@ The supplemental run and new Calc timing instrumentation are **UNVERIFIED** on a
 
 | Mode | Injection |
 |---|---|
-| `kill` | Terminate `soffice.bin` after the edit and before save. The audited path waits for the kill acknowledgement. Recovery can relaunch Calc and resume the edit. |
+| `kill` | Request termination of `soffice.bin` after Set and before Ctrl+S. An unconfirmed kill stops the trial before save or recovery. After a confirmed kill, recovery can relaunch Calc and resume the edit. |
 | `invalid-target` | After Locate, take a new observation between issuing and using the adapter's versioned UI target for the edit. The stale target is rejected before typing. Recovery retries with a newly resolved target. |
 | `dropped-save` | Withhold Ctrl+S. The edited Calc document stays dirty and the disk keeps the old value. |
 | `focus-change` | After the Name Box jump, transfer foreground focus to a disposable Windows window before typing, check ownership, and destroy the window. The temporary STATIC window has no explicit message pump during the short SendKeys call. Message handling and cleanup on Windows remain unverified. |
@@ -425,9 +425,12 @@ The supplemental run and new Calc timing instrumentation are **UNVERIFIED** on a
 `trials.jsonl` records the `recovery` flag, verdict, host-computed expected value, disk readback
 when available, `falseSuccess` and the reason. `refuted` means the verifier found evidence
 against success. `uncertain` means it could not verify the outcome. A verified verdict with
-a wrong disk value or without a completed recovery event in the saved trace is a false success.
-If the disk value is unreadable despite recovery evidence, the audit fails as unproven.
-A recovery trial needs evidence that the fault landed and the ladder ran to count toward coverage.
+a readable disk value that differs from host ground truth is a false success. A verified
+verdict with an unreadable disk value fails the audit as `unprovenVerified`.
+A verified recovery trial with a matching disk value, a landed fault and missing trace proof
+of completed recovery is recorded separately as `unprovenRecovery` and is ineligible. A
+fault that never landed is also ineligible. Both audit commands recompute the classification
+from recorded evidence and print a `RECLASSIFIED` line when the stored false-success flag changes.
 
 | Driver exit | Meaning |
 |---|---|

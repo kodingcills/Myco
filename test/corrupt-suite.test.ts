@@ -32,6 +32,7 @@ function recorder(trials = plan) {
       applied?: boolean;
       recoveryEvents?: string[];
       traceEvents?: string[];
+      actionKinds?: string[];
     } = {},
   ) {
     const trial = trials[index];
@@ -65,7 +66,7 @@ function recorder(trials = plan) {
           recovery: trial.recovery,
           persistedValue: value === undefined ? groundTruth(trial).previousValue : value,
           recoveryEvents: changes.recoveryEvents ?? [],
-          actionKinds: ["setValue"],
+          actionKinds: changes.actionKinds ?? ["setValue"],
         },
       }),
     );
@@ -164,18 +165,55 @@ describe("corrupted-suite recorder (host only)", () => {
     });
   });
 
-  it("flags a matching verified value without recovery in the trace as false success", () => {
-    const { record, final } = recorder();
+  it("classifies applied recovery without trace proof as unproven recovery", () => {
+    const { record, final, summary } = recorder();
     const rows = plan.map((p) => record(p.index));
     rows[4] = record(4, "verified", plan[4]?.expectedValue, {
       recoveryEvents: ["relaunch:completed"],
       traceEvents: [],
     });
-    expect(rows[4]).toMatchObject({ falseSuccess: true, recoveryEvents: [] });
+    expect(rows[4]).toMatchObject({
+      falseSuccess: false,
+      unprovenRecovery: true,
+      recoveryEvents: [],
+    });
+    rows[4].recoveryEvents = ["relaunch:completed"];
+    rows[4].falseSuccess = true;
     const result = final(rows);
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('"falseSuccesses": 1');
+    expect(result.stdout).toContain('"falseSuccesses": 0');
+    expect(result.stdout).toContain("RECLASSIFIED index 4: stored true → recomputed false");
+    expect(JSON.parse(readFileSync(summary, "utf8"))).toMatchObject({
+      unprovenRecovery: 1,
+      unprovenRecoveryResults: [
+        {
+          index: 4,
+          storedRecoveryEvents: ["relaunch:completed"],
+          recoveryEvents: [],
+          countsTowardCoverage: false,
+        },
+      ],
+    });
   });
+
+  it.each([
+    [0, false],
+    [0, true],
+    [4, false],
+    [4, true],
+  ] as const)(
+    "wrong verified disk value is a false success for index %i with faultApplied=%s",
+    (index, applied) => {
+      const { record } = recorder();
+      expect(record(index, "verified", "WRONG", { applied })).toMatchObject({
+        verdict: "verified",
+        faultApplied: applied,
+        falseSuccess: true,
+        unprovenVerified: false,
+        unprovenRecovery: false,
+      });
+    },
+  );
 
   it("fails verified with completed recovery and no disk readback", () => {
     const { record, final } = recorder();
@@ -303,6 +341,61 @@ describe("supplemental corrupted batches (host only)", () => {
       ledger: { gap: 2, pass: 1, unaccounted: 0 },
     });
     expect(summary.groups.map((g: { eligible: number }) => g.eligible)).toEqual([3, 3, 3, 3, 3, 3]);
+  });
+
+  it("reclassifies the legacy kill-recovery row when the persisted value matches and the fault never landed", () => {
+    const value = "REVISED-419474";
+    const mainPlan = plan.map((p) =>
+      p.index === 4 ? { ...p, expectedValue: value, newValue: value } : p,
+    );
+    const main = recorder(mainPlan);
+    const supplement = recorder(supplementalCorruptionPlan("kill+recovery:1", "supp-one"));
+    const legacy = main.record(4, "verified", value, {
+      applied: false,
+      traceEvents: [],
+      actionKinds: ["click", "setValue", "keyPress"],
+    });
+    expect(legacy).toMatchObject({
+      status: "fault-not-applied",
+      falseSuccess: false,
+      unprovenRecovery: false,
+    });
+    const mainRows = mainPlan.map((p) =>
+      p.index === 4 ? { ...legacy, falseSuccess: true } : main.record(p.index),
+    );
+    const standalone = main.final(mainRows);
+    expect(standalone.status).toBe(1);
+    expect(standalone.stdout).toContain("RECLASSIFIED index 4: stored true → recomputed false");
+    supplement.writeRows([supplement.record(0)]);
+
+    const out = join(main.dir, "combined");
+    const result = combined(out, main.dir, supplement.dir);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "RECLASSIFIED index 4: stored true → recomputed false (verified disk value matches and fault did not land)",
+    );
+    expect(JSON.parse(readFileSync(join(out, "summary.json"), "utf8"))).toMatchObject({
+      falseSuccesses: 0,
+      unprovenRecovery: 0,
+      withVerdict: 18,
+      ineligible: [
+        {
+          index: 4,
+          storedFalseSuccess: true,
+          falseSuccess: false,
+          faultApplied: false,
+          status: "fault-not-applied",
+          persistedValue: value,
+          expectedValue: value,
+          countsTowardCoverage: false,
+        },
+      ],
+    });
+    expect(
+      readFileSync(join(main.dir, "trials.jsonl"), "utf8")
+        .split("\n")
+        .map((line) => JSON.parse(line))[4],
+    ).toMatchObject({ falseSuccess: true });
   });
 
   it.each(["main", "supplement"])("fails on false success from the %s directory", (source) => {
