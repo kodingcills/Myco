@@ -1,0 +1,160 @@
+{
+  "manifestSha256": "bb256a9b2b28ee929c94352887a3d4bc402f4a14181a2a41a16e82bf76351995",
+  "completed": 1,
+  "partial": true,
+  "c1ChargedMicros": 0,
+  "combinedChargedMicros": 0,
+  "rows": [
+    {
+      "index": 0,
+      "mycoVerdict": "verified",
+      "verdict": "uncertain",
+      "planner": "planner:none"
+    },
+    {
+      "index": 1,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 2,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 3,
+      "mycoVerdict": "refuted",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 4,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 5,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 6,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 7,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 8,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 9,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 10,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 11,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 12,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 13,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 14,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 15,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 16,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 17,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 18,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 19,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 20,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 21,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 22,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 23,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 24,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 25,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 26,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 27,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 28,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    },
+    {
+      "index": 29,
+      "mycoVerdict": "verified",
+      "omitted": "driver-unreachable"
+    }
+  ]
+}

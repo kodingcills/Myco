@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/*.md", "!foundry/viewer-fixtures"]
+    "includes": ["**", "!**/*.md", "!foundry/viewer-fixtures", "!docs/research/experiments"]
   },
   "assist": {
     "actions": {
