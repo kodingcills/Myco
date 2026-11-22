@@ -604,3 +604,41 @@ Do not call the MCP discovery barrier closed on the strength of this window.
   again for RT-015. Each boot pays full cloud-init. A window is mostly boot time.
 - `shutdown.sh` keeps the overlay by design; it was 1.4 GB after this run.
   `destroy` deletes it, but a failing run leaves it behind.
+
+## Batched VM needs (one slot, operating rule B)
+
+Per rule B, everything that can be done without the guest is done without it. What
+remains genuinely requires the guest, and is listed so one slot covers it in a
+single pass rather than several.
+
+### One slot, one command: `runtime/guest/live-proof.sh --go`
+
+Measured cost last run: **4m42s** total from a clean overlay, and it is now
+self-sufficient (cloud-init installs the C toolchain; the script waits for
+`cloud-init status: done`). It covers, in order:
+
+| # | Step | What it proves | Last result |
+|---|---|---|---|
+| 3 | `first_path` | create → observe → act → evidence → reset → destroy, with guest-side assertions | pass, 52s (reset 49.5s) |
+| 3 | `first_path` (2nd test) | **MCP discovery from an unrelated cwd** — starts the server from `/tmp` with `MYCO_HOME` cleared and drives a real `create` | **never run** |
+| 4 | `read_file_live` | RT-015 round trip, three escape refusals, ungranted refusal | pass, 113s |
+| 5 | progress heartbeat | `notifications/progress` during create carrying the client token | pass, 5s |
+
+**The one unproven item is the discovery test.** It was written and merged *after*
+the last window, so `first_path` ran with only one test. That is the whole reason a
+slot is still needed — everything else has already passed.
+
+### Explicitly NOT batched into this slot
+
+- **RT-016 (process control)** — not built yet; a half-built op would burn the slot.
+- **RT-015 under `reset`** — the grant is re-applied on every connect, so a reset
+  then read would test it, but the current test already exercises a fresh grant and
+  the marginal value is low.
+- **Anything the mock or replay now covers** — session logic and evidence writing
+  are both offline now (#167), so they need no slot at all.
+
+### Cost if the slot must be split
+
+Each test binary boots its own guest (~60s cloud-init each). Running `first_path`
+alone is ~2min; adding `read_file_live` adds ~2min. The script runs them in one
+guest session where it can, so batching is roughly half the cost of splitting.
