@@ -23,7 +23,12 @@ import sys
 def record(argv):
     idx, seed, rk, cl, nv, out_path, fp_path = argv
     expected = json.load(open(fp_path)).get(seed)
-    rec = {"index": int(idx), "fixtureSeed": seed, "rowKey": rk, "column": cl, "typed": nv}
+    # acPower is recorded as evidence, never enforced: a battery row is valid.
+    ac = "yes" if len(argv) > 7 and argv[7] == "yes" else "no"
+    rec = {
+        "index": int(idx), "fixtureSeed": seed, "rowKey": rk, "column": cl,
+        "typed": nv, "acPower": ac,
+    }
     try:
         d = json.load(open(out_path))
         if not isinstance(d, dict):

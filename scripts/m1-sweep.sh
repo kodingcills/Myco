@@ -21,8 +21,12 @@
 #     (exit 9); resume is only for gate pauses / operator stops.
 #
 # Host gates, checked before each trial (exit and resume later; never run
-# through them): AC power (exit 3), 1-min load > 14 (exit 4), swap free
-# < 300 MB (exit 6). A healthy run sits at load 8-10 because QEMU is the load.
+# through them): 1-min load > 14 (exit 4), swap free < 300 MB (exit 6). A
+# healthy run sits at load 8-10 because QEMU is the load.
+#
+# AC power is NOT a gate (Tiffany via outer loop, 2026-11-22): charger state
+# must never block a run. It is recorded per row as `acPower` so the JSONL
+# shows which trials ran on battery; a battery row is valid evidence.
 set -u
 WS=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-/tmp/m1-013/sweep}
@@ -60,9 +64,10 @@ for i in $(seq 0 29); do
   fi
   echo "=== trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"
 
-  if ! pmset -g batt | head -1 | grep -q "AC Power"; then
-    echo "PAUSED_AC_POWER_LOST at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 3
-  fi
+  # AC power is RECORDED, never enforced (Tiffany via outer loop, 2026-11-22):
+  # charger state must not block a run, and a row that ran on battery is still
+  # valid evidence. The value goes into the row so the JSONL shows it.
+  AC_POWER=no; pmset -g batt | head -1 | grep -q "AC Power" && AC_POWER=yes
   LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
   SWAP_FREE=$(sysctl -n vm.swapusage | sed -E 's/.*free = ([0-9.]+)M.*/\1/')
   if awk -v l="$LOAD1" 'BEGIN{exit !(l>14.0)}'; then
@@ -90,7 +95,7 @@ for i in $(seq 0 29); do
     --mode normal --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial.out" 2> "$OUT/trial.err"
 
-  python3 scripts/m1-sweep-record.py "$i" "$FS" "$RK" "$CL" "$NV" "$OUT/trial.out" "$FPRINTS" >> "$LOG"
+  python3 scripts/m1-sweep-record.py "$i" "$FS" "$RK" "$CL" "$NV" "$OUT/trial.out" "$FPRINTS" "$AC_POWER" >> "$LOG"
   if tail -1 "$LOG" | grep -q '"status": "seed-mismatch"'; then
     echo "ABORT_SEED_MISMATCH at trial $i $(date -u +%FT%TZ): $(tail -1 "$LOG")" >> "$PROGRESS"; exit 7
   fi
