@@ -31,7 +31,7 @@ RUNNER = ROOT / "scripts" / "df005-runner.py"
 FAILS: list[str] = []
 
 STUB_TEMPLATE = r'''#!/usr/bin/env python3
-import json, sys
+import json, os, sys
 def text(o, err=False):
     return {"content": [{"type": "text", "text": json.dumps(o)}], "isError": err}
 for line in sys.stdin:
@@ -46,8 +46,14 @@ for line in sys.stdin:
     else:
         n, a = r["params"]["name"], r["params"]["arguments"]
         if n == "observe":
+            tree = ({"nodes": [
+                {"name": "myco-todo", "ref": "w1", "role": "frame", "children": [
+                    {"name": "", "ref": "e1", "role": "entry"},
+                    {"name": "Save", "ref": "b1", "role": "push-button"},
+                ]},
+            ]} if os.environ.get("STUB_A11Y") == "1" else {"nodes": []})
             res = text({"ok": True, "state_version": 1, "screenshot": "/x.png",
-                        "a11y_tree": {"nodes": [{"name": "sanity-entry", "ref": "r1"}]}})
+                        "a11y_tree": tree})
         elif n == "act":
             res = text({"ok": True, "outcome": {"kind": "delivered_verified"}})
         elif n == "create":
@@ -67,7 +73,7 @@ def expect(cond: bool, what: str) -> None:
 def fake_guest_store(items: list[str]) -> str:
     """A readback stub that prints the store the *test* wants the guest to hold."""
     return f'''#!/usr/bin/env python3
-import json, sys
+import json, os, sys
 print(json.dumps({{"items": [{{"text": t}} for t in {json.dumps(items)}]}}))
 '''
 
@@ -79,21 +85,24 @@ def unreadable_store() -> str:
 class Harness:
     """A stub MCP server plus an optional scripted guest readback."""
 
-    def __init__(self, store_items: list[str] | None = None, unreadable: bool = False):
+    def __init__(self, store_items: list[str] | None = None, unreadable: bool = False,
+                 a11y: bool = True):
         self.dir = Path(tempfile.mkdtemp(prefix="df005-t-"))
         self.stub = self.dir / "stub.py"
         self.stub.write_text(STUB_TEMPLATE)
-        self.env: dict[str, str] = {}
+        # Grading is only reachable once the driver can resolve an entry and a
+        # Save ref; `a11y=False` models an app that exposes no AT-SPI nodes.
+        self.env: dict[str, str] = {"STUB_A11Y": "1"} if a11y else {}
         if unreadable:
             rb = self.dir / "readback.py"
             rb.write_text(unreadable_store())
-            self.env = {"MYCO_DF005_ASSUME_GUEST": "1",
-                        "MYCO_DF005_READBACK_CMD": f"{sys.executable} {rb}"}
+            self.env.update({"MYCO_DF005_ASSUME_GUEST": "1",
+                             "MYCO_DF005_READBACK_CMD": f"{sys.executable} {rb}"})
         elif store_items is not None:
             rb = self.dir / "readback.py"
             rb.write_text(fake_guest_store(store_items))
-            self.env = {"MYCO_DF005_ASSUME_GUEST": "1",
-                        "MYCO_DF005_READBACK_CMD": f"{sys.executable} {rb}"}
+            self.env.update({"MYCO_DF005_ASSUME_GUEST": "1",
+                             "MYCO_DF005_READBACK_CMD": f"{sys.executable} {rb}"})
 
     def run(self, *, scenario: str = "all", agent_report: str | None = None) -> tuple[int, Path]:
         out = Path(tempfile.mkdtemp(prefix="df005-out-"))
@@ -225,12 +234,20 @@ def main() -> int:
     expect(cb["passed"] is False, f"one missing item fails: {cb['reason']}")
     os.unlink(partial)
 
-    print("9. artifacts from a graded run validate against M1-012")
+    print("9. app exposes no AT-SPI refs → REQ-04 gap, never pass")
+    code, d = Harness(store_items=["buy milk", "call mom", "write report"], a11y=False).run(
+        scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "gap", f"gap, not pass (got {row['state']})")
+    expect("REQ-04" in row["detail"], f"attributed to REQ-04: {row['detail']}")
+    expect(code == 1, "exit non-zero")
+
+    print("10. artifacts from a graded run validate against M1-012")
     code, d = Harness(store_items=["buy milk", "call mom", "write report"]).run(scenario="DF-S01")
     v = validate_artifacts(d)
     expect(v == "", f"schema validation: {v or 'valid'}")
 
-    print("10. non-object JSON store → uncertain, evidence still written")
+    print("11. non-object JSON store → uncertain, evidence still written")
     for body in ("[1, 2, 3]", '"a string"', "42", "true", "null"):
         rb = tempfile.NamedTemporaryFile("w", suffix=".py", delete=False)
         rb.write(f"#!/usr/bin/env python3\nprint({body!r})\n")
@@ -238,7 +255,7 @@ def main() -> int:
         env = {"MYCO_DF005_ASSUME_GUEST": "1",
                "MYCO_DF005_READBACK_CMD": f"{sys.executable} {rb.name}"}
         h = Harness()
-        h.env = env
+        h.env.update(env)      # keep STUB_A11Y so the run reaches grading
         code, d = h.run(scenario="DF-S01")
         state = ledger(d)["run-df-s01-1"]["state"]
         c = checks_of(d, "run-df-s01-1")["persisted-set-matches"]
@@ -247,7 +264,7 @@ def main() -> int:
         expect((d / "run-df-s01-1" / "trace.jsonl").exists(), f"{body}: trace written")
         os.unlink(rb.name)
 
-    print("11. mutation: each no-guest gate is independently load-bearing")
+    print("12. mutation: each no-guest gate is independently load-bearing")
     src = RUNNER.read_text()
     offline_gate = "if offline and not assume_guest:"
     live_gate = "if not assume_guest and not probe.guest_alive:"
@@ -269,7 +286,7 @@ def main() -> int:
         expect(state in ("gap", "uncertain", "failure"),
                f"{label} removed: lands in a non-success bucket ({state}: {reason[:60]})")
 
-    print("12. both gates removed: the readback channel is the third guard")
+    print("13. both gates removed: the readback channel is the third guard")
     mutated = src.replace(offline_gate, "if False:", 1).replace(live_gate, "if False:", 1)
     RUNNER.write_text(mutated)
     try:
