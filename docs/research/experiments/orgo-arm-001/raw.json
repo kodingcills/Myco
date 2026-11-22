@@ -1,0 +1,43 @@
+{
+  "mode": "live",
+  "generated": "2026-11-22T04:46:49.846Z",
+  "preflight": {
+    "ok": false,
+    "reasons": [
+      "Free account: Orgo runs hourly computers as Medium only and a create naming another size still gets a Medium (docs: create, account-limits, instance-types)",
+      "billing/compute offers no Small (0.5 vCPU, 4 GB): Medium 2 vCPU 8 GB"
+    ],
+    "tier": "free",
+    "mode": "free",
+    "balanceCents": 300,
+    "offers": [
+      {
+        "name": "Medium",
+        "cpu": 2,
+        "ramGb": 8,
+        "diskGb": 40,
+        "usdPerHour": 0.055
+      }
+    ],
+    "inventoryCount": 0
+  },
+  "experiments": {},
+  "spend": {
+    "startCents": 300,
+    "endCents": 300,
+    "ledgerCents": 0
+  },
+  "cleanup": {
+    "deleted": [],
+    "finalCount": 0
+  },
+  "history": [
+    {
+      "amount_cents": 300,
+      "balance_after_cents": 300,
+      "type": "initial_grant",
+      "created_at": "2026-11-22T04:29:23.532Z"
+    }
+  ],
+  "errors": []
+}
