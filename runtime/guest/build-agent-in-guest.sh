@@ -13,7 +13,19 @@ SSH=(ssh -i "$KEY" -p 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/d
 SCP=(scp -i "$KEY" -P 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r)
 
 "${SSH[@]}" 'command -v ~/.cargo/bin/cargo >/dev/null || { curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh && sh /tmp/rustup.sh -y --profile minimal --default-toolchain stable; }'
-"${SSH[@]}" 'sudo apt-get install -y -qq libxkbcommon-dev pkg-config build-essential >/dev/null 2>&1 || true'
+# A build script needs a linker, so these are mandatory, not best-effort.
+#
+# They used to be attempted with `|| true`, which turned a broken apt state into a
+# confusing failure 40 seconds later ("linker `cc` not found" from proc-macro2).
+# The usual cause is an interrupted cloud-init install leaving dpkg unconfigured,
+# which fails EVERY later apt command until it is repaired.
+"${SSH[@]}" 'sudo dpkg --configure -a >/dev/null 2>&1 || true'
+if ! "${SSH[@]}" 'sudo apt-get install -y -qq libxkbcommon-dev pkg-config build-essential >/dev/null 2>&1'; then
+  echo "[build] FATAL: could not install the guest toolchain; apt state follows" >&2
+  "${SSH[@]}" 'sudo apt-get install -y libxkbcommon-dev pkg-config build-essential 2>&1 | tail -15' >&2 || true
+  exit 1
+fi
+"${SSH[@]}" 'command -v cc >/dev/null || { echo "no C compiler after install" >&2; exit 1; }'
 
 echo "[build] syncing sources to guest"
 "${SSH[@]}" 'rm -rf ~/myco-build && mkdir -p ~/myco-build/crates'
