@@ -95,7 +95,7 @@ class TodoApp:
             "listbox_rows": self.listbox.get(0, tk.END),
             "listbox_selection": [self.listbox.get(i) for i in self.listbox.curselection()],
             "status_text": self.status.cget("text"),
-            "entry_text": self.entry.get(),
+            "entry_text": self.entry_text.get(),
         }
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=self.state_file.parent, delete=False
