@@ -1,4 +1,4 @@
-import { connectC1, type Mcp, PixelRouteError, pixelAction } from "./c1.ts";
+import { connectC1, type Mcp, pixelAction } from "./c1.ts";
 import {
   type BaselineRow,
   type Claim,

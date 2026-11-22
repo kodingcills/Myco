@@ -6,6 +6,10 @@ set -euo pipefail
 WS=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-/tmp/baseline/c1}
 PROGRESS="$OUT/progress.log"
+if [ "${2:-}" != "--coordinator-go" ]; then
+  echo "Coordinator GO required" >&2
+  exit 1
+fi
 
 cd "$WS"
 mkdir -p "$OUT"
@@ -30,6 +34,6 @@ trap vm_lock_release EXIT
 echo "VM lock acquired. Starting C1 sweep at $(date -u +%FT%TZ)..." | tee -a "$PROGRESS"
 
 # Run unattended under caffeinate
-caffeinate -dimsu node --import tsx scripts/c1-sweep.ts "$OUT" 2>&1 | tee -a "$PROGRESS"
+caffeinate -dimsu node --import tsx scripts/c1-sweep.ts "$OUT" --coordinator-go 2>&1 | tee -a "$PROGRESS"
 
 echo "C1 sweep finished at $(date -u +%FT%TZ)." | tee -a "$PROGRESS"

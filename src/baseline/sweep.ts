@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { groundTruth } from "../tasks/intent.ts";
 import { type PreparedC1, RESET_SNAPSHOT, runC1Trial, STEP_BUDGET } from "./c1-trial.ts";
 import { type BaselineRow, isBaselineRow } from "./index.ts";
-import { createPlanner, MAX_CALL_MICROS, type Planner } from "./planner.ts";
+import { createPlanner, MAX_CALL_MICROS, type Planner, PlannerFailure } from "./planner.ts";
 import manifest from "./sweep-v3.json" with { type: "json" };
 
 const COMBINED_LIMIT = 9_000_000;
@@ -22,11 +22,11 @@ const DEFAULT_ARM_LIMIT = 4_500_000;
 const MAX_TRIAL_MICROS = STEP_BUDGET * MAX_CALL_MICROS;
 const manifestSha256 = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 
-type Omission = "trial-interrupted" | "spend-limit" | "driver-unreachable";
+type Omission = "trial-interrupted" | "spend-limit" | "driver-unreachable" | "planner-failed";
 
 type Entry =
   | { status: "reserved"; micros: number }
-  | { status: "omitted"; micros: number; reason: Omission }
+  | { status: "omitted"; micros: number; reason: Omission; detail?: string }
   | { status: "scored"; micros: number; row: BaselineRow };
 interface Ledger {
   manifestSha256: string;
@@ -155,8 +155,15 @@ export async function runC1Sweep(options: {
           prepared,
           planner,
         );
-      } catch {
-        ledger.c1[index] = { status: "omitted", micros: reservation, reason: "trial-interrupted" };
+      } catch (error) {
+        const failed = error instanceof PlannerFailure;
+        if (failed) stopReason = "planner-failed";
+        ledger.c1[index] = {
+          status: "omitted",
+          micros: reservation,
+          reason: failed ? "planner-failed" : "trial-interrupted",
+          ...(failed ? { detail: error.message } : {}),
+        };
         persist();
         continue;
       }
@@ -181,6 +188,7 @@ export async function runC1Sweep(options: {
             index,
             mycoVerdict,
             omitted: entry?.status === "omitted" ? entry.reason : "trial-interrupted",
+            ...(entry?.status === "omitted" && entry.detail ? { detail: entry.detail } : {}),
           };
     });
     const completed = rows.filter((row) => "verdict" in row).length;

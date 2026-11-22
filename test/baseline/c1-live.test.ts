@@ -281,7 +281,7 @@ describe("C1 host harness", () => {
       .mockImplementationOnce(async () => reply());
     const planner = createPlanner(request, { ANTHROPIC_API_KEY: "synthetic-secret" });
     await expect(planner.act("test", { mimeType: "image/png", data: "AA==" })).rejects.toThrow(
-      new Error(`Anthropic Messages usage could not be verified: ${reason}`),
+      `Anthropic Messages usage could not be verified: ${reason}`,
     );
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -289,7 +289,10 @@ describe("C1 host harness", () => {
   it("fails closed without Ollama fallback when Anthropic call fails", async () => {
     const key = "fake-test-key";
     const request = vi.fn<typeof fetch>(async () => {
-      throw new Error("Anthropic API network error");
+      return Response.json(
+        { error: { type: "authentication_error", message: key } },
+        { status: 401 },
+      );
     });
     const root = directory();
     const prepare = vi.fn(async () => prepared());
@@ -300,6 +303,12 @@ describe("C1 host harness", () => {
       planner: createPlanner(request, { ANTHROPIC_API_KEY: key }),
     });
     expect(report.completed).toBe(0);
-    expect(report.rows[0]).toMatchObject({ omitted: "trial-interrupted" });
+    expect(report.rows[0]).toMatchObject({
+      omitted: "planner-failed",
+      detail: "Anthropic token count rejected: HTTP 401 (authentication_error)",
+    });
+    expect(JSON.stringify(report)).not.toContain(key);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

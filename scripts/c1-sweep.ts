@@ -1,10 +1,10 @@
+// biome-ignore-all lint/suspicious/noConsole: CLI progress and fatal diagnostics go to the operator log.
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { independentC1Judge } from "../src/baseline/c1-judge.ts";
-import { type PreparedC1, RESET_SNAPSHOT } from "../src/baseline/c1-trial.ts";
+import type { PreparedC1, RESET_SNAPSHOT } from "../src/baseline/c1-trial.ts";
 import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
 import { createPlanner } from "../src/baseline/planner.ts";
 import { runC1Sweep } from "../src/baseline/sweep.ts";
@@ -13,8 +13,10 @@ import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
 import { groundTruth } from "../src/tasks/intent.ts";
 import { AgentClient, SshTunnel } from "../src/win/agent-client.ts";
+import { probeC1Driver } from "./c1-driver-preflight.ts";
 
 async function main() {
+  if (!process.argv.includes("--coordinator-go")) throw new Error("Coordinator GO required");
   const directory = process.argv[2] || "/tmp/baseline/c1";
   console.log(`=== Starting C1 Screenshot Baseline Sweep in ${directory} ===`);
 
@@ -22,9 +24,11 @@ async function main() {
 
   async function prepare(
     target: (typeof manifest.rows)[number],
-    snapshot: typeof RESET_SNAPSHOT
+    snapshot: typeof RESET_SNAPSHOT,
   ): Promise<PreparedC1> {
-    console.log(`\n--- Preparing Trial ${target.index} (fixtureSeed: ${target.params.fixtureSeed}) ---`);
+    console.log(
+      `\n--- Preparing Trial ${target.index} (fixtureSeed: ${target.params.fixtureSeed}) ---`,
+    );
 
     // 1. Health & power checks
     const acPower = execFileSync("pmset", ["-g", "batt"]).toString().includes("AC Power");
@@ -52,7 +56,7 @@ async function main() {
         const statusCheck = execFileSync(
           join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
           ["C:\\myco\\bin\\cua-driver.exe status"],
-          { encoding: "utf8" }
+          { encoding: "utf8" },
         );
         if (statusCheck.includes("Cua Driver daemon is running")) {
           pipeReachable = true;
@@ -69,7 +73,7 @@ async function main() {
       [
         "& powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\myco\\bin\\run-interactive.ps1' -Exe 'C:\\Program Files\\LibreOffice\\program\\python.exe' -ArgList '-m myco_agent --host 127.0.0.1 --port 8765 --token-file C:\\ProgramData\\Myco\\agent.token --backend windows' -Name 'myco-agent' -WorkDir 'C:\\Program Files\\Myco\\agent'",
       ],
-      { stdio: "ignore" }
+      { stdio: "ignore" },
     );
     let token = "";
     for (let i = 0; i < 10; i++) {
@@ -78,7 +82,7 @@ async function main() {
         token = execFileSync(
           join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
           ["Get-Content C:\\ProgramData\\Myco\\agent.token"],
-          { encoding: "utf8" }
+          { encoding: "utf8" },
         ).trim();
         if (token.length > 20) break;
       } catch {}
@@ -142,18 +146,20 @@ async function main() {
         const resJson = execFileSync(
           join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
           ["C:\\myco\\bin\\cua-driver.exe call list_windows '{}'"],
-          { input: "", encoding: "utf8" }
+          { input: "", encoding: "utf8" },
         );
         const parsed = JSON.parse(resJson);
         const win = parsed.windows?.find(
-          (w: any) =>
+          (w: { app_name?: string; title?: string; pid: number; window_id: number }) =>
             w.app_name?.toLowerCase().includes("soffice") ||
             w.app_name?.toLowerCase().includes("calc") ||
-            w.title?.toLowerCase().includes("calc")
+            w.title?.toLowerCase().includes("calc"),
         );
         if (win) {
           windowInfo = { pid: win.pid, window_id: win.window_id };
-          console.log(`[${target.index}] Found Calc window: pid=${win.pid}, window_id=${win.window_id}`);
+          console.log(
+            `[${target.index}] Found Calc window: pid=${win.pid}, window_id=${win.window_id}`,
+          );
           break;
         }
       } catch {}
@@ -211,23 +217,23 @@ async function main() {
           const resJson = execFileSync(
             join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
             ["C:\\myco\\bin\\cua-driver.exe call list_windows '{}'"],
-            { input: "", encoding: "utf8" }
+            { input: "", encoding: "utf8" },
           );
           const parsed = JSON.parse(resJson);
           const win = parsed.windows?.find(
-            (w: any) =>
+            (w: { app_name?: string; title?: string; pid: number; window_id: number }) =>
               w.app_name?.toLowerCase().includes("soffice") ||
               w.app_name?.toLowerCase().includes("calc") ||
               w.title?.toLowerCase().includes("calc") ||
-              w.pid === windowInfo?.pid
+              w.pid === windowInfo?.pid,
           );
           if (!win) return "closed";
           const dialog = parsed.windows?.find(
-            (w: any) =>
+            (w: { app_name?: string; title?: string; pid: number; window_id: number }) =>
               (w.pid === windowInfo?.pid || w.app_name === win.app_name) &&
               (w.title?.toLowerCase().includes("save") ||
                 w.title?.toLowerCase().includes("confirm") ||
-                w.title?.toLowerCase().includes("error"))
+                w.title?.toLowerCase().includes("error")),
           );
           if (dialog) return "dialog";
           return "open";
@@ -238,12 +244,7 @@ async function main() {
     });
 
     return {
-      driver: {
-        hostVersion: "0.56.4",
-        guestVersion: "0.56.4",
-        pipeReachable,
-        sessionIdentityMatches: true,
-      },
+      driver: probeC1Driver(windowInfo.pid, pipeReachable),
       resetMs,
       acPower,
       caffeinate,
@@ -257,11 +258,11 @@ async function main() {
   }
 
   try {
-    const planner = createPlanner();
+    const planner = createPlanner(fetch, { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY });
     console.log("--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]");
 
     const report = await runC1Sweep({
-      coordinatorGo: true,
+      coordinatorGo: process.argv.includes("--coordinator-go"),
       directory,
       armLimitMicros: 4_500_000,
       planner,
