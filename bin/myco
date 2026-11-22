@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -e
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"
+
+if [ "$1" = "test" ]; then
+  shift
+  exec npx tsx "$ROOT/scripts/myco-test.ts" "$@"
+elif [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ -z "$1" ]; then
+  echo "Myco — Verified GUI test runner for desktop coding agents"
+  echo ""
+  echo "Usage: myco test <task-package.yaml>"
+  echo ""
+  echo "Commands:"
+  echo "  test <file>   Execute a verified GUI task package and output evidence"
+  echo ""
+  echo "Exit codes:"
+  echo "  0: Verified (state changes confirmed)"
+  echo "  1: Refuted (false success or failed checks)"
+  echo "  2: Uncertain (ambiguous or runtime error)"
+  exit $([ -z "$1" ] && echo 1 || echo 0)
+else
+  echo "Unknown command: $1" >&2
+  echo "Run 'myco --help' for available commands" >&2
+  exit 1
+fi

@@ -9,17 +9,23 @@
   "engines": {
     "node": ">=24"
   },
+  "bin": {
+    "myco": "bin/myco"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json && pnpm --filter viewer typecheck",
     "lint": "biome check . && pnpm --filter viewer lint",
     "format": "biome format --write .",
     "schema-validate": "tsx schemas/validate-artifacts.ts",
-    "test": "vitest run && pnpm schema-validate"
+    "test": "vitest run && pnpm schema-validate",
+    "test:task": "tsx scripts/myco-test.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^24.0.0",
+    "fflate": "^0.8.3",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
