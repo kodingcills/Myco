@@ -46,6 +46,32 @@ Plus, recorded per run regardless of bucket:
   `docs/coordination/dogfood-state.md` implicated by a `gap`/`uncertain`, or
   `none`. One run may implicate several; record all.
 
+### How the harness enforces these buckets (`scripts/df005-runner.py`)
+
+Written down because the shipped runner violated three of them at once and
+graded an offline stub `pass / verified+ground-truth` (found 2026-11-22,
+fixed in PR #169):
+
+1. **An oracle is guest state.** It is computed only from the guest's persisted
+   store read back over the independent ssh channel. A runtime
+   `delivered_verified` outcome is *not* evidence; it is a claim by the thing
+   under test.
+2. **Ungraded is never graded.** A stub/offline server, or a session whose guest
+   never answered ssh, is `gap`. There is no path where a run with no guest
+   behind it records `success` or the `verifier:verified+ground-truth` oracle.
+3. **Could-not-look is `uncertain`.** Unreadable file, unparseable store, dead
+   channel → `passed: null` and a `verifier:uncertain` oracle (ADR-0002). Never
+   `failure` (that asserts the intent failed), never `success`.
+4. **A disagreeing store after a completed run is `failure`/`verifier:refuted`.**
+   The harness refused; it is not a *false success*, which requires the agent to
+   have claimed success.
+5. **The runner exits non-zero unless every trial is a genuine success**, so an
+   ungraded matrix can never look green to a calling script.
+
+`test/df005-runner-offline.py` drives every one of these branches without a
+guest, and includes a mutation that removes the guest gate to prove the tests
+are load-bearing rather than decorative.
+
 The headline metrics per eval: success rate over the 5 scenarios,
 false-success count (target: 0), gap count by REQ-id (feeds the runtime team's
 priority list), and median time cost per scenario.
