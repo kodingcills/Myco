@@ -33,6 +33,7 @@ export interface TrialInput {
   readonly screen: ScreenView;
   /** The evidence stream the runtime emitted. */
   readonly trace: readonly GuardTraceEvent[];
+  readonly requireSavedBytes?: boolean;
   /** The system-under-test's own claim. Attached LAST (see below). */
   readonly selfReport: { readonly claimsSuccess: boolean; readonly text: string };
 }
@@ -52,37 +53,33 @@ export function scoreTrial(input: TrialInput): FoundryTrialResult {
   const claims = observeScreenClaims(input.fixture, input.screen);
 
   // 3. Trace guard. Can only refute a run, never pass one.
-  const guard = checkTrace(input.fixture, input.trace, input.actual.files);
+  const guard = checkTrace(input.fixture, input.trace, input.actual.files, input.requireSavedBytes);
 
   // 4. Fold, then attach the transcript's claim.
   const composite = compositeVerdict(stateVerdict.status, claims);
-  const verdict = composite.verdict;
-  const falseSuccess = verdict !== "verified" && input.selfReport.claimsSuccess;
+  let verdict = composite.verdict;
+  if (guard.status === "file-io-shortcut") verdict = "refuted";
+  else if (verdict === "verified" && guard.status !== "clean")
+    verdict = guard.status === "unknown" ? "uncertain" : "refuted";
+  const falseSuccess = verdict === "refuted" && input.selfReport.claimsSuccess;
 
   const reasons: string[] = [...stateVerdict.reasons, ...composite.reasons];
-  if (
-    guard.status === "file-io-shortcut" ||
-    guard.status === "unreconciled-change" ||
-    guard.status === "not-launched"
-  ) {
+  if (guard.status !== "clean") {
     reasons.push(`trace guard: ${guard.status} — ${guard.reasons.join("; ")}`);
-    if (verdict === "verified") {
+    if (composite.verdict === "verified" && verdict === "refuted") {
       reasons.push("result refused: the change cannot be explained by GUI acts");
     }
   }
   if (falseSuccess) {
-    reasons.push(
-      "FALSE SUCCESS: the agent claimed success; persisted state does not satisfy the intent",
-    );
+    reasons.push("FALSE SUCCESS: the agent claimed success; the trial was refuted");
   }
 
-  const refusedByGuard = verdict === "verified" && guard.status !== "clean";
   return {
     fixtureId: input.fixture.fixtureId,
     fixtureVersion: input.fixture.version,
     oracleVersion: oracleForApp(input.fixture.app).version,
     faultVersion: input.faultVersion,
-    verdict: refusedByGuard ? "refuted" : verdict,
+    verdict,
     falseSuccess,
     stateChecks: stateVerdict.checks,
     screenClaims: claims ?? [],

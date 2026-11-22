@@ -159,6 +159,36 @@ identically. An arm that only has pixels has nothing to reconcile — which is f
 a pixel arm cannot upload a file without a GUI act either; the guard's first clause simply
 never fires for it.
 
+### Discovery comparison evidence
+
+Discovery's public grader produces descriptive results. Every row is ineligible for
+the pre-registered decisions. This entry point has no trusted ingress for live
+artifacts. The public prompt hash checks task catalog identity. Decision eligibility
+requires a grader-owned hidden commitment, distinct seeded hidden task/fault pairs
+matched across arms, and evidence of the actual delivered prompt bound to each run.
+The trusted ingest must also bind planner settings, trace, recorder closure and
+effect audits, independent save observations, and final persisted bytes to that
+same run. Caller-supplied claims about this provenance cannot establish eligibility.
+
+The Discovery guard trace requires one ordered `tool-call` marker and one complete
+effect audit per inventory entry, with matching call IDs and channels. GUI actions
+refer back to their recorded GUI call. Scored rows retain audited reads of watched
+persistence with their call ID, channel, and position in the input trace. This
+locates the call in the trace. Live measurement still requires a recorder that
+captures all accesses and establishes when reads completed before the arm finished.
+Direct file and shell writes to watched files enter the trace guard. For HCU+shell,
+final watched bytes must match the last independently observed save, including
+when another GUI action follows it. A missing or incomplete observed save cannot
+support a verified score. The grader can check snapshot contents and sequence.
+Independent capture remains a live recorder requirement.
+
+Create one comparison with `createDiscoveryComparison` and reuse it for subsequent
+batches, including after quota exhaustion. It snapshots the settings and checks
+them alongside the pinned `claude-sonnet-5-5` model. Durable resume across processes
+requires the trusted runner to persist the original comparison configuration. The
+original add-four-items prompt and `ef-t01b-add-four-items-noverify` share a fixture
+and intent and have distinct task IDs and prompt hashes in scored evidence.
+
 ## 6. Hidden split and blind scoring
 
 The split is **two roots, not one root with filters** (filters leak by accident), and it

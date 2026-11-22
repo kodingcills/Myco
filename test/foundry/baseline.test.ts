@@ -234,8 +234,8 @@ describe("baseline", () => {
     expect(() =>
       baselineReport([{ ...rows[0]!, commitmentRoot: "b".repeat(64) }], true, trusted),
     ).toThrow(/Mixed or invalid hidden split/);
-    expect(report.couldNotRun).toHaveLength(4);
-    expect(report.escalations).toHaveLength(4);
+    expect(report.couldNotRun).toHaveLength(5);
+    expect(report.escalations).toHaveLength(5);
   });
   it("records torn stores as uncertain and keeps unmeasured metrics unknown", () => {
     const rows = runArm(credulous, [task], options);
