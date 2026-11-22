@@ -151,10 +151,16 @@ def main():
 
         if a.verify_myco_todo:
             def verify_myco_todo():
-                return subprocess.check_output(
+                result = subprocess.run(
                     [os.path.join(REPO, "scripts", "deploy-verify-myco-todo.sh"), "--go"],
-                    text=True, timeout=60,
-                ).strip()
+                    text=True, timeout=60, capture_output=True,
+                )
+                if result.returncode:
+                    raise RuntimeError(
+                        f"myco-todo deployment exited {result.returncode}: "
+                        f"{result.stdout.strip()} {result.stderr.strip()}"
+                    )
+                return result.stdout.strip()
             step("verify-myco-todo", verify_myco_todo)
 
         def destroy():
