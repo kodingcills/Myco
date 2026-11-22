@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Host-only JSONL recorder and acceptance summary for M1-014."""
 
+import argparse
 import json
 import re
 import subprocess
@@ -14,16 +15,22 @@ GROUPS = [(mode, False) for mode in CLASSES] + [("kill", True), ("invalid-target
 RECORD_FIELDS = ("index", "class", "recovery", "fixtureSeed", "rowKey", "column", "expectedValue")
 
 
-def load_plan(path):
+def load_plan(path, *, allow_supplement=False):
     plan = json.loads(Path(path).read_text())
+    groups = Counter((p["class"], p["recovery"]) for p in plan)
+    full_suite = groups == Counter(dict.fromkeys(GROUPS, 3))
+    supplement = (
+        allow_supplement and groups and groups.keys() <= set(GROUPS)
+        and all(p["fixtureSeed"].startswith("m1-014s-") for p in plan)
+    )
     if (
         any(type(p["recovery"]) is not bool for p in plan)
-        or Counter((p["class"], p["recovery"]) for p in plan) != Counter(dict.fromkeys(GROUPS, 3))
+        or not (full_suite or supplement)
         or [p["index"] for p in plan] != list(range(len(plan)))
         or len({p["fixtureSeed"] for p in plan}) != len(plan)
         or len({p["fixtureSha256"] for p in plan}) != len(plan)
     ):
-        raise ValueError("expected three indexed trials per class and recovery group, with distinct seeds and hashes")
+        raise ValueError("expected a valid suite layout with indexed trials and distinct seeds and hashes")
     return plan
 
 
@@ -100,6 +107,7 @@ def record(trial, status, out_path, out_dir):
         reason=" | ".join(reason for reason in reasons if isinstance(reason, str)) if isinstance(reasons, list) else "",
         fixtureSha256=fixture.get("csvSha256"),
         elapsedMs=report.get("elapsedMs"),
+        timings=report.get("timings"),
         guardPredicate=guard.get("predicateName") if isinstance(guard, dict) else None,
         persistedValue=persisted if isinstance(persisted, str) else None,
         persistedReadError=audit.get("persistedReadError"),
@@ -176,34 +184,25 @@ def ledger_rows(eval_id, row, false_success, unproven, eligible):
         }
 
 
-def final(plan, rows, out_dir):
-    ledger_path = out_dir / "ledger.jsonl"
-    counts = {group: Counter() for group in GROUPS}
-    recovery_results = []
+def audit_batch(plan, rows, source, counts, problems, *, allow_missing_reports):
     expected = {p["index"]: p for p in plan}
     seen = set()
-    problems = []
-    ledger = []
-    false_successes = unproven_verified = 0
     for row in rows:
         index = row.get("index")
         trial = expected.get(index)
         if trial is None or index in seen:
-            problems.append(f"duplicate or unexpected trial index {index}")
+            problems.append(f"{source}: duplicate or unexpected trial index {index}")
             continue
         seen.add(index)
         if any(row.get(k) != trial[k] for k in RECORD_FIELDS):
-            problems.append(f"trial {index}: record does not match suite manifest")
+            problems.append(f"{source}: trial {index}: record does not match suite manifest")
             continue
         mode_counts = counts[(trial["class"], trial["recovery"])]
-        row["recoveryEvents"] = trace_recovery_events(row, out_dir)
-        if trial["recovery"]:
-            recovery_results.append(row)
+        row["recoveryEvents"] = trace_recovery_events(row, source)
         mode_counts["recorded"] += 1
         false_success, unproven = score(row)
-        false_successes += false_success
-        unproven_verified += unproven
         mode_counts["falseSuccesses"] += false_success
+        mode_counts["unprovenVerified"] += unproven
         fixture_matches = row.get("status") != "seed-mismatch" and row.get("fixtureSha256") == trial["fixtureSha256"]
         eligible = (
             fixture_matches
@@ -212,12 +211,41 @@ def final(plan, rows, out_dir):
             and row.get("faultApplied") is True
             and (not trial["recovery"] or bool(row["recoveryEvents"]))
         )
-        if not fixture_matches:
-            problems.append(f"trial {index}: missing or mismatched fixture hash")
+        no_report = (
+            row.get("status") in ("reset-failed", "deploy-failed", "token-failed", "harness-error")
+            and row.get("verdict") is None
+            and row.get("fixtureSha256") is None
+        )
+        if not fixture_matches and not (allow_missing_reports and no_report):
+            problems.append(f"{source}: trial {index}: missing or mismatched fixture hash")
         if eligible:
             mode_counts[row["verdict"]] += 1
         row.update(falseSuccess=false_success, unprovenVerified=unproven, countsTowardCoverage=eligible)
-        ledger.extend(ledger_rows(ledger_path.parent.name or "m1-014", row, false_success, unproven, eligible))
+        yield row
+
+
+def final(batches, out_dir, *, combined=False, supplement=False):
+    ledger_path = out_dir / "ledger.jsonl"
+    counts = {group: Counter() for group in GROUPS}
+    recovery_results = []
+    ineligible = []
+    problems = []
+    ledger = []
+    total = 0
+    for source, plan, rows in batches:
+        total += len(rows)
+        if supplement and len(rows) != len(plan):
+            problems.append("supplemental batch has unrecorded trials")
+        eval_id = str(source) if combined else out_dir.name or "m1-014"
+        for row in audit_batch(plan, rows, source, counts, problems, allow_missing_reports=combined or supplement):
+            eligible = row["countsTowardCoverage"]
+            if combined:
+                row["sourceDir"] = str(source)
+            if row["recovery"]:
+                recovery_results.append(row)
+            if not eligible:
+                ineligible.append(row)
+            ledger.extend(ledger_rows(eval_id, row, row["falseSuccess"], row["unprovenVerified"], eligible))
 
     ledger_path.write_text("".join(json.dumps(row) + "\n" for row in ledger))
 
@@ -230,26 +258,36 @@ def final(plan, rows, out_dir):
     if accounting["unaccounted"] != 0:
         problems.append("conformance ledger has unaccounted rows")
 
-    print("class           recovery  recorded  verified   refuted uncertain  falseSuccesses")
+    print("class           recovery  recorded  eligible  verified   refuted uncertain  falseSuccesses")
     totals = Counter()
+    group_results = []
     for (mode, recovery), count in counts.items():
         totals.update(count)
         label = "yes" if recovery else "no"
+        eligible = sum(count[k] for k in VERDICTS)
+        group_results.append({
+            "class": mode,
+            "recovery": recovery,
+            "eligible": eligible,
+            **{k: count[k] for k in ("recorded", *VERDICTS, "falseSuccesses")},
+        })
         print(f"{mode:15} {label:8} " + " ".join(
-            f"{count[k]:9}" for k in ("recorded", *VERDICTS, "falseSuccesses")
+            f"{n:9}" for n in (count["recorded"], eligible, *(count[k] for k in (*VERDICTS, "falseSuccesses")))
         ))
-        if sum(count[k] for k in VERDICTS) < 3:
+        if not supplement and eligible < 3:
             problems.append(f"{mode} (recovery={label}): fewer than 3 eligible verdicts")
     with_verdict = sum(totals[k] for k in VERDICTS)
-    if with_verdict < 10:
+    if not supplement and with_verdict < 10:
         problems.append("fewer than 10 trials with a verdict")
-    passed = not (problems or false_successes or unproven_verified)
+    passed = not (problems or totals["falseSuccesses"] or totals["unprovenVerified"])
     summary = {
-        "total": len(rows),
+        "total": total,
         "withVerdict": with_verdict,
         **{k: totals[k] for k in VERDICTS},
-        "falseSuccesses": false_successes,
-        "unprovenVerified": unproven_verified,
+        "falseSuccesses": totals["falseSuccesses"],
+        "unprovenVerified": totals["unprovenVerified"],
+        "groups": group_results,
+        "ineligible": ineligible,
         "recoveryResults": recovery_results,
         "ledger": accounting,
         "passed": passed,
@@ -263,16 +301,54 @@ def final(plan, rows, out_dir):
     return 0 if passed else 1
 
 
-if __name__ == "__main__":
-    command, plan_path, *args = sys.argv[1:]
-    plan = load_plan(plan_path)
+def final_combined(argv):
+    parser = argparse.ArgumentParser(prog=f"{Path(sys.argv[0]).name} --final-combined")
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("directories", type=Path, nargs="+")
+    args = parser.parse_args(argv)
+    if len(args.directories) < 2:
+        parser.error("at least two input directories are required")
+    out = args.out.resolve()
+    batches = []
+    seeds = {}
+    for directory in args.directories:
+        source = directory.resolve()
+        if out == source:
+            raise ValueError("combined output must differ from the input directories")
+        plan = load_plan(source / "params.json", allow_supplement=True)
+        for trial in plan:
+            seed = trial["fixtureSeed"]
+            if seed in seeds:
+                raise ValueError(f"duplicate fixture seed {seed!r} in {seeds[seed]} and {source}")
+            seeds[seed] = source
+        log = source / "trials.jsonl"
+        if not log.is_file():
+            raise ValueError(f"missing trial log: {log}")
+        batches.append((source, plan, load_records(log)))
+    out.mkdir(parents=True, exist_ok=True)
+    return final(batches, out, combined=True)
+
+
+def main(argv):
+    command, *args = argv
+    if command == "--final-combined":
+        return final_combined(args)
+    plan_path, *args = args
+    plan = load_plan(plan_path, allow_supplement=command != "--final")
     if command == "--pending":
-        sys.exit(pending(plan, load_records(args[0])))
-    if command == "--final":
+        return pending(plan, load_records(args[0]))
+    if command in ("--final", "--final-supplement"):
         log = Path(args[0])
-        sys.exit(final(plan, load_records(log), log.parent))
+        return final([(log.parent, plan, load_records(log))], log.parent, supplement=command == "--final-supplement")
     if command == "--record":
         index, status, *paths = args
         print(json.dumps(record(plan[int(index)], status, paths[0] if paths else None, Path(plan_path).parent)))
-    else:
-        sys.exit(f"unknown command: {command}")
+        return 0
+    raise ValueError(f"unknown command: {command}")
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (ValueError, OSError) as error:
+        sys.exit(str(error))

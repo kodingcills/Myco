@@ -366,7 +366,8 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   separately.
 
 The driver applies the host and seed gates. The operator also watches conversion failures
-in `trials.jsonl`. If the fixture timeout recurs, stop at a trial boundary, retain the run
+in `trials.jsonl`. The normal trial watchdog is 2,400 seconds. If the fixture timeout recurs,
+stop at a trial boundary, retain the run
 directory, and report the failure before resuming. The sweep v2 stop was recorded by the
 operator in `progress.log`.
 
@@ -393,6 +394,27 @@ driver runs `--final` automatically and saves its output to `summary.txt`. The s
 rebuilds the summary and ledger from existing artifacts. Keep the output directory and its
 `runs/` tree together for replay. Each live trial has a 900-second watchdog.
 
+Use a supplemental batch when a group needs more eligible trials. Give each batch a distinct
+output directory basename using letters, digits, hyphens or underscores. The basename names
+its fixture seeds. Resume with the same directory and group selection.
+
+```bash
+scripts/m1-corrupt-suite.sh /tmp/myco-evals/supplement-01 --groups dropped-save:3,kill+recovery:1
+python3 scripts/m1-corrupt-suite-record.py --final-combined --out /tmp/myco-evals/combined \
+  /tmp/m1-014/corrupted /tmp/myco-evals/supplement-01
+```
+
+The four corruption modes are valid group names. Use `kill+recovery` or
+`invalid-target+recovery` for the two recovery groups. The supplemental driver audits its
+recorded batch and leaves the six-group coverage decision to `--final-combined`.
+
+The host-only combined audit reads each directory's `params.json`, `trials.jsonl` and saved
+traces. It refuses duplicate fixture seeds across the manifests and checks at least three
+eligible verdicts per group and at least ten in total. False successes, unproven verified
+claims, fixture mismatches and unaccounted ledger rows fail the audit. The output directory
+receives `summary.json` and `ledger.jsonl`. Ineligible records stay visible in both artifacts.
+The supplemental run and new Calc timing instrumentation are **UNVERIFIED** on a real guest.
+
 | Mode | Injection |
 |---|---|
 | `kill` | Terminate `soffice.bin` after the edit and before save. The audited path waits for the kill acknowledgement. Recovery can relaunch Calc and resume the edit. |
@@ -409,7 +431,7 @@ A recovery trial needs evidence that the fault landed and the ladder ran to coun
 
 | Driver exit | Meaning |
 |---|---|
-| 0 | Three eligible verdicts in each of the six class and recovery groups, with zero false successes, unproven verified claims, and unaccounted ledger rows. |
+| 0 | Full suite passed all coverage and evidence gates, or the supplemental batch recorded its manifest and passed its evidence checks. |
 | 1 | Driver or manifest error. |
 | 3 / 4 / 6 | Paused for loss of AC power, one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |

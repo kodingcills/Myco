@@ -38,7 +38,12 @@ import { type FixtureFingerprint, fixtureFingerprint, generateFixture } from "..
 import { type CalcRecordEditParams, type GroundTruth, groundTruth } from "../tasks/intent.js";
 import { unoVerifierOverAgent } from "../verify/uno-verifier.js";
 import type { AgentClient } from "../win/agent-client.js";
-import { unoModified, unoString, WindowsCalcAdapter } from "../win/calc-adapter.js";
+import {
+  type CalcTimings,
+  unoModified,
+  unoString,
+  WindowsCalcAdapter,
+} from "../win/calc-adapter.js";
 import {
   cleanupTrialGuest,
   describeGuestHealth,
@@ -110,8 +115,7 @@ export interface TrialOptions {
  * Deadline for the guest-side fixture `.xlsx` to appear (M1-013 decision, approved
  * 2026-11-21). A cold headless convert right after a reset was measured at 30.8 s and
  * once at 169.4 s, so the earlier 60 s converter default could mark a healthy trial
- * uncertain. It stays inside the sweep's 600 s per-trial watchdog. Each agent RPC keeps
- * its own timeout; this bounds only the arrival poll.
+ * uncertain. Each agent RPC keeps its own timeout; this bounds only the arrival poll.
  */
 export const FIXTURE_CONVERT_DEADLINE_MS = 240_000;
 
@@ -126,6 +130,8 @@ export interface TrialReport {
   cleanup: GuestCleanupResult;
   /** How long the guest-side fixture convert took, against its deadline; null if never attempted. */
   fixtureConvert: ConvertTiming | null;
+  /** Calc readiness and UI helper attempts, including recovery attempts. */
+  timings: CalcTimings;
   /** Identity of the fixture bytes this trial uploaded (M1-013 sweep seed check). */
   fixture: FixtureFingerprint;
   corruption?: CorruptionAudit;
@@ -229,6 +235,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     xlsxPath: outcome.xlsxPath,
     cleanup,
     fixtureConvert: converter.lastTiming,
+    timings: adapter.timings,
     fixture: fixtureFingerprint(fixture),
     corruption,
   };
