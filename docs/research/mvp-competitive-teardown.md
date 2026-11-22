@@ -359,8 +359,8 @@ Misses the Absent Row" (`OSW2`).
 
 ## 2.6 Cross-check against the M2 research teardown (finding m2-01)
 
-Written in a separate workstream, on different days, as a different reading pass over
-the same primary pages, against the same claim. m2-01 read four product lines this
+Written in a separate workstream, as a different reading pass over the same primary
+pages, against the same claim. m2-01 read four product lines this
 document does not cover (Anthropic computer use, OpenAI computer use/Operator, UiPath,
 heyclicky); this document read one control m2-01 does not (screenshot-only). Simular
 Agent S is not in that complement: m2-01 §7.3 treats it and Sai as one product line, and

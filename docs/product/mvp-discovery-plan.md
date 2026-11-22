@@ -184,9 +184,10 @@ pre-declared decision rule. No proof expands into a product.
     seeds; a 0-false-success claim needs ≥30 refutable trials. The 10-run "≥90%" form
     declared here first was underpowered — at 0 false successes in 10 trials the
     failure-rate upper bound is 27.8% — and is withdrawn.
-  - Fail if: the setup cannot reach 15 min on a developer machine, or the HCU+shell
-    arm also gets 0 false successes **and** a comparable time — then A's only
-    remaining value is the durable artifact, and the wedge moves to B.
+  - Fail if: the setup cannot reach 15 min on a developer machine, or — at the
+    pre-registered sample size (≥30 refutable pairs; `mvd-preregistration.md` §4.1
+    row 3) — the HCU+shell arm also gets 0 false successes **and** a comparable time.
+    Then A's only remaining value is the durable artifact, and the wedge moves to B.
 - **Kill:** if the verdict requires Foundry's oracle to read the app's private
   files in a way a normal developer could not, the test is not portable; record it.
 
@@ -196,9 +197,11 @@ pre-declared decision rule. No proof expands into a product.
   surface with a real persisted oracle. First candidate is LibreOffice Calc with the
   existing UNO/file verifier; the second is chosen only if a business app can be
   driven locally without an account.
-- **Decision rule:** over 10 trials with ≥3 interrupted, 0 false successes, 0 silent
-  duplicates, and either `verified` or `uncertain` afterwards. Median cost per
-  operation recorded.
+- **Decision rule (superseded by `mvd-preregistration.md` §4.3 for any rate):** a
+  demonstration over 10 trials with ≥3 interrupted, 0 false successes, 0 silent
+  duplicates, and either `verified` or `uncertain` afterwards; median cost per
+  operation recorded. Any "0 silent duplicates / 0 silent losses" *claim* needs ≥30
+  interrupted trials (0/30 ⇒ upper bound 11.4%), not 10.
 - **Kill:** if every candidate needs an account or a vendor API, B is documented as
   unproven on this host — not asserted.
 

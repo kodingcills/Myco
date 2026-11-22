@@ -198,9 +198,10 @@ excluded from Discovery evidence.
     UUID-vs-`instance_id` spec contradiction). Adopted m2-01's billing point in its own
     hedge (Orgo bills machine-hours, Sai credits), so verification is free *if the
     customer writes it* — which is precisely why the `hcu+shell` arm is the decisive one.
-  - `docs/product/mvp-discovery-plan.md`: §2 now cites the nine-product finding as
-    independent confirmation; §4's underpowered 10-run rule is explicitly withdrawn
-    in favour of `mvd-preregistration.md` §1/§4 (already merged); §6's second app is
+  - `docs/product/mvp-discovery-plan.md`: §2 now cites m2-01's eight product lines
+    (nine entries, Agent S and Sai one line per §7.3) as independent confirmation;
+    §4-A's underpowered 10-run rule is withdrawn and §4-B's 10-trial rule is
+    retargeted to `mvd-preregistration.md` §4.3 (≥30 interrupted trials); §6's second app is
     LibreOffice Writer per m2-03; §7 gains m2-04 (one demonstration cannot identify a
     loop) and m2-05 (~21 s is the default reset, not 8.3 s) as evidence that would
     overturn C and any trial-heavy budget.
