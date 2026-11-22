@@ -1,12 +1,11 @@
-import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { zipSync } from "fflate";
 import type { ResultRecord } from "../src/data/types.ts";
-import { boot, checkOffline, screenshotDir, waitForRun } from "./support.ts";
+import { boot, checkOffline, waitForRun } from "./support.ts";
 
-test("a viewer-only screenshot hands off from loading to preview to full image", async ({
+test("screenshots hand off from preview to full and reuse the cached image on reselect", async ({
   page,
-}) => {
+}, testInfo) => {
   const offline = checkOffline(page);
   await page.addInitScript(() => {
     // Gate delivery of actual image worker results to make both handoffs deterministic.
@@ -74,11 +73,24 @@ test("a viewer-only screenshot hands off from loading to preview to full image",
         stateVersionBefore: 0,
         stateVersionAfter: 1,
       },
+      {
+        step: 1,
+        action: { kind: "type", text: "Second screenshot" },
+        preconditionResults: [],
+        postconditionResults: [],
+        stateVersionBefore: 1,
+        stateVersionAfter: 2,
+      },
     ],
   };
   const trace = [
     { type: "run-start", runId: result.runId, taskId: result.taskId, startedAt: result.startedAt },
-    { type: "action", step: 0, timestamp: result.startedAt, action: result.steps[0]!.action },
+    ...result.steps.map(({ step, action }) => ({
+      type: "action",
+      step,
+      timestamp: result.startedAt,
+      action,
+    })),
   ]
     .map((entry) => JSON.stringify(entry))
     .join("\n");
@@ -94,6 +106,8 @@ test("a viewer-only screenshot hands off from loading to preview to full image",
           "trace.jsonl": Buffer.from(trace),
           "artifacts/viewer-test.png": Buffer.from(png, "base64"),
           "artifacts/viewer-test-meta.json": Buffer.from('{"step":0}'),
+          "artifacts/viewer-second.png": Buffer.from(png, "base64"),
+          "artifacts/viewer-second-meta.json": Buffer.from('{"step":1}'),
         }),
       ),
     });
@@ -116,14 +130,14 @@ test("a viewer-only screenshot hands off from loading to preview to full image",
     inspector.getByRole("button", { name: "Open source artifacts/viewer-test-meta.json#/step" }),
   ).toBeVisible();
   await page.screenshot({
-    path: join(screenshotDir, "viewer-test-screenshot-loading-1440.png"),
+    path: testInfo.outputPath("viewer-test-screenshot-loading-1440.png"),
     animations: "disabled",
   });
   await release("image/webp");
   await expect(image).toHaveAttribute("data-image-size", "preview");
   await expect.poll(sized).toBe(96);
   await page.screenshot({
-    path: join(screenshotDir, "viewer-test-screenshot-preview-1440.png"),
+    path: testInfo.outputPath("viewer-test-screenshot-preview-1440.png"),
     animations: "disabled",
   });
 
@@ -134,7 +148,7 @@ test("a viewer-only screenshot hands off from loading to preview to full image",
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "Step screenshot" })).toBeVisible();
   await page.screenshot({
-    path: join(screenshotDir, "viewer-test-screenshot-full-1440.png"),
+    path: testInfo.outputPath("viewer-test-screenshot-full-1440.png"),
     animations: "disabled",
   });
   await page.keyboard.press("Escape");
@@ -143,5 +157,16 @@ test("a viewer-only screenshot hands off from loading to preview to full image",
     "aria-valuetext",
     "#00",
   );
+  const firstFullURL = await image.getAttribute("src");
+  await page.keyboard.press("j");
+  await expect(page.getByRole("slider", { name: "Playhead" })).toHaveAttribute(
+    "aria-valuetext",
+    "#01",
+  );
+  await expect(image).toHaveAttribute("data-image-size", "full");
+  expect(await image.getAttribute("src")).not.toBe(firstFullURL);
+  await page.keyboard.press("k");
+  await expect(image).toHaveAttribute("data-image-size", "full");
+  await expect(image).toHaveAttribute("src", firstFullURL!);
   offline();
 });

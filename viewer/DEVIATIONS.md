@@ -12,10 +12,8 @@ merge of PR #69. The approval covers, as written in this file at the time of app
    Failed · False success);
 3. the eight decisions listed under "Open decisions for outer loop" below, as currently written.
 
-**Not covered, still outstanding (do not block merge):** a Chrome Stable spot-check by Tiffany
-(Chrome Stable could not be run in the build environment; everything was measured on Playwright's
-headless Chromium), and screenshot latency and memory with 1,000 screenshots (tracked as MVD-008
-in `docs/backlog/mvp-discovery.md`).
+**Not covered, still outstanding (do not block merge):** see the MVD-008 / TIF-63 measurements
+and Tiffany’s pending spot-check in [PERF.md](PERF.md#screenshots-select-latency-and-memory-at-1000-screenshots-mvd-008).
 
 # Viewer Stage 2 decisions
 
@@ -63,7 +61,7 @@ in `docs/backlog/mvp-discovery.md`).
 - Full J3 screenshot experience on a real run. The viewer-only test verifies the loading, preview, full-image and lightbox states. It leaves the real evidence unchanged.
 - The 150 ms final Verdict Bar limit at 10,000 steps now passes on the measured machine (122.7 / 126.0 / 136.4 ms median / p95 / max, N=20; [PERF.md](PERF.md)). Chrome Stable has not been run, and hosted CI checks the 10,000-step median against runner-specific caps. The strict local flag enforces the 150 ms maximum at both sizes.
 - Scrub input to playhead and selected-row rendering. This gate uses its own input-to-render measurement. The adjacent rAF interval is reported separately.
-- Screenshot budgets. Cached and cold full-image latency and memory at 1,000 screenshots remain unmeasured.
+- Screenshot budgets. See the measured limits and outstanding misses in [PERF.md](PERF.md#screenshots-select-latency-and-memory-at-1000-screenshots-mvd-008).
 - Chrome Stable. Repeat on the specified M-series Chrome Stable setup.
 - §2.6 CheckRow and §5 color conflict. Passing checks still use their check-level Verified badge. Outer-loop interpretation is pending.
 - Written sign-off: given 2026-11-21 22:39 ET for the layout tokens, the two beyond-§6.2 verdict rules and the eight open decisions (see Sign-off record).

@@ -112,7 +112,7 @@ Further headroom, if the 10–14 ms margin proves too thin on other hardware: sp
 
 - Chrome Stable (the browser named in the spec) could not run here, so the numbers are for Playwright Chromium headless shell 159.
 - One machine, one sitting, N = 20. The nearest-rank p95 at N = 20 is the second-largest sample.
-- Large manifested inputs beyond the generated 33.6 MB run, cached and cold full-image screenshot latency, memory at 1,000 screenshots, and responsiveness throughout the full indexing window were not measured.
+- The verdict timing above covered manifested inputs up to 33.6 MB. The screenshot benchmark below uses a larger manifested input. Responsiveness throughout the full indexing window remains unmeasured.
 
 ## Timing definitions
 
@@ -120,4 +120,62 @@ Further headroom, if the 10–14 ms margin proves too thin on other hardware: sp
 - Load marks begin on the app's drop event. The harness preloads local file handles outside the timer, then dispatches a drop with those same handles. Final verdict timing ends two animation frames after the committed terminal verdict (`data-verdict-final="true"`). First Why rows and indexed and usable use the same render proxy; the latter also requires the worker's completion to be reflected in the DOM. The kill record has zero steps, so its indexed measurement uses the empty Why list.
 - Scrub uses actual Playwright mouse drags in Why, approximately 2% to 99.9% of the timeline. A capture listener marks pointer input. The Inspector commit mark requires changed slider selection and matching Inspector text. The next animation frame is a conservative render proxy for the playhead and selected row. Neither is a compositor presentation timestamp.
 - Keyboard uses physical Playwright key events and measures from `J` to the next frame after the matching Inspector and playhead update.
-- The fixture set has no step-linked screenshots, so screenshot latency and memory budgets are not covered.
+- The verdict fixtures have no step-linked screenshots. The benchmark below uses a dedicated screenshot run.
+
+## Screenshots: select latency and memory at 1,000 screenshots (MVD-008)
+
+Apple M4 Pro (14 cores, 24 GiB), macOS 27.0 (26A428), arm64. Playwright 1.65.1 Chromium headless shell 159.0.8154.6 (revision 1255), offline at 1440×900. Both builds use Playwright’s default headless launch flags, including `--headless`, `--no-sandbox`, `--disable-background-networking` and `--enable-unsafe-swiftshader`, with no custom flags and no `--single-process`. The benchmark JSON records the exact command line.
+
+The deterministic folder contains 1,000 distinct 1440×900 synthetic desktop PNGs (270,637–271,405 bytes each, 271,054,803 PNG bytes, 274,011,763 total file bytes). The generator extends the verified fixture’s result, trace and ledger records and emits a SHA-256 manifest. Each step links its own PNG through a §6.4 screenshot event. The harness asserted the terminal `Verified` verdict and 1,000 steps before every measurement.
+
+Each keyboard pair uses a fresh page. It selects a previously unopened full image with J, moves away with J, then reselects it with K. The scrub uses one held mouse drag across the filmstrip, pausing each move for its distinct target image. Each timing series discards its first sample. Capture listeners mark the physical Playwright key or pointer event. Preview time ends at the first rAF with a visible decoded 96 px image. The first-frame count is relative to the first rAF with the new selection committed. Full-image time ends one rAF after the correct Inspector image is in the viewport and its own `img.decode()` has resolved at 1440×900. These frame boundaries are render proxies. The full-image budget compares the maximum and p95 is nearest rank. Preview statistics include only selections where a preview appeared.
+
+Memory uses a separate fresh browser, with sampling about every 200 ms from opening the manifested folder through 320 distinct keyboard-selected full images, 181 mouse moves across the scrubber end to end, and a 2 s settle. Both benchmark phases run serially. Only the launched browser’s CDP-reported PIDs are passed to `ps`. MB is decimal.
+
+Latency entries are **min / median / p95 / max (N)**.
+
+| Metric | Before | After | §8 after |
+| --- | ---: | ---: | --- |
+| Cold keyboard select, full (ms) | 54.7 / 64.3 / 69.3 / 70.4 (20) | 59.0 / 63.2 / 69.0 / 69.1 (20) | Pass ≤ 250 ms |
+| Cold keyboard select, preview (ms) | 4.7 / 9.9 / 15.5 / 16.2 (20), 20/20 first frame | 4.9 / 11.6 / 16.8 / 17.8 (20), 20/20 first frame | Pass |
+| Cached keyboard reselect, full (ms) | 63.8 / 65.5 / 66.4 / 67.0 (20) | 46.8 / 48.9 / 49.8 / 49.9 (20) | Pass ≤ 100 ms |
+| Cached keyboard reselect, preview (ms) | 14.2 / 15.6 / 16.4 / 16.5 (20), 20/20 first frame | — (0), 0/20 first frame | Full image first |
+| Cold filmstrip scrub, full (ms) | 49.6 / 51.0 / 65.5 / 67.9 (20) | 48.5 / 50.1 / 51.5 / 51.7 (20) | Pass ≤ 250 ms |
+| Cold filmstrip scrub, preview (ms) | 15.0 / 15.0 / 15.0 / 15.0 (1), 0/20 first frame | — (0), 0/20 first frame | Miss |
+| Open screen RSS (MB) | 324.8 | 325.8 | — |
+| Loaded RSS, before selecting a full image (MB) | 541.1 | 547.7 | — |
+| Browsing peak RSS (MB) | 1,696.5 | 1,370.5 | — |
+| Peak total process RSS (MB) | 1,871.3 (76 samples) | 1,575.5 (76 samples) | Miss ≤ 400 MB |
+| Renderer / browser / GPU / network RSS at total peak (MB) | 1,579.6 / 163.8 / 86.1 / 41.7 | 1,310.5 / 128.5 / 94.8 / 41.7 | — |
+| Settled RSS, 2 s after scrub (MB) | 1,595.7 | 1,561.6 | — |
+| Peak / settled page JS heap (MB) | 42.4 / 27.6 | 41.9 / 34.2 | — |
+| Peak / settled DOM nodes | 30,622 / 18,102 | 37,756 / 22,879 | — |
+| Peak / settled tracked worker ImageBitmaps | 65 / 64 | 1 / 0 | — |
+| Peak / settled full image URLs | 1 / 1 | 13 / 12 | ≤ 64 cache entries |
+| Peak / settled thumbnail URLs | 35 / 34 | 35 / 34 | Visible consumers only |
+
+The image worker sends the original full PNG or WebP to the browser decoder and requests a resized bitmap for the thumbnail. The Inspector and lightbox reuse the decoded image’s URL. The Viewer retains up to 64 full image entries with a 64 MiB decoded-pixel estimate cap, which fits 12 of these 1440×900 frames plus a transient in-flight image. The worker retains zero full bitmaps after browsing, down from 64. The selected preview reads through the shared thumbnail cache on the first render and moves ahead of background thumbnail jobs if still queued. The regression test verifies the preview-to-full handoff, lightbox, and URL reuse.
+
+Thumbnail requests come from mounted virtual-list rows, sampled slots on the visible filmstrip axis, and the selected Inspector. The Viewer releases a thumbnail URL when its last consumer unmounts. There is no extra thumbnail prefetch beyond the visible views, so it stays within the ±20 allowance. A scrub can land outside the ready thumbnails. Those cold targets missed the first-frame preview criterion. Cached reselects went straight to the full image.
+
+Exact commands from the repository root (the baseline HTML was built at `e8f70b2` before editing and copied to `/private/tmp/mvd-008/before.html`):
+
+```sh
+pnpm install --offline --frozen-lockfile
+mkdir -p /private/tmp/mvd-008
+node viewer/scripts/gen-screenshot-run.mjs /private/tmp/mvd-008/run
+pnpm --filter viewer build
+export PLAYWRIGHT_BROWSERS_PATH=/private/tmp/myco-stage4-browsers
+cd viewer
+node scripts/screenshot-bench.mjs /private/tmp/mvd-008/before.html /private/tmp/mvd-008/run 20 > /private/tmp/mvd-008/before-final.json
+node scripts/screenshot-bench.mjs dist/myco-viewer.html /private/tmp/mvd-008/run 20 > /private/tmp/mvd-008/after-final.json
+```
+
+The generator takes a new output directory outside the repository. It uses fixed seed `0x4d59434f`; no image artifacts are checked in. The benchmark JSON also emits the raw latency samples.
+
+RSS sums the browser, renderer, GPU and network utility processes listed by CDP. Shared pages can be counted by multiple PIDs, and RSS includes an idle browser baseline. It excludes Node, external processes, swapped/compressed pages and any GPU memory outside those processes. The sampled maximum can miss shorter spikes. `JSHeapUsedSize` and `Memory.getDOMCounters` describe the page target and do not account for worker/V8 or native image allocations. The harness wraps image URL creation/revocation and the image worker’s bitmap creation/close during the memory pass only. It counts app-owned resources. Chromium’s native decoder cache and actual residency of decoded `HTMLImageElement` pixels are opaque to the harness. These results are from one before/after pair on one machine (start load averages 7.23 / 7.83 / 7.89), so treat small timing changes as run-to-run noise.
+
+### Chrome Stable spot-check (Tiffany; NOT run by the build agent)
+
+- Result: _pending: Tiffany to fill in. Build environment could not launch Chrome Stable (SIGABRT); every number above is Playwright's headless Chromium._
+- Suggested steps: open `viewer/dist/myco-viewer.html` in Chrome Stable, open the verified fixture and a 10,000-step perf run, confirm the verdict appears within about a frame or two of drop, step/scrub feels instant, and note Chrome version/OS.
