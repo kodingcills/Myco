@@ -97,6 +97,12 @@ describe("baseline", () => {
     expect(isBaselineRow(evidence)).toBe(true);
     expect(rowKey(evidence)).toBe("hcu/0");
     expect(isBaselineRow({ ...evidence, subArm: "hcu+shell" })).toBe(false);
+    // A battery row is valid evidence. This is the assertion that would have
+    // caught `x.acPower === true`: without it, the swapped "no" case below
+    // passes under both the old and the new validator, so the schema change had
+    // no test that could fail.
+    expect(isBaselineRow({ ...evidence, acPower: false })).toBe(true);
+    expect(isBaselineRow({ ...evidence, acPower: "no" })).toBe(false);
   });
 
   // Guards against ignoring persisted evidence, driver preconditions, or budget attribution.
