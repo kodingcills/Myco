@@ -394,3 +394,30 @@ current merge rate.
 content-identity proof in place of a fresh PASS when the diff is provably
 unchanged, or (d) keep the rule and accept that docs PRs may take many attempts.
 Until told otherwise I will not repeat this deviation.
+
+## Verifier hazard: the worktree is shared, and I mutated it mid-review (2026-11-22)
+
+A verification of PR #112 returned REJECT claiming the PR contained **no `runtime/`
+changes at all** — that the feature and all three must-fixes were absent. That was
+false: `git show ed58525:runtime/crates/myco-rt-mcp/src/main.rs | grep -c read_root`
+returns 14, and every must-fix marker is present.
+
+Cause: **I reset a branch in the shared worktree while the verifier was reading it.**
+I ran `git checkout -B feat/create-progress origin/main` and `git reset --hard` to
+move unrelated work to its own branch; the verifier's working-tree reads then saw
+main's files, not the PR's. The verifier even reported "my initial diff reads were
+stale/cached views" — it noticed the inconsistency and drew the wrong conclusion
+from it.
+
+Rules adopted here:
+1. **Never mutate the worktree while a verifier is running.** Branch switches,
+   resets, rebases and stashes all change the files a verifier is reading.
+2. **Brief verifiers to use object reads** (`git show <sha>:<path>`,
+   `git diff <a> <b>`, `git grep <pat> <sha> -- path`) rather than the working
+   tree. Those cannot be disturbed by another process.
+3. **A REJECT that says "the feature is absent" is a claim to check against the
+   object store before acting on it.** In this case the correct response was to
+   verify the SHA myself, not to re-implement three fixes that already existed.
+
+Cost: one wasted verification round and a near-miss where I could have "fixed"
+code that was already correct.
