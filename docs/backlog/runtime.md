@@ -385,3 +385,27 @@ stop being reviewable.
   either side fails somewhere deterministic and VM-free.
 - Ideally the two share one source of truth; if they cannot (crate dependency
   direction), the pair of tests is the contract.
+
+## RT-023 — `runtime/` is not `cargo fmt` clean, and nothing enforces it
+
+**Found by:** the verifier of #195, as a non-blocking note. Measured, not assumed:
+`cargo fmt -p myco-rt-backend-qemu -- --check` reports **59 diffs on `origin/main`**
+and the same 59 on #195's branch — so this is pre-existing and repo-wide, not
+introduced by that PR.
+
+**Why it matters beyond tidiness:** there is no `runtime/` CI job (see the standing
+gap above), so nothing runs `fmt --check` or `clippy` on this workspace. Formatting
+therefore drifts unopposed, and every future PR inherits a noisy diff baseline: a
+reviewer cannot tell formatting churn from a real change, and `cargo fmt` as a
+pre-commit habit would rewrite unrelated regions.
+
+**Not fixed here** because a repo-wide reformat is exactly the kind of change that
+buries a real diff, and it should be its own PR with no logic change in it.
+
+**Acceptance:**
+- One PR running `cargo fmt --all` across `runtime/` with **no** logic change, so it
+  can be reviewed as a no-op.
+- A `runtime/` CI job that runs `cargo fmt -- --check` and `cargo clippy`, so the
+  baseline cannot drift again. This is the same missing job as the standing gap
+  above; one job closes both.
+- Until then: do not treat a fmt-only diff in `runtime/` as a review finding.
