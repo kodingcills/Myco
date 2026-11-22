@@ -145,6 +145,36 @@ Every action returns a three-way outcome: `delivered_verified`, `delivered_unver
   }
   ```
 
+##### Targetless variants (RT-008 / Discovery S0)
+
+Some toolkits publish **no** accessibility nodes — Tk registers zero AT-SPI nodes
+(RT-003) — so an app's entry field can hold focus with no ref to aim at. `typeText`
+requires a `target` and `keyPress` only sends key names, which left no way to type a
+single character into such an app. Two variants close that:
+
+| Kind | Payload | Use |
+|---|---|---|
+| `typeTextGlobal` | `{"text": "..."}` | Type into the focused window via XTEST. |
+| `clickAt` | `{"x": N, "y": N}` | Click a raw guest screen coordinate. |
+
+```json
+{"name": "act", "arguments": {"session_id": "df-s01-run-1",
+  "action": {"kind": "typeTextGlobal", "text": "buy milk"}}}
+```
+```json
+{"name": "act", "arguments": {"session_id": "df-s01-run-1",
+  "action": {"kind": "clickAt", "x": 320, "y": 240}}}
+```
+
+- **Neither takes a ref**, so neither is bound to a state version and neither can be
+  refused as `stale_ref`. That is deliberate: they address focus or a screen point,
+  not an element from an observation.
+- Both report **`delivered_unverified`**. The reason they exist is that the toolkit
+  exposes nothing to read back, so a verification claim would be untrue. Confirm by
+  reading app state — the Tk app publishes its widget contents to a file.
+- Coordinates are guest screen coordinates; negative values are refused.
+- Both are in `Permissions::default()`'s allowed set.
+
 #### 4. `evidence` — Fetch Run Artifacts
 ```json
 {
