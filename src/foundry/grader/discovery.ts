@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { armRegistry, discoveryPlanner } from "../baseline/registry.ts";
 import { watchesPersistencePath } from "../guard.ts";
 import { scoreTrial, type TrialInput } from "../oracles/blind.ts";
+import { oracleForApp } from "../oracles/state.ts";
 import { findTask, taskFixture } from "../tasks/bank.ts";
 import type { GuardTraceEvent } from "../types.ts";
 
@@ -163,8 +164,30 @@ export function scoreDiscoveryTrial(
 
   const fixture = taskFixture(task);
   const audit = reconcileAudit(evidence, input.trace, new Set(fixture.persistenceFiles));
-  if (!audit)
-    return { ...identity, status: "excluded" as const, decisionEligible: false, reason: "audit" };
+  if (!audit) {
+    if (armId !== "hcu+shell")
+      return { ...identity, status: "excluded" as const, decisionEligible: false, reason: "audit" };
+    const reasons = ["Tool-call audit is incomplete or does not match the trace"];
+    return {
+      ...identity,
+      status: "scored" as const,
+      decisionEligible: false,
+      reason: "audit",
+      storeReads: null,
+      result: {
+        fixtureId: fixture.fixtureId,
+        fixtureVersion: fixture.version,
+        oracleVersion: oracleForApp(fixture.app).version,
+        faultVersion: input.faultVersion,
+        verdict: "uncertain" as const,
+        falseSuccess: false,
+        stateChecks: [],
+        screenClaims: [],
+        traceGuard: { status: "unknown" as const, reasons },
+        reasons,
+      },
+    };
+  }
 
   const result = scoreTrial({
     ...input,

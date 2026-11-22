@@ -151,8 +151,9 @@ describe("Discovery evidence grading", () => {
       ],
     ] satisfies Input["trace"][]) {
       expect(scoreDiscoveryTrial(evidence, { ...input, trace }, settings)).toMatchObject({
-        status: "excluded",
+        status: "scored",
         reason: "audit",
+        result: { verdict: "uncertain", falseSuccess: false },
       });
     }
     expect(parseGuardTrace(serialiseGuardTrace(input.trace))).toEqual(input.trace);
@@ -213,8 +214,13 @@ describe("Discovery evidence grading", () => {
     ];
     for (const changes of invalid) {
       const trial = scoreDiscoveryTrial({ ...evidence, ...changes }, input, settings);
-      expect(trial).toMatchObject({ status: "excluded", decisionEligible: false, reason: "audit" });
-      expect(trial).not.toHaveProperty("result");
+      expect(trial).toMatchObject({
+        status: "scored",
+        decisionEligible: false,
+        reason: "audit",
+        storeReads: null,
+        result: { verdict: "uncertain", falseSuccess: false },
+      });
     }
   });
 
