@@ -158,6 +158,12 @@ describe("baseline", () => {
     });
   });
   // Guards against invalid budget, cost, version, and colliding sub-arm keys.
+  it("accepts a battery row as valid evidence", () => {
+    // acPower is recorded, never enforced: reverting the schema to
+    // `acPower === true` would silently invalidate every battery row.
+    expect(isBaselineRow({ ...row, acPower: false })).toBe(true);
+  });
+
   it("validates row semantics", () => {
     expect(isBaselineRow(row)).toBe(true);
     for (const bad of [
