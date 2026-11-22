@@ -18,7 +18,12 @@ import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
 import { type CalcRecordEditParams, groundTruth } from "../src/tasks/intent.ts";
 import { AgentClient } from "../src/win/agent-client.ts";
-import { unoModified, unoString } from "../src/win/calc-adapter.ts";
+import {
+  CALC_HELPER_TIMEOUT_MS,
+  CALC_UNO_READY_TIMEOUT_MS,
+  unoModified,
+  unoString,
+} from "../src/win/calc-adapter.ts";
 import { FakeAgent } from "./fake/agent.ts";
 
 const PARAMS: CalcRecordEditParams = {
@@ -81,23 +86,59 @@ describe("uno_eval result normalization (deployed-agent shape)", () => {
     await expect(adapter.observe()).rejects.toMatchObject({ name: "AgentOpError" });
   });
 
-  it("adapter act(keyPress ctrl+s) issues launch + polls the helper result", async () => {
-    // read_file returns the helper result JSON; the adapter must parse it.
-    const { client, agent } = clientWith({
-      unoBehavior: () => "",
-      csvBytes: Buffer.from(JSON.stringify({ ok: true })),
-    });
-    const { WindowsCalcAdapter } = await import("../src/win/calc-adapter.ts");
-    const adapter = new WindowsCalcAdapter({
-      client,
-      xlsxPath: "C:\\x\\f.xlsx",
-      unoSocket: "2002",
-      observedCells: ["B4"],
-    });
-    const result = await adapter.act({ kind: "keyPress", keys: "ctrl+s" });
-    expect(result.outcome).toBe("delivered_unverified");
-    const launches = agent.requests.filter((r) => r.op === "launch");
-    expect(launches.length).toBeGreaterThan(0);
+  it.each([
+    {
+      helper: { ok: true, elapsedMs: 1234 },
+      elapsedMs: 1234,
+      outcome: "ok",
+      act: "delivered_unverified",
+    },
+    {
+      helper: { ok: false, elapsedMs: 56, error: "unfocused" },
+      elapsedMs: 56,
+      outcome: "error",
+      act: "failed",
+    },
+    {
+      helper: { ok: true, elapsedMs: "1234" },
+      elapsedMs: null,
+      outcome: "ok",
+      act: "delivered_unverified",
+    },
+    { helper: { ok: true }, elapsedMs: null, outcome: "ok", act: "delivered_unverified" },
+  ])(
+    "records timing from the helper result $helper",
+    async ({ helper, elapsedMs, outcome, act }) => {
+      const { client, agent } = clientWith({
+        unoBehavior: () => "",
+        helperResult: helper,
+      });
+      const { WindowsCalcAdapter } = await import("../src/win/calc-adapter.ts");
+      const adapter = new WindowsCalcAdapter({
+        client,
+        xlsxPath: "C:\\x\\f.xlsx",
+        unoSocket: "2002",
+        observedCells: ["B4"],
+      });
+      const result = await adapter.act({ kind: "keyPress", keys: "ctrl+s" });
+      expect(result.outcome).toBe(act);
+      const launches = agent.requests.filter((r) => r.op === "launch");
+      expect(launches.length).toBeGreaterThan(0);
+      expect(adapter.timings.helpers).toEqual([
+        {
+          op: "save",
+          elapsedMs,
+          outcome,
+          deadlineMs: CALC_HELPER_TIMEOUT_MS,
+          durationMs: expect.any(Number),
+        },
+      ]);
+    },
+  );
+
+  it("gives the cold Calc helper and UNO readiness polls 90 seconds each", () => {
+    expect(CALC_HELPER_TIMEOUT_MS).toBe(90_000);
+    expect(CALC_UNO_READY_TIMEOUT_MS).toBe(90_000);
   });
 });
 
@@ -258,6 +299,16 @@ describe("trial evidence artifacts", () => {
     expect(report.verdict.status).toBe("verified");
     expect(report.completed).toBe(true);
     expect(report.xlsxPath).toContain("fixture.xlsx");
+    expect(report.timings.helpers.map(({ op }) => op)).toEqual([
+      "focus",
+      "nametype",
+      "nametype",
+      "nametype",
+      "save",
+    ]);
+    expect(report.timings.unoReady).toEqual([
+      { durationMs: expect.any(Number), deadlineMs: CALC_UNO_READY_TIMEOUT_MS, outcome: "ready" },
+    ]);
 
     const trace = readFileSync(join(runsDir, report.runId, "trace.jsonl"), "utf8");
     const lines = trace.split("\n").filter((l) => l !== "");
@@ -386,6 +437,68 @@ describe("live corruption modes over the fake agent", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([
+    { recovery: false, acknowledged: true },
+    { recovery: true, acknowledged: true },
+    { recovery: false, acknowledged: false },
+    { recovery: true, acknowledged: false },
+  ])(
+    "requests the kill after Set and before save (recovery=$recovery, acknowledged=$acknowledged)",
+    async ({ recovery, acknowledged }) => {
+      const gt = groundTruth(PARAMS);
+      const { client, agent } = clientWith({
+        desktopOverlay: true,
+        killCalcDesktop: acknowledged,
+        unoBehavior: () => gt.previousValue,
+        csvBytes: Buffer.from(generateFixture(PARAMS.fixtureSeed).csv),
+        csvBytesAfterSave: csvWithTarget(PARAMS, gt),
+      });
+      vi.useFakeTimers();
+      try {
+        const pending = runTrial({
+          client,
+          params: PARAMS,
+          unoSocket: "2002",
+          runsDir: mkdtempSync(join(tmpdir(), "myco-kill-order-")),
+          killAfterStep: 3,
+          auditKill: true,
+          recovery,
+        });
+        await vi.runAllTimersAsync();
+        const report = await pending;
+        const operations = agent.requests.flatMap((request) => {
+          if (request.op === "kill" && request.params.image_name === "soffice.bin") return ["kill"];
+          if (request.op !== "launch") return [];
+          const argv = request.params.argv as string[];
+          if (argv.some((arg) => arg.startsWith("--accept="))) return ["launch-calc"];
+          if (argv.some((arg) => arg.includes('"op":"save"'))) return ["ctrl+s"];
+          if (argv.some((arg) => arg.includes('"op":"nametype"') && arg.includes(gt.expectedValue)))
+            return ["set"];
+          return [];
+        });
+        const edit = operations.indexOf("set");
+        expect(edit).toBeGreaterThan(0);
+        expect(operations[edit + 1]).toBe("kill");
+        expect(operations.slice(edit + 2)).toEqual(
+          recovery && acknowledged ? ["kill", "launch-calc", "set", "ctrl+s", "kill"] : ["kill"],
+        );
+        expect(report.corruption?.applied).toBe(acknowledged);
+        if (!acknowledged) {
+          expect(report).toMatchObject({
+            completed: false,
+            guardFailure: { step: 2, predicateName: "act:setValue" },
+            corruption: { persistedValue: gt.previousValue, recoveryEvents: [] },
+          });
+          expect(report.guardFailure?.observed).toContain(
+            "agent did not report a terminated process",
+          );
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 function csvWithTarget(params: CalcRecordEditParams, gt: ReturnType<typeof groundTruth>): Buffer {

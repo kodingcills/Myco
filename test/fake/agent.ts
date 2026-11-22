@@ -18,6 +18,8 @@ export interface FakeAgentScript {
   csvBytes?: Buffer;
   /** Persisted CSV returned after the desktop has received a save. */
   csvBytesAfterSave?: Buffer;
+  /** JSON returned for a one-shot Calc helper result file. */
+  helperResult?: Record<string, unknown>;
   /** When set, read_file fails (persisted file unreadable). */
   readFileError?: boolean;
   /** When set, this op fails with OP_FAILED (fault injection). */
@@ -209,10 +211,11 @@ export class FakeAgent {
         // The deployed UIA helper writes `<script>.result.json`; the fake
         // models that write as an implicit side effect of read_file.
         if (path.endsWith(".result.json")) {
+          const result = JSON.stringify(this.script.helperResult ?? { ok: true });
           return {
             ok: true,
             id: request.id,
-            result: { data_b64: Buffer.from('{"ok": true}', "utf8").toString("base64") },
+            result: { data_b64: Buffer.from(result, "utf8").toString("base64") },
           };
         }
         const stored = this.files.get(path);

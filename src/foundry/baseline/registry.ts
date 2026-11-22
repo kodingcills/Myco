@@ -1,18 +1,27 @@
+export const discoveryPlanner = "claude-sonnet-5-5";
+
 export const armRegistry = [
   {
     id: "screenshot-only",
     channel: "screenshot-only",
-    plannerName: "unknown",
+    plannerName: discoveryPlanner,
     status: "not-run",
-    blocker: "Cua Driver C1 pixel arm needs coordinated VM time and a named planner",
+    blocker: "Cua Driver C1 pixel arm needs coordinated VM time",
   },
   {
     id: "hcu",
     channel: "gui",
-    plannerName: "unknown",
+    plannerName: discoveryPlanner,
+    status: "not-run",
+    blocker: "Microsoft Hybrid Computer Use GUI channel needs coordinated VM time",
+  },
+  {
+    id: "hcu+shell",
+    channel: "gui+shell",
+    plannerName: discoveryPlanner,
     status: "not-run",
     blocker:
-      "Microsoft Hybrid Computer Use GUI channel needs coordinated VM time and a named planner",
+      "Needs coordinated VM time, trusted live evidence ingestion, complete tool-call audits, and independently observed save snapshots",
   },
   {
     id: "orgo",

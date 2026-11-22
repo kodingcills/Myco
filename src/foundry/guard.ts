@@ -32,6 +32,7 @@ export function checkTrace(
   fixture: FixtureManifest,
   events: readonly GuardTraceEvent[],
   finalFiles: Readonly<Record<string, Uint8Array>>,
+  requireSavedBytes = false,
 ): TraceGuardResult {
   const watched = new Set(fixture.persistenceFiles);
   let launched = false;
@@ -50,8 +51,7 @@ export function checkTrace(
         actsAfterLastSave = 0;
         break;
       case "file-write":
-        if (watched.has(event.path) || watched.has(basename(event.path)))
-          directWrites.push(event.path);
+        if (watchesPersistencePath(watched, event.path)) directWrites.push(event.path);
         break;
       default:
         break;
@@ -67,12 +67,23 @@ export function checkTrace(
     };
   }
 
-  // A file is "changed" only when the trace shows it existed and its bytes differ at the end.
-  // Bytes that first appear in the final read are not a change we can attribute, so the guard
-  // does not claim to explain them — pass/fail still belongs to the state oracle.
+  if (
+    requireSavedBytes &&
+    !fixture.persistenceFiles.every((path) => lastSave?.[path] instanceof Uint8Array)
+  ) {
+    return { status: "unknown", reasons: ["missing complete observed save snapshot"] };
+  }
+
   const changed = fixture.persistenceFiles.filter(
     (path) => lastSave !== undefined && !sameBytes(finalFiles[path], lastSave[path]),
   );
+
+  if (requireSavedBytes && changed.length > 0) {
+    return {
+      status: "unreconciled-change",
+      reasons: [`${changed.join(", ")} differs from the last observed save`],
+    };
+  }
 
   if (changed.length === 0) return { status: "clean", reasons: [] };
 
@@ -92,9 +103,9 @@ export function checkTrace(
   return { status: "clean", reasons: [] };
 }
 
-function basename(path: string): string {
+export function watchesPersistencePath(watched: ReadonlySet<string>, path: string): boolean {
   const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return index === -1 ? path : path.slice(index + 1);
+  return watched.has(path) || watched.has(path.slice(index + 1));
 }
 
 /**
@@ -136,6 +147,16 @@ function decodeEvent(raw: unknown): GuardTraceEvent | null {
   switch (raw.type) {
     case "run-start":
       return { type: "run-start", timestamp: timestampOf(raw) };
+    case "tool-call":
+      if (
+        !("callId" in raw) ||
+        typeof raw.callId !== "string" ||
+        !raw.callId.trim() ||
+        !("via" in raw) ||
+        (raw.via !== "gui" && raw.via !== "file-io" && raw.via !== "shell-exec")
+      )
+        return null;
+      return { type: "tool-call", timestamp: timestampOf(raw), callId: raw.callId, via: raw.via };
     case "action": {
       if (!("step" in raw) || typeof raw.step !== "number" || !("action" in raw)) return null;
       const action = raw.action;
@@ -152,6 +173,7 @@ function decodeEvent(raw: unknown): GuardTraceEvent | null {
         type: "action",
         timestamp: timestampOf(raw),
         step: raw.step,
+        ...("callId" in raw && typeof raw.callId === "string" ? { callId: raw.callId } : {}),
         action: { kind: action.kind },
       };
     }

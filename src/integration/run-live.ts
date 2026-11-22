@@ -73,7 +73,8 @@ async function main(): Promise<void> {
 
   const corruption = LIVE_CORRUPTION_MODES.find((fault) => fault === mode);
   if (corruption) {
-    // Corrupted trial: kill soffice after the edit lands and before the save.
+    // Action 3 is Set (after Open and Locate). Dispatch the kill before its
+    // postcondition observation. Action 4 is Ctrl+S.
     // A wall-clock timer cannot do this reliably — launching Calc and making
     // it observable takes ~30 s, so a 12 s timer fires during launch and the
     // trial never executes a step (observed: steps: [], precondition

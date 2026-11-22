@@ -38,7 +38,12 @@ import { type FixtureFingerprint, fixtureFingerprint, generateFixture } from "..
 import { type CalcRecordEditParams, type GroundTruth, groundTruth } from "../tasks/intent.js";
 import { unoVerifierOverAgent } from "../verify/uno-verifier.js";
 import type { AgentClient } from "../win/agent-client.js";
-import { unoModified, unoString, WindowsCalcAdapter } from "../win/calc-adapter.js";
+import {
+  type CalcTimings,
+  unoModified,
+  unoString,
+  WindowsCalcAdapter,
+} from "../win/calc-adapter.js";
 import {
   cleanupTrialGuest,
   describeGuestHealth,
@@ -110,8 +115,7 @@ export interface TrialOptions {
  * Deadline for the guest-side fixture `.xlsx` to appear (M1-013 decision, approved
  * 2026-11-21). A cold headless convert right after a reset was measured at 30.8 s and
  * once at 169.4 s, so the earlier 60 s converter default could mark a healthy trial
- * uncertain. It stays inside the sweep's 600 s per-trial watchdog. Each agent RPC keeps
- * its own timeout; this bounds only the arrival poll.
+ * uncertain. Each agent RPC keeps its own timeout; this bounds only the arrival poll.
  */
 export const FIXTURE_CONVERT_DEADLINE_MS = 240_000;
 
@@ -126,6 +130,8 @@ export interface TrialReport {
   cleanup: GuestCleanupResult;
   /** How long the guest-side fixture convert took, against its deadline; null if never attempted. */
   fixtureConvert: ConvertTiming | null;
+  /** Calc readiness and UI helper attempts, including recovery attempts. */
+  timings: CalcTimings;
   /** Identity of the fixture bytes this trial uploaded (M1-013 sweep seed check). */
   fixture: FixtureFingerprint;
   corruption?: CorruptionAudit;
@@ -229,6 +235,7 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     xlsxPath: outcome.xlsxPath,
     cleanup,
     fixtureConvert: converter.lastTiming,
+    timings: adapter.timings,
     fixture: fixtureFingerprint(fixture),
     corruption,
   };
@@ -369,6 +376,7 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
 
   // 5. Run the guarded program (skipped when the launch itself failed).
   const program = windowsProgramFor(options.params);
+  let killUnconfirmed = false;
   const programAdapter =
     options.killAfterStep === undefined
       ? adapter
@@ -376,6 +384,9 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
           adapter,
           options.killAfterStep,
           options.client,
+          () => {
+            killUnconfirmed = true;
+          },
           options.auditKill ? onFaultApplied : undefined,
         );
   const outcome: RunOutcome = launchFailure
@@ -396,7 +407,7 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
   //     resume from and stay on the plain path.
   let recovered = outcome;
   const recoveryEvents: TraceEvent[] = [];
-  if (options.recovery && !outcome.completed && outcome.steps.length > 0) {
+  if (options.recovery && !killUnconfirmed && !outcome.completed && outcome.steps.length > 0) {
     const failedAt = outcome.guardFailure?.step ?? program.steps.length;
     const saveStepIndex = program.steps.findIndex((s) => s.isSave === true);
     try {
@@ -555,38 +566,43 @@ function cleanupTraceEvents(cleanup: GuestCleanupResult): TraceEvent[] {
 
 /** runProgram, with adapter/UNO failures folded into a guard-failure outcome. */
 /**
- * Delegating adapter that kills soffice.bin once N steps have completed, so
- * the fault lands after the edit and before the save — the interruption M1's
- * recovery criterion is about. The kill is fire-and-forget: the next adapter
- * call observes the dead app and the runner reports a bounded failure.
+ * Inject the kill after the Nth action dispatch, before the runner observes
+ * its postcondition. Stop the trial if the agent cannot confirm termination.
  */
 function killAfterStepAdapter(
   inner: AppAdapter,
   afterStep: number,
   client: AgentClient,
+  onUnconfirmed: () => void,
   onKilled?: (detail: string) => void,
 ): AppAdapter {
-  let completed = 0;
+  let dispatched = 0;
   return {
     observe: () => inner.observe(),
     capabilities: () => inner.capabilities(),
     issueRef: (nodeId: string) => inner.issueRef?.(nodeId) ?? null,
     async act(action) {
       const result = await inner.act(action);
-      completed += 1;
-      if (completed === afterStep) {
-        process.stderr.write(`[kill-fault] killing soffice.bin after step ${completed}\n`);
-        const killing = client.kill({ image_name: "soffice.bin" });
-        if (onKilled) {
-          // Wait for the kill before an audited trial can observe or recover.
-          // Standalone kill retains its original fire-and-forget behavior.
-          const killed = await killing.catch(() => []);
-          if (killed.length > 0 && result.outcome !== "failed") {
-            onKilled(`killed soffice.bin after action ${completed}`);
+      dispatched += 1;
+      if (dispatched === afterStep && result.outcome !== "failed") {
+        process.stderr.write(
+          `[kill-fault] requesting termination of soffice.bin after action ${dispatched}\n`,
+        );
+        let details = "agent did not report a terminated process";
+        try {
+          const killed = await client.kill({ image_name: "soffice.bin" });
+          if (killed.length > 0) {
+            onKilled?.(`killed soffice.bin after action ${dispatched}`);
+            return result;
           }
-        } else {
-          void killing.catch(() => {});
+        } catch (error) {
+          details = error instanceof Error ? error.message : String(error);
         }
+        onUnconfirmed();
+        return {
+          outcome: "failed",
+          details: `kill after action ${dispatched} unconfirmed: ${details}`,
+        };
       }
       return result;
     },
