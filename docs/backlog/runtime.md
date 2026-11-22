@@ -295,3 +295,28 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
      in the PR.
 - **not in scope:** Foundry tasks/evals (EF-001/EF-002 do not exist yet; no eval
   claims before they land), new backends, and capability expansion for its own sake.
+
+## Standing gap: `runtime/` has no CI job
+
+`.github/workflows/ci.yml` runs `check`, `agent/` and `viewer-perf` — there is **no
+`runtime/` job**, so nothing in CI ever compiles or tests the Rust workspace. Every
+`cargo test` claim for the runtime is a claim about someone running it locally.
+
+This is worse than it sounds for the RT-015 file-grant guards: `mod file_grant` is
+gated `#[cfg(target_os = "linux")]` (they exercise `openat2`), and development
+happens on macOS — so on the dev host those tests run **zero** times, and no
+automation ever runs them either. A broken grant guard could stay green
+indefinitely.
+
+Fix requires editing `.github/workflows/ci.yml`, which the current `gh` token cannot
+push (no `workflow` scope). Until someone with that scope adds:
+
+```yaml
+  runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --manifest-path runtime/Cargo.toml --workspace
+```
+
+…no runtime test result may be described as CI-verified. Local evidence only.
