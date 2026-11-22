@@ -74,7 +74,12 @@ for _ in $(seq 1 60); do
       myco@localhost true 2>/dev/null && break
   sleep 2
 done
-"$GUEST_DIR/build-agent-in-guest.sh" 2>&1 | grep -E "OK:|error" | tail -2 || fail "agent build"
+# The in-guest build has failed transiently before (a rustup/toolchain hiccup on a
+# fresh overlay). Retry once rather than burning the window on a flake.
+if ! "$GUEST_DIR/build-agent-in-guest.sh" 2>&1 | grep -q "OK:"; then
+  echo "agent build failed; retrying once" >&2
+  "$GUEST_DIR/build-agent-in-guest.sh" 2>&1 | grep -E "OK:|error" | tail -3 || fail "agent build (after retry)"
+fi
 
 say "3/6 RT-011 end-to-end (create -> observe -> act -> evidence -> reset -> destroy)"
 MYCO_RT_LIVE=1 cargo test --manifest-path runtime/Cargo.toml \
