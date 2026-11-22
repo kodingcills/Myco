@@ -366,12 +366,29 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("myco-channel-grant-{}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("state"), [0, 255]).unwrap();
+        // A root grant must be refused on a FRESH agent: asserting it after a
+        // grant already succeeded only proves the "already granted" guard
+        // (review must-fix 2).
+        let mut fresh = Channel::spawn(agent_command("s3cret"), "s3cret").unwrap();
+        assert!(
+            fresh.grant_read("/").is_err(),
+            "a grant rooted at / must be refused, not treated as a bounded grant"
+        );
+        fresh.shutdown().unwrap();
+
         let mut ch = Channel::spawn(agent_command("s3cret"), "s3cret").unwrap();
         assert!(ch.read_file("state").is_err());
         ch.grant_read(dir.to_str().unwrap()).unwrap();
         assert!(ch.grant_read("/").is_err());
         assert!(ch.read_file("../outside").is_err());
         assert_eq!(ch.read_file("state").unwrap(), [0, 255]);
+
+        // End-to-end: arbitrary bytes (length 5, non-multiple of 3) must survive
+        // the whole wire path, not just the encoder in isolation (must-fix 3).
+        let blob: Vec<u8> = vec![0, 1, 254, 255, 42];
+        std::fs::write(dir.join("blob"), &blob).unwrap();
+        assert_eq!(ch.read_file("blob").unwrap(), blob);
+
         ch.shutdown().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }

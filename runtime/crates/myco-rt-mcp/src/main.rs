@@ -1,6 +1,7 @@
 //! `myco-rt-mcp` — MCP server (stdio, newline-delimited JSON-RPC 2.0).
 //!
-//! Exposes exactly the six ops as tools (ADR-0013). Sessions live in this process,
+//! Exposes the six core ops as tools (ADR-0013), plus RT-015's opt-in
+//! `read_file` extension. Sessions live in this process,
 //! so evidence accumulates and refs stay valid for the observation they came from.
 
 use myco_rt_backend_qemu::{QemuConfig, QemuLinuxBackend};
@@ -146,7 +147,7 @@ fn tool_defs() -> Vec<Value> {
             "inputSchema": {"type":"object","properties":{
                 "session_id": {"type":"string"},
                 "token": {"type":"string"},
-                "read_root": {"type":"string","description":"Opt-in guest directory for read_file"}
+                "read_root": {"type":"string","description":"Opt-in: absolute guest directory the session may read from (not '/'). Every read_file path is confined beneath it. Applied on every connect, including after reset."}
             }}
         }),
         json!({
@@ -169,7 +170,7 @@ fn tool_defs() -> Vec<Value> {
         }),
         json!({
             "name": "read_file",
-            "description": "Read a file from the guest desktop (RT-015). Opt-in: the session must be created with read_root; paths are bounded to that grant. Returns base64 bytes.",
+            "description": "Read a file from the guest desktop (RT-015). Opt-in: the session must be created with read_root (an absolute guest directory, not '/'); every path is confined beneath it. Files are capped at 1 MiB. Returns base64 content plus raw_bytes (the pre-encoding length).",
             "inputSchema": {"type":"object","required":["session_id","path"],"properties":{
                 "session_id": {"type":"string"},
                 "path": {"type":"string","description":"Path relative to the session's read grant"}
@@ -243,7 +244,27 @@ impl Server {
         let mut cfg = QemuConfig::for_repo(workspace, &token);
         cfg.session_id = id.clone();
         // RT-015 is opt-in: a session gets file reads only when it names a root.
-        let read_root = args["read_root"].as_str().map(|s| s.to_string());
+        // Validate BEFORE provisioning: a bad root must not cost a VM boot, and
+        // must not leave a guest + lock behind (review must-fix 1).
+        let read_root = match args["read_root"].as_str() {
+            None => None,
+            Some(root) => {
+                let p = std::path::Path::new(root);
+                if !p.is_absolute() {
+                    return Err((
+                        -32602,
+                        format!("read_root must be an absolute guest path, got {root:?}"),
+                    ));
+                }
+                if p.parent().is_none() {
+                    return Err((
+                        -32602,
+                        "read_root must not be the filesystem root; name a directory".to_string(),
+                    ));
+                }
+                Some(root.to_string())
+            }
+        };
         let mut session = Session::new_creating(
             SessionConfig {
                 session_id: id.clone(),
@@ -258,7 +279,12 @@ impl Server {
                 }
             },
         );
-        session.create().map_err(|e| (-32000, e.to_string()))?;
+        if let Err(e) = session.create() {
+            // Provisioning may have booted the guest and taken the lock; tear it
+            // down so a failed create cannot brick the next one with CapReached.
+            let _ = session.destroy();
+            return Err((-32000, e.to_string()));
+        }
         self.sessions.insert(id.clone(), session);
         Ok(json!({"ok": true, "session_id": id}))
     }
@@ -324,7 +350,7 @@ impl Server {
         Ok(json!({
             "ok": true,
             "path": path,
-            "bytes": bytes.len(),
+            "raw_bytes": bytes.len(),
             "content_base64": encoded,
         }))
     }
@@ -587,6 +613,8 @@ mod read_file_tests {
             .expect("read_file tool");
         let desc = tool["description"].as_str().unwrap();
         assert!(desc.contains("Opt-in"), "description must state the grant requirement: {desc}");
+        assert!(desc.contains("1 MiB"), "description must state the size cap: {desc}");
+        assert!(desc.contains("not '/'"), "description must state the root bound: {desc}");
         // create must document how to opt in.
         let create = r["result"]["tools"]
             .as_array()
@@ -594,7 +622,11 @@ mod read_file_tests {
             .iter()
             .find(|t| t["name"] == "create")
             .expect("create tool");
-        assert!(create["inputSchema"]["properties"]["read_root"].is_object());
+        let root_desc = create["inputSchema"]["properties"]["read_root"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(root_desc.contains("absolute"), "create must document absolute: {root_desc}");
+        assert!(root_desc.contains("not '/'"), "create must document the root bound: {root_desc}");
     }
 
     #[test]
@@ -606,5 +638,47 @@ mod read_file_tests {
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+}
+
+#[cfg(test)]
+mod read_root_validation_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1 }
+    }
+
+    fn call(s: &mut Server, body: &str) -> Value {
+        serde_json::from_str(&handle_line(s, body).expect("reply")).unwrap()
+    }
+
+    /// A bad read_root must be refused BEFORE provisioning, so no VM boots and no
+    /// lock is taken (review must-fix 1).
+    #[test]
+    fn relative_read_root_is_refused_without_booting() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create","arguments":{"session_id":"x","read_root":"relative/dir"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("absolute"), "{text}");
+        assert!(s.sessions.is_empty(), "no session may be registered");
+    }
+
+    #[test]
+    fn root_read_root_is_refused_without_booting() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create","arguments":{"session_id":"x","read_root":"/"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("filesystem root"), "{text}");
+        assert!(s.sessions.is_empty());
     }
 }

@@ -11,6 +11,15 @@ impl FileGrant {
         if !root.is_absolute() {
             return Err(io::Error::other("grant root must be absolute"));
         }
+        // A grant rooted at "/" is not a grant: it is the whole guest filesystem.
+        // The tool description promises a bounded directory, so refuse the root
+        // itself rather than silently granting everything (review must-fix 2).
+        if root.parent().is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "grant root must not be the filesystem root",
+            ));
+        }
         Ok(Self(openat2(
             CWD,
             root,
