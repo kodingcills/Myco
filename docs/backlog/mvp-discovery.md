@@ -36,9 +36,10 @@ criterion (TIF-60) decide the wedge.
 ---
 
 ### MVD-001 (TIF-53) Direction A bounded proof: verified desktop for a coding agent
-- **status:** live execution plan delivered (`docs/product/direction-a-live-execution-plan.md`); dry-run harness operational in PR #93; RT-020 live proof PASS (14:33Z in PR #96 / `c25df02`); queued with M1 Coordinator for dedicated VM slot after C1, M1-016, and Foundry. Live runner entrypoint prepared in `src/foundry/grader/direction-a-live-runner.ts` and `scripts/myco-test.ts`.
+- **status:** design in progress. Host-dependent half blocked on runtime first path
+  (RT-011) and on host release by M1.
 - **owner:** discovery-owner (design, DX surface), build (implementation), foundry (task set + oracle)
-- **blocked_by:** MVD-006 (host window / Coordinator GO)
+- **blocked_by:** MVD-006 (host window), RT-first-path, RT-015
 - **surfaces:** developer surface per `docs/product/dev-surface-decision.md` (SDK over
   MCP/stdio, thin CLI/SDK/MCP over one core); human output is a v0 Viewer trace (MVD-007).
 - **description:** One OMP/coding agent, one Myco desktop, one real GUI task, end
@@ -65,9 +66,9 @@ criterion (TIF-60) decide the wedge.
      `uncertain` — never `verified` — with the recovery events in the trace.
 
 ### MVD-002 (TIF-54) Direction B bounded proof: verified operation on business software
-- **status:** task package (`tasks/calc-invoice-update.yaml`) and simulated contract dry-run runner (`src/foundry/grader/direction-b-runner.ts`) merged in PR #95 (`4081773`); timings (36.4s / 12.8s / 2048 MB) are modelled estimates, not live desktop evidence; live host execution pending host slot.
+- **status:** design in progress. Execution blocked on the same host window.
 - **owner:** discovery-owner (design), build, foundry
-- **blocked_by:** MVD-006 (host window), RT-015, RT-016
+- **blocked_by:** MVD-006 (host window), RT-first-path, RT-015, RT-016
 - **description:** A callable operation with a correctness guarantee on software
   that has no adequate API. Bound the proof to one operation: create/update a record
   through the UI, kill the app or the desktop mid-operation, then read the persisted
@@ -91,7 +92,8 @@ criterion (TIF-60) decide the wedge.
      separately and never folded into success.
 
 ### MVD-003 (TIF-55) Direction C bounded proof: is branching worth it?
-- **status:** task package (`tasks/branch-retry-experiment.yaml`) and modelled contract dry-run runner (`src/foundry/grader/direction-c-runner.ts`) merged in PR #95 (`4081773`); timings and memory deltas are modelled estimates (caution: not cited as Direction C kill-criterion evidence); live fork capability pending runtime.
+- **status:** design only. Needs fork/snapshot capability the runtime does not have
+  (Q3: add `snapshot()` + `fork()` when fork/search lands) and host time.
 - **owner:** discovery-owner (design), runtime (capability), build
 - **blocked_by:** MVD-006, runtime fork capability
 - **description:** Do not prove that branching is possible — Orgo already ships
@@ -249,10 +251,10 @@ criterion (TIF-60) decide the wedge.
 
 | Dependency | Owner | Status |
 |---|---|---|
-| Runtime first end-to-end path (create→observe→act→evidence→reset→destroy) | Runtime (RT-011 / RT-first-path) | **DONE** (RT-020 live proof PASS 14:33Z in PR #96 / `c25df02`) |
-| Host-side guest file read (REQ-08) | Runtime RT-015 | **DONE** (verified live in RT-020 proof) |
-| Process kill/relaunch (REQ-09) | Runtime RT-016 | **DONE** (verified live in RT-020 proof) |
-| Public task set, fixtures, verifiers, scoring | Foundry (TIF-50/51/58) | merged on main (`bank.ts`, `discovery.ts`) |
+| Runtime first end-to-end path (create→observe→act→evidence→reset→destroy) | Runtime (RT-011 / RT-first-path) | not passed; host-gated |
+| Host-side guest file read (REQ-08) | Runtime RT-015 | pending |
+| Process kill/relaunch (REQ-09) | Runtime RT-016 | pending |
+| Public task set, fixtures, verifiers, scoring | Foundry (TIF-50/51/58) | being launched |
 | M2 research round (competitor teardown, API design, app #2) | Research Coordinator | feeds MVD-004/MVD-002; do not duplicate |
 
 ## Out of scope

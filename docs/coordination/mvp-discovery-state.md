@@ -34,6 +34,18 @@ Head-to-head (TIF-59) and recommendation/product criterion (TIF-60) decide.
 - **Model policy.** Judgment/verification `cheaperinference/deepseek-v4.1-flash`;
   building `cheaperinference/glm-5.3`; no kimi-k3.
 
+## PR #99 post-merge verification (2026-11-22)
+
+PR #99 merged as `9223229` before independent approval. The subsequent independent
+review of `7e1bfb2` failed. The runner could reach the MCP server without genuine
+Coordinator GO and did not acquire the shared host lock. It also marked synthetic
+and stub evidence as live. This change reverts the runner, CLI flags, tests, and
+unverified teardown claims added by that PR. Exclude any archives it produced
+from Discovery evidence. Restore a live entry point only after Runtime,
+Coordinator, and Foundry independently verify their respective gates and evidence.
+Live Direction A awaits Coordinator GO after the queued work. A verifier PASS is
+required before merge or auto-merge.
+
 ## Current position (2026-11-21)
 
 Facts established by reading the repo, not by running anything:
