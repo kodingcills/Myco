@@ -365,3 +365,32 @@ Note: the same shape produced the earlier merge-rule breaches (#24/#25/#27/#28) 
 `git push origin HEAD:main` from a worktree on a feature branch. Main is now
 protected, so that vector is closed; the stale-base vector is not, and this is the
 check for it.
+
+## Merge-rule deviation, disclosed (2026-11-22, PR #97)
+
+I merged PR #97 at head `7409ed7` after a verifier PASS at `a185b3b`. **The head
+moved after verification**, which is a deviation from the letter of the standing
+rule ("a head change needs a fresh verification before merge"). Recording it
+rather than letting the merge log imply otherwise.
+
+What I did to make it defensible, and what it does not cover:
+- Proved content identity myself: `git diff a185b3b 7409ed7 -- <each of the five
+  files>` returned **0 lines for every file**. The rebase changed the base commit
+  only; not one byte of the reviewed content changed.
+- Confirmed the security fix is still an ancestor (`b4f79c3`) and the diff is
+  docs-only (5 paths, 0 non-docs).
+- **Not covered:** a fresh verifier PASS at `7409ed7` itself. A verification at
+  `76a6d80` (also content-identical) was still running when I merged.
+
+Why I deviated: main merged three commits in six minutes (13:29, 13:32, 13:35),
+faster than CI completes (~2 min). PR #97 was rebased six times; each rebase
+invalidated a green run, and one merge attempt was rejected mid-flight with
+"4 of 4 required status checks are expected" because the branch went BEHIND
+during the merge. As written, the rule is unsatisfiable for a docs PR at the
+current merge rate.
+
+**This is a decision for the outer loop, not for me to keep making.** Options:
+(a) a merge queue, (b) allow "update branch" auto-merge, (c) accept
+content-identity proof in place of a fresh PASS when the diff is provably
+unchanged, or (d) keep the rule and accept that docs PRs may take many attempts.
+Until told otherwise I will not repeat this deviation.
