@@ -97,6 +97,59 @@ mod tests {
         assert!(err.contains("MYCO_HOME"), "{err}");
     }
 
+    /// A bad `MYCO_HOME` is an error, not a fall-through.
+    ///
+    /// This is a deliberate choice worth pinning: if an operator sets `MYCO_HOME`
+    /// to the wrong path, silently using a *different* workspace discovered from
+    /// the cwd would run against a checkout they did not choose. Failing loudly is
+    /// the safer default, and this test is what makes it a property rather than an
+    /// accident of the current `if let` ordering.
+    #[test]
+    fn a_bad_myco_home_errors_instead_of_falling_through() {
+        let good = tmp("badhome-good");
+        fake_ws(&good);
+        let bad = tmp("badhome-bad"); // exists, but is not a workspace
+        let err = resolve(Some(&bad), Some(&good), None).unwrap_err();
+        assert!(
+            err.contains("MYCO_HOME"),
+            "a bad MYCO_HOME must be named, not silently ignored: {err}"
+        );
+    }
+
+    /// The nearest ancestor wins when workspaces are nested.
+    ///
+    /// `walk_up` uses `ancestors().find(..)`, so it takes the first (closest)
+    /// match. If that ever became `filter(..).last()`, a deeply nested workspace
+    /// would resolve to an outer one and run the wrong checkout.
+    #[test]
+    fn the_nearest_enclosing_workspace_wins() {
+        let outer = tmp("nest-outer");
+        fake_ws(&outer);
+        let inner = outer.join("inner");
+        fake_ws(&inner);
+        let deep = inner.join("x/y");
+        fs::create_dir_all(&deep).unwrap();
+
+        assert_eq!(
+            resolve(None, Some(&deep), None).unwrap(),
+            inner,
+            "the closest workspace must win, not the outermost"
+        );
+    }
+
+    /// The marker is a file check, not a directory check: a workspace-shaped
+    /// directory tree without `boot.sh` is not a workspace.
+    #[test]
+    fn a_directory_chain_without_the_marker_is_not_a_workspace() {
+        let r = tmp("nomarker");
+        fs::create_dir_all(r.join("runtime/guest")).unwrap(); // dir exists, boot.sh does not
+        let err = resolve(None, Some(&r), Some(&r)).unwrap_err();
+        assert!(
+            err.contains("MYCO_HOME=/path/to/Myco"),
+            "a missing marker must produce the remediation message: {err}"
+        );
+    }
+
     #[test]
     fn missing_workspace_error_names_the_fix() {
         let nowhere = tmp("none");
