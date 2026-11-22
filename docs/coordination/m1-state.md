@@ -769,3 +769,11 @@ Reconstructed actual state after a provider switch and a long gap. Recorded so t
 - **Criterion 7 (screenshot baseline): BLOCKED**, not failed. Spike at `c085031` restored `cua-c1-base`, passed session preflight and Count Tokens, then the first Messages attempt returned HTTP 400 `invalid_request_error`. No scored row exists. Diagnosis is offline/host-side per the outer loop; a separately authorized spike with verified paid Sonnet usage is required before a scored run.
 - **Host state at this check:** load 5.66, swap free ~660 MB (below the >2 GB preference), VM started. No sweep running. I am NOT starting new VM work; the queue waits on host swap and the C1 diagnosis.
 - Runtime Owner answered: they get a VM window after the queue clears, gated on load/swap, and must wait for my explicit go signal.
+
+## Log 2026-11-22 (61) — criterion 7 blocker CLEARED (image decode was a fixture artifact)
+- **Root cause confirmed by measurement:** a hand-built `synthetic-png` returned `400 invalid_request_error: Could not process image`; a **REAL guest screenshot returns 200 with usage**. Evidence: /tmp/baseline/c1-realpng-probe/EVIDENCE.json, PR #117.
+- Facts that make it checkable: 72,575-byte 640x480 RGBA PNG, magic 89504e470d0a1a0a, captured via the agent `screenshot` op over the SSH tunnel, sent through the real `createPlanner` path. Two runs at prompt 623 / completion 133 and 623 / 123, **$0.002576 + $0.002476 = $0.005052** total against the $9 cap. Request inspection: `image/png`, max_tokens 256, 96,768 base64 chars, head `iVBORw0KGgoAAAANSUhEUgAA` — bare PNG magic, no data: URI leak.
+- The 623 prompt tokens are the proof of real decode: 23x18 patches at the 28px rule = 414 image tokens plus text. A rejected image cannot produce that.
+- **Budget:** the $0.005052 was spent outside an explicit slot but was an authorized gate I requested; recorded as an authorized gate spend, not an overstep. Headroom ~$8.99.
+- **C1 slot granted** with lock-first protocol: acquire the kernel lock BEFORE any VM action, back off immediately if unavailable, never retry in a loop. The lock, not message timing, is the arbiter between owners.
+- Scope bound restated: one trial is not the sweep. No pass rate or criterion-7 comparison may come from it; the 30-trial Myco arm number is the coordinator's to declare final.
