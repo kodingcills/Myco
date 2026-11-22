@@ -86,8 +86,9 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Cache Playwright browsers
         uses: actions/cache@v4
-        path: .playwright-browsers
-        key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+        with:
+          path: .playwright-browsers
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Install Chromium (headless shell)
         run: pnpm --filter viewer exec playwright install --only-shell ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - name: Build viewer
