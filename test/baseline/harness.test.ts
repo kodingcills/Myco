@@ -78,6 +78,27 @@ const row: BaselineRow = {
   transcript: base.transcript,
 };
 describe("baseline", () => {
+  it.each([
+    ["i-right-failure", "verified"],
+    ["i-wrong-done", "refuted"],
+    ["unavailable-ready", "uncertain"],
+  ] as const)("accepts HCU evidence from the shared judge for %s", (name, status) => {
+    const f = fixture(name);
+    const verdict = judge(f.transcript, f.driver, f.observation);
+    expect(verdict.status).toBe(status);
+    const evidence: BaselineRow = {
+      ...row,
+      subArm: "hcu",
+      driver: f.driver,
+      transcript: f.transcript,
+      verdict: verdict.status,
+      verdictReason: verdict.reasons.join(", "),
+    };
+    expect(isBaselineRow(evidence)).toBe(true);
+    expect(rowKey(evidence)).toBe("hcu/0");
+    expect(isBaselineRow({ ...evidence, subArm: "hcu+shell" })).toBe(false);
+  });
+
   // Guards against ignoring persisted evidence, driver preconditions, or budget attribution.
   it.each(names)("scores fixture %s", (name) => {
     const f = fixture(name);
