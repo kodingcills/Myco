@@ -28,9 +28,11 @@ function classifySession(output: string): string {
   let sawUnreadable = false;
   for (const process of snapshot.processes) {
     const { CommandLine, SessionId } = record(process);
-    // Unreadable candidates are counted and skipped, not returned on. Returning
-    // here would make `daemon-ambiguous` unreachable for the exact case it names:
-    // two candidates, neither readable.
+    // An unreadable candidate is counted and skipped rather than returned on, so
+    // the loop still inspects every process. Its effect is not a new class:
+    // `sawUnreadable` aborts below, so two unreadable candidates still report
+    // `daemon-command-line-unreadable`. Counting buys the guarantee that a
+    // readable serve daemon is never missed because an unreadable one came first.
     if (typeof CommandLine !== "string") {
       sawUnreadable = true;
       continue;
@@ -72,9 +74,9 @@ function classifySession(output: string): string {
     }
     if (isServe) daemons.push(SessionId);
   }
-  // An unreadable candidate anywhere aborts: it may be the only daemon, or a
-  // second one whose kind we cannot name, and neither permits `match`. So this
-  // precedes the missing/ambiguous split — "we could not read a candidate" is a
+  // Abort on any unreadable candidate: it may be the serving daemon, or a second
+  // one whose kind we cannot name, and neither permits `match`. This precedes the
+  // missing/ambiguous split because "we could not read a candidate" is a
   // different statement from "there were none" or "there were too many".
   if (sawUnreadable) return "daemon-command-line-unreadable";
   if (daemons.length === 0) return "daemon-missing";

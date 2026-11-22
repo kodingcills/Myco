@@ -99,42 +99,33 @@ describe("C1 driver session preflight", () => {
     }
   });
 
-  it("reports an unreadable daemon rather than masking it, and keeps ambiguity reachable", () => {
-    const two = (a: string | null, b: string | null) => snapshot([process(a), process(b, 3)]);
-    // One readable serve plus one unreadable: the unreadable one is not ignored.
-    expect(
+  it("never reports match while any candidate is unreadable, and still splits missing from ambiguous", () => {
+    // This is a safety guard, not proof that a defect was fixed: the previous
+    // classifier returned the same classes for these three inputs. It is kept
+    // because `match` is the only class that authorises a run, so the invariant
+    // is worth pinning even where it already held.
+    const unreadableFirst = snapshot([process(null), daemon]);
+    const bothUnreadable = snapshot([process(null), process(null, 3)]);
+    const twoServe = snapshot([daemon, daemon]);
+    // `snapshot` returns the JSON text the guest would have printed, so it is
+    // passed through as-is rather than stringified again.
+    const call = (guestOutput: string) =>
       probeC1Driver(
         42,
         true,
         vi
           .fn<(command: string) => string>()
           .mockReturnValueOnce("cua-driver 0.56.4")
-          .mockReturnValueOnce(two(daemon.CommandLine, null)),
-      ).diagnostic,
-    ).toBe("daemon-command-line-unreadable");
-    // Both unreadable: ambiguity is still reported, not swallowed by the
-    // earlier return-on-first-unreadable behaviour.
-    expect(
-      probeC1Driver(
-        42,
-        true,
-        vi
-          .fn<(command: string) => string>()
-          .mockReturnValueOnce("cua-driver 0.56.4")
-          .mockReturnValueOnce(two(null, null)),
-      ).diagnostic,
-    ).toBe("daemon-command-line-unreadable");
-    // Two readable serve daemons remain genuinely ambiguous.
-    expect(
-      probeC1Driver(
-        42,
-        true,
-        vi
-          .fn<(command: string) => string>()
-          .mockReturnValueOnce("cua-driver 0.56.4")
-          .mockReturnValueOnce(snapshot([daemon, daemon])),
-      ).diagnostic,
-    ).toBe("daemon-ambiguous");
+          .mockReturnValueOnce(guestOutput),
+      ).diagnostic;
+    // An unreadable candidate anywhere aborts rather than being skipped: the
+    // readable daemon after it must not be enough to authorise a run.
+    expect(call(unreadableFirst)).toBe("daemon-command-line-unreadable");
+    expect(call(bothUnreadable)).toBe("daemon-command-line-unreadable");
+    // And the missing/ambiguous split still works on its own terms.
+    expect(call(twoServe)).toBe("daemon-ambiguous");
+    expect(call(snapshot([]))).toBe("daemon-missing");
+    expect(call(unreadableFirst)).not.toBe("match");
   });
 
   it("rejects invalid PID or mismatched version without running a session query", () => {
