@@ -111,7 +111,7 @@ Handoff to [Myco Dogfood Owner](t3-thread://v2/b1bc9145-909e-40e7-87e6-eb7568f09
 1. **REQ-08 (Oracle guest file reads):**
    - **Decision:** Oracles **should keep reading guest store files directly over the authenticated SSH channel** (`127.0.0.1:10022`, user `myco`, key `runtime/guest/keys/id_ed25519`).
    - **Rationale:** Ground-truth oracles are host-side and must remain strictly out-of-band and independent of the agent under test (ADR-0002).
-   - **RT-015 MCP tool:** A `read_file` tool ships for agents under test with bounded path grants. Core backend logic is in place (`QemuLinuxBackend::read_guest_file`); MCP exposure is in review (PR #112) and live VM validation is pending the next Coordinator slot. Until it lands, agents under test have no file-read tool and DF-S03 must score `gap`.
+   - **RT-015 MCP tool:** A `read_file` tool ships for agents under test with bounded path grants. Core backend logic is in place (`QemuLinuxBackend::read_guest_file`); MCP exposure shipped in PR #112 (`read_file`, opt-in via `read_root` at `create`). Live VM validation is pending the next Coordinator slot, so DF-S03 scores `gap` until a real guest confirms it.
 2. **REQ-09 (Process control — kill & relaunch):**
    - **Decision:** When RT-016 lands on the MCP surface, process control will be exposed symmetrically under `act` (matching `launch`):
      - Action kind `{"kind": "killProcess", "handle": "<opaque_handle>"}`.
