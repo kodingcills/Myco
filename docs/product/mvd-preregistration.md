@@ -135,7 +135,7 @@ to. If that arm also produces ≈ 0 false successes (defined below) at similar c
   the arm. Pairs are (task, seed, fault); every arm sees the identical pairs.
 - **Prompt confound.** `ef-t01` asks the agent to confirm persistence; `ef-t02..t04` do
   not. The head-to-head therefore reports each task and prompt variant separately, and
-  the pre-declared **no-verify variant** of `ef-t01` (the same task with the final
+  the pre-declared **no-verify variant** `ef-t01b-add-four-items-noverify` (the same task with the final
   sentence removed, Foundry-owned) is the discriminating comparison for rows 2 and 3.
   Pooling across prompt variants is not done.
 
