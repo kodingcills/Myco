@@ -44,6 +44,18 @@ The Calc rows are descriptive for the Discovery wedge. Slot 5 contains no EF myc
 tasks or hidden pairs. Those need a validated guest deployment, trusted paired evidence,
 and a separate run window. Orgo and Simular Sai remain parked.
 
+Slot 5 follows the C1 spike, C1 sweep, and M1-016 live reproduction. Before booking the
+30-trial run, obtain the Coordinator's finalized v3 parameter manifest and its hash,
+TIF-19's evidence index, and the cold-restore and blind-judge identifiers. Check that
+the planned trial IDs and fixture hashes agree. Keep any missing C1 row visible as an
+omission in the paired report.
+
+The Foundry host runner exercises a model. Slot 5 still needs a live HCU GUI adapter
+handoff and confirmation that the pinned planner can run within the $0 cap. For each
+attempt, capture the driver and planner versions, setup steps and elapsed time, trial
+disposition, independent verdict, and measured usage or cost. Keep the arm's claim
+separate from the verdict and record unavailable measurements as unknown.
+
 Wait for explicit Coordinator GO before touching the guest. Guest-changing work uses a
 new snapshot and preserves both clean-base snapshots. Apply the Coordinator's host
 gates, then stop the guest and report back when the run ends.
