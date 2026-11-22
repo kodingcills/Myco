@@ -590,11 +590,12 @@ function killAfterStepAdapter(
         );
         let details = "agent did not report a terminated process";
         try {
-          const killed = await client.kill({ image_name: "soffice.bin" });
+          const { killed, errors } = await client.kill({ image_name: "soffice.bin" });
           if (killed.length > 0) {
             onKilled?.(`killed soffice.bin after action ${dispatched}`);
             return result;
           }
+          if (errors.length > 0) details = `kill reported: ${errors.join("; ")}`;
         } catch (error) {
           details = error instanceof Error ? error.message : String(error);
         }

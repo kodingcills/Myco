@@ -123,3 +123,86 @@ def test_screenshot_bad_rect_is_op_error(wb, monkeypatch):
     assert exc.value.code == "BAD_REQUEST"
     with pytest.raises(OpError):
         backend.screenshot(rect=[1, 2, 3, "x"])
+
+
+# ----------------------------------------------------------------- kill
+
+
+def _backend_with_image(wb, monkeypatch, live_pids):
+    """A WindowsBackend with a scripted process listing and controlled taskkill
+    outcome, so the kill contract can be pinned off-Windows.
+
+    `_pids_of_image` is called twice per image kill (before, after). The second
+    call reports the post-kill state, which is what makes "died" and "survived"
+    distinguishable at all - the distinction the old code could not make.
+    """
+    backend = wb.WindowsBackend.__new__(wb.WindowsBackend)
+    calls = {"n": 0}
+    after = {"pids": []}  # what the SECOND listing reports (post-kill truth)
+
+    def fake_pids_of_image(image_name):
+        calls["n"] += 1
+        return list(live_pids) if calls["n"] == 1 else list(after["pids"])
+
+    monkeypatch.setattr(wb.WindowsBackend, "_pids_of_image", staticmethod(fake_pids_of_image))
+    return backend, after
+
+
+def _script_taskkill(monkeypatch, returncode):
+    """Control taskkill's exit status and record the argv it was invoked with."""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+
+        class P:
+            pass
+
+        p = P()
+        p.returncode = returncode
+        p.stdout = ""
+        p.stderr = "" if returncode == 0 else "ERROR: The process could not be terminated."
+        return p
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    return calls
+
+
+def test_kill_reports_success_when_process_dies(wb, monkeypatch):
+    backend, after = _backend_with_image(wb, monkeypatch, [3708])
+    _script_taskkill(monkeypatch, 0)
+    after["pids"] = []  # the kill worked
+    result = backend.kill(image_name="soffice.bin")
+    assert result["killed"] == [3708]
+    assert "errors" not in result
+
+
+def test_kill_reports_error_when_the_process_survives(wb, monkeypatch):
+    """The 2026-11-22 failure shape: taskkill fails, the process is still there,
+    and the caller is told nothing. killed=[] must not read as "guest is clean"."""
+    backend, after = _backend_with_image(wb, monkeypatch, [3708])
+    _script_taskkill(monkeypatch, 1)
+    after["pids"] = [3708]  # it survived
+    result = backend.kill(image_name="soffice.bin")
+    assert result["killed"] == []
+    assert result["errors"], "a failed kill that left the process alive must be reported"
+    assert "survivors=[3708]" in result["errors"][0]
+
+
+def test_kill_reports_error_on_nonzero_rc_even_if_the_process_died(wb, monkeypatch):
+    backend, after = _backend_with_image(wb, monkeypatch, [3708])
+    _script_taskkill(monkeypatch, 1)
+    after["pids"] = []  # died despite the non-zero returncode
+    result = backend.kill(image_name="soffice.bin")
+    assert result["killed"] == [3708]
+    assert result["errors"], "a non-zero taskkill returncode is reported even when nothing survives"
+
+
+def test_kill_says_nothing_when_there_was_nothing_to_kill(wb, monkeypatch):
+    """An empty process list is success, not an error - the distinction the old
+    code could not make."""
+    backend, _ = _backend_with_image(wb, monkeypatch, [])
+    _script_taskkill(monkeypatch, 0)
+    result = backend.kill(image_name="soffice.bin")
+    assert result["killed"] == []
+    assert "errors" not in result

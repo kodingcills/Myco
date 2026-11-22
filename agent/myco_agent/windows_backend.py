@@ -554,23 +554,46 @@ class WindowsBackend:
         return {"bytes": len(data)}
 
     def kill(self, pid=None, image_name=None):
+        """Kill a pid or every process of an image; report what actually died.
+
+        The returncode of taskkill is checked and surfaced, and the survivors are
+        re-listed after the kill. Both matter: an unchecked returncode reports
+        "nothing killed" for a kill that FAILED, which is indistinguishable from
+        "nothing to kill" - a cleanup can then log success while the process it
+        was asked to remove is still running. That is the shape observed on
+        2026-11-22, where a reap reported killed=[] with soffice.bin alive.
+        """
         killed = []
+        errors = []
         if pid is not None:
             proc = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/F", "/T"], capture_output=True, text=True
             )
             if proc.returncode == 0:
                 killed.append(pid)
+            else:
+                errors.append("taskkill /PID %s: rc=%s %s" % (pid, proc.returncode, proc.stderr.strip()))
         if image_name is not None:
             before = self._pids_of_image(image_name)
             if before:
-                subprocess.run(
+                proc = subprocess.run(
                     ["taskkill", "/IM", image_name, "/F", "/T"],
                     capture_output=True, text=True,
                 )
                 after = self._pids_of_image(image_name)
                 killed.extend(sorted(set(before) - set(after)))
-        return {"killed": killed}
+                # Survivors after a non-zero exit are the case that used to be
+                # invisible: the kill was attempted, failed, and reported empty.
+                survivors = sorted(set(before) & set(after))
+                if proc.returncode != 0 or survivors:
+                    errors.append(
+                        "taskkill /IM %s: rc=%s survivors=%s %s"
+                        % (image_name, proc.returncode, survivors, proc.stderr.strip())
+                    )
+        result = {"killed": killed}
+        if errors:
+            result["errors"] = errors
+        return result
 
     @staticmethod
     def _pids_of_image(image_name):

@@ -84,7 +84,17 @@ A delta that is **provably test-only** may merge without a fresh PASS when ALL o
 
 **Production code differing from the verified head still requires a fresh PASS. No exceptions.** A test cannot change what production code does; a production change can alter behaviour in ways CI does not cover.
 
-Worked example (#112 at `246cd302`): one runtime path differed from all three verified heads, so content-identity did **not** hold. The delta was 0 deletions / 19 additions / a single hunk `@@ -97,0 +98,21 @@ mod tests {` with `mod tests` at line 67 — two new tests, no production line touched. Mergeable under this extension.
+Worked example (#112 at `246cd302`): one runtime path differed from the verified heads, so content-identity did **not** hold. The delta was 0 deletions / a single hunk `@@ -97,0 +98,21 @@ mod tests {` with `mod tests` at line 67 — two new tests, no production line touched. Mergeable under this extension.
+
+The **addition count depends on the comparison base**: `74074d7 -> 246cd302` is `21/0`, while earlier verified heads give a smaller count because they predate a comment reflow. State the base alongside the number, or the figure is not reproducible. Prefer the stronger check over the hunk label — compare the region above `#[cfg(test)]` directly:
+
+```bash
+F=path/to/file.rs
+diff <(git show <verified>:$F | sed -n "1,$((line-1))p") \
+     <(git show <head>:$F     | sed -n "1,$((line-1))p")
+```
+
+Empty output means no production line changed, independent of how the diff was framed.
 
 **Why not a merge queue:** enabling one is a repository-settings decision for the outer loop, not the coordinator. Auto-merge is already on and helps throughput but does not fix verifier invalidation, since `update-branch` still produces a new head.
 
@@ -122,3 +132,51 @@ Rules:
 - **Coordinators:** when briefing a verifier, give it the exact SHA and say "read objects, not the working tree". A verdict is only meaningful for the SHA it names.
 
 Why it matters: a verifier reading a mutated worktree produces a confident, wrong verdict — either a false REJECT that wastes a fix cycle, or a false PASS that lets unverified code land. Both are worse than no review.
+
+## Defensive engineering (standing rule, 2026-11-22)
+
+**Every owner, builder and verifier applies this. It exists because two C1 bugs — a 15 s timeout nobody measured and a cleanup that reported a failed kill as clean — were unmeasured assumptions, not coding errors.**
+
+### 1. Pre-mortem before touching VM/guest/host
+
+Before building anything that touches the VM, guest or host, the owner writes the **top ~5 ways it can fail on the real target** and a test or guard for each. The categories to sweep: timeouts, partial cleanup, stale locks, missing fields across language boundaries, resource exhaustion, provider/API errors.
+
+A build without a written pre-mortem is not ready for review.
+
+### 2. Measure, don't guess
+
+Every **timeout, budget or threshold** comes from a **recorded measurement on the real guest**, plus **explicit headroom**. `--version` through vssh: 5.7/6.4/6.8 s. CIM enumeration: 11.8 s. Therefore 15 s is not a budget, it is a guess; 45 s is a budget with headroom.
+
+The **citation is the durable record of the measurement** — the PR, commit or evidence file that contains it — referenced from the constant's code comment. The measurement need not be inlined at the constant; it must be *findable from it*. A constant with no recorded measurement anywhere is rejected in review.
+
+### 3. Fault injection for cleanup/recovery
+
+Any **cleanup, kill, reset or recovery** path needs a test that **forces it to fail** and asserts the failure is reported as **dirty, never clean — and blocks scoring**. A cleanup whose failure renders as `killed=[]` is worse than no cleanup, because it is indistinguishable from success.
+
+### 4. Contract tests across boundaries
+
+When data crosses **TS / Python / Rust / PowerShell / JSON**, a test asserts **every field survives the round trip** — including error fields. PR #153's Python tests all passed while `AgentClient.kill` dropped `errors[]` on the TS side; the field never reached a caller. A layer's tests never prove the wire.
+
+### 5. Mutation check
+
+A fix's test **must fail when the fix is reverted**. Verifiers perform this themselves and paste both runs. A test that passes with the fix restored and with it removed is not a test.
+
+### 6. Real-target smoke before sweeps
+
+One end-to-end trial on the **real guest** with **timings recorded** before any multi-trial run. A green unit suite is not evidence that a sweep will start.
+
+### 7. Abort early
+
+A sweep **stops after 2 consecutive identical causes that reach the sweep loop** — a repeated `prepare` failure, or a repeated `planner-failed` — reporting `reason: "repeated-cause"`. This is the reachable scope in `runC1Sweep`; do not claim it covers a scored `driver-unreachable` row, which the pre-existing single-strike rule already stops on and which short-circuits before this counter increments.
+
+Motivation: the C1 arm walked iteratively toward a spend-cap stop rather than an explicit one. The second identical cause is the signal; report it for diagnosis instead of burning the remainder of the budget.
+
+### Verifier obligations
+
+Verifiers check items **1–7 explicitly** in their verdict, by name, with pasted evidence. "Tests pass" is not a verdict on any of them. For item 5 (mutation check), paste both runs — mutated and restored. For item 7, state whether the code change's stated trigger is reachable.
+
+### 8. A stale `node_modules` is a false red
+
+`pnpm typecheck` failed on `error TS2307: Cannot find module 'fflate'` and two test files failed to load — on a clean `origin/main`. `fflate` was in `package.json` but not installed. The failures looked like real regressions and were not.
+
+Run `pnpm install --frozen-lockfile` **before** diagnosing a failing gate, and before reporting a failure as pre-existing. A gate result from a tree whose dependencies do not match the lockfile is not evidence either way.

@@ -9,7 +9,11 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { guestContaminated, probeGuestHealth } from "../src/integration/guest-health.js";
+import {
+  cleanupTrialGuest,
+  guestContaminated,
+  probeGuestHealth,
+} from "../src/integration/guest-health.js";
 import { guestBasename } from "../src/integration/guest-shell.js";
 import { runTrial } from "../src/integration/trial.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
@@ -197,4 +201,38 @@ describe("M1-019 unconditional trial cleanup", () => {
     const trace = readFileSync(join(runsDir, report.runId, "trace.jsonl"), "utf8");
     expect(trace).toContain('"fault":"cleanup-failed"');
   });
+});
+
+it("treats a failed kill as contamination, not a clean guest", async () => {
+  // Gap the verifier found in the kill-reporting fix: the agent now reports a
+  // kill that did not take, but if the probe ignored it a foreign soffice
+  // would survive and the trial could be scored on a contaminated session.
+  const { client } = clientWith({
+    killFailsFor: "soffice.bin",
+    batch: () => "",
+  });
+  const finding = await probeGuestHealth({
+    client,
+    runRoot: "C:\\myco\\runs",
+    timeoutMs: 2_000,
+  });
+
+  expect(guestContaminated(finding)).toBe(true);
+  expect(finding.strayProcesses.join(" ")).toContain("could not terminate");
+});
+
+it("carries kill failures into the cleanup result instead of a bare empty kill", async () => {
+  // The other half: cleanupTrialGuest used to read only `killed`, so a failed
+  // kill logged as killed=[] errors=[] - indistinguishable from a clean reap,
+  // which is exactly how the orphaned soffice went unnoticed.
+  const { client } = clientWith({ killFailsFor: "soffice.bin" });
+  const cleanup = await cleanupTrialGuest({
+    client,
+    runRoot: "C:\\myco\\runs",
+    runDirName: "myco-leftover-run",
+    timeoutMs: 2_000,
+  });
+
+  expect(cleanup.killed).toEqual([]);
+  expect(cleanup.errors.join(" ")).toContain("could not terminate");
 });

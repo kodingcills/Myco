@@ -424,11 +424,24 @@ export class AgentClient {
     return result.bytes;
   }
 
-  /** Terminate a guest pid or image name; resolves the killed targets. */
-  kill(params: { pid?: number; image_name?: string }): Promise<Array<number | string>> {
-    return this.request("kill", params).then(
-      (r) => (r as { killed: Array<number | string> }).killed,
-    );
+  /**
+   * Terminate a guest pid or image name; resolves the killed targets AND any
+   * kill failures the agent reported.
+   *
+   * `errors` is the agent's own account of a kill it attempted and could not
+   * complete - a non-zero taskkill exit, or a process still listed afterwards.
+   * It must be carried, not dropped: without it a failed kill is
+   * indistinguishable from a kill with nothing to do, which is precisely how an
+   * orphaned soffice went unnoticed on 2026-11-22.
+   */
+  kill(params: {
+    pid?: number;
+    image_name?: string;
+  }): Promise<{ killed: Array<number | string>; errors: string[] }> {
+    return this.request("kill", params).then((r) => {
+      const raw = r as { killed?: Array<number | string>; errors?: string[] };
+      return { killed: raw.killed ?? [], errors: raw.errors ?? [] };
+    });
   }
 
   /** Depth-limited UIA subtree of the guest's top-level windows. */
