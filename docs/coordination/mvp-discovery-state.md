@@ -188,6 +188,15 @@ excluded from Discovery evidence.
 
 ## Log
 
+- 2026-11-22 (afternoon, second) · Pre-registered decision rule implemented
+  (`src/discovery/decision.ts`, 12 tests). It consumes Foundry-scored trials and
+  returns the §4.1 rule row mechanically: refuses while any scoped row is not
+  `decisionEligible`, refuses below 30 paired refutable trials, evaluates rows 1–5
+  top to bottom, and reports the exact sign test and Wilson intervals. It never
+  scores a trial and never reads a fixture. This is the piece that makes the
+  pre-registration executable rather than prose; no data exists yet, so no row has
+  fired. No VM, no spend, no accounts.
+
 - 2026-11-22 (afternoon) · M2 research processed into the decision documents (no VM,
   no spend, no accounts):
   - `docs/research/mvp-competitive-teardown.md` §2.6: cross-check against finding
