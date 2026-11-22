@@ -19,6 +19,14 @@ export interface TaskSource {
   resolve(task: FoundryTask): { fixture: FixtureManifest; committedFault?: FaultSpec };
 }
 const publicSource: TaskSource = { resolve: (task) => ({ fixture: taskFixture(task) }) };
+
+/**
+ * Apps this model-only harness can simulate. Growing this list is a code change, not a
+ * configuration one: each app needs its own in-memory state machine and fault semantics.
+ * A live arm for an unlisted app does not come through `runArm` at all — it goes through
+ * `executeTrial` with a real `LiveTransport`, which is app-agnostic by construction.
+ */
+export const SUPPORTED_APPS: readonly FixtureManifest["app"][] = ["myco-todo"];
 export function runArm(
   arm: ArmAdapter,
   tasks: readonly FoundryTask[],
@@ -38,8 +46,12 @@ export function runArm(
   for (const task of tasks) {
     const { fixture, committedFault } = (options.taskSource ?? publicSource).resolve(task);
     const { initialState: initial } = fixture;
-    if (initial.kind !== "myco-todo" || initial.storePath !== "store.json")
-      throw new Error("Unsupported fixture");
+    if (initial.kind !== "myco-todo" || !SUPPORTED_APPS.includes(fixture.app)) {
+      throw new Error(
+        `runArm simulates ${SUPPORTED_APPS.join(", ")}; a ${fixture.app} fixture needs a live ` +
+          "transport (see baseline/executor.ts) rather than the model harness",
+      );
+    }
     if (fixture.fixtureId !== task.fixtureId) throw new Error("Task and fixture IDs differ");
     const hash = committedFault
       ? fixtureHash({ fixture, intent: task.intent, fault: committedFault })

@@ -349,6 +349,26 @@ describe("baseline", () => {
     expect(m.completion.interval![0]).toBeCloseTo(0.06149, 4);
     expect(m.completion.interval![1]).toBeCloseTo(0.79235, 4);
   });
+  it("names the live path when asked to simulate an app it cannot", () => {
+    // A Writer or Calc task is not an error to hide: the message has to say where it goes
+    // instead, or the next agent reads "Unsupported fixture" and re-implements the harness.
+    const writerTask = {
+      taskId: "ef-t05-writer-total",
+      fixtureId: "ef-writer-autocorrect-v1",
+      prompt: "set the total",
+      intent: { kind: "writer.set-cell" as const, table: "Invoice", cell: "B3", value: "1" },
+      minimumGuiActs: 3,
+    };
+    expect(() =>
+      runArm(credulous, [writerTask], {
+        faults: [],
+        seeds: [1, 2, 3],
+        hiddenSplitVersion: 1,
+        commitmentRoot: "r",
+      }),
+    ).toThrow(/needs a live transport \(see baseline\/executor\.ts\)/);
+  });
+
   it("documents every blocked arm and planner", () => {
     expect(armRegistry.every((a) => a.blocker && a.plannerName)).toBe(true);
     // The doc also carries prose sections the registry cannot know about, so pin the
