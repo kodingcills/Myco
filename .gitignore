@@ -5,3 +5,7 @@ runs/
 .DS_Store
 __pycache__/
 .myco-token
+
+/viewer/src/theme.generated.css
+/.playwright-browsers/
+verdict-budget.ndjson

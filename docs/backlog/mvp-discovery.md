@@ -194,6 +194,19 @@ criterion (TIF-60) decide the wedge.
   the verdict-mapping unit tests against the M1 sample runs, and journeys J1-J3 by
   keyboard. Any deviation needs written outer-loop sign-off in the PR.
 
+### MVD-008 (TIF-pending) Viewer: screenshot latency and memory at 1,000 screenshots; Chrome Stable check
+- **status:** follow-up from Viewer v0 (PR #69), not blocking v0.
+- **owner:** discovery-owner (spec), build; outer-loop mirrors this item into Linear (agents do not create issues).
+- **description:** gui-spec §8 budgets that Viewer v0 never measured: full screenshot shown on
+  select (<=100 ms cached, <=250 ms cold, thumbnail first) and memory with 1,000 screenshots
+  (<=400 MB; LRU 64 full bitmaps; thumbnails only for visible +-20). Also a Chrome Stable
+  spot-check by Tiffany (the build environment could not launch Chrome Stable; v0 was measured on
+  Playwright's headless Chromium).
+- **acceptance:** a generated run with 1,000 screenshots (outside the repo, via the Foundry
+  fixture generator or a documented script); measured cached/cold select latency and peak memory
+  with N>=15 and the machine described; results in `viewer/PERF.md` against the §8 numbers; any
+  budget miss reported plainly; Chrome Stable result recorded.
+
 ---
 
 ## Dependencies owned by other workstreams
