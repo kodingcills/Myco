@@ -19,7 +19,7 @@
   land. PR #79's audit correctly excludes it from coverage and clears the old
   false-success flag. Original indices 2 and 16 also lacked landed faults.
   Four kill recoveries and three invalid-target recoveries verified from disk.
-- **VM queue & conflict resolution (12:52Z):** RT-020's live proof (task-141) was halted by platform cancellation at 12:40:59Z and pre-empted when Screenshot Baseline restored `clean-base` at 12:48Z; RT-020 did NOT complete and its interrupted attempt is excluded from scoring per Rule 8. Runtime Owner cleanly tore down its Linux QEMU guest, removed overlays, and is standing by. Screenshot Baseline Owner is confirmed as the SOLE active owner of `myco-win11` during its window through 16:15Z on `cua-c1-base` ($9.00 spend cap). RT-020 is re-queued as the immediate next slot upon C1 lock release for a fresh clean-base restore and live run (uncompleted until proof.json and independent verifier confirm). Evaluation Foundry slot 5 ($0 cap) and M1-016 live reproduction follow sequentially. PR #88 merged at `34973b5`; PR #90 merged at `7587e89`. M1-016 preflight passed with 0 discrepancies (installer hash match, 88-row v3 ledger byte-for-byte, 53-row corrupted ledger byte-for-byte, 20/20 generator proof, 506 tests passing).
+- **VM queue (14:06Z):** RT-020 granted immediate exclusive VM access (45 min window) under the shared lock protocol for its live proof with myco-todo GUI verification. C1 sweep was stopped by outer loop directive after trials 0 and 1 were refuted at $0.00 spend with document unmodified (no model calls, skipped single-trial spike). C1 lock released. Per design doc §3.5/§9.1 and Rule 8, aborted trials are classified as harness/infrastructure faults (omitted from model scoring at $0.00 spend). C1 is re-queued following RT-020, contingent on proving a real single-trial spike demonstrating actual model calls and token spend. Followed by M1-016 live reproduction and Evaluation Foundry slot 5 ($0 cap). PR #88 merged at `34973b5`; PR #90 merged at `7587e89`. M1-016 preflight passed with 0 discrepancies (installer hash match, 88-row v3 ledger byte-for-byte, 53-row corrupted ledger byte-for-byte, 20/20 generator proof, 506 tests passing).
 - [M1 backlog](../backlog/m1.md)
 
 ## Objective
@@ -783,3 +783,13 @@ The Screenshot Baseline Owner received the planner, arm, spend, and VM requireme
   - **Re-queued Slot 3:** RT-020 receives the immediate next slot upon C1 lock release for a fresh restore and 45-minute live run. Direct directive delivered to [Myco Runtime Owner (Rust)](t3-thread://v2/b1bc9145-909e-40e7-87e6-eb7568f09bd3/mcp:launch:cba81a8ecbe150c1ad3f6908da73bab666f2f4eca8ccd1657f403f1f051220fa).
   - **Slot 5:** Evaluation Foundry (TIF-58, $0 cap) queued behind RT-020.
   - **Slot 6:** M1-016 Independent Live Evaluation Reproduction queued behind Foundry.
+
+## Log 2026-11-22 (60) — C1 sweep stopped after $0.00 refuted trials; VM handed to RT-020; C1 re-queued pending single-trial spike
+- **Outer loop directive (13:55Z/14:05Z):** C1 sweep stopped after trial in flight. Trials 0 and 1 came back refuted with document unmodified at $0.00 cost, revealing that the screenshot agent was not calling the model (and had skipped the required single-trial spike before taking the VM until 16:15Z).
+- **Lock release & VM handoff:** C1 baseline sweep stopped and released the kernel flock on `/tmp/myco-win11.vm.lock`. Coordinator sent immediate GO directly to [Myco Runtime Owner (Rust)](t3-thread://v2/b1bc9145-909e-40e7-87e6-eb7568f09bd3/mcp:launch:cba81a8ecbe150c1ad3f6908da73bab666f2f4eca8ccd1657f403f1f051220fa) for its 45-minute live proof window.
+- **Rule 8 & design doc §3.5/§9.1 accounting:** Decided with Screenshot Baseline Owner that aborted trials 0 and 1 are recorded as omitted/infrastructure-fault ($0.00 spend), NOT scored failures against model capability, because model execution was never initiated.
+- **Queue re-alignment:**
+  - **Slot 3 (ACTIVE NOW):** RT-020 Live Proof (45 min, fresh restore, `myco-todo` GUI verification, independent verifier pass).
+  - **Slot 4 (Re-queued):** Screenshot Baseline C1 (re-queued; requires offline fix and verified single-trial spike demonstrating real model calls and token spend before new sweep window).
+  - **Slot 5 (Queued):** M1-016 Independent Live Evaluation Reproduction.
+  - **Slot 6 (Queued):** Evaluation Foundry (TIF-58, $0 cap).
