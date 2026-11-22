@@ -180,3 +180,41 @@ Verifiers check items **1–7 explicitly** in their verdict, by name, with paste
 `pnpm typecheck` failed on `error TS2307: Cannot find module 'fflate'` and two test files failed to load — on a clean `origin/main`. `fflate` was in `package.json` but not installed. The failures looked like real regressions and were not.
 
 Run `pnpm install --frozen-lockfile` **before** diagnosing a failing gate, and before reporting a failure as pre-existing. A gate result from a tree whose dependencies do not match the lockfile is not evidence either way.
+
+## Operating rules (Tiffany-approved, 2026-11-22 17:20 ET)
+
+Three rules that replace blanket policies with risk-proportionate ones. They exist because the previous policy — one independent verifier at the exact head for every PR, one VM at a time, every long run inside an agent turn — cost more than it caught.
+
+### A. Adaptive verification
+
+Classify the PR **before** merging and **state the tier in the PR body**. Verifiers may bump a tier up, never down.
+
+| Tier | What it covers | Requirement |
+|---|---|---|
+| **0** | Docs, prose, comments, state files. No executable code. | Green CI. **No verifier.** Prose nits never block. |
+| **1** | Small, low-risk code: tests, tooling, viewer/UI-only, refactors with tests, **<~100 lines**, and touching none of the tier-2 paths. | **One** verifier round. Minor nits become follow-up issues, not re-rounds. A push after PASS that only touches docs/tests does **not** need re-verification. |
+| **2** | Anything touching **scoring/verdicts, trial cleanup/recovery, VM/guest control, locks, spend caps, secrets, schemas, or M1 evidence numbers**. | Full independent verifier PASS **at the exact head** + green CI + the defensive checklist (pre-mortem, mutation check, fault injection). **Max 3 rounds**; still failing after round 3 → escalate to the outer loop with the disagreement rather than looping. |
+
+Worked examples from 2026-11-22: #162 (sweep abort logic) is **tier 2** — it stalls trials. #157 (evidence README/JSON) is **tier 2** — its numbers are M1 evidence. #152 and #149 (docs rules) are **tier 0**. #148 (a test asserting a schema line) is **tier 1**.
+
+**A push after PASS does not automatically void it.** What voids it is a *code* change. If the delta is docs/tests only, re-verify the delta, not the whole PR — three PRs today (#148, #162, #157) were re-verified in full for prose-only follow-ups.
+
+### B. Do not serialize on the VM
+
+The VM queue is **only** for work that truly needs the Windows guest. Every owner waiting on VM time works in parallel **now** on:
+
+- code, unit and contract tests, fixtures, mocks
+- **offline replays of recorded traces** (the arm's rows and trace events are on disk; most logic can be exercised against them)
+- docs
+
+Per-owner non-VM work: Runtime — RT-011 prep and a mocked e2e. Foundry — EF-005 fixtures and verifiers offline. Discovery/Dogfood — anything not needing the guest.
+
+**Batch VM needs** so each slot is used fully, and keep **M1 (C1 arm, M1-016, scorecard) first** in the queue.
+
+A second Windows VM is **not** approved until M1 lands; do not create one. Measure whether it would fit and report the number.
+
+### C. Long runs are detached
+
+Any run longer than a few minutes is launched **detached** — `nohup`/`setsid`, logging to a file, writing a pid file — with a **watchdog** that auto-resumes or reports. It is never tied to an agent turn: a run that dies when a turn ends produces a partial artifact nobody can distinguish from a failure.
+
+The C1 arm is the model: `scripts/c1-baseline.sh` logs to `progress.log`, holds a lock, and survives the turn that started it.

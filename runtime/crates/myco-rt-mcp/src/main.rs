@@ -891,3 +891,135 @@ mod progress_tests {
         );
     }
 }
+
+/// Contract tests: the advertised schema and the handler's actual reads must agree.
+///
+/// A tool schema is a promise to the agent. If it declares an argument the handler
+/// ignores, an agent sets it and silently gets the default; if the handler reads an
+/// argument the schema omits, the agent cannot discover it at all. Neither is
+/// visible from a name-only test, which is all this crate had.
+#[cfg(test)]
+mod schema_contract_tests {
+    use super::*;
+
+    fn defs() -> Vec<Value> {
+        tool_defs()
+    }
+
+    fn def(name: &str) -> Value {
+        defs()
+            .into_iter()
+            .find(|d| d["name"] == name)
+            .unwrap_or_else(|| panic!("no tool named {name:?}"))
+    }
+
+    /// Every tool's `inputSchema` must be a well-formed object schema.
+    #[test]
+    fn every_tool_declares_a_wellformed_object_schema() {
+        for d in defs() {
+            let name = d["name"].as_str().expect("tool has a name");
+            let schema = &d["inputSchema"];
+            assert_eq!(
+                schema["type"], "object",
+                "{name}: inputSchema must be an object schema"
+            );
+            assert!(
+                schema["properties"].is_object(),
+                "{name}: inputSchema must declare properties"
+            );
+            assert!(
+                d["description"].as_str().is_some_and(|s| !s.is_empty()),
+                "{name}: a tool without a description is invisible to an agent"
+            );
+        }
+    }
+
+    /// `required` must be a subset of `properties`, and must list only strings.
+    #[test]
+    fn required_fields_are_declared_properties() {
+        for d in defs() {
+            let name = d["name"].as_str().unwrap();
+            let props = d["inputSchema"]["properties"].as_object().unwrap();
+            if let Some(req) = d["inputSchema"]["required"].as_array() {
+                for r in req {
+                    let r = r.as_str().expect("required entries are strings");
+                    assert!(
+                        props.contains_key(r),
+                        "{name}: required field {r:?} is not in properties -- \
+                         an agent would be told to send a field it cannot see"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Arguments the handlers actually read.
+    ///
+    /// Pinned explicitly rather than scraped, so adding a read without updating the
+    /// schema fails here. Each entry is (tool, argument, whether the schema requires it).
+    const HANDLER_READS: &[(&str, &str, bool)] = &[
+        ("create", "session_id", false),
+        ("create", "token", false),
+        ("create", "read_root", false),
+        ("observe", "session_id", true),
+        ("act", "session_id", true),
+        ("act", "action", true),
+        ("evidence", "session_id", true),
+        ("read_file", "session_id", true),
+        ("read_file", "path", true),
+        ("reset", "session_id", true),
+        ("destroy", "session_id", true),
+    ];
+
+    /// Every argument a handler reads must be declared in that tool's schema.
+    #[test]
+    fn every_handler_argument_is_declared_in_its_schema() {
+        for (tool, arg, _) in HANDLER_READS {
+            let d = def(tool);
+            let props = d["inputSchema"]["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{tool}: no properties"));
+            assert!(
+                props.contains_key(*arg),
+                "{tool}: the handler reads {arg:?} but the schema does not declare it -- \
+                 an agent cannot discover an argument it is expected to send"
+            );
+        }
+    }
+
+    /// `required` must match the pinned table exactly.
+    ///
+    /// This is the check that catches the dangerous direction: a missing `required`
+    /// entry means an agent may omit a field the handler assumes present.
+    #[test]
+    fn requiredness_matches_what_the_handlers_assume() {
+        for (tool, arg, required) in HANDLER_READS {
+            let d = def(tool);
+            let listed = d["inputSchema"]["required"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).any(|s| s == *arg))
+                .unwrap_or(false);
+            assert_eq!(
+                listed,
+                *required,
+                "{tool}.{arg}: schema says required={listed} but the handler assumes \
+                 required={required}. A mismatch is a silent failure for the agent."
+            );
+        }
+    }
+
+    /// No schema may declare an argument nobody reads.
+    #[test]
+    fn no_schema_declares_an_unread_argument() {
+        for d in defs() {
+            let name = d["name"].as_str().unwrap();
+            for prop in d["inputSchema"]["properties"].as_object().unwrap().keys() {
+                assert!(
+                    HANDLER_READS.iter().any(|(t, a, _)| *t == name && *a == prop),
+                    "{name}: schema declares {prop:?} but no handler reads it -- \
+                     an agent would set it and silently get the default"
+                );
+            }
+        }
+    }
+}
