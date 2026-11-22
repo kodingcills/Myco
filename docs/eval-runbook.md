@@ -366,7 +366,8 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   separately.
 
 The driver applies the host and seed gates. The operator also watches conversion failures
-in `trials.jsonl`. If the fixture timeout recurs, stop at a trial boundary, retain the run
+in `trials.jsonl`. The normal trial watchdog is 1,500 seconds. If the fixture timeout recurs,
+stop at a trial boundary, retain the run
 directory, and report the failure before resuming. The sweep v2 stop was recorded by the
 operator in `progress.log`.
 
@@ -391,11 +392,32 @@ python3 scripts/m1-corrupt-suite-record.py --final \
 Reissue the driver command to skip recorded indices. Recorded failures stay in the audit. The
 driver runs `--final` automatically and saves its output to `summary.txt`. The second command
 rebuilds the summary and ledger from existing artifacts. Keep the output directory and its
-`runs/` tree together for replay. Each live trial has a 900-second watchdog.
+`runs/` tree together for replay. Each live trial has a 1,500-second watchdog.
+
+Use a supplemental batch when a group needs more eligible trials. Give each batch a distinct
+output directory basename using letters, digits, hyphens or underscores. The basename names
+its fixture seeds. Resume with the same directory and group selection.
+
+```bash
+scripts/m1-corrupt-suite.sh /tmp/myco-evals/supplement-01 --groups dropped-save:3,kill+recovery:1
+python3 scripts/m1-corrupt-suite-record.py --final-combined --out /tmp/myco-evals/combined \
+  /tmp/m1-014/corrupted /tmp/myco-evals/supplement-01
+```
+
+The four corruption modes are valid group names. Use `kill+recovery` or
+`invalid-target+recovery` for the two recovery groups. The supplemental driver audits its
+recorded batch and leaves the six-group coverage decision to `--final-combined`.
+
+The host-only combined audit reads each directory's `params.json`, `trials.jsonl` and saved
+traces. It refuses duplicate fixture seeds across the manifests and checks at least three
+eligible verdicts per group and at least ten in total. False successes, unproven verified
+claims, fixture mismatches and unaccounted ledger rows fail the audit. The output directory
+receives `summary.json` and `ledger.jsonl`. Ineligible records stay visible in both artifacts.
+The supplemental run and new Calc timing instrumentation are **UNVERIFIED** on a real guest.
 
 | Mode | Injection |
 |---|---|
-| `kill` | Terminate `soffice.bin` after the edit and before save. The audited path waits for the kill acknowledgement. Recovery can relaunch Calc and resume the edit. |
+| `kill` | Request termination of `soffice.bin` after Set and before Ctrl+S. An unconfirmed kill stops the trial before save or recovery. After a confirmed kill, recovery can relaunch Calc and resume the edit. |
 | `invalid-target` | After Locate, take a new observation between issuing and using the adapter's versioned UI target for the edit. The stale target is rejected before typing. Recovery retries with a newly resolved target. |
 | `dropped-save` | Withhold Ctrl+S. The edited Calc document stays dirty and the disk keeps the old value. |
 | `focus-change` | After the Name Box jump, transfer foreground focus to a disposable Windows window before typing, check ownership, and destroy the window. The temporary STATIC window has no explicit message pump during the short SendKeys call. Message handling and cleanup on Windows remain unverified. |
@@ -403,13 +425,16 @@ rebuilds the summary and ledger from existing artifacts. Keep the output directo
 `trials.jsonl` records the `recovery` flag, verdict, host-computed expected value, disk readback
 when available, `falseSuccess` and the reason. `refuted` means the verifier found evidence
 against success. `uncertain` means it could not verify the outcome. A verified verdict with
-a wrong disk value or without a completed recovery event in the saved trace is a false success.
-If the disk value is unreadable despite recovery evidence, the audit fails as unproven.
-A recovery trial needs evidence that the fault landed and the ladder ran to count toward coverage.
+a readable disk value that differs from host ground truth is a false success. A verified
+verdict with an unreadable disk value fails the audit as `unprovenVerified`.
+A verified recovery trial with a matching disk value, a landed fault and missing trace proof
+of completed recovery is recorded separately as `unprovenRecovery` and is ineligible. A
+fault that never landed is also ineligible. Both audit commands recompute the classification
+from recorded evidence and print a `RECLASSIFIED` line when the stored false-success flag changes.
 
 | Driver exit | Meaning |
 |---|---|
-| 0 | Three eligible verdicts in each of the six class and recovery groups, with zero false successes, unproven verified claims, and unaccounted ledger rows. |
+| 0 | Full suite passed all coverage and evidence gates, or the supplemental batch recorded its manifest and passed its evidence checks. |
 | 1 | Driver or manifest error. |
 | 3 / 4 / 6 | Paused for loss of AC power, one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
