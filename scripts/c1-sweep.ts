@@ -31,8 +31,9 @@ async function main() {
     );
 
     // 1. Health & power checks
+    // Recorded, not enforced: power source is evidence, not a precondition
+    // (Tiffany: never gate VM work on charger state).
     const acPower = execFileSync("pmset", ["-g", "batt"]).toString().includes("AC Power");
-    if (!acPower) throw new Error("AC power lost before trial reset");
     let caffeinate = false;
     try {
       caffeinate = execFileSync("pgrep", ["caffeinate"]).toString().trim().length > 0;

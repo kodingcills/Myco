@@ -72,19 +72,37 @@ function prepared(): PreparedC1 {
 }
 
 describe("C1 host harness", () => {
-  it("runs teardown before an aborting precondition, so an abort cannot leak", async () => {
-    // Regression: the AC gate used to throw before the try that owns teardown,
-    // so a battery abort left the caller's Calc instance running with nobody to
-    // close it - observed as two orphaned soffice processes on 2026-11-22.
-    // The gate must sit INSIDE the cleanup scope: firing is fine, leaking is not.
+  it("does not gate a trial on AC power", async () => {
+    // Tiffany: never pause or gate VM work on charger state. Power is recorded
+    // evidence, so a battery trial must RUN and report acPower: false rather
+    // than throw. Load-bearing: reinstating the gate fails this test.
+    const row = await runC1Trial(
+      { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
+      { ...prepared(), acPower: false },
+      planner(),
+    );
+    expect(row.acPower).toBe(false);
+  });
+
+  it("runs teardown on an aborting precondition, so an abort cannot leak", async () => {
+    // Regression: an aborting precondition must sit inside the cleanup scope.
+    // The AC gate that used to live before the try is gone, so this now proves
+    // the mechanism itself: a trial that aborts at entry still closes its
+    // transport. Uses a driver so the guarded block is entered.
     const closed = vi.fn(async () => {});
     await expect(
       runC1Trial(
         { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
-        { ...prepared(), acPower: false, closeTransport: closed },
+        {
+          ...prepared(),
+          closeTransport: closed,
+          connect: async () => {
+            throw new Error("abort at entry");
+          },
+        },
         planner(),
       ),
-    ).rejects.toThrow(/AC power required/);
+    ).rejects.toThrow(/abort at entry/);
     expect(closed).toHaveBeenCalledTimes(1);
   });
 
