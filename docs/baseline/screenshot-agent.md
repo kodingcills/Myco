@@ -783,7 +783,7 @@ side-by-side table is a join, not a manual reconciliation.
   "modelCalls": 5,                  // baseline only
   "tokens": { "in": 0, "out": 0 },  // baseline only
   "resetMs": 140_000,               // per-trial reset, both arms
-  "acPower": true,                  // §2.1: a battery run is not a valid trial
+  "acPower": true,                  // recorded only; a battery run IS a valid trial
   "caffeinate": true,               // host held awake for the duration
   "screenshotSource": "agent-op",   // never "utm-host" — that returns a placeholder
   "resumed": false,                 // the app or harness was interrupted and resumed
