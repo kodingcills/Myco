@@ -3,10 +3,14 @@
  *
  * This is the second application family, and it exists for one property Calc does not
  * have: Writer's AutoCorrect rewrites text while the user types. That is a silent in-app
- * mutation — the agent typed one thing, the document holds another, and the screen may
- * show either depending on when it repainted. It is the cleanest available instance of
- * "the app changed the state, not the agent", which is exactly what a false-success audit
- * needs and what a screenshot-only agent cannot see.
+ * mutation — the agent typed one thing and the document holds another. It is the cleanest
+ * available instance of "the app changed the state, not the agent", which is exactly what
+ * a false-success audit needs and what a screenshot-only agent cannot see.
+ *
+ * The model is deterministic about which side shows what: the SCREEN keeps the typed text
+ * and the FILE holds the rewrite. A live Writer may repaint to the rewritten form after a
+ * delay; that timing is a property of the real app, not of this model, and a live run must
+ * measure it rather than assume it.
  *
  * The model is deliberately small and honest about its limits: it models the table grid,
  * the cell addressing, the save path and the AutoCorrect replace table. It does not model

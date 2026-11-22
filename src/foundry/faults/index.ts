@@ -17,8 +17,6 @@ export type Fault =
    */
   | "autocorrect-rewrite";
 
-/** Faults that apply to the Writer table app; the rest are todo-store faults. */
-export const WRITER_FAULTS: readonly Fault[] = ["autocorrect-rewrite"];
 export interface FaultSpec {
   readonly fault: Fault;
   readonly version: number;
