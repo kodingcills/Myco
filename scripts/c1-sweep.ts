@@ -243,8 +243,10 @@ async function main() {
       },
     });
 
+    const { driver, diagnostic } = probeC1Driver(windowInfo.pid, pipeReachable);
+    console.log(`C1 driver preflight: ${diagnostic}`);
     return {
-      driver: probeC1Driver(windowInfo.pid, pipeReachable),
+      driver,
       resetMs,
       acPower,
       caffeinate,
