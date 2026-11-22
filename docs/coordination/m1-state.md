@@ -1,20 +1,37 @@
 # Myco M1 — coordinator state
 
-## Current handoff — 2026-11-21, sweep v2 stopped
+## Current handoff — 2026-11-21, sweep v3 complete
 
-- **M1-013:** recorded indices 0–4 at pinned commit `29369ce`. Three verified,
-  two fixture-convert timeouts (`uncertain`), 25 unrun. Stop marker at
-  20:47:24 UTC in `/tmp/m1-013/sweep-v2/progress.log`.
-- **Decision pending with the outer loop:** a cold diagnostic workbook landed
-  after 169.4 s. Proposed 240 s conversion deadline, two cold canaries and a
-  fresh sweep from index 0. Keep v2 for diagnosis. See
-  [the experiment and restart plan](../research/experiments/m1-013-convert-timeout.md).
-- **Non-VM work:** [runbook](../eval-runbook.md) and [scorecard](../m1-scorecard.md)
-  are updated. The scorecard lists the remaining evidence for the corrupted
-  suite, recovery, screenshot baseline and independent reproduction.
-- **Next:** await the restart decision and reserve the host. The diagnostic
-  was interrupted and the host process check found no leftover runner. Backlog is
-  [M1](../backlog/m1.md).
+- **M1-013:** 29 verified, one refuted, 30 recorded at `aa96974`. The final
+  seed check found six distinct expected hashes. All 30 rows match the pinned
+  parameters and all 30 result records and 525 trace events passed validation.
+  Evidence is under `/tmp/m1-013/sweep-v3/`, including `final-scorecard.json`
+  and `schema-validation.log`. Index 3 refuted after the `adapter-available` guard (UNO startup) timed out
+  before any UI action; the cell kept its pristine value, so it is not a false success. Eleven fixture conversions exceeded the old
+  60 s deadline. The slowest was 140.125 s against the 240 s deadline.
+- **M1-014:** the 18-trial live corrupted suite started at 02:20:24 UTC on
+  Nov 22, pinned to `2d5df6d`, with output in `/tmp/m1-014/corrupted-v1/`.
+  The first runner exited during reset before recording a trial. After checking
+  the host gates and confirming no runner remained, the detached runner
+  resumed at index 0 at 02:28:31 UTC with the same parameters.
+  Indices 0 and 1 landed their kill and invalid-target faults and returned
+  uncertain and refuted, respectively. Index 2 timed out in the Calc
+  `nametype` helper before the dropped-save fault landed. Its
+  `fault-not-applied` result counts against the suite's three-eligible-trials
+  dropped-save gate. Index 3 landed the focus-change fault and refuted. At
+  02:59 UTC, four trials were recorded, three faults landed, and no false
+  successes had been observed. Keep the full run for the remaining fault and
+  recovery audits.
+- **Reproduction preflight:** the pinned checkout reproduced the 18-trial
+  parameter manifest and the v3 scorecard byte for byte. The six-seed
+  fingerprint check passed again. Independent live reproduction is pending.
+- **Next VM slots:** audit the corrupted suite, then issue sequential GOs for
+  RT-020 (including the myco-todo deploy check), Cua C1 and Foundry HCU.
+  Discovery S0+S1 remains tentative. S0 uses a disposable ARM64 QEMU+HVF guest
+  on a fresh overlay of Ubuntu 24.04 `noble-server-cloudimg-arm64.img` (SHA-256
+  `50e24e1f…348e`). It has no snapshot ID. RT-011's uninterrupted MCP proof
+  and deployment and verification of myco-todo there remain pending.
+- [M1 backlog](../backlog/m1.md)
 
 ## Objective
 Milestone 1: verified, recoverable desktop execution in one real Windows GUI app (LibreOffice Calc record edits, default suggestion). Acceptance: 27/30 reliability, 0 false successes in ≥10 corrupted trials, recovery from app interruption and invalid target, machine-readable evidence, screenshot-agent baseline on identical conditions, reproducible by another agent. Full spec: docs/product/vision.md.
