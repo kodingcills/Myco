@@ -84,7 +84,17 @@ A delta that is **provably test-only** may merge without a fresh PASS when ALL o
 
 **Production code differing from the verified head still requires a fresh PASS. No exceptions.** A test cannot change what production code does; a production change can alter behaviour in ways CI does not cover.
 
-Worked example (#112 at `246cd302`): one runtime path differed from all three verified heads, so content-identity did **not** hold. The delta was 0 deletions / 19 additions / a single hunk `@@ -97,0 +98,21 @@ mod tests {` with `mod tests` at line 67 — two new tests, no production line touched. Mergeable under this extension.
+Worked example (#112 at `246cd302`): one runtime path differed from the verified heads, so content-identity did **not** hold. The delta was 0 deletions / a single hunk `@@ -97,0 +98,21 @@ mod tests {` with `mod tests` at line 67 — two new tests, no production line touched. Mergeable under this extension.
+
+The **addition count depends on the comparison base**: `74074d7 -> 246cd302` is `21/0`, while earlier verified heads give a smaller count because they predate a comment reflow. State the base alongside the number, or the figure is not reproducible. Prefer the stronger check over the hunk label — compare the region above `#[cfg(test)]` directly:
+
+```bash
+F=path/to/file.rs
+diff <(git show <verified>:$F | sed -n "1,$((line-1))p") \
+     <(git show <head>:$F     | sed -n "1,$((line-1))p")
+```
+
+Empty output means no production line changed, independent of how the diff was framed.
 
 **Why not a merge queue:** enabling one is a repository-settings decision for the outer loop, not the coordinator. Auto-merge is already on and helps throughput but does not fix verifier invalidation, since `update-branch` still produces a new head.
 
