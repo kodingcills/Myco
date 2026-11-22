@@ -241,7 +241,7 @@ async function main() {
 
   console.log("--> Prepared C1 ready. Running trial 0...");
   const planner = createPlanner();
-  console.log("--> Planner type:", planner.paid ? "Paid Sonnet" : "Ollama (qwen3.8-uncensored)");
+  console.log("--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]");
 
   const row = await runC1Trial(
     {

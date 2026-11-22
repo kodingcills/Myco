@@ -258,7 +258,7 @@ async function main() {
 
   try {
     const planner = createPlanner();
-    console.log("Planner type:", planner.paid ? "Paid Sonnet" : "Ollama (qwen3.8-uncensored)");
+    console.log("--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]");
 
     const report = await runC1Sweep({
       coordinatorGo: true,
