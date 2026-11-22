@@ -120,7 +120,17 @@ export function App() {
   const [dropError, setDropError] = useState<string>();
   const [compareError, setCompareError] = useState<string>();
   const compareInput = useRef<HTMLInputElement>(null);
+  const compareButton = useRef<HTMLButtonElement>(null);
+  const wasComparing = useRef(false);
   const comparison = useViewer((state) => state.comparison);
+  useEffect(() => {
+    if (comparison) {
+      wasComparing.current = true;
+    } else if (wasComparing.current) {
+      wasComparing.current = false;
+      compareButton.current?.focus();
+    }
+  }, [comparison]);
   useEffect(() => {
     const url = new URLSearchParams(location.search).get("compare");
     if (!url) return;
@@ -129,7 +139,9 @@ export function App() {
       .then((response) => response.json())
       .then((value: unknown) => {
         const report = parseHeadToHead(value);
-        if (!cancelled && report) useViewer.getState().openComparison(url, report);
+        if (cancelled) return;
+        if (report) useViewer.getState().openComparison(url, report);
+        else setCompareError("That file is not a head-to-head report.");
       })
       .catch(() => {
         if (!cancelled) setCompareError("That report could not be loaded.");
@@ -403,6 +415,7 @@ export function App() {
           </button>
         )}
         <button
+          ref={compareButton}
           type="button"
           data-button
           onClick={() => compareInput.current?.click()}

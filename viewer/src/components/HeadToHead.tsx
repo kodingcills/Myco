@@ -1,10 +1,6 @@
-import { ArrowRight, CircleHelp, Minus, Upload } from "lucide-react";
-import { useRef, useState } from "react";
-import {
-  type HeadToHeadDecision,
-  type HeadToHeadReport,
-  parseHeadToHead,
-} from "../data/head-to-head.ts";
+import { ArrowRight, CircleHelp, Minus } from "lucide-react";
+import { useEffect, useRef } from "react";
+import type { HeadToHeadReport } from "../data/head-to-head.ts";
 import { useViewer } from "../store.ts";
 
 function pct(value: number | null): string {
@@ -24,58 +20,19 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function CompareOpen({
-  onOpen,
-}: {
-  onOpen: (report: HeadToHeadReport, name: string) => void;
-}) {
-  const input = useRef<HTMLInputElement>(null);
-  const [error, setError] = useState<string>();
-  return (
-    <div data-report-open>
-      <p className="type-body text-text-secondary">
-        Open a head-to-head report produced by the decision rule. It shows the pre-registered row,
-        the paired trials, and the arms that could not run.
-      </p>
-      <button type="button" data-button="default" onClick={() => input.current?.click()}>
-        <Upload aria-hidden="true" /> Open report…
-      </button>
-      <input
-        ref={input}
-        hidden
-        type="file"
-        accept=".json"
-        aria-label="Head-to-head report"
-        onChange={async (event) => {
-          const file = event.currentTarget.files?.[0];
-          event.currentTarget.value = "";
-          if (!file) return;
-          try {
-            const parsed = parseHeadToHead(JSON.parse(await file.text()));
-            if (!parsed) {
-              setError("That file is not a head-to-head report.");
-              return;
-            }
-            setError(undefined);
-            onOpen(parsed, file.name);
-          } catch {
-            setError("That file could not be read as JSON.");
-          }
-        }}
-      />
-      {error && (
-        <p className="type-small text-text-secondary" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
 export function CompareApp() {
   const comparison = useViewer((state) => state.comparison);
   const name = useViewer((state) => state.comparisonName);
   const close = useViewer((state) => state.closeComparison);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    closeButton.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [close]);
   return (
     <div data-app>
       <header data-app-bar>
@@ -84,18 +41,13 @@ export function CompareApp() {
           {name ?? "head-to-head"}
         </span>
         <div className="grow" />
-        <button type="button" data-button onClick={close}>
+        <button ref={closeButton} type="button" data-button onClick={close}>
           Close
         </button>
       </header>
-      <main data-compare className="min-h-0 grow overflow-auto">
-        {comparison ? (
-          <HeadToHeadView report={comparison} />
-        ) : (
-          <CompareOpen
-            onOpen={(report, fileName) => useViewer.getState().openComparison(fileName, report)}
-          />
-        )}
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the report is a scrollable region; keyboard users need it focusable. */}
+      <main data-compare className="min-h-0 grow overflow-auto" tabIndex={0}>
+        {comparison && <HeadToHeadView report={comparison} />}
       </main>
     </div>
   );
@@ -109,9 +61,9 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
       <header data-report-header>
         <div>
           <p className="type-micro text-text-secondary">Decision</p>
-          <p className="type-title text-text-primary">
+          <h1 className="type-title text-text-primary" tabIndex={-1}>
             {settled ? (decision.row ?? "No row") : "Not decided"}
-          </p>
+          </h1>
           <p className="type-small text-text-secondary">
             {decision.status === "refused"
               ? `Refused: ${decision.reason ?? "no reason recorded"}`
@@ -146,7 +98,7 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
               <th scope="col">Trials</th>
               <th scope="col">Verified</th>
               <th scope="col">Refuted</th>
-              <th scope="col">Unknown</th>
+              <th scope="col">Uncertain</th>
               <th scope="col">False successes</th>
               <th scope="col">False-success CI</th>
             </tr>
@@ -194,6 +146,32 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
         </p>
       </section>
 
+      {decision.pairRows.length > 0 && (
+        <section aria-label="Paired trials">
+          <h2 className="type-micro text-text-secondary">Paired trials</h2>
+          <table data-report-table>
+            <thead className="type-micro text-text-secondary">
+              <tr>
+                <th scope="col">Seed</th>
+                <th scope="col">Fault</th>
+                <th scope="col">Myco false success</th>
+                <th scope="col">Comparator false success</th>
+              </tr>
+            </thead>
+            <tbody className="type-data">
+              {decision.pairRows.map((row) => (
+                <tr key={`${row.seed}-${row.faultClass}`}>
+                  <td>{row.seed}</td>
+                  <td>{row.faultClass}</td>
+                  <td>{row.mycoFalseSuccess ? "yes" : "no"}</td>
+                  <td>{row.comparatorFalseSuccess ? "yes" : "no"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
       {decision.notes.length > 0 && (
         <section aria-label="Rule notes">
           <h2 className="type-micro text-text-secondary">Rule notes</h2>
@@ -211,6 +189,12 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
         <section aria-label="Not run">
           <h2 className="type-micro text-text-secondary">Not run</h2>
           <table data-report-table>
+            <thead className="type-micro text-text-secondary">
+              <tr>
+                <th scope="col">Arm</th>
+                <th scope="col">Blocker</th>
+              </tr>
+            </thead>
             <tbody className="type-data">
               {report.notRun.map((arm) => (
                 <tr key={arm.armId}>
@@ -237,6 +221,28 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
           </ul>
         </section>
       )}
+
+      <section aria-label="What this report does not say">
+        <h2 className="type-micro text-text-secondary">What this report does not say</h2>
+        <ul data-report-notes>
+          <li className="type-small text-text-secondary">
+            It does not pool prompt variants: <span className="type-data">ef-t01</span> (verify) and{" "}
+            <span className="type-data">ef-t01b</span> (no-verify) are separate decisions.
+          </li>
+          <li className="type-small text-text-secondary">
+            It does not treat <span className="type-data">uncertain</span> as success or failure;
+            those trials are counted separately.
+          </li>
+          <li className="type-small text-text-secondary">
+            It is not a leaderboard entry. The task set, initial state, and planner are the ones
+            named above.
+          </li>
+          <li className="type-small text-text-secondary">
+            A <span className="type-data">refused</span> decision is a result: the pre-registered
+            sample or the trusted ingest is not there yet.
+          </li>
+        </ul>
+      </section>
     </section>
   );
 }

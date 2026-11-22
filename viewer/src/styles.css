@@ -791,7 +791,7 @@
 }
 
 [data-head-to-head] {
-  max-width: 68rem;
+  max-width: var(--layout-report-max-width);
   margin: 0 auto;
   padding: var(--spacing-6);
   display: flex;
@@ -809,7 +809,7 @@
 
 [data-report-facts] {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(var(--layout-report-fact-min), 1fr));
   gap: var(--spacing-3);
 }
 
@@ -845,7 +845,7 @@
 }
 
 [data-report-open] {
-  max-width: 40rem;
+  max-width: var(--layout-report-open-max-width);
   margin: 0 auto;
   padding: var(--spacing-6);
   display: flex;
