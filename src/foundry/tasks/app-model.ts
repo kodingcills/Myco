@@ -25,17 +25,11 @@ import { buildTodoInitialState, isDroppedByApp, statusSavedLine } from "./todo.t
 const ITEMS_FILE = "store.json";
 const META_FILE = "store.meta.json";
 
-function renderEntry(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length === 0 ? trimmed : trimmed[0]!.toUpperCase() + trimmed.slice(1);
-}
-
 /**
- * What the listbox shows for a row. The app adds through the Entry widget, and Tk's
- * Entry display does not collapse interior whitespace — the row is shown as typed.
- * Only the FIRST character is capitalised for display, by the listbox's render.
+ * What the listbox shows for a row. Tk's Entry display does not collapse interior
+ * whitespace, so a row is shown as typed apart from the listbox's leading capital.
  */
-function displayEntry(raw: string): string {
+export function renderEntry(raw: string): string {
   const trimmed = raw.trim();
   return trimmed.length === 0 ? trimmed : trimmed[0]!.toUpperCase() + trimmed.slice(1);
 }
@@ -56,6 +50,8 @@ export interface AppState {
   readonly files: Readonly<Record<string, string>>;
   /** Entries deleted with the Delete button; removed from both screen and store on save. */
   readonly deleted: readonly string[];
+  /** The last text typed into the entry field, i.e. the user's own input. */
+  readonly lastTyped?: string;
 }
 
 /**
@@ -93,10 +89,26 @@ export function addItem(state: AppState, text: string): AppState {
   if (trimmed === "") return { ...state, status: "nothing to add" };
   return {
     ...state,
-    listbox: [...state.listbox, displayEntry(trimmed)],
+    listbox: [...state.listbox, renderEntry(trimmed)],
     rows: [...state.rows, trimmed],
     status: `added: ${trimmed}`,
+    lastTyped: trimmed,
   };
+}
+
+/**
+ * The Edit-in-place the rename task asks for: the user types the new text over the
+ * target row. The row keeps its position; only its text changes.
+ */
+export function renameItemInPlace(state: AppState, from: string, to: string): AppState {
+  const target = renderEntry(from);
+  const index = state.listbox.indexOf(target);
+  if (index === -1) return { ...state, status: `not found: ${from}` };
+  const listbox = [...state.listbox];
+  const rows = [...state.rows];
+  listbox[index] = renderEntry(to);
+  rows[index] = to.trim();
+  return { ...state, listbox, rows, status: `renamed: ${from} -> ${to}`, lastTyped: to.trim() };
 }
 
 /** The Delete button: the entry leaves the screen immediately; the store waits for Save. */
@@ -150,10 +162,22 @@ export function saveApp(
       };
     }
     case "stale-row": {
-      // The rename repaints the listbox, but the store serialises the pre-rename rows.
-      // Any row that is new since boot is written normally; every pre-existing row keeps
-      // the text it had when the app loaded.
-      const items = shown.map((entry) => normalise(loadedTextFor(spec, entry) ?? entry));
+      // The rename repaints the listbox in place, but the store serialises the row's text as
+      // it was when the app loaded. The target is identified by its ROLE, never by text:
+      // after the rename the user's text belongs to the new value, not to the stale row.
+      // A rename is exactly "the target row left the screen and the user typed a row that
+      // is not a pre-existing one" — anything else (a plain add) leaves the store alone.
+      const slot = renameTarget(spec);
+      const preexisting = new Set(spec.seedItems.map((item) => renderEntry(normalise(item.text))));
+      const typed = state.lastTyped;
+      const renameHappened =
+        slot !== undefined &&
+        typed !== undefined &&
+        !preexisting.has(renderEntry(normalise(typed)));
+      const replacement = typed === undefined ? undefined : renderEntry(normalise(typed));
+      const items = shown.map((entry) =>
+        renameHappened && entry === replacement ? slot.stored : normalise(entry),
+      );
       return {
         ...state,
         status: statusSavedLine(shown.length),
@@ -177,17 +201,17 @@ export function saveApp(
 }
 
 /**
- * The store text (pre-rename) a rendered row corresponds to, if the row existed at load.
- * Indexed by the rendered form, since that is all the listbox keeps.
+ * The row a rename targets, and the text the store keeps for it: the one seed whose ROLE
+ * says "rename-target". Resolving by text would fail exactly where the defect lives — the
+ * user renames "Draft release notes", so the post-rename text can never identify the row
+ * that has to keep its old text.
  */
-function loadedTextFor(spec: TodoFixtureSpec, rendered: string): string | undefined {
-  const loaded = spec.seedItems
-    .filter((item) => item.role !== "deleted" && !isDroppedByApp(item.text))
-    .map((item) => ({ rendered: renderEntry(normalise(item.text)), stored: normalise(item.text) }));
-  return loaded.find((entry) => entry.rendered === rendered)?.stored;
+function renameTarget(spec: TodoFixtureSpec): { rendered: string; stored: string } | undefined {
+  const target = spec.seedItems.find((item) => item.role === "rename-target");
+  if (target === undefined) return undefined;
+  return { rendered: renderEntry(normalise(target.text)), stored: normalise(target.text) };
 }
 
-/** The timestamps the fixture's initial store used; new entries keep the same clock. */
 function initialTimestamps(spec: TodoFixtureSpec, variant: StoreVariant): () => string {
   const parsed = JSON.parse(
     new TextDecoder().decode(buildTodoInitialState(spec, variant).bytes),

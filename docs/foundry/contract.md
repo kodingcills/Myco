@@ -234,7 +234,7 @@ seed files, and calls without a directory when `MYCO_FOUNDRY_HIDDEN_DIR` is unse
 
 | Change | Requirement |
 |---|---|
-| Fixture initial state or screen claims | Bump `FixtureManifest.version`; regenerate `foundry/hidden/`; re-run the whole suite's mutation audit. Old scores are not comparable. |
+| Fixture initial state or screen claims | Bump the version encoded in the fixture id (`…-v2`): `FixtureManifest.version` is *derived* from the id, never stored separately, so an id cannot claim a version its manifest does not have. Regenerate the hidden commitment (`foundry/hidden-commitment.json`) and re-run the mutation audit. Old scores are not comparable. |
 | Oracle `expected()` semantics | Bump `StateOracle.version`; every task that pins a fixture version gets a per-task score reset note in the report. |
 | Task prompt text | Bump `taskVersion`; a prompt change can change difficulty, and a suite that edits prompts between arms is not a comparison. |
 | Fault schedule | Bump `faultVersion`; corrupted-arm scores are only comparable within one schedule. |

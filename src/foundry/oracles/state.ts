@@ -133,9 +133,18 @@ function expectedTodoState(intent: TaskIntent, initial: InitialState): TodoState
     case "todo.add-items":
       return withMeta([...current, ...intent.items.map(normalisedForStore)]);
     case "todo.rename-item": {
-      const from = normalisedForStore(intent.from);
+      // In place: the row keeps its position. Deleting the row and appending the new text
+      // is a different state, and one the mutation audit proves the oracle distinguishes.
+      const from = intent.from;
       const to = normalisedForStore(intent.to);
-      return withMeta(current.map((text) => (text === from ? to : text)));
+      const target = current.findIndex(
+        (text) => normalisedForStore(text) === normalisedForStore(from),
+      );
+      if (target === -1) {
+        // The intent names a row the initial store does not hold: nothing to rename.
+        return withMeta(current);
+      }
+      return withMeta(current.map((text, index) => (index === target ? to : text)));
     }
     case "todo.delete-items": {
       const doomed = new Set(intent.items.map(normalisedForStore));

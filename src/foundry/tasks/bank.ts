@@ -69,9 +69,9 @@ export const TODO_TASKS: readonly FoundryTask[] = [
     taskId: "ef-t03-whitespace-value",
     fixtureId: "ef-todo-wrong-value-v1",
     prompt:
-      "In the myco-todo list, add the item 'Release: review the Q3 metrics', keeping the label " +
+      "In the myco-todo list, add the item 'Bug: review the Q3 metrics', keeping the label " +
       "prefix exactly as written. Save and quit.",
-    intent: { kind: "todo.add-items", items: ["Release: review the Q3 metrics"] },
+    intent: { kind: "todo.add-items", items: ["Bug: review the Q3 metrics"] },
     minimumGuiActs: 2,
   },
   {

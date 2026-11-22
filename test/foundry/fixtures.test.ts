@@ -6,6 +6,7 @@ import {
   bootApp,
   deleteItem,
   persistedFiles,
+  renameItemInPlace,
   saveApp,
   visibleScreen,
 } from "../../src/foundry/tasks/app-model.ts";
@@ -44,7 +45,7 @@ const INTENTS: Record<string, TaskIntent> = {
     from: "Draft release notes",
     to: "Release notes for 2.4",
   },
-  "ef-todo-wrong-value-v1": { kind: "todo.add-items", items: ["Release: review the Q3 metrics"] },
+  "ef-todo-wrong-value-v1": { kind: "todo.add-items", items: ["Bug: review the Q3 metrics"] },
   "ef-todo-partial-write-v1": { kind: "todo.delete-items", items: ["archive Q1 invoices"] },
 };
 
@@ -58,8 +59,8 @@ function performTask(fixtureId: string) {
       for (const item of intent.items) state = addItem(state, item);
       break;
     case "todo.rename-item":
-      state = deleteItem(state, intent.from);
-      state = addItem(state, intent.to);
+      // A rename task is performed in place; delete-then-append is a different end state.
+      state = renameItemInPlace(state, intent.from, intent.to);
       break;
     case "todo.delete-items":
       for (const item of intent.items) state = deleteItem(state, item);

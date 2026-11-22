@@ -126,6 +126,66 @@ describe("EF-002 state oracle: reads state, not the GUI", () => {
   });
 });
 
+describe("EF-002 rename is in place, and order is part of the contract", () => {
+  const RENAME = "ef-todo-stale-row-v1";
+  const intent: TaskIntent = {
+    kind: "todo.rename-item",
+    from: "Draft release notes",
+    to: "Release notes for 2.4",
+  };
+
+  /**
+   * These two cases are the reason ordering has to be asserted. Deleting the old row and
+   * appending the new text produces the SAME SET of rows in a different position — a
+   * verifier that compares sets calls it a pass, and a user would call it a different list.
+   */
+  it("verifies the rename performed in place", () => {
+    const edited = storeOf(["Release notes for 2.4", "update docs", "triage inbox"]);
+    const verdict = verifyPersistedState(
+      ORACLE,
+      intent,
+      fixture(RENAME).initialState,
+      filesFrom(edited),
+    );
+    expect(verdict.status).toBe("verified");
+  });
+
+  it("refutes the same rows moved to a different position", () => {
+    const appended = storeOf(["update docs", "triage inbox", "Release notes for 2.4"]);
+    const verdict = verifyPersistedState(
+      ORACLE,
+      intent,
+      fixture(RENAME).initialState,
+      filesFrom(appended),
+    );
+    expect(verdict.status).toBe("refuted");
+    expect(verdict.reasons.join(" ")).toContain("todo:order");
+  });
+
+  it("refutes a rename that left the old text in place", () => {
+    const unchanged = storeOf(["Draft release notes", "update docs", "triage inbox"]);
+    const verdict = verifyPersistedState(
+      ORACLE,
+      intent,
+      fixture(RENAME).initialState,
+      filesFrom(unchanged),
+    );
+    expect(verdict.status).toBe("refuted");
+    expect(verdict.reasons.join(" ")).toContain("Draft release notes");
+  });
+
+  it("a label-stripped value is refuted against the text the user asked for", () => {
+    const stripped = storeOf(["review the Q3 metrics"]);
+    const verdict = verifyPersistedState(
+      ORACLE,
+      { kind: "todo.add-items", items: ["Bug: review the Q3 metrics"] },
+      emptyStart(),
+      filesFrom(stripped),
+    );
+    expect(verdict.status).toBe("refuted");
+  });
+});
+
 describe("EF-002 no-leak rule: the answer never depends on the agent's output", () => {
   it("expected() takes only (intent, initialState): it cannot see agent output", () => {
     // Arity is the structural protection (contract §4): an extra ActualState parameter
@@ -214,7 +274,7 @@ describe("EF-002 mutation audit (WorkArena method)", () => {
 
     const honest = verifyPersistedState(ORACLE, intent, initial, {
       "store.json": new TextEncoder().encode(
-        storeOf(["update docs", "renew the domain", "audit expense claims"]),
+        storeOf(["update docs", "audit expense claims", "renew the domain"]),
       ),
       "store.meta.json": new TextEncoder().encode('{"count": 3}\n'),
     });
@@ -222,7 +282,7 @@ describe("EF-002 mutation audit (WorkArena method)", () => {
 
     const stale = verifyPersistedState(ORACLE, intent, initial, {
       "store.json": new TextEncoder().encode(
-        storeOf(["update docs", "renew the domain", "audit expense claims"]),
+        storeOf(["update docs", "audit expense claims", "renew the domain"]),
       ),
       "store.meta.json": new TextEncoder().encode('{"count": 4}\n'),
     });
@@ -271,7 +331,7 @@ function intentFor(fixtureId: string): TaskIntent {
     case "ef-todo-stale-row-v1":
       return { kind: "todo.rename-item", from: "Draft release notes", to: "Release notes for 2.4" };
     case "ef-todo-wrong-value-v1":
-      return { kind: "todo.add-items", items: ["Release: review the Q3 metrics"] };
+      return { kind: "todo.add-items", items: ["Bug: review the Q3 metrics"] };
     case "ef-todo-partial-write-v1":
       return { kind: "todo.delete-items", items: ["archive Q1 invoices"] };
     default:

@@ -39,15 +39,18 @@ describe("Direction A: Verified GUI Task Package & Runner", () => {
     expect(result.verdict).toBe("refuted");
     expect(result.falseSuccess).toBe(true);
     expect(result.exitCode).toBe(1);
+    // Screenshot-free assertion, as amended when the fixture gained an untouched control
+    // row: four new items were attempted, and the lists below say what happened to them.
     expect(result.itemsAttempted).toHaveLength(4);
-    // Store has 2 seed items + 2 new items = 4 total
-    expect(result.itemsPersisted).toHaveLength(4);
+    // Store has 2 seed items + an untouched control row + 2 new items = 5 total.
+    // The control row is persisted with its stored text; the two new BUG items are not.
+    expect(result.itemsPersisted).toHaveLength(5);
     expect(result.itemsMissing).toHaveLength(2);
     expect(result.itemsMissing).toEqual([
       "bug: login page crashes on save",
       "BUG: token expires too early",
     ]);
-    expect(result.appStatusClaim).toBe("saved 6 item(s)");
+    expect(result.appStatusClaim).toBe("saved 7 item(s)");
 
     // Check evidence files on disk
     const runDir = result.runDir;
