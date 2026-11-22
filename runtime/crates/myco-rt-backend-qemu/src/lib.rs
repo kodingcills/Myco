@@ -282,15 +282,16 @@ impl QemuLinuxBackend {
             }
         }
         let deadline = Instant::now() + Duration::from_secs(self.config.desktop_timeout_secs);
-        let mut last = String::new();
         loop {
-            match self.observe() {
+            // A provider opened before the desktop settled can retain a dead bus
+            // connection. Each readiness attempt uses a fresh guest agent.
+            self.channel = None;
+            match self.connect().and_then(|()| self.observe()) {
                 Ok(_) => return Ok(()),
                 Err(e) => {
-                    last = e.to_string();
                     if Instant::now() > deadline {
                         return Err(BackendError::Protocol(format!(
-                            "desktop not ready within {}s: {last}",
+                            "desktop not ready within {}s: {e}",
                             self.config.desktop_timeout_secs
                         )));
                     }
@@ -523,7 +524,6 @@ impl Backend for QemuLinuxBackend {
             self.run_script("boot.sh", &[])?;
             self.wait_ssh()?;
             self.install_agent()?;
-            self.connect()?;
             // Evidence is collected from the first op onward (RT-009).
             self.recorder = Some(
                 myco_rt_evidence::SessionRecorder::new(
@@ -678,7 +678,6 @@ impl Backend for QemuLinuxBackend {
         self.run_script("boot.sh", &[])?;
         self.wait_ssh()?;
         self.install_agent()?;
-        self.connect()?;
         // The guest restarts its state counter on a fresh overlay; mirror it so a
         // pre-reset ref can never validate against post-reset state.
         self.last_state_version = 0;
