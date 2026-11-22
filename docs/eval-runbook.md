@@ -56,7 +56,7 @@ VM; do it before any VM work so a later failure is unambiguous.
 | `~/VMs/myco-win11/ssh_config`, `id_ed25519` | environment owner | Hosts the port, user, key path; `AgentClient`/`SshTunnel` default to these paths (`src/win/agent-client.ts:202-208`) |
 | `~/VMs/myco-win11/scripts/*` | environment owner | The reset/sanity primitives live outside the repo on purpose (PR #28's in-repo reset was reverted, PR #31) |
 | The agent token | produced by the deploy | Rotated on every deploy (§4); read it from the guest, never from a file committed or cached |
-| LibreOffice MSI SHA-256 | **not recorded anywhere yet** | Backlog M1-018 is still pending; acceptance row 8 asks for it. The pinned artefact is `LibreOffice_26.8.3_Win_aarch64.msi` only |
+| LibreOffice MSI SHA-256 | `8ee2ef81ca4103d3eeb06ca9f4ef0b5cbb83357d21d14a449f767bfb29183158` | SHA-256 of the retained `LibreOffice_26.8.3_Win_aarch64.msi` in the environment owner’s offline payload |
 
 Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 (`~/VMs/myco-win11/scripts`), `VM_SSH_CONFIG` (`~/VMs/myco-win11/ssh_config`), `VM_SSH_HOST`
@@ -464,7 +464,7 @@ runs/
   values/<runId>/          --mode values nests its trials here
   <evalId>/ledger.jsonl    conformance ledger — written ONLY by runEvaluation()
                            (src/core/eval.ts) in the fake harness; the live corrupted suite writes its own
-                           ledger.jsonl in its OUT dir (§7.4); the normal sweep emits none
+                           ledger.jsonl in its OUT dir (§7.4); derive the normal sweep ledger (§8.3)
 ```
 
 A sweep (§7.3) writes under its own `OUT` dir instead:
@@ -500,6 +500,26 @@ Expected: `validated N result.json + M trace events in runs: ALL OK` (recorded: 
 which is what CI proves. Use `validate-live.ts` for your run directory.
 
 ### 8.3 Ledger
+
+For normal sweep v3, join each `trials.jsonl` row to
+`runs/<index>/<runId>/{result.json,trace.jsonl}`. Require indices 0–29,
+matching run IDs and verdicts, a passing seed check, and validated result
+and trace schemas. Emit one row per distinct `action.kind` in the run's
+`action` trace events. Use `none` when no action ran.
+
+| Ledger field | Sweep v3 source |
+|---|---|
+| `evalId`, `corruptionClass` | `sweep-v3`, `none` |
+| `trialIndex`, `runId` | `trials.jsonl` index and run ID |
+| `actionKind` | Distinct traced action kinds, or `none` |
+| `state`, `oracle`, `refusalCode` | Verified trials map to `pass`, `UnoVerifier:verified`, and null. Index 3 maps to `refusal`, `UnoVerifier:refuted`, and `guard:adapter-available` |
+
+Each action kind inherits the trial-level persisted-state verdict. V3
+produces 88 schema-valid rows, with 87 passes (three action kinds each
+for 29 verified trials) and one refusal (no action at index 3). All rows
+are accounted for. The reliability denominator remains 30 trials.
+Validate the derived artifact at `/tmp/m1-013/sweep-v3/ledger.jsonl`
+with `node --import tsx scripts/m1-corrupt-suite-ledger.ts <ledger-path>`.
 
 `runs/<evalId>/ledger.jsonl` — one row per (trial, corruption-class, action-kind) with an explicit
 oracle and refusal code. The corrupted-suite recorder writes its live conformance ledger to
@@ -539,10 +559,9 @@ Be explicit with whoever asks for an "independent reproduction":
    ISO with the auto-logon password.
 4. **The snapshots are not in the repo.** `clean-base` / `clean-base-live` are the only known-good
    states; nothing regenerates them but a successful `build-all.sh`.
-5. **Versions are pinned but one hash is missing**: LibreOffice 26.8.3 aarch64, Python 3.12.10,
-   pywin32 312, comtypes 1.5.0, pywinauto 0.6.9, uiautomation 2.0.29 are recorded; the MSI
-   SHA-256 that acceptance row 8 asks for is **not** recorded (M1-018 pending).
-6. **Live evidence is pending** for the corrupted suite (M1-014). The screenshot baseline
+5. **Verify the pinned installer** against the SHA-256 in §1 before building
+   a fresh guest. The hash identifies the retained offline payload.
+6. **The corrupted suite has live evidence** (M1-014). The screenshot baseline
    (M1-015, Cua Driver as the agent with a local or approved planner) is also pending. A reproduction today can reach: reset → deploy
    → desktop proof → 20/20 generator proof → the 30-trial sweep (`scripts/m1-sweep.sh`, §7.3) →
    the corrupted suite (`scripts/m1-corrupt-suite.sh`, §7.4) → validated per-trial evidence.
