@@ -95,4 +95,25 @@ mod tests {
         }
         std::fs::remove_dir_all(base).unwrap();
     }
+
+    /// The root itself is not a grant: it would expose the whole guest filesystem.
+    /// Covered transitively by the transport's fresh-agent assertion, but a direct
+    /// test is what makes the refusal a property of this function (review residual
+    /// risk 2).
+    #[test]
+    fn refuses_a_parentless_root() {
+        let err = FileGrant::open(Path::new("/")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("filesystem root"),
+            "error must name the reason: {err}"
+        );
+    }
+
+    /// A relative root is refused before any syscall.
+    #[test]
+    fn refuses_a_relative_root() {
+        let err = FileGrant::open(Path::new("relative/dir")).unwrap_err();
+        assert!(err.to_string().contains("absolute"), "{err}");
+    }
 }
