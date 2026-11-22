@@ -557,3 +557,50 @@ and it booted a VM during a yielded window — the exact failure mode that cost 
 hour. Killed within seconds; no qemu remained. That is why the `--go` guard exists
 now: the script was dangerous to run casually, and I was the one who ran it
 casually.
+
+## Window result 2026-11-22 20:10–20:29Z (head `7963e3a`)
+
+First complete live-proof run. Host window granted by the M1 Coordinator; guest was
+QEMU+HVF, 2 GB / 2 vCPU, `hostfwd=tcp:127.0.0.1:10022-:22` (loopback only).
+
+### RT-011 end to end: PASS
+
+| op | measured |
+|---|---|
+| create | 794.463 ms |
+| observe | 13.855 ms (v2 nodes=5, windows `["MycoGtkSanity"]`) |
+| act | 488.294 ms → `delivered_verified` |
+| evidence | 9.310 ms → 4 trace lines, `recordKind=session`, no verdict |
+| reset | **54.907 s** |
+| destroy | 1.147 s → no qemu, overlay deleted |
+
+Guest-side assertion, not our claim: after `act` the guest's own state file read
+`{"entry_text": "rt011-45864"}`, and after `reset` it read `{"entry_text": ""}`.
+
+### RT-015: FAILED — test precondition, not the backend
+
+`grant_read` returned ENOENT and `provision` burned its full 900 s desktop timeout.
+The test granted `/home/myco/rt015-<pid>` before provisioning, but that directory is
+created later by `guest_exec`. The guard was correct; fixed in PR #154 (grant
+`/home/myco`, which cloud-init always creates). **Not yet re-run in a guest.**
+
+### So: is MYCO_HOME discovery proven end to end?
+
+Partly, and it is worth separating the two claims.
+
+- **The backend path is proven.** `create` succeeded from the test harness and the
+  whole lifecycle ran against a real guest.
+- **The MCP-from-any-directory claim is still NOT proven end to end.** The proof
+  exercises the backend crate, and it runs from the repo root. What it does not do
+  is start `myco-rt-mcp` as a server from an unrelated directory and drive
+  `create`/`observe` through it. Discovery resolving from the executable path is
+  covered by unit tests, not by this run.
+
+Do not call the MCP discovery barrier closed on the strength of this window.
+
+### Measurement gaps found
+
+- The proof reboots the guest per test binary: step 3 boots, then step 4 boots
+  again for RT-015. Each boot pays full cloud-init. A window is mostly boot time.
+- `shutdown.sh` keeps the overlay by design; it was 1.4 GB after this run.
+  `destroy` deletes it, but a failing run leaves it behind.
