@@ -1,6 +1,6 @@
 # Sai arm 001
 
-Read [the protocol](PROTOCOL.md) and [partial results](RESULTS.md) before working on the harness. The ledger and results JSON are records of the earlier Free Explore session.
+Read [the protocol](PROTOCOL.md) and [partial results](RESULTS.md) before working on the harness. The ledger and results JSON are records of the earlier Free Explore session; they are **not published (held privately)** and the `raw/` directory is git-ignored.
 
 From the repository root, run the offline plan and focused tests:
 
