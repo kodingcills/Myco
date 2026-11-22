@@ -90,15 +90,26 @@ which `replay.ts` already does.
 
 ## 4. What the Foundry will build next, in order
 
-1. **Independent save observer** (offline design, VM to run): a second reader that samples
-   the store at save time and records a hash, independent of the arm's recorder.
-2. **Ingest attestation** (offline): an ingest that accepts only artifacts carrying the
-   observer's record, and flips `decisionEligible` only when every binding matches.
-3. **The eligibility flip** (Tier 2, needs a verifier at the exact head): the one code change
-   that can turn a descriptive row into a decision input.
+1. ~~**Independent save observer**~~ — **built** (`src/foundry/baseline/attest.ts`):
+   `SaveObserver` samples the persistence files and records a hash, byte length and whether
+   the read came after the last save. The offline implementation is honest about being
+   offline; a live run must supply an observer whose `id` names the real second channel.
+2. ~~**Ingest attestation**~~ — **built** (`attest()` in the same file): strict by
+   construction, with no "assume fine" branch. It refuses a run when the recorder is
+   inconsistent or unfinished, when any persistence file lacks an observation, when an
+   observation predates the last save, when the bytes changed after observation, when the
+   screen reading came from the arm, or when the trace has no save to place the observation
+   against. It also reports `screenConstrained`, so an empty pixel-arm screen reads as
+   "nothing to match" rather than "agreed".
+3. **The eligibility flip** — **not done, and deliberately so.** `scoreDiscoveryTrial` still
+   hardcodes `decisionEligible: false`. Wiring `attest()` into it is the one change that can
+   turn a descriptive row into a decision input, and it is Tier 2: it needs a full verifier
+   pass at the exact head, not a follow-up to this one.
 
-Item 1 and 2 are designable and testable offline against the fake guest. Item 3 is the
-scoring change and should not land without a full verifier pass.
+**What is still missing for a real S1 run**, beyond the flip: an observer that is genuinely
+independent. `offlineObserver` hashes bytes it is handed, which tests the gate's *contract*
+but cannot test the gate's *premise* — that the reader is not the arm. That requires a second
+connection to the guest, which is VM work.
 
 ## Sources
 
