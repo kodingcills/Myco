@@ -63,6 +63,21 @@ The honest competitive picture:
   discipline, is reproducible when the agent is gone, and is the same object in local
   and CI runs". The head-to-head adds an **HCU + agent shell** arm to test exactly this.
 
+**Independently confirmed (research finding m2-01: eight product lines against vendor
+primary docs — m2-01 lists nine entries, with Simular's Agent S and Sai counted as one
+line per its §7.3).** None of Cua, Anthropic computer use, OpenAI computer
+use/Operator, Simular Agent S, UiPath, heyclicky, Microsoft HCU, Orgo, or Simular Sai
+returns a verdict on the persisted outcome. The closest two are Cua's per-action
+`effect` (five values, including `refused` and `partial`) and HCU's window-level
+before/after tree diff with pre-input guards — and HCU is explicit: *"Neither proves file contents, persistence or
+network state."* Orgo and Sai both ship an escape hatch a host *could* use to hash a
+file, but neither returns a verdict, a three-valued unknown, or an artifact a second
+party can check; the host authors both the expectation and the comparison. Both bill
+for the machine, not the outcome — Orgo per running hour ($0.023–$0.368), Sai per
+credit (m2-01 records its per-credit prices as not reported) — so **verification is
+free if the customer writes it themselves**: the economic baseline any
+verified-outcome product is priced against.
+
 [INFERENCE] The durable-test framing is the difference between an agent that happens
 to check and a test suite that always checks. This is the hypothesis MVD-004 decides.
 
@@ -161,13 +176,18 @@ pre-declared decision rule. No proof expands into a product.
 - **Oracle:** host-side parse of the persisted JSON store (Foundry). The agent's
   transcript is scored separately and never used as ground truth.
 - **Evidence:** trace, result, report; screenshots of the report.
-- **Decision rule (pre-declared):**
-  - Pass if: 0 false successes on DF-S02; ≥90% `verified` on DF-S01 over 10 runs;
-    time-to-first-verified-result ≤ 15 min from a clean checkout; the run is
-    reproducible from the README by a second agent.
-  - Fail if: the setup cannot reach 15 min on a developer machine, or the HCU+shell
-    arm also gets 0 false successes **and** a comparable time — then A's only
-    remaining value is the durable artifact, and the wedge moves to B.
+- **Decision rule (pre-declared — superseded by `mvd-preregistration.md` §1/§4 for
+  anything that is a *rate*):**
+  - Pass if: 0 false successes on DF-S02 as a **demonstration**; time-to-first-
+    verified-result ≤ 15 min from a clean checkout; the run is reproducible from the
+    README by a second agent. A completion *rate* needs ~100 normal trials over ≥3
+    seeds; a 0-false-success claim needs ≥30 refutable trials. The 10-run "≥90%" form
+    declared here first was underpowered — at 0 false successes in 10 trials the
+    failure-rate upper bound is 27.8% — and is withdrawn.
+  - Fail if: the setup cannot reach 15 min on a developer machine, or — at the
+    pre-registered sample size (≥30 refutable pairs; `mvd-preregistration.md` §4.1
+    row 3) — the HCU+shell arm also gets 0 false successes **and** a comparable time.
+    Then A's only remaining value is the durable artifact, and the wedge moves to B.
 - **Kill:** if the verdict requires Foundry's oracle to read the app's private
   files in a way a normal developer could not, the test is not portable; record it.
 
@@ -177,9 +197,11 @@ pre-declared decision rule. No proof expands into a product.
   surface with a real persisted oracle. First candidate is LibreOffice Calc with the
   existing UNO/file verifier; the second is chosen only if a business app can be
   driven locally without an account.
-- **Decision rule:** over 10 trials with ≥3 interrupted, 0 false successes, 0 silent
-  duplicates, and either `verified` or `uncertain` afterwards. Median cost per
-  operation recorded.
+- **Decision rule (superseded by `mvd-preregistration.md` §4.3 for any rate):** a
+  demonstration over 10 trials with ≥3 interrupted, 0 false successes, 0 silent
+  duplicates, and either `verified` or `uncertain` afterwards; median cost per
+  operation recorded. Any "0 silent duplicates / 0 silent losses" *claim* needs ≥30
+  interrupted trials (0/30 ⇒ upper bound 11.4%), not 10.
 - **Kill:** if every candidate needs an account or a vendor API, B is documented as
   unproven on this host — not asserted.
 
@@ -226,9 +248,12 @@ The milestone's product criterion becomes:
 > alternative reports success; and the same task reruns without an agent in under a
 > minute with the same verdict.
 
-Sample: 3 developers/agents, 2 apps (myco-todo + one volunteer app if available).
-Threshold: 3/3 complete, 0 false successes, median ≤15 min. If the threshold fails,
-the criterion is not met, whatever the demos look like.
+Sample: 3 developers/agents, 2 apps (myco-todo + LibreOffice Writer — the second app
+per research finding m2-03: already in the installed ARM64 MSI, and its table cells
+expose `XCell` *and* `XText`, so the M1 UNO read transfers with only the address
+changing from `(sheet,"A1")` to `(table,"D3")`).
+Threshold: 3/3 complete, 0 false successes (demonstration), median ≤15 min. If the
+threshold fails, the criterion is not met, whatever the demos look like.
 
 The technical criterion stays with M1/Runtime: reliably complete, verify, recover a
 supported workflow with reproducible evidence. Discovery does not restate it.
@@ -244,6 +269,8 @@ supported workflow with reproducible evidence. Discovery does not restate it.
 | Foundry's oracle cannot be made portable | The demo is a lab result; re-scope to B or to a narrower app class |
 | Interrupted-operation trials produce duplicates or silent losses | B's guarantee is not reached; fix before claiming it |
 | Fork overhead is small and success gain is large | C moves up; but only with the measured comparison |
+| One demonstration suffices to identify a reusable procedure (m2-04 says it cannot: minimal-DFA learning from positives alone is NP-complete) | C's "branch and keep what verifies" cannot become "compile a loop"; C stays a per-run search, and any procedure claim needs a verify-before-store gate |
+| Resets are cheap enough for trial-heavy designs | Measured reset is ~21 s warm disk-only by default, not 8.3 s (m2-05: 8.3 s is the live path and it wedges at -2700); budget ~21 s per trial, and APFS clone buys concurrency, not speed |
 
 ---
 
