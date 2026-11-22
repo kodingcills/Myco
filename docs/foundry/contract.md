@@ -244,7 +244,14 @@ cannot drift:
 | ~100 normal trials | CI lower bound **≥ 0.80** at ~90% observed | survey §7.1 |
 | 0 false successes in 10 | bounds the true rate only below **25.9%** | survey §7.2 |
 | 0 false successes in 30 | bounds it below **9.5%** — the smallest meaningful count | survey §7.2 |
-| 6 discordant of 30 | smallest sign-test result with p < 0.05 (5 of 5 is p = 0.0625) | survey §7.3 |
+| **6 of 6** discordant, all one way | smallest significant sign-test result, p = 0.031; 5 of 5 is p = 0.0625 | survey §7.3 |
+
+Read the sign-test row carefully, because two different questions hide behind "discordant":
+a *unanimous* run of 6 trials favouring one arm gives p = 2·(1/2)^6 = 0.031. Six discordant
+trials **scattered across 30** proves nothing — at n = 30 a two-sided sign test needs 21
+discordant trials, all one way, for p < 0.05. So the comparison is only meaningful when the
+arms disagree outright on at least 6 trials and one arm wins every one of them; anything
+milder is reported as "underpowered at n=30", never as a win.
 
 Consequences the contract imposes:
 
@@ -260,7 +267,7 @@ Consequences the contract imposes:
 
 | Change | Requirement |
 |---|---|
-| Fixture initial state or screen claims | Bump the version encoded in the fixture id (`…-v2`): `FixtureManifest.version` is *derived* from the id, never stored separately, so an id cannot claim a version its manifest does not have. Regenerate the hidden commitment (`foundry/hidden-commitment.json`) and re-run the mutation audit. Old scores are not comparable. |
+| Fixture initial state or screen claims | Bump `FixtureManifest.version`. An **authored** fixture must also rename its id to match (`ef-todo-stale-row-v1` → `…-v2`); the builder throws if the id's suffix and the manifest version disagree. A **generated** fixture (content-hash id, no suffix) passes its version explicitly. Either way, regenerate `foundry/hidden-commitment.json` and re-run the mutation audit: old scores are not comparable. |
 | Oracle `expected()` semantics | Bump `StateOracle.version`; every task that pins a fixture version gets a per-task score reset note in the report. |
 | Task prompt text | Bump `taskVersion`; a prompt change can change difficulty, and a suite that edits prompts between arms is not a comparison. |
 | Fault schedule | Bump `faultVersion`; corrupted-arm scores are only comparable within one schedule. |

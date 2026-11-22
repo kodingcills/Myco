@@ -123,7 +123,7 @@ export function loadTaskPackage(yamlPath: string): TaskPackage {
     app: (parsed.app as string) || "dogfood/apps/myco-todo",
     desktop: (parsed.desktop as string) || "linux-x11",
     task: (parsed.task as string) || "ef-t01-add-four-items",
-    fixture: (parsed.fixture as string) || "ef-todo-silent-drop-v1",
+    fixture: (parsed.fixture as string) || "ef-todo-silent-drop-v2",
     oracle: (parsed.oracle as string) || "foundry:todo-persisted-store",
     prompt:
       (parsed.prompt as string) ||

@@ -109,17 +109,27 @@ export function buildTodoInitialState(
   };
 }
 
-/** The version a fixture id encodes (`…-v1`); a bump must reach the id or it is not a bump. */
-export function fixtureVersionOf(fixtureId: string): number {
+/**
+ * The version a fixture id encodes (`…-v2`), or `undefined` when the id carries none.
+ * Generated fixtures use content-hash ids, so they pass their version explicitly; an
+ * authored fixture encodes it in the id and the two must agree.
+ */
+export function fixtureVersionOf(fixtureId: string): number | undefined {
   const encoded = /-v(\d+)$/.exec(fixtureId)?.[1];
-  return encoded === undefined ? 0 : Number(encoded);
+  return encoded === undefined ? undefined : Number(encoded);
 }
 
-export function todoFixture(spec: TodoFixtureSpec): FixtureManifest {
+export function todoFixture(spec: TodoFixtureSpec, version = 1): FixtureManifest {
+  const encoded = fixtureVersionOf(spec.fixtureId);
+  if (encoded !== undefined && encoded !== version) {
+    throw new Error(
+      `fixture ${spec.fixtureId} encodes version ${encoded} but was built as v${version}`,
+    );
+  }
   return {
     fixtureId: spec.fixtureId,
     app: "myco-todo",
-    version: fixtureVersionOf(spec.fixtureId),
+    version,
     description: spec.description,
     screenClaimsToTrap: spec.screenClaimsToTrap,
     persistenceFiles:
@@ -138,7 +148,7 @@ export function todoFixture(spec: TodoFixtureSpec): FixtureManifest {
  */
 export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
   {
-    fixtureId: "ef-todo-silent-drop-v1",
+    fixtureId: "ef-todo-silent-drop-v2",
     defect: "silent-drop",
     description:
       "An existing shopping list. The user asks for four more items, two of which the app will " +
@@ -155,7 +165,7 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
     mustNotBeSolvableBy: ["file-io", "shell-exec"],
   },
   {
-    fixtureId: "ef-todo-stale-row-v1",
+    fixtureId: "ef-todo-stale-row-v2",
     defect: "stale-row",
     description:
       "A release checklist where one row must be renamed. The app repaints the row but the " +
@@ -172,7 +182,7 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
     mustNotBeSolvableBy: ["file-io"],
   },
   {
-    fixtureId: "ef-todo-wrong-value-v1",
+    fixtureId: "ef-todo-wrong-value-v2",
     defect: "wrong-value",
     description:
       "A task list where the requested text begins with 'Bug: '. The listbox shows the text as " +
@@ -187,7 +197,7 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
     mustNotBeSolvableBy: ["file-io"],
   },
   {
-    fixtureId: "ef-todo-partial-write-v1",
+    fixtureId: "ef-todo-partial-write-v2",
     defect: "partial-write",
     description:
       "A working list where two rows must be removed. The app rewrites the store in two passes " +
@@ -214,7 +224,9 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
 ];
 
 export const TODO_FIXTURES: readonly FixtureManifest[] = TODO_FIXTURE_SPECS.map((spec) =>
-  todoFixture(spec),
+  // Authored fixtures carry their version in the id, so the builder's agreement check is
+  // satisfied by construction rather than by a second literal that could drift.
+  todoFixture(spec, fixtureVersionOf(spec.fixtureId) ?? 1),
 );
 
 export function findTodoFixture(fixtureId: string): FixtureManifest | undefined {

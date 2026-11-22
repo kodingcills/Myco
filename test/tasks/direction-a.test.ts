@@ -18,7 +18,7 @@ describe("Direction A: Verified GUI Task Package & Runner", () => {
     expect(taskPkg.app).toBe("dogfood/apps/myco-todo");
     expect(taskPkg.desktop).toBe("linux-x11");
     expect(taskPkg.task).toBe("ef-t01-add-four-items");
-    expect(taskPkg.fixture).toBe("ef-todo-silent-drop-v1");
+    expect(taskPkg.fixture).toBe("ef-todo-silent-drop-v2");
     expect(taskPkg.intent.items).toHaveLength(4);
     expect(taskPkg.intent.items).toContain("bug: login page crashes on save");
     expect(taskPkg.intent.items).toContain("BUG: token expires too early");

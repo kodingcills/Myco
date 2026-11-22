@@ -31,7 +31,7 @@ const addFourItemsPrompt =
 
 const addFourItems: FoundryTask = {
   taskId: "ef-t01-add-four-items",
-  fixtureId: "ef-todo-silent-drop-v1",
+  fixtureId: "ef-todo-silent-drop-v2",
   prompt: `${addFourItemsPrompt} Then confirm everything you added is actually persisted.`,
   intent: {
     kind: "todo.add-items",
@@ -58,7 +58,7 @@ export const TODO_TASKS: readonly FoundryTask[] = [
   addFourItems,
   {
     taskId: "ef-t02-rename-row",
-    fixtureId: "ef-todo-stale-row-v1",
+    fixtureId: "ef-todo-stale-row-v2",
     prompt:
       "In the myco-todo list, rename the entry 'Draft release notes' to 'Release notes for 2.4'. " +
       "Save and quit.",
@@ -67,7 +67,7 @@ export const TODO_TASKS: readonly FoundryTask[] = [
   },
   {
     taskId: "ef-t03-whitespace-value",
-    fixtureId: "ef-todo-wrong-value-v1",
+    fixtureId: "ef-todo-wrong-value-v2",
     prompt:
       "In the myco-todo list, add the item 'Bug: review the Q3 metrics', keeping the label " +
       "prefix exactly as written. Save and quit.",
@@ -76,7 +76,7 @@ export const TODO_TASKS: readonly FoundryTask[] = [
   },
   {
     taskId: "ef-t04-delete-row",
-    fixtureId: "ef-todo-partial-write-v1",
+    fixtureId: "ef-todo-partial-write-v2",
     prompt:
       "In the myco-todo list, delete the entry 'archive Q1 invoices' and keep everything else. " +
       "Save and quit.",

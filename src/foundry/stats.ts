@@ -76,16 +76,26 @@ export function clopperPearson(successes: number, trials: number): Interval {
   return { low, high };
 }
 
-/** Wilson score interval, for comparison with AndroidWorld's reporting convention. */
-export function wilson(successes: number, trials: number): Interval | null {
-  if (trials <= 0) return null;
+/**
+ * Wilson score interval, for comparison with AndroidWorld's reporting convention.
+ * Returns a `[low, high]` tuple and throws on impossible counts, matching the shape
+ * `oracles/report.ts` already exported — this module is the single implementation.
+ */
+export function wilson(successes: number, n: number): readonly [number, number] | null {
+  if (
+    !Number.isSafeInteger(n) ||
+    !Number.isSafeInteger(successes) ||
+    successes < 0 ||
+    successes > n
+  )
+    throw new Error("Invalid counts");
+  if (!n) return null;
   const z = 1.959963984540054;
-  const p = successes / trials;
-  const denominator = 1 + (z * z) / trials;
-  const centre = (p + (z * z) / (2 * trials)) / denominator;
-  const spread =
-    (z * Math.sqrt((p * (1 - p)) / trials + (z * z) / (4 * trials * trials))) / denominator;
-  return { low: Math.max(0, centre - spread), high: Math.min(1, centre + spread) };
+  const p = successes / n;
+  const d = 1 + (z * z) / n;
+  const centre = (p + (z * z) / (2 * n)) / d;
+  const margin = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
+  return [Math.max(0, centre - margin), Math.min(1, centre + margin)];
 }
 
 /**

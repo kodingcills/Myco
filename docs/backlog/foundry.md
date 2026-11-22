@@ -103,8 +103,9 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   name the exact blocker for each arm not run; no arm's self-report is used as ground truth.
   **Trial-count honesty (M2 statistics):** the arm comparison is reported as a paired
   per-trial table with a sign test, and the report states "underpowered" when discordant
-  trials are too few — at n=30 the smallest significant result is 6 discordant trials all
-  favouring one side (p = 0.031); 5 of 5 gives p = 0.0625 and proves nothing.
+  trials are too few — the smallest significant result is **6 of 6** discordant, all one way
+  (p = 0.031); 5 of 5 gives p = 0.0625 and proves nothing. Six scattered discordant trials out
+  of 30 prove nothing either: at n=30 a two-sided sign test needs 21, all one way.
   **Reset budget:** plan at ~21 s per cold restore (`scripts/reset-trial-vm.sh` default), not
   the 8.3 s live path; 100 trials is ~35 minutes of reset, so statistical power is affordable
   and the real cost to optimise is verification.

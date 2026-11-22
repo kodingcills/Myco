@@ -50,9 +50,18 @@ export interface AppState {
   readonly files: Readonly<Record<string, string>>;
   /** Entries deleted with the Delete button; removed from both screen and store on save. */
   readonly deleted: readonly string[];
-  /** The last text typed into the entry field, i.e. the user's own input. */
-  readonly lastTyped?: string;
+  /**
+   * The last user operation, recorded explicitly. The save path must not infer what the
+   * user did from the text they typed: an Add and a rename both leave text behind, and
+   * conflating them corrupts the store.
+   */
+  readonly lastOp?: LastOp;
 }
+
+export type LastOp =
+  | { readonly kind: "add"; readonly text: string }
+  | { readonly kind: "rename"; readonly index: number; readonly text: string }
+  | { readonly kind: "delete"; readonly text: string };
 
 /**
  * Builds the starting app state: parses the fixture's initial store exactly as the
@@ -92,7 +101,7 @@ export function addItem(state: AppState, text: string): AppState {
     listbox: [...state.listbox, renderEntry(trimmed)],
     rows: [...state.rows, trimmed],
     status: `added: ${trimmed}`,
-    lastTyped: trimmed,
+    lastOp: { kind: "add", text: trimmed },
   };
 }
 
@@ -108,7 +117,13 @@ export function renameItemInPlace(state: AppState, from: string, to: string): Ap
   const rows = [...state.rows];
   listbox[index] = renderEntry(to);
   rows[index] = to.trim();
-  return { ...state, listbox, rows, status: `renamed: ${from} -> ${to}`, lastTyped: to.trim() };
+  return {
+    ...state,
+    listbox,
+    rows,
+    status: `renamed: ${from} -> ${to}`,
+    lastOp: { kind: "rename", index, text: to.trim() },
+  };
 }
 
 /** The Delete button: the entry leaves the screen immediately; the store waits for Save. */
@@ -123,6 +138,7 @@ export function deleteItem(state: AppState, renderedOrRaw: string): AppState {
     rows: kept.filter((row) => row.entry !== target).map((row) => row.raw),
     deleted: [...state.deleted, target],
     status: `deleted: ${target}`,
+    lastOp: { kind: "delete", text: target },
   };
 }
 
@@ -163,20 +179,13 @@ export function saveApp(
     }
     case "stale-row": {
       // The rename repaints the listbox in place, but the store serialises the row's text as
-      // it was when the app loaded. The target is identified by its ROLE, never by text:
-      // after the rename the user's text belongs to the new value, not to the stale row.
-      // A rename is exactly "the target row left the screen and the user typed a row that
-      // is not a pre-existing one" — anything else (a plain add) leaves the store alone.
+      // it was when the app loaded. Only a rename triggers this: an add or a delete writes
+      // exactly what the user did. The stale text is substituted at the renamed INDEX, so
+      // untouched rows keep their stored form and a no-op save round-trips the initial bytes.
       const slot = renameTarget(spec);
-      const preexisting = new Set(spec.seedItems.map((item) => renderEntry(normalise(item.text))));
-      const typed = state.lastTyped;
-      const renameHappened =
-        slot !== undefined &&
-        typed !== undefined &&
-        !preexisting.has(renderEntry(normalise(typed)));
-      const replacement = typed === undefined ? undefined : renderEntry(normalise(typed));
-      const items = shown.map((entry) =>
-        renameHappened && entry === replacement ? slot.stored : normalise(entry),
+      const renamedIndex = state.lastOp?.kind === "rename" ? state.lastOp.index : -1;
+      const items = state.rows.map((raw, index) =>
+        index === renamedIndex && slot !== undefined ? slot.stored : normalise(raw),
       );
       return {
         ...state,

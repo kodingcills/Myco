@@ -44,9 +44,10 @@ describe("EF-004 statistics", () => {
   });
 
   it("Wilson agrees closely with the survey's published values", () => {
-    const interval = wilson(27, 30)!;
-    expect(interval.low).toBeCloseTo(0.744, 3);
+    const [low] = wilson(27, 30)!;
+    expect(low).toBeCloseTo(0.744, 3);
     expect(wilson(0, 0)).toBeNull();
+    expect(() => wilson(5, 3)).toThrow(/Invalid counts/);
   });
 
   it("attaches the underpowered caveats instead of reporting a bare rate", () => {
