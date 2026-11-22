@@ -9,6 +9,7 @@ import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
 import { createPlanner } from "../src/baseline/planner.ts";
 import { runC1Sweep } from "../src/baseline/sweep.ts";
 import manifest from "../src/baseline/sweep-v3.json" with { type: "json" };
+import { cleanupTrialGuest } from "../src/integration/guest-health.ts";
 import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
 import { groundTruth } from "../src/tasks/intent.ts";
@@ -21,6 +22,29 @@ async function main() {
   console.log(`=== Starting C1 Screenshot Baseline Sweep in ${directory} ===`);
 
   let activeTunnel: SshTunnel | undefined;
+
+  /** Reap what a failed prepare left in the guest, then let the error through. */
+  async function reapAfterPrepareFailure(
+    client: AgentClient,
+    runRoot: string,
+    converter: WindowsFixtureConverter | undefined,
+  ): Promise<void> {
+    try {
+      const tail = (path: string | null | undefined) =>
+        path ? path.split(/[\\/]/).pop() : undefined;
+      const cleanup = await cleanupTrialGuest({
+        client,
+        runRoot,
+        runDirName: tail(converter?.lastRunDir),
+        profileDirName: tail(converter?.lastProfileDir),
+      });
+      console.log(
+        `--> Guest reaped after failed prepare: killed=${JSON.stringify(cleanup.killed)} removed=${JSON.stringify(cleanup.removed)} residue=${JSON.stringify(cleanup.residue)}`,
+      );
+    } catch (error) {
+      console.error("--> Guest reap failed:", error instanceof Error ? error.message : error);
+    }
+  }
 
   async function prepare(
     target: (typeof manifest.rows)[number],
@@ -40,7 +64,7 @@ async function main() {
     } catch {
       caffeinate = false;
     }
-    const loadAvg1 = os.loadavg()[0];
+    const loadAvg1 = os.loadavg()[0] ?? 0;
 
     // 2. Cold reset VM to snapshot
     console.log(`[${target.index}] Resetting VM to ${snapshot}...`);
@@ -105,7 +129,12 @@ async function main() {
     for (let i = 0; i < 15; i++) {
       try {
         const pong = await client.ping();
-        console.log(`[${target.index}] myco-agent ping verified:`, pong.backend);
+        // ping() returns {agent_version, session_id}; there is no `backend`
+        // field. The old line logged `undefined` and typechecked only because
+        // this file was outside every tsconfig include.
+        console.log(
+          `[${target.index}] myco-agent ping verified: agent_version=${pong.agent_version}`,
+        );
         pingOk = true;
         break;
       } catch {
@@ -115,105 +144,42 @@ async function main() {
     if (!pingOk) throw new Error("myco-agent did not answer ping");
 
     // 6. Convert fixture
-    console.log(`[${target.index}] Converting fixture for seed: ${target.params.fixtureSeed}...`);
-    const fixture = generateFixture(target.params.fixtureSeed);
-    const converter = new WindowsFixtureConverter({
-      client,
-      guestDir: `C:\\myco\\runs\\${target.index}`,
-      timeoutMs: 90_000,
-    });
-    await converter.convert(Buffer.from(fixture.csv, "utf8"));
-    const xlsxPath = converter.lastXlsxPath;
-    if (!xlsxPath) throw new Error("fixture convert produced no path");
-    console.log(`[${target.index}] Fixture converted: ${xlsxPath}`);
+    // From here on a throw can leave guest state behind: convert creates nonce
+    // dirs, and step 7 launches Calc. Both are reaped on the way out. This is
+    // the same leak class #131 fixed for the spike, on the path that actually
+    // ran it - the window-not-found and UNO-timeout aborts each orphaned a
+    // soffice with nothing to kill it.
+    const runRoot = `C:\\myco\\runs\\${target.index}`;
+    let converter: WindowsFixtureConverter | undefined;
+    try {
+      console.log(`[${target.index}] Converting fixture for seed: ${target.params.fixtureSeed}...`);
+      const fixture = generateFixture(target.params.fixtureSeed);
+      converter = new WindowsFixtureConverter({
+        client,
+        guestDir: runRoot,
+        timeoutMs: 90_000,
+      });
+      await converter.convert(Buffer.from(fixture.csv, "utf8"));
+      const xlsxPath = converter.lastXlsxPath;
+      if (!xlsxPath) throw new Error("fixture convert produced no path");
+      console.log(`[${target.index}] Fixture converted: ${xlsxPath}`);
 
-    // 7. Launch Calc on fixture with UNO accept socket 2002
-    console.log(`[${target.index}] Launching Calc on fixture with UNO accept socket 2002...`);
-    const unoSocket = "2002";
-    await client.launch([
-      "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
-      `--accept=socket,host=127.0.0.1,port=${unoSocket};urp;`,
-      "--norestore",
-      "--nologo",
-      xlsxPath,
-    ]);
-
-    // 8. Find Calc window in Cua
-    console.log(`[${target.index}] Finding Calc window in Cua...`);
-    let windowInfo: { pid: number; window_id: number } | undefined;
-    for (let attempt = 0; attempt < 30; attempt++) {
-      await sleep(1000);
-      try {
-        const resJson = execFileSync(
-          join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
-          ["C:\\myco\\bin\\cua-driver.exe call list_windows '{}'"],
-          { input: "", encoding: "utf8" },
-        );
-        const parsed = JSON.parse(resJson);
-        const win = parsed.windows?.find(
-          (w: { app_name?: string; title?: string; pid: number; window_id: number }) =>
-            w.app_name?.toLowerCase().includes("soffice") ||
-            w.app_name?.toLowerCase().includes("calc") ||
-            w.title?.toLowerCase().includes("calc"),
-        );
-        if (win) {
-          windowInfo = { pid: win.pid, window_id: win.window_id };
-          console.log(
-            `[${target.index}] Found Calc window: pid=${win.pid}, window_id=${win.window_id}`,
-          );
-          break;
-        }
-      } catch {}
-    }
-    if (!windowInfo) throw new Error("Calc window not found after launch");
-
-    // 9. Wait for UNO readiness
-    console.log(`[${target.index}] Polling UNO socket readiness...`);
-    const gt = groundTruth(target.params);
-    const unoDeadline = Date.now() + 60_000;
-    let unoReady = false;
-    while (Date.now() < unoDeadline) {
-      try {
-        await client.unoEval({
-          call: "get_string",
-          cell: gt.cellRef,
-          socket: unoSocket,
-        });
-        console.log(`[${target.index}] UNO socket ready (initial ${gt.cellRef} readable)`);
-        unoReady = true;
-        break;
-      } catch {
-        await sleep(500);
-      }
-    }
-    if (!unoReady) throw new Error("UNO socket timed out before becoming ready");
-
-    // 10. Wire connect, closeTransport, judge, audit
-    let mcpProc: ReturnType<typeof spawn> | undefined;
-    const connect = async () => {
-      mcpProc = spawn("ssh", [
-        "-F",
-        join(os.homedir(), "VMs/myco-win11/ssh_config"),
-        "-o",
-        "LogLevel=ERROR",
-        "myco-win11",
-        "C:\\myco\\bin\\cua-driver.exe mcp --socket \\\\.\\pipe\\cua-driver",
+      // 7. Launch Calc on fixture with UNO accept socket 2002
+      console.log(`[${target.index}] Launching Calc on fixture with UNO accept socket 2002...`);
+      const unoSocket = "2002";
+      await client.launch([
+        "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
+        `--accept=socket,host=127.0.0.1,port=${unoSocket};urp;`,
+        "--norestore",
+        "--nologo",
+        xlsxPath,
       ]);
-      return mcpStdio(mcpProc.stdin!, mcpProc.stdout!);
-    };
-    const closeTransport = async () => {
-      if (mcpProc) {
-        mcpProc.kill();
-        mcpProc = undefined;
-      }
-    };
 
-    const judgeAudit = independentC1Judge({
-      client,
-      socket: unoSocket,
-      xlsxPath,
-      params: target.params,
-      documentState: async () => {
+      // 8. Find Calc window in Cua
+      console.log(`[${target.index}] Finding Calc window in Cua...`);
+      let windowInfo: { pid: number; window_id: number } | undefined;
+      for (let attempt = 0; attempt < 30; attempt++) {
+        await sleep(1000);
         try {
           const resJson = execFileSync(
             join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
@@ -225,39 +191,117 @@ async function main() {
             (w: { app_name?: string; title?: string; pid: number; window_id: number }) =>
               w.app_name?.toLowerCase().includes("soffice") ||
               w.app_name?.toLowerCase().includes("calc") ||
-              w.title?.toLowerCase().includes("calc") ||
-              w.pid === windowInfo?.pid,
+              w.title?.toLowerCase().includes("calc"),
           );
-          if (!win) return "closed";
-          const dialog = parsed.windows?.find(
-            (w: { app_name?: string; title?: string; pid: number; window_id: number }) =>
-              (w.pid === windowInfo?.pid || w.app_name === win.app_name) &&
-              (w.title?.toLowerCase().includes("save") ||
-                w.title?.toLowerCase().includes("confirm") ||
-                w.title?.toLowerCase().includes("error")),
-          );
-          if (dialog) return "dialog";
-          return "open";
-        } catch {
-          return "unavailable";
-        }
-      },
-    });
+          if (win) {
+            windowInfo = { pid: win.pid, window_id: win.window_id };
+            console.log(
+              `[${target.index}] Found Calc window: pid=${win.pid}, window_id=${win.window_id}`,
+            );
+            break;
+          }
+        } catch {}
+      }
+      if (!windowInfo) throw new Error("Calc window not found after launch");
 
-    const { driver, diagnostic } = probeC1Driver(windowInfo.pid, pipeReachable);
-    console.log(`C1 driver preflight: ${diagnostic}`);
-    return {
-      driver,
-      resetMs,
-      acPower,
-      caffeinate,
-      loadAvg1,
-      window: windowInfo,
-      connect,
-      closeTransport,
-      judge: judgeAudit.judge,
-      audit: judgeAudit.audit,
-    };
+      // 9. Wait for UNO readiness
+      console.log(`[${target.index}] Polling UNO socket readiness...`);
+      const gt = groundTruth(target.params);
+      const unoDeadline = Date.now() + 60_000;
+      let unoReady = false;
+      while (Date.now() < unoDeadline) {
+        try {
+          await client.unoEval({
+            call: "get_string",
+            cell: gt.cellRef,
+            socket: unoSocket,
+          });
+          console.log(`[${target.index}] UNO socket ready (initial ${gt.cellRef} readable)`);
+          unoReady = true;
+          break;
+        } catch {
+          await sleep(500);
+        }
+      }
+      if (!unoReady) throw new Error("UNO socket timed out before becoming ready");
+
+      // 10. Wire connect, closeTransport, judge, audit
+      let mcpProc: ReturnType<typeof spawn> | undefined;
+      const connect = async () => {
+        mcpProc = spawn("ssh", [
+          "-F",
+          join(os.homedir(), "VMs/myco-win11/ssh_config"),
+          "-o",
+          "LogLevel=ERROR",
+          "myco-win11",
+          "C:\\myco\\bin\\cua-driver.exe mcp --socket \\\\.\\pipe\\cua-driver",
+        ]);
+        return mcpStdio(mcpProc.stdin!, mcpProc.stdout!);
+      };
+      const closeTransport = async () => {
+        if (mcpProc) {
+          mcpProc.kill();
+          mcpProc = undefined;
+        }
+      };
+
+      const judgeAudit = independentC1Judge({
+        client,
+        socket: unoSocket,
+        xlsxPath,
+        params: target.params,
+        documentState: async () => {
+          try {
+            const resJson = execFileSync(
+              join(os.homedir(), "VMs/myco-win11/scripts/vssh"),
+              ["C:\\myco\\bin\\cua-driver.exe call list_windows '{}'"],
+              { input: "", encoding: "utf8" },
+            );
+            const parsed = JSON.parse(resJson);
+            const win = parsed.windows?.find(
+              (w: { app_name?: string; title?: string; pid: number; window_id: number }) =>
+                w.app_name?.toLowerCase().includes("soffice") ||
+                w.app_name?.toLowerCase().includes("calc") ||
+                w.title?.toLowerCase().includes("calc") ||
+                w.pid === windowInfo?.pid,
+            );
+            if (!win) return "closed";
+            const dialog = parsed.windows?.find(
+              (w: { app_name?: string; title?: string; pid: number; window_id: number }) =>
+                (w.pid === windowInfo?.pid || w.app_name === win.app_name) &&
+                (w.title?.toLowerCase().includes("save") ||
+                  w.title?.toLowerCase().includes("confirm") ||
+                  w.title?.toLowerCase().includes("error")),
+            );
+            if (dialog) return "dialog";
+            return "open";
+          } catch {
+            return "unavailable";
+          }
+        },
+      });
+
+      const { driver, diagnostic } = probeC1Driver(windowInfo.pid, pipeReachable);
+      console.log(`C1 driver preflight: ${diagnostic}`);
+      return {
+        driver,
+        resetMs,
+        acPower,
+        caffeinate,
+        loadAvg1,
+        window: windowInfo,
+        connect,
+        closeTransport,
+        judge: judgeAudit.judge,
+        audit: judgeAudit.audit,
+      };
+    } catch (error) {
+      // Anything between the convert and this return that throws has already
+      // touched the guest. Reap before propagating, or the next slot inherits a
+      // live soffice and a stale nonce dir.
+      await reapAfterPrepareFailure(client, runRoot, converter);
+      throw error;
+    }
   }
 
   try {

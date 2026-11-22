@@ -345,9 +345,11 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   appear, one to one with their hashes; otherwise `SEED_CHECK_FAILED` and exit 8. History: the
   pilot driver dropped the seed, and every trial ran on one sheet (log 47).
 - **Gates and exit codes.** Checked before every trial; the driver exits rather than running
-  through them: 3 = on battery, 4 = 1-min load > 14, 6 = swap free < 300 MB. Re-running the
-  same command resumes: indices already in `trials.jsonl` are skipped, never re-run, whatever
-  their status.
+  through them: 4 = 1-min load > 14, 6 = swap free < 300 MB. **Power is not a gate** (Tiffany,
+  2026-11-22: never pause or gate runs on charger power) — `acPower` is recorded per row, and a
+  battery run is a valid trial. Exit 3 is retained in the table below only for runs started
+  before that change; it is no longer emitted. Re-running the same command resumes: indices
+  already in `trials.jsonl` are skipped, never re-run, whatever their status.
 - **Fresh `OUT` per sweep.** Resume-skip means a stale `trials.jsonl` in a reused directory
   silently counts old records. Resume after a host gate only with the same commit, guest
   configuration, parameters and fingerprints. Preserve the old output and start at index 0
@@ -436,7 +438,7 @@ from recorded evidence and print a `RECLASSIFIED` line when the stored false-suc
 |---|---|
 | 0 | Full suite passed all coverage and evidence gates, or the supplemental batch recorded its manifest and passed its evidence checks. |
 | 1 | Driver or manifest error. |
-| 3 / 4 / 6 | Paused for loss of AC power, one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. |
+| 4 / 6 | Paused for one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. **Exit 3 (on battery) is no longer emitted** — power is recorded, never enforced. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
 | 8 | Final audit failed. Inspect `summary.json`, `summary.txt` and `ledger.jsonl`. |
 | 10 | VM in use. `REFUSED_VM_LOCKED` names the lock holder or the legacy driver process. |
