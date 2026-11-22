@@ -6,8 +6,8 @@
   seed check found six distinct expected hashes. All 30 rows match the pinned
   parameters and all 30 result records and 525 trace events passed validation.
   Evidence is under `/tmp/m1-013/sweep-v3/`, including `final-scorecard.json`
-  and `schema-validation.log`. Index 3 refuted after Calc's UNO startup check
-  timed out before any UI action. Eleven fixture conversions exceeded the old
+  and `schema-validation.log`. Index 3 refuted after the `adapter-available` guard (UNO startup) timed out
+  before any UI action; the cell kept its pristine value, so it is not a false success. Eleven fixture conversions exceeded the old
   60 s deadline. The slowest was 140.125 s against the 240 s deadline.
 - **M1-014:** the 18-trial live corrupted suite started at 02:20:24 UTC on
   Nov 22, pinned to `2d5df6d`, with output in `/tmp/m1-014/corrupted-v1/`.
