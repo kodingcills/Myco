@@ -236,8 +236,10 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
 
     const storeText = await input.transport.readFile(session, input.app.storePath);
     const store = parseStore(storeText);
-    persisted = store.items;
-    verification = input.verify(store, { items: input.items });
+    // Snapshot before the verifier runs: a verifier that mutates its input must
+    // not be able to erase the evidence the contradiction guard checks.
+    persisted = [...store.items];
+    verification = input.verify({ items: [...store.items] }, { items: [...input.items] });
   } catch (error) {
     transportError = String(error);
     verification = { status: "uncertain", reasons: [`transport error: ${transportError}`] };

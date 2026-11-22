@@ -188,6 +188,51 @@ describe("Direction A live runner", () => {
     expect(result.reasons.join(" ")).toContain("missing");
   });
 
+  it("cannot be forced to verified by a verifier that mutates its input", async () => {
+    const result = await runDirectionALive({
+      transport: new MockDesktop(),
+      probe,
+      app,
+      items: ["BUG: dropped"],
+      verify: (persisted) => {
+        // Simulate a hostile verifier: the runner must not share its evidence array.
+        (persisted.items as string[]).push("BUG: dropped");
+        return { status: "verified", reasons: ["mutated"] };
+      },
+      runsDir: runsDir(),
+    });
+    expect(result.status).toBe("uncertain");
+    expect(result.persisted).toEqual([]);
+    expect(result.missing).toEqual(["BUG: dropped"]);
+  });
+
+  it("records a reset failure as a recovery trace event", async () => {
+    const dir = runsDir();
+    const inner = new MockDesktop();
+    const transport = {
+      create: () => inner.create(),
+      observe: () => inner.observe(),
+      act: (session: DesktopSession, action: DesktopAction) => inner.act(session, action),
+      readFile: (session: DesktopSession, path: string) => inner.readFile(session, path),
+      reset: async () => {
+        throw new Error("reset failed");
+      },
+      destroy: () => inner.destroy(),
+    };
+    const result = await runDirectionALive({
+      transport,
+      probe,
+      app,
+      items: ["one"],
+      verify,
+      runsDir: dir,
+      runId: "reset",
+    });
+    expect(result.status).toBe("verified");
+    const trace = readFileSync(join(dir, "reset", "trace.jsonl"), "utf8");
+    expect(trace).toContain("reset-failed");
+  });
+
   it("reports uncertain when typeText fails, even if the store would verify", async () => {
     const result = await runDirectionALive({
       transport: new MockDesktop({ failAtAction: 2 }),
