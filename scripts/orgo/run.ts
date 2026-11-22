@@ -1,10 +1,8 @@
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import {
   type Api,
   appendLedger,
@@ -32,7 +30,6 @@ import { fakeOrgo, type Scenario } from "./fake.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const defaultOut = resolve(here, "../../docs/research/experiments/orgo-arm-001");
-const run = promisify(execFile);
 const stateScript = join(here, "state.py");
 
 export type Metric = ReturnType<typeof stats>;
@@ -70,7 +67,19 @@ export type Context = {
   history: () => Promise<unknown[] | null>;
   log: (message: string) => void;
   created: Set<string>;
+  /** Computer ids present at preflight; anything else present later is ours to delete. */
+  baseline: Set<string>;
+  /** `performance.now()` value after which no further polling or allocation happens. */
+  deadlineAt: number;
 };
+
+export const runBoundMs = 30 * 60_000;
+
+export class DeadlineError extends Error {
+  constructor() {
+    super("30 minute run bound reached");
+  }
+}
 
 export function loadKey(path = join(homedir(), ".myco/secrets/orgo.env")): Promise<string> {
   return readFile(path, "utf8").then((text) => {
@@ -155,6 +164,7 @@ async function liveInventory(ctx: Context): Promise<Computer[]> {
 
 /** Refresh balance and inventory, then enforce the spend and two-computer guard before an allocation. */
 async function allow(ctx: Context, additional: number) {
+  if (performance.now() >= ctx.deadlineAt) throw new DeadlineError();
   const balance = await credit(ctx);
   ctx.lastCents = balance;
   const live = await liveInventory(ctx);
@@ -210,7 +220,8 @@ export async function preflight(api: Api, ledgerPath: string, key: string, works
     offers: parseOffers(compute.data),
     inventoryCount: detail.status === 200 ? inventory(detail.data).length : null,
   });
-  return { workspaceId, result };
+  const baseline = detail.status === 200 ? inventory(detail.data).map(({ id }) => id) : [];
+  return { workspaceId, result, baseline };
 }
 
 const guest = {
@@ -236,8 +247,9 @@ function text(reply: Reply): string {
   return typeof reply.data.output === "string" ? reply.data.output.trim() : "";
 }
 
-async function until(
-  ctx: Context,
+/** Poll until ready or `limitMs`; throws DeadlineError once the run bound is reached. */
+export async function until(
+  ctx: Pick<Context, "sleep" | "deadlineAt">,
   _id: string,
   ready: (reply: Reply) => boolean,
   limitMs: number,
@@ -245,6 +257,7 @@ async function until(
 ): Promise<{ ms: number; reply: Reply | null }> {
   const started = performance.now();
   while (performance.now() - started < limitMs) {
+    if (performance.now() >= ctx.deadlineAt) throw new DeadlineError();
     const reply = await poll().catch(() => null);
     if (reply && ready(reply)) return { ms: performance.now() - started, reply };
     await ctx.sleep(1_000);
@@ -503,6 +516,7 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
     );
     await until(ctx, source, status("frozen"), 120_000, getComputer(ctx, source));
   }
+  await allow(ctx, 1);
   const stoppedFork = await billable(ctx, "E5 fork stopped source", source, () =>
     ctx.api("POST", `/api/computers/${source}/fork`, {}),
   );
@@ -513,6 +527,7 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
     body: stoppedFork.body.slice(0, 600),
   });
   if (stoppedFork.status === 201) ctx.created.add(String(stoppedFork.data.id));
+  await allow(ctx, 1);
   const stoppedClone = await billable(ctx, "E5 clone stopped source", source, () =>
     ctx.api("POST", `/api/computers/${source}/clone`, { name: `${prefix}clone-stopped` }),
   );
@@ -524,17 +539,27 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
   if (stoppedClone.status === 201) ctx.created.add(String(stoppedClone.data.id));
 }
 
-/** Delete every `myco-discovery-*` computer (only those), then re-list. Safe to run repeatedly. */
+/**
+ * Delete every computer this run created plus every computer absent at preflight (regardless of
+ * name, since Orgo auto-names forks), plus `myco-discovery-*` names; then re-list. Safe to repeat.
+ */
 export async function cleanup(
   ctx: Context,
 ): Promise<{ deleted: string[]; finalCount: number | null }> {
   const deleted: string[] = [];
-  const targets = cleanupSelection(await liveInventory(ctx));
-  for (const computer of targets) {
-    const reply = await billable(ctx, "cleanup delete", computer.id, () =>
-      ctx.api("DELETE", `/api/computers/${computer.id}`),
+  const live = await liveInventory(ctx);
+  const ids = new Set([
+    ...cleanupSelection(live, { created: ctx.created, baseline: ctx.baseline }).map(({ id }) => id),
+    ...ctx.created,
+  ]);
+  for (const id of ids) {
+    const reply = await billable(ctx, "cleanup delete", id, () =>
+      ctx.api("DELETE", `/api/computers/${id}`),
     );
-    if (reply.status >= 200 && reply.status < 300) deleted.push(shortId(computer.id));
+    if (reply.status >= 200 && reply.status < 300) {
+      deleted.push(shortId(id));
+      ctx.created.delete(id);
+    }
   }
   const remaining = await liveInventory(ctx).catch(() => null);
   await ledger(ctx, {
@@ -547,7 +572,12 @@ export async function renderResults(raw: Raw): Promise<string> {
   const fmt = (value: number | null) => (value === null ? "-" : Math.round(value).toString());
   const row = (label: string, m: Metric) =>
     `| ${label} | ${m.n} | ${fmt(m.min)} | ${fmt(m.median)} | ${fmt(m.p95)} | ${fmt(m.max)} |`;
-  const lines: string[] = ["# Orgo arm 001 results", ""];
+  const lines: string[] = [
+    "# Orgo arm 001 results",
+    "",
+    "> **NOT CLEARED FOR LIVE USE.** The runner has not been approved for a live compute pass. Live `run` refuses to start experiments unless `ORGO_LIVE_APPROVED=yes` is set, which requires explicit outer-loop approval. Only the read-only preflight has run live.",
+    "",
+  ];
   lines.push(
     `Generated ${raw.generated} (${raw.mode}). Authoritative tables below; raw data in \`raw.json\`, per-operation ledger in \`ledger.jsonl\`.`,
     "",
@@ -617,7 +647,7 @@ export async function renderResults(raw: Raw): Promise<string> {
   }
   if (!p.ok) {
     lines.push(
-      "## Documented, not tested (docs.orgo.ai, retrieved at run time; no live outcome)",
+      "## Documented, not tested (docs.orgo.ai; static text, no live outcome)",
       "",
       "| Operation | Documented behaviour | Live result |",
       "| --- | --- | --- |",
@@ -668,10 +698,10 @@ export async function renderResults(raw: Raw): Promise<string> {
     ? `${fmt(ran.metrics.apiMs.median)} ms median API (N=${ran.metrics.apiMs.n})`
     : "not measured (gated)";
   lines.push(
-    `| Fork latency / source pause | ${forkLatency}; docs claim ~2 s source pause | Myco reset is ~21-25 s warm and ~165 s from a fresh UTM start (contract section 7a); a Myco \`fork()\` would need to beat both without the live-restore wedge seen in m2-05 |`,
+    `| Fork latency / source pause | ${forkLatency}; docs claim ~2 s source pause | Myco reset is ~21 s warm and ~165 s from a fresh UTM start (contract section 7a); a Myco \`fork()\` would need to beat both without the live-restore wedge seen in m2-05 |`,
   );
   lines.push(
-    "| Clone latency | not measured unless E3 above has samples | a Myco clone starts from a cold boot like Orgo's |",
+    "| Clone latency | not measured unless E3 above has samples | not applicable: Myco has no clone or fork operation |",
   );
   lines.push(
     `| Suspend on a credit-only account | ${raw.experiments.E4 ? "see E4" : "not measured (gated)"}; docs: an hourly computer answers 409 HOURLY_USE_STOP | Myco snapshot/restore must keep RAM for credit-only use |`,
@@ -679,8 +709,10 @@ export async function renderResults(raw: Raw): Promise<string> {
   lines.push(
     "| State semantics | docs: fork copies live memory; clone and stop/start keep disk only | Myco needs both plus verified reset state |",
   );
+  const offered =
+    p.offers.map((o) => `${o.name} at $${o.usdPerHour}/h`).join(", ") || "no offers recorded";
   lines.push(
-    "| Cost per branch | docs: Small about $0.023/h; a fork needs its own purchase on an hourly source (HOURLY_QUOTE_REQUIRED) | local branch cost is host CPU and disk only |",
+    `| Cost per branch | docs: Small about $0.023/h; this account is only offered ${offered} (preflight above); a fork needs its own purchase on an hourly source (HOURLY_QUOTE_REQUIRED) | local branch cost is host CPU and disk only |`,
   );
   lines.push(
     "",
@@ -701,36 +733,82 @@ type Args = {
   workspace?: string;
   scenario: Scenario;
   charge?: number;
+  deadlineMs?: number;
+  failMidE2: boolean;
 };
 
+const commands = new Set(["run", "preflight", "cleanup", "render"]);
+const scenarios = new Set<string>(["free", "paid-gated", "paid-open"]);
+
+/** Strict parser: unknown flags, missing values, unknown scenarios and unknown commands all throw. */
 export function parseArgs(argv: string[]): Args {
-  const flag = (name: string) => {
-    const at = argv.indexOf(name);
-    return at >= 0 ? argv[at + 1] : undefined;
+  const args: Args = {
+    command: "run",
+    dryRun: false,
+    out: defaultOut,
+    scenario: "free",
+    failMidE2: false,
   };
-  const scenario = (flag("--scenario") ?? "free") as Scenario;
-  if (!["free", "paid-gated", "paid-open"].includes(scenario)) throw new Error("Unknown scenario");
-  const valueFlags = new Set(["--out", "--workspace", "--scenario", "--charge-cents"]);
-  const positional = argv.filter(
-    (arg, at) => !arg.startsWith("--") && !valueFlags.has(argv[at - 1] ?? ""),
-  );
-  const charge = flag("--charge-cents");
-  return {
-    command: positional[0] ?? "run",
-    dryRun: argv.includes("--dry-run"),
-    out: resolve(flag("--out") ?? defaultOut),
-    workspace: flag("--workspace"),
-    scenario,
-    charge: charge === undefined ? undefined : Number(charge),
+  const positional: string[] = [];
+  const number = (name: string, value: string | undefined) => {
+    const parsed = Number(value);
+    if (value === undefined || value === "" || !Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(`${name} needs a non-negative number`);
+    }
+    return parsed;
   };
+  for (let at = 0; at < argv.length; at += 1) {
+    const arg = argv[at] ?? "";
+    const value = () => {
+      const next = argv[at + 1];
+      if (next === undefined || next.startsWith("--")) throw new Error(`${arg} needs a value`);
+      at += 1;
+      return next;
+    };
+    switch (arg) {
+      case "--dry-run":
+        args.dryRun = true;
+        break;
+      case "--fail-mid-e2":
+        args.failMidE2 = true;
+        break;
+      case "--out":
+        args.out = resolve(value());
+        break;
+      case "--workspace":
+        args.workspace = value();
+        break;
+      case "--scenario": {
+        const scenario = value();
+        if (!scenarios.has(scenario)) throw new Error(`Unknown scenario: ${scenario}`);
+        args.scenario = scenario as Scenario;
+        break;
+      }
+      case "--charge-cents":
+        args.charge = number(arg, value());
+        break;
+      case "--deadline-ms":
+        args.deadlineMs = number(arg, value());
+        break;
+      default:
+        if (arg.startsWith("--")) throw new Error(`Unknown option: ${arg}`);
+        positional.push(arg);
+    }
+  }
+  if (positional.length > 1) throw new Error("Only one command is accepted");
+  args.command = positional[0] ?? "run";
+  if (!commands.has(args.command)) throw new Error(`Unknown command: ${args.command}`);
+  return args;
 }
 
-async function liveHistory(): Promise<unknown[] | null> {
+/**
+ * Billing history over REST. `/api/credits/transactions` is what the Orgo CLI calls but it is not in
+ * the public OpenAPI file, so this is best effort: any failure yields null. No package is fetched.
+ */
+export async function fetchHistory(api: Api): Promise<unknown[] | null> {
   try {
-    const { stdout } = await run("npx", ["-y", "orgo@2.5.0", "--json", "billing", "history"], {
-      timeout: 90_000,
-    });
-    const rows = object(JSON.parse(stdout)).transactions;
+    const reply = await api("GET", "/api/credits/transactions");
+    const rows = reply.status === 200 ? reply.data.transactions : null;
     return Array.isArray(rows)
       ? rows.map(object).map((row) => ({
           amount_cents: row.amount_cents,
@@ -744,18 +822,35 @@ async function liveHistory(): Promise<unknown[] | null> {
   }
 }
 
+/** Live experiments need an explicit approval switch; the read-only preflight does not. */
+export function liveApproved(env: Record<string, string | undefined>): boolean {
+  return env.ORGO_LIVE_APPROVED === "yes";
+}
+
 export async function main(argv: string[]): Promise<Raw> {
   const args = parseArgs(argv);
+  if (args.command === "render") {
+    // Re-render RESULTS.md from the committed raw.json: no key, no network.
+    const stored = JSON.parse(await readFile(join(args.out, "raw.json"), "utf8")) as Raw;
+    await writeFile(join(args.out, "RESULTS.md"), await renderResults(stored));
+    return stored;
+  }
   const dryRun = args.dryRun;
   const out =
     dryRun && args.out === defaultOut ? await mkdtemp(join(tmpdir(), "orgo-dry-")) : args.out;
   await mkdir(out, { recursive: true });
-  const fake = dryRun ? fakeOrgo({ scenario: args.scenario, chargeCents: args.charge }) : null;
+  const fake = dryRun
+    ? fakeOrgo({
+        scenario: args.scenario,
+        chargeCents: args.charge,
+        failOnForkBash: args.failMidE2,
+      })
+    : null;
   const key = dryRun ? "sk_dry_run_placeholder" : await loadKey();
   const api = createApi(key, fake ? fake.request : fetch);
   const ledgerPath = join(out, "ledger.jsonl");
   const log = (message: string) => process.stderr.write(`${message}\n`);
-  const { workspaceId, result } = await preflight(api, ledgerPath, key, args.workspace);
+  const { workspaceId, result, baseline } = await preflight(api, ledgerPath, key, args.workspace);
   const startCents = result.balanceCents ?? 0;
   const ctx: Context = {
     api,
@@ -768,9 +863,11 @@ export async function main(argv: string[]): Promise<Raw> {
     lastCents: startCents,
     sleep: dryRun ? async () => undefined : (ms) => delay(ms),
     balanceWait: dryRun ? async () => undefined : () => delay(3_000),
-    history: dryRun ? async () => null : liveHistory,
+    history: () => fetchHistory(api),
     log,
     created: new Set(),
+    baseline: new Set(baseline),
+    deadlineAt: performance.now() + (args.deadlineMs ?? runBoundMs),
   };
   const raw: Raw = {
     mode: dryRun ? "dry-run" : "live",
@@ -787,14 +884,17 @@ export async function main(argv: string[]): Promise<Raw> {
   } else if (args.command === "preflight" || !result.ok) {
     if (!result.ok)
       log(`Preflight gate: ${result.reasons.length} reason(s); no compute call made.`);
+  } else if (!dryRun && !liveApproved(process.env)) {
+    raw.errors.push(
+      "Live run refused: NOT CLEARED FOR LIVE USE (set ORGO_LIVE_APPROVED=yes only with outer-loop approval). Only the preflight ran.",
+    );
+    log(raw.errors[0] ?? "");
   } else {
-    const deadline = setTimeout(() => ctx.log("30 minute run bound reached"), 30 * 60_000);
     try {
       await runExperiments(ctx, raw);
     } catch (error) {
       raw.errors.push(error instanceof Error ? error.message : "unknown error");
     } finally {
-      clearTimeout(deadline);
       raw.cleanup = await cleanup(ctx).catch((error: unknown) => {
         raw.errors.push(`cleanup: ${error instanceof Error ? error.message : "failed"}`);
         return raw.cleanup;

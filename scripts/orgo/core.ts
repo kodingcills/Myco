@@ -149,9 +149,21 @@ export function inventory(workspace: JsonObject): Computer[] {
     .filter(({ status }) => status !== "deleted");
 }
 
-/** Only computers this tool names `myco-discovery-*` are ever selected for deletion. */
-export function cleanupSelection(computers: Computer[]) {
-  return computers.filter(({ name }) => name.startsWith(prefix));
+/**
+ * Computers cleanup deletes: names starting `myco-discovery-`, every id this run created
+ * (Orgo auto-names forks, e.g. `agent-1 (fork)`), and every computer absent at preflight
+ * (inventory delta), regardless of name. Without a scope only the name prefix applies.
+ */
+export function cleanupSelection(
+  computers: Computer[],
+  scope: { created?: Iterable<string>; baseline?: Iterable<string> } = {},
+) {
+  const created = new Set(scope.created ?? []);
+  const baseline = scope.baseline === undefined ? null : new Set(scope.baseline);
+  return computers.filter(
+    ({ id, name }) =>
+      name.startsWith(prefix) || created.has(id) || (baseline !== null && !baseline.has(id)),
+  );
 }
 
 export type Offer = {

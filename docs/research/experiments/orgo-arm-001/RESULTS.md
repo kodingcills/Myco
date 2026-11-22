@@ -1,5 +1,7 @@
 # Orgo arm 001 results
 
+> **NOT CLEARED FOR LIVE USE.** The runner has not been approved for a live compute pass. Live `run` refuses to start experiments unless `ORGO_LIVE_APPROVED=yes` is set, which requires explicit outer-loop approval. Only the read-only preflight has run live.
+
 Generated 2026-11-22T04:46:49.846Z (live). Authoritative tables below; raw data in `raw.json`, per-operation ledger in `ledger.jsonl`.
 
 ## Preflight (read-only, before any compute call)
@@ -25,7 +27,7 @@ Generated 2026-11-22T04:46:49.846Z (live). Authoritative tables below; raw data 
 - E4 stop/start/suspend: not run (precondition gate; documented semantics only, see PROTOCOL.md)
 - E5 stopped fork: not run (precondition gate; documented semantics only, see PROTOCOL.md)
 
-## Documented, not tested (docs.orgo.ai, retrieved at run time; no live outcome)
+## Documented, not tested (docs.orgo.ai; static text, no live outcome)
 
 | Operation | Documented behaviour | Live result |
 | --- | --- | --- |
@@ -66,11 +68,11 @@ Billing history (amounts only):
 
 | Dimension | Orgo (this account) | Myco comparison |
 | --- | --- | --- |
-| Fork latency / source pause | not measured (gated); docs claim ~2 s source pause | Myco reset is ~21-25 s warm and ~165 s from a fresh UTM start (contract section 7a); a Myco `fork()` would need to beat both without the live-restore wedge seen in m2-05 |
-| Clone latency | not measured unless E3 above has samples | a Myco clone starts from a cold boot like Orgo's |
+| Fork latency / source pause | not measured (gated); docs claim ~2 s source pause | Myco reset is ~21 s warm and ~165 s from a fresh UTM start (contract section 7a); a Myco `fork()` would need to beat both without the live-restore wedge seen in m2-05 |
+| Clone latency | not measured unless E3 above has samples | not applicable: Myco has no clone or fork operation |
 | Suspend on a credit-only account | not measured (gated); docs: an hourly computer answers 409 HOURLY_USE_STOP | Myco snapshot/restore must keep RAM for credit-only use |
 | State semantics | docs: fork copies live memory; clone and stop/start keep disk only | Myco needs both plus verified reset state |
-| Cost per branch | docs: Small about $0.023/h; a fork needs its own purchase on an hourly source (HOURLY_QUOTE_REQUIRED) | local branch cost is host CPU and disk only |
+| Cost per branch | docs: Small about $0.023/h; this account is only offered Medium at $0.055/h (preflight above); a fork needs its own purchase on an hourly source (HOURLY_QUOTE_REQUIRED) | local branch cost is host CPU and disk only |
 
 ## Not measured
 

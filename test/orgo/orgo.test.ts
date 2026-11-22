@@ -12,7 +12,17 @@ import {
   redact,
   stats,
 } from "../../scripts/orgo/core.ts";
-import { loadKey, main, parseArgs, renderResults } from "../../scripts/orgo/run.ts";
+import { fakeOrgo } from "../../scripts/orgo/fake.ts";
+import {
+  DeadlineError,
+  fetchHistory,
+  liveApproved,
+  loadKey,
+  main,
+  parseArgs,
+  renderResults,
+  until,
+} from "../../scripts/orgo/run.ts";
 
 // Fixtures are assembled at runtime so no literal looks like a real credential to secret scanners.
 const prefixShape = ["sk", "_"].join("");
@@ -264,5 +274,140 @@ describe("cli plumbing", () => {
     expect(await loadKey(path)).toBe(key);
     await writeFile(path, "OTHER=1\n");
     await expect(loadKey(path)).rejects.toThrow(/missing/);
+  });
+});
+
+describe("cleanup scope (P1-1)", () => {
+  it("selects auto-named forks that are created or absent at preflight, regardless of name", () => {
+    const computers = [
+      { id: "a", name: "myco-discovery-base", status: "running" },
+      { id: "b", name: "agent-1 (fork)", status: "running" },
+      { id: "c", name: "someone-elses", status: "running" },
+    ];
+    expect(cleanupSelection(computers).map((c) => c.id)).toEqual(["a"]);
+    expect(cleanupSelection(computers, { created: ["b"] }).map((c) => c.id)).toEqual(["a", "b"]);
+    expect(cleanupSelection(computers, { baseline: ["c"] }).map((c) => c.id)).toEqual(["a", "b"]);
+    expect(cleanupSelection(computers, { created: ["a", "b"], baseline: ["c"] })).toHaveLength(2);
+  });
+
+  it("deletes the fork and source when the run throws mid-E2", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orgo-dry-test-"));
+    const raw = await main([
+      "run",
+      "--dry-run",
+      "--scenario",
+      "paid-open",
+      "--fail-mid-e2",
+      "--out",
+      dir,
+    ]);
+    expect(raw.errors.join(" ")).toMatch(/before a response/);
+    expect(raw.cleanup.finalCount).toBe(0);
+    expect(raw.cleanup.deleted.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("E5 guards and documented codes (P1-2)", () => {
+  it("records NOT_FORKABLE and NOT_CLONABLE for a stopped source after allow()", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orgo-dry-test-"));
+    const raw = await main(["run", "--dry-run", "--scenario", "paid-open", "--out", dir]);
+    const e5 = raw.experiments.E5?.observations ?? [];
+    expect(e5[0]).toMatchObject({ status: 409, code: "NOT_FORKABLE" });
+    expect(e5[1]).toMatchObject({ cloneStatus: 400, cloneCode: "NOT_CLONABLE" });
+  });
+
+  it("never POSTs the E5 fork or clone once spend is at the stop rule", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orgo-dry-test-"));
+    const raw = await main([
+      "run",
+      "--dry-run",
+      "--scenario",
+      "paid-open",
+      "--charge-cents",
+      "50",
+      "--out",
+      dir,
+    ]);
+    expect(raw.errors.join(" ")).toMatch(/stop rule/);
+    const ledger = await readFile(join(dir, "ledger.jsonl"), "utf8");
+    expect(ledger).not.toContain("E5 fork");
+    expect(ledger).not.toContain("E5 clone");
+    expect(raw.cleanup.finalCount).toBe(0);
+  });
+});
+
+describe("run bound (P2-1)", () => {
+  it("until throws once the deadline has passed", async () => {
+    const ctx = { sleep: async () => undefined, deadlineAt: performance.now() - 1 };
+    await expect(
+      until(
+        ctx,
+        "x",
+        () => false,
+        60_000,
+        async () => ({ status: 200, ms: 0, data: {}, body: "" }),
+      ),
+    ).rejects.toThrow(DeadlineError);
+  });
+
+  it("stops before the first create when the bound is already reached, then cleans up", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orgo-dry-test-"));
+    const raw = await main([
+      "run",
+      "--dry-run",
+      "--scenario",
+      "paid-open",
+      "--deadline-ms",
+      "0",
+      "--out",
+      dir,
+    ]);
+    expect(raw.errors.join(" ")).toMatch(/run bound/);
+    expect(raw.cleanup.finalCount).toBe(0);
+    expect(await readFile(join(dir, "ledger.jsonl"), "utf8")).not.toContain("E0 create");
+  });
+});
+
+describe("report wording (P2-2) and history (P2-3)", () => {
+  it("is marked not cleared and drops the unsourced claims", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orgo-dry-test-"));
+    const raw = await main(["run", "--dry-run", "--scenario", "free", "--out", dir]);
+    const md = await renderResults(raw);
+    expect(md).toContain("NOT CLEARED FOR LIVE USE");
+    expect(md).not.toContain("retrieved at run time");
+    expect(md).not.toContain("21-25");
+    expect(md).toContain("~21 s warm");
+    expect(md).not.toMatch(/cold boot/);
+    expect(md).toContain("only offered Medium at $0.055/h");
+  });
+
+  it("reads billing history over REST, never through npx", async () => {
+    const fake = fakeOrgo({ scenario: "free" });
+    const rows = await fetchHistory(createApi("k", fake.request));
+    expect(rows).toEqual([expect.objectContaining({ type: "initial_grant" })]);
+    expect(fake.calls).toContain("GET /api/credits/transactions");
+    const failing = createApi(
+      "k",
+      (async () => new Response("nope", { status: 500 })) as typeof fetch,
+    );
+    expect(await fetchHistory(failing)).toBeNull();
+  });
+});
+
+describe("strict arguments (P2-4) and live approval", () => {
+  it("rejects unknown or malformed scenario values and options", () => {
+    expect(() => parseArgs(["--scenario", "fre"])).toThrow(/Unknown scenario/);
+    expect(() => parseArgs(["--scenario"])).toThrow(/needs a value/);
+    expect(() => parseArgs(["--scenario", "--dry-run"])).toThrow(/needs a value/);
+    expect(() => parseArgs(["--bogus"])).toThrow(/Unknown option/);
+    expect(() => parseArgs(["--charge-cents", "abc"])).toThrow(/number/);
+    expect(() => parseArgs(["launch"])).toThrow(/Unknown command/);
+    expect(parseArgs(["--scenario", "paid-gated"]).scenario).toBe("paid-gated");
+  });
+
+  it("requires an explicit approval switch for live experiments", () => {
+    expect(liveApproved({})).toBe(false);
+    expect(liveApproved({ ORGO_LIVE_APPROVED: "1" })).toBe(false);
+    expect(liveApproved({ ORGO_LIVE_APPROVED: "yes" })).toBe(true);
   });
 });

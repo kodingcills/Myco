@@ -23,6 +23,8 @@ export type FakeOptions = {
   balanceCents?: number;
   /** Cents charged per create/fork/clone. */
   chargeCents?: number;
+  /** Make the state probe on a fork reject, simulating a mid-E2 crash. */
+  failOnForkBash?: boolean;
 };
 
 export function fakeOrgo(options: FakeOptions) {
@@ -68,6 +70,18 @@ export function fakeOrgo(options: FakeOptions) {
       return json(200, {
         balanceCents: balance,
         tier: options.scenario === "free" ? "free" : "starter",
+      });
+    }
+    if (method === "GET" && path === "/api/credits/transactions") {
+      return json(200, {
+        transactions: [
+          {
+            amount_cents: 300,
+            balance_after_cents: 300,
+            type: "initial_grant",
+            created_at: "2026-01-01T00:00:00.000Z",
+          },
+        ],
       });
     }
     if (method === "GET" && path === "/api/workspaces") {
@@ -124,10 +138,9 @@ export function fakeOrgo(options: FakeOptions) {
       case "fork":
       case "clone": {
         if (computer.status !== "running") {
-          return json(409, {
-            error: "Not running",
-            code: action === "fork" ? "NOT_FORKABLE" : "computer_asleep",
-          });
+          return action === "fork"
+            ? json(409, { error: "Not running", code: "NOT_FORKABLE" })
+            : json(400, { error: "No host on record", code: "NOT_CLONABLE" });
         }
         if (options.scenario === "paid-gated") {
           return json(409, {
@@ -135,8 +148,9 @@ export function fakeOrgo(options: FakeOptions) {
             code: "HOURLY_QUOTE_REQUIRED",
           });
         }
+        // Docs: forks are auto-named `agent-N (fork)`, so they never carry the myco-discovery- prefix.
         const copy = add(
-          typeof body.name === "string" ? body.name : `${computer.name} (${action})`,
+          typeof body.name === "string" ? body.name : `agent-${counter + 1} (${action})`,
           action,
         );
         return json(201, { id: copy.id, name: copy.name, status: "running" });
@@ -158,6 +172,13 @@ export function fakeOrgo(options: FakeOptions) {
         if (computer.status !== "running")
           return json(409, { error: "asleep", code: "computer_asleep" });
         const command = String(body.command ?? "");
+        if (
+          options.failOnForkBash &&
+          computer.kind === "fork" &&
+          command.includes("state.py read")
+        ) {
+          throw new Error("simulated crash");
+        }
         let output = "ok";
         if (command.includes("state.py read")) {
           const live = computer.kind !== "clone" && !computer.restarted;
