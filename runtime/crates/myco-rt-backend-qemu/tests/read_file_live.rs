@@ -45,19 +45,23 @@ fn live_read_file_round_trips_and_refuses_escapes() {
     }
     let ws = workspace();
     let dir = format!("/home/myco/rt015-{}", std::process::id());
+    let rel = format!("rt015-{}", std::process::id());
 
-    // A granted session reads its own files and nothing else.
+    // The grant root must EXIST before provision: `with_read_grant` records it and
+    // `connect` opens it with openat2, so granting a directory that does not exist
+    // yet fails the boot with ENOENT (and re-fails on every reconnect after reset).
+    // Grant the parent that cloud-init always creates, then work one level down.
     let mut granted = backend(&ws, &format!("rt015-glad-{}", std::process::id()))
-        .with_read_grant(dir.clone());
+        .with_read_grant("/home/myco".to_string());
     bring_up(&mut granted);
     granted
         .guest_exec(&format!("mkdir -p {dir} && printf 'hello-rt015' > {dir}/known.txt && printf '\\x00\\x01\\xfe\\xff*' > {dir}/blob"))
         .expect("seed guest files");
 
     // Exact bytes, including a length that is not a multiple of 3.
-    let known = granted.read_guest_file("known.txt").expect("read known.txt");
+    let known = granted.read_guest_file(&format!("{rel}/known.txt")).expect("read known.txt");
     assert_eq!(known, b"hello-rt015", "text round trip must be exact");
-    let blob = granted.read_guest_file("blob").expect("read blob");
+    let blob = granted.read_guest_file(&format!("{rel}/blob")).expect("read blob");
     assert_eq!(blob, vec![0x00, 0x01, 0xfe, 0xff, 0x2a], "binary round trip must be exact");
     println!("READ OK known={:?} blob={:?}", String::from_utf8_lossy(&known), blob);
 
@@ -75,7 +79,7 @@ fn live_read_file_round_trips_and_refuses_escapes() {
     // A session WITHOUT a grant must not read anything, on a fresh agent.
     let mut ungranted = backend(&ws, &format!("rt015-nogrant-{}", std::process::id()));
     bring_up(&mut ungranted);
-    let r = ungranted.read_guest_file("known.txt");
+    let r = ungranted.read_guest_file(&format!("{rel}/known.txt"));
     assert!(r.is_err(), "a session with no read_root must refuse reads");
     println!("REFUSED ungranted read: {}", r.unwrap_err());
     ungranted.destroy().expect("destroy after ungranted session");
