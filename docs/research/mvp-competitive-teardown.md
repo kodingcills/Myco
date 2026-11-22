@@ -144,7 +144,7 @@ headline number must come from a third party until cua.ai publishes its own.
 MIT"; those two are **FSL-1.1-MIT**. Cua Spaces "Free for individuals. Pro is $18
 a month and Teams is $30 per seat a month" (repo README of trycua/cua).
 
-**Outcome verification.** The most rigorous vocabulary of the four, and it stops
+**Outcome verification.** The most rigorous vocabulary of the products surveyed, and it stops
 at accessibility read-back:
 
 > "1. **Element, background.** Act by `element_token`: UI Automation Invoke on
@@ -375,7 +375,7 @@ is the finding — it is listed, not smoothed.
 | Sai `unverifiable` | three-valued but transcript-adjudicated | the same, and names `unverifiable` as **the one shape worth stealing** | confirm; the shape is worth stealing, the oracle is not |
 | Closest to a proof | Cua (per-action `effect`) and HCU (window before/after + layout guard) | the same two | confirm |
 | HCU's limit | quoted from `PLATFORMS.md` and `MCP.md` | quoted: *"Neither proves file contents, persistence or network state."* | both; m2-01's sentence is the sharper one |
-| Scope | HCU, Cua, Orgo, Sai, screenshot-only control (4 products + 1 control) | Cua, Anthropic, OpenAI, Simular Agent S, UiPath, heyclicky (6), plus HCU/Orgo/Sai added — m2-01 §7.3 treats **Agent S and Sai as one product line**, so its comparable inventory is 8 | complementary; neither is a superset. **Union = 8 named products + the screenshot-only control, 0 with a persisted-outcome verdict** |
+| Scope | HCU, Cua, Orgo, Sai, screenshot-only control (4 products + 1 control) | m2-01 §1–§6: Cua, Anthropic, OpenAI, Simular Agent S, UiPath, heyclicky (6); §7 adds HCU, Orgo, Sai (3, "added 2026-11-21 so Discovery has three more data points"). §7.3 treats **Agent S and Sai as one product line**, so its comparable inventory is 8 | complementary; neither is a superset. **Union = 8 named products + the screenshot-only control, 0 with a persisted-outcome verdict** |
 | Economic baseline | MIT for HCU (Apache-2.0 OSWorld-V2 subtree, not pure MIT) and Cua (FSL-1.1-MIT for Spaces/Driver Bench); per-task benchmark cost $10.03 vs $10.05 on OSWorld 2.0 (§3.5) | "per machine-hour or per credit" (m2-01's closing "Two notes for Discovery"): Orgo bills machine-time ($0.023-$0.368/running hr), Sai bills credits (per-credit prices not reported), so verification is effectively free if the customer writes it | adopt m2-01's hedge, not a stronger one: either billing model prices verification at zero *when the customer writes it*, which is why the **hcu+shell** arm decides the wedge |
 
 The joint conclusion both documents reach independently: **the gap is not access,

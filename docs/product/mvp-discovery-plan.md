@@ -63,13 +63,13 @@ The honest competitive picture:
   discipline, is reproducible when the agent is gone, and is the same object in local
   and CI runs". The head-to-head adds an **HCU + agent shell** arm to test exactly this.
 
-**Independently confirmed (research finding m2-01, nine listed products — 8 distinct
-product lines once Simular's Agent S and Sai are counted as one, per m2-01 §7.3 —
-against vendor primary docs).** None of Cua, Anthropic computer use, OpenAI computer
+**Independently confirmed (research finding m2-01: eight product lines against vendor
+primary docs — m2-01 lists nine entries, with Simular's Agent S and Sai counted as one
+line per its §7.3).** None of Cua, Anthropic computer use, OpenAI computer
 use/Operator, Simular Agent S, UiPath, heyclicky, Microsoft HCU, Orgo, or Simular Sai
-returns a verdict on the persisted outcome. The closest two are Cua's per-action `effect` (five values,
-including `refused` and `partial`) and HCU's window-level before/after tree diff with
-pre-input guards — and HCU is explicit: *"Neither proves file contents, persistence or
+returns a verdict on the persisted outcome. The closest two are Cua's per-action
+`effect` (five values, including `refused` and `partial`) and HCU's window-level
+before/after tree diff with pre-input guards — and HCU is explicit: *"Neither proves file contents, persistence or
 network state."* Orgo and Sai both ship an escape hatch a host *could* use to hash a
 file, but neither returns a verdict, a three-valued unknown, or an artifact a second
 party can check; the host authors both the expectation and the comparison. Both bill
@@ -180,10 +180,10 @@ pre-declared decision rule. No proof expands into a product.
   anything that is a *rate*):**
   - Pass if: 0 false successes on DF-S02 as a **demonstration**; time-to-first-
     verified-result ≤ 15 min from a clean checkout; the run is reproducible from the
-    README by a second agent. A completion *rate* needs ≥100 trials over ≥3 seeds and
-    0 false successes needs ≥30 refutable trials — the 10-run "≥90%" form declared
-    here first was underpowered — at 0 false successes in 10 trials the failure-rate upper
-bound is 27.8% — and is withdrawn.
+    README by a second agent. A completion *rate* needs ~100 normal trials over ≥3
+    seeds; a 0-false-success claim needs ≥30 refutable trials. The 10-run "≥90%" form
+    declared here first was underpowered — at 0 false successes in 10 trials the
+    failure-rate upper bound is 27.8% — and is withdrawn.
   - Fail if: the setup cannot reach 15 min on a developer machine, or the HCU+shell
     arm also gets 0 false successes **and** a comparable time — then A's only
     remaining value is the durable artifact, and the wedge moves to B.

@@ -75,9 +75,9 @@ Facts established by reading the repo, not by running anything:
 
 6. **M2 research round landed (main fc4738e, PR #48; findings under
    `docs/research/findings/m2-0*.md`).** Research input to A/B/C, not a plan; the
-   "M2 = MCP/API" lock-in stays retracted. It *independently confirms* item 4: nine
-   listed products surveyed against vendor primary docs (8 distinct product lines, with
-   Simular Agent S and Sai counted together per m2-01 §7.3), none returns a verdict on
+   "M2 = MCP/API" lock-in stays retracted. It *independently confirms* item 4: eight
+   product lines surveyed against vendor primary docs (m2-01 lists nine entries, with
+   Simular Agent S and Sai counted together per its §7.3), none returns a verdict on
    persisted state. Closest: Cua per-action `effect`; Microsoft HCU window-level before/after
    diff, which says "Neither proves file contents, persistence or network state."
    What it changes for Discovery:
