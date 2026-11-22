@@ -356,3 +356,32 @@ Dogfood, not folded into a test PR.
   guard is removed), or is documented as deliberately unguarded — and the mocked
   e2e assertion is updated to match the decision either way.
 - The MCP `evidence` handler's error path is covered for the destroyed case.
+
+## RT-022 — the backend half of the act wire contract is untested
+
+**Found by:** the verifier of #186, as a caveat on an otherwise clean PASS.
+
+`myco-rt-agent` does not depend on `myco-rt-backend-qemu` (its Cargo.toml has only
+serde, serde_json, xa11y, uuid, rustix). So the wire-JSON assertions added in #186 are
+a **hand-copied literal** of the backend's `json!` blocks, not the backend's actual
+output. They pin the agent parser against the documented form.
+
+**The gap:** a rename on the backend side — `"x"` to `"px"` in
+`QemuLinuxBackend::act` — passes every test in #186. It is caught only by the live
+tests in `backend-qemu/tests/`, which need a VM. So a backend-side wire change can
+reach `main` with a green suite and fail only inside a guest, which is the most
+expensive place to find it and arrives looking like an XTEST fault.
+
+**Why it was not fixed in #186:** the wire-building code is inline inside
+`QemuLinuxBackend::act` and needs a live channel to reach. Extracting it — a pure
+`fn action_to_wire(action: &Action) -> serde_json::Value` — is a production change to
+guest-control code (Tier 2), and folding a refactor into a test PR is how test PRs
+stop being reviewable.
+
+**Acceptance:**
+- `action_to_wire` extracted as a pure function, with a unit test in the backend crate
+  asserting the exact JSON for every variant.
+- That test and #186's agent-side test agree on the same literals, so a rename on
+  either side fails somewhere deterministic and VM-free.
+- Ideally the two share one source of truth; if they cannot (crate dependency
+  direction), the pair of tests is the contract.
