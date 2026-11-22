@@ -147,6 +147,22 @@ impl<B: Backend> Session<B> {
         Ok(outcome)
     }
 
+    /// `read_file`: read a guest file through the backend's explicit read grant
+    /// (RT-015). Kept off the six-op surface: it is an extension that only works
+    /// when the backend was constructed with a grant, and it is not a verdict.
+    pub fn read_guest_file(&mut self, path: &str) -> Result<Vec<u8>, RuntimeError>
+    where
+        B: crate::ops::GuestFileRead,
+    {
+        self.require_ready().map_err(|_| RuntimeError::IllegalTransition {
+            from: self.phase,
+            to: SessionPhase::Ready,
+        })?;
+        self.backend
+            .read_guest_file(path)
+            .map_err(|e| RuntimeError::Backend(e.to_string()))
+    }
+
     /// `evidence`: export this session's artifacts (trace.jsonl + result.json,
     /// ADR-0007) through the backend's validated writer.
     pub fn evidence(&mut self) -> Result<crate::ops::EvidenceArtifacts, RuntimeError> {

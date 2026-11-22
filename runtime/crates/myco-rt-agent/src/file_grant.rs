@@ -11,6 +11,15 @@ impl FileGrant {
         if !root.is_absolute() {
             return Err(io::Error::other("grant root must be absolute"));
         }
+        // A grant rooted at "/" is not a grant: it is the whole guest filesystem.
+        // The tool description promises a bounded directory, so refuse the root
+        // itself rather than silently granting everything (review must-fix 2).
+        if root.parent().is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "grant root must not be the filesystem root",
+            ));
+        }
         Ok(Self(openat2(
             CWD,
             root,
@@ -85,5 +94,29 @@ mod tests {
             assert!(grant.read(Path::new(path)).is_err(), "{path}");
         }
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// The root itself is not a grant: it would expose the whole guest filesystem.
+    /// Covered transitively by the transport's fresh-agent assertion, but a direct
+    /// test is what makes the refusal a property of this function (review residual
+    /// risk 2).
+    #[test]
+    fn refuses_a_parentless_root() {
+        let err = FileGrant::open(Path::new("/")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("filesystem root"),
+            "error must name the reason: {err}"
+        );
+    }
+
+    /// A relative root is refused before any syscall.
+    #[test]
+    fn refuses_a_relative_root() {
+        let err = FileGrant::open(Path::new("relative/dir")).unwrap_err();
+        // Symmetry with the sibling test: pin the kind, not just the message, so a
+        // different failure cannot masquerade as this guard.
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(err.to_string().contains("absolute"), "{err}");
     }
 }

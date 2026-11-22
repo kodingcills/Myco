@@ -42,6 +42,10 @@ DF-005 (TIF-27) is blocked on **RT-first-path** (= RT-011 end-to-end test).
 | REQ-11 | guest shell exec w/ stdout/stderr/exit | **RT-018** (extended op) | no |
 | REQ-12 | reset/destroy after crashes | RT-006 acceptance + RT-011 (crash-then-reset case) | yes |
 
+Note (2026-11-22): the MCP surface is now **seven** tools — the six core ops plus
+RT-015's opt-in `read_file`. The six-op API remains the core contract; extensions
+are separate and explicitly named.
+
 Note: REQ-08/10/11 exceed the brief's "v0 = exactly six operations". They are
 scheduled as extended ops immediately after the first path rather than expanding v0
 mid-flight; flagged to the outer loop (runtime-state.md log, 2026-11-19).
