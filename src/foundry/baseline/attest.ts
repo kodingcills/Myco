@@ -92,8 +92,12 @@ export interface AttestInput {
   readonly screen: ScreenView;
   /** The observer that produced `observations`, so the result can name it. */
   readonly observerId: string;
-  /** Persistence paths the fixture designates. */
-  readonly persistencePaths: readonly string[];
+  /**
+   * The fixture's authoritative `persistenceFiles`. This must come from the fixture
+   * manifest, never from the caller's convenience: a caller-supplied list with no lower
+   * bound is how a gate ends up admitting a run that observed nothing.
+   */
+  readonly requiredPaths: readonly string[];
   /** Whether the screen reading came from the observer rather than the arm. */
   readonly screenObserved: boolean;
 }
@@ -117,7 +121,14 @@ export interface Attestation {
  */
 export function attest(input: AttestInput): Attestation {
   const blockers: string[] = [];
-  const { evidence, observations, finalFiles, persistencePaths } = input;
+  const { evidence, observations, finalFiles } = input;
+
+  // The set that must be observed is the fixture's list UNION whatever the final state
+  // actually holds. A file present in the final state but absent from the fixture list is
+  // still a file the run wrote, and an empty set is a caller error, not a clean run.
+  const required = [...new Set([...input.requiredPaths, ...Object.keys(finalFiles)])].sort();
+  if (required.length === 0)
+    blockers.push("fixture: no persistence files are designated, so nothing can be attested");
 
   // 1. The recorder must be closed and internally consistent. An open or inconsistent
   //    recording means the arm's account of itself is incomplete.
@@ -127,13 +138,22 @@ export function attest(input: AttestInput): Attestation {
     blockers.push("recorder: not every call has an audit");
   if (evidence.toolCallAudits.some((audit) => audit.status !== "complete"))
     blockers.push("recorder: an audit is incomplete");
+  // Cardinality is not identity: an audit must name a call that was actually recorded, on
+  // the same channel. Without this a ghost audit satisfies the count.
+  const recorded = new Map(evidence.recordedCalls.map((call) => [call.callId, call.via]));
+  for (const audit of evidence.toolCallAudits) {
+    const via = recorded.get(audit.callId);
+    if (via === undefined) blockers.push(`recorder: audit ${audit.callId} names no recorded call`);
+    else if (via !== audit.via)
+      blockers.push(`recorder: audit ${audit.callId} is ${audit.via}, recorded as ${via}`);
+  }
   if (evidence.status !== "finished")
     blockers.push(`recorder: trial status is ${evidence.status}, not finished`);
 
   // 2. Every persistence file must have been observed, and the observation must match the
   //    final bytes. A missing observation is a blocker, never a pass.
   const accepted: SaveObservation[] = [];
-  for (const path of persistencePaths) {
+  for (const path of required) {
     const observation = observations.find((candidate) => candidate.path === path);
     if (observation === undefined) {
       blockers.push(`observer: no observation of ${path}`);
@@ -169,9 +189,25 @@ export function attest(input: AttestInput): Attestation {
   // "the screen oracle had nothing to match" from "the screen oracle agreed".
   const screenConstrained = input.screen.reachable && input.screen.visibleText.length > 0;
 
-  // 4. The trace must contain at least one save the observer can be said to follow.
-  if (!input.trace.some((event) => event.type === "save-observed"))
+  // 4. The observation must be placeable against a save the trace actually recorded, and
+  //    that save's bytes must agree with what the observer saw. Checking only the event
+  //    type lets any fabricated event of the right shape satisfy the binding.
+  const saves = input.trace.filter((event) => event.type === "save-observed");
+  if (saves.length === 0) {
     blockers.push("trace: no save was observed, so the observation cannot be placed");
+  } else {
+    const lastSave = saves[saves.length - 1]!;
+    for (const observation of accepted) {
+      const saved = lastSave.files[observation.path];
+      if (saved === undefined) {
+        blockers.push(`trace: the last save does not include ${observation.path}`);
+        continue;
+      }
+      const savedHash = createHash("sha256").update(saved).digest("hex");
+      if (savedHash !== observation.sha256)
+        blockers.push(`trace: ${observation.path} at the last save differs from the observation`);
+    }
+  }
 
   return {
     eligible: blockers.length === 0,

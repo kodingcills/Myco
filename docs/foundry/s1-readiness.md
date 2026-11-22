@@ -96,10 +96,13 @@ which `replay.ts` already does.
    offline; a live run must supply an observer whose `id` names the real second channel.
 2. ~~**Ingest attestation**~~ — **built** (`attest()` in the same file): strict by
    construction, with no "assume fine" branch. It refuses a run when the recorder is
-   inconsistent or unfinished, when any persistence file lacks an observation, when an
-   observation predates the last save, when the bytes changed after observation, when the
-   screen reading came from the arm, or when the trace has no save to place the observation
-   against. It also reports `screenConstrained`, so an empty pixel-arm screen reads as
+   inconsistent or unfinished, when an audit names no recorded call or the wrong channel,
+   when any persistence file lacks an observation, when an observation predates the last
+   save, when the bytes changed after observation, when the screen reading came from the
+   arm, or when the last save's bytes disagree with the observation. The required file set
+   is the fixture's list **union** whatever the final state holds, and an empty set is
+   refused — a caller-supplied list with no lower bound was the first defect the verifier
+   found. It also reports `screenConstrained`, so an empty pixel-arm screen reads as
    "nothing to match" rather than "agreed".
 3. **The eligibility flip** — **not done, and deliberately so.** `scoreDiscoveryTrial` still
    hardcodes `decisionEligible: false`. Wiring `attest()` into it is the one change that can

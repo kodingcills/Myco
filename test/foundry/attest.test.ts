@@ -18,11 +18,10 @@ const TASK = findTask("ef-t01b-add-four-items-noverify")!;
 const SPEC = TODO_FIXTURE_SPECS.find((s) => s.fixtureId === TASK.fixtureId)!;
 const PROMPT_HASH = createHash("sha256").update(TASK.prompt).digest("hex");
 
-const SAVE_EVENT: GuardTraceEvent = {
-  type: "save-observed",
-  timestamp: "2026-11-22T00:00:00.000Z",
-  files: {},
-};
+/** A save event carrying the bytes the observer will see, so the binding can be placed. */
+function saveEvent(files: Readonly<Record<string, Uint8Array>>): GuardTraceEvent {
+  return { type: "save-observed", timestamp: "2026-11-22T00:00:00.000Z", files };
+}
 
 interface FinishedRun {
   evidence: RecordedTrialEvidence;
@@ -59,12 +58,12 @@ function baseInput(run: FinishedRun) {
   const observer = offlineObserver();
   return {
     evidence: run.evidence,
-    trace: [...run.trace, SAVE_EVENT],
+    trace: [...run.trace, saveEvent(run.files)],
     finalFiles: run.files,
     observations: observer.observe(["store.json"], run.files),
     screen: run.screen,
     observerId: observer.id,
-    persistencePaths: ["store.json"],
+    requiredPaths: ["store.json"],
     screenObserved: true,
   };
 }
@@ -177,6 +176,76 @@ describe("EF-005 attestation gate", () => {
   it("names the observer, so a report can say which channel produced the evidence", async () => {
     const input = baseInput(await finishedRun());
     expect(attest(input).observerId).toBe("offline");
+  });
+
+  it("refuses an empty required set instead of admitting a run that observed nothing", async () => {
+    // The P1 the verifier found: a caller-supplied list with no lower bound let
+    // `requiredPaths: []` pass with zero observations.
+    const input = baseInput(await finishedRun());
+    const result = attest({ ...input, requiredPaths: [], finalFiles: {} });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("no persistence files are designated");
+  });
+
+  it("requires an observation for a file the final state holds but the list omits", async () => {
+    // A file the run wrote is a file that must be observed, whatever the caller listed.
+    const input = baseInput(await finishedRun());
+    const withExtra = {
+      ...input.finalFiles,
+      "store.meta.json": new TextEncoder().encode('{"count":1}'),
+    };
+    const result = attest({ ...input, finalFiles: withExtra });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("no observation of store.meta.json");
+  });
+
+  it("refuses an audit that names no recorded call", async () => {
+    // Cardinality is not identity: a ghost audit used to satisfy the count.
+    const input = baseInput(await finishedRun());
+    const evidence = {
+      ...input.evidence,
+      toolCallAudits: input.evidence.toolCallAudits.map((a, i) =>
+        i === 0 ? { ...a, callId: "ghost" } : a,
+      ),
+    };
+    const result = attest({ ...input, evidence });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("names no recorded call");
+  });
+
+  it("refuses an audit whose channel disagrees with the recorded call", async () => {
+    const input = baseInput(await finishedRun());
+    const evidence = {
+      ...input.evidence,
+      toolCallAudits: input.evidence.toolCallAudits.map((a, i) =>
+        i === 0 ? { ...a, via: a.via === "gui" ? ("shell-exec" as const) : ("gui" as const) } : a,
+      ),
+    };
+    const result = attest({ ...input, evidence });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("recorded as");
+  });
+
+  it("refuses a save event whose bytes disagree with the observation", async () => {
+    // Checking only the event's type let any fabricated event satisfy the binding.
+    const input = baseInput(await finishedRun());
+    const wrongSave = saveEvent({ "store.json": new TextEncoder().encode('{"items":[]}') });
+    const result = attest({
+      ...input,
+      trace: [...input.trace.filter((e) => e.type !== "save-observed"), wrongSave],
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("differs from the observation");
+  });
+
+  it("refuses a save event that omits a file the observation covers", async () => {
+    const input = baseInput(await finishedRun());
+    const result = attest({
+      ...input,
+      trace: [...input.trace.filter((e) => e.type !== "save-observed"), saveEvent({})],
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("does not include store.json");
   });
 
   it("collects every blocker rather than stopping at the first", async () => {
