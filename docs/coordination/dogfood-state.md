@@ -135,6 +135,37 @@ runs and app startup. No Windows guest involvement — this is the Linux RT-020
 desktop.
 
 ## Status
+
+### 2026-11-22 — DF-005 harness hardened (PR #169 merged `32ac252`)
+
+The shipped runner graded an offline stub MCP server `pass / verifier:verified+ground-truth`
+for DF-S01/S02/S05 with no guest behind it. Fixed and merged after two
+independent verifier rounds (`deepseek-v4.1-flash`), CI 4/4 green:
+
+- Oracle is guest state only, read back over an independent channel.
+- Three independent no-guest guards (offline gate, guest-probe gate, ssh
+  readback); removing any one still yields `gap`/`uncertain`, never `pass`.
+- Unreadable/unparseable store → `uncertain` with `passed: null` (ADR-0002);
+  wrong-shaped JSON no longer crashes the run and destroys its evidence.
+- Exit non-zero unless every trial is a genuine success.
+- `observation` events carry the schema-required `nodeCount`.
+
+### 2026-11-22 — REQ-13 filed: no focus-relative typing or coordinate click
+
+Found while fixing target resolution (PR #193). The runtime's `Action` union
+requires an AT-SPI ref for **both** `click` and `typeText` (`act.rs` resolves
+the ref and fails with `unresolved_ref`), and exposes **no** focus-relative
+typing or coordinate-click action. Tk registers zero AT-SPI nodes, so **no Tk
+app can be driven at all** — DF-S01/S02/S05 will gap on REQ-04 against the real
+fixture until this exists.
+
+| id | requirement | exercised by |
+|---|---|---|
+| REQ-13 | **Focus-relative input**: an action that types into the focused window without an AT-SPI ref (XTEST with real focus is proven to land in Tk on RT-003), and/or a coordinate click. Without it, apps with no accessibility tree are unactuatable. | DF-S01, DF-S02, DF-S05 |
+
+This is the single highest-value runtime ask from dogfood: it gates every
+scenario that needs to type into the fixture.
+
 Phase 1 (DF-005 / TIF-27) is **UNBLOCKED** (2026-11-22):
 - Runtime first path (RT-011 / TIF-40) and arbitrary-agent safe desktop (RT-020 / TIF-56) passed live proof (`rt020-live-20261122-093115`) and independent verification, merged via PR #96.
 - Full runbook and entry points for Dogfood: [`docs/env/dogfood-runtime-runbook.md`](../env/dogfood-runtime-runbook.md).
