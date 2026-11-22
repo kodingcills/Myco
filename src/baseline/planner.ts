@@ -107,6 +107,11 @@ export class PlannerFailure extends Error {}
 
 export interface Planner {
   paid: boolean;
+  /**
+   * HTTP status of the most recent Messages call, or `undefined` if none was made.
+   * The probe cites this rather than inferring success from a usage block.
+   */
+  readonly lastMessageStatus?: number;
   act(
     instruction: string,
     screenshot: Screenshot,
@@ -133,10 +138,13 @@ export function createPlanner(
     );
   }
 
-  async function post(url: string, body: object, key?: string, timeoutMs = 60_000) {
-    let response: Response;
+  /**
+   * One request attempt, before any interpretation. The probe uses this so it can
+   * record the exact HTTP status rather than inferring success from a usage block.
+   */
+  async function postRaw(url: string, body: object, key?: string, timeoutMs = 60_000) {
     try {
-      response = await request(url, {
+      const response = await request(url, {
         method: "POST",
         redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
@@ -146,36 +154,55 @@ export function createPlanner(
         },
         body: JSON.stringify(body),
       });
+      const { status, ok } = response;
+      let decoded: unknown;
+      try {
+        decoded = await response.json();
+      } catch {
+        decoded = undefined;
+      }
+      return { ok, status, body: decoded } as const;
     } catch {
       // Request exceptions and provider bodies may contain credentials.
-      return { failure: "transport failure" };
+      return { ok: false, failure: "transport failure" } as const;
     }
-    if (!response.ok) {
+  }
+
+  /** Last HTTP status observed on a Messages call; `undefined` if none completed. */
+  let lastRawStatus: number | undefined;
+
+  async function post(url: string, body: object, key?: string, timeoutMs = 60_000) {
+    const raw = await postRaw(url, body, key, timeoutMs);
+    if ("status" in raw) lastRawStatus = raw.status;
+    if (!raw.ok) {
+      if (!("status" in raw)) return { failure: raw.failure };
       let errorType = "unknown error type";
       let detail = "";
       try {
-        const { type, message } = record(record(await response.json()).error);
+        const { type, message } = record(record(raw.body).error);
         if (typeof type === "string" && PROVIDER_ERROR_TYPES.has(type)) errorType = type;
         // Keep the scrubbed message for a 400 even when the type is unrecognised.
         // Gating `detail` on the allowlist means a new API error code arrives as
         // a bare status, which is unauditable — the failure we are fixing here.
-        if (response.status === 400 && key && typeof message === "string")
+        if (raw.status === 400 && key && typeof message === "string")
           detail = scrubBadRequestMessage(message, key);
       } catch {
         // Keep the status when the error body cannot be decoded.
       }
-      return { failure: `HTTP ${response.status} (${errorType})${detail ? `: ${detail}` : ""}` };
+      return { failure: `HTTP ${raw.status} (${errorType})${detail ? `: ${detail}` : ""}` };
     }
-    try {
-      return { data: record(await response.json()) };
-    } catch {
-      return { failure: "invalid JSON" };
-    }
+    if (raw.body === undefined) return { failure: "invalid JSON" };
+    return { data: record(raw.body) };
   }
+
+  let lastMessageStatus: number | undefined;
 
   return {
     get paid() {
       return useSonnet;
+    },
+    get lastMessageStatus() {
+      return lastMessageStatus;
     },
     async act(instruction, shot) {
       const calls: Awaited<ReturnType<Planner["act"]>>["calls"] = [];
@@ -214,6 +241,8 @@ export function createPlanner(
             { ...message, max_tokens: MAX_OUTPUT },
             apiKey,
           );
+          // Record the status so a probe can cite "HTTP 200", not a usage block.
+          lastMessageStatus = lastRawStatus;
           const usage = record(data?.usage);
           const { input_tokens: input, output_tokens: outputCount } = usage;
           if (
