@@ -29,17 +29,27 @@ export interface Planner {
 
 export function createPlanner(
   request: typeof fetch = fetch,
-  env: { ANTHROPIC_API_KEY?: string } = process.env as { ANTHROPIC_API_KEY?: string },
+  env: { ANTHROPIC_API_KEY?: string; ALLOW_FALLBACK?: string } = process.env as {
+    ANTHROPIC_API_KEY?: string;
+    ALLOW_FALLBACK?: string;
+  },
 ): Planner {
   const apiKey = env.ANTHROPIC_API_KEY;
+  const allowFallback = env.ALLOW_FALLBACK === "true";
   let useSonnet = Boolean(apiKey);
 
-  async function post(url: string, body: object, key?: string) {
+  if (!useSonnet && !allowFallback) {
+    throw new Error(
+      "ANTHROPIC_API_KEY is required for the paid Claude Sonnet planner (Ollama fallback is disabled)",
+    );
+  }
+
+  async function post(url: string, body: object, key?: string, timeoutMs = 60_000) {
     try {
       const response = await request(url, {
         method: "POST",
         redirect: "error",
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: {
           "content-type": "application/json",
           ...(key ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : {}),
@@ -114,6 +124,7 @@ export function createPlanner(
             });
           } else {
             calls.push({ model: SONNET, usage: { cost: MAX_CALL_MICROS / 1_000_000 } });
+            if (!allowFallback) throw new Error("Anthropic usage could not be verified");
             // Stop the paid path when the charge cannot be verified.
             useSonnet = false;
           }
@@ -121,18 +132,37 @@ export function createPlanner(
             output = record(
               data.content.find((item: unknown) => record(item).type === "text"),
             ).text;
-            if (data.stop_reason === "refusal") useSonnet = false;
-          } else useSonnet = false;
-        } else useSonnet = false;
+            if (data.stop_reason === "refusal") {
+              if (!allowFallback) throw new Error("Anthropic call refused request");
+              useSonnet = false;
+            }
+          } else {
+            if (!allowFallback) throw new Error("Anthropic messages API call failed");
+            useSonnet = false;
+          }
+        } else {
+          if (!allowFallback) throw new Error("Anthropic token count API call failed or exceeded limit");
+          useSonnet = false;
+        }
       }
       if (!useSonnet) {
-        const data = await post("http://127.0.0.1:11434/api/chat", {
-          model: OLLAMA,
-          stream: false,
-          format: "json",
-          options: { temperature: 0, seed: 0, num_predict: MAX_OUTPUT },
-          messages: [{ role: "user", content: text, images: [shot.data] }],
-        });
+        if (!allowFallback) {
+          throw new Error("Anthropic planner unavailable and Ollama fallback is disabled");
+        }
+        const ollamaTimeout =
+          Number((env as Record<string, string>).OLLAMA_TIMEOUT_MS) || 180_000;
+        const data = await post(
+          "http://127.0.0.1:11434/api/chat",
+          {
+            model: OLLAMA,
+            stream: false,
+            format: "json",
+            options: { temperature: 0, seed: 0, num_predict: MAX_OUTPUT },
+            messages: [{ role: "user", content: text, images: [shot.data] }],
+          },
+          undefined,
+          ollamaTimeout,
+        );
         const usage: Usage = { cost: 0 };
         const { prompt_eval_count: prompt, eval_count: completion } = data ?? {};
         if (typeof prompt === "number" && Number.isSafeInteger(prompt) && prompt >= 0)

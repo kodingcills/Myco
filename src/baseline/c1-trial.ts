@@ -68,9 +68,6 @@ export async function runC1Trial(
           break;
         }
       }
-    } catch (error) {
-      if (error instanceof PixelRouteError) throw error;
-      deviations.push("c1-loop-interrupted");
     } finally {
       try {
         await prepared.closeTransport();

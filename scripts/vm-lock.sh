@@ -85,7 +85,7 @@ vm_lock_owned_by_parent() {
     read -r pid driver < "$VM_LOCK_PATH" &&
     [ "$pid" = "$owner" ] &&
     case "$driver" in
-      m1-sweep.sh|m1-corrupt-suite.sh|c1-baseline.sh|c1-sweep.sh)
+      m1-sweep.sh|m1-corrupt-suite.sh|c1-baseline.sh|c1-sweep.sh|c1-spike.sh)
         kill -0 "$pid" 2>/dev/null &&
           python3 - "$VM_LOCK_PATH" "$owner" <<'PY'
 import os

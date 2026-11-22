@@ -236,12 +236,29 @@ describe("C1 host harness", () => {
       directory: root,
       coordinatorGo: true,
       prepare,
-      planner: createPlanner(request, { ANTHROPIC_API_KEY: key }),
+      planner: createPlanner(request, { ANTHROPIC_API_KEY: key, ALLOW_FALLBACK: "true" }),
     });
     const row = readFileSync(join(root, "trials/c1/0.json"), "utf8");
     expect(row).toContain("planner:claude-sonnet-5-5+qwen3.8-uncensored");
     expect(JSON.parse(row).transcript.actions).toEqual([]);
     for (const filename of ["accounting.json", "report.json", "trials/c1/0.json"])
       expect(readFileSync(join(root, filename), "utf8")).not.toContain(key);
+  });
+
+  it("fails closed without Ollama fallback when Anthropic call fails", async () => {
+    const key = "fake-test-key";
+    const request = vi.fn<typeof fetch>(async () => {
+      throw new Error("Anthropic API network error");
+    });
+    const root = directory();
+    const prepare = vi.fn(async () => prepared());
+    const report = await runC1Sweep({
+      directory: root,
+      coordinatorGo: true,
+      prepare,
+      planner: createPlanner(request, { ANTHROPIC_API_KEY: key }),
+    });
+    expect(report.completed).toBe(0);
+    expect(report.rows[0]).toMatchObject({ omitted: "trial-interrupted" });
   });
 });
