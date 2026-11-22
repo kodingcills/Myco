@@ -189,7 +189,11 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   Phase-1 go signal for Dogfood); measured create/reset/destroy costs recorded.
 
 ### RT-015 (TIF-43) Extended op: host-side guest file read (Dogfood REQ-08)
-- **status:** pending
+- **status:** implemented, in review (PR #112). MCP `read_file` tool, opt-in via
+  `create.read_root`; kernel-enforced confinement (`openat2` + RESOLVE_BENEATH |
+  NO_SYMLINKS | NO_XDEV); 1 MiB cap; root `/` refused. **Path-grant enforcement is
+  proven on Linux only** (`#[cfg(target_os = "linux")]`), so it is unverified on
+  macOS hosts and not yet live-validated against a guest.
 - **owner:** build
 - **blocked_by:** RT-first-path
 - **description:** Read an arbitrary guest file from the host for oracle checks,
