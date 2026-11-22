@@ -769,3 +769,11 @@ Reconstructed actual state after a provider switch and a long gap. Recorded so t
 - **Criterion 7 (screenshot baseline): BLOCKED**, not failed. Spike at `c085031` restored `cua-c1-base`, passed session preflight and Count Tokens, then the first Messages attempt returned HTTP 400 `invalid_request_error`. No scored row exists. Diagnosis is offline/host-side per the outer loop; a separately authorized spike with verified paid Sonnet usage is required before a scored run.
 - **Host state at this check:** load 5.66, swap free ~660 MB (below the >2 GB preference), VM started. No sweep running. I am NOT starting new VM work; the queue waits on host swap and the C1 diagnosis.
 - Runtime Owner answered: they get a VM window after the queue clears, gated on load/swap, and must wait for my explicit go signal.
+
+## Log 2026-11-22 (59) — criterion 7 blocker NARROWED: image decode, not auth
+- The C1 Messages 400 has a specific cause. Probe output at 12:38 (/tmp/baseline/c1-messages-probe.gJblW1/result.json):
+      {"status":400,"image":"synthetic-png","diagnostic":"HTTP 400 (invalid_request_error): Could not process image"}
+  That is **not** an auth, billing, credit or quota failure. Anthropic could not DECODE the image the probe sent. The probe appears to hand-build a PNG in memory instead of sending a real screenshot; no PNG exists on disk under /tmp/baseline.
+- Consequence for ownership: the unblock is the Baseline owner sending one Messages request with a REAL guest PNG. If that returns 200, the 400 was a probe-fixture artifact and criterion 7 is unblocked. If a real PNG also 400s, it becomes a genuine payload/encoding bug needing offline diagnosis.
+- VM slot granted to the Baseline owner at 39% memory free / load 5.66 / 6 GB guest, with an instruction to prove the real-PNG hypothesis FIRST so the slot is not wasted.
+- HOST GATE CORRECTED (outer loop): swap-free is a bad gate on macOS because swap grows on demand. Use `memory_pressure` (normal / warn / critical) plus `vm_stat`, not swap free. My earlier swap-based holds were over-cautious.
