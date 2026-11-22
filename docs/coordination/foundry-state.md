@@ -202,6 +202,7 @@ Observed 2026-11-22 while landing PR #129 (a **docs-only** diff, one coordinatio
 |---|---|---|
 | `myco/eval-foundry` @ 200b072 | **fail** 518.8 ms (limit 425.8) | 18:59:45 |
 | `myco/eval-foundry` @ 3587513 | **fail** 506.4 ms (median, limit 425.8) | 19:03:12 |
+| `myco/eval-foundry` @ b02cbe8 | **fail 160.95 ms against a limit of 150** — a *different* budget at a *different* step | 19:07:37 |
 | `myco/eval-foundry` @ earlier heads | **pass** | 18:55:30, 18:53:15 |
 | `docs/c1-stack-proof` | **fail** | 19:01:13 |
 | `feat/rt015-read-file-tool` | **fail** then pass then pass | 18:55:00 → 18:59:50 |
@@ -210,7 +211,9 @@ The diff under test touches no viewer code and no `src/`. The same commit passed
 twice and failed it twice, and two unrelated branches failed it in the same window while
 `main` passed. That is runner variance, not a regression — the samples are bimodal
 (384–435 ms good runs, 672–860 ms bad runs), which is what a noisy-neighbour macOS runner
-looks like on a 315 ms workload.
+looks like on a 315 ms workload. The third failure only missing a **150 ms** budget by
+10.95 ms, at a different assertion, is the same conclusion from a tighter budget: the
+workload sits close enough to its limit that runner noise decides the outcome.
 
 **Not my call to fix** (`.github/workflows/` is out of scope for this workstream and the
 repo rule is that no agent edits it). Options for whoever owns CI, cheapest first:
