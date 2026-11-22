@@ -344,3 +344,92 @@ This script:
 - **Shared VM Lock:** All live guest operations must respect `/tmp/myco-win11.vm.lock` via [`scripts/vm-lock.sh`](../../scripts/vm-lock.sh).
 - **Coordinator GO:** Live VM execution is permitted only within a Coordinator-approved window. Do not touch or start `myco-win11` (UTM).
 - **No Lingering VMs:** Every test run must conclude with `destroy` (or `runtime/guest/shutdown.sh`). Ensure `pgrep -f qemu-system-aarch64` reports no processes.
+
+---
+
+## 8. DF-005 Execution Procedure (the guest window, in order)
+
+Guest time is the scarce resource. Run these in this order and stop at the first
+failure — each step is cheaper than the one after it.
+
+### Step 0 — preflight (read-only, ~10 s)
+
+```bash
+python3 scripts/df005-runner.py --preflight
+```
+
+Creates no session, launches nothing, and probes the VM lock with a non-blocking
+`flock` it releases immediately (it names the holder rather than contending).
+Exit 0 means every precondition holds:
+
+| check | fails when |
+|---|---|
+| `mcp-server` | `runtime/target/debug/myco-rt-mcp` missing or not executable |
+| `vm-lock` | held by another driver |
+| `guest-ssh` | no answer, or not Linux |
+| `app-deployed` | app absent, or guest sha256 ≠ repo sha256 (stale) |
+| `app-self-test` | the fixture does not run in this guest |
+| `introspection-env` | `MYCO_INTROSPECTION_FILE` absent from `/run/myco/gui.env` |
+
+**Do not proceed on a failed preflight.** A run started against a stale app or a
+dead introspection channel produces `gap` rows that look like runtime defects and
+cost a slot to discover.
+
+### Step 1 — deploy the fixture (if `app-deployed` failed)
+
+```bash
+scripts/deploy-verify-myco-todo.sh --go
+```
+
+Verifies the guest is Ubuntu 24.04 aarch64 with a live GUI env, uploads the app
+with a sha256 check, and confirms the window maps.
+
+### Step 2 — the run
+
+```bash
+python3 scripts/df005-runner.py --go --scenario all --runs 3 \
+    --eval-id df-phase1-$(date -u +%Y%m%d-%H%M%S)
+```
+
+Writes `runs/<evalId>/{ledger.jsonl,<runId>/{trace.jsonl,result.json}}`.
+Exit 0 only if **every** trial is a genuine success; any `gap`, `uncertain` or
+`failure` exits non-zero. That is deliberate — an ungraded matrix must never look
+green to a calling script.
+
+### Step 3 — read the result honestly
+
+```bash
+python3 - <<'PY'
+import json, sys, collections
+rows = [json.loads(l) for l in open(sys.argv[1])]
+print(collections.Counter(r["state"] for r in rows))
+for r in rows:
+    if r["state"] != "pass":
+        print(r["runId"], r["state"], r["oracle"], r["detail"])
+PY
+runs/<evalId>/ledger.jsonl
+```
+
+Buckets and what each means for filing are in
+[`dogfood/scoring.md`](../../dogfood/scoring.md). In short: `gap` is a runtime
+capability miss (file it), `uncertain` is "could not look" (never a pass, never a
+failure), `failure` is the intent not met.
+
+### Step 4 — tear down
+
+`destroy` runs per trial. Confirm nothing lingers:
+
+```bash
+pgrep -f qemu-system-aarch64 || echo "no guest running"
+```
+
+### Known blocker: REQ-13
+
+The runtime's `Action` union requires an AT-SPI ref for both `click` and
+`typeText`, and exposes no focus-relative typing or coordinate-click action. Tk
+registers zero AT-SPI nodes, so **DF-S01/S02/S05 will gap on REQ-04** against the
+real fixture until REQ-13 lands. Expect that; it is a filed requirement, not a
+harness bug. DF-S03/S04 additionally need REQ-10/11 and REQ-09.
+
+If the slot is short, run DF-S01 only: it is the cheapest proof that the whole
+path (create → observe → act → persist → independent oracle) works.
