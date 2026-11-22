@@ -50,10 +50,12 @@ REQ-07 was retired by Dogfood (folded into REQ-03).
 ## Interfaces RT provides to M1 / Dogfood
 | Interface | Shape | Status |
 |---|---|---|
-| Six-op session API | MCP stdio server + `myco-rt` CLI (JSON NDJSON) | ADR-0013; not implemented |
-| Linux desktop backend | QEMU+HVF ARM64 guest, AT-SPI observation, input actuation | ADR-0011; not implemented |
-| Evidence envelope | `runs/<sessionId>/trace.jsonl` + `result.json` reusing M1's schemas (verdict omitted) | ADR-0012; not implemented |
-| `Backend` trait | Rust trait for create/observe/act/evidence/reset/destroy | ADR-0011; not implemented |
+| Six-op session API | MCP stdio server + `myco-rt` CLI (JSON NDJSON) | ADR-0013; implemented & verified (RT-010, RT-020) |
+| Linux desktop backend | QEMU+HVF ARM64 guest, AT-SPI observation, input actuation | ADR-0011; implemented & verified (RT-006, RT-020) |
+| Evidence envelope | `runs/<sessionId>/trace.jsonl` + `result.json` reusing M1's schemas (verdict omitted) | ADR-0012; implemented & verified (RT-009, RT-014) |
+| `Backend` trait | Rust trait for create/observe/act/evidence/reset/destroy | ADR-0011; implemented (RT-005) |
+| Dogfood Runbook & Entry Points | Detailed operator/agent guide for DF-S01..DF-S05 | `docs/env/dogfood-runtime-runbook.md` (done 2026-11-22) |
+| Windows/UTM backend anticipation | Design note mapping `Backend` to `myco-agent` | `docs/architecture/windows-utm-backend.md` (RT-012 done 2026-11-22) |
 
 ## Interfaces RT needs from M1
 | Interface | Owner | Status |
@@ -333,7 +335,9 @@ unchanged during prep.
 - **Status & Dogfood Impact:**
   - RT-020 (TIF-56) is **DONE**.
   - RT-011 (TIF-40) and RT-first-path (TIF-42) are **DONE**.
-  - Dogfood DF-005 (TIF-27) is **UNBLOCKED**.
+  - PR #96 opened, passed 6/6 CI checks, squashed and merged to `main` (`c25df02`).
+  - Dogfood DF-005 (TIF-27) is **UNBLOCKED**; complete runbook and entry points delivered at [`docs/env/dogfood-runtime-runbook.md`](../env/dogfood-runtime-runbook.md).
+  - RT-012 (TIF-41) Windows/UTM backend anticipation completed (design note at [`docs/architecture/windows-utm-backend.md`](../architecture/windows-utm-backend.md)); zero code touching UTM.
   - VM lock is **FREE** for Screenshot Baseline C1 / subsequent runs.
 
 ## Near-miss — a stale branch silently reverted security work (2026-11-22)

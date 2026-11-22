@@ -96,9 +96,11 @@ search, workflow compilation, multi-OS support beyond Linux ARM64, product UI.
   Independent adversarial verification PASSED. RT-first-path is verified.
 
 ## Status
-Phase 0 complete: PR #8 merged to main (2026-11-19, head 3ffcceb; VERIFIED by
-independent kimi-k3 review at a491f71 + docs-only hardening delta, CI 4/4 green).
-Tk GUI startup repair merged via PR #89.
-Phase 1 (DF-005, TIF-27) is **UNBLOCKED** by RT-020 completion (2026-11-22).
-Dogfood test harness prepared against RT-020 entry points; queued for M1 Coordinator
-VM slot allocation (queue: C1, M1-016, Foundry first). Not touching VM without GO.
+Phase 1 (DF-005 / TIF-27) is **UNBLOCKED** (2026-11-22):
+- Runtime first path (RT-011 / TIF-40) and arbitrary-agent safe desktop (RT-020 / TIF-56) passed live proof (`rt020-live-20261122-093115`) and independent verification, merged via PR #96.
+- Full runbook and entry points for Dogfood: [`docs/env/dogfood-runtime-runbook.md`](../env/dogfood-runtime-runbook.md).
+- Entry points:
+  - Agent-under-test (Oh My Pi / LLM): MCP stdio server `runtime/target/debug/myco-rt-mcp`.
+  - Dogfood test harness & oracles: CLI `runtime/target/debug/myco-rt` + SSH port forward `127.0.0.1:10022` (`runtime/guest/keys/id_ed25519`).
+  - Target app verification: `scripts/deploy-verify-myco-todo.sh --go`.
+- Host discipline: VM time is queued through the M1 Coordinator (C1, M1-016, Foundry first); no VM is taken without GO.
