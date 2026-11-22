@@ -1,8 +1,8 @@
 # Proposed amendment: Medium gate-probe
 
-**Status: NOT ADOPTED: needs outer-loop approval because the outer loop asked for the smallest machine and said not the 8 GB example, and Medium (2 vCPU, 8 GB, $0.055/h) is the only size this Free account is offered.**
+**Status: ADOPTED by outer-loop approval 2026-11-21 23:58 ET, budget $0.25, hard stop $0.15.** Adopted into [PROTOCOL.md](PROTOCOL.md) as Amendment 1. The outer loop asked for the smallest machine and said not the 8 GB example; Medium (2 vCPU, 8 GB, $0.055/h) is the only size this Free account is offered, and the outer loop has ruled that 'smallest machine' was a cost preference, not a requirement.
 
-This is a proposal from the independent verifier pass on PR #81. It does not change [PROTOCOL.md](PROTOCOL.md).
+This amendment was proposed by the independent verifier pass on PR #81 and is recorded here as proposed.
 
 ## Why
 The pre-registered preflight gated: the account is Free, `billing/compute` offers only Medium, and a create naming Small would still get a Medium. Zero compute samples exist. A single, tightly capped Medium probe could still record Orgo's actual responses for the gated operations.

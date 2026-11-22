@@ -22,3 +22,17 @@ This is the infrastructure comparator for [MVD-003 §4.4](../../../product/mvd-p
 | E6 Reconcile | 1 | Compare the ledger total, ending balance and billing history after standalone cleanup, with an empty computer inventory. Record any uncertainty from delayed accounting. |
 
 A failed eligibility check yields zero compute samples for E0–E5. Report it as a precondition with its evidence and keep documented semantics distinct from live outcomes. This protocol does not test other sizes, other operating systems, scale, paid-plan-only capabilities, or any end-to-end claim about attempts to verified.
+
+## Amendment 1: Medium gate-probe (adopted after the preflight gate)
+
+Added in a new commit after the pre-registered text above and after the preflight result was known. The original text is unchanged. This amendment does not rewrite any earlier rule or result: it narrows what is run under the outer loop's later approval. The outer loop (Discovery owner) approved it on 2026-11-21 23:58 ET: budget $0.25 total, hard stop $0.15 observed spend. The earlier "smallest machine only" rule was a cost preference; Medium is the smallest size the Free tier is offered. Full text and rationale: [PROPOSED-AMENDMENT.md](PROPOSED-AMENDMENT.md).
+
+1. On a Free account a single Medium may be created only as a gate-probe for E0, E1, E4 and E5, and to observe the E2 and E3 gates.
+2. Probe budget $0.25 total, hard stop at $0.15 observed spend, `ends_in_hours` 1, and a 20 minute deadline enforced in the polling loops.
+3. Cleanup deletes every computer present now that was absent at preflight, or in the created-id set, regardless of name. The source is named `myco-discovery-base`.
+4. E2 and E3 become N=1 gate observations: record the first response. On 403 `HOURLY_LIMIT` or 409 `HOURLY_QUOTE_REQUIRED` stop that experiment: no purchase, no further attempt.
+5. E4 suspend is a single probe expecting 409 `HOURLY_USE_STOP`. E5 keeps `allow()`. Sample counts are N=1 and no p95 is claimed.
+6. Medium results are not Small results: report the size obtained, and do not compare latency or price across sizes.
+7. The raw preflight JSON stays committed.
+
+Still not approved: any paid Orgo plan, top-up or purchase. Fork and clone timing remain documented, gated results. The runner stays marked NOT CLEARED FOR LIVE USE until the outer loop confirms an independent re-verification of the fixes, and the probe mode is not yet implemented in `scripts/orgo`.
