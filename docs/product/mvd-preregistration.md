@@ -114,21 +114,54 @@ completion-rate claim.
 **Why hcu+shell decides the wedge.** A competent coding agent with HCU and shell access
 can read `store.json` and notice a dropped item itself, and `ef-t01` literally asks it
 to. If that arm also produces ~0 false successes at similar cost and setup, then
-"verification exists" is not Myco's product (plan §2). The rule:
+"verification exists" is not Myco's product (plan §2).
 
-| Outcome (n≥30 refutable trials per arm) | Consequence for the wedge |
-|---|---|
-| hcu+shell false successes ≥ screenshot-only's, and Myco ≈ 0 | Independent verdict is a real differentiator; A stands as written. |
-| hcu+shell ≈ 0 false successes, but its verdict depends on the agent choosing to read the store (measure: fraction of trials where it did, and where it was wrong when it did) | A's differentiator is *the verdict without agent discipline* plus the durable artifact; test with a prompt that does **not** ask for verification (an extra, pre-declared prompt variant) before claiming it. |
-| hcu+shell ≈ 0 false successes **and** it checks on every trial regardless of prompt **and** setup/cost within 1.5× of Myco | A's differentiation reduces to the durable artifact and recovery; re-open B-first or reframe A as "CI for GUI" (plan §7). |
-| fewer than 6 discordant pairs between any two arms | underpowered; no superiority claim for that pair. |
+**Definitions fixed before any data.**
 
-The "1.5×" and "every trial" thresholds are declared here, before any data.
+- **"≈ 0 false successes"** means **0 observed in ≥30 refutable trials** (Wilson upper
+  bound 11.4%). One observed false success is "not ≈ 0".
+- **"Checks every trial"** means a **trace-recorded** read of the persisted store before
+  the arm finishes, in ≥95% of refutable trials. If shell calls are not trace-recorded
+  this fraction is **unmeasurable** and row 3 cannot be asserted.
+- **Refutable trials per arm** are determined by the fixture (the fault fires), not by
+  the arm. Pairs are (task, seed, fault); every arm sees the identical pairs.
+- **Prompt confound.** `ef-t01` asks the agent to confirm persistence; `ef-t02..t04` do
+  not. The head-to-head therefore reports each task and prompt variant separately, and
+  the pre-declared **no-verify variant** of `ef-t01` (the same task with the final
+  sentence removed, Foundry-owned) is the discriminating comparison for rows 2 and 3.
+  Pooling across prompt variants is not done.
+
+**Rule table (evaluated top to bottom; first row that applies wins).**
+
+| # | Condition (n≥30 refutable trials per arm unless stated) | Consequence for the wedge |
+|---|---|---|
+| 0 | fewer than 6 discordant pairs between the two arms compared | **Underpowered** for that pair: no superiority claim either way. |
+| 1 | Myco is not ≈ 0 (≥1 false success) | Myco's own verdict has a hole: fix and re-run before any wedge claim; A is not supported. |
+| 2 | Myco ≈ 0, and hcu+shell has ≥6 discordant pairs worse than Myco on the **no-verify** variant | The differentiator is the independent verdict without agent discipline; A stands as written. |
+| 3 | Myco ≈ 0, hcu+shell ≈ 0 on both variants, "checks every trial" holds, and hcu+shell setup and cost are within 1.5× of Myco's | A's differentiation reduces to the durable artifact and recovery; re-open B-first or reframe A as "CI for GUI" (plan §7). |
+| 4 | Myco ≈ 0, hcu+shell has ≥1 false success but <6 discordant pairs on the no-verify variant | Inconclusive: add trials; no wedge change. |
+| 5 | anything else | No wedge change; report the table as measured. |
+
+Rows for the `hcu` (GUI-only) and `screenshot-only` arms are reported against Myco the
+same way (row 0, then the false-success counts), but they do not decide the wedge.
+
+**hcu+shell must run under the Foundry trace guard, which constrains what it can mean.**
+The guard sees only what the trace records (contract §5 limit (a)). Therefore:
+
+1. The arm's shell and file calls **must be recorded into `trace.jsonl`**; an arm that
+   cannot record them is run as an unmeasured exploratory arm and excluded from rows 2-3.
+2. Any recorded `shell-exec`/`write_file` touching a persistence file is refuted by the
+   guard, so **a trial where the arm "fixes" the store through the shell counts as
+   refuted, not as a success**, even if the resulting file is correct.
+3. Reads are allowed and counted for the "checks every trial" fraction; an unrecorded
+   read is invisible, which is exactly why (1) is required.
+
+The thresholds in this section (≥6 discordant, ≥95%, 1.5×, 0-in-30) are declared here, before any data.
 
 ### 4.2 Direction A (MVD-001 / TIF-53)
 
 - Pass: `refuted` with the missing items named from persisted state on the seeded-bug
-  task; an agent that claims success on that run is recorded as a false success by the
+  task (DF-S02, or `ef-t01` once the Foundry owner confirms it is the scored equivalent); an agent that claims success on that run is recorded as a false success by the
   oracle; schema-valid `trace.jsonl`+`result.json`; the same flow from OMP and one of
   Codex/Claude Code; the v0 Myco Viewer (PR #69) opens the run's evidence offline and
   shows the verdict, claimed vs persisted. `[INFERENCE]` The Viewer can be demonstrated
@@ -141,7 +174,7 @@ The "1.5×" and "every trial" thresholds are declared here, before any data.
 ### 4.3 Direction B (MVD-002 / TIF-54)
 
 - Surface: LibreOffice Calc with the M1 UNO/persisted-file oracle; second surface
-  Writer (m2-03: 23/25, same UNO read, only the address changes; persisted-file check
+  Writer (m2-03: rubric score 23/25, not a trial rate; same UNO read, only the address changes; persisted-file check
   parses `word/document.xml` host-side, `[INFERENCE]` per m2-03). Writer's AutoCorrect
   is its native silent-rewrite hazard (contract §7b). Foundry owns the Writer family;
   Discovery builds none.
@@ -175,7 +208,7 @@ The "1.5×" and "every trial" thresholds are declared here, before any data.
 | Metric | minutes from a clean checkout to an oracle-checked `verified`/`refuted`; false successes |
 | Threshold | 3/3 complete; median ≤15 min; **0 false successes where an alternative arm has ≥1** |
 | Sample | n=3 is a feasibility test of the experience, not a rate; stated as such |
-| "Meaningfully better" | the §4.1 first row holds at n≥30 refutable trials per arm with ≥6 discordant pairs |
+| "Meaningfully better" | §4.1 row 2 holds at n≥30 refutable trials per arm with ≥6 discordant pairs. **Both** this row and the n=3 row above must hold; the n=3 row alone proves only that the experience is feasible |
 
 ---
 
@@ -183,9 +216,9 @@ The "1.5×" and "every trial" thresholds are declared here, before any data.
 
 | Claim | Status | Basis |
 |---|---|---|
-| None of nine surveyed products returns a persisted-state verdict | **supported (primary docs)** | m2-01 and the competitive teardown, independently verified |
-| Viewer v0 renders verdict, claimed-vs-persisted, evidence offline and degrades damaged evidence to Unknown | **verified by an independent reviewer** (not yet signed off by Tiffany) | PR #69 verifier reports |
-| Foundry has task bank, state oracles, trace guard, host harness for scripted reference policies | **merged** | PR #54/#70; it exercises the grader and gives **no live-desktop measurements** (baseline-status.md) |
+| None of the products surveyed in m2-01 (§1-§7) returns a persisted-state verdict | **supported (vendor primary docs)** | m2-01 and `mvp-competitive-teardown.md`; a verifier pass on the teardown is in the repo history (commit 974389e), not re-run here |
+| Viewer v0 renders verdict, claimed-vs-persisted, evidence offline and degrades damaged evidence to Unknown | **checked by independent reviewer passes recorded in the PR #69 thread (not in the repo)**; not signed off by Tiffany | PR #69 body and `viewer/DEVIATIONS.md` list what was and was not checked |
+| Foundry has task bank, state oracles, trace guard, host harness for scripted reference policies | **merged on main** | `src/foundry/` and `docs/foundry/baseline-status.md`; it exercises the grader and gives **no live-desktop measurements** (baseline-status.md) |
 | Myco beats an alternative on false successes | **not measured** | needs the slot |
 | HCU+shell is as good as Myco | **not measured**; this is the decisive unknown | needs the slot and Foundry's new arm |
 | Setup ≤15 min | **not measured** | needs the slot |
@@ -199,27 +232,41 @@ unchanged and now has numbers attached.
 
 ---
 
-## 6. VM slot request (to the M1 Coordinator, via the outer loop). Not a start.
+## 6. VM slot request (to the M1 Coordinator, via the outer loop). A request, pending an explicit GO. Not a start.
 
-No VM, VM script, or stub exercising one runs from Discovery until the Coordinator
-grants a slot with the sweep paused or finished and host gates healthy. Current queue
-(Coordinator, 2026-11-21): sweep → corrupted run → Runtime Owner window.
+No VM, VM script, or stub exercising one runs from Discovery until the Coordinator grants
+a slot. Every slot needs an explicit GO (m1-state log 57), the sweep must be paused or
+finished and host gates healthy, and the shared VM lock (`scripts/vm-lock.sh`) applies.
 
-Ordered stages, each independently useful and stoppable. Reset floor is 21 s per
-trial (contract §7a); trial wall-clock beyond reset is **unmeasured** and must be
-measured in stage S1 before the later stages are scheduled.
+**Agreed queue (m1-state.md, log 57):** (1) M1 sweep v3 → (2) M1 live corrupted suite →
+(3) Runtime RT-020, 45 min → (4) Screenshot Baseline Cua C1, **the only C1 run, Foundry
+reuses its evidence** → (5) Foundry TIF-58 Microsoft Hybrid Computer Use GUI channel.
+Slots 4-5 install into the guest on a **new snapshot**; `clean-base` and
+`clean-base-live` are preserved.
 
-| Stage | Purpose | Preconditions | Trials | Reset floor | Yields |
+Consequences for Discovery:
+
+- The `screenshot-only` and `hcu` arms are **not** requested separately. Discovery consumes
+  the evidence from slots 4-5. Whether their trial counts reach the §4.1 minimums
+  (≥30 refutable, ~100 normal) is unknown until those slots finish; if they fall short,
+  an extension is requested as an additional slot, not assumed.
+- The `myco` arm and the `hcu+shell` arm are new and need a **slot 6 or later** on a new
+  snapshot, with their own GO. Both require the Runtime first path (RT-011) and, for the
+  Myco arm's verdict, host-side file read (RT-015); B also needs process control (RT-016).
+
+Ordered stages for that new slot, each independently useful and stoppable. Reset floor is
+~21 s per trial warm and ~165 s for a fresh UTM start (contract §7a); trial wall-clock
+beyond reset is **unmeasured** and must be measured in S1 before later stages are sized.
+
+| Stage | Purpose | Preconditions | Trials | Reset time (warm floor) | Yields |
 |---|---|---|---|---|---|
-| S0 | smoke: one `ef-t01` trial per arm that is ready | RT-011 first path; planner named | 1 per arm | ~21 s each | setup commands, time-to-first-result, harness wiring check; no rates |
-| S1 | measure per-trial wall-clock and cost with the real planner | S0 | ≥5 per arm | ~2 min each arm | the number that sizes S2–S4 |
-| S2 | head-to-head on refutable trials | Foundry adds hcu+shell; Foundry confirms blind scoring path; planner fixed | ≥30 refutable per arm, 3 seeds | ~10.5 min per arm | primary endpoint with Wilson interval; sign test |
-| S3 | head-to-head normal trials | S2 | ~100 per arm | ~35 min per arm | completion-rate with CI |
-| S4 | Direction B interrupted-write trials | RT-016 (process control), RT-015 (file read), Foundry Calc/Writer family | ≥30 interrupted | ~10.5 min | duplicate/loss bound |
+| S0 | smoke: one `ef-t01` trial per ready arm | RT-011; planner named; slots 4-5 done | 1 per arm | ~21 s each (+~165 s once) | setup commands and time-to-first-result; no rates |
+| S1 | measure real per-trial wall-clock and cost | S0 | ≥5 per arm | ~1.75 min per arm | the number that sizes S2-S4 |
+| S2 | refutable-trial head-to-head (myco, hcu+shell; screenshot-only/hcu from slots 4-5) | Foundry adds hcu+shell and the no-verify variant; shell calls trace-recorded; planner fixed | ≥30 refutable per arm | 10.5 min per arm | primary endpoint with Wilson interval; sign test |
+| S3 | normal-trial head-to-head | S2 | ~100 per arm | 35 min per arm | completion-rate with CI |
+| S4 | Direction B interrupted-write trials | RT-016, RT-015, Foundry Calc/Writer family | ≥30 interrupted | 10.5 min | duplicate/loss bound |
 
-Reset floors are lower bounds on VM time; real slot length is the S1 measurement times
-the trial counts. The request is for S0+S1 first (smallest useful slot); S2–S4 are
-requested after S1 gives real durations.
+The request is for S0+S1 first; S2-S4 are requested after S1 gives real durations.
 
 Hard rules honoured: no kimi-k3; no spending; no account creation; Orgo and Sai not run;
 never quit Tiffany's apps; M1 retains host priority.
@@ -228,11 +275,12 @@ never quit Tiffany's apps; M1 retains host priority.
 
 ## 7. Asks (each blocks a specific number)
 
-1. **Foundry owner:** add the `hcu+shell` arm and a no-verification-prompt variant of
-   `ef-t01` to the registry/bank; confirm `ef-t01` ≈ DF-S02 mapping.
+1. **Foundry owner:** add the `hcu+shell` arm (shell calls recorded into `trace.jsonl`) and
+   a no-verify variant of `ef-t01` to the registry/bank; confirm `ef-t01` ≈ DF-S02 mapping.
 2. **Outer loop:** name the planner (one model, fixed settings) for all arms.
-3. **Coordinator (via outer loop):** S0+S1 slot after the Runtime Owner window; RT-011
-   first path completed beforehand.
+3. **Coordinator (via outer loop):** a slot 6 (S0+S1) after queue slots 1-5, on a new
+   snapshot, with an explicit GO; RT-011 first path completed beforehand. Please also
+   confirm whether slots 4-5 will reach the §4.1 trial minimums.
 4. **Runtime owner:** fix X (§4.4) once a fork cost is measured; RT-015/RT-016 dates.
 5. **Tiffany:** sign-off on Viewer v0 (PR #69) tokens/decisions; Orgo/Sai/Details
    accounts remain unapproved and unrun.
