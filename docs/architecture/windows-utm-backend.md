@@ -58,7 +58,7 @@ pub trait Backend: Send {
 
 ## 3. Detailed Operation Mapping to `myco-agent`
 
-M1's Windows guest agent (`agent/src/myco_agent/server.py`) listens on loopback TCP port `8765` inside the interactive desktop session (`WinSta0\Default`). Every request is NDJSON containing an `id`, `token`, `op`, and `params`.
+M1's Windows guest agent (`agent/myco_agent/server.py`) listens on loopback TCP port `8765` inside the interactive desktop session (`WinSta0\Default`). Every request is NDJSON containing an `id`, `token`, `op`, and `params`.
 
 ### 3.1 `provision(&mut self)`
 - **Host VM Check:** Verifies VM state against the shared lock `/tmp/myco-win11.vm.lock` via `scripts/vm-lock.sh`. Fails immediately if the VM is locked by another runner.

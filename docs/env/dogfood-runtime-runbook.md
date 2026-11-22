@@ -27,7 +27,9 @@ The runtime crates live in `runtime/crates/`:
 
 To build or verify the binaries on the host:
 ```bash
-cargo build -p myco-rt-cli -p myco-rt-mcp
+cargo build --manifest-path runtime/Cargo.toml -p myco-rt-cli -p myco-rt-mcp
+# or from the runtime workspace directory:
+(cd runtime && cargo build -p myco-rt-cli -p myco-rt-mcp)
 ```
 
 ---
