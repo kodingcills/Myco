@@ -1357,3 +1357,32 @@ The initial recommendation was Cua Driver with a local planner. The options belo
 | OSWorld agent adapters that ship in-repo (UI-TARS v1/v2, OpenCUA, Qwen3-VL, Gemini, o3, gpt54, Owl, AGUVIS, …) | `mm_agents/` directory listing, 2026-11-21 |
 | Published OSWorld number is only *verified* when maintainers run the agent | OSWorld README §"Public evaluation" |
 | OSWorld-Verified's own warning about opaque, incomparable self-run scores | `xlang.ai/blog/osworld-verified`, quoted in `docs/research/eval-frameworks.md` §1.5 |
+
+## Host-side C1 harness
+
+`src/baseline/sweep.ts` runs the frozen v3 pairs in order. The manifest records the SHA-256 of
+the source `trials.jsonl` and each joined `result.json`. Index 3 retains its Myco refutation and
+its task parameters. Use one durable output directory for both arms. The accounting file holds
+the reservation before preparation starts, stores the completed row before publishing
+`trials/c1/<index>.json`, and retains an interrupted trial's charge. The report lists every
+index and its omission reason when applicable. A restart republishes committed rows and skips
+previously reserved, scored, and omitted indices. If a process dies while holding `.run-lock`,
+the Coordinator must confirm it has exited before removing that lock. Keep the accounting file.
+
+The Coordinator's live caller supplies fresh preparation from `cua-c1-base` (PR #86), the Cua
+version and pipe/session preflight, the exact Calc window, AC/caffeinate/load measurements, and
+a Cua stdio connection. The caller also supplies an independent document/health state probe for
+the grader, including driver-caused app death attribution. The harness expects the planner to
+save and close via the exposed UI tools. It reads persisted state for closed or unmodified
+documents and performs a separate audit conversion for verified rows.
+
+The hosted planner preflights each image request with Anthropic token counting and reserves
+30 calls at a padded 5,000 input and 256 output tokens each, using the frozen rates in §9.1.
+Unknown usage is held at the call reservation. Hosted rows and rows that switch to Ollama carry
+their model names in the existing deviations field. Before paid use, confirm the configured
+model, rates, token-count behavior and the applicable provider-side spend control. The host cap depends on
+provider billing staying within the reserved envelope.
+
+Live validation still requires Coordinator GO, the reset dependency, and the Windows Calc
+spike. Confirm the pinned driver's MCP response shape, pixel typing and shortcuts, and the
+grader's window/document probes before any scored run.
