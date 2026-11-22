@@ -86,14 +86,52 @@ fn type_text_global_reaches_the_focused_window() {
         .expect("the GTK sanity window must be present");
     println!("WINDOW {} pid={}", win.title, win.pid);
 
-    // ClickAt at a point inside the window. Coordinates are guest screen
-    // coordinates; the window is placed by openbox, so aim near the top-left
-    // quadrant where the entry sits (320x200 default size).
-    let click = be.act(&Action::ClickAt { x: 160, y: 120 });
+    // Read the window's ACTUAL geometry from the guest rather than guessing a
+    // point: openbox places the window, and a guessed coordinate that misses is
+    // indistinguishable from a broken ClickAt. xdotool is the same out-of-band
+    // oracle used for focus below.
+    let geom = oracle(
+        &ws,
+        "DISPLAY=:0 xdotool search --name MycoGtkSanity getwindowgeometry --shell 2>/dev/null \
+         | tr '\n' ' ' || echo NONE",
+    );
+    println!("GEOMETRY -> {geom}");
+    let field = |k: &str| -> Option<i32> {
+        geom.split_whitespace()
+            .find_map(|tok| tok.strip_prefix(&format!("{k}=")))
+            .and_then(|v| v.parse::<i32>().ok())
+    };
+    let (wx, wy, ww, wh) = match (field("X"), field("Y"), field("WIDTH"), field("HEIGHT")) {
+        (Some(x), Some(y), Some(w), Some(h)) => (x, y, w, h),
+        _ => panic!("could not read the GTK window geometry from the guest: {geom:?}"),
+    };
+    // Aim at the window centre: the entry sits in a vertical box, so the middle
+    // lands on or near it, and any click inside the window establishes focus.
+    let (cx, cy) = (wx + ww / 2, wy + wh / 2);
+    println!("CLICKAT TARGET -> ({cx}, {cy}) from window ({wx},{wy}) {ww}x{wh}");
+
+    let click = be.act(&Action::ClickAt { x: cx, y: cy });
     println!("CLICKAT -> {click:?}");
     assert!(
         matches!(click, Ok(_)),
         "ClickAt must be delivered or fail with a reason, never panic: {click:?}"
+    );
+
+    // Establish that the GTK window is actually ACTIVE before typing.
+    //
+    // This matters for diagnosis: the app never calls grab_focus() and openbox
+    // decides window focus, so "typeTextGlobal delivered nothing" could mean
+    // either the XTEST path is broken OR the keystrokes went to a window that was
+    // never focused. Those are different bugs, and without this check a failure
+    // here would be attributed to the wrong one -- expensively, inside a window.
+    //
+    // xdotool is out-of-band ground truth: the runtime does not report focus, so
+    // asking the guest is the only honest way to know.
+    let active = oracle(&ws, "DISPLAY=:0 xdotool getactivewindow getwindowname 2>/dev/null || echo NONE");
+    println!("ACTIVE WINDOW -> {active}");
+    assert!(
+        active.contains("MycoGtkSanity"),
+        "the GTK sanity window must be active before typing, else this test cannot          distinguish an XTEST failure from a focus failure. Active window was {active:?}.          ClickAt is supposed to establish this -- if it did not, that itself is the bug."
     );
 
     // The decisive assertion: type with NO target and read the app's own state.
