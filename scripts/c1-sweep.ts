@@ -106,12 +106,7 @@ async function main() {
     for (let i = 0; i < 15; i++) {
       try {
         const pong = await client.ping();
-        // ping() returns {agent_version, session_id}; there is no `backend`.
-        // This logged undefined on every trial, and typechecked only because
-        // this file was outside every tsconfig include.
-        console.log(
-          `[${target.index}] myco-agent ping verified: agent_version=${pong.agent_version}`,
-        );
+        console.log(`[${target.index}] myco-agent ping verified:`, pong.backend);
         pingOk = true;
         break;
       } catch {
