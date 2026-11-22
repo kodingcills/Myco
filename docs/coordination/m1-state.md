@@ -19,7 +19,7 @@
   land. PR #79's audit correctly excludes it from coverage and clears the old
   false-success flag. Original indices 2 and 16 also lacked landed faults.
   Four kill recoveries and three invalid-target recoveries verified from disk.
-- **VM queue:** RT-020 received its 45-minute GO (granted 2026-11-22 07:18 EST / 12:18Z, active until 08:05 EST / 13:05Z), including the myco-todo live reset and deploy check. PR #90 (C1 live harness) and PR #88 (Rule 8 honest-count) are under independent verifier review. Cua C1 and Foundry slot 5 await sequential handback. Discovery S0+S1 is tentative. Its disposable ARM64 QEMU+HVF guest uses a fresh Ubuntu 24.04 cloud image overlay with no snapshot ID. RT-011 proof remains open. M1-016 independent reproduction has launched its preflight phase.
+- **VM queue:** RT-020 completed its live run and released the kernel flock on `/tmp/myco-win11.vm.lock` at ~12:40Z. PR #88 (Rule 8 honest-count) merged at `34973b5`. PR #90 (C1 host-side live harness, M1-021) verified and merged at `7587e89`. C1 GO was delivered directly to the Screenshot Baseline Owner thread with exclusive window 12:42Z through 16:15Z on `cua-c1-base` under the approved $9.00 spend cap ($4.50 per arm). C1 Baseline Owner is running and preparing `cua-c1-base`. Evaluation Foundry slot 5 ($0 cap) and M1-016 live reproduction are queued sequentially behind C1. M1-016 independent reproduction completed host preflight and artifact validation cleanly (MSI hash exact match, 88-row v3 ledger verified byte-for-byte, 53-row corrupted ledger verified with 0 false successes, 20/20 generator proof matched, 506 tests passing).
 - [M1 backlog](../backlog/m1.md)
 
 ## Objective
@@ -756,3 +756,16 @@ The Screenshot Baseline Owner received the planner, arm, spend, and VM requireme
 - **Open gap (scorecard row 6):** the live entrypoints emit no conformance ledger. Needs a ledger, or a documented trials.jsonl → ledger mapping, before row 6 closes.
 - **Update 23:05Z:** the canaries are DONE (/tmp/m1-013/canary-240s/): seed-b idx 1 verified, convert 45.0 s; seed-d idx 3 verified, convert 31.4 s; both fixture hashes match. Two earlier canary runs were mis-parameterized (zsh did not split the arguments). They are kept only as timing samples (116.9 s and 19.7 s) in /tmp/m1-013/canary-240s-misparam/ and are NOT canaries. **Sweep v3 started 22:39:34Z** in /tmp/m1-013/sweep-v3/, pinned at aa96974. First results: idx 0, 1 and 2 verified, with converts of 39.9 s, 71.5 s (would have failed at 60 s) and 25.0 s.
 - **M1-014 merged:** PR #73 → fb910d6, two verifier rounds. It adds `scripts/m1-corrupt-suite.sh`: 18 trials, 4 classes × 3 without recovery plus kill × 3 and invalid-target × 3 with recovery, a host-ground-truth false-success audit, and a ledger. It also adds a shared VM lock, `scripts/vm-lock.sh` at /tmp/myco-win11.vm.lock, used by both drivers and by reset-trial-vm.sh; it refuses with exit 10 and also refuses while the pre-lock v3 sweep runs. The builder ran nothing on the VM. The injections are unverified on real Calc until the suite runs (queue slot 2).
+
+## Log 2026-11-22 (58) — PR #88 and PR #90 merged, RT-020 released lock, C1 GO active, M1-016 preflight verified
+- **PR #88 (Rule 8 symmetric honest-count):** verified and merged into `main` at `34973b5`. Independent post-merge verifier confirmed exact conformance: first attempt counts, no scored retries, explicit omissions.
+- **PR #90 (Host-side C1 screenshot baseline harness, M1-021):** verified and merged into `main` at `7587e89`. 60 tests passing, strict spend cap enforcement ($9.00 total / $4.50 arm limit), sensitive credential redaction, and `cua-c1-base` restore targeted.
+- **VM lock handoff:** Runtime RT-020 completed its live run and released the kernel flock on `/tmp/myco-win11.vm.lock` at ~12:40Z.
+- **C1 GO:** Delivered directly to [Myco M1 Screenshot Baseline Owner](t3-thread://v2/b1bc9145-909e-40e7-87e6-eb7568f09bd3/mcp:launch:1f1ac1ce7b00a783feb8c5a564d6dedf5ba6236c9155d5b9eb0188809f2d64e9). Window granted from 12:42Z through 16:15Z (3.5 hours) on `cua-c1-base`. Baseline owner active, verified `cua-driver-rs-0.56.4-windows-arm64.zip` release hash, and is preparing `cua-c1-base`.
+- **M1-016 independent reproduction:** Preflight completed cleanly with 0 discrepancies:
+  - Pinned installer SHA-256 (`8ee2ef81ca4103d3eeb06ca9f4ef0b5cbb83357d21d14a449f767bfb29183158`) exact match on `/Users/tofuinparis/VMs/iso/payload/LibreOffice_26.8.3_Win_aarch64.msi`.
+  - 88-row v3 ledger verified byte-for-byte; all 30 results and 525 traces valid; 0 unaccounted rows.
+  - 53-row combined corrupted ledger verified byte-for-byte; 0 false successes, 0 unaccounted rows.
+  - Host-side generator proof (20/20) and sweep parameters reproduced identically.
+  - Full test suite passed (506 tests).
+  - Live VM evaluation reproduction queued behind C1 and Evaluation Foundry slot 5 ($0 cap).
