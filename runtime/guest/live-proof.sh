@@ -19,10 +19,25 @@
 set -uo pipefail
 
 GUEST_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE="$(cd "$GUEST_DIR/.." && pwd)"
+WORKSPACE="$(cd "$GUEST_DIR/../.." && pwd)"  # repo root
 cd "$WORKSPACE" || exit 1
 
 say() { printf '\n=== %s\n' "$*"; }
+
+# This script boots a VM. It must never run by accident: the host is shared with
+# other workstreams and a stray guest measurably degrades their runs. Require an
+# explicit --go, and say why.
+if [[ "${1:-}" != "--go" ]]; then
+  cat >&2 <<'USAGE'
+refusing to start: this script boots a VM.
+
+Run it only inside a host window granted by the M1 Coordinator:
+
+    runtime/guest/live-proof.sh --go
+
+USAGE
+  exit 2
+fi
 fail() { printf '\nFAILED: %s\n' "$*" >&2; "$GUEST_DIR/shutdown.sh" >/dev/null 2>&1; exit 1; }
 
 cleanup() {
@@ -35,6 +50,18 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+say "0/6 preflight (fail in seconds, not after a boot)"
+[[ -f "$GUEST_DIR/state/noble-server-cloudimg-arm64.img" ]] \
+  || fail "base image missing: run runtime/guest/fetch-image.sh"
+[[ -f "$GUEST_DIR/keys/id_ed25519" ]] \
+  || fail "guest private key missing (gitignored): see runtime/guest/keys/README.md, then re-provision"
+command -v qemu-system-aarch64 >/dev/null || fail "qemu-system-aarch64 not on PATH"
+command -v cargo >/dev/null || fail "cargo not on PATH"
+if pgrep -f qemu-system-aarch64 >/dev/null; then
+  fail "a guest is already running; another workstream may hold the host"
+fi
+echo "OK: image, key, qemu, cargo present; no guest running"
 
 say "1/6 building the workspace"
 cargo build --workspace --manifest-path runtime/Cargo.toml 2>&1 | tail -2 || fail "cargo build"
