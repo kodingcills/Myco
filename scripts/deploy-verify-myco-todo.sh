@@ -36,7 +36,11 @@ source /run/myco/gui.env
 set +a
 app="$HOME/myco-todo/myco_todo.py"
 python3 "$app" --self-test
-if xdotool search --all --onlyvisible --name '^myco-todo$' >/dev/null; then
+todo_window() {
+    # xdotool is in the guest image (x11-utils/xwininfo is not).
+    xdotool search --onlyvisible --name '^myco-todo$' 2>/dev/null | sed -n 1p || true
+}
+if [[ -n "$(todo_window)" ]]; then
     echo "A myco-todo window is already open" >&2
     exit 1
 fi
@@ -49,11 +53,19 @@ cleanup() {
     rm -rf "$work"
 }
 trap cleanup EXIT
-if ! window="$(timeout 20s xdotool search --sync --all --onlyvisible --name '^myco-todo$' | sed -n '1p')"; then
-    cat "$work/app.log" >&2
-    exit 1
-fi
-test -n "$window"
-kill -0 "$app_pid"
-printf 'myco-todo visible (X11 window %s), installed at %s\n' "$window" "$app"
+for attempt in {1..40}; do
+    window="$(todo_window)"
+    if [[ -n "$window" ]] && kill -0 "$app_pid" 2>/dev/null; then
+        printf 'myco-todo visible (X11 window %s), installed at %s\n' "$window" "$app"
+        exit 0
+    fi
+    kill -0 "$app_pid" 2>/dev/null || break
+    sleep 0.5
+done
+cat "$work/app.log" >&2
+echo "myco-todo did not expose a viewable X11 window; visible windows:" >&2
+for w in $(xdotool search --onlyvisible --name '' 2>/dev/null); do
+    printf '  %s: %s\n' "$w" "$(xdotool getwindowname "$w" 2>/dev/null)" >&2
+done
+exit 1
 GUEST

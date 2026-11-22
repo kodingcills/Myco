@@ -9,3 +9,6 @@ __pycache__/
 /viewer/src/theme.generated.css
 /.playwright-browsers/
 verdict-budget.ndjson
+
+recovery.local.json
+recovery.local.json.*.tmp

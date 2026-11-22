@@ -203,3 +203,110 @@ The app-held state is small: JS heap about 17–42 MB, 12 live full-image URLs a
 
 - Result: _pending: Tiffany to fill in. Build environment could not launch Chrome Stable (SIGABRT); every number above is Playwright's headless Chromium._
 - Suggested steps: open `viewer/dist/myco-viewer.html` in Chrome Stable, open the verified fixture and a 10,000-step perf run, confirm the verdict appears within about a frame or two of drop, step/scrub feels instant, and note Chrome version/OS.
+
+## Screenshots: bounded retained memory (MVD-009 / TIF-64)
+
+The hard **400,000,000-byte** gate remains open. All three saved runs of the prior
+implementation exceeded it on summed peak physical footprint and peak RSS. One offline
+Chromium Headless Shell rerun of the measured-width build sampled 373,229,920 B peak
+renderer footprint, 457,070,232 B peak summed footprint, and 838,172,672 B peak summed
+RSS (38 sample rows, same synthetic workload). The wide PNG and original-only fallback
+browser tests passed on this build. Chrome Stable remains unmeasured.
+
+### Saved Headless Shell measurements
+
+Apple M4 Pro, macOS 27.0, Chromium Headless Shell 159.0.8154.6 (Playwright 1.65.1),
+offline at 1440×900 and DPR 1. Each fresh browser opens the same folder of 1,000 synthetic
+1440×900 PNGs, selects 320 distinct steps, scrubs across the full range and settles for 2 s.
+Each run has 38 rows. The sampler waits 400 ms after collecting a row and takes physical
+footprints every third row and at checkpoints, reading PIDs sequentially. Short spikes can
+fall between samples and RSS and footprint can peak at different times. The folder workload
+does not cover archive copies, the lightbox, high DPR or visiting all 1,000 full images.
+The saved runs were serial on a shared host.
+
+| Build and run | Peak summed RSS (B) | Settled summed RSS (B) | Peak summed footprint (B) | Settled summed footprint (B) | Peak renderer footprint (B) | Settled renderer footprint (B) | Peak summed footprint minus each run’s idle (B) | Raw result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Baseline 1 | 1,570,488,320 | 1,557,135,360 | 1,204,017,704 | 1,190,910,504 | 1,102,187,520 | 1,090,653,184 | 1,110,181,616 | `base-full-1.json` |
+| Baseline 2 | 1,571,176,448 | 1,566,998,528 | 1,209,146,016 | 1,204,951,712 | 1,113,033,800 | 1,108,839,496 | 1,115,408,256 | `base-full-2.json` |
+| Baseline 3 | 1,575,616,512 | 1,571,700,736 | 1,210,850,072 | 1,206,917,912 | 1,115,360,328 | 1,111,428,168 | 1,117,783,888 | `base-full-3.json` |
+| Prior implementation 1 | 863,633,408 | 852,410,368 | 482,072,120 | 430,528,128 | 390,056,288 | 348,539,304 | 388,252,440 | `view64-mem-1.json` |
+| Prior implementation 2 | 860,864,512 | 852,688,896 | 467,981,952 | 436,999,808 | 385,042,808 | 353,225,080 | 373,949,208 | `view64-mem-2.json` |
+| Prior implementation 3 | 896,581,632 | 888,995,840 | 498,833,144 | 459,085,584 | 416,975,272 | 376,310,208 | 405,472,072 | `view64-mem-3.json` |
+
+The prior implementation missed summed peak and settled footprint and summed peak and settled
+RSS in all three runs. Two of three met peak renderer footprint and peak summed footprint
+minus idle. All three met settled renderer footprint. The worst summed peak footprint missed
+by 98,833,144 B. Renderer-only, settled and idle-subtracted figures describe separate metrics.
+
+Raw run outputs are retained locally. Artifact SHA-256 values follow.
+
+- Baseline `base.html` (recorded as `3379ab3` in the builder handoff)
+  `f8f4c482fd9b49191eff2632fe494dcd9a389f68cf858e8a47f6fb60e814b591`.
+- Prior implementation `view64.html` (fixed 560 px CSS width × DPR)
+  `ace20435a8abf0b33ef4ace075e3334c40e98ed00290fc6672def9f565b18305`.
+- Measured-width build `dist/myco-viewer.html`
+  `fc85fc972bb57b2d3d51417c417e2ce1f4720ef679c7bd64689b30615b5740bd`.
+
+The saved latency runs use the same workload and timing approach, adapted for canvas.
+The timer checks visible Inspector image metadata and a paint opportunity. Each row has 20
+samples after one discarded warmup. Original-size lightbox timing remains open.
+
+| Inspector latency | Baseline median / max | Prior implementation median / max | Budget |
+| --- | ---: | ---: | ---: |
+| Cold keyboard | 64.7 / 70.5 ms | 48.8 / 54.9 ms | ≤250 ms |
+| Cached keyboard | 48.9 / 49.6 ms | 32.2 / 32.7 ms | ≤100 ms |
+| Cold drag | 50.2 / 50.8 ms | 33.4 / 51.1 ms | ≤250 ms |
+
+Both saved runs had a first-frame preview in 20/20 cold keyboard samples and 0/20 cold drag
+samples (`lat-base.json`, `lat-view64.json`). After a 40-step revisit, the 64-entry
+variant took 26.4 ms median versus 45.7 ms at 12 entries. The harness did not assert asset
+identity for that comparison. The strict 10,000-step verdict guard intermittently exceeded
+150 ms before and after. Regression status remains unresolved.
+
+### What the evidence isolates
+
+The baseline full-image DOM path is the dominant measured contributor. In the 160-selection
+diagnostic, thumbnail-only, full-image-only and combined runs settled at 195, 769 and 784 MB
+renderer footprint respectively (`base-no-full-1.json`, `base-no-thumbs-1.json`,
+`base-control-1.json`). The zero-cache baseline settled at 1,098–1,107 MB, overlapping the
+normal baseline. Full-resolution worker bitmaps with a 12-entry cache settled at 377–389 MB.
+Native region totals cannot identify allocation owners. In one cycling run over 100 distinct
+steps, footprint grew more slowly and nonmonotonically with bitmaps (`base-cycle-1.json`,
+`view64-cycle-1.json`). The cause of the residual footprint remains unverified.
+
+### Implementation
+
+- The Inspector decodes to the rendered width rounded up to a 32 CSS px bucket, multiplied
+  by DPR and capped at the source width. Width and DPR are part of the view cache key. Resize
+  and DPR changes are coalesced with a 100 ms trailing update. Only the lightbox requests
+  original pixels, and it releases them on close.
+- The view LRU holds up to 64 entries and 64 MiB of bitmap pixels. Live evicted entries,
+  canvas backing stores, originals and in-flight work are outside that accounting.
+- The worker checks PNG chunk CRCs and IEND and WebP RIFF structure before decode. These
+  checks and decoder rejection drive the warning. Compressed pixel data accepted by the
+  decoder has no independent validation. A failed bitmap transfer releases the worker bitmap
+  and reports unavailable.
+- Canceled active jobs waiting for the run skip the archive read. Selection work already
+  takes precedence in the queue, which has two active slots. Two in-flight thumbnails can
+  still make a selection wait. Simultaneous same-path jobs can repeat encoded reads and
+  container scans. The saved runs do not isolate savings from reserving a slot or sharing
+  encoded data, so scheduling and sharing policy remain as before.
+
+### Reproduce
+
+```sh
+pnpm install --offline --frozen-lockfile
+bench_dir="$(mktemp -d)"
+node viewer/scripts/gen-screenshot-run.mjs "$bench_dir/run"
+pnpm --filter viewer build
+pnpm --filter viewer exec playwright install --only-shell chromium
+cd viewer
+# memory: footprint of the launched PIDs, one fresh browser per run
+MYCO_SCREENSHOT_BENCH_PHASE=memory MYCO_SCREENSHOT_BENCH_FOOTPRINT=1 \
+  node scripts/screenshot-bench.mjs dist/myco-viewer.html "$bench_dir/run" 15 > after-mem.json
+# one-factor diagnostics: MYCO_SCREENSHOT_BENCH_DIAGNOSTIC=control|no-full|no-thumbs (160 steps),
+# MYCO_SCREENSHOT_BENCH_CYCLE=100 (700 presses over 100 distinct steps),
+# MYCO_SCREENSHOT_BENCH_NATIVE_DUMP=<prefix> (vmmap and footprint of the renderer at the end)
+# latency (N = 20): MYCO_SCREENSHOT_BENCH_PHASE=latency; MYCO_SCREENSHOT_BENCH_REVISIT=40 reselects after 40 steps
+MYCO_SCREENSHOT_BENCH_PHASE=latency node scripts/screenshot-bench.mjs dist/myco-viewer.html "$bench_dir/run" 20 > after-lat.json
+```
