@@ -75,9 +75,10 @@ Facts established by reading the repo, not by running anything:
 
 6. **M2 research round landed (main fc4738e, PR #48; findings under
    `docs/research/findings/m2-0*.md`).** Research input to A/B/C, not a plan; the
-   "M2 = MCP/API" lock-in stays retracted. It *independently confirms* item 4: nine
-   products surveyed against vendor primary docs, none returns a verdict on persisted
-   state. Closest: Cua per-action `effect`; Microsoft HCU window-level before/after
+   "M2 = MCP/API" lock-in stays retracted. It *independently confirms* item 4: eight
+   product lines surveyed against vendor primary docs (m2-01 lists nine entries, with
+   Simular Agent S and Sai counted together per its §7.3), none returns a verdict on
+   persisted state. Closest: Cua per-action `effect`; Microsoft HCU window-level before/after
    diff, which says "Neither proves file contents, persistence or network state."
    What it changes for Discovery:
    - **A:** m2-02 is "what A must get right", not the wedge. Two keepers whichever
@@ -176,7 +177,39 @@ verifier, and every sub-thread is reported here and to the outer loop.
 4. **Vision-capable model for the baseline arm** — M1-022 already open; not
    duplicated here.
 
+## Merge rule (reaffirmed by the outer loop after PR #98)
+
+No PR merges, and no auto-merge is enabled, without **an independent verifier PASS at
+the exact PR head**, then **green CI at that same head**. Any head change — including
+merging `main` in — needs a fresh verification before merge. PR #99 is the reason this
+is written down: it merged a live runner whose gates could be bypassed; PR #100
+reverted it (`8396c93` — that revert reached `main` via PR #101), and its archives are
+excluded from Discovery evidence.
+
 ## Log
+
+- 2026-11-22 (afternoon) · M2 research processed into the decision documents (no VM,
+  no spend, no accounts):
+  - `docs/research/mvp-competitive-teardown.md` §2.6: cross-check against finding
+    m2-01. 8 named products plus a screenshot-only control across the two documents
+    (Simular Agent S and Sai counted as one product line, per m2-01 §7.3), none with a
+    persisted-outcome verdict; the four overlapping products (HCU, Cua, Orgo, Sai)
+    agree, including two defects both documents found separately (Orgo's $3-vs-$5 credit, Orgo's
+    UUID-vs-`instance_id` spec contradiction). Adopted m2-01's billing point in its own
+    hedge (Orgo bills machine-hours, Sai credits), so verification is free *if the
+    customer writes it* — which is precisely why the `hcu+shell` arm is the decisive one.
+  - `docs/product/mvp-discovery-plan.md`: §2 now cites m2-01's eight product lines
+    (nine entries, Agent S and Sai one line per §7.3) as independent confirmation;
+    §4-A's underpowered 10-run rule is withdrawn and §4-B's 10-trial rule is
+    retargeted to `mvd-preregistration.md` §4.3 (≥30 interrupted trials); §6's second app is
+    LibreOffice Writer per m2-03; §7 gains m2-04 (one demonstration cannot identify a
+    loop) and m2-05 (~21 s is the default reset, not 8.3 s) as evidence that would
+    overturn C and any trial-heavy budget.
+  - Not changed: the pre-registration, the A/B/C rule table, the Viewer (gui-spec is
+    locked), the Direction A plan. No science moved, so no re-verification of them.
+  - Standing state: every live step is gated on the **Coordinator GO + host lock**
+    (queued after C1, M1-016 and Foundry). Nothing runnable in this window; the work
+    above is documentation reconciliation only.
 
 - 2026-11-22 (morning) · PR #84 merged (`767a62c`): Descriptive Sai arm evidence, Amendment 3, and blocker fixes verified. Blocker 1 resolved: approval URLs in diagnostic fields (`error`, `message`, `description`) are safely captured to private `/private/tmp/sai-setup/approval-N.txt` (mode 0600) and redacted (`[REDACTED]`) from ledger excerpts. Blocker 2 resolved: strict paid and quota guards (`plan.free: true` + `plan.title: "Paid plan"`, plain-text `storage_quota_exceeded`, and pre-strip inspection of diagnostic fields). 50 tests pass (`test/sai/harness.test.ts`), credential scanner clean, independent verifier pass (`PASS`), CI green.
 - 2026-11-22 (morning) · PR #81 merged (`aad8b59`): Orgo arm runner, fake service, spend guards, and preflight merged. Amendment 1 adopted (Free Medium gate-probe). Live probe remains ON HOLD pending verified provider-side $0.25 ceiling (real spend/keys blocked). Direction C analytical comparator: Orgo ~2s live memory pause on running Linux VM ($0.055/hr Medium) vs Myco's ~21s warm disk-only cold restore default (8.3s live RAM snapshot wedges in rapid cycling). Orgo branches the machine, not the task/intent. Branching (Direction C) is deferred in favor of linear retry from known-good state via intent log.
