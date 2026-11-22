@@ -19,6 +19,57 @@ struct Server {
     /// `Err` carries the remediation message; tools/list still works, `create` reports it.
     workspace: Result<PathBuf, String>,
     next_id: u64,
+    /// Where progress notifications go. `None` in tests.
+    progress: Option<ProgressSink>,
+}
+
+/// The client's progress token, if it supplied one.
+///
+/// MCP puts `_meta` on the request params, but clients in the wild also nest it
+/// inside the tool `arguments`, so accept both. `params._meta` wins when both are
+/// present. Returning `None` is what keeps a token-less client from receiving
+/// unsolicited notifications, so this is the single gate for that rule.
+fn progress_token(params: &Value, args: &Value) -> Option<Value> {
+    params
+        .get("_meta")
+        .and_then(|m| m.get("progressToken"))
+        .or_else(|| args.get("_meta").and_then(|m| m.get("progressToken")))
+        .cloned()
+}
+
+/// Emits MCP `notifications/progress` while a long tool call runs.
+///
+/// `create` takes minutes (boot + cloud-init + desktop readiness) and MCP calls
+/// are synchronous, so without this an agent cannot tell a slow boot from a hang.
+#[derive(Clone)]
+pub struct ProgressSink(std::sync::Arc<std::sync::Mutex<Box<dyn std::io::Write + Send>>>);
+
+impl ProgressSink {
+    pub fn new(w: Box<dyn std::io::Write + Send>) -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(w)))
+    }
+
+    /// Write one complete line under the lock. Every stdout write in the server
+    /// goes through here, so a notification can never interleave with a reply.
+    fn write_line(&self, line: &str) {
+        if let Ok(mut w) = self.0.lock() {
+            let _ = writeln!(w, "{line}");
+            let _ = w.flush();
+        }
+    }
+
+    fn notify(&self, token: &Value, progress: u64, message: &str) {
+        let msg = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": {
+                "progressToken": token,
+                "progress": progress,
+                "message": message,
+            }
+        });
+        self.write_line(&msg.to_string());
+    }
 }
 
 fn main() {
@@ -27,7 +78,13 @@ fn main() {
         // Don't die: tools/list must still work; `create` returns this to the agent.
         eprintln!("myco-rt-mcp: {e}");
     }
-    let mut srv = Server { sessions: HashMap::new(), workspace, next_id: 1 };
+    let sink = ProgressSink::new(Box::new(std::io::stdout()));
+    let mut srv = Server {
+        sessions: HashMap::new(),
+        workspace,
+        next_id: 1,
+        progress: Some(sink),
+    };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -36,8 +93,15 @@ fn main() {
             continue;
         }
         if let Some(reply) = handle_line(&mut srv, &line) {
-            let _ = writeln!(stdout, "{reply}");
-            let _ = stdout.flush();
+            // Replies go through the same sink as progress notifications, so
+            // "one line per message, never interleaved" is an invariant this code
+            // enforces rather than a property of Stdout's internal LineWriter.
+            if let Some(sink) = srv.progress.clone() {
+                sink.write_line(&reply);
+            } else {
+                let _ = writeln!(stdout, "{reply}");
+                let _ = stdout.flush();
+            }
         }
     }
 }
@@ -194,7 +258,7 @@ impl Server {
         let name = params["name"].as_str().ok_or((-32602, "missing tool name".to_string()))?;
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         let out = match name {
-            "create" => self.create(&args),
+            "create" => self.create(&args, params),
             "observe" => self.observe(&args),
             "act" => self.act(&args),
             "evidence" => self.evidence(&args),
@@ -228,7 +292,7 @@ impl Server {
             .ok_or((-32602, format!("unknown session {id}")))
     }
 
-    fn create(&mut self, args: &Value) -> Result<Value, (i64, String)> {
+    fn create(&mut self, args: &Value, params: &Value) -> Result<Value, (i64, String)> {
         let id = args["session_id"]
             .as_str()
             .map(|s| s.to_string())
@@ -279,7 +343,43 @@ impl Server {
                 }
             },
         );
-        if let Err(e) = session.create() {
+        // A create takes minutes; emit progress so the agent can tell a slow boot
+        // from a hang.
+        let token = progress_token(params, args);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let heartbeat = match (&self.progress, token) {
+            (Some(sink), Some(tok)) => {
+                let sink = sink.clone();
+                let stop = stop.clone();
+                Some(std::thread::spawn(move || {
+                    let started = std::time::Instant::now();
+                    let mut tick = 0u64;
+                    while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                            break;
+                        }
+                        tick += 1;
+                        sink.notify(
+                            &tok,
+                            tick,
+                            &format!(
+                                "provisioning desktop: {}s elapsed (boot, cloud-init, then AT-SPI readiness)",
+                                started.elapsed().as_secs()
+                            ),
+                        );
+                    }
+                }))
+            }
+            _ => None,
+        };
+
+        let created = session.create();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(h) = heartbeat {
+            let _ = h.join();
+        }
+        if let Err(e) = created {
             // Provisioning may have booted the guest and taken the lock; tear it
             // down so a failed create cannot brick the next one with CapReached.
             let _ = session.destroy();
@@ -388,7 +488,7 @@ mod tests {
     use super::*;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1 }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
     }
 
     #[test]
@@ -397,6 +497,7 @@ mod tests {
             sessions: HashMap::new(),
             workspace: Err("no Myco workspace found. Fix: set MYCO_HOME=/path/to/Myco".into()),
             next_id: 1,
+            progress: None,
         };
         let r = reply(
             &mut s,
@@ -507,7 +608,7 @@ mod protocol_edge_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1 }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
     }
 
     #[test]
@@ -571,7 +672,7 @@ mod read_file_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1 }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
     }
 
     fn call(s: &mut Server, body: &str) -> Value {
@@ -647,7 +748,7 @@ mod read_root_validation_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1 }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
     }
 
     fn call(s: &mut Server, body: &str) -> Value {
@@ -680,5 +781,70 @@ mod read_root_validation_tests {
         let text = r["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("filesystem root"), "{text}");
         assert!(s.sessions.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    /// The sink must emit a spec-shaped `notifications/progress` line carrying the
+    /// client's token, and a notification must carry no `id`.
+    #[test]
+    fn progress_notification_is_spec_shaped() {
+        struct W(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for W {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = ProgressSink::new(Box::new(W(buf.clone())));
+        sink.notify(&json!("tok-1"), 3, "provisioning desktop: 15s elapsed");
+
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        let v: Value = serde_json::from_str(out.trim()).unwrap();
+        assert_eq!(v["jsonrpc"], "2.0");
+        assert_eq!(v["method"], "notifications/progress");
+        assert_eq!(v["params"]["progressToken"], "tok-1");
+        assert_eq!(v["params"]["progress"], 3);
+        assert!(v["params"]["message"].as_str().unwrap().contains("15s"));
+        assert!(v.get("id").is_none(), "a notification must carry no id");
+    }
+
+    /// No token means no notifications. This asserts the gate itself, so mutating
+    /// it to synthesise a token turns this red (verified by re-running that
+    /// mutation after the first version of this test proved vacuous).
+    #[test]
+    fn no_token_means_no_notifications() {
+        assert_eq!(progress_token(&json!({}), &json!({})), None);
+        assert_eq!(
+            progress_token(&json!({"name": "create"}), &json!({"session_id": "x"})),
+            None,
+            "a create with no _meta anywhere must not start a heartbeat"
+        );
+    }
+
+    /// The token is accepted from either location, because clients differ.
+    #[test]
+    fn token_is_found_in_params_or_arguments() {
+        assert_eq!(
+            progress_token(&json!({"_meta": {"progressToken": "p-1"}}), &json!({})),
+            Some(json!("p-1"))
+        );
+        assert_eq!(
+            progress_token(&json!({}), &json!({"_meta": {"progressToken": "a-1"}})),
+            Some(json!("a-1"))
+        );
+        // params wins when both are present.
+        assert_eq!(
+            progress_token(
+                &json!({"_meta": {"progressToken": "p-2"}}),
+                &json!({"_meta": {"progressToken": "a-2"}})
+            ),
+            Some(json!("p-2"))
+        );
     }
 }
