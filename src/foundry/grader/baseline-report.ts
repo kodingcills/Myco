@@ -1,4 +1,4 @@
-import { armRegistry, escalations } from "../baseline/registry.ts";
+import { armRegistry, economicsLine, escalations } from "../baseline/registry.ts";
 import type { commitment } from "../hidden-split/index.ts";
 import { scoreReport, wilson } from "../oracles/report.ts";
 import type { runArm } from "./baseline-runner.ts";
@@ -6,6 +6,15 @@ import type { runArm } from "./baseline-runner.ts";
 type Row = ReturnType<typeof runArm>[number];
 type Unknown = "unknown";
 const unarmed = (row: Row) => row.faultClass !== null && row.faultEvent === null;
+/**
+ * The arm's declared marginal cost, or "blocked: <reason>". An arm with no registry entry
+ * (the Myco arm is not in the registry) reports `unregistered` rather than a guess.
+ */
+function declaredEconomics(armId: string | undefined): string {
+  const arm = armRegistry.find((candidate) => candidate.id === armId);
+  return arm ? economicsLine(arm.economics) : "unregistered";
+}
+
 /** Completion excludes uncertain trials. Recovery is verified faulted trials with a recovery event divided by known faulted trials. Repeatability is the range of per-seed known completion rates, only with at least three known seeds. Unmeasured setup and economics remain unknown. */
 export function metrics(rows: readonly Row[]) {
   const known = rows.filter((r) => r.result.verdict !== "uncertain" && !unarmed(r));
@@ -44,8 +53,11 @@ export function metrics(rows: readonly Row[]) {
       spread: rates.length >= 3 ? Math.max(...rates) - Math.min(...rates) : ("unknown" as const),
     },
     economics: {
+      // Tokens and measured cost stay unknown until a live run measures them; the declared
+      // marginal cost is known now and is what EF-005's acceptance asks the column to state.
       tokens: "unknown" as Unknown,
       cost: "unknown" as Unknown,
+      declared: declaredEconomics(rows[0]?.armId),
       plannerName: rows[0]?.plannerName ?? "unknown",
     },
   };

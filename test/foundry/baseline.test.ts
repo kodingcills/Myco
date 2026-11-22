@@ -7,6 +7,7 @@ import {
   armRegistry,
   baselineArmTable,
   baselineStatusMarkdown,
+  economicsLine,
 } from "../../src/foundry/baseline/registry.ts";
 import type { Fault } from "../../src/foundry/faults/index.ts";
 import { baselineReport, metrics } from "../../src/foundry/grader/baseline-report.ts";
@@ -254,10 +255,32 @@ describe("baseline", () => {
       wallClock: "unknown",
       manualInterventions: "unknown",
     });
-    expect(m.economics).toEqual({ tokens: "unknown", cost: "unknown", plannerName: "unknown" });
+    // No rows means no arm, so the declared cost is unregistered rather than guessed.
+    expect(m.economics).toEqual({
+      tokens: "unknown",
+      cost: "unknown",
+      declared: "unregistered",
+      plannerName: "unknown",
+    });
     expect(m.recovery).toBe("unknown");
     expect(m.repeatability.spread).toBe("unknown");
   });
+  it("states each arm's declared marginal cost, or why it is blocked", () => {
+    // EF-005 acceptance: the economics column states the marginal cost OR
+    // "blocked: account required" — never a blanket "unknown" that hides the difference
+    // between an arm nobody has run and an arm nobody may run.
+    const free = metrics(runArm(credulous, [task], options));
+    expect(free.economics.declared).toBe("unregistered");
+
+    const registered = armRegistry.map((arm) => economicsLine(arm.economics));
+    expect(registered).toContain(
+      "$0 marginal (MIT driver, no account; planner is the already-paid Claude subscription)",
+    );
+    expect(registered.some((line) => line.startsWith("blocked: account required"))).toBe(true);
+    // Every arm states something; none falls through to a bare "unknown".
+    expect(registered.every((line) => line.length > 0 && line !== "unknown")).toBe(true);
+  });
+
   it("runs committed synthetic hidden fixtures and derives claim eligibility", () => {
     const dir = mkdtempSync(join(tmpdir(), "myco-synthetic-"));
     try {
