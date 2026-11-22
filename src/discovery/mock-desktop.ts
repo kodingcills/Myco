@@ -72,8 +72,13 @@ export class MockDesktop implements DesktopTransport {
       case "launch":
         this.version += 1;
         return "delivered_verified";
-      case "typeText":
+      case "typeTextGlobal":
         this.entry += action.text;
+        this.version += 1;
+        return "delivered_verified";
+      case "clickAt":
+        // The Save control sits in the lower band of the 420x360 window.
+        if (action.y >= 272 && action.y <= 296) this.save();
         this.version += 1;
         return "delivered_verified";
       case "keyPress":
