@@ -1,11 +1,24 @@
 import type { AppState } from "../tasks/app-model.ts";
+import { saveWriter, type WriterDoc } from "../tasks/writer.ts";
 
 export type Fault =
   | "stale-ui"
   | "interrupted-write"
   | "partial-persistence"
   | "crash-mid-save"
-  | "permission-denied";
+  | "permission-denied"
+  /**
+   * Writer's AutoCorrect rewrites typed text at save. Unlike the five above it is not a
+   * crash or an interruption: the app did what it was designed to do, and the document
+   * legitimately disagrees with the user's intent. It is included because it is the one
+   * fault class where a screenshot-only agent is wrong for a reason it never caused, and
+   * because `crash-mid-save` and the other four are all observable as *absence* of state
+   * whereas this one is a well-formed document holding the wrong text.
+   */
+  | "autocorrect-rewrite";
+
+/** Faults that apply to the Writer table app; the rest are todo-store faults. */
+export const WRITER_FAULTS: readonly Fault[] = ["autocorrect-rewrite"];
 export interface FaultSpec {
   readonly fault: Fault;
   readonly version: number;
@@ -88,6 +101,10 @@ export function injectFault(state: AppState, spec: FaultSpec): FaultResult {
     case "permission-denied":
       next = { ...state, status: spec.reportError ? "save failed: permission denied" : saved };
       break;
+    case "autocorrect-rewrite":
+      // A Writer fault, not a todo-store fault: it has its own entry point so the two
+      // document shapes never share a switch.
+      throw new Error("autocorrect-rewrite applies to the Writer app; use injectWriterFault");
   }
   return {
     state: next,
@@ -97,6 +114,34 @@ export function injectFault(state: AppState, spec: FaultSpec): FaultResult {
       timestamp: timestamp(spec.seed),
       fault: spec.fault,
       detail: `save fault, seed ${spec.seed}, version ${spec.version}`,
+    },
+  };
+}
+
+/**
+ * The Writer AutoCorrect fault: save with AutoCorrect armed, so the document stores the
+ * rewritten text while the screen keeps what the user typed. Returns the same shape as
+ * `injectFault` so the ledger and the scorer treat it identically.
+ */
+export function injectWriterFault(
+  doc: WriterDoc,
+  spec: FaultSpec,
+): { doc: WriterDoc; faultVersion: number; event: FaultEvent } {
+  if (spec.fault !== "autocorrect-rewrite") {
+    throw new Error(`injectWriterFault cannot arm ${spec.fault}`);
+  }
+  if (!Number.isInteger(spec.version) || spec.version < 1 || !Number.isSafeInteger(spec.seed)) {
+    throw new Error("Invalid fault version or seed");
+  }
+  const saved = saveWriter(doc, { autocorrect: true });
+  return {
+    doc: saved,
+    faultVersion: spec.version,
+    event: {
+      type: "fault-injection",
+      timestamp: timestamp(spec.seed),
+      fault: spec.fault,
+      detail: `autocorrect armed at save, seed ${spec.seed}, version ${spec.version}`,
     },
   };
 }
