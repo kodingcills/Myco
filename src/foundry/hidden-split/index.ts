@@ -83,20 +83,24 @@ export function generateHiddenFixtures(seed: Uint8Array, n: number): HiddenFixtu
       if (base.defect === "silent-drop")
         intent = { kind: "todo.add-items", items: [`BUG: ${target}`, text()] };
       else if (base.defect === "wrong-value")
-        intent = { kind: "todo.add-items", items: [`Release: ${target}`] };
-      else if (base.defect === "stale-row")
-        intent = { kind: "todo.rename-item", from: items[0]!.text, to: target };
-      else intent = { kind: "todo.delete-items", items: [items[0]!.text] };
+        intent = { kind: "todo.add-items", items: [`Bug: ${target}`] };
+      else if (base.defect === "stale-row") {
+        // The rename target is the row whose ROLE says so, not simply the first row.
+        const renameRow = items.find((item) => item.role === "rename-target");
+        intent = { kind: "todo.rename-item", from: renameRow?.text ?? items[0]!.text, to: target };
+      } else intent = { kind: "todo.delete-items", items: [items[0]!.text] };
       const claims =
         intent.kind === "todo.rename-item"
           ? [intent.to]
           : intent.kind === "todo.add-items"
             ? [...intent.items]
             : items.slice(1).map((item) => item.text);
-      const fixture = todoFixture(
-        { ...base, fixtureId: id, seedItems: items, screenClaimsToTrap: claims },
-        1,
-      );
+      const fixture = todoFixture({
+        ...base,
+        fixtureId: id,
+        seedItems: items,
+        screenClaimsToTrap: claims,
+      });
       return {
         fixture,
         intent,

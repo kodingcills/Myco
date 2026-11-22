@@ -14,10 +14,19 @@
 
 import type { FixtureDefectKind, FixtureManifest, InitialState } from "../types.ts";
 
+/** What an entry is, independently of its text: text alone cannot carry the role. */
+export type TodoSeedRole =
+  /** Ordinary row the task leaves alone; the fixture's ordering control. */
+  | "kept"
+  /** The row a rename task operates on, exactly as it starts on screen. */
+  | "rename-target"
+  /** A row whose stored form the app normalises, so it cannot carry a rename target. */
+  | "dropped"
+  | "deleted";
+
 export interface TodoSeedItem {
   readonly text: string;
-  /** Why the item exists; used by screen-claim generation and by the report. */
-  readonly role: "kept" | "dropped" | "rename-source" | "deleted";
+  readonly role: TodoSeedRole;
 }
 
 export interface TodoFixtureSpec {
@@ -100,7 +109,23 @@ export function buildTodoInitialState(
   };
 }
 
-export function todoFixture(spec: TodoFixtureSpec, version: number): FixtureManifest {
+/**
+ * The version a fixture id encodes (`…-v2`), or `undefined` when the id carries none.
+ * Generated fixtures use content-hash ids, so they pass their version explicitly; an
+ * authored fixture encodes it in the id and the two must agree.
+ */
+export function fixtureVersionOf(fixtureId: string): number | undefined {
+  const encoded = /-v(\d+)$/.exec(fixtureId)?.[1];
+  return encoded === undefined ? undefined : Number(encoded);
+}
+
+export function todoFixture(spec: TodoFixtureSpec, version = 1): FixtureManifest {
+  const encoded = fixtureVersionOf(spec.fixtureId);
+  if (encoded !== undefined && encoded !== version) {
+    throw new Error(
+      `fixture ${spec.fixtureId} encodes version ${encoded} but was built as v${version}`,
+    );
+  }
   return {
     fixtureId: spec.fixtureId,
     app: "myco-todo",
@@ -123,7 +148,7 @@ export function todoFixture(spec: TodoFixtureSpec, version: number): FixtureMani
  */
 export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
   {
-    fixtureId: "ef-todo-silent-drop-v1",
+    fixtureId: "ef-todo-silent-drop-v2",
     defect: "silent-drop",
     description:
       "An existing shopping list. The user asks for four more items, two of which the app will " +
@@ -134,12 +159,13 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
     seedItems: [
       { text: "buy milk", role: "kept" },
       { text: "call mom", role: "kept" },
+      { text: "renew the domain", role: "kept" },
     ],
-    screenClaimsToTrap: ["BUG: token expires too early", statusSavedLine(6)],
+    screenClaimsToTrap: ["BUG: token expires too early", statusSavedLine(7)],
     mustNotBeSolvableBy: ["file-io", "shell-exec"],
   },
   {
-    fixtureId: "ef-todo-stale-row-v1",
+    fixtureId: "ef-todo-stale-row-v2",
     defect: "stale-row",
     description:
       "A release checklist where one row must be renamed. The app repaints the row but the " +
@@ -148,7 +174,7 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
       "After the rename the listbox and status bar show only the new text; the store still holds " +
       "the old text for that row.",
     seedItems: [
-      { text: "Draft release notes", role: "rename-source" },
+      { text: "Draft release notes", role: "rename-target" },
       { text: "update docs", role: "kept" },
       { text: "triage inbox", role: "kept" },
     ],
@@ -156,22 +182,22 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
     mustNotBeSolvableBy: ["file-io"],
   },
   {
-    fixtureId: "ef-todo-wrong-value-v1",
+    fixtureId: "ef-todo-wrong-value-v2",
     defect: "wrong-value",
     description:
-      "A task list where the requested text begins with 'Release:'. The listbox shows the text as " +
+      "A task list where the requested text begins with 'Bug: '. The listbox shows the text as " +
       "typed; the app's save path reads a leading key prefix as a label and stores only the value.",
     disagreement:
-      "The listbox and status bar show the full typed text ('Release: review the Q3 metrics'), " +
-      "while the store holds only 'review the Q3 metrics' — the prefix was stripped on the way to " +
-      "disk, so an exact-value check against what the screen shows refutes the run while the app " +
-      "reports a successful save.",
+      "The listbox and status bar show the full typed text ('Bug: review the Q3 metrics'), while " +
+      "the store holds only 'review the Q3 metrics' — the prefix was stripped on the way to disk, " +
+      "so an exact-value check against what the screen shows refutes the run while the app reports " +
+      "a successful save.",
     seedItems: [{ text: "draft the agenda", role: "kept" }],
-    screenClaimsToTrap: ["Release: review the Q3 metrics", statusSavedLine(2)],
+    screenClaimsToTrap: ["Bug: review the Q3 metrics", statusSavedLine(2)],
     mustNotBeSolvableBy: ["file-io"],
   },
   {
-    fixtureId: "ef-todo-partial-write-v1",
+    fixtureId: "ef-todo-partial-write-v2",
     defect: "partial-write",
     description:
       "A working list where two rows must be removed. The app rewrites the store in two passes " +
@@ -184,13 +210,13 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
     seedItems: [
       { text: "archive Q1 invoices", role: "kept" },
       { text: "update docs", role: "kept" },
-      { text: "renew the domain", role: "kept" },
       { text: "audit expense claims", role: "kept" },
+      { text: "renew the domain", role: "kept" },
     ],
     screenClaimsToTrap: [
       "Update docs",
-      "Renew the domain",
       "Audit expense claims",
+      "Renew the domain",
       statusSavedLine(3),
     ],
     mustNotBeSolvableBy: ["file-io"],
@@ -198,7 +224,9 @@ export const TODO_FIXTURE_SPECS: readonly TodoFixtureSpec[] = [
 ];
 
 export const TODO_FIXTURES: readonly FixtureManifest[] = TODO_FIXTURE_SPECS.map((spec) =>
-  todoFixture(spec, 1),
+  // Authored fixtures carry their version in the id, so the builder's agreement check is
+  // satisfied by construction rather than by a second literal that could drift.
+  todoFixture(spec, fixtureVersionOf(spec.fixtureId) ?? 1),
 );
 
 export function findTodoFixture(fixtureId: string): FixtureManifest | undefined {

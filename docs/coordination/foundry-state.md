@@ -2,7 +2,8 @@
 
 Owner: Evaluation Foundry (project P-TIF-6, team TIF). Independent of the Runtime Owner and
 of MVP Discovery. Reports to the outer loop (T3 Code Bridge).
-Branch: `myco/eval-foundry`. Canonical backlog: [docs/backlog/foundry.md](../backlog/foundry.md).
+Branch: `myco/eval-foundry` (fixture/verifier work now on `myco/hcu-evidence`, PR #110 while
+slot 5 holds that branch). Canonical backlog: [docs/backlog/foundry.md](../backlog/foundry.md).
 
 ## Why this workstream exists (Tiffany, 2026-11-21, approved t80u / widget t80s288)
 
@@ -26,10 +27,10 @@ host without a desktop. Any future VM work is scheduled through the M1 Coordinat
 
 | Linear | Id | Status | Artefact |
 |---|---|---|---|
-| TIF-50 | EF-001 | in progress | `foundry/` fixture contracts + the GUI-disagreement seed task; `src/foundry/` runner; `docs/foundry/contract.md` |
-| TIF-51 | EF-002 | in progress | `src/foundry/oracles/` (state oracles, hidden by path), mutation audit, hidden split scaffolding |
+| TIF-50 | EF-001 | **done, PR #110 verified PASS** | Four fixtures across four defect classes, each with a statement-level screen-vs-store assertion; `docs/foundry/contract.md` §3 |
+| TIF-51 | EF-002 | **done, PR #110 verified PASS** | `src/foundry/oracles/state.ts` (derived truth, no-leak by type), mutation audit, hidden split commitment |
 | TIF-52 | EF-003 | blocked on EF-001 + EF-002 | `src/foundry/faults/` (planned) + `docs/research/findings/f1-ef-fault-taxonomy.md` |
-| TIF-57 | EF-004 | blocked on EF-001 + EF-002 | blind scoring in `src/foundry/oracles/blind.ts`; split roots `foundry/hidden/` |
+| TIF-57 | EF-004 | blind scoring + hidden split landed (PR #64); `src/foundry/stats.ts` adds the interval/caveat contract (PR #110) | `src/foundry/oracles/blind.ts`, `foundry/hidden-commitment.json`, `src/foundry/stats.ts` |
 | TIF-58 | EF-005 | host harness merged; live run awaits Coordinator GO | [baseline status](../foundry/baseline-status.md), PRs #70 and #75 |
 
 ### TIF-58 slot 5
@@ -70,6 +71,66 @@ gates, then stop the guest and report back when the run ends.
    it applies identically to every arm including the screenshot baselines. (contract §5)
 4. **Two roots for the hidden split** — `foundry/tasks/` public, `foundry/oracles/` +
    `foundry/hidden/` hidden, separate roots and separate ownership. (contract §6)
+
+## Log 2026-11-22 — EF-002 defect found by an independent probe, fixed, and regression-tested
+
+An adversarial verifier run against the EF-001/EF-002 commit found that the **stale-row
+fixture was not testing its own defect**. The app model resolved the rename target by its
+*post*-rename text, so the lookup could never find the pre-rename row and the stale text was
+never written. The fixture passed anyway because the order check refuted for an unrelated
+reason — the "refuted" result was real, the reason was not, and no test distinguished them.
+The same bug made an in-place rename refute while delete-then-append passed unnoticed.
+
+Fixed in PR #110 with tests that would catch a regression: an in-place rename now verifies,
+a reordered store refutes, and each of the four fixtures must disagree between screen and
+store **for the reason its manifest states**. The general lesson is in the contract: a trap
+test that only asserts "refuted" cannot tell a working fixture from a broken one.
+
+Also in PR #110: fixture roles (`rename-target`) replace text-based row identification;
+every fixture gains an untouched control row; the wrong-value task moved to a `Bug: ` label
+so the app's own drop rule cannot turn it into a second silent-drop; fixture version is
+derived from the id and the hidden commitment is regenerated.
+
+## M2 research folded in (2026-11-22, main at fc4738e)
+
+- **Statistics are now a contract clause** (contract §6.1). Under 100 normal trials a report
+  must print the underpowered caveat; 10 corrupted trials bounds a zero false-success rate
+  only below 25.9%, and **30** is the smallest meaningful count. Two arms are compared as a
+  paired table with a sign test — 6 discordant of 30 is the smallest significant result.
+- **Reset budget corrected** to ~21 s per cold restore (`scripts/reset-trial-vm.sh` default),
+  not the 8.3 s live path; 100 trials is ~35 minutes of reset, so power is affordable and the
+  real cost to optimise is verification.
+- **LibreOffice Writer** becomes EF-003's sixth fault class: AutoCorrect is a silent in-app
+  mutation Calc cannot produce, and Writer table cells read through the same UNO call shape.
+- **No drift claim is available** from published sources (m2-04); if the Foundry needs one it
+  must generate the evidence and say so.
+
+## Log 2026-11-22 (2) — PR #110 through three verifier rounds to PASS
+
+The first verifier rejected with seven findings. Six were mine, introduced while fixing the
+stale-row defect; one was a doc error. All are fixed, and each fix has a test that fails if
+it comes back:
+
+| Round | Verdict | What it caught |
+|---|---|---|
+| 1 | REJECT | Stale-row save corrupted the store on a plain Add (it inferred "rename" from the typed text, which Add also sets); a no-op save capitalised untouched rows; contract §6.1's sign-test row was wrong by 15 orders of magnitude; `stats.ts` was dead code so its caveats could never reach a report; hidden fixtures had silently dropped to version 0; three fixtures changed content without the version bump §7 mandates; the partial-write assertion ignored the screen. |
+| 2 | REJECT | One regression left: the stale text was keyed on the fixture's designated target, so renaming any *other* row wrote the wrong text and duplicated an untouched row. |
+| 3 | **PASS** | Fixed by carrying each row's load-time text (`loadedRows`) and substituting at the renamed index — the defect is now stated generally ("a renamed row keeps its load-time text") and is correct for any row. |
+
+Two things worth keeping from this:
+
+1. **The verifier's probes were better than my tests.** Every rejection came from a script
+   that printed the store next to the screen for a sequence I had not tried. ADR-0023 now
+   requires statement-level assertions for exactly this reason.
+2. **A fix can be worse than the bug.** Rounds 1 and 2 were both regressions I introduced
+   while fixing the original defect. The lesson is in the tests, not the prose: the save
+   path now has four cases (no-op, add, delete, rename) and a rename-after-add case, each
+   asserting the store and the screen.
+
+`stats.ts` is no longer dead: `oracles/report.ts` owns the single `wilson` implementation and
+puts `scoreClaim()` into `completion.claim`, so a report cannot publish a rate without its
+interval and caveats. Verified end to end — a 10-trial report carries both underpowered
+caveats.
 
 ## Escalations (queued for the outer loop; the Foundry does not act on them)
 

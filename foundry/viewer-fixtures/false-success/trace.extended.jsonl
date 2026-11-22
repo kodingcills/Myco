@@ -1,4 +1,4 @@
-{"type":"run-start","runId":"viewer-false-success","taskId":"ef-todo-silent-drop-v1","startedAt":"2026-11-21T12:00:00.000Z"}
+{"type":"run-start","runId":"viewer-false-success","taskId":"ef-todo-silent-drop-v2","startedAt":"2026-11-21T12:00:00.000Z"}
 {"type":"observation","timestamp":"2026-11-21T12:00:00.000Z","stateVersion":0,"nodeCount":40}
 {"type":"action","timestamp":"2026-11-21T12:00:00.037Z","step":0,"action":{"kind":"click","ref":"Button[name=Add#0]"}}
 {"type":"guard-evaluation","timestamp":"2026-11-21T12:00:00.074Z","step":0,"phase":"pre","results":[{"predicateName":"target-visible","passed":true,"observed":"Edit [name=new-item] focused1 | uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia uia"}],"stateVersionBefore":0,"stateVersionAfter":0}
