@@ -288,8 +288,9 @@ Slots 4-5 install into the Windows guest on a **new snapshot**; `clean-base` and
 `clean-base-live` are preserved.
 
 **Slot 6: tentatively granted as S0+S1 only (Coordinator's message; not in the repo).** After
-slots 1-5, with: an explicit GO; the shared host lock; host gates (AC power, load ≤14, swap
-free ≥300 MB); and the preconditions below. S2-S4 are requested separately after S1.
+slots 1-5, with: an explicit GO; the shared host lock; host gates (load ≤14, swap free ≥300 MB);
+and the preconditions below. S2-S4 are requested separately after S1. **AC power is not a host
+gate** (Tiffany, 2026-11-22): it is recorded per row and a battery run is valid evidence.
 
 - **Host lock.** The Coordinator's condition is that S0 takes the shared host lock because
   only one heavy guest may run on this Mac at a time. Today `scripts/vm-lock.sh` (PR #73,

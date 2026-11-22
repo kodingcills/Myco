@@ -554,8 +554,9 @@ local 8765 → guest 8765), so the baseline reuses it rather than shelling out.
   `QEMULauncher`, so that pattern finds nothing even when the VM is healthy. Use
   `lsof -iTCP:2222`. (This is the same class of error as the `pgrep` check in log 39.)
 
-**Host conditions for a valid run**, recorded per trial in the row (§4): AC power, `caffeinate
--dimsu` for the duration, and no other VM running. A baseline run on a contended Mac measures the
+**Host conditions for a valid run**, recorded per trial in the row (§4): `caffeinate -dimsu` for
+the duration, and no other VM running. AC power is NOT a condition — it is recorded per row and a
+battery run is valid evidence (Tiffany, 2026-11-22: never gate VM work on charger state). A baseline run on a contended Mac measures the
 Mac — logs 30/41 show resets swinging 45 s → 1879 s under load.
 
 **The no-touch rule is absolute while a sweep runs**, and it covers stubs. The incident that
@@ -1158,8 +1159,8 @@ The local path costs $0 in API spend. Apply the §9.1 limits to the selected Son
 
 - **The local rows (Cua + Ollama, UI-TARS) cost $0 in marginal spend.** They cost disk (4–20 GB), RAM during the run, and host
   time. On this Mac RAM is the binding constraint (log 15: Ollama at 9.1 GB + the VM at 8 GB
-  starved the guest). A baseline run must therefore happen when the VM is the only heavy guest and
-  the Mac is on AC power.
+  starved the guest). A baseline run must therefore happen when the VM is the only heavy guest.
+  AC power is not a precondition; it is recorded per row.
 - **D and E stay `unknown` for a different reason than in the earlier draft.** The *token* cost is
   now priced (§8.4). What is unknown is whether CheaperInference's `deepseek-v4.1-flash`/`glm-5.3`
   accept images at all — the one prior check returned a credits error — and what a dedicated
