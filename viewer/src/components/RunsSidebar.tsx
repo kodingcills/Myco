@@ -1,4 +1,4 @@
-import { FileWarning } from "lucide-react";
+import { AlertTriangle, FileWarning } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { deriveVerdict } from "../data/verdict.ts";
 import { type OpenedRun, useViewer } from "../store.ts";
@@ -50,6 +50,12 @@ export function RunsSidebar({ mod }: { mod: boolean }) {
       <div data-run-tree role="tree" aria-label="Runs opened this session">
         {runs.map((run, index) => {
           const task = run.error ? "Can't read file" : (run.data.result?.taskId ?? run.name);
+          const isSimulated = Boolean(
+            run.data.manifest?.simulated ||
+              run.data.manifest?.dryRun ||
+              (run.data.result && "simulated" in run.data.result && run.data.result.simulated) ||
+              (run.data.result && "dryRun" in run.data.result && run.data.result.dryRun),
+          );
           return (
             <div
               key={run.key}
@@ -103,6 +109,20 @@ export function RunsSidebar({ mod }: { mod: boolean }) {
               <span className="type-body-strong truncate" title={task}>
                 {task}
               </span>
+              {isSimulated && (
+                <span
+                  data-simulated-badge
+                  className="type-data-small inline-flex items-center gap-1 px-1 border border-border-strong rounded-control text-text-primary bg-bg-surface3 whitespace-nowrap"
+                  title="Simulated / dry-run harness"
+                >
+                  <AlertTriangle
+                    className="size-3 shrink-0 text-text-primary"
+                    strokeWidth={1.5}
+                    aria-hidden="true"
+                  />
+                  Simulated
+                </span>
+              )}
               {mod && index < 9 ? (
                 <kbd data-kbd>
                   {navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+"}

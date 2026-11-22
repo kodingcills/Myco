@@ -521,7 +521,8 @@ async function measureMemory(context, root) {
 }
 
 async function runPhase(measure) {
-  const browser = await chromium.launch();
+  const executablePath = process.env.MYCO_BROWSER_PATH || process.env.CHROMIUM_EXECUTABLE_PATH;
+  const browser = await chromium.launch(executablePath ? { executablePath } : undefined);
   try {
     const root = await browser.newBrowserCDPSession();
     const { processInfo } = await root.send("SystemInfo.getProcessInfo");
