@@ -269,7 +269,10 @@ async function main() {
       const { driver, diagnostic } = probeC1Driver(windowInfo.pid, pipeReachable);
       console.log(`C1 driver preflight: ${diagnostic}`);
       return {
-        driver,
+        // Carry the cause into the row: a driver-unreachable verdict must name
+        // its reason, or a too-tight timeout and a dead driver are the same
+        // artifact. See DriverPrecondition.diagnostic.
+        driver: { ...driver, diagnostic },
         resetMs,
         acPower,
         caffeinate,
