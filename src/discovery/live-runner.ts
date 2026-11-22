@@ -154,9 +154,11 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
   let persisted: readonly string[] = [];
   let verification: LiveVerification = { status: "uncertain", reasons: ["run did not complete"] };
   let transportError: string | undefined;
+  let resetError: string | undefined;
 
   try {
     session = await input.transport.create();
+    const launchBefore = 0;
     const launched = await input.transport.act(session, {
       kind: "launch",
       command: input.app.command,
@@ -168,9 +170,15 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
       step(
         0,
         { kind: "launch", command: input.app.command },
+        launchBefore,
         observation.stateVersion,
-        observation.stateVersion,
-        [{ predicateName: "app launched", passed: true, observed: input.app.command }],
+        [
+          {
+            predicateName: "app launched",
+            passed: true,
+            observed: `${launched}: ${input.app.command}`,
+          },
+        ],
         [],
       ),
     );
@@ -188,7 +196,7 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
           { kind: "typeText", text: item },
           before,
           observation.stateVersion,
-          [{ predicateName: "entry focused", passed: true, observed: observation.entryText }],
+          [],
           [
             {
               predicateName: "item appears in the list",
@@ -202,6 +210,7 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
 
     // Focus order in the app: entry -> Add -> list -> Save. Three Tabs from the
     // entry reach Save; Return activates it.
+    const saveBefore = observation.stateVersion;
     for (const keys of ["Tab", "Tab", "Tab", "Return"]) {
       const outcome = await input.transport.act(session, { kind: "keyPress", keys });
       if (outcome === "failed") throw new Error(`save key ${keys} failed`);
@@ -212,9 +221,15 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
       step(
         input.items.length + 1,
         { kind: "keyPress", keys: "Tab Tab Tab Return" },
+        saveBefore,
         observation.stateVersion,
-        observation.stateVersion,
-        [{ predicateName: "save activated", passed: true, observed: claimed }],
+        [
+          {
+            predicateName: "save activated",
+            passed: /saved\s+\d+\s+item/i.test(claimed),
+            observed: claimed,
+          },
+        ],
         [],
       ),
     );
@@ -230,8 +245,8 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
     if (session) {
       try {
         await input.transport.reset(session);
-      } catch {
-        // A failed reset is recorded below, not hidden.
+      } catch (error) {
+        resetError = String(error);
       }
       try {
         await input.transport.destroy(session);
@@ -242,6 +257,14 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
   }
 
   const missing = input.items.filter((item) => !persisted.includes(item));
+  if (verification.status === "verified" && missing.length > 0) {
+    verification = {
+      status: "uncertain",
+      reasons: [
+        `verifier claimed verified but the persisted store is missing: ${missing.join(", ")}`,
+      ],
+    };
+  }
   const claimedSuccess = /saved\s+\d+\s+item/i.test(claimed);
   const falseSuccess = verification.status === "refuted" && claimedSuccess;
   const checks = [
@@ -268,6 +291,7 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
     reasons: [...verification.reasons],
   };
   if (transportError) verdict.reasons.push(`transport error: ${transportError}`);
+  if (resetError) verdict.reasons.push(`reset failed: ${resetError}`);
 
   const record: RunRecord = {
     runId,
@@ -279,7 +303,17 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
     ...(verification.status === "uncertain" ? { unresolvedState: verdict.reasons.join("; ") } : {}),
   };
   mkdirSync(join(input.runsDir, runId), { recursive: true });
-  const evidenceDir = writeRunEvidence(input.runsDir, record, []);
+  const extraTrace = resetError
+    ? [
+        {
+          type: "recovery" as const,
+          timestamp: new Date().toISOString(),
+          event: `reset-failed: ${resetError}`,
+          stateVersion: 0,
+        },
+      ]
+    : [];
+  const evidenceDir = writeRunEvidence(input.runsDir, record, extraTrace);
 
   return {
     status: verification.status,

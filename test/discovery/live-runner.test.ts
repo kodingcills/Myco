@@ -5,7 +5,12 @@ import { describe, expect, it } from "vitest";
 import { resultRecordSchema } from "../../schemas/result-record.ts";
 import { traceEventSchema } from "../../schemas/trace-events.ts";
 import { validateSchema } from "../../schemas/validate.ts";
-import { type LiveVerification, runDirectionALive } from "../../src/discovery/live-runner.ts";
+import {
+  type DesktopAction,
+  type DesktopSession,
+  type LiveVerification,
+  runDirectionALive,
+} from "../../src/discovery/live-runner.ts";
 import { MockDesktop } from "../../src/discovery/mock-desktop.ts";
 import type { PreflightProbe } from "../../src/discovery/preflight.ts";
 
@@ -119,6 +124,80 @@ describe("Direction A live runner", () => {
     expect(result.status).toBe("uncertain");
     expect(result.falseSuccess).toBe(false);
     expect(transport.destroyCount).toBe(1);
+  });
+
+  it("does not call a refuted run a false success when the app never claimed success", async () => {
+    const inner = new MockDesktop();
+    const transport = {
+      create: () => inner.create(),
+      observe: async () => ({
+        ...(await inner.observe()),
+        statusText: "error: could not save",
+      }),
+      act: (session: DesktopSession, action: DesktopAction) => inner.act(session, action),
+      readFile: (session: DesktopSession, path: string) => inner.readFile(session, path),
+      reset: () => inner.reset(),
+      destroy: () => inner.destroy(),
+    };
+    const result = await runDirectionALive({
+      transport,
+      probe,
+      app,
+      items: ["BUG: dropped"],
+      verify,
+      runsDir: runsDir(),
+    });
+    expect(result.status).toBe("refuted");
+    expect(result.falseSuccess).toBe(false);
+  });
+
+  it("keeps the verdict when reset fails, and records the failure", async () => {
+    const inner = new MockDesktop();
+    const transport = {
+      create: () => inner.create(),
+      observe: () => inner.observe(),
+      act: (session: DesktopSession, action: DesktopAction) => inner.act(session, action),
+      readFile: (session: DesktopSession, path: string) => inner.readFile(session, path),
+      reset: async () => {
+        throw new Error("reset failed");
+      },
+      destroy: () => inner.destroy(),
+    };
+    const result = await runDirectionALive({
+      transport,
+      probe,
+      app,
+      items: ["one"],
+      verify,
+      runsDir: runsDir(),
+    });
+    expect(result.status).toBe("verified");
+    expect(result.reasons.join(" ")).toContain("reset failed");
+  });
+
+  it("downgrades a verifier that says verified while the store is missing items", async () => {
+    const result = await runDirectionALive({
+      transport: new MockDesktop(),
+      probe,
+      app,
+      items: ["BUG: dropped"],
+      verify: () => ({ status: "verified", reasons: ["trust me"] }),
+      runsDir: runsDir(),
+    });
+    expect(result.status).toBe("uncertain");
+    expect(result.reasons.join(" ")).toContain("missing");
+  });
+
+  it("reports uncertain when typeText fails, even if the store would verify", async () => {
+    const result = await runDirectionALive({
+      transport: new MockDesktop({ failAtAction: 2 }),
+      probe,
+      app,
+      items: ["one"],
+      verify,
+      runsDir: runsDir(),
+    });
+    expect(result.status).toBe("uncertain");
   });
 
   it("reports uncertain when the transport throws, and still destroys the session", async () => {
