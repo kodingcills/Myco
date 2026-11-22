@@ -40,6 +40,30 @@ export const armRegistry = [
   },
 ] as const;
 export const escalations = armRegistry.map(({ id, blocker }) => ({ id, blocker }));
+/**
+ * The generated part of docs/foundry/baseline-status.md: the header and the arm table.
+ * The offline-inventory and guest-queue sections are prose the doc owns, so this function
+ * renders only what the arm registry actually knows — a test asserts equality with the
+ * committed doc, which is how the two stay in step.
+ */
+/** The arm table only: the part of the status doc the registry determines. */
+export function baselineArmTable(): string {
+  return [
+    "## Live arms queued for the outer loop.",
+    "",
+    ...armRegistry.map(
+      (a) => `- **${a.id}** — ${a.status}: ${a.blocker}; planner: ${a.plannerName}.`,
+    ),
+  ].join("\n");
+}
+
 export function baselineStatusMarkdown(): string {
-  return `# Baseline status\n\nThe host harness runs scripted reference policies over the myco-todo model. It uses the Foundry fixture's initial bytes and isolates the injected save faults. Control saves and recovery saves use the model's healthy save path. These runs exercise the grader and provide no live desktop performance measurements. Setup time, manual interventions, and economics remain unknown.\n\nLive arms queued for the outer loop.\n\n${armRegistry.map((a) => `- **${a.id}** — ${a.status}: ${a.blocker}; planner: ${a.plannerName}.`).join("\n")}\n`;
+  const header =
+    "# Baseline status\n\n" +
+    "The host harness runs scripted reference policies over the myco-todo model. It uses the " +
+    "Foundry fixture's initial bytes and isolates the injected save faults. Control saves and " +
+    "recovery saves use the model's healthy save path. These runs exercise the grader and " +
+    "provide no live desktop performance measurements. Setup time, manual interventions, and " +
+    "economics remain unknown.\n\n";
+  return `${header}${baselineArmTable()}\n`;
 }

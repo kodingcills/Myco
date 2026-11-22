@@ -246,12 +246,23 @@ cannot drift:
 | 0 false successes in 30 | bounds it below **9.5%** — the smallest meaningful count | survey §7.2 |
 | **6 of 6** discordant, all one way | smallest significant sign-test result, p = 0.031; 5 of 5 is p = 0.0625 | survey §7.3 |
 
-Read the sign-test row carefully, because two different questions hide behind "discordant":
-a *unanimous* run of 6 trials favouring one arm gives p = 2·(1/2)^6 = 0.031. Six discordant
-trials **scattered across 30** proves nothing — at n = 30 a two-sided sign test needs 21
-discordant trials, all one way, for p < 0.05. So the comparison is only meaningful when the
-arms disagree outright on at least 6 trials and one arm wins every one of them; anything
-milder is reported as "underpowered at n=30", never as a win.
+Read the sign-test row carefully, because "discordant" hides two different questions and only
+one of them has a small answer:
+
+| Discordant outcome | Trials needed for p < 0.05 |
+|---|---|
+| **Unanimous** (one arm wins every discordant trial) | **6** (p = 0.031); 5 gives 0.0625 |
+| **Split**, best case (8 to 1) | **9** |
+| **Split**, scattered (e.g. 3 to 3, 15 to 15) | **never** — p = 1 |
+
+So a comparison is only meaningful when the arms disagree outright on at least 6 trials and
+one arm wins every one of them. A mixed result needs roughly an 8:1 ratio over at least 9
+trials, and an even split proves nothing regardless of size. Anything milder is reported as
+"underpowered at n=30", never as a win. `src/foundry/baseline/compare.ts` computes this and
+refuses to name a winner outside the bound. *(Corrected 2026-11-22: this paragraph previously
+said "at n = 30 a two-sided sign test needs 21 discordant trials", which is wrong — 20
+unanimous gives p ≈ 2×10⁻⁶. The 21 figure conflated the unanimous question with a
+fixed-n=30 one.)*
 
 Consequences the contract imposes:
 
