@@ -806,3 +806,25 @@ The Screenshot Baseline Owner received the planner, arm, spend, and VM requireme
 - **Fail-closed contract:** The baseline must fail closed with NO local-model fallback. If Anthropic calls fail or credits expire, the trial fails closed immediately.
 - **Spike proof requirement:** One spike trial must show real Anthropic API calls with non-zero token usage and recorded cost before the re-sweep window is granted.
 - **VM Queue Sequence:** Confirmed as (1) RT-020 live proof (active, myco-todo live run underway) -> (2) C1 screenshot baseline -> (3) M1-016 independent live evaluation reproduction -> (4) Evaluation Foundry (TIF-58, $0 cap).
+
+## Log 2026-11-22 (63) — RT-020 live proof passed and merged (PR #96, c25df02); C1 spike GO active on cua-c1-base
+- **RT-020 Live Proof PASSED & MERGED:**
+  - Live session `runs/rt020-live-20261122-093115/proof.json` passed all 11 steps cleanly (`passed: true`, `ok: true`, cold boot 108.0s, act:launch 0.4s, act:typeText 0.5s, verify-myco-todo 0.8s with live X11 window ID 16777242, reset 52.0s, clean destroy 1.1s, zero lingering QEMU processes).
+  - Independent adversarial verification performed by Antigravity subagent (`312c1bf6-f5c5-406d-9616-7f5f621040b0`): formal PASS verdict delivered.
+  - PR #96 (`feat(runtime): complete RT-020 live proof and independent verification`) opened from `rt020-live-run`.
+  - Zero schema modifications (`schemas/` untouched). All 6 CI checks passed green.
+  - PR #96 squash-merged into `main` at commit `c25df02`.
+  - Unblocks Dogfood DF-005 (TIF-27).
+- **C1 Spike GO & Guest State:**
+  - Coordinator delivered GO to [Myco M1 Screenshot Baseline Owner](t3-thread://v2/b1bc9145-909e-40e7-87e6-eb7568f09bd3/mcp:launch:1f1ac1ce7b00a783feb8c5a564d6dedf5ba6236c9155d5b9eb0188809f2d64e9).
+  - Windows guest `myco-win11` successfully restored to `cua-c1-base`, started, and verified healthy via SSH (`vssh` answered `myco-win11\myco`).
+  - Kernel lock `/tmp/myco-win11.vm.lock` confirmed FREE.
+  - Phase 1a single-trial spike (`scripts/c1-spike.sh /tmp/baseline/c1-spike`) active under strict fail-closed contract with paid Claude Sonnet (`claude-sonnet-5-5`), $9.00 hard cap, and zero local Ollama fallback.
+- **VM Queue Sequence:**
+  1. Slot 4: C1 single spike trial (Active now).
+  2. Slot 4b: C1 30-trial re-sweep (upon spike pass with non-zero Anthropic token spend).
+  3. Slot 5: M1-016 independent live reproduction.
+  4. Slot 6: Evaluation Foundry slot 5 (TIF-58, $0 cap).
+  5. Slot 7: Discovery live Direction A execution (`docs/product/direction-a-live-execution-plan.md`).
+  6. Slot 8: Dogfood DF-005 (TIF-27).
+
