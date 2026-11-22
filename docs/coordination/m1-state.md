@@ -19,7 +19,7 @@
   land. PR #79's audit correctly excludes it from coverage and clears the old
   false-success flag. Original indices 2 and 16 also lacked landed faults.
   Four kill recoveries and three invalid-target recoveries verified from disk.
-- **VM queue:** RT-020 completed its live run and released the kernel flock on `/tmp/myco-win11.vm.lock` at ~12:40Z. PR #88 (Rule 8 honest-count) merged at `34973b5`. PR #90 (C1 host-side live harness, M1-021) verified and merged at `7587e89`. C1 GO was delivered directly to the Screenshot Baseline Owner thread with exclusive window 12:42Z through 16:15Z on `cua-c1-base` under the approved $9.00 spend cap ($4.50 per arm). C1 Baseline Owner is running and preparing `cua-c1-base`. Evaluation Foundry slot 5 ($0 cap) and M1-016 live reproduction are queued sequentially behind C1. M1-016 independent reproduction completed host preflight and artifact validation cleanly (MSI hash exact match, 88-row v3 ledger verified byte-for-byte, 53-row corrupted ledger verified with 0 false successes, 20/20 generator proof matched, 506 tests passing).
+- **VM queue & conflict resolution (12:52Z):** RT-020's live proof (task-141) was halted by platform cancellation at 12:40:59Z and pre-empted when Screenshot Baseline restored `clean-base` at 12:48Z; RT-020 did NOT complete and its interrupted attempt is excluded from scoring per Rule 8. Runtime Owner cleanly tore down its Linux QEMU guest, removed overlays, and is standing by. Screenshot Baseline Owner is confirmed as the SOLE active owner of `myco-win11` during its window through 16:15Z on `cua-c1-base` ($9.00 spend cap). RT-020 is re-queued as the immediate next slot upon C1 lock release for a fresh clean-base restore and live run (uncompleted until proof.json and independent verifier confirm). Evaluation Foundry slot 5 ($0 cap) and M1-016 live reproduction follow sequentially. PR #88 merged at `34973b5`; PR #90 merged at `7587e89`. M1-016 preflight passed with 0 discrepancies (installer hash match, 88-row v3 ledger byte-for-byte, 53-row corrupted ledger byte-for-byte, 20/20 generator proof, 506 tests passing).
 - [M1 backlog](../backlog/m1.md)
 
 ## Objective
@@ -769,3 +769,17 @@ The Screenshot Baseline Owner received the planner, arm, spend, and VM requireme
   - Host-side generator proof (20/20) and sweep parameters reproduced identically.
   - Full test suite passed (506 tests).
   - Live VM evaluation reproduction queued behind C1 and Evaluation Foundry slot 5 ($0 cap).
+
+## Log 2026-11-22 (59) — VM conflict investigated and resolved: single VM ownership enforced, RT-020 re-queued
+- **Conflict audit (12:40Z–12:52Z):**
+  - Lock file `/tmp/myco-win11.vm.lock` was free; metadata showed `64024 reset-trial-vm.sh` which had exited.
+  - Process audit confirmed only UTM `QEMULauncher` (PID 64087) running. No `task-141` or `qemu-system-aarch64` processes were active.
+  - Runtime Owner's `task-141` (started 12:40:38Z) was halted by server cancellation at 12:40:59Z. `runs/rt020-live-20261122-074038` left 0-byte `proof.json`/`proof.err`.
+  - At 12:48Z, Screenshot Baseline restored `clean-base` on `myco-win11` under the 12:42Z C1 GO.
+  - Runtime Owner cleanly shut down its guest (`runtime/guest/shutdown.sh`), removed overlays (`myco-runtime-v0.qcow2`, `SESSION.lock`, `qemu.pid`), committed `682e8b4` in `docs/coordination/runtime-state.md`, and stood down awaiting coordination.
+- **Rule 8 application:** The clobbered RT-020 run is excluded from scoring as an interrupted attempt. RT-020 is NOT recorded as completed.
+- **Queue re-alignment & single ownership:**
+  - **Slot 4 (ACTIVE):** Screenshot Baseline Owner holds exclusive VM access through 16:15Z on `cua-c1-base` ($9.00 total spend cap). Direct directive delivered to [Myco M1 Screenshot Baseline Owner](t3-thread://v2/b1bc9145-909e-40e7-87e6-eb7568f09bd3/mcp:launch:1f1ac1ce7b00a783feb8c5a564d6dedf5ba6236c9155d5b9eb0188809f2d64e9).
+  - **Re-queued Slot 3:** RT-020 receives the immediate next slot upon C1 lock release for a fresh restore and 45-minute live run. Direct directive delivered to [Myco Runtime Owner (Rust)](t3-thread://v2/b1bc9145-909e-40e7-87e6-eb7568f09bd3/mcp:launch:cba81a8ecbe150c1ad3f6908da73bab666f2f4eca8ccd1657f403f1f051220fa).
+  - **Slot 5:** Evaluation Foundry (TIF-58, $0 cap) queued behind RT-020.
+  - **Slot 6:** M1-016 Independent Live Evaluation Reproduction queued behind Foundry.
