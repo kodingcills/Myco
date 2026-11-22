@@ -204,6 +204,12 @@ impl<B: Backend> Session<B> {
 fn action_refs(action: &Action) -> Vec<&crate::state::ElementRef> {
     match action {
         Action::Click { target } | Action::TypeText { target, .. } => vec![target],
+        // TypeTextGlobal and ClickAt carry no ref: they address focus or a raw
+        // screen point, not an element from an observation. Returning an empty
+        // vec here is what keeps them out of the staleness check -- and the
+        // match arm is written out rather than using `_` so a future ref-carrying
+        // variant cannot silently skip the binding.
+        Action::KeyPress { .. } | Action::TypeTextGlobal { .. } | Action::ClickAt { .. } => Vec::new(),
         _ => vec![],
     }
 }
@@ -336,6 +342,59 @@ mod tests {
         let obs2 = s.observe().unwrap();
         let ok = ElementRef { payload: "n1".into(), issued_at: obs2.state_version };
         assert!(s.act(&Action::Click { target: ok }).is_ok());
+    }
+
+    /// The targetless variants are exempt from staleness, and stay exempt.
+    ///
+    /// `TypeTextGlobal`/`ClickAt` address focus or a raw screen point, not an
+    /// element from an observation, so a version mismatch is meaningless for
+    /// them. This is the property Discovery's S0 depends on: it has no ref to
+    /// offer because Tk publishes no nodes.
+    ///
+    /// Asserted together with its converse -- `TypeText` with a stale ref is
+    /// still refused -- so "exempt" cannot be achieved by disabling the check.
+    #[test]
+    fn targetless_actions_are_exempt_from_staleness_but_targeted_ones_are_not() {
+        let mut s = ready();
+        let obs = s.observe().unwrap(); // version 0
+        // Move the version on so anything bound to 0 is stale.
+        s.act(&Action::Launch { command: "x".into(), args: vec![] }).unwrap();
+
+        // Exempt: no ref, so no staleness error.
+        assert!(
+            s.act(&Action::TypeTextGlobal { text: "hello".into() }).is_ok(),
+            "typing into the focused window must not be ref-bound"
+        );
+        assert!(
+            s.act(&Action::ClickAt { x: 10, y: 20 }).is_ok(),
+            "clicking a raw point must not be ref-bound"
+        );
+
+        // Converse: a ref-carrying action at the old version is still refused.
+        let stale = ElementRef { payload: "n1".into(), issued_at: obs.state_version };
+        assert!(
+            matches!(
+                s.act(&Action::TypeText { target: stale, text: "x".into() }),
+                Err(RuntimeError::StaleRef { .. })
+            ),
+            "the targetless exemption must not have relaxed targeted actions"
+        );
+    }
+
+    /// The new kinds report the names the MCP surface advertises.
+    #[test]
+    fn new_action_kinds_report_their_wire_names() {
+        assert_eq!(Action::TypeTextGlobal { text: "t".into() }.kind_name(), "typeTextGlobal");
+        assert_eq!(Action::ClickAt { x: 0, y: 0 }.kind_name(), "clickAt");
+    }
+
+    /// Default permissions must let the new kinds through, or the exemption above
+    /// would be untestable and S0 blocked by the permission set instead.
+    #[test]
+    fn default_permissions_allow_the_targetless_kinds() {
+        let p = Permissions::default();
+        assert!(p.allows("typeTextGlobal"), "typeTextGlobal must be allowed by default");
+        assert!(p.allows("clickAt"), "clickAt must be allowed by default");
     }
 
     #[test]

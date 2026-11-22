@@ -25,6 +25,19 @@ pub enum Action {
         target: String,
         text: String,
     },
+    /// Type into the focused window, with no element target (RT-003 / Discovery S0).
+    ///
+    /// Some toolkits publish no accessibility nodes -- Tk registers zero AT-SPI
+    /// nodes -- so there is no ref to aim at even though the entry holds focus.
+    /// Same XTEST path as KeyPress.
+    TypeTextGlobal {
+        text: String,
+    },
+    /// Click a raw guest screen coordinate (RT-003 / Discovery S0).
+    ClickAt {
+        x: i32,
+        y: i32,
+    },
     KeyPress {
         keys: String,
     },
@@ -92,6 +105,8 @@ pub fn act(
             };
             type_text(&provider, el, target, text, &cache.nodes)
         }
+        Action::TypeTextGlobal { text } => type_text_global(text),
+        Action::ClickAt { x, y } => click_at(*x, *y),
         Action::KeyPress { keys } => key_press(keys),
     }
 }
@@ -265,6 +280,82 @@ fn read_text(
         .clone()
         .filter(|v| !v.is_empty())
         .or_else(|| el.text().read_all().ok())
+}
+
+/// Type into whatever window has focus, with no element target.
+///
+/// Uses `Keyboard::type_text`, which is XTEST -- the same delivery path as
+/// `key_press`. Deliberately reported `delivered_unverified`: the whole reason
+/// this primitive exists is that the toolkit exposes nothing to read back, so
+/// claiming verification would be a lie. The caller confirms by reading app state
+/// (the Tk app writes its widget contents to a file).
+fn type_text_global(text: &str) -> (Outcome, Option<String>) {
+    if text.is_empty() {
+        return (Outcome::Failed { reason: "empty text; nothing to type".into() }, None);
+    }
+    let input = match xa11y::input_sim() {
+        Ok(i) => i,
+        Err(e) => {
+            return (
+                Outcome::Failed { reason: format!("input unavailable: {e}") },
+                Some("input_unavailable".into()),
+            )
+        }
+    };
+    match input.keyboard().type_text(text) {
+        Ok(()) => (
+            Outcome::DeliveredUnverified {
+                reason: format!(
+                    "{} chars typed into the focused window via XTest; no element was                      targeted, so there is nothing to read back at this layer",
+                    text.chars().count()
+                ),
+            },
+            Some("typed_focused".into()),
+        ),
+        Err(e) => (
+            Outcome::Failed { reason: format!("focused typing failed: {e}") },
+            Some("type_error".into()),
+        ),
+    }
+}
+
+/// Click a raw guest screen coordinate.
+///
+/// The escape hatch for elements that are not in the accessibility tree. Guarded
+/// against negative coordinates: a negative point is a caller bug, and passing it
+/// through would move the pointer off-screen and click nothing, which reads as a
+/// mysterious no-op rather than an error.
+fn click_at(x: i32, y: i32) -> (Outcome, Option<String>) {
+    if x < 0 || y < 0 {
+        return (
+            Outcome::Failed {
+                reason: format!("screen coordinate must be non-negative, got ({x}, {y})"),
+            },
+            Some("bad_coordinate".into()),
+        );
+    }
+    let input = match xa11y::input_sim() {
+        Ok(i) => i,
+        Err(e) => {
+            return (
+                Outcome::Failed { reason: format!("input unavailable: {e}") },
+                Some("input_unavailable".into()),
+            )
+        }
+    };
+    let point = xa11y::Point { x, y };
+    match input.mouse().click(point) {
+        Ok(()) => (
+            Outcome::DeliveredUnverified {
+                reason: format!("pointer click delivered at ({x}, {y}) via XTest; no read-back"),
+            },
+            Some("clicked_point".into()),
+        ),
+        Err(e) => (
+            Outcome::Failed { reason: format!("click at ({x}, {y}) failed: {e}") },
+            Some("click_error".into()),
+        ),
+    }
 }
 
 fn key_press(keys: &str) -> (Outcome, Option<String>) {

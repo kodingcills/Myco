@@ -222,7 +222,7 @@ fn tool_defs() -> Vec<Value> {
         }),
         json!({
             "name": "act",
-            "description": "Perform one action (launch, click, typeText, keyPress) with a three-way outcome.",
+            "description": "Perform one action with a three-way outcome: launch, click, typeText, typeTextGlobal, clickAt, keyPress. Use typeTextGlobal/clickAt when the toolkit exposes no accessibility nodes (Tk registers none) and there is no ref to target.",
             "inputSchema": {"type":"object","required":["session_id","action"],"properties":{
                 "session_id": {"type":"string"},
                 "action": {"type":"object"}

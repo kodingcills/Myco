@@ -10,6 +10,19 @@ pub enum Action {
     Launch { command: String, args: Vec<String> },
     Click { target: ElementRef },
     TypeText { target: ElementRef, text: String },
+    /// Type into whatever window currently has focus, with no element target.
+    ///
+    /// Needed because some toolkits expose no accessibility nodes (Tk registers
+    /// zero AT-SPI nodes, RT-003), so there is no `ElementRef` to aim at even
+    /// though the app's entry field holds focus. Runs through the same XTEST path
+    /// as `KeyPress`, which is why it carries no ref and no staleness binding.
+    TypeTextGlobal { text: String },
+    /// Click a raw screen coordinate.
+    ///
+    /// The escape hatch for the same case: a canvas or an AT-SPI-blind toolkit
+    /// has no element to reference, only a position. `x`/`y` are guest screen
+    /// coordinates, so this is deliberately not ref-bound.
+    ClickAt { x: i32, y: i32 },
     KeyPress { keys: String },
 }
 
@@ -19,6 +32,8 @@ impl Action {
             Action::Launch { .. } => "launch",
             Action::Click { .. } => "click",
             Action::TypeText { .. } => "typeText",
+            Action::TypeTextGlobal { .. } => "typeTextGlobal",
+            Action::ClickAt { .. } => "clickAt",
             Action::KeyPress { .. } => "keyPress",
         }
     }
