@@ -89,3 +89,18 @@ Worked example (#112 at `246cd302`): one runtime path differed from all three ve
 **Why not a merge queue:** enabling one is a repository-settings decision for the outer loop, not the coordinator. Auto-merge is already on and helps throughput but does not fix verifier invalidation, since `update-branch` still produces a new head.
 
 **Verifier reading rule (from a false REJECT):** a verifier claimed a PR contained no `runtime/` changes because the author had reset a shared worktree while it was reading. Verifiers must be given the SHA and must read objects (`git show <sha>:<path>`), never the working tree, and authors must not mutate a worktree while a review is reading it.
+
+## VM queue gate (standing rule, Tiffany via outer loop, 2026-11-22 14:27 ET)
+
+**Never gate VM work on AC power.** The charger state is not a scheduling condition. A VM slot may be granted on battery.
+
+The only gates that remain:
+
+1. **`memory_pressure` / `vm_stat` not critical** — no warn/critical pressure, free pages present.
+2. **The VM lock is held by exactly one owner at a time** — acquire `LOCK_EX` before any VM action; back off immediately if unavailable; never retry in a loop.
+
+**Load average alone is not a reason to hold the queue.** It may be reported for context, and a run may be *paused* mid-flight if the host becomes unusable, but it must not block a grant.
+
+Removed by this rule: the AC-power gate, the swap-free gate (swap grows on demand on macOS, so it is not a pressure signal), and the "load under 8 sustained" watcher. The watcher script was deleted rather than left dormant, so it cannot be restarted by habit.
+
+**Consequence for owner code:** any harness that refuses to run because of charger state must drop that check. `src/baseline/c1-trial.ts` had `if (!prepared.acPower) throw new Error("AC power required")`; that gate is to be removed, and the same edit must move the precondition inside the cleanup scope so an abort at entry cannot leave guest processes behind.
