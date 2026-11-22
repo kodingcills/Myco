@@ -503,3 +503,27 @@ wall clock, not 2.
 ### Not in this window
 RT-015 `read_file` live validation (PR #112 is in review, not on main) and RT-016
 process control. Both are separate, smaller windows if the Coordinator prefers.
+
+### Corrected finding: discovery works today (measured 2026-11-22)
+
+My earlier note said an agent must run from the repo root. That is **no longer
+true**, and I checked rather than assuming. `myco-rt-backend-qemu::workspace::discover()`
+resolves `$MYCO_HOME` -> walk up from the current directory -> **walk up from the
+executable**, and the executable path is what saves a bare-directory caller.
+
+Measured from `/tmp/myco-bare-test` with the in-tree binary:
+- `initialize` -> answered normally;
+- `tools/call observe` on an unknown session -> `unknown session` immediately, i.e.
+  discovery succeeded and the call reached business logic;
+- `tools/call create` -> **blocked**, because it genuinely tried to boot a VM.
+
+So the ease barrier is not discovery any more; it is that `create` takes minutes
+and gives no progress feedback. That is the thing to fix for TIF-56, and it is a
+different fix than the one my write-up implied.
+
+**Incident, recorded because it is mine:** that `create` probe ran while M1 held
+the host. No VM started (`pgrep -f qemu-system-aarch64` empty, no pidfile) because
+`boot.sh` was killed before it could, but the probe did leave a
+`runtime/guest/state/SESSION.lock`, which I cleared (stale pid). I should not have
+called `create` to test discovery; `observe` on a bogus session proves the same
+thing without touching the VM, and I used that afterwards.
