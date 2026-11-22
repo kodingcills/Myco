@@ -72,8 +72,8 @@ From `src/foundry/baseline/registry.ts` (merged) plus the arm this plan adds:
 
 | Arm | Registry status | Blocker | Needs |
 |---|---|---|---|
-| screenshot-only (Cua Driver C1 pixel rung) | not-run | VM time, named planner | slot (§6), planner |
-| hcu (Microsoft Hybrid Computer Use, GUI channel) | not-run | VM time, named planner | slot (§6), planner |
+| screenshot-only (Cua Driver C1 pixel rung) | not-run | VM time, named planner | slots 4-5 evidence (§6), planner |
+| hcu (Microsoft Hybrid Computer Use, GUI channel) | not-run | VM time, named planner | slots 4-5 evidence (§6), planner |
 | **hcu+shell** (HCU plus the agent's own read access to the store) | **not in the registry** | none technical | **Foundry must add it** (§4 explains why it is the decisive arm) |
 | myco (verdict from persisted state via the Myco runtime) | not in the registry | RT-011/RT-015/RT-016, slot | runtime first path |
 | orgo | blocked | account creation and card/credit | outer-loop decision |
@@ -113,7 +113,7 @@ completion-rate claim.
 
 **Why hcu+shell decides the wedge.** A competent coding agent with HCU and shell access
 can read `store.json` and notice a dropped item itself, and `ef-t01` literally asks it
-to. If that arm also produces ~0 false successes at similar cost and setup, then
+to. If that arm also produces ≈ 0 false successes (defined below) at similar cost and setup, then
 "verification exists" is not Myco's product (plan §2).
 
 **Definitions fixed before any data.**
@@ -131,16 +131,28 @@ to. If that arm also produces ~0 false successes at similar cost and setup, then
   sentence removed, Foundry-owned) is the discriminating comparison for rows 2 and 3.
   Pooling across prompt variants is not done.
 
+**Superiority needs power.** Any claim that one arm is better than another (row 2 below,
+and the §4.5 criterion) additionally requires **≥6 discordant pairs** in its favour
+(exact sign test, §1). Fewer than 6 means **underpowered**: no superiority claim either
+way, and the rows below say what is reported instead. Rows 1 and 3 are evaluated on
+counts and need no pairing.
+
+**Unit of analysis.** Claims are made **per (task, prompt variant)**, never pooled
+across variants. The wedge-deciding comparison is `ef-t01` no-verify; it needs **≥30
+refutable pairs per arm** on that variant, produced by repeating seeds/fault schedules
+(Foundry owns the schedule). `ef-t01` with the verify sentence needs its own ≥30.
+`ef-t02..t04` are reported at whatever n they reach, descriptively, with the interval,
+and make no rate claim below 30.
+
 **Rule table (evaluated top to bottom; first row that applies wins).**
 
-| # | Condition (n≥30 refutable trials per arm unless stated) | Consequence for the wedge |
+| # | Condition (≥30 refutable pairs per arm on `ef-t01` no-verify) | Consequence for the wedge |
 |---|---|---|
-| 0 | fewer than 6 discordant pairs between the two arms compared | **Underpowered** for that pair: no superiority claim either way. |
 | 1 | Myco is not ≈ 0 (≥1 false success) | Myco's own verdict has a hole: fix and re-run before any wedge claim; A is not supported. |
-| 2 | Myco ≈ 0, and hcu+shell has ≥6 discordant pairs worse than Myco on the **no-verify** variant | The differentiator is the independent verdict without agent discipline; A stands as written. |
-| 3 | Myco ≈ 0, hcu+shell ≈ 0 on both variants, "checks every trial" holds, and hcu+shell setup and cost are within 1.5× of Myco's | A's differentiation reduces to the durable artifact and recovery; re-open B-first or reframe A as "CI for GUI" (plan §7). |
-| 4 | Myco ≈ 0, hcu+shell has ≥1 false success but <6 discordant pairs on the no-verify variant | Inconclusive: add trials; no wedge change. |
-| 5 | anything else | No wedge change; report the table as measured. |
+| 2 | Myco ≈ 0, and hcu+shell has **≥6** discordant pairs worse than Myco | The differentiator is the independent verdict without agent discipline; A stands as written. |
+| 3 | Myco ≈ 0, hcu+shell ≈ 0 on both prompt variants, "checks every trial" holds, and hcu+shell setup and cost are within 1.5× of Myco's | A's differentiation reduces to the durable artifact and recovery; re-open B-first or reframe A as "CI for GUI" (plan §7). |
+| 4 | Myco ≈ 0, hcu+shell has ≥1 false success, but **<6** discordant pairs worse than Myco | Underpowered / inconclusive: add trials; no wedge change. |
+| 5 | anything else (e.g. hcu+shell ≈ 0 but not within 1.5×, or shell calls not trace-recorded) | No wedge change; report the table as measured. |
 
 Rows for the `hcu` (GUI-only) and `screenshot-only` arms are reported against Myco the
 same way (row 0, then the false-success counts), but they do not decide the wedge.
@@ -161,7 +173,8 @@ The thresholds in this section (≥6 discordant, ≥95%, 1.5×, 0-in-30) are dec
 ### 4.2 Direction A (MVD-001 / TIF-53)
 
 - Pass: `refuted` with the missing items named from persisted state on the seeded-bug
-  task (DF-S02, or `ef-t01` once the Foundry owner confirms it is the scored equivalent); an agent that claims success on that run is recorded as a false success by the
+  task (DF-S02, or `ef-t01` once the Foundry owner confirms it is the scored equivalent);
+  an agent that claims success on that run is recorded as a false success by the
   oracle; schema-valid `trace.jsonl`+`result.json`; the same flow from OMP and one of
   Codex/Claude Code; the v0 Myco Viewer (PR #69) opens the run's evidence offline and
   shows the verdict, claimed vs persisted. `[INFERENCE]` The Viewer can be demonstrated
@@ -217,7 +230,7 @@ The thresholds in this section (≥6 discordant, ≥95%, 1.5×, 0-in-30) are dec
 | Claim | Status | Basis |
 |---|---|---|
 | None of the products surveyed in m2-01 (§1-§7) returns a persisted-state verdict | **supported (vendor primary docs)** | m2-01 and `mvp-competitive-teardown.md`; a verifier pass on the teardown is in the repo history (commit 974389e), not re-run here |
-| Viewer v0 renders verdict, claimed-vs-persisted, evidence offline and degrades damaged evidence to Unknown | **checked by independent reviewer passes recorded in the PR #69 thread (not in the repo)**; not signed off by Tiffany | PR #69 body and `viewer/DEVIATIONS.md` list what was and was not checked |
+| Viewer v0 renders verdict, claimed-vs-persisted, evidence offline and degrades damaged evidence to Unknown | **checked by independent reviewer passes recorded in the PR #69 thread (not in the repo)**; not signed off by Tiffany | PR #69 body and `viewer/DEVIATIONS.md` on the PR #69 branch list what was and was not checked |
 | Foundry has task bank, state oracles, trace guard, host harness for scripted reference policies | **merged on main** | `src/foundry/` and `docs/foundry/baseline-status.md`; it exercises the grader and gives **no live-desktop measurements** (baseline-status.md) |
 | Myco beats an alternative on false successes | **not measured** | needs the slot |
 | HCU+shell is as good as Myco | **not measured**; this is the decisive unknown | needs the slot and Foundry's new arm |
@@ -227,7 +240,7 @@ The thresholds in this section (≥6 discordant, ≥95%, 1.5×, 0-in-30) are dec
 
 The wedge recommendation therefore stays **provisional**: Direction A, narrowed to
 verified GUI tests for coding agents, with Viewer v0 as its human artifact. It is
-promoted to a recommendation only if §4.1 row 1 holds. The plan's §7 overturn table is
+promoted to a recommendation only if §4.1 row 2 holds (and row 1 is not triggered). The plan's §7 overturn table is
 unchanged and now has numbers attached.
 
 ---
@@ -262,7 +275,7 @@ beyond reset is **unmeasured** and must be measured in S1 before later stages ar
 |---|---|---|---|---|---|
 | S0 | smoke: one `ef-t01` trial per ready arm | RT-011; planner named; slots 4-5 done | 1 per arm | ~21 s each (+~165 s once) | setup commands and time-to-first-result; no rates |
 | S1 | measure real per-trial wall-clock and cost | S0 | ≥5 per arm | ~1.75 min per arm | the number that sizes S2-S4 |
-| S2 | refutable-trial head-to-head (myco, hcu+shell; screenshot-only/hcu from slots 4-5) | Foundry adds hcu+shell and the no-verify variant; shell calls trace-recorded; planner fixed | ≥30 refutable per arm | 10.5 min per arm | primary endpoint with Wilson interval; sign test |
+| S2 | refutable-trial head-to-head (myco, hcu+shell; screenshot-only/hcu from slots 4-5) | Foundry adds hcu+shell and the no-verify variant; shell calls trace-recorded; planner fixed | ≥30 refutable pairs per arm on `ef-t01` no-verify (decides rows 1-4) plus ≥30 on `ef-t01` verify variant | 21 min per arm (60 trials) | primary endpoint with Wilson interval; sign test |
 | S3 | normal-trial head-to-head | S2 | ~100 per arm | 35 min per arm | completion-rate with CI |
 | S4 | Direction B interrupted-write trials | RT-016, RT-015, Foundry Calc/Writer family | ≥30 interrupted | 10.5 min | duplicate/loss bound |
 
