@@ -628,6 +628,16 @@ self-sufficient (cloud-init installs the C toolchain; the script waits for
 the last window, so `first_path` ran with only one test. That is the whole reason a
 slot is still needed — everything else has already passed.
 
+### Covered offline since this plan was written
+
+- **Guest lifecycle scripts** (RT-003): `runtime/guest/selftest.sh` now drives
+  overlay creation, backing-file identity, `--recreate`, double-boot refusal,
+  dead-pid handling, base-image immutability, and shutdown semantics with no guest
+  and no download. A failure in any of those no longer costs a window.
+- **RT-020 discovery**: precedence, nearest-ancestor, bad-`MYCO_HOME`, and marker
+  semantics are pinned by unit tests, mutation-verified.
+- **Session logic and evidence writing**: #167's mock and replay.
+
 ### Explicitly NOT batched into this slot
 
 - **RT-016 (process control)** — not built yet; a half-built op would burn the slot.
