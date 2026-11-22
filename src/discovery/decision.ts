@@ -21,9 +21,30 @@
  *    so a future reader does not "fix" the document to match the code.
  */
 
-import { wilson } from "../foundry/oracles/report.ts";
-
-export { wilson };
+/**
+ * Wilson score interval, 95%, two-sided. Returns null for n = 0.
+ *
+ * Kept local on purpose: `test/foundry/split.test.ts` forbids any `src/` file
+ * outside the Foundry grader roots from importing them, so the decision rule
+ * cannot reuse `src/foundry/oracles/report.ts` without weakening hidden-split
+ * isolation. The formula is the same one; the isolation rule wins.
+ */
+export function wilson(successes: number, n: number): readonly [number, number] | null {
+  if (
+    !Number.isSafeInteger(n) ||
+    !Number.isSafeInteger(successes) ||
+    successes < 0 ||
+    successes > n
+  )
+    throw new Error("wilson: invalid counts");
+  if (n === 0) return null;
+  const z = 1.96;
+  const p = successes / n;
+  const denominator = 1 + (z * z) / n;
+  const centre = (p + (z * z) / (2 * n)) / denominator;
+  const margin = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / denominator;
+  return [Math.max(0, centre - margin), Math.min(1, centre + margin)];
+}
 
 export type Verdict = "verified" | "refuted" | "uncertain";
 
