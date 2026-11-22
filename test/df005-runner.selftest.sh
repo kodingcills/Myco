@@ -47,15 +47,33 @@ echo "   VM lock refusal confirmed (exit 10 REFUSED_VM_LOCKED)"
 
 echo "3. Running all 5 scenarios (1 run each) with fake MCP server"
 eval_id="selftest-$(date +%s)"
+# A stub server has no guest behind it, so every trial must be a `gap` and the
+# runner must exit non-zero. Grading offline runs as passes was the shipped
+# false success (DF-S01 `pass` with nothing saved); this asserts it is gone.
+set +e
 python3 "$here/scripts/df005-runner.py" \
     --scenario all \
     --runs 1 \
     --server-cmd "$stub" \
     --eval-id "$eval_id" \
     --output-dir "$tmp_out" >/dev/null
+offline_code=$?
+set -e
+if [ "$offline_code" -eq 0 ]; then
+    echo "FAIL: offline run exited 0 — an ungraded run must not look like success"
+    exit 1
+fi
+echo "   offline run exited $offline_code (non-zero as required)"
 
 eval_dir="$tmp_out/$eval_id"
 test -f "$eval_dir/ledger.jsonl" || { echo "FAIL: missing ledger.jsonl"; exit 1; }
+
+# Every offline trial is a gap: no ledger row may be `pass`.
+if grep -q '"state": "pass"' "$tmp_out/$eval_id/ledger.jsonl"; then
+    echo "FAIL: an offline trial was graded pass"
+    exit 1
+fi
+echo "   no offline trial graded pass"
 
 for s in df-s01 df-s02 df-s03 df-s04 df-s05; do
     run_dir="$eval_dir/run-$s-1"
@@ -117,5 +135,8 @@ for (const entry of readdirSync(evalDir)) {
 }
 console.log("   M1-012 schema validation confirmed (ledger, results, traces valid)");
 ' "$eval_dir"
+
+echo "5. Offline grading contract tests (lying stub, readback branches)"
+python3 "$here/test/df005-runner-offline.py"
 
 echo "df005-runner selftest OK: all 5 scenarios executed and evidenced cleanly"
