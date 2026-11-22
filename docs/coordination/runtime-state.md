@@ -425,3 +425,46 @@ Rules adopted here:
 
 Cost: one wasted verification round and a near-miss where I could have "fixed"
 code that was already correct.
+
+## RT-015, progress heartbeat, and live validation merged (2026-11-22)
+
+Three PRs landed under the coordinator's content-identity rule (#126):
+
+| PR | Merge commit | What |
+|---|---|---|
+| #112 | `dc073f4` | RT-015 `read_file` as an opt-in MCP tool |
+| #124 | `9e0921d` | `create` progress heartbeat |
+| #127 | `969443b` | live validation tests; live tests now report `ignored` |
+
+**RT-015** is the Dogfood REQ-08 surface: `read_file` bounded to a grant set at
+`create` via `read_root` (absolute, not `/`), kernel-enforced confinement
+(`openat2` + `RESOLVE_BENEATH | NO_SYMLINKS | NO_XDEV`), 1 MiB cap. Three review
+rounds found real defects — a bad `read_root` leaked a VM and the session lock, a
+`/` grant exposed the whole guest, and the test that "covered" the root bound
+passed for the wrong reason. All fixed, with a mutation-verified test.
+
+**Progress heartbeat** closes the last ease barrier for TIF-56: `create` takes
+minutes and MCP calls are synchronous, so an agent could not tell a slow boot from
+a hang. A 5s heartbeat emits spec-shaped `notifications/progress` with the
+client's token, accepted from either `params._meta` or `arguments._meta` because
+clients differ. The first version of the no-token test was vacuous — the reviewer
+proved it by mutating the gate and watching all 15 tests pass; the replacement
+turns red under that same mutation.
+
+**Live tests now report `ignored`, not `ok`.** A skipped test that reports "ok" is
+not evidence, and a reviewer said so.
+
+### Still unproven
+None of this has run against a real guest. `read_file`, the progress heartbeat,
+and RT-011's end-to-end path are unit-tested and reviewed; the host window is what
+makes them real. The live tests are ready and gated (`MYCO_RT_LIVE=1 ... --ignored`).
+
+### Process notes
+- The content-identity rule works: it landed three PRs that the up-to-date
+  requirement had blocked through nine rebase cycles.
+- The `viewer verdict budget (macos-latest)` benchmark failed **six** times across
+  these PRs (432.6, 509.9, 435.15, 473.55, 438.2 ms against a 425.8 ms limit, with
+  samples spanning 305–1136 ms). It passes on rerun every time. The config has a
+  separate `hardMedian` of 580 ms that all of these satisfy, so the tolerance check
+  is what flakes. Escalated; not touched, because `viewer/` is another workstream's
+  and changing a perf threshold is a judgment call about the benchmark's intent.
