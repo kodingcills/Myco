@@ -527,3 +527,33 @@ the host. No VM started (`pgrep -f qemu-system-aarch64` empty, no pidfile) becau
 `runtime/guest/state/SESSION.lock`, which I cleared (stale pid). I should not have
 called `create` to test discovery; `observe` on a bogus session proves the same
 thing without touching the VM, and I used that afterwards.
+
+## Window readiness (2026-11-22, after #134)
+
+The live proof is one command and cannot be started by accident:
+
+    runtime/guest/live-proof.sh --go
+
+**Preflight (fails in <1s, before any boot):** base image present, guest private
+key present, `qemu-system-aarch64` and `cargo` on PATH, and no guest already
+running. Without `--go` the script exits 2 and explains why.
+
+**State prepared for the window:**
+- Guest keypair regenerated (the private key is gitignored and was missing from
+  this worktree). The **public** key is committed, because cloud-init bakes it in
+  and a stale pubkey would make the new private key fail to authenticate.
+- The partial overlay from an accidental boot was deleted, so the window starts
+  from a clean provision with the current pubkey rather than resuming a
+  half-finished cloud-init.
+
+**What the run proves, in order:** RT-011 end-to-end (create → observe → act →
+evidence → reset → destroy, asserting on the guest's own state file), RT-015
+`read_file` (round-trip, escape refusals, ungranted refusal), and the progress
+heartbeat. A `trap` shuts the guest down on every exit path and verifies no qemu
+remains.
+
+**Incident, recorded because it is mine:** I ran the script to check its preflight
+and it booted a VM during a yielded window — the exact failure mode that cost M1 an
+hour. Killed within seconds; no qemu remained. That is why the `--go` guard exists
+now: the script was dangerous to run casually, and I was the one who ran it
+casually.
