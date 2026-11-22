@@ -8,6 +8,7 @@ import {
   cleanupSelection,
   createApi,
   guard,
+  object,
   parseOffers,
   probeLimits,
   redact,
@@ -631,4 +632,278 @@ describe("API and live-run gating", () => {
   ])("rejects live-only misuse of %s", (...flags) =>
     expect(() => parseArgs(["run", ...flags])).toThrow(/require --dry-run/),
   );
+});
+
+describe("independent review reproductions", () => {
+  const newOut = () => mkdtemp(join(tmpdir(), "orgo-review-"));
+  const runFake = (dir: string, fake: ReturnType<typeof fakeOrgo>, extra: string[] = []) =>
+    main(["run", "--dry-run", "--out", dir, ...extra], { fake: () => fake });
+  const recoveryAt = async (dir: string) =>
+    JSON.parse(await readFile(join(dir, "recovery.local.json"), "utf8"));
+
+  it("refuses the live-shaped Free run before the delayed 30c debit can be incurred", async () => {
+    const fake = fakeOrgo({ scenario: "free" });
+    let cleanupStarted = false;
+    const request: typeof fetch = async (input, init) => {
+      const response = await fake.request(input, init);
+      if (init?.method === "DELETE") cleanupStarted = true;
+      if (fake.calls.at(-1) === "GET /api/credits") {
+        return new Response(
+          JSON.stringify({ balanceCents: cleanupStarted ? 270 : 300, tier: "free" }),
+        );
+      }
+      return response;
+    };
+
+    // The fake first demonstrates that the 15c observed stop alone misses the delayed debit.
+    const simulation = await runFake(await newOut(), { ...fake, request });
+    expect(simulation.spend.ledgerCents).toBe(30);
+    expect(simulation.cleanup.finalCount).toBe(0);
+
+    fake.calls.length = 0;
+    cleanupStarted = false;
+    const out = await newOut();
+    const blocked = await main(["run", "--out", out], {
+      env: { ORGO_LIVE_APPROVED: "yes", ORGO_PROBE_APPROVED: "yes" },
+      loadKey: async () => key,
+      fetch: request,
+    });
+    expect(blocked.errors.join()).toMatch(/no verified provider ceiling.*25c cap/);
+    expect(blocked.experiments).toEqual({});
+    expect(blocked.spend.ledgerCents).toBe(0);
+    expect(fake.calls.every((call) => call.startsWith("GET "))).toBe(true);
+    await expect(readFile(join(out, "recovery.local.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("refuses the clone when credits return 503 after the first gated fork", async () => {
+    const fake = fakeOrgo({ scenario: "free" });
+    let forkAttempted = false;
+    const request: typeof fetch = async (input, init) => {
+      const reply = await fake.request(input, init);
+      const call = fake.calls.at(-1) ?? "";
+      if (call.endsWith("/fork")) forkAttempted = true;
+      return forkAttempted && call === "GET /api/credits"
+        ? new Response(null, { status: 503 })
+        : reply;
+    };
+    const raw = await runFake(await newOut(), { ...fake, request });
+    expect(forkAttempted).toBe(true);
+    expect(fake.calls.some((call) => call.endsWith("/clone"))).toBe(false);
+    expect(raw.errors.join()).toContain("Balance returned HTTP 503");
+    expect(raw.spend.ledgerCents).toBeNull();
+    expect(raw.cleanup.finalCount).toBe(0);
+  });
+
+  it("retries an unexpected copy after both the immediate and first cleanup DELETE fail", async () => {
+    const fake = fakeOrgo({ scenario: "free-fork-open" });
+    let forkId: string | undefined;
+    let attempts = 0;
+    const request: typeof fetch = async (input, init) => {
+      if (
+        forkId &&
+        init?.method === "DELETE" &&
+        String(input).endsWith(forkId) &&
+        ++attempts <= 2
+      ) {
+        throw new Error("dropped DELETE transfer");
+      }
+      const reply = await fake.request(input, init);
+      if (fake.calls.at(-1)?.endsWith("/fork"))
+        forkId = String(object(await reply.clone().json()).id);
+      return reply;
+    };
+    const dir = await newOut();
+    const raw = await runFake(dir, { ...fake, request });
+    expect(attempts).toBe(3);
+    expect(raw.cleanup.finalCount).toBe(0);
+    expect(fake.computers.size).toBe(0);
+    expect((await recoveryAt(dir)).created).toContain(forkId);
+  });
+
+  it.each([1, 4, Infinity])(
+    "recovers an auto-named fork after a dropped response and %s hidden inventory reads",
+    async (hiddenReads) => {
+      const fake = fakeOrgo({ scenario: "free-fork-open" });
+      let forkId: string | undefined;
+      let reads = 0;
+      const request: typeof fetch = async (input, init) => {
+        const response = await fake.request(input, init);
+        const call = fake.calls.at(-1) ?? "";
+        if (call.endsWith("/fork")) {
+          forkId = String(object(await response.json()).id);
+          throw new Error("dropped fork response after allocation");
+        }
+        if (forkId && call.startsWith("GET /api/workspaces/") && ++reads <= hiddenReads) {
+          const workspace = object(await response.json());
+          if (!Array.isArray(workspace.desktops)) throw new Error("Missing fake inventory");
+          workspace.desktops = workspace.desktops.filter(
+            (computer) => object(computer).id !== forkId,
+          );
+          return new Response(JSON.stringify(workspace));
+        }
+        return response;
+      };
+      const dir = await newOut();
+      const raw = await runFake(dir, { ...fake, request });
+      expect(raw.errors.join()).toMatch(/failed before a response/);
+      expect(forkId).toBeDefined();
+      const original = await recoveryAt(dir);
+      expect(original.baseline).toEqual([]);
+      expect(original.created).toHaveLength(Number.isFinite(hiddenReads) ? 2 : 1);
+      if (hiddenReads === 1) {
+        expect(raw.cleanup.finalCount).toBe(0);
+        expect(fake.computers.size).toBe(0);
+      } else {
+        expect(fake.computers.get(forkId ?? "")?.name).toMatch(/\(fork\)/);
+        if (hiddenReads === 4) expect(raw.cleanup.finalCount).toBe(1);
+        const evidence = await readFile(join(dir, "raw.json"), "utf8");
+        const recovered = await main(["cleanup", "--dry-run", "--out", dir], { fake: () => fake });
+        expect(recovered.cleanup.finalCount).toBe(0);
+        expect(fake.computers.size).toBe(0);
+        expect(await recoveryAt(dir)).toMatchObject({
+          baseline: [],
+          created: [...new Set([...original.created, forkId])],
+        });
+        expect(await readFile(join(dir, "raw.json"), "utf8")).toBe(evidence);
+      }
+    },
+  );
+
+  it("protects the original inventory and deletes recorded IDs even when inventory omits them", async () => {
+    const fake = fakeOrgo({ scenario: "free-fork-open" });
+    const workspaceId = "00000000-0000-4000-8000-000000000001";
+    const base = await fake.request("https://www.orgo.ai/api/computers", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "myco-discovery-preexisting",
+        os: "linux",
+        cpu: 2,
+        ram: 8,
+        billing_mode: "hourly",
+        ends_in_hours: 1,
+      }),
+    });
+    const baseId = String(object(await base.json()).id);
+    const fork = await fake.request(`https://www.orgo.ai/api/computers/${baseId}/fork`, {
+      method: "POST",
+    });
+    const forkId = String(object(await fork.json()).id);
+    const dir = await newOut();
+    const journal = {
+      version: 1,
+      workspaceId,
+      dryRun: true,
+      baseline: [baseId],
+      created: [forkId],
+    };
+    await writeFile(join(dir, "recovery.local.json"), JSON.stringify(journal));
+    const request: typeof fetch = async (input, init) => {
+      if (String(input).includes("/credits")) throw new Error("billing connection unavailable");
+      const reply = await fake.request(input, init);
+      if (fake.calls.at(-1) === `GET /api/workspaces/${workspaceId}`) {
+        return new Response(
+          JSON.stringify({ desktops: [{ id: baseId, name: "myco-discovery-preexisting" }] }),
+        );
+      }
+      return reply;
+    };
+    await main(["cleanup", "--dry-run", "--out", dir], { fake: () => ({ ...fake, request }) });
+    expect([...fake.computers.keys()]).toEqual([baseId]);
+    expect(await recoveryAt(dir)).toEqual(journal);
+  });
+
+  it.each([{ cpu: 2, ram: 8 }, { cpu: 2 }, { cpu: 0.5, ram: 4 }])(
+    "requires a complete Medium detail when create omits the size (%j)",
+    async (reportedSize) => {
+      const fake = fakeOrgo({ scenario: "free" });
+      let sizeReported = false;
+      const request: typeof fetch = async (input, init) => {
+        const response = await fake.request(input, init);
+        const call = fake.calls.at(-1) ?? "";
+        if (call === "POST /api/computers") {
+          const { id } = object(await response.json());
+          return new Response(JSON.stringify({ id }), { status: 201 });
+        }
+        if (!sizeReported && call.startsWith("GET /api/computers/")) {
+          sizeReported = true;
+          return new Response(JSON.stringify({ status: "running", ...reportedSize }));
+        }
+        return response;
+      };
+      const raw = await runFake(await newOut(), { ...fake, request });
+      expect(raw.cleanup.finalCount).toBe(0);
+      if (reportedSize.ram === 8) {
+        expect(raw.errors).toEqual([]);
+        expect(raw.experiments.E0?.observations[0]).toMatchObject({
+          sizeSource: "computer detail",
+        });
+      } else {
+        expect(raw.errors.join()).toMatch(/Could not confirm Medium/);
+        expect(raw.experiments.E1).toBeUndefined();
+        expect(fake.calls.some((call) => call.endsWith("/bash"))).toBe(false);
+      }
+    },
+  );
+
+  it.each(["create balance", "E0 running poll", "E5 detail"])(
+    "aborts an in-flight %s at the experiment deadline and still cleans up",
+    async (target) => {
+      const fake = fakeOrgo({ scenario: "free" });
+      let stalled: AbortSignal | null | undefined;
+      const request: typeof fetch = async (input, init) => {
+        const reply = await fake.request(input, init);
+        const call = fake.calls.at(-1) ?? "";
+        const created = fake.calls.includes("POST /api/computers");
+        const poll = call.startsWith("GET /api/computers/");
+        if (
+          !stalled &&
+          created &&
+          ((target === "create balance" && call === "GET /api/credits") ||
+            (target === "E0 running poll" && poll) ||
+            (target === "E5 detail" &&
+              poll &&
+              fake.calls.some((call) => call.endsWith("/suspend"))))
+        ) {
+          stalled = init?.signal;
+          // Ignore AbortSignal to model a transport with a stalled request/body.
+          if (target === "create balance") return new Response(new ReadableStream());
+          return new Promise<Response>(() => {});
+        }
+        return reply;
+      };
+      const dir = await newOut();
+      const raw = await runFake(dir, { ...fake, request }, ["--deadline-ms", "450"]);
+      expect(stalled).toMatchObject({ aborted: true });
+      expect(raw.errors.join()).toMatch(/run bound/);
+      expect(raw.experiments.E5?.n ?? 0).toBe(0);
+      expect(raw.cleanup.finalCount).toBe(0);
+      expect(fake.computers.size).toBe(0);
+      if (target === "create balance") expect((await recoveryAt(dir)).created).toHaveLength(1);
+    },
+  );
+
+  it("bounds cleanup independently and can retry from the journal after it times out", async () => {
+    const fake = fakeOrgo({ scenario: "free" });
+    let stalled: AbortSignal | null | undefined;
+    const request: typeof fetch = async (input, init) => {
+      if (init?.method === "DELETE") {
+        stalled = init.signal;
+        return new Promise<Response>(() => {});
+      }
+      return fake.request(input, init);
+    };
+    const dir = await newOut();
+    const raw = await main(["run", "--dry-run", "--out", dir], {
+      fake: () => ({ ...fake, request }),
+      cleanupDeadlineMs: 50,
+    });
+    expect(stalled).toMatchObject({ aborted: true });
+    expect(raw.errors.join()).toMatch(/could not verify an empty workspace/);
+    expect(fake.computers.size).toBe(1);
+    const recovered = await main(["cleanup", "--dry-run", "--out", dir], { fake: () => fake });
+    expect(recovered.cleanup.finalCount).toBe(0);
+    expect(fake.computers.size).toBe(0);
+  });
 });

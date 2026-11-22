@@ -30,6 +30,7 @@ import {
   stats,
 } from "./core.ts";
 import { fakeOrgo, type Scenario } from "./fake.ts";
+import { isId, readRecovery, recoveryFile, writeRecovery } from "./recovery.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const defaultOut = resolve(here, "../../docs/research/experiments/orgo-arm-001");
@@ -59,16 +60,13 @@ export type Raw = {
 export type Context = {
   api: Api;
   key: string;
-  dir: string;
   ledgerPath: string;
   watchPath: string;
   workspaceId: string;
   startCents: number;
   lastCents: number;
   sleep: (ms: number) => Promise<void>;
-  balanceWait: () => Promise<void>;
-  history: () => Promise<unknown[] | null>;
-  log: (message: string) => void;
+  remember: (id: string) => Promise<void>;
   created: Set<string>;
   /** Computer ids present at preflight; anything else present later is ours to delete. */
   baseline: Set<string>;
@@ -79,6 +77,10 @@ export type Context = {
 };
 
 export const runBoundMs = 20 * 60_000;
+export const cleanupBoundMs = 60_000;
+const cleanupAttempts = 4;
+const billingBlock =
+  "Free probe refused before allocation: no verified provider ceiling or worst-case charge bound covers the 25c cap";
 
 export class DeadlineError extends Error {
   constructor() {
@@ -131,7 +133,7 @@ async function billable(
   const beforeCents = ctx.lastCents;
   const reply = await call();
   const immediateCents = await credit(ctx).catch(() => null);
-  await ctx.balanceWait();
+  if (performance.now() < ctx.deadlineAt) await ctx.sleep(3_000);
   const delayedCents = await credit(ctx).catch(() => null);
   const observed = delayedCents ?? immediateCents;
   if (observed !== null) ctx.lastCents = observed;
@@ -197,6 +199,31 @@ export async function allow(
 }
 
 const succeeded = (reply: Reply) => reply.status >= 200 && reply.status < 300;
+const deletedOrAbsent = (reply: Reply) => succeeded(reply) || reply.status === 404;
+
+function boundedApi(api: Api, deadlineAt: number, cleanup = false): Api {
+  const deadlineError = () =>
+    cleanup ? new Error("60 second cleanup bound reached") : new DeadlineError();
+  return async (method, path, payload, pollSignal) => {
+    const remaining = deadlineAt - performance.now();
+    if (remaining <= 0) throw deadlineError();
+    const timeout = AbortSignal.timeout(Math.ceil(Math.min(remaining, cleanup ? 5_000 : 75_000)));
+    const signal = pollSignal ? AbortSignal.any([timeout, pollSignal]) : timeout;
+    try {
+      return await api(method, path, payload, signal);
+    } catch (error) {
+      if (performance.now() >= deadlineAt) throw deadlineError();
+      throw error;
+    }
+  };
+}
+
+async function rememberComputer(ctx: Context, id: unknown) {
+  if (!isId(id) || ctx.baseline.has(id))
+    throw new Error("Allocation response has no valid new computer id");
+  ctx.created.add(id);
+  await ctx.remember(id);
+}
 
 async function copyComputer(
   ctx: Context,
@@ -209,10 +236,10 @@ async function copyComputer(
   const id = reply.data.id;
   if (typeof id !== "string" || id === source)
     throw new Error("Copy response has no new computer id");
-  ctx.created.add(id);
+  await rememberComputer(ctx, id);
   if (ctx.probe) {
     const deleted = await ctx.api("DELETE", `/api/computers/${id}`).catch(() => null);
-    if (deleted && succeeded(deleted)) ctx.created.delete(id);
+    if (deleted && deletedOrAbsent(deleted)) ctx.created.delete(id);
     await ledger(ctx, {
       operation: `delete unexpected probe ${action}`,
       computer: shortId(id),
@@ -314,9 +341,21 @@ const guest = {
     `echo ${value} > /root/.myco-diverge; echo ${value} > /dev/shm/myco-diverge; cat /root/.myco-diverge /dev/shm/myco-diverge | tr '\\n' ' '`,
 };
 
-async function bash(ctx: Context, id: string, command: string, timeout = 60): Promise<Reply> {
+async function bash(
+  ctx: Context,
+  id: string,
+  command: string,
+  timeout = 60,
+  signal?: AbortSignal,
+): Promise<Reply> {
   checkDeadline(ctx);
-  return ctx.api("POST", `/api/computers/${id}/bash`, { command, timeout });
+  const remainingSeconds = Math.ceil((ctx.deadlineAt - performance.now()) / 1_000);
+  return ctx.api(
+    "POST",
+    `/api/computers/${id}/bash`,
+    { command, timeout: Math.min(timeout, remainingSeconds) },
+    signal,
+  );
 }
 
 function text(reply: Reply): string {
@@ -329,29 +368,34 @@ export async function until(
   _id: string,
   ready: (reply: Reply) => boolean,
   limitMs: number,
-  poll: () => Promise<Reply>,
+  poll: (signal: AbortSignal) => Promise<Reply>,
 ): Promise<{ ms: number; reply: Reply | null }> {
   const started = performance.now();
-  while (performance.now() - started < limitMs) {
+  checkDeadline(ctx);
+  const pollDeadline = Math.min(started + limitMs, ctx.deadlineAt);
+  const signal = AbortSignal.timeout(Math.max(0, Math.ceil(pollDeadline - performance.now())));
+  while (performance.now() < pollDeadline) {
+    const reply = await poll(signal).catch(() => null);
     checkDeadline(ctx);
-    const reply = await poll().catch(() => null);
-    checkDeadline(ctx);
+    if (performance.now() >= pollDeadline) break;
     if (reply && ready(reply)) return { ms: performance.now() - started, reply };
-    await ctx.sleep(1_000);
+    await ctx.sleep(Math.min(1_000, Math.max(0, pollDeadline - performance.now())));
   }
+  checkDeadline(ctx);
   return { ms: performance.now() - started, reply: null };
 }
 
 const status = (value: string) => (reply: Reply) =>
   reply.status === 200 && reply.data.status === value;
-const getComputer = (ctx: Context, id: string) => () => ctx.api("GET", `/api/computers/${id}`);
+const getComputer = (ctx: Context, id: string) => (signal?: AbortSignal) =>
+  ctx.api("GET", `/api/computers/${id}`, undefined, signal);
 const firstBash = (ctx: Context, id: string, limitMs = 120_000) =>
   until(
     ctx,
     id,
     (reply) => reply.status === 200 && reply.data.exit_code === 0,
     limitMs,
-    () => bash(ctx, id, "true", 20),
+    (signal) => bash(ctx, id, "true", 20, signal),
   );
 
 function parseJson(reply: Reply): JsonObject {
@@ -395,8 +439,8 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
   const name = `${prefix}base`;
   const started = performance.now();
   const size = ctx.probe ? medium : small;
-  const created = await billable(ctx, "E0 create linux", null, () =>
-    ctx.api("POST", "/api/computers", {
+  const created = await billable(ctx, "E0 create linux", null, async () => {
+    const reply = await ctx.api("POST", "/api/computers", {
       workspace_id: ctx.workspaceId,
       name,
       billing_mode: "hourly",
@@ -404,27 +448,40 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
       ram: size.ram,
       cpu: size.cpu,
       ends_in_hours: 1,
-    }),
-  );
+    });
+    if (succeeded(reply)) await rememberComputer(ctx, reply.data.id);
+    return reply;
+  });
   if (created.status < 200 || created.status >= 300) {
     pushRejected(e0, created);
     return;
   }
   const source = created.data.id;
   if (typeof source !== "string") throw new Error("Create response has no computer id");
-  ctx.created.add(source);
-  const obtained = {
-    cpu: created.data.cpu ?? null,
-    ramGb: created.data.ram ?? created.data.ram_gb ?? null,
-  };
-  e0.observations.push({ sizeObtained: obtained });
-  if (
-    ctx.probe &&
-    ((obtained.cpu !== null && obtained.cpu !== size.cpu) ||
-      (obtained.ramGb !== null && obtained.ramGb !== size.ram))
-  ) {
-    throw new Error("Create returned a size outside the Medium probe");
+  const readSize = (data: JsonObject) => ({
+    cpu: data.cpu ?? null,
+    ramGb: data.ram ?? data.ram_gb ?? null,
+  });
+  let obtained = readSize(created.data);
+  let sizeSource: string | undefined;
+  if (ctx.probe) {
+    if (
+      (obtained.cpu !== null && obtained.cpu !== size.cpu) ||
+      (obtained.ramGb !== null && obtained.ramGb !== size.ram)
+    )
+      throw new Error("Create returned a size outside the Medium probe");
+    if (obtained.cpu === null || obtained.ramGb === null) {
+      const detail = requireOk(await getComputer(ctx, source)(), "Medium detail");
+      if (detail.id !== undefined && detail.id !== source)
+        throw new Error("Medium detail returned a different computer");
+      obtained = readSize(detail);
+      sizeSource = "computer detail";
+    }
+    if (obtained.cpu !== size.cpu || obtained.ramGb !== size.ram)
+      throw new Error("Could not confirm Medium (2 vCPU, 8 GB)");
+    await allow(ctx, 0);
   }
+  e0.observations.push({ sizeObtained: obtained, ...(sizeSource ? { sizeSource } : {}) });
   await mkdir(dirname(ctx.watchPath), { recursive: true });
   await writeFile(
     ctx.watchPath,
@@ -476,7 +533,6 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
       break;
     }
     const id = String(forked.data.id);
-    ctx.created.add(id);
     const reachable = await firstBash(ctx, id);
     const to = text(await bash(ctx, source, guest.now));
     const gap = parseJson(await bash(ctx, source, guest.gap(from, to)));
@@ -502,10 +558,10 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
       divergence: { sourceWrite, forkWrite, sourceAfterForkWrite: sourceAgain },
       balanceDeltaCents: forked.beforeCents - ctx.lastCents,
     });
-    await billable(ctx, `E2 delete fork ${i + 1}`, id, () =>
+    const deleted = await billable(ctx, `E2 delete fork ${i + 1}`, id, () =>
       ctx.api("DELETE", `/api/computers/${id}`),
     );
-    ctx.created.delete(id);
+    if (deletedOrAbsent(deleted)) ctx.created.delete(id);
   }
   e2.metrics = {
     apiMs: stats(apiMs),
@@ -528,7 +584,6 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
       break;
     }
     const id = String(cloned.data.id);
-    ctx.created.add(id);
     const reachable = await firstBash(ctx, id);
     const probe = parseJson(await bash(ctx, id, guest.read));
     cloneApi.push(cloned.ms);
@@ -540,10 +595,10 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
       bootChanged: probe.boot !== sourceProbe.boot,
       balanceDeltaCents: cloned.beforeCents - ctx.lastCents,
     });
-    await billable(ctx, `E3 delete clone ${i + 1}`, id, () =>
+    const deleted = await billable(ctx, `E3 delete clone ${i + 1}`, id, () =>
       ctx.api("DELETE", `/api/computers/${id}`),
     );
-    ctx.created.delete(id);
+    if (deletedOrAbsent(deleted)) ctx.created.delete(id);
   }
   e3.metrics = { apiMs: stats(cloneApi), firstBashMs: stats(cloneBash.filter(Number.isFinite)) };
 
@@ -658,7 +713,7 @@ export async function runExperiments(ctx: Context, raw: Raw): Promise<void> {
 
 /**
  * Delete every computer this run created plus every computer absent at preflight (regardless of
- * name, since Orgo auto-names forks), plus `myco-discovery-*` names; then re-list. Safe to repeat.
+ * name, since Orgo auto-names forks); then re-list. Safe to repeat in an exclusive workspace.
  */
 export async function cleanup(ctx: Context): Promise<Raw["cleanup"]> {
   const deleted: string[] = [];
@@ -667,25 +722,47 @@ export async function cleanup(ctx: Context): Promise<Raw["cleanup"]> {
     errors.push(redact(error instanceof Error ? error.message : "Cleanup failed", ctx.key));
     return null;
   };
-  const live = (await liveInventory(ctx).catch(record)) ?? (await liveInventory(ctx).catch(record));
-  const ids = new Set([
-    ...cleanupSelection(live ?? [], { created: ctx.created, baseline: ctx.baseline }).map(
-      ({ id }) => id,
-    ),
-    ...ctx.created,
-  ]);
-  for (const id of ids) {
-    const reply = await billable(ctx, "cleanup delete", id, () =>
-      ctx.api("DELETE", `/api/computers/${id}`),
-    ).catch(record);
-    if (reply && succeeded(reply)) {
-      deleted.push(shortId(id));
-      ctx.created.delete(id);
-    } else if (reply && reply.status !== 404) {
-      errors.push(`Cleanup delete returned HTTP ${reply.status} ${reply.body}`);
+  const discoveries = (current: Computer[] | null) =>
+    cleanupSelection(current ?? [], { baseline: ctx.baseline }).filter(
+      ({ id }) => !ctx.baseline.has(id),
+    );
+  let remaining = await liveInventory(ctx).catch(record);
+  for (
+    let attempt = 0;
+    attempt < cleanupAttempts && performance.now() < ctx.deadlineAt;
+    attempt++
+  ) {
+    for (const { id } of discoveries(remaining)) {
+      await rememberComputer(ctx, id).catch(record);
     }
+    for (const id of ctx.created) {
+      if (performance.now() >= ctx.deadlineAt) break;
+      const reply = await ctx.api("DELETE", `/api/computers/${id}`).catch(record);
+      if (reply && deletedOrAbsent(reply)) {
+        ctx.created.delete(id);
+        if (succeeded(reply)) deleted.push(shortId(id));
+      } else if (reply) {
+        errors.push(`Cleanup delete returned HTTP ${reply.status} ${reply.body}`);
+      }
+      await ledger(ctx, {
+        operation: "cleanup delete",
+        computer: shortId(id),
+        status: reply?.status ?? null,
+        code: reply?.code ?? null,
+      }).catch(record);
+    }
+    await ctx.sleep(1_000);
+    remaining = await liveInventory(ctx).catch(record);
   }
-  const remaining = await liveInventory(ctx).catch(record);
+  // Retain IDs from the last observation for recovery even when the retry budget is exhausted.
+  for (const { id } of discoveries(remaining)) {
+    await rememberComputer(ctx, id).catch(record);
+  }
+  if (remaining === null || remaining.length || ctx.created.size) {
+    errors.push(
+      "Cleanup could not verify an empty workspace; run cleanup again with the original --out directory",
+    );
+  }
   await ledger(ctx, {
     operation: `cleanup final list (${remaining?.length ?? "unknown"} computers)`,
   }).catch(record);
@@ -722,12 +799,11 @@ export async function renderResults(raw: Raw): Promise<string> {
   lines.push(
     `| Offers | ${p.offers.map((o) => `${o.name} (${o.cpu} vCPU, ${o.ramGb} GB, ${o.diskGb} GB disk, $${o.usdPerHour}/h)`).join("; ") || "none"} |`,
   );
-  const obtained = object(
-    raw.experiments.E0?.observations.find((o) => o.sizeObtained)?.sizeObtained,
-  );
+  const sizeObservation = raw.experiments.E0?.observations.find((o) => o.sizeObtained);
+  const obtained = object(sizeObservation?.sizeObtained);
   lines.push(
     `| Eligibility check | ${p.profile === "probe" ? "Free Medium probe" : "Small protocol"}: ${p.ok ? "passed" : "gated"} |`,
-    `| Size obtained | ${Object.keys(obtained).length ? `${obtained.cpu ?? "unknown"} vCPU, ${obtained.ramGb ?? "unknown"} GB (create response)` : "No computer created"} |`,
+    `| Size obtained | ${Object.keys(obtained).length ? `${obtained.cpu ?? "unknown"} vCPU, ${obtained.ramGb ?? "unknown"} GB (${sizeObservation?.sizeSource ?? "create response"})` : "No computer created"} |`,
     "",
     "p95 is omitted for N=1.",
     "",
@@ -959,6 +1035,7 @@ export async function main(
     loadKey?: () => Promise<string>;
     fetch?: typeof fetch;
     fake?: typeof fakeOrgo;
+    cleanupDeadlineMs?: number;
   } = {},
 ): Promise<Raw> {
   const args = parseArgs(argv);
@@ -972,6 +1049,14 @@ export async function main(
   const out =
     dryRun && args.out === defaultOut ? await mkdtemp(join(tmpdir(), "orgo-dry-")) : args.out;
   await mkdir(out, { recursive: true });
+  const recoveryPath = join(out, recoveryFile);
+  const recovery = args.command === "cleanup" ? await readRecovery(recoveryPath) : null;
+  if (
+    recovery &&
+    (recovery.dryRun !== dryRun || (args.workspace && args.workspace !== recovery.workspaceId))
+  ) {
+    throw new Error("Recovery journal does not match the requested mode or workspace");
+  }
   const fake = dryRun
     ? (dependencies.fake ?? fakeOrgo)({
         scenario: args.scenario,
@@ -983,12 +1068,42 @@ export async function main(
   const api = createApi(key, fake?.request ?? dependencies.fetch ?? fetch);
   const ledgerPath = join(out, "ledger.jsonl");
   const log = (message: string) => process.stderr.write(`${redact(message, key)}\n`);
-  const { workspaceId, result, baseline } = await preflight(api, ledgerPath, key, args.workspace);
+  const cleanupMs = dryRun ? (dependencies.cleanupDeadlineMs ?? cleanupBoundMs) : cleanupBoundMs;
+  const preflightDeadline = performance.now() + (recovery ? cleanupMs : runBoundMs);
+  const preflightApi = boundedApi(api, preflightDeadline);
+  const { workspaceId, result, baseline } = recovery
+    ? {
+        workspaceId: recovery.workspaceId,
+        baseline: recovery.baseline,
+        result: {
+          ok: false,
+          reasons: [],
+          tier: "unknown",
+          mode: "unknown",
+          balanceCents: null,
+          inventoryCount: null,
+          offers: [],
+        } as Preflight,
+      }
+    : await preflight(preflightApi, ledgerPath, key, args.workspace);
   const startCents = result.balanceCents ?? 0;
+  if (!isId(workspaceId) || !baseline.every(isId))
+    throw new Error("Invalid workspace or inventory ID");
+  const state = recovery ?? { version: 1 as const, workspaceId, dryRun, baseline, created: [] };
+  const known = new Set(state.created);
+  const deadlineAt =
+    args.deadlineMs === undefined ? preflightDeadline : performance.now() + args.deadlineMs;
+  const phase = (deadlineAt: number, cleanup = false) => ({
+    deadlineAt,
+    api: boundedApi(api, deadlineAt, cleanup),
+    sleep: async (ms: number) => {
+      const remaining = deadlineAt - performance.now();
+      if (remaining > 0) await delay(Math.min(dryRun ? 1 : ms, remaining));
+    },
+  });
   const ctx: Context = {
-    api,
+    ...phase(deadlineAt),
     key,
-    dir: out,
     ledgerPath,
     watchPath: dryRun ? join(out, "watch.txt") : "/private/tmp/orgo-setup/watch.txt",
     workspaceId,
@@ -996,26 +1111,33 @@ export async function main(
     lastCents: startCents,
     lowestCents: startCents,
     probe: result.profile === "probe",
-    sleep: dryRun ? async () => undefined : (ms) => delay(ms),
-    balanceWait: dryRun ? async () => undefined : () => delay(3_000),
-    history: () => fetchHistory(api),
-    log,
-    created: new Set(),
-    baseline: new Set(baseline),
-    deadlineAt: performance.now() + (args.deadlineMs ?? runBoundMs),
+    remember: async (id) => {
+      if (known.has(id)) return;
+      await writeRecovery(recoveryPath, { ...state, created: [...known, id] });
+      known.add(id);
+    },
+    created: new Set(state.created),
+    baseline: new Set(state.baseline),
+  };
+  let reconciliationApi = preflightApi;
+  const clean = () => {
+    const cleanupDeadline = recovery ? preflightDeadline : performance.now() + cleanupMs;
+    const cleanupCtx = { ...ctx, ...phase(cleanupDeadline, true) };
+    reconciliationApi = cleanupCtx.api;
+    return cleanup(cleanupCtx);
   };
   const raw: Raw = {
     mode: dryRun ? "dry-run" : "live",
     generated: new Date().toISOString(),
     preflight: result,
     experiments: {},
-    spend: { startCents, endCents: null, ledgerCents: null },
+    spend: { startCents: result.balanceCents, endCents: null, ledgerCents: null },
     cleanup: { deleted: [], finalCount: null },
     history: null,
     errors: [],
   };
-  if (args.command === "cleanup") {
-    raw.cleanup = await cleanup(ctx);
+  if (recovery) {
+    raw.cleanup = await clean();
   } else if (args.command === "preflight" || !result.ok) {
     if (!result.ok)
       log(`Preflight gate: ${result.reasons.length} reason(s); no compute call made.`);
@@ -1023,38 +1145,56 @@ export async function main(
     raw.errors.push(
       "Live run refused: NOT CLEARED FOR LIVE USE (set ORGO_LIVE_APPROVED to yes and, for the Free probe, set ORGO_PROBE_APPROVED to yes). Only the preflight ran.",
     );
-    log(raw.errors[0] ?? "");
+  } else if (!dryRun && ctx.probe) {
+    raw.errors.push(billingBlock);
   } else {
+    try {
+      await writeRecovery(recoveryPath, state, true);
+    } catch {
+      throw new Error(
+        "Could not initialize recovery journal; use a fresh --out directory for each run",
+      );
+    }
     try {
       await runExperiments(ctx, raw);
     } catch (error) {
       raw.errors.push(redact(error instanceof Error ? error.message : "unknown error", key));
     } finally {
-      raw.cleanup = await cleanup(ctx);
+      raw.cleanup = await clean();
     }
   }
   raw.errors.push(...(raw.cleanup.errors ?? []));
-  const end = await credit(ctx).catch(() => null);
+  const end = await credit({ api: reconciliationApi }).catch(() => null);
   raw.spend.endCents = end;
-  raw.spend.ledgerCents = end === null ? null : startCents - end;
-  raw.history = await ctx.history();
-  const target = dryRun ? out : args.out;
+  raw.spend.ledgerCents = end === null || raw.spend.startCents === null ? null : startCents - end;
+  raw.history = await fetchHistory(reconciliationApi);
   const sanitized = JSON.parse(
     JSON.stringify(raw, (_, value: unknown) =>
       typeof value === "string" ? redact(value, key) : value,
     ),
   ) as Raw;
-  await writeFile(join(target, "raw.json"), `${JSON.stringify(sanitized, null, 2)}\n`);
-  await writeFile(join(target, "RESULTS.md"), await renderResults(sanitized));
+  if (!recovery) {
+    await writeFile(join(out, "raw.json"), `${JSON.stringify(sanitized, null, 2)}\n`);
+    await writeFile(join(out, "RESULTS.md"), await renderResults(sanitized));
+  }
   return sanitized;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).then(
-    (raw) =>
+    (raw) => {
+      const phase =
+        raw.spend.startCents === null && raw.cleanup.finalCount !== null
+          ? "recovery sweep"
+          : `preflight ${raw.preflight.ok ? "passed" : "gated"}`;
       process.stdout.write(
-        `${raw.mode}: preflight ${raw.preflight.ok ? "passed" : "gated"}; computers after cleanup ${raw.cleanup.finalCount ?? "n/a"}\n`,
-      ),
+        `${raw.mode}: ${phase}; computers after cleanup ${raw.cleanup.finalCount ?? "n/a"}\n`,
+      );
+      if (raw.errors.length) {
+        for (const error of raw.errors) process.stderr.write(`${error}\n`);
+        process.exitCode = 1;
+      }
+    },
     (error: unknown) => {
       process.stderr.write(`${error instanceof Error ? redact(error.message, "") : "failed"}\n`);
       process.exitCode = 1;

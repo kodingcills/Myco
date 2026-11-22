@@ -17,6 +17,7 @@ export type Api = (
   method: "GET" | "POST" | "DELETE",
   path: string,
   payload?: JsonObject,
+  signal?: AbortSignal,
 ) => Promise<Reply>;
 
 export function object(value: unknown): JsonObject {
@@ -87,19 +88,31 @@ const apiRoutes = {
 };
 
 export function createApi(key: string, request: typeof fetch = fetch): Api {
-  return async (method, path, payload) => {
+  return async (method, path, payload, deadline) => {
     if (!path.startsWith("/api/") || !apiRoutes[method].some((route) => route.test(path)))
       throw new Error("Unexpected API path");
     const started = performance.now();
+    const timeout = AbortSignal.timeout(75_000);
+    const signal = deadline ? AbortSignal.any([deadline, timeout]) : timeout;
+    // Bound both the fetch and body read, even if an injected transport ignores cancellation.
+    let abort: (() => void) | undefined;
     try {
-      const response = await request(origin + path, {
-        method,
-        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: payload === undefined ? undefined : JSON.stringify(payload),
-        redirect: "error",
-        signal: AbortSignal.timeout(75_000),
+      signal.throwIfAborted();
+      const cancelled = new Promise<never>((_, reject) => {
+        abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
       });
-      const raw = await response.text();
+      const response = await Promise.race([
+        cancelled,
+        request(origin + path, {
+          method,
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: payload === undefined ? undefined : JSON.stringify(payload),
+          redirect: "error",
+          signal,
+        }),
+      ]);
+      const raw = await Promise.race([cancelled, response.text()]);
       const ms = performance.now() - started;
       let data: JsonObject = {};
       try {
@@ -116,6 +129,8 @@ export function createApi(key: string, request: typeof fetch = fetch): Api {
       };
     } catch {
       throw new Error("Orgo request failed before a response was read");
+    } finally {
+      if (abort) signal.removeEventListener("abort", abort);
     }
   };
 }
