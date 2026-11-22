@@ -73,6 +73,12 @@ impl SshConfig {
 }
 
 /// A connected, authenticated channel to one agent process.
+#[derive(Debug, serde::Deserialize)]
+pub struct ProcessExit {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
 pub struct Channel {
     child: Child,
     stdin: ChildStdin,
@@ -253,6 +259,40 @@ impl Channel {
         }
     }
 
+    pub fn grant_read(&mut self, root: &str) -> Result<(), TransportError> {
+        self.extension("grant_read", serde_json::json!({"root": root}))
+    }
+
+    pub fn read_file(&mut self, path: &str) -> Result<Vec<u8>, TransportError> {
+        self.extension("read_file", serde_json::json!({"path": path}))
+    }
+
+    pub fn launch_process(&mut self, command: &str, args: &[String]) -> Result<String, TransportError> {
+        self.extension("launch_process", serde_json::json!({"command": command, "args": args}))
+    }
+
+    pub fn kill_process(&mut self, handle: &str) -> Result<ProcessExit, TransportError> {
+        self.extension("kill_process", serde_json::json!({"handle": handle}))
+    }
+
+    pub fn relaunch_process(&mut self, handle: &str) -> Result<String, TransportError> {
+        self.extension("relaunch_process", serde_json::json!({"handle": handle}))
+    }
+
+    fn extension<T: serde::de::DeserializeOwned>(
+        &mut self,
+        op: &str,
+        mut request: serde_json::Value,
+    ) -> Result<T, TransportError> {
+        request["op"] = serde_json::json!(op);
+        let response = self.roundtrip(request)?;
+        if response["op"] != op || response["ok"] != true {
+            return Err(TransportError::Protocol(response.to_string()));
+        }
+        serde_json::from_value(response["value"].clone())
+            .map_err(|error| TransportError::Protocol(format!("{op}: {error}")))
+    }
+
     /// `shutdown`: clean agent exit (NOT a VM poweroff).
     pub fn shutdown(mut self) -> Result<(), TransportError> {
         let resp = self.roundtrip(serde_json::json!({"op": "shutdown"}))?;
@@ -306,6 +346,36 @@ mod tests {
         assert_eq!(resp["op"], "ping");
         assert_eq!(resp["protocol_version"], 1);
         ch.shutdown().expect("clean shutdown");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn file_read_over_control_channel_requires_grant() {
+        let dir = std::env::temp_dir().join(format!("myco-channel-grant-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("state"), [0, 255]).unwrap();
+        let mut ch = Channel::spawn(agent_command("s3cret"), "s3cret").unwrap();
+        assert!(ch.read_file("state").is_err());
+        ch.grant_read(dir.to_str().unwrap()).unwrap();
+        assert!(ch.grant_read("/").is_err());
+        assert!(ch.read_file("../outside").is_err());
+        assert_eq!(ch.read_file("state").unwrap(), [0, 255]);
+        ch.shutdown().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn process_control_over_channel_rejects_previous_session_handles() {
+        let mut ch = Channel::spawn(agent_command("s3cret"), "s3cret").unwrap();
+        let handle = ch.launch_process("sleep", &["60".into()]).unwrap();
+        assert_eq!(ch.kill_process(&handle).unwrap().signal, Some(9));
+        let replacement = ch.relaunch_process(&handle).unwrap();
+        ch.shutdown().unwrap();
+        let mut next = Channel::spawn(agent_command("s3cret"), "s3cret").unwrap();
+        let current = next.launch_process("sleep", &["60".into()]).unwrap();
+        assert!(next.kill_process(&replacement).is_err());
+        assert_eq!(next.kill_process(&current).unwrap().signal, Some(9));
+        next.shutdown().unwrap();
     }
 
     #[test]

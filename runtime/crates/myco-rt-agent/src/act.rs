@@ -9,7 +9,6 @@
 
 use crate::observe::{resolve, Node};
 use serde::Deserialize;
-use std::process::{Command, Stdio};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -98,14 +97,8 @@ pub fn act(
 }
 
 fn launch(command: &str, args: &[String]) -> (Outcome, Option<String>) {
-    let mut cmd = Command::new(command);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // Inherit the GUI session env (DISPLAY, bus) so the app joins the desktop.
     crate::load_gui_env();
-    match cmd.spawn() {
+    match crate::processes::spawn(command, args) {
         Ok(mut child) => {
             let pid = child.id();
             // Verification: the process is still running shortly after spawn.
