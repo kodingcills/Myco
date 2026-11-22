@@ -286,6 +286,62 @@ describe("C1 host harness", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("sends Sonnet vision Messages without unsupported sampling parameters", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ input_tokens: 100 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          usage: { input_tokens: 100, output_tokens: 12 },
+          content: [{ type: "text", text: '{"claim":"done"}' }],
+        }),
+      );
+    const planner = createPlanner(request, { ANTHROPIC_API_KEY: "synthetic-key" });
+    const result = await planner.act("test", { mimeType: "image/png", data: "AA==" });
+    const count = request.mock.calls[0]?.[1];
+    const messages = request.mock.calls[1]?.[1];
+    expect(JSON.parse(String(messages?.body))).toEqual({
+      ...JSON.parse(String(count?.body)),
+      max_tokens: 256,
+    });
+    expect(JSON.parse(String(messages?.body)).model).toBe("claude-sonnet-5-5");
+    expect(new Headers(messages?.headers).has("anthropic-beta")).toBe(false);
+    expect(result.calls[0]?.usage).toEqual({ prompt: 100, completion: 12, cost: 0.00032 });
+  });
+
+  it("keeps only bounded scrubbed provider text on an Anthropic 400", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ input_tokens: 100 }))
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              type: "invalid_request_error",
+              message:
+                "A billing credit detail.\nAuthorization: private-value\n" +
+                '"X-Api-Key": "obscure-value"\n' +
+                "synthetic-key sk-ant-other-key " +
+                "detail ".repeat(60),
+            },
+          },
+          { status: 400 },
+        ),
+      );
+    const planner = createPlanner(request, { ANTHROPIC_API_KEY: "synthetic-key" });
+    const error = await planner
+      .act("test", { mimeType: "image/png", data: "AA==" })
+      .catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    const prefix =
+      "Anthropic Messages usage could not be verified: HTTP 400 (invalid_request_error): ";
+    expect(message.startsWith(prefix + "A billing credit detail.")).toBe(true);
+    expect(message.slice(prefix.length)).toHaveLength(300);
+    expect(message).not.toMatch(/private-value|obscure-value|synthetic-key|sk-ant|[\r\n]/);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("fails closed without Ollama fallback when Anthropic call fails", async () => {
     const key = "fake-test-key";
     const request = vi.fn<typeof fetch>(async () => {
