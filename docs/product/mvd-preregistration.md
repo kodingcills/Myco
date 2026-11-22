@@ -89,7 +89,7 @@ pre-registered decisions. Eligibility needs a grader-owned hidden commitment, di
 seeded hidden task/fault pairs matched across arms, evidence of the actual delivered
 prompt bound to each run, and a trusted ingest that binds planner settings, trace,
 recorder closure and effect audits, independent save observations and final persisted
-bytes to the same run. That trusted ingest does not exist yet. So the §4.1 rule table
+bytes to the same run. That trusted ingest does not exist on main as of PR #75 (`contract.md`: "no trusted ingress"). So the §4.1 rule table
 **cannot be applied to any result until it does**; anything earlier is reported as
 descriptive and never moves the wedge.
 
@@ -156,7 +156,7 @@ way, and the rows below say what is reported instead. Rows 1 and 3 are evaluated
 counts and need no pairing.
 
 **Unit of analysis.** Claims are made **per (task, prompt variant)**, never pooled
-across variants. The wedge-deciding comparison is `ef-t01` no-verify; it needs **≥30
+across variants. The wedge-deciding comparison is `ef-t01b` (no-verify); it needs **≥30
 refutable pairs per arm** on that variant, drawn by the grader as **seeded variants of the
 silent-drop family from the hidden split** (repeating the one public fixture gives repeats,
 not independent samples). Decision-row trials therefore come only from the grader-supplied
@@ -171,7 +171,7 @@ and make no rate claim below 30.
 
 **Rule table (evaluated top to bottom; first row that applies wins).**
 
-| # | Condition (≥30 refutable pairs per arm on `ef-t01` no-verify) | Consequence for the wedge |
+| # | Condition (≥30 refutable pairs per arm on `ef-t01b`, no-verify) | Consequence for the wedge |
 |---|---|---|
 | 1 | Myco is not ≈ 0 (≥1 false success) | Myco's own verdict has a hole: fix and re-run before any wedge claim; A is not supported. |
 | 2 | Myco ≈ 0, and hcu+shell has **≥6** discordant pairs worse than Myco | The differentiator is the independent verdict without agent discipline; A stands as written. |
@@ -263,7 +263,7 @@ The thresholds in this section (≥6 discordant, ≥95%, 1.5×, 0-in-30) are dec
 | Viewer v0 renders verdict, claimed-vs-persisted, evidence offline and degrades damaged evidence to Unknown | **checked by independent reviewer passes recorded in the PR #69 thread (not in the repo)**; not signed off by Tiffany | PR #69 body and `viewer/DEVIATIONS.md` on the PR #69 branch list what was and was not checked |
 | Foundry has task bank, state oracles, trace guard, host harness for scripted reference policies | **merged on main** | `src/foundry/` and `docs/foundry/baseline-status.md`; it exercises the grader and gives **no live-desktop measurements** (baseline-status.md) |
 | Myco beats an alternative on false successes | **not measured** | needs the slot |
-| HCU+shell is as good as Myco | **not measured**; this is the decisive unknown | needs the slot and Foundry's new arm |
+| HCU+shell is as good as Myco | **not measured**; this is the decisive unknown | needs the slot, the trusted ingest (§3) and a live run |
 | Setup ≤15 min | **not measured** | needs the slot |
 | Orgo/Sai behaviour | **not run** (blocked) | accounts |
 | Branching improves verified completion | **not measured**; design only | no runtime fork |
@@ -334,7 +334,7 @@ LibreOffice Calc (and Writer where noted) and no Windows port of `myco-todo` is 
   `myco-todo` deploy there. Per the Runtime Owner/Coordinator (not in the repo), the RT-020
   window (queue slot 3) includes a `myco-todo` deploy check whose result is S0's readiness
   signal. Dates and readiness come from the Runtime Owner.
-- **Arms runnable on the Linux guest.** `myco` for certain once RT-011 is done. `hcu+shell`
+- **Arms runnable on the Linux guest.** `myco` once RT-011, RT-015 (host-side file read) and the `myco-todo` deploy are done. `hcu+shell`
   only if HCU runs on that guest, which is **unverified**: the Cua C1/HCU installs described in
   the repo are on the Windows guest (`m1-state.md`). Until shown, S0/S1 cover the Myco arm
   alone, and a cross-arm S2 needs a stated guest for every arm (otherwise arms differ in
@@ -356,7 +356,7 @@ table therefore shows **bounds**, using 19.7 s and 240 s per reset, until S1 mea
 | S1 | measure real per-trial wall-clock and cost | S0 | ≥5 per arm | 1.6 - 20 min | the number that sizes S2-S4 |
 | S2 | refutable-trial head-to-head (myco, hcu+shell; screenshot-only/hcu via extension slots) | trusted ingest and hidden commitment (§3 eligibility); shell calls trace-recorded; planner fixed (Claude `claude-sonnet-5-5`); one stated guest per arm | ≥30 refutable pairs per arm on `ef-t01b` no-verify (decides rows 1-4) plus ≥30 on `ef-t01` verify variant | 60 trials: 20 min - 4 h per arm | primary endpoint with Wilson interval; sign test |
 | S3 | normal-trial head-to-head | S2 | ~100 per arm | 33 min - 6.7 h per arm | completion-rate with CI |
-| S4 | Direction B interrupted-write trials | RT-016, RT-015, Foundry Calc/Writer family (Windows/Calc timing family) | ≥30 interrupted | 10 min - 2 h | duplicate/loss bound |
+| S4 | Direction B interrupted-write trials | RT-016, RT-015, Foundry Calc/Writer family | ≥30 interrupted | **not bounded here**: Calc/Writer runs on the Windows guest (25 s restore + 20 s deploy + 25-169 s cold-launch variance per trial); sized after S1 | duplicate/loss bound |
 
 The request is for S0+S1 first; S2-S4 are requested after S1 gives real durations.
 
@@ -368,7 +368,7 @@ never quit Tiffany's apps; M1 retains host priority.
 ## 7. Asks and status (each blocks a specific number)
 
 1. **Foundry owner:** DONE and merged (PR #75): the `hcu+shell` arm is in the registry
-   (not-run), `ef-t01b-add-four-items-noverify` is in the bank, and `plannerName` is set. The
+   (not-run), `ef-t01b-add-four-items-noverify` is in `bank.ts` (`DISCOVERY_TODO_TASKS`), and `plannerName` is set. The
    `ef-t01` ≈ DF-S02 mapping is confirmed at the defect level. **Open:** the trusted ingest and
    hidden commitment that make any live result decision-eligible (§3); sizing of any extension
    slot for screenshot-only and hcu on EF tasks.
