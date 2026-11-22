@@ -169,9 +169,16 @@ export interface TraceAct {
 export type GuardTraceEvent =
   | { readonly type: "run-start"; readonly timestamp: string }
   | {
+      readonly type: "tool-call";
+      readonly timestamp: string;
+      readonly callId: string;
+      readonly via: "gui" | "file-io" | "shell-exec";
+    }
+  | {
       readonly type: "action";
       readonly timestamp: string;
       readonly step: number;
+      readonly callId?: string;
       readonly action: TraceAct;
     }
   | {
