@@ -42,7 +42,7 @@
 
 - Exact J2 evidence. The checked-in M1 normal run passed verification, and its mid-typing capture lacks a step association. The refuted M1 result is a live-document mismatch before persisted readback. The Foundry false-success fixture verifies the keyboard journey using its own claim, absent value, and check source. The exact B39 disagreement, trace line, and step-linked capture require the corresponding authoritative run.
 - Full J3 screenshot experience on a real run. The viewer-only test verifies the loading, preview, full-image and lightbox states. It leaves the real evidence unchanged.
-- The 150 ms final Verdict Bar limit at 10,000 steps now passes on the measured machine (122.7 / 126.0 / 136.4 ms median / p95 / max, N=20; [PERF.md](PERF.md)). Chrome Stable has not been run, and CI enforces 250 ms at 10,000 steps unless `MYCO_VIEWER_STRICT_BUDGET=1`.
+- The 150 ms final Verdict Bar limit at 10,000 steps now passes on the measured machine (122.7 / 126.0 / 136.4 ms median / p95 / max, N=20; [PERF.md](PERF.md)). Chrome Stable has not been run, and hosted CI checks the 10,000-step median against runner-specific caps. The strict local flag enforces the 150 ms maximum at both sizes.
 - Scrub input to playhead and selected-row rendering. This gate uses its own input-to-render measurement. The adjacent rAF interval is reported separately.
 - Screenshot budgets. Cached and cold full-image latency and memory at 1,000 screenshots remain unmeasured.
 - Chrome Stable. Repeat on the specified M-series Chrome Stable setup.

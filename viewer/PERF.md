@@ -68,6 +68,8 @@ A positive verdict still waits for every check it waited for before: the result 
 
 At 10,000 steps the job median must clear both limits in `viewer/e2e/perf-baseline.json`. The hard limit is the highest observed job p95 plus 15%, rounded upward to the next 10 ms. The relative limit allows 35% above the pooled median, rounded to 0.1 ms before storage. Ubuntu job medians ranged from 277.0 to 505.4 ms, leaving about 39 ms above the slowest job. The two macOS medians were 289.4 and 370.6 ms. The 1,000-step CI median limit stays at 150 ms. A single delayed sample has little effect on the median of 20. Runner-wide contention still shifts the median, and two macOS jobs give limited evidence of its frequency.
 
+The independent review reproduced the two-job macOS calibration. It verified two of the seven Ubuntu jobs. The remaining five Ubuntu job or attempt IDs are needed to independently reproduce the pooled baseline.
+
 Both hosted runner images already exceed 150 ms at baseline. Their checks can detect drift relative to runner performance. The strict local check still enforces the 150 ms spec maximum.
 
 ## Other §8 measurements (current build)

@@ -50,10 +50,9 @@ jobs:
       - name: Test
         run: pytest -v
 
-  # The viewer's e2e suite is not part of CI. This job runs only the 10k-step verdict budget test
-  # (viewer/e2e/verdict-budget.pw.ts) so a drift above the 150 ms spec budget is caught. It asserts
-  # the median of 20 samples against per-OS thresholds in viewer/e2e/perf-baseline.json; the exact
-  # 150 ms maximum is the local gate (MYCO_VIEWER_STRICT_BUDGET=1). See viewer/PERF.md.
+  # Runs both verdict fixture sizes. The hosted 10k check compares the median
+  # against calibrated runner caps. The strict local gate enforces a 150 ms maximum
+  # at both sizes (MYCO_VIEWER_STRICT_BUDGET=1). See viewer/PERF.md.
   viewer-perf:
     name: viewer verdict budget (${{ matrix.os }})
     strategy:
