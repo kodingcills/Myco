@@ -2,7 +2,25 @@ import { pixelAction, record, type Screenshot } from "./c1.ts";
 import type { Action, Claim, Usage } from "./index.ts";
 
 const SONNET = "claude-sonnet-5-5";
+/**
+ * Error types we surface verbatim. This is an allowlist, not a filter: for a
+ * type outside it we neither name the type nor keep its message, so the real
+ * cause is lost.
+ *
+ * That cost us a spike: a `POST /v1/messages` returned 400 and the harness
+ * reported only "HTTP 400 (unknown error type)". The live API documents 36
+ * distinct 400 codes — `image_dimensions_too_large`,
+ * `request_body_encoding_unsupported`, `tool_name_conflict`, and so on — and
+ * NONE of them appeared here, so every one of them was suppressed. The 400
+ * class is exactly the one a diagnosis needs, and it was the one class this
+ * set could not pass through.
+ *
+ * The set below is the documented 400 codes plus the transport-level types.
+ * An unrecognised type is still reported (see `httpFailure`), so a future code
+ * degrades to "unknown" rather than to silence.
+ */
 const PROVIDER_ERROR_TYPES = new Set([
+  // Transport- and auth-level types.
   "invalid_request_error",
   "authentication_error",
   "billing_error",
@@ -13,6 +31,43 @@ const PROVIDER_ERROR_TYPES = new Set([
   "api_error",
   "overloaded_error",
   "timeout_error",
+  // Documented 400 codes (docs.claude.com POST /v1/messages, fetched 2026-11-22).
+  "available_tools_limit_exceeded",
+  "claude_code_key_creator_not_member",
+  "claude_code_version_too_old",
+  "cmek_key_disabled",
+  "cmek_key_network_blocked",
+  "cmek_key_unreachable",
+  "compaction_block_ambiguous",
+  "compaction_block_misplaced",
+  "compaction_content_mismatch",
+  "compaction_incomplete_turn",
+  "compaction_nothing_to_summarize",
+  "compaction_signature_invalid",
+  "compaction_too_many_tool_references",
+  "compaction_tool_changes_mismatch",
+  "compaction_unavailable",
+  "contract_spend_limit_reached",
+  "enforced_spend_limit_reached",
+  "image_dimensions_too_large",
+  "linked_organization_billing_unavailable",
+  "linked_organization_spend_limit_reached",
+  "organization_on_hold",
+  "ramp_limit_exceeded",
+  "request_body_encoding_invalid",
+  "request_body_encoding_unsupported",
+  "request_body_too_large_after_decoding",
+  "skill_read_blocked_undecryptable",
+  "thread_already_continued",
+  "thread_continue_in_flight",
+  "thread_fingerprint_mismatch",
+  "thread_not_found",
+  "thread_unsupported_request",
+  "tool_name_conflict",
+  "tool_reference_unresolved",
+  "user_profile_billing_not_authorized",
+  "user_profile_not_billable",
+  "user_profile_required",
 ]);
 const OLLAMA = "qwen3.8-uncensored";
 const MAX_INPUT = 5_000;
@@ -100,11 +155,12 @@ export function createPlanner(
       let detail = "";
       try {
         const { type, message } = record(record(await response.json()).error);
-        if (typeof type === "string" && PROVIDER_ERROR_TYPES.has(type)) {
-          errorType = type;
-          if (response.status === 400 && key && typeof message === "string")
-            detail = scrubBadRequestMessage(message, key);
-        }
+        if (typeof type === "string" && PROVIDER_ERROR_TYPES.has(type)) errorType = type;
+        // Keep the scrubbed message for a 400 even when the type is unrecognised.
+        // Gating `detail` on the allowlist means a new API error code arrives as
+        // a bare status, which is unauditable — the failure we are fixing here.
+        if (response.status === 400 && key && typeof message === "string")
+          detail = scrubBadRequestMessage(message, key);
       } catch {
         // Keep the status when the error body cannot be decoded.
       }
