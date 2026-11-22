@@ -14,7 +14,10 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
 ---
 
 ### EF-001 (TIF-50) GUI-required task fixtures where visible success can disagree with persisted state
-- **status:** in progress (2026-11-21). Contract: docs/foundry/contract.md §3. Fixture
+- **status:** **done** (PR #110 merged d09f209, verified PASS at e802a19 after three
+  verifier rounds). Four `myco-todo` fixtures across four defect classes, each with a
+  statement-level screen-vs-store disagreement assertion; seed task is the extended dogfood
+  app. Contract: docs/foundry/contract.md §3. Fixture
   manifests + builder/loader under `foundry/tasks/`; public task bank in
   `src/foundry/tasks/`. Seed task is the extended `myco-todo` GUI-disagreement family; further
   application-specific tasks follow the same contract.
@@ -33,7 +36,12 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   bug contract is proven by a test, not only described in a docstring.
 
 ### EF-002 (TIF-51) Application-specific state verifiers and ground truth
-- **status:** in progress (2026-11-21). State oracles under `src/foundry/oracles/`
+- **status:** **done** (PR #110 merged d09f209, verified PASS at e802a19). Derived ground
+  truth, three-valued verdicts, mutation audit (7 hand-written near-misses refused, unmutated
+  run still verified), hidden-split commitment regenerated. An independent probe found the
+  stale-row defect could not fire and a rename was accepted in the wrong position; both are
+  fixed, and the save path now has five cases (no-op, add, delete, rename, rename-after-add)
+  each asserting the store and the screen. State oracles under `src/foundry/oracles/`
   (hidden by path, contract §6); mutation audit in `test/foundry/`.
 - **owner:** foundry-owner
 - **blocked_by:** EF-001
@@ -58,13 +66,19 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   <https://osworld-v2.xlang.ai/>) — see docs/research/findings/f1-ef-fault-taxonomy.md.
   The M1 corrupted-trial spirit (zero false successes) applies, but faults must be
   application- and GUI-specific, not only file corruption.
+  **Corrupted-trial count (M2 statistics):** zero false successes in 10 trials bounds the
+  true rate only below 25.9%; **30 corrupted trials** is the smallest count that bounds it
+  below 9.5% (docs/research/benchmark-survey.md §7.2). EF-003 reports `scoreClaim()`
+  caveats verbatim rather than a bare "0 false successes".
 - **acceptance:** ≥5 fault classes, each producing a state where the screen and the persisted
   state disagree in the class's stated way; each has a golden trace proving the fault armed;
   every fault's ground truth is derived host-side from the schedule + intent; a fault that
-  leaves no forensic trace is rejected; zero false successes across the faulted suite.
+  leaves no forensic trace is rejected; zero false successes across the faulted suite, with
+  the trial count and its zero-event bound reported; **a Writer AutoCorrect class** (M2-03)
+  because it is a silent in-app mutation Calc cannot produce.
 
 ### EF-004 (TIF-57) Evidence collection, blind scoring, and a hidden test split
-- **status:** blocked (design started in `src/foundry/oracles/blind.ts` + contract §6)
+- **status:** in progress (below)
 - **owner:** foundry-owner
 - **blocked_by:** EF-001, EF-002
 - **description:** Graders must not treat the system-under-test's self-reported success as
@@ -89,3 +103,11 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   oracle versions and fault schedule; per-arm setup cost (wall-clock + steps) recorded; the
   economics column states the marginal cost or "blocked: account required"; escalation rows
   name the exact blocker for each arm not run; no arm's self-report is used as ground truth.
+  **Trial-count honesty (M2 statistics):** the arm comparison is reported as a paired
+  per-trial table with a sign test, and the report states "underpowered" when discordant
+  trials are too few — the smallest significant result is **6 of 6** discordant, all one way
+  (p = 0.031); 5 of 5 gives p = 0.0625 and proves nothing. Six scattered discordant trials out
+  of 30 prove nothing either: at n=30 a two-sided sign test needs 21, all one way.
+  **Reset budget:** plan at ~21 s per cold restore (`scripts/reset-trial-vm.sh` default), not
+  the 8.3 s live path; 100 trials is ~35 minutes of reset, so statistical power is affordable
+  and the real cost to optimise is verification.

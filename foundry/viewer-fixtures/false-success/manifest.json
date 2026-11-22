@@ -2,9 +2,9 @@
   "format": "mycotrace/1",
   "runId": "viewer-false-success",
   "files": {
-    "trace.jsonl": "6c0c8b01ae059644bf17b8a2e1dc50127127b6a1c47839ad686f113ea9b95921",
-    "result.json": "77a9dbe23cd47f8ca83f2e4a0dc0efca8b9d1299454e1c569dcc7861ceeaf32f",
+    "trace.jsonl": "747416de159987efe686d4866329684aaed640c65306d553c6235f6160309da4",
+    "result.json": "92fb959912ce85686cfc0de113f1ecfa6771e19fe3db53fb2501e2ff64381f84",
     "ledger.jsonl": "5ffb95bd4b2cb6c638464715e0d2511792cf560365980ea0c38a5a5081be602a",
-    "trace.extended.jsonl": "5803b78d5bc1c136c27035e4015e15a0af7f161b8093187140d98111a0e7ee34"
+    "trace.extended.jsonl": "d9b33a178baf58d379474c1b7044229488984e121dd5ac17f7fb76cd868b7b28"
   }
 }

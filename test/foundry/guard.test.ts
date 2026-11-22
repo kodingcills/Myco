@@ -16,7 +16,7 @@ import {
 } from "../../src/foundry/tasks/todo.ts";
 import type { FixtureManifest, GuardTraceEvent, InitialState } from "../../src/foundry/types.ts";
 
-const FIXTURE_ID = "ef-todo-silent-drop-v1";
+const FIXTURE_ID = "ef-todo-silent-drop-v2";
 
 function fixture() {
   const found = findTodoFixture(FIXTURE_ID);

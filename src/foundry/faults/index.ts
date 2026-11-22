@@ -108,6 +108,9 @@ export function relaunch(state: AppState): AppState {
   return {
     ...state,
     rows,
+    // A relaunch loads from disk, so the load-time text is the disk text: the stale-row
+    // defect only stales a row renamed within the current boot session.
+    loadedRows: rows,
     listbox: rows.map((s) => (s.length ? s[0]!.toUpperCase() + s.slice(1) : s)),
     status: "",
     deleted: [],
