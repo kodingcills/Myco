@@ -68,14 +68,19 @@ cargo build --workspace --manifest-path runtime/Cargo.toml 2>&1 | tail -2 || fai
 
 say "2/6 booting the guest and building the agent in-guest"
 "$GUEST_DIR/boot.sh" 2>&1 | tail -1
-for _ in $(seq 1 60); do
+# SSH answering is NOT readiness: cloud-init is still installing packages, and a
+# build that starts now races it. Observed: ssh up at ~15s, cloud-init "done" at
+# ~60s, and the build failing in between because `build-essential` had not landed
+# yet. Require cloud-init to report done, with a bounded wait.
+for _ in $(seq 1 150); do
   ssh -i "$GUEST_DIR/keys/id_ed25519" -p 10022 -o StrictHostKeyChecking=no \
       -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=3 \
-      myco@localhost true 2>/dev/null && break
+      myco@localhost 'cloud-init status 2>/dev/null | grep -q "status: done"' 2>/dev/null && break
   sleep 2
 done
-# The in-guest build has failed transiently before (a rustup/toolchain hiccup on a
-# fresh overlay). Retry once rather than burning the window on a flake.
+echo "cloud-init: $(ssh -i "$GUEST_DIR/keys/id_ed25519" -p 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=3 myco@localhost 'cloud-init status 2>/dev/null | head -1' 2>/dev/null)"
+# Retry once: even after cloud-init, a first build on a fresh overlay has hit
+# transient toolchain hiccups.
 if ! "$GUEST_DIR/build-agent-in-guest.sh" 2>&1 | grep -q "OK:"; then
   echo "agent build failed; retrying once" >&2
   "$GUEST_DIR/build-agent-in-guest.sh" 2>&1 | grep -E "OK:|error" | tail -3 || fail "agent build (after retry)"
