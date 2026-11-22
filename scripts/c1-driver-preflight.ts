@@ -87,10 +87,26 @@ function classifySession(output: string): string {
   return daemons[0] === snapshot.calcSession ? "match" : "session-mismatch";
 }
 
+/**
+ * Per-command budget for a guest round trip.
+ *
+ * 15s was too tight and it cost a whole arm: on 2026-11-22 the CIM query took
+ * 11.8s and a bare `--version` measured 5.7-6.8s on an idle guest, so two
+ * queries plus the CIM enumeration crossed the limit under sweep load and the
+ * preflight threw session-command-failed - aborting the run at trial 0 with
+ * every later trial omitted as driver-unreachable, after Calc, Cua and UNO had
+ * all come up cleanly. The check was right; the budget was wrong.
+ *
+ * 45s is deliberately generous: this is a liveness precondition, not a
+ * performance measurement, and a slow guest should cost seconds rather than the
+ * run. A genuinely dead guest still fails, just later.
+ */
+const GUEST_QUERY_TIMEOUT_MS = 45_000;
+
 function queryGuest(command: string): string {
   return execFileSync(join(homedir(), "VMs/myco-win11/scripts/vssh"), [command], {
     encoding: "utf8",
-    timeout: 15_000,
+    timeout: GUEST_QUERY_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
