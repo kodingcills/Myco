@@ -182,19 +182,21 @@ No PR merges, and no auto-merge is enabled, without **an independent verifier PA
 the exact PR head**, then **green CI at that same head**. Any head change — including
 merging `main` in — needs a fresh verification before merge. PR #99 is the reason this
 is written down: it merged a live runner whose gates could be bypassed; PR #100
-reverted it (`8396c93`), and its archives are excluded from Discovery evidence.
+reverted it (`8396c93`, reachable from the C1 branches but not yet an ancestor of
+`main`), and its archives are excluded from Discovery evidence.
 
 ## Log
 
 - 2026-11-22 (afternoon) · M2 research processed into the decision documents (no VM,
   no spend, no accounts):
   - `docs/research/mvp-competitive-teardown.md` §2.6: cross-check against finding
-    m2-01. Eleven products across the two documents, none with a persisted-outcome
-    verdict; the three overlapping products agree, including two defects both found
-    independently (Orgo's $3-vs-$5 credit, Orgo's UUID-vs-`instance_id` spec
-    contradiction). Adopted m2-01's economic point: Orgo/Sai bill machine-time, so
-    verification is free if the customer writes it — which is precisely why the
-    `hcu+shell` arm is the decisive one.
+    m2-01. 8 named products plus a screenshot-only control across the two documents
+    (Simular Agent S and Sai counted as one product line, per m2-01 §7.3), none with a
+    persisted-outcome verdict; the three overlapping products agree, including two
+    defects both documents found separately (Orgo's $3-vs-$5 credit, Orgo's
+    UUID-vs-`instance_id` spec contradiction). Adopted m2-01's billing point in its own
+    hedge (Orgo bills machine-hours, Sai credits), so verification is free *if the
+    customer writes it* — which is precisely why the `hcu+shell` arm is the decisive one.
   - `docs/product/mvp-discovery-plan.md`: §2 now cites the nine-product finding as
     independent confirmation; §4's underpowered 10-run rule is explicitly withdrawn
     in favour of `mvd-preregistration.md` §1/§4 (already merged); §6's second app is
