@@ -162,6 +162,21 @@ release_locks() {
   declare -F vm_lock_release >/dev/null && vm_lock_release
   return 0
 }
+# Take state/SESSION.lock (the backend's protocol: atomic create holding our pid;
+# a dead holder is reclaimed). Returns 0 when taken, 1 when a live process holds it.
+try_session_lock() {
+  if ! ( set -C; echo "$$" > "$SESSION_LOCK" ) 2>/dev/null; then
+    SESSION_HOLDER="$(cat "$SESSION_LOCK" 2>/dev/null || true)"
+    if [[ -n "$SESSION_HOLDER" ]] && ! kill -0 "$SESSION_HOLDER" 2>/dev/null; then
+      rm -f "$SESSION_LOCK"
+      ( set -C; echo "$$" > "$SESSION_LOCK" ) 2>/dev/null || return 1
+    else
+      return 1
+    fi
+  fi
+  SESSION_LOCK_OURS=1
+  return 0
+}
 take_locks() {
   [[ -r "$VM_LOCK_SCRIPT" ]] || { echo "Refusing: cannot take the VM lock ($VM_LOCK_SCRIPT not found)" >&2; exit 1; }
   # shellcheck source=/dev/null
@@ -169,28 +184,52 @@ take_locks() {
   local rc=0
   vm_lock_acquire "provision.sh" || rc=$?
   [[ $rc -eq 0 ]] || { echo "Refusing: the host VM lock is held (see above); not booting." >&2; exit 10; }
-  if ! ( set -C; echo "$$" > "$SESSION_LOCK" ) 2>/dev/null; then
-    local holder; holder="$(cat "$SESSION_LOCK" 2>/dev/null || true)"
-    if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
-      rm -f "$SESSION_LOCK"
-      ( set -C; echo "$$" > "$SESSION_LOCK" ) 2>/dev/null || { release_locks; echo "Refusing: SESSION.lock race" >&2; exit 10; }
-    else
-      release_locks
-      echo "Refusing: a runtime session holds $SESSION_LOCK (pid ${holder:-?}); not booting." >&2
-      exit 10
-    fi
+  if ! try_session_lock; then
+    release_locks
+    echo "Refusing: a runtime session holds $SESSION_LOCK (pid ${SESSION_HOLDER:-?}); not booting." >&2
+    exit 10
   fi
-  SESSION_LOCK_OURS=1
+}
+
+# TIF-154: tidy the saved agent (`.prev`) left by an interrupted or killed build.
+# CALLER MUST HOLD SESSION.lock: every build takes it before moving the agent aside,
+# so holding it means no build is mid-flight and `.prev` is not in use. (TIF-141's
+# first attempt did this without the lock, and a concurrent run could then delete
+# a good agent; the Tier-1 verifier's F1.)
+#  - agent absent, `.prev` present: restore it (the build died after the move-aside);
+#  - agent present, `.prev` present: drop `.prev` (a leftover from a build killed
+#    after success, or SIGKILL; F2). Restoring it later would revert a newer agent.
+recover_saved_agent() {
+  if [[ ! -e "$AGENT" && -s "$AGENT.prev" ]]; then
+    mv -f "$AGENT.prev" "$AGENT"; echo "Restored the agent saved by an interrupted build ($AGENT)."
+  elif [[ -s "$AGENT" && -e "$AGENT.prev" ]]; then
+    rm -f "$AGENT.prev"; echo "Dropped a leftover saved agent ($AGENT.prev); the current agent is newer."
+  fi
 }
 
 if [[ $AGENT_MODE == report ]]; then
+  # Recovery needs SESSION.lock; take it only briefly, and leave a build's files
+  # alone if one holds it. (No VM lock: nothing here boots.)
+  if [[ -e "$AGENT.prev" ]]; then
+    if try_session_lock; then
+      recover_saved_agent
+      release_locks
+    else
+      echo "A build holds $SESSION_LOCK (pid ${SESSION_HOLDER:-?}); leaving its saved agent alone."
+    fi
+  fi
   if [[ -s "$AGENT" ]]; then
     echo "OK: guest agent binary present ($AGENT)."
   fi
-elif [[ -s "$AGENT" && $AGENT_MODE == build ]]; then
+elif [[ -s "$AGENT" && ! -e "$AGENT.prev" && $AGENT_MODE == build ]]; then
   echo "OK: guest agent binary present ($AGENT); --rebuild-agent to rebuild."
 else
   take_locks
+  recover_saved_agent
+  if [[ -s "$AGENT" && $AGENT_MODE == build ]]; then
+    echo "OK: guest agent binary present ($AGENT); --rebuild-agent to rebuild."
+    release_locks
+  else
   BOOTED_HERE=0
   BUILD_STARTED=0; BUILD_OK=0; BUILD_PID=""
   cleanup() {
@@ -269,6 +308,7 @@ else
   [[ -s "$AGENT" ]] || { echo "FAIL: build reported success but $AGENT is missing" >&2; exit 1; }
   BUILD_OK=1
   rm -f "$AGENT.prev"
+  fi
 fi
 
 echo
