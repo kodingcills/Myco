@@ -106,3 +106,28 @@ issue".)
 - **acceptance:** `provision.sh` either builds the agent or fails with that
   instruction; the runbook's provisioning sequence includes the build step and
   the boot/shutdown ordering it implies.
+
+### DF-010 (TIF-pending) DF-005 runner follow-ups from TIF-158 verification
+- **status:** open
+- **owner:** dogfood-owner
+- **blocked_by:** none
+- **description:** Four non-behavioural follow-ups from the three TIF-158 (#299)
+  verification rounds. None changes a verdict; all four make a future change
+  harder to get wrong. Filed together because they share one file and one
+  verifier round.
+  1. **N1 — runbook path drift.** `docs/env/dogfood-runtime-runbook.md` taught
+     `/home/myco/myco-todo/myco_todo.py` while the runner now deploys and
+     launches `/tmp/myco_todo.py`. Fixed in PR #305 (Tier 0, doc-only).
+  2. **N2 — a mutation dies by crashing, not by naming.** Making the write path
+     absolute kills the offline suite via `KeyError: 'persisted-set-matches'` in
+     test 9 rather than a named assertion. A `write_file path must be relative`
+     check in test 24's block would fail cleanly.
+  3. **N3 — writability is inferred, not measured.** `preflight` verifies the
+     grant root exists but not that the agent may write there — the claim that
+     failed twice. `stat -c '%a %U' /tmp` in preflight would measure it.
+  4. **N4 — the outside-root guard is untested.** `deploy_fixture` refuses a path
+     outside `GRANT_ROOT`, and no test feeds it one.
+- **acceptance:** N2 fails with a named assertion when the write path is made
+  absolute; N3's preflight reports the measured mode and owner of the grant root;
+  N4 has a direct test that an outside-root path returns False; N1's runbook
+  examples match the runner (PR #305).
