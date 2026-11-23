@@ -15,6 +15,16 @@
 # Never deletes host-only files. A host copy may legitimately carry files the
 # repo does not (wait-guest-ready.sh did), and removing them is not this
 # script's call. It only adds and updates repo-owned files.
+#
+# BEFORE RUNNING --go AGAINST A REAL HOST: the synced vm.sh must already take
+# the host VM lock and honour a parent-held one (TIF-164/TIF-166 B2, PR #304).
+# Syncing an older vm.sh onto a driver path that expects the newer one can make
+# things worse, not better. Check what you are about to push:
+#
+#     scripts/sync-toolchain.sh --dry-run
+#     git -C <repo> log --oneline -1 -- docs/env/vm-toolchain/vm.sh
+#
+# This script cannot verify that for you: it copies what the working tree has.
 set -euo pipefail
 
 D=$(cd "$(dirname "$0")" && pwd)
@@ -28,6 +38,13 @@ case "${1:-}" in
   --dry-run|"") DRY=1 ;;
   *) echo "usage: $0 [--dry-run|--go]" >&2; exit 2 ;;
 esac
+# Reject extra args rather than silently ignoring them: `--go --dry-run` would
+# otherwise run in dry-run and not sync, the opposite of what was asked.
+if [ $# -gt 1 ]; then
+  echo "sync-toolchain: takes at most one argument, got $#: $*" >&2
+  echo "usage: $0 [--dry-run|--go]" >&2
+  exit 2
+fi
 
 [ -d "$SRC" ] || { echo "sync-toolchain: source not found: $SRC" >&2; exit 1; }
 [ -d "$DST" ] || { echo "sync-toolchain: host scripts dir not found: $DST" >&2; echo "  (set VM_ROOT if the VM lives elsewhere)" >&2; exit 1; }
