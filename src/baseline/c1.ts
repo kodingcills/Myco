@@ -122,7 +122,21 @@ function classify(result: unknown): {
   if (effect === "unverifiable")
     return { outcome: "delivered", escalatable: false, ...verifiedField };
 
-  // Any other refusal, including one with no code at all.
+  // An error with no routing signifier is a TOOL fault, not a delivery refusal.
+  //
+  // This is the branch that was missing. Cua signifies a routing refusal in
+  // structured form - `effect: "refused"`, or a background_* code - and the probe
+  // confirmed both. An `isError` carrying only prose (the shape the probe itself
+  // received for a stall: a `content[].text` message with no `structuredContent`
+  // at all) has no such signifier, so reading it as "the app never saw it" was an
+  // assumption, not an observation. Treating it as a stall says what is actually
+  // known - the call ran and did not succeed, and whether the input landed is
+  // unconfirmed - and keeps it out of `routing-refused`, where it would have been
+  // filed as "not a model outcome" while in fact describing a delivery failure.
+  if (outer.isError === true && effect !== "refused")
+    return { outcome: "delivered-stalled", escalatable: false, ...verifiedField };
+
+  // A refusal Cua states but cannot escalate.
   if (outer.isError === true || effect === "refused")
     return { outcome: "routing-refused", escalatable: false, ...verifiedField };
 
