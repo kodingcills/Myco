@@ -352,9 +352,16 @@ def main() -> int:
     print("12. mutation: each no-guest gate is independently load-bearing")
     src = RUNNER.read_text()
     offline_gate = "if offline and not assume_guest:"
-    live_gate = "if not assume_guest and not probe.guest_alive:"
+    live_gate = "if not assume_guest:"
     expect(offline_gate in src, "offline gate present")
     expect(live_gate in src, "live-guest gate present")
+    # TIF-27: the live gate no longer probes once (`probe.guest_alive`); it WAITS
+    # via `probe.wait_ready()`, because create() returns before the guest it
+    # booted is reachable and a one-shot probe made a slow-but-healthy boot
+    # indistinguishable from one that will never come up. Assert the wait is
+    # there, so a revert to the one-shot form is caught by source as well as by
+    # the behavioural probe below.
+    expect("probe.wait_ready()" in src, "live-guest gate WAITS for the guest (not a one-shot probe)")
     # Behavioural probe, not a source assertion: disable one gate, run, restore.
     for label, gate in (("offline gate", offline_gate), ("live-guest gate", live_gate)):
         mutated = src.replace(gate, "if False:", 1)
@@ -492,23 +499,53 @@ def main() -> int:
 
     print("16. preflight accounts for every check when the guest is unreachable")
     out2 = Path(tempfile.mkdtemp(prefix="df005-pf2-"))
+    # FORCE the premise. This case is about what the preflight reports when ssh
+    # cannot reach a guest, but a guest is usually NOT running on a test host -
+    # and when one is (a live Linux guest on 10022), this invocation found it,
+    # ran the dependent checks against it, and failed for reasons that had
+    # nothing to do with the property under test. Pointing GUEST_DIR at an empty
+    # directory makes ssh fail by construction: no key, so no connection, every
+    # run. A test that passes or fails on ambient host state is not testing the
+    # code.
+    empty_guest = out2 / "no-guest"
+    empty_guest.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         [sys.executable, str(RUNNER), "--preflight"],
         capture_output=True, text=True, cwd=ROOT,
-        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out2 / "free.lock")},
+        env={**os.environ,
+             "MYCO_VM_LOCK_PATH": str(out2 / "free.lock"),
+             "MYCO_GUEST_DIR": str(empty_guest)},
     )
-    # Off-guest, ssh fails; the dependent checks must still be reported as
-    # not-run rather than silently omitted, so the "N of 8" count is honest.
+    # Off-guest, ssh fails; the dependent checks must still be reported rather
+    # than silently omitted, so the "N of 8" count is honest. TIF-27 renamed the
+    # wording from "not run: guest unreachable" to "deferred: ..." when the
+    # preflight learned that a guest the run will boot is not a failure - but the
+    # property is the same: every check is ACCOUNTED FOR, never dropped from the
+    # count. (This assertion was left behind by that rename, which is why it is
+    # phrased against the new wording here.)
     for name in ("app-deployed", "app-self-test", "introspection-file",
                  "introspection-shadow"):
-        expect(f"skip {name}: not run: guest unreachable" in proc.stdout,
+        expect(f"skip {name}: deferred: no guest up yet" in proc.stdout,
                f"{name} reported as not-run, not omitted")
-    expect("of 8 checks failed" in proc.stdout, "count is stated against 8")
+    # TIF-27: with no guest up, the preflight now SUCCEEDS while accounting for
+    # every check - the dependents are deferred to the run rather than failed, and
+    # `guest-ssh` is deferred too. The property this case guards is unchanged:
+    # every check is ACCOUNTED FOR, never dropped from the count, so the summary
+    # cannot claim a number it did not measure. What changed is that "no guest
+    # yet" is no longer a failure, because the run boots one.
+    expect("5 deferred to the run" in proc.stdout,
+           "the summary accounts for the deferred checks rather than dropping them")
+    expect("of 8 checks failed" not in proc.stdout,
+           "a run with no guest yet is not reported as a failure (the run boots one)")
     # create-schema needs no guest, so it must be reported even off-guest —
     # not silently omitted from an "of 8" claim.
     expect("create-schema" in proc.stdout,
            "create-schema is reported in every path, guest or not")
-    expect(proc.returncode == 1, "exit 1")
+    # Exit 0 is correct here now (TIF-27): the preflight cannot fail on a guest
+    # the run will boot. The check above asserts it is not reported as a failure;
+    # this asserts it actually SUCCEEDS rather than merely not-failing, which is
+    # the distinction that mattered when the defer was introduced.
+    expect(proc.returncode == 0, "exit 0: no guest yet is not a failure")
 
     print("17. no delivery outcome can pass on a matching store (M1 allowlist)")
     for mode in ("failed", "empty", "unknown"):
