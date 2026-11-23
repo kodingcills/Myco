@@ -716,3 +716,25 @@ would need either a live VM window or a generic `Server`. The guard lives in
 the layer that owns it. A generic `Server` would make the whole MCP surface
 VM-testable; that is a separate refactor, noted here rather than smuggled into this
 change.
+
+## TIF-47 / RT-013: memory discipline + idle reaping (2026-11-22)
+
+Delivered: configurable guest RAM (`MYCO_RT_GUEST_MB`, default 2048), a guest-side
+idle reaper (`idle-watchdog.sh`, opt-in via `MYCO_RT_IDLE_SECS`, off by default), a
+host-only proof of the reaper (`idle-watchdog-test.sh`, 5/5, mutation-verified), and
+`scripts/memory-budget.sh` — the read-only host/guest memory measurement.
+
+**Measured for the second-VM question (TIF-92)**, host 24 GB, sampled 2026-11-22 while
+`myco-win11` ran (no Myco Linux guest up at sample time):
+
+| | cap | observed host RSS |
+|---|---|---|
+| `myco-win11` (UTM) | 6144 MB | 294–498 MB |
+| Myco Linux guest | 2048 MB | ~0 idle (commits lazily) |
+
+Host at that sample: swap 8.2–8.4 GB used of 9 GB, compressed ~10.7 GB, reclaimable
+~3.4–3.7 GB. **Second-VM headroom for a ≥2 GB guest: ~1.7–3.5 GB reclaimable** — thin,
+and swap is already in use *before* any second VM. The cap is a ceiling, not a
+reservation (QEMU commits lazily), so the honest near-term charge is RSS, not `-m`.
+
+No VM lock was taken; measurement is `ps`/`vm_stat`/`vm.swapusage` only.
