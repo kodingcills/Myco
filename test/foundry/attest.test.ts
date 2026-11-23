@@ -810,6 +810,19 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     expect(screenResult.screenConstrained).toBe(false);
   });
 
+  it("v3: bundleDigest is injective over paths containing newlines", () => {
+    // Joining `path:hash` with "\n" collided, so two distinct maps shared a digest and the
+    // binding did not bind "this bundle" (round 3, finding 1).
+    const h = (v: string) => createHash("sha256").update(v).digest("hex");
+    const enc = (v: string) => new TextEncoder().encode(v);
+    const twoFiles = { "store.json": enc("s"), p: enc("p"), q: enc("q") };
+    const smudged = { "store.json": enc("s"), [`p:${h("p")}\nq`]: enc("q") };
+    expect(bundleDigest(twoFiles as never)).not.toBe(bundleDigest(smudged as never));
+    // Order still does not matter.
+    const reordered = { q: enc("q"), p: enc("p"), "store.json": enc("s") };
+    expect(bundleDigest(reordered as never)).toBe(bundleDigest(twoFiles as never));
+  });
+
   it("v3: isAttestation's guard is load-bearing", () => {
     // Called directly, so the outer catch in scoreDiscoveryTrial cannot mask it. A Proxy
     // whose `get` trap throws must yield `false`, not a throw.
@@ -1266,6 +1279,23 @@ describe("EF-005 attestation gate", () => {
       finalFiles: {},
     });
     expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("does not match the committed commitment");
+  });
+
+  it("v3: a forged hidden set of the SAME COUNT is refused by rootHash alone", async () => {
+    // The existing test above differs in count, so the count check catches it. A set with the
+    // same length but different content is only caught by the rootHash comparison, which is
+    // what makes the commitment a commitment (round 3, finding 3).
+    const input = baseInput(await finishedRun());
+    const forged = structuredClone(HIDDEN);
+    (forged[0]!.fault as { seed: number }).seed = 999_999;
+    const result = attest({
+      ...input,
+      hiddenFixtures: forged,
+      claimedFixtureHash: fixtureHash(forged[0]!),
+      evidence: { ...input.evidence, fixtureHash: fixtureHash(forged[0]!) },
+    });
+    expect(result.eligible, "a forged set of the same count was admitted").toBe(false);
     expect(result.blockers.join(" ")).toContain("does not match the committed commitment");
   });
 
