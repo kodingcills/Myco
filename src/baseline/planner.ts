@@ -71,7 +71,36 @@ const PROVIDER_ERROR_TYPES = new Set([
 ]);
 const OLLAMA = "qwen3.8-uncensored";
 const MAX_INPUT = 5_000;
-const MAX_OUTPUT = 256;
+/**
+ * Output ceiling per model call.
+ *
+ * 256 was clipping REAL responses. Reproducible from the committed rows under
+ * `docs/research/experiments/c1-arm-002/rows/` (444 calls, 29 rows): the largest
+ * NON-truncated completion is **250** (row 26), and **22 calls across 22 distinct
+ * rows landed on exactly 256** - the ceiling, not the model's answer.
+ *
+ * The failure this caused: a reply cut off mid-JSON gave the planner no parseable
+ * decision, and the trial scored `planner-no-action` / `persisted-mismatch` - a
+ * HARNESS fault recorded as an agent failure. That deflates the baseline and, at
+ * two consecutive identical failures, breaks the abort rule it should have
+ * triggered. arm-003d r2 trials 3 and 4 were exactly that shape: 0 steps, one
+ * call, completion 256. (Those rows are not committed, so they are named as the
+ * motivation and not cited as evidence.)
+ *
+ * Scope, stated precisely: 256-hits occur across MOST verdicts, not only the
+ * zero-action ones, so truncation is not the sole reason a call reaches the
+ * ceiling. `FINAL.md` attributes arm-002's zero-action rows to the model typing
+ * cell references rather than to clipping. What is proven is that the ceiling was
+ * REACHED 22 times and that 250 is the largest answer that got through - which is
+ * enough to say the cap was binding.
+ *
+ * 1024 is ~4x that maximum, so clipping would need an answer four times longer
+ * than any observed. Chosen as a config value with headroom, not fitted to the
+ * data. The cost is coupled on purpose: MAX_CALL_MICROS below derives from this,
+ * so raising it raises the fail-closed reservation (376,800 -> 607,200 micros per
+ * trial, 1.61x) rather than hiding the increase.
+ */
+const MAX_OUTPUT = 1024;
 // Integer microdollars at the frozen short-context input and output rates.
 export const MAX_CALL_MICROS = MAX_INPUT * 2 + MAX_OUTPUT * 10;
 const PROMPT = [
@@ -257,6 +286,16 @@ export function createPlanner(
               if (!allowFallback) throw new PlannerFailure("Anthropic call refused request");
               useSonnet = false;
             }
+            // A response cut off at the ceiling is not an answer, so it must not
+            // become a scored failure. Throwing PlannerFailure makes the sweep
+            // omit the trial (`planner-failed`) rather than record a model miss -
+            // the distinction this whole arm exists to measure. Without this the
+            // truncated call returns partial JSON, the planner finds no decision,
+            // and `planner-no-action` is scored against the agent.
+            if (data.stop_reason === "max_tokens")
+              throw new PlannerFailure(
+                `Anthropic response truncated at max_tokens=${MAX_OUTPUT}; the reply is partial and must not be scored as an agent decision`,
+              );
           } else {
             if (!allowFallback) throw new PlannerFailure("Anthropic messages API call failed");
             useSonnet = false;
