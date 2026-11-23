@@ -39,11 +39,7 @@ export interface Screenshot {
  * from `classify` would be reporting a delivery as a document state, which is
  * exactly the conflation this type exists to undo.
  */
-export type CuaOutcome =
-  | "routing-refused"
-  | "delivered"
-  | "delivered-stalled"
-  | "save-failed";
+export type CuaOutcome = "routing-refused" | "delivered" | "delivered-stalled" | "save-failed";
 
 /** Where an action ended up being delivered. Recorded per action (TIF-167). */
 export type DeliveryMode = "background" | "foreground";

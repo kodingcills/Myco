@@ -28,11 +28,7 @@ export interface ActionDelivery {
   mode: "background" | "foreground";
   /** True when background refused and the action was retried once in foreground. */
   escalated: boolean;
-  outcome:
-    | "routing-refused"
-    | "delivered"
-    | "delivered-stalled"
-    | "save-failed";
+  outcome: "routing-refused" | "delivered" | "delivered-stalled" | "save-failed";
 }
 export interface Transcript {
   actions: Action[];
