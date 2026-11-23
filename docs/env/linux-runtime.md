@@ -13,11 +13,36 @@ QEMU+HVF Linux ARM64 desktop for the Myco Desktop Runtime. Scripts:
 | Size on disk | 593 MB (raw download) |
 | Verify | `runtime/guest/fetch-image.sh` checks the hash on every run; state at `runtime/guest/state/base-image.sha256` |
 
-Guest: 2 vCPU, **2048 MB RAM (hard cap)**, qcow2 overlay over the pristine base.
-QEMU invocation (see `boot.sh`): `-machine virt -cpu host -accel hvf -smp 2 -m 2048
--display none -bios /opt/homebrew/share/qemu/edk2-aarch64-code.fd` + virtio-blk disk
-+ cloud-init seed ISO + user-mode net with `hostfwd tcp:127.0.0.1:10022-:22`,
-`-daemonize`, serial log to `state/serial.log`.
+Guest: 2 vCPU, **2048 MB RAM cap (configurable via `MYCO_RT_GUEST_MB`)**, qcow2 overlay
+over the pristine base. QEMU invocation (see `boot.sh`): `-machine virt -cpu host
+-accel hvf -smp 2 -m "$GUEST_MB" -display none -bios
+/opt/homebrew/share/qemu/edk2-aarch64-code.fd` + virtio-blk disk + cloud-init seed ISO
++ user-mode net with `hostfwd tcp:127.0.0.1:10022-:22`, `-daemonize`, serial log to
+`state/serial.log`.
+
+Memory discipline (RT-013, TIF-47). The `-m` value is a **ceiling, not a
+reservation**: QEMU commits guest RAM lazily, so the host charge is the process RSS at
+sample time, not the cap. Measured on this host (2026-11-22, `scripts/memory-budget.sh`):
+
+| Guest | cap | observed host RSS |
+|---|---|---|
+| Myco Linux guest (this one) | 2048 MB | ~0 idle, rises toward the cap under a loaded desktop |
+| `myco-win11` (UTM, M1's guest) | 6144 MB | 294–498 MB at sample |
+
+So raising `MYCO_RT_GUEST_MB` does not immediately cost the host that much; it sets the
+worst-case ceiling a loaded guest may reach. `scripts/memory-budget.sh` reads both
+guests' live RSS and host pressure (`vm_stat`, `vm.swapusage`) and reports the headroom
+for a second VM — the number the post-M1 second-VM question (TIF-92) needs. It is
+read-only and touches no lock.
+
+Idle shutdown (RT-013). The guest runs `runtime/guest/idle-watchdog.sh` (started by the
+provisioning seed) which powers the guest off after `MYCO_RT_IDLE_SECS` with no
+heartbeat. Default is **disabled** (`0`) — a session never vanishes silently; an
+operator enables reaping explicitly with a documented timeout. The policy is in the
+guest, not the host, so a crashed host agent cannot leave a guest running forever.
+`runtime/guest/idle-watchdog-test.sh` proves both directions on the host with no VM
+(fires on a stale/absent heartbeat, holds on a fresh one); a mutation that disables the
+decision turns exactly the two "fires" cases red.
 
 ## Package pins (as installed and verified in the guest, dpkg-query 2026-11-19)
 
@@ -62,11 +87,14 @@ gir1.2-atspi-2.0 2.52.0-1build1 · at-spi2-core 2.52.0-1build1 · gir1.2-gtk-3.0
 ## Lifecycle
 
 ```
-runtime/guest/fetch-image.sh      # download + SHA-256 verify (idempotent)
-runtime/guest/create-overlay.sh   # qcow2 overlay over the pristine base
-runtime/guest/boot.sh             # QEMU+HVF, headless, daemonized (idempotent)
-runtime/guest/smoke.sh            # boots if needed; AT-SPI + input proofs
-runtime/guest/shutdown.sh         # clean shutdown over SSH; overlay kept
+runtime/guest/fetch-image.sh         # download + SHA-256 verify (idempotent)
+runtime/guest/create-overlay.sh      # qcow2 overlay over the pristine base
+runtime/guest/boot.sh                # QEMU+HVF, headless, daemonized (idempotent)
+runtime/guest/smoke.sh               # boots if needed; AT-SPI + input proofs
+runtime/guest/shutdown.sh            # clean shutdown over SSH; overlay kept
+runtime/guest/idle-watchdog.sh       # guest-side reaper: self-shutdown after MYCO_RT_IDLE_SECS idle
+runtime/guest/idle-watchdog-test.sh  # proves the reaper fires/holds, on the host, no VM
+scripts/memory-budget.sh             # read-only host/guest RSS + swap + second-VM headroom
 ```
 
 SSH: `ssh -i runtime/guest/keys/id_ed25519 -p 10022 myco@localhost` (key generated at
@@ -168,9 +196,11 @@ single loopback-only forwarded port, and a disposable overlay so `destroy` delet
 writes rather than rolling them back.
 
 **Not** guaranteed, and not to be claimed: network egress policy, guest→host file
-transfer beyond `read_file`'s grant, idle reaping (a session left alone stays up
-until `destroy`), per-agent attribution, or multi-tenant credentials. The full
-list with evidence is in [docs/research/runtime-safety-isolation.md](../research/runtime-safety-isolation.md).
+transfer beyond `read_file`'s grant, per-agent attribution, or multi-tenant
+credentials. Idle reaping is **opt-in and off by default** (see the memory-discipline
+section above): a session left alone stays up until `destroy` unless `MYCO_RT_IDLE_SECS`
+is set. The full list with evidence is in
+[docs/research/runtime-safety-isolation.md](../research/runtime-safety-isolation.md).
 
 ### 5. Verifying the path yourself
 
