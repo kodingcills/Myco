@@ -3,7 +3,32 @@
 # usage: vm.sh start|start-disposable|stop|kill|status|snapshot <name>|restore <name>|snapshots|delete-snapshot <name>|screenshot <png>
 set -euo pipefail
 NAME=${VM_NAME:-myco-win11}
+D=$(cd "$(dirname "$0")" && pwd)
 as() { osascript -e "tell application \"UTM\"" -e "set vm to virtual machine named \"$NAME\"" -e "$1" -e "end tell"; }
+
+# TIF-137: a launch takes the host VM lock, the same flock boot.sh and the trial
+# drivers use. Without this, vm.sh was the one launcher that could start a guest
+# while another owner held the lock — and build-all.sh calls it four times.
+# Only the launching subcommands lock; status/snapshots/screenshot are read-only.
+case "${1:-}" in
+  start|start-disposable)
+    # vm-lock.sh lives in the repo (scripts/), not in the host copy of this
+    # directory, so search both layouts before giving up.
+    LOCK=""
+    for c in "$D/../../../scripts/vm-lock.sh" "$D/vm-lock.sh" "$D/../scripts/vm-lock.sh"; do
+      [ -r "$c" ] && { LOCK=$c; break; }
+    done
+    if [ -n "$LOCK" ]; then
+      # shellcheck source=/dev/null
+      . "$LOCK"
+      vm_lock_acquire "vm.sh $1" || exit "$?"
+      trap vm_lock_release EXIT
+    else
+      echo "vm.sh: WARNING: vm-lock.sh not found, launching WITHOUT the host VM lock" >&2
+    fi
+    ;;
+esac
+
 case "${1:-}" in
   start) as 'start vm' ;;
   start-disposable) as 'start vm saving false' ;;
