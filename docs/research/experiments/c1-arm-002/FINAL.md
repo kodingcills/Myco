@@ -82,7 +82,7 @@ The two arms were not doing the same job.
 
 | | Myco's arm | arm-002 |
 |---|---|---|
-| Task given | `windowsProgramFor(params)` — a compiled guarded program with an **explicit save step** (`isSave: true`; `src/integration/trial.ts`, `grep isSave`) | `taskText(params)` — a sentence |
+| Task given | `windowsProgramFor(params)` — a compiled guarded program with an **explicit save step** (`isSave: true`; `src/tasks/calc-record-edit.ts` and `src/integration/trial.ts`, `grep 'isSave: true'`) | `taskText(params)` — a sentence |
 | Includes the save? | **Yes, as a step** | **No** — "Set the X cell for record Y to Z." |
 | System prompt | — | "Save and close it" (`planner.ts:78`) |
 
