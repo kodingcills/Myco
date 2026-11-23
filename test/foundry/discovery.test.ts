@@ -261,6 +261,81 @@ describe("Discovery evidence grading", () => {
     });
   });
 
+  it("R6 round 3 finding 1: a malformed row is refused, never fatal", () => {
+    // `scoreTrial` throws on an invalid faultVersion, and a null fixture/actual/trace/screen/
+    // selfReport throws on the way in. Each must cost one row, not the batch.
+    const bad: readonly [string, Record<string, unknown>][] = [
+      ["actual null", { actual: null }],
+      [
+        "actual throws",
+        {
+          actual: new Proxy(
+            {},
+            {
+              get: () => {
+                throw new Error("trap");
+              },
+            },
+          ),
+        },
+      ],
+      ["faultVersion -1", { faultVersion: -1 }],
+      ["faultVersion string", { faultVersion: "x" }],
+      ["trace null", { trace: null }],
+      ["trace has null", { trace: [null] }],
+      ["fixture null", { fixture: null }],
+      ["screen null", { screen: null }],
+      ["selfReport null", { selfReport: null }],
+    ];
+    for (const [name, patch] of bad) {
+      const malformed = { ...input, ...patch } as never;
+      let threw = false;
+      let row: ReturnType<typeof scoreDiscoveryTrial> | undefined;
+      try {
+        row = scoreDiscoveryTrial(evidence, malformed, settings, attest({} as never));
+      } catch {
+        threw = true;
+      }
+      // The property is "never throws", not "always excluded": a row that can still be
+      // scored should be. What must never happen is a throw that costs the batch.
+      expect(threw, `${name} threw out of the scorer`).toBe(false);
+      expect(row, `${name} produced no row`).toBeDefined();
+      expect(row?.decisionEligible).toBe(false);
+    }
+  });
+
+  it("R6 round 3 finding 1: one bad row does not abort the batch", () => {
+    const comparison = createDiscoveryComparison(settings, refuseAll);
+    const rows = comparison([
+      { evidence, input },
+      { evidence, input: { ...input, faultVersion: -1 } as never },
+      { evidence, input },
+    ]);
+    expect(rows).toHaveLength(3);
+    expect(rows[1]?.status).toBe("excluded");
+    expect(rows[0]?.status).toBe("scored");
+    expect(rows[2]?.status).toBe("scored");
+
+    // The attester is caller-supplied, so it can throw too. That must cost one row.
+    let calls = 0;
+    const flaky = () => {
+      calls += 1;
+      if (calls === 2) throw new Error("attester trap");
+      return attest({} as never);
+    };
+    const withFlaky = createDiscoveryComparison(
+      settings,
+      flaky,
+    )([
+      { evidence, input },
+      { evidence, input },
+      { evidence, input },
+    ]);
+    expect(withFlaky).toHaveLength(3);
+    expect(withFlaky[1]?.decisionEligible).toBe(false);
+    expect(withFlaky[2]?.status).toBe("scored");
+  });
+
   it("R6 round 2 finding 2: the comparison attests every row it scores", () => {
     // The gate must run on real rows, not only in tests that call attest() by hand. A
     // comparison that skipped it would produce rows that look scored but were never

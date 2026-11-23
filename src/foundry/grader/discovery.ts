@@ -194,6 +194,41 @@ export function scoreDiscoveryTrial(
   comparisonSettings: PlannerSettings,
   attestation?: Attestation,
 ) {
+  // TOTAL. A malformed row is refused, never fatal: one bad row must not abort the batch.
+  // `scoreTrial` throws on an invalid faultVersion, and a null `fixture`, `actual`, `trace`,
+  // `screen` or `selfReport` throws on the way in, so the whole body is guarded rather than
+  // each field (R6 round 3, finding 1).
+  try {
+    return scoreDiscoveryTrialUnsafe(evidence, input, comparisonSettings, attestation);
+  } catch {
+    return {
+      armId: safeField(evidence, "armId"),
+      taskId: safeField(evidence, "taskId"),
+      promptHash: safeField(evidence, "promptHash"),
+      planner: undefined,
+      status: "excluded" as const,
+      decisionEligible: false,
+      reason: "malformed" as const,
+    };
+  }
+}
+
+/** Read an identity field without letting a hostile accessor escape as a throw. */
+function safeField(evidence: unknown, key: string): string {
+  try {
+    const value = (evidence as Record<string, unknown> | null | undefined)?.[key];
+    return typeof value === "string" ? value : "(unreadable)";
+  } catch {
+    return "(unreadable)";
+  }
+}
+
+function scoreDiscoveryTrialUnsafe(
+  evidence: DiscoveryTrialEvidence,
+  input: Omit<TrialInput, "intent">,
+  comparisonSettings: PlannerSettings,
+  attestation?: Attestation,
+) {
   const { armId, taskId, promptHash, planner } = evidence;
   const identity = { armId, taskId, promptHash, planner };
   if (evidence.status === "quota-exhausted")
@@ -337,7 +372,15 @@ export function createDiscoveryComparison(
   ) => {
     const results: ReturnType<typeof scoreDiscoveryTrial>[] = [];
     for (const { evidence, input } of trials) {
-      const trial = scoreDiscoveryTrial(evidence, input, pinnedSettings, attester(evidence, input));
+      // The attester is caller-supplied, so it can throw too. A throw there must cost one
+      // row, not the batch.
+      let attestation: Attestation | undefined;
+      try {
+        attestation = attester(evidence, input);
+      } catch {
+        attestation = undefined;
+      }
+      const trial = scoreDiscoveryTrial(evidence, input, pinnedSettings, attestation);
       results.push(trial);
       if (trial.status === "paused") break;
     }

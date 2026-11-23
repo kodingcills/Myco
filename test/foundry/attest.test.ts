@@ -489,6 +489,27 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     }
   });
 
+  it("R6 round 3 finding 2: the attestation is deeply frozen", async () => {
+    const run = await finishedRun();
+    const att = attest(baseInput(run));
+    expect(Object.isFrozen(att.blockers), "blockers array is frozen").toBe(true);
+    expect(Object.isFrozen(att.accepted), "accepted array is frozen").toBe(true);
+    expect(Object.isFrozen(att.unexpectedFiles), "unexpectedFiles array is frozen").toBe(true);
+    // The observations are copies, not the caller's objects.
+    if (att.accepted.length > 0) {
+      expect(Object.isFrozen(att.accepted[0]), "an accepted observation is frozen").toBe(true);
+      expect(() => {
+        (att.accepted[0] as { sha256: string }).sha256 = "x";
+      }).toThrow();
+    }
+    // Clearing blockers must not be possible: "empty iff eligible" depends on it.
+    const refused = attest({} as never);
+    expect(() => {
+      (refused.blockers as string[]).length = 0;
+    }).toThrow();
+    expect(refused.blockers.length).toBeGreaterThan(0);
+  });
+
   it("R6 round 2 finding 4: the returned attestation is frozen", async () => {
     const run = await finishedRun();
     const att = attest(baseInput(run));

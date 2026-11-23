@@ -356,11 +356,13 @@ export function attest(input: AttestInput): Attestation {
     return Object.freeze({
       [attestedBrand]: true as const,
       eligible: false,
-      blockers: ["input: malformed, could not be evaluated (the input could not be read)"],
+      blockers: Object.freeze([
+        "input: malformed, could not be evaluated (the input could not be read)",
+      ]),
       observerId: "(unreadable)",
-      accepted: [],
+      accepted: Object.freeze([]),
       screenConstrained: false,
-      unexpectedFiles: [],
+      unexpectedFiles: Object.freeze([]),
       resolvedFixtureId: null,
       binding: null,
     });
@@ -562,7 +564,18 @@ function attestOrRefuse(input: AttestInput): Attestation {
       blockers.push(`observer: ${path} length disagrees with the observation`);
       continue;
     }
-    accepted.push(observation);
+    // Copy into frozen primitives. `accepted` held the caller's own observation objects, so
+    // mutating one after attest() changed what the attestation reported (R6 round 3,
+    // finding 2).
+    accepted.push(
+      Object.freeze({
+        path: observation.path,
+        sha256: observation.sha256,
+        bytes: observation.bytes,
+        observedAt: observation.observedAt,
+        afterLastSave: observation.afterLastSave,
+      }),
+    );
   }
 
   // 3a. The observer must be one this gate can vouch for. Deny by default: `observerId` is
@@ -630,11 +643,13 @@ function attestOrRefuse(input: AttestInput): Attestation {
   return Object.freeze({
     [attestedBrand]: true as const,
     eligible: blockers.length === 0,
-    blockers,
+    // Freeze the arrays too: Object.freeze is shallow, so a caller could clear `blockers`
+    // and break "empty iff eligible" (R6 round 3, finding 2).
+    blockers: Object.freeze([...blockers]),
     observerId: safeObserverId(input),
-    accepted,
+    accepted: Object.freeze([...accepted]),
     screenConstrained,
-    unexpectedFiles: unexpected,
+    unexpectedFiles: Object.freeze([...unexpected]),
     resolvedFixtureId: resolved?.fixture.fixtureId ?? null,
     // Copy the binding into frozen primitives. Returning the caller's own object let a
     // caller mutate it, or define a getter that answers honestly for the gate and
