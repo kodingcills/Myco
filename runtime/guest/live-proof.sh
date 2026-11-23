@@ -24,6 +24,29 @@ cd "$WORKSPACE" || exit 1
 
 say() { printf '\n=== %s\n' "$*"; }
 
+# TIF-163: is a guest running? `pgrep -f qemu-system-aarch64` is NOT the answer —
+# UTM runs the guest as QEMULauncher and the qemu binary name appears only in that
+# process's arguments, so the narrow pattern reads 0 while a guest is live. Prefer
+# the shared check; fall back to an argv[0]-basename scan so this script works even
+# where `scripts/vm-state.sh` is not on PATH.
+# Fails CLOSED: if the host cannot be read, report running.
+vm_state_running() {
+  if [[ -x "$WORKSPACE/scripts/vm-state.sh" ]]; then
+    "$WORKSPACE/scripts/vm-state.sh" --quiet
+    # 0 running, 1 idle, 2 unknown -> treat unknown as running
+    [[ $? -eq 1 ]] && return 1 || return 0
+  fi
+  local table
+  table="$(ps -Ao command)" || return 0
+  [[ -n "$table" ]] || return 0
+  # The same identity set as scripts/vm-state.sh. Matching only
+  # qemu-system-aarch64 here would reintroduce exactly the bug this replaces:
+  # a readable table containing UTM's QEMULauncher would read as idle.
+  awk '{n = split($1, a, "/"); b = a[n]
+        if (b == "qemu-system-aarch64" || b == "QEMULauncher" ||
+            b == "qemu-aarch64-softmmu" || b == "qemu-system-aarch64-headless") found = 1} END {exit !found}' <<<"$table"
+}
+
 # This script boots a VM. It must never run by accident: the host is shared with
 # other workstreams and a stray guest measurably degrades their runs. Require an
 # explicit --go, and say why.
@@ -43,8 +66,8 @@ fail() { printf '\nFAILED: %s\n' "$*" >&2; "$GUEST_DIR/shutdown.sh" >/dev/null 2
 cleanup() {
   say "shutting the guest down"
   "$GUEST_DIR/shutdown.sh" 2>&1 | tail -1
-  if pgrep -f qemu-system-aarch64 >/dev/null; then
-    echo "WARNING: qemu still running after shutdown" >&2
+  if vm_state_running; then
+    echo "WARNING: a guest is still running after shutdown" >&2
   else
     echo "OK: no qemu process remains"
   fi
@@ -58,7 +81,7 @@ say "0/7 preflight (fail in seconds, not after a boot)"
   || fail "guest private key missing (gitignored): see runtime/guest/keys/README.md, then re-provision"
 command -v qemu-system-aarch64 >/dev/null || fail "qemu-system-aarch64 not on PATH"
 command -v cargo >/dev/null || fail "cargo not on PATH"
-if pgrep -f qemu-system-aarch64 >/dev/null; then
+if vm_state_running; then
   fail "a guest is already running; another workstream may hold the host"
 fi
 echo "OK: image, key, qemu, cargo present; no guest running"
