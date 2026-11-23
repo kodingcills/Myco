@@ -8,6 +8,22 @@ Restarted thread. Preflight done; #315 amended (test-only) and pushed. Head `53d
 **round-2 verifier `LauncherPRVerifierR2` is running on it**; CI on that head is in
 progress. The 11:29 merge GO was **voided** by the outer loop at 11:37.
 
+### 12:2x ET — ROUND 2 PASS
+
+`LauncherPRVerifierR2` at `53d8a12` (worktree `0cf8165`, HANDOFF.md-only diff; the three
+in-scope files hash identical): **correct, confidence 0.90, no patch-introduced defect.**
+It ran the Linux/dash leg itself (node:24-bookworm-slim, `/bin/sh -> /usr/bin/dash`) and
+macOS, 7/7 on both, **0 `sleep 297` survivors on either**; the negative control still fails
+`expected 2 to be 1`; launcher restored to hash `9382150f`; `scripts/s0-live.sh:178` still
+claims with `mkdir "$LOCK_DIR"`; the b92ee9f diff is 17 lines, only 4 non-comment (the
+`qemu_running` four-name set from #313).
+
+**CI on `0cf8165`: 4/5 green** — `check (ubuntu-latest)` **SUCCESS** (the dash leg on real
+CI), both `myco-agent` jobs SUCCESS, `runtime guest agent tests` SUCCESS. Only
+`check (macos-latest)` still QUEUED. `viewer verdict budget` is SKIPPED by design.
+
+**Merge condition = round-2 PASS ✓ + 5/5 green CI (waiting on the last job).**
+
 ### 12:0x ET — round-2 fix: the stub records its sleeper (portable)
 
 The outer loop voided the `2f9c640` shebang patch and asked for the portable form: the
