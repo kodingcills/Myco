@@ -90,25 +90,32 @@ class TodoApp:
             self.publish_state()
 
     @staticmethod
-    def widget_center(widget, toplevel) -> dict[str, int] | None:
-        """Centre of `widget` in `toplevel`-relative coordinates, or None.
+    def widget_center(widget) -> dict[str, int] | None:
+        """Centre of `widget` in SCREEN coordinates, or None.
 
         A driver that cannot reach an app through accessibility (Tk registers
         zero AT-SPI nodes) still needs a point to click to move focus. The
-        runtime's `clickAt` takes guest screen coordinates and this record is
-        read by the runner, so publish the centre point plus the size.
+        runtime's `clickAt` takes **guest screen coordinates** — "origin is
+        top-left of the primary display" (xa11y `Point`), and the agent passes
+        them straight to XTest — so this must be screen-absolute.
+
+        `winfo_rootx()`/`winfo_rooty()` are already screen-absolute. Do NOT
+        subtract the toplevel's origin: that yields a window-relative point,
+        which `clickAt` would interpret as a screen point and land somewhere
+        else entirely (usually the title bar or another window), silently.
 
         Recomputed on every publish: geometry is not final until the window
-        maps, and changes on resize. Returns None while unmapped (width or
-        height 1) so a consumer cannot click a not-yet-placed pixel.
+        maps, and changes on resize or a window-manager move. Returns None
+        while unmapped (width or height <= 1) so a consumer cannot click a
+        not-yet-placed pixel.
         """
         try:
             width, height = widget.winfo_width(), widget.winfo_height()
             if width <= 1 or height <= 1:
                 return None
             return {
-                "x": widget.winfo_rootx() - toplevel.winfo_rootx() + width // 2,
-                "y": widget.winfo_rooty() - toplevel.winfo_rooty() + height // 2,
+                "x": widget.winfo_rootx() + width // 2,
+                "y": widget.winfo_rooty() + height // 2,
                 "width": width,
                 "height": height,
             }
@@ -126,8 +133,8 @@ class TodoApp:
             # TIF-122: the runner's global route needs click targets. Without
             # these it gaps on REQ-03 with "no entry_field geometry" even when
             # the introspection channel is wired.
-            "entry_field": self.widget_center(self.entry, self.toplevel),
-            "save_button": self.widget_center(self.save_button, self.toplevel),
+            "entry_field": self.widget_center(self.entry),
+            "save_button": self.widget_center(self.save_button),
         }
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=self.state_file.parent, delete=False

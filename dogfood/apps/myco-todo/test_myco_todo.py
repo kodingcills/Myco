@@ -33,17 +33,33 @@ class WidgetCenterTest(unittest.TestCase):
         def winfo_height(self):
             return self._height
 
-    def test_centre_is_relative_to_the_toplevel(self):
-        toplevel = self.FakeWidget(100, 200, 420, 360)
+    def test_centre_is_screen_absolute(self):
+        """`clickAt` takes screen coordinates, so the centre must be too.
+
+        A widget at screen (108, 208) sized 300x24 has its centre at
+        (108+150, 208+12) = (258, 220) on the display. Subtracting a toplevel
+        origin here would publish a window-relative point that `clickAt` reads
+        as a screen point, landing the click somewhere else entirely.
+        """
         entry = self.FakeWidget(108, 208, 300, 24)
-        self.assertEqual(myco_todo.TodoApp.widget_center(entry, toplevel),
-                         {"x": 8 + 150, "y": 8 + 12, "width": 300, "height": 24})
+        self.assertEqual(myco_todo.TodoApp.widget_center(entry),
+                         {"x": 258, "y": 220, "width": 300, "height": 24})
+
+    def test_centre_does_not_subtract_a_window_origin(self):
+        """Regression: a non-zero window origin must not shift the result.
+
+        The bug this guards published `rootx - toplevel_rootx + w//2`. With a
+        window at screen (100, 85) that produced (194, 19) instead of the true
+        screen point (294, 104) — a click on the title bar, silently.
+        """
+        widget = self.FakeWidget(294 - 150, 104 - 12, 300, 24)   # centre (294, 104)
+        self.assertEqual(myco_todo.TodoApp.widget_center(widget)["x"], 294)
+        self.assertEqual(myco_todo.TodoApp.widget_center(widget)["y"], 104)
 
     def test_unmapped_widget_has_no_centre(self):
-        toplevel = self.FakeWidget(0, 0, 420, 360)
         for width, height in ((1, 24), (300, 1), (0, 0)):
             widget = self.FakeWidget(0, 0, width, height)
-            self.assertIsNone(myco_todo.TodoApp.widget_center(widget, toplevel),
+            self.assertIsNone(myco_todo.TodoApp.widget_center(widget),
                               f"{width}x{height} is not mapped")
 
     def test_broken_widget_does_not_raise(self):
@@ -51,7 +67,7 @@ class WidgetCenterTest(unittest.TestCase):
             def winfo_rootx(self):
                 raise RuntimeError("gone")
 
-        self.assertIsNone(myco_todo.TodoApp.widget_center(Broken(), self.FakeWidget(0, 0, 1, 1)))
+        self.assertIsNone(myco_todo.TodoApp.widget_center(Broken()))
 
 
 class TodoGuiTest(unittest.TestCase):
