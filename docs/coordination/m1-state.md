@@ -149,7 +149,9 @@ it". Measured, from `rows/*.json`:
   357 / 18; that did not reproduce. The arm was still running, so treat any
   count here as a snapshot and re-derive it from the ledger.)
 - `modified` was the plurality of refutations (16, vs `step-budget` 7 and
-  `persisted-mismatch` 5) — correct value typed, never saved
+  `persisted-mismatch` 6) — all 16 ended `planner-no-action` with empty `claims`, and
+  **only 1 of the 16 had typed the expected value**; the other 15 typed a cell
+  reference. Not "correct value typed, never saved" — that reading was retracted.
   (`c1-judge.ts:32`: document left open).
 - 296 of 308 clicks landed in a 10-px band at y=146 — the Name Box, one element,
   not a spread of cell attempts.
