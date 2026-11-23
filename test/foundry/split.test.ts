@@ -87,7 +87,14 @@ describe("TIF-95: the attestation gate is not reachable from arm code", () => {
   it("no arm-facing file imports the attestation gate", () => {
     const leaks = ARM_FACING.filter((file) => {
       if (!statSync(file).isFile()) return false;
-      return /from\s+["'][^"']*grader\/attest/.test(readFileSync(file, "utf8"));
+      const source = readFileSync(file, "utf8");
+      // Static import, dynamic import, and require all count: a boundary that only catches
+      // `from "..."` is a boundary an arm can step around with `await import(...)`.
+      return (
+        /from\s+["'][^"']*grader\/attest/.test(source) ||
+        /import\s*\(\s*["'][^"']*grader\/attest/.test(source) ||
+        /require\s*\(\s*["'][^"']*grader\/attest/.test(source)
+      );
     });
     expect(leaks).toEqual([]);
   });

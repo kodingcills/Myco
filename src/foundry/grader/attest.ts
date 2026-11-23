@@ -26,6 +26,8 @@
  */
 
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { RecordedTrialEvidence } from "../baseline/recorder.ts";
 import { commitment, fixtureHash, type HiddenFixture } from "../hidden-split/index.ts";
 import type { GuardTraceEvent, ScreenView } from "../types.ts";
@@ -93,11 +95,6 @@ export interface AttestInput {
   readonly screen: ScreenView;
   /** The observer that produced `observations`, so the result can name it. */
   readonly observerId: string;
-  /**
-   * The trusted commitment, loaded from `foundry/hidden-commitment.json`. The gate verifies
-   * the supplied hidden set against it, so a caller cannot substitute a set of its own.
-   */
-  readonly trustedCommitment: ReturnType<typeof commitment>;
   /** The hidden fixtures the run claims to have used. */
   readonly hiddenFixtures: readonly HiddenFixture[];
   /** The fixture hash the run claims. The gate resolves the fixture from this. */
@@ -106,7 +103,14 @@ export interface AttestInput {
   readonly screenObserved: boolean;
 }
 
+const attestedBrand: unique symbol = Symbol("myco.attestation");
+
 export interface Attestation {
+  /**
+   * Brand: only `attest()` can produce an `Attestation`. Without it, a caller could hand
+   * `scoreDiscoveryTrial` a literal `{ eligible: true }` and skip the gate entirely.
+   */
+  readonly [attestedBrand]: true;
   readonly eligible: boolean;
   /** Every reason the run is not eligible. Empty iff `eligible`. */
   readonly blockers: readonly string[];
@@ -127,20 +131,63 @@ export interface Attestation {
  * Strict by construction: an empty blocker list is the only path to `eligible: true`, and
  * every check below can only add a blocker. There is no "assume fine" branch.
  */
-export function attest(input: AttestInput): Attestation {
+export interface AttestOptions {
+  /** Path to the committed commitment. Defaults to the repo's own file. */
+  readonly commitmentPath?: string;
+}
+
+/** Reads the committed commitment, or null when it is absent or malformed. */
+function readTrustedCommitment(path: string): ReturnType<typeof commitment> | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!parsed || typeof parsed !== "object" || !("commitment" in parsed)) return null;
+    const value = parsed.commitment;
+    if (!value || typeof value !== "object") return null;
+    if (
+      !("rootHash" in value) ||
+      typeof value.rootHash !== "string" ||
+      !("count" in value) ||
+      typeof value.count !== "number" ||
+      !("hiddenSplitVersion" in value) ||
+      typeof value.hiddenSplitVersion !== "number" ||
+      !("perFixtureHash" in value) ||
+      !Array.isArray(value.perFixtureHash)
+    )
+      return null;
+    return {
+      hiddenSplitVersion: value.hiddenSplitVersion,
+      count: value.count,
+      rootHash: value.rootHash,
+      perFixtureHash: value.perFixtureHash as string[],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function attest(input: AttestInput, options: AttestOptions = {}): Attestation {
   const blockers: string[] = [];
   const { evidence, observations, finalFiles } = input;
 
   // Option 1: the fixture is resolved from the commitment, never taken from the caller.
   // A caller-supplied fixture could keep the real id and name a benign file; a fixture
   // resolved from a commitment-verified set cannot.
+  // The trusted commitment is READ FROM THE COMMITTED FILE, never taken from the caller.
+  // A caller-supplied commitment is not a commitment: it would let a forged set vouch for
+  // itself, which is the hole this option exists to close.
+  const trusted = readTrustedCommitment(
+    options.commitmentPath ?? join(process.cwd(), "foundry", "hidden-commitment.json"),
+  );
   const supplied = commitment(input.hiddenFixtures);
-  const commitmentMatches =
-    supplied.rootHash === input.trustedCommitment.rootHash &&
-    supplied.count === input.trustedCommitment.count &&
-    supplied.hiddenSplitVersion === input.trustedCommitment.hiddenSplitVersion;
-  if (!commitmentMatches)
-    blockers.push("commitment: the supplied hidden set does not match the trusted commitment");
+  if (trusted === null) {
+    blockers.push("commitment: the committed commitment could not be read");
+  } else if (
+    supplied.rootHash !== trusted.rootHash ||
+    supplied.count !== trusted.count ||
+    supplied.hiddenSplitVersion !== trusted.hiddenSplitVersion
+  ) {
+    blockers.push("commitment: the supplied hidden set does not match the committed commitment");
+  }
 
   const resolved = input.hiddenFixtures.find(
     (candidate) => fixtureHash(candidate) === input.claimedFixtureHash,
@@ -265,6 +312,7 @@ export function attest(input: AttestInput): Attestation {
   }
 
   return {
+    [attestedBrand]: true as const,
     eligible: blockers.length === 0,
     blockers,
     observerId: input.observerId,
