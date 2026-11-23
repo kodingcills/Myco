@@ -1,0 +1,351 @@
+{
+  "index": 1,
+  "params": {
+    "fixtureSeed": "seed-b",
+    "rowKey": "EMP-0023",
+    "column": "qty",
+    "newValue": "9733"
+  },
+  "cellRef": "C24",
+  "expected": "9733",
+  "previousValue": "142",
+  "subArm": "c1",
+  "instruction": "Set the cell at record EMP-0023, column qty, to \"9733\", and save the file.",
+  "verdict": "refuted",
+  "verdictReason": "modified",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 75,
+          "y": 146,
+          "text": "A24\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "C24\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      }
+    ],
+    "claims": [],
+    "deliveries": [
+      {
+        "step": 1,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 2,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 3,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 4,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 5,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 6,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 7,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 8,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 9,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 10,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 11,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 12,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 13,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 14,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 15,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      }
+    ]
+  },
+  "usage": [
+    {
+      "prompt": 567,
+      "completion": 140,
+      "cost": 0.002534
+    },
+    {
+      "prompt": 567,
+      "completion": 223,
+      "cost": 0.003364
+    },
+    {
+      "prompt": 567,
+      "completion": 244,
+      "cost": 0.003574
+    },
+    {
+      "prompt": 567,
+      "completion": 177,
+      "cost": 0.002904
+    },
+    {
+      "prompt": 567,
+      "completion": 163,
+      "cost": 0.002764
+    },
+    {
+      "prompt": 567,
+      "completion": 217,
+      "cost": 0.003304
+    },
+    {
+      "prompt": 567,
+      "completion": 127,
+      "cost": 0.002404
+    },
+    {
+      "prompt": 567,
+      "completion": 187,
+      "cost": 0.003004
+    },
+    {
+      "prompt": 567,
+      "completion": 143,
+      "cost": 0.002564
+    },
+    {
+      "prompt": 567,
+      "completion": 207,
+      "cost": 0.003204
+    },
+    {
+      "prompt": 567,
+      "completion": 154,
+      "cost": 0.002674
+    },
+    {
+      "prompt": 567,
+      "completion": 228,
+      "cost": 0.003414
+    },
+    {
+      "prompt": 567,
+      "completion": 230,
+      "cost": 0.003434
+    },
+    {
+      "prompt": 567,
+      "completion": 223,
+      "cost": 0.003364
+    },
+    {
+      "prompt": 567,
+      "completion": 230,
+      "cost": 0.003434
+    },
+    {
+      "prompt": 567,
+      "completion": 256,
+      "cost": 0.003694
+    }
+  ],
+  "cost": 0.049634000000000005,
+  "tokens": {
+    "in": 9072,
+    "out": 3149
+  },
+  "modelCalls": 16,
+  "steps": 15,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 78621,
+  "resetMs": 190233,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 9.19921875
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "cua-action-1-verified:false",
+    "cua-action-2-verified:false",
+    "cua-action-3-verified:false",
+    "cua-action-4-verified:false",
+    "cua-action-5-verified:false",
+    "cua-action-6-verified:false",
+    "cua-action-7-verified:false",
+    "cua-action-8-verified:false",
+    "cua-action-9-verified:false",
+    "cua-action-10-verified:false",
+    "cua-action-11-verified:false",
+    "cua-action-12-verified:false",
+    "cua-action-13-verified:false",
+    "cua-action-14-verified:false",
+    "cua-action-15-verified:false",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}
