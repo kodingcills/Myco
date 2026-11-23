@@ -353,6 +353,24 @@ that subset safe (TOCTOU, throws, freeze). The rest is here, with a fresh round 
   wiring still incomplete; one vacuous scorer assertion. Round 3 verified the three safety
   fixes at `7effe5f`. **Do not re-litigate the safety fixes** — they are verified; this issue
   is coverage and wiring only.
+- **round-3 findings, dropped here so #253 can ship.** Round 3 rejected at `7effe5f` with two
+  in-scope findings. Both are deferred rather than fixed, because the cap forbids a fourth
+  round and neither is a security hole while the flag is `false`:
+  1. **The scorer is not total.** `scoreTrial` is called unguarded at `discovery.ts:248`, and
+     `blind.ts:47-48` throws on an invalid `faultVersion`. A throwing or null `input.actual`,
+     `faultVersion: -1` or `"x"`, a null `trace` or trace event, or a null `fixture`, `screen`
+     or `selfReport` throws out of `scoreDiscoveryTrial`, and
+     `createDiscoveryComparison([good, bad, good])` loses the whole batch. **This predates
+     #253** — `blind.ts` is unchanged by it — and the failure is closed: no row becomes
+     eligible, it only kills availability. Fix: wrap the body of `scoreDiscoveryTrial`, or
+     each iteration of the batch loop, so a throw becomes an `excluded` row.
+  2. **The freeze is shallow.** `Object.freeze` does not reach `blockers`, `accepted` or
+     `unexpectedFiles`, and `accepted` holds the caller's own observation objects. Clearing
+     `blockers` breaks the "empty iff eligible" invariant at `attest.ts:227`; mutating
+     `accepted[0].sha256` succeeds after `attest()`. Inert today because the flag is off and
+     the scorer does not surface those fields, but `discovery.ts:309` forwards `blockers` by
+     reference and `:312` reports `accepted` once the flag flips. Fix: freeze the arrays and
+     copy the observations, as the binding fix already does.
 - **known trap for the mutation runner.** A mutant that fails to compile is not a kill. Two
   of the author's own probes were wrong this way: a Proxy that returned a forged fixture to
   `.find` was refused for the wrong reason (the hash no longer matched), and a `try`-removal
