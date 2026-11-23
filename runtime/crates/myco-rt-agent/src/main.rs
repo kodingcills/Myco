@@ -116,7 +116,7 @@ fn main() {
                 };
                 let mut ops = vec!["ping", "observe", "shutdown", "launch_process", "kill_process", "relaunch_process"];
                 if cfg!(target_os = "linux") {
-                    ops.extend(["grant_read", "read_file"]);
+                    ops.extend(["grant_read", "read_file", "write_file"]);
                 }
                 let _ = writeln!(
                     stdout,
@@ -242,6 +242,33 @@ fn main() {
                         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no file grant")
                     })?;
                     Ok(serde_json::json!(grant.read(request_path(&req, "path")?)?))
+                })();
+                send_result(&mut stdout, op, result);
+            }
+            #[cfg(target_os = "linux")]
+            "write_file" => {
+                let result = (|| {
+                    let grant = grant.as_ref().ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no file grant")
+                    })?;
+                    let path = request_path(&req, "path")?;
+                    // Size-check before converting the array. This bounds only the
+                    // copy and the Vec<u8>: the request line has already been read
+                    // and parsed whole by the loop above, so the real bound on an
+                    // oversize request is the host's 1 MiB cap (MCP + transport).
+                    let len = req.get("content").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+                    if len > file_grant::WRITE_LIMIT {
+                        return Err(std::io::Error::other("content exceeds 1 MiB limit"));
+                    }
+                    // Bytes arrive as a JSON array of numbers, the same encoding
+                    // `read_file` sends them in — no new wire format, and symmetric
+                    // with the read a caller confirms the write with.
+                    let bytes: Vec<u8> = serde_json::from_value(
+                        req.get("content").cloned().unwrap_or(serde_json::Value::Null),
+                    )
+                    .map_err(|e| std::io::Error::other(format!("content must be a byte array: {e}")))?;
+                    grant.write(&path, &bytes)?;
+                    Ok(serde_json::json!({"bytes_written": bytes.len()}))
                 })();
                 send_result(&mut stdout, op, result);
             }

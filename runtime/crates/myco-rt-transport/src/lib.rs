@@ -9,6 +9,18 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Report only the byte count the agent confirmed; never assume the full length.
+fn confirmed_bytes_written(reply: &serde_json::Value) -> Result<usize, TransportError> {
+    reply
+        .get("bytes_written")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .ok_or_else(|| TransportError::Protocol("write_file reply has no bytes_written".into()))
+}
+
+/// Largest `write_file` payload, matching the agent's cap and `read_file`'s.
+pub const WRITE_LIMIT: usize = 1024 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("spawn failed: {0}")]
@@ -269,6 +281,19 @@ impl Channel {
         self.extension("read_file", serde_json::json!({"path": path}))
     }
 
+    /// RT-017: write bytes to a grant-relative guest file path. Bytes travel as a
+    /// JSON array of numbers, the same encoding `read_file` uses.
+    pub fn write_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, TransportError> {
+        if bytes.len() > WRITE_LIMIT {
+            return Err(TransportError::Protocol("write_file content exceeds 1 MiB limit".into()));
+        }
+        let resp: serde_json::Value = self.extension(
+            "write_file",
+            serde_json::json!({"path": path, "content": bytes}),
+        )?;
+        confirmed_bytes_written(&resp)
+    }
+
     pub fn launch_process(&mut self, command: &str, args: &[String]) -> Result<String, TransportError> {
         self.extension("launch_process", serde_json::json!({"command": command, "args": args}))
     }
@@ -389,6 +414,64 @@ mod tests {
         std::fs::write(dir.join("blob"), &blob).unwrap();
         assert_eq!(ch.read_file("blob").unwrap(), blob);
 
+        ch.shutdown().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn write_reply_without_bytes_written_is_an_error() {
+        assert_eq!(confirmed_bytes_written(&serde_json::json!({"bytes_written": 3})).unwrap(), 3);
+        assert!(confirmed_bytes_written(&serde_json::json!({})).is_err(), "must not assume a length");
+        assert!(confirmed_bytes_written(&serde_json::json!({"bytes_written": "3"})).is_err());
+    }
+
+    /// RT-017 end to end through the REAL agent over the wire: grant, write,
+    /// read back, replace with shorter content, refuse over the cap, refuse
+    /// without a grant. Catches a renamed wire field or a dropped reply field,
+    /// which unit tests on either side cannot. Linux-only (the agent's grant is).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn file_write_over_control_channel_round_trips_through_the_agent() {
+        let dir = std::env::temp_dir().join(format!("myco-channel-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+
+        let mut ch = Channel::spawn(agent_command("s3cret"), "s3cret").unwrap();
+        assert!(ch.write_file("f", b"x").is_err(), "no grant, no write");
+        assert!(!dir.join("f").exists());
+        ch.grant_read(dir.to_str().unwrap()).unwrap();
+
+        let blob: Vec<u8> = vec![0, 1, 254, 255, 42];
+        assert_eq!(ch.write_file("f", &blob).unwrap(), blob.len(), "agent confirms the count");
+        assert_eq!(ch.read_file("f").unwrap(), blob, "bytes survive the wire both ways");
+        assert_eq!(std::fs::read(dir.join("f")).unwrap(), blob);
+
+        assert_eq!(ch.write_file("f", b"z").unwrap(), 1);
+        assert_eq!(ch.read_file("f").unwrap(), b"z", "a shorter write truncates");
+
+        assert!(ch.write_file("../escape", b"x").is_err());
+        assert!(ch.write_file("big", &vec![0u8; WRITE_LIMIT + 1]).is_err(), "transport cap");
+        assert!(!dir.join("big").exists());
+
+        ch.shutdown().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The agent's own cap, bypassing the transport's: an oversize raw request
+    /// is refused by the agent, not written.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn agent_refuses_an_oversize_write_on_its_own() {
+        let dir = std::env::temp_dir().join(format!("myco-channel-bigwrite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let mut ch = Channel::spawn(agent_command("s3cret"), "s3cret").unwrap();
+        ch.grant_read(dir.to_str().unwrap()).unwrap();
+        let resp = ch
+            .roundtrip(serde_json::json!({"op": "write_file", "path": "big", "content": vec![0u8; WRITE_LIMIT + 1]}))
+            .unwrap();
+        assert_ne!(resp["ok"], true, "agent must refuse: {resp}");
+        assert!(!dir.join("big").exists());
         ch.shutdown().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
