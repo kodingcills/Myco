@@ -73,6 +73,15 @@ Committed to date, measured from the ledgers:
 | `c1-arm2/accounting.json` (finished) | **$1.555362 charged** ($1.178562 actually spent across the 29 scored rows; $0.376800 is row 9's reservation, never spent but booked) |
 | **Total committed** | read from `report.json.c1ChargedMicros` and the spike: **$1.632162** today (spike $0.076800 + arm-002 $1.555362). Recompute it from those two files rather than trusting this cell — the pre-existing "≈$1.11" (and its $1.0344 input) were mid-run snapshots |
 
+**Which number the cap test uses: the booked figure, $1.555362 — not the cash
+figure, $1.178562.** The cap is enforced by `charged()` in
+`src/baseline/sweep.ts`, which sums `micros` across **every** ledger entry
+regardless of status: scored, omitted and reserved alike. An omitted trial made
+real API calls before it died, and a reserved row holds a live reservation, so
+scored-only would under-report by exactly the amount that matters near a cap.
+Quoting $1.18 unqualified is wrong; it is cash spent, not spend booked against
+the cap.
+
 Arm-003 runs to a **$9.00 cap on total committed spend**, and arm-002's final cost
 counts toward it. At arm-002's measured rate the remaining headroom is comfortable;
 the cap binds before worst case, which is the intended fail-closed behaviour.
@@ -103,6 +112,36 @@ land, without re-deriving the plan under time pressure.
 
 Wall-clock and load are **not** gates (standing rule: load alone never holds a
 run; power is recorded, never enforced).
+
+### Watching the run
+
+**A stale log is a death, not a pause.** Do not reason from a file that stopped
+growing; treat it as a dead run until proven otherwise.
+
+`scripts/watch-c1-arm.sh` **is on main** (`7db8cec`, updated by `237d406`) and
+fires correctly: verified `silent=25m` → `TRIGGER` → exit 10, and spend over
+limit → exit 9, on both macOS and Linux. Use it. The manual checks below are the
+**backstop**, not the primary mechanism — a watchdog that is itself broken is
+exactly the failure this table catches, and it has been broken twice.
+
+Note the naming trap: `grep -i watchdog` on main finds only Runtime's
+`idle-watchdog.sh`, because this file's name contains no "watchdog". It is the
+C1 watchdog.
+
+| Signal | How | Death looks like |
+|---|---|---|
+| Process alive | `pgrep -f "c1-sweep.ts <dir>"` | no match |
+| Log growing | `wc -c < <dir>/progress.log` every ~5 min | **byte count unchanged across two checks** |
+| Ledger growing | `ls <dir>/trials/c1/*.json | wc -l` | no new row for > 2 trial-times |
+| Spend | `sum(micros)` over `accounting.json` | > $4.00 mid-arm → report immediately |
+| Guest | `tasklist /FI "IMAGENAME eq soffice.bin"` | a leftover after a trial ends |
+
+Two checks five minutes apart with an identical byte count is the trigger. One
+check is not evidence — a cold reset legitimately takes ~180 s with no log
+output, so a single quiet sample is normal and two are not.
+
+If the watchdog lands before the window opens, use it and keep the manual checks
+as the backstop. If it does not, the table above is the whole protocol.
 
 ### Acceptance criteria
 
