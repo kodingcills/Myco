@@ -45,6 +45,12 @@ GUEST_DIR = Path(os.environ.get("MYCO_GUEST_DIR", REPO / "runtime" / "guest"))
 VM_LOCK_PATH = os.environ.get("MYCO_VM_LOCK_PATH", "/tmp/myco-win11.vm.lock")
 APP_PATH = "~/myco-todo/myco_todo.py"
 
+# TIF-120: the guest path the fixture publishes its widget record to and the
+# runtime reads it back from. Passed on `create` (route 1, preferred over
+# gui.env) and set by the runtime as MYCO_TODO_STATE_FILE for apps it launches,
+# so the app writes exactly where `observe` reads.
+INTROSPECTION_PATH = "/tmp/myco-todo-state.json"
+
 # The oracle channel is a seam (`readback`), not a hard-coded ssh call: offline
 # contract tests substitute a stub that models a guest's store. The default is
 # always ssh to the real guest; there is no mode in which a stub is graded as a
@@ -485,7 +491,12 @@ def execute_scenario(
     # --- create ----------------------------------------------------------
     t_create = time.time()
     try:
-        created = mcp.call_tool("create", {"session_id": sid})
+        created = mcp.call_tool("create", {
+            "session_id": sid,
+            # Route 1 (TIF-120): a per-session path wins over gui.env, and the
+            # runtime sets MYCO_TODO_STATE_FILE to it for apps launched via act.
+            "introspection_file": INTROSPECTION_PATH,
+        })
     except McpError as e:
         return gap("REQ-01", f"create failed: {e}")
     create_seconds = time.time() - t_create
@@ -1068,11 +1079,19 @@ def preflight() -> int:
         rc3, st = guest(f"python3 {APP_PATH} --self-test 2>&1 | tail -1")
         record("app-self-test", rc3 == 0 and "self-test OK" in st, st[:80])
 
-        # 6. Introspection channel configured for the session.
-        rc4, env = guest("grep -c MYCO_INTROSPECTION_FILE /run/myco/gui.env 2>/dev/null || echo 0")
-        record("introspection-env", rc4 == 0 and env.strip() not in ("", "0"),
-               "MYCO_INTROSPECTION_FILE present in gui.env" if env.strip() not in ("", "0")
-               else "absent: the app's widget state will be unobservable (REQ-03)")
+        # 6. Introspection channel. The runner now names the path on `create`
+        # (route 1), which wins over gui.env, so the check is that the path is
+        # usable in the guest — not that gui.env happens to carry one.
+        rc4, probe = guest(
+            f"d=$(dirname {INTROSPECTION_PATH}); "
+            "test -d \"$d\" && test -w \"$d\" && echo writable || echo not-writable"
+        )
+        writable = rc4 == 0 and "writable" in probe and "not-writable" not in probe
+        record("introspection-env", writable,
+               f"{INTROSPECTION_PATH} is writable in the guest (route 1, set on create)"
+               if writable else
+               f"{INTROSPECTION_PATH} is not writable in the guest: the app cannot "
+               "publish and observe will report introspection null (REQ-03)")
     else:
         # No guest to ask: record the dependent checks as not-run rather than
         # omitting them, so the summary never claims a count it did not measure.
