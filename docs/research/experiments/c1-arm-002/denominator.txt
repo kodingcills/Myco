@@ -1,0 +1,5 @@
+rows recorded: 30 of 30
+statuses: {'refuted': 29, 'harness-error': 1}
+false successes: 0
+rows with a driver diagnostic: 0
+reasons: {'step-budget': 7, 'modified': 16, 'persisted-mismatch': 6, 'trial-interrupted': 1}
