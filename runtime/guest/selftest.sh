@@ -351,8 +351,8 @@ unhold() { pkill -P "$HOLDER" 2>/dev/null; kill "$HOLDER" 2>/dev/null; wait "$HO
 
 L="$TMP/l18a"; lsand "$L"
 out="$(MYCO_VM_LOCK_PATH="$L/vm.lock" bash "$L/boot.sh" 2>&1)"; rc=$?
-if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$(cut -d' ' -f2 "$L/vm.lock")" == boot.sh ]]; then
-  ok "boot.sh takes the free VM lock before seeding (lock file names boot.sh)"
+if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$(cut -d' ' -f2 "$L/vm.lock")" == boot.sh && "$out" != *"No such file"* ]]; then
+  ok "boot.sh takes the free VM lock before seeding (lock file names boot.sh; no stray error on a fresh host)"
 else bad "boot.sh with a free lock: rc=$rc order=[$(lorder "$L")] lock=[$(cat "$L/vm.lock" 2>/dev/null)] / $out"; fi
 
 L="$TMP/l18b"; lsand "$L"; hold_lock "$L/vm.lock" other-owner
@@ -363,8 +363,8 @@ else bad "boot.sh with a held lock: rc=$rc order=[$(lorder "$L")] / $out"; fi
 
 L="$TMP/l18c"; lsand "$L"
 out="$( export MYCO_VM_LOCK_PATH="$L/vm.lock"; source "$MYCO_VM_LOCK_SCRIPT"; vm_lock_acquire parent-driver >/dev/null 2>&1 && bash "$L/boot.sh" 2>&1 )"; rc=$?
-if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$out" == *"held by the caller"* ]]; then
-  ok "boot.sh boots under a VM lock its ancestor holds, without re-acquiring"
+if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$out" == *"held by the caller"* && "$out" != *"WARNING"* ]]; then
+  ok "boot.sh boots under a VM lock its ancestor holds (inherited fd: no warning), without re-acquiring"
 else bad "boot.sh under an ancestor's lock: rc=$rc order=[$(lorder "$L")] / $out"; fi
 
 L="$TMP/l18d"; lsand "$L"; hold_lock "$L/vm.lock" spoofed-owner
@@ -387,8 +387,8 @@ r = subprocess.run(["bash", os.path.join(d, "boot.sh")], env=env, capture_output
 print(r.stdout + r.stderr); sys.exit(r.returncode)
 PY
 out="$(MYCO_VM_LOCK_PATH="$L/vm.lock" python3 "$L/holder.py" "$L" 2>&1)"; rc=$?
-if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$out" == *"held by the caller"* ]]; then
-  ok "boot.sh boots under a Python holder (df005-runner style, no MYCO_VM_LOCK_OWNER)"
+if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$out" == *"held by the caller"* && "$out" == *"lock was not inherited"* ]]; then
+  ok "boot.sh boots under a Python holder (df005-runner style) and WARNS that the lock ends with it"
 else bad "Python-held lock: rc=$rc order=[$(lorder "$L")] / $out"; fi
 
 L="$TMP/l18f"; lsand "$L"

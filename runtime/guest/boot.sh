@@ -44,8 +44,12 @@ rm -f "$PID_FILE"
 # runtime/ that starts qemu, so taking it here covers provision.sh, smoke.sh,
 # channel-test.sh, live-proof.sh and the Rust backend's create/reset alike.
 #
-# The lock is an flock on fd 9, which qemu inherits when it daemonizes: it stays
-# held for the guest's whole life and is released when the guest exits. A caller
+# When boot.sh takes the lock itself, it is an flock on fd 9, which qemu inherits
+# when it daemonizes: it stays held for the guest's whole life and is released when
+# the guest exits. Under a caller that already holds it, the guest keeps it only
+# if the caller's descriptor was inherited (vm-lock.sh drivers, provision.sh); a
+# Python caller's is close-on-exec (df005-runner.py), so there the lock ends with
+# the caller, and boot.sh prints a WARNING saying so. A caller
 # that already holds the lock (provision.sh --build-agent, a trial driver, or
 # df005-runner.py, which locks from Python) is an ANCESTOR of this process and is
 # recorded as the holder in the lock file ("<pid> <driver>", written by every
@@ -58,7 +62,8 @@ LOCK_HOLDER=""
 lock_held_by_ancestor() {
   local holder p
   local path="${MYCO_VM_LOCK_PATH:-/tmp/myco-win11.vm.lock}"
-  read -r holder _ < "$path" 2>/dev/null || return 1
+  [[ -r "$path" ]] || return 1          # a fresh host has no lock file yet
+  read -r holder _ < "$path" || return 1
   [[ "$holder" =~ ^[0-9]+$ ]] && kill -0 "$holder" 2>/dev/null || return 1
   # The file keeps the last owner's pid after a release, so also prove the lock is
   # HELD right now: a non-blocking flock that succeeds means it is free.
@@ -81,6 +86,26 @@ PY
 }
 if lock_held_by_ancestor; then
   echo "VM lock: held by the caller (pid $LOCK_HOLDER); booting under it."
+  # The guest keeps the lock after the caller exits only if the caller's lock
+  # descriptor reaches qemu, i.e. it was inherited by this process (vm-lock.sh's
+  # fd 9 is; Python's os.open fds are close-on-exec by default, so df005-runner's
+  # is not). Say which, so the "held for the guest's life" property is never
+  # silently assumed (TIF-137 review round 1).
+  if ! python3 - "${MYCO_VM_LOCK_PATH:-/tmp/myco-win11.vm.lock}" <<'PY'
+import os, sys
+target = os.stat(sys.argv[1])
+for name in os.listdir("/dev/fd"):
+    try:
+        if os.path.samestat(os.fstat(int(name)), target):
+            sys.exit(0)          # an inherited descriptor on the lock file: qemu gets it
+    except (OSError, ValueError):
+        pass
+sys.exit(1)
+PY
+  then
+    echo "VM lock WARNING: the caller's lock was not inherited, so this guest is locked only" >&2
+    echo "  while pid $LOCK_HOLDER runs. Destroy the guest before that process exits." >&2
+  fi
 else
   [[ -r "$VM_LOCK_SCRIPT" ]] || { echo "Refusing to boot: cannot take the VM lock ($VM_LOCK_SCRIPT not found)" >&2; exit 1; }
   # shellcheck source=/dev/null
