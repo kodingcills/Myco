@@ -151,10 +151,18 @@ describe("baseline", () => {
     expect(checkPurity("c1", token)).toEqual({ ok: false, code: "element-token", actionIndex: 0 });
     expect(checkPurity("c2", token)).toEqual({ ok: true });
     expect(
-      checkPurity("c1", { actions: [{ tool: "unknown", arguments: {} }], claims: [], deliveries: [] }),
+      checkPurity("c1", {
+        actions: [{ tool: "unknown", arguments: {} }],
+        claims: [],
+        deliveries: [],
+      }),
     ).toMatchObject({ code: "tool-not-allowed" });
     expect(
-      checkPurity("c1", { actions: [{ tool: "click", arguments: { x: 1 } }], claims: [], deliveries: [] }),
+      checkPurity("c1", {
+        actions: [{ tool: "click", arguments: { x: 1 } }],
+        claims: [],
+        deliveries: [],
+      }),
     ).toMatchObject({ code: "missing-coordinates" });
     const extraToken = { ...valid, extra: { element_token: "x" } };
     expect(checkPurity("c1", extraToken)).toMatchObject({

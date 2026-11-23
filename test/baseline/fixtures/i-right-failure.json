@@ -1,9 +1,7 @@
 {
   "transcript": {
     "actions": [],
-    "claims": [
-      "failure"
-    ],
+    "claims": ["failure"],
     "deliveries": []
   },
   "driver": {
