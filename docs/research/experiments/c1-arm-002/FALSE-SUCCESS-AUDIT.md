@@ -1,25 +1,25 @@
-# arm-002: the 0-false-success audit (TIF-219)
+# The 0-false-success audit (TIF-156)
 
-**Answer: 0 false successes observed, 0 audited. No bound is supported.**
+**Conclusion: arm-002's "0 false successes" is an OBSERVATION, not a bound. It is
+not evidence of the property, because no success claim was ever independently
+checked.**
 
-This is not a failure of the arm. It is a limit on what its number can be used to
-claim, and it is computed from the artifact rather than asserted here:
+## The scorecard sentence
 
-```
-$ node --import tsx scripts/audit-false-success.ts docs/research/experiments/c1-arm-002/accounting.json
-  rows        : 29 (verified 0, refuted 29, uncertain 0)
-  audited     : 0 of 29 (unaudited 29)
-  falseSuccess: 0 true
-  bounded?    : false
-```
+> arm-002: 29 scored rows, **0 audited** — no false-success bound is supported;
+> the 0 is observed only.
 
-## Why zero audits
+A bound requires rows the audit actually reached. arm-002 has none, so its zero is
+a statement about the **scorer** (it did not invent a success in the trials that
+ran) and not about the **property** (that a claimed success would have been caught
+if false).
 
-The independent audit runs only when the verdict is `verified` — the guard in
-`runC1Trial` (`src/baseline/c1-trial.ts`, "if (verdict.status === \"verified\")"),
-which calls `audit()` in `src/baseline/c1-judge.ts`. Line numbers are deliberately
-not cited: they rot on any unrelated edit above them, and a stale line reference
-reads as authoritative.
+## Why: cited to code, not counted
+
+Two lines decide this, and neither is a matter of interpretation.
+
+**The audit runs only on a success verdict** — the guard in `runC1Trial`
+(`src/baseline/c1-trial.ts`, `if (verdict.status === "verified")`):
 
 ```ts
 if (verdict.status === "verified") {
@@ -27,43 +27,85 @@ if (verdict.status === "verified") {
 }
 ```
 
-arm-002 has **29 refuted rows and 0 verified rows**, so the branch never executes
-and every row carries `audited: false, independentValuePresent: null`. The
-validator enforces the pairing — `x.audited === (x.independentValuePresent !== null)`
-— so these two fields cannot drift apart.
+**`falseSuccess` is defined so that an unaudited row can never be `true`** —
+`src/baseline/index.ts`:
 
-## Observed vs bounded — the distinction that matters
+```ts
+export function falseSuccess(
+  verdict: VerdictStatus,
+  independentValuePresent: boolean | null,
+): boolean | null {
+  return verdict === "verified"
+    ? independentValuePresent === null
+      ? null
+      : !independentValuePresent
+    : false;
+}
+```
 
-| Claim | Means | Supported by arm-002? |
+For any non-`verified` verdict the function returns `false` **before looking at the
+independent value at all**. So in an arm with zero verified rows,
+`falseSuccess === false` on every row is arithmetically guaranteed — it is not a
+measurement. The count cannot distinguish "the scorer never lied" from "the scorer
+was never asked".
+
+## The contrast that makes it a finding
+
+The same rule applied to M1-014 gives the opposite result, and that difference is
+what makes row 4 DONE and row 7 not.
+
+| | arm-002 (screenshot baseline) | M1-014 (corrupted suite) |
 |---|---|---|
-| **0 false successes observed** | no row was scored a success while the document disagreed | **yes** — all 29 rows are `falseSuccess: false`, and none is `true` |
-| **0 false successes, bounded** | the audit ran on the rows that could have produced one and found none | **no** — 0 rows were audited |
+| Rows with a verdict | 29 | 21 |
+| **`verified`** | **0** | **7** |
+| `refuted` | 29 | 11 |
+| `uncertain` | 0 | 3 |
+| **Audited** | **0** | **7** |
+| False successes | 0 | 0 |
+| **Supports a bound?** | **no** | **yes — 7 success claims checked, 0 false** |
 
-An observation is a statement about the **scorer**: it says the scorer did not
-invent a success in the trials that ran. A bound is a statement about a
-**population**: it says that when a success occurs, the independent check would
-have caught a false one.
+M1-014's zero is a measurement: seven rows claimed success, `audit()` read the
+persisted value independently, and none disagreed. arm-002's zero is a tautology of
+its verdict distribution.
 
-arm-002 supports the first and not the second. Saying "0 false successes" without
-qualification reads as the second, which is why the scorecard must not do it.
+Source: `docs/research/experiments/m1-014-combined-audit/summary.json`
+(`total 24, withVerdict 21, verified 7, refuted 11, uncertain 3, falseSuccesses 0`).
 
-## What would produce a bound
+## The denominator correction: 29, not 30
 
-A bound needs rows that reached `verified`. arm-003 (TIF-90) is the arm that can
-produce them: it runs the same task with the save requirement present, so an agent
-that completes the task should persist a value and be scored `verified`, at which
-point `audit()` runs and the row becomes auditable.
+`accounting.json` has **30 ledger keys** but **29 rows**: entry `9` is
+`{status: "omitted", micros: 376800, reason: "trial-interrupted"}` with no `row`
+field at all. Anything row-based therefore uses **29**.
 
-If arm-003 also yields zero verified rows, the honest conclusion is not "zero
-false successes" but "the arm cannot produce successes, so false successes are
-unmeasurable" — a statement about the task or the agent, not about the scorer.
+This was wrong twice in earlier prose — stated as "0 of 30" when it is **0 of 29**.
+It is now pinned by `test/baseline/false-success-audit.test.ts`, which asserts
+`rows === 29` against the recorded artifact, so the distinction fails the suite
+rather than drifting back into a sentence.
+
+The auditor skips rowless entries by construction
+(`Object.values(ledger).flatMap((e) => (e.row ? [e.row] : []))`), and a mutation
+that counts them fails the test — the real artifact is the case that caught it,
+since entry 9 would inflate 29 → 30.
+
+## What would produce a bound for the baseline
+
+Rows that reach `verified`. arm-003 (TIF-90) runs the same tasks with the save
+requirement in the text, so an agent that completes the task should persist a value,
+be scored `verified`, and become auditable.
+
+**If arm-003 also yields zero verified rows, the honest line is "the arm cannot
+produce successes, so false successes are unmeasurable" — not "zero false
+successes."** That is written here before the run so it cannot be spun after it.
 
 ## Reproduce
 
 ```
 node --import tsx scripts/audit-false-success.ts docs/research/experiments/c1-arm-002/accounting.json
+node --import tsx scripts/audit-false-success.ts docs/research/experiments/c1-arm-002/accounting.json --json
 ```
 
-`test/baseline/false-success-audit.test.ts` pins this outcome against the recorded
-artifact, so a future edit to the corpus or the gate fails the suite rather than
-silently turning "observed" into "bounded".
+The script also names the cause when nothing was audited: *"no row reached a
+success verdict"* when `verified === 0`, and *"N row(s) reached a success verdict
+but none was audited — the audit was unavailable for them"* otherwise (which is the
+`independent-audit-unavailable` path). A correct count with the wrong explanation
+is how a number gets quoted for the wrong reason.
