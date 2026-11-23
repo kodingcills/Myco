@@ -84,7 +84,7 @@ echo "PID TTY TIME CMD"`,
   return spawnSync("bash", [GATE, String(opts.timeout ?? 20)], {
     encoding: "utf8",
     timeout: 120_000,
-    env: { PATH: `${stubDir}:/usr/bin:/bin`, HOME: dir },
+    env: { PATH: `${stubDir}:/usr/bin:/bin`, HOME: dir, MYCO_READY_INTERVAL: "1" },
   });
 }
 
@@ -97,11 +97,13 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-// These tests are slow BY CONSTRUCTION: the gate can only conclude a guest is
-// stalled after it has watched three 10s intervals without CPU progress. So the
-// suite needs a per-test timeout above vitest's 5s default - the first run of
-// this file reported five failures that were all vitest killing correct tests.
-const SLOW = 90_000;
+// The gate concludes a guest is stalled only after three sampling intervals
+// without CPU progress. Those intervals are 10s in production, so the tests
+// shrink them via MYCO_READY_INTERVAL - otherwise each test takes 30s and the
+// suite runs long enough to trip vitest's worker-report timeout, which fails CI
+// as an unhandled error even when all tests pass. The timeout below is generous
+// relative to the shrunk interval, not a substitute for shrinking it.
+const SLOW = 30_000;
 
 describe("wait-guest-ready", () => {
   it("fails when the guest CPU is flat even though SSH answers", { timeout: SLOW }, () => {
@@ -138,7 +140,7 @@ describe("wait-guest-ready", () => {
     const r = spawnSync("bash", [GATE, "10"], {
       encoding: "utf8",
       timeout: 120_000,
-      env: { PATH: `${stubDir}:/usr/bin:/bin`, HOME: dir },
+      env: { PATH: `${stubDir}:/usr/bin:/bin`, HOME: dir, MYCO_READY_INTERVAL: "1" },
     });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("no qemu process");

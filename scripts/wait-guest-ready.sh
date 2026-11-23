@@ -28,6 +28,12 @@ T=${1:-600}
 MIN_DELTA=${2:-1}
 CFG=~/VMs/myco-win11/ssh_config
 
+# How often to sample guest CPU time. Overridable so tests can exercise the
+# stall logic in seconds rather than in real wall-clock tens of seconds: a suite
+# that takes 96s trips vitest's default worker-report timeout, which fails CI as
+# an unhandled error even when every test passes. The production value stays 10.
+INTERVAL=${MYCO_READY_INTERVAL:-10}
+
 # The real binary is qemu-aarch64-softmmu. `pgrep -f qemu-system-aarch64`
 # returns 0 on a perfectly running guest, which is its own way to mislead: an
 # earlier check read the guest as absent for that reason. Match either name.
@@ -53,7 +59,7 @@ START=$(date +%s)
 PID=""
 until PID=$(guest_pid) && [ -n "$PID" ]; do
   [ $(( $(date +%s) - START )) -gt "$T" ] && { echo "wait-guest-ready: timeout: no qemu process after ${T}s" >&2; exit 1; }
-  sleep 5
+  sleep "$INTERVAL"
 done
 
 # Watch CPU time advance. A guest that is paused or stuck in early UEFI stays
@@ -71,7 +77,7 @@ while :; do
     echo "wait-guest-ready: timeout after ${T}s: guest pid $PID consumed ${LAST}s CPU and has not booted (status may still claim 'started'; see TIF-164)" >&2
     exit 1
   fi
-  sleep 10
+  sleep "$INTERVAL"
   CUR=$(cpu_seconds "$PID")
   if [ -z "$CUR" ]; then
     echo "wait-guest-ready: guest pid $PID disappeared while waiting" >&2
