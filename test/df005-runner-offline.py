@@ -649,11 +649,35 @@ def main() -> int:
     expect(create["args"].get("allow_write") is True,
            f"create grants allow_write: {create['args'].get('allow_write')}")
     root = create["args"].get("read_root", "")
-    expect(root and "/myco-todo" in root, f"read_root covers the app dir: {root!r}")
+    # The grant root must be an EXISTING directory: FileGrant::open uses
+    # OFlags::DIRECTORY and no op creates one. /opt/myco is seeded; the
+    # /home/myco/myco-todo the first attempt used is not.
+    expect(root == "/opt/myco",
+           f"read_root is the seeded directory, not one that must be created: {root!r}")
+    expect(not root.endswith("/"), f"read_root is not '/' or a trailing-slash root: {root!r}")
     # One session served this run, so one deploy is correct here; the point is
     # that it happens before the launch, asserted above.
     expect(order.count("write_file") == 1,
            f"one deploy for a one-trial run: {order.count('write_file')}")
+    # The deployed path and the launched path must be the SAME file. Without
+    # this, a run could deploy a stale copy elsewhere and launch an absent
+    # APP_PATH — the original bug — with a green suite.
+    wrote = next(c for c in calls if c["tool"] == "write_file")["args"]["path"]
+    launch_call = next(c for c in calls
+                       if c["tool"] == "act"
+                       and c["args"].get("action", {}).get("kind") == "launch")
+    launched_arg = launch_call["args"]["action"]["args"][0]
+    expect(launched_arg.endswith("/" + wrote),
+           f"the launched path ends with the deployed name: {launched_arg!r} vs {wrote!r}")
+    # And the write path must be grant-relative: FileGrant::read refuses anything
+    # but Component::Normal parts, so an absolute path is rejected in the guest
+    # with "expected a grant-relative file path".
+    expect(not wrote.startswith("/"),
+           f"the write path is grant-relative, not absolute: {wrote!r}")
+    root = create["args"].get("read_root", "")
+    expect(launched_arg == f"{root}/{wrote}",
+           f"the absolute launch path is root + grant-relative name: "
+           f"{launched_arg!r} vs {root}/{wrote}")
 
     print("25. a session without the write grant fails closed, not silently")
     # Without write_file the deploy cannot run. Every trial would gap for a

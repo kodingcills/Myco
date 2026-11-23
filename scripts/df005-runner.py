@@ -45,8 +45,16 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_SERVER = REPO / "runtime" / "target" / "debug" / "myco-rt-mcp"
 GUEST_DIR = Path(os.environ.get("MYCO_GUEST_DIR", REPO / "runtime" / "guest"))
 VM_LOCK_PATH = os.environ.get("MYCO_VM_LOCK_PATH", "/tmp/myco-win11.vm.lock")
-GUEST_HOME = "/home/myco"
-APP_PATH = f"{GUEST_HOME}/myco-todo/myco_todo.py"
+# The runtime's file grant is rooted at an EXISTING directory: FileGrant::open
+# uses OFlags::DIRECTORY with no mkdir op anywhere, so a root that does not yet
+# exist makes create retry for the whole desktop timeout and then fail. The seed
+# creates /opt/myco; /home/myco/myco-todo it does not (TIF-158, verified).
+GRANT_ROOT = "/opt/myco"
+APP_NAME = "myco_todo.py"
+# Absolute path for the launch argument; the grant-relative name for file ops.
+# FileGrant::read refuses anything but Component::Normal parts, so an absolute
+# path is rejected with "expected a grant-relative file path".
+APP_PATH = f"{GRANT_ROOT}/{APP_NAME}"
 
 # TIF-120: the guest path the fixture publishes its widget record to and the
 # runtime reads it back from. Passed on `create` (route 1, preferred over
@@ -513,7 +521,7 @@ def execute_scenario(
             # TIF-158: the runner deploys the fixture itself, which needs the
             # session's write grant. read_root confines every read/write beneath
             # it, so this is the narrowest root that covers APP_PATH.
-            "read_root": f"{GUEST_HOME}/myco-todo",
+            "read_root": GRANT_ROOT,
             "allow_write": True,
         })
     except McpError as e:
@@ -559,7 +567,7 @@ def execute_scenario(
     #
     # Fail closed: if the deploy cannot put a current fixture in place, every
     # trial would gap for a known reason, so stop rather than spend the slot.
-    deployed, why = deploy_fixture(mcp, sid, APP_PATH)
+    deployed, why = deploy_fixture(mcp, sid, APP_NAME)
     if not deployed:
         cleanup(mcp, sid)
         return gap("REQ-04", f"fixture not deployed: {why}")

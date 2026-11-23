@@ -16,7 +16,14 @@ GUEST_STATE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --go) GO=1 ;;
-        --guest-state) GUEST_STATE="${2:-}"; shift ;;
+        # A trailing --guest-state with no value used to be swallowed by
+        # "${2:-}" and silently fall back to the default guest — which is the
+        # exact wrong-guest confusion this flag exists to prevent (TIF-158).
+        --guest-state)
+            [[ $# -ge 2 && -n "${2:-}" ]] || {
+                echo "--guest-state needs a directory" >&2; exit 2; }
+            GUEST_STATE="$2"; shift ;;
+
         *) usage; exit 2 ;;
     esac
     shift
