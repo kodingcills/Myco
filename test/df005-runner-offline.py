@@ -378,6 +378,30 @@ def main() -> int:
     expect(not (out / "free.lock").exists() or (out / "free.lock").stat().st_size == 0,
            "does not write a lock it does not hold")
 
+    print("14b. preflight proves create declares introspection_file")
+    # The silent failure: a key the server does not know is ignored, so the run
+    # gaps at REQ-03 after a guest is already booted. The check reads the
+    # server's tool list — no session is created.
+    proc = subprocess.run(
+        [sys.executable, str(RUNNER), "--preflight"],
+        capture_output=True, text=True, cwd=ROOT,
+        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out / "free2.lock")},
+    )
+    line = next((l for l in proc.stdout.splitlines() if "create-schema" in l), "")
+    expect("create-schema" in proc.stdout, "the create-schema check is reported")
+    # The built server on this tree either declares the key (TIF-120 merged) or
+    # does not; the check must report the truth either way, and must never pass
+    # silently when the key is absent.
+    if "does not declare introspection_file" in line:
+        expect("FAIL" in line, f"an absent key FAILS rather than passing: {line.strip()[:110]}")
+    elif "not run" in line:
+        # No built server in this tree: the check must say so rather than
+        # silently passing, and the count must not claim it passed.
+        expect("skip" in line, f"an unavailable server skips, never passes: {line.strip()[:110]}")
+    else:
+        expect("ok" in line and "declares introspection_file" in line,
+               f"a declaring server passes with a definite reason: {line.strip()[:110]}")
+
     print("15. preflight reports a held lock without contending for it")
     held = out / "held.lock"
     holder = subprocess.Popen(
@@ -400,19 +424,20 @@ def main() -> int:
         holder.kill()
         holder.wait()
 
-    print("16. preflight accounts for all six checks when the guest is unreachable")
+    print("16. preflight accounts for every check when the guest is unreachable")
     out2 = Path(tempfile.mkdtemp(prefix="df005-pf2-"))
     proc = subprocess.run(
         [sys.executable, str(RUNNER), "--preflight"],
         capture_output=True, text=True, cwd=ROOT,
         env={**os.environ, "MYCO_VM_LOCK_PATH": str(out2 / "free.lock")},
     )
-    # Off-guest, ssh fails; the three dependent checks must still be reported as
-    # not-run rather than silently omitted, so the "N of 6" count is honest.
-    for name in ("app-deployed", "app-self-test", "introspection-env"):
+    # Off-guest, ssh fails; the dependent checks must still be reported as
+    # not-run rather than silently omitted, so the "N of 8" count is honest.
+    for name in ("app-deployed", "app-self-test", "introspection-file",
+                 "introspection-shadow"):
         expect(f"skip {name}: not run: guest unreachable" in proc.stdout,
                f"{name} reported as not-run, not omitted")
-    expect("of 6 checks failed" in proc.stdout, "count is stated against 6")
+    expect("of 8 checks failed" in proc.stdout, "count is stated against 8")
     expect(proc.returncode == 1, "exit 1")
 
     print("17. no delivery outcome can pass on a matching store (M1 allowlist)")

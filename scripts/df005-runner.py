@@ -977,7 +977,43 @@ def summarize(results: dict[str, list[RunResult]]) -> None:
             print("gaps by requirement: " + ", ".join(f"{k}={v}" for k, v in sorted(gaps.items())))
 
 
-TOTAL_CHECKS = 6
+TOTAL_CHECKS = 8
+
+
+def create_accepts_introspection(timeout: float = 15.0) -> tuple[bool, str]:
+    """Ask the MCP server whether `create` declares `introspection_file`.
+
+    Read-only: `tools/list` only. No session is created. Returns (ok, detail).
+
+    The failure this catches is silent — the runner sends a key the server does
+    not know, `create` ignores it, and the run gaps on REQ-03 after a guest has
+    already been booted. Checking the declaration costs one handshake.
+    """
+    client = McpClient([str(DEFAULT_SERVER)])
+    try:
+        client.request("initialize", {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "clientInfo": {"name": "df005-preflight", "version": "0.2.0"},
+        })
+        listed = client.request("tools/list")
+    except McpError as e:
+        return False, f"could not read the server's tool list: {e}"
+    finally:
+        client.close()
+
+    for tool in listed.get("tools", []):
+        if tool.get("name") != "create":
+            continue
+        props = (tool.get("inputSchema") or {}).get("properties") or {}
+        if "introspection_file" in props:
+            return True, "create declares introspection_file, so route 1 is honoured"
+        return False, (
+            "create does not declare introspection_file (has: "
+            f"{', '.join(sorted(props)) or 'nothing'}). The runner sends it anyway, "
+            "and the server will ignore it — the record will never reach observe. "
+            "TIF-120 must land first."
+        )
+    return False, "the server exposes no `create` tool"
 
 
 def preflight() -> int:
@@ -1046,12 +1082,13 @@ def preflight() -> int:
     # are read-only, but they add load to someone else's live slot, so report
     # them as not-run and let the operator see why they are missing.
     if not lock_free:
-        for name in ("guest-ssh", "app-deployed", "app-self-test", "introspection-env"):
+        for name in ("guest-ssh", "app-deployed", "app-self-test",
+                     "introspection-file", "introspection-shadow"):
             record(name, None, "not run: another driver holds the VM lock")
         print()
         print(f"preflight FAILED: 1 of {TOTAL_CHECKS} checks failed: vm-lock")
         print("  not run (blocked by the above): guest-ssh, app-deployed, "
-              "app-self-test, introspection-env")
+              "app-self-test, introspection-file, introspection-shadow")
         print("Fix these before spending the guest slot.")
         return 1
 
@@ -1079,24 +1116,52 @@ def preflight() -> int:
         rc3, st = guest(f"python3 {APP_PATH} --self-test 2>&1 | tail -1")
         record("app-self-test", rc3 == 0 and "self-test OK" in st, st[:80])
 
-        # 6. Introspection channel. The runner now names the path on `create`
-        # (route 1), which wins over gui.env, so the check is that the path is
-        # usable in the guest — not that gui.env happens to carry one.
+        # 6. The exact file is usable, not merely its directory: a stale
+        # root-owned or read-only file at this path defeats the channel while a
+        # directory probe still passes.
         rc4, probe = guest(
-            f"d=$(dirname {INTROSPECTION_PATH}); "
-            "test -d \"$d\" && test -w \"$d\" && echo writable || echo not-writable"
+            f"p={INTROSPECTION_PATH}; d=$(dirname \"$p\"); "
+            "if [ -e \"$p\" ] && [ ! -w \"$p\" ]; then echo not-writable-file; "
+            "elif [ ! -d \"$d\" ] || [ ! -w \"$d\" ]; then echo not-writable-dir; "
+            "else echo writable; fi"
         )
-        writable = rc4 == 0 and "writable" in probe and "not-writable" not in probe
-        record("introspection-env", writable,
-               f"{INTROSPECTION_PATH} is writable in the guest (route 1, set on create)"
-               if writable else
-               f"{INTROSPECTION_PATH} is not writable in the guest: the app cannot "
-               "publish and observe will report introspection null (REQ-03)")
+        file_state = (probe or "").strip().splitlines()[-1] if probe else ""
+        file_ok = rc4 == 0 and file_state == "writable"
+        record("introspection-file", file_ok,
+               f"{INTROSPECTION_PATH} is writable in the guest" if file_ok else
+               f"{INTROSPECTION_PATH}: {file_state or 'probe failed'}. The app cannot "
+               "publish there, so observe will report introspection null (REQ-03)")
+
+        # 7. gui.env must not shadow route 1. The runtime's rule is "an explicit
+        # value wins", so a MYCO_TODO_STATE_FILE in gui.env makes the app publish
+        # somewhere other than the path `create` names — the record then never
+        # reaches observe, silently.
+        rc5, shadow = guest(
+            f"grep -E '^[[:space:]]*(export[[:space:]]+)?MYCO_TODO_STATE_FILE=' "
+            "/run/myco/gui.env 2>/dev/null | head -1 || true"
+        )
+        shadowed = bool((shadow or "").strip())
+        record("introspection-shadow", not shadowed,
+               f"gui.env sets {shadow.strip()[:60]!r}, which overrides the path "
+               "create names (route 1) — remove it or the app publishes elsewhere"
+               if shadowed else "gui.env does not shadow MYCO_TODO_STATE_FILE")
     else:
         # No guest to ask: record the dependent checks as not-run rather than
         # omitting them, so the summary never claims a count it did not measure.
-        for name in ("app-deployed", "app-self-test", "introspection-env"):
+        for name in ("app-deployed", "app-self-test", "introspection-file",
+                     "introspection-shadow"):
             record(name, None, "not run: guest unreachable")
+
+    # 8. Does `create` actually accept the argument we send? A key-name drift
+    # (introspection vs introspection_file) passes every guest-side probe above
+    # and then burns the slot at REQ-03. Ask the server's own schema rather than
+    # trusting a write.
+    if DEFAULT_SERVER.exists():
+        accepted, detail = create_accepts_introspection()
+        pass
+    else:
+        # Same reason as check 1: without a binary there is nothing to ask.
+        record("create-schema", None, "not run: the MCP server binary is missing")
 
     failed = [n for n, ok, _ in results if ok is False]
     skipped = [n for n, ok, _ in results if ok is None]
