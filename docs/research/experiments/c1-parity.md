@@ -26,7 +26,7 @@ Everything here is computed from recorded artifacts, not from reading the code:
 | Myco's recorded result, byte for byte | `sha256(runs/<i>/<runId>/result.json)` vs `manifest rows[i].resultSha256` | **30/30 verified** |
 | Model setting | `deviations` records `planner:claude-sonnet-5-5`; Myco's arm used the same model | Same model string |
 | Initial state | Both reset to the `cua-c1-base` snapshot | Same snapshot |
-| **Rendered instruction sentence** | — | **NOT RECORDED BY EITHER ARM** |
+| **Rendered instruction sentence** | each row's `instruction` field, both arms | **RECORDED BY BOTH, byte-identical test pinned** |
 
 The third row is the strongest evidence, and it is worth being precise about why.
 `resultSha256` in the C1 manifest is **not** a fixture hash — it is the SHA-256 of
@@ -34,16 +34,26 @@ Myco's own `result.json` for that `runId`. All 30 reproduce exactly. The C1 arm
 therefore carries Myco's recorded trial identities *and* a byte-exact reference to
 what Myco produced, so the two arms cannot silently drift apart.
 
-The instruction sentence is constructed at `src/baseline/c1-trial.ts:46`:
+The instruction sentence is built by one shared function,
+`taskText()` in `src/tasks/task-text.ts`:
 
 ```ts
-const instruction = `Set the ${column} cell for record ${rowKey} to ${JSON.stringify(newValue)}.`;
+return `Set the cell at record ${params.rowKey}, column ${params.column}, to ${JSON.stringify(params.newValue)}, and save the file.`;
 ```
 
-Both arms pass the same `taskParams` (proven above), and this is the only
-instruction-construction site in the repo. But **neither arm persists the rendered
-string**, so parity is an inference from identical inputs, not an observation of
-identical prompts.
+**This section is superseded by TIF-104 and TIF-85.** As written it said neither arm
+persisted the rendered string, which was true when the doc was drafted and is not
+true now:
+
+- `taskText()` is the single construction site, imported by both arms
+  (`c1-trial.ts` and `integration/trial.ts`).
+- Both arms **record it on every row** as `instruction`.
+- `test/baseline/instruction-parity.test.ts` and `task-parity.test.ts` pin that
+  both call sites use it and that the save requirement is in the text.
+
+So instruction parity is now **observed** — a field diff between two artifacts —
+rather than inferred from identical inputs. The old text has been left visible in
+this note only in summary; the correction is the paragraph above.
 
 ## What this does and does not establish
 
@@ -62,14 +72,33 @@ without reading source. Until then, row 7's evidence should say *"identical
 parameters, fixtures and identities; instruction text identical by construction
 from a single template site"*.
 
-## Separate finding: the manifest hash does not bind
+## Retracted: the manifest hash does bind (the earlier alarm was a false one)
 
-`report.json` and `accounting.json` for arm-002 record
-`manifestSha256: bb256a9b…`, while `src/baseline/sweep-v3.json` in the repo hashes
-to `4d651ba1…`. The manifest is unchanged by the PRs that landed today, so this is
-a pre-existing discrepancy, not drift from this work.
+An earlier version of this note reported a discrepancy: the ledger records
+`manifestSha256: bb256a9b…` while `shasum -a 256 src/baseline/sweep-v3.json` gives
+`4d651ba1…`.
 
-Consequence: **the arm ledger does not currently bind to the manifest in the repo.**
-A future reproducibility claim that checks the recorded hash against the checked-in
-file will fail. Not fixed here — it needs the arm's owner to say which manifest
-produced the run before any hash is rewritten.
+**That comparison was wrong, and the hash is correct.** `sweep.ts:23` computes it
+over the **parsed** object, not the file bytes:
+
+```ts
+const manifestSha256 = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
+```
+
+So the right check is `sha256(JSON.stringify(import(manifest)))`, not `shasum` on
+the file — and that reproduces `bb256a9b…` exactly. Verified:
+
+```
+JSON.stringify(manifest): bb256a9b2b28ee929c94352887a3d4bc402f4a14181a2a41a16e82bf76351995
+recorded                : bb256a9b2b28ee929c94352887a3d4bc402f4a14181a2a41a16e82bf76351995
+match? true
+```
+
+**Consequence: the arm ledger does bind to the manifest in the repo.** A
+reproducibility check must hash the parsed object; hashing the file is what fails,
+and it would fail for any correctly-recorded run.
+
+Worth keeping as the record of a near-miss: the alarm came from a plausible-looking
+check that measured something adjacent to the claim. `sweep.ts:63` enforces the
+same comparison at run time (`ledger.manifestSha256 !== manifestSha256` throws
+"v3 manifest mismatch"), so the guard was working the whole time.
