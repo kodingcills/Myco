@@ -6,7 +6,12 @@ import { fakeGuest, LAYOUT } from "../../src/foundry/baseline/guest.ts";
 import type { RecordedTrialEvidence } from "../../src/foundry/baseline/recorder.ts";
 import { ArmRecorder } from "../../src/foundry/baseline/recorder.ts";
 import { todoTransport } from "../../src/foundry/baseline/todo-transport.ts";
-import { attest, offlineObserver, type SaveObservation } from "../../src/foundry/grader/attest.ts";
+import {
+  type AttestInput,
+  attest,
+  offlineObserver,
+  type SaveObservation,
+} from "../../src/foundry/grader/attest.ts";
 import { scoreDiscoveryTrial } from "../../src/foundry/grader/discovery.ts";
 import {
   type commitment,
@@ -84,6 +89,57 @@ function baseInput(run: FinishedRun) {
     screenObserved: true,
   };
 }
+
+describe("TIF-95: mutation check — each gate check is load-bearing", () => {
+  /**
+   * A gate whose checks are not individually necessary is a gate that would still pass if
+   * one were deleted. Each case below removes exactly one check from the input side and
+   * asserts the gate refuses, so a future edit that drops a check fails here.
+   */
+  const mutations: readonly { name: string; apply: (i: AttestInput) => AttestInput }[] = [
+    {
+      name: "no commitment match",
+      apply: (i) => ({ ...i, hiddenFixtures: i.hiddenFixtures.slice(1) }),
+    },
+    {
+      name: "claimed hash names no fixture",
+      apply: (i) => ({ ...i, claimedFixtureHash: "0".repeat(64) }),
+    },
+    { name: "no observation", apply: (i) => ({ ...i, observations: [] }) },
+    {
+      name: "observation predates the save",
+      apply: (i) => ({
+        ...i,
+        observations: i.observations.map((o) => ({ ...o, afterLastSave: false })),
+      }),
+    },
+    { name: "screen supplied by the arm", apply: (i) => ({ ...i, screenObserved: false }) },
+    {
+      name: "no save in the trace",
+      apply: (i) => ({ ...i, trace: i.trace.filter((e) => e.type !== "save-observed") }),
+    },
+    {
+      name: "no recorder calls",
+      apply: (i) => ({
+        ...i,
+        evidence: { ...i.evidence, recordedCalls: [], recordedCallCount: 0, toolCallAudits: [] },
+      }),
+    },
+  ];
+
+  it("the unmutated run is eligible, and every single-check removal is refused", async () => {
+    const run = await finishedRun();
+    const base = baseInput(run);
+    expect(attest(base).eligible, "baseline must be eligible or the mutations prove nothing").toBe(
+      true,
+    );
+    for (const mutation of mutations) {
+      const result = attest(mutation.apply(base));
+      expect(result.eligible, `${mutation.name} was not refused`).toBe(false);
+      expect(result.blockers.length, `${mutation.name} gave no reason`).toBeGreaterThan(0);
+    }
+  });
+});
 
 describe("TIF-95: the gate decides eligibility, never the verdict", () => {
   it("an eligible run is not thereby verified, and a refuted run stays refuted", async () => {

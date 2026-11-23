@@ -106,6 +106,22 @@ export interface AttestInput {
 const attestedBrand: unique symbol = Symbol("myco.attestation");
 
 /**
+ * KNOWN LIMIT (TIF-115) — the brand is forgeable in-process, and no fix inside this file
+ * can close it.
+ *
+ * `attestedBrand` is an own symbol property of every attestation, and
+ * `Object.getOwnPropertySymbols` is public API. A caller holding any real attestation can
+ * copy the symbol onto a fresh `{ eligible: true }`, and `isAttestation` accepts it.
+ * Nothing inside the process can distinguish a copied symbol from one this module set.
+ *
+ * Concretely: the gate raises the bar from "hardcoded false" to "you must already hold a
+ * real attestation to forge one", and it refuses every forgery that does not. It is not a
+ * sandbox. The fix is to run the gate out of the arm's process (TIF-115); until then the
+ * boundary this file provides is a boundary, not isolation, and the exploit is recorded
+ * rather than papered over.
+ */
+
+/**
  * Runtime counterpart to the brand. The type system stops a typed caller; this stops an
  * untyped one, which is the boundary the scorer actually owns.
  */
