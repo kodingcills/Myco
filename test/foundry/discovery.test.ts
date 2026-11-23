@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { armRegistry, discoveryPlanner } from "../../src/foundry/baseline/registry.ts";
 import { recoverSave } from "../../src/foundry/faults/index.ts";
+import { attest } from "../../src/foundry/grader/attest.ts";
 import {
   createDiscoveryComparison,
   scoreDiscoveryTrial,
@@ -61,6 +62,9 @@ const input: Input = {
   ],
   selfReport: { claimsSuccess: true, text: "Done" },
 };
+
+/** An attester that refuses every row, for tests that want descriptive output. */
+const refuseAll = () => attest({} as never);
 
 describe("Discovery evidence grading", () => {
   it("pins the recorded comparison planner and queues the HCU+shell arm", () => {
@@ -188,7 +192,8 @@ describe("Discovery evidence grading", () => {
   });
 
   it("keeps public repeats descriptive even with caller-supplied hidden metadata", () => {
-    const comparison = createDiscoveryComparison(settings);
+    // These rows are meant to stay descriptive, so the attester refuses everything.
+    const comparison = createDiscoveryComparison(settings, refuseAll);
     const batch = Array.from({ length: 30 }, (_, seed) => ({
       evidence: { ...evidence, seed, fault: "silent-drop", commitmentRoot: "a".repeat(64) },
       input,
@@ -256,9 +261,368 @@ describe("Discovery evidence grading", () => {
     });
   });
 
+  it("R6 round 3 finding 1: a malformed row is refused, never fatal", () => {
+    // `scoreTrial` throws on an invalid faultVersion, and a null fixture/actual/trace/screen/
+    // selfReport throws on the way in. Each must cost one row, not the batch.
+    const bad: readonly [string, Record<string, unknown>][] = [
+      ["actual null", { actual: null }],
+      [
+        "actual throws",
+        {
+          actual: new Proxy(
+            {},
+            {
+              get: () => {
+                throw new Error("trap");
+              },
+            },
+          ),
+        },
+      ],
+      ["faultVersion -1", { faultVersion: -1 }],
+      ["faultVersion string", { faultVersion: "x" }],
+      ["trace null", { trace: null }],
+      ["trace has null", { trace: [null] }],
+      ["fixture null", { fixture: null }],
+      ["screen null", { screen: null }],
+      ["selfReport null", { selfReport: null }],
+    ];
+    for (const [name, patch] of bad) {
+      const malformed = { ...input, ...patch } as never;
+      let threw = false;
+      let row: ReturnType<typeof scoreDiscoveryTrial> | undefined;
+      try {
+        row = scoreDiscoveryTrial(evidence, malformed, settings, attest({} as never));
+      } catch {
+        threw = true;
+      }
+      // The property is "never throws", not "always excluded": a row that can still be
+      // scored should be. What must never happen is a throw that costs the batch.
+      expect(threw, `${name} threw out of the scorer`).toBe(false);
+      expect(row, `${name} produced no row`).toBeDefined();
+      expect(row?.decisionEligible).toBe(false);
+    }
+  });
+
+  it("v2 round 1 finding 2: a malformed trial record costs one row, not the batch", () => {
+    // The loop destructured each record outside any guard, so a null record or a throwing
+    // `evidence` accessor aborted everything.
+    const bad: readonly [string, unknown][] = [
+      ["null record", null],
+      ["undefined record", undefined],
+      [
+        "throwing proxy",
+        new Proxy(
+          {},
+          {
+            get: () => {
+              throw new Error("trap");
+            },
+          },
+        ),
+      ],
+      [
+        "throwing evidence getter",
+        {
+          get evidence() {
+            throw new Error("x");
+          },
+          input,
+        },
+      ],
+      [
+        "throwing input getter",
+        {
+          evidence,
+          get input() {
+            throw new Error("x");
+          },
+        },
+      ],
+    ];
+    for (const [name, record] of bad) {
+      const comparison = createDiscoveryComparison(settings, refuseAll);
+      let threw = false;
+      let rows: ReturnType<typeof scoreDiscoveryTrial>[] = [];
+      try {
+        rows = comparison([{ evidence, input }, record as never, { evidence, input }]);
+      } catch {
+        threw = true;
+      }
+      expect(threw, `${name} aborted the batch`).toBe(false);
+      expect(rows, `${name} lost rows`).toHaveLength(3);
+      expect(rows[0]?.status, `${name} lost the first good row`).toBe("scored");
+      expect(rows[2]?.status, `${name} lost the last good row`).toBe("scored");
+      expect(rows[1]?.decisionEligible).toBe(false);
+    }
+  });
+
+  it("R6 round 3 finding 1: one bad row does not abort the batch", () => {
+    const comparison = createDiscoveryComparison(settings, refuseAll);
+    const rows = comparison([
+      { evidence, input },
+      { evidence, input: { ...input, faultVersion: -1 } as never },
+      { evidence, input },
+    ]);
+    expect(rows).toHaveLength(3);
+    expect(rows[1]?.status).toBe("excluded");
+    expect(rows[0]?.status).toBe("scored");
+    expect(rows[2]?.status).toBe("scored");
+
+    // The attester is caller-supplied, so it can throw too. That must cost one row.
+    let calls = 0;
+    const flaky = () => {
+      calls += 1;
+      if (calls === 2) throw new Error("attester trap");
+      return attest({} as never);
+    };
+    const withFlaky = createDiscoveryComparison(
+      settings,
+      flaky,
+    )([
+      { evidence, input },
+      { evidence, input },
+      { evidence, input },
+    ]);
+    expect(withFlaky).toHaveLength(3);
+    expect(withFlaky[1]?.decisionEligible).toBe(false);
+    expect(withFlaky[2]?.status).toBe("scored");
+  });
+
+  it("R6 round 2 finding 2: the comparison attests every row it scores", () => {
+    // The gate must run on real rows, not only in tests that call attest() by hand. A
+    // comparison that skipped it would produce rows that look scored but were never
+    // admitted.
+    let calls = 0;
+    const counting = () => {
+      calls += 1;
+      return attest({} as never);
+    };
+    const comparison = createDiscoveryComparison(settings, counting);
+    const rows = comparison([
+      { evidence, input },
+      { evidence: { ...evidence, seed: 2 } as typeof evidence, input },
+      { evidence: { ...evidence, seed: 3 } as typeof evidence, input },
+    ]);
+    expect(rows).toHaveLength(3);
+    expect(calls).toBe(3);
+    expect(rows.every((row) => row.status === "scored" && !row.decisionEligible)).toBe(true);
+  });
+
+  it("v3: a throwing next() adds no rows", () => {
+    // The guard must end the batch, not push a malformed row for the failed pull.
+    const source = {
+      [Symbol.iterator]: () => ({
+        next: () => {
+          throw new Error("next trap");
+        },
+      }),
+    };
+    const rows = createDiscoveryComparison(settings, refuseAll)(source as never);
+    expect(rows, "a throwing next() produced a row").toHaveLength(0);
+  });
+
+  it("v3: the scorer and the gate read a record's evidence and actual once each", () => {
+    // Counting reads is the direct property: a getter that answers differently per read can
+    // only matter if there is more than one read.
+    const counts = { evidence: 0, actual: 0 };
+    const record = {
+      get evidence() {
+        counts.evidence += 1;
+        return evidence;
+      },
+      get input() {
+        return {
+          ...input,
+          get actual() {
+            counts.actual += 1;
+            return input.actual;
+          },
+        };
+      },
+    };
+    const comparison = createDiscoveryComparison(settings, refuseAll);
+    const rows = comparison([record as never]);
+    expect(rows).toHaveLength(1);
+    expect(counts, "a field was read more than once").toEqual({ evidence: 1, actual: 1 });
+  });
+
+  it("v3: a hostile attestation binding does not throw out of the scorer", () => {
+    // `readBindingSafely` and `digestSafely` are the guards that keep one bad row from
+    // taking down the batch.
+    const real = attest({} as never);
+    const forged = Object.defineProperty(Object.assign(Object.create(null), real), "binding", {
+      get() {
+        throw new Error("trap");
+      },
+      enumerable: true,
+      configurable: true,
+    }) as never;
+    expect(() => scoreDiscoveryTrial(evidence, input, settings, forged)).not.toThrow();
+    expect(scoreDiscoveryTrial(evidence, input, settings, forged)).toMatchObject({
+      decisionEligible: false,
+    });
+    // A file map that cannot be digested must not throw either.
+    expect(() =>
+      scoreDiscoveryTrial(
+        evidence,
+        { ...input, actual: { kind: "myco-todo", files: { "store.json": 42 } } } as never,
+        settings,
+        attest({} as never),
+      ),
+    ).not.toThrow();
+  });
+
+  it("v3: the attester and the scorer see the same evidence", () => {
+    // They read the caller's record separately, so a toggling field could show one value to
+    // the gate and another to the guard (round 1, finding 2).
+    let reads = 0;
+    const shifty = {
+      ...evidence,
+      get recordedCalls() {
+        reads += 1;
+        return reads === 1 ? (evidence.recordedCalls ?? []) : [];
+      },
+    };
+    const comparison = createDiscoveryComparison(settings, (e) => attest({ evidence: e } as never));
+    const rows = comparison([{ evidence: shifty as never, input }]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.decisionEligible).toBe(false);
+  });
+
+  it("v2 round 3 finding 1: a truthy non-true done ends the batch, not an infinite loop", () => {
+    // A hand-rolled loop tested `done === true`, so `{done: 1}` read as "not done" and the
+    // loop ran forever, growing memory. `for...of` stops on any truthy `done`.
+    for (const done of [1, "yes", true] as const) {
+      let pulls = 0;
+      const source = {
+        [Symbol.iterator]: () => ({
+          next: () => {
+            pulls += 1;
+            if (pulls > 50) throw new Error("pulled past the cap");
+            return { done, value: { evidence, input } };
+          },
+        }),
+      };
+      const rows = createDiscoveryComparison(settings, refuseAll)(source as never);
+      expect(rows.length, `done=${JSON.stringify(done)} did not stop`).toBeLessThanOrEqual(1);
+      expect(pulls, `done=${JSON.stringify(done)} kept pulling`).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("v2 round 3 finding 2: a quota pause calls iterator.return()", () => {
+    // `break` out of a hand-rolled loop skips `return()`, so a generator's `finally` never
+    // runs and its cleanup is lost.
+    let cleaned = false;
+    function* trials() {
+      try {
+        yield { evidence, input };
+        yield { evidence: { ...evidence, status: "quota-exhausted" } as const, input };
+        yield { evidence, input };
+      } finally {
+        cleaned = true;
+      }
+    }
+    const rows = createDiscoveryComparison(settings, refuseAll)(trials());
+    expect(rows).toHaveLength(2);
+    expect(cleaned, "the generator's finally did not run").toBe(true);
+  });
+
+  it("v2 round 2 finding 1: a broken iterator ends the batch without losing rows", () => {
+    // Each step of the iteration is guarded separately: a throwing `next()`, a throwing
+    // `done` getter, or a throwing `value` getter must not abort the batch or lose rows
+    // already collected.
+    const broken: readonly [string, () => Iterable<unknown>][] = [
+      [
+        "next throws",
+        () => ({
+          [Symbol.iterator]: () => ({
+            next: () => {
+              throw new Error("next trap");
+            },
+          }),
+        }),
+      ],
+      [
+        "done getter throws",
+        () => ({
+          [Symbol.iterator]: () => ({
+            next: () => ({
+              get done(): boolean {
+                throw new Error("done trap");
+              },
+              value: { evidence, input },
+            }),
+          }),
+        }),
+      ],
+      [
+        "value getter throws",
+        () => ({
+          [Symbol.iterator]: () => {
+            // Finite: one record whose `value` throws, then done. A stateless iterator here
+            // would make the guarded `continue` loop forever.
+            let step = 0;
+            return {
+              next: () => {
+                step += 1;
+                if (step > 1) return { done: true, value: undefined };
+                return {
+                  done: false,
+                  get value() {
+                    throw new Error("value trap");
+                  },
+                };
+              },
+            };
+          },
+        }),
+      ],
+      [
+        "Symbol.iterator throws",
+        () => ({
+          [Symbol.iterator]: () => {
+            throw new Error("iterator trap");
+          },
+        }),
+      ],
+    ];
+    for (const [name, make] of broken) {
+      const comparison = createDiscoveryComparison(settings, refuseAll);
+      let threw = false;
+      let rows: ReturnType<typeof scoreDiscoveryTrial>[] = [];
+      try {
+        rows = comparison(make() as never);
+      } catch {
+        threw = true;
+      }
+      expect(threw, `${name} aborted the batch`).toBe(false);
+      expect(Array.isArray(rows), `${name} returned no rows`).toBe(true);
+    }
+  });
+
+  it("v2 round 2 finding 1: a quota pause stops consuming the source", () => {
+    // The existing test above passes even when the source is drained, because the guard
+    // swallows its post-pause throw. This one counts pulls, so draining is visible.
+    let pulls = 0;
+    function* trials() {
+      pulls += 1;
+      yield { evidence, input };
+      pulls += 1;
+      yield { evidence: { ...evidence, status: "quota-exhausted" } as const, input };
+      pulls += 1;
+      yield { evidence, input };
+      pulls += 1;
+      yield { evidence, input };
+    }
+    const rows = createDiscoveryComparison(settings, refuseAll)(trials());
+    expect(rows).toHaveLength(2);
+    expect(pulls, "the source was pulled past the quota pause").toBe(2);
+  });
+
   it("pauses on quota without consuming the next trial", () => {
     const mutableSettings = structuredClone(settings);
-    const comparison = createDiscoveryComparison(mutableSettings);
+    const comparison = createDiscoveryComparison(mutableSettings, refuseAll);
     function* trials() {
       yield { evidence, input };
       yield { evidence: { ...evidence, status: "quota-exhausted" } as const, input };
