@@ -1,0 +1,145 @@
+{
+  "runId": "6dceded8-548d-4c00-9b9c-a296a73de4a0",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-kill-4",
+    "rowKey": "EMP-0004",
+    "column": "name",
+    "newValue": "REVISED-419474"
+  },
+  "startedAt": "2026-11-22T03:03:56.968Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-kill-4\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-71390-1795316639474-201557055\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-71390-1795316639474-201557055\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B5"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-kill-4\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-71390-1795316639474-201557055\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B5 located at record EMP-0004, column name, holds fixture value \"Dara Ito\"",
+          "passed": true,
+          "observed": "value=\"Dara Ito\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B5"
+        },
+        "value": "REVISED-419474"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-71390-1795316639474-201557055\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B5 located at record EMP-0004, column name, holds fixture value \"Dara Ito\"",
+          "passed": true,
+          "observed": "value=\"Dara Ito\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B5 holds \"REVISED-419474\"",
+          "passed": true,
+          "observed": "value=\"REVISED-419474\""
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B5 holds \"REVISED-419474\"",
+          "passed": true,
+          "observed": "value=\"REVISED-419474\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 9,
+      "stateVersionAfter": 10
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B5 (record EMP-0004, column name) persisted as \"REVISED-419474\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B5 (record EMP-0004, column name) persisted as \"REVISED-419474\""
+    ]
+  }
+}

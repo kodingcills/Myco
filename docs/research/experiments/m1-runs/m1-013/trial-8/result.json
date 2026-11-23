@@ -1,0 +1,145 @@
+{
+  "runId": "06ed1b7a-b2d9-430d-9502-7975e102369d",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-c",
+    "rowKey": "EMP-0125",
+    "column": "name",
+    "newValue": "REVISED-545101"
+  },
+  "startedAt": "2026-11-21T23:44:58.773Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-c\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-76833-1795304701223-53973079\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-76833-1795304701223-53973079\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B126"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-c\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-76833-1795304701223-53973079\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B126 located at record EMP-0125, column name, holds fixture value \"Gil Petrov\"",
+          "passed": true,
+          "observed": "value=\"Gil Petrov\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B126"
+        },
+        "value": "REVISED-545101"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-76833-1795304701223-53973079\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B126 located at record EMP-0125, column name, holds fixture value \"Gil Petrov\"",
+          "passed": true,
+          "observed": "value=\"Gil Petrov\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B126 holds \"REVISED-545101\"",
+          "passed": true,
+          "observed": "value=\"REVISED-545101\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B126 holds \"REVISED-545101\"",
+          "passed": true,
+          "observed": "value=\"REVISED-545101\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B126 (record EMP-0125, column name) persisted as \"REVISED-545101\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B126 (record EMP-0125, column name) persisted as \"REVISED-545101\""
+    ]
+  }
+}

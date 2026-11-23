@@ -1,0 +1,145 @@
+{
+  "runId": "6a0f620d-185e-4a01-b695-5777f1684735",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-d",
+    "rowKey": "EMP-0061",
+    "column": "salary",
+    "newValue": "$4277.43"
+  },
+  "startedAt": "2026-11-22T02:04:29.624Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-d\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-65007-1795313071446-263336933\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-65007-1795313071446-263336933\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "E62"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-d\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-65007-1795313071446-263336933\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell E62 located at record EMP-0061, column salary, holds fixture value \"$35145.44\"",
+          "passed": true,
+          "observed": "value=\"$35145.44\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "E62"
+        },
+        "value": "$4277.43"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-65007-1795313071446-263336933\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell E62 located at record EMP-0061, column salary, holds fixture value \"$35145.44\"",
+          "passed": true,
+          "observed": "value=\"$35145.44\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell E62 holds \"$4277.43\"",
+          "passed": true,
+          "observed": "value=\"$4277.43\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell E62 holds \"$4277.43\"",
+          "passed": true,
+          "observed": "value=\"$4277.43\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell E62 (record EMP-0061, column salary) persisted as \"$4277.43\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell E62 (record EMP-0061, column salary) persisted as \"$4277.43\""
+    ]
+  }
+}
