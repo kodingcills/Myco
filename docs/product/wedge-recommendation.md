@@ -27,7 +27,7 @@ Positioning sentence to test:
 | The technical core works on a real desktop | 29 verified, 1 refuted, 30 recorded; 21 eligible trials, 0 false successes, 0 unaccounted ledger entries | M1-013, M1-014 |
 | A false success is caught, not reported | `myco-run --task df-s02` prints the UI claim `saved 4 item(s)`, the store's 2 missing items, and `REFUTED` | `docs/product/quickstart.md` §3 |
 | A developer can get there from a clean clone | ~3 s from clone to a verified report, measured; the whole page ~20 s | `docs/product/quickstart.md` |
-| The verdict is not the agent's claim | The exit code comes from schema + cross-file validation of the artifacts; a tampered run exits 2 | `src/discovery/run-artifacts.ts`, `test/discovery/myco-run.test.ts` |
+| The verdict is not the agent's claim | The exit code comes from schema + cross-file validation of the artifacts; a tampered run exits 2 | `src/discovery/run-artifacts.ts`; `docs/product/quickstart.md` §4; `test/discovery/myco-run.test.ts` |
 | No surveyed competitor returns a persisted-outcome verdict | 8 product lines from vendor primary docs; closest is Cua's per-action `effect` and HCU's window-level before/after diff, which says it does not prove file contents | `docs/research/mvp-competitive-teardown.md` §2.6, `docs/research/findings/m2-01` |
 
 ## What is not measured
@@ -65,21 +65,32 @@ Positioning sentence to test:
 
 ## What would overturn this
 
-The pre-registered rule rows, in order:
+The arbiter is the pre-registered rule table in `mvd-preregistration.md` §4.1,
+evaluated top to bottom, first row that applies, on ≥30 refutable pairs per arm on
+the no-verify variant. Reproduced here in its own order and wording:
 
-1. Setup cannot get under 15 minutes on a developer machine → A is not a developer
-   wedge; the transport becomes the product problem.
-2. Myco does not beat the screenshot-only control on independently verified
-   correctness → the verdict is not the differentiator.
-3. Myco does not beat `hcu+shell` → a competent agent with HCU and shell access
-   can read the store itself; the durable artifact is not enough.
-4. Myco does not beat Orgo or Sai on the same tasks → the incumbent's lifecycle
-   and hosting win.
-5. Resets are cheap enough for trial-heavy designs → the economics change.
+| # | Condition | Consequence |
+|---|---|---|
+| 1 | Myco is not ≈ 0 (≥1 false success) | Myco's own verdict has a hole: fix and re-run before any wedge claim; A is not supported. |
+| 2 | Myco ≈ 0, and `hcu+shell` has ≥6 discordant pairs worse than Myco | The differentiator is the independent verdict without agent discipline; A stands as written. |
+| 3 | Myco ≈ 0, `hcu+shell` ≈ 0 on both prompt variants, "checks every trial" holds, and `hcu+shell` setup and cost are within 1.5× of Myco's | A's differentiation reduces to the durable artifact and recovery; re-open B-first or reframe A as "CI for GUI". |
+| 4 | Myco ≈ 0, `hcu+shell` has ≥1 false success but <6 discordant pairs worse than Myco | Underpowered / inconclusive: add trials; no wedge change. |
+| 5 | anything else (e.g. `hcu+shell` ≈ 0 but not within 1.5×, or shell calls not trace-recorded) | No wedge change; report the table as measured. |
 
-A single row firing is enough to move the wedge. The rule refuses to decide below
-30 paired refutable trials, and it reports `unknown` rather than a verdict when
-evidence is unavailable.
+Only row 1 moves the wedge — and it moves it away from A. Row 2 is the row that
+supports this recommendation. Row 3 reframes it and re-opens B. Rows 4 and 5
+leave it where it is. So "a single row firing decides" would be wrong: the rows
+say four different things.
+
+Two limits on the table, both from the same document: the `hcu` (GUI-only) and
+`screenshot-only` arms are reported the same way but **do not decide the wedge**;
+and the table cannot be applied at all until Foundry's trusted ingest exists —
+anything earlier is descriptive and never moves the wedge.
+
+The plan's own overturn conditions (`mvp-discovery-plan.md` §7) are a separate,
+broader list, not the rule table: they include setup above 15 minutes, no win over
+the screenshot-only control, no win over `Orgo`/`Sai`, and reset economics. They
+are reasons to re-examine the wedge; they are not rows of the pre-registered rule.
 
 ## The two MVP criteria
 
