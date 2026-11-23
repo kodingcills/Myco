@@ -201,6 +201,7 @@ if [[ $rc -eq 1 && "$out" == *MISS* && ! -f "$P/keys/id_ed25519" ]]; then ok "pr
 else bad "provision.sh --check on an empty tree: rc=$rc (want 1): $out"; fi
 echo "ssh-ed25519 AAAA test" > "$P/keys/id_ed25519.pub"   # non-empty: --check rejects an empty .pub
 touch "$P/keys/id_ed25519" "$P/state/noble-server-cloudimg-arm64.img" "$P/state/myco-runtime-v0.qcow2" "$P/state/seed.iso"
+echo agent > "$P/state/myco-rt-agent-aarch64"
 out="$(bash "$P/provision.sh" --check 2>&1)"; rc=$?
 if [[ $rc -eq 0 ]]; then ok "provision.sh --check exits 0 when every asset is present"
 else bad "provision.sh --check on a complete tree: rc=$rc (want 0): $out"; fi
@@ -214,13 +215,13 @@ for s in fetch-image make-seed; do printf '#!/usr/bin/env bash\nexit 0\n' > "$R/
 printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; [[ -f "$d/state/myco-runtime-v0.qcow2" ]] && e=old || e=none; echo "$e $*" >> "$d/overlay-args.log"; touch "$d/state/myco-runtime-v0.qcow2"\n' > "$R/create-overlay.sh"
 chmod +x "$R"/*.sh
 touch "$R/state/myco-runtime-v0.qcow2"
-out="$(bash "$R/provision.sh" 2>&1)"; rc=$?
+out="$(bash "$R/provision.sh" --no-agent 2>&1)"; rc=$?
 if [[ $rc -eq 0 && "$(cat "$R/overlay-args.log" 2>/dev/null)" == "none "* ]]; then
   ok "provision.sh discards the old overlay when it generates a new key"
 else bad "re-key kept the old overlay (rc=$rc): $(cat "$R/overlay-args.log" 2>/dev/null) / $out"; fi
 rm -f "$R/keys/id_ed25519" "$R/overlay-args.log"; touch "$R/state/myco-runtime-v0.qcow2"
 sleep 300 & live=$!; echo "$live" > "$R/state/qemu.pid"
-out="$(bash "$R/provision.sh" 2>&1)"; rc=$?
+out="$(bash "$R/provision.sh" --no-agent 2>&1)"; rc=$?
 kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
 if [[ $rc -eq 1 && ! -f "$R/overlay-args.log" && ! -f "$R/keys/id_ed25519" && -f "$R/state/myco-runtime-v0.qcow2" && "$out" == *Refusing* ]]; then
   ok "provision.sh refuses to re-key over a running guest's overlay"
@@ -238,7 +239,7 @@ ssh-keygen -t ed25519 -N '' -q -f "$K/keys/id_ed25519"; rm -f "$K/keys/id_ed2551
 touch "$K/state/myco-runtime-v0.qcow2"
 before="$(shasum "$K/keys/id_ed25519" | cut -d' ' -f1)"
 sleep 300 & live=$!; echo "$live" > "$K/state/qemu.pid"
-out="$(bash "$K/provision.sh" 2>&1)"; rc=$?
+out="$(bash "$K/provision.sh" --no-agent 2>&1)"; rc=$?
 kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
 after="$(shasum "$K/keys/id_ed25519" | cut -d' ' -f1)"
 derived="$(ssh-keygen -y -f "$K/keys/id_ed25519" | cut -d' ' -f2)"
@@ -302,9 +303,9 @@ printf '#!/usr/bin/env bash\n[[ -f "$(dirname "$0")/fail-fetch" ]] && exit 1; ex
 printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; [[ -f "$d/state/myco-runtime-v0.qcow2" ]] && e=old || e=none; echo "$e $*" >> "$d/overlay-args.log"; touch "$d/state/myco-runtime-v0.qcow2"\n' > "$I/create-overlay.sh"
 chmod +x "$I"/*.sh
 echo stale > "$I/state/myco-runtime-v0.qcow2"; touch "$I/fail-fetch"
-bash "$I/provision.sh" >/dev/null 2>&1; rc1=$?
+bash "$I/provision.sh" --no-agent >/dev/null 2>&1; rc1=$?
 rm -f "$I/fail-fetch"
-bash "$I/provision.sh" >/dev/null 2>&1; rc2=$?
+bash "$I/provision.sh" --no-agent >/dev/null 2>&1; rc2=$?
 if [[ $rc1 -ne 0 && $rc2 -eq 0 && "$(cat "$I/overlay-args.log" 2>/dev/null)" == "none "* ]]; then
   ok "an interrupted re-key still ends on a fresh overlay"
 else bad "interrupted re-key: rc1=$rc1 rc2=$rc2 overlay-log=$(cat "$I/overlay-args.log" 2>/dev/null)"; fi
@@ -320,9 +321,67 @@ if [[ "$(tr '\n' ' ' < "$F/order.log" 2>/dev/null)" == "seed overlay " ]]; then
   ok "boot.sh runs make-seed.sh before create-overlay.sh"
 else bad "boot.sh order: $(tr '\n' ' ' < "$F/order.log" 2>/dev/null)"; fi
 
+# ── 19. provision.sh builds the guest agent (TIF-120 / DF-008) ────────────────
+# boot -> wait for cloud-init -> build -> shut down, with stubs that log the order.
+# The boot stub starts a harmless `sleep` as the "guest" so liveness checks work;
+# nothing here can start qemu.
+agent_sandbox() {
+  local d="$1"; rm -rf "$d"; mkdir -p "$d/state" "$d/keys" "$d/bin"
+  cp "$HERE/provision.sh" "$d/"
+  for s in fetch-image make-seed create-overlay; do printf '#!/usr/bin/env bash\nexit 0\n' > "$d/$s.sh"; done
+  printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo boot >> "$d/order.log"; sleep 300 & echo $! > "$d/state/qemu.pid"\n' > "$d/boot.sh"
+  printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo shutdown >> "$d/order.log"; kill "$(cat "$d/state/qemu.pid")" 2>/dev/null; rm -f "$d/state/qemu.pid"\n' > "$d/shutdown.sh"
+  printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo build >> "$d/order.log"; [[ -f "$d/fail-build" ]] && exit 1; echo bin > "$d/state/myco-rt-agent-aarch64"\n' > "$d/build-agent-in-guest.sh"
+  # ssh stub: "cloud-init done" unless told otherwise.
+  printf '#!/usr/bin/env bash\n[[ -f "%s/not-ready" ]] && exit 1; exit 0\n' "$d" > "$d/bin/ssh"
+  chmod +x "$d"/*.sh "$d/bin/ssh"
+  ssh-keygen -t ed25519 -N '' -q -f "$d/keys/id_ed25519" </dev/null
+  touch "$d/state/noble-server-cloudimg-arm64.img" "$d/state/myco-runtime-v0.qcow2" "$d/state/seed.iso"
+}
+order() { [[ -f "$1/order.log" ]] && tr '\n' ' ' < "$1/order.log"; true; }
+reap() { [[ -f "$1/state/qemu.pid" ]] && kill "$(cat "$1/state/qemu.pid")" 2>/dev/null; true; }
+
+A="$TMP/a19"; agent_sandbox "$A"
+out="$(PATH="$A/bin:$PATH" MYCO_RT_WAIT_INTERVAL=0 bash "$A/provision.sh" 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -eq 0 && "$(order "$A")" == "boot build shutdown " && -s "$A/state/myco-rt-agent-aarch64" && ! -f "$A/state/qemu.pid" ]]; then
+  ok "provision.sh boots, builds the agent, and shuts the guest down"
+else bad "agent build sequence: rc=$rc order=[$(order "$A")] / $out"; fi
+
+A="$TMP/a19b"; agent_sandbox "$A"; sleep 300 & live=$!; echo "$live" > "$A/state/qemu.pid"
+out="$(PATH="$A/bin:$PATH" MYCO_RT_WAIT_INTERVAL=0 bash "$A/provision.sh" 2>&1)"; rc=$?
+still=$(kill -0 "$live" 2>/dev/null && echo yes || echo no); kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+if [[ $rc -eq 0 && "$(order "$A")" == "build " && $still == yes ]]; then
+  ok "provision.sh reuses a running guest and leaves it running"
+else bad "reuse running guest: rc=$rc order=[$(order "$A")] still-running=$still / $out"; fi
+
+A="$TMP/a19c"; agent_sandbox "$A"; touch "$A/fail-build"
+out="$(PATH="$A/bin:$PATH" MYCO_RT_WAIT_INTERVAL=0 bash "$A/provision.sh" 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -ne 0 && "$(order "$A")" == "boot build build shutdown " && ! -s "$A/state/myco-rt-agent-aarch64" ]]; then
+  ok "a failed agent build retries once, fails, and still shuts the guest down"
+else bad "failed build: rc=$rc order=[$(order "$A")] / $out"; fi
+
+A="$TMP/a19d"; agent_sandbox "$A"; touch "$A/not-ready"
+out="$(PATH="$A/bin:$PATH" MYCO_RT_WAIT_INTERVAL=0 MYCO_RT_CLOUDINIT_WAIT_SECS=1 bash "$A/provision.sh" 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -ne 0 && "$(order "$A")" == "boot shutdown " && "$out" == *"cloud-init not done"* ]]; then
+  ok "a guest that never finishes cloud-init fails clearly and is shut down"
+else bad "cloud-init timeout: rc=$rc order=[$(order "$A")] / $out"; fi
+
+A="$TMP/a19e"; agent_sandbox "$A"; echo bin > "$A/state/myco-rt-agent-aarch64"
+out="$(PATH="$A/bin:$PATH" bash "$A/provision.sh" 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -eq 0 && -z "$(order "$A")" ]]; then
+  ok "an existing agent binary means no boot at all"
+else bad "existing agent: rc=$rc order=[$(order "$A")] / $out"; fi
+
+A="$TMP/a19f"; agent_sandbox "$A"
+out="$(PATH="$A/bin:$PATH" bash "$A/provision.sh" --no-agent 2>&1)"; rc=$?; reap "$A"
+chk="$(bash "$A/provision.sh" --check 2>&1)"; crc=$?
+if [[ $rc -eq 0 && -z "$(order "$A")" && $crc -eq 1 && "$chk" == *"MISS  guest agent binary"* ]]; then
+  ok "--no-agent never boots, and --check reports the missing agent"
+else bad "--no-agent: rc=$rc order=[$(order "$A")] check-rc=$crc / $chk"; fi
+
 echo
 if [[ $FAILURES -eq 0 ]]; then
-  echo "guest selftest OK: all 18 scenarios passed, no guest started, no download"
+  echo "guest selftest OK: all 19 scenarios passed, no guest started, no download"
   exit 0
 fi
 echo "guest selftest FAILED: $FAILURES scenario(s)" >&2

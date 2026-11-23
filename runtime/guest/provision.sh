@@ -11,10 +11,18 @@
 # happen IN the checkout that will run the guest, not in some shared cache. This
 # script is idempotent and safe to run in any checkout:
 #
-#   runtime/guest/provision.sh              # provision (downloads ~600 MB on first run)
-#   runtime/guest/provision.sh --check      # report state, change nothing; exit 0 only if complete
+#   runtime/guest/provision.sh                 # provision everything, incl. the agent
+#   runtime/guest/provision.sh --check         # report state, change nothing; exit 0 only if complete
+#   runtime/guest/provision.sh --no-agent      # assets only; never boots (no VM window)
+#   runtime/guest/provision.sh --rebuild-agent # rebuild the agent even if a copy exists
 #
-# It does NOT boot. Booting is `boot.sh`; see docs/env/linux-runtime.md.
+# The guest agent (myco-rt-agent) must be built INSIDE the guest: it links
+# libxkbcommon, so the musl cross-build from macOS fails. So when no host copy of
+# the agent exists, this script boots the guest, waits for cloud-init, runs
+# build-agent-in-guest.sh, and shuts the guest down again (TIF-120 / DF-008: the
+# missing binary made every create fail with "no agent binary on the host").
+# If a guest is already running it is reused and left running. That boot is the
+# only VM action here; `--no-agent` skips it. See docs/env/linux-runtime.md.
 # It never downloads an overlay or seed from anywhere but the pinned sources, and it
 # never touches myco-win11 or UTM.
 set -euo pipefail
@@ -26,13 +34,19 @@ PUB="$GUEST_DIR/keys/id_ed25519.pub"
 BASE="$STATE/noble-server-cloudimg-arm64.img"
 OVERLAY="$STATE/myco-runtime-v0.qcow2"
 SEED="$STATE/seed.iso"
+AGENT="$STATE/myco-rt-agent-aarch64"
+PID_FILE="$STATE/qemu.pid"
+USAGE="usage: $(basename "$0") [--check | --no-agent | --rebuild-agent]   (no argument = provision all)"
 CHECK=0
+AGENT_MODE=build      # build | skip | rebuild
 case "${1:-}" in
-  "")      ;;
-  --check) CHECK=1 ;;
-  *) echo "usage: $(basename "$0") [--check]   (no argument = provision)" >&2; exit 2 ;;
+  "")              ;;
+  --check)         CHECK=1 ;;
+  --no-agent)      AGENT_MODE=skip ;;
+  --rebuild-agent) AGENT_MODE=rebuild ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
 esac
-[[ $# -le 1 ]] || { echo "usage: $(basename "$0") [--check]" >&2; exit 2; }
+[[ $# -le 1 ]] || { echo "$USAGE" >&2; exit 2; }
 
 ok()   { printf '  ok    %s\n' "$1"; }
 miss() { printf '  MISS  %s\n' "$1"; }
@@ -44,10 +58,12 @@ report() {
   [[ -f "$BASE"   ]] && ok "base image ($(du -h "$BASE" | cut -f1))" || miss "base image ($BASE)"
   [[ -f "$OVERLAY" ]] && ok "qcow2 overlay"            || miss "qcow2 overlay"
   [[ -f "$SEED"   ]] && ok "cloud-init seed"           || miss "cloud-init seed"
+  [[ -s "$AGENT"  ]] && ok "guest agent binary ($AGENT)" || miss "guest agent binary ($AGENT; built in-guest)"
 }
 
 # --check exits 0 only when every asset is present, so a preflight can gate on it.
-complete() { [[ -f "$KEY" && -s "$PUB" && -f "$BASE" && -f "$OVERLAY" && -f "$SEED" ]]; }
+# The agent binary counts: `create` fails without it (DF-008).
+complete() { [[ -f "$KEY" && -s "$PUB" && -f "$BASE" && -f "$OVERLAY" && -f "$SEED" && -s "$AGENT" ]]; }
 
 if [[ $CHECK -eq 1 ]]; then
   report
@@ -125,8 +141,59 @@ echo "Fetching/verifying the pinned base image ..."
 # 5. Cloud-init seed (regenerates so the current public key is authorized).
 "$GUEST_DIR/make-seed.sh"
 
+# 6. Guest agent binary, built natively in the guest (see header). Ordering the
+#    scripts never expressed: boot -> cloud-init done -> build -> shut down.
+guest_live() { [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; }
+if [[ $AGENT_MODE == skip ]]; then
+  echo "Skipping the agent build (--no-agent). create needs it: run this script"
+  echo "without --no-agent (it boots the guest), or runtime/guest/build-agent-in-guest.sh"
+  echo "with a guest running."
+elif [[ -s "$AGENT" && $AGENT_MODE != rebuild ]]; then
+  echo "OK: guest agent binary present ($AGENT); --rebuild-agent to rebuild."
+else
+  BOOTED_HERE=0
+  if guest_live; then
+    echo "Reusing the running guest (pid $(cat "$PID_FILE")) to build the agent; it stays running."
+  else
+    echo "Booting the guest to build the agent (it is shut down again afterwards) ..."
+    "$GUEST_DIR/boot.sh"
+    BOOTED_HERE=1
+    # Shut down even if a later step fails: never leave a guest this script started.
+    trap '"$GUEST_DIR/shutdown.sh" || true' EXIT
+  fi
+  # SSH answering is not readiness: cloud-init is still installing the toolchain,
+  # and a build that starts now races it (live-proof.sh learned this).
+  SSH_OPTS=(-i "$KEY" -p 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+            -o BatchMode=yes -o ConnectTimeout=3)
+  WAIT_SECS="${MYCO_RT_CLOUDINIT_WAIT_SECS:-300}"
+  INTERVAL="${MYCO_RT_WAIT_INTERVAL:-2}"
+  deadline=$(( $(date +%s) + WAIT_SECS ))
+  until ssh "${SSH_OPTS[@]}" myco@localhost 'cloud-init status 2>/dev/null | grep -q "status: done"' 2>/dev/null; do
+    if (( $(date +%s) >= deadline )); then
+      echo "FAIL: guest not ready (cloud-init not done) after ${WAIT_SECS}s; serial log: $STATE/serial.log" >&2
+      exit 1
+    fi
+    sleep "$INTERVAL"
+  done
+  # Retry once: a first build on a fresh overlay has hit transient toolchain hiccups.
+  rm -f "$AGENT"
+  if ! "$GUEST_DIR/build-agent-in-guest.sh"; then
+    echo "agent build failed; retrying once" >&2
+    "$GUEST_DIR/build-agent-in-guest.sh" || { echo "FAIL: agent build (after retry)" >&2; exit 1; }
+  fi
+  [[ -s "$AGENT" ]] || { echo "FAIL: build reported success but $AGENT is missing" >&2; exit 1; }
+  if [[ $BOOTED_HERE -eq 1 ]]; then
+    trap - EXIT
+    "$GUEST_DIR/shutdown.sh"
+  fi
+fi
+
 echo
 report
 echo
-echo "Provisioned. Boot with: $GUEST_DIR/boot.sh"
+if complete; then
+  echo "Provisioned. Boot with: $GUEST_DIR/boot.sh"
+else
+  echo "Provisioned except the guest agent (see above); create will fail until it is built."
+fi
 echo "SSH once up:            ssh -i $KEY -p 10022 myco@localhost"
