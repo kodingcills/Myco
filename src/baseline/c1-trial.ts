@@ -121,8 +121,7 @@ export async function runC1Trial(
         // non-stall outcome never sees it. That bug shipped in the first draft of
         // this guard and the test caught it.
         const stalledKey = actionSignature(action);
-        if (unconfirmed.has(stalledKey))
-          deviations.push(`cua-action-${steps}-resent-after-stall`);
+        if (unconfirmed.has(stalledKey)) deviations.push(`cua-action-${steps}-resent-after-stall`);
         // A stall marks THIS action unconfirmed; any other outcome for it clears
         // the mark, because its effect is now known. Other signatures are
         // untouched - clearing one action's uncertainty says nothing about
