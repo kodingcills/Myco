@@ -22,7 +22,7 @@ function run(snapshot?: string) {
     writeFileSync(join(stubs, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
   // vm.sh logs every call; `status` reports a stopped VM so the script proceeds.
   stub("vm.sh", `echo "vm.sh $*" >> "${log}"\n[ "$1" = status ] && echo stopped\nexit 0`);
-  stub("wait-ssh.sh", `echo "wait-ssh.sh $*" >> "${log}"\nexit 0`);
+  stub("wait-guest-ready.sh", `echo "wait-guest-ready.sh $*" >> "${log}"\nexit 0`);
   stub("vssh", `echo "vssh" >> "${log}"\nexit 0`);
   // Keep the lock guard independent of whatever is running on the host.
   writeFileSync(join(bin, "pgrep"), "#!/bin/bash\nexit 1\n", { mode: 0o755 });
