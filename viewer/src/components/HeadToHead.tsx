@@ -3,12 +3,17 @@ import { useEffect, useRef } from "react";
 import type { HeadToHeadReport } from "../data/head-to-head.ts";
 import { useViewer } from "../store.ts";
 
+// gui-spec §4.6/§2.11: missing data reads exactly `not recorded`; unverifiable data reads
+// exactly `could not look`. Identical strings everywhere, so they live in one place.
+const MISSING = "not recorded";
+const COULD_NOT_LOOK = "could not look";
+
 function pct(value: number | null): string {
-  return value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
+  return value === null ? MISSING : `${(value * 100).toFixed(1)}%`;
 }
 
 function band(bounds: readonly [number, number] | null): string {
-  return bounds === null ? "n/a" : `${pct(bounds[0])}–${pct(bounds[1])}`;
+  return bounds === null ? MISSING : `${pct(bounds[0])}–${pct(bounds[1])}`;
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
@@ -109,14 +114,11 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
         <Fact label="Paired trials" value={String(decision.pairs)} />
         <Fact
           label="Sign test p"
-          value={decision.signTestP === null ? "n/a" : decision.signTestP.toFixed(4)}
+          value={decision.signTestP === null ? MISSING : decision.signTestP.toFixed(4)}
         />
         <Fact label="Ineligible rows" value={String(decision.ineligibleRows)} />
         {report.generatedAt && (
-          <Fact
-            label="Generated"
-            value={report.generatedAt.replace("T", " ").replace(/\.\d+Z$/, "Z")}
-          />
+          <Fact label="Generated" value={formatGeneratedAt(report.generatedAt)} />
         )}
       </div>
 
@@ -128,8 +130,8 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
               <th scope="col">Arm</th>
               <th scope="col">Trials</th>
               <th scope="col">Verified</th>
-              <th scope="col">Refuted</th>
-              <th scope="col">Uncertain</th>
+              <th scope="col">Failed</th>
+              <th scope="col">Unknown</th>
               <th scope="col">False successes</th>
               <th scope="col">False-success CI</th>
             </tr>
@@ -145,8 +147,8 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
                   <td>{arm.trials.filter((trial) => trial.verdict === "verified").length}</td>
                   <td>{arm.trials.filter((trial) => trial.verdict === "refuted").length}</td>
                   <td>{arm.trials.filter((trial) => trial.verdict === "uncertain").length}</td>
-                  <td>{unknown ? "n/a (unknown)" : falseSuccesses}</td>
-                  <td>{unknown ? "n/a" : armInterval(arm.trials, falseSuccesses)}</td>
+                  <td>{unknown ? MISSING : falseSuccesses}</td>
+                  <td>{unknown ? COULD_NOT_LOOK : armInterval(arm.trials, falseSuccesses)}</td>
                 </tr>
               );
             })}
@@ -194,9 +196,11 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
                 <tr key={`${row.seed}-${row.faultClass}`}>
                   <td>{row.seed}</td>
                   <td>{row.faultClass}</td>
-                  <td>{row.claimKnown === false ? "n/a" : row.mycoFalseSuccess ? "yes" : "no"}</td>
                   <td>
-                    {row.claimKnown === false ? "n/a" : row.comparatorFalseSuccess ? "yes" : "no"}
+                    {row.claimKnown === false ? MISSING : row.mycoFalseSuccess ? "yes" : "no"}
+                  </td>
+                  <td>
+                    {row.claimKnown === false ? MISSING : row.comparatorFalseSuccess ? "yes" : "no"}
                   </td>
                 </tr>
               ))}
@@ -296,8 +300,9 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
         <h2 className="type-micro text-text-secondary">What this report does not say</h2>
         <ul data-report-notes>
           <li className="type-small text-text-secondary">
-            It does not pool prompt variants: <span className="type-data">ef-t01</span> (verify) and{" "}
-            <span className="type-data">ef-t01b</span> (no-verify) are separate decisions.
+            It does not pool prompt variants: <span className="type-data">{decision.taskId}</span> (
+            <span className="type-data">{decision.promptVariant}</span>) is this decision's variant,
+            and any other variant is a separate decision.
           </li>
           <li className="type-small text-text-secondary">
             It does not treat <span className="type-data">uncertain</span> as success or failure;
@@ -322,11 +327,21 @@ function armInterval(
   falseSuccesses: number,
 ): string {
   const n = trials.length;
-  if (n === 0) return "n/a";
+  if (n === 0) return COULD_NOT_LOOK;
   const z = 1.96;
   const p = falseSuccesses / n;
   const d = 1 + (z * z) / n;
   const centre = (p + (z * z) / (2 * n)) / d;
   const margin = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
   return `${pct(Math.max(0, centre - margin))}–${pct(Math.min(1, centre + margin))}`;
+}
+
+// gui-spec §4.5: absolute timestamps read `HH:MM:SS.mmm ET` in the viewer's local zone with
+// a label. The report's `generatedAt` is an ISO instant, so render it in local time rather
+// than echoing the raw UTC `Z`, which the spec forbids in the UI.
+function formatGeneratedAt(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return MISSING;
+  const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}:${String(at.getSeconds()).padStart(2, "0")}.${String(at.getMilliseconds()).padStart(3, "0")}`;
+  return `${time} ET`;
 }

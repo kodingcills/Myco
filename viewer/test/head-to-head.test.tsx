@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { HeadToHeadView } from "../src/components/HeadToHead.tsx";
-import { parseHeadToHead } from "../src/data/head-to-head.ts";
+import { parseHeadToHead, resolveSameOriginReportUrl } from "../src/data/head-to-head.ts";
 
 const fixture = JSON.parse(
   readFileSync(new URL("../fixtures/head-to-head.json", import.meta.url), "utf8"),
@@ -124,7 +124,7 @@ test("the decision is the page heading and tables carry scoped headers", () => {
   }
 });
 
-test("a pair row whose claim is unknown renders n/a, never no", () => {
+test("a pair row whose claim is unknown reads `not recorded`, never no", () => {
   const report = parseHeadToHead({
     ...fixture,
     decision: {
@@ -152,7 +152,8 @@ test("a pair row whose claim is unknown renders n/a, never no", () => {
   const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
   const text = textOf(html);
   // The unknown row must not read as a denial, and the known row must still read.
-  expect(text).toContain("1 silent-drop n/a n/a");
+  // gui-spec §4.6: missing data reads exactly `not recorded`.
+  expect(text).toContain("1 silent-drop not recorded not recorded");
   expect(text).toContain("2 silent-drop yes no");
 });
 
@@ -169,5 +170,69 @@ test("an unknown false-success value is not rendered as a measured zero", () => 
   expect(report).toBeDefined();
   if (!report) return;
   const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
-  expect(textOf(html)).toContain("n/a (unknown)");
+  const text = textOf(html);
+  // gui-spec §4.6: missing reads `not recorded`; an interval that cannot be computed reads
+  // `could not look`. Neither may be collapsed into a measured zero.
+  expect(text).toContain("not recorded");
+  expect(text).toContain("could not look");
+  expect(text).not.toContain("n/a");
+});
+
+test("arm headers use the four fixed verdict words, never Refuted or Uncertain", () => {
+  const report = parseHeadToHead(fixture);
+  expect(report).toBeDefined();
+  if (!report) return;
+  const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
+  const table = html.split("<table")[1] ?? "";
+  const headers = (table.split("</thead>")[0]?.match(/<th\b[^>]*>([^<]*)</g) ?? []).join(" ");
+  // gui-spec §4.3 fixes the words and forbids synonyms.
+  expect(headers).toContain("Verified");
+  expect(headers).toContain("Failed");
+  expect(headers).toContain("Unknown");
+  const text = textOf(html);
+  expect(text).not.toContain("Refuted");
+  expect(text).not.toContain("Uncertain");
+});
+
+test("the generated time is local with an ET label, never a raw UTC Z", () => {
+  const report = parseHeadToHead({ ...fixture, generatedAt: "2026-11-23T18:30:00.000Z" });
+  expect(report).toBeDefined();
+  if (!report) return;
+  const text = textOf(renderToStaticMarkup(<HeadToHeadView report={report} />));
+  // gui-spec §4.5: absolute timestamps read HH:MM:SS.mmm ET.
+  expect(text).toMatch(/Generated \d{2}:\d{2}:\d{2}\.\d{3} ET/);
+  expect(text).not.toContain("18:30:00.000Z");
+});
+
+test("the prompt-variant note names this decision's own variant, not a fixture's", () => {
+  const report = parseHeadToHead({
+    ...fixture,
+    decision: {
+      ...fixture.decision,
+      taskId: "some-other-task",
+      promptVariant: "other-variant",
+    },
+  });
+  expect(report).toBeDefined();
+  if (!report) return;
+  const text = textOf(renderToStaticMarkup(<HeadToHeadView report={report} />));
+  expect(text).toContain("some-other-task");
+  expect(text).toContain("other-variant");
+  // The old copy hardcoded these two names; neither may survive.
+  expect(text).not.toContain("ef-t01b");
+});
+
+test("a ?compare= address off this origin is refused, not fetched", () => {
+  const base = "https://viewer.example/app/";
+  expect(resolveSameOriginReportUrl("/reports/r.json", base)).toHaveProperty("url");
+  expect(resolveSameOriginReportUrl("reports/r.json", base)).toHaveProperty("url");
+  expect(resolveSameOriginReportUrl("https://viewer.example/reports/r.json", base)).toHaveProperty(
+    "url",
+  );
+  const crossOrigin = resolveSameOriginReportUrl("https://evil.example/r.json", base);
+  expect(crossOrigin).toHaveProperty("error");
+  const protocolRelative = resolveSameOriginReportUrl("//evil.example/r.json", base);
+  expect(protocolRelative).toHaveProperty("error");
+  const notAUrl = resolveSameOriginReportUrl("http://[", base);
+  expect(notAUrl).toHaveProperty("error");
 });
