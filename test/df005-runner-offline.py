@@ -29,6 +29,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "scripts" / "df005-runner.py"
+
+# Import the runner's own scoring rule rather than restating it in the test:
+# a test that re-expresses the rule it guards cannot detect a change to it.
+import importlib.util as _ilu  # noqa: E402
+
+_spec = _ilu.spec_from_file_location("df005_runner", RUNNER)
+df005 = _ilu.module_from_spec(_spec)
+# Register before exec: dataclass processing looks the module up in sys.modules.
+sys.modules["df005_runner"] = df005
+_spec.loader.exec_module(df005)  # type: ignore[union-attr]
+check_score = df005.check_score
 FAILS: list[str] = []
 
 STUB_TEMPLATE = r'''#!/usr/bin/env python3
@@ -190,6 +201,16 @@ def report_text(body: str) -> str:
     return f.name
 
 
+# The declared weight split per scenario. Add a scenario here when it gains a
+# weight set, so test 20 fails on a missing declaration instead of guessing.
+EXPECTED_WEIGHT_SPLIT: dict[str, dict[str, float]] = {
+    "DF-S01": {"persisted-set-matches": 0.7, "create-cost-observed": 0.0,
+               "actions-delivered": 0.3},
+    "DF-S02": {"persisted-set-matches": 0.4, "agent-report-names-missing": 0.4,
+               "create-cost-observed": 0.0, "actions-delivered": 0.2},
+}
+
+
 def main() -> int:
     print("1. stub that lies about delivery, with no guest behind it")
     code, d = Harness().run()
@@ -206,6 +227,9 @@ def main() -> int:
     expect(ledger(d)["run-df-s01-1"]["state"] == "uncertain", "ledger state `uncertain`")
     c = checks_of(d, "run-df-s01-1")["persisted-set-matches"]
     expect(c["passed"] is None, "check passed is null (could not look)")
+    _res = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+    expect(_res["verdict"]["score"] == 0.0,
+           f"an uncertain run scores 0.0, not a failed-check value: {_res['verdict']['score']}")
     expect("could not look" in c["reason"], f"reason says could not look: {c['reason']}")
 
     print("3. guest store correct → success")
@@ -438,13 +462,11 @@ def main() -> int:
         expect(abs(total - 1.0) < 1e-9, f"{label}: weights sum to {total}")
         # The sum alone is not enough: swapping two weights keeps it at 1.0
         # while changing what a partial run scores. Pin the split.
-        expected_split = (
-            {"persisted-set-matches": 0.4, "agent-report-names-missing": 0.4,
-             "create-cost-observed": 0.0, "actions-delivered": 0.2}
-            if scenario == "DF-S02" else
-            {"persisted-set-matches": 0.7, "create-cost-observed": 0.0,
-             "actions-delivered": 0.3}
-        )
+        # Keyed lookup, not an if/else with a default: a third weight set must
+        # fail loudly here rather than silently inherit DF-S01's split.
+        expected_split = EXPECTED_WEIGHT_SPLIT.get(scenario)
+        expect(expected_split is not None,
+               f"{label}: a weight split is declared for {scenario}")
         expect(weights == expected_split, f"{label}: split is {weights}")
         if scenario == "DF-S02":
             expect(res["verdict"]["score"] == 1.0,
@@ -464,7 +486,16 @@ def main() -> int:
     expect(not any(o == "{}" for o in observed),
            "no postcondition collapses the envelope to {}")
 
-    print("22. scores are rounded and the two encodings agree")
+    print("21b. every scenario with a weight set has a declared split")
+    # Scenarios that are gaps (S03/S04) or declare no weights (S05) are not in
+    # the table. If one later gains weights, this fails until it is declared.
+    weighted = {sid for sid, sc in df005.SCENARIOS.items()
+                if not sc.needs_ops and sid not in ("DF-S03", "DF-S04", "DF-S05")}
+    expect(set(EXPECTED_WEIGHT_SPLIT) == weighted,
+           f"declared splits match the weighted scenarios: "
+           f"{sorted(EXPECTED_WEIGHT_SPLIT)} vs {sorted(weighted)}")
+
+    print("22. scores are rounded and the rule's literals hold")
     h = Harness(store_items=["fix login page"], a11y=False, geometry=True)
     code, d = h.run(scenario="DF-S02", agent_report=report_text(
         "Both 'BUG: crash on save' and 'Bugfix release notes' were dropped by a "
@@ -472,8 +503,16 @@ def main() -> int:
     res = json.loads((d / "run-df-s02-1" / "result.json").read_text())
     score = res["verdict"]["score"]
     expect(score == round(score, 10), f"score is not float noise: {score!r}")
-    # check()'s published score and RunResult.score must be the same rule.
-    recomputed = round(sum(c["partial_score"]["weight"] * (1.0 if c["passed"] is True else 0.0)
+    # Assert the LITERAL rule, not the function against itself. Comparing
+    # `published == check_score(passed)` is tautological when both sides call the
+    # same function, so it pins nothing about the rule's value.
+    for c in res["verdict"]["checks"]:
+        want = {True: 1.0, False: 0.0, None: 0.0}[c["passed"]]
+        expect(c["partial_score"]["score"] == want,
+               f"{c['name']}: passed={c['passed']!r} -> score {c['partial_score']['score']} "
+               f"(want {want})")
+    recomputed = round(sum(c["partial_score"]["weight"] *
+                           {True: 1.0, False: 0.0, None: 0.0}[c["passed"]]
                            for c in res["verdict"]["checks"]), 10)
     expect(score == recomputed, f"published {score} == recomputed {recomputed}")
 
