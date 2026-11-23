@@ -453,7 +453,17 @@ def main() -> int:
             capture_output=True, text=True, cwd=ROOT,
             env={**os.environ, "MYCO_VM_LOCK_PATH": str(held)},
         )
-        expect("test-holder" in proc.stdout, f"names the holder: {proc.stdout.strip()[-120:]}")
+        expect("held by" in proc.stdout and "99999 test-holder" in proc.stdout,
+               f"names the holder on the vm-lock line: {proc.stdout.strip()[-160:]}")
+        # The denominator must be MEASURED, not asserted: count the check lines
+        # actually printed and compare to the "of N" claim. Omitting a check
+        # that needs neither the lock nor the guest is the defect this guards.
+        check_lines = [l for l in proc.stdout.splitlines()
+                       if l.lstrip().startswith(("ok ", "FAIL ", "skip "))]
+        expect("create-schema" in proc.stdout,
+               "create-schema is reported even while the lock is held")
+        expect(len(check_lines) == 8,
+               f"8 check lines printed under a held lock (got {len(check_lines)})")
         expect(proc.returncode == 1, "exit 1 while the lock is held")
     finally:
         holder.kill()

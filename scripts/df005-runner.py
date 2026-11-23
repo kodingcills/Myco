@@ -989,7 +989,12 @@ def create_accepts_introspection(timeout: float = 15.0) -> tuple[bool, str]:
     not know, `create` ignores it, and the run gaps on REQ-03 after a guest has
     already been booted. Checking the declaration costs one handshake.
     """
-    client = McpClient([str(DEFAULT_SERVER)])
+    try:
+        client = McpClient([str(DEFAULT_SERVER)])
+    except Exception as e:  # noqa: BLE001 - a spawn failure (permissions, a
+        # partially-written binary) must be a recorded FAIL, not a traceback.
+        return False, f"could not start the server: {type(e).__name__}: {e}"
+
     try:
         client.request("initialize", {
             "protocolVersion": "2024-11-05", "capabilities": {},
@@ -1014,7 +1019,8 @@ def create_accepts_introspection(timeout: float = 15.0) -> tuple[bool, str]:
             "create does not declare introspection_file (has: "
             f"{', '.join(sorted(props)) or 'nothing'}). The runner sends it anyway, "
             "and the server will ignore it — the record will never reach observe. "
-            "TIF-120 must land first."
+            "Rebuild with: cargo build -p myco-rt-mcp (a stale binary predating "
+            "TIF-120 reports the same)."
         )
     return False, "the server exposes no `create` tool"
 
@@ -1084,6 +1090,24 @@ def preflight() -> int:
     # (e) Never probe the guest while another driver holds the lock. The checks
     # are read-only, but they add load to someone else's live slot, so report
     # them as not-run and let the operator see why they are missing.
+    # 8. Does `create` actually accept the argument we send? A key-name drift
+    # (introspection vs introspection_file) passes every guest-side probe and
+    # then burns the slot at REQ-03. Ask the server's own schema rather than
+    # trusting a write.
+    #
+    # Deliberately before the held-lock return: this check needs neither the
+    # lock nor the guest, and omitting it while printing "of 8" is the very
+    # count-without-measuring defect this file exists to prevent.
+    if DEFAULT_SERVER.exists() and os.access(DEFAULT_SERVER, os.X_OK):
+        accepted, detail = create_accepts_introspection()
+        record("create-schema", accepted, detail)
+    elif not DEFAULT_SERVER.exists():
+        record("create-schema", None, "not run: the MCP server binary is missing")
+    else:
+        # exists but is not executable — the same condition check 1 fails on.
+        record("create-schema", False,
+               f"{DEFAULT_SERVER} is not executable, so its schema cannot be read")
+
     if not lock_free:
         for name in ("guest-ssh", "app-deployed", "app-self-test",
                      "introspection-file", "introspection-shadow"):
@@ -1153,24 +1177,15 @@ def preflight() -> int:
                f"overrides the path create names ({INTROSPECTION_PATH}) — the app "
                "would publish elsewhere and observe would see nothing"
                if shadowed else
-               "no competing MYCO_TODO_STATE_FILE in the agent's environment")
+               f"the agent's environment has no MYCO_TODO_STATE_FILE competing "
+               f"with {INTROSPECTION_PATH} (equality is a proxy: it does not "
+               "prove the app writes there)")
     else:
         # No guest to ask: record the dependent checks as not-run rather than
         # omitting them, so the summary never claims a count it did not measure.
         for name in ("app-deployed", "app-self-test", "introspection-file",
                      "introspection-shadow"):
             record(name, None, "not run: guest unreachable")
-
-    # 8. Does `create` actually accept the argument we send? A key-name drift
-    # (introspection vs introspection_file) passes every guest-side probe above
-    # and then burns the slot at REQ-03. Ask the server's own schema rather than
-    # trusting a write.
-    if DEFAULT_SERVER.exists():
-        accepted, detail = create_accepts_introspection()
-        record("create-schema", accepted, detail)
-    else:
-        # Same reason as check 1: without a binary there is nothing to ask.
-        record("create-schema", None, "not run: the MCP server binary is missing")
 
     failed = [n for n, ok, _ in results if ok is False]
     skipped = [n for n, ok, _ in results if ok is None]
