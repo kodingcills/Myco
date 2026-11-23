@@ -342,3 +342,19 @@ that subset safe (TOCTOU, throws, freeze). The rest is here, with a fresh round 
   every path that can produce a decision-eligible row attests, and the attestation parameter
   is not optional on that path; `executeTrial` records the fixture it actually ran against;
   the scorer assertion names the blocker. **The eligibility flag flips only after a PASS.**
+- **prior rounds, so round 1 starts informed.** #253 ran three rounds. Round 1 rejected at
+  `376749d`: the fixture binding was circular (caller-written `evidence.fixtureId` compared
+  only against the caller's own `claimedFixtureHash`); no production path set
+  `fixtureId`/`fixtureHash` or called `attest()`; the binding was the caller's mutable object
+  and the scorer threw on a hostile one; A14 and R1 survived mutation. Round 2 rejected at
+  `22abfa5`: TOCTOU on the hidden set (Proxy array, getter on `taskFixtureId`); three clauses
+  survived mutation; the scorer still threw (binding accessor outside the try, `isAttestation`
+  on a Proxy, `bundleDigest` on malformed files); the returned attestation was not frozen;
+  wiring still incomplete; one vacuous scorer assertion. Round 3 verified the three safety
+  fixes at `7effe5f`. **Do not re-litigate the safety fixes** — they are verified; this issue
+  is coverage and wiring only.
+- **known trap for the mutation runner.** A mutant that fails to compile is not a kill. Two
+  of the author's own probes were wrong this way: a Proxy that returned a forged fixture to
+  `.find` was refused for the wrong reason (the hash no longer matched), and a `try`-removal
+  mutant was a syntax error. Check the mutant compiles before scoring it, and check the
+  mutant admits an input the real code refuses.
