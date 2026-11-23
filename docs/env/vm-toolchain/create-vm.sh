@@ -6,7 +6,7 @@
 # Uses UTM's AppleScript interface via osascript (utmctl is blocked by macOS Automation/TCC outside a GUI-granted context).
 set -euo pipefail
 NAME=${NAME:-myco-win11}; CPUS=${CPUS:-6}; MEM=${MEM:-8192}; DISK_MB=${DISK_MB:-65536}; SSH_PORT=${SSH_PORT:-2222}
-WINISO=${WINISO:-$(ls ~/VMs/iso/Win11_*ARM64*.iso | head -1)}; SEED=${SEED:-$HOME/VMs/myco-win11/seed.iso}
+WINISO=${WINISO:-$(ls ${ISO_ROOT:-$HOME/VMs/iso}/Win11_*ARM64*.iso | head -1)}; SEED=${SEED:-${VM_ROOT:-$HOME/VMs/myco-win11}/seed.iso}
 osascript <<OSA
 tell application "UTM"
   if exists (virtual machine named "$NAME") then error "VM $NAME already exists"
