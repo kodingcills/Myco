@@ -41,9 +41,13 @@ argv_match() {
 # 2. A forwarded port. 2222 is UTM's (create-vm.sh SSH_PORT default), 10022 is
 #    boot.sh's. A listener means a guest is up even if argv[0] is unexpected.
 port_match() {
-  local p out
+  local p out rc
   for p in 2222 10022; do
-    out="$(lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null)" || return 2
+    # lsof exits 1 for "no matching file" and >1 for a real error. Mapping every
+    # non-zero to unreadable made exit 1 (idle) unreachable on any host with
+    # lsof: an idle host reported UNKNOWN. Only rc > 1 is unreadable.
+    out="$(lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null)"; rc=$?
+    [ "$rc" -gt 1 ] && return 2
     [ -n "$out" ] && return 0
   done
   return 1

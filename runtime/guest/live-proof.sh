@@ -39,9 +39,12 @@ vm_state_running() {
   local table
   table="$(ps -Ao command)" || return 0
   [[ -n "$table" ]] || return 0
+  # The same identity set as scripts/vm-state.sh. Matching only
+  # qemu-system-aarch64 here would reintroduce exactly the bug this replaces:
+  # a readable table containing UTM's QEMULauncher would read as idle.
   awk '{n = split($1, a, "/"); b = a[n]
         if (b == "qemu-system-aarch64" || b == "QEMULauncher" ||
-            b == "qemu-aarch64-softmmu") found = 1} END {exit !found}' <<<"$table"
+            b == "qemu-aarch64-softmmu" || b == "qemu-system-aarch64-headless") found = 1} END {exit !found}' <<<"$table"
 }
 
 # This script boots a VM. It must never run by accident: the host is shared with

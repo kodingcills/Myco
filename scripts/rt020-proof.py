@@ -30,7 +30,8 @@ def qemu_running():
         return True
     if ps.returncode != 0 or not ps.stdout.strip():
         return True
-    names = {"qemu-system-aarch64", "QEMULauncher", "qemu-aarch64-softmmu"}
+    names = {"qemu-system-aarch64", "QEMULauncher", "qemu-aarch64-softmmu",
+             "qemu-system-aarch64-headless"}
     for line in ps.stdout.splitlines():
         argv0 = line.split(None, 1)[0] if line.split() else ""
         if os.path.basename(argv0) in names:
