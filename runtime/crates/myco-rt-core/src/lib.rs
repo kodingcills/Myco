@@ -12,7 +12,7 @@ pub mod session;
 pub mod state;
 
 pub use ops::{Action, ActionOutcome, Backend, EvidenceArtifacts, Observation, SessionEvent};
-pub use session::{Session, SessionConfig, SessionPhase};
+pub use session::{Session, SessionConfig, SessionPhase, WRITE_FILE_PERMISSION};
 pub use state::{ElementRef, StateVersion};
 
 /// Errors surfaced by the runtime. Verdict-shaped outcomes do not exist here

@@ -38,7 +38,7 @@ DF-005 (TIF-27) is blocked on **RT-first-path** (= RT-011 end-to-end test).
 | REQ-06 | reset with measured cost | RT-006 + RT-011 (measured, not inherited from M1-017) | yes |
 | REQ-08 | host-side guest file read | **RT-015** (extended op, post-first-path) | no |
 | REQ-09 | process control (launch/kill/relaunch, exit status) | launch via `act` now; kill/relaunch/exit-status = **RT-016** | partial |
-| REQ-10 | guest file edit/write | **RT-017** (extended op) | no |
+| REQ-10 | guest file edit/write | **RT-017** (extended op; PR #229 in review, opt-in `allow_write`, live acceptance pending) | no |
 | REQ-11 | guest shell exec w/ stdout/stderr/exit | **RT-018** (extended op) | no |
 | REQ-12 | reset/destroy after crashes | RT-006 acceptance + RT-011 (crash-then-reset case) | yes |
 

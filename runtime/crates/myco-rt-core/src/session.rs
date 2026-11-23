@@ -30,6 +30,10 @@ impl std::fmt::Display for SessionPhase {
     }
 }
 
+/// Permission that gates `write_guest_file` (RT-017). Opt-in: not in
+/// `Permissions::default()`.
+pub const WRITE_FILE_PERMISSION: &str = "writeFile";
+
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     pub session_id: String,
@@ -173,6 +177,28 @@ impl<B: Backend> Session<B> {
         self.backend
             .read_guest_file(path)
             .map_err(|e| RuntimeError::Backend(e.to_string()))
+    }
+
+    /// `write_file` (RT-017): write a guest file through the backend's grant.
+    /// Guarded like the other non-terminal ops, and gated on its own `writeFile`
+    /// permission, which `Permissions::default()` does NOT include: a read grant
+    /// alone never becomes a write grant (Tier-2 verifier, #229). Bumps the
+    /// version on success because the guest filesystem is part of what refs
+    /// describe; a refused write does not.
+    pub fn write_guest_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, RuntimeError>
+    where
+        B: crate::ops::GuestFileWrite,
+    {
+        self.require_ready()?;
+        if !self.config.permissions.allows(WRITE_FILE_PERMISSION) {
+            return Err(RuntimeError::PermissionDenied(WRITE_FILE_PERMISSION.into()));
+        }
+        let written = self
+            .backend
+            .write_guest_file(path, bytes)
+            .map_err(|e| RuntimeError::Backend(e.to_string()))?;
+        self.state_version = StateVersion(self.state_version.0 + 1);
+        Ok(written)
     }
 
     /// `launch_process` (RT-016): launch a process and return a handle that

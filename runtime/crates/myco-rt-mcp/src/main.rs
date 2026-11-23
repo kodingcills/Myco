@@ -208,7 +208,8 @@ fn tool_defs() -> Vec<Value> {
             "inputSchema": {"type":"object","properties":{
                 "session_id": {"type":"string"},
                 "token": {"type":"string"},
-                "read_root": {"type":"string","description":"Opt-in: absolute guest directory the session may read from (not '/'). Every read_file path is confined beneath it. Applied on every connect, including after reset."}
+                "read_root": {"type":"string","description":"Opt-in: absolute guest directory the session may read from (not '/'). Every read_file path is confined beneath it. Applied on every connect, including after reset. Read-only unless allow_write is also true."},
+                "allow_write": {"type":"boolean","description":"Opt-in, default false: also allow write_file under read_root. Requires read_root. Without it write_file is refused."}
             }}
         }),
         json!({
@@ -235,6 +236,15 @@ fn tool_defs() -> Vec<Value> {
             "inputSchema": {"type":"object","required":["session_id","path"],"properties":{
                 "session_id": {"type":"string"},
                 "path": {"type":"string","description":"Path relative to the session's read grant"}
+            }}
+        }),
+        json!({
+            "name": "write_file",
+            "description": "Write/replace a regular guest file (RT-017), confined beneath the session's read_root. Opt-in: the session must be created with read_root AND allow_write=true. Content is base64, capped at 1 MiB decoded. FIFOs, devices, directories, symlinks and hard-linked files are refused. Not atomic (truncate then write); read it back with read_file to confirm. Returns bytes_written.",
+            "inputSchema": {"type":"object","required":["session_id","path","content_base64"],"properties":{
+                "session_id": {"type":"string"},
+                "path": {"type":"string","description":"Path relative to the session's grant"},
+                "content_base64": {"type":"string","description":"File content, base64-encoded"}
             }}
         }),
         json!({
@@ -285,6 +295,7 @@ impl Server {
             "act" => self.act(&args),
             "evidence" => self.evidence(&args),
             "read_file" => self.read_file(&args),
+            "write_file" => self.write_file(&args),
             "launch_process" => self.launch_process(&args),
             "kill_process" => self.kill_process(&args),
             "relaunch_process" => self.relaunch_process(&args),
@@ -354,10 +365,14 @@ impl Server {
                 Some(root.to_string())
             }
         };
+        let permissions = session_permissions(
+            read_root.is_some(),
+            args["allow_write"].as_bool().unwrap_or(false),
+        )?;
         let mut session = Session::new_creating(
             SessionConfig {
                 session_id: id.clone(),
-                permissions: Permissions::default(),
+                permissions,
                 idle_timeout: None,
             },
             {
@@ -485,6 +500,34 @@ impl Server {
             "raw_bytes": bytes.len(),
             "content_base64": encoded,
         }))
+    }
+
+    /// RT-017: write/replace a guest file within the session's grant.
+    ///
+    /// Content arrives base64 (the same wire convention as `read_file`'s output) and
+    /// is decoded here; the guest re-confines the path against the same grant the
+    /// read uses, so a write cannot escape what a read cannot.
+    fn write_file(&mut self, args: &Value) -> Result<Value, (i64, String)> {
+        let path = args["path"]
+            .as_str()
+            .ok_or((-32602, "missing path".to_string()))?;
+        let encoded = args["content_base64"]
+            .as_str()
+            .ok_or((-32602, "missing content_base64".to_string()))?;
+        // Cap BEFORE decoding, so an oversize payload costs nothing more here and
+        // never reaches the guest (the agent and transport re-check).
+        if encoded.len() > WRITE_FILE_MAX_ENCODED {
+            return Err((-32602, "content exceeds 1 MiB limit".to_string()));
+        }
+        let bytes = base64_decode(encoded).map_err(|e| (-32602, format!("bad content_base64: {e}")))?;
+        if bytes.len() > WRITE_FILE_LIMIT {
+            return Err((-32602, "content exceeds 1 MiB limit".to_string()));
+        }
+        let s = self.session(args)?;
+        let written = s
+            .write_guest_file(path, &bytes)
+            .map_err(|e| (-32000, e.to_string()))?;
+        Ok(json!({"ok": true, "path": path, "bytes_written": written}))
     }
 
     /// RT-016: launch a managed process and return its handle.
@@ -672,7 +715,8 @@ mod tests {
             names,
             vec![
                 "act", "create", "destroy", "evidence", "kill_process",
-                "launch_process", "observe", "read_file", "relaunch_process", "reset"
+                "launch_process", "observe", "read_file", "relaunch_process", "reset",
+                "write_file"
             ]
         );
     }
@@ -900,6 +944,88 @@ fn base64_encode(input: &[u8]) -> String {
     out
 }
 
+/// The permission set a `create` call grants. RT-017 write is a second, explicit
+/// opt-in on top of the read grant: `read_root` alone must never yield
+/// `writeFile` (Tier-2 verifier, #229). Pure, so both directions are testable
+/// without booting a VM.
+fn session_permissions(has_read_root: bool, allow_write: bool) -> Result<Permissions, (i64, String)> {
+    if allow_write && !has_read_root {
+        return Err((-32602, "allow_write requires read_root".to_string()));
+    }
+    let mut permissions = Permissions::default();
+    if allow_write {
+        permissions.allowed_actions.push(myco_rt_core::WRITE_FILE_PERMISSION.into());
+    }
+    Ok(permissions)
+}
+
+/// RT-017 write cap, matching the agent's and transport's `WRITE_LIMIT` and
+/// `read_file`'s 1 MiB cap.
+const WRITE_FILE_LIMIT: usize = 1024 * 1024;
+/// Base64 length of a `WRITE_FILE_LIMIT`-byte payload (4 chars per 3 bytes, padded).
+const WRITE_FILE_MAX_ENCODED: usize = WRITE_FILE_LIMIT.div_ceil(3) * 4;
+
+/// Minimal base64 decode (no dependency), the inverse of `base64_encode`.
+///
+/// Strict on purpose: rejects any length that is not a multiple of 4 and any
+/// character outside the alphabet, `=` anywhere but the final one or two
+/// positions, and non-canonical trailing bits (e.g. `AA=B`, `AB==`), so a caller sending malformed content gets a
+/// clear error instead of silently-corrupt bytes written to a guest file.
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    let value_of = |c: u8| -> Result<u8, String> {
+        match c {
+            b'A'..=b'Z' => Ok(c - b'A'),
+            b'a'..=b'z' => Ok(c - b'a' + 26),
+            b'0'..=b'9' => Ok(c - b'0' + 52),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err(format!("invalid base64 char {:?}", c as char)),
+        }
+    };
+    let bytes = input.as_bytes();
+    if !bytes.len().is_multiple_of(4) {
+        return Err("length must be a multiple of 4".into());
+    }
+    let chunks = bytes.len() / 4;
+    let mut out = Vec::with_capacity(chunks * 3);
+    for (idx, chunk) in bytes.chunks(4).enumerate() {
+        // Padding may only appear as a suffix of the LAST quantum: "x===" and
+        // "xy=z" and any '=' before the final chunk are malformed.
+        let pad = match (chunk[2], chunk[3]) {
+            (b'=', b'=') => 2,
+            (_, b'=') => 1,
+            (b'=', _) => return Err("padding must come last".into()),
+            _ => 0,
+        };
+        if pad > 0 && idx + 1 != chunks {
+            return Err("padding must come last".into());
+        }
+        if chunk[0] == b'=' || chunk[1] == b'=' {
+            return Err("padding must come last".into());
+        }
+        let mut vals = [0u8; 4];
+        for (i, &c) in chunk.iter().enumerate().take(4 - pad) {
+            vals[i] = value_of(c)?;
+        }
+        // Canonical form: the bits a padded quantum discards must be zero.
+        if (pad == 2 && vals[1] & 0x0f != 0) || (pad == 1 && vals[2] & 0x03 != 0) {
+            return Err("non-canonical base64 (stray trailing bits)".into());
+        }
+        let n = (u32::from(vals[0]) << 18)
+            | (u32::from(vals[1]) << 12)
+            | (u32::from(vals[2]) << 6)
+            | u32::from(vals[3]);
+        out.push((n >> 16) as u8);
+        if pad < 2 {
+            out.push((n >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(n as u8);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod read_file_tests {
     use super::*;
@@ -934,6 +1060,70 @@ mod read_file_tests {
         );
         assert_eq!(r["result"]["isError"], true);
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("missing path"));
+    }
+
+    fn write_call(s: &mut Server, content: &str) -> String {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"write_file","arguments":{{"session_id":"nope","path":"f","content_base64":"{content}"}}}}}}"#
+        );
+        let r = call(s, &body);
+        assert_eq!(r["result"]["isError"], true);
+        r["result"]["content"][0]["text"].as_str().unwrap().to_string()
+    }
+
+    /// RT-017: the PRE-decode cap. Oversize input that is not even valid base64
+    /// is refused for size, so it is never decoded (without this cap the error
+    /// would be "bad content_base64").
+    #[test]
+    fn write_file_refuses_oversize_input_before_decoding() {
+        let text = write_call(&mut srv(), &"*".repeat(WRITE_FILE_MAX_ENCODED + 4));
+        assert!(text.contains("1 MiB"), "must be the pre-decode size refusal: {text}");
+    }
+
+    /// The POST-decode cap: LIMIT+1 bytes encode to exactly WRITE_FILE_MAX_ENCODED
+    /// chars, so they pass the length check and only the decoded-size check stops
+    /// them (without it this would reach the session lookup).
+    #[test]
+    fn write_file_refuses_one_byte_over_after_decoding() {
+        let encoded = base64_encode(&vec![0u8; WRITE_FILE_LIMIT + 1]);
+        assert_eq!(encoded.len(), WRITE_FILE_MAX_ENCODED, "fixture: LIMIT+1 fits the encoded cap");
+        let text = write_call(&mut srv(), &encoded);
+        assert!(text.contains("1 MiB"), "must be the post-decode size refusal: {text}");
+    }
+
+    /// Exactly 1 MiB is admitted past both caps (it fails later, at the session
+    /// lookup), so the caps are not off by one quantum.
+    #[test]
+    fn write_file_admits_exactly_one_mib() {
+        let text = write_call(&mut srv(), &base64_encode(&vec![0u8; WRITE_FILE_LIMIT]));
+        assert!(text.contains("unknown session"), "1 MiB must pass the caps: {text}");
+    }
+
+    /// The read grant never becomes a write grant by itself; `allow_write` adds
+    /// `writeFile` and nothing else.
+    #[test]
+    fn read_root_alone_grants_no_write_and_allow_write_grants_it() {
+        let w = myco_rt_core::WRITE_FILE_PERMISSION;
+        assert!(!session_permissions(false, false).unwrap().allows(w));
+        assert!(!session_permissions(true, false).unwrap().allows(w), "read_root alone must not grant writeFile");
+        let rw = session_permissions(true, true).unwrap();
+        assert!(rw.allows(w), "read_root + allow_write must grant writeFile");
+        let mut expected = Permissions::default().allowed_actions;
+        expected.push(w.into());
+        assert_eq!(rw.allowed_actions, expected, "allow_write adds exactly writeFile");
+        assert!(session_permissions(false, true).is_err(), "allow_write requires read_root");
+    }
+
+    /// A write grant needs a read root; refused before any VM is touched.
+    #[test]
+    fn allow_write_without_read_root_is_refused() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"create","arguments":{"allow_write":true}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("allow_write requires read_root"));
     }
 
     #[test]
@@ -1194,12 +1384,16 @@ mod schema_contract_tests {
         ("create", "session_id", false),
         ("create", "token", false),
         ("create", "read_root", false),
+        ("create", "allow_write", false),
         ("observe", "session_id", true),
         ("act", "session_id", true),
         ("act", "action", true),
         ("evidence", "session_id", true),
         ("read_file", "session_id", true),
         ("read_file", "path", true),
+        ("write_file", "session_id", true),
+        ("write_file", "path", true),
+        ("write_file", "content_base64", true),
         ("launch_process", "session_id", true),
         ("launch_process", "command", true),
         ("launch_process", "args", false),
@@ -1405,5 +1599,90 @@ mod act_boundary_tests {
                 "{kind}: a bare-string target must be REWRITTEN into                  {{payload, issued_at}}, not fail deserialization -- the rewrite list                  is missing this kind. Got: {msg}"
             );
         }
+    }
+}
+
+/// RT-017: `write_file` argument validation and the base64 round trip.
+///
+/// The write itself is proven against the guest's `FileGrant` in
+/// `myco-rt-agent`'s tests (the layer that owns the confinement). Here the wire
+/// contract is what matters: the tool declares its arguments, refuses a bad
+/// encoding before touching a session, and decode is the exact inverse of encode.
+#[cfg(test)]
+mod write_file_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+    }
+
+    fn call(s: &mut Server, body: &str) -> Value {
+        serde_json::from_str(&handle_line(s, body).expect("reply")).unwrap()
+    }
+
+    #[test]
+    fn base64_decode_inverts_encode() {
+        for case in [&b""[..], b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar", b"\x00\xff\x10"] {
+            let encoded = base64_encode(case);
+            assert_eq!(
+                base64_decode(&encoded).expect("decode"),
+                case,
+                "round trip failed for {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn base64_decode_rejects_malformed_input() {
+        assert!(base64_decode("abc").is_err(), "length not a multiple of 4");
+        assert!(base64_decode("ab*d").is_err(), "character outside the alphabet");
+        assert!(base64_decode("Zg==Zm9v").is_err(), "padding before the last quantum");
+        assert!(base64_decode("AA=B").is_err(), "'=' before a data char");
+        assert!(base64_decode("A===").is_err(), "three pad chars");
+        assert!(base64_decode("AB==").is_err(), "non-canonical trailing bits (2 pad)");
+        assert!(base64_decode("AAB=").is_err(), "non-canonical trailing bits (1 pad)");
+    }
+
+    #[test]
+    fn write_file_requires_content_and_path() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"write_file","arguments":{"session_id":"x","path":"a"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("missing content_base64"));
+
+        let r2 = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"write_file","arguments":{"session_id":"x","content_base64":"Zm9v"}}}"#,
+        );
+        assert_eq!(r2["result"]["isError"], true);
+        assert!(r2["result"]["content"][0]["text"].as_str().unwrap().contains("missing path"));
+    }
+
+    #[test]
+    fn write_file_refuses_bad_base64_before_session_lookup() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"write_file","arguments":{"session_id":"nope","path":"a","content_base64":"!!!"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("bad content_base64"), "must reject the encoding first: {text}");
+        assert!(!text.contains("unknown session"), "malformed input must not depend on session state");
+    }
+
+    #[test]
+    fn write_file_on_an_unknown_session_is_a_tool_error() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write_file","arguments":{"session_id":"nope","path":"a","content_base64":"Zm9v"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown session"));
     }
 }
