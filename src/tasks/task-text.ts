@@ -42,9 +42,13 @@ export interface TaskTextParams {
 }
 
 /**
- * The canonical task sentence. **Both arms must render their task line from
- * this function**, so instruction parity is checkable by diffing two recorded
- * fields rather than by reading source.
+ * The canonical task sentence for the screenshot baseline.
+ *
+ * The baseline is the only arm that reads a sentence: Myco's arm runs a compiled
+ * program (`windowsProgramFor`) and is never prompted. What the two arms must
+ * share is the **job**, not the prose — see this module's header and
+ * `test/baseline/task-parity.test.ts`, which pins that Myco's program saves *and*
+ * the baseline is told to.
  */
 export function taskText(params: TaskTextParams): string {
   return `Set the cell at record ${params.rowKey}, column ${params.column}, to ${JSON.stringify(params.newValue)}, and save the file.`;
