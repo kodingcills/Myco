@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# vssh [cmd...]: ssh into the Myco VM (PowerShell is the default shell). vssh -T < script.ps1 also works.
+exec ssh -F "$HOME/VMs/myco-win11/ssh_config" -o LogLevel=ERROR myco-win11 "$@"
