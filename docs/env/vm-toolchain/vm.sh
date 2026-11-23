@@ -23,8 +23,16 @@ case "${1:-}" in
       . "$LOCK"
       vm_lock_acquire "vm.sh $1" || exit "$?"
       trap vm_lock_release EXIT
+    elif [ "${MYCO_VM_LOCK_OPTIONAL:-0}" = "1" ]; then
+      echo "vm.sh: WARNING: vm-lock.sh not found; launching WITHOUT the host VM lock (MYCO_VM_LOCK_OPTIONAL=1)" >&2
     else
-      echo "vm.sh: WARNING: vm-lock.sh not found, launching WITHOUT the host VM lock" >&2
+      # Refusing is the safe default: launching unlocked is exactly the race the
+      # lock exists to close. Verified: an earlier warn-and-proceed version would
+      # start a guest while another holder held the lock.
+      echo "vm.sh: REFUSING to launch: vm-lock.sh not found, so the host VM lock cannot be taken." >&2
+      echo "  Looked in: $D/../../../scripts/vm-lock.sh, $D/vm-lock.sh, $D/../scripts/vm-lock.sh" >&2
+      echo "  Set MYCO_VM_LOCK_OPTIONAL=1 to launch anyway (unsafe outside a single-owner host)." >&2
+      exit 1
     fi
     ;;
 esac
