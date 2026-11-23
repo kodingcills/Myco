@@ -135,14 +135,6 @@ function reconcileAudit(
 }
 
 /**
- * Score a discovery trial.
- *
- * `attestation` is the trusted-ingest gate (TIF-95). Without it the row is descriptive, as
- * before. With it, the row is decision-eligible only when the gate admits it — and the gate
- * resolves the fixture from the hidden commitment, so a caller cannot supply a benign one.
- * The gate never changes the verdict; it only decides whether the verdict may count.
- */
-/**
  * Whether an attestation may make a row decision-eligible.
  *
  * `false` until TIF-125 binds the attestation to the row being scored and the scorer
@@ -152,6 +144,14 @@ function reconcileAudit(
  */
 export const ATTESTATION_BINDING_LANDED = false;
 
+/**
+ * Score a discovery trial.
+ *
+ * `attestation` is the trusted-ingest gate (TIF-95). Without it the row is descriptive, as
+ * before. With it, the row is decision-eligible only when the gate admits it — and the gate
+ * resolves the fixture from the hidden commitment, so a caller cannot supply a benign one.
+ * The gate never changes the verdict; it only decides whether the verdict may count.
+ */
 export function scoreDiscoveryTrial(
   evidence: DiscoveryTrialEvidence,
   input: Omit<TrialInput, "intent">,
