@@ -26,7 +26,11 @@ export interface Screenshot {
  *                       it within its budget. NOT a model outcome: it is unproven
  *                       whether the app acted, and Cua requires reading the target
  *                       before repeating rather than blind-retrying.
- * - `delivered`         the input landed and Cua verified it.
+ * - `delivered`         the input landed, and `verified` says whether Cua
+ *                       confirmed it took effect. Always carries that flag.
+ *                       `verified: false` means the call succeeded without
+ *                       confirmation - it is NOT the same as a stall, which says
+ *                       the target never acknowledged reading it.
  * - `save-failed`       a save was attempted, was delivered, and did not take. This
  *                       is the ONLY outcome that counts against the model.
  *
@@ -97,7 +101,11 @@ function classify(result: unknown): {
   if (typeof path === "string" && !["pixel", "key_events", "key_events_fg"].includes(path))
     throw new PixelRouteError("unexpected Cua delivery path");
 
-  const verifiedField = typeof verified === "boolean" ? { verified } : {};
+  // Always a boolean, never absent. `verified` used to be spread in only when Cua
+  // supplied it, so a `delivered` could carry no verification flag at all - and a
+  // consumer reading "no flag" as "no problem" would treat an unconfirmed delivery
+  // as a confirmed one. The absent case is now an explicit `false`.
+  const verifiedField = { verified: verified === true };
 
   // The delivery layer declined, and says a mode change would work.
   if (typeof code === "string" && ESCALATABLE_REFUSALS[code] === true)

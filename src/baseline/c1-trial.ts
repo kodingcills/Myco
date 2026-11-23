@@ -1,6 +1,7 @@
 import { taskText } from "../tasks/task-text.ts";
-import { connectC1, type Mcp, pixelAction } from "./c1.ts";
+import { connectC1, type Mcp, pixelAction, record } from "./c1.ts";
 import {
+  type Action,
   type BaselineRow,
   type Claim,
   type DriverPrecondition,
@@ -29,6 +30,17 @@ export interface PreparedC1 {
   audit(): Promise<boolean>;
 }
 
+/**
+ * A stable identity for an action, so "the same action again" is decidable.
+ *
+ * Coordinates are deliberately part of it: a click on a different cell is a
+ * different action, and only an identical one is the case worth flagging.
+ */
+function actionSignature(action: Action): string {
+  const args = record(action.arguments);
+  return `${action.tool}:${JSON.stringify(Object.entries(args).sort())}`;
+}
+
 export async function runC1Trial(
   target: Pick<BaselineRow, "index" | "params" | "cellRef" | "expected" | "previousValue">,
   prepared: PreparedC1,
@@ -36,6 +48,12 @@ export async function runC1Trial(
 ): Promise<BaselineRow> {
   const started = performance.now();
   const transcript: Transcript = { actions: [], claims: [], deliveries: [] };
+  /**
+   * The last action left unconfirmed, if any. Used only to detect that the SAME
+   * action was sent again while its predecessor's effect is still unknown, which
+   * for a save means the app may now hold two dialogs.
+   */
+  let lastStalled: string | undefined;
   const calls: Awaited<ReturnType<Planner["act"]>>["calls"] = [];
   const deviations = ["reset:cua-c1-base", "step-budget-asymmetry"];
   let observation: Observation = { kind: "unavailable" };
@@ -85,6 +103,24 @@ export async function runC1Trial(
         }
         if (resultOfAction.outcome === "delivered-stalled")
           deviations.push(`cua-action-${steps}-stalled`);
+        // A stall leaves the input's effect unconfirmed, and Cua's own guidance
+        // is to read the target before repeating. The harness cannot enforce that
+        // - the next decision belongs to the planner - so it records the one case
+        // that matters: the SAME action sent again while its predecessor is still
+        // unconfirmed. For a save that means a second Save As dialog, and nothing
+        // else in the row would reveal it, because two stalls look like two
+        // ordinary stalls.
+        //
+        // The comparison MUST precede the assignment: two consecutive stalls are
+        // exactly the case worth flagging, so a branch that only compares on a
+        // non-stall outcome never sees it. That bug shipped in the first draft of
+        // this guard and the test caught it.
+        const stalledKey = actionSignature(action);
+        if (lastStalled !== undefined && lastStalled === stalledKey)
+          deviations.push(`cua-action-${steps}-resent-after-stall`);
+        // A stall arms the guard; any other outcome clears it, because the input's
+        // effect is no longer unknown.
+        lastStalled = resultOfAction.outcome === "delivered-stalled" ? stalledKey : undefined;
       }
     } finally {
       try {
