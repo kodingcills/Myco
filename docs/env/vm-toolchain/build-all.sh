@@ -22,7 +22,7 @@ ls $ISO/Win11_*ARM64*.iso >/dev/null 2>&1 || "$D/build-win-iso.sh"
 "$D/wait-ssh.sh" 3600                         # unattended Setup + OOBE + first-logon script
 # new VMs: drive 1 = NVMe system disk, 2 = installer ISO, 3 = seed ISO (has the offline payload and the password).
 # The seed stays attached for provisioning and is ejected before snapshotting.
-scp -q -F $VM/ssh_config -o LogLevel=ERROR "$D"/guest/* myco-win11:C:/myco/bin/
+scp -q -F "$VM/ssh_config" -o LogLevel=ERROR "$D"/guest/* myco-win11:C:/myco/bin/
 "$D/vssh" 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\bin\provision.ps1'
 "$D/vssh" 'C:\myco\bin\smoke.ps1'
 "$D/shutdown.sh"; "$D/set-cd.sh" 2 $ISO/empty.iso; "$D/set-cd.sh" 3 $ISO/empty.iso
