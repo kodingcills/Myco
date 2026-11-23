@@ -11,7 +11,7 @@
 | Actually spent on model calls | **$1.178562** (Σ `cost` over the 29 scored rows) |
 | Never spent, but still booked | **$0.376800** — row 9's reservation |
 
-`charged()` (`sweep.ts:83`) sums every entry's `micros`, and `sweep.ts:159` compares
+`charged()` (`sweep.ts:83`) sums every entry's `micros`, and `sweep.ts:155-161` compares
 that total against the arm cap. So **$1.555362 is the figure that answers "how much
 of the $9 cap is used"**, and it is the correct one to quote against a budget.
 
@@ -25,8 +25,7 @@ trial must not free budget for a retry), not a leak, but it means **the two
 numbers legitimately differ by exactly one reservation.**
 
 (`report.json.c1ChargedMicros` — `sweep.ts:83` `charged()` sums every entry,
-including the omitted row's 376800 µ$ reservation). **Quote one or the other, never
-an unqualified "spend".**
+including the omitted row's 376800 µ$ reservation). **State which question you are answering:** quote **$1.555362** against the cap, and **$1.178562** as cash spent. Never an unqualified "spend".
 
 ## The numbers
 
@@ -56,7 +55,7 @@ eligible trials, 0 false successes), not this arm.
 
 | Reason | n | What the transcript shows |
 |---|---|---|
-| `modified` | 16 | Document left open, unsaved (`c1-judge.ts:32`). **All 16 ended `planner-no-action`** — the planner returned no parseable decision — and **none declared done** (`claims` empty on all 16). **Only 1 of the 16 had typed the expected value** (index 6, `2024-03-26`); the other 15 typed a cell address such as `'A24\n'` or nothing at all. |
+| `modified` | 16 | Document left open, unsaved (`c1-judge.ts:32`). **All 16 ended `planner-no-action`** — the planner returned no parseable decision — and **none declared done** (`claims` empty on all 16). **Only 1 of the 16 had typed the expected value** (index 6, `2024-03-26`); the other 15 each typed a **cell reference** such as `'A24\n'` — not a value. ("Typed nothing" belongs to the `persisted-mismatch` rows, and the Name Box at `(70,146)` is where most of them landed but not all: index 6 acted at `(282,277)`.) |
 | `step-budget` | 7 | 30 steps used without concluding. |
 | `persisted-mismatch` | 6 | Persisted value ≠ expected. **2 rows took zero actions** (indices 3, 29) and 2 more issued no `type_text` (5, 15); only index 23 typed the expected value and still mismatched. |
 | `trial-interrupted` | 1 | Index 9. Not a timeout — see below. |
@@ -95,8 +94,8 @@ ever attempted Ctrl+S.
 `modified` rows terminated on `planner-no-action` with empty `claims`: the
 planner stopped deciding, and did not declare success. So the *stopping* is on
 the planner, not on a deliberate "I'm done" choice. Only one of the sixteen had
-typed the correct value; the rest typed a cell reference into the Name Box or
-nothing. The save gap is real and it is a task-completion difference — the
+typed the correct value; the rest typed a cell reference — mostly into the Name Box, and not
+universally. The save gap is real and it is a task-completion difference — the
 baseline was never told to persist — but **the transcript does not support "it
 typed the right value and stopped"**, and an earlier revision of this file said
 that.
