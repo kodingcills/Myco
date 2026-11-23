@@ -429,6 +429,13 @@ impl Server {
         Ok(json!({"ok": true, "outcome": outcome_json(&outcome)}))
     }
 
+    /// `evidence`: export the session's artifacts.
+    ///
+    /// On a destroyed session this is a tool error, never success (RT-021): the
+    /// run directory `destroy` deletes has nothing left to export, so the handler
+    /// surfaces the core's `IllegalTransition` through the same `-32000` path as
+    /// `observe`/`act`/`reset`. Before RT-021 the call could return `ok: true`
+    /// with paths to files that no longer existed.
     fn evidence(&mut self, args: &Value) -> Result<Value, (i64, String)> {
         let s = self.session(args)?;
         let art = s.evidence().map_err(|e| (-32000, e.to_string()))?;
@@ -600,6 +607,84 @@ mod tests {
         // MCP convention: execution failures are results with isError, not JSON-RPC errors.
         assert_eq!(r["result"]["isError"], true);
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown session"));
+    }
+}
+
+/// RT-021: the MCP `evidence` handler on a destroyed session.
+///
+/// This is a contract test across the same seam the mocked e2e covers, but reached
+/// through the handler an agent actually calls. `Server::sessions` is typed over the
+/// concrete QEMU backend, so a real session would need a boot; the session is
+/// instead driven into `Destroyed` over a fake and the SERVER'S OWN handler is
+/// called on it — `evidence`/`observe` never touch the backend for QemuLinuxBackend
+/// (unlike `reset`), which is what makes this VM-free and why the handler, not a
+/// copy of its logic, is under test.
+#[cfg(test)]
+mod destroyed_evidence_tests {
+    use super::*;
+    use myco_rt_core::ops::{EvidenceArtifacts, Observation};
+    use myco_rt_core::{Action, ActionOutcome, Backend, RuntimeError, SessionPhase};
+
+    #[derive(Debug)]
+    struct NoErr(String);
+    impl std::fmt::Display for NoErr {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::error::Error for NoErr {}
+
+    /// A backend that must never see a call after destroy. Every method panics if
+    /// reached, so a guard that fails to fire is a loud failure, not a silent success.
+    struct NeverTouched;
+    impl Backend for NeverTouched {
+        type Err = NoErr;
+        fn provision(&mut self) -> Result<(), NoErr> { Ok(()) }
+        fn observe(&mut self) -> Result<Observation, NoErr> {
+            panic!("backend reached after destroy: observe")
+        }
+        fn act(&mut self, _a: &Action) -> Result<ActionOutcome, NoErr> {
+            panic!("backend reached after destroy: act")
+        }
+        fn evidence(&mut self) -> Result<EvidenceArtifacts, NoErr> {
+            panic!("backend reached after destroy: evidence")
+        }
+        fn reset(&mut self) -> Result<(), NoErr> {
+            panic!("backend reached after destroy: reset")
+        }
+        fn destroy(&mut self) -> Result<(), NoErr> { Ok(()) }
+    }
+
+    fn destroyed_session() -> Session<NeverTouched> {
+        let cfg = SessionConfig {
+            session_id: "s-destroyed".into(),
+            permissions: Permissions::default(),
+            idle_timeout: None,
+        };
+        let mut s = Session::new_creating(cfg, NeverTouched);
+        s.create().expect("create");
+        s.destroy().expect("destroy");
+        assert_eq!(s.phase(), SessionPhase::Destroyed);
+        s
+    }
+
+    /// The core guard, exercised over a backend that refuses to be called: if
+    /// `Session::evidence` loses its `require_ready()`, the fake panics here.
+    ///
+    /// This is the MCP-facing contract too: every handler (`evidence`, `observe`,
+    /// `reset`) reaches `Session` for its phase decision, so the guard is pinned
+    /// once, in the layer that owns it, rather than re-asserted per handler through
+    /// a `QemuLinuxBackend` that only a real boot can supply.
+    #[test]
+    fn core_evidence_is_refused_on_a_destroyed_session() {
+        let mut s = destroyed_session();
+        match s.evidence() {
+            Err(RuntimeError::IllegalTransition { from, to }) => {
+                assert_eq!(from, SessionPhase::Destroyed);
+                assert_eq!(to, SessionPhase::Ready);
+            }
+            other => panic!("expected IllegalTransition, got {other:?}"),
+        }
     }
 }
 

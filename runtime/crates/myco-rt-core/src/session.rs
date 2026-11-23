@@ -165,7 +165,14 @@ impl<B: Backend> Session<B> {
 
     /// `evidence`: export this session's artifacts (trace.jsonl + result.json,
     /// ADR-0007) through the backend's validated writer.
+    ///
+    /// Guarded like every other non-terminal op (RT-021): the artifacts live in the
+    /// run directory, which `destroy` deletes, so a torn-down session has nothing to
+    /// export. Unguarded, the result was backend-dependent — `FakeBackend` returned
+    /// paths to files that never existed while `QemuLinuxBackend` reached a deleted
+    /// run dir — so a client could not treat the success case as meaningful.
     pub fn evidence(&mut self) -> Result<crate::ops::EvidenceArtifacts, RuntimeError> {
+        self.require_ready()?;
         self.backend.evidence().map_err(Self::backend_err)
     }
 
