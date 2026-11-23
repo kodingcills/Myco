@@ -25,7 +25,6 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
   if (message.method !== "tools/call") return;
   const { name, arguments: args } = message.params;
-<<<<<<< HEAD
   const failing = process.env.FAKE_MCP_FAIL === name;
   if (log) appendFileSync(log, `${name} ${JSON.stringify(args)}\n`);
   if (failing) {
@@ -50,13 +49,6 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         isError: true,
       });
     }
-=======
-  if (log) appendFileSync(log, `${name} ${JSON.stringify(args)}\n`);
-  if (name === "create") return send(message.id, text({ ok: true, session_id: args.session_id }));
-  if (name === "observe") return send(message.id, text({ ok: true, state_version: 7 }));
-  if (name === "act") return send(message.id, text({ ok: true, outcome: "delivered_unverified" }));
-  if (name === "read_file") {
->>>>>>> origin/main
     if (args.path === "state.json") {
       const state = { entry_text: "", listbox_rows: ["a", "b"], status_text: "saved 2 item(s)" };
       return send(

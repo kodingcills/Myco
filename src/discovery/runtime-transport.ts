@@ -20,10 +20,7 @@ import type {
   DesktopSession,
   DesktopTransport,
 } from "./live-runner.ts";
-<<<<<<< HEAD
 import type { ProbeEvidence } from "./preflight.ts";
-=======
->>>>>>> origin/main
 
 interface Pending {
   resolve(value: unknown): void;
@@ -41,11 +38,8 @@ export interface RuntimeTransportOptions {
   readonly readRoot: string;
   /** Guest path of the app's published state file (ADR-0016). */
   readonly introspectionPath: string;
-<<<<<<< HEAD
   /** Guest path of the app under test (the `appPresent` check). */
   readonly appPath: string;
-=======
->>>>>>> origin/main
   /** Session id; defaults to a timestamped one. */
   readonly sessionId?: string;
   /** Per-request timeout. */
@@ -217,7 +211,6 @@ export class RuntimeTransport implements DesktopTransport {
     return outcomeOf(result.outcome);
   }
 
-<<<<<<< HEAD
   /**
    * Host-side evidence for the preflight; it never assumes a check passed.
    *
@@ -274,8 +267,6 @@ export class RuntimeTransport implements DesktopTransport {
     };
   }
 
-=======
->>>>>>> origin/main
   async readFile(_session: DesktopSession, path: string): Promise<string> {
     const file = (await this.client.callTool("read_file", {
       session_id: this.sessionId,
