@@ -20,6 +20,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 RUN_DIR="${S0_RUN_DIR:-/tmp/myco-s0}"
 PID_FILE="$RUN_DIR/s0.pid"
 CHILD_FILE="$RUN_DIR/s0.child"
+LOCK_DIR="$RUN_DIR/s0.lock"
 LOG="$RUN_DIR/s0.log"
 PROBE="$RUN_DIR/probe.txt"
 RT_MCP="$ROOT/runtime/target/debug/myco-rt-mcp"
@@ -108,6 +109,7 @@ run_sequence() {
   wait "$CHILD" || rc=$?
   say "child $CHILD exited with $rc"
   rm -f "$CHILD_FILE"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
   return "$rc"
 }
 
@@ -115,11 +117,12 @@ watchdog() {
   # The watchdog holds the pid file and reports the child's exit, so a run that
   # dies while no agent is watching still leaves a record.
   probe >>"$LOG" 2>&1
-  gate || { say "gate refused; not starting"; rm -f "$PID_FILE"; exit 2; }
+  gate || { say "gate refused; not starting"; rm -f "$PID_FILE"; rmdir "$LOCK_DIR" 2>/dev/null || true; exit 2; }
   local rc=0
   run_sequence || rc=$?
   say "watchdog done (rc $rc)"
   rm -f "$PID_FILE"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
   exit "$rc"
 }
 
@@ -145,6 +148,7 @@ case "${1:-}" in
       fi
       rm -f "$FILE"
     done
+    rmdir "$LOCK_DIR" 2>/dev/null || true
     # Scoped to this worktree: an unscoped pkill aborts another workstream's run
     # on a host with a dozen worktrees. `--` ends option parsing, otherwise pkill
     # reads a pattern starting with a path as a flag and matches nothing.
@@ -164,14 +168,16 @@ case "${1:-}" in
     say "launching detached; log $LOG"
     nohup "$0" --watchdog >>"$LOG" 2>&1 &
     CHILD=$!
-    # `set -C` makes the redirect fail when the file exists, so claiming the pid
-    # file is one atomic step. Check-then-write let two concurrent `--run` calls
-    # both pass the guard and leave one child untracked (2026-11-23).
-    if ! ( set -C; echo "$CHILD" >"$PID_FILE" ) 2>/dev/null; then
+    # Claiming the pid file must be one atomic step. A noclobber redirect in a
+    # subshell is not: the redirect is parsed before `set -C` runs, so it is a
+    # plain truncating write and concurrent `--run` calls both won (measured
+    # 2026-11-23). `mkdir` is atomic on every filesystem we run on.
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
       kill "$CHILD" 2>/dev/null || true
-      say "another --run claimed the pid file first"
+      say "another --run holds the run lock; refusing to start a second sequence"
       exit 1
     fi
+    echo "$CHILD" >"$PID_FILE"
     say "pid $CHILD"
     echo "watch with: $0 --status" ;;
   --watchdog) watchdog ;;

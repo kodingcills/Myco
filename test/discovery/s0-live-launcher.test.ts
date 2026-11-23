@@ -83,17 +83,33 @@ describe("s0-live.sh launcher", () => {
     expect(logOf(runDir)).toContain("already running");
   });
 
-  it("claims the pid file in one atomic step, so a concurrent --run cannot both start", () => {
-    const { script } = harness();
-    // This asserts the shape of the claim, because a live race is not reproducible
-    // on demand (a check-then-write launcher passed 8 of 8 test runs and lost a
-    // manual 8-way race — 2026-11-23). The claim must be a single noclobber
-    // redirect; the guard-then-write shape this replaced let racers both win.
-    const source = readFileSync(script, "utf8");
-    expect(source).toContain('if ! ( set -C; echo "$CHILD" >"$PID_FILE" ) 2>/dev/null; then');
-    expect(source).not.toContain('echo $! >"$PID_FILE"');
-    // And the loser must clean up the watchdog it already spawned.
-    expect(source).toContain('kill "$CHILD" 2>/dev/null || true');
+  it("admits exactly one --run under a real race", () => {
+    const { script, runDir } = harness();
+    // Eight simultaneous --run calls, both outcomes counted. A shared output file
+    // made an earlier version of this test lie, so each racer writes its own.
+    const rounds = 6;
+    for (let round = 0; round < rounds; round += 1) {
+      spawnSync("bash", ["-c", `rm -rf "${runDir}"; mkdir -p "${runDir}"`]);
+      const winners = spawnSync(
+        "bash",
+        [
+          "-c",
+          `for i in 1 2 3 4 5 6 7 8; do ( S0_RUN_DIR="${runDir}" bash "${script}" --run >"${runDir}/out.$i" 2>&1; echo $? >"${runDir}/rc.$i" ) & done; wait; cat "${runDir}"/rc.* | grep -c '^0$'`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(Number(winners.stdout.trim())).toBe(1);
+      // Seven refusals, and count them from the rc files: the launcher appends
+      // several lines to one log, so racing writers can interleave there.
+      const refusals = spawnSync("bash", ["-c", `cat "${runDir}"/rc.* | grep -c '^1$'`], {
+        encoding: "utf8",
+      });
+      expect(Number(refusals.stdout.trim())).toBe(7);
+      // The recorded pid must be alive: an untracked child is the defect.
+      const recorded = Number(readFileSync(join(runDir, "s0.pid"), "utf8").trim());
+      expect(spawnSync("kill", ["-0", String(recorded)]).status).toBe(0);
+      spawnSync("bash", ["-c", `pkill -9 -f "${runDir}" 2>/dev/null; rm -rf "${runDir}"`]);
+    }
   });
 
   it("keeps --status and --stop on the terminal, and everything else in the log", () => {
