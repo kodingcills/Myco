@@ -379,6 +379,41 @@ def main() -> int:
            "does not write a lock it does not hold")
 
     print("14b. preflight proves create declares introspection_file")
+    # The parser must be tested against a server that DECLARES the key. Without
+    # such a fixture, a drifted key name still produces a FAIL on a tree that
+    # lacks it, so the suite passes while the parser is wrong.
+    declaring = Path(tempfile.mkdtemp(prefix="df005-decl-")) / "stub.py"
+    declaring.write_text(
+        "#!/usr/bin/env python3\nimport json, sys\n"
+        "for line in sys.stdin:\n"
+        "    r = json.loads(line); m = r.get('method'); i = r.get('id')\n"
+        "    if i is None: continue\n"
+        "    if m == 'initialize': res = {'protocolVersion': '2024-11-05'}\n"
+        "    elif m == 'tools/list': res = {'tools': [{'name': 'create', 'inputSchema':\n"
+        "        {'type': 'object', 'properties': {'session_id': {'type': 'string'},\n"
+        "         'introspection_file': {'type': 'string'}}}}]}\n"
+        "    else: res = {}\n"
+        "    print(json.dumps({'jsonrpc': '2.0', 'id': i, 'result': res}), flush=True)\n"
+    )
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import importlib.util as _u2
+    _sp = _u2.spec_from_file_location("df005_pre", RUNNER)
+    pre = _u2.module_from_spec(_sp)
+    sys.modules["df005_pre"] = pre
+    _sp.loader.exec_module(pre)  # type: ignore[union-attr]
+    declaring.chmod(0o755)
+    pre.DEFAULT_SERVER = declaring
+    ok, detail = pre.create_accepts_introspection()
+    expect(ok is True, f"a declaring server is read as declaring: {detail}")
+    # And the inverse: a server that does not declare it must read as absent.
+    nonserver = Path(tempfile.mkdtemp(prefix="df005-nodecl-")) / "stub.py"
+    nonserver.write_text(declaring.read_text().replace("introspection_file", "introspection"))
+    nonserver.chmod(0o755)
+    pre.DEFAULT_SERVER = nonserver
+    ok2, detail2 = pre.create_accepts_introspection()
+    expect(ok2 is False, f"a permissive/drifted server reads as absent: {detail2}")
+    expect("introspection_file" in detail2 or "does not declare" in detail2,
+           f"the failure names the missing key: {detail2}")
     # The silent failure: a key the server does not know is ignored, so the run
     # gaps at REQ-03 after a guest is already booted. The check reads the
     # server's tool list — no session is created.
@@ -438,6 +473,10 @@ def main() -> int:
         expect(f"skip {name}: not run: guest unreachable" in proc.stdout,
                f"{name} reported as not-run, not omitted")
     expect("of 8 checks failed" in proc.stdout, "count is stated against 8")
+    # create-schema needs no guest, so it must be reported even off-guest —
+    # not silently omitted from an "of 8" claim.
+    expect("create-schema" in proc.stdout,
+           "create-schema is reported in every path, guest or not")
     expect(proc.returncode == 1, "exit 1")
 
     print("17. no delivery outcome can pass on a matching store (M1 allowlist)")

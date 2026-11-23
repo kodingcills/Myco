@@ -998,6 +998,9 @@ def create_accepts_introspection(timeout: float = 15.0) -> tuple[bool, str]:
         listed = client.request("tools/list")
     except McpError as e:
         return False, f"could not read the server's tool list: {e}"
+    except Exception as e:  # noqa: BLE001 - a banner or a decode error must not
+        # crash preflight; it is still a "the server did not answer usefully".
+        return False, f"the server did not answer usefully: {type(e).__name__}: {e}"
     finally:
         client.close()
 
@@ -1120,12 +1123,13 @@ def preflight() -> int:
         # root-owned or read-only file at this path defeats the channel while a
         # directory probe still passes.
         rc4, probe = guest(
-            f"p={INTROSPECTION_PATH}; d=$(dirname \"$p\"); "
-            "if [ -e \"$p\" ] && [ ! -w \"$p\" ]; then echo not-writable-file; "
+            f"p={shlex.quote(INTROSPECTION_PATH)}; d=$(dirname \"$p\"); "
+            "if [ -d \"$p\" ]; then echo not-a-file; "
+            "elif [ -e \"$p\" ] && [ ! -w \"$p\" ]; then echo not-writable-file; "
             "elif [ ! -d \"$d\" ] || [ ! -w \"$d\" ]; then echo not-writable-dir; "
             "else echo writable; fi"
         )
-        file_state = (probe or "").strip().splitlines()[-1] if probe else ""
+        file_state = (probe or "").strip()
         file_ok = rc4 == 0 and file_state == "writable"
         record("introspection-file", file_ok,
                f"{INTROSPECTION_PATH} is writable in the guest" if file_ok else
@@ -1136,15 +1140,20 @@ def preflight() -> int:
         # value wins", so a MYCO_TODO_STATE_FILE in gui.env makes the app publish
         # somewhere other than the path `create` names — the record then never
         # reaches observe, silently.
-        rc5, shadow = guest(
-            f"grep -E '^[[:space:]]*(export[[:space:]]+)?MYCO_TODO_STATE_FILE=' "
-            "/run/myco/gui.env 2>/dev/null | head -1 || true"
-        )
-        shadowed = bool((shadow or "").strip())
+        rc5, shadow = guest("printenv MYCO_TODO_STATE_FILE 2>/dev/null || true")
+        shadow_value = (shadow or "").strip()
+        # The launched app inherits the agent's whole environment, so any channel
+        # that sets this (gui.env, /etc/environment, sshd env, a unit's
+        # Environment=) makes the runtime's "explicit value wins" rule drop
+        # route 1. Probing the effective variable subsumes all of them. A value
+        # equal to our own path is not a shadow.
+        shadowed = bool(shadow_value) and shadow_value != INTROSPECTION_PATH
         record("introspection-shadow", not shadowed,
-               f"gui.env sets {shadow.strip()[:60]!r}, which overrides the path "
-               "create names (route 1) — remove it or the app publishes elsewhere"
-               if shadowed else "gui.env does not shadow MYCO_TODO_STATE_FILE")
+               f"MYCO_TODO_STATE_FILE={shadow_value[:60]!r} in the agent's environment "
+               f"overrides the path create names ({INTROSPECTION_PATH}) — the app "
+               "would publish elsewhere and observe would see nothing"
+               if shadowed else
+               "no competing MYCO_TODO_STATE_FILE in the agent's environment")
     else:
         # No guest to ask: record the dependent checks as not-run rather than
         # omitting them, so the summary never claims a count it did not measure.
@@ -1158,7 +1167,7 @@ def preflight() -> int:
     # trusting a write.
     if DEFAULT_SERVER.exists():
         accepted, detail = create_accepts_introspection()
-        pass
+        record("create-schema", accepted, detail)
     else:
         # Same reason as check 1: without a binary there is nothing to ask.
         record("create-schema", None, "not run: the MCP server binary is missing")
