@@ -922,6 +922,11 @@ def preflight() -> int:
         record("introspection-env", rc4 == 0 and env.strip() not in ("", "0"),
                "MYCO_INTROSPECTION_FILE present in gui.env" if env.strip() not in ("", "0")
                else "absent: the app's widget state will be unobservable (REQ-03)")
+    else:
+        # No guest to ask: record the dependent checks as not-run rather than
+        # omitting them, so the summary never claims a count it did not measure.
+        for name in ("app-deployed", "app-self-test", "introspection-env"):
+            record(name, None, "not run: guest unreachable")
 
     failed = [n for n, ok, _ in results if ok is False]
     skipped = [n for n, ok, _ in results if ok is None]
