@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 import {
   exitCodeFor,
   matchesRecorded,
+  type ReplayResult,
   replayDirectory,
   replayRow,
+  summarizeFailures,
 } from "../../scripts/replay-arm-rows.ts";
 import type { BaselineRow } from "../../src/baseline/index.ts";
 
@@ -137,6 +139,10 @@ describe("offline arm-row replay", () => {
     // three) makes present=true stop agreeing, which is what these pin.
     expect(verifiedPresent.matched).toBe(true);
     expect(verifiedAbsent.matched).toBe(false);
+    // The null case: an unaudited row. Its stored falseSuccess is false while
+    // the recomputed value is null, so it must NOT read as matched - null means
+    // the audit never ran, which is not evidence of success in either direction.
+    expect(verifiedUnknown.matched).toBe(false);
     // A duplicate `lookalike` fixture (identical overrides to verifiedAbsent) and
     // a direct falseSuccess(...) call were removed here: the first re-replayed the
     // same row, and the second re-tested src/ rather than the replay. Both were
@@ -237,6 +243,23 @@ describe("CLI exit contract", () => {
   // printed "cost drift" and exited 0. Drift is its own failure - the stored
   // cost has diverged from the usage records, so reported spend is wrong even
   // when every verdict reproduces.
+  it("derives the counts from the results, not from the caller", () => {
+    // Pins what FEEDS exitCodeFor. Without this, emptying the drift filter left
+    // every test green and the gate silently dead - the arithmetic was covered
+    // but nothing checked the inputs.
+    const ok = { matched: true, costDelta: 0 } as ReplayResult;
+    const failedRow = { matched: false, costDelta: 0 } as ReplayResult;
+    const driftedRow = { matched: true, costDelta: -0.05 } as ReplayResult;
+    expect(summarizeFailures([])).toEqual({ failed: 0, drifting: 0 });
+    expect(summarizeFailures([ok])).toEqual({ failed: 0, drifting: 0 });
+    expect(summarizeFailures([failedRow, ok])).toEqual({ failed: 1, drifting: 0 });
+    expect(summarizeFailures([driftedRow, ok])).toEqual({ failed: 0, drifting: 1 });
+    expect(summarizeFailures([failedRow, driftedRow])).toEqual({ failed: 1, drifting: 1 });
+    // ...and the counts reach the exit code.
+    const both = summarizeFailures([failedRow, driftedRow]);
+    expect(exitCodeFor(both.failed, both.drifting)).toBe(1);
+  });
+
   it("exits 0 only when every row reproduces and no cost has drifted", () => {
     expect(exitCodeFor(0, 0)).toBe(0);
   });

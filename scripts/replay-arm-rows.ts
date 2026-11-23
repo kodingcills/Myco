@@ -159,6 +159,22 @@ export function exitCodeFor(failedRows: number, driftingRows: number): number {
   return failedRows > 0 || driftingRows > 0 ? 1 : 0;
 }
 
+/**
+ * How many rows failed to reproduce, and how many have cost that disagrees with
+ * their own usage records.
+ *
+ * Extracted for the same reason as exitCodeFor: the derivation was inline at
+ * module scope, so a mutation that emptied the drift filter left every test
+ * green while the gate silently stopped firing. Pinning the arithmetic without
+ * pinning what feeds it moved the hole rather than closing it.
+ */
+export function summarizeFailures(results: ReplayResult[]): { failed: number; drifting: number } {
+  return {
+    failed: results.filter((r) => !r.matched).length,
+    drifting: results.filter((r) => r.costDelta !== 0).length,
+  };
+}
+
 export function replayDirectory(directory: string): ReplayResult[] {
   const files = readdirSync(directory)
     .filter((f) => f.endsWith(".json"))
@@ -176,8 +192,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // human branch meant a machine consumer reading --json got exit 0 even with
   // rows that failed to reproduce or costs that had drifted, which is the worse
   // of the two audiences to mislead.
-  const bad = results.filter((r) => !r.matched);
-  const drift = results.filter((r) => r.costDelta !== 0);
+  const { failed, drifting } = summarizeFailures(results);
   if (process.argv.includes("--json")) {
     console.log(JSON.stringify(results, null, 2));
   } else {
@@ -187,15 +202,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         `${mark} idx=${r.index} recorded=${r.recorded}/${r.reasonRecorded} replayed=${r.replayed}/${r.reasonReplayed} costDelta=${r.costDelta}`,
       );
     }
-    console.log(`\n${results.length - bad.length}/${results.length} reproduced`);
-    if (drift.length > 0) {
+    console.log(`\n${results.length - failed}/${results.length} reproduced`);
+    if (drifting > 0) {
       // Recomputed cost disagreeing with the recorded cost is a real finding:
       // the usage records and the stored total have diverged, so the stored
       // figure would misreport spend. It was previously printed and ignored.
-      console.log(`cost drift in ${drift.length} row(s):`);
-      for (const d of drift) console.log(`  idx=${d.index} costDelta=${d.costDelta}`);
+      console.log(`cost drift in ${drifting} row(s):`);
+      for (const d of results.filter((r) => r.costDelta !== 0))
+        console.log(`  idx=${d.index} costDelta=${d.costDelta}`);
     }
   }
-  if (exitCodeFor(bad.length, drift.length) !== 0)
-    process.exitCode = exitCodeFor(bad.length, drift.length);
+  const code = exitCodeFor(failed, drifting);
+  if (code !== 0) process.exitCode = code;
 }

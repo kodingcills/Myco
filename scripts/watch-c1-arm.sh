@@ -15,8 +15,19 @@
 OUT=${1:-/tmp/baseline/c1-arm2}
 LIMIT_USD=${2:-4.00}
 SILENT_MIN=${3:-20}
-last_size=0
-last_change=$(date +%s)
+# Seed both from the log's OWN mtime, not from "now" and not from an empty size.
+# Starting last_change at script start made every existing log look freshly
+# written on the first iteration (last_size=0 never equals a real size), which
+# reset the clock and made the threshold un-trippable for a run that was already
+# stalled when the watcher began. Starting last_size at 0 had the same effect on
+# the first pass.
+if [ -f "$OUT/progress.log" ]; then
+  last_size=$(wc -c < "$OUT/progress.log" | tr -d ' ')
+  last_change=$(stat -f %m "$OUT/progress.log" 2>/dev/null || echo "$(date +%s)")
+else
+  last_size=0
+  last_change=$(date +%s)
+fi
 while true; do
   if ! pgrep -f "c1-sweep.ts $OUT" > /dev/null 2>&1; then
     echo "[$(date -u +%H:%MZ)] SWEEP ENDED"
