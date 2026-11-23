@@ -35,9 +35,12 @@ guests' live RSS and host pressure (`vm_stat`, `vm.swapusage`) and reports the h
 for a second VM — the number the post-M1 second-VM question (TIF-92) needs. It is
 read-only and touches no lock.
 
-Idle shutdown (RT-013). The guest runs `runtime/guest/idle-watchdog.sh` (started by the
-provisioning seed) which powers the guest off after `MYCO_RT_IDLE_SECS` with no
-heartbeat. Default is **disabled** (`0`) — a session never vanishes silently; an
+Idle shutdown (RT-013). `runtime/guest/idle-watchdog.sh` powers the guest off after
+`MYCO_RT_IDLE_SECS` with no heartbeat. **It is not installed yet:** the cloud-init seed
+(`runtime/guest/seed/user-data`) does not copy or start it, so a provisioned guest today
+has no idle reaper and stays up until `destroy`/`shutdown.sh` (post-merge verifier,
+TIF-110). Wiring it into the seed is a follow-up that needs a VM boot to prove. Default
+when installed is **disabled** (`0`) — a session never vanishes silently; an
 operator enables reaping explicitly with a documented timeout. The policy is in the
 guest, not the host, so a crashed host agent cannot leave a guest running forever.
 `runtime/guest/idle-watchdog-test.sh` proves both directions on the host with no VM

@@ -19,8 +19,17 @@ PID_FILE="$STATE/qemu.pid"
 # record why in that scenario's evidence. The cap is a ceiling, not a reservation:
 # QEMU commits lazily, so a 2048 MB cap does not charge the host 2048 MB up front
 # (measured 2026-11-22: host RSS ~ 0 while idle, see scripts/memory-budget.sh).
-GUEST_MB="${MYCO_RT_GUEST_MB:-2048}"
-[[ "$GUEST_MB" =~ ^[0-9]+$ ]] || { echo "MYCO_RT_GUEST_MB must be an integer MB, got '$GUEST_MB'" >&2; exit 1; }
+# `-2048` (not `:-2048`): a SET-but-empty value must reach the guard and fail, not
+# be silently replaced by the default. `${VAR:-def}` substitutes on empty, so the
+# guard validated the substitute rather than the caller's input and
+# `MYCO_RT_GUEST_MB=` fell through to a real boot (post-merge verifier, TIF-110).
+GUEST_MB="${MYCO_RT_GUEST_MB-2048}"
+# Positive integer only, no leading zero (`08` would also trip bash's octal
+# arithmetic): `0` is not a cap. QEMU treats `-m 0` as "use the default",
+# so accepting it would silently defeat the memory cap this guard exists to enforce
+# (post-merge verifier, TIF-110).
+[[ "$GUEST_MB" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "MYCO_RT_GUEST_MB must be a positive integer MB, got '$GUEST_MB'" >&2; exit 1; }
 
 [[ -f "$EDK2" ]] || { echo "Missing UEFI firmware: $EDK2 (brew install qemu)" >&2; exit 1; }
 
