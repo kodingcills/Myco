@@ -27,9 +27,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const { name, arguments: args } = message.params;
   if (log) appendFileSync(log, `${name} ${JSON.stringify(args)}\n`);
   if (name === "create") return send(message.id, text({ ok: true, session_id: args.session_id }));
-  if (name === "observe") return send(message.id, text({ ok: true, state_version: 7 }));
+  if (name === "observe")
+    return send(message.id, text({ ok: true, state_version: 7, windows: [{ id: "myco-todo" }] }));
   if (name === "act") return send(message.id, text({ ok: true, outcome: "delivered_unverified" }));
   if (name === "read_file") {
+    if (args.path.startsWith("__myco_")) {
+      return send(message.id, {
+        content: [{ type: "text", text: JSON.stringify({ ok: false, error: "no such file" }) }],
+        isError: true,
+      });
+    }
     if (args.path === "state.json") {
       const state = { entry_text: "", listbox_rows: ["a", "b"], status_text: "saved 2 item(s)" };
       return send(

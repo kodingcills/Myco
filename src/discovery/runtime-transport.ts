@@ -20,6 +20,7 @@ import type {
   DesktopSession,
   DesktopTransport,
 } from "./live-runner.ts";
+import type { ProbeEvidence } from "./preflight.ts";
 
 interface Pending {
   resolve(value: unknown): void;
@@ -37,6 +38,8 @@ export interface RuntimeTransportOptions {
   readonly readRoot: string;
   /** Guest path of the app's published state file (ADR-0016). */
   readonly introspectionPath: string;
+  /** Guest path of the app under test (the `appPresent` check). */
+  readonly appPath: string;
   /** Session id; defaults to a timestamped one. */
   readonly sessionId?: string;
   /** Per-request timeout. */
@@ -206,6 +209,54 @@ export class RuntimeTransport implements DesktopTransport {
       action: wire,
     })) as { outcome?: unknown };
     return outcomeOf(result.outcome);
+  }
+
+  /** Host-side evidence for the preflight; it never assumes a check passed. */
+  /**
+   * Host-side evidence for the preflight. A failed read is not proof of absence:
+   * `read_file` fails for a missing grant and for a refused path alike, so
+   * absence is the part this transport cannot establish and it reports that.
+   */
+  async evidence(_session: DesktopSession): Promise<ProbeEvidence> {
+    let runtimeReachable = false;
+    let guestReady = false;
+    try {
+      const observation = (await this.client.callTool("observe", {
+        session_id: this.sessionId,
+      })) as { a11y_tree?: unknown; windows?: unknown };
+      runtimeReachable = true;
+      guestReady = Array.isArray(observation.windows) && observation.windows.length > 0;
+    } catch {
+      return {
+        runtimeReachable: false,
+        guestReady: false,
+        appPresent: false,
+        storeReadable: false,
+        // The oracle is supplied by its owner, not by this transport; claiming
+        // it here would be the transport deciding what counts as verification.
+        oraclePresent: false,
+        guestClean: false,
+      };
+    }
+    const canRead = async (path: string): Promise<boolean> => {
+      try {
+        await this.client.callTool("read_file", { session_id: this.sessionId, path });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    return {
+      runtimeReachable,
+      guestReady,
+      appPresent: await canRead(this.options.appPath),
+      storeReadable: await canRead(this.options.introspectionPath),
+      // The oracle is supplied by its owner; the transport claiming it present
+      // would be the transport deciding what counts as verification.
+      oraclePresent: false,
+      // No probe here can distinguish "no stray process" from "no read grant".
+      guestClean: false,
+    };
   }
 
   async readFile(_session: DesktopSession, path: string): Promise<string> {

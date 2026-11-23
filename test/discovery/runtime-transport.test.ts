@@ -11,6 +11,7 @@ function transport(): RuntimeTransport {
     cwd: join(import.meta.dirname, "..", ".."),
     readRoot: "/home/myco",
     introspectionPath: "state.json",
+    appPath: "app.py",
     sessionId: "s0-test",
     timeoutMs: 10_000,
   });
@@ -25,6 +26,17 @@ describe("runtime MCP transport", () => {
     await t.initialize();
     const session = await t.create();
     expect(session.id).toBe("s0-test");
+    const evidence = await t.evidence(session);
+    expect(evidence.runtimeReachable).toBe(true);
+    expect(evidence.guestReady).toBe(true);
+    expect(evidence.appPresent).toBe(true);
+    expect(evidence.storeReadable).toBe(true);
+    // The oracle is not the transport's to claim, and a read of a path that does
+    // not exist must not pass as "guest clean".
+    expect(evidence.oraclePresent).toBe(false);
+    // A failed read is never evidence of absence: the transport cannot tell "no
+    // stray process" from "no grant", so cleanliness stays unproven.
+    expect(evidence.guestClean).toBe(false);
     const observation = await t.observe();
     expect(observation.stateVersion).toBe(7);
     expect(observation.listRows).toEqual(["a", "b"]);

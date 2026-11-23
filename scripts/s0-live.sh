@@ -36,6 +36,8 @@ probe() {
     echo "load:            $(sysctl -n vm.loadavg)"
     echo "qemu:            $(qemu_running && echo RUNNING || echo down)"
     echo "rt_mcp:          $([[ -x "$RT_MCP" ]] && echo present || echo MISSING)"
+    echo "coordinator_go:  ${MYCO_COORDINATOR_GO:-no}"
+    echo "host_lock:       ${MYCO_HOST_LOCK:-no}"
     echo "vm_lock:         $(ls /tmp/myco-*.lock 2>/dev/null | tr '\n' ' ' || echo none)"
     echo "git_head:        $(git -C "$ROOT" rev-parse --short HEAD)"
   } | tee "$PROBE"
@@ -59,6 +61,17 @@ gate() {
   # would have been self-defeating by refusing on its own text.
   if qemu_running; then
     say "REFUSED: a qemu guest is already running; the window is not ours"
+    return 2
+  fi
+  # The gate the runtime and the human own: no boot, and no probe, without them.
+  # Environment variables are a stopgap until the coordinator's lock backend is
+  # named in the runbook; they are read here and nowhere else.
+  if [[ "${MYCO_COORDINATOR_GO:-}" != "1" ]]; then
+    say "REFUSED: no Coordinator GO (set MYCO_COORDINATOR_GO=1 only on an explicit GO)"
+    return 2
+  fi
+  if [[ "${MYCO_HOST_LOCK:-}" != "1" ]]; then
+    say "REFUSED: the shared host lock is not held by this run (MYCO_HOST_LOCK=1 when it is)"
     return 2
   fi
   # The runtime binary is the only transport; a missing one must refuse here so
