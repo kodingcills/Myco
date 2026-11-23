@@ -192,6 +192,8 @@ criterion (TIF-60) decide the wedge.
      HCU/Cua already provide; features without a measured job).
 
 ### MVD-006 (TIF-61) Coordination: public task set + host window
+- **linear_state:** the `TIF-61` tag has not been reported as drifting; the outer
+  loop lists TIF-52/53/60 as the disagreements, and MVD-006 is none of them.
 - **status:** **task set delivered; host window requested and queued, not granted.**
   The row's own acceptance also requires the window to be recorded "with start/end
   and owner" — that value does not exist yet, so this row is not closed.
