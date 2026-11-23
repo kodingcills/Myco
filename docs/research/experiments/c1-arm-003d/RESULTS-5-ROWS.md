@@ -41,13 +41,22 @@ UTM:                                            no guest
 
 **No sweep, no wrapper, no reset process, no guest.** The last log line is
 `[5] Resetting VM to cua-c1-base...`, so it died during that reset rather than
-finishing it. **Cause not established** - nothing in the logs names a fault, and the
-three logs share one mtime, so they stopped together rather than one erroring.
+finishing it.
 
-**The watchdog went silent earlier than the run.** `watch.log`'s last line is at
-**15:43:16** showing `rows=2`, while the ledger's last write is **15:45:27** with 5
-scored. So the watchdog stopped reporting ~2 minutes and 3 rows before the run
-stopped - consistent with the wrapper dying first and the sweep living briefly on.
+**Cause: an OPERATOR KILL, ordered by the outer loop at 20:48Z** once the
+`max_tokens=256` truncation defect below was identified. **It is not a launcher, VM
+or watchdog fault**, and nothing here needs investigating as an unexplained abort.
+
+The kill order was deliberate - watchdog, then wrapper, then the surviving sweep
+children and `tee` - which is exactly why **`watch.log`'s last line is 15:43:16 at
+`rows=2` while the ledger's last write is 15:45:27 with 5 scored.** The watchdog was
+killed *first* and the sweep children outlived it by ~2 minutes, rather than the
+wrapper dying of a fault. That ordering was previously read as evidence of a
+launcher problem; it is evidence of the order the processes were killed in.
+
+**The fix it was stopped for: PR #340** - a truncated reply now throws
+`PlannerFailure` so the trial is **omitted** rather than scored as an agent failure,
+the ceiling rose from 256 to 1024, and the abort-early rule is wired to scored rows.
 
 ## The five rows
 
@@ -60,9 +69,22 @@ stopped - consistent with the wrapper dying first and the sweep living briefly o
 | 4 | refuted / persisted-mismatch | 0 | no | no |
 
 **Only 1 of 5 attempted a save**, and only that one exercised the escalation path.
-Trials 3 and 4 did **nothing at all** (0 steps) yet were scored `persisted-mismatch` -
-worth a look, since a zero-step row that reaches the judge is a different shape from
-a planner that tried and failed.
+
+**Trials 3 and 4 did nothing at all (0 steps) yet were scored `persisted-mismatch`.
+That is now diagnosed, and it is not a scoring question.** Both are one model call
+with a completion of **exactly 256** - the output ceiling:
+
+```
+trial 3: steps 0, calls 1, completions [256], persisted-mismatch
+trial 4: steps 0, calls 1, completions [256], persisted-mismatch
+```
+
+The reply was clipped mid-JSON, the planner found no parseable decision, and
+`planner-no-action` was scored **against the agent**. A zero-step row reaching the
+judge is a different shape from a planner that tried and failed because **it is a
+harness fault in the model's clothing** - which is exactly why it looked like one.
+**PR #340 makes that shape impossible:** a `max_tokens` reply throws
+`PlannerFailure`, so the trial is omitted rather than scored.
 
 ## Spend
 
