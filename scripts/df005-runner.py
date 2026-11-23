@@ -318,7 +318,8 @@ def read_agent_report(path: str | None) -> tuple[str | None, str]:
         return None, f"agent report unreadable: {e}"
 
 
-def grade_report_clause_b(sc: Scenario, report: str | None) -> dict[str, Any]:
+def grade_report_clause_b(sc: Scenario, report: str | None,
+                          weight: float) -> dict[str, Any]:
     """DF-S02 clause (b): the report must name BOTH dropped items and the cause.
 
     Host-computable proxy for the pinned rubric (dogfood/scenarios/DF-S02): both
@@ -329,7 +330,7 @@ def grade_report_clause_b(sc: Scenario, report: str | None) -> dict[str, Any]:
     if report is None:
         return check(
             f"{sc.slug}:agent-report-names-missing", None,
-            "could not look: no agent transcript supplied for clause (b)", 0.5,
+            "could not look: no agent transcript supplied for clause (b)", weight,
         )
     low = report.lower()
     dropped = [a for a in sc.adds if a not in sc.expected]
@@ -352,7 +353,7 @@ def grade_report_clause_b(sc: Scenario, report: str | None) -> dict[str, Any]:
         if wrong_causes:
             problems.append(f"blames unrelated cause(s) {wrong_causes}")
         reason = "; ".join(problems)
-    return check(f"{sc.slug}:agent-report-names-missing", ok, reason, 0.5)
+    return check(f"{sc.slug}:agent-report-names-missing", ok, reason, weight)
 
 
 def now() -> str:
@@ -657,7 +658,7 @@ def execute_scenario(
     checks = [check(f"{sc.slug}:persisted-set-matches", persisted == expected,
                     f"persisted {persisted}, expected {expected}", w_persisted)]
     if sc.report_clause_b:
-        checks.append(grade_report_clause_b(sc, agent_report))
+        checks.append(grade_report_clause_b(sc, agent_report, w_report))
 
     checks.append(check(f"{sc.slug}:create-cost-observed", True,
                         f"create took {create_seconds:.2f}s", 0.0))
@@ -780,7 +781,7 @@ def app_basename() -> str:
 DELIVERED_KINDS = ("delivered_verified", "delivered_unverified")
 
 
-def predicate(name: str, outcome: Any) -> dict[str, Any]:
+def predicate(name: str, response: Any) -> dict[str, Any]:
     """Did this action land? An ALLOWLIST over ADR-0003's outcome kinds.
 
     `delivered_verified` and `delivered_unverified` both landed; everything else
@@ -797,19 +798,23 @@ def predicate(name: str, outcome: Any) -> dict[str, Any]:
     `PredicateResult.passed` is boolean-only (M1-012), so the exact kind is
     preserved verbatim in `observed` rather than being coerced away.
     """
+    outcome = response.get("outcome") if isinstance(response, dict) else None
     kind = outcome.get("kind") if isinstance(outcome, dict) else None
     return {"predicateName": name, "passed": kind in DELIVERED_KINDS,
-            "observed": json.dumps(outcome, sort_keys=True)}
+            "observed": json.dumps(response, sort_keys=True)}
 
 
 def act(mcp: McpClient, sid: str, action: dict[str, Any]) -> dict[str, Any]:
-    """Perform one action and return its three-way outcome.
+    """Perform one action and return the server's full response.
 
     A `failed` outcome is a real result (the action did not land), not an
     exception: the caller records it as a failing postcondition.
     """
-    res = mcp.call_tool("act", {"session_id": sid, "action": action})
-    return res.get("outcome", {})
+    # Return the whole response, not just `outcome`: a response with no
+    # `outcome` key must be distinguishable in the evidence from one whose
+    # outcome is an empty object. Collapsing both to `{}` made a transport gap
+    # look like an empty outcome.
+    return mcp.call_tool("act", {"session_id": sid, "action": action})
 
 
 def cleanup(mcp: McpClient, sid: str) -> None:

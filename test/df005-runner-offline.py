@@ -405,6 +405,38 @@ def main() -> int:
     expect("typeTextGlobal" in kinds, f"global route visible in steps: {kinds}")
     expect("typeText" not in kinds, "no ref-form summary on the global route")
 
+    print("20. check weights sum to 1.0 for both weight sets")
+    # Round 3 found DF-S02 summing to 1.1 because the report check hardcoded
+    # 0.5 while the caller assumed 0.4. Assert the invariant, not the numbers.
+    for label, kwargs, scenario in (
+        ("DF-S01 (no report clause)", {}, "DF-S01"),
+        ("DF-S02 (report clause)", {"agent_report": report_text(
+            "Both 'BUG: crash on save' and 'Bugfix release notes' were dropped by a "
+            "starts-with prefix filter at save time.")}, "DF-S02"),
+    ):
+        code, d = Harness(store_items=["fix login page", "update docs"],
+                          a11y=False, geometry=True).run(scenario=scenario, **kwargs)
+        res = json.loads((d / f"run-{scenario.lower()}-1" / "result.json").read_text())
+        total = sum(c["partial_score"]["weight"] for c in res["verdict"]["checks"])
+        expect(abs(total - 1.0) < 1e-9, f"{label}: weights sum to {total}")
+        if scenario == "DF-S02":
+            expect(res["verdict"]["score"] == 1.0,
+                   f"a fully correct DF-S02 scores 1.0 (got {res['verdict']['score']})")
+
+    print("21. a missing outcome is distinguishable from an empty one in evidence")
+    h = Harness(store_items=["buy milk", "call mom", "write report"],
+                a11y=False, geometry=True)
+    h.env["STUB_ACT_MODE"] = "empty"
+    code, d = h.run(scenario="DF-S01")
+    res = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+    observed = [p["observed"] for st in res["steps"] for p in st["postconditionResults"]]
+    # The gap case: the server answered, but with no `outcome` key. The evidence
+    # must show that, not a bare `{}` that reads like an empty outcome.
+    expect(any(o == '{"ok": true}' for o in observed),
+           f"a response with no outcome is recorded verbatim: {observed[:3]}")
+    expect(not any(o == "{}" for o in observed),
+           "no postcondition collapses the envelope to {}")
+
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0
 
