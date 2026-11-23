@@ -9,7 +9,8 @@ import { todoTransport } from "../../src/foundry/baseline/todo-transport.ts";
 import {
   type AttestInput,
   attest,
-  offlineObserver,
+  offlineObserverForContractTest,
+  registerLiveObserver,
   type SaveObservation,
 } from "../../src/foundry/grader/attest.ts";
 import { scoreDiscoveryTrial } from "../../src/foundry/grader/discovery.ts";
@@ -36,6 +37,8 @@ const COMMITTED = JSON.parse(readFileSync("foundry/hidden-commitment.json", "utf
 };
 const HIDDEN = generateHiddenFixtures(new Uint8Array(32).fill(42), COMMITTED.meta.count);
 const HIDDEN_FIXTURE = HIDDEN[0]!;
+/** The contract-test symbol, from the door itself, so a test can strip it to model production. */
+const MARKER_KEY = offlineObserverForContractTest().marker;
 const PROMPT_HASH = createHash("sha256").update(TASK.prompt).digest("hex");
 
 /** A save event carrying the bytes the observer will see, so the binding can be placed. */
@@ -76,17 +79,19 @@ async function finishedRun(): Promise<FinishedRun> {
 }
 
 function baseInput(run: FinishedRun) {
-  const observer = offlineObserver();
+  const { observer, marker } = offlineObserverForContractTest();
   return {
+    [marker]: marker,
     evidence: run.evidence,
     trace: [...run.trace, saveEvent(run.files)],
     finalFiles: run.files,
     observations: observer.observe(["store.json"], run.files),
     screen: run.screen,
     observerId: observer.id,
-    // Contract test: opt in explicitly, because the gate refuses an offline observer in
-    // production. That refusal is asserted separately.
-    allowOfflineObserver: true as const,
+    // Contract test: the marker is a symbol the caller cannot guess, so production code
+    // cannot reach this door by naming a string.
+    // The symbol IS the marker; spreading it in is what the gate checks.
+    ...{ [marker]: marker },
     hiddenFixtures: HIDDEN,
     claimedFixtureHash: fixtureHash(HIDDEN_FIXTURE),
     screenObserved: true,
@@ -128,6 +133,77 @@ describe("TIF-95: mutation check — each gate check is load-bearing", () => {
         evidence: { ...i.evidence, recordedCalls: [], recordedCallCount: 0, toolCallAudits: [] },
       }),
     },
+    // Round 5 named these as surviving every test. Each removes one clause's input.
+    {
+      name: "duplicate call id",
+      apply: (i) => ({
+        ...i,
+        evidence: {
+          ...i.evidence,
+          recordedCalls: [...i.evidence.recordedCalls, i.evidence.recordedCalls[0]!],
+          recordedCallCount: i.evidence.recordedCallCount + 1,
+          toolCallAudits: [...i.evidence.toolCallAudits, i.evidence.toolCallAudits[0]!],
+        },
+      }),
+    },
+    {
+      name: "audit channel disagrees",
+      apply: (i) => ({
+        ...i,
+        evidence: {
+          ...i.evidence,
+          toolCallAudits: i.evidence.toolCallAudits.map((a, n) =>
+            n === 0
+              ? { ...a, via: a.via === "gui" ? ("shell-exec" as const) : ("gui" as const) }
+              : a,
+          ),
+        },
+      }),
+    },
+    {
+      name: "trial did not finish",
+      apply: (i) => ({ ...i, evidence: { ...i.evidence, status: "quota-exhausted" as const } }),
+    },
+    {
+      name: "observation length disagrees",
+      apply: (i) => ({
+        ...i,
+        observations: i.observations.map((o: SaveObservation) => ({ ...o, bytes: o.bytes + 1 })),
+      }),
+    },
+    {
+      name: "saved bytes differ from the observation",
+      apply: (i) => ({
+        ...i,
+        trace: [
+          ...i.trace.filter((e) => e.type !== "save-observed"),
+          saveEvent({ "store.json": new TextEncoder().encode('{"items":[]}') }),
+        ],
+      }),
+    },
+    {
+      name: "last save includes no observed file",
+      apply: (i) => ({
+        ...i,
+        trace: [...i.trace.filter((e) => e.type !== "save-observed"), saveEvent({})],
+      }),
+    },
+    {
+      name: "unregistered observer named",
+      apply: (i) => {
+        const { [MARKER_KEY]: _drop, ...production } = i as unknown as Record<
+          string | symbol,
+          unknown
+        >;
+        return { ...production, observerId: "some-live-observer" } as AttestInput;
+      },
+    },
+    { name: "observations absent", apply: (i) => ({ ...i, observations: undefined as never }) },
+    { name: "final state absent", apply: (i) => ({ ...i, finalFiles: undefined as never }) },
+    {
+      name: "hidden fixtures absent",
+      apply: (i) => ({ ...i, hiddenFixtures: undefined as never }),
+    },
   ];
 
   it("the unmutated run is eligible, and every single-check removal is refused", async () => {
@@ -144,29 +220,48 @@ describe("TIF-95: mutation check — each gate check is load-bearing", () => {
   });
 });
 
-describe("TIF-95: an offline observer cannot vouch for a live run", () => {
-  it("refuses offlineObserver unless the caller declares a contract test", async () => {
-    // The finding that made this the most important round: a caller can supply the bytes AND
-    // a matching observation, and a match between two things one caller controls proves
-    // nothing. The offline observer hashes whatever it is handed, so it cannot vouch for a
-    // live run.
+describe("TIF-95: a caller cannot name its own provenance", () => {
+  /**
+   * Round 5's finding, and the reason this design changed: the previous guard refused one
+   * forbidden string. That is a check whose input the caller writes — the same fabrication
+   * with `observerId: "Offline"` or `"vm-guest"` passed. These tests assert the inverse:
+   * nothing is admitted unless it is registered, so there is no string to guess.
+   */
+  it("refuses a self-consistent fabrication for ANY unregistered observer id", async () => {
     const run = await finishedRun();
     const input = baseInput(run);
-    const production = { ...input, allowOfflineObserver: undefined };
-    const result = attest(production);
-    expect(result.eligible).toBe(false);
-    expect(result.blockers.join(" ")).toContain("an offline observer cannot vouch for a live run");
+    // Fabricated end to end: no executeTrial, no guest, no file on disk. Only the caller's
+    // own bytes and a matching observation.
+    // Strip the contract-test door: this is the production shape, a plain caller.
+    const { [MARKER_KEY]: _drop, ...production } = input as Record<string | symbol, unknown>;
+    for (const id of [
+      "offline",
+      "Offline",
+      "offline ",
+      " vm-guest-second-connection",
+      "x",
+      "",
+      "   ",
+    ]) {
+      const result = attest({ ...production, observerId: id } as AttestInput);
+      expect(result.eligible, `observerId ${JSON.stringify(id)} was admitted`).toBe(false);
+      expect(result.blockers.join(" ")).toContain("not a registered live observer");
+    }
+  });
 
-    // The same input with the explicit test opt-in is admitted, so the refusal above is a
-    // decision about provenance and not a blanket rejection of the offline observer.
+  it("admits the contract-test door, so the refusals above are about provenance", async () => {
+    // The door is a symbol the caller cannot name, and the input is otherwise identical.
+    const input = baseInput(await finishedRun());
     expect(attest(input).eligible).toBe(true);
   });
 
-  it("refuses an unnamed observer", async () => {
+  it("admits a registered live observer and only that observer", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest({ ...input, observerId: "  " });
-    expect(result.eligible).toBe(false);
-    expect(result.blockers.join(" ")).toContain("no observer was named");
+    const live = { id: "vm-second-connection", observe: () => [] };
+    registerLiveObserver(live);
+    expect(attest({ ...input, observerId: "vm-second-connection" }).eligible).toBe(true);
+    // A different id is still refused even though one observer is registered.
+    expect(attest({ ...input, observerId: "vm-second-connection " }).eligible).toBe(false);
   });
 });
 

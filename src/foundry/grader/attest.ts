@@ -68,6 +68,47 @@ export interface SaveObserver {
  */
 export const OFFLINE_OBSERVER_ID = "offline";
 
+/**
+ * Observers this gate will accept, and how an identity is proven.
+ *
+ * The previous design refused one forbidden string, which is a check the caller writes the
+ * input to. This is the inverse: nothing is accepted unless it is registered here. The
+ * offline observer is reachable only when the input carries the contract-test marker, so
+ * production code has no string it can pass to be believed.
+ */
+const LIVE_OBSERVERS = new Map<string, SaveObserver>();
+const CONTRACT_TEST_MARKER: unique symbol = Symbol("myco.contract-test");
+
+/** Register a live observer. Called by the ingest once a second channel exists. */
+export function registerLiveObserver(observer: SaveObserver): void {
+  if (observer.id.trim() === "" || observer.id === OFFLINE_OBSERVER_ID)
+    throw new Error("a live observer needs its own non-empty id");
+  LIVE_OBSERVERS.set(observer.id, observer);
+}
+
+/** Test-only door for the offline observer. Not reachable by naming a string. */
+export function offlineObserverForContractTest(observedAt = "1970-01-01T00:00:00.000Z"): {
+  observer: SaveObserver;
+  marker: typeof CONTRACT_TEST_MARKER;
+} {
+  return { observer: offlineObserver(observedAt), marker: CONTRACT_TEST_MARKER };
+}
+
+function safeObserverId(input: unknown): string {
+  if (!input || typeof input !== "object" || !("observerId" in input)) return "(none)";
+  const id = (input as { observerId?: unknown }).observerId;
+  return typeof id === "string" ? id : "(none)";
+}
+function trustObservers(input: unknown): SaveObserver | null {
+  if (!input || typeof input !== "object") return null;
+  const id = safeObserverId(input);
+  const bypass = (input as { [CONTRACT_TEST_MARKER]?: unknown })[CONTRACT_TEST_MARKER];
+  if (bypass === CONTRACT_TEST_MARKER && id === OFFLINE_OBSERVER_ID) return offlineObserver();
+  return LIVE_OBSERVERS.get(id) ?? null;
+}
+
+/** Reads the observer id without trusting it to be a string. */
+
 export function offlineObserver(observedAt = "1970-01-01T00:00:00.000Z"): SaveObserver {
   return {
     id: OFFLINE_OBSERVER_ID,
@@ -217,9 +258,40 @@ function readTrustedCommitment(path: string): ReturnType<typeof commitment> | nu
   }
 }
 
+/**
+ * Reads one field off a possibly-malformed input. `attest` must never throw: a gate that
+ * crashes on bad input is a gate an arm can disable by sending bad input.
+ */
+function field<T>(input: unknown, key: string, fallback: T): T {
+  if (!input || typeof input !== "object" || !(key in input)) return fallback;
+  const value = (input as Record<string, unknown>)[key];
+  return (value === undefined ? fallback : value) as T;
+}
+
 export function attest(input: AttestInput): Attestation {
+  // Any throw becomes a blocker. The body below still guards its own fields for a precise
+  // message; this is the backstop that makes "never throws" a property rather than a claim.
+  try {
+    return attestOrRefuse(input);
+  } catch (error) {
+    return {
+      [attestedBrand]: true as const,
+      eligible: false,
+      blockers: [
+        `input: malformed, could not be evaluated (${error instanceof Error ? error.message : "unknown error"})`,
+      ],
+      observerId: safeObserverId(input),
+      accepted: [],
+      screenConstrained: false,
+      unexpectedFiles: [],
+      resolvedFixtureId: null,
+    };
+  }
+}
+
+function attestOrRefuse(input: AttestInput): Attestation {
   const blockers: string[] = [];
-  const { evidence } = input;
+  const evidence = field<RecordedTrialEvidence | undefined>(input, "evidence", undefined);
 
   // Option 1: the fixture is resolved from the commitment, never taken from the caller.
   // A caller-supplied fixture could keep the real id and name a benign file; a fixture
@@ -281,21 +353,24 @@ export function attest(input: AttestInput): Attestation {
 
   // 1. The recorder must be closed and internally consistent. An open or inconsistent
   //    recording means the arm's account of itself is incomplete.
-  if ((evidence.recordedCalls ?? []).length !== evidence.recordedCallCount)
+  if (evidence === undefined) {
+    blockers.push("recorder: no evidence supplied, so the arm's account of itself is missing");
+  }
+  if ((evidence?.recordedCalls ?? []).length !== evidence?.recordedCallCount)
     blockers.push("recorder: call count does not match the recorded calls");
-  if ((evidence.toolCallAudits ?? []).length !== (evidence.recordedCalls ?? []).length)
+  if ((evidence?.toolCallAudits ?? []).length !== (evidence?.recordedCalls ?? []).length)
     blockers.push("recorder: not every call has an audit");
-  if ((evidence.toolCallAudits ?? []).some((audit) => audit.status !== "complete"))
+  if ((evidence?.toolCallAudits ?? []).some((audit) => audit?.status !== "complete"))
     blockers.push("recorder: an audit is incomplete");
   // Cardinality is not identity: an audit must name a call that was actually recorded, on
   // the same channel. Without this a ghost audit satisfies the count.
   const recorded = new Map<string, string>();
-  for (const call of evidence.recordedCalls ?? []) {
+  for (const call of evidence?.recordedCalls ?? []) {
     if (recorded.has(call.callId))
       blockers.push(`recorder: call ${call.callId} is recorded more than once`);
     else recorded.set(call.callId, call.via);
   }
-  for (const audit of evidence.toolCallAudits ?? []) {
+  for (const audit of evidence?.toolCallAudits ?? []) {
     const via = recorded.get(audit.callId);
     if (via === undefined) blockers.push(`recorder: audit ${audit.callId} names no recorded call`);
     else if (via !== audit.via)
@@ -305,8 +380,8 @@ export function attest(input: AttestInput): Attestation {
         `recorder: ${audit.via} call ${audit.callId} reports no accesses, so a direct write cannot be ruled out`,
       );
   }
-  if (evidence.status !== "finished")
-    blockers.push(`recorder: trial status is ${evidence.status}, not finished`);
+  if (evidence?.status !== "finished")
+    blockers.push(`recorder: trial status is ${evidence?.status ?? "absent"}, not finished`);
 
   // 2. Every persistence file must have been observed, and the observation must match the
   //    final bytes. A missing observation is a blocker, never a pass.
@@ -338,16 +413,18 @@ export function attest(input: AttestInput): Attestation {
     accepted.push(observation);
   }
 
-  // 3a. The observer must be a live channel, not the caller. Refusing `offline` in
-  //     production is what stops a self-consistent fabrication: a caller can pass fabricated
-  //     bytes AND a matching observation, and a match between two things one caller controls
-  //     proves nothing.
-  if (input.observerId === OFFLINE_OBSERVER_ID && input.allowOfflineObserver !== true) {
+  // 3a. The observer must be one this gate can vouch for. Deny by default: `observerId` is
+  //     a string the caller writes, so "refuse the literal offline" refuses nothing — the
+  //     same fabrication with observerId "Offline" or "vm-guest" passed. Only an observer
+  //     registered here, and only when it reports its own identity, counts.
+  const registered = trustObservers(input);
+  if (registered === null) {
     blockers.push(
-      "observer: an offline observer cannot vouch for a live run; its hash is of bytes the caller supplied",
+      `observer: "${safeObserverId(input)}" is not a registered live observer; a caller cannot name its own provenance`,
     );
+  } else if (registered.id !== safeObserverId(input)) {
+    blockers.push("observer: the identity does not match the registered observer");
   }
-  if (input.observerId.trim() === "") blockers.push("observer: no observer was named");
 
   // 3b. The screen reading must come from the observer, not the arm. A caller-supplied
   //    visibleText is an unchecked claim, and it feeds the screen oracle.
@@ -365,7 +442,7 @@ export function attest(input: AttestInput): Attestation {
   // A save the app did not perform is not a save. Require at least one GUI call, and
   // require the last save to follow a GUI action in the trace: bytes conjured out of band
   // with no act to explain them are the exact false success this gate exists to catch.
-  const guiCalls = (evidence.recordedCalls ?? []).filter((call) => call.via === "gui");
+  const guiCalls = (evidence?.recordedCalls ?? []).filter((call) => call?.via === "gui");
   if (guiCalls.length === 0)
     blockers.push("recorder: no GUI call was recorded, so no save can be attributed to the app");
   if (saves.length === 0) {
@@ -394,7 +471,7 @@ export function attest(input: AttestInput): Attestation {
     [attestedBrand]: true as const,
     eligible: blockers.length === 0,
     blockers,
-    observerId: input.observerId,
+    observerId: safeObserverId(input),
     accepted,
     screenConstrained,
     unexpectedFiles: unexpected,
