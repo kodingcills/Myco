@@ -39,8 +39,10 @@ if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 fi
 rm -f "$PID_FILE"
 
-"$GUEST_DIR/create-overlay.sh"
+# Seed first: make-seed.sh mints a key only when no overlay exists yet, so on a
+# fresh checkout it must run before create-overlay.sh makes one (TIF-111).
 "$GUEST_DIR/make-seed.sh"
+"$GUEST_DIR/create-overlay.sh"
 
 : > "$SERIAL_LOG"
 echo "Booting guest (-m ${GUEST_MB} MB, serial log: $SERIAL_LOG) ..."

@@ -92,6 +92,7 @@ gir1.2-atspi-2.0 2.52.0-1build1 · at-spi2-core 2.52.0-1build1 · gir1.2-gtk-3.0
 ## Lifecycle
 
 ```
+runtime/guest/provision.sh           # one step: keypair, image, overlay, seed (--check reports, exit 1 if incomplete)
 runtime/guest/fetch-image.sh         # download + SHA-256 verify (idempotent)
 runtime/guest/create-overlay.sh      # qcow2 overlay over the pristine base
 runtime/guest/boot.sh                # QEMU+HVF, headless, daemonized (idempotent)

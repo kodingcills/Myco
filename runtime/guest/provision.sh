@@ -47,7 +47,7 @@ report() {
 }
 
 # --check exits 0 only when every asset is present, so a preflight can gate on it.
-complete() { [[ -f "$KEY" && -f "$PUB" && -f "$BASE" && -f "$OVERLAY" && -f "$SEED" ]]; }
+complete() { [[ -f "$KEY" && -s "$PUB" && -f "$BASE" && -f "$OVERLAY" && -f "$SEED" ]]; }
 
 if [[ $CHECK -eq 1 ]]; then
   report
@@ -67,35 +67,52 @@ if ! command -v cloud-localds >/dev/null 2>&1 && ! command -v mkisofs >/dev/null
   exit 1
 fi
 
+# Make the .pub match the private key: rebuild it if it is missing, empty, or a
+# different key. The private key is the identity SSH actually presents, so it wins.
+# Written to a temp file and moved into place only on success, so a failed
+# `ssh-keygen -y` (corrupt or passphrase-protected key) never leaves an empty .pub
+# that a later run would accept (TIF-111 re-verifier, round 3).
+sync_pub() {
+  local key="$1" pub="$2" derived tmp
+  if ! derived="$(ssh-keygen -y -f "$key" </dev/null 2>/dev/null)" || [[ -z "$derived" ]]; then
+    echo "Cannot derive a public key from $key (corrupt, or passphrase-protected)." >&2
+    echo "Fix it, or remove BOTH key files and run runtime/guest/provision.sh to re-key." >&2
+    exit 1
+  fi
+  if [[ -s "$pub" ]] && [[ "$(cut -d' ' -f1,2 "$pub")" == "$(cut -d' ' -f1,2 <<<"$derived")" ]]; then
+    return 0
+  fi
+  [[ -s "$pub" ]] && echo "Public key does not match the private key; rebuilding it." >&2 \
+                  || echo "Public key missing or empty; rebuilding it from the private key." >&2
+  tmp="$(mktemp "${pub}.XXXXXX")"
+  printf '%s myco-rt-guest\n' "$derived" > "$tmp"
+  mv -f "$tmp" "$pub"
+}
+
 # 2. Keypair (user-data authorizes the public key, so it must exist before seeding).
 #    Both key files are gitignored, so regenerating them never dirties git.
-#
-#    Only a missing PRIVATE key means a new identity. A missing .pub alone (e.g. a
-#    `git pull` that removed the formerly tracked file) is rebuilt from the private
-#    key, so the guest's trusted key never changes underneath it.
-if [[ -f "$KEY" && ! -f "$PUB" ]]; then
-  echo "Public key missing; rebuilding it from the existing private key."
-  ssh-keygen -y -f "$KEY" > "$PUB"
-fi
-
-# A new key cannot reach an overlay where cloud-init already ran: the instance-id is
-# fixed, so ssh_authorized_keys is not re-applied and SSH would be refused. So a
-# re-key discards the (disposable) overlay. Decide BEFORE touching any key file, so
-# a refusal leaves a running guest's key intact (TIF-111 re-verifier).
-OVERLAY_ARGS=()
-if [[ ! -f "$KEY" ]]; then
+#    Only a missing PRIVATE key means a new identity; otherwise the .pub is synced to
+#    the existing private key and the guest's trusted key never changes.
+if [[ -f "$KEY" ]]; then
+  sync_pub "$KEY" "$PUB"
+else
+  # A new key cannot reach an overlay where cloud-init already ran (fixed
+  # instance-id: ssh_authorized_keys is not re-applied), so the old overlay must go.
+  # Check for a live guest BEFORE touching anything, then delete the overlay BEFORE
+  # creating the key: if this run is interrupted later (Ctrl-C in the download, a
+  # SHA mismatch), a re-run must not find "new key + old overlay" and call it done.
   if [[ -f "$OVERLAY" ]]; then
     if [[ -f "$STATE/qemu.pid" ]] && kill -0 "$(cat "$STATE/qemu.pid")" 2>/dev/null; then
       echo "Refusing: the SSH private key is missing but a guest is running on the overlay." >&2
       echo "Stop it (runtime/guest/shutdown.sh), then re-run this script." >&2
       exit 1
     fi
-    echo "New key: the overlay will be recreated so cloud-init authorizes it."
-    OVERLAY_ARGS=(--recreate)
+    echo "New key: discarding the old overlay so cloud-init authorizes the new one."
+    rm -f "$OVERLAY" "$SEED"
   fi
   echo "Generating guest SSH keypair ..."
   rm -f "$PUB"
-  ssh-keygen -t ed25519 -N '' -C myco-rt-guest -f "$KEY" -q
+  ssh-keygen -t ed25519 -N '' -C myco-rt-guest -f "$KEY" -q </dev/null
 fi
 
 # 3. Base image (SHA-256 pinned in fetch-image.sh; ~600 MB first time).
@@ -103,7 +120,7 @@ echo "Fetching/verifying the pinned base image ..."
 "$GUEST_DIR/fetch-image.sh"
 
 # 4. Overlay over the pristine base (never writes the base).
-"$GUEST_DIR/create-overlay.sh" ${OVERLAY_ARGS[@]+"${OVERLAY_ARGS[@]}"}
+"$GUEST_DIR/create-overlay.sh"
 
 # 5. Cloud-init seed (regenerates so the current public key is authorized).
 "$GUEST_DIR/make-seed.sh"
