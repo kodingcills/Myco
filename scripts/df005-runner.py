@@ -300,12 +300,21 @@ def parse_store(raw: str) -> tuple[list[str] | None, str]:
 # --------------------------------------------------------------------------
 # Checks
 # --------------------------------------------------------------------------
+def check_score(passed: bool | None) -> float:
+    """The one place a check's score is derived from its outcome.
+
+    `check()` publishes this and `RunResult.score` consumes it, so the two can
+    never disagree — they did, as two independent encodings of the same rule.
+    """
+    return 1.0 if passed is True else 0.0
+
+
 def check(name: str, passed: bool | None, reason: str, weight: float) -> dict[str, Any]:
     return {
         "name": name,
         "passed": passed,
         "reason": reason,
-        "partial_score": {"score": 0.0 if passed is not True else 1.0, "weight": weight},
+        "partial_score": {"score": check_score(passed), "weight": weight},
     }
 
 
@@ -393,9 +402,10 @@ class RunResult:
             return 0.0
         total = 0.0
         for c in checks:
-            w = c["partial_score"]["weight"]
-            total += w * (1.0 if c["passed"] is True else 0.0)
-        return total
+            total += c["partial_score"]["weight"] * check_score(c["passed"])
+        # Round: 0.4 + 0.2 accumulates to 0.6000000000000001 in binary float,
+        # which is noise in an artifact a human reads.
+        return round(total, 10)
 
 
 class GuestProbe:
@@ -663,6 +673,8 @@ def execute_scenario(
     if sc.report_clause_b:
         checks.append(grade_report_clause_b(sc, agent_report, w_report))
 
+    # Informational, not a check: it can never fail, so it must not look like
+    # one. It stays in the evidence as a zero-weight observation.
     checks.append(check(f"{sc.slug}:create-cost-observed", True,
                         f"create took {create_seconds:.2f}s", 0.0))
 
