@@ -96,7 +96,7 @@ runtime/guest/provision.sh           # keypair, image, overlay, seed; never boot
 runtime/guest/provision.sh --build-agent  # + the guest agent: BOOTS A VM, under the host VM lock + SESSION.lock (exit 10 if held)
 runtime/guest/fetch-image.sh         # download + SHA-256 verify (idempotent)
 runtime/guest/create-overlay.sh      # qcow2 overlay over the pristine base
-runtime/guest/boot.sh                # QEMU+HVF, headless, daemonized (idempotent); takes the host VM lock (exit 10 if held), held by qemu for the guest's life when boot.sh took it, or under a caller whose lock fd is inherited (TIF-137; a Python caller's is not, see the runbook)
+runtime/guest/boot.sh                # QEMU+HVF, headless, daemonized (idempotent); takes the host VM lock (exit 10 if held), held by qemu for the guest's life when boot.sh took it, or under a caller that passes its lock fd down (vm-lock.sh drivers, provision.sh, df005-runner.py; others get a WARNING, see the runbook) (TIF-137)
 runtime/guest/smoke.sh               # boots if needed; AT-SPI + input proofs
 runtime/guest/shutdown.sh            # clean shutdown over SSH; overlay kept
 runtime/guest/idle-watchdog.sh       # guest-side reaper (NOT installed by the seed yet): self-shutdown after MYCO_RT_IDLE_SECS idle

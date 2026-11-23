@@ -397,6 +397,54 @@ if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$(cut -d' ' -f2 "$L/v
   ok "a stale holder line from a live ancestor that released the lock does not skip it"
 else bad "stale holder line: rc=$rc order=[$(lorder "$L")] lock=[$(cat "$L/vm.lock" 2>/dev/null)] / $out"; fi
 
+# ── 18c. df005-runner.py passes its lock to the guest (TIF-137, fix (b)) ───────
+# Drives the runner's REAL acquire_vm_lock / McpClient(pass_fds) / release_vm_lock
+# through the real boot.sh, with a fake daemonizing qemu on PATH (a background
+# `sleep` that inherits fds and writes the pidfile). After the runner exits, the
+# guest must still hold the lock; once the guest dies, the lock is free.
+RUNNER="$HERE/../../scripts/df005-runner.py"
+probe_lock() { python3 -c 'import fcntl,os,sys
+fd=os.open(sys.argv[1],os.O_RDONLY)
+try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+except BlockingIOError: print("HELD"); sys.exit()
+print("FREE")' "$1"; }
+runner_sandbox() {
+  local d="$1"; rm -rf "$d"; mkdir -p "$d/state" "$d/keys" "$d/bin"
+  cp "$HERE/boot.sh" "$d/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$d/make-seed.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$d/create-overlay.sh"
+  printf '#!/usr/bin/env bash\npf=""; while [[ $# -gt 0 ]]; do [[ "$1" == -pidfile ]] && pf="$2"; shift; done\nsleep 300 </dev/null >/dev/null 2>&1 &\necho $! > "$pf"\n' > "$d/bin/qemu-system-aarch64"
+  chmod +x "$d"/*.sh "$d/bin/qemu-system-aarch64"
+  cat > "$d/runner.py" <<'PY'
+import importlib.util, os, sys
+runner_path, boot, mode = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("df005_runner", runner_path)
+r = importlib.util.module_from_spec(spec)
+sys.modules["df005_runner"] = r   # dataclasses need the module registered first
+spec.loader.exec_module(r)
+fd = r.acquire_vm_lock("df005-runner.py")
+c = r.McpClient(["bash", boot], pass_fds=(fd,) if mode == "pass" else ())
+out, err = c.proc.communicate(timeout=60)
+sys.stdout.write(out + err)
+r.release_vm_lock(fd)            # then the runner exits, as after Ctrl-C
+PY
+}
+runner_case() {  # $1 dir, $2 pass|nopass
+  local d="$1"; runner_sandbox "$d"
+  RC_OUT="$(PATH="$d/bin:$PATH" MYCO_VM_LOCK_PATH="$d/vm.lock" python3 "$d/runner.py" "$RUNNER" "$d/boot.sh" "$2" 2>&1)"
+  AFTER_RUNNER="$(probe_lock "$d/vm.lock")"
+  kill "$(cat "$d/state/qemu.pid" 2>/dev/null)" 2>/dev/null; sleep 0.3
+  AFTER_GUEST="$(probe_lock "$d/vm.lock")"
+}
+runner_case "$TMP/r18c" pass
+if [[ "$AFTER_RUNNER" == HELD && "$AFTER_GUEST" == FREE && "$RC_OUT" == *"held by the caller"* && "$RC_OUT" != *WARNING* ]]; then
+  ok "df005-runner's lock reaches the guest: still HELD after the runner exits, FREE once the guest dies"
+else bad "runner pass_fds: after-runner=$AFTER_RUNNER after-guest=$AFTER_GUEST / $RC_OUT"; fi
+runner_case "$TMP/r18c2" nopass
+if [[ "$AFTER_RUNNER" == FREE && "$RC_OUT" == *"lock was not inherited"* ]]; then
+  ok "control: without pass_fds the lock ends with the runner, and boot.sh warns"
+else bad "runner control: after-runner=$AFTER_RUNNER / $RC_OUT"; fi
+
 # ── 19. provision.sh and the guest agent (TIF-120 / DF-008) ───────────────────
 # Default never boots; --build-agent takes the host VM lock and SESSION.lock, then
 # boot -> wait for cloud-init -> build -> shut down. Stubs log the call order; the

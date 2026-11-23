@@ -47,9 +47,10 @@ rm -f "$PID_FILE"
 # When boot.sh takes the lock itself, it is an flock on fd 9, which qemu inherits
 # when it daemonizes: it stays held for the guest's whole life and is released when
 # the guest exits. Under a caller that already holds it, the guest keeps it only
-# if the caller's descriptor was inherited (vm-lock.sh drivers, provision.sh); a
-# Python caller's is close-on-exec (df005-runner.py), so there the lock ends with
-# the caller, and boot.sh prints a WARNING saying so. A caller
+# if the caller's descriptor was inherited: vm-lock.sh drivers and provision.sh
+# (fd 9), and df005-runner.py, which passes its fd down via pass_fds (TIF-137).
+# A caller that does not (a Python fd is close-on-exec by default) gets a WARNING
+# that the lock ends with it. A caller
 # that already holds the lock (provision.sh --build-agent, a trial driver, or
 # df005-runner.py, which locks from Python) is an ANCESTOR of this process and is
 # recorded as the holder in the lock file ("<pid> <driver>", written by every
