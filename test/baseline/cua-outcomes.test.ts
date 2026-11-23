@@ -203,6 +203,24 @@ describe("Cua action outcomes", () => {
     }
   });
 
+  it("does not claim `delivered` without saying whether it was verified", async () => {
+    // The doc comment says `delivered` means "the input landed and Cua verified
+    // it". The fall-through branch can return `delivered` with `verified` absent
+    // entirely, which claims delivery while dropping the qualification the name
+    // promises. Two shapes reach it: an unqualified success with no structured
+    // verification, and a plain non-error response.
+    for (const shape of [
+      { isError: false, structuredContent: { effect: "applied" } },
+      { isError: false, structuredContent: {} },
+    ]) {
+      const { result } = await executeOnce([shape]);
+      expect(result.outcome, JSON.stringify(shape)).toBe("delivered");
+      // `verified` must be PRESENT as a boolean, so a consumer can tell
+      // "confirmed" from "we do not know" instead of reading absence as success.
+      expect(typeof result.verified, JSON.stringify(shape)).toBe("boolean");
+    }
+  });
+
   it("keeps verified alongside the outcome rather than in place of it", async () => {
     const { result } = await executeOnce([DELIVERED]);
     expect(result.verified).toBe(true);
