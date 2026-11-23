@@ -39,6 +39,63 @@ if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 fi
 rm -f "$PID_FILE"
 
+# TIF-137: every guest launch takes the host VM lock (CONTRIBUTING-agents.md, VM
+# queue gate: "acquire LOCK_EX before any VM action"). boot.sh is the only place in
+# runtime/ that starts qemu, so taking it here covers provision.sh, smoke.sh,
+# channel-test.sh, live-proof.sh and the Rust backend's create/reset alike.
+#
+# The lock is an flock on fd 9, which qemu inherits when it daemonizes: it stays
+# held for the guest's whole life and is released when the guest exits. A caller
+# that already holds the lock (provision.sh --build-agent, a trial driver, or
+# df005-runner.py, which locks from Python) is an ANCESTOR of this process and is
+# recorded as the holder in the lock file ("<pid> <driver>", written by every
+# owner under the protocol). That pid, not an environment variable, decides it:
+# only the flock holder can write the file, so it cannot be spoofed, and callers
+# that never export MYCO_VM_LOCK_OWNER still work. No re-acquire in that case:
+# flock is per open file, so a second acquire would refuse our own caller.
+VM_LOCK_SCRIPT="${MYCO_VM_LOCK_SCRIPT:-$GUEST_DIR/../../scripts/vm-lock.sh}"
+LOCK_HOLDER=""
+lock_held_by_ancestor() {
+  local holder p
+  local path="${MYCO_VM_LOCK_PATH:-/tmp/myco-win11.vm.lock}"
+  read -r holder _ < "$path" 2>/dev/null || return 1
+  [[ "$holder" =~ ^[0-9]+$ ]] && kill -0 "$holder" 2>/dev/null || return 1
+  # The file keeps the last owner's pid after a release, so also prove the lock is
+  # HELD right now: a non-blocking flock that succeeds means it is free.
+  python3 - "$path" <<'PY' || return 1
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDONLY)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(0)          # held by someone: the holder line is current
+fcntl.flock(fd, fcntl.LOCK_UN)
+sys.exit(1)              # free: nobody holds it, so take it ourselves
+PY
+  p=$PPID
+  while [[ -n "$p" && "$p" -gt 1 ]]; do
+    if [[ "$p" == "$holder" ]]; then LOCK_HOLDER="$holder"; return 0; fi
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+  done
+  return 1
+}
+if lock_held_by_ancestor; then
+  echo "VM lock: held by the caller (pid $LOCK_HOLDER); booting under it."
+else
+  [[ -r "$VM_LOCK_SCRIPT" ]] || { echo "Refusing to boot: cannot take the VM lock ($VM_LOCK_SCRIPT not found)" >&2; exit 1; }
+  # shellcheck source=/dev/null
+  source "$VM_LOCK_SCRIPT"
+  lock_rc=0
+  vm_lock_acquire "boot.sh $GUEST_DIR" || lock_rc=$?
+  if [[ $lock_rc -eq 10 ]]; then
+    echo "Refusing to boot: the host VM lock is held by another owner (see above)." >&2
+    exit 10
+  elif [[ $lock_rc -ne 0 ]]; then
+    echo "Refusing to boot: could not take the VM lock (vm_lock_acquire exit $lock_rc)." >&2
+    exit 1
+  fi
+fi
+
 # Seed first: make-seed.sh mints a key only when no overlay exists yet, so on a
 # fresh checkout it must run before create-overlay.sh makes one (TIF-111).
 "$GUEST_DIR/make-seed.sh"

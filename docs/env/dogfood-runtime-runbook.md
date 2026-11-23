@@ -470,6 +470,18 @@ writes its state to that path. Like `launch_process` (arbitrary execution in the
 guest), this is inside the guest; the isolation boundary is the VM
 (`docs/research/runtime-safety-isolation.md`).
 
+**Every guest launch takes the host VM lock (TIF-137).** `boot.sh`, the only
+place in `runtime/` that starts qemu (so `create`, `reset`, `provision.sh
+--build-agent`, `smoke.sh`, `live-proof.sh` alike), takes `/tmp/myco-win11.vm.lock`
+before seeding, and qemu inherits it: **the lock is held for as long as the guest
+runs** and released when it exits (`destroy`, `shutdown.sh`). If someone else
+holds it, `boot.sh` refuses with exit 10 (`create` fails with "Refusing to boot:
+the host VM lock is held by another owner"). A caller that already holds the lock,
+such as `df005-runner.py --go`, a trial driver, or `provision.sh --build-agent`, is
+recognised as an ancestor through the pid it recorded in the lock file and is not
+asked to lock twice. Consequence: a session left running keeps the host locked, so
+`destroy` sessions you are done with.
+
 **Do not leave your own guest running.** The runtime's `create` boots its own
 guest from the same overlay; if one is already up, `boot.sh` exits 1 and every
 trial gaps with `script failed: boot.sh`. Boot only to build the agent, then shut
