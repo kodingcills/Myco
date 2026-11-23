@@ -35,8 +35,10 @@ export interface DesktopObservation {
 
 export type DesktopAction =
   | { readonly kind: "launch"; readonly command: string; readonly args: readonly string[] }
-  /** Global text into the focused window. The runtime op this runner is waiting on. */
-  | { readonly kind: "typeText"; readonly text: string }
+  /** Global text into the focused window (runtime `typeTextGlobal`, XTEST). */
+  | { readonly kind: "typeTextGlobal"; readonly text: string }
+  /** Raw guest screen coordinate (runtime `clickAt`). */
+  | { readonly kind: "clickAt"; readonly x: number; readonly y: number }
   | { readonly kind: "keyPress"; readonly keys: string };
 
 export type ActionOutcome = "delivered_verified" | "delivered_unverified" | "failed";
@@ -66,6 +68,8 @@ export interface LiveRunInput {
     readonly command: string;
     readonly args: readonly string[];
     readonly storePath: string;
+    /** Screen point of the Save control; when absent, the runner uses Tab traversal. */
+    readonly savePoint?: { readonly x: number; readonly y: number };
   };
   readonly items: readonly string[];
   readonly verify: (
@@ -185,7 +189,7 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
 
     for (const [index, item] of input.items.entries()) {
       const before = observation.stateVersion;
-      const typed = await input.transport.act(session, { kind: "typeText", text: item });
+      const typed = await input.transport.act(session, { kind: "typeTextGlobal", text: item });
       if (typed === "failed") throw new Error(`typeText failed for item ${index}`);
       const added = await input.transport.act(session, { kind: "keyPress", keys: "Return" });
       if (added === "failed") throw new Error(`Return failed for item ${index}`);
@@ -193,7 +197,7 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
       steps.push(
         step(
           index + 1,
-          { kind: "typeText", text: item },
+          { kind: "typeTextGlobal", text: item },
           before,
           observation.stateVersion,
           [],
@@ -208,19 +212,27 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
       );
     }
 
-    // Focus order in the app: entry -> Add -> list -> Save. Three Tabs from the
-    // entry reach Save; Return activates it.
+    // Prefer the raw-point click when the task package names the Save control;
+    // otherwise fall back to the app's focus order (entry -> Add -> list -> Save).
     const saveBefore = observation.stateVersion;
-    for (const keys of ["Tab", "Tab", "Tab", "Return"]) {
-      const outcome = await input.transport.act(session, { kind: "keyPress", keys });
-      if (outcome === "failed") throw new Error(`save key ${keys} failed`);
+    const saveAction: DesktopAction = input.app.savePoint
+      ? { kind: "clickAt", x: input.app.savePoint.x, y: input.app.savePoint.y }
+      : { kind: "keyPress", keys: "Tab Tab Tab Return" };
+    if (saveAction.kind === "clickAt") {
+      const outcome = await input.transport.act(session, saveAction);
+      if (outcome === "failed") throw new Error("save click failed");
+    } else {
+      for (const keys of ["Tab", "Tab", "Tab", "Return"]) {
+        const outcome = await input.transport.act(session, { kind: "keyPress", keys });
+        if (outcome === "failed") throw new Error(`save key ${keys} failed`);
+      }
     }
     observation = await input.transport.observe(session);
     claimed = observation.statusText;
     steps.push(
       step(
         input.items.length + 1,
-        { kind: "keyPress", keys: "Tab Tab Tab Return" },
+        saveAction,
         saveBefore,
         observation.stateVersion,
         [
