@@ -977,7 +977,52 @@ def summarize(results: dict[str, list[RunResult]]) -> None:
             print("gaps by requirement: " + ", ".join(f"{k}={v}" for k, v in sorted(gaps.items())))
 
 
-TOTAL_CHECKS = 6
+TOTAL_CHECKS = 8
+
+
+def create_accepts_introspection(timeout: float = 15.0) -> tuple[bool, str]:
+    """Ask the MCP server whether `create` declares `introspection_file`.
+
+    Read-only: `tools/list` only. No session is created. Returns (ok, detail).
+
+    The failure this catches is silent — the runner sends a key the server does
+    not know, `create` ignores it, and the run gaps on REQ-03 after a guest has
+    already been booted. Checking the declaration costs one handshake.
+    """
+    try:
+        client = McpClient([str(DEFAULT_SERVER)])
+    except Exception as e:  # noqa: BLE001 - a spawn failure (permissions, a
+        # partially-written binary) must be a recorded FAIL, not a traceback.
+        return False, f"could not start the server: {type(e).__name__}: {e}"
+
+    try:
+        client.request("initialize", {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "clientInfo": {"name": "df005-preflight", "version": "0.2.0"},
+        })
+        listed = client.request("tools/list")
+    except McpError as e:
+        return False, f"could not read the server's tool list: {e}"
+    except Exception as e:  # noqa: BLE001 - a banner or a decode error must not
+        # crash preflight; it is still a "the server did not answer usefully".
+        return False, f"the server did not answer usefully: {type(e).__name__}: {e}"
+    finally:
+        client.close()
+
+    for tool in listed.get("tools", []):
+        if tool.get("name") != "create":
+            continue
+        props = (tool.get("inputSchema") or {}).get("properties") or {}
+        if "introspection_file" in props:
+            return True, "create declares introspection_file, so route 1 is honoured"
+        return False, (
+            "create does not declare introspection_file (has: "
+            f"{', '.join(sorted(props)) or 'nothing'}). The runner sends it anyway, "
+            "and the server will ignore it — the record will never reach observe. "
+            "Rebuild with: cargo build -p myco-rt-mcp (a stale binary predating "
+            "TIF-120 reports the same)."
+        )
+    return False, "the server exposes no `create` tool"
 
 
 def preflight() -> int:
@@ -1045,13 +1090,32 @@ def preflight() -> int:
     # (e) Never probe the guest while another driver holds the lock. The checks
     # are read-only, but they add load to someone else's live slot, so report
     # them as not-run and let the operator see why they are missing.
+    # 8. Does `create` actually accept the argument we send? A key-name drift
+    # (introspection vs introspection_file) passes every guest-side probe and
+    # then burns the slot at REQ-03. Ask the server's own schema rather than
+    # trusting a write.
+    #
+    # Deliberately before the held-lock return: this check needs neither the
+    # lock nor the guest, and omitting it while printing "of 8" is the very
+    # count-without-measuring defect this file exists to prevent.
+    if DEFAULT_SERVER.exists() and os.access(DEFAULT_SERVER, os.X_OK):
+        accepted, detail = create_accepts_introspection()
+        record("create-schema", accepted, detail)
+    elif not DEFAULT_SERVER.exists():
+        record("create-schema", None, "not run: the MCP server binary is missing")
+    else:
+        # exists but is not executable — the same condition check 1 fails on.
+        record("create-schema", False,
+               f"{DEFAULT_SERVER} is not executable, so its schema cannot be read")
+
     if not lock_free:
-        for name in ("guest-ssh", "app-deployed", "app-self-test", "introspection-env"):
+        for name in ("guest-ssh", "app-deployed", "app-self-test",
+                     "introspection-file", "introspection-shadow"):
             record(name, None, "not run: another driver holds the VM lock")
         print()
         print(f"preflight FAILED: 1 of {TOTAL_CHECKS} checks failed: vm-lock")
         print("  not run (blocked by the above): guest-ssh, app-deployed, "
-              "app-self-test, introspection-env")
+              "app-self-test, introspection-file, introspection-shadow")
         print("Fix these before spending the guest slot.")
         return 1
 
@@ -1079,23 +1143,48 @@ def preflight() -> int:
         rc3, st = guest(f"python3 {APP_PATH} --self-test 2>&1 | tail -1")
         record("app-self-test", rc3 == 0 and "self-test OK" in st, st[:80])
 
-        # 6. Introspection channel. The runner now names the path on `create`
-        # (route 1), which wins over gui.env, so the check is that the path is
-        # usable in the guest — not that gui.env happens to carry one.
+        # 6. The exact file is usable, not merely its directory: a stale
+        # root-owned or read-only file at this path defeats the channel while a
+        # directory probe still passes.
         rc4, probe = guest(
-            f"d=$(dirname {INTROSPECTION_PATH}); "
-            "test -d \"$d\" && test -w \"$d\" && echo writable || echo not-writable"
+            f"p={shlex.quote(INTROSPECTION_PATH)}; d=$(dirname \"$p\"); "
+            "if [ -d \"$p\" ]; then echo not-a-file; "
+            "elif [ -e \"$p\" ] && [ ! -w \"$p\" ]; then echo not-writable-file; "
+            "elif [ ! -d \"$d\" ] || [ ! -w \"$d\" ]; then echo not-writable-dir; "
+            "else echo writable; fi"
         )
-        writable = rc4 == 0 and "writable" in probe and "not-writable" not in probe
-        record("introspection-env", writable,
-               f"{INTROSPECTION_PATH} is writable in the guest (route 1, set on create)"
-               if writable else
-               f"{INTROSPECTION_PATH} is not writable in the guest: the app cannot "
-               "publish and observe will report introspection null (REQ-03)")
+        file_state = (probe or "").strip()
+        file_ok = rc4 == 0 and file_state == "writable"
+        record("introspection-file", file_ok,
+               f"{INTROSPECTION_PATH} is writable in the guest" if file_ok else
+               f"{INTROSPECTION_PATH}: {file_state or 'probe failed'}. The app cannot "
+               "publish there, so observe will report introspection null (REQ-03)")
+
+        # 7. gui.env must not shadow route 1. The runtime's rule is "an explicit
+        # value wins", so a MYCO_TODO_STATE_FILE in gui.env makes the app publish
+        # somewhere other than the path `create` names — the record then never
+        # reaches observe, silently.
+        rc5, shadow = guest("printenv MYCO_TODO_STATE_FILE 2>/dev/null || true")
+        shadow_value = (shadow or "").strip()
+        # The launched app inherits the agent's whole environment, so any channel
+        # that sets this (gui.env, /etc/environment, sshd env, a unit's
+        # Environment=) makes the runtime's "explicit value wins" rule drop
+        # route 1. Probing the effective variable subsumes all of them. A value
+        # equal to our own path is not a shadow.
+        shadowed = bool(shadow_value) and shadow_value != INTROSPECTION_PATH
+        record("introspection-shadow", not shadowed,
+               f"MYCO_TODO_STATE_FILE={shadow_value[:60]!r} in the agent's environment "
+               f"overrides the path create names ({INTROSPECTION_PATH}) — the app "
+               "would publish elsewhere and observe would see nothing"
+               if shadowed else
+               f"the agent's environment has no MYCO_TODO_STATE_FILE competing "
+               f"with {INTROSPECTION_PATH} (equality is a proxy: it does not "
+               "prove the app writes there)")
     else:
         # No guest to ask: record the dependent checks as not-run rather than
         # omitting them, so the summary never claims a count it did not measure.
-        for name in ("app-deployed", "app-self-test", "introspection-env"):
+        for name in ("app-deployed", "app-self-test", "introspection-file",
+                     "introspection-shadow"):
             record(name, None, "not run: guest unreachable")
 
     failed = [n for n, ok, _ in results if ok is False]
