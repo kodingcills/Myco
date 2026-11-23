@@ -223,14 +223,18 @@ fn destroyed_session_refuses_every_operation() {
     assert!(s.reset().is_err(), "reset after destroy");
     assert!(s.act(&targeted("x")).is_err(), "act after destroy");
 
-    // `evidence` is the exception, and the asymmetry is real: unlike every other
-    // non-terminal op it has no `require_ready()` guard, so it reaches the backend
-    // on a destroyed session and reports success. Pinned here as observed behaviour
-    // rather than asserted as correct -- see the note in the test body.
-    assert!(
-        s.evidence().is_ok(),
-        "observed: evidence is unguarded after destroy (finding, not endorsement)"
-    );
+    // `evidence` used to be the exception: unlike every other non-terminal op it
+    // had no `require_ready()` guard, so it reached the backend on a destroyed
+    // session and reported success. RT-021 closed that asymmetry -- the artifacts
+    // live in the run directory `destroy` deletes, and the success it reported was
+    // backend-dependent (synthetic paths under FakeBackend). It is now refused
+    // like every other op; this assertion is what fails if the guard is removed.
+    match s.evidence() {
+        Err(RuntimeError::IllegalTransition { from, .. }) => {
+            assert_eq!(from, SessionPhase::Destroyed, "evidence refused from destroyed")
+        }
+        other => panic!("evidence must be refused on a destroyed session, got {other:?}"),
+    }
 
     assert_eq!(s.phase(), SessionPhase::Destroyed, "phase stays destroyed");
 }
