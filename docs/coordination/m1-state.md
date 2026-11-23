@@ -96,6 +96,36 @@ old code walked 11 trials before the cap stopped it; the new code stops at 2.
   **not yet merged to main**. `/tmp/baseline/c1-arm/accounting.json` is the
   live copy.
 
+## Linear ownership (from 2026-11-22 22:2x ET)
+
+**TIF-109 is reported fixed** — Tiffany signed Oh My Pi into Linear
+(`/mcp reauth linear`), and a fresh omp session should see team TIF.
+
+**What changes for owners:** you own your issues directly — create and update TIF
+issues, set **In Progress** when a PR opens, **Done only on merged evidence**,
+link PRs, and keep blocking relations current. Partial PRs carry
+**"Part of TIF-xx"** so Linear does not auto-close the issue.
+
+### Status of my own access: NO
+
+Checked rather than assumed:
+
+- `~/.omp/agent/mcp.json` **does** configure `linear`
+  (`"type": "http", "url": "https://mcp.linear.app/mcp"`).
+- A direct `initialize` POST to that URL returns **401**.
+- **No Linear credential exists on this machine**: `~/.omp/oauth/` contains only
+  `zcode`, and the keychain has no `linear` item.
+
+So for this session the server is configured but unusable, and `/mcp reload` will
+not help because there is no token to load. The four owners were asked to verify
+independently and reply "Linear confirmed: TIF-nn <title>" only if they actually
+read an issue — a plain "no" is more useful than an optimistic "probably".
+
+**Consequence while unconfirmed:** the in-repo files remain the record —
+`docs/backlog/m1.md` for M1, the per-owner backlogs for the rest, and this file for
+coordinator state. The outer loop has been proxying issue creation and will stop
+once an owner confirms.
+
 ## Open defects
 
 - **#153 — REJECTED by verifier.** Python half correct and mutation-verified,
