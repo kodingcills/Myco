@@ -279,13 +279,15 @@ Dogfood scenarios require host-side oracle checks against guest state (REQ-08, R
 - **Guest User:** `myco`
 - **Private Key:** `runtime/guest/keys/id_ed25519` (permissions `0600`)
 
->  **If the private key is missing** (both keys are gitignored, so a fresh clone has
+> **If the private key is missing** (both keys are gitignored, so a fresh clone has
 > only `README.md`), every command below fails with `Identity file not accessible`.
-> The one-step fix is `runtime/guest/provision.sh` (`--check` reports what is
-> missing and exits non-zero until everything is present). Or generate it per
-> [`runtime/guest/keys/README.md`](../../runtime/guest/keys/README.md) and
-> re-provision the guest — cloud-init bakes the public key in, so a key generated
-> after provisioning will not authenticate.
+> Re-provision with `runtime/guest/provision.sh`, following
+> [§6 Step -1 — provision](#step--1--provision-only-if-the-guest-does-not-exist)
+> (`provision.sh --check` reports what is missing and exits non-zero until
+> everything is present). Do not generate a key by hand over an existing overlay:
+> cloud-init authorizes the key only on the overlay's first boot, so a hand-made key
+> will not authenticate. `provision.sh` discards the old overlay when it has to
+> re-key (see [`runtime/guest/keys/README.md`](../../runtime/guest/keys/README.md)).
 
 ### Standard SSH Execution Command
 ```bash
