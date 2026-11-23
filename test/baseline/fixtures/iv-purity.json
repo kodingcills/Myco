@@ -9,8 +9,7 @@
         }
       }
     ],
-    "claims": [],
-    "deliveries": []
+    "claims": []
   },
   "driver": {
     "hostVersion": "1",
