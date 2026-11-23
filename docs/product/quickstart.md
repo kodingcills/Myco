@@ -150,8 +150,9 @@ ARTIFACTS: INVALID
 ```
 
 Exit code **2**. A normal run whose artifacts were corrupted the same way also
-exits 2 instead of printing `VERIFIED`, because the exit code is decided by the
-validator, not by the in-memory verdict.
+exits 2 and reports `artifacts: INVALID`; the exit code and the validity line are
+decided by the validator, not by the in-memory verdict, so the summary's verdict
+line alone is never what a caller should trust.
 
 The viewer reads the same two files: `pnpm --filter viewer build`, then open
 `viewer/dist/index.html` and drop the run directory in.
@@ -212,11 +213,19 @@ are readable. Two are **not established by any owner yet**:
 
 The transport reports both as `false` rather than assuming them, which is the
 intended state: a preflight that guesses is worse than one that refuses. So
-`--transport live` currently exits **2** at the preflight and writes no run
-directory.
+`--transport live --gate-passed` currently exits **2** at the preflight and writes
+no run directory.
 
-Which refusal you meet depends on the machine, so both are listed. This is the one
-this host printed:
+The two flags come first and are machine-independent. Without `--gate-passed` it
+refuses before touching the host at all, with exit code **1** (§6):
+
+```sh
+pnpm myco-run --transport live --task df-s01 --out /tmp/myco-out
+# myco-run: refusing the live path without the Coordinator's GO for this window.
+```
+
+Past that, which refusal you meet depends on the machine, so both are listed. This
+is the one this host printed:
 
 ```sh
 pnpm myco-run --transport live --task df-s01 --out /tmp/myco-out --gate-passed
@@ -227,13 +236,6 @@ pnpm myco-run --transport live --task df-s01 --out /tmp/myco-out --gate-passed
 On a machine that has not built the runtime, the same command refuses earlier with
 `myco-run: live transport refused (runtime binary absent: runtime/target/debug/myco-rt-mcp)`.
 Either way the exit code is 2 and no run directory is written.
-
-and without the GO:
-
-```sh
-pnpm myco-run --transport live --task df-s01 --out /tmp/myco-out
-# myco-run: refusing the live path without the Coordinator's GO for this window.
-```
 
 The detached launcher for the full S0 sequence (both tasks, one process, watchdog)
 is `scripts/s0-live.sh --run`, gated the same way through
