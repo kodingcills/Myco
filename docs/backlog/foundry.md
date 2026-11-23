@@ -6,6 +6,19 @@ outer loop mirrors this file into Linear; agents do not call Linear
 Owner roles: `foundry-owner` (this workstream), `verifier` (independent, per sub-thread),
 `outer-loop`. Contracts: [../foundry/contract.md](../foundry/contract.md).
 
+**On ids and Linear.** The markdown id (EF-00N) is the entry's identity in this repo; the
+TIF id is its Linear id. They are one-to-one — no entry carries two TIF ids, and no two
+entries share one. Three ids were previously claimed by two files at once, which the outer
+loop resolved on 2026-11-22: `docs/backlog/m1.md` had wrongly taken **TIF-51, TIF-52 and
+TIF-58**, which belong to EF-002, EF-003 and EF-005 here. `m1.md` was corrected; this file's
+tags were already right and were not changed. **EF-005/TIF-58 and EF-006/TIF-74 are two
+items, not two ids for one item** — split on the outer loop's instruction because a harness
+that scores a model is different work from making a live run's evidence admissible.
+
+The Foundry has no Linear connector, so `**linear status:**` here records what the outer loop
+reported. Where this file and Linear disagree, **Linear is authoritative and this file is
+stale** — the reconciliation is the outer loop's to run.
+
 **Dependency rule (Tiffany, 2026-11-21):** EF-001 and EF-002 must exist before any
 implementation team optimizes against Foundry tasks. EF-003, EF-004 and EF-005 are blocked
 on both. MVP Discovery's head-to-head (TIF-59) is blocked on the same two and consumes
@@ -100,10 +113,11 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   environment (path test); a score report cannot be produced without its version triple.
 
 ### EF-005 (TIF-58) Baseline harness on the same tasks
-- **linear status:** **in progress** for the original harness scope. **Later work is
-  TIF-74** (see EF-006 below): the live transports, the trusted ingest, and the attestation
-  gate are tracked there, not here. This entry keeps the arm registry, the reference
-  policies, the paired comparison and the economics column.
+- **linear id:** **TIF-58** (authoritative; this entry is one Linear item, not two).
+- **linear status:** **in progress**. Scope is the original harness: the arm registry, the
+  reference policies, the paired comparison and the economics column. The later work — live
+  transports, trusted ingest, attestation gate — is a **separate item, EF-006 / TIF-74**,
+  not a second id for this one.
 - **status:** in progress
 - **owner:** foundry-owner
 - **blocked_by:** EF-001, EF-002
@@ -127,9 +141,11 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   the 8.3 s live path; 100 trials is ~35 minutes of reset, so statistical power is affordable
   and the real cost to optimise is verification.
 
-### EF-006 (TIF-74) EF-005 later work: live transports, trusted ingest, attestation
-- **linear status:** **in progress** (Linear tracks this as TIF-74; EF-005/TIF-58 keeps the
-  original harness scope).
+### EF-006 (TIF-74) Live transports, trusted ingest and attestation
+- **linear id:** **TIF-74** (authoritative). A sibling of EF-005/TIF-58, not a sub-item of
+  it: the split keeps a harness that scores a model separate from the work that makes a real
+  run gradeable and its evidence admissible.
+- **linear status:** **in progress**.
 - **owner:** foundry-owner
 - **blocked_by:** EF-001, EF-002
 - **description:** The work that turns the offline harness into something a live arm can run

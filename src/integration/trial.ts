@@ -36,6 +36,7 @@ import type { TaskIntent, Verdict } from "../core/verify.ts";
 import { intentFor, validateIntent } from "../tasks/calc-record-edit.js";
 import { type FixtureFingerprint, fixtureFingerprint, generateFixture } from "../tasks/fixture.js";
 import { type CalcRecordEditParams, type GroundTruth, groundTruth } from "../tasks/intent.js";
+import { taskText } from "../tasks/task-text.js";
 import { unoVerifierOverAgent } from "../verify/uno-verifier.js";
 import type { AgentClient } from "../win/agent-client.js";
 import {
@@ -219,6 +220,11 @@ export async function runTrial(options: TrialOptions): Promise<TrialReport> {
     runId,
     taskId: "calc-record-edit",
     taskParams: options.params as unknown as Record<string, unknown>,
+    // The job, rendered as text. Myco's arm executes a compiled program rather
+    // than reading a sentence, but recording the sentence is what makes parity
+    // with the screenshot baseline checkable: both arms now persist the same
+    // string from the same function (TIF-104). See task-text.ts.
+    instruction: taskText(options.params),
     startedAt: new Date(started).toISOString(),
     steps: outcome.steps.map(stepFromRecord),
     guardFailure: outcome.guardFailure,
@@ -722,6 +728,7 @@ interface EvidenceInput {
   runId: string;
   taskId: string;
   taskParams: Record<string, unknown>;
+  instruction?: string;
   startedAt: string;
   steps: EvidenceStep[];
   guardFailure?: RunOutcome["guardFailure"];
@@ -735,6 +742,7 @@ function writeTrialEvidence(runsDir: string, input: EvidenceInput): void {
     runId: input.runId,
     taskId: input.taskId,
     taskParams: input.taskParams,
+    ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
     startedAt: input.startedAt,
     steps: input.steps,
     guardFailure: input.guardFailure,

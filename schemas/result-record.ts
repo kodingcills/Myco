@@ -116,6 +116,7 @@ export const resultRecordSchema: JsonSchema = {
         runId: { type: "string", minLength: 1 },
         taskId: { type: "string", minLength: 1 },
         taskParams: { type: "object" },
+        instruction: { type: "string" },
         startedAt: { type: "string", minLength: 1 },
         steps: { type: "array", items: { $ref: "#/$defs/EvidenceStep" } },
         guardFailure: { $ref: "#/$defs/GuardFailure" },

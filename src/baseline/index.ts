@@ -163,7 +163,10 @@ export interface BaselineRow {
    * See docs/research/experiments/c1-parity.md for why that mattered.
    */
   instruction?: string;
-  params: { fixtureSeed: string; rowKey: string; column: string; newValue: string | number };
+  /** Narrowed to match Myco's `CalcRecordEditParams`: a numeric value here would
+   *  render `to 9733,` while Myco's identical intent renders `to "9733",`, which is
+   *  an input-shape divergence in a task-text comparison (TIF-104). */
+  params: { fixtureSeed: string; rowKey: string; column: string; newValue: string };
   cellRef: string;
   expected: string | number;
   previousValue: string | number;

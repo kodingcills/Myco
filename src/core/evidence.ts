@@ -29,6 +29,17 @@ export interface RunRecord {
   runId: string;
   taskId: string;
   taskParams: Record<string, unknown>;
+  /**
+   * The job rendered as text (`taskText`), so instruction parity with the
+   * screenshot baseline is checkable by diffing two artifacts rather than
+   * reading source (TIF-104).
+   *
+   * Optional deliberately: Myco's arm executes a compiled program and never
+   * reads a sentence, but records the same string the baseline is given.
+   * Runners with no sentence at all (Discovery's live runner) omit it rather
+   * than fabricate one.
+   */
+  instruction?: string;
   startedAt: string;
   steps: EvidenceStep[];
   guardFailure?: GuardFailure;
