@@ -116,7 +116,7 @@ fn main() {
                 };
                 let mut ops = vec!["ping", "observe", "shutdown", "launch_process", "kill_process", "relaunch_process"];
                 if cfg!(target_os = "linux") {
-                    ops.extend(["grant_read", "read_file"]);
+                    ops.extend(["grant_read", "read_file", "write_file"]);
                 }
                 let _ = writeln!(
                     stdout,
@@ -242,6 +242,25 @@ fn main() {
                         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no file grant")
                     })?;
                     Ok(serde_json::json!(grant.read(request_path(&req, "path")?)?))
+                })();
+                send_result(&mut stdout, op, result);
+            }
+            #[cfg(target_os = "linux")]
+            "write_file" => {
+                let result = (|| {
+                    let grant = grant.as_ref().ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no file grant")
+                    })?;
+                    let path = request_path(&req, "path")?;
+                    // Bytes arrive as a JSON array of numbers, the same encoding
+                    // `read_file` sends them in — no new wire format, and symmetric
+                    // with the read a caller confirms the write with.
+                    let bytes: Vec<u8> = serde_json::from_value(
+                        req.get("content").cloned().unwrap_or(serde_json::Value::Null),
+                    )
+                    .map_err(|e| std::io::Error::other(format!("content must be a byte array: {e}")))?;
+                    grant.write(&path, &bytes)?;
+                    Ok(serde_json::json!({"bytes_written": bytes.len()}))
                 })();
                 send_result(&mut stdout, op, result);
             }

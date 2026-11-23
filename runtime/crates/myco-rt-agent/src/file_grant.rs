@@ -62,6 +62,36 @@ impl FileGrant {
         }
         Ok(bytes)
     }
+
+    /// Write/replace a file inside the grant (RT-017).
+    ///
+    /// Same confinement as `read`: grant-relative, no symlink traversal, no mount
+    /// crossing. `CREATE | TRUNC` replaces the file atomically enough for the
+    /// fix-the-bug scenarios (DF-S03) — the caller then reads it back with `read`
+    /// to confirm, which is the read-back that makes the write verifiable rather
+    /// than assumed.
+    pub fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if path.as_os_str().is_empty()
+            || !path
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "expected a grant-relative file path",
+            ));
+        }
+        let fd = openat2(
+            &self.0,
+            path,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o644),
+            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+        )?;
+        let mut file = std::fs::File::from(fd);
+        use std::io::Write;
+        file.write_all(bytes)
+    }
 }
 
 #[cfg(test)]
@@ -121,5 +151,52 @@ mod tests {
         // with the same kind and message. Ordering is not pinned by any test.
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert!(err.to_string().contains("absolute"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+    use std::fs::{create_dir, read_to_string};
+
+    fn grant(root: &Path) -> FileGrant {
+        FileGrant::open(root).expect("grant")
+    }
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("myco-fg-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        create_dir(&p).expect("mkdir");
+        p
+    }
+
+    #[test]
+    fn writes_a_new_file_and_reads_it_back() {
+        let root = tmp("write");
+        let g = grant(&root);
+        g.write(Path::new("state.json"), b"{\"n\":1}").expect("write");
+        assert_eq!(read_to_string(root.join("state.json")).unwrap(), "{\"n\":1}");
+        assert_eq!(g.read(Path::new("state.json")).unwrap(), b"{\"n\":1}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_replaces_existing_content() {
+        let root = tmp("replace");
+        std::fs::write(root.join("f"), "old").unwrap();
+        let g = grant(&root);
+        g.write(Path::new("f"), b"new").expect("write");
+        assert_eq!(read_to_string(root.join("f")).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_refuses_parent_traversal() {
+        let root = tmp("escape");
+        let g = grant(&root);
+        let err = g.write(Path::new("../outside"), b"x").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!root.parent().unwrap().join("outside").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

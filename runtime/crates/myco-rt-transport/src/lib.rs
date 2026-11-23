@@ -269,6 +269,19 @@ impl Channel {
         self.extension("read_file", serde_json::json!({"path": path}))
     }
 
+    /// RT-017: write bytes to a grant-relative guest file path. Bytes travel as a
+    /// JSON array of numbers, the same encoding `read_file` uses.
+    pub fn write_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, TransportError> {
+        let resp: serde_json::Value = self.extension(
+            "write_file",
+            serde_json::json!({"path": path, "content": bytes}),
+        )?;
+        Ok(resp
+            .get("bytes_written")
+            .and_then(|v: &serde_json::Value| v.as_u64())
+            .unwrap_or(bytes.len() as u64) as usize)
+    }
+
     pub fn launch_process(&mut self, command: &str, args: &[String]) -> Result<String, TransportError> {
         self.extension("launch_process", serde_json::json!({"command": command, "args": args}))
     }

@@ -175,6 +175,22 @@ impl<B: Backend> Session<B> {
             .map_err(|e| RuntimeError::Backend(e.to_string()))
     }
 
+    /// `write_file` (RT-017): write a guest file through the backend's grant.
+    /// Guarded like the other non-terminal ops; bumps the version because the
+    /// guest filesystem is part of what refs describe.
+    pub fn write_guest_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, RuntimeError>
+    where
+        B: crate::ops::GuestFileWrite,
+    {
+        self.require_ready()?;
+        let written = self
+            .backend
+            .write_guest_file(path, bytes)
+            .map_err(|e| RuntimeError::Backend(e.to_string()))?;
+        self.state_version = StateVersion(self.state_version.0 + 1);
+        Ok(written)
+    }
+
     /// `launch_process` (RT-016): launch a process and return a handle that
     /// `kill_guest_process`/`relaunch_guest_process` accept. Guarded like the
     /// other non-terminal ops; bumps the version because the process set changed.

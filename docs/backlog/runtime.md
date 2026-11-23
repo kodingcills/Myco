@@ -212,7 +212,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   gone, relaunches, exit status reported; session stays usable (feeds REQ-12).
 
 ### RT-017 (TIF-45) Extended op: guest file edit (Dogfood REQ-10)
-- **status:** pending
+- **status:** done (2026-11-23; `GuestFileWrite` extension + MCP `write_file` tool). Same grant as `read_file` (`read_root`), same `openat2` confinement with `CREATE|TRUNC`; content travels base64, decoded strictly. Tests: `myco-rt-mcp` write_file arg/encode/round-trip (42/0). **Guest-side `FileGrant::write` tests are `#[cfg(target_os = "linux")]`** like the read tests, so on this macOS dev host they run zero times — the same unverified-on-macOS gap RT-015 already records. Live replace-then-read not run (no VM slot).
 - **owner:** build
 - **blocked_by:** RT-first-path
 - **description:** Write/replace a file in the guest (fix-the-bug scenarios,

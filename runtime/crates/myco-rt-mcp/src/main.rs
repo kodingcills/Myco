@@ -238,6 +238,15 @@ fn tool_defs() -> Vec<Value> {
             }}
         }),
         json!({
+            "name": "write_file",
+            "description": "Write/replace a guest file (RT-017), confined to the session's read_root grant (the same grant read_file uses). Content is base64. Returns bytes written; read it back with read_file to confirm.",
+            "inputSchema": {"type":"object","required":["session_id","path","content_base64"],"properties":{
+                "session_id": {"type":"string"},
+                "path": {"type":"string","description":"Path relative to the session's grant"},
+                "content_base64": {"type":"string","description":"File content, base64-encoded"}
+            }}
+        }),
+        json!({
             "name": "launch_process",
             "description": "Launch a managed guest process and return a handle for kill_process/relaunch_process (RT-016). Unlike act:launch -- which starts a process but returns no handle -- this registers the process so it can be killed and relaunched by handle.",
             "inputSchema": {"type":"object","required":["session_id","command"],"properties":{
@@ -285,6 +294,7 @@ impl Server {
             "act" => self.act(&args),
             "evidence" => self.evidence(&args),
             "read_file" => self.read_file(&args),
+            "write_file" => self.write_file(&args),
             "launch_process" => self.launch_process(&args),
             "kill_process" => self.kill_process(&args),
             "relaunch_process" => self.relaunch_process(&args),
@@ -487,6 +497,26 @@ impl Server {
         }))
     }
 
+    /// RT-017: write/replace a guest file within the session's grant.
+    ///
+    /// Content arrives base64 (the same wire convention as `read_file`'s output) and
+    /// is decoded here; the guest re-confines the path against the same grant the
+    /// read uses, so a write cannot escape what a read cannot.
+    fn write_file(&mut self, args: &Value) -> Result<Value, (i64, String)> {
+        let path = args["path"]
+            .as_str()
+            .ok_or((-32602, "missing path".to_string()))?;
+        let encoded = args["content_base64"]
+            .as_str()
+            .ok_or((-32602, "missing content_base64".to_string()))?;
+        let bytes = base64_decode(encoded).map_err(|e| (-32602, format!("bad content_base64: {e}")))?;
+        let s = self.session(args)?;
+        let written = s
+            .write_guest_file(path, &bytes)
+            .map_err(|e| (-32000, e.to_string()))?;
+        Ok(json!({"ok": true, "path": path, "bytes_written": written}))
+    }
+
     /// RT-016: launch a managed process and return its handle.
     ///
     /// Distinct from `act:launch`, which starts a process for a delivery check but
@@ -672,7 +702,8 @@ mod tests {
             names,
             vec![
                 "act", "create", "destroy", "evidence", "kill_process",
-                "launch_process", "observe", "read_file", "relaunch_process", "reset"
+                "launch_process", "observe", "read_file", "relaunch_process", "reset",
+                "write_file"
             ]
         );
     }
@@ -898,6 +929,51 @@ fn base64_encode(input: &[u8]) -> String {
         out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
     }
     out
+}
+
+/// Minimal base64 decode (no dependency), the inverse of `base64_encode`.
+///
+/// Strict on purpose: rejects any length that is not a multiple of 4 and any
+/// character outside the alphabet, so a caller sending malformed content gets a
+/// clear error instead of silently-corrupt bytes written to a guest file.
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    let mut value_of = |c: u8| -> Result<u8, String> {
+        match c {
+            b'A'..=b'Z' => Ok(c - b'A'),
+            b'a'..=b'z' => Ok(c - b'a' + 26),
+            b'0'..=b'9' => Ok(c - b'0' + 52),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err(format!("invalid base64 char {:?}", c as char)),
+        }
+    };
+    let bytes = input.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return Err("length must be a multiple of 4".into());
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let pad = chunk.iter().filter(|&&c| c == b'=').count();
+        if pad > 2 {
+            return Err("too much padding".into());
+        }
+        let mut vals = [0u8; 4];
+        for (i, &c) in chunk.iter().enumerate() {
+            vals[i] = if c == b'=' { 0 } else { value_of(c)? };
+        }
+        let n = (u32::from(vals[0]) << 18)
+            | (u32::from(vals[1]) << 12)
+            | (u32::from(vals[2]) << 6)
+            | u32::from(vals[3]);
+        out.push((n >> 16) as u8);
+        if pad < 2 {
+            out.push((n >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(n as u8);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1200,6 +1276,9 @@ mod schema_contract_tests {
         ("evidence", "session_id", true),
         ("read_file", "session_id", true),
         ("read_file", "path", true),
+        ("write_file", "session_id", true),
+        ("write_file", "path", true),
+        ("write_file", "content_base64", true),
         ("launch_process", "session_id", true),
         ("launch_process", "command", true),
         ("launch_process", "args", false),
@@ -1405,5 +1484,85 @@ mod act_boundary_tests {
                 "{kind}: a bare-string target must be REWRITTEN into                  {{payload, issued_at}}, not fail deserialization -- the rewrite list                  is missing this kind. Got: {msg}"
             );
         }
+    }
+}
+
+/// RT-017: `write_file` argument validation and the base64 round trip.
+///
+/// The write itself is proven against the guest's `FileGrant` in
+/// `myco-rt-agent`'s tests (the layer that owns the confinement). Here the wire
+/// contract is what matters: the tool declares its arguments, refuses a bad
+/// encoding before touching a session, and decode is the exact inverse of encode.
+#[cfg(test)]
+mod write_file_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+    }
+
+    fn call(s: &mut Server, body: &str) -> Value {
+        serde_json::from_str(&handle_line(s, body).expect("reply")).unwrap()
+    }
+
+    #[test]
+    fn base64_decode_inverts_encode() {
+        for case in [&b""[..], b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar", b"\x00\xff\x10"] {
+            let encoded = base64_encode(case);
+            assert_eq!(
+                base64_decode(&encoded).expect("decode"),
+                case,
+                "round trip failed for {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn base64_decode_rejects_malformed_input() {
+        assert!(base64_decode("abc").is_err(), "length not a multiple of 4");
+        assert!(base64_decode("ab*d").is_err(), "character outside the alphabet");
+    }
+
+    #[test]
+    fn write_file_requires_content_and_path() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"write_file","arguments":{"session_id":"x","path":"a"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("missing content_base64"));
+
+        let r2 = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"write_file","arguments":{"session_id":"x","content_base64":"Zm9v"}}}"#,
+        );
+        assert_eq!(r2["result"]["isError"], true);
+        assert!(r2["result"]["content"][0]["text"].as_str().unwrap().contains("missing path"));
+    }
+
+    #[test]
+    fn write_file_refuses_bad_base64_before_session_lookup() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"write_file","arguments":{"session_id":"nope","path":"a","content_base64":"!!!"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("bad content_base64"), "must reject the encoding first: {text}");
+        assert!(!text.contains("unknown session"), "malformed input must not depend on session state");
+    }
+
+    #[test]
+    fn write_file_on_an_unknown_session_is_a_tool_error() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write_file","arguments":{"session_id":"nope","path":"a","content_base64":"Zm9v"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown session"));
     }
 }
