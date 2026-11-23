@@ -214,11 +214,17 @@ export class RuntimeTransport implements DesktopTransport {
   /**
    * Host-side evidence for the preflight; it never assumes a check passed.
    *
-   * The transport cannot vouch for two of the eight checks and says so: the
-   * oracle is the runner's injected verifier, not something a file read
-   * establishes, and no probe here can show the guest has no stray app process.
-   * Those two keep the live path closed until their owners supply them, which is
-   * the intended state, not an oversight.
+   * `guestClean` uses the ratified advisory definition (outer loop on Tiffany's
+   * behalf, 2026-11-23; TIF-89): the app's store and published state files are
+   * absent before launch. It says the run started from a known-empty app state,
+   * not that the guest was otherwise pristine, and every evidence record must
+   * state that this definition was in force. This object is built after the
+   * session exists, when the app may already have run, so it reports the check
+   * unproven rather than inferring the answer from files it can no longer trust.
+   *
+   * `oraclePresent` is Foundry's verifier validating this run, not something a
+   * file read proves, and it is unproven until Foundry wires it: an S0 PASS must
+   * not claim Foundry-oracle validation.
    */
   async evidence(_session: DesktopSession): Promise<ProbeEvidence> {
     let runtimeReachable = false;

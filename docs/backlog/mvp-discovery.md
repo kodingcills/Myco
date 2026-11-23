@@ -90,6 +90,13 @@ criterion (TIF-60) decide the wedge.
   5. Median wall-clock and model cost per run are recorded, with n and dispersion.
   6. One forced failure (kill app, or a wrong target) is recovered or reported
      `uncertain` — never `verified` — with the recovery events in the trace.
+- **evidence definitions (ratified 2026-11-23, TIF-89):** every record produced for
+  this row must state which `guestClean` definition was in force. The ratified
+  definition is advisory: *the app's store and published state files are absent
+  before launch*. It says the run started from a known-empty app state, not that the
+  guest was otherwise pristine. `oraclePresent` remains unproven until Foundry's
+  verifier validates a run, so a `verified` result must not be presented as
+  MVD-001 coverage until it does.
 
 ### MVD-002 (TIF-54) Direction B bounded proof: verified operation on business software
 - **status:** design in progress. Execution blocked on the same host window.
