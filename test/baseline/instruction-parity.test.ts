@@ -1,6 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { type RunRecord, writeRunEvidence } from "../../src/core/evidence.ts";
 import { taskText } from "../../src/tasks/task-text.ts";
 
 /**
@@ -120,5 +122,53 @@ describe("the two runs this task exists for", () => {
     const p = "docs/research/experiments/c1-arm-002/FINAL.md";
     expect(existsSync(repoFile(p))).toBe(true);
     expect(readFileSync(repoFile(p), "utf8")).toContain("save");
+  });
+});
+
+describe("the recorded instruction survives a real round trip", () => {
+  // Behaviour-level, not a source pin. The call-site assertions above are
+  // refactor-brittle; this drives the actual writer and reads the bytes back, so
+  // a change that keeps the literal `taskText(...)` in source while dropping the
+  // value is still caught.
+  const record = (instruction?: string): RunRecord =>
+    ({
+      runId: "11111111-2222-3333-4444-555555555555",
+      taskId: "calc-record-edit",
+      taskParams: { rowKey: "EMP-0001", column: "name", newValue: "REVISED-1" },
+      ...(instruction === undefined ? {} : { instruction }),
+      startedAt: new Date(0).toISOString(),
+      steps: [],
+      verdict: {
+        status: "verified",
+        checks: [
+          {
+            name: "cell-persisted",
+            passed: true,
+            reason: "persisted value matches intent",
+            partial_score: { score: 1, weight: 1 },
+          },
+        ],
+        score: 1,
+        reasons: [],
+      },
+    }) as RunRecord;
+
+  it("writes the instruction to result.json", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-parity-"));
+    const runDir = writeRunEvidence(join(dir, "runs"), record(taskText(params)), []);
+    const written = JSON.parse(readFileSync(join(runDir, "result.json"), "utf8"));
+    expect(written.instruction).toBe(taskText(params));
+    expect(written.instruction).toContain("save the file");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("writes no key at all when there is no instruction", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-parity-"));
+    const runDir = writeRunEvidence(join(dir, "runs"), record(), []);
+    const raw = readFileSync(join(runDir, "result.json"), "utf8");
+    expect(JSON.parse(raw).instruction).toBeUndefined();
+    // Absent, not null or empty string.
+    expect(raw).not.toContain('"instruction"');
+    rmSync(dir, { recursive: true, force: true });
   });
 });
