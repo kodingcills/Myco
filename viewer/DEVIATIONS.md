@@ -126,3 +126,19 @@ and adds three layout tokens (`reportMaxWidth`, `reportOpenMaxWidth`, `reportFac
 to `tokens.json`. The decision header is deliberately neutral: a rule row is not a
 verification verdict, so no verdict color or badge is used for it. Screenshots:
 `viewer/screenshots/head-to-head-1440.png` and `-1280.png`.
+
+## Live head-to-head intake (TIF-108) — pending outer-loop sign-off
+
+`viewer/src/data/live-report.ts` turns real artifacts already on disk into the compare
+surface's input, with no invented numbers:
+
+- a Myco `runs/<runId>/result.json` becomes one arm's trial (false success is marked
+  **unknown**, because the artifact does not record the agent's claim);
+- a Foundry C1/C2 arm accounting file becomes the comparator arm, with each row's own
+  verdict and false-success flag;
+- Foundry's paired report supplies `pairRows`, so the paired table is the pipeline's
+  own pairing rather than a reconstruction;
+- a source that cannot be read is refused by name, never guessed at.
+
+Provenance is derived from what the artifacts carry. A pair where one side's claim is
+unknown is **not** called live; it renders as `Unknown source` until the claim exists.
