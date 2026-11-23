@@ -166,10 +166,10 @@ case "${1:-}" in
     say "launching detached; log $LOG"
     nohup "$0" --watchdog >>"$LOG" 2>&1 &
     CHILD=$!
-    # Claiming the run must be ONE atomic step. A noclobber redirect inside a subshell
-    # is not: bash parses the redirect before `set -C` runs in the same subshell, so it
-    # is a plain truncating write and concurrent --run calls both started (measured
-    # 2026-11-23: 28 double-starts in 30 rounds). mkdir is atomic everywhere.
+    # Claiming the run must be ONE atomic step. `mkdir` gives that in one syscall and
+    # fails cleanly when the directory exists. The noclobber alternative is reachable
+    # only through a construct that also refuses, and #300's earlier attempt showed the
+    # guard it replaced could admit two runs; `mkdir` is the form that cannot.
     if ! mkdir "$LOCK_DIR" 2>/dev/null; then
       kill "$CHILD" 2>/dev/null || true
       say "another --run holds the run lock; refusing to start a second sequence"

@@ -24,10 +24,9 @@ const made: string[] = [];
 
 afterEach(() => {
   for (const dir of made.splice(0)) {
-    spawnSync("bash", [
-      "-c",
-      'pkill -9 -f "' + dir + '" 2>/dev/null; pkill -9 -f "sleep 297" 2>/dev/null',
-    ]);
+    // Every process this fixture spawns carries `dir` in argv: the launcher tree by
+    // path, and the pnpm stub's sleeper by `exec -a` in the stub.
+    spawnSync("bash", ["-c", `pkill -9 -f ${JSON.stringify(dir)} 2>/dev/null`]);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -42,7 +41,14 @@ function worktree(): { dir: string; script: string; runDir: string; env: NodeJS.
   const bin = join(dir, "bin");
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "ps"), "#!/bin/sh\nprintf 'launchd\\n'\n");
-  writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nsleep 297\n");
+  // `exec -a` puts the fixture path into the sleeper's argv[0], so the launcher-tree
+  // `pkill -f <dir>` in afterEach reaps it too — a plain `sleep 297` orphans itself when
+  // its parent stub dies and cannot be found by path (measured 2026-11-23: 29 orphans
+  // after a 30-round run, and the sleep's own argv carries nothing else to match on).
+  writeFileSync(
+    join(bin, "pnpm"),
+    `#!/bin/sh\nexec -a ${JSON.stringify(`${dir}/sentinel`)} sleep 297\n`,
+  );
   chmodSync(join(bin, "ps"), 0o755);
   chmodSync(join(bin, "pnpm"), 0o755);
   const rt = join(dir, "runtime", "target", "debug");
@@ -125,7 +131,7 @@ describe("s0-live.sh launcher", () => {
     const { script, runDir, env } = worktree();
     // Check-then-write tears roughly one round in ten (measured 2026-11-23: 4/40
     // rounds with two winners), so 30 rounds make the negative control dependable
-    // without making a green run slow — ~6 s.
+    // without making a green run slow — ~10 s.
     for (let round = 0; round < 30; round += 1) {
       spawnSync("bash", ["-c", 'rm -rf "' + runDir + '"; mkdir -p "' + runDir + '"']);
       const racers = spawnSync(
