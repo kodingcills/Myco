@@ -1,0 +1,145 @@
+{
+  "runId": "7f6c4b4b-78e0-4762-a6c8-4f1a27a905a3",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-c",
+    "rowKey": "EMP-0106",
+    "column": "joined",
+    "newValue": "2024-10-09"
+  },
+  "startedAt": "2026-11-22T00:28:35.186Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-c\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-48630-1795307316729-985338976\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-48630-1795307316729-985338976\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "D107"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-c\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-48630-1795307316729-985338976\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell D107 located at record EMP-0106, column joined, holds fixture value \"2023-01-07\"",
+          "passed": true,
+          "observed": "value=\"2023-01-07\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "D107"
+        },
+        "value": "2024-10-09"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-48630-1795307316729-985338976\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell D107 located at record EMP-0106, column joined, holds fixture value \"2023-01-07\"",
+          "passed": true,
+          "observed": "value=\"2023-01-07\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell D107 holds \"2024-10-09\"",
+          "passed": true,
+          "observed": "value=\"2024-10-09\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell D107 holds \"2024-10-09\"",
+          "passed": true,
+          "observed": "value=\"2024-10-09\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell D107 (record EMP-0106, column joined) persisted as \"2024-10-09\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell D107 (record EMP-0106, column joined) persisted as \"2024-10-09\""
+    ]
+  }
+}

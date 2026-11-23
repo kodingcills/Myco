@@ -1,0 +1,18 @@
+{"type":"run-start","runId":"47e0679e-7dc0-48ce-b5fd-8eb8632376dd","taskId":"calc-record-edit","startedAt":"2026-11-22T00:51:49.606Z"}
+{"type":"fault-injection","timestamp":"2026-11-22T00:53:07.737Z","fault":"cleanup","detail":"killed=[4328,6632] removed=[myco-7180-1795308710625-311873711,myco-7180-1795308710625-455139270] residue=[]"}
+{"type":"observation","timestamp":"2026-11-22T00:53:07.738Z","stateVersion":1,"nodeCount":0}
+{"type":"action","timestamp":"2026-11-22T00:53:07.738Z","step":0,"action":{"kind":"click","ref":{"nodeId":"A1"}}}
+{"type":"guard-evaluation","timestamp":"2026-11-22T00:53:07.738Z","step":0,"phase":"pre","results":[{"predicateName":"intent targets an existing record and column (fixture \"seed-f\")","passed":true,"observed":"intent valid"},{"predicateName":"document open","passed":true,"observed":"documentPath=\"C:/myco/runs/myco-7180-1795308710625-311873711\\\\fixture.xlsx\""}],"stateVersionBefore":1,"stateVersionAfter":1}
+{"type":"guard-evaluation","timestamp":"2026-11-22T00:53:07.738Z","step":0,"phase":"post","results":[{"predicateName":"document open","passed":true,"observed":"documentPath=\"C:/myco/runs/myco-7180-1795308710625-311873711\\\\fixture.xlsx\""}],"stateVersionBefore":1,"stateVersionAfter":2}
+{"type":"observation","timestamp":"2026-11-22T00:53:07.739Z","stateVersion":3,"nodeCount":0}
+{"type":"action","timestamp":"2026-11-22T00:53:07.739Z","step":1,"action":{"kind":"click","ref":{"nodeId":"C33"}}}
+{"type":"guard-evaluation","timestamp":"2026-11-22T00:53:07.739Z","step":1,"phase":"pre","results":[{"predicateName":"intent targets an existing record and column (fixture \"seed-f\")","passed":true,"observed":"intent valid"},{"predicateName":"document open","passed":true,"observed":"documentPath=\"C:/myco/runs/myco-7180-1795308710625-311873711\\\\fixture.xlsx\""},{"predicateName":"cell C33 located at record EMP-0032, column qty, holds fixture value \"544\"","passed":true,"observed":"value=\"544\""}],"stateVersionBefore":3,"stateVersionAfter":3}
+{"type":"guard-evaluation","timestamp":"2026-11-22T00:53:07.739Z","step":1,"phase":"post","results":[],"stateVersionBefore":3,"stateVersionAfter":4}
+{"type":"observation","timestamp":"2026-11-22T00:53:07.739Z","stateVersion":5,"nodeCount":0}
+{"type":"action","timestamp":"2026-11-22T00:53:07.739Z","step":2,"action":{"kind":"setValue","ref":{"nodeId":"C33"},"value":"9513"}}
+{"type":"guard-evaluation","timestamp":"2026-11-22T00:53:07.739Z","step":2,"phase":"pre","results":[{"predicateName":"document open","passed":true,"observed":"documentPath=\"C:/myco/runs/myco-7180-1795308710625-311873711\\\\fixture.xlsx\""},{"predicateName":"cell C33 located at record EMP-0032, column qty, holds fixture value \"544\"","passed":true,"observed":"value=\"544\""}],"stateVersionBefore":5,"stateVersionAfter":5}
+{"type":"guard-evaluation","timestamp":"2026-11-22T00:53:07.739Z","step":2,"phase":"post","results":[{"predicateName":"cell C33 holds \"9513\"","passed":true,"observed":"value=\"9513\""}],"stateVersionBefore":5,"stateVersionAfter":6}
+{"type":"observation","timestamp":"2026-11-22T00:53:07.739Z","stateVersion":7,"nodeCount":0}
+{"type":"action","timestamp":"2026-11-22T00:53:07.739Z","step":3,"action":{"kind":"keyPress","keys":"ctrl+s"}}
+{"type":"guard-evaluation","timestamp":"2026-11-22T00:53:07.739Z","step":3,"phase":"pre","results":[{"predicateName":"cell C33 holds \"9513\"","passed":true,"observed":"value=\"9513\""}],"stateVersionBefore":7,"stateVersionAfter":7}
+{"type":"guard-evaluation","timestamp":"2026-11-22T00:53:07.739Z","step":3,"phase":"post","results":[{"predicateName":"document not dirty after save","passed":true,"observed":"dirty=false"}],"stateVersionBefore":7,"stateVersionAfter":8}

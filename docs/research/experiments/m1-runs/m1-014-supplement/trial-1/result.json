@@ -1,0 +1,152 @@
+{
+  "runId": "99fba57c-55cc-4669-81d2-4782e8ea37ec",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014s-supplement-01-dropped-save-1",
+    "rowKey": "EMP-0040",
+    "column": "name",
+    "newValue": "REVISED-140173"
+  },
+  "startedAt": "2026-11-22T04:52:03.431Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014s-supplement-01-dropped-save-1\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-14733-1795323124355-741455776\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-14733-1795323124355-741455776\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B41"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014s-supplement-01-dropped-save-1\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-14733-1795323124355-741455776\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B41 located at record EMP-0040, column name, holds fixture value \"Hana Kaur\"",
+          "passed": true,
+          "observed": "value=\"Hana Kaur\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B41"
+        },
+        "value": "REVISED-140173"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-14733-1795323124355-741455776\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B41 located at record EMP-0040, column name, holds fixture value \"Hana Kaur\"",
+          "passed": true,
+          "observed": "value=\"Hana Kaur\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B41 holds \"REVISED-140173\"",
+          "passed": true,
+          "observed": "value=\"REVISED-140173\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B41 holds \"REVISED-140173\"",
+          "passed": true,
+          "observed": "value=\"REVISED-140173\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": false,
+          "observed": "dirty=true"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 7
+    }
+  ],
+  "guardFailure": {
+    "step": 3,
+    "phase": "postcondition",
+    "predicateName": "document not dirty after save",
+    "observed": "dirty=true",
+    "reason": "postcondition \"document not dirty after save\" not met after step 3"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "document still modified (isModified=true): the edit was never saved",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "document still modified (isModified=true): the edit was never saved"
+    ]
+  }
+}

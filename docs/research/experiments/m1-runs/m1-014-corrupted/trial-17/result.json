@@ -1,0 +1,145 @@
+{
+  "runId": "27770c7a-ad12-4e80-99fa-3f0fb9ef320e",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-invalid-target-17",
+    "rowKey": "EMP-0005",
+    "column": "name",
+    "newValue": "REVISED-403986"
+  },
+  "startedAt": "2026-11-22T04:39:53.500Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-invalid-target-17\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-24431-1795322395373-306059040\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-24431-1795322395373-306059040\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B6"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-invalid-target-17\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-24431-1795322395373-306059040\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B6 located at record EMP-0005, column name, holds fixture value \"Bruno Petrov\"",
+          "passed": true,
+          "observed": "value=\"Bruno Petrov\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B6"
+        },
+        "value": "REVISED-403986"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-24431-1795322395373-306059040\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B6 located at record EMP-0005, column name, holds fixture value \"Bruno Petrov\"",
+          "passed": true,
+          "observed": "value=\"Bruno Petrov\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B6 holds \"REVISED-403986\"",
+          "passed": true,
+          "observed": "value=\"REVISED-403986\""
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B6 holds \"REVISED-403986\"",
+          "passed": true,
+          "observed": "value=\"REVISED-403986\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 9,
+      "stateVersionAfter": 10
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B6 (record EMP-0005, column name) persisted as \"REVISED-403986\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B6 (record EMP-0005, column name) persisted as \"REVISED-403986\""
+    ]
+  }
+}
