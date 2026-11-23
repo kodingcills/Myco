@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { replayDirectory, replayRow } from "../../scripts/replay-arm-rows.ts";
+import { matchesRecorded, replayDirectory, replayRow } from "../../scripts/replay-arm-rows.ts";
 import { type BaselineRow, falseSuccess } from "../../src/baseline/index.ts";
 
 /** A minimal row in the shape the live sweep writes, so the replay contract is
@@ -161,5 +161,35 @@ describe("replay row ordering", () => {
       );
     }
     expect(replayDirectory(dir).map((r) => r.index)).toEqual([1, 2, 10]);
+  });
+});
+
+describe("the match rule has three independent halves", () => {
+  // Asserted directly because no single fixture can isolate them: a row that
+  // disagrees on status will also disagree on reason, so a status-only fixture
+  // leaves the reason and falseSuccess halves untested. The verifier removed the
+  // reason check from the conjunction and the suite stayed green - this is what
+  // makes that mutation fail.
+  const ok = { status: "refuted", reason: "modified", falseSuccess: false };
+
+  it("accepts an exact match", () => {
+    expect(matchesRecorded("refuted", "modified", false, ok)).toBe(true);
+  });
+
+  it("rejects a reason that differs while the status matches", () => {
+    expect(matchesRecorded("refuted", "step-budget", false, ok)).toBe(false);
+  });
+
+  it("rejects a status that differs while the reason matches", () => {
+    expect(matchesRecorded("verified", "modified", false, ok)).toBe(false);
+  });
+
+  it("rejects a falseSuccess that differs while status and reason match", () => {
+    expect(matchesRecorded("refuted", "modified", true, ok)).toBe(false);
+  });
+
+  it("treats null and false as different, so an unaudited row is not a pass", () => {
+    expect(matchesRecorded("refuted", "modified", null, ok)).toBe(false);
+    expect(matchesRecorded("refuted", "modified", null, { ...ok, falseSuccess: null })).toBe(true);
   });
 });

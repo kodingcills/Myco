@@ -19,6 +19,7 @@ import {
   type Observation,
   sumUsage,
 } from "../src/baseline/index.ts";
+import type { VerdictStatus } from "../src/core/verify.ts";
 
 /** The observation a verdict reason implies. Kept in one place so a new reason
  * makes this fail loudly rather than silently skipping the row. */
@@ -78,12 +79,43 @@ export interface ReplayResult {
  * judge of the run: it cannot tell you the live observation was right, only
  * that the same inputs still produce the same answers.
  */
-export function replayRow(row: BaselineRow): ReplayResult {
+/**
+ * The match rule, extracted so it can be asserted directly rather than through
+ * a fixture that happens to disagree on one field. Three independent halves:
+ * status, reason string, and falseSuccess. Exported because a mutation removing
+ * any one of them left the suite green when this lived inline.
+ */
+export function matchesRecorded(
+  recordedStatus: string,
+  recordedReason: string,
+  recordedFalseSuccess: boolean | null,
+  replayed: { status: string; reason: string; falseSuccess: boolean | null },
+): boolean {
+  return (
+    replayed.status === recordedStatus &&
+    replayed.reason === recordedReason &&
+    replayed.falseSuccess === recordedFalseSuccess
+  );
+}
+
+export function replayRow(
+  row: BaselineRow,
+  /** Injectable for tests only: lets a caller force the judge's result so the
+   * reason half of the match conjunction can be exercised on its own. Production
+   * callers pass nothing. */
+  judgeOverride?: (
+    row: BaselineRow,
+    observation: Observation,
+  ) => { status: VerdictStatus; reasons: string[] },
+): ReplayResult {
   const driver =
     row.verdictReason === "driver-unreachable"
       ? { ...row.driver, sessionIdentityMatches: false }
       : row.driver;
-  const replayed = judge(row.transcript, driver, observationFor(row.verdictReason, row));
+  const observation = observationFor(row.verdictReason, row);
+  const replayed = judgeOverride
+    ? judgeOverride(row, observation)
+    : judge(row.transcript, driver, observation);
   const reasonReplayed = replayed.reasons[0] ?? "unavailable";
   // falseSuccess must also reproduce: it is the property the milestone rests on.
   const fsReplayed = falseSuccess(replayed.status, row.independentValuePresent);
@@ -94,10 +126,11 @@ export function replayRow(row: BaselineRow): ReplayResult {
     replayed: replayed.status,
     reasonRecorded: row.verdictReason,
     reasonReplayed,
-    matched:
-      replayed.status === row.verdict &&
-      reasonReplayed === row.verdictReason &&
-      fsReplayed === row.falseSuccess,
+    matched: matchesRecorded(row.verdict, row.verdictReason, row.falseSuccess, {
+      status: replayed.status,
+      reason: reasonReplayed,
+      falseSuccess: fsReplayed,
+    }),
     costDelta: Number((costReplayed - row.cost).toFixed(6)),
   };
 }
@@ -127,6 +160,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const directory = process.argv[2];
   if (!directory) throw new Error("usage: replay-arm-rows.ts <rows-dir> [--json]");
   const results = replayDirectory(directory);
+  // Failure must be visible in BOTH output modes. Setting exitCode only in the
+  // human branch meant a machine consumer reading --json got exit 0 even with
+  // rows that failed to reproduce or costs that had drifted, which is the worse
+  // of the two audiences to mislead.
+  const bad = results.filter((r) => !r.matched);
+  const drift = results.filter((r) => r.costDelta !== 0);
   if (process.argv.includes("--json")) {
     console.log(JSON.stringify(results, null, 2));
   } else {
@@ -136,8 +175,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         `${mark} idx=${r.index} recorded=${r.recorded}/${r.reasonRecorded} replayed=${r.replayed}/${r.reasonReplayed} costDelta=${r.costDelta}`,
       );
     }
-    const bad = results.filter((r) => !r.matched);
-    const drift = results.filter((r) => r.costDelta !== 0);
     console.log(`\n${results.length - bad.length}/${results.length} reproduced`);
     if (drift.length > 0) {
       // Recomputed cost disagreeing with the recorded cost is a real finding:
@@ -146,6 +183,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`cost drift in ${drift.length} row(s):`);
       for (const d of drift) console.log(`  idx=${d.index} costDelta=${d.costDelta}`);
     }
-    if (bad.length > 0 || drift.length > 0) process.exitCode = 1;
   }
+  if (bad.length > 0 || drift.length > 0) process.exitCode = 1;
 }
