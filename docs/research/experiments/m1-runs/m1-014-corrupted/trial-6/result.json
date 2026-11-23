@@ -1,0 +1,99 @@
+{
+  "runId": "86aee642-60d8-48cb-bc37-58b8936106fd",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-kill-6",
+    "rowKey": "EMP-0008",
+    "column": "name",
+    "newValue": "REVISED-177708"
+  },
+  "startedAt": "2026-11-22T03:18:36.663Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-kill-6\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-35192-1795317519082-128426874\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-35192-1795317519082-128426874\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B9"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-kill-6\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-35192-1795317519082-128426874\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B9 located at record EMP-0008, column name, holds fixture value \"Dara Petrov\"",
+          "passed": true,
+          "observed": "value=\"Dara Petrov\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    }
+  ],
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "observe-after-action",
+    "observed": "agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)",
+    "reason": "app became unobservable after step 2: agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+  },
+  "verdict": {
+    "status": "uncertain",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": null,
+        "reason": "could not look: UNO readback of B9 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "could not look: UNO readback of B9 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+    ]
+  },
+  "unresolvedState": "could not look: UNO readback of B9 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+}

@@ -1,0 +1,145 @@
+{
+  "runId": "36309df6-121d-4008-805d-14e9c268af93",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014s-supplement-01-kill+recovery-0",
+    "rowKey": "EMP-0059",
+    "column": "name",
+    "newValue": "REVISED-980332"
+  },
+  "startedAt": "2026-11-22T05:08:39.795Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014s-supplement-01-kill+recovery-0\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-58586-1795324123506-227444420\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-58586-1795324123506-227444420\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B60"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014s-supplement-01-kill+recovery-0\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-58586-1795324123506-227444420\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B60 located at record EMP-0059, column name, holds fixture value \"Faye Larsen\"",
+          "passed": true,
+          "observed": "value=\"Faye Larsen\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B60"
+        },
+        "value": "REVISED-980332"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-58586-1795324123506-227444420\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B60 located at record EMP-0059, column name, holds fixture value \"Faye Larsen\"",
+          "passed": true,
+          "observed": "value=\"Faye Larsen\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B60 holds \"REVISED-980332\"",
+          "passed": true,
+          "observed": "value=\"REVISED-980332\""
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B60 holds \"REVISED-980332\"",
+          "passed": true,
+          "observed": "value=\"REVISED-980332\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 9,
+      "stateVersionAfter": 10
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B60 (record EMP-0059, column name) persisted as \"REVISED-980332\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B60 (record EMP-0059, column name) persisted as \"REVISED-980332\""
+    ]
+  }
+}

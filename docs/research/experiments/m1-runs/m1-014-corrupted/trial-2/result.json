@@ -1,0 +1,38 @@
+{
+  "runId": "84fd870c-35bd-4762-b522-39785c045cb9",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-dropped-save-2",
+    "rowKey": "EMP-0011",
+    "column": "name",
+    "newValue": "REVISED-851422"
+  },
+  "startedAt": "2026-11-22T02:48:02.817Z",
+  "steps": [],
+  "guardFailure": {
+    "step": 0,
+    "phase": "precondition",
+    "predicateName": "act:click",
+    "observed": "nametype on A1: helper timed out after 30000ms",
+    "reason": "action dispatch failed on step 0: nametype on A1: helper timed out after 30000ms"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "cell B12 expected \"REVISED-851422\" but live document has \"Ada Nakamura\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "cell B12 expected \"REVISED-851422\" but live document has \"Ada Nakamura\""
+    ]
+  }
+}

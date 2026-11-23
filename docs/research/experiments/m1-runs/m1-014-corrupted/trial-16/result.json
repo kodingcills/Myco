@@ -1,0 +1,39 @@
+{
+  "runId": "0dd9be22-6458-4042-9d08-fd31abc25a4e",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-kill-16",
+    "rowKey": "EMP-0037",
+    "column": "name",
+    "newValue": "REVISED-318607"
+  },
+  "startedAt": "2026-11-22T04:32:09.534Z",
+  "steps": [],
+  "guardFailure": {
+    "step": -1,
+    "phase": "precondition",
+    "predicateName": "adapter-available",
+    "observed": "UNO bridge on socket 2002 never answered: agent at 127.0.0.1:8765 timed out after 15000ms",
+    "reason": "adapter unusable: UNO bridge on socket 2002 never answered: agent at 127.0.0.1:8765 timed out after 15000ms"
+  },
+  "verdict": {
+    "status": "uncertain",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": null,
+        "reason": "could not look: UNO readback of B38 failed — agent op failed (OP_FAILED): AttributeError: CurrentController",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "could not look: UNO readback of B38 failed — agent op failed (OP_FAILED): AttributeError: CurrentController"
+    ]
+  },
+  "unresolvedState": "could not look: UNO readback of B38 failed — agent op failed (OP_FAILED): AttributeError: CurrentController"
+}
