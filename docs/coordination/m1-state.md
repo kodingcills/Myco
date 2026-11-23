@@ -167,8 +167,8 @@ fails if the save requirement is dropped (mutation-verified: all 5 fail on rever
 
 **Arm-003 planned**, queue after M1-016: byte-identical task text, same
 `claude-sonnet-5-5` planner, same `cua-c1-base` snapshot, 30 trials, **$9.00 cap on
-total committed spend** (≈$1.11 committed at the time of writing; arm-002's final
-cost counts toward it). Design: `docs/research/experiments/c1-arm-003-design.md`.
+total committed spend** (**$1.63 charged**; arm-002's charged cost counts toward
+it). Design: `docs/research/experiments/c1-arm-003-design.md`.
 
 **Task/fixture parity is separately proven** and unaffected:
 `docs/research/experiments/c1-parity.md` — 30/30 params, 30/30 runIds, 6/6 fixture
