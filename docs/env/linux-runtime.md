@@ -92,7 +92,8 @@ gir1.2-atspi-2.0 2.52.0-1build1 · at-spi2-core 2.52.0-1build1 · gir1.2-gtk-3.0
 ## Lifecycle
 
 ```
-runtime/guest/provision.sh           # one step: keypair, image, overlay, seed (--check reports, exit 1 if incomplete)
+runtime/guest/provision.sh           # keypair, image, overlay, seed; never boots (--check reports, exit 1 if incomplete; exit 3 = agent missing)
+runtime/guest/provision.sh --build-agent  # + the guest agent: BOOTS A VM, under the host VM lock + SESSION.lock (exit 10 if held)
 runtime/guest/fetch-image.sh         # download + SHA-256 verify (idempotent)
 runtime/guest/create-overlay.sh      # qcow2 overlay over the pristine base
 runtime/guest/boot.sh                # QEMU+HVF, headless, daemonized (idempotent)
