@@ -142,6 +142,16 @@ function reconcileAudit(
  * resolves the fixture from the hidden commitment, so a caller cannot supply a benign one.
  * The gate never changes the verdict; it only decides whether the verdict may count.
  */
+/**
+ * Whether an attestation may make a row decision-eligible.
+ *
+ * `false` until TIF-125 binds the attestation to the row being scored and the scorer
+ * re-derives the digest itself. Everything else in the gate still runs and still reports its
+ * blockers; only the eligibility flip is withheld, so the evidence pipeline keeps being
+ * exercised while nothing can be marked eligible on an unverified bundle.
+ */
+export const ATTESTATION_BINDING_LANDED = false;
+
 export function scoreDiscoveryTrial(
   evidence: DiscoveryTrialEvidence,
   input: Omit<TrialInput, "intent">,
@@ -212,8 +222,15 @@ export function scoreDiscoveryTrial(
   // The runtime check matters as much as the type: an untyped caller can pass a literal
   // `{ eligible: true }` as `never`, and the brand is the only thing that distinguishes a
   // real attestation from a claim about one.
+  //
+  // FAIL CLOSED (TIF-125). `attestation.eligible` is the gate's claim about evidence that was
+  // handed to it. The scorer holds the row, and it does not yet re-derive that evidence —
+  // the gate verified a bundle the caller supplied, and nothing here proves it was THIS
+  // bundle. Until TIF-125 lands the binding and the scorer recomputes `bundleDigest` from
+  // `input.actual.files`, no row may be decision-eligible on the strength of an attestation.
+  // `ATTESTATION_BINDING_LANDED` is the single switch to flip when that work merges.
   const attested = isAttestation(attestation);
-  const eligible = attested && attestation.eligible;
+  const eligible = ATTESTATION_BINDING_LANDED && attested && attestation.eligible;
   return {
     ...identity,
     status: "scored" as const,
@@ -222,9 +239,13 @@ export function scoreDiscoveryTrial(
     // "no blockers recorded" for "no blockers existed".
     attestationBlockers: eligible
       ? []
-      : attested
-        ? attestation.blockers
-        : ["no attestation supplied"],
+      : !ATTESTATION_BINDING_LANDED && attested
+        ? [
+            "eligibility withheld: TIF-125 must bind the attestation to the scored row before this can count",
+          ]
+        : attested
+          ? attestation.blockers
+          : ["no attestation supplied"],
     ...(eligible
       ? { attestation: { observerId: attestation.observerId, accepted: attestation.accepted } }
       : { decisionBlocker: "trusted-live-artifacts-unavailable" as const }),

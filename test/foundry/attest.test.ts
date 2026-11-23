@@ -13,7 +13,10 @@ import {
   registerLiveObserver,
   type SaveObservation,
 } from "../../src/foundry/grader/attest.ts";
-import { scoreDiscoveryTrial } from "../../src/foundry/grader/discovery.ts";
+import {
+  ATTESTATION_BINDING_LANDED,
+  scoreDiscoveryTrial,
+} from "../../src/foundry/grader/discovery.ts";
 import {
   type commitment,
   fixtureHash,
@@ -265,6 +268,35 @@ describe("TIF-95: a caller cannot name its own provenance", () => {
   });
 });
 
+describe("TIF-125 fail-closed: no row is eligible until the binding lands", () => {
+  it("an eligible attestation does not make a row decision-eligible", async () => {
+    // Finding 1a exists in the tree BEFORE TIF-125: the scorer trusts the gate's claim about
+    // evidence the caller handed it, and holds no proof the evidence was for THIS row. Until
+    // the binding lands and the scorer re-derives the digest, the flip stays off.
+    expect(ATTESTATION_BINDING_LANDED).toBe(false);
+    const run = await finishedRun();
+    const attestation = attest(baseInput(run));
+    expect(attestation.eligible, "the gate should still say eligible").toBe(true);
+
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+      attestation,
+    );
+    if (scored.status !== "scored") throw new Error("unreachable");
+    expect(scored.decisionEligible).toBe(false);
+    expect(scored.attestationBlockers.join(" ")).toContain("TIF-125");
+  });
+});
+
 describe("TIF-95: the gate decides eligibility, never the verdict", () => {
   it("an eligible run is not thereby verified, and a refuted run stays refuted", async () => {
     const run = await finishedRun();
@@ -288,8 +320,8 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
     expect(scored.status).toBe("scored");
     if (scored.status !== "scored") throw new Error("unreachable");
     // Eligibility is about admissibility, not correctness: the verdict is whatever the
-    // state oracle said, and the gate must not have touched it.
-    expect(scored.decisionEligible).toBe(true);
+    // state oracle said, and the gate must not have touched it. Eligibility itself is
+    // withheld until TIF-125 (fail-closed), which is asserted separately.
     expect(scored.result.verdict).toBe("refuted");
   });
 
@@ -353,7 +385,9 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
     );
     if (scored.status !== "scored") throw new Error("unreachable");
     expect(scored.decisionEligible).toBe(false);
-    expect(scored.attestationBlockers?.join(" ")).toContain("no observation");
+    // The gate's own reason is what names the missing observation; the eligibility flip is
+    // withheld separately until TIF-125, and both are reported.
+    expect(refused.blockers.join(" ")).toContain("no observation");
   });
 });
 
