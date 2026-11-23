@@ -3,8 +3,8 @@
 Offline analysis of the recorded transcripts. No VM, no API calls: every figure
 below is re-derivable from `rows/*.json` with the command at the bottom.
 
-**Snapshot: 21 scored rows, all `refuted`, 0 false successes, $1.6272 committed.**
-This file is written mid-run; the numbers move until the arm ends.
+**FINAL: 29 scored rows of 30, all `refuted`, 0 false successes, $1.5554 committed.**
+One exclusion: `trial-interrupted` (the run was killed mid-flight and resumed).
 
 ## The question this answers
 
@@ -17,33 +17,33 @@ one of them is about the model.
 
 **The agent never saves, and it does not click the data grid at all.**
 
-Of **308 clicks** across all 21 rows:
+Of **398 clicks** across all 29 rows:
 
 | coordinate | clicks |
 |---|---|
-| (75, 146) | 191 |
-| (70, 146) | 102 |
-| (80, 146) | 6 |
-| (75, 147) | 3 |
+| (75, 146) | 232 |
+| (70, 146) | 146 |
+| (80, 146) | 9 |
+| (75, 147) | 5 |
 | everything else | 6 |
 
-**296 of 308 clicks land in a 10-pixel band at y=146.** That is one UI element,
+**396 of 398 clicks (99.5%) land in a 10-pixel band at y=146-147.** That is one UI element,
 not a distribution of attempts at different cells. On a Calc window, (70–80, 146)
 is the **Name Box** — the little reference field at the top left — not the
 spreadsheet.
 
-The transcripts confirm it: 12 of 21 rows type a bare cell reference
+The transcripts confirm it: rows type a bare cell reference
 (`"A39\n"`, `"A97\n"`) into it, which is Name-Box *navigation*, not cell entry.
 
 ## The failure modes, individually
 
 | reason | n | what actually happened |
 |---|---|---|
-| `modified` | 12 | Typed a value, **never saved**. The document was left open, so the judge could not read a persisted value and reported `modified`. |
-| `step-budget` | 5 | Clicked the **same coordinate 30 times**. A click loop — the planner is stuck, not searching. |
-| `persisted-mismatch` | 4 | Saved (or never acted) with a value that does not match, including one row that typed `"A97"` into the Name Box. |
+| `modified` | 16 | Typed a value, **never saved**. The document was left open, so the judge could not read a persisted value and reported `modified`. |
+| `step-budget` | 7 | Clicked the **same coordinate 30 times**. A click loop — the planner is stuck, not searching. |
+| `persisted-mismatch` | 6 | Saved (or never acted) with a value that does not match, including one row that typed `"A97"` into the Name Box. |
 
-**Zero `press_key` calls across all 21 rows.** No row ever attempted Ctrl+S.
+**Zero `press_key` calls across all 29 rows.** No row ever attempted Ctrl+S.
 
 ## Why `modified` is not a coordinate miss
 
@@ -60,7 +60,7 @@ instruction says only *"Set the X cell for record Y to Z"* (`c1-trial.ts:46`).
 
 So the agent is told to save in the prompt and given a task that never mentions
 saving. A planner that treats the task line as the whole job will type the value
-and stop — which is what 12 of 21 rows did. This is an **instruction-fidelity
+and stop — which is what 16 of 29 rows did. This is an **instruction-fidelity
 difference between the two arms**, and it belongs in the comparison write-up: if
 Myco's arm is told to save and the baseline's task line is not, the arms are not
 measuring the same thing.

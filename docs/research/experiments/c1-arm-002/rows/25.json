@@ -1,0 +1,110 @@
+{
+  "index": 25,
+  "params": {
+    "fixtureSeed": "seed-b",
+    "rowKey": "EMP-0048",
+    "column": "qty",
+    "newValue": "5773"
+  },
+  "cellRef": "C49",
+  "expected": "5773",
+  "previousValue": "701",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "modified",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "C49\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 560,
+      "completion": 148,
+      "cost": 0.0026
+    },
+    {
+      "prompt": 560,
+      "completion": 140,
+      "cost": 0.00252
+    },
+    {
+      "prompt": 560,
+      "completion": 212,
+      "cost": 0.00324
+    },
+    {
+      "prompt": 560,
+      "completion": 188,
+      "cost": 0.003
+    },
+    {
+      "prompt": 560,
+      "completion": 256,
+      "cost": 0.00368
+    }
+  ],
+  "cost": 0.015039999999999998,
+  "tokens": {
+    "in": 2800,
+    "out": 944
+  },
+  "modelCalls": 5,
+  "steps": 4,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 34193,
+  "resetMs": 178088,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 6.7822265625
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}
