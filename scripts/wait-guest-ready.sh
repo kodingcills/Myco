@@ -25,7 +25,12 @@
 set -uo pipefail
 
 T=${1:-600}
-MIN_DELTA=${2:-1}
+# How many CPU seconds the guest must gain before SSH alone can be trusted. A
+# single 1s blip is weak evidence: TIF-164's stalled guest also sat at exactly
+# 00:01, so one second of progress would have been indistinguishable from a
+# process that ran once and stopped. This parameter was parsed and ignored in the
+# first version (a documented knob that did nothing); it is now load-bearing.
+MIN_DELTA=${2:-3}
 CFG=~/VMs/myco-win11/ssh_config
 
 # How often to sample guest CPU time. Overridable so tests can exercise the
@@ -65,6 +70,7 @@ done
 # Watch CPU time advance. A guest that is paused or stuck in early UEFI stays
 # flat; a booting one gains seconds every interval.
 LAST=$(cpu_seconds "$PID")
+FIRST=$LAST
 FLAT=0
 # A booting guest must show at least one CPU advance before SSH alone can be
 # trusted. Without this, a flat-CPU guest whose sshd still answers passes in
@@ -87,11 +93,18 @@ while :; do
   # a live process is a stall, not a slow boot.
   if [ "$CUR" -gt "$LAST" ]; then
     FLAT=0
-    SEEN_PROGRESS=1
+    # Progress counts only once the cumulative gain since the first sample has
+    # reached MIN_DELTA, so a lone blip cannot satisfy the AND on its own.
+    if [ $(( CUR - FIRST )) -ge "$MIN_DELTA" ]; then
+      SEEN_PROGRESS=1
+    fi
   else
     FLAT=$(( FLAT + 1 ))
     if [ "$FLAT" -ge 3 ]; then
-      echo "wait-guest-ready: guest pid $PID CPU time flat at ${CUR}s across 3 intervals - not booting (TIF-164). UTM status may still report 'started'; do not trust it." >&2
+      # Report the cumulative gain, not just the current reading: a guest that
+      # advanced 0.6s has integer-truncated samples showing as "flat at 0s",
+      # which reads as "no CPU at all" and misdescribes what was measured.
+      echo "wait-guest-ready: guest pid $PID CPU flat for 3 intervals (gained $(( CUR - FIRST ))s of the ${MIN_DELTA}s needed) - not booting (TIF-164). UTM status may still report 'started'; do not trust it." >&2
       exit 1
     fi
   fi
@@ -100,7 +113,7 @@ while :; do
   # guard is what makes that an AND: SSH answering on its own is not evidence of
   # a boot, because a stalled guest's sshd can still respond while the guest
   # itself is not executing.
-  if [ "$SEEN_PROGRESS" = "1" ] && ssh -F "$CFG" -o BatchMode=yes -o ConnectTimeout=10 myco-win11 'echo ok' 2>/dev/null | grep -q ok; then
+  if [ "$SEEN_PROGRESS" = "1" ] && [ "$(ssh -F "$CFG" -o BatchMode=yes -o ConnectTimeout=10 myco-win11 'echo ok' 2>/dev/null || true)" = "ok" ]; then
     echo "wait-guest-ready: ssh up after $(( $(date +%s) - START ))s (guest CPU ${CUR}s)"
     exit 0
   fi
