@@ -24,9 +24,19 @@ const made: string[] = [];
 
 afterEach(() => {
   for (const dir of made.splice(0)) {
-    // Every process this fixture spawns carries `dir` in argv: the launcher tree by
-    // path, and the pnpm stub's sleeper by `exec -a` in the stub.
+    // The launcher tree carries `dir` in argv, so the path kill reaches it. The sleepers
+    // do not — they are bare `sleep 297` — so they are killed by the pids the stub
+    // recorded while it was alive.
     spawnSync("bash", ["-c", `pkill -9 -f ${JSON.stringify(dir)} 2>/dev/null`]);
+    const recorded = join(dir, "sleepers");
+    if (existsSync(recorded)) {
+      const pids = readFileSync(recorded, "utf8")
+        .split("\n")
+        .filter((line) => /^\d+$/.test(line.trim()));
+      if (pids.length > 0) {
+        spawnSync("kill", ["-9", ...pids]);
+      }
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -41,16 +51,16 @@ function worktree(): { dir: string; script: string; runDir: string; env: NodeJS.
   const bin = join(dir, "bin");
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "ps"), "#!/bin/sh\nprintf 'launchd\\n'\n");
-  // `exec -a` puts the fixture path into the sleeper's argv[0], so the launcher-tree
-  // `pkill -f <dir>` in afterEach reaps it too — a plain `sleep 297` orphans itself when
-  // its parent stub dies and cannot be found by path (measured 2026-11-23: 29 orphans
-  // after a 30-round run, and the sleep's own argv carries nothing else to match on).
-  // The shebang is `bash`, not `sh`: on Ubuntu `/bin/sh` is dash, whose `exec` has no
-  // `-a`, so the stub exited 127 and every round's watchdog was already dead (seen as
-  // `exec: -a: not found` in CI).
+  // A plain `sleep 297` orphans itself when its parent stub dies and cannot be found by
+  // path (measured 2026-11-23: 29 orphans after a 30-round run). `exec -a` fixed that on
+  // macOS but broke on Ubuntu, where `/bin/sh` is dash and `exec` has no `-a`: the stub
+  // exited 127 and every watchdog was already dead. So the stub records the sleeper's own
+  // pid in the fixture and afterEach kills exactly those — `sh` is enough, and both
+  // shells fork the backgrounded `sleep` rather than exec'ing it, so `$!` is the process
+  // that must be signalled.
   writeFileSync(
     join(bin, "pnpm"),
-    `#!/usr/bin/env bash\nexec -a ${JSON.stringify(`${dir}/sentinel`)} sleep 297\n`,
+    `#!/bin/sh\nsleep 297 &\necho $! >> ${JSON.stringify(join(dir, "sleepers"))}\nwait\n`,
   );
   chmodSync(join(bin, "ps"), 0o755);
   chmodSync(join(bin, "pnpm"), 0o755);
@@ -79,6 +89,9 @@ function logOf(runDir: string): string {
 }
 
 function startDetached(argv: string): number {
+  // A child whose argv[0] is the argv we were given, so the launcher's `$ROOT`-anchored
+  // fallback matches it exactly as it would a real `s0-live.ts --live`. `bash` is named
+  // explicitly, so `exec -a` is safe here; the fixture's `pnpm` stub cannot assume it.
   const out = spawnSync(
     "bash",
     ["-c", "nohup bash -c \"exec -a '" + argv + "' sleep 297\" >/dev/null 2>&1 & echo $!"],
