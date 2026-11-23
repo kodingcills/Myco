@@ -60,3 +60,49 @@ workstream), `agent-under-test` (cheaperinference/glm-5.3), `verifier`
 (Appended below this line as DF-007+ when Phase 1 runs surface them, using the
 format in dogfood/scoring.md §"Turning a failed capability into a Linear
 issue".)
+
+### DF-007 (TIF-120) Introspection channel is never enabled, so the global route has no target
+
+- **status:** open — blocked on TIF-120 (Runtime)
+- **owner:** runtime
+- **blocked_by:** none
+- **description:** `QemuConfig.introspection_file` defaults to `None`
+  (`runtime/crates/myco-rt-backend-qemu/src/lib.rs:68`) and nothing in the
+  DF-005 path sets it. It is **not settable through the MCP `create` tool**, so
+  `MYCO_INTROSPECTION_FILE` is never passed to the guest agent, the app's
+  published widget record never reaches the runner, and the global actuation
+  route has no `entry_field` geometry to click. Tk registers zero AT-SPI nodes,
+  so there is no ref route either: DF-S01 cannot pass until this is fixed.
+- **reproduction:** eval `df-s01-live3-20261123-025219`, run `run-df-s01-1`,
+  trial 1 of 3, 80.67s. Ledger row:
+  `state=gap, oracle=verifier:uncertain, missing=REQ-01`; check reason:
+  `no AT-SPI entry ref and no entry_field geometry in the introspection record,
+  so there is no point to click`. Preflight passed 6/6 immediately before the
+  run, including `introspection-env: MYCO_INTROSPECTION_FILE present in
+  gui.env` — the variable exists in the guest's `gui.env`, but the runtime never
+  passes it to the agent, so the two disagree.
+- **acceptance:** `create` accepts an introspection path (or defaults to one the
+  fixture publishes to); a DF-S01 trial then reaches the actuation step and its
+  trace shows `clickAt` + `typeTextGlobal`; the run is graded from the persisted
+  store rather than gapping on REQ-03/REQ-04.
+
+### DF-008 (TIF-120) Provisioning omits the guest agent binary
+
+- **status:** open — blocked on TIF-120 (Runtime)
+- **owner:** runtime
+- **blocked_by:** none
+- **description:** `runtime/guest/provision.sh` produces the base image, overlay,
+  keypair and seed, but not the `myco-rt-agent` binary. `create` then fails with
+  `no agent binary on the host: build one with
+  runtime/guest/build-agent-in-guest.sh`. The agent must be built **inside** the
+  guest (it links `libxkbcommon`, so the musl cross-build from macOS fails), which
+  means provisioning has an ordering dependency the script does not express:
+  boot → build agent → shut down → run.
+- **reproduction:** eval `df-s01-live2-20261123-025057`, all three trials,
+  ~1.3s each. Ledger `detail`: `create failed: tool create error:
+  {"code":-32000,"error":"backend error: protocol: no agent binary on the host:
+  build one with runtime/guest/build-agent-in-guest.sh"}`. After running that
+  script (57.7s, 7.4 MB binary) the same command reached the actuation step.
+- **acceptance:** `provision.sh` either builds the agent or fails with that
+  instruction; the runbook's provisioning sequence includes the build step and
+  the boot/shutdown ordering it implies.
