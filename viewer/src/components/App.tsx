@@ -495,7 +495,9 @@ export function App() {
               >
                 {(error || parseError) && (
                   <section role="alert" className="p-3">
-                    <h1 className="type-title">Can't read this run</h1>
+                    <h1 className="type-title">
+                      {parseError ? "Can't read this run" : "Can't read this file"}
+                    </h1>
                     {error && <p className="type-data wrap-anywhere">{error}</p>}
                     {parseError && (
                       <>
