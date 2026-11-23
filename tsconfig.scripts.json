@@ -23,5 +23,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["scripts/c1-spike.ts", "scripts/c1-sweep.ts"]
+  "include": ["scripts/c1-spike.ts", "scripts/c1-sweep.ts", "scripts/myco-run.ts"]
 }

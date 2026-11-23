@@ -36,6 +36,8 @@ probe() {
     echo "load:            $(sysctl -n vm.loadavg)"
     echo "qemu:            $(qemu_running && echo RUNNING || echo down)"
     echo "rt_mcp:          $([[ -x "$RT_MCP" ]] && echo present || echo MISSING)"
+    echo "coordinator_go:  ${MYCO_COORDINATOR_GO:-no}"
+    echo "host_lock:       ${MYCO_HOST_LOCK:-no}"
     echo "vm_lock:         $(ls /tmp/myco-*.lock 2>/dev/null | tr '\n' ' ' || echo none)"
     echo "git_head:        $(git -C "$ROOT" rev-parse --short HEAD)"
   } | tee "$PROBE"
@@ -44,6 +46,10 @@ probe() {
 # A guest is identified by the basename of its argv[0], so an absolute path or an
 # `exec -a` wrapper still counts. A failed `ps` is not evidence of an idle host:
 # the gate must fail closed, so an unreadable table reports a guest.
+#
+# Identity comes from the basename of argv[0], not a regex over argv: on
+# 2026-11-23 `pgrep -f qemu-system-aarch64` matched a file path in an unrelated
+# argv and would have been self-defeating by matching its own text.
 qemu_running() {
   local table
   table="$(ps -Ao command)" || return 0
@@ -52,11 +58,19 @@ qemu_running() {
 }
 
 gate() {
+  # The gate the runtime and the human own: no boot, and no probe, without them.
+  # Environment variables are a stopgap until the coordinator's lock backend is
+  # named in the runbook; they are read here and nowhere else.
+  if [[ "${MYCO_COORDINATOR_GO:-}" != "1" ]]; then
+    say "REFUSED: no Coordinator GO (set MYCO_COORDINATOR_GO=1 only on an explicit GO)"
+    return 2
+  fi
+  if [[ "${MYCO_HOST_LOCK:-}" != "1" ]]; then
+    say "REFUSED: the shared host lock is not held by this run (MYCO_HOST_LOCK=1 when it is)"
+    return 2
+  fi
   # Refuse to start a guest while another one is running. Memory pressure is
   # reported, not gated: TIF-123/#244 made the live check informational.
-  # Identity comes from the process table's command column, not a regex over
-  # argv: on 2026-11-23 `pgrep -f` matched a file path in an unrelated argv and
-  # would have been self-defeating by refusing on its own text.
   if qemu_running; then
     say "REFUSED: a qemu guest is already running; the window is not ours"
     return 2

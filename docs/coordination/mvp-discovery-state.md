@@ -31,6 +31,16 @@ Head-to-head (TIF-59) and recommendation/product criterion (TIF-60) decide.
   escalations; record what could not be run.
 - **Foundry owns ground truth.** Discovery does not write fixtures or verifiers
   and does not optimise against hidden tests.
+- **S0 live is closed on purpose, and by whose hands.** `RuntimeTransport.evidence()`
+  reports `oraclePresent` and `guestClean` as false because neither is the
+  transport's to establish: the oracle is Foundry's injected verifier, and nothing
+  in the runtime today can list guest processes (`read_file` cannot tell "no stray
+  process" from "no file grant"). So the preflight refuses and `--transport live`
+  exits before a run directory exists. Opening it needs either a guest process
+  probe or an agreed narrower definition of `guestClean`; that is a decision for
+  Tiffany and Foundry, not something to paper over by defaulting the two fields
+  true. The launcher also refuses without `MYCO_COORDINATOR_GO=1` and
+  `MYCO_HOST_LOCK=1` — the hole PR #99 was reverted for.
 - **Model policy.** Judgment/verification `cheaperinference/deepseek-v4.1-flash`;
   building `cheaperinference/glm-5.3`; no kimi-k3.
 
@@ -124,6 +134,22 @@ Facts established by reading the repo, not by running anything:
 - Direction A run: OMP agent, myco-todo, DF-S01 → DF-S02, Foundry oracle, report.
 - Exit: MVD-001 acceptance 1–6. If it fails, the failure is recorded as a runtime
   or DX gap, not papered over.
+
+**MVD-001 acceptance status (2026-11-23, host side only).**
+1. Quickstart — **met on the mock path**: `docs/product/quickstart.md` goes
+   from clone to a `verified` report in ~3 s measured, whole page ~20 s, against
+   a 15-minute budget. A *fresh agent* has not been timed; the page was written
+   for one and executed top to bottom by the builder.
+2. Live DF-S02 refuted from the guest store — **not met**: needs the guest.
+3. Schema-valid artifacts and a summary naming claim, state, verdict — **met**:
+   `pnpm myco-run` prints the three parts and `validateRunDir` gates the exit code.
+4. Two ordinary agent environments — **not met**: the invocation contract is
+   documented and tested (flags only, no TTY, `--json`, explicit exit codes), but
+   nothing ran inside Codex or Claude Code.
+5. Wall-clock and model cost — **half met**: wall-clock is recorded with its
+   provenance bound to its basis; model cost is `not-measured` because no model
+   is called on the mock path.
+6. One forced failure recovered or `uncertain` — **not met**: needs the guest.
 
 ### Phase 3 — head-to-head and wedge
 - MVD-004 on Foundry's task set with whatever arms can be run without accounts/paid
