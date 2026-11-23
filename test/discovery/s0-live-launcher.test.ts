@@ -13,6 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+// These tests spawn and signal real processes. Inside vitest's default worker
+// threads that deadlocks the pool (measured 2026-11-23: >200s hang, then
+// ERR_IPC_CHANNEL_CLOSED, versus 2.4s in a forked child), because a test that
+// signals pgrep-matched processes can take out the worker that owns the pool.
+// `pnpm test` therefore runs this file in a forked child (see package.json).
+
 const ROOT = join(import.meta.dirname, "..", "..");
 
 /** A launcher copy in its own fake worktree, so nothing here touches the real run dir. */
