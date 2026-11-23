@@ -346,6 +346,21 @@ def main() -> int:
         holder.kill()
         holder.wait()
 
+    print("16. preflight accounts for all six checks when the guest is unreachable")
+    out2 = Path(tempfile.mkdtemp(prefix="df005-pf2-"))
+    proc = subprocess.run(
+        [sys.executable, str(RUNNER), "--preflight"],
+        capture_output=True, text=True, cwd=ROOT,
+        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out2 / "free.lock")},
+    )
+    # Off-guest, ssh fails; the three dependent checks must still be reported as
+    # not-run rather than silently omitted, so the "N of 6" count is honest.
+    for name in ("app-deployed", "app-self-test", "introspection-env"):
+        expect(f"skip {name}: not run: guest unreachable" in proc.stdout,
+               f"{name} reported as not-run, not omitted")
+    expect("of 6 checks failed" in proc.stdout, "count is stated against 6")
+    expect(proc.returncode == 1, "exit 1")
+
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0
 
