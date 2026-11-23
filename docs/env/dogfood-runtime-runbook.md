@@ -371,15 +371,52 @@ running, a boot plus trials is exactly the setup that turns a real `verified`
 into a flaky `failure` — and a flaky `failure` is indistinguishable from a
 genuine one in the ledger. Wait for a healthy host.
 
-Provisioning sequence, once a window is approved:
+Provisioning sequence, once a window is approved. **Use `provision.sh`, not the
+individual scripts** — it encodes the ordering below and the guards that make it
+safe to re-run:
 
 ```bash
-runtime/guest/fetch-image.sh          # no-op when the image verifies
-runtime/guest/create-overlay.sh       # builds state/myco-runtime-v0.qcow2
-runtime/guest/make-seed.sh            # regenerates key, renders seed.iso
-runtime/guest/boot.sh                 # boots; wait for SSH on 10022
-python3 scripts/df005-runner.py --preflight   # must exit 0 before anything else
+runtime/guest/provision.sh --check    # report state, change nothing
+runtime/guest/provision.sh            # keypair -> image -> overlay -> seed
 ```
+
+Two guards in `provision.sh` that the individual scripts do not have, both
+learned the hard way:
+
+- **A new key cannot reach an existing overlay.** cloud-init runs once with a
+  fixed instance-id, so `ssh_authorized_keys` is never re-applied. If the private
+  key is missing but an overlay exists, `make-seed.sh` refuses
+  (`Refusing: SSH private key missing but an overlay exists`) and
+  `provision.sh` discards the overlay *before* generating the key, so an
+  interrupted run cannot leave "new key + old overlay" looking provisioned.
+- **The `.pub` is derived from the private key, not the other way round.** If
+  both exist but disagree, `provision.sh` rebuilds the `.pub` from the key.
+
+### The guest agent binary is a separate step
+
+`provision.sh` does **not** produce `myco-rt-agent`, and `create` fails without
+it:
+
+```
+backend error: protocol: no agent binary on the host: build one with
+runtime/guest/build-agent-in-guest.sh (it stores a copy under runtime/guest/state/)
+```
+
+It cannot be cross-compiled from macOS — `xa11y` links `libxkbcommon`, so the
+musl build fails at link time. It must be built **inside the guest**, which means
+provisioning has an ordering dependency the scripts do not express:
+
+```bash
+runtime/guest/boot.sh                        # guest must be up
+runtime/guest/build-agent-in-guest.sh        # ~60 s; writes state/myco-rt-agent-aarch64
+runtime/guest/shutdown.sh                    # the runtime boots its own guest
+python3 scripts/df005-runner.py --preflight  # must exit 0 before anything else
+```
+
+**Do not leave your own guest running.** The runtime's `create` boots its own
+guest from the same overlay; if one is already up, `boot.sh` exits 1 and every
+trial gaps with `script failed: boot.sh`. Boot only to build the agent, then shut
+down and let the runtime own the lifecycle.
 
 Verifying the key half without booting: point `MYCO_GUEST_DIR` at a temp dir
 with a freshly generated key and run `--preflight`. The failure should advance
