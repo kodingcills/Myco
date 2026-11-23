@@ -15,8 +15,11 @@ $ node --import tsx scripts/audit-false-success.ts docs/research/experiments/c1-
 
 ## Why zero audits
 
-The independent audit runs only when the verdict is `verified`
-(`src/baseline/c1-trial.ts:91`), and `c1-judge.ts:35` is what it calls:
+The independent audit runs only when the verdict is `verified` — the guard in
+`runC1Trial` (`src/baseline/c1-trial.ts`, "if (verdict.status === \"verified\")"),
+which calls `audit()` in `src/baseline/c1-judge.ts`. Line numbers are deliberately
+not cited: they rot on any unrelated edit above them, and a stale line reference
+reads as authoritative.
 
 ```ts
 if (verdict.status === "verified") {
