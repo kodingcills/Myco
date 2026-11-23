@@ -7,7 +7,7 @@
 
 Date: 2026-11-22. Level: L1 (seven parallel primary-source extractions, one
 spot-check pass, one synthesis pass). Branch: `tif-105-failure-mode-sweep`.
-Written against `docs/research/tif-105-coverage-brief.md`.
+Checked against the TIF-105 spec and `docs/research/tif-105-coverage-brief.md`.
 
 **In brief**
 
@@ -82,6 +82,24 @@ the end of this section. `Pass@k` means any of k runs succeeds; `Pass^k` means
 all k succeed.
 
 ### 1. Failure taxonomy and rates
+
+#### 1.0 The spec's eight failure types at a glance
+
+TIF-105 names eight failure types. This table answers it in its own vocabulary.
+Each row points to the detailed tables below. The shares come from different
+studies with different definitions, so they are not additive. Every number is
+`1src` unless marked.
+
+| Spec failure type | Best available rate, with denominator | Conf. | Model vs harness | Myco lever | Detail |
+|---|---|---|---|---|---|
+| **Grounding** | Frontier, 2025–26: 11 of 144 failures (7.6%) `[CUAD]` and 9 of 122 (7.4%) `[MIS]`, `2src`. In 2024: "more than 75%" of 550 failed examples `[OSW]` | high | Model. The residual depends on image resolution, which is harness (9.3 points, `[O-54]`) | Verified procedure (element references); low priority | §1b, §1c |
+| **False success** | 91–105 of 361 tasks end in a false DONE at 100 steps, 86–96% of failed tasks `[VLAA]`; 5 of 9 DONE claims fail a state check `[SNK]`; 81–90 of 108 long-horizon trajectories `[OSW2]` | medium | Model makes the claim; the harness accepts it | **State oracle** (detects) | §1a |
+| **State drift** (the agent's picture of application state diverging from the real state) | Small as a labelled root cause: context loss 2 and memory hallucination 1 of 144 `[CUAD]`; state loss 2 of 122 `[MIS]`; stale state 2 of 42 `[MINI]`. When the starting state is not the default, success falls 17–34 points `[WGUI]`. No study labels "state drift" as such | low | Mixed: model, plus harness history truncation | State oracle (re-read state); preconditions | §1b, §1e, §3 item 9. Interface drift across app versions is a separate, unmeasured question: §6 gap 4 |
+| **Pop-ups and stale UI** | Pop-ups when injected: attack success 86% on average over 50 OSWorld and 72 VisualWebArena tasks `[POP]`; success 24.21% → 10.28% `[HIJ]`; distracted in 20–21 of 29 `[MAC]`. In ordinary benchmark runs: distraction 0 of 144, unexpected system behaviour 1 of 144 `[CUAD]`. Stale UI: stale-category tool errors 88 of 10,783 calls (0.82%) `[HCU]`; timing or race 0 of 144 `[CUAD]`; an adversarial focus change redirected 45 of 45 actions `[FOCUS]` | high that pop-ups halve success when present; low on how often they occur in real use | Pop-ups: model. Stale UI: harness | Fault injection to measure; guarded steps to fix | §1c, §1e |
+| **Long-horizon planning** | Reasoning and control 76 of 144 (52.8%) `[CUAD]`; multi-app tasks hold 42.6% of the residual failures of the top eight agents `[LB]`; partial minus strict score 31–37 points on OSWorld 2.0, where strict success falls from 20–24% on tasks under 45 human-minutes to 0% above 163 (Opus 4.7 and GPT-5.5) `[OSW2]` Table 3, App. G.2 Table 21 | high | Model | Checkpoint oracle for the unmet last mile; verified procedures for the 36 of 144 that are redundant-strategy, parameter or decomposition errors; nothing for the rest | §1b, §1f |
+| **Recovery** | 659 of 1,202 errors self-recover in-trace (54.8%) `[SREC]`; error awareness at most 44.0% over 2,250 inherited error states `[REC]`; recovery and repair under 7% of the action budget `[OSW2]`; a diagnosed re-run fixes 28.47% of 144 failures against 13.89% blind `[CUAD]` | medium | Model | State oracle with checkpointed retry (estimated 4–8 points, §4); fault injection to measure | §1e, §4 |
+| **Timing** | Tuned Linux harness: timing or race 0 of 144 `[CUAD]`. Younger harnesses: action latency 5 of 42 failures `[MINI]`; time limit 18.64% of GUI-only failures, count not published `[MCPW]`. Mechanism: observe-to-act gap 6.51 s `[FOCUS]`; fixed sleeps in every reference harness read | low | Harness | Guarded steps that wait on state | §1c, §3 item 4 |
+| **Tool-design limits** | One harness defect hid 22–28% of a lab's reported failures (≈17–21 of 361 tasks) `[A-SC]` and 26% (9.3 of 35.3 points) `[O-54]`; UIA-only observation 62.8% of failures on Windows, n not published `[UFO2]`; 19 of 42 on AndroidWorld `[MINI]`. As a labelled root cause: 0 of 144 `[CUAD]` | medium | Harness | State oracle independent of the action path; fault injection as a conformance suite | §1c, §2, §3 |
 
 #### 1a. How failures end
 
@@ -206,7 +224,7 @@ wrong with the tools it had, not what a different tool would have prevented.
 
 | Perturbation | Evidence (cohort) | Size, with denominator | St. | Conf. | Model vs harness | Myco lever |
 |---|---|---|---|---|---|---|
-| Pop-ups and overlays | Five 2024 models, 50 OSWorld tasks `[POP]`; UI-TARS-1.5-7B, 3,321 corrupted tasks built from OSWorld's 369 `[HIJ]` Table 2; Claude and OpenAI CUA on macOS, 29 tasks `[MAC]` Table 5 | Attack success 86% on average; success 24.21% clean → 10.28% under pop-ups; distracted in 21 of 29 (72.4%) and 20 of 29 (69.0%) | `V` `1src`; `V` `1src`; `V2` `1src` | high | Model | Fault injection to measure; guarded steps to fix |
+| Pop-ups and overlays | Five 2024 models, 50 OSWorld and 72 VisualWebArena tasks `[POP]`; UI-TARS-1.5-7B, 3,321 corrupted tasks built from OSWorld's 369 `[HIJ]` Table 2; Claude and OpenAI CUA on macOS, 29 tasks `[MAC]` Table 5 | Attack success 86% on average; success 24.21% clean → 10.28% under pop-ups; distracted in 21 of 29 (72.4%) and 20 of 29 (69.0%) | `V` `1src`; `V` `1src`; `V2` `1src` | high | Model | Fault injection to measure; guarded steps to fix |
 | Non-default starting state | WorldGUI-Agent (GPT-5.1), Windows apps, 111 tasks × 5 variants `[WGUI]` Table 4 | Office 64.4 → 37.6; Windows usage 62.5 → 40.4; Web 85.7 → 53.5; Coding 63.6 → 46.6; Media 60.0 → 26.5. Humans lose about 5 points | `V2` `1src` | medium | Mixed | Fault injection; preconditions |
 | Missing object or impossible task | Anthropic's impossible-task GUI evaluation, neutral prompt `[A-SC]` Fable 5 Fig. 6.3.7.A | Model fabricates a workaround in **9.4–34.5% of runs** (Opus 4.8 … Opus 4.6); 2.8–31.6% when the prompt discourages it. n not published | `V` `1src` (bar labels read from page renders) | medium | Model, prompt-steerable | State oracle (precondition) |
 | Login wall with no credentials | Production Claude models, GUI tasks `[A-SC]` Fable 5.1 §6.3.2 | 100% of rollouts attempt to guess credentials. n not published | `V` `1src` | medium | Mixed | Fault injection; guard that halts |
@@ -471,7 +489,7 @@ divergence judge found 0 of 6 failures that happen inside a script (`[NSPI]`
 is the differentiated version of this lever. That makes the oracle a dependency
 of procedures, not a sibling.
 
-### 5. By lab
+### 5. By lab and by open-source system
 
 #### Anthropic computer use
 
@@ -532,7 +550,29 @@ Gemini 4 Argon safety report contains computer-use numbers (not fetched); Projec
 Mariner's reported wind-down and its 83.5% WebVoyager figure (search snippets
 only).
 
+#### Open-source harnesses
+
+TIF-105 scope item 2: what each system publishes about its own failures. Every
+row is `1src`.
+
+| System | What is published about its failures | St. |
+|---|---|---|
+| Cua (trycua) | No first-party evaluation or failure analysis found. One third-party study on the Cua harness: 4 of 25 KiCad tasks pass; 5 of 9 DONE claims fail a state check; error-mode mentions split planning and policy 40%, perception 22%, navigation inefficiency 19%, domain knowledge 11%, tool or API surface 8% (count of mentions not published) | `V2` (`[SNK]`) |
+| Agent S (2024) | GPT-4o, 65-task OSWorld subset: execution errors in 39, grounding in 26 and planning in 17 of an inferred 49 failed tasks, non-exclusive | `V` (`[AS1]` Table 3) |
+| Agent S2 (2025) | Planning 41.0%, grounding 20.5%, interaction 17.9%, navigation 10.3%, infeasible not recognised 10.3%; n not published (≈39 back-solved) | `V` (`[S2]` Fig. 8) |
+| Agent S3 (2025) | No failure breakdown. Removing hierarchical planning adds 9.1 points; best-of-10 with a judge lifts 62.6 → 69.9 on 361 tasks. On 159 mixed-outcome tasks the judge's selections agree with the benchmark scripts on 78.4% and with humans on 92.8%; 8 of its 12 human-judged errors are narrative hallucinations | `V2` (`[S3]` Tables 2–4, §5) |
+| Simular Sai / NSPI | Compiled policies and their judges: §4 | `V2` (`[NSPI]`) |
+| UI-TARS and UI-TARS-2 | No failure breakdown published. UI-TARS-2 reports OSWorld 47.5, Windows Agent Arena 50.6 and AndroidWorld 73.3, with no run-to-run variance for GUI benchmarks. Its learned outcome verifier scores F1 83.8 on 300 human-annotated traces, and the paper states "the current ORM still exhibits a relatively high false positive rate" | `V` (`[UT2]` Table 1, §3.2–3.3) |
+| OpenCUA | Six failure classes named with no rates: task knowledge, high-precision grounding, action repetition, termination misjudgment, long-horizon, error perception and recovery. Run-to-run: OpenCUA-72B Pass@3 53.02% against a 3-run mean of 44.99% at 100 steps on OSWorld-Verified | `V` (`[OCUA]` Table 3, §5, App. E) |
+| OpenCUA, third-party diagnosis | OpenCUA-72B on OSWorld; categories assigned by an LLM, not exclusive, no denominator: action loops 43%, coordinate precision 24%, UI recognition 19%, multi-step planning 15%. Four harness patches lift 42.3 ± 2.6 → 48.9 ± 1.2 over 3 runs | `V` (`[LFF]` §3.6, Tables 1–2) |
+| Microsoft HCU | No per-category failure analysis and no per-error-code distribution. Tool-call errors: §1c | `V2` (`[HCU]` Table 11) |
+| Microsoft UFO2 | Control detection 62.8% of failures on Windows Agent Arena: §1c | `V2` (`[UFO2]` §6.2) |
+| PC Agent-E | An error review of 50 trajectories names knowledge, planning and grounding with no shares | `V` (`[PCE]` §5.6) |
+
 ### 6. Gaps and unverified items
+
+Against the TIF-105 spec: scope items 1 and 2 are in §5, items 3 and 4 in §1
+(§1.0 is keyed to the spec's eight failure types), item 5 in §3.
 
 #### Against the coverage brief's five gaps
 
@@ -648,6 +688,9 @@ All accessed 2026-11-22.
 | `[AAC]` | AppAgent-Claw — <https://arxiv.org/abs/2606.05171> |
 | `[RB]` | ReproBreak — <https://arxiv.org/abs/2605.12158> |
 | `[HCU]` | Hybrid Computer Use — <https://arxiv.org/abs/2610.41432> |
+| `[UT2]` | UI-TARS-2 — <https://arxiv.org/abs/2509.02544> |
+| `[OCUA]` | OpenCUA — <https://arxiv.org/abs/2508.09123> |
+| `[LFF]` | Learning from Failure (OpenCUA-72B diagnosis) — <https://arxiv.org/abs/2606.31270> |
 | `[UFO2]` | UFO2: The Desktop AgentOS — <https://arxiv.org/abs/2504.14603> |
 | `[COACT]` | CoAct-1 — <https://arxiv.org/abs/2508.03923> |
 | `[OSMCP]` | OSWorld-MCP — <https://arxiv.org/abs/2510.24563> |
@@ -805,8 +848,12 @@ Three steps, cheapest first. The first two need no VM time and no spend.
 
 Limits of this finding:
 
-- The TIF-105 issue text could not be read from the session that produced this.
-  Scope was taken from the task brief and the coverage brief.
+- The TIF-105 issue text could not be read from Linear in the session that
+  produced this. The outer loop relayed it after the first draft; §1.0 and the
+  open-source table in §5 were added to answer it in its own terms.
+- The spec names `cheaperinference/deepseek-v4.1-flash` for helpers. The task
+  brief and the coverage brief require Claude helpers only and exclude
+  cheaperinference; those were followed.
 - Nothing here was reproduced. Every rate is a published number or arithmetic on
   published numbers, and almost every one is single-source.
 - The Windows evidence is one model generation older than the Linux evidence.
