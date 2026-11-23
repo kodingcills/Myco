@@ -16,6 +16,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FAILURES=0
+# TIF-137: boot.sh now takes the host VM lock. No scenario may touch the real lock
+# (/tmp/myco-win11.vm.lock): default every run to a private lock file and to this
+# checkout's vm-lock.sh (sandboxed copies of boot.sh cannot find it relatively).
+export MYCO_VM_LOCK_PATH="$TMP/vm.lock"
+export MYCO_VM_LOCK_SCRIPT="$HERE/../../scripts/vm-lock.sh"
+unset MYCO_VM_LOCK_OWNER
 
 ok()   { printf 'ok   %s\n' "$*"; }
 bad()  { printf 'FAIL %s\n' "$*" >&2; FAILURES=$((FAILURES + 1)); }
@@ -322,6 +328,122 @@ bash "$F/boot.sh" >/dev/null 2>&1
 if [[ "$(tr '\n' ' ' < "$F/order.log" 2>/dev/null)" == "seed overlay " ]]; then
   ok "boot.sh runs make-seed.sh before create-overlay.sh"
 else bad "boot.sh order: $(tr '\n' ' ' < "$F/order.log" 2>/dev/null)"; fi
+
+# ── 18b. boot.sh takes the host VM lock (TIF-137) ─────────────────────────────
+# Stubs: make-seed logs, create-overlay logs and exits 7, so reaching "overlay"
+# proves boot.sh got past its lock step and nothing reaches qemu.
+lsand() {
+  local d="$1"; rm -rf "$d"; mkdir -p "$d/state" "$d/keys"
+  cp "$HERE/boot.sh" "$d/"
+  printf '#!/usr/bin/env bash\necho seed >> "$(dirname "$0")/order.log"\n' > "$d/make-seed.sh"
+  printf '#!/usr/bin/env bash\necho overlay >> "$(dirname "$0")/order.log"; exit 7\n' > "$d/create-overlay.sh"
+  chmod +x "$d"/*.sh
+}
+lorder() { [[ -f "$1/order.log" ]] && tr '\n' ' ' < "$1/order.log"; true; }
+hold_lock() {   # $1 lock path, $2 name; holds the lock ~30 s in the background
+  # A separate bash process, not a ( ) subshell: inside a subshell $$ is still THIS
+  # script's pid, which is an ancestor of boot.sh and would look like a real owner.
+  MYCO_VM_LOCK_PATH="$1" bash -c 'source "$MYCO_VM_LOCK_SCRIPT"; vm_lock_acquire "$0" >/dev/null 2>&1 && sleep 30' "$2" &
+  HOLDER=$!
+  for _ in $(seq 1 50); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done
+}
+unhold() { pkill -P "$HOLDER" 2>/dev/null; kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null; true; }
+
+L="$TMP/l18a"; lsand "$L"
+out="$(MYCO_VM_LOCK_PATH="$L/vm.lock" bash "$L/boot.sh" 2>&1)"; rc=$?
+if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$(cut -d' ' -f2 "$L/vm.lock")" == boot.sh && "$out" != *"No such file"* ]]; then
+  ok "boot.sh takes the free VM lock before seeding (lock file names boot.sh; no stray error on a fresh host)"
+else bad "boot.sh with a free lock: rc=$rc order=[$(lorder "$L")] lock=[$(cat "$L/vm.lock" 2>/dev/null)] / $out"; fi
+
+L="$TMP/l18b"; lsand "$L"; hold_lock "$L/vm.lock" other-owner
+out="$(MYCO_VM_LOCK_PATH="$L/vm.lock" bash "$L/boot.sh" 2>&1)"; rc=$?; unhold
+if [[ $rc -eq 10 && -z "$(lorder "$L")" && "$out" == *"held by another owner"* ]]; then
+  ok "boot.sh refuses (exit 10) while another owner holds the VM lock, before seeding"
+else bad "boot.sh with a held lock: rc=$rc order=[$(lorder "$L")] / $out"; fi
+
+L="$TMP/l18c"; lsand "$L"
+out="$( export MYCO_VM_LOCK_PATH="$L/vm.lock"; source "$MYCO_VM_LOCK_SCRIPT"; vm_lock_acquire parent-driver >/dev/null 2>&1 && bash "$L/boot.sh" 2>&1 )"; rc=$?
+if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$out" == *"held by the caller"* && "$out" != *"WARNING"* ]]; then
+  ok "boot.sh boots under a VM lock its ancestor holds (inherited fd: no warning), without re-acquiring"
+else bad "boot.sh under an ancestor's lock: rc=$rc order=[$(lorder "$L")] / $out"; fi
+
+L="$TMP/l18d"; lsand "$L"; hold_lock "$L/vm.lock" spoofed-owner
+spoof="$(cut -d' ' -f1 "$L/vm.lock")"
+out="$(MYCO_VM_LOCK_PATH="$L/vm.lock" MYCO_VM_LOCK_OWNER="$spoof" bash "$L/boot.sh" 2>&1)"; rc=$?; unhold
+if [[ $rc -eq 10 && -z "$(lorder "$L")" ]]; then
+  ok "a MYCO_VM_LOCK_OWNER that is not an ancestor does not bypass the lock"
+else bad "spoofed owner: rc=$rc order=[$(lorder "$L")] / $out"; fi
+
+L="$TMP/l18e"; lsand "$L"
+# (Written to a file: bash 3.2 mis-parses a quoted heredoc inside $( ).)
+cat > "$L/holder.py" <<'PY'
+import fcntl, os, subprocess, sys
+d = sys.argv[1]
+fd = os.open(os.path.join(d, "vm.lock"), os.O_RDWR | os.O_CREAT, 0o666)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)          # df005-runner.py's protocol
+os.ftruncate(fd, 0); os.write(fd, ("%d df005-runner.py\n" % os.getpid()).encode())
+env = {k: v for k, v in os.environ.items() if k != "MYCO_VM_LOCK_OWNER"}
+r = subprocess.run(["bash", os.path.join(d, "boot.sh")], env=env, capture_output=True, text=True)
+print(r.stdout + r.stderr); sys.exit(r.returncode)
+PY
+out="$(MYCO_VM_LOCK_PATH="$L/vm.lock" python3 "$L/holder.py" "$L" 2>&1)"; rc=$?
+if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$out" == *"held by the caller"* && "$out" == *"lock was not inherited"* ]]; then
+  ok "boot.sh boots under a Python holder (df005-runner style) and WARNS that the lock ends with it"
+else bad "Python-held lock: rc=$rc order=[$(lorder "$L")] / $out"; fi
+
+L="$TMP/l18f"; lsand "$L"
+out="$(MYCO_VM_LOCK_PATH="$L/vm.lock" bash -c 'echo "$$ released-driver" > "$MYCO_VM_LOCK_PATH"; bash "$0/boot.sh" 2>&1' "$L")"; rc=$?
+if [[ $rc -eq 7 && "$(lorder "$L")" == "seed overlay " && "$(cut -d' ' -f2 "$L/vm.lock")" == boot.sh ]]; then
+  ok "a stale holder line from a live ancestor that released the lock does not skip it"
+else bad "stale holder line: rc=$rc order=[$(lorder "$L")] lock=[$(cat "$L/vm.lock" 2>/dev/null)] / $out"; fi
+
+# ── 18c. df005-runner.py passes its lock to the guest (TIF-137, fix (b)) ───────
+# Drives the runner's REAL acquire_vm_lock / McpClient(pass_fds) / release_vm_lock
+# through the real boot.sh, with a fake daemonizing qemu on PATH (a background
+# `sleep` that inherits fds and writes the pidfile). After the runner exits, the
+# guest must still hold the lock; once the guest dies, the lock is free.
+RUNNER="$HERE/../../scripts/df005-runner.py"
+probe_lock() { python3 -c 'import fcntl,os,sys
+fd=os.open(sys.argv[1],os.O_RDONLY)
+try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+except BlockingIOError: print("HELD"); sys.exit()
+print("FREE")' "$1"; }
+runner_sandbox() {
+  local d="$1"; rm -rf "$d"; mkdir -p "$d/state" "$d/keys" "$d/bin"
+  cp "$HERE/boot.sh" "$d/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$d/make-seed.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$d/create-overlay.sh"
+  printf '#!/usr/bin/env bash\npf=""; while [[ $# -gt 0 ]]; do [[ "$1" == -pidfile ]] && pf="$2"; shift; done\nsleep 300 </dev/null >/dev/null 2>&1 &\necho $! > "$pf"\n' > "$d/bin/qemu-system-aarch64"
+  chmod +x "$d"/*.sh "$d/bin/qemu-system-aarch64"
+  cat > "$d/runner.py" <<'PY'
+import importlib.util, os, sys
+runner_path, boot, mode = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("df005_runner", runner_path)
+r = importlib.util.module_from_spec(spec)
+sys.modules["df005_runner"] = r   # dataclasses need the module registered first
+spec.loader.exec_module(r)
+fd = r.acquire_vm_lock("df005-runner.py")
+c = r.McpClient(["bash", boot], pass_fds=(fd,) if mode == "pass" else ())
+out, err = c.proc.communicate(timeout=60)
+sys.stdout.write(out + err)
+r.release_vm_lock(fd)            # then the runner exits, as after Ctrl-C
+PY
+}
+runner_case() {  # $1 dir, $2 pass|nopass
+  local d="$1"; runner_sandbox "$d"
+  RC_OUT="$(PATH="$d/bin:$PATH" MYCO_VM_LOCK_PATH="$d/vm.lock" python3 "$d/runner.py" "$RUNNER" "$d/boot.sh" "$2" 2>&1)"
+  AFTER_RUNNER="$(probe_lock "$d/vm.lock")"
+  kill "$(cat "$d/state/qemu.pid" 2>/dev/null)" 2>/dev/null; sleep 0.3
+  AFTER_GUEST="$(probe_lock "$d/vm.lock")"
+}
+runner_case "$TMP/r18c" pass
+if [[ "$AFTER_RUNNER" == HELD && "$AFTER_GUEST" == FREE && "$RC_OUT" == *"held by the caller"* && "$RC_OUT" != *WARNING* ]]; then
+  ok "df005-runner's lock reaches the guest: still HELD after the runner exits, FREE once the guest dies"
+else bad "runner pass_fds: after-runner=$AFTER_RUNNER after-guest=$AFTER_GUEST / $RC_OUT"; fi
+runner_case "$TMP/r18c2" nopass
+if [[ "$AFTER_RUNNER" == FREE && "$RC_OUT" == *"lock was not inherited"* ]]; then
+  ok "control: without pass_fds the lock ends with the runner, and boot.sh warns"
+else bad "runner control: after-runner=$AFTER_RUNNER / $RC_OUT"; fi
 
 # ── 19. provision.sh and the guest agent (TIF-120 / DF-008) ───────────────────
 # Default never boots; --build-agent takes the host VM lock and SESSION.lock, then
