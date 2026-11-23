@@ -46,7 +46,7 @@ why anyone would choose it. The earlier "M2 = MCP/API" lock-in is retracted.
 
 Three directions are investigated with **bounded proofs**, not three products:
 
-- **A** — verified desktops for coding agents (TIF-53).
+- **A** — verified desktops for coding agents (executed under TIF-89; the old `TIF-53` label was stale).
 - **B** — verified operations for existing business software without adequate APIs (TIF-54).
 - **C** — branchable desktops for agent experimentation (TIF-55).
 
