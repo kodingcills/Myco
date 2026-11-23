@@ -4,6 +4,7 @@ use std::path::{Component, Path};
 use rustix::fd::OwnedFd;
 use rustix::fs::{CWD, Mode, OFlags, ResolveFlags, openat2};
 
+#[derive(Debug)]
 pub struct FileGrant(OwnedFd);
 
 impl FileGrant {
