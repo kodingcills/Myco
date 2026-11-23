@@ -146,7 +146,9 @@ export function parseHeadToHead(value: unknown): HeadToHeadReport | undefined {
     }
   }
 
-  let provenance: HeadToHeadProvenance | undefined;
+  // Absence is not evidence of liveness: a report that does not say where its
+  // numbers came from is "unknown", and the view must say so.
+  let provenance: HeadToHeadProvenance = { kind: "unknown" };
   if (isRecord(value.provenance)) {
     const kind = value.provenance.kind;
     if (kind !== "live" && kind !== "simulated" && kind !== "mixed" && kind !== "unknown")

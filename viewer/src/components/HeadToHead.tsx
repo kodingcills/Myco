@@ -55,6 +55,7 @@ export function CompareApp() {
 
 export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
   const { decision } = report;
+  const provenance = report.provenance ?? { kind: "unknown" as const };
   const settled = decision.status === "decided";
   return (
     <section data-head-to-head aria-label="Head-to-head report">
@@ -65,7 +66,7 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
             <h1 className="type-title text-text-primary" tabIndex={-1}>
               {settled ? (decision.row ?? "No row") : "Not decided"}
             </h1>
-            {report.provenance && report.provenance.kind !== "live" && (
+            {provenance.kind !== "live" && (
               <span
                 data-simulated-badge
                 className="type-data-small inline-flex items-center gap-1 px-1 border border-border-strong rounded-control text-text-primary bg-bg-surface3 whitespace-nowrap"
@@ -76,9 +77,9 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
                   strokeWidth={1.5}
                   aria-hidden="true"
                 />
-                {report.provenance.kind === "simulated"
+                {provenance.kind === "simulated"
                   ? "Simulated"
-                  : report.provenance.kind === "mixed"
+                  : provenance.kind === "mixed"
                     ? "Mixed"
                     : "Unknown source"}
               </span>
@@ -87,7 +88,7 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
           <p className="type-small text-text-secondary">
             {decision.status === "refused"
               ? `Refused: ${decision.reason ?? "no reason recorded"}`
-              : report.provenance && report.provenance.kind !== "live"
+              : provenance.kind !== "live"
                 ? "Not a live result: the arms below are not guest trials"
                 : "The pre-registered rule returned this row"}
           </p>
@@ -231,22 +232,20 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
         </section>
       )}
 
-      {report.provenance && (
+      {provenance && (
         <section aria-label="Provenance">
           <h2 className="type-micro text-text-secondary">Provenance</h2>
           <p className="type-small text-text-primary">
-            {report.provenance.kind === "live"
+            {provenance.kind === "live"
               ? "Live guest trials."
-              : report.provenance.kind === "simulated"
+              : provenance.kind === "simulated"
                 ? "Simulated: no guest trials back these numbers."
-                : report.provenance.kind === "mixed"
+                : provenance.kind === "mixed"
                   ? "Mixed: at least one arm is not live guest evidence."
                   : "Unknown source: the report does not say whether these are live trials."}
           </p>
-          {report.provenance.note && (
-            <p className="type-small text-text-secondary">{report.provenance.note}</p>
-          )}
-          {report.provenance.arms && report.provenance.arms.length > 0 && (
+          {provenance.note && <p className="type-small text-text-secondary">{provenance.note}</p>}
+          {provenance.arms && provenance.arms.length > 0 && (
             <table data-report-table>
               <thead className="type-micro text-text-secondary">
                 <tr>
@@ -256,7 +255,7 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
                 </tr>
               </thead>
               <tbody className="type-data">
-                {report.provenance.arms.map((arm) => (
+                {provenance.arms.map((arm) => (
                   <tr key={arm.armId}>
                     <td className="type-data-strong">{arm.armId}</td>
                     <td>{arm.source}</td>
