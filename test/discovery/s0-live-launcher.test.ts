@@ -45,9 +45,12 @@ function worktree(): { dir: string; script: string; runDir: string; env: NodeJS.
   // `pkill -f <dir>` in afterEach reaps it too — a plain `sleep 297` orphans itself when
   // its parent stub dies and cannot be found by path (measured 2026-11-23: 29 orphans
   // after a 30-round run, and the sleep's own argv carries nothing else to match on).
+  // The shebang is `bash`, not `sh`: on Ubuntu `/bin/sh` is dash, whose `exec` has no
+  // `-a`, so the stub exited 127 and every round's watchdog was already dead (seen as
+  // `exec: -a: not found` in CI).
   writeFileSync(
     join(bin, "pnpm"),
-    `#!/bin/sh\nexec -a ${JSON.stringify(`${dir}/sentinel`)} sleep 297\n`,
+    `#!/usr/bin/env bash\nexec -a ${JSON.stringify(`${dir}/sentinel`)} sleep 297\n`,
   );
   chmodSync(join(bin, "ps"), 0o755);
   chmodSync(join(bin, "pnpm"), 0o755);
