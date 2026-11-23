@@ -5,7 +5,7 @@
 # macOS fails at link time (`unable to find library -lxkbcommon`). The guest has
 # the toolchain (rustup, installed by this script if missing) and the system
 # libraries, so a native build is the boring path.
-set -euo pipefail
+set -euo pipefail   # pipefail matters: `cargo build | tail` must fail when cargo does
 GUEST_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE="$(cd "$GUEST_DIR/.." && pwd)"
 KEY="$GUEST_DIR/keys/id_ed25519"
@@ -48,10 +48,18 @@ TOML
 "${SCP[@]}" "$WORKSPACE/crates/myco-rt-agent" myco@localhost:~/myco-build/crates/ >/dev/null
 
 echo "[build] cargo build --release -p myco-rt-agent (native, in guest)"
-"${SSH[@]}" 'cd ~/myco-build && ~/.cargo/bin/cargo build --release -p myco-rt-agent 2>&1 | tail -5'
+# pipefail inside the guest too: a failed compile must not exit 0 (TIF-120 review:
+# `| tail -5` used to swallow it, and the stale binary below was shipped back).
+"${SSH[@]}" 'set -o pipefail; cd ~/myco-build && ~/.cargo/bin/cargo build --release -p myco-rt-agent 2>&1 | tail -5'
 
-"${SSH[@]}" 'mkdir -p ~/bin && cp ~/myco-build/target/release/myco-rt-agent ~/bin/myco-rt-agent && chmod +x ~/bin/myco-rt-agent; ls -la ~/bin/myco-rt-agent'
+# Remove the old guest copy first and chain with &&: only a binary this build just
+# produced can reach ~/bin and then the host.
+"${SSH[@]}" 'set -e; mkdir -p ~/bin && rm -f ~/bin/myco-rt-agent && cp ~/myco-build/target/release/myco-rt-agent ~/bin/myco-rt-agent && chmod +x ~/bin/myco-rt-agent && ls -la ~/bin/myco-rt-agent'
 # Keep a host-side copy: reset() recreates the overlay, which deletes ~/myco-build
 # and ~/bin inside the guest, so the backend must be able to reinstall from here.
-"${SCP[@]}" myco@localhost:~/bin/myco-rt-agent "$GUEST_DIR/state/myco-rt-agent-aarch64" >/dev/null
+# Copy to a temp name and rename into place: an interrupted or failed scp (disk
+# full, dropped connection, Ctrl-C) must never leave a truncated agent at the path
+# create installs from (TIF-120 review round 2).
+"${SCP[@]}" myco@localhost:~/bin/myco-rt-agent "$GUEST_DIR/state/myco-rt-agent-aarch64.tmp" >/dev/null
+mv -f "$GUEST_DIR/state/myco-rt-agent-aarch64.tmp" "$GUEST_DIR/state/myco-rt-agent-aarch64"
 echo "[build] OK: /home/myco/bin/myco-rt-agent (host copy: runtime/guest/state/myco-rt-agent-aarch64)"

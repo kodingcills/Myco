@@ -36,13 +36,24 @@ pub enum TransportError {
 }
 
 /// Build the remote command line: token always, introspection file when enabled.
+///
+/// sshd hands this string to the guest's login shell, so every value in it is
+/// single-quoted (TIF-120): a token or a path is data, never shell syntax. The
+/// MCP layer additionally restricts the introspection path's character set.
 fn remote_command(token: &str, agent_path: &str, introspection: Option<&str>) -> String {
     match introspection {
         Some(path) => format!(
-            "MYCO_RT_TOKEN={token} MYCO_INTROSPECTION_FILE={path} {agent_path}"
+            "MYCO_RT_TOKEN={} MYCO_INTROSPECTION_FILE={} {agent_path}",
+            shell_single_quote(token),
+            shell_single_quote(path)
         ),
-        None => format!("MYCO_RT_TOKEN={token} {agent_path}"),
+        None => format!("MYCO_RT_TOKEN={} {agent_path}", shell_single_quote(token)),
     }
+}
+
+/// POSIX single-quoting: wrap in '…' and turn each embedded ' into '\''.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Connection parameters for the SSH channel to a guest agent.
@@ -363,14 +374,18 @@ mod tests {
             .unwrap()
             .to_path_buf();
         let bin = workspace.join("target").join("debug").join("myco-rt-agent");
-        if !bin.exists() {
-            let status = Command::new("cargo")
+        // Always build (a no-op when current): reusing an existing binary let
+        // these tests run a STALE agent that predates the code under test
+        // (TIF-120 review). Serialized so parallel tests don't race cargo.
+        static BUILD: std::sync::Once = std::sync::Once::new();
+        BUILD.call_once(|| {
+            let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
                 .args(["build", "-p", "myco-rt-agent"])
                 .current_dir(&workspace)
                 .status()
                 .expect("cargo build -p myco-rt-agent");
             assert!(status.success(), "agent build failed");
-        }
+        });
         let mut c = Command::new(bin);
         c.env("MYCO_RT_TOKEN", token);
         c
@@ -416,6 +431,23 @@ mod tests {
 
         ch.shutdown().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// TIF-120: the introspection path reaches the agent as one shell word,
+    /// whatever it contains; nothing in it can run as shell syntax.
+    #[test]
+    fn introspection_path_is_quoted_into_the_remote_command() {
+        assert_eq!(
+            remote_command("t", "/home/myco/bin/myco-rt-agent", Some("/tmp/state.json")),
+            "MYCO_RT_TOKEN='t' MYCO_INTROSPECTION_FILE='/tmp/state.json' /home/myco/bin/myco-rt-agent"
+        );
+        assert_eq!(remote_command("t", "a", None), "MYCO_RT_TOKEN='t' a");
+        assert_eq!(remote_command("a b;c", "a", None), "MYCO_RT_TOKEN='a b;c' a", "the token is quoted too");
+        // A hostile path round-trips through a real POSIX shell as plain data.
+        let hostile = "/tmp/x'; touch /tmp/pwned-myco; echo '$(id) `id`";
+        let cmd = format!("printf %s {}", shell_single_quote(hostile));
+        let out = Command::new("sh").arg("-c").arg(&cmd).output().unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), hostile);
     }
 
     #[test]
@@ -474,6 +506,31 @@ mod tests {
         assert!(!dir.join("big").exists());
         ch.shutdown().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// TIF-120 end to end through the REAL agent: an agent started with
+    /// MYCO_INTROSPECTION_FILE hands it to the apps it launches as
+    /// MYCO_TODO_STATE_FILE (the production `spawn` path reads the env var).
+    #[test]
+    fn launched_app_sees_the_introspection_file_as_its_state_file() {
+        let dir = std::env::temp_dir().join(format!("myco-channel-intro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let seen = dir.join("seen");
+        let mut cmd = agent_command("s3cret");
+        cmd.env("MYCO_INTROSPECTION_FILE", "/tmp/myco-intro-e2e.json")
+            .env_remove("MYCO_TODO_STATE_FILE");
+        let mut ch = Channel::spawn(cmd, "s3cret").unwrap();
+        let script = format!("printf %s \"$MYCO_TODO_STATE_FILE\" > {}", seen.display());
+        let handle = ch.launch_process("sh", &["-c".into(), script]).unwrap();
+        for _ in 0..50 {
+            if seen.exists() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = ch.kill_process(&handle);
+        ch.shutdown().unwrap();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "/tmp/myco-intro-e2e.json");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
