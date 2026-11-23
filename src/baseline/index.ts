@@ -157,6 +157,12 @@ export function checkPurity(arm: SubArm, transcript: Transcript): PurityResult {
 export interface BaselineRow {
   subArm: BaselineEvidenceArm;
   index: number;
+  /**
+   * The exact text the planner was given for this trial. Recorded so the two
+   * arms' instruction parity is a field diff, not a source-reading exercise.
+   * See docs/research/experiments/c1-parity.md for why that mattered.
+   */
+  instruction?: string;
   params: { fixtureSeed: string; rowKey: string; column: string; newValue: string | number };
   cellRef: string;
   expected: string | number;

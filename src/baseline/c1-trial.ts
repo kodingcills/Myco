@@ -1,3 +1,4 @@
+import { taskText } from "../tasks/task-text.ts";
 import { connectC1, type Mcp, pixelAction } from "./c1.ts";
 import {
   type BaselineRow,
@@ -42,8 +43,10 @@ export async function runC1Trial(
   if (driverReady(prepared.driver)) {
     try {
       const c1 = await connectC1(await prepared.connect(), prepared.window);
-      const { rowKey, column, newValue } = target.params;
-      const instruction = `Set the ${column} cell for record ${rowKey} to ${JSON.stringify(newValue)}.`;
+      // The canonical intent, shared with Myco's arm. Rendered once here and
+      // recorded on the row so instruction parity is checkable by diffing two
+      // fields rather than reading source.
+      const instruction = taskText(target.params);
       while (steps < STEP_BUDGET) {
         const result = await planner.act(instruction, await c1.screenshot());
         calls.push(...result.calls);
@@ -97,6 +100,7 @@ export async function runC1Trial(
   return {
     ...target,
     subArm: "c1",
+    instruction: taskText(target.params),
     verdict: verdict.status,
     verdictReason: verdict.reasons[0] ?? "unavailable",
     transcript,
