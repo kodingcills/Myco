@@ -4,8 +4,42 @@
 
 ## 0. Session 2026-11-23 10:25 ET — read this first
 
-Restarted thread. Preflight done; #315 amended (test-only), pushed, and **round 1 PASSED**.
-**Head `5b610b2` (code `434d1ba`); PR #315 is MERGEABLE and `BEHIND` origin/main.**
+Restarted thread. Preflight done; #315 amended (test-only) and pushed. **STOPPED SHORT OF
+MERGE on the outer loop's GO** — see below. Head `2f9c640`; PR is `BEHIND` and CI is
+re-running.
+
+### 11:45 ET — GO given, but CI found a real bug; merge is paused
+
+The outer loop said GO at 11:29 (accept round-1 PASS at `434d1ba`; if the code diff has
+not moved, merge). Steps run, all clean:
+- merged `origin/main` (`d4c95a1`, #317's probe files; no conflict), targeted test 7/7;
+- `git diff 434d1ba HEAD -- . ':!HANDOFF.md'` showed only main's files, and
+  `git diff origin/main <rev> -- <each PR file>` was byte-identical between `434d1ba` and
+  the pre-merge head — PR diff vs main had not moved.
+
+**Then the PR's own CI failed `check (ubuntu-latest)`** on the pre-merge head `702e7df`:
+`expected [] to have a length of 1` at the race test's liveness assertion.
+
+**Root cause — a bug the round-1 nit fix introduced, invisible on macOS.**
+`LauncherPRVerifier` (macOS-only) could not see it. The `exec -a` pnpm stub was
+`#!/bin/sh`; on Ubuntu `/bin/sh` is **dash**, whose `exec` has **no `-a`**. The stub
+exited 127 (`exec: -a: not found`), so every round's watchdog was already dead when the
+test looked. Reproduced exactly in a Linux container: `1 failed | 6 passed`. The launcher
+itself is not implicated — only the fixture.
+
+**Fix at `2f9c640` (test-only):** stub shebang is `/usr/bin/env bash`. Verified:
+- ubuntu-latest in a container: **7/7, 3/3 runs**, 0 leaked sleepers;
+- macOS: **7/7**, 0 leaked sleepers;
+- `tsc` and `biome` clean; `scripts/s0-live.sh` still untouched.
+
+**Why merge is paused:** the code diff moved since `434d1ba`, so under the GO's own
+condition ("if the code diff moved, stop and tell me") the pre-change acceptance no longer
+authorises a merge. CI on `2f9c640` is queued; the PR is `BEHIND` again (main advanced).
+Watching #315 for CI.
+
+**Lesson for the discipline list:** the round-1 verifier ran one OS. A `sh`-vs-`bash`
+difference is exactly the class a single-platform re-verify cannot catch — check
+`readlink -f /bin/sh` before trusting any `exec -a` or `set -o` in a stub.
 
 ### 11:00 ET — round 1 verdict: PASS
 
