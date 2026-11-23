@@ -299,14 +299,19 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
       attestation,
     );
 
-  it("R6 1a positive control: an honest, fully-bound row IS decision-eligible", async () => {
-    // Without this, a gate that refuses everything would pass every other test here. The
-    // binding must admit the honest row, not merely reject the dishonest ones.
+  it("R6 1a positive control: an honest row passes the binding, withheld only by the flag", async () => {
+    // The flag stays false until an independent PASS, so eligibility cannot be asserted
+    // here. What CAN be asserted is that the binding admits the honest row: the blocker is
+    // the flag, not the binding. Together with the negative test below — which asserts the
+    // binding blocker — this pins both directions. A binding that did nothing would make
+    // the negative test fail; a binding that refused everything would make this one fail.
     const run = await finishedRun();
     const result = scored(run, attest(baseInput(run)));
     if (result.status !== "scored") throw new Error("unreachable");
-    expect(result.attestationBlockers).toEqual([]);
-    expect(result.decisionEligible).toBe(true);
+    const blockers = result.attestationBlockers.join(" ");
+    expect(blockers).toContain("eligibility withheld");
+    expect(blockers).not.toContain("does not cover this row");
+    expect(result.decisionEligible).toBe(false);
   });
 
   it("R6 1a: attest(bundle A) cannot make bundle B decision-eligible", async () => {
@@ -354,7 +359,9 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     mutable.bundleDigest = bundleDigest(otherBundle);
     const afterMutation = scored(otherRun, attested);
     if (afterMutation.status !== "scored") throw new Error("unreachable");
-    expect(afterMutation.decisionEligible, "a mutated binding was admitted").toBe(false);
+    // Assert the BLOCKER, not just the flag: with the flag off, `decisionEligible` is false
+    // either way, so only the blocker identity proves the binding caught it.
+    expect(afterMutation.attestationBlockers.join(" ")).toContain("does not cover this row");
 
     // (ii) A getter that answers honestly for the gate and dishonestly for the scorer.
     let reads = 0;
@@ -368,7 +375,7 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     const trappedAttestation = attest({ ...baseInput(run), bundle: trapped });
     const afterGetter = scored(otherRun, trappedAttestation);
     if (afterGetter.status !== "scored") throw new Error("unreachable");
-    expect(afterGetter.decisionEligible, "a getter binding was admitted").toBe(false);
+    expect(afterGetter.attestationBlockers.join(" ")).toContain("does not cover this row");
 
     // (iii) A hostile binding must not throw out of the scorer and abort the batch.
     const hostile = new Proxy(

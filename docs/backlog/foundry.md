@@ -271,3 +271,42 @@ Recorded here so the parking survives the session that was told about it.
 | Remaining EF-003 fault classes | TIF-52 | The 30-corrupted-trial run needs guest time |
 
 Unparking is the outer loop's call. Nothing in this table starts on its own.
+
+## TIF-125 round-1 out-of-scope findings (2026-11-22)
+
+Found by the independent verifier at `376749d`. Not fixed in #253 because each is either a
+documented limit or a separate design decision. Recorded here for the outer loop to mirror
+into Linear; agents do not create issues.
+
+### EF-011: `baseline-runner` silently defaults `taskFixtureId`
+
+- **status:** open
+- **owner:** foundry
+- **description:** `runArm` computes the committed fixture hash with
+  `taskFixtureId ?? fixture.fixtureId`. A hidden source that omits `taskFixtureId` therefore
+  produces a hash over the wrong identity, with no error, and the row is silently
+  unattestable rather than loudly broken. The fallback exists for the public source, where
+  the fixture IS the task fixture, so the fix is to make the field required on the hidden
+  path rather than to remove the default.
+- **acceptance:** a hidden source that omits `taskFixtureId` throws a named error instead of
+  hashing the wrong identity; the public source still works; a test covers both.
+
+### EF-012: `hiddenSplitVersion` did not move when the fixture hash schema changed
+
+- **status:** open
+- **owner:** foundry
+- **description:** `taskFixtureId` became part of the fixture identity in #253, so every
+  hidden fixture hash changed, but `hiddenSplitVersion` stayed at `1`. Scores are only
+  comparable within one version, and a reader cannot tell a pre-`taskFixtureId` commitment
+  from a post one by the version alone.
+- **acceptance:** the version is bumped, the commitment is regenerated, and a test asserts
+  that a commitment with the old version is refused.
+
+### EF-013: stale comments in the discovery tests
+
+- **status:** open
+- **owner:** foundry
+- **description:** comments in `test/foundry/discovery.test.ts` still describe the
+  eligibility flag as "withheld (fail-closed)" in places where the flag is now the only
+  thing withholding it. Cosmetic, but a reader is misled about which mechanism is active.
+- **acceptance:** the comments describe the current mechanism.

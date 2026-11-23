@@ -137,11 +137,12 @@ function reconcileAudit(
 /**
  * Whether an attestation may make a row decision-eligible.
  *
- * `true` here because this change IS the binding: the attestation carries the row it covers
- * and the scorer re-derives the digest from the bytes it is about to score. On the narrowed
- * TIF-95 branch it is `false`, so that branch fails closed until this lands.
+ * `false` until an independent verifier PASSES the binding. The binding is present and
+ * tested here, but a gate that has not been independently verified must not admit anything:
+ * the whole point of the workstream is that a self-reported success is not evidence. Flipping
+ * this is a separate, deliberate change made only after a PASS.
  */
-export const ATTESTATION_BINDING_LANDED = true;
+export const ATTESTATION_BINDING_LANDED = false;
 
 /** Read a binding defensively: a Proxy trap must not escape as a throw. */
 function readBinding(value: unknown): AttestedBundle | null {
