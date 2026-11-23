@@ -71,7 +71,24 @@ const PROVIDER_ERROR_TYPES = new Set([
 ]);
 const OLLAMA = "qwen3.8-uncensored";
 const MAX_INPUT = 5_000;
-const MAX_OUTPUT = 256;
+/**
+ * Output ceiling per model call.
+ *
+ * 256 was clipping REAL responses. Measured across arm-003d r2 and arm-002: the
+ * largest non-truncated completion observed is 248 tokens, and 22+ calls in the
+ * committed arm-002 rows (plus trials 0-4 here) landed on exactly 256 - the
+ * ceiling, not the model's answer. When a tool call was cut mid-JSON the planner
+ * returned no parseable decision and the trial scored `planner-no-action` /
+ * `persisted-mismatch`, i.e. a HARNESS fault recorded as an agent failure. That
+ * deflates the baseline and, at two consecutive identical failures, breaks the
+ * abort rule it should have triggered.
+ *
+ * 1024 is ~4x the largest observed completion, so truncation needs a response
+ * four times longer than anything yet seen. The cost is coupled on purpose:
+ * MAX_CALL_MICROS below derives from this, so raising it raises the fail-closed
+ * reservation by the same amount rather than hiding the increase.
+ */
+const MAX_OUTPUT = 1024;
 // Integer microdollars at the frozen short-context input and output rates.
 export const MAX_CALL_MICROS = MAX_INPUT * 2 + MAX_OUTPUT * 10;
 const PROMPT = [
@@ -257,6 +274,16 @@ export function createPlanner(
               if (!allowFallback) throw new PlannerFailure("Anthropic call refused request");
               useSonnet = false;
             }
+            // A response cut off at the ceiling is not an answer, so it must not
+            // become a scored failure. Throwing PlannerFailure makes the sweep
+            // omit the trial (`planner-failed`) rather than record a model miss -
+            // the distinction this whole arm exists to measure. Without this the
+            // truncated call returns partial JSON, the planner finds no decision,
+            // and `planner-no-action` is scored against the agent.
+            if (data.stop_reason === "max_tokens")
+              throw new PlannerFailure(
+                `Anthropic response truncated at max_tokens=${MAX_OUTPUT}; the reply is partial and must not be scored as an agent decision`,
+              );
           } else {
             if (!allowFallback) throw new PlannerFailure("Anthropic messages API call failed");
             useSonnet = false;

@@ -243,6 +243,22 @@ export async function runC1Sweep(options: {
       if (row.verdictReason === "driver-unreachable") {
         stopReason ??= "driver-unreachable";
         noteCause("driver-unreachable");
+      } else {
+        // A SCORED failure also feeds the abort-early rule.
+        //
+        // The rule above is documented as "two consecutive identical exclusion
+        // causes mean the sweep is measuring the harness, not the agent", but it
+        // was only wired to omissions and driver-unreachable. arm-003d r2 trials
+        // 3 and 4 both scored `refuted/persisted-mismatch` with zero steps and a
+        // single truncated model call, so nothing incremented the counter and the
+        // sweep kept buying trials that were measuring the ceiling, not the
+        // agent. A repeated scored failure is the same signal as a repeated
+        // omission; it is only quieter.
+        //
+        // Keyed on the verdict AND reason AND step count: two `refuted` trials
+        // that failed differently are not a repeated cause, and collapsing them
+        // would abort a run that is merely having a hard time.
+        noteCause(`scored:${row.verdict}:${row.verdictReason}:steps=${row.steps}`);
       }
       ledger.c1[index] = { status: "scored", micros, row };
       persist();
