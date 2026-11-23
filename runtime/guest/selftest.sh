@@ -177,9 +177,57 @@ else
   bad "a stale pidfile was not handled cleanly (rc=$rc): $out"
 fi
 
+# ── 10. boot.sh's RAM guard rejects bad values before ANY side effect ──────────
+# TIF-110: `${VAR:-2048}` let a set-but-empty value through, and `0` (QEMU's
+# "default") was accepted. A revert of either turns this red.
+guard_bad=0
+for v in "" 0 00 08 -1 abc 1e3 " 2048"; do
+  G="$(sandbox "$TMP/g10")"   # fresh per value: one leak must not mask the others
+  out="$(MYCO_RT_GUEST_MB="$v" bash "$G/boot.sh" 2>&1)"; rc=$?
+  if [[ $rc -ne 1 || "$out" != *"positive integer MB"* || -f "$G/state/noble-server-cloudimg-arm64.img" ]]; then
+    bad "boot.sh guard let MYCO_RT_GUEST_MB='$v' through (rc=$rc): $out"; guard_bad=1
+  fi
+done
+[[ $guard_bad -eq 0 ]] && ok "boot.sh rejects empty/0/08/-1/non-numeric RAM caps before any side effect"
+
+# ── 11. provision.sh: unknown args refused, --check gates on completeness ──────
+P="$TMP/p11"; rm -rf "$P"; mkdir -p "$P/state" "$P/keys"
+cp "$HERE/provision.sh" "$P/"
+out="$(bash "$P/provision.sh" --chek 2>&1)"; rc=$?
+if [[ $rc -eq 2 && ! -f "$P/keys/id_ed25519" ]]; then ok "provision.sh refuses an unknown argument without provisioning"
+else bad "provision.sh --chek was not refused cleanly (rc=$rc): $out"; fi
+out="$(bash "$P/provision.sh" --check 2>&1)"; rc=$?
+if [[ $rc -eq 1 && "$out" == *MISS* && ! -f "$P/keys/id_ed25519" ]]; then ok "provision.sh --check exits 1 and changes nothing when unprovisioned"
+else bad "provision.sh --check on an empty tree: rc=$rc (want 1): $out"; fi
+touch "$P/keys/id_ed25519" "$P/keys/id_ed25519.pub" "$P/state/noble-server-cloudimg-arm64.img" "$P/state/myco-runtime-v0.qcow2" "$P/state/seed.iso"
+out="$(bash "$P/provision.sh" --check 2>&1)"; rc=$?
+if [[ $rc -eq 0 ]]; then ok "provision.sh --check exits 0 when every asset is present"
+else bad "provision.sh --check on a complete tree: rc=$rc (want 0): $out"; fi
+
+# ── 12. a new SSH key forces a fresh overlay; refused under a live guest ───────
+# cloud-init will not re-apply ssh_authorized_keys to an overlay it already ran in,
+# so re-keying over an old overlay would print "Provisioned" and then refuse SSH.
+R="$TMP/r12"; rm -rf "$R"; mkdir -p "$R/state" "$R/keys"
+cp "$HERE/provision.sh" "$R/"
+for s in fetch-image make-seed; do printf '#!/usr/bin/env bash\nexit 0\n' > "$R/$s.sh"; done
+printf '#!/usr/bin/env bash\necho "$*" >> "$(dirname "$0")/overlay-args.log"\n' > "$R/create-overlay.sh"
+chmod +x "$R"/*.sh
+touch "$R/state/myco-runtime-v0.qcow2"
+out="$(bash "$R/provision.sh" 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$(cat "$R/overlay-args.log" 2>/dev/null)" == "--recreate" ]]; then
+  ok "provision.sh recreates the overlay when it generates a new key"
+else bad "re-key over an existing overlay did not pass --recreate (rc=$rc): $(cat "$R/overlay-args.log" 2>/dev/null) / $out"; fi
+rm -f "$R/keys/id_ed25519" "$R/overlay-args.log"
+sleep 300 & live=$!; echo "$live" > "$R/state/qemu.pid"
+out="$(bash "$R/provision.sh" 2>&1)"; rc=$?
+kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+if [[ $rc -eq 1 && ! -f "$R/overlay-args.log" && "$out" == *Refusing* ]]; then
+  ok "provision.sh refuses to re-key over a running guest's overlay"
+else bad "re-key under a live guest was not refused (rc=$rc): $out"; fi
+
 echo
 if [[ $FAILURES -eq 0 ]]; then
-  echo "guest selftest OK: all 9 scenarios passed, no guest started, no download"
+  echo "guest selftest OK: all 12 scenarios passed, no guest started, no download"
   exit 0
 fi
 echo "guest selftest FAILED: $FAILURES scenario(s)" >&2

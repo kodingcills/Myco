@@ -12,7 +12,7 @@
 # script is idempotent and safe to run in any checkout:
 #
 #   runtime/guest/provision.sh              # provision (downloads ~600 MB on first run)
-#   runtime/guest/provision.sh --check      # report state, change nothing
+#   runtime/guest/provision.sh --check      # report state, change nothing; exit 0 only if complete
 #
 # It does NOT boot. Booting is `boot.sh`; see docs/env/linux-runtime.md.
 # It never downloads an overlay or seed from anywhere but the pinned sources, and it
@@ -27,7 +27,12 @@ BASE="$STATE/noble-server-cloudimg-arm64.img"
 OVERLAY="$STATE/myco-runtime-v0.qcow2"
 SEED="$STATE/seed.iso"
 CHECK=0
-[[ "${1:-}" == "--check" ]] && CHECK=1
+case "${1:-}" in
+  "")      ;;
+  --check) CHECK=1 ;;
+  *) echo "usage: $(basename "$0") [--check]   (no argument = provision)" >&2; exit 2 ;;
+esac
+[[ $# -le 1 ]] || { echo "usage: $(basename "$0") [--check]" >&2; exit 2; }
 
 ok()   { printf '  ok    %s\n' "$1"; }
 miss() { printf '  MISS  %s\n' "$1"; }
@@ -41,11 +46,15 @@ report() {
   [[ -f "$SEED"   ]] && ok "cloud-init seed"           || miss "cloud-init seed"
 }
 
+# --check exits 0 only when every asset is present, so a preflight can gate on it.
+complete() { [[ -f "$KEY" && -f "$PUB" && -f "$BASE" && -f "$OVERLAY" && -f "$SEED" ]]; }
+
 if [[ $CHECK -eq 1 ]]; then
   report
   echo
-  echo "Run without --check to provision."
-  exit 0
+  if complete; then echo "Provisioned."; exit 0; fi
+  echo "Not provisioned. Run without --check to provision."
+  exit 1
 fi
 
 # 1. Tooling. Each is a hard requirement; name the one-line fix rather than failing
@@ -59,10 +68,27 @@ if ! command -v cloud-localds >/dev/null 2>&1 && ! command -v mkisofs >/dev/null
 fi
 
 # 2. Keypair (user-data authorizes the public key, so it must exist before seeding).
+#    Both key files are gitignored, so regenerating them never dirties git.
+REKEYED=0
 if [[ ! -f "$KEY" || ! -f "$PUB" ]]; then
   echo "Generating guest SSH keypair ..."
   rm -f "$KEY" "$PUB"
   ssh-keygen -t ed25519 -N '' -C myco-rt-guest -f "$KEY" -q
+  REKEYED=1
+fi
+
+# A new key cannot reach an overlay where cloud-init already ran: the instance-id is
+# fixed, so ssh_authorized_keys is not re-applied and SSH would be refused. So a
+# re-key discards the (disposable) overlay, but never under a running guest.
+OVERLAY_ARGS=()
+if [[ $REKEYED -eq 1 && -f "$OVERLAY" ]]; then
+  if [[ -f "$STATE/qemu.pid" ]] && kill -0 "$(cat "$STATE/qemu.pid")" 2>/dev/null; then
+    echo "Refusing: new SSH key generated but a guest is running on the old overlay." >&2
+    echo "Stop it (runtime/guest/shutdown.sh), then re-run this script." >&2
+    exit 1
+  fi
+  echo "New key: recreating the overlay so cloud-init authorizes it."
+  OVERLAY_ARGS=(--recreate)
 fi
 
 # 3. Base image (SHA-256 pinned in fetch-image.sh; ~600 MB first time).
@@ -70,7 +96,7 @@ echo "Fetching/verifying the pinned base image ..."
 "$GUEST_DIR/fetch-image.sh"
 
 # 4. Overlay over the pristine base (never writes the base).
-"$GUEST_DIR/create-overlay.sh"
+"$GUEST_DIR/create-overlay.sh" ${OVERLAY_ARGS[@]+"${OVERLAY_ARGS[@]}"}
 
 # 5. Cloud-init seed (regenerates so the current public key is authorized).
 "$GUEST_DIR/make-seed.sh"

@@ -41,8 +41,10 @@ Idle shutdown (RT-013). `runtime/guest/idle-watchdog.sh` powers the guest off af
 has no idle reaper and stays up until `destroy`/`shutdown.sh` (post-merge verifier,
 TIF-110). Wiring it into the seed is a follow-up that needs a VM boot to prove. Default
 when installed is **disabled** (`0`) — a session never vanishes silently; an
-operator enables reaping explicitly with a documented timeout. The policy is in the
-guest, not the host, so a crashed host agent cannot leave a guest running forever.
+operator enables reaping explicitly with a documented timeout. Once installed and
+enabled, the policy runs in the guest rather than the host, so a crashed host agent
+would not leave a guest running. **Today it is neither**: a guest whose host agent
+crashes stays up until someone runs `shutdown.sh` or kills QEMU.
 `runtime/guest/idle-watchdog-test.sh` proves both directions on the host with no VM
 (fires on a stale/absent heartbeat, holds on a fresh one); a mutation that disables the
 decision turns exactly the two "fires" cases red.
@@ -200,9 +202,9 @@ writes rather than rolling them back.
 
 **Not** guaranteed, and not to be claimed: network egress policy, guest→host file
 transfer beyond `read_file`'s grant, per-agent attribution, or multi-tenant
-credentials. Idle reaping is **opt-in and off by default** (see the memory-discipline
-section above): a session left alone stays up until `destroy` unless `MYCO_RT_IDLE_SECS`
-is set. The full list with evidence is in
+credentials. Idle reaping: **not available yet**. The reaper script exists, but the seed
+does not install it (see the memory-discipline section above), so a session left alone
+stays up until `destroy` whatever `MYCO_RT_IDLE_SECS` is set to. The full list with evidence is in
 [docs/research/runtime-safety-isolation.md](../research/runtime-safety-isolation.md).
 
 ### 5. Verifying the path yourself
