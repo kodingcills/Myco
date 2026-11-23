@@ -16,7 +16,7 @@
  */
 
 import type { HeadToHeadArm, HeadToHeadReport } from "./head-to-head.ts";
-import { intake, provenanceFor, type ArmSource } from "./live-report.ts";
+import { type ArmSource, intake, provenanceFor } from "./live-report.ts";
 
 /** The part of an opened run this needs: its name and its parsed `result.json`. */
 export interface OpenedRunLike {

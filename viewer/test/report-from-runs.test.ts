@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
-import { armSourcesFromRuns, type OpenedRunLike, reportFromRuns } from "../src/data/report-from-runs.ts";
+import {
+  armSourcesFromRuns,
+  type OpenedRunLike,
+  reportFromRuns,
+} from "../src/data/report-from-runs.ts";
 
 // The committed run the scorecard links to, read the same way the viewer reads it.
 const trial = JSON.parse(
