@@ -83,7 +83,7 @@ describe("a truncated model reply is a harness fault, not an agent decision", ()
   });
 
   it("asks for enough output that a real answer is not clipped", async () => {
-    // The ceiling itself: 256 was clipping responses of 248+ observed tokens.
+    // The ceiling itself: 256 was clipping responses of 250+ observed tokens.
     // Asserted as a floor with headroom rather than an exact number, so raising
     // it further is allowed and lowering it back to a clipping value is not.
     const { planner, seen } = plannerReturningMessage({
