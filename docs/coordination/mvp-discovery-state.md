@@ -200,6 +200,30 @@ below runs now, offline, in parallel with M1.
 | N5 | **Direction B/C dry-run validation**: all three task packages run offline and emit schema-valid evidence | done 2026-11-22: A `REFUTED` (false success caught), B `UNCERTAIN` (interrupted write, 0 duplicates), C `VERIFIED` (modeled timings, explicitly not evidence) | done |
 | N6 | **Docs**: keep plan/teardown/state current; no science moves without data | — | ongoing |
 | N7 | **S3 resolved with Foundry** (`docs/foundry/answer-discovery-s3-gap.md`, PR #176): a todo screenshot arm is EF-005's, and `not-run` + C1-descriptive is the correct report today. Foundry asked for one wording nit in the C1 note | coordination, no code | done |
+| N8 | **Direction A mock live runner**: exercise the full task → act → verify → report path against a fake transport, so the live run is a config change once the act op lands | no guest; the transport is injected | next |
+| N9 | **Report section for the Cua/HCU arms** once EF-005 produces pairs; the report already has the not-run table | no guest | next |
+| N10 | **Viewer head-to-head view** over the same report input (v0 reads a single run) | no guest | next |
+
+### S0 is not guest-blocked; it is act-blocked (2026-11-22, 18:00 ET)
+
+The VM queue records that Discovery S0/S1 use the disposable ARM64 QEMU+HVF Ubuntu
+guest, not the Windows guest. That is correct, and it means the guest is not the
+blocker. The blocker is the runtime's action union:
+
+- `runtime/crates/myco-rt-core/src/ops.rs` — `Action` is `Launch`, `Click { target }`,
+  `TypeText { target, text }`, `KeyPress { keys }`. `TypeText` **requires** an
+  `ElementRef`; `KeyPress` sends key names, not text.
+- RT-003 measured that Tk registers **zero AT-SPI nodes**, so the dogfood app's entry
+  field has no ref. The app focuses its entry on launch and binds `<Return>` to Add
+  (`dogfood/apps/myco-todo/myco_todo.py:68,90`), so the only missing primitive is
+  **global text into the focused window** (XTEST), plus optionally a coordinate click
+  for the Save button (Tab traversal may cover it).
+- Consequence: S0 cannot type a single item on the current runtime, with or without a
+  guest. Starting the guest now would burn a slot and produce no Direction A run.
+
+Reported to the Runtime Owner with the smallest fix: `TypeTextGlobal { text }` (or an
+optional `target` on `TypeText`) using the same XTEST path as `KeyPress`. S0 starts the
+day that lands; the guest is otherwise ready.
 
 **Next non-VM work, in order:** (a) Foundry's offline item — generalise `runArm` past its
 model-only guard so a todo arm can be scored at all (Foundry owns the harness; Discovery
