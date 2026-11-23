@@ -11,7 +11,7 @@ as() { osascript -e "tell application \"UTM\"" -e "set vm to virtual machine nam
 # UEFI for 4.5 minutes and never reached sshd. A launch now proves the guest
 # answers SSH first. Default 180s: a cold boot from a disk-only snapshot takes
 # 20-30s on an idle host, so 180 is margin, not a hang.
-BOOT_TIMEOUT=${MYCO_BOOT_TIMEOUT:-180}
+BOOT_TIMEOUT=${MYCO_BOOT_TIMEOUT-180}
 boot_ready() {
   if [ "${MYCO_BOOT_SKIP_READINESS:-0}" = "1" ]; then
     echo "vm.sh: WARNING: MYCO_BOOT_SKIP_READINESS=1; not verifying that the guest reached SSH" >&2
@@ -46,7 +46,7 @@ boot_ready() {
 # `vm.sh stop` returned rc 0 while the guest process was still alive 30 seconds
 # later; only `kill` stopped it. Both arms now wait until UTM reports stopped,
 # so "stopped" means measured, not requested. Mirrors shutdown.sh's poll shape.
-STOP_TIMEOUT=${MYCO_STOP_TIMEOUT:-60}
+STOP_TIMEOUT=${MYCO_STOP_TIMEOUT-60}
 stop_ready() {
   case $STOP_TIMEOUT in
     ''|*[!0-9]*)
@@ -90,8 +90,19 @@ case "${1:-}" in
       # flock is not reentrant across processes. reset-trial-vm.sh acquires the
       # lock and then calls `vm.sh start`, so acquiring unconditionally would make
       # the child refuse its own parent (rc 10) and the guest could never boot.
-      # Mirror reset-trial-vm.sh:19-22: if an ancestor already holds it, inherit.
-      if vm_lock_owned_by_parent; then
+      #
+      # vm_lock_owned_by_parent cannot answer this: its `case` whitelist is
+      # m1-sweep/m1-corrupt-suite/c1-baseline/c1-sweep/c1-spike, and it returns 1
+      # for any other driver name — including `reset-trial-vm.sh`, which is
+      # exactly the caller that needs it. Widening that list means editing a
+      # shared script every other workstream sources, so instead assert the
+      # property directly: if MYCO_VM_LOCK_OWNER names the pid recorded in the
+      # lock file, an ancestor owns this lock and we must not re-acquire.
+      recorded=""
+      if [ -n "${MYCO_VM_LOCK_OWNER:-}" ] && [ -r "$VM_LOCK_PATH" ]; then
+        read -r recorded _ < "$VM_LOCK_PATH" || true
+      fi
+      if vm_lock_owned_by_parent || { [ -n "$recorded" ] && [ "$recorded" = "${MYCO_VM_LOCK_OWNER:-}" ]; }; then
         echo "vm.sh: host VM lock already held by the caller; starting under it" >&2
       else
         vm_lock_acquire "vm.sh $1" || exit "$?"
