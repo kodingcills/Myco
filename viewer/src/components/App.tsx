@@ -2,7 +2,7 @@ import { Popover } from "@base-ui/react/popover";
 import { Tabs } from "@base-ui/react/tabs";
 import { PanelLeft, PanelRight } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { parseHeadToHead } from "../data/head-to-head.ts";
+import { parseHeadToHead, resolveSameOriginReportUrl } from "../data/head-to-head.ts";
 import { joinSteps } from "../data/steps.ts";
 import { droppedFiles, selectionName } from "../open-files.ts";
 import { type Mode, useActiveRun, useViewer } from "../store.ts";
@@ -132,15 +132,22 @@ export function App() {
     }
   }, [comparison]);
   useEffect(() => {
-    const url = new URLSearchParams(location.search).get("compare");
-    if (!url) return;
+    const param = new URLSearchParams(location.search).get("compare");
+    if (!param) return;
+    // gui-spec §5: no network at runtime, and not a fetch-anything gadget. A `?compare=`
+    // that leaves this origin is refused by name rather than fetched.
+    const resolved = resolveSameOriginReportUrl(param, location.href);
+    if ("error" in resolved) {
+      setCompareError(resolved.error);
+      return;
+    }
     let cancelled = false;
-    void fetch(url)
+    void fetch(resolved.url)
       .then((response) => response.json())
       .then((value: unknown) => {
         const report = parseHeadToHead(value);
         if (cancelled) return;
-        if (report) useViewer.getState().openComparison(url, report);
+        if (report) useViewer.getState().openComparison(param, report);
         else setCompareError("That file is not a head-to-head report.");
       })
       .catch(() => {
