@@ -4,6 +4,15 @@
 
 ## 0. Session 2026-11-23 10:25 ET — read this first
 
+**#315 IS MERGED** as `301dfe6` (squash) on 2026-11-23 17:14Z; remote branch deleted and
+the three in-scope files are byte-identical on `main` to the verified `53d8a12`.
+**TIF-138's launcher work is done.** Round-2 PASS (`LauncherPRVerifierR2`, 0.90) + 5/5
+green CI on `1211c1d`.
+
+**Next real work: the four compare-view must-fixes (TIF-144…147), one Tier-1 PR** —
+read `docs/design/gui-spec.md` §4.3/§4.5/§4.6/§4.7 first for the sanctioned wording and
+time format. Then TIF-148. See §4 and §7.
+
 Restarted thread. Preflight done; #315 amended (test-only) and pushed. Head `53d8a12`;
 **round-2 verifier `LauncherPRVerifierR2` is running on it**; CI on that head is in
 progress. The 11:29 merge GO was **voided** by the outer loop at 11:37.
