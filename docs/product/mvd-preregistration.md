@@ -336,7 +336,7 @@ LibreOffice Calc (and Writer where noted) and no Windows port of `myco-todo` is 
   window (queue slot 3) includes a `myco-todo` deploy check whose result is S0's readiness
   signal. Dates and readiness come from the Runtime Owner.
 - **S0 app merged candidate:** `dogfood/apps/myco-todo/myco_todo.py` merged in PR #89 (`1f4619a`), SHA-256
-  `cb1086fc208804b487764cab06cbeae61c3884d39b95f57f608326b571ce53b1`
+  `7f10b1e7f2c2b829b5dfb2974d4163867b0b3c92d6a7f7a09f4273ed07864f56`
   (updated by TIF-122, which adds `entry_field`/`save_button` geometry to the
   published record in **screen** coordinates, as `clickAt` requires; the
   previous pins were `3ffccbf3…` and, before that, `c9671a04…`).
