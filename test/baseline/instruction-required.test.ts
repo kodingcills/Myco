@@ -72,10 +72,28 @@ describe("a C1 row must record its instruction or declare the gap", () => {
     // check. This walks every JSON file under docs/research and validates every
     // embedded C1 row it finds, so a future corpus that predates the field fails
     // here until it is annotated.
-    const root = join(process.cwd(), "docs/research");
+    // Scans the WHOLE repo, not just docs/research. The first version scoped
+    // itself to docs/research and that is how the round-1 defect survived a
+    // round: two C1 corpora under viewer/fixtures/real/ are rejected by this
+    // rule and the sweep could not see them. A corpus the rule rejects, with no
+    // check that notices, is the class of bug this test exists for - so the
+    // sweep walks everything and skips only the directories that cannot contain
+    // recorded evidence.
+    const root = process.cwd();
+    const SKIP = new Set([
+      "node_modules",
+      ".git",
+      "dist",
+      "build",
+      "coverage",
+      ".next",
+      "target",
+      "__pycache__",
+    ]);
     const found: Array<{ where: string; row: unknown }> = [];
     const visit = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (SKIP.has(entry.name)) continue;
         const full = join(dir, entry.name);
         if (entry.isDirectory()) {
           visit(full);
@@ -90,7 +108,9 @@ describe("a C1 row must record its instruction or declare the gap", () => {
         }
         const walk = (node: unknown, where: string): void => {
           if (Array.isArray(node)) {
-            node.forEach((v, i) => walk(v, `${where}[${i}]`));
+            node.forEach((v, i) => {
+              walk(v, `${where}[${i}]`);
+            });
             return;
           }
           if (!node || typeof node !== "object") return;
