@@ -25,13 +25,23 @@ export interface OpenedRunLike {
   readonly data: { readonly result?: unknown };
 }
 
-/** One opened run is one `myco-run-dir` source. `content` is the artifact's text. */
+/**
+ * One opened run is one `myco-run-dir` source. `content` is the artifact's text.
+ *
+ * `armId` is the run's `key`, not its folder name: names are not unique — every pack
+ * has a `trial-0` (m1-013, m1-014-corrupted, m1-014-supplement each hold one), and a
+ * bare `result.json` + `trace.jsonl` pair is always named `result.json + trace.jsonl`.
+ * Two such runs would collide as arm ids, so the head-to-head rows (and their React
+ * keys) would be indistinguishable. `key` is the runId, or a UUID before the result
+ * parses, so it is unique per open run. The folder name stays as the human `path` and
+ * becomes the row's label.
+ */
 export function armSourcesFromRuns(runs: readonly OpenedRunLike[]): ArmSource[] {
   const sources: ArmSource[] = [];
   for (const run of runs) {
     if (run.data.result === undefined) continue;
     sources.push({
-      armId: run.name,
+      armId: run.key,
       kind: "myco-run-dir",
       path: run.name,
       content: JSON.stringify(run.data.result),
@@ -58,7 +68,8 @@ export function reportFromRuns(
   const uncertain = verdicts.filter((trial) => trial.verdict === "uncertain").length;
   const pairs: HeadToHeadArm[] = arms.map((arm) => ({
     armId: arm.armId,
-    label: arm.armId,
+    // The row shows the run's folder name; the id is the unique run key.
+    label: arm.source,
     trials: arm.trials.map((trial) => ({
       verdict: trial.verdict,
       falseSuccess: trial.falseSuccess,
@@ -91,9 +102,15 @@ export function reportFromRuns(
         ...(refused.length > 0
           ? [`Refused: ${refused.map((entry) => `${entry.source} (${entry.reason})`).join(", ")}`]
           : []),
-        armsWithKnownClaims < arms.length
-          ? "A run's result.json does not record the agent's claim, so false success cannot be decided from it; those rows read `not recorded`."
-          : "Every arm records its false-success flag.",
+        // Only claim the flags are recorded when there is at least one arm. With no arms
+        // the comparison below is 0 < 0, which would assert it falsely.
+        ...(arms.length === 0
+          ? ["No arm could be read from the open runs, so there is nothing to compare."]
+          : [
+              armsWithKnownClaims < arms.length
+                ? "A run's result.json does not record the agent's claim, so false success cannot be decided from it; those rows read `not recorded`."
+                : "Every arm records its false-success flag.",
+            ]),
       ],
       pairRows: pairRows.map((row) => ({
         seed: row.seed,
