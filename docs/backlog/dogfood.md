@@ -40,7 +40,13 @@ workstream), `agent-under-test` (cheaperinference/glm-5.3), `verifier`
 - **acceptance:** every scenario's required capabilities resolve to a REQ-id; coordinator + runtime owner can read the table without further context.
 
 ### DF-005 (TIF-27) Phase 1: run DF-S01..DF-S05 through the real runtime
-- **status:** ready (unblocked 2026-11-22 by RT-020; queued for VM slot)
+- **status:** blocked (2026-11-23) on the preflight/guest-boot deadlock - see
+  `docs/research/experiments/df-s01-preflight-deadlock/BLOCKER.md`. The runner
+  cannot start from a clean host: `preflight()` (df005-runner.py:1347) hard-fails
+  when `guest-ssh` is unreachable, but the guest only comes up via `create()` ->
+  `boot.sh` (backend-qemu lib.rs:616), which is downstream of that gate. Booting
+  the guest first also fails, because `boot.sh` holds the host flock for the
+  guest's lifetime. **Previously:** ready (unblocked 2026-11-22 by RT-020)
 - **owner:** dogfood-owner (execution), agent-under-test, verifier
 - **blocked_by:** none (RT-first-path complete)
 - **description:** For each scenario: provision a desktop via the runtime, run cheaperinference/glm-5.3 as the agent under test on the scenario task, grade with the scenario's oracle plus cheaperinference/kimi-k3 as independent verifier of the agent's report, emit M1-012 evidence (trace.jsonl, result.json, ledger.jsonl), score per dogfood/scoring.md.
