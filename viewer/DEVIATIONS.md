@@ -137,7 +137,11 @@ surface's input, with no invented numbers:
 - a Foundry C1/C2 arm accounting file becomes the comparator arm, with each row's own
   verdict and false-success flag;
 - Foundry's paired report supplies `pairRows`, so the paired table is the pipeline's
-  own pairing rather than a reconstruction;
+  own pairing rather than a reconstruction — **with one honest limit**: that file
+  prints two verdicts and no agent claim, so a false success on the pair side cannot
+  be decided from it. Those rows carry `claimKnown: false` and the table shows `n/a`
+  rather than "no". Row 0 is `verified` vs `refuted`, i.e. a candidate false success
+  for whichever side claimed success; calling it "no" would be an invention;
 - a source that cannot be read is refused by name, never guessed at.
 
 Provenance is derived from what the artifacts carry. A pair where one side's claim is

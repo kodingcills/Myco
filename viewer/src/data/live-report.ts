@@ -41,6 +41,8 @@ export interface LiveIntake {
     faultClass: string;
     mycoFalseSuccess: boolean;
     comparatorFalseSuccess: boolean;
+    /** False when the artifact does not record the claim that a false success needs. */
+    readonly claimKnown: boolean;
   }[];
   readonly refused: readonly { readonly source: string; readonly reason: string }[];
 }
@@ -105,6 +107,7 @@ export function pairsFromFoundryReport(value: unknown, source: string, faultClas
     faultClass: string;
     mycoFalseSuccess: boolean;
     comparatorFalseSuccess: boolean;
+    readonly claimKnown: boolean;
   }[] = [];
   for (const row of value.rows) {
     if (!isRecord(row)) continue;
@@ -112,15 +115,17 @@ export function pairsFromFoundryReport(value: unknown, source: string, faultClas
     const myco = verdictOf(row.mycoVerdict);
     const comparator = verdictOf(row.verdict);
     if (index === undefined || !myco || !comparator) continue;
-    // A false success needs the arm's own claim; these artifacts do not record it,
-    // so both sides are reported as "not a false success" only when the oracle
-    // agrees with the claim we can see: the oracle verdict is `refuted`/`verified`
-    // and the arm's verdict matches it. Otherwise the row is left as no/unknown.
+    // These artifacts print two verdicts and no agent claim. A false success needs
+    // the claim, so it is reported as false and flagged unknown rather than
+    // inferred: row 0 of the Calc report is `verified` vs `refuted`, which is a
+    // *candidate* false success for whichever side claimed success, and calling it
+    // "no" would be an invention. `claimKnown: false` is what the surface shows.
     pairRows.push({
       seed: index,
       faultClass,
       mycoFalseSuccess: false,
       comparatorFalseSuccess: false,
+      claimKnown: false,
     });
   }
   return pairRows.length > 0 ? { pairRows, source } : undefined;
@@ -159,9 +164,13 @@ export function intake(sources: readonly ArmSource[]): LiveIntake {
  * Provenance for a report built from these arms: `live` only when every arm came
  * from a real artifact, `mixed` when some did not, `unknown` when nothing did.
  */
-export function provenanceFor(arms: readonly LiveArm[]): "live" | "mixed" | "unknown" {
+export function provenanceFor(
+  arms: readonly LiveArm[],
+  pairRows: readonly { readonly claimKnown?: boolean }[] = [],
+): "live" | "mixed" | "unknown" {
   if (arms.length === 0) return "unknown";
-  return arms.every((arm) => arm.trials.every((trial) => trial.falseSuccessKnown))
-    ? "live"
-    : "unknown";
+  const pairClaimsKnown = pairRows.every((row) => row.claimKnown !== false);
+  const armsKnown = arms.every((arm) => arm.trials.every((trial) => trial.falseSuccessKnown));
+  if (armsKnown && pairClaimsKnown) return "live";
+  return pairRows.some((row) => row.claimKnown === false) || !armsKnown ? "unknown" : "mixed";
 }

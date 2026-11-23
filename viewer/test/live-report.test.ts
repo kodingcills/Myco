@@ -17,8 +17,14 @@ const mycoResult = JSON.parse(
     "utf8",
   ),
 );
-const c1Accounting = JSON.parse(readFileSync("/tmp/baseline/c1-arm2/accounting.json", "utf8"));
-const c1Report = JSON.parse(readFileSync("/tmp/baseline/c1-arm2/report.json", "utf8"));
+// Committed copies of the real arm-002 artifacts, so the suite runs from a clean
+// clone. They are byte-copies; nothing is edited on the way in.
+const c1Accounting = JSON.parse(
+  readFileSync(new URL("../fixtures/real/c1-arm2-accounting.json", import.meta.url), "utf8"),
+);
+const c1Report = JSON.parse(
+  readFileSync(new URL("../fixtures/real/c1-arm2-report.json", import.meta.url), "utf8"),
+);
 
 test("reads a real Myco run directory", () => {
   const arm = armFromMycoResult(mycoResult, "myco", "m1-013/normal-711e16c1");
@@ -46,12 +52,17 @@ test("reads the real Foundry paired report without inventing a false success", (
   // false success; the loader must not guess one.
   expect(pairs?.pairRows.every((row) => row.mycoFalseSuccess === false)).toBe(true);
   expect(pairs?.pairRows.every((row) => row.comparatorFalseSuccess === false)).toBe(true);
+  // The artifacts print verdicts but no agent claim, so a false success on the
+  // pair side cannot be decided: the row must say so rather than say "no".
+  expect(pairs?.pairRows.every((row) => row.claimKnown === false)).toBe(true);
 });
 
 test("provenance is derived from what the artifacts carry", () => {
   const myco = armFromMycoResult(mycoResult, "myco", "m1-013");
   const c1 = armFromFoundryAccounting(c1Accounting, "c1", "c1-arm2");
   expect(provenanceFor([])).toBe("unknown");
+  const pairs = pairsFromFoundryReport(c1Report, "c1-arm2/report.json", "calc-record-edit");
+  expect(provenanceFor([c1!], pairs?.pairRows ?? [])).toBe("unknown");
   // The Myco run does not carry the claim, so the pair is not fully live yet.
   expect(provenanceFor([myco!, c1!])).toBe("unknown");
   // An arm whose rows all carry the claim is live.

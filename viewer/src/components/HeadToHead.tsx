@@ -194,8 +194,10 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
                 <tr key={`${row.seed}-${row.faultClass}`}>
                   <td>{row.seed}</td>
                   <td>{row.faultClass}</td>
-                  <td>{row.mycoFalseSuccess ? "yes" : "no"}</td>
-                  <td>{row.comparatorFalseSuccess ? "yes" : "no"}</td>
+                  <td>{row.claimKnown === false ? "n/a" : row.mycoFalseSuccess ? "yes" : "no"}</td>
+                  <td>
+                    {row.claimKnown === false ? "n/a" : row.comparatorFalseSuccess ? "yes" : "no"}
+                  </td>
                 </tr>
               ))}
             </tbody>
