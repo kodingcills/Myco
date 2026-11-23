@@ -428,6 +428,14 @@ it booted, even on failure. A failed rebuild restores the previous agent. So a
 A stale agent (missing ops) is reported at `create` as `stale agent: missing
 ops …`; fix it with `--rebuild-agent`.
 
+**An interrupted build is recovered (TIF-154).** If a build was interrupted after
+the old agent was moved to `state/myco-rt-agent-aarch64.prev`, the next
+`provision.sh` run, in any mode, restores it. A leftover `.prev` next to a newer
+agent is dropped. Both happen only while holding `state/SESSION.lock`, which every
+build takes before moving the agent aside, so recovery never touches a build in
+progress. A plain run that finds the lock held says so and leaves the files
+alone.
+
 ### The introspection channel (TIF-120)
 
 Tk registers no AT-SPI nodes, so the global route clicks the geometry the

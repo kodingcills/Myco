@@ -499,6 +499,55 @@ if [[ "$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null)" == old && ! -e "$A/s
   ok "TERM during a build stops the build: no orphan lands an agent afterwards"
 else bad "orphan build: agent=$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null) lock=$(cat "$A/state/SESSION.lock" 2>/dev/null)"; fi
 
+# ── 21. TIF-154: lock-aware recovery of a saved agent (.prev) ─────────────────
+AG=state/myco-rt-agent-aarch64
+A="$TMP/a21a"; agent_sandbox "$A"; echo old > "$A/$AG.prev"
+out="$(prov "$A" 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -eq 0 && "$(cat "$A/$AG" 2>/dev/null)" == old && ! -e "$A/$AG.prev" && -z "$(order "$A")" && ! -e "$A/state/SESSION.lock" ]]; then
+  ok "a plain run restores an agent left in .prev (under SESSION.lock, released after)"
+else bad "plain-run recovery: rc=$rc agent=$(cat "$A/$AG" 2>/dev/null) / $out"; fi
+
+A="$TMP/a21b"; agent_sandbox "$A"; echo new > "$A/$AG"; echo older > "$A/$AG.prev"
+out="$(prov "$A" 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -eq 0 && "$(cat "$A/$AG")" == new && ! -e "$A/$AG.prev" ]]; then
+  ok "a leftover .prev next to a present agent is dropped, never restored over it (F2)"
+else bad "leftover .prev: rc=$rc agent=$(cat "$A/$AG" 2>/dev/null) prev=$(cat "$A/$AG.prev" 2>/dev/null) / $out"; fi
+
+A="$TMP/a21c"; agent_sandbox "$A"; echo old > "$A/$AG.prev"; sleep 300 & sess=$!; echo "$sess" > "$A/state/SESSION.lock"
+out="$(prov "$A" 2>&1)"; rc=$?
+held="$(cat "$A/state/SESSION.lock" 2>/dev/null)"; kill "$sess" 2>/dev/null; wait "$sess" 2>/dev/null
+if [[ $rc -eq 3 && ! -e "$A/$AG" && "$(cat "$A/$AG.prev")" == old && "$held" == "$sess" && "$out" == *"leaving its saved agent alone"* ]]; then
+  ok "while a live process holds SESSION.lock, a plain run leaves .prev alone"
+else bad "recovery under a held lock: rc=$rc agent=$(cat "$A/$AG" 2>/dev/null) prev=$(cat "$A/$AG.prev" 2>/dev/null) / $out"; fi
+
+A="$TMP/a21d"; agent_sandbox "$A"; echo old > "$A/$AG.prev"
+out="$(prov "$A" --build-agent 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -eq 0 && "$(cat "$A/$AG")" == old && -z "$(order "$A")" && ! -e "$A/state/SESSION.lock" ]]; then
+  ok "--build-agent recovers a saved agent under its locks instead of booting"
+else bad "--build-agent recovery: rc=$rc order=[$(order "$A")] agent=$(cat "$A/$AG" 2>/dev/null) / $out"; fi
+
+# The Tier-1 verifier's F1 race, made deterministic: run 1 is a --rebuild-agent whose
+# build fails slowly; while it holds the locks, run 2 starts. Run 1 must still end by
+# restoring the good agent, whatever run 2 was.
+race() {  # $1 = run-2 flag ("" or --rebuild-agent)
+  local A="$TMP/a21race$2"; agent_sandbox "$A"; echo GOOD-OLD > "$A/$AG"
+  printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo build >> "$d/order.log"; touch "$d/building"; sleep 2; exit 1\n' > "$A/build-agent-in-guest.sh"
+  PATH="$A/bin:$PATH" MYCO_RT_WAIT_INTERVAL=0 MYCO_VM_LOCK_SCRIPT="$VMLOCK_SCRIPT" MYCO_VM_LOCK_PATH="$A/vm.lock" \
+    bash "$A/provision.sh" --rebuild-agent >/dev/null 2>&1 & local r1=$!
+  for _ in $(seq 1 100); do [[ -f "$A/building" ]] && break; sleep 0.05; done
+  R2OUT="$(prov "$A" $1 2>&1)"; R2RC=$?
+  wait "$r1"; R1RC=$?; reap "$A"
+  RACE_AGENT="$(cat "$A/$AG" 2>/dev/null || echo ABSENT)"; RACE_PREV="$(cat "$A/$AG.prev" 2>/dev/null || echo ABSENT)"
+}
+race "" plain
+if [[ $R1RC -ne 0 && "$RACE_AGENT" == GOOD-OLD && "$RACE_PREV" == ABSENT && "$R2OUT" == *"leaving its saved agent alone"* ]]; then
+  ok "F1 race: a plain run during a failing rebuild cannot lose the good agent"
+else bad "F1 race (plain): r1=$R1RC r2=$R2RC agent=$RACE_AGENT prev=$RACE_PREV / $R2OUT"; fi
+race --rebuild-agent rebuild
+if [[ $R1RC -ne 0 && $R2RC -eq 10 && "$RACE_AGENT" == GOOD-OLD && "$RACE_PREV" == ABSENT ]]; then
+  ok "F1 race: a refused --rebuild-agent during a failing rebuild changes nothing"
+else bad "F1 race (rebuild): r1=$R1RC r2=$R2RC agent=$RACE_AGENT prev=$RACE_PREV / $R2OUT"; fi
+
 echo
 if [[ $FAILURES -eq 0 ]]; then
   echo "guest selftest OK: all scenarios passed, no guest started, no download"
