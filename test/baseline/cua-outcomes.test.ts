@@ -121,6 +121,25 @@ describe("Cua action outcomes", () => {
     expect(result.escalated).toBe(true);
   });
 
+  it("never reports save-failed from the transport layer", async () => {
+    // Whether a save took effect is a document state, judged separately
+    // (c1-judge.ts). Cua only answers "did I deliver this input". So no transport
+    // response, however it is shaped, may produce save-failed - doing so would
+    // report a delivery as a document outcome, which is the conflation TIF-167
+    // exists to undo.
+    const shapes = [
+      { isError: false, structuredContent: {} },
+      { isError: true, structuredContent: { effect: "refused" } },
+      BACKGROUND_UNAVAILABLE,
+      DELIVERY_STALLED,
+      { isError: false, structuredContent: { effect: "applied", verified: false } },
+    ];
+    for (const shape of shapes) {
+      const { result } = await executeOnce([shape]);
+      expect(result.outcome).not.toBe("save-failed");
+    }
+  });
+
   it("keeps verified alongside the outcome rather than in place of it", async () => {
     const { result } = await executeOnce([DELIVERED]);
     expect(result.verified).toBe(true);
