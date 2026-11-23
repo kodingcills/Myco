@@ -7,7 +7,6 @@ import { independentC1Judge } from "../src/baseline/c1-judge.ts";
 import type { PreparedC1, RESET_SNAPSHOT } from "../src/baseline/c1-trial.ts";
 import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
 import { createPlanner } from "../src/baseline/planner.ts";
-import { parseSpendCeiling } from "./spend-ceiling.ts";
 import { runC1Sweep } from "../src/baseline/sweep.ts";
 import manifest from "../src/baseline/sweep-v3.json" with { type: "json" };
 import { cleanupTrialGuest } from "../src/integration/guest-health.ts";
@@ -16,6 +15,7 @@ import { generateFixture } from "../src/tasks/fixture.ts";
 import { groundTruth } from "../src/tasks/intent.ts";
 import { AgentClient, SshTunnel } from "../src/win/agent-client.ts";
 import { persistedDiagnostic, probeC1Driver } from "./c1-driver-preflight.ts";
+import { parseSpendCeiling } from "./spend-ceiling.ts";
 
 async function main() {
   if (!process.argv.includes("--coordinator-go")) throw new Error("Coordinator GO required");
