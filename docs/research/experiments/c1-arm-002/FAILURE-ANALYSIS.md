@@ -65,6 +65,33 @@ difference between the two arms**, and it belongs in the comparison write-up: if
 Myco's arm is told to save and the baseline's task line is not, the arms are not
 measuring the same thing.
 
+## The coordinate-space hypothesis is now RULED OUT (TIF-97)
+
+The open question was whether the click coordinates are in a different space
+than the screenshot - i.e. a scaling bug rather than a strategy choice. Checked,
+and it is not:
+
+| layer | value | consequence |
+|---|---|---|
+| guest screen | **1024x768** | under Anthropic's 1568px long-edge limit, so the API does not downscale |
+| harness resize | **none** - the screenshot is sent as-is (`planner.ts:193`) | no local scaling |
+| grounding geometry sent to the model | **none** | the model is told "Coordinates are screenshot pixels" (`planner.ts:81`) but never told the image's dimensions |
+
+Since nothing in the path rescales, the coordinates the planner emits are already
+in screenshot pixels, and (75,146) really is the Name Box at that resolution.
+
+That matters because it changes the fix. A scaling bug would be repaired in the
+harness; this cannot be, because the planner is consistently choosing the Name
+Box and typing a reference into it. Two follow-ons worth naming:
+
+- The model is never told the image dimensions, so it must infer scale from the
+  image. At 1024x768 that is inferable, but a larger guest resolution would make
+  the same strategy fail differently - worth telling the planner the dimensions
+  rather than relying on inference.
+- No grounding width/height is recorded per row, so this mapping cannot be
+  re-checked from the rows alone; the screen size above had to be read from the
+  live guest. Recording it per row is the cheap fix that makes TIF-97 auditable.
+
 ## What this does NOT say
 
 - It does not say the model cannot find a cell. It says it navigated by Name Box
