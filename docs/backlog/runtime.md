@@ -189,7 +189,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   Phase-1 go signal for Dogfood); measured create/reset/destroy costs recorded.
 
 ### RT-015 (TIF-43) Extended op: host-side guest file read (Dogfood REQ-08)
-- **status:** implemented, in review (PR #112). MCP `read_file` tool, opt-in via
+- **status:** done — merged as PR #112 (2026-11-22). MCP `read_file` tool, opt-in via
   `create.read_root`; kernel-enforced confinement (`openat2` + RESOLVE_BENEATH |
   NO_SYMLINKS | NO_XDEV); 1 MiB cap; root `/` refused. **Path-grant enforcement is
   proven on Linux only** (`#[cfg(target_os = "linux")]`), so it is unverified on
@@ -203,7 +203,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   bytes match; permission denied for paths outside the session's grant (test).
 
 ### RT-016 (TIF-44) Extended op: process control (Dogfood REQ-09)
-- **status:** pending
+- **status:** done (2026-11-23; `GuestProcessControl` extension + `launch_process`/`kill_process`/`relaunch_process` MCP tools). `act:launch` returns no handle, so `launch_process` was required for kill/relaunch to name anything — that is why three tools, not two. Kill/relaunch bump the state version (refs invalidate, like a delivered action). Tests: `mock_e2e` round trip + refusal paths, `myco-rt-mcp` arg/schema contracts; mutations (drop the guard, drop the version bump) turn them red. `cargo test --workspace` 107/0. Live kill/relaunch against a guest not yet run (no VM slot); the guest agent's `kill_process`/`relaunch_process` ops existed and are unit-tested in `myco-rt-transport`.
 - **owner:** build
 - **blocked_by:** RT-first-path
 - **description:** Kill (SIGKILL) and relaunch a named guest process with exit

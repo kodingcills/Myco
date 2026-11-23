@@ -563,6 +563,36 @@ impl myco_rt_core::ops::GuestFileRead for QemuLinuxBackend {
     }
 }
 
+impl myco_rt_core::ops::GuestProcessControl for QemuLinuxBackend {
+    type ProcErr = BackendError;
+
+    fn launch_guest_process(
+        &mut self,
+        command: &str,
+        args: &[String],
+    ) -> Result<String, BackendError> {
+        QemuLinuxBackend::launch_guest_process(self, command, args)
+    }
+
+    fn kill_guest_process(
+        &mut self,
+        handle: &str,
+    ) -> Result<myco_rt_core::ops::ProcessExit, BackendError> {
+        // Fully-qualified for the same reason as `read_guest_file` above: the
+        // inherent method has the same name, and a plain call would recurse if the
+        // inherent one were ever removed.
+        let exit = QemuLinuxBackend::kill_guest_process(self, handle)?;
+        Ok(myco_rt_core::ops::ProcessExit {
+            code: exit.code,
+            signal: exit.signal,
+        })
+    }
+
+    fn relaunch_guest_process(&mut self, handle: &str) -> Result<String, BackendError> {
+        QemuLinuxBackend::relaunch_guest_process(self, handle)
+    }
+}
+
 impl Backend for QemuLinuxBackend {
     type Err = BackendError;
 

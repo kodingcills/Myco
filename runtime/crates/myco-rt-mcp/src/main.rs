@@ -238,6 +238,31 @@ fn tool_defs() -> Vec<Value> {
             }}
         }),
         json!({
+            "name": "launch_process",
+            "description": "Launch a managed guest process and return a handle for kill_process/relaunch_process (RT-016). Unlike act:launch -- which starts a process but returns no handle -- this registers the process so it can be killed and relaunched by handle.",
+            "inputSchema": {"type":"object","required":["session_id","command"],"properties":{
+                "session_id": {"type":"string"},
+                "command": {"type":"string","description":"Executable to run in the guest"},
+                "args": {"type":"array","items":{"type":"string"},"description":"Arguments"}
+            }}
+        }),
+        json!({
+            "name": "kill_process",
+            "description": "SIGKILL a managed guest process by the handle returned from launch_process (RT-016). Returns how it died (code or signal). Invalidates outstanding refs: re-observe before acting again.",
+            "inputSchema": {"type":"object","required":["session_id","handle"],"properties":{
+                "session_id": {"type":"string"},
+                "handle": {"type":"string","description":"Handle returned by launch_process"}
+            }}
+        }),
+        json!({
+            "name": "relaunch_process",
+            "description": "Relaunch a process that was killed by kill_process (RT-016), returning a new handle. Invalidates outstanding refs: re-observe before acting again.",
+            "inputSchema": {"type":"object","required":["session_id","handle"],"properties":{
+                "session_id": {"type":"string"},
+                "handle": {"type":"string","description":"Handle previously passed to kill_process"}
+            }}
+        }),
+        json!({
             "name": "reset",
             "description": "Return the session's desktop to a clean base.",
             "inputSchema": {"type":"object","required":["session_id"],"properties":{"session_id":{"type":"string"}}}
@@ -260,6 +285,9 @@ impl Server {
             "act" => self.act(&args),
             "evidence" => self.evidence(&args),
             "read_file" => self.read_file(&args),
+            "launch_process" => self.launch_process(&args),
+            "kill_process" => self.kill_process(&args),
+            "relaunch_process" => self.relaunch_process(&args),
             "reset" => self.reset(&args),
             "destroy" => self.destroy(&args),
             other => Err((-32602, format!("unknown tool {other}"))),
@@ -459,6 +487,58 @@ impl Server {
         }))
     }
 
+    /// RT-016: launch a managed process and return its handle.
+    ///
+    /// Distinct from `act:launch`, which starts a process for a delivery check but
+    /// returns no handle; a handle is what makes the process killable and
+    /// relaunchable, so this is the entry point for the recovery ops.
+    fn launch_process(&mut self, args: &Value) -> Result<Value, (i64, String)> {
+        let command = args["command"]
+            .as_str()
+            .ok_or((-32602, "missing command".to_string()))?;
+        let argv: Vec<String> = args["args"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let s = self.session(args)?;
+        let handle = s
+            .launch_guest_process(command, &argv)
+            .map_err(|e| (-32000, e.to_string()))?;
+        Ok(json!({"ok": true, "handle": handle}))
+    }
+
+    /// RT-016: SIGKILL a managed guest process by its launch handle.
+    ///
+    /// The handle is the one `launch_process` returned; a session without a launched
+    /// process, or a stale handle, is a tool error from the backend, never a panic.
+    fn kill_process(&mut self, args: &Value) -> Result<Value, (i64, String)> {
+        let handle = args["handle"]
+            .as_str()
+            .ok_or((-32602, "missing handle".to_string()))?;
+        let s = self.session(args)?;
+        let exit = s
+            .kill_guest_process(handle)
+            .map_err(|e| (-32000, e.to_string()))?;
+        Ok(json!({
+            "ok": true,
+            "handle": handle,
+            "code": exit.code,
+            "signal": exit.signal,
+        }))
+    }
+
+    /// RT-016: relaunch a killed process, returning a new handle.
+    fn relaunch_process(&mut self, args: &Value) -> Result<Value, (i64, String)> {
+        let handle = args["handle"]
+            .as_str()
+            .ok_or((-32602, "missing handle".to_string()))?;
+        let s = self.session(args)?;
+        let new_handle = s
+            .relaunch_guest_process(handle)
+            .map_err(|e| (-32000, e.to_string()))?;
+        Ok(json!({"ok": true, "handle": new_handle}))
+    }
+
     fn reset(&mut self, args: &Value) -> Result<Value, (i64, String)> {
         let s = self.session(args)?;
         s.reset().map_err(|e| (-32000, e.to_string()))?;
@@ -585,11 +665,15 @@ mod tests {
             .filter_map(|t| t["name"].as_str())
             .collect();
         names.sort_unstable();
-        // The six-op core, plus RT-015's opt-in read_file extension. Any other
-        // addition must be a deliberate decision recorded here, not drift.
+        // The six-op core, plus the extension ops: RT-015's opt-in read_file and
+        // RT-016's kill_process/relaunch_process. Any other addition must be a
+        // deliberate decision recorded here, not drift.
         assert_eq!(
             names,
-            vec!["act", "create", "destroy", "evidence", "observe", "read_file", "reset"]
+            vec![
+                "act", "create", "destroy", "evidence", "kill_process",
+                "launch_process", "observe", "read_file", "relaunch_process", "reset"
+            ]
         );
     }
 
@@ -681,6 +765,74 @@ mod destroyed_evidence_tests {
             }
             other => panic!("expected IllegalTransition, got {other:?}"),
         }
+    }
+}
+
+/// RT-016: the process-control tools are declared and give clear errors.
+///
+/// These do not boot a VM: they reach the handler through `tools/call` with no
+/// session, which is where the argument validation and the unknown-session path
+/// are observable. The kill/relaunch round trip itself is proven in `myco-rt-core`'s
+/// `mock_e2e` against a fake backend, which is the layer that owns the phase logic.
+#[cfg(test)]
+mod process_tool_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+    }
+
+    fn call(s: &mut Server, body: &str) -> Value {
+        serde_json::from_str(&handle_line(s, body).expect("reply")).unwrap()
+    }
+
+    fn def(name: &str) -> Value {
+        tool_defs()
+            .into_iter()
+            .find(|d| d["name"] == name)
+            .unwrap_or_else(|| panic!("no tool named {name:?}"))
+    }
+
+    fn arg_is_required(tool: &str, arg: &str) {
+        let d = def(tool);
+        let req = d["inputSchema"]["required"].as_array().cloned().unwrap_or_default();
+        assert!(
+            req.iter().any(|v: &Value| v.as_str() == Some(arg)),
+            "{tool}.{arg} must be required"
+        );
+    }
+
+    #[test]
+    fn process_tools_require_their_arguments() {
+        arg_is_required("launch_process", "session_id");
+        arg_is_required("launch_process", "command");
+        arg_is_required("kill_process", "session_id");
+        arg_is_required("kill_process", "handle");
+        arg_is_required("relaunch_process", "session_id");
+        arg_is_required("relaunch_process", "handle");
+    }
+
+    #[test]
+    fn kill_without_a_handle_is_refused_before_session_lookup() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kill_process","arguments":{"session_id":"x"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("missing handle"));
+    }
+
+    #[test]
+    fn launch_on_an_unknown_session_is_a_tool_error() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"launch_process","arguments":{"session_id":"nope","command":"/bin/sleep"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown session"));
     }
 }
 
@@ -1048,6 +1200,13 @@ mod schema_contract_tests {
         ("evidence", "session_id", true),
         ("read_file", "session_id", true),
         ("read_file", "path", true),
+        ("launch_process", "session_id", true),
+        ("launch_process", "command", true),
+        ("launch_process", "args", false),
+        ("kill_process", "session_id", true),
+        ("kill_process", "handle", true),
+        ("relaunch_process", "session_id", true),
+        ("relaunch_process", "handle", true),
         ("reset", "session_id", true),
         ("destroy", "session_id", true),
     ];
