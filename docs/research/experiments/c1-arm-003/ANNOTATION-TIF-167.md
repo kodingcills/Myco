@@ -1,0 +1,58 @@
+# arm-003c annotation (TIF-167, 2026-11-23)
+
+**This file annotates an existing record without editing it.** `c1-arm-003-run-plan.md`
+and the surviving arm-003c notes are unchanged: recorded evidence does not get
+rewritten because a later finding changes how it should be read. The correction
+lives here, next to the record.
+
+## What the record says, and what it means
+
+arm-003c's surviving note reports that its save attempt returned
+`cua-action-refused`.
+
+**That was a ROUTING refusal, not a model failure.** The distinction was invisible
+at the time because `C1.execute` returned a single `refused` boolean built from
+`result.isError === true || effect === "refused"`, which collapsed the delivery
+layer declining an input with the model failing at the task.
+
+The probe run on a live guest on 2026-11-23 settled which it was:
+
+- **Background `key_combo` on a LibreOffice `SALFRAME` window is refused by Cua's
+  delivery layer** with `code=background_unavailable`, before the application is
+  reached at all.
+- **It is not about the key.** `Ctrl+F12`, which has no save meaning anywhere, is
+  refused identically (same `code`, `effect`, `event_kind`, `target_class`).
+- **Foreground delivery is accepted** and the key genuinely arrives — after the
+  retry a Save As dialog appeared.
+
+Evidence: `docs/research/experiments/c1-press-key-probe/RESULT.md`.
+
+## Consequences
+
+**The save never failed, because it was never attempted.** No `press_key` could
+have been delivered in background mode, which also explains why arm-002 recorded
+zero `press_key` calls across 422 actions — that was never a planner that forgot
+to save.
+
+**A reader must not carry away "C1 failed to save" from arm-003c.** The refusal
+was infrastructure answering, and the same refusal would have hit every
+`press_key` the planner ever sent.
+
+**Nothing is re-scored.** The two rows arm-003c produced were lost with `/tmp`, and
+the run is already classified as an infrastructure abort. There is no score to
+correct; the point is only that the remaining artifact not be misread.
+
+**arm-002 is unaffected.** Its rows are `refuted/modified` on their own terms, and
+no `press_key` is among them.
+
+## The run condition this sets for arm-003d
+
+`key_combo` actions are attempted in background mode first and escalate **once** to
+`delivery_mode: "foreground"` when Cua answers with a background refusal. Every
+action's delivery mode is recorded in the transcript (`Transcript.deliveries`), and
+arm-003d declares escalation as a run condition rather than hiding it — a row
+produced with foreground delivery is not the same measurement as one produced
+entirely in background.
+
+Only a genuine save failure counts against the model; a routing refusal, a
+delivered action, and a stalled confirmation do not.

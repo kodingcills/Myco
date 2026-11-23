@@ -7,7 +7,6 @@ export type Claim = "done" | "failure";
 const DELIVERY_OUTCOMES: Record<string, true> = {
   "routing-refused": true,
   delivered: true,
-  "delivered-dismissed": true,
   "delivered-stalled": true,
   "save-failed": true,
 };
@@ -32,7 +31,6 @@ export interface ActionDelivery {
   outcome:
     | "routing-refused"
     | "delivered"
-    | "delivered-dismissed"
     | "delivered-stalled"
     | "save-failed";
 }
@@ -40,9 +38,13 @@ export interface Transcript {
   actions: Action[];
   claims: Claim[];
   /**
-   * Delivery mode per action (TIF-167). Optional because rows recorded before
-   * the field existed are still valid evidence; `deliveriesUnrecorded` on the
-   * row marks that case explicitly.
+   * Delivery mode per action (TIF-167): which mode carried each action, and what
+   * became of it.
+   *
+   * Optional because rows recorded before the field existed are still valid
+   * evidence, and they must not be edited to satisfy a later rule. New
+   * transcripts always carry it - `runC1Trial` initialises it - and the type
+   * makes that a compile-time requirement for anyone building one.
    */
   deliveries?: ActionDelivery[];
 }
@@ -213,18 +215,6 @@ export interface BaselineRow {
    * alternative and it would have silently invalidated all 29.
    */
   instructionUnrecorded?: true;
-  /**
-   * Set when the record predates delivery-mode recording (TIF-167), so a row
-   * without `deliveries` is a known gap rather than a silent omission.
-   *
-   * Same rule as `instructionUnrecorded`, and for the same reason: arm-002's 29
-   * recorded rows and every existing fixture predate the field, and requiring it
-   * unconditionally would invalidate evidence that was correctly gathered. A NEW
-   * row must carry `deliveries` or this marker. The field is what makes arm-003d's
-   * declared run condition decidable from the row rather than from memory - a row
-   * that silently omits it makes escalation unauditable.
-   */
-  deliveriesUnrecorded?: true;
   /** Narrowed to match Myco's `CalcRecordEditParams`: a numeric value here would
    *  render `to 9733,` while Myco's identical intent renders `to "9733",`, which is
    *  an input-shape divergence in a task-text comparison (TIF-104). */
@@ -363,21 +353,31 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     t.claims.every((c: unknown) => c === "done" || c === "failure") &&
     Array.isArray(t.actions) &&
     t.actions.every((a: unknown) => object(a) && str(a.tool) && "arguments" in a) &&
-    // TIF-167: a C1 row must record delivery modes, or say why it does not.
-    // Without this the arm-003d run condition is written but unenforced, and a
-    // writer that dropped the field would ship an unauditable row silently.
-    // The marker lives on the ROW, like `instructionUnrecorded`, not on the
-    // transcript - rows recorded before the field existed are still evidence and
-    // must stay valid.
-    (Array.isArray(t.deliveries)
-      ? t.deliveries.every(
+    // TIF-167: delivery modes, WHEN RECORDED, must be well formed.
+    //
+    // Deliberately permissive about absence. An earlier version required the
+    // field on every C1 row and used an `instructionUnrecorded`-style marker to
+    // excuse the rows that predate it - which meant editing 34 committed trial
+    // rows. That is not this change's call: TIF-104's marker covered adding a new
+    // field to rows being written at the time, not retrofitting a validator onto
+    // recorded evidence. The rows are the artifact; they do not change because a
+    // later rule would prefer them to.
+    //
+    // So absence is accepted and malformation is not. That still catches the thing
+    // worth catching - a writer emitting a delivery record nobody can interpret -
+    // while leaving every recorded row byte-identical. The writer guarantee that
+    // NEW rows carry the field lives where the writer is (c1-trial.ts initialises
+    // `deliveries: []`), and the compile-time `Transcript` type enforces it for
+    // anyone constructing a transcript in TypeScript.
+    (t.deliveries === undefined ||
+      (Array.isArray(t.deliveries) &&
+        t.deliveries.every(
           (v: unknown) =>
             object(v) &&
             count(v.step) &&
             (v.mode === "background" || v.mode === "foreground") &&
             typeof v.escalated === "boolean" &&
             DELIVERY_OUTCOMES[v.outcome as string] === true,
-        )
-      : x.deliveriesUnrecorded === true)
+        )))
   );
 }

@@ -414,12 +414,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "1": {
@@ -522,8 +517,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "2": {
@@ -926,8 +920,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "3": {
@@ -992,8 +985,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "4": {
@@ -1384,8 +1376,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "5": {
@@ -1463,8 +1454,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "6": {
@@ -1555,8 +1545,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "7": {
@@ -1972,12 +1961,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "8": {
@@ -2200,8 +2184,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "9": {
@@ -2442,8 +2425,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "11": {
@@ -2594,8 +2576,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "12": {
@@ -2734,8 +2715,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "13": {
@@ -2814,8 +2794,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "14": {
@@ -3231,12 +3210,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "15": {
@@ -3338,8 +3312,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "16": {
@@ -3538,8 +3511,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "17": {
@@ -3846,8 +3818,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "18": {
@@ -4263,12 +4234,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "19": {
@@ -4684,12 +4650,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "20": {
@@ -5104,8 +5065,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "21": {
@@ -5208,8 +5168,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "22": {
@@ -5529,8 +5488,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "23": {
@@ -5621,8 +5579,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "24": {
@@ -6038,12 +5995,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "25": {
@@ -6158,8 +6110,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "26": {
@@ -6349,8 +6300,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "27": {
@@ -6501,8 +6451,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     },
     "28": {
@@ -6919,12 +6868,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "29": {
@@ -6989,8 +6933,7 @@
           "step-budget-asymmetry",
           "planner-no-action",
           "planner:claude-sonnet-5-5"
-        ],
-        "deliveriesUnrecorded": true
+        ]
       }
     }
   },
