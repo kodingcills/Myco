@@ -1023,3 +1023,147 @@ mod schema_contract_tests {
         }
     }
 }
+
+/// The MCP `act` boundary (RT-008 / Discovery S0).
+///
+/// `act` is the surface an agent actually calls, and it does two things before the
+/// session sees an action: it rewrites an agent-supplied `target` STRING into the
+/// `{payload, issued_at}` shape `ElementRef` needs, and it deserializes the rest.
+/// Neither was tested, so two failure modes were invisible:
+///
+///   1. an unknown or misspelled `kind` is rejected with a message the agent can act
+///      on -- not a panic and not a silent no-op;
+///   2. the target-rewriting branch is gated on `kind` being exactly `click` or
+///      `typeText`. A future ref-carrying kind added without updating that list
+///      would silently skip the rewrite, leave `target` a bare string, and fail to
+///      deserialize -- the same drift class RT-022 exposed on the backend wire.
+#[cfg(test)]
+mod act_boundary_tests {
+    use super::*;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+    }
+
+    /// Returns `(is_error, message)`. MCP convention: an EXECUTION failure is a
+    /// result with `isError: true`, not a JSON-RPC error -- so `call_tool` gives
+    /// `Ok` for these and the text carries the reason.
+    fn act(s: &mut Server, action: serde_json::Value) -> (bool, String) {
+        let r = s
+            .call_tool(&serde_json::json!({
+                "name": "act",
+                "arguments": {"session_id": "s1", "action": action},
+            }))
+            .expect("a tool failure is an isError result, not a protocol error");
+        let is_err = r["isError"].as_bool().unwrap_or(false);
+        let text = r["content"][0]["text"].as_str().unwrap_or("").to_string();
+        (is_err, text)
+    }
+
+    /// The S0 primitive must survive the MCP boundary. It carries no target, so the
+    /// rewrite branch n/a's it -- but it still has to deserialize.
+    #[test]
+    fn type_text_global_passes_the_boundary() {
+        let mut s = srv();
+        let (is_err, msg) =
+            act(&mut s, serde_json::json!({"kind": "typeTextGlobal", "text": "buy milk"}));
+        // No session exists, so this must fail on the SESSION lookup -- not on the
+        // action shape. A shape rejection would mean the primitive is unreachable
+        // through the surface Discovery actually calls.
+        assert!(
+            is_err && msg.contains("unknown session"),
+            "typeTextGlobal must parse at the MCP boundary and fail only later on the \
+             missing session; got is_err={is_err} msg={msg}"
+        );
+        assert!(
+            !msg.contains("malformed action"),
+            "the action itself must be well-formed: {msg}"
+        );
+    }
+
+    #[test]
+    fn click_at_passes_the_boundary() {
+        let mut s = srv();
+        let (is_err, msg) = act(&mut s, serde_json::json!({"kind": "clickAt", "x": 10, "y": 20}));
+        assert!(
+            is_err && msg.contains("unknown session") && !msg.contains("malformed action"),
+            "clickAt must parse at the boundary; got is_err={is_err} msg={msg}"
+        );
+    }
+
+    /// An unknown kind is a clean tool error naming the problem, so an agent can
+    /// correct itself rather than retrying blindly.
+    #[test]
+    fn an_unknown_kind_is_a_clear_tool_error() {
+        let mut s = srv();
+        let (is_err, msg) = act(&mut s, serde_json::json!({"kind": "teleport", "x": 1}));
+        assert!(is_err, "an unknown kind must be refused");
+        assert!(msg.contains("malformed action"), "the error must say what failed: {msg}");
+        assert!(msg.contains("teleport"), "and name the offending kind: {msg}");
+    }
+
+    /// A ref-carrying kind with NO target is refused rather than silently accepted.
+    #[test]
+    fn a_targeted_kind_without_a_target_is_refused() {
+        let mut s = srv();
+        let (is_err, msg) = act(&mut s, serde_json::json!({"kind": "click"}));
+        assert!(is_err, "a click with no target must be refused; got {msg}");
+        assert!(
+            msg.contains("malformed action"),
+            "and the refusal must name the shape problem: {msg}"
+        );
+    }
+
+    /// Every ref-carrying kind must get its target REWRITTEN, not passed through.
+    ///
+    /// This asserts on the handler's real behaviour rather than on a copied list.
+    /// A previous version compared two hardcoded arrays, which proved nothing: it
+    /// stayed green when the handler's `matches!` was narrowed, because it never
+    /// read that line.
+    ///
+    /// The mechanism: give the handler a session whose state version is known, send
+    /// a ref-carrying action whose `target` is a bare string, and require the
+    /// failure to be something OTHER than "malformed action". If the rewrite were
+    /// skipped, deserialization of `ElementRef` from a string would fail and the
+    /// message would say "malformed action" -- so that string is the signal.
+    #[test]
+    fn every_ref_carrying_kind_gets_its_target_rewritten() {
+        // A session must exist for the version lookup; without one the handler
+        // reports "unknown session" before it ever rewrites, which would make this
+        // test pass for the wrong reason.
+        for kind in ["click", "typeText"] {
+            let mut s = Server {
+                sessions: HashMap::new(),
+                workspace: Ok(PathBuf::from(".")),
+                next_id: 1,
+                progress: None,
+            };
+            // Register a fake session so the rewrite path is reachable.
+            let mut cfg = QemuConfig::for_repo(std::path::Path::new("."), "t");
+            cfg.session_id = "s1".into();
+            let session = Session::new_creating(
+                SessionConfig {
+                    session_id: "s1".into(),
+                    permissions: myco_rt_core::Permissions::default(),
+                    idle_timeout: None,
+                },
+                QemuLinuxBackend::new(cfg),
+            );
+            s.sessions.insert("s1".into(), session);
+
+            let mut args = serde_json::json!({"kind": kind, "target": "ref-payload"});
+            if kind == "typeText" {
+                args["text"] = serde_json::json!("t");
+            }
+            let r = s.call_tool(&serde_json::json!({
+                "name": "act",
+                "arguments": {"session_id": "s1", "action": args},
+            })).expect("isError result");
+            let msg = r["content"][0]["text"].as_str().unwrap_or("").to_string();
+            assert!(
+                !msg.contains("malformed action"),
+                "{kind}: a bare-string target must be REWRITTEN into                  {{payload, issued_at}}, not fail deserialization -- the rewrite list                  is missing this kind. Got: {msg}"
+            );
+        }
+    }
+}
