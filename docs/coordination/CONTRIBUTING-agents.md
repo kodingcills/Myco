@@ -251,6 +251,58 @@ Rules:
 - **Never silence with `!` or `as`** when the real question is whether the value can be absent. A cast moves the failure to runtime, where it is more expensive.
 - **A file newly added to typecheck is a discovery event, not a regression.** Expect it to surface latent type lies; triage each one rather than making the errors go away.
 
+## Debug with the goal in sight (Tiffany-approved, 2026-11-22 22:19 ET)
+
+Endless loops are how a session burns a day and delivers nothing. The rules below
+are cheap at the start and non-negotiable at the limit.
+
+### 1. Before fixing, write two lines
+
+```
+GOAL:        what this PR or issue exists to prove or deliver
+HYPOTHESIS:  the suspected root cause, and the evidence for it
+```
+
+Not a plan — two lines, in the PR body, the issue, or the commit. If you cannot
+write the hypothesis with evidence, you are not ready to fix; go get evidence.
+
+### 2. Reproduce first, smallest possible
+
+A failing test, or one command whose wrong output is the bug. **Fix the cause, not
+the symptom.** A change that makes the symptom disappear without explaining the
+hypothesis is a patch, and patches compound.
+
+### 3. After 2 failed attempts on the same symptom — stop patching
+
+Re-read the evidence. **List what you have ruled out.** Form a *new* hypothesis.
+Attempt three is a different hypothesis, not a third variation of the first.
+
+### 4. After 3 — stop entirely
+
+Report: the goal, what is known, what was tried, and the best remaining
+hypothesis. Then **escalate or split**. Do not keep looping.
+
+### 5. No drift
+
+An unrelated bug found along the way gets a **follow-up TIF issue**, and you return
+to the goal. Fixing it now is how a one-line fix becomes an unreviewable PR.
+
+### 6. Ask at every checkpoint
+
+> Does this still serve the goal?
+
+If not, stop. This is the check that catches a session that has spent an hour
+polishing something nobody asked for.
+
+**Why this repo needs it, with today's examples.** #241 was rejected **three
+times, each a different symptom of one unexamined cause** — the correction
+reaching one file and not the prose beside it. The fix was not another round; it
+was the hypothesis "my correction is not propagating, and I haven't checked" plus
+one grep. Written earlier, that saves two rounds. Likewise the `myco_todo.py` hash
+conflict: the goal was "merge these four PRs", the symptom was a rebase conflict,
+and the cause was main having already corrected the value — computable in one
+`shasum` call.
+
 ## Targeted testing (Tiffany-approved, 2026-11-22 22:17 ET)
 
 Running the full suite after every edit is wasted time — it is minutes of signal buried in minutes of noise, and it is what CI is for.

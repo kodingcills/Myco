@@ -35,11 +35,16 @@ guests' live RSS and host pressure (`vm_stat`, `vm.swapusage`) and reports the h
 for a second VM — the number the post-M1 second-VM question (TIF-92) needs. It is
 read-only and touches no lock.
 
-Idle shutdown (RT-013). The guest runs `runtime/guest/idle-watchdog.sh` (started by the
-provisioning seed) which powers the guest off after `MYCO_RT_IDLE_SECS` with no
-heartbeat. Default is **disabled** (`0`) — a session never vanishes silently; an
-operator enables reaping explicitly with a documented timeout. The policy is in the
-guest, not the host, so a crashed host agent cannot leave a guest running forever.
+Idle shutdown (RT-013). `runtime/guest/idle-watchdog.sh` powers the guest off after
+`MYCO_RT_IDLE_SECS` with no heartbeat. **It is not installed yet:** the cloud-init seed
+(`runtime/guest/seed/user-data`) does not copy or start it, so a provisioned guest today
+has no idle reaper and stays up until `destroy`/`shutdown.sh` (post-merge verifier,
+TIF-110). Wiring it into the seed is a follow-up that needs a VM boot to prove. Default
+when installed is **disabled** (`0`) — a session never vanishes silently; an
+operator enables reaping explicitly with a documented timeout. Once installed and
+enabled, the policy runs in the guest rather than the host, so a crashed host agent
+would not leave a guest running. **Today it is neither**: a guest whose host agent
+crashes stays up until someone runs `shutdown.sh` or kills QEMU.
 `runtime/guest/idle-watchdog-test.sh` proves both directions on the host with no VM
 (fires on a stale/absent heartbeat, holds on a fresh one); a mutation that disables the
 decision turns exactly the two "fires" cases red.
@@ -87,12 +92,13 @@ gir1.2-atspi-2.0 2.52.0-1build1 · at-spi2-core 2.52.0-1build1 · gir1.2-gtk-3.0
 ## Lifecycle
 
 ```
+runtime/guest/provision.sh           # one step: keypair, image, overlay, seed (--check reports, exit 1 if incomplete)
 runtime/guest/fetch-image.sh         # download + SHA-256 verify (idempotent)
 runtime/guest/create-overlay.sh      # qcow2 overlay over the pristine base
 runtime/guest/boot.sh                # QEMU+HVF, headless, daemonized (idempotent)
 runtime/guest/smoke.sh               # boots if needed; AT-SPI + input proofs
 runtime/guest/shutdown.sh            # clean shutdown over SSH; overlay kept
-runtime/guest/idle-watchdog.sh       # guest-side reaper: self-shutdown after MYCO_RT_IDLE_SECS idle
+runtime/guest/idle-watchdog.sh       # guest-side reaper (NOT installed by the seed yet): self-shutdown after MYCO_RT_IDLE_SECS idle
 runtime/guest/idle-watchdog-test.sh  # proves the reaper fires/holds, on the host, no VM
 scripts/memory-budget.sh             # read-only host/guest RSS + swap + second-VM headroom
 ```
@@ -197,9 +203,9 @@ writes rather than rolling them back.
 
 **Not** guaranteed, and not to be claimed: network egress policy, guest→host file
 transfer beyond `read_file`'s grant, per-agent attribution, or multi-tenant
-credentials. Idle reaping is **opt-in and off by default** (see the memory-discipline
-section above): a session left alone stays up until `destroy` unless `MYCO_RT_IDLE_SECS`
-is set. The full list with evidence is in
+credentials. Idle reaping: **not available yet**. The reaper script exists, but the seed
+does not install it (see the memory-discipline section above), so a session left alone
+stays up until `destroy` whatever `MYCO_RT_IDLE_SECS` is set to. The full list with evidence is in
 [docs/research/runtime-safety-isolation.md](../research/runtime-safety-isolation.md).
 
 ### 5. Verifying the path yourself

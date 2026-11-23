@@ -177,9 +177,152 @@ else
   bad "a stale pidfile was not handled cleanly (rc=$rc): $out"
 fi
 
+# ── 10. boot.sh's RAM guard rejects bad values before ANY side effect ──────────
+# TIF-110: `${VAR:-2048}` let a set-but-empty value through, and `0` (QEMU's
+# "default") was accepted. A revert of either turns this red.
+guard_bad=0
+for v in "" 0 00 08 -1 abc 1e3 " 2048"; do
+  G="$(sandbox "$TMP/g10")"   # fresh per value: one leak must not mask the others
+  out="$(MYCO_RT_GUEST_MB="$v" bash "$G/boot.sh" 2>&1)"; rc=$?
+  if [[ $rc -ne 1 || "$out" != *"positive integer MB"* || -f "$G/state/noble-server-cloudimg-arm64.img" ]]; then
+    bad "boot.sh guard let MYCO_RT_GUEST_MB='$v' through (rc=$rc): $out"; guard_bad=1
+  fi
+done
+[[ $guard_bad -eq 0 ]] && ok "boot.sh rejects empty/0/08/-1/non-numeric RAM caps before any side effect"
+
+# ── 11. provision.sh: unknown args refused, --check gates on completeness ──────
+P="$TMP/p11"; rm -rf "$P"; mkdir -p "$P/state" "$P/keys"
+cp "$HERE/provision.sh" "$P/"
+out="$(bash "$P/provision.sh" --chek 2>&1)"; rc=$?
+if [[ $rc -eq 2 && ! -f "$P/keys/id_ed25519" ]]; then ok "provision.sh refuses an unknown argument without provisioning"
+else bad "provision.sh --chek was not refused cleanly (rc=$rc): $out"; fi
+out="$(bash "$P/provision.sh" --check 2>&1)"; rc=$?
+if [[ $rc -eq 1 && "$out" == *MISS* && ! -f "$P/keys/id_ed25519" ]]; then ok "provision.sh --check exits 1 and changes nothing when unprovisioned"
+else bad "provision.sh --check on an empty tree: rc=$rc (want 1): $out"; fi
+echo "ssh-ed25519 AAAA test" > "$P/keys/id_ed25519.pub"   # non-empty: --check rejects an empty .pub
+touch "$P/keys/id_ed25519" "$P/state/noble-server-cloudimg-arm64.img" "$P/state/myco-runtime-v0.qcow2" "$P/state/seed.iso"
+out="$(bash "$P/provision.sh" --check 2>&1)"; rc=$?
+if [[ $rc -eq 0 ]]; then ok "provision.sh --check exits 0 when every asset is present"
+else bad "provision.sh --check on a complete tree: rc=$rc (want 0): $out"; fi
+
+# ── 12. a new SSH key forces a fresh overlay; refused under a live guest ───────
+# cloud-init will not re-apply ssh_authorized_keys to an overlay it already ran in,
+# so re-keying over an old overlay would print "Provisioned" and then refuse SSH.
+R="$TMP/r12"; rm -rf "$R"; mkdir -p "$R/state" "$R/keys"
+cp "$HERE/provision.sh" "$R/"
+for s in fetch-image make-seed; do printf '#!/usr/bin/env bash\nexit 0\n' > "$R/$s.sh"; done
+printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; [[ -f "$d/state/myco-runtime-v0.qcow2" ]] && e=old || e=none; echo "$e $*" >> "$d/overlay-args.log"; touch "$d/state/myco-runtime-v0.qcow2"\n' > "$R/create-overlay.sh"
+chmod +x "$R"/*.sh
+touch "$R/state/myco-runtime-v0.qcow2"
+out="$(bash "$R/provision.sh" 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$(cat "$R/overlay-args.log" 2>/dev/null)" == "none "* ]]; then
+  ok "provision.sh discards the old overlay when it generates a new key"
+else bad "re-key kept the old overlay (rc=$rc): $(cat "$R/overlay-args.log" 2>/dev/null) / $out"; fi
+rm -f "$R/keys/id_ed25519" "$R/overlay-args.log"; touch "$R/state/myco-runtime-v0.qcow2"
+sleep 300 & live=$!; echo "$live" > "$R/state/qemu.pid"
+out="$(bash "$R/provision.sh" 2>&1)"; rc=$?
+kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+if [[ $rc -eq 1 && ! -f "$R/overlay-args.log" && ! -f "$R/keys/id_ed25519" && -f "$R/state/myco-runtime-v0.qcow2" && "$out" == *Refusing* ]]; then
+  ok "provision.sh refuses to re-key over a running guest's overlay"
+else bad "re-key under a live guest was not refused (rc=$rc): $out"; fi
+
+# ── 13. a missing .pub alone never re-keys, even with a live guest ─────────────
+# A `git pull` deletes the formerly tracked .pub while the private key and overlay
+# stay. Rebuild the .pub from the private key; never touch the guest's identity.
+K="$TMP/k13"; rm -rf "$K"; mkdir -p "$K/state" "$K/keys"
+cp "$HERE/provision.sh" "$K/"
+for s in fetch-image make-seed; do printf '#!/usr/bin/env bash\nexit 0\n' > "$K/$s.sh"; done
+printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; [[ -f "$d/state/myco-runtime-v0.qcow2" ]] && e=old || e=none; echo "$e $*" >> "$d/overlay-args.log"; touch "$d/state/myco-runtime-v0.qcow2"\n' > "$K/create-overlay.sh"
+chmod +x "$K"/*.sh
+ssh-keygen -t ed25519 -N '' -q -f "$K/keys/id_ed25519"; rm -f "$K/keys/id_ed25519.pub"
+touch "$K/state/myco-runtime-v0.qcow2"
+before="$(shasum "$K/keys/id_ed25519" | cut -d' ' -f1)"
+sleep 300 & live=$!; echo "$live" > "$K/state/qemu.pid"
+out="$(bash "$K/provision.sh" 2>&1)"; rc=$?
+kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+after="$(shasum "$K/keys/id_ed25519" | cut -d' ' -f1)"
+derived="$(ssh-keygen -y -f "$K/keys/id_ed25519" | cut -d' ' -f2)"
+if [[ $rc -eq 0 && "$before" == "$after" && "$(cut -d' ' -f2 "$K/keys/id_ed25519.pub" 2>/dev/null)" == "$derived" \
+      && "$(cat "$K/overlay-args.log" 2>/dev/null)" == "old "* ]]; then
+  ok "provision.sh rebuilds a missing .pub from the private key without re-keying"
+else bad "missing .pub with live guest: rc=$rc key-changed=$([[ $before == "$after" ]] && echo no || echo YES) / $out"; fi
+
+# ── 14. make-seed.sh (boot.sh's path) never silently re-keys ───────────────────
+M="$TMP/m14"; rm -rf "$M"; mkdir -p "$M/state" "$M/keys" "$M/seed" "$M/bin"
+cp "$HERE/make-seed.sh" "$M/"; printf 'k: __MYCO_PUBKEY__\n' > "$M/seed/user-data"; : > "$M/seed/meta-data"
+printf '#!/usr/bin/env bash\n: > "$1"\n' > "$M/bin/cloud-localds"; chmod +x "$M/bin/cloud-localds"
+touch "$M/state/myco-runtime-v0.qcow2"
+out="$(PATH="$M/bin:$PATH" bash "$M/make-seed.sh" 2>&1)"; rc=$?
+if [[ $rc -eq 1 && ! -f "$M/keys/id_ed25519" && "$out" == *Refusing* ]]; then
+  ok "make-seed.sh refuses to mint a new key over an existing overlay"
+else bad "make-seed.sh re-keyed over an existing overlay (rc=$rc): $out"; fi
+rm -f "$M/keys/id_ed25519" "$M/keys/id_ed25519.pub"   # never prompt "Overwrite?" (hangs a tty)
+ssh-keygen -t ed25519 -N '' -q -f "$M/keys/id_ed25519" </dev/null; rm -f "$M/keys/id_ed25519.pub"
+before="$(shasum "$M/keys/id_ed25519" | cut -d' ' -f1)"
+out="$(PATH="$M/bin:$PATH" bash "$M/make-seed.sh" 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$before" == "$(shasum "$M/keys/id_ed25519" | cut -d' ' -f1)" && -f "$M/keys/id_ed25519.pub" ]]; then
+  ok "make-seed.sh rebuilds a missing .pub from the existing private key"
+else bad "make-seed.sh with private key but no .pub (rc=$rc): $out"; fi
+
+# ── 15. a bad private key never leaves an empty .pub behind ────────────────────
+# A failed `ssh-keygen -y` used to leave a 0-byte .pub that the next run accepted,
+# seeding a guest that authorizes no key.
+E="$TMP/e15"; rm -rf "$E"; mkdir -p "$E/state" "$E/keys" "$E/seed" "$E/bin"
+cp "$HERE/make-seed.sh" "$HERE/provision.sh" "$E/"; printf 'k: __MYCO_PUBKEY__\n' > "$E/seed/user-data"; : > "$E/seed/meta-data"
+printf '#!/usr/bin/env bash\n: > "$1"\n' > "$E/bin/cloud-localds"; chmod +x "$E/bin/cloud-localds"
+echo "not a key" > "$E/keys/id_ed25519"; chmod 600 "$E/keys/id_ed25519"
+out1="$(PATH="$E/bin:$PATH" bash "$E/make-seed.sh" 2>&1)"; rc1=$?
+out2="$(PATH="$E/bin:$PATH" bash "$E/make-seed.sh" 2>&1)"; rc2=$?
+if [[ $rc1 -eq 1 && $rc2 -eq 1 && ! -e "$E/keys/id_ed25519.pub" && "$(cat "$E/keys/id_ed25519")" == "not a key" && "$out1" == *"Cannot derive"* ]]; then
+  ok "a corrupt private key fails clearly, every time, and leaves no empty .pub"
+else bad "corrupt key: rc1=$rc1 rc2=$rc2 pub=$( [[ -e $E/keys/id_ed25519.pub ]] && wc -c <"$E/keys/id_ed25519.pub" || echo none) / $out1 / $out2"; fi
+: > "$E/keys/id_ed25519.pub"; touch "$E/state/noble-server-cloudimg-arm64.img" "$E/state/myco-runtime-v0.qcow2" "$E/state/seed.iso"
+ssh-keygen -t ed25519 -N '' -q -f "$E/keys/k2" </dev/null; mv "$E/keys/k2" "$E/keys/id_ed25519"; rm -f "$E/keys/k2.pub"
+: > "$E/keys/id_ed25519.pub"
+out="$(bash "$E/provision.sh" --check 2>&1)"; rc=$?
+if [[ $rc -eq 1 ]]; then ok "provision.sh --check treats an empty .pub as not provisioned"
+else bad "--check accepted an empty .pub (rc=$rc): $out"; fi
+
+# ── 16. a .pub that does not match the private key is rebuilt, not trusted ─────
+ssh-keygen -t ed25519 -N '' -q -f "$E/keys/other" </dev/null
+cp "$E/keys/other.pub" "$E/keys/id_ed25519.pub"
+out="$(PATH="$E/bin:$PATH" bash "$E/make-seed.sh" 2>&1)"; rc=$?
+want="$(ssh-keygen -y -f "$E/keys/id_ed25519" | cut -d' ' -f2)"
+if [[ $rc -eq 0 && "$(cut -d' ' -f2 "$E/keys/id_ed25519.pub")" == "$want" && "$out" == *"does not match"* ]]; then
+  ok "a mismatched .pub is rebuilt from the private key"
+else bad "mismatched .pub was trusted (rc=$rc): $out"; fi
+
+# ── 17. an interrupted re-key cannot leave "new key + old overlay" ─────────────
+# fetch-image fails (Ctrl-C, SHA mismatch, no network) after the key is minted;
+# the re-run must still end on a fresh overlay.
+I="$TMP/i17"; rm -rf "$I"; mkdir -p "$I/state" "$I/keys"
+cp "$HERE/provision.sh" "$I/"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$I/make-seed.sh"
+printf '#!/usr/bin/env bash\n[[ -f "$(dirname "$0")/fail-fetch" ]] && exit 1; exit 0\n' > "$I/fetch-image.sh"
+printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; [[ -f "$d/state/myco-runtime-v0.qcow2" ]] && e=old || e=none; echo "$e $*" >> "$d/overlay-args.log"; touch "$d/state/myco-runtime-v0.qcow2"\n' > "$I/create-overlay.sh"
+chmod +x "$I"/*.sh
+echo stale > "$I/state/myco-runtime-v0.qcow2"; touch "$I/fail-fetch"
+bash "$I/provision.sh" >/dev/null 2>&1; rc1=$?
+rm -f "$I/fail-fetch"
+bash "$I/provision.sh" >/dev/null 2>&1; rc2=$?
+if [[ $rc1 -ne 0 && $rc2 -eq 0 && "$(cat "$I/overlay-args.log" 2>/dev/null)" == "none "* ]]; then
+  ok "an interrupted re-key still ends on a fresh overlay"
+else bad "interrupted re-key: rc1=$rc1 rc2=$rc2 overlay-log=$(cat "$I/overlay-args.log" 2>/dev/null)"; fi
+
+# ── 18. boot.sh on a fresh checkout seeds before creating the overlay ──────────
+F="$TMP/f18"; rm -rf "$F"; mkdir -p "$F/state" "$F/keys"
+cp "$HERE/boot.sh" "$F/"
+printf '#!/usr/bin/env bash\necho seed >> "$(dirname "$0")/order.log"\n' > "$F/make-seed.sh"
+printf '#!/usr/bin/env bash\necho overlay >> "$(dirname "$0")/order.log"; exit 7\n' > "$F/create-overlay.sh"
+chmod +x "$F"/*.sh
+bash "$F/boot.sh" >/dev/null 2>&1
+if [[ "$(tr '\n' ' ' < "$F/order.log" 2>/dev/null)" == "seed overlay " ]]; then
+  ok "boot.sh runs make-seed.sh before create-overlay.sh"
+else bad "boot.sh order: $(tr '\n' ' ' < "$F/order.log" 2>/dev/null)"; fi
+
 echo
 if [[ $FAILURES -eq 0 ]]; then
-  echo "guest selftest OK: all 9 scenarios passed, no guest started, no download"
+  echo "guest selftest OK: all 18 scenarios passed, no guest started, no download"
   exit 0
 fi
 echo "guest selftest FAILED: $FAILURES scenario(s)" >&2

@@ -720,7 +720,9 @@ change.
 ## TIF-47 / RT-013: memory discipline + idle reaping (2026-11-22)
 
 Delivered: configurable guest RAM (`MYCO_RT_GUEST_MB`, default 2048), a guest-side
-idle reaper (`idle-watchdog.sh`, opt-in via `MYCO_RT_IDLE_SECS`, off by default), a
+idle reaper *script* (`idle-watchdog.sh`, opt-in via `MYCO_RT_IDLE_SECS`, off by default;
+**not installed by the seed**, so no provisioned guest runs it; corrected by the
+post-merge verifier, TIF-110), a
 host-only proof of the reaper (`idle-watchdog-test.sh`, 5/5, mutation-verified), and
 `scripts/memory-budget.sh` — the read-only host/guest memory measurement.
 
