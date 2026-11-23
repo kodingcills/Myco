@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
 # vssh [cmd...]: ssh into the Myco VM (PowerShell is the default shell). vssh -T < script.ps1 also works.
-exec ssh -F "$HOME/VMs/myco-win11/ssh_config" -o LogLevel=ERROR myco-win11 "$@"
+# VM_ROOT overrides where ssh_config lives, matching build-all.sh / build-seed-iso.sh.
+VM=${VM_ROOT:-$HOME/VMs/myco-win11}
+exec ssh -F "$VM/ssh_config" -o LogLevel=ERROR myco-win11 "$@"
