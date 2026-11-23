@@ -1010,26 +1010,35 @@ def act(mcp: McpClient, sid: str, action: dict[str, Any]) -> dict[str, Any]:
 
 
 def cleanup(mcp: McpClient, sid: str) -> str | None:
-    """Destroy the session. Returns None on success, or the failure as a string.
+    """Tear the session down. Returns None on success, or the failure as a string.
 
-    Teardown failure used to be swallowed - both tools' exceptions were dropped -
-    so a session left running was indistinguishable from a clean exit, and a
-    leaked session holds the single guest for every run after it.
+    `reset` is best-effort and `destroy` is terminal, and BOTH must be attempted:
+    an early `return None` after `reset` succeeded would skip `destroy` on the
+    happy path, leaving the session alive on every run while reporting a clean
+    teardown - the exact leak this function was changed to surface. `reset`
+    transitions the session back to Ready; only `destroy` removes it
+    (runtime/crates/myco-rt-mcp/src/main.rs). So the loop must not stop early.
+
+    The reported failure is the LAST one, because `destroy` is the operation that
+    actually frees the guest: a `reset` failure followed by a successful destroy
+    is a clean teardown, while the reverse is a leak.
 
     Returns rather than raises deliberately: there are twelve call sites, most of
-    them error paths that already have a bucket to report, and making teardown
-    raise would turn a reported gap into an unhandled exception. Callers that
-    need to distinguish a dirty teardown check the return value; the rest are
-    unchanged.
+    them error paths that already have a bucket to report, and raising would turn
+    a reported gap into an unhandled exception. Callers that need to distinguish
+    a dirty teardown check the return value; the rest are unchanged.
     """
-    last: Exception | None = None
+    destroy_error: Exception | None = None
     for tool in ("reset", "destroy"):
         try:
             mcp.call_tool(tool, {"session_id": sid})
-            return None
         except Exception as e:  # noqa: BLE001
-            last = e
-    return f"could not free session {sid}: {last}"
+            if tool == "destroy":
+                destroy_error = e
+    # Success is `destroy` having worked - not `reset` having worked.
+    if destroy_error is None:
+        return None
+    return f"could not free session {sid}: {destroy_error}"
 
 
 def build_step_events(started_at: str, steps: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -1294,6 +1303,14 @@ def preflight(offline: bool = False) -> int:
     guest_up = rc == 0 and "Linux" in out
     if guest_up:
         record("guest-ssh", True, out[:80])
+    elif offline:
+        # A stub/offline server boots no guest, so an absent guest is a REAL
+        # defect here, not a deferral: the claim "create() boots one" is false by
+        # construction. Fail it, so the parameter is load-bearing rather than
+        # decorative - and so an offline run cannot silently pass a check whose
+        # justification does not apply to it.
+        record("guest-ssh", False,
+               f"offline/stub server boots no guest, and none is listening ({out[:60] or 'no answer'})")
     else:
         # No guest listening, which is NORMAL before a run: `create()` boots one
         # (`provision()` -> `boot.sh`), downstream of this gate. Recording it as

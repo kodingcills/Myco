@@ -83,6 +83,16 @@ def main() -> int:
     ok = df005.cleanup(FakeMcp(teardown_works=True), "s1")
     expect(ok is None, "a teardown that works returns None")
 
+    # The regression this guards: `reset` succeeding must NOT short-circuit
+    # `destroy`. `reset` only returns the session to Ready; `destroy` is what
+    # removes it. An early return after a successful reset leaked the session on
+    # EVERY run while reporting a clean teardown - worse than the swallowing it
+    # replaced, because it leaked on the happy path.
+    probe_mcp = FakeMcp(teardown_works=True)
+    df005.cleanup(probe_mcp, "s-destroy")
+    expect(probe_mcp.calls == ["reset", "destroy"],
+           f"cleanup calls BOTH reset and destroy (got {probe_mcp.calls})")
+
     bad = df005.cleanup(FakeMcp(teardown_works=False), "s2")
     expect(isinstance(bad, str) and "s2" in bad,
            f"a teardown that fails returns the failure naming the session: {bad!r}")
@@ -114,7 +124,7 @@ def main() -> int:
     expect(leak is not None,
            "fault-injection: the dirty case is distinguishable from a clean failure")
 
-    # --- 4. the bucket vocabulary is not invented ----------------------------
+    # --- 5. the bucket vocabulary is not invented ----------------------------
     # The gate reports `gap` because scoring.md has no `dirty` bucket. Assert the
     # constant the message uses is real, so a future edit cannot quietly name a
     # bucket that no downstream count knows about.
