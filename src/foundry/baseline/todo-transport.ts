@@ -138,7 +138,7 @@ export interface AgentOps {
 }
 
 export function mycoAgentGuest(ops: AgentOps): GuestProtocol {
-  const require = <T>(fn: T | undefined, what: string): T => {
+  const mustHave = <T>(fn: T | undefined, what: string): T => {
     if (fn === undefined)
       throw new Error(
         `the guest has no ${what} channel; a pixel arm cannot run without it (M1-023)`,
@@ -153,8 +153,8 @@ export function mycoAgentGuest(ops: AgentOps): GuestProtocol {
     // Async so a missing channel rejects rather than throwing synchronously: the protocol
     // promises a Promise, and a caller using `await` must see the failure the same way it
     // would see a guest error.
-    click: async (x, y) => require(ops.click, "coordinate-click")(x, y),
-    key: async (name) => require(ops.key, "keystroke")(name),
-    type: async (text) => require(ops.type, "text-entry")(text),
+    click: async (x, y) => mustHave(ops.click, "coordinate-click")(x, y),
+    key: async (name) => mustHave(ops.key, "keystroke")(name),
+    type: async (text) => mustHave(ops.type, "text-entry")(text),
   };
 }

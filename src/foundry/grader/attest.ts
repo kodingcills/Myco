@@ -1,0 +1,480 @@
+/**
+ * TIF-58 EF-005 — the independent save observer and the ingest attestation.
+ *
+ * This is the piece `docs/foundry/s1-readiness.md` names as missing. The problem it solves
+ * is narrow and worth stating plainly: today the only account of what was saved is the
+ * arm's own recorder. "The arm says it saved" and "the store was saved" are the same
+ * evidence, so a false success can be manufactured by the thing being measured.
+ *
+ * Two components, deliberately separate:
+ *
+ * 1. **`SaveObserver`** — a reader that is not the arm. It samples the persistence files at
+ *    a point the arm does not control and records a hash. On the VM this is a second
+ *    connection to the guest; offline it is a function over the same bytes, which is enough
+ *    to test the *contract* (the ingest's behaviour) without pretending to test the
+ *    *independence* (which only a real second process can provide).
+ *
+ * 2. **`attest()`** — the gate. It takes the arm's evidence, the observer's record, and the
+ *    final bytes, and decides whether the run may be decision-eligible. It is deliberately
+ *    strict: every binding must match, and a missing observation is a blocker rather than a
+ *    pass. A gate that defaults to eligible is not a gate.
+ *
+ * What this does NOT do: it does not make a run trustworthy by itself. The observer's
+ * independence is a property of *where it runs*, and this module cannot verify that. What it
+ * can do is refuse to call a run eligible when the observer's record is absent, stale, or
+ * disagrees — which is the difference between "we checked" and "we assumed".
+ */
+
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { RecordedTrialEvidence } from "../baseline/recorder.ts";
+import { commitment, fixtureHash, type HiddenFixture } from "../hidden-split/index.ts";
+import type { GuardTraceEvent, ScreenView } from "../types.ts";
+
+/** One observation of one persistence file, taken by a reader that is not the arm. */
+export interface SaveObservation {
+  /** Which file was read. */
+  readonly path: string;
+  /** SHA-256 of the bytes at observation time. */
+  readonly sha256: string;
+  /** Byte length, so a truncated read is visible even if the hash collides. */
+  readonly bytes: number;
+  /** When the observer read it, ISO-8601. */
+  readonly observedAt: string;
+  /**
+   * Whether the observer read the file *after* the arm's last recorded save. A read taken
+   * before the save proves nothing about what was saved.
+   */
+  readonly afterLastSave: boolean;
+}
+
+/** A reader that is not the arm. */
+export interface SaveObserver {
+  readonly id: string;
+  observe(
+    paths: readonly string[],
+    files: Readonly<Record<string, Uint8Array>>,
+  ): readonly SaveObservation[];
+}
+
+/**
+ * The offline observer: hashes the bytes it is given.
+ *
+ * It is honest about what it is. `id` says `offline`, and `attest()` treats an offline
+ * observation as sufficient for *contract* testing but records the observer's identity in
+ * the result, so a report can say which observer produced the evidence. A live run must
+ * supply an observer whose `id` names the real second channel.
+ */
+export const OFFLINE_OBSERVER_ID = "offline";
+
+/**
+ * Observers this gate will accept, and how an identity is proven.
+ *
+ * The previous design refused one forbidden string, which is a check the caller writes the
+ * input to. This is the inverse: nothing is accepted unless it is registered here. The
+ * offline observer is reachable only when the input carries the contract-test marker, so
+ * production code has no string it can pass to be believed.
+ */
+const LIVE_OBSERVERS = new Map<string, SaveObserver>();
+const CONTRACT_TEST_MARKER: unique symbol = Symbol("myco.contract-test");
+
+/** Register a live observer. Called by the ingest once a second channel exists. */
+export function registerLiveObserver(observer: SaveObserver): void {
+  if (observer.id.trim() === "" || observer.id === OFFLINE_OBSERVER_ID)
+    throw new Error("a live observer needs its own non-empty id");
+  LIVE_OBSERVERS.set(observer.id, observer);
+}
+
+/** Test-only door for the offline observer. Not reachable by naming a string. */
+export function offlineObserverForContractTest(observedAt = "1970-01-01T00:00:00.000Z"): {
+  observer: SaveObserver;
+  marker: typeof CONTRACT_TEST_MARKER;
+} {
+  return { observer: offlineObserver(observedAt), marker: CONTRACT_TEST_MARKER };
+}
+
+function safeObserverId(input: unknown): string {
+  if (!input || typeof input !== "object" || !("observerId" in input)) return "(none)";
+  const id = (input as { observerId?: unknown }).observerId;
+  return typeof id === "string" ? id : "(none)";
+}
+function trustObservers(input: unknown): SaveObserver | null {
+  if (!input || typeof input !== "object") return null;
+  const id = safeObserverId(input);
+  const bypass = (input as { [CONTRACT_TEST_MARKER]?: unknown })[CONTRACT_TEST_MARKER];
+  if (bypass === CONTRACT_TEST_MARKER && id === OFFLINE_OBSERVER_ID) return offlineObserver();
+  return LIVE_OBSERVERS.get(id) ?? null;
+}
+
+/** Reads the observer id without trusting it to be a string. */
+
+export function offlineObserver(observedAt = "1970-01-01T00:00:00.000Z"): SaveObserver {
+  return {
+    id: OFFLINE_OBSERVER_ID,
+    observe(paths, files) {
+      return paths.map((path) => {
+        const bytes = files[path];
+        if (bytes === undefined) {
+          return { path, sha256: "", bytes: 0, observedAt, afterLastSave: false };
+        }
+        return {
+          path,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          bytes: bytes.length,
+          observedAt,
+          afterLastSave: true,
+        };
+      });
+    },
+  };
+}
+
+export interface AttestInput {
+  readonly evidence: RecordedTrialEvidence;
+  readonly trace: readonly GuardTraceEvent[];
+  readonly finalFiles: Readonly<Record<string, Uint8Array>>;
+  readonly observations: readonly SaveObservation[];
+  readonly screen: ScreenView;
+  /** The observer that produced `observations`, so the result can name it. */
+  readonly observerId: string;
+  /**
+   * Set only by contract tests, which need the gate to admit an `offline` observer so they
+   * can exercise the other checks. A production caller MUST NOT set it: `offline` hashes
+   * whatever it is handed, so a caller supplying both the bytes and the observation would be
+   * vouching for itself — the recipe this gate exists to reject.
+   */
+  readonly allowOfflineObserver?: true;
+  /** The hidden fixtures the run claims to have used. */
+  readonly hiddenFixtures: readonly HiddenFixture[];
+  /** The fixture hash the run claims. The gate resolves the fixture from this. */
+  readonly claimedFixtureHash: string;
+  /** Whether the screen reading came from the observer rather than the arm. */
+  readonly screenObserved: boolean;
+}
+
+const attestedBrand: unique symbol = Symbol("myco.attestation");
+
+/**
+ * KNOWN LIMIT (TIF-115) — the brand is forgeable in-process, and no fix inside this file
+ * can close it.
+ *
+ * `attestedBrand` is an own symbol property of every attestation, and
+ * `Object.getOwnPropertySymbols` is public API. A caller holding any real attestation can
+ * copy the symbol onto a fresh `{ eligible: true }`, and `isAttestation` accepts it.
+ * Nothing inside the process can distinguish a copied symbol from one this module set.
+ *
+ * Concretely: the gate raises the bar from "hardcoded false" to "you must already hold a
+ * real attestation to forge one", and it refuses every forgery that does not. It is not a
+ * sandbox. The fix is to run the gate out of the arm's process (TIF-115); until then the
+ * boundary this file provides is a boundary, not isolation, and the exploit is recorded
+ * rather than papered over.
+ */
+
+/**
+ * Runtime counterpart to the brand. The type system stops a typed caller; this stops an
+ * untyped one, which is the boundary the scorer actually owns.
+ */
+export function isAttestation(value: unknown): value is Attestation {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as Record<symbol, unknown>)[attestedBrand] === true
+  );
+}
+
+export interface Attestation {
+  /**
+   * Brand: only `attest()` can produce an `Attestation`. Without it, a caller could hand
+   * `scoreDiscoveryTrial` a literal `{ eligible: true }` and skip the gate entirely.
+   */
+  readonly [attestedBrand]: true;
+  readonly eligible: boolean;
+  /** Every reason the run is not eligible. Empty iff `eligible`. */
+  readonly blockers: readonly string[];
+  readonly observerId: string;
+  /** The observation the gate accepted, for the report. */
+  readonly accepted: readonly SaveObservation[];
+  /** False when the screen oracle had no text to match, which is not the same as agreeing. */
+  readonly screenConstrained: boolean;
+  /** Files the final state holds that the fixture does not designate. Reported, not required. */
+  readonly unexpectedFiles: readonly string[];
+  /** The fixture the gate resolved from the commitment, or null when it could not. */
+  readonly resolvedFixtureId: string | null;
+}
+
+/**
+ * Decides whether a run may be decision-eligible.
+ *
+ * Strict by construction: an empty blocker list is the only path to `eligible: true`, and
+ * every check below can only add a blocker. There is no "assume fine" branch.
+ */
+/**
+ * The committed commitment, found by walking up from this module rather than by counting
+ * `..` segments. Counting breaks under `tsc`: the compiled module sits one level deeper
+ * (`dist/src/foundry/grader/`), so a fixed depth resolves to `dist/foundry/…` and every
+ * compiled row is silently refused. Walking up finds the repo root in both layouts.
+ *
+ * A caller-supplied path is not a commitment: it lets a caller write a file that vouches
+ * for a set they also wrote. So this is not an option.
+ */
+function findCommittedCommitment(): string | null {
+  let dir = import.meta.dirname;
+  for (;;) {
+    const candidate = join(dir, "foundry", "hidden-commitment.json");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** Reads the committed commitment, or null when it is absent or malformed. */
+function readTrustedCommitment(path: string): ReturnType<typeof commitment> | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!parsed || typeof parsed !== "object" || !("commitment" in parsed)) return null;
+    const value = parsed.commitment;
+    if (!value || typeof value !== "object") return null;
+    if (
+      !("rootHash" in value) ||
+      typeof value.rootHash !== "string" ||
+      !("count" in value) ||
+      typeof value.count !== "number" ||
+      !("hiddenSplitVersion" in value) ||
+      typeof value.hiddenSplitVersion !== "number" ||
+      !("perFixtureHash" in value) ||
+      !Array.isArray(value.perFixtureHash)
+    )
+      return null;
+    return {
+      hiddenSplitVersion: value.hiddenSplitVersion,
+      count: value.count,
+      rootHash: value.rootHash,
+      perFixtureHash: value.perFixtureHash as string[],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads one field off a possibly-malformed input. `attest` must never throw: a gate that
+ * crashes on bad input is a gate an arm can disable by sending bad input.
+ */
+function field<T>(input: unknown, key: string, fallback: T): T {
+  if (!input || typeof input !== "object" || !(key in input)) return fallback;
+  const value = (input as Record<string, unknown>)[key];
+  return (value === undefined ? fallback : value) as T;
+}
+
+export function attest(input: AttestInput): Attestation {
+  // Any throw becomes a blocker. The body below still guards its own fields for a precise
+  // message; this is the backstop that makes "never throws" a property rather than a claim.
+  try {
+    return attestOrRefuse(input);
+  } catch (error) {
+    return {
+      [attestedBrand]: true as const,
+      eligible: false,
+      blockers: [
+        `input: malformed, could not be evaluated (${error instanceof Error ? error.message : "unknown error"})`,
+      ],
+      observerId: safeObserverId(input),
+      accepted: [],
+      screenConstrained: false,
+      unexpectedFiles: [],
+      resolvedFixtureId: null,
+    };
+  }
+}
+
+function attestOrRefuse(input: AttestInput): Attestation {
+  const blockers: string[] = [];
+  const evidence = field<RecordedTrialEvidence | undefined>(input, "evidence", undefined);
+
+  // Option 1: the fixture is resolved from the commitment, never taken from the caller.
+  // A caller-supplied fixture could keep the real id and name a benign file; a fixture
+  // resolved from a commitment-verified set cannot.
+  // The trusted commitment is READ FROM THE COMMITTED FILE, never taken from the caller.
+  // A caller-supplied commitment is not a commitment: it would let a forged set vouch for
+  // itself, which is the hole this option exists to close.
+  const commitmentPath = findCommittedCommitment();
+  const trusted = commitmentPath === null ? null : readTrustedCommitment(commitmentPath);
+  const hiddenFixtures = Array.isArray(input.hiddenFixtures) ? input.hiddenFixtures : null;
+  if (hiddenFixtures === null) {
+    blockers.push("hidden fixtures: none supplied, so no fixture can be resolved");
+  }
+  const supplied = hiddenFixtures === null ? null : commitment(hiddenFixtures);
+  if (trusted === null) {
+    blockers.push("commitment: the committed commitment could not be read");
+  } else if (
+    supplied !== null &&
+    (supplied.rootHash !== trusted.rootHash ||
+      supplied.count !== trusted.count ||
+      supplied.hiddenSplitVersion !== trusted.hiddenSplitVersion)
+  ) {
+    blockers.push("commitment: the supplied hidden set does not match the committed commitment");
+  }
+
+  const resolved = (hiddenFixtures ?? []).find(
+    (candidate) => fixtureHash(candidate) === input.claimedFixtureHash,
+  );
+  if (resolved === undefined)
+    blockers.push(
+      `commitment: no hidden fixture hashes to ${input.claimedFixtureHash.slice(0, 12)}…`,
+    );
+
+  // The required set is the resolved fixture's own list. Files the app wrote beyond it (a
+  // log, a sidecar) are reported but not required to be observed: demanding an observation
+  // for every file in the final state refuses honest runs, which is a worse failure than
+  // the one it would prevent.
+  // Every field a caller supplies is guarded: a gate that throws on malformed input is one
+  // an arm can disable by sending malformed input.
+  const safeFinalFiles: Readonly<Record<string, Uint8Array>> =
+    input.finalFiles && typeof input.finalFiles === "object" ? input.finalFiles : {};
+  if (!input.finalFiles || typeof input.finalFiles !== "object")
+    blockers.push("final state: none supplied, so no observation can be matched against it");
+  const safeObservations: readonly SaveObservation[] = Array.isArray(input.observations)
+    ? input.observations
+    : [];
+  if (!Array.isArray(input.observations))
+    blockers.push("observations: none supplied, so nothing can be attested");
+
+  const required: readonly string[] =
+    resolved === undefined ? [] : [...new Set<string>(resolved.fixture.persistenceFiles)].sort();
+  if (resolved !== undefined && required.length === 0)
+    blockers.push(
+      `fixture: ${resolved.fixture.fixtureId} designates no persistence files, so nothing can be attested`,
+    );
+  const unexpected = Object.keys(safeFinalFiles)
+    .filter((path) => !required.includes(path))
+    .sort();
+
+  // 1. The recorder must be closed and internally consistent. An open or inconsistent
+  //    recording means the arm's account of itself is incomplete.
+  if (evidence === undefined) {
+    blockers.push("recorder: no evidence supplied, so the arm's account of itself is missing");
+  }
+  if ((evidence?.recordedCalls ?? []).length !== evidence?.recordedCallCount)
+    blockers.push("recorder: call count does not match the recorded calls");
+  if ((evidence?.toolCallAudits ?? []).length !== (evidence?.recordedCalls ?? []).length)
+    blockers.push("recorder: not every call has an audit");
+  if ((evidence?.toolCallAudits ?? []).some((audit) => audit?.status !== "complete"))
+    blockers.push("recorder: an audit is incomplete");
+  // Cardinality is not identity: an audit must name a call that was actually recorded, on
+  // the same channel. Without this a ghost audit satisfies the count.
+  const recorded = new Map<string, string>();
+  for (const call of evidence?.recordedCalls ?? []) {
+    if (recorded.has(call.callId))
+      blockers.push(`recorder: call ${call.callId} is recorded more than once`);
+    else recorded.set(call.callId, call.via);
+  }
+  for (const audit of evidence?.toolCallAudits ?? []) {
+    const via = recorded.get(audit.callId);
+    if (via === undefined) blockers.push(`recorder: audit ${audit.callId} names no recorded call`);
+    else if (via !== audit.via)
+      blockers.push(`recorder: audit ${audit.callId} is ${audit.via}, recorded as ${via}`);
+    if (audit.via !== "gui" && audit.accesses.length === 0)
+      blockers.push(
+        `recorder: ${audit.via} call ${audit.callId} reports no accesses, so a direct write cannot be ruled out`,
+      );
+  }
+  if (evidence?.status !== "finished")
+    blockers.push(`recorder: trial status is ${evidence?.status ?? "absent"}, not finished`);
+
+  // 2. Every persistence file must have been observed, and the observation must match the
+  //    final bytes. A missing observation is a blocker, never a pass.
+  const accepted: SaveObservation[] = [];
+  for (const path of required) {
+    const observation = safeObservations.find((candidate) => candidate.path === path);
+    if (observation === undefined) {
+      blockers.push(`observer: no observation of ${path}`);
+      continue;
+    }
+    if (!observation.afterLastSave) {
+      blockers.push(`observer: ${path} was read before the last save`);
+      continue;
+    }
+    const bytes = safeFinalFiles[path];
+    if (bytes === undefined) {
+      blockers.push(`observer: ${path} is absent from the final state`);
+      continue;
+    }
+    const actual = createHash("sha256").update(bytes).digest("hex");
+    if (actual !== observation.sha256) {
+      blockers.push(`observer: ${path} changed after it was observed`);
+      continue;
+    }
+    if (bytes.length !== observation.bytes) {
+      blockers.push(`observer: ${path} length disagrees with the observation`);
+      continue;
+    }
+    accepted.push(observation);
+  }
+
+  // 3a. The observer must be one this gate can vouch for. Deny by default: `observerId` is
+  //     a string the caller writes, so "refuse the literal offline" refuses nothing — the
+  //     same fabrication with observerId "Offline" or "vm-guest" passed. Only an observer
+  //     registered here, and only when it reports its own identity, counts.
+  const registered = trustObservers(input);
+  if (registered === null) {
+    blockers.push(
+      `observer: "${safeObserverId(input)}" is not a registered live observer; a caller cannot name its own provenance`,
+    );
+  } else if (registered.id !== safeObserverId(input)) {
+    blockers.push("observer: the identity does not match the registered observer");
+  }
+
+  // 3b. The screen reading must come from the observer, not the arm. A caller-supplied
+  //    visibleText is an unchecked claim, and it feeds the screen oracle.
+  if (!input.screenObserved)
+    blockers.push("screen: the reading was supplied by the arm, not observed");
+  // A pixel arm legitimately reads no text (Tk exposes no AT-SPI node), so an empty screen
+  // is not a blocker. It is reported through `screenConstrained` so a reader can tell
+  // "the screen oracle had nothing to match" from "the screen oracle agreed".
+  const screenConstrained = input.screen.reachable && input.screen.visibleText.length > 0;
+
+  // 4. The observation must be placeable against a save the trace actually recorded, and
+  //    that save's bytes must agree with what the observer saw. Checking only the event
+  //    type lets any fabricated event of the right shape satisfy the binding.
+  const saves = input.trace.filter((event) => event.type === "save-observed");
+  // A save the app did not perform is not a save. Require at least one GUI call, and
+  // require the last save to follow a GUI action in the trace: bytes conjured out of band
+  // with no act to explain them are the exact false success this gate exists to catch.
+  const guiCalls = (evidence?.recordedCalls ?? []).filter((call) => call?.via === "gui");
+  if (guiCalls.length === 0)
+    blockers.push("recorder: no GUI call was recorded, so no save can be attributed to the app");
+  if (saves.length === 0) {
+    blockers.push("trace: no save was observed, so the observation cannot be placed");
+  } else {
+    const lastSaveIndex = input.trace.lastIndexOf(saves[saves.length - 1]!);
+    const guiActBefore = input.trace
+      .slice(0, lastSaveIndex)
+      .some((event) => event.type === "action" && event.callId !== undefined);
+    if (!guiActBefore)
+      blockers.push("trace: the last save follows no GUI action, so the app did not perform it");
+    const lastSave = saves[saves.length - 1]!;
+    for (const observation of accepted) {
+      const saved = lastSave.files[observation.path];
+      if (saved === undefined) {
+        blockers.push(`trace: the last save does not include ${observation.path}`);
+        continue;
+      }
+      const savedHash = createHash("sha256").update(saved).digest("hex");
+      if (savedHash !== observation.sha256)
+        blockers.push(`trace: ${observation.path} at the last save differs from the observation`);
+    }
+  }
+
+  return {
+    [attestedBrand]: true as const,
+    eligible: blockers.length === 0,
+    blockers,
+    observerId: safeObserverId(input),
+    accepted,
+    screenConstrained,
+    unexpectedFiles: unexpected,
+    resolvedFixtureId: resolved?.fixture.fixtureId ?? null,
+  };
+}

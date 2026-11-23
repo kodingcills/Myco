@@ -115,6 +115,11 @@ impl QemuLinuxBackend {
         Ok(self.control_channel()?.read_file(relative_path)?)
     }
 
+    /// RT-017: write bytes to a grant-relative guest path via the control channel.
+    pub fn write_guest_file(&mut self, relative_path: &str, bytes: &[u8]) -> Result<usize, BackendError> {
+        Ok(self.control_channel()?.write_file(relative_path, bytes)?)
+    }
+
     pub fn launch_guest_process(&mut self, command: &str, args: &[String]) -> Result<String, BackendError> {
         self.last_state_version = 0;
         Ok(self.control_channel()?.launch_process(command, args)?)
@@ -560,6 +565,15 @@ impl myco_rt_core::ops::GuestFileRead for QemuLinuxBackend {
         // this trait method if the inherent one were ever removed, recursing
         // infinitely instead of failing to compile (review §4).
         QemuLinuxBackend::read_guest_file(self, path)
+    }
+}
+
+impl myco_rt_core::ops::GuestFileWrite for QemuLinuxBackend {
+    type WriteErr = BackendError;
+
+    fn write_guest_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, BackendError> {
+        // Fully-qualified for the same reason as the read impl above.
+        QemuLinuxBackend::write_guest_file(self, path, bytes)
     }
 }
 

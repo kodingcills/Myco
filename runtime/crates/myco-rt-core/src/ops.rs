@@ -100,6 +100,16 @@ pub trait GuestFileRead {
     fn read_guest_file(&mut self, path: &str) -> Result<Vec<u8>, Self::ReadErr>;
 }
 
+/// Extension capability (RT-017): a backend that can write a guest file under an
+/// explicit grant. Separate from `GuestFileRead` so a backend may support one and
+/// not the other; the confinement is the backend's job, and it is the same grant
+/// the read uses.
+pub trait GuestFileWrite {
+    type WriteErr: std::error::Error + Send + Sync + 'static;
+    /// Write/replace `path` within the backend's grant, returning bytes written.
+    fn write_guest_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, Self::WriteErr>;
+}
+
 /// Exit status of a managed guest process (RT-016).
 ///
 /// Either field may be absent: a process that exited normally has `code` and no

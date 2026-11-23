@@ -13,7 +13,7 @@
 //! The fake is intentionally realistic rather than minimal: an empty a11y tree or
 //! zero windows would let bugs through that a real observation would expose.
 
-use myco_rt_core::ops::{GuestProcessControl, ProcessExit, ProcessInfo, WindowInfo};
+use myco_rt_core::ops::{GuestFileWrite, GuestProcessControl, ProcessExit, ProcessInfo, WindowInfo};
 use myco_rt_core::{
     Action, ActionOutcome, Backend, EvidenceArtifacts, ElementRef, Observation, Permissions,
     RuntimeError, Session, SessionConfig, SessionPhase, StateVersion,
@@ -158,6 +158,23 @@ impl Backend for FakeDesktop {
     fn destroy(&mut self) -> Result<(), FakeErr> {
         self.provisioned = false;
         Ok(())
+    }
+}
+
+/// RT-017 over the fake: a write lands unless the path is empty or names the
+/// fake's one "unwritable" file, which models a backend refusal (FIFO, symlink,
+/// outside the grant). Deliberately does NOT check `provisioned` or permissions:
+/// those guards belong to `Session`, and a fake that also refused would let a
+/// removed guard pass for the wrong reason.
+impl GuestFileWrite for FakeDesktop {
+    type WriteErr = FakeErr;
+
+    fn write_guest_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, FakeErr> {
+        if path.is_empty() || path == "unwritable" {
+            return Err(FakeErr(format!("refused: {path:?}")));
+        }
+        self.version += 1;
+        Ok(bytes.len())
     }
 }
 
@@ -579,4 +596,47 @@ fn reset_invalidates_process_handles() {
     s.reset().expect("reset");
     let err = s.kill_guest_process(&live).unwrap_err();
     assert!(err.to_string().contains("unknown process handle"), "after reset: {err}");
+}
+
+
+fn writable_session() -> SessionUnderTest {
+    let mut p = Permissions::default();
+    p.allowed_actions.push(myco_rt_core::WRITE_FILE_PERMISSION.into());
+    let mut s = session_with(p);
+    s.create().expect("create");
+    s
+}
+
+/// RT-017: writes are opt-in. The default permission set (what a read grant
+/// alone gives) refuses `write_file`, and the refusal does not bump the version.
+#[test]
+fn write_file_requires_the_write_permission() {
+    let mut s = ready_session();
+    let v = s.state_version();
+    assert!(matches!(
+        s.write_guest_file("f", b"x"),
+        Err(RuntimeError::PermissionDenied(p)) if p == myco_rt_core::WRITE_FILE_PERMISSION
+    ));
+    assert_eq!(s.state_version(), v, "a refused write must not bump the version");
+}
+
+/// A successful write bumps the version (the guest changed); a backend refusal
+/// does not.
+#[test]
+fn write_file_bumps_the_version_only_on_success() {
+    let mut s = writable_session();
+    let v0 = s.state_version();
+    assert_eq!(s.write_guest_file("f", b"abc").expect("write"), 3);
+    let v1 = s.state_version();
+    assert!(v1 > v0, "a write changes guest state and must bump the version");
+    assert!(s.write_guest_file("unwritable", b"x").is_err());
+    assert_eq!(s.state_version(), v1, "a write the backend refuses must not bump the version");
+}
+
+/// The phase guard: no writes after destroy, even with the permission.
+#[test]
+fn write_file_is_refused_after_destroy() {
+    let mut s = writable_session();
+    s.destroy().expect("destroy");
+    assert!(s.write_guest_file("f", b"x").is_err(), "write after destroy");
 }
