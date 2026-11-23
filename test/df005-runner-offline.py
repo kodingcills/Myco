@@ -44,6 +44,7 @@ FAILS: list[str] = []
 
 STUB_TEMPLATE = r'''#!/usr/bin/env python3
 import json, os, sys
+FILES = {}
 def text(o, err=False):
     return {"content": [{"type": "text", "text": json.dumps(o)}], "isError": err}
 for line in sys.stdin:
@@ -54,7 +55,8 @@ for line in sys.stdin:
         res = {"protocolVersion": "2024-11-05"}
     elif m == "tools/list":
         res = {"tools": [{"name": n} for n in
-                ("create", "observe", "act", "evidence", "reset", "destroy")]}
+                ("create", "observe", "act", "evidence", "reset", "destroy",
+                 "write_file", "read_file")]}
     else:
         n, a = r["params"]["name"], r["params"]["arguments"]
         if n == "observe":
@@ -85,6 +87,12 @@ for line in sys.stdin:
                 res = text({"ok": True, "outcome": {"kind": "failed", "reason": "synthetic"}})
             else:
                 res = text({"ok": True, "outcome": {"kind": "delivered_unverified"}})
+        elif n == "write_file":
+            FILES[a.get("path", "")] = a.get("content_base64", "")
+            res = text({"ok": True, "bytes_written": len(a.get("content_base64", ""))})
+        elif n == "read_file":
+            res = text({"ok": True, "content": FILES.get(a.get("path", ""), ""),
+                        "raw_bytes": len(FILES.get(a.get("path", "")))})
         elif n == "create":
             res = text({"ok": True, "session_id": a.get("session_id", "s")})
         else:
@@ -610,6 +618,69 @@ def main() -> int:
            f"create passes introspection_file: {args.get('introspection_file')!r}")
     expect(args.get("introspection_file", "").startswith("/"),
            "the path is absolute, as the runtime requires")
+
+    print("24. the runner deploys the fixture before launching it (TIF-158)")
+    # Two live DF-S01 windows were spent discovering the fixture was simply
+    # never deployed: the app path did not exist, nothing published, and every
+    # trial gapped at REQ-03 with introspection: not_published_yet.
+    h = Harness(store_items=["buy milk", "call mom", "write report"],
+                a11y=False, geometry=True)
+    log = h.dir / "calls.jsonl"
+    stub = h.dir / "deploy_stub.py"
+    stub.write_text(STUB_TEMPLATE.replace(
+        '        n, a = r["params"]["name"], r["params"]["arguments"]',
+        '        n, a = r["params"]["name"], r["params"]["arguments"]\n'
+        f'        open({str(log)!r}, "a").write(json.dumps({{"tool": n, "args": a}}) + "\\n")',
+    ))
+    h.stub = stub
+    code, d = h.run(scenario="DF-S01")
+    calls = [json.loads(l) for l in log.read_text().splitlines()]
+    order = [c["tool"] for c in calls]
+    expect("write_file" in order, f"the runner writes the fixture: {order}")
+    expect("read_file" in order, "it reads it back to verify")
+    # The deploy must precede the launch, or the app runs a stale/absent copy.
+    wf = order.index("write_file")
+    launched = [i for i, c in enumerate(calls)
+                if c["tool"] == "act" and c["args"].get("action", {}).get("kind") == "launch"]
+    expect(launched and wf < launched[0],
+           f"the deploy precedes the launch (write at {wf}, launch at {launched})")
+    # The create grant must cover the path the deploy writes to.
+    create = next(c for c in calls if c["tool"] == "create")
+    expect(create["args"].get("allow_write") is True,
+           f"create grants allow_write: {create['args'].get('allow_write')}")
+    root = create["args"].get("read_root", "")
+    expect(root and "/myco-todo" in root, f"read_root covers the app dir: {root!r}")
+    # One session served this run, so one deploy is correct here; the point is
+    # that it happens before the launch, asserted above.
+    expect(order.count("write_file") == 1,
+           f"one deploy for a one-trial run: {order.count('write_file')}")
+
+    print("25. a session without the write grant fails closed, not silently")
+    # Without write_file the deploy cannot run. Every trial would gap for a
+    # known reason, so the runner must stop and say which capability is missing
+    # rather than spend the slot.
+    h2 = Harness(store_items=["buy milk", "call mom", "write report"],
+                 a11y=False, geometry=True)
+    nostub = h2.dir / "nowrite_stub.py"
+    # A session created without read_root/allow_write gets an error from
+    # write_file, which is what the runtime returns. That must fail closed.
+    nosrc = STUB_TEMPLATE.replace(
+        '        elif n == "write_file":\n'
+        '            FILES[a.get("path", "")] = a.get("content_base64", "")\n'
+        '            res = text({"ok": True, "bytes_written": len(a.get("content_base64", ""))})',
+        '        elif n == "write_file":\n'
+        '            res = text({"ok": False, "error": "write_file requires allow_write"}, True)')
+    assert nosrc != STUB_TEMPLATE, "the no-write variant must change the stub"
+    nostub.write_text(nosrc)
+    h2.stub = nostub
+    code, d = h2.run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "gap", f"no write grant -> gap, not pass (got {row['state']})")
+    detail = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+    reason = detail["verdict"]["checks"][0]["reason"]
+    expect("not deployed" in reason, f"the reason names the deploy: {reason[:120]}")
+    expect("read_root" in reason or "allow_write" in reason,
+           f"it names the missing capability: {reason[:140]}")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0

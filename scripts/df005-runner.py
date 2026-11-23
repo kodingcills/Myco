@@ -27,7 +27,9 @@ Grading rules this harness enforces (DF-005 hardening, 2026-11-22):
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
+import hashlib
 import json
 import os
 import shlex
@@ -43,7 +45,8 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_SERVER = REPO / "runtime" / "target" / "debug" / "myco-rt-mcp"
 GUEST_DIR = Path(os.environ.get("MYCO_GUEST_DIR", REPO / "runtime" / "guest"))
 VM_LOCK_PATH = os.environ.get("MYCO_VM_LOCK_PATH", "/tmp/myco-win11.vm.lock")
-APP_PATH = "~/myco-todo/myco_todo.py"
+GUEST_HOME = "/home/myco"
+APP_PATH = f"{GUEST_HOME}/myco-todo/myco_todo.py"
 
 # TIF-120: the guest path the fixture publishes its widget record to and the
 # runtime reads it back from. Passed on `create` (route 1, preferred over
@@ -507,6 +510,11 @@ def execute_scenario(
             # Route 1 (TIF-120): a per-session path wins over gui.env, and the
             # runtime sets MYCO_TODO_STATE_FILE to it for apps launched via act.
             "introspection_file": INTROSPECTION_PATH,
+            # TIF-158: the runner deploys the fixture itself, which needs the
+            # session's write grant. read_root confines every read/write beneath
+            # it, so this is the narrowest root that covers APP_PATH.
+            "read_root": f"{GUEST_HOME}/myco-todo",
+            "allow_write": True,
         })
     except McpError as e:
         return gap("REQ-01", f"create failed: {e}")
@@ -542,6 +550,19 @@ def execute_scenario(
     node_count = count_nodes(obs.get("a11y_tree"))
     events.append({"type": "observation", "timestamp": now(),
                    "stateVersion": v_before, "nodeCount": node_count})
+
+    # --- deploy the fixture before launching it (TIF-158) ------------------
+    # The runner launches APP_PATH; on a fresh guest that path does not exist,
+    # so nothing publishes and every trial gaps at REQ-03 with
+    # `introspection: not_published_yet`. Two live DF-S01 windows were spent
+    # discovering that the fixture was simply never deployed.
+    #
+    # Fail closed: if the deploy cannot put a current fixture in place, every
+    # trial would gap for a known reason, so stop rather than spend the slot.
+    deployed, why = deploy_fixture(mcp, sid, APP_PATH)
+    if not deployed:
+        cleanup(mcp, sid)
+        return gap("REQ-04", f"fixture not deployed: {why}")
 
     # --- launch the app --------------------------------------------------
     try:
@@ -773,6 +794,51 @@ def introspection_record(obs: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(rec, dict) and "unavailable" not in rec:
         return rec
     return None
+
+
+def deploy_fixture(mcp: McpClient, sid: str, app_path: str) -> tuple[bool, str]:
+    """Put a current myco-todo in the guest; fail closed if it cannot.
+
+    Uses the runtime's own write_file/read_file over the session that will run
+    the trials — same channel, same guest, no separate state-dir resolution
+    (TIF-158). write_file is opt-in (needs read_root + allow_write on create),
+    so a session without those is reported as the capability gap it is.
+
+    Verification is a read-back, not an exec: the runtime exposes no command
+    execution, and `read_file` returning the exact bytes we wrote is the same
+    evidence a hash check would give.
+    """
+    local_app = REPO / "dogfood" / "apps" / "myco-todo" / "myco_todo.py"
+    if not local_app.exists():
+        return False, f"no fixture at {local_app}"
+    body = local_app.read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+
+    try:
+        wrote = mcp.call_tool("write_file", {
+            "session_id": sid,
+            "path": app_path,
+            "content_base64": base64.b64encode(body).decode("ascii"),
+        })
+    except McpError as e:
+        return False, (f"write_file unavailable ({e}). Create the session with "
+                       "read_root and allow_write to let the runner deploy.")
+
+    try:
+        back = mcp.call_tool("read_file", {"session_id": sid, "path": app_path})
+    except McpError as e:
+        return False, f"could not read the fixture back: {e}"
+
+    encoded = back.get("content") or back.get("content_base64") or ""
+    try:
+        got = base64.b64decode(encoded)
+    except Exception as e:  # noqa: BLE001
+        return False, f"read-back was not base64: {e}"
+    if hashlib.sha256(got).hexdigest() != digest:
+        return False, (f"the deployed fixture does not match the repo copy "
+                       f"({digest[:12]} vs {hashlib.sha256(got).hexdigest()[:12]}, "
+                       f"wrote {wrote.get('bytes_written')} bytes)")
+    return True, f"deployed {local_app.name} ({digest[:12]}, {len(body)} bytes), read-back matches"
 
 
 def observe_until_introspection(mcp: McpClient, sid: str, tries: int = 20,
