@@ -684,3 +684,35 @@ session -- a change worth making deliberately, not in a hurry inside a window.
 
 **For the next slot:** expect ~5 minutes for the full set, and do not treat the
 second cloud-init as a hang.
+
+## TIF-93 / RT-021: `evidence` guarded, MCP surface change (2026-11-22)
+
+`Session::evidence` now calls `require_ready()`, closing the last unguarded
+non-terminal op. **Disposition: refuse on a non-`Ready` session, not document as
+deliberately unguarded.** Pre-mortem and reasoning are in
+[../backlog/runtime.md](../backlog/runtime.md) under RT-021.
+
+**Surface change for Dogfood (TIF-52/DF-005 and any MCP client):** an
+`evidence` call on a destroyed session used to return `ok: true` with a trace and
+result path; it now returns a tool error (`-32000`, `IllegalTransition`). The
+documented order is evidence-then-destroy (`first_path` prints EVIDENCE before
+DESTROY), which is unaffected. A client that called `evidence` *after* `destroy`
+was reading paths into a run directory `destroy` had already deleted; the
+`QemuLinuxBackend` path would have failed there anyway, while `FakeBackend`
+silently returned synthetic paths. No production flow is known to depend on the
+old behaviour — if one surfaces, it is a bug in that flow, not a reason to remove
+the guard.
+
+**Evidence:** `cargo test --workspace` 95 passed / 0 failed (up from 93 on
+`test/mcp-act-boundary`'s base). Mutation: removing the `require_ready()` line
+turns `mock_e2e::destroyed_session_refuses_every_operation` red; restoring it is
+green. Branch `tif-93-evidence-require-ready`.
+
+**Not covered, deliberately:** a handler-level (through `myco-rt-mcp`) assertion of
+the destroyed case. `Server::sessions` is `HashMap<String, Session<QemuLinuxBackend>>`
+— a concrete type a test cannot construct without a real boot — so the handler test
+would need either a live VM window or a generic `Server`. The guard lives in
+`Session`, which every handler calls for its phase decision, so it is pinned once in
+the layer that owns it. A generic `Server` would make the whole MCP surface
+VM-testable; that is a separate refactor, noted here rather than smuggled into this
+change.
