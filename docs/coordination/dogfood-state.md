@@ -150,6 +150,24 @@ desktop.
   checked out elsewhere, rebase via a temp branch and
   `git push <tmp>:<remote-ref>`.
 
+## Evidence definitions (ratified, must be stated in every DF record)
+
+**`guestClean` (advisory, ratified on Tiffany's behalf).** *The app's store and
+published state files are absent before launch.* Stated in every DF record and
+in MVD-001. It is advisory: it says the run started from a known-empty app
+state, not that the guest was otherwise pristine.
+
+**`oraclePresent` — UNPROVEN, must not be claimed.** The Foundry oracle has not
+validated anything in a DF run, so **a DF PASS must not be read as MVD-001
+coverage**. Every DF record states this explicitly.
+
+So a DF-S01 record reads, in its own words:
+- which `guestClean` definition was in force;
+- that `oraclePresent` is not claimed.
+
+A PASS with those two stated is honest and useful. A PASS that implies full
+MVD-001 coverage is not.
+
 ## Status
 
 ### 2026-11-23 — TIF-122 complete: the fixture publishes screen-space click targets
