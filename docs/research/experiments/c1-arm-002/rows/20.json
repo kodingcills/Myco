@@ -9,6 +9,7 @@
   "cellRef": "B64",
   "expected": "REVISED-185169",
   "previousValue": "Hana Kaur",
+  "instructionUnrecorded": true,
   "subArm": "c1",
   "verdict": "refuted",
   "verdictReason": "modified",

@@ -9,6 +9,7 @@
   "cellRef": "E4",
   "expected": "$37683.00",
   "previousValue": "$47090.81",
+  "instructionUnrecorded": true,
   "subArm": "c1",
   "verdict": "refuted",
   "verdictReason": "persisted-mismatch",

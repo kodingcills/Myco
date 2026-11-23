@@ -9,6 +9,7 @@
   "cellRef": "E60",
   "expected": "$6286.05",
   "previousValue": "$65063.77",
+  "instructionUnrecorded": true,
   "subArm": "c1",
   "verdict": "refuted",
   "verdictReason": "step-budget",
