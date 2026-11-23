@@ -123,6 +123,7 @@ export function App() {
   const compareButton = useRef<HTMLButtonElement>(null);
   const wasComparing = useRef(false);
   const comparison = useViewer((state) => state.comparison);
+  const runs = useViewer((state) => state.runs);
   useEffect(() => {
     if (comparison) {
       wasComparing.current = true;
@@ -419,6 +420,23 @@ export function App() {
             onClick={() => useViewer.setState({ inspectorOpen: !inspector })}
           >
             <PanelRight aria-hidden="true" />
+          </button>
+        )}
+        {runs.length > 0 && (
+          // TIF-148: the compare table from the runs already open — no file drop, no URL.
+          // Disabled while no run has a result.json, because there is nothing to compare.
+          <button
+            type="button"
+            data-button
+            disabled={!runs.some((run) => run.data.result !== undefined)}
+            onClick={() => {
+              setCompareError(undefined);
+              const opened = useViewer.getState().compareOpenRuns();
+              if (!opened) setCompareError("No open run carries a result.json to compare.");
+            }}
+            title="Compare the runs open in the sidebar"
+          >
+            Compare open runs
           </button>
         )}
         <button
