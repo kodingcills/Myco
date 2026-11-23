@@ -13,7 +13,17 @@ const driverModules = [
 const stdioImports = new Set(["node:readline", "node:stream"]);
 
 const allowed = new Set(
-  ["src/tasks/intent.ts", "src/tasks/fixture.ts", "src/core/verify.ts"].map((p) => resolve(p)),
+  [
+    "src/tasks/intent.ts",
+    "src/tasks/fixture.ts",
+    "src/core/verify.ts",
+    // Imports nothing (`src/tasks/task-text.ts` documents why that is a
+    // requirement). Both arms must render the same task sentence, and
+    // `intent.ts` cannot be the source because it reaches `node:crypto` through
+    // `fixture.ts`. A dependency-free leaf is safe to allow, and this test still
+    // catches anything it might one day import.
+    "src/tasks/task-text.ts",
+  ].map((p) => resolve(p)),
 );
 function violations(entry: string, extraAllowed: string[] = []): string[] {
   const permitted = new Set([...allowed, ...extraAllowed.map((p) => resolve(p))]);
