@@ -183,12 +183,6 @@ take_locks() {
   SESSION_LOCK_OURS=1
 }
 
-# Recover from an interrupted earlier build: an absent agent with a saved good one
-# (`.prev`) is restored before anything else, in every mode (TIF-141 / N-A).
-if [[ ! -e "$AGENT" && -s "$AGENT.prev" ]]; then
-  mv -f "$AGENT.prev" "$AGENT"; echo "Restored the previous agent from an interrupted build ($AGENT)."
-fi
-
 if [[ $AGENT_MODE == report ]]; then
   if [[ -s "$AGENT" ]]; then
     echo "OK: guest agent binary present ($AGENT)."

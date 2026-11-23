@@ -454,14 +454,6 @@ if [[ $rc -eq 1 && "$out" == *"assets are missing"* && "$out" != *"no guest agen
 else bad "misattributed not-ready: rc=$rc / $out"; fi
 
 # ── 20. TIF-141: round-3 nits from the TIF-120 review ─────────────────────────
-# N-A: an interrupted build that left the agent absent and a good .prev is
-# recovered by the next run of any mode (deterministic stand-in for the window).
-A="$TMP/a20a"; agent_sandbox "$A"; echo old > "$A/state/myco-rt-agent-aarch64.prev"
-out="$(prov "$A" 2>&1)"; rc=$?; reap "$A"
-if [[ $rc -eq 0 && "$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null)" == old && ! -e "$A/state/myco-rt-agent-aarch64.prev" && -z "$(order "$A")" ]]; then
-  ok "an agent left in .prev by an interrupted build is restored by the next run, without booting"
-else bad "interrupted-build recovery: rc=$rc agent=$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null) / $out"; fi
-
 # N-B: build-agent-in-guest.sh copies the host agent to a unique temp file and
 # renames it into place; a failed copy leaves the existing agent and no temp file.
 bsand() {
