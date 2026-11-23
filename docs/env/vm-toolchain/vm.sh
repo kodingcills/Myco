@@ -42,6 +42,36 @@ boot_ready() {
   return 1
 }
 
+# TIF-164: `stop vm` has the same defect as `start` had. On 2026-11-23,
+# `vm.sh stop` returned rc 0 while the guest process was still alive 30 seconds
+# later; only `kill` stopped it. Both arms now wait until UTM reports stopped,
+# so "stopped" means measured, not requested. Mirrors shutdown.sh's poll shape.
+STOP_TIMEOUT=${MYCO_STOP_TIMEOUT:-60}
+stop_ready() {
+  case $STOP_TIMEOUT in
+    ''|*[!0-9]*)
+      echo "vm.sh: MYCO_STOP_TIMEOUT must be a whole number of seconds, got '$STOP_TIMEOUT'" >&2
+      return 2 ;;
+  esac
+  local t0 st n=0
+  t0=$(date +%s)
+  while [ $(( $(date +%s) - t0 )) -lt "$STOP_TIMEOUT" ]; do
+    st=$(as 'get status of vm' 2>/dev/null)
+    if [ "$st" = "stopped" ]; then
+      n=$((n + 1))
+      # Two consecutive reads: a single one can race the shutdown transition.
+      [ $n -ge 2 ] && { echo "vm.sh: stopped after $(( $(date +%s) - t0 ))s" >&2; return 0; }
+    else
+      n=0
+    fi
+    sleep 3
+  done
+  echo "vm.sh: FAILED: UTM still reports '$(as 'get status of vm' 2>/dev/null)' after ${STOP_TIMEOUT}s; the guest process is likely still alive." >&2
+  echo "  Check: ps -Ao pid,pcpu,comm | grep -i qemu" >&2
+  echo "  Force it with 'vm.sh kill', or raise MYCO_STOP_TIMEOUT." >&2
+  return 1
+}
+
 # TIF-137: a launch takes the host VM lock, the same flock boot.sh and the trial
 # drivers use. Without this, vm.sh was the one launcher that could start a guest
 # while another owner held the lock — and build-all.sh calls it four times.
@@ -87,8 +117,8 @@ case "${1:-}" in
   # its non-zero exit propagates (before this, only the AppleScript rc mattered).
   start) as 'start vm' && boot_ready ;;
   start-disposable) as 'start vm saving false' && boot_ready ;;
-  stop) as 'stop vm by request' ;;
-  kill) as 'stop vm by force' ;;
+  stop) as 'stop vm by request' && stop_ready ;;
+  kill) as 'stop vm by force' && stop_ready ;;
   status) as 'get status of vm' ;;
   snapshots) as 'get name of every snapshot of vm' ;;
   snapshot) as "create snapshot vm named \"$2\"" ;;
