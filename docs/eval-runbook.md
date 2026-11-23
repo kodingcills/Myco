@@ -63,6 +63,34 @@ Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 (`myco-win11`), `MYCO_AGENT_PORT` (8765), `MYCO_TOKEN_PATH`
 (`C:\ProgramData\Myco\agent.token`).
 
+**The readiness gate is repo-only, by design.** `scripts/wait-guest-ready.sh` is resolved
+from the checkout by `reset-trial-vm.sh` (`REPO_GATE`, line 42) and **no host script calls
+it** — so a fresh `~/VMs/myco-win11/scripts` copy neither has it nor needs it, and
+`sync-toolchain.sh` does not deploy it (that script mirrors `docs/env/vm-toolchain/`, and
+the gate is not in there). This is why #318 could be closed: moving the gate into the synced
+toolchain was unnecessary once it resolves from the repo. If you are debugging a gate
+failure, check the **checkout's** copy — the host directory is not involved.
+
+**Precedence, exactly:** `gate_script()` checks in this order — (1) `MYCO_VM_SCRIPTS` if
+set, (2) the in-repo `REPO_GATE` if it is executable, (3) `$VM_SCRIPTS` as a fallback. So
+the host path is reachable only when `MYCO_VM_SCRIPTS` is set **and** the in-repo copy is
+missing or not executable. Setting `MYCO_VM_SCRIPTS` is how a test stubs the gate; leaving
+it unset is how a normal run uses the repo's copy.
+
+**The readiness gate is repo-only, by design.** `scripts/wait-guest-ready.sh` is resolved
+from the checkout by `reset-trial-vm.sh` (`REPO_GATE`, line 42) and **no host script calls
+it** — so a fresh `~/VMs/myco-win11/scripts` copy neither has it nor needs it, and
+`sync-toolchain.sh` does not deploy it (that script mirrors `docs/env/vm-toolchain/`, and
+the gate is not in there). This is why #318 could be closed: moving the gate into the synced
+toolchain was unnecessary once it resolves from the repo. If you are debugging a gate
+failure, check the **checkout's** copy — the host directory is not involved.
+
+**Precedence, exactly:** `gate_script()` checks in this order — (1) `MYCO_VM_SCRIPTS` if
+set, (2) the in-repo `REPO_GATE` if it is executable, (3) `$VM_SCRIPTS` as a fallback. So
+the host path is reachable only when `MYCO_VM_SCRIPTS` is set **and** the in-repo copy is
+missing or not executable. Setting `MYCO_VM_SCRIPTS` is how a test stubs the gate; leaving
+it unset is how a normal run uses the repo's copy.
+
 ### 1.4 The two GUI-only steps
 
 1. **The shell that drives the VM must be in the Mac's GUI (Aqua) session.** `scripts/vm.sh`
