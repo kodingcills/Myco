@@ -50,6 +50,52 @@ jobs:
       - name: Test
         run: pytest -v
 
+  # TIF-119: the in-guest agent's file-grant confinement (RT-015 read, RT-017 write)
+  # is `cfg(target_os = "linux")`, so on the macOS dev host those tests compile to
+  # nothing and "cargo test" passes with them never run. This job runs them on Linux
+  # and fails if the file_grant test count is zero, so the gap cannot silently return.
+  runtime-agent-linux:
+    name: runtime guest agent tests (ubuntu-latest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runtime
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native deps (xa11y-linux links libxkbcommon)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runtime
+      - name: Test myco-rt-agent
+        # pipefail: a job-level `defaults.run` makes the shell `bash -e` without
+        # pipefail, so `| tee` swallowed a compile failure (first run of this job).
+        run: |
+          set -o pipefail
+          cargo test -p myco-rt-agent 2>&1 | tee /tmp/agent-test.log
+      - name: Confinement tests actually ran
+        run: |
+          set -euo pipefail
+          n=$(grep -cE '^test file_grant::.* \.\.\. ok$' /tmp/agent-test.log || true)
+          echo "file_grant tests passed: $n"
+          [ "$n" -gt 0 ] || { echo "::error::zero file_grant tests ran on Linux (TIF-119)"; exit 1; }
+      # RT-017: the agent/wire round trip (transport <-> real agent) is Linux-only
+      # too, as is RT-015's read over the channel; core + mcp hold the Session and
+      # MCP-surface tests. Build the agent explicitly so the transport tests never
+      # spawn a stale cached binary.
+      - name: Test transport (real agent over the wire), core, mcp
+        run: |
+          set -o pipefail
+          cargo build -p myco-rt-agent
+          cargo test -p myco-rt-transport -p myco-rt-core -p myco-rt-mcp 2>&1 | tee /tmp/host-test.log
+      - name: Wire round trip actually ran
+        run: |
+          set -euo pipefail
+          for t in file_write_over_control_channel_round_trips_through_the_agent agent_refuses_an_oversize_write_on_its_own file_read_over_control_channel_requires_grant; do
+            grep -qE "^test tests::$t \.\.\. ok$" /tmp/host-test.log || { echo "::error::$t did not run and pass on Linux"; exit 1; }
+          done
+
   # Runs both verdict fixture sizes on main pushes and PRs labelled `perf`.
   # The hosted 10k check compares the median against calibrated runner caps.
   # The strict local gate enforces a 150 ms maximum at both sizes
