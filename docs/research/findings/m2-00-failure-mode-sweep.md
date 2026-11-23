@@ -12,9 +12,9 @@ Checked against the TIF-105 spec and `docs/research/tif-105-coverage-brief.md`.
 **In brief**
 
 1. **The failure mix inverted between 2024 and 2026.** Click grounding went from
-   "more than 75%" of 550 failed examples to 7.6% (11 of 144). Step-budget
-   exhaustion went from 70% of failures to 0.7% (1 of 144). Reasoning and control
-   is now 52.8% (76 of 144).
+   "more than 75%" of 550 failed examples to 7.6% (11 of 144). Ending at
+   the step limit went from 70% of one 2024 system's failures to a root cause in 1
+   of 144. Reasoning and control is now 52.8% (76 of 144).
 2. **Failures end silently.** At a 100-step budget, 86–96% of failed
    OSWorld-Verified tasks end with the agent claiming completion: 91–105 of 361
    tasks, or 25–29% of everything attempted. On long workflows 81–90 of 108
@@ -32,7 +32,8 @@ Checked against the TIF-105 spec and `docs/research/tif-105-coverage-brief.md`.
    the nearest competitor has already published.
 5. **Recommended ranking:** a state-oracle completion gate first, checkpointed
    retry second, a fault-injected false-success suite as the proof. Procedures
-   stay an experiment.
+   stay an experiment. Per-step guards rank last: the one ablation that reports
+   confidence intervals found no measurable effect.
 6. **Two gaps stay open and are not estimated:** UI-drift breakage rates for
    procedures (TIF-100), and any failure breakdown for Gemini computer use.
 
@@ -56,14 +57,14 @@ Status tags, used in every table:
 | Tag | Meaning |
 |---|---|
 | `V2` | Read from the primary source by two independent fetches this session (two research agents, or one agent plus the spot-check pass). |
-| `V` | Read from the primary source once this session. |
+| `V` | Read from the primary source this session. |
 | `D` | Derived here from `V`/`V2` inputs. The arithmetic is shown beside the number. |
 | `S` | Seen only in a secondary source or a search summary. |
 | `UNVERIFIED` | From memory, or the source could not be fetched. Not to be repeated as fact. |
 | `1src` | **Single-source.** The number rests on one study or one vendor document. Fetching that source twice (`V2`) does not make it corroborated. |
 | `2src` | The same quantity is reported by two independent studies. |
 
-Three limits on `V` and `V2`:
+Four limits on `V` and `V2`:
 
 - Web pages and arXiv HTML reached the research agents through a fetch tool that
   returns extracted text and, for long pages, a model summary of the tail. `V`
@@ -75,6 +76,12 @@ Three limits on `V` and `V2`:
 - A rate applies to the model, harness, benchmark version and year it was measured
   on. The mix shifts with capability, so every row names its cohort. A 2024
   distribution does not describe a 2026 agent.
+- Versions. After the first verifier pass, every cited arXiv paper was checked
+  against the arXiv listing. Three had been read at an older version (`[MINI]`
+  v1, `[WGUI]` v4, `[PCE]` v1) and were re-read at the latest; only `[MINI]` had
+  changed numbers. Every arXiv-sourced row was then re-checked against the
+  latest page text. Tags were not upgraded: `V2` still marks only what had two
+  reads before that pass.
 
 Every rate is given with its denominator, or with "n not published" where the
 source withholds it. Source keys (`[CUAD]`, `[OSW2]`, …) resolve in "Sources" at
@@ -94,12 +101,12 @@ studies with different definitions, so they are not additive. Every number is
 |---|---|---|---|---|---|
 | **Grounding** | Frontier, 2025–26: 11 of 144 failures (7.6%) `[CUAD]` and 9 of 122 (7.4%) `[MIS]`, `2src`. In 2024: "more than 75%" of 550 failed examples `[OSW]` | high | Model. The residual depends on image resolution, which is harness (9.3 points, `[O-54]`) | Verified procedure (element references); low priority | §1b, §1c |
 | **False success** | 91–105 of 361 tasks end in a false DONE at 100 steps, 86–96% of failed tasks `[VLAA]`; 5 of 9 DONE claims fail a state check `[SNK]`; 81–90 of 108 long-horizon trajectories `[OSW2]` | medium | Model makes the claim; the harness accepts it | **State oracle** (detects) | §1a |
-| **State drift** (the agent's picture of application state diverging from the real state) | Small as a labelled root cause: context loss 2 and memory hallucination 1 of 144 `[CUAD]`; state loss 2 of 122 `[MIS]`; stale state 2 of 42 `[MINI]`. When the starting state is not the default, success falls 17–34 points `[WGUI]`. No study labels "state drift" as such | low | Mixed: model, plus harness history truncation | State oracle (re-read state); preconditions | §1b, §1e, §3 item 9. Interface drift across app versions is a separate, unmeasured question: §6 gap 4 |
-| **Pop-ups and stale UI** | Pop-ups when injected: attack success 86% on average over 50 OSWorld and 72 VisualWebArena tasks `[POP]`; success 24.21% → 10.28% `[HIJ]`; distracted in 20–21 of 29 `[MAC]`. In ordinary benchmark runs: distraction 0 of 144, unexpected system behaviour 1 of 144 `[CUAD]`. Stale UI: stale-category tool errors 88 of 10,783 calls (0.82%) `[HCU]`; timing or race 0 of 144 `[CUAD]`; an adversarial focus change redirected 45 of 45 actions `[FOCUS]` | high that pop-ups halve success when present; low on how often they occur in real use | Pop-ups: model. Stale UI: harness | Fault injection to measure; guarded steps to fix | §1c, §1e |
+| **State drift** (the agent's picture of application state diverging from the real state) | Small as a labelled root cause: context loss 2 and memory hallucination 1 of 144 `[CUAD]`; state loss 2 of 122 `[MIS]`; stale state 2 of 105 `[MINI]`. When the starting state is not the default, success falls 17–34 points `[WGUI]`. No study labels "state drift" as such | low | Mixed: model, plus harness history truncation | State oracle (re-read state); preconditions | §1b, §1e, §3 item 9. Interface drift across app versions is a separate, unmeasured question: §6 gap 4 |
+| **Pop-ups and stale UI** | Pop-ups when injected: attack success 86% on average `[POP]` (abstract figure; five models, 50 OSWorld and 72 VisualWebArena tasks); success 24.21% → 10.28% `[HIJ]`; distracted in 20–21 of 29 `[MAC]`. In ordinary benchmark runs: distraction 0 of 144, unexpected system behaviour 1 of 144 `[CUAD]`. Stale UI: stale-category tool errors 88 of 10,783 calls (0.82%) `[HCU]`; timing or race 0 of 144 `[CUAD]`; an adversarial focus change redirected 45 of 45 actions `[FOCUS]` | high that pop-ups halve success when present; low on how often they occur in real use | Pop-ups: model. Stale UI: harness | Fault injection to measure; guarded steps to fix | §1c, §1e |
 | **Long-horizon planning** | Reasoning and control 76 of 144 (52.8%) `[CUAD]`; multi-app tasks hold 42.6% of the residual failures of the top eight agents `[LB]`; partial minus strict score 31–37 points on OSWorld 2.0, where strict success falls from 20–24% on tasks under 45 human-minutes to 0% above 163 (Opus 4.7 and GPT-5.5) `[OSW2]` Table 3, App. G.2 Table 21 | high | Model | Checkpoint oracle for the unmet last mile; verified procedures for the 36 of 144 that are redundant-strategy, parameter or decomposition errors; nothing for the rest | §1b, §1f |
 | **Recovery** | 659 of 1,202 errors self-recover in-trace (54.8%) `[SREC]`; error awareness at most 44.0% over 2,250 inherited error states `[REC]`; recovery and repair under 7% of the action budget `[OSW2]`; a diagnosed re-run fixes 28.47% of 144 failures against 13.89% blind `[CUAD]` | medium | Model | State oracle with checkpointed retry (estimated 4–8 points, §4); fault injection to measure | §1e, §4 |
-| **Timing** | Tuned Linux harness: timing or race 0 of 144 `[CUAD]`. Younger harnesses: action latency 5 of 42 failures `[MINI]`; time limit 18.64% of GUI-only failures, count not published `[MCPW]`. Mechanism: observe-to-act gap 6.51 s `[FOCUS]`; fixed sleeps in every reference harness read | low | Harness | Guarded steps that wait on state | §1c, §3 item 4 |
-| **Tool-design limits** | One harness defect hid 22–28% of a lab's reported failures (≈17–21 of 361 tasks) `[A-SC]` and 26% (9.3 of 35.3 points) `[O-54]`; UIA-only observation 62.8% of failures on Windows, n not published `[UFO2]`; 19 of 42 on AndroidWorld `[MINI]`. As a labelled root cause: 0 of 144 `[CUAD]` | medium | Harness | State oracle independent of the action path; fault injection as a conformance suite | §1c, §2, §3 |
+| **Timing** | Tuned Linux harness: timing or race 0 of 144 `[CUAD]`. Younger harnesses: action latency 0 of 105 failures `[MINI]` (v2; 5 of 42 in v1); time limit 18.64% of GUI-only failures, count not published `[MCPW]`. Mechanism: observe-to-act gap 6.51 s `[FOCUS]`; fixed sleeps in every reference harness read | low | Harness | Guarded steps that wait on state | §1c, §3 item 4 |
+| **Tool-design limits** | One harness defect hid 22–28% of a lab's reported failures (≈17–21 of 361 tasks) `[A-SC]` and 26% (9.3 of 35.3 points) `[O-54]`; UIA-only observation 62.8% of failures on Windows, n not published `[UFO2]`; 11 of 105 on AndroidWorld `[MINI]`. As a labelled root cause: 0 of 144 `[CUAD]` | medium | Harness | State oracle independent of the action path; fault injection as a conformance suite | §1c, §2, §3 |
 
 #### 1a. How failures end
 
@@ -108,9 +115,9 @@ studies with different definitions, so they are not additive. Every number is
 | **False completion claim** — agent says done, state says no | Sonnet 4.6 and Gemini 3 Flash in the VLAA-GUI harness, OSWorld-Verified, 361 tasks, 100 steps `[VLAA]` §4.3, Table 10 | Sonnet 4.6: **105 false DONE = 95.5% of failed tasks = 29.1% of 361**; with the paper's completion check 91 = 91.9% = 25.2%. Gemini 3 Flash: 102 = 91.9% = 28.3%; with the check 100 = 86.2% = 27.7%. DONE accuracy 69.6–73.5%, so 26–30% of completion claims are false (number of claims not published). At 15 steps false DONE is 53.7% and 38.7% of failures, because step exhaustion replaces it | `V2` `1src` | medium | Model makes the claim; the loop accepts it | **State oracle** (detects; does not repair) |
 | Same, state-checked, professional app | Sonnet 4.5 in the Cua harness, 25 KiCad tasks, netlist-reading verifier `[SNK]` | 4 of 25 pass; 16 of 25 hit the 150-step cap; 5 of 25 declared done on a wrong artifact; **5 of 9 DONE claims failed verification** | `V2` `1src` | medium (n=25, vendor blog, runs per task not stated) | Model | State oracle |
 | Premature stop or false done, long workflows | Four models, OSWorld 2.0, 108 tasks each, 500 steps `[OSW2]` App. F Table 19 | **81, 84, 90 and 86 of 108 trajectories (75.0–83.3%)**; final-state exactness failure 103, 97, 92 and 91 of 108 (84.3–95.4%). Labels overlap; assigned by GPT-5.5, "further human-verified" | `V2` `1src` | medium (LLM labels) | Model | State oracle, per checkpoint |
-| False DONE, small local models | Qwen3-VL-30B at 50 steps, OpenCUA-7B at 100, OSWorld, 361 tasks × 5 trials `[CANDID]` Tables 2, 5 | ≈42% (97.4 of ≈233.5 failures) and ≈90% (241.3 of ≈266.9). Mean counts per trial; categories not exclusive | `D` `1src` | low | Model | State oracle |
-| Step-budget exhaustion | Claude 4.5 Sonnet, 50 steps, OSWorld `[CUAD]` Table 7 | Root cause in **1 of 144** failures (0.7%) | `V2` `1src` | high | Was a harness cap; now minor | None |
-| Same, 2024 | FRIDAY (GPT-4o), OSWorld, 369 tasks at 18.8% success `[OSC]` Table 4 | 70.4% of failures (count not published) | `V` `1src` | medium | Harness (15-step cap) | — |
+| False DONE, small local models | Qwen3-VL-30B at 50 steps, OpenCUA-7B at 100, OSWorld, 361 tasks × 5 trials `[CANDID]` Tables 3, 5, 6 | ≈42% (97.4 of ≈233.5 failures) and ≈90% (241.3 of ≈266.9). The paper does not define "False Success" or state its unit; read here as mean tasks per trial. Categories not exclusive | `D` `1src` | low | Model | State oracle |
+| Step-budget exhaustion | Claude 4.5 Sonnet, 50 steps, OSWorld `[CUAD]` Table 7 | Root cause in **1 of 144** failures (0.7%) | `V2` `1src` | high | Model; not a budget effect at 50 steps | None |
+| Same, 2024, as a termination mode | FRIDAY (GPT-4o), OSWorld, 369 tasks at 18.8% success `[OSC]` Tables 2, 4 | "Reach step limit" 70.4% of failure cases (count not published; the paper states no step-limit value) | `V` `1src` | medium | Not attributed: a termination mode, not a cause | — |
 | Budget as a cure | Sonnet 4.5 and CoAct-1 on the official leaderboard, 361 tasks `[LB]` | 50 → 100 steps recovers 4.80 of 41.92 failing points (11.5%); CoAct-1 100 → 150 recovers 0.83 of 40.07 (2.1%) | `D` `1src` | high | Model | None |
 
 Two caveats on the headline row. `[VLAA]` does not say who adjudicated "false"
@@ -173,7 +180,7 @@ no-op repetition 36 (29.5%), plan loop 20 (16.4%), specification violation 18
 (14.8%), grounding 9 (7.4%), premature stop 8 (6.6%), tool arguments 6,
 hallucinated feature 5, missed verification 4, state loss 2 (`V2` `1src`). It
 describes behaviours, not root causes, and its inter-annotator agreement is low
-(two extractions returned κ = 0.36 and κ = 0.41). The grounding share is the one
+(κ = 0.41 between the two LLM annotators on diagnoses; four-rater Fleiss' κ = 0.36). The grounding share is the one
 quantity two studies agree on: 9 of 122 (7.4%) against 11 of 144 (7.6%), `2src`.
 
 Older open-source breakdowns, for the trend only:
@@ -192,18 +199,20 @@ wrong with the tools it had, not what a different tool would have prevented.
 
 | Effect | Evidence (cohort) | Size, with denominator | St. | Conf. | Myco lever |
 |---|---|---|---|---|---|
-| **Defect in a lab's own eval harness** | Anthropic: a zoom-tool bug when paired with batched actions, plus a 16K per-turn output cap. OSWorld-Verified, 361 tasks, 100 steps, 5 runs `[A-SC]` Opus 4.7 §8.9.4 `(OCR)`, Opus 4.8 Table 8.1 fn 28, Mythos Preview §6.11.4 | Opus 4.7 78.0 → 82.8 (4.8 points ≈ 17 of 361 tasks = 4.8/22.0 = **22% of the failures first reported**); Mythos Preview 79.6 → 85.4 (5.8 points ≈ 21 tasks = 5.8/20.4 = **28%**) | `V` `D` `1src` | medium (two causes not separated) | Fault injection (conformance tests for the tool layer) |
+| **Defect in a lab's own eval harness** | Anthropic: a zoom-tool bug when paired with batched actions, plus a 16K per-turn output cap. OSWorld-Verified, 361 tasks, 100 steps, 5 runs `[A-SC]` Opus 4.7 §8.9.4 `(OCR)`; Opus 4.8 Table 8.1 fn 28 and §8.12.6; Mythos Preview §6.11.4 (the 79.6); Fable 5 / Mythos 5 Table 8.1 fn 27 and §8.16.3 (the 85.4 rescore) | Opus 4.7 78.0 → 82.8 (4.8 points ≈ 17 of 361 tasks = 4.8/22.0 = **22% of the failures first reported**); Mythos Preview 79.6 → 85.4 (5.8 points ≈ 21 tasks = 5.8/20.4 = **28%**) | `V` `D` `1src` | medium (two causes not separated) | Fault injection (conformance tests for the tool layer) |
 | **Screenshot resolution** | OpenAI GPT-5.3-Codex, OSWorld-Verified, same weights, new image-detail parameter `[O-54]` footnote | 64.7 → 74.0 (9.3 of 35.3 failing points = **26% of that model's failures**). Task count and step budget not published on the page | `V2` `D` `1src` | high | State oracle (state, not pixels) |
 | Same, grounding only | Opus 4.7 on ScreenSpot-Pro, 1,581 tasks, old versus new image limit `[A-SC]` Opus 4.7 §8.9.3 `(OCR)` | 69.0 → 79.5 without tools; crop tooling adds 5.6–25.4 points across models | `V` `1src` | medium | — |
-| Same, enterprise UI | OpenAI computer-use-preview, UI-CUBE, 136 simple tasks, 1024×768 → 4K `[CUBE]` Table 8 | 91.2 → 35.3 | `V2` `1src` | high | — |
-| **Observation channel on Windows** | UFO2-base, GPT-4o, UIA-only detection, Windows Agent Arena (154 tasks), authors' manual review of all failures `[UFO2]` §6.2, Fig. 19 | **Control-detection failures 62.8% of failures.** Text says "more than 62%"; the exact value is from the figure; n not published (back-solved ≈71 of ≈113) | `V2` `1src` | medium (one system, 2025) | Object-model adapters for the oracle |
-| Unverified input and timing, mobile | Single-agent baseline, AndroidWorld, 42 failures of 116 tasks, manual labels `[MINI]` §3.2 | Text believed entered but not 12; action latency 5; stale state 2 = **19 of 42 (45%)** | `V2` `D` `1src` | low (baseline model unnamed, one labeller) | State oracle per step |
+| Same, enterprise UI | OpenAI computer-use-preview, UI-CUBE, 136 simple tasks, 1024×768 → 4K `[CUBE]` Table 6 | 91.2 → 35.3 | `V2` `1src` | high | — |
+| **Observation channel on Windows** | UFO2-base, GPT-4o, UIA-only detection, Windows Agent Arena (154 tasks), authors' manual review of all failures `[UFO2]` §6.2, Fig. 19 | **Control-detection failures 62.8% of failures.** The text says "more than 62%"; 62.8% is the label in Figure 19, readable only in the PDF. n not published (back-solved ≈71 of ≈113) | `V2` `1src` | medium (one system, 2025) | Object-model adapters for the oracle |
+| Unverified input and timing, mobile | Re-run single-agent baseline, AndroidWorld, 105 failures, labels by two LLM judges with author adjudication (κ = 0.59) `[MINI]` v2 §3.2 | Text believed entered but not 9; action latency 0; stale state 2 = **11 of 105 (10.5%)**. The other 94: repetitive loops 20, reasoning drift 10, error propagation 2, and 62 outside the paper's taxonomy (31 of them perception or grounding) | `V` `D` `1src` | low (baseline model unnamed; LLM judges) | State oracle per step |
 | Scaffold layers | Agent S2 → without hierarchical planning, GPT-5, OSWorld, 361 tasks `[S3]` Table 2 | 48.8 → 57.9 (**+9.1**), LLM calls per task 73.6 → 41.4 | `V2` `1src` | high | None (a caution) |
 | Step cap | Four agents on the official leaderboard, 361 tasks, 15 → 50 steps `[LB]` | +12.7 to +16.6 points | `D` `1src` | high | — |
 | Malformed tool calls | HCU, GPT-5.4, OSWorld 1.0, 361 tasks × 3 runs = 1,083 task-runs `[HCU]` Table 11, Table 2 | 2,460 of 14,160 AX/GUI calls rejected (17.37%) without the usage skill; 147 of 10,783 (1.36%) with. Task score moves only 64.00 → 65.59 | `V2` `D` `1src` | high | Verified procedure (compiled calls) |
-| Stale observation | Claude Opus 4.6, 10 OSWorld tasks, adversarial focus change `[FOCUS]` Tables 1, 5 | Observe-to-act gap 6.51 s mean; focus change redirected 45 of 45 actions; a pre-action check stopped all of them at under 0.1 s | `V` `1src` | low (one author, adversarial) | Verified procedure (precondition) |
-| GUI-only action surface | CoAct-1 on OSWorld, 361 tasks `[COACT]` Table 4; UFO2 on OSWorld-W, 49 tasks `[UFO2]` Table 5; OSWorld-MCP, 361 tasks `[OSMCP]` Table 1 | Hybrid code + GUI 60.76 against GUI-only 50.68 (+10.1); GUI + API +6.1 to +8.2; MCP tools +2.4 to +3.2 for strong agents, invoked in at most 36.3% of tasks | `V2` `1src` each | high | Verified procedure |
-| GUI-only failures that are harness | Claude 3.7 Sonnet, MCPWorld, 201 tasks × 3 attempts `[MCPW]` Table 6 | Time limit 18.64% + cursor 5.08% + element not found 1.69% = 25.4% of failures (count not published) | `V` `D` `1src` | medium | — |
+| Stale observation | Claude Opus 4.6, 10 OSWorld tasks, adversarial focus change `[FOCUS]` Tables 1, 3, 10 | Observe-to-act gap 6.51 s mean; a focus change redirected 45 of 45 actions; a pre-action check intercepted all focus attacks at under 0.1 s (it does not cover in-page DOM changes) | `V` `1src` | low (one author, adversarial) | Verified procedure (precondition) |
+| GUI-only action surface | CoAct-1 on OSWorld `[COACT]` Table 4; UFO2, GUI-only against GUI + API actions `[UFO2]` Table 5; OSWorld-MCP, 361 tasks, 50 steps `[OSMCP]` Table 1 | Hybrid code + GUI 60.76 against GUI-only 50.68 (+10.1); GUI + API +6.1 to +8.2; MCP tools +2.4 to +3.2 for strong agents, invoked in at most 36.3% of tasks | `V2` `1src` each | high | Verified procedure |
+| GUI-only failures that are harness | Claude 3.7 Sonnet, MCPWorld, 201 tasks × 3 attempts `[MCPW]` Table 5 | Time limit 18.64% + cursor 5.08% + element not found 1.69% = 25.4% of failures (count not published) | `V` `D` `1src` | medium | — |
+| Accessibility channel as agent observation | HCU, GPT-5.4, OSWorld 1.0, 361 tasks × 3 runs `[HCU]` Table 2 | 65.59 with the accessibility channel, 62.79 without (**+2.8**); 66.08 without the GUI channel | `V2` `D` `1src` | high | — (why adapters are built for the oracle, not the agent) |
+| Per-step verification, by ablation | WorldGUI-Agent (GPT-4o) on WorldGUI `[WGUI]` Table 5; mobile-use full system, AndroidWorld Cloud-90 subset, 90 tasks × 2 seeds `[MINI]` v2 §5.3 | Without the action-level critic 26.0 → 9.7 (**−16.3**). Without typed-text read-back 79.4 → 78.9 (**−0.6**, 95% CI −7.2 to +6.7); without goal verification −3.3 (95% CI −10.6 to +3.3) | `V` `1src` each | low: one positive result on a weak stack, one null result with intervals | Guarded steps |
 
 #### 1d. Benchmark and evaluator error (not agent failure)
 
@@ -213,9 +222,9 @@ wrong with the tools it had, not what a different tool would have prevented.
 | Same, as a root-cause label | `[CUAD]` | 10 of 144 (6.9%) | `V2` `1src` | high |
 | Invalid or GUI-free tasks | Epoch review of 361 OSWorld tasks `[EP1]` | ~10% serious errors; ~8% impossible by design; ~10% depend on live web; ~15% need only a terminal and ~30% more can substitute one. Approximate shares of 361 | `V` `1src` | medium |
 | Grader errors on long tasks | Epoch audit of 50 of 108 OSWorld 2.1 tasks `[EP2]` | Errors in 36 of 50 tasks; false negatives touch 25.4% of score mass, false positives 17.6% | `V` `1src` | medium |
-| Infeasible tasks reward FAIL | Qwen2.5-VL-72B, OSWorld, 30 steps `[PCE]` Table 3 | 86.7% on 30 infeasible tasks against 4.4% on 339 feasible | `V2` `1src` | high |
+| Infeasible tasks reward FAIL | Qwen2.5-VL-72B, OSWorld, 30 steps `[PCE]` Table 4 | 86.7% on 30 infeasible tasks against 4.4% on 339 feasible | `V2` `1src` | high |
 | LLM or VLM judge accepts a failed run | Screenshot VLM judge against the official evaluator `[VERI]` Table 1 | OSWorld 27.9% of failed episodes (≈201 of 361 tasks failed); ScienceBoard 24.8% (≈129 of 169 failed); AndroidWorld 15.4% (116 tasks; failed count not captured) | `V2` `1src` (table read through a page summary both times; failed counts are `D` from the actor's success rate) | medium |
-| Direction of judge error | Eight VLM judges on OSWorld runs `[OSR]` §4.3 | 88% of judge errors are false positives (count not captured) | `V` `1src` | medium |
+| Direction of judge error | Eight VLM judges on OSWorld runs `[OSR]` §E.5 | 88% of judge errors are false positives (count not captured) | `V` `1src` | medium |
 | State verifier against LLM judge | 120 tasks adjudicated by humans `[OC]` §5.1 | Verifier matches humans on **113 of 120 (94.2%)**; LLM judge 95 of 120 (79.2%). Judge model not named | `V2` `1src` | high |
 | State checkers err too | 450 calibration executions `[OC]` §5.3; 38-task corruption test `[SCALE]` | 76 of 450 (16.9%) checker-side errors before repair, 68 repaired; 0 of 38 generated verifiers failed a corrupted document | `V2` `1src`; `V` `1src` | medium |
 | Evaluator keeps no evidence | 82 AndroidWorld records `[AWAUD]` Table 2 | 41 of 82 verdicts unsupportable (no retained post-state); 2 of 82 confirmed false successes | `V` `1src` | medium |
@@ -224,22 +233,23 @@ wrong with the tools it had, not what a different tool would have prevented.
 
 | Perturbation | Evidence (cohort) | Size, with denominator | St. | Conf. | Model vs harness | Myco lever |
 |---|---|---|---|---|---|---|
-| Pop-ups and overlays | Five 2024 models, 50 OSWorld and 72 VisualWebArena tasks `[POP]`; UI-TARS-1.5-7B, 3,321 corrupted tasks built from OSWorld's 369 `[HIJ]` Table 2; Claude and OpenAI CUA on macOS, 29 tasks `[MAC]` Table 5 | Attack success 86% on average; success 24.21% clean → 10.28% under pop-ups; distracted in 21 of 29 (72.4%) and 20 of 29 (69.0%) | `V` `1src`; `V` `1src`; `V2` `1src` | high | Model | Fault injection to measure; guarded steps to fix |
-| Non-default starting state | WorldGUI-Agent (GPT-5.1), Windows apps, 111 tasks × 5 variants `[WGUI]` Table 4 | Office 64.4 → 37.6; Windows usage 62.5 → 40.4; Web 85.7 → 53.5; Coding 63.6 → 46.6; Media 60.0 → 26.5. Humans lose about 5 points | `V2` `1src` | medium | Mixed | Fault injection; preconditions |
+| Pop-ups and overlays | Five 2024 models, 50 OSWorld and 72 VisualWebArena tasks `[POP]`; UI-TARS-1.5-7B, 3,321 corrupted tasks built from OSWorld's 369 `[HIJ]` Table 2; Claude and OpenAI CUA on macOS, 29 tasks `[MAC]` Table 5 | Attack success 86% on average (abstract; the averaging basis is not stated); success 24.21% clean → 10.28% under pop-ups; distracted in 21 of 29 (72.4%) and 20 of 29 (69.0%) | `V` `1src`; `V` `1src`; `V2` `1src` | high | Model | Fault injection to measure; guarded steps to fix |
+| Non-default starting state | WorldGUI-Agent (GPT-5.1), ten Windows and web applications, 111 base tasks and 500 augmented variants `[WGUI]` Table 4 | Office 64.4 → 37.6; Windows usage 62.5 → 40.4; Web 85.7 → 53.5; Coding 63.6 → 46.6; Media 60.0 → 26.5. Humans lose 4–14 points | `V2` `1src` | medium | Mixed | Fault injection; preconditions |
 | Missing object or impossible task | Anthropic's impossible-task GUI evaluation, neutral prompt `[A-SC]` Fable 5 Fig. 6.3.7.A | Model fabricates a workaround in **9.4–34.5% of runs** (Opus 4.8 … Opus 4.6); 2.8–31.6% when the prompt discourages it. n not published | `V` `1src` (bar labels read from page renders) | medium | Model, prompt-steerable | State oracle (precondition) |
 | Login wall with no credentials | Production Claude models, GUI tasks `[A-SC]` Fable 5.1 §6.3.2 | 100% of rollouts attempt to guess credentials. n not published | `V` `1src` | medium | Mixed | Fault injection; guard that halts |
-| Self-inflicted side effects | GPT-5.5 and Opus 4.7, OSWorld 2.0, 108 tasks each `[OSW2]` §4.2, Table 14 | Bypass the visible interface in 72 of 216 trajectories (33%); force-kill an application in 11 and 12 of 108 | `V` `1src` | high | Harness (code tools) plus model | State oracle (side-effect checks) |
+| Self-inflicted side effects | GPT-5.5 and Opus 4.7, OSWorld 2.0, 108 tasks each `[OSW2]` §4.2; App. E.2 Table 14 | Bypass the visible interface in 72 of 216 trajectories (33%); force-kill an application in 11 and 12 of 108 | `V` `1src` | high | Harness (code tools) plus model | State oracle (side-effect checks) |
 | App crash and system anomalies | Five agents, 152 Android tasks `[DGARA]` Table 1 | −8.6 to −32.9 points, mean −17.5. **No desktop equivalent is published** | `V` `1src` | medium | Model | Fault injection |
 | Benign corruptions with small effect | UI-TARS-1.5-7B, same 3,321 tasks `[HIJ]` Table 2 | Network error −2.2; app minimised −3.4; accidental touch −1.7 points | `V` `1src` | medium | Model | — |
-| Own errors | 1,202 errors on OSWorld-Verified `[SREC]` Table 1; six agents, 2,250 error states `[REC]` | 659 of 1,202 (54.8%) self-recover in-trace; error awareness ≤ 44.0%; recognising an inherited error lifts the pass rate only 12.2% → 15.6% | `V` `1src` each | medium | Model | Fault injection to measure |
+| Own errors | 1,202 errors on OSWorld-Verified `[SREC]` §4.1; six agents, 2,250 error states `[REC]` Table 2, App. G.3 Table 18 | 659 of 1,202 (54.8%) self-recover in-trace; error awareness ≤ 44.0%; recognising an inherited error lifts the pass rate only 12.2% → 15.6% | `V` `1src` each | medium | Model | Fault injection to measure |
+| In-run recovery machinery | BEAP-Agent, GPT-4o planner, OSWorld, 369 tasks, 50 steps `[BEAP]` Table 1; ReTrace, OSWorld, two runs `[RETR]` Table 3 | Removing backtracking: 28.2 → 26.3 (**−1.9**). Adding explicit recovery: Sonnet 4.6 70.27 → 71.81 (+1.5); EvoCUA-32B 54.88 → 51.55 (−3.3) | `V` `1src` each | medium | Model | — |
 
 #### 1f. Repeatability, cost, and where the residual failures sit
 
 | Finding | Evidence | Size, with denominator | St. | Conf. | Myco lever |
 |---|---|---|---|---|---|
-| Run-to-run inconsistency | Agent S3 with GPT-5 and three other agents, OSWorld `[REL]` Fig. 1, Table 1 | Pass@10 ≈ 78% against Pass^10 ≈ 36%; Pass^1 → Pass^3 falls 9–15 points. Task count not captured | `V` `1src` | high | Verified procedure; oracle as selector |
-| Best-of-N with a model judge | Agent S3, GPT-5, OSWorld, 361 tasks `[S3]` Tables 1, 3 | 62.6 → 69.9 at N=10 (+7.3 of 37.4 failing points = 19.5%). Selected 66.5 against Pass@N 74.7 | `V2` `D` `1src` | high | State oracle as selector |
-| Step and latency waste | Agent S2 and others, OSWorld, 369 tasks `[OSH]` Tables 1, 5 | Planning plus reflection 76–96% of task time; efficiency-weighted scores 2.7× and 4.3× lower than raw success | `V2` `1src` | high | Verified procedure |
+| Run-to-run inconsistency | Agent S3 with GPT-5 and three other agents, OSWorld `[REL]` Fig. 1, Tables 1–2 | Pass@10 ≈ 78% against Pass^10 ≈ 36%; Pass^1 → Pass^3 falls 9–15 points. Task count not captured | `V` `1src` | high | Verified procedure; oracle as selector |
+| Best-of-N with a model judge | Agent S3, GPT-5, OSWorld, 361 tasks `[S3]` Table 1 (N=10), Table 5 (N=4) | 62.6 → 69.9 at N=10 (+7.3 of 37.4 failing points = 19.5%). At N=4, selected 66.5 against Pass@N 74.7 | `V2` `D` `1src` | high | State oracle as selector |
+| Step and latency waste | Agent S2 and others, OSWorld, 369 tasks `[OSH]` §3.1 and Table 1; §5.2 and Table 5 | Planning plus reflection 76–96% of task time; efficiency-weighted scores 2.7× and 4.3× lower than raw success | `V2` `1src` | high | Verified procedure |
 | Residual failures by domain | Top eight OSWorld-Verified rows, 356–361 tasks each, pooled success 83.8% `[LB]` | Multi-app **42.6%** of failures; Chrome 18.4%; Impress 10.5%; Calc 6.2%; everything else under 6% each | `D` `1src` (failures = tasks − score, summed over the eight rows) | high | Oracle and procedures across apps |
 | Windows concentration | Navi on WAA, 154 tasks `[WAA]` Table 4; PC Agent-E on WAA-V2, 141 tasks `[PCE]` Table 3 | Office share of failures 43.0 of 123.8 (34.7%) and 40.0 of 90.1 (44.4%); Office success 0–7% for every agent, 2024–2025 | `D` `1src` each | medium (no 2026 frontier per-domain data on Windows) | Oracle via object models |
 | Cross-app work on Windows | Best of five frontier models, 181 tasks `[WW]` Table 2 | 20.44% final-state success with 50.32% of intermediate checkpoints passed | `V` `1src` | medium | State oracle on terminal state |
@@ -252,23 +262,25 @@ wrong with the tools it had, not what a different tool would have prevented.
 |---|---|---|
 | Human root-cause labels, frontier model, tuned Linux harness | Model 112 of 144 (77.8%); infeasible-task handling 19 (13.2%); benchmark 10 (6.9%); environment 3 (2.1%); **tools 0** | `[CUAD]`, `1src` |
 | Same weights, harness changed | One latent defect hid **22–28%** (Anthropic, ≈17–21 of 361 tasks) and **26%** (OpenAI, 9.3 of 35.3 points) of reported failures | `[A-SC]`, `[O-54]`, `1src` each |
-| Young or accessibility-dependent harness | Harness share **19 of 42 (45%)** (AndroidWorld baseline), **62.8%** (UIA-only on Windows, n not published), 25.4% (GUI-only MCPWorld, n not published) | `[MINI]`, `[UFO2]`, `[MCPW]`, `1src` each |
+| Other harnesses | Harness share **62.8%** (UIA-only on Windows, n not published), 25.4% (GUI-only MCPWorld, n not published), 11 of 105 (10.5%) (AndroidWorld baseline, v2) | `[UFO2]`, `[MCPW]`, `[MINI]`, `1src` each |
 
 `[INFERENCE]` How these fit together:
 
-- For a frontier model in a mature Linux screenshot harness, the standing split is
-  roughly **75–80% model, 10–15% benchmark and task protocol, 0–10% harness**.
-  The first two figures are the labelled shares. The harness range is bounded
-  below by the zero that annotators saw and above by what the two lab defects cost
-  while they were live. This range is an inference from three single-source
-  measurements, not a measured split.
+- For a frontier model in a mature Linux screenshot harness, the labelled split is
+  **77.8% model and 20.1% benchmark and task protocol** (13.2% infeasible-task
+  handling plus 6.9% benchmark artifact), with 2.1% environment and no tool
+  failures (`[CUAD]`, 144 failures). A latent harness defect would sit inside the
+  model share. Its size has been measured only twice, one defect each time: 22–28%
+  and 26% of reported failures while the defect was live. This is a reading of
+  three single-source measurements, not a measured standing split.
 - A harness defect is invisible until someone changes the harness. Both lab
   findings came from re-running prior models after a fix, not from failure
   analysis. Anthropic's wording: "we have been underreporting OSWorld performance
-  across our model families" (`[A-SC]` Opus 4.7 §8.9.4, `(OCR)`).
-- On Windows, and wherever the agent depends on the accessibility tree to see, the
-  harness share is the majority of failures in the published data. That data is
-  from 2024–2025 models; no 2026 frontier per-domain result on Windows was found.
+  across our model families" (`[A-SC]` Opus 4.8 §8.12.6).
+- On Windows, the one study that attributes failures puts the majority on
+  accessibility-only observation (`[UFO2]`). That is one 2025 system on GPT-4o; no
+  2026 frontier per-domain result on Windows was found. The AndroidWorld baseline
+  that looked harness-dominated in its first version is 10.5% in its second.
 - Prompt-level fixes are weak. All `1src`:
   - Anthropic's scaffold refinements (batch actions, declare infeasible early,
     show the remaining budget) moved a prior model from 72.7% to 72.6% on 361
@@ -335,8 +347,9 @@ Each item is a design choice, not a model weakness.
    - The OSWorld harness notes that its commands are "not idempotent: replaying
      one that already reached the guest types the text a second time" (`V`, code
      comment).
-   - Measured once: 12 of 42 baseline failures on AndroidWorld (`[MINI]`, `V2`
-     `1src`).
+   - Measured once: 9 of 105 baseline failures on AndroidWorld (`[MINI]` v2, `V`
+     `1src`). Removing the read-back check from that paper's full system changed
+     success by −0.6 points (95% CI −7.2 to +6.7).
 6. **Errors swallowed, stale evidence returned.**
    - Microsoft's reference loop for the OpenAI tool prints an action exception and
      then sends a normal screenshot, and reuses a cached screenshot when capture
@@ -388,7 +401,8 @@ Would fix:
 - **The last mile on long work**: every top system loses 31–37 points between
   partial and strict score, and spends under 7% of its budget on checking (§1f).
 - **Selection among attempts**: a narrative judge already buys 7.3 points at
-  N=10 and leaves another 8 on the table (66.5 selected against 74.7 Pass@N).
+  N=10; at N=4 its selections reach 66.5 against a Pass@N ceiling of 74.7
+  (`[S3]` Tables 1, 5).
 - **Infeasible and missing-object cases**: 19 of 144 frontier failures, and the
   9–35% fabrication rate in Anthropic's impossible-task evaluation.
 
@@ -454,7 +468,8 @@ Would fix:
 - **Cost.** Per-run cost falls 15–217× and latency 3.4–5.1×; construction costs
   $2.03–6.45 and 33–49 minutes per task; break-even is 3.1–26.8 runs (`[NSPI]`
   Tables 1, 3, `V2` `1src`). A record-and-replay pilot ran 16 desktop tasks at
-  100% success in 34 s against 329 s (`[GPA]`, `V` `1src`, pilot scale).
+  100% success in 34 s, against a Gemini 3 Pro agent at 89.38% in 329 s (`[GPA]`
+  Table 2, `V` `1src`, pilot scale).
 - **Stale-state and wrong-target actions**, through per-step preconditions
   (§1c), and step waste (§1f).
 
@@ -483,7 +498,8 @@ Evidence against (all `[NSPI]` rows are `V2` `1src`):
 
 `[INFERENCE]` The weak part of the competitor's pipeline is its judge, not its
 compiler. Simular's policy judges accept only 11.4–40.1% of reliable policies
-("They are therefore conservative, which increases construction cost"), and its
+("They are therefore conservative, which increases construction cost without
+hurting reliability"), and its
 divergence judge found 0 of 6 failures that happen inside a script (`[NSPI]`
 §4.7, App. B.3). A procedure validated by a state oracle instead of a model judge
 is the differentiated version of this lever. That makes the oracle a dependency
@@ -524,7 +540,7 @@ Every row is `1src`.
 | Prompt injection | Operator: 23% susceptibility with mitigations against 62% without, on 31 scenarios | `V` (`[O-OPSC]`) |
 | False completion | No computer-use figure. Coding only: GPT-5.5 "lied about completing an impossible programming task in 29% of samples" (n not published) | `V` (`[O-55SC]` §9.2.1) |
 | Third-party failure taxonomy | GPT-5.4 GUI agent, 80 sampled failures: workflow execution 49 (61.3%), UI navigation and control discovery 31 (38.7%). A "self-checking and verification gap" is defined but not counted | `V` (`[GUICLI]` §6; counts inferred from the percentages) |
-| Third-party, web | Operator on Online-Mind2Web, 300 tasks at 61.3% success: "Filter & Sorting" 57.7% and navigation 19.6% of errors (error count not confirmed) | `V` (`[OM2W]` §5.2) |
+| Third-party, web | Operator on Online-Mind2Web, 300 tasks at 61.3% success: "Filter & Sorting" 57.7% and navigation 19.6% of errors (error count not confirmed) | `V` (`[OM2W]` Table 2; Fig. 7, §5.1) |
 | Sample-app issues | 15 of 30 issues read were harness or tool-design reports (a share of issues, not a failure rate) | `V`, grouping by the research agent |
 
 #### Gemini computer use
@@ -543,7 +559,7 @@ row is `1src`. Read the scores as "the card says", nothing stronger.
 | Failure taxonomy | **None published** by Google for any computer-use model, and none found from a third party. The 2.5 card names "clicking the wrong button or filling the wrong form" with no rate | `V` (absence, three documents) |
 | Safety numbers | No prompt-injection, confirmation or per-step safety-service rates for computer use in the cards or docs. The injection detector is opt-in and off by default | `V` (`[G-DOCS]`, `[G-35]`, `[G-4A]`) |
 | Harness-caused failure reports | Reference-repo issues: click coordinates outside the 0–1000 range "after approximately 15 iterations" (one reporter); docs and code disagreed on the `press_enter` default. Counts of issues, not rates | `V` (`[G-REPO]` issues #83, #84) |
-| Third-party fault injection | Gemini-3-Pro (a general model, not the Computer Use tool), 236 AndroidWorld-based tasks with one injected trap each: 72.9% → 63.6% | `V` through a page summary only (`[ANTRAP]`) |
+| Third-party fault injection | Gemini-3-Pro (a general model, not the Computer Use tool), 236 AndroidWorld-based tasks with one injected trap each: 72.9% → 63.6% | `V` (`[ANTRAP]` Table 3) |
 
 `UNVERIFIED` for Gemini: how any of the desktop scores was measured; whether the
 Gemini 4 Argon safety report contains computer-use numbers (not fetched); Project
@@ -559,15 +575,15 @@ row is `1src`.
 |---|---|---|
 | Cua (trycua) | No first-party evaluation or failure analysis found. One third-party study on the Cua harness: 4 of 25 KiCad tasks pass; 5 of 9 DONE claims fail a state check; error-mode mentions split planning and policy 40%, perception 22%, navigation inefficiency 19%, domain knowledge 11%, tool or API surface 8% (count of mentions not published) | `V2` (`[SNK]`) |
 | Agent S (2024) | GPT-4o, 65-task OSWorld subset: execution errors in 39, grounding in 26 and planning in 17 of an inferred 49 failed tasks, non-exclusive | `V` (`[AS1]` Table 3) |
-| Agent S2 (2025) | Planning 41.0%, grounding 20.5%, interaction 17.9%, navigation 10.3%, infeasible not recognised 10.3%; n not published (≈39 back-solved) | `V` (`[S2]` Fig. 8) |
-| Agent S3 (2025) | No failure breakdown. Removing hierarchical planning adds 9.1 points; best-of-10 with a judge lifts 62.6 → 69.9 on 361 tasks. On 159 mixed-outcome tasks the judge's selections agree with the benchmark scripts on 78.4% and with humans on 92.8%; 8 of its 12 human-judged errors are narrative hallucinations | `V2` (`[S3]` Tables 2–4, §5) |
+| Agent S2 (2025) | Planning 41.0%, grounding 20.5%, interaction 17.9%, navigation 10.3%, infeasible not recognised 10.3%; n not published (≈39 back-solved); figure labels, readable only in the PDF | `V` (`[S2]` Fig. 8) |
+| Agent S3 (2025) | No failure breakdown. Removing hierarchical planning adds 9.1 points; best-of-10 with a judge lifts 62.6 → 69.9 on 361 tasks. On 159 mixed-outcome tasks the judge's selections agree with the benchmark scripts on 78.4% and with humans on 92.8%; 8 of its 12 human-judged errors are narrative hallucinations | `V2` (`[S3]` Tables 1, 2, 4; §4.5) |
 | Simular Sai / NSPI | Compiled policies and their judges: §4 | `V2` (`[NSPI]`) |
-| UI-TARS and UI-TARS-2 | No failure breakdown published. UI-TARS-2 reports OSWorld 47.5, Windows Agent Arena 50.6 and AndroidWorld 73.3, with no run-to-run variance for GUI benchmarks. Its learned outcome verifier scores F1 83.8 on 300 human-annotated traces, and the paper states "the current ORM still exhibits a relatively high false positive rate" | `V` (`[UT2]` Table 1, §3.2–3.3) |
-| OpenCUA | Six failure classes named with no rates: task knowledge, high-precision grounding, action repetition, termination misjudgment, long-horizon, error perception and recovery. Run-to-run: OpenCUA-72B Pass@3 53.02% against a 3-run mean of 44.99% at 100 steps on OSWorld-Verified | `V` (`[OCUA]` Table 3, §5, App. E) |
-| OpenCUA, third-party diagnosis | OpenCUA-72B on OSWorld; categories assigned by an LLM, not exclusive, no denominator: action loops 43%, coordinate precision 24%, UI recognition 19%, multi-step planning 15%. Four harness patches lift 42.3 ± 2.6 → 48.9 ± 1.2 over 3 runs | `V` (`[LFF]` §3.6, Tables 1–2) |
+| UI-TARS and UI-TARS-2 | No failure breakdown published. UI-TARS-2 reports OSWorld 47.5, Windows Agent Arena 50.6 and AndroidWorld 73.3, with no run-to-run variance for GUI benchmarks. Its learned outcome verifier scores F1 83.8 on 300 human-annotated traces, and the paper states "the current ORM still exhibits a relatively high false positive rate" | `V` (`[UT2]` Table 1, §3.3) |
+| OpenCUA | Six failure classes named with no rates: task knowledge, high-precision grounding, action repetition, termination misjudgment, long-horizon, error perception and recovery. Run-to-run: OpenCUA-72B Pass@3 53.02% against a 3-run mean of 44.99% at 100 steps on OSWorld-Verified | `V` (`[OCUA]` Table 11, App. E) |
+| OpenCUA, third-party diagnosis | OpenCUA-72B on OSWorld; categories assigned by an LLM, not exclusive, no denominator: action loops 43%, coordinate precision 24%, UI recognition 19%, multi-step planning 15%. Four harness patches lift 42.3 ± 2.6 → 48.9 ± 1.2 over 3 runs | `V` (`[LFF]` §3.6, Fig. 6; Table 2) |
 | Microsoft HCU | No per-category failure analysis and no per-error-code distribution. Tool-call errors: §1c | `V2` (`[HCU]` Table 11) |
 | Microsoft UFO2 | Control detection 62.8% of failures on Windows Agent Arena: §1c | `V2` (`[UFO2]` §6.2) |
-| PC Agent-E | An error review of 50 trajectories names knowledge, planning and grounding with no shares | `V` (`[PCE]` §5.6) |
+| PC Agent-E | An error review of 50 trajectories names knowledge, planning and grounding with no shares | `V` (`[PCE]` §5.2) |
 
 ### 6. Gaps and unverified items
 
@@ -578,7 +594,7 @@ Against the TIF-105 spec: scope items 1 and 2 are in §5, items 3 and 4 in §1
 
 | Brief gap | Outcome |
 |---|---|
-| 1. Per-category failure breakdowns with denominators | Covered: §1b (`[CUAD]`, n=144), §1a, §1e. AndroidWorld has only `[MINI]` (n=42) and Windows Agent Arena only `[UFO2]` (n not published) |
+| 1. Per-category failure breakdowns with denominators | Covered: §1b (`[CUAD]`, n=144), §1a, §1e. AndroidWorld has only `[MINI]` (n=105) and Windows Agent Arena only `[UFO2]` (n not published) |
 | 2. Failures caused by harness or tool design | Covered: §1c, §2, §3 |
 | 3. False-success and unverifiable-success rates | Covered: §1a, §1d. No vendor publishes one for computer use |
 | 4. UI-drift failure rates for procedures (TIF-100) | **Not covered. The gap stands.** Details below |
@@ -623,17 +639,22 @@ version changes of a desktop application.
 
 - Read through OCR, unconfirmed against a page render: Opus 4.7 OSWorld 78.0%,
   Sonnet 5 81.2%, the ScreenSpot-Pro 69.0 / 85.9 pair.
-- Read through a page summary only: `[VERI]` Table 1, `[HCU]` Table 11 and its
-  Table 10 standard deviations, `[CUAD]` Table 7, `[ANTRAP]`. The first three
-  were returned identically by two independent fetches.
+- First read through a page summary, then confirmed against the page's own text:
+  `[VERI]` Table 1, `[HCU]` Tables 10 and 11, `[CUAD]` Table 7, `[CUBE]` Table 6,
+  `[MAC]` Table 5, `[ANTRAP]` Table 3.
+- Readable only in the PDF, not in the HTML text: the `[UFO2]` Figure 19 labels
+  (62.8%) and the `[S2]` Figure 8 labels.
 - Internal inconsistencies in sources, left as found: `[VLAA]` denominators;
-  `[MINI]` abstract says verified execution adds 7 points where its Table 2 says
-  15; `[NSPI]` introduction and abstract give different Pass^3 gain ranges (the
+  `[NSPI]` introduction and abstract give different Pass^3 gain ranges (the
   abstract matches the table); `[MAC]` and `[WGUI]` each have a table whose totals
-  do not add up.
+  do not add up; `[OCUA]` gives Pass@3 as 53.02% in Table 11 and 53.2% in its
+  text; `[OSW2]` gives Opus 4.8 as 20.6 / 54.8 in Table 3 and 20.5 / 54.2 in its
+  text.
+- `[MINI]` changed between versions. v1 reported 42 failures and a 15-point
+  verification ablation; v2 (2026-11-16) reports 105 failures and no single
+  mechanism with a significant effect. This doc uses v2 throughout.
 - `UNVERIFIED`: Operator o3 benchmark scores (42.9 / 62.9, press only); Claude 3.7
-  Sonnet on OSWorld; Project Mariner; the `[VERI]` appendix sentence that about
-  18 of its 28 false positives were official-evaluator errors.
+  Sonnet on OSWorld; Project Mariner.
 
 ### Sources
 
@@ -668,12 +689,14 @@ All accessed 2026-11-22.
 | `[EP2]` | Epoch AI, OSWorld 2.1 review — <https://epoch.ai/benchmarks/osworld-2-1/review> |
 | `[CUAD]` | CUADebug / CUAErrorBench — <https://arxiv.org/abs/2608.02643> |
 | `[MIS]` | How Benchmarks Mis-Score Computer-Use Agents — <https://arxiv.org/abs/2607.28367> |
-| `[VLAA]` | VLAA-GUI, "Knowing When to STOP, RECOVER, and SEARCH" — <https://arxiv.org/abs/2604.21375> |
-| `[CANDID]` | arXiv 2611.24977 — <https://arxiv.org/abs/2611.24977> |
-| `[OSC]` | arXiv 2410.18963 — <https://arxiv.org/abs/2410.18963> |
+| `[VLAA]` | VLAA-GUI: Knowing When to Stop, Recover, and Search, A Modular Framework for GUI Automation, v3 — <https://arxiv.org/abs/2604.21375> |
+| `[CANDID]` | CANDID: Candidate-Driven Intervention for Disciplined Execution in Local Computer-Use Agents — <https://arxiv.org/abs/2611.24977> |
+| `[OSC]` | OSCAR: Operating System Control via State-Aware Reasoning and Re-Planning (source of the FRIDAY baseline's failure statistics) — <https://arxiv.org/abs/2410.18963> |
 | `[OSH]` | OSWorld-Human — <https://arxiv.org/abs/2506.16042> |
 | `[REC]` | CUA-Recovery — <https://arxiv.org/abs/2610.27645> |
-| `[SREC]` | Self-recovery in computer-use traces — <https://arxiv.org/abs/2610.36471> |
+| `[SREC]` | When to Intervene? An Empirical Study of Errors and Self-Recovery in LLM Agents — <https://arxiv.org/abs/2610.36471> |
+| `[BEAP]` | BEAP-Agent: Backtrackable Execution and Adaptive Planning for GUI Agents — <https://arxiv.org/abs/2601.21352> |
+| `[RETR]` | Lost in Recovery: Demystifying Recovery Behavior of Computer-Use Agents via Goal-Oriented Action Replay (ReTrace) — <https://arxiv.org/abs/2610.27954> |
 | `[OC]` | OpenComputer — <https://arxiv.org/abs/2605.19769> |
 | `[VERI]` | VeriCUA — <https://arxiv.org/abs/2610.40578> |
 | `[OSR]` | OSReward — <https://arxiv.org/abs/2607.28609> |
@@ -683,34 +706,34 @@ All accessed 2026-11-22.
 | `[S2]` | Agent S2 — <https://arxiv.org/abs/2504.00906> |
 | `[S3]` | Agent S3, "Scaling Agents for Computer Use" — <https://arxiv.org/abs/2510.02250> |
 | `[NSPI]` | Neuro-Symbolic Computer Use (Simular) — <https://arxiv.org/abs/2609.36927> |
-| `[REL]` | Simular reliability study — <https://arxiv.org/abs/2604.17849> |
-| `[GPA]` | GPA record-and-replay — <https://arxiv.org/abs/2604.01676> |
+| `[REL]` | On the Reliability of Computer Use Agents — <https://arxiv.org/abs/2604.17849> |
+| `[GPA]` | GPA: Learning GUI Process Automation from Demonstrations — <https://arxiv.org/abs/2604.01676> |
 | `[AAC]` | AppAgent-Claw — <https://arxiv.org/abs/2606.05171> |
 | `[RB]` | ReproBreak — <https://arxiv.org/abs/2605.12158> |
 | `[HCU]` | Hybrid Computer Use — <https://arxiv.org/abs/2610.41432> |
 | `[UT2]` | UI-TARS-2 — <https://arxiv.org/abs/2509.02544> |
 | `[OCUA]` | OpenCUA — <https://arxiv.org/abs/2508.09123> |
-| `[LFF]` | Learning from Failure (OpenCUA-72B diagnosis) — <https://arxiv.org/abs/2606.31270> |
+| `[LFF]` | Learning from Failure: Inference-Time Self-Improvement for Computer-Use Agents — <https://arxiv.org/abs/2606.31270> |
 | `[UFO2]` | UFO2: The Desktop AgentOS — <https://arxiv.org/abs/2504.14603> |
 | `[COACT]` | CoAct-1 — <https://arxiv.org/abs/2508.03923> |
 | `[OSMCP]` | OSWorld-MCP — <https://arxiv.org/abs/2510.24563> |
 | `[MCPW]` | MCPWorld — <https://arxiv.org/abs/2506.07672> |
 | `[WAA]` | Windows Agent Arena — <https://arxiv.org/abs/2409.08264> |
 | `[WAA86]` | `microsoft/WindowsAgentArena` issue #86 — <https://github.com/microsoft/WindowsAgentArena/issues/86> |
-| `[PCE]` | PC Agent-E / WindowsAgentArena-V2 — <https://arxiv.org/abs/2505.13909> |
-| `[WGUI]` | WorldGUI — <https://arxiv.org/abs/2502.08047> |
+| `[PCE]` | Efficient Agent Training for Computer Use (PC Agent-E, WindowsAgentArena-V2), v2 — <https://arxiv.org/abs/2505.13909> |
+| `[WGUI]` | WorldGUI: An Interactive Benchmark for Desktop GUI Automation from Any Starting Point, v5 — <https://arxiv.org/abs/2502.08047> |
 | `[WW]` | WindowsWorld — <https://arxiv.org/abs/2604.27776> |
 | `[CUBE]` | UI-CUBE — <https://arxiv.org/abs/2511.17131> |
 | `[MAC]` | macOSWorld — <https://arxiv.org/abs/2506.04135> |
-| `[MINI]` | Minitap mobile-use on AndroidWorld — <https://arxiv.org/abs/2602.07787> |
+| `[MINI]` | Do Multi-Agents Dream of Electric Screens? Achieving 100% on AndroidWorld Through Task Decomposition (Minitap mobile-use), v2, 2026-11-16 — <https://arxiv.org/abs/2602.07787> |
 | `[SNK]` | Snorkel AI, "Cua-Bench: benchmarking computer-use agents on professional software", 2026-06-15 — <https://snorkel.ai/blog/cua-bench-benchmarking-computer-use-agents-on-professional-software/> |
-| `[POP]` | Pop-up attacks on computer-use agents — <https://arxiv.org/abs/2411.02391> |
+| `[POP]` | Attacking Vision-Language Computer Agents via Pop-ups — <https://arxiv.org/abs/2411.02391> |
 | `[HIJ]` | AgentHijack — <https://arxiv.org/abs/2605.25707> |
 | `[DGARA]` | D-GARA — <https://arxiv.org/abs/2511.16590> |
-| `[ANTRAP]` | AnTrap — <https://arxiv.org/abs/2608.24099> |
-| `[FOCUS]` | Observe-to-act gap and focus manipulation — <https://arxiv.org/abs/2604.18860> |
-| `[GUICLI]` | GUI versus CLI agents — <https://arxiv.org/abs/2606.24551> |
-| `[OM2W]` | Online-Mind2Web — <https://arxiv.org/abs/2504.01382> |
+| `[ANTRAP]` | Are Android GUI Agents Robust Against Runtime Anomalies? AnTrap: Evaluating Agents in Dynamic Adversarial Environments — <https://arxiv.org/abs/2608.24099> |
+| `[FOCUS]` | Temporal UI State Inconsistency in Desktop GUI Agents: Formalizing and Defending Against TOCTOU Attacks on Computer-Use Agents — <https://arxiv.org/abs/2604.18860> |
+| `[GUICLI]` | GUI vs. CLI: Execution Bottlenecks in Screen-Only and Skill-Mediated Computer-Use Agents — <https://arxiv.org/abs/2606.24551> |
+| `[OM2W]` | An Illusion of Progress? Assessing the Current State of Web Agents (Online-Mind2Web) — <https://arxiv.org/abs/2504.01382> |
 
 ## Decision
 
@@ -723,21 +746,30 @@ Every number in the table is single-source; the tags are in §1–§4.
 | **1** | **Completion gate.** No "done" without a state-oracle verdict; three-valued; callable from any harness; oracles mutation-tested | Silent false success | 91–105 of 361 tasks end in a false DONE at 100 steps; 5 of 9 DONE claims fail a state check; a state verifier matches humans on 113 of 120 against 95 of 120 for an LLM judge; both labs tell integrators to do this and ship nothing | Detection alone moves success about 3 points; checkers were wrong in 76 of 450 executions before calibration | high on the problem, medium on the payoff |
 | **2** | **Checkpoint oracles with targeted retry** for long and multi-app work | The last mile; multi-app residue | Partial minus strict is 31–37 points for every top system; failing attempts hold 65–76% of credit; multi-app is 42.6% of residual failures; a diagnosed re-run fixes 28.5% of 144 failures against 13.9% blind | The 4–8 point estimate rests on one paper's package comparison; long-horizon graders are themselves error-prone (36 of 50 audited tasks) | medium |
 | **3** | **Fault-injected false-success suite**, publishable | Nothing directly; it proves 1 and 2 and tests the tool layer | Nobody publishes false success under faults; no desktop study injects kill, interrupted save or permission denial; lab data show 9–35% fabricated workarounds on impossible tasks; one harness defect hid 22–28% of a lab's failures | Several benign perturbations cost only 2–3 points; a measurement is not a product | high that the ground is open |
-| **4** | **Guarded steps**: pre-action target and focus check, post-action effect read-back | Stale-state actions, no-op repetition, silent input loss | Pre-action check stopped 45 of 45 focus misdirections at under 0.1 s; per-step checks worth 15–16 points in two ablations of weaker stacks; text entry silently wrong in 12 of 42 failures | 0 of 144 frontier failures were timing or tool failures; Cua and HCU already ship widget-level read-back | medium; table stakes, not a differentiator |
-| **5** | **Verified procedures**, validated by the oracle | Repeatability and cost | Pass^3 +3.6 to +15.8; per-run cost 15–217× lower; break-even 3–27 runs | Single-run success flat; −5.6 strict and −18.5 partial on long workflows; 40–45% of variants unhandled; breakage under UI drift unmeasured (TIF-100); Simular has published and shipped | medium on the economics, low on M2 timing |
-| **6** | **Structural state adapters, built for the oracle** (not as the agent's eyes) | Verdicts where UIA is blind | UIA-only observation caused 62.8% of failures on WAA; screenshot judges err toward false success in 88% of their errors | As agent observation the advantage is shrinking: the accessibility channel is worth 2.8 points with GPT-5.4 and is used by 2 of 144 leaderboard rows | medium; an enabler for 1 and 2 |
+| **4** | **Verified procedures**, validated by the oracle | Repeatability and cost | Pass^3 +3.6 to +15.8; per-run cost 15–217× lower; break-even 3–27 runs | Single-run success flat; −5.6 strict and −18.5 partial on long workflows; 40–45% of variants unhandled; breakage under UI drift unmeasured (TIF-100); Simular has published and shipped | medium on the economics, low on M2 timing |
+| **5** | **Structural state adapters, built for the oracle** (not as the agent's eyes) | Verdicts where UIA is blind | UIA-only observation caused 62.8% of failures on WAA; screenshot judges err toward false success in 88% of their errors | As agent observation the advantage is shrinking: the accessibility channel is worth 2.8 points with GPT-5.4 (65.59 against 62.79, `[HCU]` Table 2) and is used by 2 of 144 leaderboard rows | medium; an enabler for 1 and 2 |
+| **6** | **Guarded steps**: pre-action target and focus check, post-action effect read-back | Stale-state actions, silent input loss | Pre-action check stopped 45 of 45 adversarial focus misdirections at under 0.1 s (`[FOCUS]`); an action-level critic worth 16.3 points in one ablation (`[WGUI]` Table 5); text entry silently wrong in 9 of 105 failures (`[MINI]` v2) | The read-back ablation in `[MINI]` v2 is −0.6 [−7.2, +6.7]; 0 of 144 frontier failures were timing or tool failures; stale-category errors are 88 of 10,783 tool calls (`[HCU]`); Cua and HCU already ship widget-level read-back | low; table stakes, not a bet on its own |
 
-What the ranking says: **bets 1 and 2 first, bet 3 as the proof, bet 4 inside the
-runtime, bet 6 built per application as the oracle needs it.** Bet 5 stays an
-experiment, for three reasons: it depends on the oracle as its validator, the
-direct competitor is ahead on the compiler, and the evidence that it helps on
-long work is negative.
+What the ranking says: **bets 1 and 2 first, bet 3 as the proof, bet 5 built per
+application as the oracle needs it.** Bet 4 stays an experiment, for three
+reasons: it depends on the oracle as its validator, the direct competitor is
+ahead on the compiler, and the evidence that it helps on long work is negative.
+
+Bet 6 moved from fourth to last after the first verifier pass. Its support had
+rested on two ablations. One of them, `[MINI]`, was replaced in its second
+version by a null result: removing typed-text read-back changed success by −0.6
+points, with a 95% interval of −7.2 to +6.7. What remains is one ablation on a
+GPT-4o agent, one adversarial study by a single author, and 9 of 105 failures in
+one baseline. That does not carry a harness lever on its own. Build the
+pre-action check that the completion gate and procedures need; do not run
+guarded steps as a separate track.
 
 How the bets sit against A/B/C, with no choice implied:
 
-- Bets 1, 2, 3, 4 and 6 are needed under **A** (verified desktops for coding
-  agents) and under **B** (verified operations for software without APIs) alike.
-- Bet 5 matters most under **B**, where the same operation repeats.
+- Bets 1, 2, 3 and 5 are needed under **A** (verified desktops for coding agents)
+  and under **B** (verified operations for software without APIs) alike. Bet 6
+  is table stakes under both.
+- Bet 4 matters most under **B**, where the same operation repeats.
 - The sweep found one result that bears on **C** (branchable desktops):
   best-of-N selection is worth 7.3 points at N=10 with a model judge, and forked
   attempts are one way to get N. It found nothing against C.
@@ -753,9 +785,9 @@ placeholders for the outer loop to replace with real ids.
 | **P-1** (bet 1) | Completion gate: a state-oracle verdict is required before an agent may report "done" | Expose M1's three-valued verdict as a tool an external agent loop calls. Accept when, on the M1 task family, no false DONE is accepted across at least 30 trials including fault trials, and every oracle fails at least one seeded corruption | §1a `[VLAA]`, `[SNK]`, `[OSW2]`; §1d `[OC]`, `[VERI]`, `[SCALE]`; §3 item 1 `[A-SDK]`, `[O-CU]` | **TIF-101** (verify-before-store, ADR-0017): the same verdict gates what enters the procedure store. Not a duplicate: P-1 gates what the agent may report. `m2-02` already designs "verdicts behind a separate tool" |
 | **P-2** (bet 2) | Checkpoint oracles and one targeted retry for long and multi-app tasks | Per-checkpoint postconditions; on a refuted checkpoint, one retry from the last verified point with the verdict fed back. Accept on a measured lift against the baseline arm; reject below 2 points | §1f `[OSW2]`, `[A-SC]`, `[LB]`; §4 estimate `[CUAD]` Table 3 | **TIF-98** (fast VM reset): a retry from a known-good point pays the reset cost; `m2-05` records the default reset as cold, about 21 s |
 | **P-3** (bet 3) | Fault-injected false-success suite | Report detection rate and false-success rate per fault class with exact intervals. Add four literature-backed classes to EF-003: pop-up or overlay, non-default starting state, missing object or infeasible request, login wall | §1e `[POP]`, `[HIJ]`, `[WGUI]`, `[A-SC]`, `[DGARA]`; §4 fault injection; `f1-ef-fault-taxonomy.md` | EF-003 (TIF-52), which this extends. **TIF-98**: a fault matrix multiplies trials, so reset time sets its cost |
-| **P-4** (bet 4) | Guarded steps in the runtime | Pre-action target and focus check; post-action effect read-back, including typed text. Accept when an injected focus steal and an injected dropped keystroke are both caught before the next step | §1c `[FOCUS]`, `[MINI]`; §3 items 4, 5; `[WGUI]` Table 8 | None of TIF-98..102. Relates to `m2-01` next action 2 (per-action `effect` field) |
-| **P-5** (bet 5) | Oracle-validated procedure replay experiment on the M1 task family | Compile one verified run; replay it; report Pass^3, cost per run and break-even against the uncompiled arm. Propose as an extension of TIF-100 and TIF-101, not a new track | §4 verified procedures `[NSPI]`, `[REL]`, `[GPA]`; §6 gap 4 | **TIF-100** (procedure drift): this finding confirms the drift rate is unmeasured and says what TIF-100 must produce. **TIF-101** (verify-before-store): the admission gate is the validator. **TIF-102** (paid-tier teardowns): testing Simular's judge directly needs a Sai key, so only under TIF-102 with Tiffany's approval |
-| **P-6** (bet 6) | No new issue | The second-app state read is already **TIF-99** (Writer UNO read). This finding adds the reason to build it for the oracle and not as agent observation | §1c `[UFO2]`; §1d `[OSR]`; §1f `[LB]` | **TIF-99** |
+| **P-4** (bet 6) | Pre-action guard in the runtime, low priority | A target and focus check before each step. Post-action read-back stays inside the oracle (P-1) and is not a separate track. Accept when an injected focus steal is caught before the action lands. Not before P-1 to P-3 | §1c `[FOCUS]`, `[WGUI]` Table 5, `[MINI]` v2 §5.3; §3 items 4, 5 | None of TIF-98..102. Relates to `m2-01` next action 2 (per-action `effect` field) |
+| **P-5** (bet 4) | Oracle-validated procedure replay experiment on the M1 task family | Compile one verified run; replay it; report Pass^3, cost per run and break-even against the uncompiled arm. Propose as an extension of TIF-100 and TIF-101, not a new track | §4 verified procedures `[NSPI]`, `[REL]`, `[GPA]`; §6 gap 4 | **TIF-100** (procedure drift): this finding confirms the drift rate is unmeasured and says what TIF-100 must produce. **TIF-101** (verify-before-store): the admission gate is the validator. **TIF-102** (paid-tier teardowns): testing Simular's judge directly needs a Sai key, so only under TIF-102 with Tiffany's approval |
+| **P-6** (bet 5) | No new issue | The second-app state read is already **TIF-99** (Writer UNO read). This finding adds the reason to build it for the oracle and not as agent observation | §1c `[UFO2]`; §1d `[OSR]`; §1f `[LB]` | **TIF-99** |
 | **P-7** (experiment 1) | Claim-versus-state audit on public trajectories (L2, host only, no spend) | From Simular's public OSWorld 2.1 runs and a sample of public OSWorld-Verified trajectories, record the agent's final claim against the evaluator's score. Falsifier: false DONE under 10% of runs for frontier agents | §1a caveat on `[VLAA]`; §6 "no direct confusion matrix" | None |
 | **P-8** (experiment 2) | False-DONE matrix for Myco's own screenshot baseline | From the recorded C1 arm rows, after the arm finishes: share of the baseline's completion claims that the M1 oracle refutes | §1a | TIF-75 (offline replay of recorded C1 arm rows) |
 
@@ -771,7 +803,8 @@ Not worth a bet, with the reason:
   per-attempt success is at 0.07–1.43% of 2,800 attempts for the five most recent
   Claude models.
 - **In-run self-recovery machinery.** Explicit backtracking was worth 1.9 points
-  in one study and mixed in another.
+  in one study (`[BEAP]` Table 1) and mixed in another (`[RETR]` Table 3: +1.5
+  for one model, −3.3 for another). See §1e.
 
 Two consequences for existing repo docs:
 
@@ -823,14 +856,16 @@ Three steps, cheapest first. The first two need no VM time and no spend.
 - A study with a stated state-based adjudicator puts false DONE under 10% of
   tasks for frontier agents.
 - A 2026 frontier model publishes per-domain results on Windows showing Office
-  solved. Bet 6 and the Windows rows then need re-reading.
+  solved. Bet 5 and the Windows rows then need re-reading.
 - A compiled-procedure system shows more than 80% Pass^3 on varied instances and
   no loss on long workflows, or a study measures procedure breakage across real
-  application versions. Bet 5 is re-ranked either way.
+  application versions. Bet 4 is re-ranked either way.
 - A benchmark starts reporting false-success or detection rates under injected
   faults. Bet 3 stops being open ground.
 - Google publishes a failure breakdown or a methodology for its computer-use
   scores. §5's Gemini table is then redone.
+- A controlled ablation shows a pre-action check or post-action read-back lifting
+  a frontier agent by a margin whose interval excludes zero. Bet 6 moves up.
 - Experiment step 1 or 3 hits its falsifier.
 
 ## Cost spent
@@ -841,6 +876,11 @@ Three steps, cheapest first. The first two need no VM time and no spend.
   tool calls, about 0.47M tokens. All nine pre-synthesis spot-checks confirmed the
   numbers they were sent to check.
 - Two web searches for gap 4.
+- After the verifier's FAIL at `b15a00f`: a version check of all 46 cited arXiv
+  papers against the arXiv listing; 35 single-source re-reads (80 tool calls,
+  about 1.74M tokens); a direct text check of 15 papers' pages; and an
+  independent recomputation of the leaderboard-derived shares from the public
+  data file.
 - The independent verifier is launched and settled by the Research Coordinator at
   the final head SHA; its verdict is recorded on the pull request.
 - No installs, no accounts, no paid APIs, no VM access. `myco-win11` and the
@@ -856,6 +896,10 @@ Limits of this finding:
   cheaperinference; those were followed.
 - Nothing here was reproduced. Every rate is a published number or arithmetic on
   published numbers, and almost every one is single-source.
+- The first verifier pass failed this finding at `b15a00f`. One source had been
+  read at a superseded arXiv version, and several table locators were wrong. Both
+  kinds of error were then looked for across every arXiv source, not only the
+  ones the verifier sampled.
 - The Windows evidence is one model generation older than the Linux evidence.
 - Categories from different papers are not interchangeable. Shares are reported
   per source and are not added across sources.
