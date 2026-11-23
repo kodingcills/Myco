@@ -338,13 +338,40 @@ pub(crate) fn load_gui_env() {
     // could survive a restart and point at a dead bus.)
     const PATH_ENV: &str = "/run/myco/gui.env";
     let Ok(text) = std::fs::read_to_string(PATH_ENV) else { return };
-    for line in text.lines() {
-        let Some((k, v)) = line.split_once('=') else { continue };
-        // Override, do not merely fill: sshd exports DBUS_SESSION_BUS_ADDRESS for
-        // the *login* session, whose bus has no GUI apps — silently preferring it
-        // yields an empty desktop (the bug this file exists to prevent).
+    for (k, v) in gui_env_assignments(&text, |k| std::env::var_os(k).is_some()) {
         // Safety: single-threaded op loop; set before any provider is built.
         unsafe { std::env::set_var(k, v) };
+    }
+}
+
+/// Which `gui.env` lines to apply. Override, do not merely fill: sshd exports
+/// DBUS_SESSION_BUS_ADDRESS for the *login* session, whose bus has no GUI apps,
+/// so silently preferring it yields an empty desktop (the bug gui.env exists to
+/// prevent). The one exception is the per-session introspection file: a path
+/// the session set at `create` (TIF-120) is not overridden by a host-wide
+/// gui.env line, or the "per session" setting would be silently ignored.
+fn gui_env_assignments<'a>(text: &'a str, is_set: impl Fn(&str) -> bool) -> Vec<(&'a str, &'a str)> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(k, _)| !(*k == "MYCO_INTROSPECTION_FILE" && is_set(k)))
+        .collect()
+}
+
+#[cfg(test)]
+mod gui_env_tests {
+    use super::gui_env_assignments;
+
+    #[test]
+    fn gui_env_overrides_the_bus_but_not_a_session_introspection_file() {
+        let text = "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/myco/bus\nMYCO_INTROSPECTION_FILE=/tmp/host.json\njunk-line\n";
+        // Everything already set: the bus is still overridden, the session's
+        // introspection file is kept.
+        let applied = gui_env_assignments(text, |_| true);
+        assert_eq!(applied, vec![("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/myco/bus")]);
+        // Nothing set: gui.env supplies both (the gui.env route still works).
+        let applied = gui_env_assignments(text, |_| false);
+        assert_eq!(applied.len(), 2);
+        assert!(applied.contains(&("MYCO_INTROSPECTION_FILE", "/tmp/host.json")));
     }
 }
 

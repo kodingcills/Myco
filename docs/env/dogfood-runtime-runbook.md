@@ -379,8 +379,9 @@ individual scripts** — it encodes the ordering below and the guards that make 
 safe to re-run:
 
 ```bash
-runtime/guest/provision.sh --check    # report state (incl. the agent), change nothing
-runtime/guest/provision.sh            # keypair -> image -> overlay -> seed -> agent
+runtime/guest/provision.sh --check        # report state (incl. the agent), change nothing
+runtime/guest/provision.sh                # keypair -> image -> overlay -> seed; never boots
+runtime/guest/provision.sh --build-agent  # + the guest agent if missing: BOOTS A VM, under the lock
 ```
 
 Two guards in `provision.sh` that the individual scripts do not have, both
@@ -395,7 +396,7 @@ learned the hard way:
 - **The `.pub` is derived from the private key, not the other way round.** If
   both exist but disagree, `provision.sh` rebuilds the `.pub` from the key.
 
-### The guest agent binary (built by `provision.sh`, TIF-120)
+### The guest agent binary (`provision.sh --build-agent`, TIF-120)
 
 `create` fails without `myco-rt-agent`:
 
@@ -405,41 +406,61 @@ runtime/guest/build-agent-in-guest.sh (it stores a copy under runtime/guest/stat
 ```
 
 It cannot be cross-compiled from macOS (`xa11y` links `libxkbcommon`, so the
-musl build fails at link time); it must be built **inside the guest**. Since
-TIF-120, `provision.sh` does that itself when no host copy
-(`state/myco-rt-agent-aarch64`) exists: it boots the guest, waits for cloud-init
-to report `done`, runs `build-agent-in-guest.sh` (one retry), and shuts the guest
-down again, even on failure. A guest that is already running is reused and left
-running. That boot is the only VM action in `provision.sh`:
+musl build fails at link time); it must be built **inside the guest**. Plain
+`provision.sh` never boots: when the agent is missing it exits **3** and prints
+the fix. Building it is an explicit VM action:
 
 ```bash
-runtime/guest/provision.sh                   # builds the agent if missing (~60 s + boot)
-runtime/guest/provision.sh --no-agent        # assets only, never boots (no VM window)
+runtime/guest/provision.sh --build-agent     # builds the agent if missing (~60 s + boot)
 runtime/guest/provision.sh --rebuild-agent   # rebuild a stale agent
 python3 scripts/df005-runner.py --preflight  # must exit 0 before anything else
 ```
 
+With either flag, `provision.sh` first takes the **host VM lock**
+(`scripts/vm-lock.sh`, `/tmp/myco-win11.vm.lock`) and the runtime's
+**`state/SESSION.lock`**. If either is held it refuses with **exit 10** and boots
+nothing. Only then does it boot the guest, or reuse one already running (left
+running). It waits for cloud-init to report `done`, fails at once on
+`status: error`, runs `build-agent-in-guest.sh` (one retry), and shuts down what
+it booted, even on failure. A failed rebuild restores the previous agent. So a
+`--build-agent` is a VM window like any other: get the Coordinator's slot first.
+
 A stale agent (missing ops) is reported at `create` as `stale agent: missing
 ops …`; fix it with `--rebuild-agent`.
 
-### The introspection channel is per session (TIF-120)
+### The introspection channel (TIF-120)
 
 Tk registers no AT-SPI nodes, so the global route clicks the geometry the
 fixture publishes (`entry_field`, `save_button`; TIF-122). That record reaches
-`observe` only when the session enables the channel: pass the guest path on
-`create`:
+`observe` only when the session's introspection channel is on. There are two
+ways to turn it on, and **a path given on `create` wins over `gui.env`**:
 
-```json
-{"name": "create", "arguments": {"session_id": "…", "introspection_file": "/tmp/myco-todo-state.json"}}
-```
+1. **Per session (preferred):** pass the guest path on `create`:
+   ```json
+   {"name": "create", "arguments": {"session_id": "…", "introspection_file": "/tmp/myco-todo-state.json"}}
+   ```
+2. **Host-wide fallback:** a `MYCO_INTROSPECTION_FILE=…` line in
+   `/run/myco/gui.env`. The agent applies it only when the session did not
+   name a path.
 
-The runtime hands the path to the agent as `MYCO_INTROSPECTION_FILE`, and apps
-launched through `act` get `MYCO_TODO_STATE_FILE` set to the same path, so
-myco-todo publishes exactly where `observe` reads (ADR-0016). Without the
-argument, `a11y_tree.introspection` is `null`. The path must be absolute and use
-only letters, digits and `. _ - + /`. A `MYCO_INTROSPECTION_FILE` line in
-`/run/myco/gui.env` is no longer needed; the `introspection-env` preflight check
-predates this argument.
+Either way, the agent reads the record from that path as
+`MYCO_INTROSPECTION_FILE`. Apps launched through `act` get `MYCO_TODO_STATE_FILE`
+set to the same path, so myco-todo publishes exactly where `observe` reads
+(ADR-0016). With neither, `a11y_tree.introspection` is `null`. A `create` path must be
+absolute and use only letters, digits and `. _ - + /`.
+
+**About the preflight:** `scripts/df005-runner.py --preflight`'s
+`introspection-env` check looks only at route 2 (`gui.env`). The runner's
+`create` call does not pass `introspection_file` yet. So until Dogfood updates the
+runner, route 2 is the one that both passes the preflight and turns the channel
+on. Once the runner passes `introspection_file`, that check should accept
+route 1 instead of failing it.
+
+**Threat-model note:** `introspection_file` lets a session read back any JSON
+file the guest `myco` user can read, through `observe`, and the launched app
+writes its state to that path. Like `launch_process` (arbitrary execution in the
+guest), this is inside the guest; the isolation boundary is the VM
+(`docs/research/runtime-safety-isolation.md`).
 
 **Do not leave your own guest running.** The runtime's `create` boots its own
 guest from the same overlay; if one is already up, `boot.sh` exits 1 and every

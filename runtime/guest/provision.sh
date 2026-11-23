@@ -8,21 +8,24 @@
 # guest as unprovisioned — which is what happened.
 #
 # The scripts resolve `state/` relative to their own directory, so provisioning must
-# happen IN the checkout that will run the guest, not in some shared cache. This
-# script is idempotent and safe to run in any checkout:
+# happen IN the checkout that will run the guest, not in some shared cache. Without
+# a flag it is idempotent, never boots a VM, and is safe to run in any checkout:
 #
-#   runtime/guest/provision.sh                 # provision everything, incl. the agent
+#   runtime/guest/provision.sh                 # assets: keypair, image, overlay, seed (no VM)
 #   runtime/guest/provision.sh --check         # report state, change nothing; exit 0 only if complete
-#   runtime/guest/provision.sh --no-agent      # assets only; never boots (no VM window)
-#   runtime/guest/provision.sh --rebuild-agent # rebuild the agent even if a copy exists
+#   runtime/guest/provision.sh --build-agent   # also build the guest agent if missing: BOOTS A VM
+#   runtime/guest/provision.sh --rebuild-agent # rebuild the agent even if a copy exists: BOOTS A VM
 #
 # The guest agent (myco-rt-agent) must be built INSIDE the guest: it links
-# libxkbcommon, so the musl cross-build from macOS fails. So when no host copy of
-# the agent exists, this script boots the guest, waits for cloud-init, runs
-# build-agent-in-guest.sh, and shuts the guest down again (TIF-120 / DF-008: the
+# libxkbcommon, so the musl cross-build from macOS fails (TIF-120 / DF-008: the
 # missing binary made every create fail with "no agent binary on the host").
-# If a guest is already running it is reused and left running. That boot is the
-# only VM action here; `--no-agent` skips it. See docs/env/linux-runtime.md.
+# Without a flag, a missing agent is reported with this fix and exit 3. With
+# --build-agent / --rebuild-agent the script takes the host VM lock
+# (scripts/vm-lock.sh, the rule in docs/coordination/CONTRIBUTING-agents.md) AND
+# the runtime's state/SESSION.lock, refusing with exit 10 if either is held; only
+# then does it boot the guest (or reuse one already running, which it leaves
+# running), wait for cloud-init, build, and shut down what it booted. A failed
+# rebuild restores the previous agent. See docs/env/linux-runtime.md.
 # It never downloads an overlay or seed from anywhere but the pinned sources, and it
 # never touches myco-win11 or UTM.
 set -euo pipefail
@@ -36,13 +39,15 @@ OVERLAY="$STATE/myco-runtime-v0.qcow2"
 SEED="$STATE/seed.iso"
 AGENT="$STATE/myco-rt-agent-aarch64"
 PID_FILE="$STATE/qemu.pid"
-USAGE="usage: $(basename "$0") [--check | --no-agent | --rebuild-agent]   (no argument = provision all)"
+SESSION_LOCK="$STATE/SESSION.lock"
+VM_LOCK_SCRIPT="${MYCO_VM_LOCK_SCRIPT:-$GUEST_DIR/../../scripts/vm-lock.sh}"
+USAGE="usage: $(basename "$0") [--check | --build-agent | --rebuild-agent]   (no argument = assets only, no VM)"
 CHECK=0
-AGENT_MODE=build      # build | skip | rebuild
+AGENT_MODE=report     # report | build | rebuild
 case "${1:-}" in
   "")              ;;
   --check)         CHECK=1 ;;
-  --no-agent)      AGENT_MODE=skip ;;
+  --build-agent)   AGENT_MODE=build ;;
   --rebuild-agent) AGENT_MODE=rebuild ;;
   *) echo "$USAGE" >&2; exit 2 ;;
 esac
@@ -142,50 +147,99 @@ echo "Fetching/verifying the pinned base image ..."
 "$GUEST_DIR/make-seed.sh"
 
 # 6. Guest agent binary, built natively in the guest (see header). Ordering the
-#    scripts never expressed: boot -> cloud-init done -> build -> shut down.
+#    scripts never expressed: lock -> boot -> cloud-init done -> build -> shut down.
 guest_live() { [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; }
-if [[ $AGENT_MODE == skip ]]; then
-  echo "Skipping the agent build (--no-agent). create needs it: run this script"
-  echo "without --no-agent (it boots the guest), or runtime/guest/build-agent-in-guest.sh"
-  echo "with a guest running."
-elif [[ -s "$AGENT" && $AGENT_MODE != rebuild ]]; then
+
+# Both locks, before looking at the guest at all: the host VM lock (every VM action,
+# CONTRIBUTING-agents.md) and the runtime's per-guest SESSION.lock, same protocol as
+# the backend (atomic create holding our pid; a dead holder is reclaimed). Taking
+# them first is what makes "is a guest live? then boot" race-free.
+SESSION_LOCK_OURS=0
+release_locks() {
+  if [[ $SESSION_LOCK_OURS -eq 1 && "$(cat "$SESSION_LOCK" 2>/dev/null)" == "$$" ]]; then
+    rm -f "$SESSION_LOCK"
+  fi
+  declare -F vm_lock_release >/dev/null && vm_lock_release
+  return 0
+}
+take_locks() {
+  [[ -r "$VM_LOCK_SCRIPT" ]] || { echo "Refusing: cannot take the VM lock ($VM_LOCK_SCRIPT not found)" >&2; exit 1; }
+  # shellcheck source=/dev/null
+  source "$VM_LOCK_SCRIPT"
+  local rc=0
+  vm_lock_acquire "provision.sh" || rc=$?
+  [[ $rc -eq 0 ]] || { echo "Refusing: the host VM lock is held (see above); not booting." >&2; exit 10; }
+  if ! ( set -C; echo "$$" > "$SESSION_LOCK" ) 2>/dev/null; then
+    local holder; holder="$(cat "$SESSION_LOCK" 2>/dev/null || true)"
+    if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -f "$SESSION_LOCK"
+      ( set -C; echo "$$" > "$SESSION_LOCK" ) 2>/dev/null || { release_locks; echo "Refusing: SESSION.lock race" >&2; exit 10; }
+    else
+      release_locks
+      echo "Refusing: a runtime session holds $SESSION_LOCK (pid ${holder:-?}); not booting." >&2
+      exit 10
+    fi
+  fi
+  SESSION_LOCK_OURS=1
+}
+
+if [[ $AGENT_MODE == report ]]; then
+  if [[ -s "$AGENT" ]]; then
+    echo "OK: guest agent binary present ($AGENT)."
+  fi
+elif [[ -s "$AGENT" && $AGENT_MODE == build ]]; then
   echo "OK: guest agent binary present ($AGENT); --rebuild-agent to rebuild."
 else
+  take_locks
   BOOTED_HERE=0
+  cleanup() {
+    local rc=$?
+    if [[ $BOOTED_HERE -eq 1 ]]; then "$GUEST_DIR/shutdown.sh" || true; fi
+    # A failed (re)build must not cost the agent that worked before it.
+    if [[ ! -s "$AGENT" && -s "$AGENT.prev" ]]; then
+      mv -f "$AGENT.prev" "$AGENT"; echo "Restored the previous agent ($AGENT)." >&2
+    fi
+    release_locks
+    return $rc
+  }
+  trap cleanup EXIT
   if guest_live; then
     echo "Reusing the running guest (pid $(cat "$PID_FILE")) to build the agent; it stays running."
   else
     echo "Booting the guest to build the agent (it is shut down again afterwards) ..."
+    BOOTED_HERE=1      # set first: if boot.sh dies half-way, cleanup still shuts down
     "$GUEST_DIR/boot.sh"
-    BOOTED_HERE=1
-    # Shut down even if a later step fails: never leave a guest this script started.
-    trap '"$GUEST_DIR/shutdown.sh" || true' EXIT
   fi
   # SSH answering is not readiness: cloud-init is still installing the toolchain,
-  # and a build that starts now races it (live-proof.sh learned this).
+  # and a build that starts now races it (live-proof.sh learned this). A cloud-init
+  # that finished with errors fails at once rather than after the full wait.
   SSH_OPTS=(-i "$KEY" -p 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-            -o BatchMode=yes -o ConnectTimeout=3)
+            -o BatchMode=yes -o ConnectTimeout=3 -o ServerAliveInterval=5 -o ServerAliveCountMax=2)
   WAIT_SECS="${MYCO_RT_CLOUDINIT_WAIT_SECS:-300}"
   INTERVAL="${MYCO_RT_WAIT_INTERVAL:-2}"
   deadline=$(( $(date +%s) + WAIT_SECS ))
-  until ssh "${SSH_OPTS[@]}" myco@localhost 'cloud-init status 2>/dev/null | grep -q "status: done"' 2>/dev/null; do
+  while :; do
+    status="$(ssh "${SSH_OPTS[@]}" myco@localhost 'cloud-init status 2>/dev/null' 2>/dev/null || true)"
+    case "$status" in
+      *"status: done"*)  break ;;
+      *"status: error"*) echo "FAIL: cloud-init finished with errors in the guest; serial log: $STATE/serial.log" >&2; exit 1 ;;
+    esac
     if (( $(date +%s) >= deadline )); then
       echo "FAIL: guest not ready (cloud-init not done) after ${WAIT_SECS}s; serial log: $STATE/serial.log" >&2
       exit 1
     fi
     sleep "$INTERVAL"
   done
+  # Move the old agent aside: a stale copy must not satisfy the success check below,
+  # and cleanup restores it if the build fails.
+  if [[ -s "$AGENT" ]]; then mv -f "$AGENT" "$AGENT.prev"; fi
   # Retry once: a first build on a fresh overlay has hit transient toolchain hiccups.
-  rm -f "$AGENT"
   if ! "$GUEST_DIR/build-agent-in-guest.sh"; then
     echo "agent build failed; retrying once" >&2
     "$GUEST_DIR/build-agent-in-guest.sh" || { echo "FAIL: agent build (after retry)" >&2; exit 1; }
   fi
   [[ -s "$AGENT" ]] || { echo "FAIL: build reported success but $AGENT is missing" >&2; exit 1; }
-  if [[ $BOOTED_HERE -eq 1 ]]; then
-    trap - EXIT
-    "$GUEST_DIR/shutdown.sh"
-  fi
+  rm -f "$AGENT.prev"
 fi
 
 echo
@@ -193,7 +247,13 @@ report
 echo
 if complete; then
   echo "Provisioned. Boot with: $GUEST_DIR/boot.sh"
+  echo "SSH once up:            ssh -i $KEY -p 10022 myco@localhost"
+elif [[ ! -s "$AGENT" ]] && [[ -f "$KEY" && -s "$PUB" && -f "$BASE" && -f "$OVERLAY" && -f "$SEED" ]]; then
+  echo "NOT READY: no guest agent binary, so create will fail (\"no agent binary on the host\")."
+  echo "Build it (boots a VM; needs the host VM lock and a free SESSION.lock):"
+  echo "  $GUEST_DIR/provision.sh --build-agent"
+  exit 3
 else
-  echo "Provisioned except the guest agent (see above); create will fail until it is built."
+  echo "NOT READY: assets are missing (MISS lines above); re-run this script." >&2
+  exit 1
 fi
-echo "SSH once up:            ssh -i $KEY -p 10022 myco@localhost"

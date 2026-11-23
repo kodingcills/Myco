@@ -934,7 +934,6 @@ mod protocol_edge_tests {
     }
 }
 
-/// Minimal base64 (no dependency): the wire format for binary guest files.
 /// TIF-120: set the session's introspection file from `create`'s
 /// `introspection_file`, if given. The path travels inside the SSH remote
 /// command line, so it is restricted to a conservative character set (no
@@ -967,6 +966,7 @@ fn apply_introspection_file(cfg: &mut QemuConfig, args: &Value) -> Result<(), (i
     Ok(())
 }
 
+/// Minimal base64 (no dependency): the wire format for binary guest files.
 fn base64_encode(input: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
@@ -1224,6 +1224,15 @@ mod introspection_file_tests {
         assert_eq!(c.introspection_file, None, "absent argument leaves the channel off");
     }
 
+    /// The length cap admits exactly 4096 bytes.
+    #[test]
+    fn a_path_of_exactly_the_length_cap_is_accepted() {
+        let mut c = cfg();
+        let at_cap = format!("/{}", "a".repeat(4095));
+        assert_eq!(at_cap.len(), 4096);
+        apply_introspection_file(&mut c, &json!({"introspection_file": at_cap})).unwrap();
+    }
+
     #[test]
     fn unsafe_or_malformed_paths_are_refused() {
         for bad in [
@@ -1234,6 +1243,7 @@ mod introspection_file_tests {
             json!("/tmp/x';id;'"),
             json!("/tmp/$(id).json"),
             json!("/tmp/x\ny"),
+            json!(format!("/{}", "a".repeat(4096))),
             json!(42),
         ] {
             let mut c = cfg();
