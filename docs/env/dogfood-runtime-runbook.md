@@ -379,8 +379,8 @@ individual scripts** — it encodes the ordering below and the guards that make 
 safe to re-run:
 
 ```bash
-runtime/guest/provision.sh --check    # report state, change nothing
-runtime/guest/provision.sh            # keypair -> image -> overlay -> seed
+runtime/guest/provision.sh --check    # report state (incl. the agent), change nothing
+runtime/guest/provision.sh            # keypair -> image -> overlay -> seed -> agent
 ```
 
 Two guards in `provision.sh` that the individual scripts do not have, both
@@ -395,26 +395,51 @@ learned the hard way:
 - **The `.pub` is derived from the private key, not the other way round.** If
   both exist but disagree, `provision.sh` rebuilds the `.pub` from the key.
 
-### The guest agent binary is a separate step
+### The guest agent binary (built by `provision.sh`, TIF-120)
 
-`provision.sh` does **not** produce `myco-rt-agent`, and `create` fails without
-it:
+`create` fails without `myco-rt-agent`:
 
 ```
 backend error: protocol: no agent binary on the host: build one with
 runtime/guest/build-agent-in-guest.sh (it stores a copy under runtime/guest/state/)
 ```
 
-It cannot be cross-compiled from macOS — `xa11y` links `libxkbcommon`, so the
-musl build fails at link time. It must be built **inside the guest**, which means
-provisioning has an ordering dependency the scripts do not express:
+It cannot be cross-compiled from macOS (`xa11y` links `libxkbcommon`, so the
+musl build fails at link time); it must be built **inside the guest**. Since
+TIF-120, `provision.sh` does that itself when no host copy
+(`state/myco-rt-agent-aarch64`) exists: it boots the guest, waits for cloud-init
+to report `done`, runs `build-agent-in-guest.sh` (one retry), and shuts the guest
+down again, even on failure. A guest that is already running is reused and left
+running. That boot is the only VM action in `provision.sh`:
 
 ```bash
-runtime/guest/boot.sh                        # guest must be up
-runtime/guest/build-agent-in-guest.sh        # ~60 s; writes state/myco-rt-agent-aarch64
-runtime/guest/shutdown.sh                    # the runtime boots its own guest
+runtime/guest/provision.sh                   # builds the agent if missing (~60 s + boot)
+runtime/guest/provision.sh --no-agent        # assets only, never boots (no VM window)
+runtime/guest/provision.sh --rebuild-agent   # rebuild a stale agent
 python3 scripts/df005-runner.py --preflight  # must exit 0 before anything else
 ```
+
+A stale agent (missing ops) is reported at `create` as `stale agent: missing
+ops …`; fix it with `--rebuild-agent`.
+
+### The introspection channel is per session (TIF-120)
+
+Tk registers no AT-SPI nodes, so the global route clicks the geometry the
+fixture publishes (`entry_field`, `save_button`; TIF-122). That record reaches
+`observe` only when the session enables the channel: pass the guest path on
+`create`:
+
+```json
+{"name": "create", "arguments": {"session_id": "…", "introspection_file": "/tmp/myco-todo-state.json"}}
+```
+
+The runtime hands the path to the agent as `MYCO_INTROSPECTION_FILE`, and apps
+launched through `act` get `MYCO_TODO_STATE_FILE` set to the same path, so
+myco-todo publishes exactly where `observe` reads (ADR-0016). Without the
+argument, `a11y_tree.introspection` is `null`. The path must be absolute and use
+only letters, digits and `. _ - + /`. A `MYCO_INTROSPECTION_FILE` line in
+`/run/myco/gui.env` is no longer needed; the `introspection-env` preflight check
+predates this argument.
 
 **Do not leave your own guest running.** The runtime's `create` boots its own
 guest from the same overlay; if one is already up, `boot.sh` exits 1 and every
