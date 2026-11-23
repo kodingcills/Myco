@@ -331,8 +331,17 @@ def main() -> int:
             capture_output=True, text=True, cwd=ROOT,
             env={**os.environ, "MYCO_VM_LOCK_PATH": str(held)},
         )
-        expect("test-holder" in proc.stdout, f"names the holder: {proc.stdout.strip()[-120:]}")
+        expect("held by" in proc.stdout and "99999 test-holder" in proc.stdout,
+               f"names the holder on the vm-lock line: {proc.stdout.strip()[-160:]}")
         expect(proc.returncode == 1, "exit 1 while the lock is held")
+        # (e) A held lock must short-circuit the guest checks: probing someone
+        # else's live slot is read-only but still load we should not add.
+        expect("not run: another driver holds the VM lock" in proc.stdout,
+               "guest checks are skipped, not run, under a held lock")
+        expect("1 of 6 checks failed" in proc.stdout,
+               f"reports 1 of 6, not a partial count: {proc.stdout.strip()[-160:]}")
+        expect("guest-ssh: Warning" not in proc.stdout,
+               "does not attempt ssh while the lock is held")
     finally:
         holder.kill()
         holder.wait()
