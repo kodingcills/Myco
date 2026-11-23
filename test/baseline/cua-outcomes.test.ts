@@ -109,28 +109,43 @@ describe("Cua action outcomes", () => {
   it("treats a transport fault as a stall, not as a routing refusal", async () => {
     // The verifier's finding: `isError` used to mean "the app never saw it", so a
     // tool that RAN and then errored was filed as a routing refusal - hiding a
-    // delivery failure behind "not a model outcome". Two shapes must both be
-    // stalls, including the text-only form the probe itself received.
+    // delivery failure behind "not a model outcome". Every shape below ran and
+    // failed; none of them says the delivery layer declined.
     for (const shape of [
       { isError: true, structuredContent: { code: "tool_invocation_failed" } },
       {
         isError: true,
         structuredContent: { code: "tool_invocation_failed", foreground_restored: null },
       },
+      // The text-only form the probe itself received: an error with a prose
+      // message and no structuredContent at all. Earlier this was classified
+      // routing-refused and excused as a "documented limit"; it is not a limit,
+      // because Cua signifies routing refusal in structured form (`effect` or a
+      // background_* code) and this carries neither.
       { isError: true, content: [{ type: "text", text: "input_delivery_stalled: ..." }] },
     ]) {
       const { result, calls } = await executeOnce([shape]);
-      // The text-only form carries no code, so it can only be recognised as
-      // isError-without-a-routing-code; assert it is not silently "refused".
-      if (shape.content) {
-        // No code to key on: this is the documented limit of what the transport
-        // can tell us, and the outcome is a refusal only if Cua says so.
-        expect(result.outcome).toBe("routing-refused");
-      } else {
-        expect(result.outcome).toBe("delivered-stalled");
-      }
+      expect(result.outcome, JSON.stringify(shape)).toBe("delivered-stalled");
       expect(calls).toHaveLength(1);
     }
+  });
+
+  it("still reads a stated refusal as routing, in structured or boolean form", async () => {
+    // The other side of the same line: when Cua DOES signify a refusal, it must
+    // stay routing-refused, or the escalation path is lost.
+    // A refusal is signified by `effect: "refused"`, with or without isError.
+    for (const shape of [
+      { isError: true, structuredContent: { effect: "refused" } },
+      { structuredContent: { effect: "refused" } },
+    ]) {
+      const { result } = await executeOnce([shape]);
+      expect(result.outcome, JSON.stringify(shape)).toBe("routing-refused");
+    }
+    // isError ALONE is not a stated refusal: it carries no `effect`, so it is a
+    // tool fault. This is the distinction the whole branch exists for, and it is
+    // worth pinning from both sides.
+    const { result } = await executeOnce([{ isError: true, structuredContent: {} }]);
+    expect(result.outcome).toBe("delivered-stalled");
   });
 
   it("escalates every background refusal code Cua names, not just the observed one", async () => {
