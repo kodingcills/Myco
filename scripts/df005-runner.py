@@ -443,7 +443,10 @@ def execute_scenario(
     def finish(res: RunResult) -> RunResult:
         res.started_at = started_at
         res.duration = time.time() - t0
-        res.steps = [s for s, _ in steps]
+        # `dispatched` is trace-only: EvidenceStep is closed
+        # (additionalProperties: false), so the wire actions must not leak into
+        # result.json. They are emitted as `action` events in trace.jsonl.
+        res.steps = [{k: v for k, v in s.items() if k != "dispatched"} for s, _ in steps]
         res.trace_events = events + build_step_events(res.started_at, steps)
         return res
 
@@ -517,56 +520,97 @@ def execute_scenario(
                    "postconditionResults": [predicate("launch_delivered", outcome)],
                    "stateVersionBefore": v_before, "stateVersionAfter": v_before + 1}, {}))
 
-    # --- resolve widget refs before acting -------------------------------
-    # Tk registers no AT-SPI nodes, and the runtime's closed Action union needs
-    # an AT-SPI ref for BOTH `click` and `typeText` (act.rs resolves the ref and
-    # fails with `unresolved_ref` otherwise). XTEST can type into a focused
-    # window, but the runtime exposes no focus-relative typing or coordinate
-    # click. So with no refs the run cannot be driven: that is a runtime gap
-    # (REQ-04), never something the harness may paper over.
+    # --- choose an actuation route ---------------------------------------
+    # Two routes, in order of preference:
+    #
+    #   ref route    — the app exposes AT-SPI nodes: click/typeText by ref.
+    #   global route — it exposes none (Tk registers zero, RT-003): clickAt a
+    #                  screen point to establish window focus, then
+    #                  typeTextGlobal into whatever has focus.
+    #
+    # The global route is the one the runtime's live proof uses
+    # (act_global_live.rs): clickAt the window centre, confirm the window is
+    # active out-of-band, then type with no target. Both global actions report
+    # `delivered_unverified` by design — there is nothing to read back at that
+    # layer — so the oracle below is the only thing that decides the run.
     entry_ref = find_ref_by_role(obs, ("entry", "text", "text-field"))
-    if entry_ref is None:
+    save_ref = find_ref_by_role(obs, ("push-button", "button"), name="Save")
+    route = "ref" if (entry_ref and save_ref) else "global"
+
+    field: dict[str, Any] = {}
+    save_geom: dict[str, Any] = {}
+    if route == "global":
+        # Geometry comes from the app's own introspection record, which the
+        # fixture publishes (REQ-03 option B). Without it there is no point to
+        # click, and guessing one would be a fabricated target.
+        intro = introspection_record(obs)
+        if intro is None:
+            obs = observe_until_introspection(mcp, sid)
+            intro = introspection_record(obs)
         unavailable = introspection_unavailable(obs)
-        why = f"; introspection: {unavailable}" if unavailable else ""
-        cleanup(mcp, sid)
-        return gap("REQ-04",
-                   "no AT-SPI entry ref for the app window and no focus-relative "
-                   f"typing action in the runtime's Action union{why}")
+        field = (intro or {}).get("entry_field") or {}
+        save_geom = (intro or {}).get("save_button") or {}
+        if not (isinstance(field, dict) and {"x", "y"} <= set(field)):
+            why = f"; introspection: {unavailable}" if unavailable else ""
+            cleanup(mcp, sid)
+            return gap("REQ-03",
+                       "no AT-SPI entry ref and no entry_field geometry in the "
+                       f"introspection record, so there is no point to click{why}")
+        if sc.save and not (isinstance(save_geom, dict) and {"x", "y"} <= set(save_geom)):
+            cleanup(mcp, sid)
+            return gap("REQ-03",
+                       "no AT-SPI Save ref and no save_button geometry in the "
+                       "introspection record")
 
     # --- add the scenario's items through the GUI ------------------------
     step = 2
     for item in sc.adds:
-        for action in (
-            {"kind": "click", "target": entry_ref},
-            {"kind": "keyPress", "keys": "ctrl+a"},          # clear leftovers
-            {"kind": "typeText", "target": entry_ref, "text": item},
-            {"kind": "keyPress", "keys": "Return"},
-        ):
+        if route == "ref":
+            actions = [
+                {"kind": "click", "target": entry_ref},
+                {"kind": "keyPress", "keys": "ctrl+a"},      # clear leftovers
+                {"kind": "typeText", "target": entry_ref, "text": item},
+                {"kind": "keyPress", "keys": "Return"},
+            ]
+        else:
+            actions = [
+                # Clicking inside the window establishes X focus; the entry has
+                # Tk focus already (focus_set at startup), so this is enough.
+                {"kind": "clickAt", "x": field["x"], "y": field["y"]},
+                {"kind": "keyPress", "keys": "ctrl+a"},
+                {"kind": "typeTextGlobal", "text": item},
+                {"kind": "keyPress", "keys": "Return"},
+            ]
+        outcomes = []
+        for action in actions:
             try:
-                act(mcp, sid, action)
+                outcomes.append(act(mcp, sid, action))
             except McpError as e:
                 cleanup(mcp, sid)
                 return gap("REQ-04", f"add {item!r} failed: {e}")
         steps.append(({"step": step,
                        "action": {"kind": "typeText", "text": item},
+                       "dispatched": actions,
                        "preconditionResults": [],
-                       "postconditionResults": [],
+                       "postconditionResults": [
+                           predicate(f"add_delivered[{item}]", o) for o in outcomes
+                       ],
                        "stateVersionBefore": step, "stateVersionAfter": step + 1}, {}))
         step += 1
 
     # --- save ------------------------------------------------------------
     if sc.save:
-        save_ref = find_ref_by_role(obs, ("push-button", "button"), name="Save")
-        if save_ref is None:
-            cleanup(mcp, sid)
-            return gap("REQ-04",
-                       "no AT-SPI button ref named Save and no coordinate-click action")
+        save_action = (
+            {"kind": "click", "target": save_ref} if route == "ref"
+            else {"kind": "clickAt", "x": save_geom["x"], "y": save_geom["y"]}
+        )
         try:
-            act(mcp, sid, {"kind": "click", "target": save_ref})
+            act(mcp, sid, save_action)
         except McpError as e:
             cleanup(mcp, sid)
             return gap("REQ-04", f"save click failed: {e}")
         steps.append(({"step": step, "action": {"kind": "click", "text": "Save"},
+                       "dispatched": [save_action],
                        "preconditionResults": [], "postconditionResults": [],
                        "stateVersionBefore": step, "stateVersionAfter": step + 1}, {}))
 
@@ -728,8 +772,13 @@ def cleanup(mcp: McpClient, sid: str) -> None:
 def build_step_events(started_at: str, steps: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for st, _ in steps:
-        out.append({"type": "action", "timestamp": started_at, "step": st["step"],
-                    "action": st["action"]})
+        # A step's `action` is the logical intent; `dispatched` holds the wire
+        # actions that carried it out. Recording the wire form is what lets a
+        # reader tell a ref-targeted run from a global-input one — they are
+        # indistinguishable from the intent alone and fail in different ways.
+        for action in (st.get("dispatched") or [st["action"]]):
+            out.append({"type": "action", "timestamp": started_at, "step": st["step"],
+                        "action": action})
         if st["preconditionResults"]:
             out.append({"type": "guard-evaluation", "timestamp": started_at, "step": st["step"],
                         "phase": "pre", "results": st["preconditionResults"],

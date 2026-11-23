@@ -53,6 +53,12 @@ for line in sys.stdin:
                     {"name": "Save", "ref": "b1", "role": "push-button"},
                 ]},
             ]} if os.environ.get("STUB_A11Y") == "1" else {"nodes": []})
+            if os.environ.get("STUB_GEOMETRY") == "1":
+                tree["introspection"] = {
+                    "listbox_rows": [], "entry_text": "", "status_text": "",
+                    "entry_field": {"x": 200, "y": 40, "width": 300, "height": 24},
+                    "save_button": {"x": 200, "y": 320, "width": 60, "height": 24},
+                }
             res = text({"ok": True, "state_version": 1, "screenshot": "/x.png",
                         "a11y_tree": tree})
         elif n == "act":
@@ -87,13 +93,15 @@ class Harness:
     """A stub MCP server plus an optional scripted guest readback."""
 
     def __init__(self, store_items: list[str] | None = None, unreadable: bool = False,
-                 a11y: bool = True):
+                 a11y: bool = True, geometry: bool = False):
         self.dir = Path(tempfile.mkdtemp(prefix="df005-t-"))
         self.stub = self.dir / "stub.py"
         self.stub.write_text(STUB_TEMPLATE)
         # Grading is only reachable once the driver can resolve an entry and a
         # Save ref; `a11y=False` models an app that exposes no AT-SPI nodes.
         self.env: dict[str, str] = {"STUB_A11Y": "1"} if a11y else {}
+        if geometry:
+            self.env["STUB_GEOMETRY"] = "1"
         if unreadable:
             rb = self.dir / "readback.py"
             rb.write_text(unreadable_store())
@@ -235,13 +243,33 @@ def main() -> int:
     expect(cb["passed"] is False, f"one missing item fails: {cb['reason']}")
     os.unlink(partial)
 
-    print("9. app exposes no AT-SPI refs → REQ-04 gap, never pass")
+    print("9. no AT-SPI refs and no geometry → REQ-03 gap, never pass")
     code, d = Harness(store_items=["buy milk", "call mom", "write report"], a11y=False).run(
         scenario="DF-S01")
     row = ledger(d)["run-df-s01-1"]
     expect(row["state"] == "gap", f"gap, not pass (got {row['state']})")
-    expect("REQ-04" in row["detail"], f"attributed to REQ-04: {row['detail']}")
+    expect("REQ-03" in row["detail"], f"attributed to REQ-03: {row['detail']}")
     expect(code == 1, "exit non-zero")
+
+    print("9b. no AT-SPI refs but geometry present → global route, graded from the store")
+    code, d = Harness(store_items=["buy milk", "call mom", "write report"],
+                      a11y=False, geometry=True).run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "pass", f"graded pass from the store (got {row['state']})")
+    expect(code == 0, "exit 0")
+    kinds = [json.loads(l)["action"]["kind"]
+             for l in (d / "run-df-s01-1" / "trace.jsonl").read_text().splitlines()
+             if json.loads(l)["type"] == "action"]
+    expect("typeTextGlobal" in kinds, f"typed with no target: {kinds}")
+    expect("clickAt" in kinds, f"focused by coordinate: {kinds}")
+    expect("typeText" not in kinds, "never used the ref-targeted form")
+
+    print("9c. global route with a wrong store → failure, not pass")
+    code, d = Harness(store_items=["buy milk"], a11y=False, geometry=True).run(
+        scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "failure", f"failure (got {row['state']})")
+    expect(row["oracle"] == "verifier:refuted", f"refuted: {row['oracle']}")
 
     print("10. artifacts from a graded run validate against M1-012")
     code, d = Harness(store_items=["buy milk", "call mom", "write report"]).run(scenario="DF-S01")
