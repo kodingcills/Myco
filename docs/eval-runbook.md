@@ -52,7 +52,7 @@ VM; do it before any VM work so a later failure is unambiguous.
 
 | Value | Owner | Why it cannot be derived |
 |---|---|---|
-| The VM and its snapshots | environment owner | The image is built by `build-all.sh` from a Windows ISO, an offline installer payload and a uupdump-built ISO — none of it is in the repo, and that script has never been run end to end (§10) |
+| The VM and its snapshots | environment owner | The image is built by `build-all.sh` (in the repo at `docs/env/vm-toolchain/`) from a Windows ISO, an offline installer payload and a uupdump-built ISO — none of those inputs are in the repo, and the script has never been run end to end from the repo (§10) |
 | `~/VMs/myco-win11/ssh_config`, `id_ed25519` | environment owner | Hosts the port, user, key path; `AgentClient`/`SshTunnel` default to these paths (`src/win/agent-client.ts:202-208`) |
 | `~/VMs/myco-win11/scripts/*` | environment owner | The reset/sanity primitives live outside the repo on purpose (PR #28's in-repo reset was reverted, PR #31) |
 | The agent token | produced by the deploy | Rotated on every deploy (§4); read it from the guest, never from a file committed or cached |
@@ -552,9 +552,12 @@ Be explicit with whoever asks for an "independent reproduction":
    is an ordered sketch: Windows ISO (built by `build-win-iso.sh` from a uupdump UUID), the
    offline installer payload, `create-vm.sh`, `provision.ps1`, virtualising, disk conversion,
    snapshots. Expect it to need repair before it produces a bootable VM.
-2. **It is not in the repo at all.** The whole toolchain — `build-all.sh`, `build-win-iso.sh`,
-   `build-seed-iso.sh`, `create-vm.sh`, `convert-disk-virtio.sh`, `vm.sh`, `reset.sh`,
-   `wait-ssh.sh`, `vssh`, `shutdown.sh`, `guest/` — exists only under `~/VMs/myco-win11/`.
+2. **The toolchain is in the repo** at `docs/env/vm-toolchain/` (landed in #206): `build-all.sh`,
+   `build-win-iso.sh`, `build-seed-iso.sh`, `create-vm.sh`, `convert-disk-virtio.sh`, `vm.sh`,
+   `reset.sh`, `wait-ssh.sh`, `vssh`, `shutdown.sh`, `set-cd.sh`, `guest/` and `seed/`. See that
+   directory's `README.md`. The host copies under `~/VMs/myco-win11/` are the ones that have
+   actually run; the committed copies are the same scripts, and the gap is that they have not
+   been executed from the repo (item 1).
 3. **The input files are not in the repo**: the Windows 11 ARM64 ISO (`~/VMs/iso/`), the offline
    installer payload referenced by `payload/SOURCES.txt`, the UTM guest-tools ISO, and the seed
    ISO with the auto-logon password.
