@@ -28,7 +28,7 @@ Positioning sentence to test:
 | A false success is caught, not reported | `myco-run --task df-s02` prints the UI claim `saved 4 item(s)`, the store's 2 missing items, and `REFUTED` | `docs/product/quickstart.md` §3 |
 | A developer can get there from a clean clone | ~3 s from clone to a verified report, measured; the whole page ~20 s | `docs/product/quickstart.md` |
 | The verdict is not the agent's claim | The exit code comes from schema + cross-file validation of the artifacts; a tampered run exits 2 | `src/discovery/run-artifacts.ts`; `docs/product/quickstart.md` §4; `test/discovery/myco-run.test.ts` |
-| No surveyed competitor returns a persisted-outcome verdict | 8 product lines from vendor primary docs; closest is Cua's per-action `effect` and HCU's window-level before/after diff, which says it does not prove file contents | `docs/research/mvp-competitive-teardown.md` §2.6, `docs/research/findings/m2-01` |
+| No surveyed competitor returns a persisted-outcome verdict | 8 product lines from vendor primary docs; closest is Cua's per-action `effect` and HCU's window-level before/after diff, which says it does not prove file contents | `docs/research/mvp-competitive-teardown.md` §2.6, `docs/research/findings/m2-01-competitive-teardown.md` |
 
 ## What is not measured
 
@@ -73,14 +73,13 @@ the no-verify variant. Reproduced here in its own order and wording:
 |---|---|---|
 | 1 | Myco is not ≈ 0 (≥1 false success) | Myco's own verdict has a hole: fix and re-run before any wedge claim; A is not supported. |
 | 2 | Myco ≈ 0, and `hcu+shell` has ≥6 discordant pairs worse than Myco | The differentiator is the independent verdict without agent discipline; A stands as written. |
-| 3 | Myco ≈ 0, `hcu+shell` ≈ 0 on both prompt variants, "checks every trial" holds, and `hcu+shell` setup and cost are within 1.5× of Myco's | A's differentiation reduces to the durable artifact and recovery; re-open B-first or reframe A as "CI for GUI". |
+| 3 | Myco ≈ 0, `hcu+shell` ≈ 0 on both prompt variants, "checks every trial" holds, and `hcu+shell` setup and cost are within 1.5× of Myco's | A's differentiation reduces to the durable artifact and recovery; re-open B-first or reframe A as "CI for GUI" (plan §7). |
 | 4 | Myco ≈ 0, `hcu+shell` has ≥1 false success but <6 discordant pairs worse than Myco | Underpowered / inconclusive: add trials; no wedge change. |
 | 5 | anything else (e.g. `hcu+shell` ≈ 0 but not within 1.5×, or shell calls not trace-recorded) | No wedge change; report the table as measured. |
 
-Only row 1 moves the wedge — and it moves it away from A. Row 2 is the row that
-supports this recommendation. Row 3 reframes it and re-opens B. Rows 4 and 5
-leave it where it is. So "a single row firing decides" would be wrong: the rows
-say four different things.
+Only row 1 withdraws A. Row 2 is the row that supports this recommendation. Row 3
+reframes it and re-opens B. Rows 4 and 5 leave it where it is. So "a single row
+firing decides" would be wrong: the rows say four different things.
 
 Two limits on the table, both from the same document: the `hcu` (GUI-only) and
 `screenshot-only` arms are reported the same way but **do not decide the wedge**;
@@ -88,9 +87,13 @@ and the table cannot be applied at all until Foundry's trusted ingest exists —
 anything earlier is descriptive and never moves the wedge.
 
 The plan's own overturn conditions (`mvp-discovery-plan.md` §7) are a separate,
-broader list, not the rule table: they include setup above 15 minutes, no win over
-the screenshot-only control, no win over `Orgo`/`Sai`, and reset economics. They
-are reasons to re-examine the wedge; they are not rows of the pre-registered rule.
+broader list, not the rule table. Its seven rows: `hcu+shell` at 0 false successes
+for similar cost and setup; setup that cannot get under 15 minutes; an oracle that
+cannot be made portable; interrupted-operation trials that duplicate or silently
+lose; small fork overhead with a large success gain; one demonstration being
+mistaken for a reusable procedure; and resets cheap enough for trial-heavy
+designs. They are reasons to re-examine the wedge; they are not rows of the
+pre-registered rule.
 
 ## The two MVP criteria
 
