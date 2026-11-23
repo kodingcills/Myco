@@ -55,6 +55,34 @@ Report **cash and booked separately**, never "$1.18" unqualified.
 | Guest clean | no `soffice.bin`, `:8765` free | reap, then start |
 | Lock free | `flock -n` on `/tmp/myco-win11.vm.lock` | wait; never retry in a loop |
 | Spend | committed ≤ $9.00 | stop |
+| **Manifest binding** | the recorded `manifestSha256` equals the hash of the manifest **at the commit the run executes** | **do not publish the comparison** |
+
+### The manifest gate, and the method that makes it pass
+
+The gate is real; the obvious way to check it is wrong. `sweep.ts:23` computes the
+hash over the **parsed** object, not the file bytes:
+
+```ts
+const manifestSha256 = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
+```
+
+So `shasum -a 256 src/baseline/sweep-v3.json` will **never** match — it gives
+`4d651ba1…` while the ledger correctly records `bb256a9b…`, and that difference
+says nothing about the run. An earlier note reported it as a discrepancy and has
+been retracted (`docs/research/experiments/c1-parity.md`, "Retracted: the manifest
+hash does bind").
+
+Correct check, run before starting and again before publishing:
+
+```
+node --import tsx -e 'import h from "./src/baseline/sweep-v3.json" with { type: "json" };
+import { createHash } from "node:crypto";
+console.log(createHash("sha256").update(JSON.stringify(h)).digest("hex"))'
+```
+
+That must print the `manifestSha256` the arm records. **If it does not, the
+comparison to Myco's arm is unverifiable and the number must not be published** —
+the binding is the one property that makes this arm worth running.
 
 There is **no AC or load gate** (standing rule). Power is recorded per row; load is
 recorded for context. A `memory_pressure` warn/critical is the only host condition
