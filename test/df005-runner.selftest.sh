@@ -29,7 +29,10 @@ sleep 0.2
 
 lock_out=""
 set +e
-lock_out=$(MYCO_VM_LOCK_PATH="$mock_lock" python3 "$here/scripts/df005-runner.py" --go 2>&1)
+# --skip-preflight: this step tests the LOCK refusal specifically. The
+# preflight gate now runs first and would refuse earlier with a different
+# message, so the lock check is reached by bypassing it deliberately (TIF-158).
+lock_out=$(MYCO_VM_LOCK_PATH="$mock_lock" python3 "$here/scripts/df005-runner.py" --go --skip-preflight 2>&1)
 lock_code=$?
 set -e
 kill -9 "$lock_pid" 2>/dev/null || true

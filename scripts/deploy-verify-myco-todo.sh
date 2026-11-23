@@ -1,13 +1,38 @@
 #!/usr/bin/env bash
 # Deploy and smoke-test myco-todo in an existing RT-020 Linux desktop.
 set -euo pipefail
-if [[ "${1:-}" != --go || $# != 1 ]]; then
-    echo "Usage: $0 --go (inside the Coordinator-approved Linux window)" >&2
-    exit 2
-fi
+# TIF-158: the guest may run from a DIFFERENT checkout than this script, because
+# `runtime/guest/state/` is gitignored and survives in only one worktree while
+# the runner runs from another. Resolving the guest from this script's own path
+# sent me to a worktree with no qemu.pid and refused a guest that was running
+# (TIF-158). --guest-state points at the state dir the guest actually lives in.
+usage() {
+    echo "Usage: $0 --go [--guest-state <dir>] (inside the Coordinator-approved Linux window)" >&2
+    echo "  --guest-state  directory holding qemu.pid/keys for the running guest" >&2
+    echo "                 (default: <repo>/runtime/guest)" >&2
+}
+GO=0
+GUEST_STATE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --go) GO=1 ;;
+        # A trailing --guest-state with no value used to be swallowed by
+        # "${2:-}" and silently fall back to the default guest — which is the
+        # exact wrong-guest confusion this flag exists to prevent (TIF-158).
+        --guest-state)
+            [[ $# -ge 2 && -n "${2:-}" ]] || {
+                echo "--guest-state needs a directory" >&2; exit 2; }
+            GUEST_STATE="$2"; shift ;;
+
+        *) usage; exit 2 ;;
+    esac
+    shift
+done
+[[ $GO -eq 1 ]] || { usage; exit 2; }
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-guest="$repo/runtime/guest"
+guest="${GUEST_STATE:-$repo/runtime/guest}"
+[[ -d "$guest" ]] || { echo "No guest state dir at $guest" >&2; exit 1; }
 app="$repo/dogfood/apps/myco-todo/myco_todo.py"
 pid="$(cat "$guest/state/qemu.pid")"
 [[ "$pid" =~ ^[0-9]+$ ]]
