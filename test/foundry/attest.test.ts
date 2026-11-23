@@ -10,6 +10,7 @@ import {
   type AttestInput,
   attest,
   bundleDigest,
+  isAttestation,
   offlineObserverForContractTest,
   registerLiveObserver,
   type SaveObservation,
@@ -740,10 +741,11 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     expect(refused.eligible).toBe(false);
   });
 
-  it("v3: freezeBinding's freeze and isAttestation's guard are load-bearing", async () => {
+  it("v3: freezeBinding's freeze is load-bearing", async () => {
     // A binding whose fields are getters: frozen into primitives at entry, the returned
-    // `binding` is plain data. Without freezeBinding the caller's object is returned, and
-    // without isAttestation's try a hostile Proxy throws.
+    // `binding` is plain data. Without freezeBinding the caller's object is returned.
+    // (`isAttestation`'s try is pinned separately, where its effect is observable: the outer
+    // catch in scoreDiscoveryTrial masks it otherwise.)
     const run = await finishedRun();
     const input = baseInput(run);
     let reads = 0;
@@ -778,6 +780,21 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     attest(counted as never);
     expect(counts, "a field was read more than once").toEqual({ finalFiles: 1, screen: 1 });
 
+    // Each ENTRY is read once too. Counting only the top-level getter missed the snapshot's
+    // removal (round 2, finding 3).
+    let entryReads = 0;
+    const countedEntries = {
+      ...input,
+      finalFiles: {
+        get "store.json"() {
+          entryReads += 1;
+          return input.finalFiles["store.json"];
+        },
+      },
+    };
+    attest(countedEntries as never);
+    expect(entryReads, "a finalFiles entry was read more than once").toBe(1);
+
     // `screen.visibleText` is read once too, so the value reported as `screenConstrained` is
     // the value checked (round 1, finding 4).
     let textReads = 0;
@@ -791,6 +808,22 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     const screenResult = attest({ ...input, screen: shiftyScreen as never });
     expect(textReads, "screen.visibleText was read more than once").toBe(1);
     expect(screenResult.screenConstrained).toBe(false);
+  });
+
+  it("v3: isAttestation's guard is load-bearing", () => {
+    // Called directly, so the outer catch in scoreDiscoveryTrial cannot mask it. A Proxy
+    // whose `get` trap throws must yield `false`, not a throw.
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(() => isAttestation(hostile), "isAttestation threw").not.toThrow();
+    expect(isAttestation(hostile), "a hostile Proxy passed the brand check").toBe(false);
+    expect(isAttestation({}), "a plain object passed the brand check").toBe(false);
   });
 
   it("v3: the catch-path return is frozen too", () => {

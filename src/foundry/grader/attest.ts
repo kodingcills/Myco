@@ -327,14 +327,21 @@ function freezeBinding(bundle: AttestedBundle | undefined): AttestedBundle | nul
   }
 }
 
-/** Snapshot the final file map into plain data, reading every field exactly once. */
-function snapshotFiles(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object") return {};
+/**
+ * Snapshot the final file map into plain data, reading every field exactly once.
+ *
+ * `supplied` is carried out with the copy so the "was anything supplied" check does not need
+ * a second read of the caller's object (round 2, finding 3).
+ */
+function snapshotFiles(value: unknown): { files: Record<string, unknown>; supplied: boolean } {
+  if (value === null || typeof value !== "object") return { files: {}, supplied: false };
   try {
     const copy: unknown = structuredClone(value);
-    return copy !== null && typeof copy === "object" ? (copy as Record<string, unknown>) : {};
+    return copy !== null && typeof copy === "object"
+      ? { files: copy as Record<string, unknown>, supplied: true }
+      : { files: {}, supplied: false };
   } catch {
-    return {};
+    return { files: {}, supplied: false };
   }
 }
 
@@ -500,7 +507,8 @@ function attestOrRefuse(input: AttestInput): Attestation {
   // an arm can disable by sending malformed input.
   // Snapshot ONCE. `finalFiles` was read five times and each entry twice, so a getter could
   // show different bytes to different checks (round 1, finding 3).
-  const rawFiles: Record<string, unknown> = snapshotFiles(input.finalFiles);
+  const finalState = snapshotFiles(input.finalFiles);
+  const rawFiles: Record<string, unknown> = finalState.files;
   // A string where bytes belong is not persisted state. Accepting it let a caller pass
   // "content" and have the gate digest it as though it were a file.
   const malformed = Object.entries(rawFiles)
@@ -511,7 +519,7 @@ function attestOrRefuse(input: AttestInput): Attestation {
   const safeFinalFiles: Readonly<Record<string, Uint8Array>> = Object.fromEntries(
     Object.entries(rawFiles).filter(([, bytes]) => bytes instanceof Uint8Array),
   ) as Record<string, Uint8Array>;
-  if (Object.keys(rawFiles).length === 0 && !Array.isArray(input.finalFiles))
+  if (!finalState.supplied)
     blockers.push("final state: none supplied, so no observation can be matched against it");
   // Snapshot ONCE, type-checked. The loop below used to read the caller's object at the
   // check and again to build the frozen copy, so a getter could answer honestly for the
