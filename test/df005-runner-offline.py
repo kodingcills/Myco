@@ -378,6 +378,65 @@ def main() -> int:
     expect(not (out / "free.lock").exists() or (out / "free.lock").stat().st_size == 0,
            "does not write a lock it does not hold")
 
+    print("14b. preflight proves create declares introspection_file")
+    # The parser must be tested against a server that DECLARES the key. Without
+    # such a fixture, a drifted key name still produces a FAIL on a tree that
+    # lacks it, so the suite passes while the parser is wrong.
+    declaring = Path(tempfile.mkdtemp(prefix="df005-decl-")) / "stub.py"
+    declaring.write_text(
+        "#!/usr/bin/env python3\nimport json, sys\n"
+        "for line in sys.stdin:\n"
+        "    r = json.loads(line); m = r.get('method'); i = r.get('id')\n"
+        "    if i is None: continue\n"
+        "    if m == 'initialize': res = {'protocolVersion': '2024-11-05'}\n"
+        "    elif m == 'tools/list': res = {'tools': [{'name': 'create', 'inputSchema':\n"
+        "        {'type': 'object', 'properties': {'session_id': {'type': 'string'},\n"
+        "         'introspection_file': {'type': 'string'}}}}]}\n"
+        "    else: res = {}\n"
+        "    print(json.dumps({'jsonrpc': '2.0', 'id': i, 'result': res}), flush=True)\n"
+    )
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import importlib.util as _u2
+    _sp = _u2.spec_from_file_location("df005_pre", RUNNER)
+    pre = _u2.module_from_spec(_sp)
+    sys.modules["df005_pre"] = pre
+    _sp.loader.exec_module(pre)  # type: ignore[union-attr]
+    declaring.chmod(0o755)
+    pre.DEFAULT_SERVER = declaring
+    ok, detail = pre.create_accepts_introspection()
+    expect(ok is True, f"a declaring server is read as declaring: {detail}")
+    # And the inverse: a server that does not declare it must read as absent.
+    nonserver = Path(tempfile.mkdtemp(prefix="df005-nodecl-")) / "stub.py"
+    nonserver.write_text(declaring.read_text().replace("introspection_file", "introspection"))
+    nonserver.chmod(0o755)
+    pre.DEFAULT_SERVER = nonserver
+    ok2, detail2 = pre.create_accepts_introspection()
+    expect(ok2 is False, f"a permissive/drifted server reads as absent: {detail2}")
+    expect("introspection_file" in detail2 or "does not declare" in detail2,
+           f"the failure names the missing key: {detail2}")
+    # The silent failure: a key the server does not know is ignored, so the run
+    # gaps at REQ-03 after a guest is already booted. The check reads the
+    # server's tool list — no session is created.
+    proc = subprocess.run(
+        [sys.executable, str(RUNNER), "--preflight"],
+        capture_output=True, text=True, cwd=ROOT,
+        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out / "free2.lock")},
+    )
+    line = next((l for l in proc.stdout.splitlines() if "create-schema" in l), "")
+    expect("create-schema" in proc.stdout, "the create-schema check is reported")
+    # The built server on this tree either declares the key (TIF-120 merged) or
+    # does not; the check must report the truth either way, and must never pass
+    # silently when the key is absent.
+    if "does not declare introspection_file" in line:
+        expect("FAIL" in line, f"an absent key FAILS rather than passing: {line.strip()[:110]}")
+    elif "not run" in line:
+        # No built server in this tree: the check must say so rather than
+        # silently passing, and the count must not claim it passed.
+        expect("skip" in line, f"an unavailable server skips, never passes: {line.strip()[:110]}")
+    else:
+        expect("ok" in line and "declares introspection_file" in line,
+               f"a declaring server passes with a definite reason: {line.strip()[:110]}")
+
     print("15. preflight reports a held lock without contending for it")
     held = out / "held.lock"
     holder = subprocess.Popen(
@@ -394,25 +453,40 @@ def main() -> int:
             capture_output=True, text=True, cwd=ROOT,
             env={**os.environ, "MYCO_VM_LOCK_PATH": str(held)},
         )
-        expect("test-holder" in proc.stdout, f"names the holder: {proc.stdout.strip()[-120:]}")
+        expect("held by" in proc.stdout and "99999 test-holder" in proc.stdout,
+               f"names the holder on the vm-lock line: {proc.stdout.strip()[-160:]}")
+        # The denominator must be MEASURED, not asserted: count the check lines
+        # actually printed and compare to the "of N" claim. Omitting a check
+        # that needs neither the lock nor the guest is the defect this guards.
+        check_lines = [l for l in proc.stdout.splitlines()
+                       if l.lstrip().startswith(("ok ", "FAIL ", "skip "))]
+        expect("create-schema" in proc.stdout,
+               "create-schema is reported even while the lock is held")
+        expect(len(check_lines) == 8,
+               f"8 check lines printed under a held lock (got {len(check_lines)})")
         expect(proc.returncode == 1, "exit 1 while the lock is held")
     finally:
         holder.kill()
         holder.wait()
 
-    print("16. preflight accounts for all six checks when the guest is unreachable")
+    print("16. preflight accounts for every check when the guest is unreachable")
     out2 = Path(tempfile.mkdtemp(prefix="df005-pf2-"))
     proc = subprocess.run(
         [sys.executable, str(RUNNER), "--preflight"],
         capture_output=True, text=True, cwd=ROOT,
         env={**os.environ, "MYCO_VM_LOCK_PATH": str(out2 / "free.lock")},
     )
-    # Off-guest, ssh fails; the three dependent checks must still be reported as
-    # not-run rather than silently omitted, so the "N of 6" count is honest.
-    for name in ("app-deployed", "app-self-test", "introspection-env"):
+    # Off-guest, ssh fails; the dependent checks must still be reported as
+    # not-run rather than silently omitted, so the "N of 8" count is honest.
+    for name in ("app-deployed", "app-self-test", "introspection-file",
+                 "introspection-shadow"):
         expect(f"skip {name}: not run: guest unreachable" in proc.stdout,
                f"{name} reported as not-run, not omitted")
-    expect("of 6 checks failed" in proc.stdout, "count is stated against 6")
+    expect("of 8 checks failed" in proc.stdout, "count is stated against 8")
+    # create-schema needs no guest, so it must be reported even off-guest —
+    # not silently omitted from an "of 8" claim.
+    expect("create-schema" in proc.stdout,
+           "create-schema is reported in every path, guest or not")
     expect(proc.returncode == 1, "exit 1")
 
     print("17. no delivery outcome can pass on a matching store (M1 allowlist)")
