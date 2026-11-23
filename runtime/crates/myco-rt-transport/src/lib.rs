@@ -367,13 +367,31 @@ mod tests {
 
     /// Locate the real agent binary built by `cargo test --workspace`.
     /// Tests that need it build it on demand if absent.
-    fn agent_command(token: &str) -> Command {
-        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    fn workspace() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(|p| p.parent())
             .unwrap()
-            .to_path_buf();
-        let bin = workspace.join("target").join("debug").join("myco-rt-agent");
+            .to_path_buf()
+    }
+
+    /// Where `cargo build -p myco-rt-agent` puts the binary. Honours
+    /// CARGO_TARGET_DIR (TIF-141 / N-D): looking only under <workspace>/target
+    /// missed it whenever the target dir was overridden.
+    fn agent_bin() -> PathBuf {
+        let target = match std::env::var_os("CARGO_TARGET_DIR") {
+            Some(dir) => {
+                let dir = PathBuf::from(dir);
+                if dir.is_absolute() { dir } else { workspace().join(dir) }
+            }
+            None => workspace().join("target"),
+        };
+        target.join("debug").join("myco-rt-agent")
+    }
+
+    fn agent_command(token: &str) -> Command {
+        let workspace = workspace();
+        let bin = agent_bin();
         // Always build (a no-op when current): reusing an existing binary let
         // these tests run a STALE agent that predates the code under test
         // (TIF-120 review). Serialized so parallel tests don't race cargo.
@@ -591,9 +609,7 @@ mod tests {
         // Ensure the binary is fully built before spawning it directly (the
         // on-demand build in agent_command races a direct spawn on cold targets).
         let _ = agent_command("warmup");
-        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent().and_then(|p| p.parent()).unwrap().to_path_buf();
-        let bin = workspace.join("target").join("debug").join("myco-rt-agent");
+        let bin = agent_bin();
         let mut c = Command::new(bin);
         c.env_remove("MYCO_RT_TOKEN");
         // Agent exits(2) before reading auth: channel closes → transport error.
@@ -605,9 +621,7 @@ mod tests {
     fn hung_agent_becomes_timeout_not_hang() {
         // A fake agent that authenticates then stops answering: the transport must
         // return Timeout within the deadline, not block forever (review finding #2).
-        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent().and_then(|p| p.parent()).unwrap().to_path_buf();
-        let bin = workspace.join("target").join("debug").join("myco-rt-agent");
+        let bin = agent_bin();
         let _ = agent_command("warmup");
         let mut c = Command::new("sh");
         c.arg("-c").arg(format!(

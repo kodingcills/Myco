@@ -453,6 +453,52 @@ if [[ $rc -eq 1 && "$out" == *"assets are missing"* && "$out" != *"no guest agen
   ok "an incomplete tree with the agent present names the real gap (exit 1), not the agent"
 else bad "misattributed not-ready: rc=$rc / $out"; fi
 
+# ── 20. TIF-141: round-3 nits from the TIF-120 review ─────────────────────────
+# N-B: build-agent-in-guest.sh copies the host agent to a unique temp file and
+# renames it into place; a failed copy leaves the existing agent and no temp file.
+bsand() {
+  local d="$1"; rm -rf "$d"; mkdir -p "$d/guest/state" "$d/guest/keys" "$d/crates/myco-rt-agent" "$d/bin"
+  cp "$HERE/build-agent-in-guest.sh" "$d/guest/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/ssh"
+  # scp stub: uploads succeed; the download writes the binary, or a partial + fails
+  printf '#!/usr/bin/env bash\ndst="${@: -1}"; case "$dst" in myco@*) exit 0 ;; esac\nif [[ -f "%s/scp-partial" ]]; then printf partial > "$dst"; exit 1; fi\nprintf NEWBIN > "$dst"\n' "$d" > "$d/bin/scp"
+  chmod +x "$d/bin/ssh" "$d/bin/scp" "$d/guest/build-agent-in-guest.sh"
+}
+leftover() { ls "$1/guest/state/" 2>/dev/null | grep -c 'myco-rt-agent-aarch64\.tmp' || true; }
+Bd="$TMP/b20"; bsand "$Bd"
+out="$(PATH="$Bd/bin:$PATH" bash "$Bd/guest/build-agent-in-guest.sh" 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$(cat "$Bd/guest/state/myco-rt-agent-aarch64")" == NEWBIN && "$(leftover "$Bd")" -eq 0 ]]; then
+  ok "build-agent-in-guest.sh renames a complete copy into place and leaves no temp file"
+else bad "build copy: rc=$rc agent=$(cat "$Bd/guest/state/myco-rt-agent-aarch64" 2>/dev/null) tmp=$(leftover "$Bd") / $out"; fi
+Bd="$TMP/b20b"; bsand "$Bd"; echo old > "$Bd/guest/state/myco-rt-agent-aarch64"; touch "$Bd/scp-partial"
+out="$(PATH="$Bd/bin:$PATH" bash "$Bd/guest/build-agent-in-guest.sh" 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$(cat "$Bd/guest/state/myco-rt-agent-aarch64")" == old && "$(leftover "$Bd")" -eq 0 ]]; then
+  ok "a failed host copy leaves the existing agent and no temp file"
+else bad "failed copy: rc=$rc agent=$(cat "$Bd/guest/state/myco-rt-agent-aarch64" 2>/dev/null) tmp=$(leftover "$Bd") / $out"; fi
+
+# provision.sh's cleanup removes temp files a failed build left behind.
+A="$TMP/a20c"; agent_sandbox "$A"
+printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo build >> "$d/order.log"; echo part > "$d/state/myco-rt-agent-aarch64.tmp.Ab12Cd"; exit 1\n' > "$A/build-agent-in-guest.sh"
+out="$(prov "$A" --build-agent 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -ne 0 && -z "$(ls "$A/state/" | grep 'aarch64\.tmp')" ]]; then
+  ok "provision.sh's cleanup removes temp files left by a failed build"
+else bad "temp cleanup: rc=$rc left=$(ls "$A/state/" | grep 'aarch64\.tmp' | tr '\n' ' ') / $out"; fi
+
+# N-C: TERM to provision.sh during a build stops the build too, so an orphan cannot
+# rename an agent in after the locks are released.
+A="$TMP/a20d"; agent_sandbox "$A"; echo old > "$A/state/myco-rt-agent-aarch64"
+printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo build >> "$d/order.log"; touch "$d/building"; sleep 3; echo orphan > "$d/state/myco-rt-agent-aarch64"\n' > "$A/build-agent-in-guest.sh"
+# Run provision.sh itself in the background (not via the prov function: `$!` of a
+# backgrounded function is a wrapper subshell, and TERM would miss provision.sh).
+PATH="$A/bin:$PATH" MYCO_RT_WAIT_INTERVAL=0 MYCO_VM_LOCK_SCRIPT="$VMLOCK_SCRIPT" MYCO_VM_LOCK_PATH="$A/vm.lock" \
+  bash "$A/provision.sh" --rebuild-agent >/dev/null 2>&1 & ppid_=$!
+for _ in $(seq 1 100); do [[ -f "$A/building" ]] && break; sleep 0.05; done
+kill -TERM "$ppid_" 2>/dev/null; wait "$ppid_" 2>/dev/null
+sleep 4; reap "$A"
+if [[ "$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null)" == old && ! -e "$A/state/SESSION.lock" ]]; then
+  ok "TERM during a build stops the build: no orphan lands an agent afterwards"
+else bad "orphan build: agent=$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null) lock=$(cat "$A/state/SESSION.lock" 2>/dev/null)"; fi
+
 echo
 if [[ $FAILURES -eq 0 ]]; then
   echo "guest selftest OK: all scenarios passed, no guest started, no download"
