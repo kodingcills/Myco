@@ -1,1 +1,19 @@
-aa96974 M1-016: Sweep runbook, acceptance scorecard, and timeout handoff (#68)
+docs-pr-at-run-time: aa96974 M1-016: Sweep runbook, acceptance scorecard, and timeout handoff (#68)
+
+This file names the commit the RUNBOOK AND SCORECARD were at when the sweep was
+published - NOT the code the sweep executed.
+
+Corrected by TIF-139: the original content was the bare line above, which reads as
+"the sweep ran at this commit". It did not. aa96974 is a docs PR; it changes no
+harness code.
+
+There is no single commit that identifies the executed code: the sweep ran across
+several days and the scripts live in the repo at the evidence commit. To reproduce,
+use the evidence's own pinned inputs - params.json, fingerprints.json and the
+ledger - and the scripts at the commit that added this directory:
+
+  evidence committed by 3eaa23c (squash of TIF-91, PR #269)
+  pre-squash branch commit 23edd6b is byte-identical for trials.jsonl and summary.json
+
+The fixture hashes and the 30 parameter sets are what tie a re-run to this run;
+the commit identifies the scripts, which is a weaker binding and is stated as such.
