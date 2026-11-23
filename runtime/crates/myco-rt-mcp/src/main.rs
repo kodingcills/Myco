@@ -666,7 +666,7 @@ mod tests {
             .collect();
         names.sort_unstable();
         // The six-op core, plus the extension ops: RT-015's opt-in read_file and
-        // RT-016's kill_process/relaunch_process. Any other addition must be a
+        // RT-016's launch_process/kill_process/relaunch_process. Any other addition must be a
         // deliberate decision recorded here, not drift.
         assert_eq!(
             names,

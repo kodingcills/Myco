@@ -789,6 +789,18 @@ Tier-2 review of #226 at c3a75b3: **REJECT**, fixed forward on the same PR:
 - Status corrected from "done" to "implemented, in review; live acceptance pending".
 - Follow-up, not fixed: process ops write no trace events.
 
+Tier-2 re-review at 175e760: **REJECT** on one coordination defect, fixed forward:
+- The shipped tool shape contradicted the recorded REQ-09 decision in
+  `dogfood-state.md` (kill/relaunch as `act` kinds). That entry is now marked
+  SUPERSEDED with the shipped shape, the reason (`act:launch` mints no handle) and
+  the trace-event cost. `direction-a-live-execution-plan.md` G3 no longer says
+  RT-016 PASS.
+- Fake fidelity: `act(Launch)` no longer registers a handle, reset clears handles,
+  error text matches the agent's. Remaining known gap: an already-exited process
+  reports SIGKILL in the fake (live run only).
+- "A backend-refused op does not bump the version" is now asserted for all three
+  ops; moving the bump before the backend call turns one test red per op. 110/0.
+
 Not done: live kill/relaunch against a real guest (no VM slot; per Tiffany's rule the
 second VM is post-M1), so RT-016's acceptance test has not run. The guest-side ops
 are unit-tested in `myco-rt-transport`.
