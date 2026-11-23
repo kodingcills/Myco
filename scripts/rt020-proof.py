@@ -20,8 +20,22 @@ TOOLS = {"create", "observe", "act", "evidence", "reset", "destroy"}
 
 
 def qemu_running():
-    r = subprocess.run(["pgrep", "-f", "qemu-system-aarch64"], capture_output=True, text=True)
-    return bool(r.stdout.strip())
+    # TIF-163: `pgrep -f qemu-system-aarch64` returns 0 while a UTM guest is live.
+    # UTM runs the guest as QEMULauncher, and the qemu binary name appears only in
+    # that process's arguments. Match argv[0]'s basename instead, and fail closed:
+    # an unreadable host reports a guest, never an idle one.
+    try:
+        ps = subprocess.run(["ps", "-Ao", "command"], capture_output=True, text=True)
+    except OSError:
+        return True
+    if ps.returncode != 0 or not ps.stdout.strip():
+        return True
+    names = {"qemu-system-aarch64", "QEMULauncher", "qemu-aarch64-softmmu"}
+    for line in ps.stdout.splitlines():
+        argv0 = line.split(None, 1)[0] if line.split() else ""
+        if os.path.basename(argv0) in names:
+            return True
+    return False
 
 
 class Mcp:
