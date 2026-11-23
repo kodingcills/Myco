@@ -1302,6 +1302,9 @@ def main() -> int:
     p.add_argument("--agent-report", help="agent transcript for verifier-graded clause (b)")
     p.add_argument("--preflight", action="store_true",
                    help="read-only readiness check; creates no session, mutates nothing")
+    p.add_argument("--skip-preflight", action="store_true",
+                   help="with --go: take the slot without running preflight first "
+                        "(the readiness gate is on by default)")
     args = p.parse_args()
 
     if args.preflight:
@@ -1316,6 +1319,21 @@ def main() -> int:
     if not offline:
         if not args.go:
             sys.exit("refusing to boot a guest without --go (wait for M1 Coordinator GO)")
+
+        # Run the readiness check BEFORE taking the lock or booting anything.
+        # Those were separate flags: --go acquired the lock, booted a guest and
+        # spent a window without ever consulting the check that exists to stop
+        # exactly that. Two windows were lost to it (TIF-158). A gate that is not
+        # wired to the action it guards is not a gate.
+        if not args.skip_preflight:
+            print("running preflight before taking the slot (--skip-preflight to override)")
+            rc = preflight()
+            if rc != 0:
+                sys.exit(
+                    "preflight failed; not taking the guest slot. Fix the checks above, "
+                    "or pass --skip-preflight if you know the failure is benign."
+                )
+
         lock_fd = acquire_vm_lock("df005-runner.py")
         if not DEFAULT_SERVER.exists():
             release_vm_lock(lock_fd)

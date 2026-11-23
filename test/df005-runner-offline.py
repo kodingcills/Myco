@@ -706,6 +706,47 @@ def main() -> int:
     expect("read_root" in reason or "allow_write" in reason,
            f"it names the missing capability: {reason[:140]}")
 
+    print("26. --go runs preflight first and refuses on failure (TIF-158 fix B)")
+    # The check existed but --go never called it: it acquired the lock, booted a
+    # guest and spent a window without consulting the readiness gate it already
+    # had. Two windows were lost to that (TIF-158).
+    out3 = Path(tempfile.mkdtemp(prefix="df005-gate-"))
+    held = out3 / "held.lock"
+    holder = subprocess.Popen([sys.executable, "-c",
+        f"import fcntl,time;fd=open({str(held)!r},'w');"
+        "fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);"
+        "fd.write('99999 gate-holder');fd.flush();time.sleep(8)"])
+    time.sleep(0.5)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(RUNNER), "--go", "--scenario", "DF-S01", "--runs", "1",
+             "--eval-id", "gate", "--output-dir", str(out3 / "runs")],
+            capture_output=True, text=True, cwd=ROOT,
+            env={**os.environ, "MYCO_VM_LOCK_PATH": str(held)},
+        )
+        expect("running preflight before taking the slot" in proc.stdout,
+               "the gate announces itself")
+        expect("not taking the guest slot" in proc.stdout + proc.stderr,
+               f"--go refuses when preflight fails: {(proc.stdout+proc.stderr)[-160:]}")
+        expect("scenarios=[" not in proc.stdout,
+               "it stops BEFORE the trial loop")
+    finally:
+        holder.kill(); holder.wait()
+
+    print("27. --skip-preflight is honoured, and only with --go")
+    proc = subprocess.run(
+        [sys.executable, str(RUNNER), "--go", "--skip-preflight", "--scenario", "DF-S01",
+         "--runs", "1", "--eval-id", "skip", "--output-dir", str(out3 / "runs2")],
+        capture_output=True, text=True, cwd=ROOT,
+        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out3 / "free.lock")},
+    )
+    out = proc.stdout + proc.stderr
+    expect("running preflight before taking the slot" not in out,
+           "the escape hatch skips the gate")
+    # It still must not proceed past the lock when the server is missing.
+    expect("build server first" in out or "scenarios=[" in out or "refusing" in out,
+           f"it proceeds to the next gate rather than silently doing nothing: {out[-160:]}")
+
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0
 
