@@ -14,7 +14,9 @@
 # what the C1 arm does.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# `pwd -P`: on macOS /tmp is a symlink to /private/tmp, and a child launched with
+# the /tmp spelling carries that spelling in argv, so a lexical $ROOT would miss it.
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 RUN_DIR="${S0_RUN_DIR:-/tmp/myco-s0}"
 PID_FILE="$RUN_DIR/s0.pid"
 CHILD_FILE="$RUN_DIR/s0.child"
