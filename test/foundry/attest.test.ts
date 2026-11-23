@@ -446,6 +446,114 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     expect(result.blockers.join(" ")).toContain("no hidden fixture hashes to");
   });
 
+  it("R6 round 2 finding 3: the scorer does not throw on a hostile accessor or bad files", async () => {
+    const run = await finishedRun();
+    const real = attest(baseInput(run));
+
+    // (i) A throwing `binding` ACCESSOR, not just a hostile binding value.
+    const throwingAccessor = Object.defineProperty({ ...real }, "binding", {
+      get() {
+        throw new Error("trap");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    expect(() => scored(run, throwingAccessor as typeof real)).not.toThrow();
+
+    // (ii) A Proxy that throws on the FIRST read — the brand read inside isAttestation.
+    const brandThrows = new Proxy(real, {
+      get() {
+        throw new Error("trap");
+      },
+    });
+    expect(() => scored(run, brandThrows as typeof real)).not.toThrow();
+
+    // (iii) Malformed files: `scoreTrial` handles these without throwing, so the scorer must
+    // too. A throw here aborts the whole comparison batch.
+    for (const files of [{ "store.json": undefined }, null]) {
+      expect(() =>
+        scoreDiscoveryTrial(
+          { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+          {
+            fixture: taskFixture(TASK),
+            actual: { kind: "myco-todo", files },
+            screen: run.screen,
+            trace: run.trace,
+            selfReport: run.selfReport,
+            faultVersion: 0,
+          } as never,
+          { t: 0 },
+          real,
+        ),
+      ).not.toThrow();
+    }
+  });
+
+  it("R6 round 2 finding 4: the returned attestation is frozen", async () => {
+    const run = await finishedRun();
+    const att = attest(baseInput(run));
+    expect(Object.isFrozen(att)).toBe(true);
+    // Reassigning `binding` or `eligible` after the fact must not take effect.
+    expect(() => {
+      (att as { eligible: boolean }).eligible = true;
+    }).toThrow();
+    expect(att.eligible).toBe(true);
+    const refused = attest({} as never);
+    expect(Object.isFrozen(refused)).toBe(true);
+    expect(refused.eligible).toBe(false);
+  });
+
+  it("R6 round 2 finding 1: the hidden set is read once, so a Proxy cannot answer twice", async () => {
+    // The set was read at the commitment check and again at the resolve. A Proxy array can
+    // give the real set to the commitment and a forged fixture to the resolve, so the
+    // commitment passes while the resolved fixture is not in it.
+    const input = baseInput(await finishedRun());
+    const forged = structuredClone(HIDDEN[0]!);
+    (forged.fault as { version: number }).version = 999;
+    const forgedHash = fixtureHash(forged);
+    let indexReads = 0;
+    const shifty = new Proxy(HIDDEN, {
+      get(target, key, receiver) {
+        if (key === "0") {
+          indexReads += 1;
+          // First index read is the commitment's map; later reads are the resolve's find.
+          return indexReads === 1 ? target[0] : forged;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const result = attest({
+      ...input,
+      hiddenFixtures: shifty as never,
+      claimedFixtureHash: forgedHash,
+      evidence: { ...input.evidence, fixtureHash: forgedHash },
+    });
+    expect(result.eligible, "a Proxy set admitted a fixture outside the commitment").toBe(false);
+  });
+
+  it("R6 round 2 finding 1: a getter on taskFixtureId cannot answer differently per read", async () => {
+    const input = baseInput(await finishedRun());
+    const foreign = HIDDEN.find((h) => h.taskFixtureId !== TASK.fixtureId)!;
+    let reads = 0;
+    const shifty = structuredClone(foreign);
+    Object.defineProperty(shifty, "taskFixtureId", {
+      get() {
+        reads += 1;
+        // Honest for the first reads, the claimed task's value afterwards.
+        return reads <= 2 ? foreign.taskFixtureId : TASK.fixtureId;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    const result = attest({
+      ...input,
+      hiddenFixtures: [shifty, ...HIDDEN.slice(1)] as never,
+      claimedFixtureHash: fixtureHash(foreign),
+      evidence: { ...input.evidence, fixtureHash: fixtureHash(foreign) },
+    });
+    expect(result.eligible, "a getter fixture was admitted").toBe(false);
+  });
+
   it("R6 round 2 finding 1: a row naming an unknown task is refused", async () => {
     // The registry is the only non-circular oracle here, so a task it does not know cannot
     // be bound to any fixture.

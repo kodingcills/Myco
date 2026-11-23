@@ -310,3 +310,35 @@ into Linear; agents do not create issues.
   eligibility flag as "withheld (fail-closed)" in places where the flag is now the only
   thing withholding it. Cosmetic, but a reader is misled about which mechanism is active.
 - **acceptance:** the comments describe the current mechanism.
+
+## TIF-127: the binding's coverage and wiring (split from #253, 2026-11-22)
+
+Round 2 of #253 rejected at `22abfa5` with six in-scope findings. The hard cap says split, not
+round 3. #253 was narrowed to the parts that passed plus the three safety fixes needed to make
+that subset safe (TOCTOU, throws, freeze). The rest is here, with a fresh round 1.
+
+### EF-014 (TIF-127) Binding coverage and production wiring
+- **status:** open
+- **owner:** foundry-owner
+- **tier:** 2 (grading and oracle code)
+- **blocked_by:** #253
+- **description:** Three findings from the round-2 rejection are coverage and integration, not
+  safety, so they do not block #253:
+  1. **Three load-bearing clauses survive mutation.** `attest.ts:436` (the
+     `resolved.taskFixtureId` clause), `attest.ts:368` (the `rootHash` comparison) and
+     `discovery.ts:259` (the scorer's null-binding refusal) can each be removed with the full
+     suite green. Each needs a test whose input the real code refuses and the mutant admits:
+     the honest `fixtureId` with a committed hash from another task; a forged set of the same
+     count; a null binding.
+  2. **Production wiring is incomplete.** No production code calls `attest()`,
+     `createDiscoveryComparison` or `executeTrial`; the `attestation` parameter of
+     `scoreDiscoveryTrial` is still optional; the required attester can be a no-op; and
+     `executeTrial` records whatever fixture the caller asserts. `RecordedTrialEvidence`'s
+     `fixtureId`/`fixtureHash` are still optional.
+  3. **A vacuous scorer assertion.** `attest.test.ts:484` checks only
+     `decisionEligible === false`, which the flag makes true regardless; it must assert the
+     blocker identity.
+- **acceptance:** each of the three clauses has a test that fails when the clause is removed;
+  every path that can produce a decision-eligible row attests, and the attestation parameter
+  is not optional on that path; `executeTrial` records the fixture it actually ran against;
+  the scorer assertion names the blocker. **The eligibility flag flips only after a PASS.**

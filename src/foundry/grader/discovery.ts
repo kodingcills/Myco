@@ -144,6 +144,24 @@ function reconcileAudit(
  */
 export const ATTESTATION_BINDING_LANDED = false;
 
+/** Read the binding through its accessor, so a throwing getter cannot escape. */
+function readBindingSafely(attestation: Attestation): AttestedBundle | null {
+  try {
+    return readBinding(attestation.binding);
+  } catch {
+    return null;
+  }
+}
+
+/** Digest the scored bytes, or `null` when they are not a file map. */
+function digestSafely(files: unknown): string | null {
+  try {
+    return bundleDigest(files as Readonly<Record<string, Uint8Array>>);
+  } catch {
+    return null;
+  }
+}
+
 /** Read a binding defensively: a Proxy trap must not escape as a throw. */
 function readBinding(value: unknown): AttestedBundle | null {
   if (value === null || typeof value !== "object") return null;
@@ -251,16 +269,17 @@ export function scoreDiscoveryTrial(
   // row the evidence describes: it holds the row, so it recomputes the digest from the
   // bytes it is about to score and compares that to what the attestation claims (R6 1a).
   const attested = isAttestation(attestation);
-  // Reading a hostile binding must not throw: a throw here aborts the whole comparison
-  // batch, so one malformed row would take down every other row's score (R6 round 2,
-  // finding 3). An unreadable binding is simply not a binding.
-  const binding = attested ? readBinding(attestation.binding) : null;
+  // Nothing here may throw: a throw aborts the whole comparison batch, so one malformed row
+  // would take down every other row's score (R6 round 2, finding 3). That covers the
+  // `binding` accessor itself, not just the value it returns, and the digest of malformed
+  // files — `scoreTrial` handles both without throwing, so the scorer must too.
+  const binding = attested ? readBindingSafely(attestation) : null;
   const bindsThisRow =
     binding !== null &&
     binding.armId === armId &&
     binding.taskId === taskId &&
     binding.promptHash === promptHash &&
-    binding.bundleDigest === bundleDigest(input.actual.files);
+    binding.bundleDigest === digestSafely(input.actual.files);
   if (attested && !bindsThisRow) {
     return {
       ...identity,

@@ -204,11 +204,17 @@ const attestedBrand: unique symbol = Symbol("myco.attestation");
  * untyped one, which is the boundary the scorer actually owns.
  */
 export function isAttestation(value: unknown): value is Attestation {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as Record<symbol, unknown>)[attestedBrand] === true
-  );
+  // A Proxy whose `get` trap throws must not escape: the brand read is the first thing the
+  // scorer does, and a throw there aborts the whole comparison batch (R6 round 2, finding 3).
+  try {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      (value as Record<symbol, unknown>)[attestedBrand] === true
+    );
+  } catch {
+    return false;
+  }
 }
 
 export interface Attestation {
@@ -322,6 +328,23 @@ function freezeBinding(bundle: AttestedBundle | undefined): AttestedBundle | nul
   }
 }
 
+/**
+ * Copy the caller's hidden set into plain data, reading every field exactly once.
+ *
+ * `Array.isArray` is true for a Proxy, and a getter can answer differently on each read, so
+ * the set must be snapshotted before any check uses it. A set that cannot be copied is not
+ * a set.
+ */
+function snapshotFixtures(value: unknown): readonly HiddenFixture[] | null {
+  if (!Array.isArray(value)) return null;
+  try {
+    const copy: unknown = structuredClone(value);
+    return Array.isArray(copy) ? (copy as HiddenFixture[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function attest(input: AttestInput): Attestation {
   // Any throw becomes a blocker. The body below still guards its own fields for a precise
   // message; this is the backstop that makes "never throws" a property rather than a claim.
@@ -330,7 +353,7 @@ export function attest(input: AttestInput): Attestation {
   } catch {
     // The backstop must not touch `input` either: reading a hostile Proxy's fields here
     // would throw again from inside the handler and defeat the whole property (R6 3).
-    return {
+    return Object.freeze({
       [attestedBrand]: true as const,
       eligible: false,
       blockers: ["input: malformed, could not be evaluated (the input could not be read)"],
@@ -340,7 +363,7 @@ export function attest(input: AttestInput): Attestation {
       unexpectedFiles: [],
       resolvedFixtureId: null,
       binding: null,
-    };
+    });
   }
 }
 
@@ -356,7 +379,11 @@ function attestOrRefuse(input: AttestInput): Attestation {
   // itself, which is the hole this option exists to close.
   const commitmentPath = findCommittedCommitment();
   const trusted = commitmentPath === null ? null : readTrustedCommitment(commitmentPath);
-  const hiddenFixtures = Array.isArray(input.hiddenFixtures) ? input.hiddenFixtures : null;
+  // Snapshot ONCE. The set was read at the commitment check, at the resolve, and again for
+  // taskFixtureId and persistenceFiles; a Proxy array or a getter could answer differently
+  // each time, admitting a fixture that is not in the commitment (R6 round 2, finding 1).
+  // structuredClone reads every field exactly once and yields plain data.
+  const hiddenFixtures = snapshotFixtures(input.hiddenFixtures);
   if (hiddenFixtures === null) {
     blockers.push("hidden fixtures: none supplied, so no fixture can be resolved");
   }
@@ -600,7 +627,7 @@ function attestOrRefuse(input: AttestInput): Attestation {
     }
   }
 
-  return {
+  return Object.freeze({
     [attestedBrand]: true as const,
     eligible: blockers.length === 0,
     blockers,
@@ -614,5 +641,5 @@ function attestOrRefuse(input: AttestInput): Attestation {
     // dishonestly for the scorer, after attest() had already said eligible (R6 round 2,
     // finding 3). A copy taken here cannot change afterwards.
     binding: bundle,
-  };
+  });
 }
