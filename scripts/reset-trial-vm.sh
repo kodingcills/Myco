@@ -33,13 +33,14 @@ if [ -n "${MYCO_VM_SCRIPTS:-}" ] && [ ! -x "$VM_SCRIPTS/vm.sh" ]; then
   echo "reset-trial-vm: MYCO_VM_SCRIPTS is set but $VM_SCRIPTS/vm.sh is not executable; refusing to fall back to the real VM" >&2
   exit 2
 fi
-# The readiness gate is the one VM-adjacent script that lives in THIS repo, so
-# the version that runs is the version the tests exercise. The other lifecycle
-# scripts (vm.sh, vssh) stay in the VM dir per docs/eval-runbook.md.
+# The readiness gate is part of the committed toolchain (docs/env/vm-toolchain),
+# which is what scripts/sync-toolchain.sh deploys to the host. Resolving it from
+# there means the version that runs is the version the tests exercise, and the
+# host copy is managed by the sync rather than by hand.
 #
 # It is still resolved through VM_SCRIPTS so a test stub can shadow it, as
 # test/wait-guest-ready.test.ts and the reset-allowlist test both do.
-REPO_GATE=$(cd "$(dirname "$0")" && pwd)/wait-guest-ready.sh
+REPO_GATE=$(cd "$(dirname "$0")/../docs/env/vm-toolchain" && pwd)/wait-guest-ready.sh
 
 STOP_TIMEOUT=${MYCO_STOP_TIMEOUT:-30}
 SSH_WAIT_TIMEOUT=${MYCO_SSH_WAIT_TIMEOUT:-600}

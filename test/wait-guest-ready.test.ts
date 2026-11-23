@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const GATE = join(import.meta.dirname, "..", "scripts", "wait-guest-ready.sh");
+const GATE = join(import.meta.dirname, "..", "docs", "env", "vm-toolchain", "wait-guest-ready.sh");
 const GUEST_PID = "69100";
 
 let dir = "";

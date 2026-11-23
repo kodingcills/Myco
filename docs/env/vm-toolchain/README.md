@@ -17,6 +17,7 @@ reproducibility. They are now in the repo.
 | `vm.sh` | Start / stop / snapshot the guest |
 | `reset.sh` | Restore a snapshot |
 | `wait-ssh.sh`, `vssh` | Wait for SSH; run a guest command |
+| `wait-guest-ready.sh` | Wait for a real boot: guest CPU time must **advance** AND SSH must answer. `wait-ssh.sh` alone cannot tell a booting guest from a stalled one, because a UEFI-stuck guest still accepts TCP on 2222 (TIF-164) |
 | `set-cd.sh`, `shutdown.sh` | Drive 1/2/3 eject; graceful stop |
 | `guest/` | `provision.ps1`, `smoke.ps1`, `smoke_calc_uia.py`, `run-interactive.ps1` |
 | `seed/` | `autounattend.xml.tmpl`, `firstlogon.ps1` |
