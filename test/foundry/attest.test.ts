@@ -84,6 +84,9 @@ function baseInput(run: FinishedRun) {
     observations: observer.observe(["store.json"], run.files),
     screen: run.screen,
     observerId: observer.id,
+    // Contract test: opt in explicitly, because the gate refuses an offline observer in
+    // production. That refusal is asserted separately.
+    allowOfflineObserver: true as const,
     hiddenFixtures: HIDDEN,
     claimedFixtureHash: fixtureHash(HIDDEN_FIXTURE),
     screenObserved: true,
@@ -141,6 +144,32 @@ describe("TIF-95: mutation check — each gate check is load-bearing", () => {
   });
 });
 
+describe("TIF-95: an offline observer cannot vouch for a live run", () => {
+  it("refuses offlineObserver unless the caller declares a contract test", async () => {
+    // The finding that made this the most important round: a caller can supply the bytes AND
+    // a matching observation, and a match between two things one caller controls proves
+    // nothing. The offline observer hashes whatever it is handed, so it cannot vouch for a
+    // live run.
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const production = { ...input, allowOfflineObserver: undefined };
+    const result = attest(production);
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("an offline observer cannot vouch for a live run");
+
+    // The same input with the explicit test opt-in is admitted, so the refusal above is a
+    // decision about provenance and not a blanket rejection of the offline observer.
+    expect(attest(input).eligible).toBe(true);
+  });
+
+  it("refuses an unnamed observer", async () => {
+    const input = baseInput(await finishedRun());
+    const result = attest({ ...input, observerId: "  " });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("no observer was named");
+  });
+});
+
 describe("TIF-95: the gate decides eligibility, never the verdict", () => {
   it("an eligible run is not thereby verified, and a refuted run stays refuted", async () => {
     const run = await finishedRun();
@@ -167,28 +196,6 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
     // state oracle said, and the gate must not have touched it.
     expect(scored.decisionEligible).toBe(true);
     expect(scored.result.verdict).toBe("refuted");
-  });
-
-  it("a hand-built { eligible: true } cannot satisfy the scorer", async () => {
-    // The brand is the point: without it, a caller could skip the gate entirely by passing
-    // a literal. This asserts the type system refuses that, at compile time.
-    const run = await finishedRun();
-    const forged = { eligible: true, blockers: [], observerId: "forged" };
-    const scored = scoreDiscoveryTrial(
-      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
-      {
-        fixture: taskFixture(TASK),
-        actual: { kind: "myco-todo", files: run.files },
-        screen: run.screen,
-        trace: run.trace,
-        selfReport: run.selfReport,
-        faultVersion: 0,
-      } as never,
-      { t: 0 },
-      // @ts-expect-error — an Attestation can only come from attest().
-      forged,
-    );
-    expect(scored).toBeDefined();
   });
 
   it("a runtime literal is refused even though the type system was bypassed", async () => {

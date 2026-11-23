@@ -66,9 +66,11 @@ export interface SaveObserver {
  * the result, so a report can say which observer produced the evidence. A live run must
  * supply an observer whose `id` names the real second channel.
  */
+export const OFFLINE_OBSERVER_ID = "offline";
+
 export function offlineObserver(observedAt = "1970-01-01T00:00:00.000Z"): SaveObserver {
   return {
-    id: "offline",
+    id: OFFLINE_OBSERVER_ID,
     observe(paths, files) {
       return paths.map((path) => {
         const bytes = files[path];
@@ -95,6 +97,13 @@ export interface AttestInput {
   readonly screen: ScreenView;
   /** The observer that produced `observations`, so the result can name it. */
   readonly observerId: string;
+  /**
+   * Set only by contract tests, which need the gate to admit an `offline` observer so they
+   * can exercise the other checks. A production caller MUST NOT set it: `offline` hashes
+   * whatever it is handed, so a caller supplying both the bytes and the observation would be
+   * vouching for itself — the recipe this gate exists to reject.
+   */
+  readonly allowOfflineObserver?: true;
   /** The hidden fixtures the run claims to have used. */
   readonly hiddenFixtures: readonly HiddenFixture[];
   /** The fixture hash the run claims. The gate resolves the fixture from this. */
@@ -210,7 +219,7 @@ function readTrustedCommitment(path: string): ReturnType<typeof commitment> | nu
 
 export function attest(input: AttestInput): Attestation {
   const blockers: string[] = [];
-  const { evidence, observations, finalFiles } = input;
+  const { evidence } = input;
 
   // Option 1: the fixture is resolved from the commitment, never taken from the caller.
   // A caller-supplied fixture could keep the real id and name a benign file; a fixture
@@ -220,18 +229,23 @@ export function attest(input: AttestInput): Attestation {
   // itself, which is the hole this option exists to close.
   const commitmentPath = findCommittedCommitment();
   const trusted = commitmentPath === null ? null : readTrustedCommitment(commitmentPath);
-  const supplied = commitment(input.hiddenFixtures);
+  const hiddenFixtures = Array.isArray(input.hiddenFixtures) ? input.hiddenFixtures : null;
+  if (hiddenFixtures === null) {
+    blockers.push("hidden fixtures: none supplied, so no fixture can be resolved");
+  }
+  const supplied = hiddenFixtures === null ? null : commitment(hiddenFixtures);
   if (trusted === null) {
     blockers.push("commitment: the committed commitment could not be read");
   } else if (
-    supplied.rootHash !== trusted.rootHash ||
-    supplied.count !== trusted.count ||
-    supplied.hiddenSplitVersion !== trusted.hiddenSplitVersion
+    supplied !== null &&
+    (supplied.rootHash !== trusted.rootHash ||
+      supplied.count !== trusted.count ||
+      supplied.hiddenSplitVersion !== trusted.hiddenSplitVersion)
   ) {
     blockers.push("commitment: the supplied hidden set does not match the committed commitment");
   }
 
-  const resolved = input.hiddenFixtures.find(
+  const resolved = (hiddenFixtures ?? []).find(
     (candidate) => fixtureHash(candidate) === input.claimedFixtureHash,
   );
   if (resolved === undefined)
@@ -243,13 +257,25 @@ export function attest(input: AttestInput): Attestation {
   // log, a sidecar) are reported but not required to be observed: demanding an observation
   // for every file in the final state refuses honest runs, which is a worse failure than
   // the one it would prevent.
-  const required =
-    resolved === undefined ? [] : [...new Set(resolved.fixture.persistenceFiles)].sort();
+  // Every field a caller supplies is guarded: a gate that throws on malformed input is one
+  // an arm can disable by sending malformed input.
+  const safeFinalFiles: Readonly<Record<string, Uint8Array>> =
+    input.finalFiles && typeof input.finalFiles === "object" ? input.finalFiles : {};
+  if (!input.finalFiles || typeof input.finalFiles !== "object")
+    blockers.push("final state: none supplied, so no observation can be matched against it");
+  const safeObservations: readonly SaveObservation[] = Array.isArray(input.observations)
+    ? input.observations
+    : [];
+  if (!Array.isArray(input.observations))
+    blockers.push("observations: none supplied, so nothing can be attested");
+
+  const required: readonly string[] =
+    resolved === undefined ? [] : [...new Set<string>(resolved.fixture.persistenceFiles)].sort();
   if (resolved !== undefined && required.length === 0)
     blockers.push(
       `fixture: ${resolved.fixture.fixtureId} designates no persistence files, so nothing can be attested`,
     );
-  const unexpected = Object.keys(finalFiles)
+  const unexpected = Object.keys(safeFinalFiles)
     .filter((path) => !required.includes(path))
     .sort();
 
@@ -286,7 +312,7 @@ export function attest(input: AttestInput): Attestation {
   //    final bytes. A missing observation is a blocker, never a pass.
   const accepted: SaveObservation[] = [];
   for (const path of required) {
-    const observation = observations.find((candidate) => candidate.path === path);
+    const observation = safeObservations.find((candidate) => candidate.path === path);
     if (observation === undefined) {
       blockers.push(`observer: no observation of ${path}`);
       continue;
@@ -295,7 +321,7 @@ export function attest(input: AttestInput): Attestation {
       blockers.push(`observer: ${path} was read before the last save`);
       continue;
     }
-    const bytes = finalFiles[path];
+    const bytes = safeFinalFiles[path];
     if (bytes === undefined) {
       blockers.push(`observer: ${path} is absent from the final state`);
       continue;
@@ -312,7 +338,18 @@ export function attest(input: AttestInput): Attestation {
     accepted.push(observation);
   }
 
-  // 3. The screen reading must come from the observer, not the arm. A caller-supplied
+  // 3a. The observer must be a live channel, not the caller. Refusing `offline` in
+  //     production is what stops a self-consistent fabrication: a caller can pass fabricated
+  //     bytes AND a matching observation, and a match between two things one caller controls
+  //     proves nothing.
+  if (input.observerId === OFFLINE_OBSERVER_ID && input.allowOfflineObserver !== true) {
+    blockers.push(
+      "observer: an offline observer cannot vouch for a live run; its hash is of bytes the caller supplied",
+    );
+  }
+  if (input.observerId.trim() === "") blockers.push("observer: no observer was named");
+
+  // 3b. The screen reading must come from the observer, not the arm. A caller-supplied
   //    visibleText is an unchecked claim, and it feeds the screen oracle.
   if (!input.screenObserved)
     blockers.push("screen: the reading was supplied by the arm, not observed");
