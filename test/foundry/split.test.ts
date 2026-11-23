@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TODO_TASKS } from "../../src/foundry/tasks/bank.ts";
 import { TODO_FIXTURE_SPECS, TODO_FIXTURES } from "../../src/foundry/tasks/todo.ts";
@@ -73,37 +73,63 @@ describe("EF-002 hidden split isolation", () => {
 describe("TIF-95: the attestation gate is not reachable from arm code", () => {
   /**
    * The cheap half of process isolation. Full isolation (a separate process the arm cannot
-   * call) is a follow-up; until then the boundary is enforced by import graph, so an arm
-   * cannot import the gate and satisfy it with its own provenance.
+   * call) is EF-009; until then the boundary is the import graph.
+   *
+   * A token scan over specifiers is not enough: a re-export shim reaches the gate with no
+   * forbidden token in the arm-facing file. So this walks the transitive import closure of
+   * every arm-facing root and fails if any module in it is the gate.
    */
-  const ARM_FACING = [
+  const ARM_ROOTS = [
     join(SRC, "foundry", "baseline", "arms", "index.ts"),
     join(SRC, "foundry", "baseline", "todo-transport.ts"),
     join(SRC, "foundry", "baseline", "guest.ts"),
     join(SRC, "foundry", "baseline", "executor.ts"),
     join(SRC, "foundry", "baseline", "recorder.ts"),
   ];
+  const GATE = join(SRC, "foundry", "grader", "attest.ts");
 
-  it("no arm-facing file imports the attestation gate", () => {
-    const leaks = ARM_FACING.filter((file) => {
-      if (!statSync(file).isFile()) return false;
-      const source = readFileSync(file, "utf8");
-      // A regex over specifiers can always be stepped around: a template literal, a
-      // computed specifier, or createRequire all reach the module without matching a
-      // literal pattern. So the rule is stronger and simpler — arm-facing code may not use
-      // dynamic module loading at all. That is enforceable and complete for the threat.
-      return (
-        /from\s+["'][^"']*grader\/attest/.test(source) ||
-        /\bimport\s*\(/.test(source) ||
-        /\brequire\s*\(/.test(source) ||
-        /\bcreateRequire\b/.test(source)
-      );
-    });
+  /** Relative specifiers this file imports, resolved to absolute paths. */
+  function importsOf(file: string): string[] {
+    const source = readFileSync(file, "utf8");
+    const specifiers = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
+    return specifiers
+      .filter((spec) => spec.startsWith("."))
+      .map((spec) => resolve(dirname(file), spec))
+      .filter((path) => existsSync(path));
+  }
+
+  /** Every module reachable from `root`, following relative imports. */
+  function closure(root: string): Set<string> {
+    const seen = new Set<string>();
+    const queue = [root];
+    while (queue.length > 0) {
+      const file = queue.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      queue.push(...importsOf(file));
+    }
+    return seen;
+  }
+
+  it("no arm-facing root reaches the gate, directly or through a re-export", () => {
+    const leaks = ARM_ROOTS.filter((root) => closure(root).has(GATE));
     expect(leaks).toEqual([]);
   });
 
+  it("the closure check actually follows re-exports", () => {
+    // Guard the guard: a shim that re-exports the gate must be detected, or the test above
+    // proves only that the roots do not name the gate themselves.
+    const shim = join(SRC, "foundry", "baseline", "__shim_probe.ts");
+    writeFileSync(shim, 'export { attest } from "../grader/attest.ts";\n');
+    try {
+      expect(closure(shim).has(GATE)).toBe(true);
+    } finally {
+      rmSync(shim, { force: true });
+    }
+  });
+
   it("the gate lives in the grader, not in the arm harness", () => {
-    expect(statSync(join(SRC, "foundry", "grader", "attest.ts")).isFile()).toBe(true);
+    expect(statSync(GATE).isFile()).toBe(true);
     expect(existsSync(join(SRC, "foundry", "baseline", "attest.ts"))).toBe(false);
   });
 });

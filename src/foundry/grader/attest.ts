@@ -26,8 +26,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { RecordedTrialEvidence } from "../baseline/recorder.ts";
 import { commitment, fixtureHash, type HiddenFixture } from "../hidden-split/index.ts";
 import type { GuardTraceEvent, ScreenView } from "../types.ts";
@@ -144,18 +144,24 @@ export interface Attestation {
  * every check below can only add a blocker. There is no "assume fine" branch.
  */
 /**
- * The committed commitment, at a fixed location derived from this module rather than from
- * the working directory or an argument. A caller-supplied path is not a commitment: it lets
- * a caller write a file that vouches for a set they also wrote.
+ * The committed commitment, found by walking up from this module rather than by counting
+ * `..` segments. Counting breaks under `tsc`: the compiled module sits one level deeper
+ * (`dist/src/foundry/grader/`), so a fixed depth resolves to `dist/foundry/…` and every
+ * compiled row is silently refused. Walking up finds the repo root in both layouts.
+ *
+ * A caller-supplied path is not a commitment: it lets a caller write a file that vouches
+ * for a set they also wrote. So this is not an option.
  */
-const COMMITTED_COMMITMENT = join(
-  import.meta.dirname,
-  "..",
-  "..",
-  "..",
-  "foundry",
-  "hidden-commitment.json",
-);
+function findCommittedCommitment(): string | null {
+  let dir = import.meta.dirname;
+  for (;;) {
+    const candidate = join(dir, "foundry", "hidden-commitment.json");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
 
 /** Reads the committed commitment, or null when it is absent or malformed. */
 function readTrustedCommitment(path: string): ReturnType<typeof commitment> | null {
@@ -196,7 +202,8 @@ export function attest(input: AttestInput): Attestation {
   // The trusted commitment is READ FROM THE COMMITTED FILE, never taken from the caller.
   // A caller-supplied commitment is not a commitment: it would let a forged set vouch for
   // itself, which is the hole this option exists to close.
-  const trusted = readTrustedCommitment(COMMITTED_COMMITMENT);
+  const commitmentPath = findCommittedCommitment();
+  const trusted = commitmentPath === null ? null : readTrustedCommitment(commitmentPath);
   const supplied = commitment(input.hiddenFixtures);
   if (trusted === null) {
     blockers.push("commitment: the committed commitment could not be read");

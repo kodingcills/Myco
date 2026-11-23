@@ -155,6 +155,15 @@ when anything is missing, inconsistent, or unattributable.
   as well as a type-level one, so an untyped caller passing a literal `{ eligible: true }`
   is refused rather than trusted.
 
-**Still open (EF-009):** full process isolation. The import test is a boundary, not
-isolation — an arm running arbitrary code in the same process can still reach the module by
-path. That is a separate hardening issue, filed as a follow-up.
+**Still open (EF-009), and now with a demonstrated exploit:** full process isolation.
+
+Round 3 of verification showed the brand is forgeable in-process. `attestedBrand` is an own
+symbol property of every attestation, and `Object.getOwnPropertySymbols` is public API — a
+caller holding any real attestation can copy the symbol onto a fresh `{ eligible: true }`,
+and `isAttestation` accepts it. **No in-process fix can close this**: nothing inside the
+process can distinguish a copied symbol from one the module set. The fix is to move
+`attest()` and `isAttestation` out of the arm's process, which is EF-009.
+
+The import-closure test is a boundary, not isolation, and it is now a *transitive* check
+rather than a token scan: a re-export shim reaches the gate with no forbidden token in the
+arm-facing file, which round 3 demonstrated.
