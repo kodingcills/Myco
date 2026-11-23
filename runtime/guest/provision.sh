@@ -192,22 +192,40 @@ elif [[ -s "$AGENT" && $AGENT_MODE == build ]]; then
 else
   take_locks
   BOOTED_HERE=0
-  BUILD_STARTED=0; BUILD_OK=0
+  BUILD_STARTED=0; BUILD_OK=0; BUILD_PID=""
   cleanup() {
     local rc=$?
+    # Stop a build still running (TERM/INT to this script alone would otherwise
+    # orphan it, and it could later rename a new agent in after the locks are gone).
+    if [[ -n "$BUILD_PID" ]]; then
+      pkill -TERM -P "$BUILD_PID" 2>/dev/null || true
+      kill -TERM "$BUILD_PID" 2>/dev/null || true
+      wait "$BUILD_PID" 2>/dev/null || true
+    fi
     if [[ $BOOTED_HERE -eq 1 ]]; then "$GUEST_DIR/shutdown.sh" || true; fi
     # A build that started but did not succeed leaves nothing at the agent path
     # but the previous agent: whatever it wrote there (possibly a truncated
     # partial copy, which `-s` cannot tell from a good one) is discarded, and the
     # agent that worked before is put back. Decided by BUILD_OK, not by size.
     if [[ $BUILD_STARTED -eq 1 && $BUILD_OK -ne 1 ]]; then
-      rm -f "$AGENT" "$AGENT.tmp"
-      if [[ -s "$AGENT.prev" ]]; then
-        mv -f "$AGENT.prev" "$AGENT"; echo "Restored the previous agent ($AGENT)." >&2
-      fi
+      rm -f "$AGENT" "$AGENT".tmp.*
+    fi
+    # Independent of BUILD_STARTED: an absent agent with a saved one is always
+    # restored, which also covers an interrupt between the move-aside and the
+    # flag (TIF-141 / round-3 N-A).
+    if [[ ! -e "$AGENT" && -s "$AGENT.prev" ]]; then
+      mv -f "$AGENT.prev" "$AGENT"; echo "Restored the previous agent ($AGENT)." >&2
     fi
     release_locks
     return $rc
+  }
+  # Run one build attempt as a tracked child so cleanup can stop it.
+  run_build() {
+    "$GUEST_DIR/build-agent-in-guest.sh" & BUILD_PID=$!
+    local brc=0
+    wait "$BUILD_PID" || brc=$?
+    BUILD_PID=""
+    return $brc
   }
   trap cleanup EXIT
   if guest_live; then
@@ -239,12 +257,14 @@ else
   done
   # Move the old agent aside: a stale copy must not satisfy the success check below,
   # and cleanup restores it if the build fails.
-  BUILD_STARTED=1
+  # Move aside FIRST, then flag the build as started: an interrupt between the two
+  # leaves the old agent in .prev, which cleanup restores (TIF-141 / N-A).
   if [[ -s "$AGENT" ]]; then mv -f "$AGENT" "$AGENT.prev"; fi
+  BUILD_STARTED=1
   # Retry once: a first build on a fresh overlay has hit transient toolchain hiccups.
-  if ! "$GUEST_DIR/build-agent-in-guest.sh"; then
+  if ! run_build; then
     echo "agent build failed; retrying once" >&2
-    "$GUEST_DIR/build-agent-in-guest.sh" || { echo "FAIL: agent build (after retry)" >&2; exit 1; }
+    run_build || { echo "FAIL: agent build (after retry)" >&2; exit 1; }
   fi
   [[ -s "$AGENT" ]] || { echo "FAIL: build reported success but $AGENT is missing" >&2; exit 1; }
   BUILD_OK=1

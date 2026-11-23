@@ -60,6 +60,11 @@ echo "[build] cargo build --release -p myco-rt-agent (native, in guest)"
 # Copy to a temp name and rename into place: an interrupted or failed scp (disk
 # full, dropped connection, Ctrl-C) must never leave a truncated agent at the path
 # create installs from (TIF-120 review round 2).
-"${SCP[@]}" myco@localhost:~/bin/myco-rt-agent "$GUEST_DIR/state/myco-rt-agent-aarch64.tmp" >/dev/null
-mv -f "$GUEST_DIR/state/myco-rt-agent-aarch64.tmp" "$GUEST_DIR/state/myco-rt-agent-aarch64"
+# A unique temp name (TIF-141 / N-C): two runs, or an orphaned one, never share it.
+# provision.sh's cleanup removes leftovers matching myco-rt-agent-aarch64.tmp.*.
+AGENT_TMP="$(mktemp "$GUEST_DIR/state/myco-rt-agent-aarch64.tmp.XXXXXX")"
+trap 'rm -f "$AGENT_TMP"' EXIT
+"${SCP[@]}" myco@localhost:~/bin/myco-rt-agent "$AGENT_TMP" >/dev/null
+chmod 0755 "$AGENT_TMP"
+mv -f "$AGENT_TMP" "$GUEST_DIR/state/myco-rt-agent-aarch64"
 echo "[build] OK: /home/myco/bin/myco-rt-agent (host copy: runtime/guest/state/myco-rt-agent-aarch64)"
