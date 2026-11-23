@@ -293,6 +293,34 @@ criterion (TIF-60) decide the wedge.
 
 ---
 
+## Review findings and incidents (Linear-only ids)
+
+Raised by review, not by the original plan. Recorded here by reference so the repo
+carries the evidence even though the issue lives in Linear.
+
+### TIF-107 — verifier FAIL: live-runner evidence aliasing (fixed in #187)
+- **status:** fixed and merged (`5c10cd3`, PR #187); this entry is the record.
+- **what happened:** the injected verifier received the same `items` array that the
+  runner had aliased into its own `persisted` evidence. A verifier that mutated its
+  input could erase `missing` and force `verified` on a run whose store had dropped
+  items — a false success produced by the verification boundary itself.
+- **how it was found:** the round-2 verifier of PR #187 constructed the mutation and
+  reproduced `status: verified` on a store that persisted nothing.
+- **fix:** snapshot `persisted` before calling the verifier, and pass copies of both
+  the store and the intent; a hostile-verifier test now fails if the copy is removed.
+- **residual:** the runner still trusts the verifier's verdict. The contradiction
+  guard downgrades `verified` to `uncertain` when the store is missing items, which
+  is the second line of defence, and it is tested.
+
+### TIF-108 — compare-surface deferred nits (open)
+- dead `[data-report-open]` CSS block and its `reportOpenMaxWidth` token (the screen
+  it styled was removed in #203);
+- report-load failures reuse the run-specific heading "Can't read this run";
+- no test pins the Not-run `<th scope="col">` headers or the report `h1` tag.
+
+### TIF-86 / TIF-103 — compare provenance and simulated notes (done)
+- TIF-86: #203 merged `60484fe`. TIF-103: #215 merged `56f9c20`.
+
 ## Dependencies owned by other workstreams
 
 | Dependency | Owner | Status |
