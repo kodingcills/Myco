@@ -32,7 +32,6 @@ RUNNER = ROOT / "scripts" / "df005-runner.py"
 
 # Import the runner's own scoring rule rather than restating it in the test:
 # a test that re-expresses the rule it guards cannot detect a change to it.
-sys.path.insert(0, str(RUNNER.parent))
 import importlib.util as _ilu  # noqa: E402
 
 _spec = _ilu.spec_from_file_location("df005_runner", RUNNER)
@@ -228,6 +227,9 @@ def main() -> int:
     expect(ledger(d)["run-df-s01-1"]["state"] == "uncertain", "ledger state `uncertain`")
     c = checks_of(d, "run-df-s01-1")["persisted-set-matches"]
     expect(c["passed"] is None, "check passed is null (could not look)")
+    _res = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+    expect(_res["verdict"]["score"] == 0.0,
+           f"an uncertain run scores 0.0, not a failed-check value: {_res['verdict']['score']}")
     expect("could not look" in c["reason"], f"reason says could not look: {c['reason']}")
 
     print("3. guest store correct → success")
@@ -484,7 +486,16 @@ def main() -> int:
     expect(not any(o == "{}" for o in observed),
            "no postcondition collapses the envelope to {}")
 
-    print("22. scores are rounded and the two encodings agree")
+    print("21b. every scenario with a weight set has a declared split")
+    # Scenarios that are gaps (S03/S04) or declare no weights (S05) are not in
+    # the table. If one later gains weights, this fails until it is declared.
+    weighted = {sid for sid, sc in df005.SCENARIOS.items()
+                if not sc.needs_ops and sid not in ("DF-S03", "DF-S04", "DF-S05")}
+    expect(set(EXPECTED_WEIGHT_SPLIT) == weighted,
+           f"declared splits match the weighted scenarios: "
+           f"{sorted(EXPECTED_WEIGHT_SPLIT)} vs {sorted(weighted)}")
+
+    print("22. scores are rounded and the rule's literals hold")
     h = Harness(store_items=["fix login page"], a11y=False, geometry=True)
     code, d = h.run(scenario="DF-S02", agent_report=report_text(
         "Both 'BUG: crash on save' and 'Bugfix release notes' were dropped by a "
@@ -492,16 +503,18 @@ def main() -> int:
     res = json.loads((d / "run-df-s02-1" / "result.json").read_text())
     score = res["verdict"]["score"]
     expect(score == round(score, 10), f"score is not float noise: {score!r}")
-    # check()'s published score and RunResult.score must be the same rule.
-    # `check_score` is imported from the runner, so this asserts agreement with
-    # the real rule rather than with a copy of it.
-    recomputed = round(sum(c["partial_score"]["weight"] * check_score(c["passed"])
+    # Assert the LITERAL rule, not the function against itself. Comparing
+    # `published == check_score(passed)` is tautological when both sides call the
+    # same function, so it pins nothing about the rule's value.
+    for c in res["verdict"]["checks"]:
+        want = {True: 1.0, False: 0.0, None: 0.0}[c["passed"]]
+        expect(c["partial_score"]["score"] == want,
+               f"{c['name']}: passed={c['passed']!r} -> score {c['partial_score']['score']} "
+               f"(want {want})")
+    recomputed = round(sum(c["partial_score"]["weight"] *
+                           {True: 1.0, False: 0.0, None: 0.0}[c["passed"]]
                            for c in res["verdict"]["checks"]), 10)
     expect(score == recomputed, f"published {score} == recomputed {recomputed}")
-    # And the published per-check score must itself be check_score's output.
-    for c in res["verdict"]["checks"]:
-        expect(c["partial_score"]["score"] == check_score(c["passed"]),
-               f"{c['name']}: published score matches check_score({c['passed']!r})")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0
