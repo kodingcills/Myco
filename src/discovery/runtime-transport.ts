@@ -20,6 +20,7 @@ import type {
   DesktopSession,
   DesktopTransport,
 } from "./live-runner.ts";
+import type { ProbeEvidence } from "./preflight.ts";
 
 interface Pending {
   resolve(value: unknown): void;
@@ -37,6 +38,8 @@ export interface RuntimeTransportOptions {
   readonly readRoot: string;
   /** Guest path of the app's published state file (ADR-0016). */
   readonly introspectionPath: string;
+  /** Guest path of the app under test (the `appPresent` check). */
+  readonly appPath: string;
   /** Session id; defaults to a timestamped one. */
   readonly sessionId?: string;
   /** Per-request timeout. */
@@ -206,6 +209,62 @@ export class RuntimeTransport implements DesktopTransport {
       action: wire,
     })) as { outcome?: unknown };
     return outcomeOf(result.outcome);
+  }
+
+  /**
+   * Host-side evidence for the preflight; it never assumes a check passed.
+   *
+   * The transport cannot vouch for two of the eight checks and says so: the
+   * oracle is the runner's injected verifier, not something a file read
+   * establishes, and no probe here can show the guest has no stray app process.
+   * Those two keep the live path closed until their owners supply them, which is
+   * the intended state, not an oversight.
+   */
+  async evidence(_session: DesktopSession): Promise<ProbeEvidence> {
+    let runtimeReachable = false;
+    let guestReady = false;
+    try {
+      const observation = (await this.client.callTool("observe", {
+        session_id: this.sessionId,
+      })) as { a11y_tree?: unknown; windows?: unknown };
+      runtimeReachable = true;
+      guestReady = Array.isArray(observation.windows) && observation.windows.length > 0;
+    } catch {
+      return {
+        runtimeReachable: false,
+        guestReady: false,
+        appPresent: false,
+        storeReadable: false,
+        // The oracle is supplied by its owner, not by this transport; claiming
+        // it here would be the transport deciding what counts as verification.
+        oraclePresent: false,
+        guestClean: false,
+      };
+    }
+    // Any failure counts as "not established". The agent does distinguish a
+    // missing file from a refused path, but both arrive as one error string, and
+    // reading that text would make presence depend on a message format.
+    const canRead = async (path: string): Promise<boolean> => {
+      try {
+        await this.client.callTool("read_file", { session_id: this.sessionId, path });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    return {
+      runtimeReachable,
+      guestReady,
+      appPresent: await canRead(this.options.appPath),
+      storeReadable: await canRead(this.options.introspectionPath),
+      // The oracle is supplied by its owner; the transport claiming it present
+      // would be the transport deciding what counts as verification.
+      oraclePresent: false,
+      // Not established by this transport: it has no process probe, and a failed
+      // read cannot tell "no stray process" from "no read grant". It stays false
+      // until its owner supplies a real probe, so the live path stays closed.
+      guestClean: false,
+    };
   }
 
   async readFile(_session: DesktopSession, path: string): Promise<string> {

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  checkGate,
+  combinedPreflight,
   type PreflightProbe,
   renderPreflight,
   runPreflight,
@@ -60,6 +62,29 @@ describe("Direction A preflight", () => {
     expect(run(JSON.stringify(allPass)).status).toBe(0);
     expect(run(JSON.stringify({ ...allPass, guestClean: false })).status).toBe(2);
     expect(run("{not json").status).toBe(3);
+  });
+
+  it("gates on authorisation alone, so a caller cannot boot by supplying evidence", () => {
+    expect(checkGate({ coordinatorGo: false, hostLock: false }).ok).toBe(false);
+    expect(checkGate({ coordinatorGo: true, hostLock: false }).abort).toEqual([
+      "shared host lock held by this run",
+    ]);
+    expect(checkGate({ coordinatorGo: true, hostLock: true }).ok).toBe(true);
+  });
+
+  it("aborts even when every piece of evidence passes, if authorisation is denied", () => {
+    const evidence = {
+      runtimeReachable: true,
+      guestReady: true,
+      appPresent: true,
+      storeReadable: true,
+      oraclePresent: true,
+      guestClean: true,
+    };
+    expect(combinedPreflight({ coordinatorGo: true, hostLock: true }, evidence).ok).toBe(true);
+    const denied = combinedPreflight({ coordinatorGo: false, hostLock: true }, evidence);
+    expect(denied.ok).toBe(false);
+    expect(denied.abort).toEqual(["Coordinator GO for this host window"]);
   });
 
   it("does not accept truthy non-boolean values", () => {

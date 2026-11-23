@@ -10,6 +10,9 @@
  * enforces the gate.
  */
 
+/** What production callers must collect; the Go/lock fields are decided by people/infra. */
+export type ProbeEvidence = Omit<PreflightProbe, "coordinatorGo" | "hostLock">;
+
 export interface PreflightProbe {
   /** The Coordinator's explicit GO for this host window. */
   readonly coordinatorGo: boolean;
@@ -62,6 +65,32 @@ const DETAIL: Record<keyof PreflightProbe, string> = {
   oraclePresent: "Foundry oracle for this task is present",
   guestClean: "no stray app processes or leftover run directories",
 };
+
+/**
+ * The gate a host-side launcher must pass before it collects evidence: without
+ * a named Coordinator GO and the shared host lock, no probe is gathered at all.
+ * Otherwise a caller could satisfy every field it controls and boot a guest.
+ */
+export function checkGate(gate: {
+  readonly coordinatorGo: boolean;
+  readonly hostLock: boolean;
+}): PreflightResult {
+  const checks: PreflightCheck[] = (["coordinatorGo", "hostLock"] as const).map((name) => ({
+    name,
+    ok: gate[name] === true,
+    detail: DETAIL[name],
+  }));
+  const abort = checks.filter((check) => !check.ok).map((check) => check.detail);
+  return { ok: abort.length === 0, checks, abort };
+}
+
+/** The full gate: the human/infra authorisation, then the host-side evidence. */
+export function combinedPreflight(
+  gate: { readonly coordinatorGo: boolean; readonly hostLock: boolean },
+  evidence: ProbeEvidence | null,
+): PreflightResult {
+  return runPreflight({ ...evidence, ...gate });
+}
 
 export function runPreflight(probe: Partial<PreflightProbe> | null | undefined): PreflightResult {
   const checks: PreflightCheck[] = [];
