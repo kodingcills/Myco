@@ -49,6 +49,14 @@ child it spawns agrees on the same roots:
 | `VM_ROOT` | `~/VMs/myco-win11` | `build-all.sh`, `build-seed-iso.sh`, `create-vm.sh`, `vssh`, `wait-ssh.sh` |
 | `ISO_ROOT` | `~/VMs/iso` | `build-all.sh`, `build-seed-iso.sh`, `build-win-iso.sh`, `create-vm.sh` |
 | `VM_TOOLS` | `~/VMs/tools` | `build-win-iso.sh` (the `chntpw` build tree) |
+| `MYCO_BOOT_TIMEOUT` | `180` | `vm.sh` — seconds `start`/`start-disposable` wait for the guest's SSH before failing |
+| `MYCO_BOOT_SKIP_READINESS` | unset | `vm.sh` — `1` skips that check (warns; proves nothing) |
+
+`vm.sh start` and `start-disposable` return success only once the guest answers
+SSH, because UTM accepting a start says nothing about the boot (TIF-164: a guest
+sat in early UEFI for 4.5 minutes under host load 26 while the caller believed the
+launch had worked). On timeout `vm.sh` exits 1 and names the likely causes. The
+check reuses `wait-ssh.sh`, so it needs the same `VM_ROOT`/`ssh_config`.
 
 `vm.sh`, `set-cd.sh` and `convert-disk-virtio.sh` are **name-based** (`VM_NAME`),
 not path-based, so the roots do not apply to them. `reset.sh` and `shutdown.sh`
