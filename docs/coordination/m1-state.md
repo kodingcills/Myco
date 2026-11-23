@@ -33,11 +33,12 @@
   the runtime's optional introspection config. `--dry-run` gives DF-S01
   verified and DF-S02 refuted offline. **No live S0 evidence yet:** the one
   attempt was stopped two minutes into boot because the window was not ours.
-  The live preflight still refuses on two checks no owner can establish yet —
-  `oraclePresent` (Foundry's verifier) and `guestClean` (no guest-side process
-  probe exists; `read_file` cannot separate "no stray process" from "no grant") —
-  so opening S0 is a decision for Tiffany and Foundry, recorded in
-  `mvp-discovery-state.md`, not a default to flip.
+  The live preflight still refuses on two checks: `oraclePresent` (Foundry's
+  verifier, unproven — an S0 PASS must not claim MVD-001 coverage) and
+  `guestClean` (ratified 2026-11-23 as *the app's store and published state files
+  are absent before launch*; collected before the run, so the transport reports it
+  unproven). Opening S0 live needs the merged gate, the VM lock, and an explicit
+  Coordinator GO.
 - [M1 backlog](../backlog/m1.md)
 
 ## Standing rule — defensive engineering (Tiffany-approved, 2026-11-22 16:00 ET)

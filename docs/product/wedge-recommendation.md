@@ -111,9 +111,11 @@ pre-registered rule.
 ## Next three actions, in order
 
 1. **Open S0 live** by deciding the two unproven preflight checks with Tiffany and
-   Foundry: either a guest-side process probe, or a narrower `guestClean`
-   definition recorded in the run's evidence. Until then, S0 cannot leave the
-   preflight.
+   Foundry on `oraclePresent`: `guestClean` was ratified on 2026-11-23 as *the
+   app's store and published state files are absent before launch*, and every S0
+   record must state that definition was in force; `oraclePresent` stays unproven,
+   so an S0 PASS must not be read as MVD-001 coverage. Until Foundry wires it, S0
+   cannot leave the preflight.
 2. **Run the head-to-head** the moment Foundry's fixtures and verifiers land:
    Myco, screenshot-only, HCU, Orgo, Sai on the same tasks, scored by Foundry, with
    the pre-registered rule as the only decision procedure.
