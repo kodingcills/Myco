@@ -42,6 +42,20 @@ export interface Screenshot {
  * resolved into, and so a caller cannot add a fifth without noticing. Writing it
  * from `classify` would be reporting a delivery as a document state, which is
  * exactly the conflation this type exists to undo.
+ *
+ * **IF YOU WANT THE MODEL OUTCOME, READ THE JUDGE'S `modified`.** That is where it
+ * lives, per row and with attribution - arm-002 scored 16 rows `modified` with
+ * "Document left open, unsaved (c1-judge.ts:32)", and those rows are the
+ * comparison axis for anything after them. A transport outcome saying
+ * `delivered` means only that the input landed; it is silent on whether the
+ * document changed, and reading `delivered` as success is the mistake this whole
+ * type was introduced to prevent.
+ *
+ * This name is reserved rather than removed so that the boundary is visible at
+ * the place a reader would otherwise expect a save verdict to be. If a future arm
+ * needs a save outcome on the transport side, that is a deliberate contract
+ * change against evidence the judge's vocabulary is insufficient - not a value
+ * to start writing from `classify`.
  */
 export type CuaOutcome = "routing-refused" | "delivered" | "delivered-stalled" | "save-failed";
 
