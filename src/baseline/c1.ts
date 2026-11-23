@@ -7,6 +7,43 @@ export interface Screenshot {
   data: string;
 }
 
+/**
+ * What actually happened to one Cua action, kept distinct because the previous
+ * single `refused` boolean conflated four different events (TIF-167).
+ *
+ * The distinction is not cosmetic. `C1.execute` used to return
+ * `refused: result.isError === true || effect === "refused"`, so a *routing*
+ * refusal - the delivery layer declining to send the input at all - was
+ * indistinguishable from the model failing to save. arm-003c's
+ * `cua-action-refused` was read as the latter for a day when it was the former,
+ * and the probe on 2026-11-23 settled it: background `key_combo` on a SALFRAME
+ * window is refused before the app is ever reached, identically for Ctrl+S and
+ * for Ctrl+F12.
+ *
+ * - `routing-refused`   the delivery layer declined to deliver; the app never saw
+ *                       it. NOT a model outcome.
+ * - `delivered-stalled` the input landed but Cua could not confirm the target read
+ *                       it within its budget. NOT a model outcome: it is unproven
+ *                       whether the app acted, and Cua requires reading the target
+ *                       before repeating rather than blind-retrying.
+ * - `delivered`         the input landed and Cua verified it.
+ * - `save-failed`       a save was attempted, was delivered, and did not take. This
+ *                       is the ONLY outcome that counts against the model.
+ *
+ * `save-failed` is NOT produced by `classify` and cannot be: whether a save took
+ * effect is not visible in the transport response. Cua answers "did I deliver
+ * this input", and the save's success is established separately by the judge
+ * reading the document (`c1-judge.ts` returns `modified` when the cell is still
+ * dirty). It is in the union so the four transport outcomes have a name to be
+ * resolved into, and so a caller cannot add a fifth without noticing. Writing it
+ * from `classify` would be reporting a delivery as a document state, which is
+ * exactly the conflation this type exists to undo.
+ */
+export type CuaOutcome = "routing-refused" | "delivered" | "delivered-stalled" | "save-failed";
+
+/** Where an action ended up being delivered. Recorded per action (TIF-167). */
+export type DeliveryMode = "background" | "foreground";
+
 export interface Mcp {
   request(method: string, params: object): Promise<unknown>;
   notify(method: string): Promise<void>;
@@ -16,6 +53,90 @@ export function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+/**
+ * Refusal codes where the delivery layer declined *and* says a mode change would
+ * help. Three rather than one because Cua's own taxonomy names three
+ * (docs/research/adapters.md:655): `background_occluded` and
+ * `background_uipi_blocked` refuse an input from the background layer for the
+ * same reason `background_unavailable` does and carry the same escalation, so
+ * treating only the one observed in the probe as retryable would silently
+ * under-escalate on a different desktop condition.
+ */
+const ESCALATABLE_REFUSALS: Record<string, true> = {
+  background_unavailable: true,
+  background_occluded: true,
+  background_uipi_blocked: true,
+};
+
+/**
+ * Turn one raw Cua response into a single outcome.
+ *
+ * Order matters. The retryable refusals are checked before the generic
+ * `effect === "refused"`, because a refusal the delivery layer can escalate is a
+ * different event from one it cannot: only the former should be retried in
+ * foreground mode, and conflating them would either retry something unfixable or
+ * drop the only escape hatch that works.
+ *
+ * The core distinction this function exists to preserve: **a transport fault is
+ * not a routing refusal.** `isError` used to mean "the app never saw it", but a
+ * tool that ran and then errored has no such implication, and Cua reports that as
+ * `tool_invocation_failed`. Reading it as `routing-refused` would hide a delivery
+ * failure behind "not a model outcome" - the same conflation class this whole
+ * change removes, one layer down.
+ */
+function classify(result: unknown): {
+  outcome: CuaOutcome;
+  escalatable: boolean;
+  verified?: boolean;
+} {
+  const outer = record(result);
+  const inner = record(outer.structuredContent);
+  const { effect, verified, path, code } = inner;
+  if (typeof path === "string" && !["pixel", "key_events", "key_events_fg"].includes(path))
+    throw new PixelRouteError("unexpected Cua delivery path");
+
+  const verifiedField = typeof verified === "boolean" ? { verified } : {};
+
+  // The delivery layer declined, and says a mode change would work.
+  if (typeof code === "string" && ESCALATABLE_REFUSALS[code] === true)
+    return { outcome: "routing-refused", escalatable: true, ...verifiedField };
+
+  // The tool ran and failed. Not a delivery refusal, and NOT to be retried
+  // blindly: Cua's own message for a stall says the input may still appear and to
+  // inspect the target first. Matched on the code alone - requiring
+  // `foreground_restored` to be a boolean would misroute the text-only form,
+  // which is how the probe itself received the stall.
+  if (code === "tool_invocation_failed")
+    return { outcome: "delivered-stalled", escalatable: false, ...verifiedField };
+
+  // The input landed, and its effect could not be confirmed. A dismissal and a
+  // success both read this way from the transport (`effect: "unverifiable"` was
+  // what Escape returned), so this is `delivered` with the caveat recorded rather
+  // than a distinct outcome: only the judge can tell the two apart.
+  if (effect === "unverifiable")
+    return { outcome: "delivered", escalatable: false, ...verifiedField };
+
+  // An error with no routing signifier is a TOOL fault, not a delivery refusal.
+  //
+  // This is the branch that was missing. Cua signifies a routing refusal in
+  // structured form - `effect: "refused"`, or a background_* code - and the probe
+  // confirmed both. An `isError` carrying only prose (the shape the probe itself
+  // received for a stall: a `content[].text` message with no `structuredContent`
+  // at all) has no such signifier, so reading it as "the app never saw it" was an
+  // assumption, not an observation. Treating it as a stall says what is actually
+  // known - the call ran and did not succeed, and whether the input landed is
+  // unconfirmed - and keeps it out of `routing-refused`, where it would have been
+  // filed as "not a model outcome" while in fact describing a delivery failure.
+  if (outer.isError === true && effect !== "refused")
+    return { outcome: "delivered-stalled", escalatable: false, ...verifiedField };
+
+  // A refusal Cua states but cannot escalate.
+  if (outer.isError === true || effect === "refused")
+    return { outcome: "routing-refused", escalatable: false, ...verifiedField };
+
+  return { outcome: "delivered", escalatable: false, ...verifiedField };
 }
 
 export function pixelAction(input: unknown): Action {
@@ -38,7 +159,7 @@ export function pixelAction(input: unknown): Action {
   if (tool === "press_key" && (typeof key !== "string" || !/^[a-z0-9+_-]{1,32}$/i.test(key)))
     throw new Error("invalid pixel action");
   const action = { tool, arguments: args };
-  if (!checkPurity("c1", { actions: [action], claims: [] }).ok)
+  if (!checkPurity("c1", { actions: [action], claims: [], deliveries: [] }).ok)
     throw new Error("impure pixel action");
   return action;
 }
@@ -88,16 +209,44 @@ export async function connectC1(mcp: Mcp, window: { pid: number; window_id: numb
       }
       throw new Error("guest screenshot unavailable");
     },
-    async execute(input: Action): Promise<{ refused: boolean; verified?: boolean }> {
+    async execute(input: Action): Promise<{
+      outcome: CuaOutcome;
+      deliveryMode: DeliveryMode;
+      escalated: boolean;
+      verified?: boolean;
+    }> {
       const action = pixelAction(input);
-      const result = await call(action.tool, { ...record(action.arguments), pid, window_id });
-      const { effect, verified, path } = record(result.structuredContent);
-      if (typeof path === "string" && !["pixel", "key_events", "key_events_fg"].includes(path))
-        throw new PixelRouteError("unexpected Cua delivery path");
-      return {
-        refused: result.isError === true || effect === "refused",
-        ...(typeof verified === "boolean" ? { verified } : {}),
-      };
+      // One background attempt. `delivery_mode` is added here rather than in
+      // `pixelAction` because that validator pins the argument count, and the
+      // planner must not be able to pick a mode - the escalation is policy, not
+      // a model choice.
+      const background = await call(action.tool, {
+        ...record(action.arguments),
+        pid,
+        window_id,
+      });
+      const first = classify(background);
+
+      // Escalate ONCE, and only on the specific refusal that has a documented
+      // escape hatch. Any other failure is reported as-is: retrying a
+      // `delivered-stalled` action would duplicate it, and retrying an
+      // unexpected error would hide a real fault.
+      //
+      // `escalatable` is consumed here and deliberately not returned: it is a
+      // property of this decision, not of what the caller observed.
+      if (first.outcome !== "routing-refused" || !first.escalatable) {
+        const { escalatable: _drop, ...observed } = first;
+        return { ...observed, deliveryMode: "background", escalated: false };
+      }
+
+      const foreground = await call(action.tool, {
+        ...record(action.arguments),
+        pid,
+        window_id,
+        delivery_mode: "foreground",
+      });
+      const { escalatable: _alsoDrop, ...observed } = classify(foreground);
+      return { ...observed, deliveryMode: "foreground", escalated: true };
     },
   };
 }

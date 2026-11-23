@@ -148,7 +148,12 @@ describe("C1 host harness", () => {
       await expect(
         c1.execute({ ...action, arguments: { ...action.arguments, pid: 99 } }),
       ).rejects.toThrow();
-      expect(await c1.execute(action)).toEqual({ refused: false, verified: true });
+      expect(await c1.execute(action)).toEqual({
+        outcome: "delivered",
+        deliveryMode: "background",
+        escalated: false,
+        verified: true,
+      });
       expect(fake.request).toHaveBeenCalledTimes(3);
       expect(fake.request).toHaveBeenLastCalledWith("tools/call", {
         name: "click",
@@ -548,7 +553,7 @@ describe("judge names the driver cause", () => {
   // the assertion targets the wrong field, so it targets the verdict.
   it("includes the diagnostic in the verdict reasons", () => {
     const verdict = judge(
-      { actions: [], claims: [] },
+      { actions: [], claims: [], deliveries: [] },
       {
         hostVersion: "0.56.4",
         guestVersion: "0.56.4",
@@ -570,7 +575,7 @@ describe("judge leaves an unnamed cause unnamed", () => {
   // worse than none, so this pins the exact array.
   it("returns exactly ['driver-unreachable'] when the diagnostic is absent", () => {
     const verdict = judge(
-      { actions: [], claims: [] },
+      { actions: [], claims: [], deliveries: [] },
       {
         hostVersion: "0.56.4",
         guestVersion: "0.56.4",

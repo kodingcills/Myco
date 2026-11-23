@@ -3,13 +3,46 @@ import type { Verdict, VerdictStatus } from "../core/verify.ts";
 export type SubArm = "c1" | "c2";
 export type BaselineEvidenceArm = SubArm | "hcu";
 export type Claim = "done" | "failure";
+/** The transport outcomes TIF-167 distinguishes. Static lookup, so a Record. */
+const DELIVERY_OUTCOMES: Record<string, true> = {
+  "routing-refused": true,
+  delivered: true,
+  "delivered-stalled": true,
+  "save-failed": true,
+};
+
 export interface Action {
   tool: string;
   arguments: unknown;
 }
+/**
+ * How one action was delivered, and what became of it.
+ *
+ * Recorded per action rather than aggregated because arm-003d declares delivery
+ * mode as a run condition (TIF-167): a row produced with foreground escalation
+ * measures something different from one produced entirely in background, and a
+ * count would hide which actions escalated.
+ */
+export interface ActionDelivery {
+  step: number;
+  mode: "background" | "foreground";
+  /** True when background refused and the action was retried once in foreground. */
+  escalated: boolean;
+  outcome: "routing-refused" | "delivered" | "delivered-stalled" | "save-failed";
+}
 export interface Transcript {
   actions: Action[];
   claims: Claim[];
+  /**
+   * Delivery mode per action (TIF-167): which mode carried each action, and what
+   * became of it.
+   *
+   * Optional because rows recorded before the field existed are still valid
+   * evidence, and they must not be edited to satisfy a later rule. New
+   * transcripts always carry it - `runC1Trial` initialises it - and the type
+   * makes that a compile-time requirement for anyone building one.
+   */
+  deliveries?: ActionDelivery[];
 }
 export interface DriverPrecondition {
   hostVersion: string;
@@ -315,6 +348,32 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     Array.isArray(t.claims) &&
     t.claims.every((c: unknown) => c === "done" || c === "failure") &&
     Array.isArray(t.actions) &&
-    t.actions.every((a: unknown) => object(a) && str(a.tool) && "arguments" in a)
+    t.actions.every((a: unknown) => object(a) && str(a.tool) && "arguments" in a) &&
+    // TIF-167: delivery modes, WHEN RECORDED, must be well formed.
+    //
+    // Deliberately permissive about absence. An earlier version required the
+    // field on every C1 row and used an `instructionUnrecorded`-style marker to
+    // excuse the rows that predate it - which meant editing 34 committed trial
+    // rows. That is not this change's call: TIF-104's marker covered adding a new
+    // field to rows being written at the time, not retrofitting a validator onto
+    // recorded evidence. The rows are the artifact; they do not change because a
+    // later rule would prefer them to.
+    //
+    // So absence is accepted and malformation is not. That still catches the thing
+    // worth catching - a writer emitting a delivery record nobody can interpret -
+    // while leaving every recorded row byte-identical. The writer guarantee that
+    // NEW rows carry the field lives where the writer is (c1-trial.ts initialises
+    // `deliveries: []`), and the compile-time `Transcript` type enforces it for
+    // anyone constructing a transcript in TypeScript.
+    (t.deliveries === undefined ||
+      (Array.isArray(t.deliveries) &&
+        t.deliveries.every(
+          (v: unknown) =>
+            object(v) &&
+            count(v.step) &&
+            (v.mode === "background" || v.mode === "foreground") &&
+            typeof v.escalated === "boolean" &&
+            DELIVERY_OUTCOMES[v.outcome as string] === true,
+        )))
   );
 }
