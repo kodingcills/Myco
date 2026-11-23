@@ -694,6 +694,98 @@ def main() -> int:
            f"the absolute launch path is root + grant-relative name: "
            f"{launched_arg!r} vs {root}/{wrote}")
 
+    # Structural, not observational: the assertions above read the CALLS, so a
+    # change that kept the two paths mutually consistent but moved both to a
+    # different value would still pass. What must hold is that ONE expression
+    # produces the write path and the launch path cannot be a second one. Check
+    # the source: the launch argument must be APP_PATH, and the write path must
+    # be derived from its argument, not built from a parallel constant.
+    import ast as _ast
+    tree = _ast.parse((ROOT / "scripts" / "df005-runner.py").read_text())
+
+    # 1. The launch's first argument is exactly APP_PATH.
+    launches = [n for n in _ast.walk(tree) if isinstance(n, _ast.Dict)
+                and any(isinstance(k, _ast.Constant) and k.value == "kind"
+                        and isinstance(v, _ast.Constant) and v.value == "launch"
+                        for k, v in zip(n.keys, n.values))]
+    expect(launches, "the runner builds a launch action")
+    launch_args = None
+    for d in launches:
+        for k, v in zip(d.keys, d.values):
+            if isinstance(k, _ast.Constant) and k.value == "args":
+                launch_args = v
+    # The launch dict is nested; find the "args" list whose first element is a Name.
+    arg_lists = [n for n in _ast.walk(tree) if isinstance(n, _ast.List)
+                 and n.elts and isinstance(n.elts[0], _ast.Name)]
+    expect(any(n.elts[0].id == "APP_PATH" for n in arg_lists),
+           "the launch's first argument is the APP_PATH constant, not a literal")
+
+    # 2. APP_PATH is built from GRANT_ROOT and APP_NAME, and nothing else defines
+    #    a second app path constant.
+    assigns = {t.id: n.value for n in _ast.walk(tree)
+               if isinstance(n, _ast.Assign) and len(n.targets) == 1
+               and isinstance(t := n.targets[0], _ast.Name)}
+    expect("APP_PATH" in assigns, "APP_PATH is module-level")
+    path_src = _ast.unparse(assigns["APP_PATH"])
+    expect("GRANT_ROOT" in path_src and "APP_NAME" in path_src,
+           f"APP_PATH derives from GRANT_ROOT and APP_NAME: {path_src}")
+    # No other module-level name may hold an app path (a parallel constant is
+    # exactly how the two could drift).
+    others = [k for k, v in assigns.items()
+              if k != "APP_PATH" and "APP_NAME" in _ast.unparse(v)]
+    expect(not others, f"no second constant builds an app path: {others}")
+
+    # 3. deploy_fixture's `rel` must be DERIVED from its `app_path` argument.
+    #    Checked as dataflow, not by matching the expression's text: dead text
+    #    (`if False: rel = app_path[...]`) satisfies a text match while the live
+    #    code uses a constant, which is exactly the hole a string check leaves.
+    fn = next(n for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)
+              and n.name == "deploy_fixture")
+    # Every assignment to `rel` that is REACHABLE — i.e. not nested inside an
+    # `if` whose test is a constant, which is how dead code is spelled.
+    live_rels: list = []
+
+    class _Collector(_ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.dead = 0
+
+        def visit_If(self, node):  # noqa: N802
+            const_test = isinstance(node.test, _ast.Constant)
+            if const_test:
+                self.dead += 1
+            self.generic_visit(node)
+            if const_test:
+                self.dead -= 1
+
+        def visit_Assign(self, node):  # noqa: N802
+            for t in node.targets:
+                if isinstance(t, _ast.Name) and t.id == "rel" and self.dead == 0:
+                    live_rels.append(node.value)
+            self.generic_visit(node)
+
+    _Collector().visit(fn)
+    expect(live_rels, "deploy_fixture assigns `rel` outside any constant-false branch")
+    # And that live value reads the function's own argument.
+    def uses_app_path(n) -> bool:
+        return any(isinstance(x, _ast.Name) and x.id == "app_path"
+                   for x in _ast.walk(n))
+    expect(all(uses_app_path(v) for v in live_rels),
+           f"every live `rel` derives from app_path: "
+           f"{[_ast.unparse(v) for v in live_rels]}")
+
+    # 4. The CALLSITE must pass the same expression the launch uses. Without
+    #    this, `deploy_fixture(mcp, sid, OTHER)` deploys elsewhere while the
+    #    launch opens APP_PATH — the original bug, suite green.
+    call_args = []
+    for n in _ast.walk(tree):
+        if (isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name)
+                and n.func.id == "deploy_fixture" and len(n.args) >= 3):
+            call_args.append(_ast.unparse(n.args[2]))
+    expect(call_args, "deploy_fixture is called with an explicit path argument")
+    expect(all(a == "APP_PATH" for a in call_args),
+           f"every deploy callsite passes APP_PATH, the same value the launch "
+           f"opens: {call_args}")
+
     print("25. a session without the write grant fails closed, not silently")
     # Without write_file the deploy cannot run. Every trial would gap for a
     # known reason, so the runner must stop and say which capability is missing
