@@ -326,8 +326,15 @@ async function main() {
     // the caller inherit a default that cannot be spent. Fail closed if either is
     // missing rather than defaulting to zero, which is how a fresh directory
     // silently got a full allowance it had already spent part of (arm-003d).
-    const priorSpendMicros = Number(process.env.MYCO_PRIOR_SPEND_MICROS);
-    const remainingMicros = Number(process.env.MYCO_ARM_LIMIT_MICROS);
+    // Parse strictly. `Number("")` is 0, so an EMPTY env var - the most likely
+    // operator mistake - would read as "zero prior spend" and quietly restore the
+    // unlimited-looking ceiling this parameter exists to remove. Requiring a
+    // non-empty digit string closes that, and `Number.isSafeInteger` still
+    // rejects "", whitespace, "abc", "1.5" and NaN.
+    const raw = (name: string): number =>
+      /^\d+$/.test(process.env[name] ?? "") ? Number(process.env[name]) : Number.NaN;
+    const priorSpendMicros = raw("MYCO_PRIOR_SPEND_MICROS");
+    const remainingMicros = raw("MYCO_ARM_LIMIT_MICROS");
     if (
       !Number.isSafeInteger(priorSpendMicros) ||
       priorSpendMicros < 0 ||
