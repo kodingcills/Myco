@@ -78,6 +78,27 @@ Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 
 **UNVERIFIED** (no VM at writing time).
 
+### 2.0 Is a guest running at all? (do this first)
+
+```bash
+scripts/vm-state.sh          # exit 0 running, 1 idle, 2 cannot tell
+```
+
+**Do not use `pgrep -f qemu-system-aarch64`.** UTM runs the guest as
+`QEMULauncher`, and the qemu binary name appears only in that process's
+*arguments*, not its `argv[0]` — so the narrow pattern returns 0 while a guest is
+live. That trap was recorded in the state file three times (2026-11-21, logs 39,
+43, and 600/656/932) and was still used in a VM grant on 2026-11-23, which is why
+there is now a script instead of another note.
+
+`vm-state.sh` reports `UNKNOWN` and **exits 2 rather than claiming idle** when it
+cannot read the host, because a failed check must never read as an idle one.
+Treat exit 2 as running.
+
+The signals it checks, in order: `argv[0]` basename (`qemu-system-aarch64`,
+`QEMULauncher`, `qemu-aarch64-softmmu`), then listeners on `:2222` (UTM's
+forward) and `:10022` (boot.sh's), then UTM's own AppleScript status.
+
 ```bash
 ~/VMs/myco-win11/scripts/vm.sh status
 ```
@@ -85,6 +106,24 @@ Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 Expected: `started`. Other values: `stopped` → start it; `resuming` → wedge, §3.3. **If it is
 `stopped`, run the reset (§3) rather than a bare start**, so the trial starts from a known
 snapshot.
+
+**Ownership is the flock, never the lock file.** `/tmp/myco-win11.vm.lock` keeps
+the last writer's `<pid> <driver>` after release, so its contents name a dead pid
+routinely — two different stale contents were read on the morning of 2026-11-23
+while the flock was free both times. Take a non-blocking `flock` to learn whether
+the host is in use:
+
+```bash
+python3 -c 'import fcntl,sys
+f=open("/tmp/myco-win11.vm.lock","a+")
+try: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB); print("FREE")
+except BlockingIOError: print("HELD — someone owns the host")
+finally: fcntl.flock(f,fcntl.LOCK_UN)' 2>/dev/null || true
+```
+
+A **`HELD` flock is the only evidence of ownership.** Free + a named pid means the
+file is stale; free + `vm-state.sh` exit 0 means a guest is running with nobody
+holding the lock, which is the case to stop and report rather than proceed.
 
 ```bash
 ~/VMs/myco-win11/scripts/wait-ssh.sh 120
