@@ -39,8 +39,14 @@ probe() {
   } | tee "$PROBE"
 }
 
+# A guest is identified by the basename of its argv[0], so an absolute path or an
+# `exec -a` wrapper still counts. A failed `ps` is not evidence of an idle host:
+# the gate must fail closed, so an unreadable table reports a guest.
 qemu_running() {
-  ps -Ao command | awk '$1=="qemu-system-aarch64"{found=1} END{exit !found}'
+  local table
+  table="$(ps -Ao command)" || return 0
+  [[ -n "$table" ]] || return 0
+  awk '{n=split($1,a,"/"); if (a[n]=="qemu-system-aarch64") found=1} END{exit !found}' <<<"$table"
 }
 
 gate() {
@@ -70,9 +76,13 @@ run_sequence() {
   ) >>"$LOG" 2>&1 &
   CHILD=$!
   echo "$CHILD" >"$CHILD_FILE"
-  wait "$CHILD"
-  say "child $CHILD exited with $?"
+  # `set -e` would abort the watchdog on a non-zero child, losing the exit code
+  # and leaving the pid files behind — the one case the record exists for.
+  local rc=0
+  wait "$CHILD" || rc=$?
+  say "child $CHILD exited with $rc"
   rm -f "$CHILD_FILE"
+  return "$rc"
 }
 
 watchdog() {
@@ -80,9 +90,11 @@ watchdog() {
   # dies while no agent is watching still leaves a record.
   probe >>"$LOG" 2>&1
   gate || { say "gate refused; not starting"; rm -f "$PID_FILE"; exit 2; }
-  run_sequence
-  say "watchdog done"
+  local rc=0
+  run_sequence || rc=$?
+  say "watchdog done (rc $rc)"
   rm -f "$PID_FILE"
+  exit "$rc"
 }
 
 case "${1:-}" in
@@ -104,8 +116,10 @@ case "${1:-}" in
       fi
       rm -f "$FILE"
     done
-    pkill -f "scripts/s0-live.ts --live" 2>/dev/null || true
-    pkill -f "target/debug/myco-rt-mcp" 2>/dev/null || true
+    # Scoped to this worktree: an unscoped pkill aborts another workstream's run
+    # on a host with a dozen worktrees.
+    pkill -f "$ROOT/.*scripts/s0-live.ts --live" 2>/dev/null || true
+    pkill -f "$ROOT/runtime/target/debug/myco-rt-mcp" 2>/dev/null || true
     [[ "$STALE" == 1 ]] && echo stopped || echo "not running" ;;
   --run)
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then

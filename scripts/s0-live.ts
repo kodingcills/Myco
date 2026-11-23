@@ -12,7 +12,7 @@
  * present.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runDirectionALive } from "../src/discovery/live-runner.ts";
 import { MockDesktop } from "../src/discovery/mock-desktop.ts";
@@ -101,15 +101,21 @@ function savePoint(): { x: number; y: number } {
 }
 
 async function live(): Promise<number> {
-  // Identity from the process table's command column: a regex over argv matched
-  // an unrelated file path on 2026-11-23 and would match this script's own text.
-  const qemu = spawnSync("ps", ["-Ao", "command"], { encoding: "utf8" }).stdout ?? "";
-  if (qemu.split("\n").some((line) => line.startsWith("qemu-system-aarch64"))) {
+  // Identity is the basename of argv[0], so an absolute path or an `exec -a`
+  // wrapper still counts; a regex over argv matched an unrelated file path on
+  // 2026-11-23. A failed `ps` is not evidence of an idle host: fail closed.
+  const table = spawnSync("ps", ["-Ao", "command"], { encoding: "utf8" });
+  const lines = (table.stdout ?? "").split("\n").filter((line) => line.length > 0);
+  const guestUp =
+    table.status !== 0 ||
+    lines.length === 0 ||
+    lines.some((line) => line.split(" ")[0]?.split("/").at(-1) === "qemu-system-aarch64");
+  if (guestUp) {
     process.stderr.write("refusing: a qemu guest is already running\n");
     return 2;
   }
   const binary = join(ROOT, "runtime/target/debug/myco-rt-mcp");
-  if (!existsSync(binary)) {
+  if (!existsSync(binary) || (statSync(binary).mode & 0o111) === 0) {
     process.stderr.write(
       `refusing: ${binary} is missing; build it with cargo build -p myco-rt-mcp\n`,
     );
