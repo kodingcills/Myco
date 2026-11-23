@@ -1,0 +1,4 @@
+{"type":"run-start","runId":"0dd9be22-6458-4042-9d08-fd31abc25a4e","taskId":"calc-record-edit","startedAt":"2026-11-22T04:32:09.534Z"}
+{"type":"fault-injection","timestamp":"2026-11-22T04:34:23.112Z","fault":"cleanup","detail":"killed=[2364,4896] removed=[myco-2425-1795321933260-145480959,myco-2425-1795321933260-773917959] residue=[]"}
+{"type":"guard-failure","timestamp":"2026-11-22T04:34:23.112Z","step":-1,"phase":"precondition","guard":{"step":-1,"phase":"precondition","predicateName":"adapter-available","observed":"UNO bridge on socket 2002 never answered: agent at 127.0.0.1:8765 timed out after 15000ms","reason":"adapter unusable: UNO bridge on socket 2002 never answered: agent at 127.0.0.1:8765 timed out after 15000ms"}}
+{"type":"recovery","timestamp":"2026-11-22T04:34:23.112Z","event":"aborted-uncertain","stateVersion":0}

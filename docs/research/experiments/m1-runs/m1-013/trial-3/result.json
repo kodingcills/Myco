@@ -1,0 +1,38 @@
+{
+  "runId": "5e9a0f04-944a-417b-b8f9-256831070b1b",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-d",
+    "rowKey": "EMP-0009",
+    "column": "salary",
+    "newValue": "$12458.13"
+  },
+  "startedAt": "2026-11-21T23:06:57.778Z",
+  "steps": [],
+  "guardFailure": {
+    "step": -1,
+    "phase": "precondition",
+    "predicateName": "adapter-available",
+    "observed": "UNO bridge on socket 2002 never answered: agent at 127.0.0.1:8765 timed out after 15000ms",
+    "reason": "adapter unusable: UNO bridge on socket 2002 never answered: agent at 127.0.0.1:8765 timed out after 15000ms"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "cell E10 expected \"$12458.13\" but live document has \"$77544.00\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "cell E10 expected \"$12458.13\" but live document has \"$77544.00\""
+    ]
+  }
+}

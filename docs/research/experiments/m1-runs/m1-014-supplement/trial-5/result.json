@@ -1,0 +1,145 @@
+{
+  "runId": "17fd5661-0b85-48e6-ac43-b501a4ff089d",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014s-supplement-01-kill+recovery-2",
+    "rowKey": "EMP-0095",
+    "column": "name",
+    "newValue": "REVISED-927507"
+  },
+  "startedAt": "2026-11-22T05:35:33.248Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014s-supplement-01-kill+recovery-2\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-8441-1795325736851-648604394\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-8441-1795325736851-648604394\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B96"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014s-supplement-01-kill+recovery-2\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-8441-1795325736851-648604394\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B96 located at record EMP-0095, column name, holds fixture value \"Enzo Jovic\"",
+          "passed": true,
+          "observed": "value=\"Enzo Jovic\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B96"
+        },
+        "value": "REVISED-927507"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-8441-1795325736851-648604394\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B96 located at record EMP-0095, column name, holds fixture value \"Enzo Jovic\"",
+          "passed": true,
+          "observed": "value=\"Enzo Jovic\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B96 holds \"REVISED-927507\"",
+          "passed": true,
+          "observed": "value=\"REVISED-927507\""
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B96 holds \"REVISED-927507\"",
+          "passed": true,
+          "observed": "value=\"REVISED-927507\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 9,
+      "stateVersionAfter": 10
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B96 (record EMP-0095, column name) persisted as \"REVISED-927507\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B96 (record EMP-0095, column name) persisted as \"REVISED-927507\""
+    ]
+  }
+}
