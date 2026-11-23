@@ -1,21 +1,47 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import {
-  attest,
-  offlineObserver,
-  type SaveObservation,
-} from "../../src/foundry/baseline/attest.ts";
 import { executeTrial } from "../../src/foundry/baseline/executor.ts";
 import { fakeGuest, LAYOUT } from "../../src/foundry/baseline/guest.ts";
 import type { RecordedTrialEvidence } from "../../src/foundry/baseline/recorder.ts";
 import { ArmRecorder } from "../../src/foundry/baseline/recorder.ts";
 import { todoTransport } from "../../src/foundry/baseline/todo-transport.ts";
-import { findTask } from "../../src/foundry/tasks/bank.ts";
+import {
+  type AttestInput,
+  attest,
+  offlineObserverForContractTest,
+  registerLiveObserver,
+  type SaveObservation,
+} from "../../src/foundry/grader/attest.ts";
+import {
+  ATTESTATION_BINDING_LANDED,
+  scoreDiscoveryTrial,
+} from "../../src/foundry/grader/discovery.ts";
+import {
+  type commitment,
+  fixtureHash,
+  generateHiddenFixtures,
+} from "../../src/foundry/hidden-split/index.ts";
+import { findTask, taskFixture } from "../../src/foundry/tasks/bank.ts";
 import { TODO_FIXTURE_SPECS } from "../../src/foundry/tasks/todo.ts";
 import type { GuardTraceEvent, ScreenView } from "../../src/foundry/types.ts";
 
 const TASK = findTask("ef-t01b-add-four-items-noverify")!;
 const SPEC = TODO_FIXTURE_SPECS.find((s) => s.fixtureId === TASK.fixtureId)!;
+
+/**
+ * The gate reads `foundry/hidden-commitment.json` at a fixed path, so the test must use the
+ * set that file commits to. That is the point: a test that could substitute its own
+ * commitment would not be testing the gate.
+ */
+const COMMITTED = JSON.parse(readFileSync("foundry/hidden-commitment.json", "utf8")) as {
+  meta: { count: number };
+  commitment: ReturnType<typeof commitment>;
+};
+const HIDDEN = generateHiddenFixtures(new Uint8Array(32).fill(42), COMMITTED.meta.count);
+const HIDDEN_FIXTURE = HIDDEN[0]!;
+/** The contract-test symbol, from the door itself, so a test can strip it to model production. */
+const MARKER_KEY = offlineObserverForContractTest().marker;
 const PROMPT_HASH = createHash("sha256").update(TASK.prompt).digest("hex");
 
 /** A save event carrying the bytes the observer will see, so the binding can be placed. */
@@ -28,6 +54,7 @@ interface FinishedRun {
   trace: readonly GuardTraceEvent[];
   files: Readonly<Record<string, Uint8Array>>;
   screen: ScreenView;
+  selfReport: { readonly claimsSuccess: boolean; readonly text: string };
 }
 
 /** A finished, internally consistent recording, so each test can vary one thing. */
@@ -55,18 +82,314 @@ async function finishedRun(): Promise<FinishedRun> {
 }
 
 function baseInput(run: FinishedRun) {
-  const observer = offlineObserver();
+  const { observer, marker } = offlineObserverForContractTest();
   return {
+    [marker]: marker,
     evidence: run.evidence,
     trace: [...run.trace, saveEvent(run.files)],
     finalFiles: run.files,
     observations: observer.observe(["store.json"], run.files),
     screen: run.screen,
     observerId: observer.id,
-    fixture: { fixtureId: SPEC.fixtureId, persistenceFiles: ["store.json"] },
+    // Contract test: the marker is a symbol the caller cannot guess, so production code
+    // cannot reach this door by naming a string.
+    // The symbol IS the marker; spreading it in is what the gate checks.
+    ...{ [marker]: marker },
+    hiddenFixtures: HIDDEN,
+    claimedFixtureHash: fixtureHash(HIDDEN_FIXTURE),
     screenObserved: true,
   };
 }
+
+describe("TIF-95: mutation check — each gate check is load-bearing", () => {
+  /**
+   * A gate whose checks are not individually necessary is a gate that would still pass if
+   * one were deleted. Each case below removes exactly one check from the input side and
+   * asserts the gate refuses, so a future edit that drops a check fails here.
+   */
+  const mutations: readonly { name: string; apply: (i: AttestInput) => AttestInput }[] = [
+    {
+      name: "no commitment match",
+      apply: (i) => ({ ...i, hiddenFixtures: i.hiddenFixtures.slice(1) }),
+    },
+    {
+      name: "claimed hash names no fixture",
+      apply: (i) => ({ ...i, claimedFixtureHash: "0".repeat(64) }),
+    },
+    { name: "no observation", apply: (i) => ({ ...i, observations: [] }) },
+    {
+      name: "observation predates the save",
+      apply: (i) => ({
+        ...i,
+        observations: i.observations.map((o) => ({ ...o, afterLastSave: false })),
+      }),
+    },
+    { name: "screen supplied by the arm", apply: (i) => ({ ...i, screenObserved: false }) },
+    {
+      name: "no save in the trace",
+      apply: (i) => ({ ...i, trace: i.trace.filter((e) => e.type !== "save-observed") }),
+    },
+    {
+      name: "no recorder calls",
+      apply: (i) => ({
+        ...i,
+        evidence: { ...i.evidence, recordedCalls: [], recordedCallCount: 0, toolCallAudits: [] },
+      }),
+    },
+    // Round 5 named these as surviving every test. Each removes one clause's input.
+    {
+      name: "duplicate call id",
+      apply: (i) => ({
+        ...i,
+        evidence: {
+          ...i.evidence,
+          recordedCalls: [...i.evidence.recordedCalls, i.evidence.recordedCalls[0]!],
+          recordedCallCount: i.evidence.recordedCallCount + 1,
+          toolCallAudits: [...i.evidence.toolCallAudits, i.evidence.toolCallAudits[0]!],
+        },
+      }),
+    },
+    {
+      name: "audit channel disagrees",
+      apply: (i) => ({
+        ...i,
+        evidence: {
+          ...i.evidence,
+          toolCallAudits: i.evidence.toolCallAudits.map((a, n) =>
+            n === 0
+              ? { ...a, via: a.via === "gui" ? ("shell-exec" as const) : ("gui" as const) }
+              : a,
+          ),
+        },
+      }),
+    },
+    {
+      name: "trial did not finish",
+      apply: (i) => ({ ...i, evidence: { ...i.evidence, status: "quota-exhausted" as const } }),
+    },
+    {
+      name: "observation length disagrees",
+      apply: (i) => ({
+        ...i,
+        observations: i.observations.map((o: SaveObservation) => ({ ...o, bytes: o.bytes + 1 })),
+      }),
+    },
+    {
+      name: "saved bytes differ from the observation",
+      apply: (i) => ({
+        ...i,
+        trace: [
+          ...i.trace.filter((e) => e.type !== "save-observed"),
+          saveEvent({ "store.json": new TextEncoder().encode('{"items":[]}') }),
+        ],
+      }),
+    },
+    {
+      name: "last save includes no observed file",
+      apply: (i) => ({
+        ...i,
+        trace: [...i.trace.filter((e) => e.type !== "save-observed"), saveEvent({})],
+      }),
+    },
+    {
+      name: "unregistered observer named",
+      apply: (i) => {
+        const { [MARKER_KEY]: _drop, ...production } = i as unknown as Record<
+          string | symbol,
+          unknown
+        >;
+        return { ...production, observerId: "some-live-observer" } as AttestInput;
+      },
+    },
+    { name: "observations absent", apply: (i) => ({ ...i, observations: undefined as never }) },
+    { name: "final state absent", apply: (i) => ({ ...i, finalFiles: undefined as never }) },
+    {
+      name: "hidden fixtures absent",
+      apply: (i) => ({ ...i, hiddenFixtures: undefined as never }),
+    },
+  ];
+
+  it("the unmutated run is eligible, and every single-check removal is refused", async () => {
+    const run = await finishedRun();
+    const base = baseInput(run);
+    expect(attest(base).eligible, "baseline must be eligible or the mutations prove nothing").toBe(
+      true,
+    );
+    for (const mutation of mutations) {
+      const result = attest(mutation.apply(base));
+      expect(result.eligible, `${mutation.name} was not refused`).toBe(false);
+      expect(result.blockers.length, `${mutation.name} gave no reason`).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("TIF-95: a caller cannot name its own provenance", () => {
+  /**
+   * Round 5's finding, and the reason this design changed: the previous guard refused one
+   * forbidden string. That is a check whose input the caller writes — the same fabrication
+   * with `observerId: "Offline"` or `"vm-guest"` passed. These tests assert the inverse:
+   * nothing is admitted unless it is registered, so there is no string to guess.
+   */
+  it("refuses a self-consistent fabrication for ANY unregistered observer id", async () => {
+    const run = await finishedRun();
+    const input = baseInput(run);
+    // Fabricated end to end: no executeTrial, no guest, no file on disk. Only the caller's
+    // own bytes and a matching observation.
+    // Strip the contract-test door: this is the production shape, a plain caller.
+    const { [MARKER_KEY]: _drop, ...production } = input as Record<string | symbol, unknown>;
+    for (const id of [
+      "offline",
+      "Offline",
+      "offline ",
+      " vm-guest-second-connection",
+      "x",
+      "",
+      "   ",
+    ]) {
+      const result = attest({ ...production, observerId: id } as AttestInput);
+      expect(result.eligible, `observerId ${JSON.stringify(id)} was admitted`).toBe(false);
+      expect(result.blockers.join(" ")).toContain("not a registered live observer");
+    }
+  });
+
+  it("admits the contract-test door, so the refusals above are about provenance", async () => {
+    // The door is a symbol the caller cannot name, and the input is otherwise identical.
+    const input = baseInput(await finishedRun());
+    expect(attest(input).eligible).toBe(true);
+  });
+
+  it("admits a registered live observer and only that observer", async () => {
+    const input = baseInput(await finishedRun());
+    const live = { id: "vm-second-connection", observe: () => [] };
+    registerLiveObserver(live);
+    expect(attest({ ...input, observerId: "vm-second-connection" }).eligible).toBe(true);
+    // A different id is still refused even though one observer is registered.
+    expect(attest({ ...input, observerId: "vm-second-connection " }).eligible).toBe(false);
+  });
+});
+
+describe("TIF-125 fail-closed: no row is eligible until the binding lands", () => {
+  it("an eligible attestation does not make a row decision-eligible", async () => {
+    // Finding 1a exists in the tree BEFORE TIF-125: the scorer trusts the gate's claim about
+    // evidence the caller handed it, and holds no proof the evidence was for THIS row. Until
+    // the binding lands and the scorer re-derives the digest, the flip stays off.
+    expect(ATTESTATION_BINDING_LANDED).toBe(false);
+    const run = await finishedRun();
+    const attestation = attest(baseInput(run));
+    expect(attestation.eligible, "the gate should still say eligible").toBe(true);
+
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+      attestation,
+    );
+    if (scored.status !== "scored") throw new Error("unreachable");
+    expect(scored.decisionEligible).toBe(false);
+    expect(scored.attestationBlockers.join(" ")).toContain("TIF-125");
+  });
+});
+
+describe("TIF-95: the gate decides eligibility, never the verdict", () => {
+  it("an eligible run is not thereby verified, and a refuted run stays refuted", async () => {
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const attestation = attest(input);
+    expect(attestation.eligible).toBe(true);
+
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+      attestation,
+    );
+    expect(scored.status).toBe("scored");
+    if (scored.status !== "scored") throw new Error("unreachable");
+    // Eligibility is about admissibility, not correctness: the verdict is whatever the
+    // state oracle said, and the gate must not have touched it. Eligibility itself is
+    // withheld until TIF-125 (fail-closed), which is asserted separately.
+    expect(scored.result.verdict).toBe("refuted");
+  });
+
+  it("a runtime literal is refused even though the type system was bypassed", async () => {
+    // The round-2 finding: passing an unbranded object as `never` satisfied the scorer,
+    // because the brand was compile-time only. The runtime check is what the scorer owns.
+    const run = await finishedRun();
+    const forged = { eligible: true, blockers: [], observerId: "forged" };
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+      forged as never,
+    );
+    if (scored.status !== "scored") throw new Error("unreachable");
+    expect(scored.decisionEligible).toBe(false);
+    expect(scored.attestationBlockers).toEqual(["no attestation supplied"]);
+  });
+
+  it("without an attestation the row stays descriptive", async () => {
+    const run = await finishedRun();
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+    );
+    if (scored.status !== "scored") throw new Error("unreachable");
+    expect(scored.decisionEligible).toBe(false);
+    expect(scored.attestationBlockers).toEqual(["no attestation supplied"]);
+  });
+
+  it("a refused attestation keeps the row descriptive and names why", async () => {
+    const run = await finishedRun();
+    const refused = attest({ ...baseInput(run), observations: [] });
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+      refused,
+    );
+    if (scored.status !== "scored") throw new Error("unreachable");
+    expect(scored.decisionEligible).toBe(false);
+    // The gate's own reason is what names the missing observation; the eligibility flip is
+    // withheld separately until TIF-125, and both are reported.
+    expect(refused.blockers.join(" ")).toContain("no observation");
+  });
+});
 
 describe("EF-005 attestation gate", () => {
   it("admits a run whose observation matches the final bytes", async () => {
@@ -184,11 +507,12 @@ describe("EF-005 attestation gate", () => {
     const input = baseInput(await finishedRun());
     const result = attest({
       ...input,
-      fixture: { fixtureId: "empty", persistenceFiles: [] },
+      hiddenFixtures: [],
+      claimedFixtureHash: "0".repeat(64),
       finalFiles: {},
     });
     expect(result.eligible).toBe(false);
-    expect(result.blockers.join(" ")).toContain("designates no persistence files");
+    expect(result.blockers.join(" ")).toContain("does not match the committed commitment");
   });
 
   it("reports an app-written file the fixture does not designate, without refusing the run", async () => {
@@ -262,7 +586,11 @@ describe("EF-005 attestation gate", () => {
     const input = baseInput(await finishedRun());
     const result = attest({
       ...input,
-      evidence: { ...input.evidence, recordedCalls: undefined, toolCallAudits: undefined } as never,
+      evidence: {
+        ...input.evidence,
+        recordedCalls: undefined,
+        toolCallAudits: undefined,
+      } as never,
     });
     expect(result.eligible).toBe(false);
     expect(result.blockers.length).toBeGreaterThan(0);
