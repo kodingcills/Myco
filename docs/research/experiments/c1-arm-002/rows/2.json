@@ -9,6 +9,7 @@
   "cellRef": "D60",
   "expected": "2024-05-28",
   "previousValue": "2023-07-30",
+  "instructionUnrecorded": true,
   "subArm": "c1",
   "verdict": "refuted",
   "verdictReason": "modified",

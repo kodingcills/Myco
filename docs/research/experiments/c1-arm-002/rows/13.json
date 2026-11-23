@@ -9,6 +9,7 @@
   "cellRef": "C97",
   "expected": "4140",
   "previousValue": "940",
+  "instructionUnrecorded": true,
   "subArm": "c1",
   "verdict": "refuted",
   "verdictReason": "persisted-mismatch",

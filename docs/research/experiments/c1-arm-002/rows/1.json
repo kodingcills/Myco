@@ -9,6 +9,7 @@
   "cellRef": "C24",
   "expected": "9733",
   "previousValue": "142",
+  "instructionUnrecorded": true,
   "subArm": "c1",
   "verdict": "refuted",
   "verdictReason": "modified",
