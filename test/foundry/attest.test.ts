@@ -1,21 +1,27 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import {
-  attest,
-  offlineObserver,
-  type SaveObservation,
-} from "../../src/foundry/baseline/attest.ts";
 import { executeTrial } from "../../src/foundry/baseline/executor.ts";
 import { fakeGuest, LAYOUT } from "../../src/foundry/baseline/guest.ts";
 import type { RecordedTrialEvidence } from "../../src/foundry/baseline/recorder.ts";
 import { ArmRecorder } from "../../src/foundry/baseline/recorder.ts";
 import { todoTransport } from "../../src/foundry/baseline/todo-transport.ts";
-import { findTask } from "../../src/foundry/tasks/bank.ts";
+import { attest, offlineObserver, type SaveObservation } from "../../src/foundry/grader/attest.ts";
+import { scoreDiscoveryTrial } from "../../src/foundry/grader/discovery.ts";
+import {
+  commitment,
+  fixtureHash,
+  generateHiddenFixtures,
+} from "../../src/foundry/hidden-split/index.ts";
+import { findTask, taskFixture } from "../../src/foundry/tasks/bank.ts";
 import { TODO_FIXTURE_SPECS } from "../../src/foundry/tasks/todo.ts";
 import type { GuardTraceEvent, ScreenView } from "../../src/foundry/types.ts";
 
 const TASK = findTask("ef-t01b-add-four-items-noverify")!;
 const SPEC = TODO_FIXTURE_SPECS.find((s) => s.fixtureId === TASK.fixtureId)!;
+/** A real hidden set, so the gate resolves the fixture from a commitment rather than a literal. */
+const HIDDEN = generateHiddenFixtures(new Uint8Array(32).fill(42), 1);
+const TRUSTED = commitment(HIDDEN);
+const HIDDEN_FIXTURE = HIDDEN[0]!;
 const PROMPT_HASH = createHash("sha256").update(TASK.prompt).digest("hex");
 
 /** A save event carrying the bytes the observer will see, so the binding can be placed. */
@@ -28,6 +34,7 @@ interface FinishedRun {
   trace: readonly GuardTraceEvent[];
   files: Readonly<Record<string, Uint8Array>>;
   screen: ScreenView;
+  selfReport: { readonly claimsSuccess: boolean; readonly text: string };
 }
 
 /** A finished, internally consistent recording, so each test can vary one thing. */
@@ -63,10 +70,81 @@ function baseInput(run: FinishedRun) {
     observations: observer.observe(["store.json"], run.files),
     screen: run.screen,
     observerId: observer.id,
-    fixture: { fixtureId: SPEC.fixtureId, persistenceFiles: ["store.json"] },
+    trustedCommitment: TRUSTED,
+    hiddenFixtures: HIDDEN,
+    claimedFixtureHash: fixtureHash(HIDDEN_FIXTURE),
     screenObserved: true,
   };
 }
+
+describe("TIF-95: the gate decides eligibility, never the verdict", () => {
+  it("an eligible run is not thereby verified, and a refuted run stays refuted", async () => {
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const attestation = attest(input);
+    expect(attestation.eligible).toBe(true);
+
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+      attestation,
+    );
+    expect(scored.status).toBe("scored");
+    if (scored.status !== "scored") throw new Error("unreachable");
+    // Eligibility is about admissibility, not correctness: the verdict is whatever the
+    // state oracle said, and the gate must not have touched it.
+    expect(scored.decisionEligible).toBe(true);
+    expect(scored.result.verdict).toBe("refuted");
+  });
+
+  it("without an attestation the row stays descriptive", async () => {
+    const run = await finishedRun();
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+    );
+    if (scored.status !== "scored") throw new Error("unreachable");
+    expect(scored.decisionEligible).toBe(false);
+    expect(scored.attestationBlockers).toEqual(["no attestation supplied"]);
+  });
+
+  it("a refused attestation keeps the row descriptive and names why", async () => {
+    const run = await finishedRun();
+    const refused = attest({ ...baseInput(run), observations: [] });
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+      refused,
+    );
+    if (scored.status !== "scored") throw new Error("unreachable");
+    expect(scored.decisionEligible).toBe(false);
+    expect(scored.attestationBlockers?.join(" ")).toContain("no observation");
+  });
+});
 
 describe("EF-005 attestation gate", () => {
   it("admits a run whose observation matches the final bytes", async () => {
@@ -184,11 +262,12 @@ describe("EF-005 attestation gate", () => {
     const input = baseInput(await finishedRun());
     const result = attest({
       ...input,
-      fixture: { fixtureId: "empty", persistenceFiles: [] },
+      hiddenFixtures: [],
+      claimedFixtureHash: "0".repeat(64),
       finalFiles: {},
     });
     expect(result.eligible).toBe(false);
-    expect(result.blockers.join(" ")).toContain("designates no persistence files");
+    expect(result.blockers.join(" ")).toContain("does not match the trusted commitment");
   });
 
   it("reports an app-written file the fixture does not designate, without refusing the run", async () => {

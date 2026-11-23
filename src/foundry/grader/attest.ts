@@ -26,8 +26,9 @@
  */
 
 import { createHash } from "node:crypto";
-import type { FixtureManifest, GuardTraceEvent, ScreenView } from "../types.ts";
-import type { RecordedTrialEvidence } from "./recorder.ts";
+import type { RecordedTrialEvidence } from "../baseline/recorder.ts";
+import { commitment, fixtureHash, type HiddenFixture } from "../hidden-split/index.ts";
+import type { GuardTraceEvent, ScreenView } from "../types.ts";
 
 /** One observation of one persistence file, taken by a reader that is not the arm. */
 export interface SaveObservation {
@@ -93,11 +94,14 @@ export interface AttestInput {
   /** The observer that produced `observations`, so the result can name it. */
   readonly observerId: string;
   /**
-   * The fixture itself, so the required file set comes from the manifest rather than from
-   * the caller. A caller-supplied list is how a gate ends up admitting a run that observed
-   * nothing, or hiding a file by omitting it.
+   * The trusted commitment, loaded from `foundry/hidden-commitment.json`. The gate verifies
+   * the supplied hidden set against it, so a caller cannot substitute a set of its own.
    */
-  readonly fixture: Pick<FixtureManifest, "fixtureId" | "persistenceFiles">;
+  readonly trustedCommitment: ReturnType<typeof commitment>;
+  /** The hidden fixtures the run claims to have used. */
+  readonly hiddenFixtures: readonly HiddenFixture[];
+  /** The fixture hash the run claims. The gate resolves the fixture from this. */
+  readonly claimedFixtureHash: string;
   /** Whether the screen reading came from the observer rather than the arm. */
   readonly screenObserved: boolean;
 }
@@ -113,6 +117,8 @@ export interface Attestation {
   readonly screenConstrained: boolean;
   /** Files the final state holds that the fixture does not designate. Reported, not required. */
   readonly unexpectedFiles: readonly string[];
+  /** The fixture the gate resolved from the commitment, or null when it could not. */
+  readonly resolvedFixtureId: string | null;
 }
 
 /**
@@ -125,14 +131,34 @@ export function attest(input: AttestInput): Attestation {
   const blockers: string[] = [];
   const { evidence, observations, finalFiles } = input;
 
-  // The required set is the fixture's own list. Files the app wrote beyond it (a log, a
-  // sidecar) are reported but not required to be observed: demanding an observation for
-  // every file in the final state refuses honest runs, which is a worse failure than the
-  // one it would prevent.
-  const required = [...new Set(input.fixture.persistenceFiles)].sort();
-  if (required.length === 0)
+  // Option 1: the fixture is resolved from the commitment, never taken from the caller.
+  // A caller-supplied fixture could keep the real id and name a benign file; a fixture
+  // resolved from a commitment-verified set cannot.
+  const supplied = commitment(input.hiddenFixtures);
+  const commitmentMatches =
+    supplied.rootHash === input.trustedCommitment.rootHash &&
+    supplied.count === input.trustedCommitment.count &&
+    supplied.hiddenSplitVersion === input.trustedCommitment.hiddenSplitVersion;
+  if (!commitmentMatches)
+    blockers.push("commitment: the supplied hidden set does not match the trusted commitment");
+
+  const resolved = input.hiddenFixtures.find(
+    (candidate) => fixtureHash(candidate) === input.claimedFixtureHash,
+  );
+  if (resolved === undefined)
     blockers.push(
-      `fixture: ${input.fixture.fixtureId} designates no persistence files, so nothing can be attested`,
+      `commitment: no hidden fixture hashes to ${input.claimedFixtureHash.slice(0, 12)}…`,
+    );
+
+  // The required set is the resolved fixture's own list. Files the app wrote beyond it (a
+  // log, a sidecar) are reported but not required to be observed: demanding an observation
+  // for every file in the final state refuses honest runs, which is a worse failure than
+  // the one it would prevent.
+  const required =
+    resolved === undefined ? [] : [...new Set(resolved.fixture.persistenceFiles)].sort();
+  if (resolved !== undefined && required.length === 0)
+    blockers.push(
+      `fixture: ${resolved.fixture.fixtureId} designates no persistence files, so nothing can be attested`,
     );
   const unexpected = Object.keys(finalFiles)
     .filter((path) => !required.includes(path))
@@ -245,5 +271,6 @@ export function attest(input: AttestInput): Attestation {
     accepted,
     screenConstrained,
     unexpectedFiles: unexpected,
+    resolvedFixtureId: resolved?.fixture.fixtureId ?? null,
   };
 }

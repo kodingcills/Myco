@@ -119,3 +119,19 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   **Reset budget:** plan at ~21 s per cold restore (`scripts/reset-trial-vm.sh` default), not
   the 8.3 s live path; 100 trials is ~35 minutes of reset, so statistical power is affordable
   and the real cost to optimise is verification.
+
+### EF-009 (TIF-pending) Hardening: run the attestation gate out of the arm's reach
+- **linear status:** **needs an issue** (file as a new TIF issue; no id yet). Follow-up to
+  TIF-95, which took the cheap half of the isolation option.
+- **owner:** foundry-owner
+- **blocked_by:** TIF-95
+- **description:** TIF-95 closed the fixture-identity hole by resolving the fixture from the
+  hidden commitment, and stopped exporting `attest()` to arm-facing code with an import-graph
+  test. That is a boundary, not isolation: an arm that can run arbitrary code in the same
+  process can still reach the module by path, and the import test only covers the files it
+  names. Full isolation means the ingest runs in a process the arm cannot call, with the
+  observations produced by a second guest connection rather than a function the arm invokes.
+- **acceptance:** the ingest runs as a separate process with no shared memory or module
+  handle reachable from arm code; the observer is a second guest connection, not
+  `offlineObserver`; a test proves arm code cannot reach the gate even by dynamic import;
+  the import-graph test from TIF-95 is retained as a cheap first line.

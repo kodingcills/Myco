@@ -6,6 +6,7 @@ import { scoreTrial, type TrialInput } from "../oracles/blind.ts";
 import { oracleForApp } from "../oracles/state.ts";
 import { findTask, taskFixture } from "../tasks/bank.ts";
 import type { GuardTraceEvent } from "../types.ts";
+import type { Attestation } from "./attest.ts";
 
 type Setting =
   | null
@@ -133,11 +134,19 @@ function reconcileAudit(
   return seen.size === calls.size ? { guardTrace, storeReads } : null;
 }
 
-/** Score public evidence descriptively. This entry point has no trusted artifact ingress. */
+/**
+ * Score a discovery trial.
+ *
+ * `attestation` is the trusted-ingest gate (TIF-95). Without it the row is descriptive, as
+ * before. With it, the row is decision-eligible only when the gate admits it — and the gate
+ * resolves the fixture from the hidden commitment, so a caller cannot supply a benign one.
+ * The gate never changes the verdict; it only decides whether the verdict may count.
+ */
 export function scoreDiscoveryTrial(
   evidence: DiscoveryTrialEvidence,
   input: Omit<TrialInput, "intent">,
   comparisonSettings: PlannerSettings,
+  attestation?: Attestation,
 ) {
   const { armId, taskId, promptHash, planner } = evidence;
   const identity = { armId, taskId, promptHash, planner };
@@ -173,6 +182,7 @@ export function scoreDiscoveryTrial(
       status: "scored" as const,
       decisionEligible: false,
       reason: "audit",
+      attestationBlockers: ["tool-call audit is incomplete or does not match the trace"],
       storeReads: null,
       result: {
         fixtureId: fixture.fixtureId,
@@ -196,11 +206,19 @@ export function scoreDiscoveryTrial(
     trace: audit.guardTrace,
     requireSavedBytes: armId === "hcu+shell",
   });
+  // The gate decides eligibility; it never touches `result`. A refuted verdict stays
+  // refuted whether or not the run is eligible, and an eligible run is not thereby verified.
+  const eligible = attestation?.eligible === true;
   return {
     ...identity,
     status: "scored" as const,
-    decisionEligible: false,
-    decisionBlocker: "trusted-live-artifacts-unavailable" as const,
+    decisionEligible: eligible,
+    // Always present, empty when eligible: a uniform shape means a reader cannot mistake
+    // "no blockers recorded" for "no blockers existed".
+    attestationBlockers: eligible ? [] : (attestation?.blockers ?? ["no attestation supplied"]),
+    ...(eligible
+      ? { attestation: { observerId: attestation.observerId, accepted: attestation.accepted } }
+      : { decisionBlocker: "trusted-live-artifacts-unavailable" as const }),
     storeReads: audit.storeReads,
     result,
   };

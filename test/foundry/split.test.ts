@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TODO_TASKS } from "../../src/foundry/tasks/bank.ts";
@@ -67,6 +67,34 @@ describe("EF-002 hidden split isolation", () => {
         new RegExp(`${spec.fixtureId}[\\s\\S]{0,400}answer`),
       );
     }
+  });
+});
+
+describe("TIF-95: the attestation gate is not reachable from arm code", () => {
+  /**
+   * The cheap half of process isolation. Full isolation (a separate process the arm cannot
+   * call) is a follow-up; until then the boundary is enforced by import graph, so an arm
+   * cannot import the gate and satisfy it with its own provenance.
+   */
+  const ARM_FACING = [
+    join(SRC, "foundry", "baseline", "arms", "index.ts"),
+    join(SRC, "foundry", "baseline", "todo-transport.ts"),
+    join(SRC, "foundry", "baseline", "guest.ts"),
+    join(SRC, "foundry", "baseline", "executor.ts"),
+    join(SRC, "foundry", "baseline", "recorder.ts"),
+  ];
+
+  it("no arm-facing file imports the attestation gate", () => {
+    const leaks = ARM_FACING.filter((file) => {
+      if (!statSync(file).isFile()) return false;
+      return /from\s+["'][^"']*grader\/attest/.test(readFileSync(file, "utf8"));
+    });
+    expect(leaks).toEqual([]);
+  });
+
+  it("the gate lives in the grader, not in the arm harness", () => {
+    expect(statSync(join(SRC, "foundry", "grader", "attest.ts")).isFile()).toBe(true);
+    expect(existsSync(join(SRC, "foundry", "baseline", "attest.ts"))).toBe(false);
   });
 });
 

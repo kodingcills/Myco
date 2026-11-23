@@ -139,14 +139,16 @@ artifacts come from a channel the arm does not control, and no function can veri
 inputs' provenance. What the gate *can* do — and now does — is refuse an eligible verdict
 when anything is missing, inconsistent, or unattributable.
 
-**Decision needed (outer loop / Tiffany):** before `attest()` is wired into
-`scoreDiscoveryTrial`, the fixture identity must come from the hidden commitment rather than
-from a caller argument. Concretely, either:
+**Decided (TIF-95):** option 1, plus the cheap half of option 2.
 
-1. the ingest resolves the fixture itself from the hidden split and passes only a commitment
-   id, rejecting any fixture whose hash does not match `foundry/hidden-commitment.json`; or
-2. the ingest runs in a process the arm cannot call, and `attest()` is not exported to arm
-   code at all.
+- The gate now resolves the fixture from the hidden commitment and refuses any set that does
+  not match `foundry/hidden-commitment.json`, or any claimed hash that no hidden fixture
+  produces. A caller can no longer name a benign `persistenceFiles`.
+- `attest()` moved to `src/foundry/grader/`, and an import-graph test fails if arm-facing code
+  imports it.
+- `attest()` is wired into `scoreDiscoveryTrial`: a row is decision-eligible only when the
+  gate admits it, and the gate never changes the verdict.
 
-Option 1 is cheaper and testable offline. Option 2 is the stronger guarantee. Both are
-changes to *where* the gate runs, which is why they are not part of this PR.
+**Still open (EF-009):** full process isolation. The import test is a boundary, not
+isolation — an arm running arbitrary code in the same process can still reach the module by
+path. That is a separate hardening issue, filed as a follow-up.
