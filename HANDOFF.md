@@ -1,5 +1,64 @@
 # MVP Discovery — handoff
 
+---
+
+## 0. Session 2026-11-23 10:25 ET — read this first
+
+Restarted thread. Preflight and the #315 Tier-2 pre-check are done. **Nothing pushed,
+no verifier spawned, nothing of mine is running.**
+
+### Host preflight (the requested first task)
+
+- **The load test was already gone.** No match for `t2-lc-verify`, `race.sh`, `s0-live.sh`,
+  or pids 4057 / 4123–4132; no `while :` spinners anywhere. Nothing was killed; it had
+  exited before this session began.
+- `uptime` at 10:23: **load averages 33.55 / 45.55 / 40.65**.
+- Top 5 by CPU: Grok Bot GPU helper `0.5%`, Grok Bot renderer `0.4%`, Chrome helper
+  `0.3%`, `biomesyncd` `0.4%`, `mapssyncd` `0.2%` — under 1.5% of one core *combined*.
+  **The load average is not sustained by any running process on this host.** Tell M1: their
+  "load 31–33" is a decaying 1-minute EMA from an old spike, not live contention; the VM
+  queue is very likely unblocked right now.
+
+### #315 Tier-2 pre-check result — REJECT-shaped, do not hand to a verifier as-is
+
+Harness `/tmp/t2-lc-verify/race.sh`; stubs first on PATH (TIF-161); no VM; launcher at
+`bf7d738` on `tif-138-launcher-claim`; worktree restored to HEAD afterwards.
+
+| State | Params | winners / refusals | bad_rounds | winner_pid_dead |
+|---|---|---|---|---|
+| HEAD (`mkdir` claim) | 8×5 | 5 / 35 | 0 | 0 |
+| **Revert A** check-then-write on `$PID_FILE` | 8×5 | 7 / 33 | **2** | 0 |
+| **Revert A** | 8×10 | 11 / 69 | **1** | 0 |
+| **Revert B** subshell noclobber `( set -C; : > "$LOCK_DIR" )` | 8×10 | 10 / 70 | **0** | 0 |
+| **Revert B** | 8×50 | 50 / 350 | **0** | 0 |
+
+- **A: confirmed.** The "expected 8 to be 1" shape is reached fast. Good.
+- **B: FAILS the pre-check.** 400 claims, 4000 processes, zero bad rounds. §1's claim that
+  the race test must fail against **both** reverts does **not** hold for the current
+  harness. A PASS against B is the exact failure this PR exists to avoid.
+- **Why:** `--run` starts `nohup "$0" --watchdog` *before* the claim and kills it on
+  refusal. The per-refuser kill makes the race resolve to one live winner anyway, so a
+  winner-count assertion cannot see the recording race. The subshell-noclobber revert
+  does leak — the second claimer overwrites `s0.pid` and kills the first's child — but the
+  detectable symptom is `rounds_winner_pid_dead`, and the harness's `--stop` masks it.
+
+### Blocked on the outer loop (Linear is 401 for me; no peer to message)
+
+1. **#316 conflict question.** #316 (TIF-166) pins `not.toContain("set -C")` in
+   `scripts/run-s0*.sh`. #315 does not touch those files → no conflict. Confirm, or tell me
+   whether #315 must be the *toolchain-independent* mkdir.
+2. **Authorise a test amendment** (launcher untouched): the race test's success criterion
+   becomes "`s0.pid`'s recorded pid is alive after the round, and exactly one of the N
+   racers is still alive" — the assertion revert B actually fails. This re-arms the B
+   requirement without changing the shipping fix.
+3. Or: say explicitly that the verifier should run against unchanged `bf7d738` with the
+   revert-A evidence attached and B recorded as a known gap.
+
+Then: one verifier, ≤4 spinners, ≤3 min, only after a Coordinator slot is confirmed
+(TIF-137). **M1's host is free now — the VM queue can proceed.**
+
+---
+
 Written 2026-11-23 10:0x ET by the MVP Discovery thread, at the outer loop's request,
 so this thread can be restarted with fresh context and the host freed for the M1 VM
 queue. Read this first; it is the entry point, not the archive.
