@@ -13,7 +13,18 @@ const driverModules = [
 const stdioImports = new Set(["node:readline", "node:stream"]);
 
 const allowed = new Set(
-  ["src/tasks/intent.ts", "src/tasks/fixture.ts", "src/core/verify.ts"].map((p) => resolve(p)),
+  [
+    "src/tasks/intent.ts",
+    "src/tasks/fixture.ts",
+    "src/core/verify.ts",
+    // Imports nothing (`src/tasks/task-text.ts` documents why that is a
+    // requirement). It renders the sentence for the screenshot baseline only:
+    // Myco's arm runs a compiled program and is never prompted. Both arms must
+    // share the job — see test/baseline/task-parity.test.ts — not the prose. A
+    // dependency-free leaf is safe to allow, and this test still catches
+    // anything it might one day import.
+    "src/tasks/task-text.ts",
+  ].map((p) => resolve(p)),
 );
 function violations(entry: string, extraAllowed: string[] = []): string[] {
   const permitted = new Set([...allowed, ...extraAllowed.map((p) => resolve(p))]);

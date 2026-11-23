@@ -134,13 +134,44 @@ Today's classification: #162 → tier 2, #157 → tier 2, #152/#149 → tier 0, 
 
 **C — Long runs are detached.** Anything over a few minutes: `nohup`/`setsid`, log to file, pid file, watchdog that resumes or reports. Never tied to an agent turn. `scripts/c1-baseline.sh` is the model — it holds a lock, logs to `progress.log`, and outlives the turn that started it.
 
-## C1 arm-002 — RUNNING (started ~16:10, not by this coordinator)
+## C1 arm-002 — RECORDED, NOT THE BASELINE (decision 2026-11-23)
 
-- Live ledger `/tmp/baseline/c1-arm2/accounting.json`, log `progress.log`, lock held, QEMU up.
-- At last read: **9 scored / 1 omitted / 1 reserved**, spend **$0.3728**, all `refuted`, `falseSuccess: False` throughout.
-- Reasons observed: `modified` ×5, `persisted-mismatch` ×2, `step-budget` ×2 — all plausible refutations, **zero `driver-unreachable`**.
-- This confirms in production: #156's 45 s preflight (trial-5 preflight logged `match`), #163's sentinel filter (healthy rows show `driver: None`, not `"match"`), and no false successes.
-- **Do not interfere.** Read the final denominator from the ledger when it stops.
+Arm-002 ran 30 trials at ~16:10 and finished. **Its rows are kept; it is not
+scored as criterion 7.**
+
+**Why: instruction parity was violated.** Myco's arm was told the canonical intent,
+which ends "and save the file" (`src/tasks/intent.ts`). Arm-002's per-trial task
+line did not (`c1-trial.ts:46`), though its system prompt did say "Save and close
+it". Measured, from `rows/*.json`:
+
+- **0 `press_key` calls** — re-measured at 28 scored rows: 422 actions,
+  `click` 398 / `type_text` 24. (An earlier revision of this file said 375 /
+  357 / 18; that did not reproduce. The arm was still running, so treat any
+  count here as a snapshot and re-derive it from the ledger.)
+- `modified` was the plurality of refutations (16, vs `step-budget` 7 and
+  `persisted-mismatch` 5) — correct value typed, never saved
+  (`c1-judge.ts:32`: document left open).
+- 296 of 308 clicks landed in a 10-px band at y=146 — the Name Box, one element,
+  not a spread of cell attempts.
+
+A neighbouring-cell miss would have saved a wrong value and given
+`persisted-mismatch`. These were task-completion failures caused by the instruction.
+
+**Fixed in code, so it cannot recur.** `src/tasks/task-text.ts` — dependency-free
+by requirement, because `c1-trial.ts` is guarded by the import-boundary test and
+`intent.ts` reaches `node:crypto` through `fixture.ts`. Both arms render from it,
+every row records the rendered `instruction`, and `test/baseline/task-text.test.ts`
+fails if the save requirement is dropped (mutation-verified: all 5 fail on revert).
+
+**Arm-003 planned**, queue after M1-016: byte-identical task text, same
+`claude-sonnet-5-5` planner, same `cua-c1-base` snapshot, 30 trials, **$9.00 cap on
+total committed spend** (≈$1.11 committed at the time of writing; arm-002's final
+cost counts toward it). Design: `docs/research/experiments/c1-arm-003-design.md`.
+
+**Task/fixture parity is separately proven** and unaffected:
+`docs/research/experiments/c1-parity.md` — 30/30 params, 30/30 runIds, 6/6 fixture
+hashes, and 30/30 of the manifest's `resultSha256` reproducing byte-exactly against
+Myco's own `result.json`.
 
 ## Objective
 Milestone 1: verified, recoverable desktop execution in one real Windows GUI app (LibreOffice Calc record edits, default suggestion). Acceptance: 27/30 reliability, 0 false successes in ≥10 corrupted trials, recovery from app interruption and invalid target, machine-readable evidence, screenshot-agent baseline on identical conditions, reproducible by another agent. Full spec: docs/product/vision.md.

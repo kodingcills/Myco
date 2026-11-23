@@ -27,6 +27,12 @@ export interface CalcRecordEditParams {
   newValue: string;
 }
 
+// The baseline's task sentence lives in `./task-text.ts`, which imports nothing,
+// because `src/baseline/c1-trial.ts` may not reach this module (`fixture.ts` pulls
+// in `node:crypto` and the import-boundary test forbids it). Deliberately NOT
+// re-exported here: the only consumer is the baseline, and a re-export would let a
+// future caller take this path in through the back door.
+
 export function columnByName(name: string): FixtureColumn | undefined {
   return DATA_COLUMNS.find((c) => c.name === name);
 }
