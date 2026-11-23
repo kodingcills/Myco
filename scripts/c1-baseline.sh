@@ -4,7 +4,23 @@
 set -euo pipefail
 
 WS=$(cd "$(dirname "$0")/.." && pwd)
-OUT=${1:-/tmp/baseline/c1}
+# NEVER default a run under /tmp. arm-003c's ledgers and rows lived there, and the
+# 2026-11-23 reboot wiped them mid-investigation - the spend is still only known
+# because someone had quoted it before the loss, and the two rows it produced are
+# gone entirely. A sweep's whole point is the evidence it leaves behind.
+#
+# The default now lands beside the other run artefacts, outside the OS's temp
+# reaper. Callers may still pass an explicit directory; if they pass one under
+# /tmp this refuses rather than silently accepting it, because a run that expects
+# its ledger to outlive the session must not be able to point it at /tmp by
+# accident either.
+OUT=${1:-$HOME/Projects/myco-runs/c1}
+case "$OUT" in
+  /tmp/*|/var/tmp/*)
+    echo "c1-baseline: refusing to run under '$OUT' - /tmp is wiped by reboot and took arm-003c's ledger with it (TIF-164). Use a durable path, e.g. \$HOME/Projects/myco-runs/c1" >&2
+    exit 2
+    ;;
+esac
 PROGRESS="$OUT/progress.log"
 if [ "${2:-}" != "--coordinator-go" ]; then
   echo "Coordinator GO required" >&2
