@@ -99,7 +99,7 @@ Every action returns a three-way outcome: `delivered_verified`, `delivered_unver
       "action": {
         "kind": "launch",
         "command": "python3",
-        "args": ["/home/myco/myco-todo/myco_todo.py"]
+        "args": ["/tmp/myco_todo.py"]
       }
     }
   }
@@ -253,8 +253,14 @@ myco-rt create '{"session_id": "df-s01-harness"}'
 # 2. Observe current state
 myco-rt observe
 
+# NOTE (TIF-158): the DF-005 runner deploys the fixture itself to /tmp/myco_todo.py,
+# under the session's read_root grant (/tmp), and launches it from there. The
+# examples below use that path. The manual deploy in section 6 still works for
+# ad-hoc use, but the runner no longer depends on it — and it must not, because
+# the runner's own preflight (app-deployed) checks this path before it takes a slot.
+
 # 3. Launch the target app
-myco-rt act '{"kind": "launch", "command": "python3", "args": ["/home/myco/myco-todo/myco_todo.py"]}'
+myco-rt act '{"kind": "launch", "command": "python3", "args": ["/tmp/myco_todo.py"]}'
 
 # 4. Act by Accessible Widget Name (CLI resolves name against observation tree)
 myco-rt act '{"kind": "typeText", "name": "sanity-entry", "text": "myco-df-probe"}'
@@ -304,25 +310,25 @@ ssh -i runtime/guest/keys/id_ed25519 \
 To inspect the application's persisted state JSON:
 ```bash
 ssh -i runtime/guest/keys/id_ed25519 -p 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    myco@localhost 'cat /home/myco/myco-todo/store.json'
+    myco@localhost 'cat /tmp/df-s01.json'
 ```
 Or copy to host:
 ```bash
 scp -i runtime/guest/keys/id_ed25519 -P 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    myco@localhost:/home/myco/myco-todo/store.json ./runs/store-check.json
+    myco@localhost:/tmp/df-s01.json ./runs/store-check.json
 ```
 
 ### REQ-10: Guest File Edit (Bug Fix / Injection)
 ```bash
 scp -i runtime/guest/keys/id_ed25519 -P 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     dogfood/apps/myco-todo/myco_todo.py \
-    myco@localhost:/home/myco/myco-todo/myco_todo.py
+    myco@localhost:/tmp/myco_todo.py
 ```
 
 ### REQ-11: Guest Shell Exec (Headless Self-Test / Verification)
 ```bash
 ssh -i runtime/guest/keys/id_ed25519 -p 10022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    myco@localhost 'python3 /home/myco/myco-todo/myco_todo.py --self-test'
+    myco@localhost 'python3 /tmp/myco_todo.py --self-test'
 ```
 
 ---
