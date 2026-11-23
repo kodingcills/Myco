@@ -384,17 +384,38 @@ export function createDiscoveryComparison(
     }>,
   ) => {
     const results: ReturnType<typeof scoreDiscoveryTrial>[] = [];
-    // Materialise first, guarded: a broken iterator ends the batch, but rows already
-    // collected still score. Destructuring each record is guarded separately below, because
-    // a null record or a throwing `evidence` accessor used to abort everything (round 1,
-    // finding 2).
-    const records: unknown[] = [];
+    // LAZY, and guarded per step. Materialising the iterable first would pull trials after
+    // a quota pause, so a lazy source keeps running and an infinite one never returns
+    // (round 2, finding 1). Each `next()`, `done` and `value` read is guarded separately, so
+    // a broken iterator ends the batch without losing rows already collected, and a bad
+    // record costs one row.
+    let iterator: Iterator<unknown>;
     try {
-      for (const record of trials) records.push(record);
+      iterator = trials[Symbol.iterator]();
     } catch {
-      // A throwing iterator is a broken batch; score what we have.
+      return results;
     }
-    for (const record of records) {
+    while (true) {
+      let step: IteratorResult<unknown>;
+      try {
+        step = iterator.next();
+      } catch {
+        break;
+      }
+      let done: boolean;
+      try {
+        done = step.done === true;
+      } catch {
+        break;
+      }
+      if (done) break;
+      let record: unknown;
+      try {
+        record = step.value;
+      } catch {
+        results.push(malformedRow());
+        continue;
+      }
       let evidence: DiscoveryTrialEvidence;
       let input: Omit<TrialInput, "intent">;
       try {

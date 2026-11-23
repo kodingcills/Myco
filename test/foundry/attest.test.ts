@@ -523,14 +523,25 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
   it("v2 round 1 finding 1: a non-primitive observation field is refused", async () => {
     const input = baseInput(await finishedRun());
     const real = input.observations[0]!;
-    const result = attest({
-      ...input,
-      observations: [
-        { ...real, observedAt: { when: "now" } },
-        ...input.observations.slice(1),
-      ] as never,
-    });
-    expect(result.eligible, "a non-primitive observedAt was admitted").toBe(false);
+    for (const field of ["path", "sha256", "bytes", "observedAt", "afterLastSave"] as const) {
+      const result = attest({
+        ...input,
+        observations: [
+          { ...real, [field]: { when: "now" } },
+          ...input.observations.slice(1),
+        ] as never,
+      });
+      expect(result.eligible, `a non-primitive ${field} was admitted`).toBe(false);
+    }
+    // `afterLastSave` is the one the gate only tests for truthiness, so a truthy non-boolean
+    // slips through without its own type check (round 2, finding 2).
+    for (const bad of ["false", 1, {}, []]) {
+      const result = attest({
+        ...input,
+        observations: [{ ...real, afterLastSave: bad }, ...input.observations.slice(1)] as never,
+      });
+      expect(result.eligible, `afterLastSave ${JSON.stringify(bad)} was admitted`).toBe(false);
+    }
   });
 
   it("R6 round 3 finding 2: the attestation is deeply frozen", async () => {

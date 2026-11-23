@@ -409,6 +409,98 @@ describe("Discovery evidence grading", () => {
     expect(rows.every((row) => row.status === "scored" && !row.decisionEligible)).toBe(true);
   });
 
+  it("v2 round 2 finding 1: a broken iterator ends the batch without losing rows", () => {
+    // Each step of the iteration is guarded separately: a throwing `next()`, a throwing
+    // `done` getter, or a throwing `value` getter must not abort the batch or lose rows
+    // already collected.
+    const broken: readonly [string, () => Iterable<unknown>][] = [
+      [
+        "next throws",
+        () => ({
+          [Symbol.iterator]: () => ({
+            next: () => {
+              throw new Error("next trap");
+            },
+          }),
+        }),
+      ],
+      [
+        "done getter throws",
+        () => ({
+          [Symbol.iterator]: () => ({
+            next: () => ({
+              get done(): boolean {
+                throw new Error("done trap");
+              },
+              value: { evidence, input },
+            }),
+          }),
+        }),
+      ],
+      [
+        "value getter throws",
+        () => ({
+          [Symbol.iterator]: () => {
+            // Finite: one record whose `value` throws, then done. A stateless iterator here
+            // would make the guarded `continue` loop forever.
+            let step = 0;
+            return {
+              next: () => {
+                step += 1;
+                if (step > 1) return { done: true, value: undefined };
+                return {
+                  done: false,
+                  get value() {
+                    throw new Error("value trap");
+                  },
+                };
+              },
+            };
+          },
+        }),
+      ],
+      [
+        "Symbol.iterator throws",
+        () => ({
+          [Symbol.iterator]: () => {
+            throw new Error("iterator trap");
+          },
+        }),
+      ],
+    ];
+    for (const [name, make] of broken) {
+      const comparison = createDiscoveryComparison(settings, refuseAll);
+      let threw = false;
+      let rows: ReturnType<typeof scoreDiscoveryTrial>[] = [];
+      try {
+        rows = comparison(make() as never);
+      } catch {
+        threw = true;
+      }
+      expect(threw, `${name} aborted the batch`).toBe(false);
+      expect(Array.isArray(rows), `${name} returned no rows`).toBe(true);
+    }
+  });
+
+  it("v2 round 2 finding 1: a quota pause stops consuming the source", () => {
+    // The existing test above passes even when the source is drained, because the guard
+    // swallows its post-pause throw. This one counts pulls, so draining is visible.
+    let pulls = 0;
+    function* trials() {
+      pulls += 1;
+      yield { evidence, input };
+      pulls += 1;
+      yield { evidence: { ...evidence, status: "quota-exhausted" } as const, input };
+      pulls += 1;
+      yield { evidence, input };
+      pulls += 1;
+      yield { evidence, input };
+    }
+    const rows = createDiscoveryComparison(settings, refuseAll)(trials());
+    expect(rows).toHaveLength(2);
+    expect(pulls, "the source was pulled past the quota pause").toBe(2);
+  });
+
   it("pauses on quota without consuming the next trial", () => {
     const mutableSettings = structuredClone(settings);
     const comparison = createDiscoveryComparison(mutableSettings, refuseAll);
