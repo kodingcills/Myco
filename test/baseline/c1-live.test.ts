@@ -228,6 +228,48 @@ describe("C1 host harness", () => {
     const report = await runC1Sweep(options);
     expect(report).toMatchObject({ combinedChargedMicros: 8_700_000, completed: 0 });
     expect(report.rows[0]).toMatchObject({ omitted: "spend-limit" });
+
+    // TIF-164/TIF-90: prior spend counts against the ceiling.
+    //
+    // The ledger in a run directory holds only that run's trials, so a fresh
+    // directory previously got a full allowance it had already spent part of.
+    // arm-003d hit this: $3.19 was committed against a $9 ceiling and the new
+    // ledger started at zero. Fail-closed means a prior-spend seed that is
+    // present but ignored must BLOCK the run, not merely be absent from the math.
+    // A fresh spy per case: the shared one is asserted against earlier in this
+    // test, and reusing it would make an unrelated count failure look like a
+    // seed failure.
+    const fresh = {
+      directory: directory(),
+      coordinatorGo: true,
+      prepare: vi.fn(async () => prepared()),
+      planner,
+    };
+    // Plenty of room: prior spend is small, so the run proceeds. This is the
+    // control that proves the assertion below is about the seed and not about a
+    // universally-impossible cap.
+    const roomy = await runC1Sweep({ ...fresh, priorSpendMicros: 100_000 });
+    expect(roomy.completed).toBeGreaterThan(0);
+    // Remaining budget of one trial's reservation: prior spend must consume it,
+    // or the run would buy a second trial with money already gone.
+    const tight = await runC1Sweep({
+      directory: directory(),
+      coordinatorGo: true,
+      prepare: vi.fn(async () => prepared()),
+      planner,
+      priorSpendMicros: 9_000_000 - 376_800,
+      // The seed consumes almost the whole ceiling, so the caller must state
+      // what is LEFT rather than inherit the per-arm default - which is the
+      // fail-closed behaviour this parameter adds.
+      armLimitMicros: 376_800,
+    });
+    expect(tight.rows[0]).toMatchObject({ omitted: "spend-limit" });
+    // And an invalid seed is refused outright rather than treated as zero.
+    for (const bad of [-1, 1.5, Number.NaN, 9_000_001]) {
+      await expect(runC1Sweep({ ...fresh, priorSpendMicros: bad })).rejects.toThrow(
+        "invalid prior spend",
+      );
+    }
     expect(prepare).not.toHaveBeenCalled();
   });
 
