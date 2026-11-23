@@ -3,6 +3,15 @@ import type { Verdict, VerdictStatus } from "../core/verify.ts";
 export type SubArm = "c1" | "c2";
 export type BaselineEvidenceArm = SubArm | "hcu";
 export type Claim = "done" | "failure";
+/** The transport outcomes TIF-167 distinguishes. Static lookup, so a Record. */
+const DELIVERY_OUTCOMES: Record<string, true> = {
+  "routing-refused": true,
+  delivered: true,
+  "delivered-dismissed": true,
+  "delivered-stalled": true,
+  "save-failed": true,
+};
+
 export interface Action {
   tool: string;
   arguments: unknown;
@@ -30,7 +39,12 @@ export interface ActionDelivery {
 export interface Transcript {
   actions: Action[];
   claims: Claim[];
-  deliveries: ActionDelivery[];
+  /**
+   * Delivery mode per action (TIF-167). Optional because rows recorded before
+   * the field existed are still valid evidence; `deliveriesUnrecorded` on the
+   * row marks that case explicitly.
+   */
+  deliveries?: ActionDelivery[];
 }
 export interface DriverPrecondition {
   hostVersion: string;
@@ -199,6 +213,18 @@ export interface BaselineRow {
    * alternative and it would have silently invalidated all 29.
    */
   instructionUnrecorded?: true;
+  /**
+   * Set when the record predates delivery-mode recording (TIF-167), so a row
+   * without `deliveries` is a known gap rather than a silent omission.
+   *
+   * Same rule as `instructionUnrecorded`, and for the same reason: arm-002's 29
+   * recorded rows and every existing fixture predate the field, and requiring it
+   * unconditionally would invalidate evidence that was correctly gathered. A NEW
+   * row must carry `deliveries` or this marker. The field is what makes arm-003d's
+   * declared run condition decidable from the row rather than from memory - a row
+   * that silently omits it makes escalation unauditable.
+   */
+  deliveriesUnrecorded?: true;
   /** Narrowed to match Myco's `CalcRecordEditParams`: a numeric value here would
    *  render `to 9733,` while Myco's identical intent renders `to "9733",`, which is
    *  an input-shape divergence in a task-text comparison (TIF-104). */
@@ -336,6 +362,22 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     Array.isArray(t.claims) &&
     t.claims.every((c: unknown) => c === "done" || c === "failure") &&
     Array.isArray(t.actions) &&
-    t.actions.every((a: unknown) => object(a) && str(a.tool) && "arguments" in a)
+    t.actions.every((a: unknown) => object(a) && str(a.tool) && "arguments" in a) &&
+    // TIF-167: a C1 row must record delivery modes, or say why it does not.
+    // Without this the arm-003d run condition is written but unenforced, and a
+    // writer that dropped the field would ship an unauditable row silently.
+    // The marker lives on the ROW, like `instructionUnrecorded`, not on the
+    // transcript - rows recorded before the field existed are still evidence and
+    // must stay valid.
+    (Array.isArray(t.deliveries)
+      ? t.deliveries.every(
+          (v: unknown) =>
+            object(v) &&
+            count(v.step) &&
+            (v.mode === "background" || v.mode === "foreground") &&
+            typeof v.escalated === "boolean" &&
+            DELIVERY_OUTCOMES[v.outcome as string] === true,
+        )
+      : x.deliveriesUnrecorded === true)
   );
 }

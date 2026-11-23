@@ -83,5 +83,6 @@
     "step-budget-asymmetry",
     "planner-no-action",
     "planner:claude-sonnet-5-5"
-  ]
+  ],
+  "deliveriesUnrecorded": true
 }

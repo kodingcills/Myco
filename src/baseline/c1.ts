@@ -63,17 +63,35 @@ export function record(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * Refusal codes where the delivery layer declined *and* says a mode change would
+ * help. Three rather than one because Cua's own taxonomy names three
+ * (docs/research/adapters.md:655): `background_occluded` and
+ * `background_uipi_blocked` refuse an input from the background layer for the
+ * same reason `background_unavailable` does and carry the same escalation, so
+ * treating only the one observed in the probe as retryable would silently
+ * under-escalate on a different desktop condition.
+ */
+const ESCALATABLE_REFUSALS: Record<string, true> = {
+  background_unavailable: true,
+  background_occluded: true,
+  background_uipi_blocked: true,
+};
+
+/**
  * Turn one raw Cua response into a single outcome.
  *
- * Order matters. The `background_unavailable` code is checked before the
- * generic `effect === "refused"`, because a refusal the delivery layer can
- * escalate is a different event from one it cannot: only the former should be
- * retried in foreground mode, and conflating them would either retry something
- * unfixable or drop the only escape hatch that works.
+ * Order matters. The retryable refusals are checked before the generic
+ * `effect === "refused"`, because a refusal the delivery layer can escalate is a
+ * different event from one it cannot: only the former should be retried in
+ * foreground mode, and conflating them would either retry something unfixable or
+ * drop the only escape hatch that works.
  *
- * `escalatable` is deliberately narrow. Cua's own message names
- * `delivery_mode:"foreground"` for this case; nothing else in its vocabulary
- * promises that a retry helps.
+ * The core distinction this function exists to preserve: **a transport fault is
+ * not a routing refusal.** `isError` used to mean "the app never saw it", but a
+ * tool that ran and then errored has no such implication, and Cua reports that as
+ * `tool_invocation_failed`. Reading it as `routing-refused` would hide a delivery
+ * failure behind "not a model outcome" - the same conflation class this whole
+ * change removes, one layer down.
  */
 function classify(result: unknown): {
   outcome: CuaOutcome;
@@ -89,16 +107,25 @@ function classify(result: unknown): {
   const verifiedField = typeof verified === "boolean" ? { verified } : {};
 
   // The delivery layer declined, and says a mode change would work.
-  if (code === "background_unavailable")
+  if (typeof code === "string" && ESCALATABLE_REFUSALS[code] === true)
     return { outcome: "routing-refused", escalatable: true, ...verifiedField };
 
-  // Delivered, but Cua could not confirm the target read it. NOT a failure and
-  // NOT to be retried blindly: the driver itself says to inspect first.
-  if (code === "tool_invocation_failed" && typeof inner.foreground_restored === "boolean")
+  // The tool ran and failed. Not a delivery refusal, and NOT to be retried
+  // blindly: Cua's own message for a stall says the input may still appear and to
+  // inspect the target first. Matched on the code alone - requiring
+  // `foreground_restored` to be a boolean would misroute the text-only form,
+  // which is how the probe itself received the stall.
+  if (code === "tool_invocation_failed")
     return { outcome: "delivered-stalled", escalatable: false, ...verifiedField };
 
-  // Any other refusal, including one with no code at all, is routing-level and
-  // must not be counted against the model.
+  // The input landed, and its effect could not be confirmed. A dismissal and a
+  // success both read this way from the transport (`effect: "unverifiable"` was
+  // what Escape returned), so this is `delivered` with the caveat recorded rather
+  // than a distinct outcome: only the judge can tell the two apart.
+  if (effect === "unverifiable")
+    return { outcome: "delivered", escalatable: false, ...verifiedField };
+
+  // Any other refusal, including one with no code at all.
   if (outer.isError === true || effect === "refused")
     return { outcome: "routing-refused", escalatable: false, ...verifiedField };
 
