@@ -57,7 +57,7 @@ I **cannot read or write Linear**: the configured MCP server
 
 ## 3. Directions A / B / C
 
-The recommendation lives in [`docs/product/wedge-recommendation.md`](../Myco/myco-mvp-discovery-4b5ff1cd3a7126c4/docs/product/wedge-recommendation.md)
+The recommendation lives in `docs/product/wedge-recommendation.md` (in the Discovery worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4/docs/product/wedge-recommendation.md`)
 (merged as [#278](https://github.com/kodingcills/Myco/pull/278), TIF-60).
 
 - **Recommended: Direction A, narrowed** — verified GUI tests for coding agents: a task, a
@@ -97,10 +97,10 @@ Four must-fixes in **one** Tier-1 PR:
 
 | Id | Fix | Site |
 |---|---|---|
-| TIF-144 | unknown false successes must read `not recorded`, never `0`/`n/a` | [HeadToHead.tsx:112,148,149,197,199,325](../Myco/myco-mvp-discovery-4b5ff1cd3a7126c4/viewer/src/components/HeadToHead.tsx:148) |
-| TIF-145 | remove the forbidden verdict words `Refuted`/`Uncertain` from arm-table headers | [HeadToHead.tsx:131-132](../Myco/myco-mvp-discovery-4b5ff1cd3a7126c4/viewer/src/components/HeadToHead.tsx:131) — **read `docs/design/gui-spec.md` §4.3 for sanctioned wording first; do not invent a synonym** |
-| TIF-146 | `?compare=<url>` must not `fetch()` arbitrary URLs | [App.tsx:135-152](../Myco/myco-mvp-discovery-4b5ff1cd3a7126c4/viewer/src/components/App.tsx:135) — restrict to same-origin |
-| TIF-147 | "does not say" copy is hardcoded ef-t01/ef-t01b; `Generated` is UTC `Z` | [HeadToHead.tsx:299-300](../Myco/myco-mvp-discovery-4b5ff1cd3a7126c4/viewer/src/components/HeadToHead.tsx:299) and `:118` — the report already carries `decision.taskId`/`promptVariant` |
+| TIF-144 | unknown false successes must read `not recorded`, never `0`/`n/a` | `viewer/src/components/HeadToHead.tsx:148` (in the Discovery worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4/viewer/src/components/HeadToHead.tsx:148`) |
+| TIF-145 | remove the forbidden verdict words `Refuted`/`Uncertain` from arm-table headers | `viewer/src/components/HeadToHead.tsx:131` (in the Discovery worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4/viewer/src/components/HeadToHead.tsx:131`) — **read `docs/design/gui-spec.md` §4.3 for sanctioned wording first; do not invent a synonym** |
+| TIF-146 | `?compare=<url>` must not `fetch()` arbitrary URLs | `viewer/src/components/App.tsx:135` (in the Discovery worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4/viewer/src/components/App.tsx:135`) — restrict to same-origin |
+| TIF-147 | "does not say" copy is hardcoded ef-t01/ef-t01b; `Generated` is UTC `Z` | `viewer/src/components/HeadToHead.tsx:299` (in the Discovery worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4/viewer/src/components/HeadToHead.tsx:299`) and `:118` — the report already carries `decision.taskId`/`promptVariant` |
 
 Nits after M1: TIF-149, TIF-150.
 
