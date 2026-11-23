@@ -2,7 +2,11 @@
 # Builds ~/VMs/myco-win11/seed.iso: autounattend.xml + first-logon script + SSH pubkey + ARM64 drivers + guest tools + offline installers.
 # The password is read from credentials.txt and never printed. seed.iso is chmod 600 because it contains it.
 set -euo pipefail
-VM=~/VMs/myco-win11; S=$VM/scripts; GT=~/VMs/iso/dl/utm-guest-tools-latest.iso; PAY=~/VMs/iso/payload
+# D = this script's directory, so seed/ resolves from the repo as well as from
+# the host copy. VM_ROOT / ISO_ROOT are overridable for a non-default layout.
+D=$(cd "$(dirname "$0")" && pwd)
+VM=${VM_ROOT:-$HOME/VMs/myco-win11}; S=$D
+GT=${ISO_ROOT:-$HOME/VMs/iso}/dl/utm-guest-tools-latest.iso; PAY=${ISO_ROOT:-$HOME/VMs/iso}/payload
 [ -f $VM/credentials.txt ] || { echo "missing credentials.txt"; exit 1; }
 PW=$(awk -F': ' '/^password:/{print $2}' $VM/credentials.txt)
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT; chmod 700 "$W"; R=$W/root; mkdir -p $R/payload
