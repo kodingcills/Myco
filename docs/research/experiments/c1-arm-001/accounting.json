@@ -56,7 +56,8 @@
           "reset:cua-c1-base",
           "step-budget-asymmetry",
           "planner:none"
-        ]
+        ],
+        "deliveriesUnrecorded": true
       }
     },
     "1": {

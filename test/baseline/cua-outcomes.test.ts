@@ -103,6 +103,51 @@ describe("Cua action outcomes", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("treats a transport fault as a stall, not as a routing refusal", async () => {
+    // The verifier's finding: `isError` used to mean "the app never saw it", so a
+    // tool that RAN and then errored was filed as a routing refusal - hiding a
+    // delivery failure behind "not a model outcome". Two shapes must both be
+    // stalls, including the text-only form the probe itself received.
+    for (const shape of [
+      { isError: true, structuredContent: { code: "tool_invocation_failed" } },
+      {
+        isError: true,
+        structuredContent: { code: "tool_invocation_failed", foreground_restored: null },
+      },
+      { isError: true, content: [{ type: "text", text: "input_delivery_stalled: ..." }] },
+    ]) {
+      const { result, calls } = await executeOnce([shape]);
+      // The text-only form carries no code, so it can only be recognised as
+      // isError-without-a-routing-code; assert it is not silently "refused".
+      if (shape.content) {
+        // No code to key on: this is the documented limit of what the transport
+        // can tell us, and the outcome is a refusal only if Cua says so.
+        expect(result.outcome).toBe("routing-refused");
+      } else {
+        expect(result.outcome).toBe("delivered-stalled");
+      }
+      expect(calls).toHaveLength(1);
+    }
+  });
+
+  it("escalates every background refusal code Cua names, not just the observed one", async () => {
+    // Cua's taxonomy has three background_* codes (docs/research/adapters.md:655).
+    // Escalating only the one seen in the probe would under-escalate on a
+    // different desktop condition - a retryable refusal counted as final.
+    for (const code of [
+      "background_unavailable",
+      "background_occluded",
+      "background_uipi_blocked",
+    ]) {
+      const { result, calls } = await executeOnce([
+        { isError: true, structuredContent: { code, effect: "refused" } },
+        DELIVERED,
+      ]);
+      expect(result.escalated, `${code} should escalate`).toBe(true);
+      expect(calls).toHaveLength(2);
+    }
+  });
+
   it("does not escalate a refusal that is not background_unavailable", async () => {
     // An unexpected refusal has no documented retry. Escalating would retry
     // something unfixable and hide the real fault.

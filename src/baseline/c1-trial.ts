@@ -69,7 +69,7 @@ export async function runC1Trial(
         // declares escalation as a run condition: a row produced with foreground
         // delivery is not the same measurement as one produced in background
         // (TIF-167).
-        transcript.deliveries.push({
+        transcript.deliveries?.push({
           step: steps,
           mode: resultOfAction.deliveryMode,
           escalated: resultOfAction.escalated,
