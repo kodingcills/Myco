@@ -72,9 +72,13 @@ fi
 "$VM_SCRIPTS/vm.sh" restore "$SNAPSHOT" >/dev/null
 "$VM_SCRIPTS/vm.sh" start >/dev/null
 
-# 3. Wait for SSH, then prove the state we are in is not a half-resumed one.
-"$VM_SCRIPTS/wait-ssh.sh" "$SSH_WAIT_TIMEOUT" >/dev/null || die "guest did not answer SSH within ${SSH_WAIT_TIMEOUT}s"
-
+# 3. Wait for a real boot, then prove the state we are in is not a half-resumed
+#    one. SSH alone is not enough: a stalled guest accepts TCP on 2222 (QEMU's
+#    user-mode netdev listens with the guest stopped) and never answers, so an
+#    SSH-only wait spends its whole budget and then fails - which is exactly what
+#    consumed the 2026-11-23 09:2x slot (TIF-164). wait-guest-ready.sh also
+#    requires guest CPU time to ADVANCE, which a non-booting guest never does.
+"$VM_SCRIPTS/wait-guest-ready.sh" "$SSH_WAIT_TIMEOUT" >/dev/null || die "guest did not reach a real boot within ${SSH_WAIT_TIMEOUT}s (see TIF-164)"
 # 4. The guest clock is the snapshot's clock; resync so trial timestamps are sane.
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 if ! "$VM_SCRIPTS/vssh" "Set-Date -Date ([datetime]::Parse('$NOW').ToUniversalTime().ToLocalTime()) | Out-Null" >/dev/null 2>&1; then
