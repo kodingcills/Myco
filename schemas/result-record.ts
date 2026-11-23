@@ -106,6 +106,52 @@ const resultRecordDefs = {
 export const resultRecordSchema: JsonSchema = {
   $defs: {
     ...resultRecordDefs,
+    /**
+     * MVD-001 acceptance 5: per-run economics. The number cannot travel alone: a
+     * mock wall-clock relabelled as live would read as run latency it never had,
+     * so `provenance` is *fixed* per branch and `wallClockBasis` must agree with it
+     * (`anyOf` over the two permitted pairings — the subset has no
+     * `if/then`, and a pairing is exactly what the pairing check expresses).
+     * `modelCost` is an object rather than a number so "not measured" cannot be
+     * read as 0.
+     */
+    Economics: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["provenance", "wallClockMs", "wallClockBasis", "modelCost"],
+          properties: {
+            provenance: { type: "string", const: "mock" },
+            wallClockMs: { type: "integer", minimum: 0 },
+            wallClockBasis: { type: "string", const: "mock-contract-double" },
+            modelCost: { $ref: "#/$defs/ModelCost" },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["provenance", "wallClockMs", "wallClockBasis", "modelCost"],
+          properties: {
+            provenance: { type: "string", const: "live" },
+            wallClockMs: { type: "integer", minimum: 0 },
+            wallClockBasis: { type: "string", const: "live-guest" },
+            modelCost: { $ref: "#/$defs/ModelCost" },
+          },
+        },
+      ],
+    },
+    /** A cost is never a bare number: "not-measured" must carry its reason. */
+    ModelCost: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "reason"],
+      properties: {
+        status: { type: "string", enum: ["not-measured", "measured"] },
+        reason: { type: "string" },
+        usd: { type: "number", minimum: 0 },
+      },
+    },
     // M1 run record: verdict required. recordKind optional; absent or "run".
     RunRecord: {
       type: "object",
@@ -124,6 +170,7 @@ export const resultRecordSchema: JsonSchema = {
         unresolvedState: { type: "string" },
         simulated: { type: "boolean" },
         dryRun: { type: "boolean" },
+        economics: { $ref: "#/$defs/Economics" },
       },
     },
     // ADR-0012 session record: runtime-layer summary, no verdict. `verdict` is
@@ -144,6 +191,7 @@ export const resultRecordSchema: JsonSchema = {
         guardFailure: { $ref: "#/$defs/GuardFailure" },
         checks: { type: "array", items: { $ref: "#/$defs/CheckVerdict" } },
         unresolvedState: { type: "string" },
+        economics: { $ref: "#/$defs/Economics" },
       },
     },
   },

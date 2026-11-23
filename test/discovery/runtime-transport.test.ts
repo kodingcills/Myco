@@ -4,13 +4,15 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RuntimeTransport } from "../../src/discovery/runtime-transport.ts";
 
-function transport(): RuntimeTransport {
+function transport(failing = ""): RuntimeTransport {
+  process.env.FAKE_MCP_FAIL = failing;
   return new RuntimeTransport({
     binary: process.execPath,
     args: [join(import.meta.dirname, "fake-mcp-server.mjs")],
     cwd: join(import.meta.dirname, "..", ".."),
     readRoot: "/home/myco",
     introspectionPath: "state.json",
+    appPath: "app.py",
     sessionId: "s0-test",
     timeoutMs: 10_000,
   });
@@ -25,6 +27,17 @@ describe("runtime MCP transport", () => {
     await t.initialize();
     const session = await t.create();
     expect(session.id).toBe("s0-test");
+    const evidence = await t.evidence(session);
+    expect(evidence.runtimeReachable).toBe(true);
+    expect(evidence.guestReady).toBe(true);
+    expect(evidence.appPresent).toBe(true);
+    expect(evidence.storeReadable).toBe(true);
+    // The oracle is not the transport's to claim, and a read of a path that does
+    // not exist must not pass as "guest clean".
+    expect(evidence.oraclePresent).toBe(false);
+    // A failed read is never evidence of absence: the transport cannot tell "no
+    // stray process" from "no grant", so cleanliness stays unproven.
+    expect(evidence.guestClean).toBe(false);
     const observation = await t.observe();
     expect(observation.stateVersion).toBe(7);
     expect(observation.listRows).toEqual(["a", "b"]);
@@ -42,5 +55,22 @@ describe("runtime MCP transport", () => {
     expect(calls).toContain('"kind":"clickAt"');
     expect(calls).toContain("reset");
     expect(calls).toContain("destroy");
+  });
+
+  it("reports every check unproven when the guest cannot be observed", async () => {
+    process.env.FAKE_MCP_LOG = "";
+    const t = transport("observe");
+    await t.initialize();
+    const session = await t.create();
+    const evidence = await t.evidence(session);
+    expect(evidence).toEqual({
+      runtimeReachable: false,
+      guestReady: false,
+      appPresent: false,
+      storeReadable: false,
+      oraclePresent: false,
+      guestClean: false,
+    });
+    await t.destroy();
   });
 });
