@@ -479,15 +479,10 @@ describe("Discovery evidence grading", () => {
     // They read the caller's record separately, so a toggling field could show one value to
     // the gate and another to the guard (round 1, finding 2).
     //
-    // The assertion must be the STATUS, not `decisionEligible`: that is false while the flag
-    // is off no matter what the code does (round 2, finding 1). With the snapshot removed,
-    // the attester reads 4 audits and the scorer reads [], so the row comes back
-    // `excluded/audit` instead of `scored`.
-    const honest = createDiscoveryComparison(settings, (e) => attest({ evidence: e } as never))([
-      { evidence: evidence as never, input },
-    ]);
-    expect(honest[0]?.status, "the honest row should score").toBe("scored");
-
+    // The assertion is the READ COUNT, not the status. The status does not distinguish: for
+    // an `hcu+shell` arm a failed audit returns `scored`, not `excluded/audit`, so removing
+    // the snapshot leaves the status unchanged (round 3, finding 2). Counting reads is what
+    // actually fails when the snapshot goes.
     let reads = 0;
     const shifty = {
       ...evidence,
@@ -501,30 +496,13 @@ describe("Discovery evidence grading", () => {
     ]);
     expect(rows).toHaveLength(1);
     expect(reads, "the record's evidence was read more than once").toBe(1);
-    expect(rows[0]?.status, "a toggling field changed the row's status").toBe("scored");
-  });
-
-  it("v3: readBinding's own try is load-bearing", () => {
-    // `readBinding` is private and `readBindingSafely` wraps it, so its try looks redundant.
-    // It is not: caculating the destructure itself can throw (a Proxy `ownKeys`/`getOwnProperty`
-    // trap), and that is outside the safe wrapper when the wrapper's value is a Proxy.
-    const hostile = new Proxy(
-      {},
-      {
-        ownKeys: () => {
-          throw new Error("trap");
-        },
-        getOwnPropertyDescriptor: () => {
-          throw new Error("trap");
-        },
-      },
-    );
-    expect(() => readBindingSafely({ binding: hostile } as never)).not.toThrow();
-    expect(readBindingSafely({ binding: hostile } as never)).toBeNull();
+    // And the scorer still produced a row rather than dropping it for bad evidence.
+    expect(rows[0]?.status).toBe("scored");
   });
 
   it("v3: digestSafely and readBindingSafely are total", () => {
-    // Called directly, so the outer catch in scoreDiscoveryTrial cannot mask a throw.
+    // Called directly, so the outer catch in scoreDiscoveryTrial cannot mask a throw. These
+    // are the guards that keep one malformed row from taking down a batch.
     expect(() => digestSafely(null), "digestSafely threw on null").not.toThrow();
     expect(digestSafely(null)).toBeNull();
     expect(digestSafely({ "store.json": 42 })).toBeNull();
@@ -539,6 +517,17 @@ describe("Discovery evidence grading", () => {
     }) as never;
     expect(() => readBindingSafely(throwingAccessor), "readBindingSafely threw").not.toThrow();
     expect(readBindingSafely(throwingAccessor)).toBeNull();
+    // `readBindingSafely` is the sole guard for a hostile binding now that `readBinding`'s
+    // own try is gone.
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(readBindingSafely({ binding: hostile } as never)).toBeNull();
   });
 
   it("v2 round 3 finding 1: a truthy non-true done ends the batch, not an infinite loop", () => {

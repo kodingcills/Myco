@@ -174,8 +174,14 @@ export interface AttestedBundle {
  * building the map in a different order. This is the value the attestation is bound to.
  */
 export function bundleDigest(files: Readonly<Record<string, Uint8Array>>): string {
+  // Length-prefix each entry. Joining `path:hash` with "\n" was not injective: a path may
+  // contain "\n", so `{p, q}` and a single path `"p:<h(p)>\nq"` hashed the same, and the
+  // digest did not bind "this bundle" as its comment claimed (round 3, finding 1).
   const entries = Object.entries(files)
-    .map(([path, bytes]) => `${path}:${createHash("sha256").update(bytes).digest("hex")}`)
+    .map(([path, bytes]) => {
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      return `${path.length}:${path}${digest}`;
+    })
     .sort();
   return createHash("sha256").update(entries.join("\n")).digest("hex");
 }
