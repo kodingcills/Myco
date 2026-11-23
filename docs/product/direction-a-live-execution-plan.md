@@ -34,7 +34,7 @@ No live execution may commence until all four gates are signed off:
 | :--- | :--- | :--- | :--- |
 | **G1: RT-011** | First end-to-end path verified (`create → observe → act → evidence → reset → destroy`) | Runtime | **PASS** (14:33Z RT-020 live proof verified) |
 | **G2: RT-015** | Host-side guest file read operational (`REQ-08`) | Runtime | **PASS** (RT-020 host file read verified) |
-| **G3: RT-016** | Process control & signal dispatch operational (`REQ-09`) | Runtime | **PASS** (RT-020 process lifecycle verified) |
+| **G3: RT-016** | Process control & signal dispatch operational (`REQ-09`) | Runtime | **NOT PASSED**: implemented in PR #226, live kill/relaunch acceptance pending a VM slot (RT-020 did not exercise kill/relaunch; corrected 2026-11-22) |
 | **G4: Coordinator GO** | Dedicated host execution window granted | M1 Coordinator | Queued after C1, M1-016, and Foundry |
 
 > [!NOTE]
