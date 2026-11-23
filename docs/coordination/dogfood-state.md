@@ -87,7 +87,7 @@ search, workflow compilation, multi-OS support beyond Linux ARM64, product UI.
   `--self-test` without Tk/display, retain ADR-0016 atomic write
   (`tempfile.NamedTemporaryFile` + replace), trace `entry_text` with `StringVar`, and
   add `test_myco_todo.py` skipping cleanly without display.
-  `myco_todo.py` SHA-256: `cb1086fc208804b487764cab06cbeae61c3884d39b95f57f608326b571ce53b1`.
+  `myco_todo.py` SHA-256: `7f10b1e7f2c2b829b5dfb2974d4163867b0b3c92d6a7f7a09f4273ed07864f56`.
 
 - **2026-11-22 — RT-020 live proof passes end-to-end (`08b3863`).** Runtime Owner
   executed live proof script (`rt020-proof.py --go --verify-myco-todo`, 11/11 steps
