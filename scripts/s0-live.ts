@@ -49,8 +49,17 @@ const GUEST_APP = "/home/myco/myco-todo";
 const STATE = ".myco-todo-state.json";
 const STORE = ".myco-todo.json";
 
-function sh(command: string, args: string[]): string {
-  return execFileSync(command, args, { encoding: "utf8" }).trim();
+/** `strict: false` turns a non-zero exit into empty output (pgrep found nothing). */
+function sh(command: string, args: string[], strict = true): string {
+  try {
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (error) {
+    if (strict) throw error;
+    return String((error as { stdout?: string }).stdout ?? "").trim();
+  }
 }
 
 function deploy(): void {
@@ -92,7 +101,7 @@ function savePoint(): { x: number; y: number } {
 }
 
 async function live(): Promise<number> {
-  if (sh("pgrep", ["-f", "qemu-system-aarch64"]).length > 0) {
+  if (sh("pgrep", ["-f", "qemu-system-aarch64"], false).length > 0) {
     process.stderr.write("refusing: a qemu guest is already running\n");
     return 2;
   }

@@ -17,6 +17,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_DIR="${S0_RUN_DIR:-/tmp/myco-s0}"
 PID_FILE="$RUN_DIR/s0.pid"
+CHILD_FILE="$RUN_DIR/s0.child"
 LOG="$RUN_DIR/s0.log"
 PROBE="$RUN_DIR/probe.txt"
 mkdir -p "$RUN_DIR"
@@ -51,8 +52,12 @@ run_sequence() {
   (
     cd "$ROOT"
     exec pnpm exec tsx scripts/s0-live.ts --live
-  ) >>"$LOG" 2>&1
-  say "child exited with $?"
+  ) >>"$LOG" 2>&1 &
+  CHILD=$!
+  echo "$CHILD" >"$CHILD_FILE"
+  wait "$CHILD"
+  say "child $CHILD exited with $?"
+  rm -f "$CHILD_FILE"
 }
 
 watchdog() {
@@ -70,9 +75,23 @@ case "${1:-}" in
   --status)
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
       echo "running: pid $(cat "$PID_FILE")"; else echo "not running"; fi
-    echo "log:  $LOG"; tail -n 5 "$LOG" 2>/dev/null || true ;;
+    echo "log:  $LOG"; pgrep -fl "scripts/s0-live.ts --live|target/debug/myco-rt-mcp" || echo "children: none"; tail -n 5 "$LOG" 2>/dev/null || true ;;
   --stop)
-    if [[ -f "$PID_FILE" ]]; then kill "$(cat "$PID_FILE")" 2>/dev/null || true; rm -f "$PID_FILE"; echo stopped; else echo "not running"; fi ;;
+    # Stop the whole tree: the MCP server is a grandchild, and killing only the
+    # watchdog leaves it holding the guest tools (seen 2026-11-23).
+    STALE=0
+    for FILE in "$PID_FILE" "$CHILD_FILE"; do
+      if [[ -f "$FILE" ]]; then
+        PID="$(cat "$FILE")"
+        pkill -P "$PID" 2>/dev/null || true
+        kill "$PID" 2>/dev/null || true
+        STALE=1
+      fi
+      rm -f "$FILE"
+    done
+    pkill -f "scripts/s0-live.ts --live" 2>/dev/null || true
+    pkill -f "target/debug/myco-rt-mcp" 2>/dev/null || true
+    [[ "$STALE" == 1 ]] && echo stopped || echo "not running" ;;
   --run)
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
       echo "already running: pid $(cat "$PID_FILE")"; exit 1
