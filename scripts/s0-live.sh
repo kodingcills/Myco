@@ -24,11 +24,12 @@ LOG="$RUN_DIR/s0.log"
 PROBE="$RUN_DIR/probe.txt"
 RT_MCP="$ROOT/runtime/target/debug/myco-rt-mcp"
 mkdir -p "$RUN_DIR"
-# Every message goes to the log, including the probe and the gate verdict, so a
-# run nobody is watching still leaves a complete record. `--status` and `--stop`
-# keep the terminal, because a person asking "is it running?" wants an answer.
+# Everything a detached run would print goes to the log, including the probe and
+# the gate verdict, so a run nobody is watching leaves a complete record. The
+# commands a person asks directly (`--status`, `--stop`, `--probe`) answer on the
+# terminal, because that is where they are looking.
 case "${1:-}" in
-  --status | --stop) ;;
+  --probe | --status | --stop) ;;
   *) exec >>"$LOG" 2>&1 ;;
 esac
 

@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +30,18 @@ function run(script: string, runDir: string, args: string[], env: NodeJS.Process
     encoding: "utf8",
     env: { ...process.env, S0_RUN_DIR: runDir, ...env },
   });
+}
+
+/** Start a process detached from this test's stdio and return its pid. */
+function spawnDetached(argv: string): number {
+  const out = spawnSync(
+    "bash",
+    ["-c", `nohup bash -c "exec -a '${argv}' sleep 60" >/dev/null 2>&1 & echo $!`],
+    {
+      encoding: "utf8",
+    },
+  );
+  return Number(out.stdout.trim());
 }
 
 /** The launcher redirects its whole output to the log, so assertions read the log. */
@@ -83,15 +96,39 @@ describe("s0-live.sh launcher", () => {
   });
 
   it("keeps --status and --stop on the terminal, and everything else in the log", () => {
+    const { dir, script, runDir } = harness();
+    // A child of THIS worktree, and a look-alike under another root. --status must
+    // list the first and never the second: an unanchored pattern listed both.
+    // /tmp is a symlink on macOS: the launcher canonicalises $ROOT, so the argv
+    // must use the same spelling or the pattern is correct and still misses.
+    const mine = spawnDetached(`node ${realpathSync(dir)}/scripts/s0-live.ts --live`);
+    const foreign = spawnDetached(`node ${realpathSync(dir)}/foreign/scripts/s0-live.ts --live`);
+    try {
+      const status = run(script, runDir, ["--status"]);
+      expect(status.stdout).toContain("not running");
+      expect(status.stdout).toContain(String(mine));
+      expect(status.stdout).not.toContain(String(foreign));
+    } finally {
+      for (const pid of [mine, foreign]) spawnSync("kill", ["-9", String(pid)]);
+    }
+  });
+
+  it("keeps a human's answer on the terminal", () => {
     const { script, runDir } = harness();
-    // A person asking "is it running?" must get an answer on stdout, not a file.
     const status = run(script, runDir, ["--status"]);
     expect(status.stdout).toContain("not running");
     const stop = run(script, runDir, ["--stop"]);
     expect(stop.stdout).toContain("not running");
     // A run nobody is watching must leave its gate verdict in the log.
-    run(script, runDir, ["--watchdog"]);
+    const watched = run(script, runDir, ["--watchdog"]);
+    expect(watched.stdout).not.toContain("REFUSED");
     expect(logOf(runDir)).toContain("REFUSED: no Coordinator GO");
+  });
+
+  it("still shows --probe to the person who asked for it", () => {
+    const { script, runDir } = harness();
+    const probed = run(script, runDir, ["--probe"]);
+    expect(probed.stdout).toContain("S0 pre-run gate");
   });
 
   it("keeps a failed child's exit code in the log and leaves no pid files", () => {
