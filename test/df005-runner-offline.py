@@ -516,6 +516,27 @@ def main() -> int:
                            for c in res["verdict"]["checks"]), 10)
     expect(score == recomputed, f"published {score} == recomputed {recomputed}")
 
+    print("23. create names the introspection path (TIF-120 route 1)")
+    # The runtime sets MYCO_TODO_STATE_FILE to this path for apps it launches,
+    # so the app publishes exactly where observe reads. Without it the channel
+    # is off and the global route has no geometry.
+    seen = {}
+    stub = Path(tempfile.mkdtemp(prefix="df005-intro-")) / "stub.py"
+    stub.write_text(STUB_TEMPLATE.replace(
+        'elif n == "create":',
+        'elif n == "create":\n            open(os.environ["STUB_CREATE_LOG"], "a").write(json.dumps(a) + "\\n")',
+    ))
+    log = Path(tempfile.mkdtemp(prefix="df005-intro-log-")) / "create.jsonl"
+    h = Harness(store_items=["buy milk", "call mom", "write report"], a11y=False, geometry=True)
+    h.stub = stub
+    h.env["STUB_CREATE_LOG"] = str(log)
+    code, d = h.run(scenario="DF-S01")
+    args = json.loads(log.read_text().splitlines()[0])
+    expect(args.get("introspection_file") == "/tmp/myco-todo-state.json",
+           f"create passes introspection_file: {args.get('introspection_file')!r}")
+    expect(args.get("introspection_file", "").startswith("/"),
+           "the path is absolute, as the runtime requires")
+
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0
 
