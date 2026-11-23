@@ -1,0 +1,129 @@
+{
+  "runId": "3754f5fc-06b8-45ee-9044-d8c4af66f844",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-focus-change-15",
+    "rowKey": "EMP-0027",
+    "column": "name",
+    "newValue": "REVISED-3892"
+  },
+  "startedAt": "2026-11-22T04:24:29.824Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-focus-change-15\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-76444-1795321471113-192948012\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-76444-1795321471113-192948012\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B28"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-focus-change-15\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-76444-1795321471113-192948012\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B28 located at record EMP-0027, column name, holds fixture value \"Gil Kaur\"",
+          "passed": true,
+          "observed": "value=\"Gil Kaur\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B28"
+        },
+        "value": "REVISED-3892"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-76444-1795321471113-192948012\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B28 located at record EMP-0027, column name, holds fixture value \"Gil Kaur\"",
+          "passed": true,
+          "observed": "value=\"Gil Kaur\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B28 holds \"REVISED-3892\"",
+          "passed": false,
+          "observed": "value=\"Gil Kaur\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    }
+  ],
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "cell B28 holds \"REVISED-3892\"",
+    "observed": "value=\"Gil Kaur\"",
+    "reason": "postcondition \"cell B28 holds \"REVISED-3892\"\" not met after step 2"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "cell B28 expected \"REVISED-3892\" but live document has \"Gil Kaur\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "cell B28 expected \"REVISED-3892\" but live document has \"Gil Kaur\""
+    ]
+  }
+}
