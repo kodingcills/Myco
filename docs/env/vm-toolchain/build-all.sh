@@ -3,7 +3,14 @@
 set -euo pipefail
 D=$(cd "$(dirname "$0")" && pwd)
 # VM_ROOT / ISO_ROOT are overridable so a fresh operator can use any layout.
-VM=${VM_ROOT:-$HOME/VMs/myco-win11}; ISO=${ISO_ROOT:-$HOME/VMs/iso}
+# They MUST be exported: the child scripts (build-seed-iso, create-vm, wait-ssh,
+# vssh) resolve their own defaults from these, so without the export a custom
+# root would put the key and credentials.txt in one place while the children
+# used ~/VMs/myco-win11 — a split-brain layout that silently builds the wrong VM.
+export VM_ROOT=${VM_ROOT:-$HOME/VMs/myco-win11}
+export ISO_ROOT=${ISO_ROOT:-$HOME/VMs/iso}
+export VM_TOOLS=${VM_TOOLS:-$HOME/VMs/tools}
+VM=$VM_ROOT; ISO=$ISO_ROOT
 ls $ISO/Win11_*ARM64*.iso >/dev/null 2>&1 || "$D/build-win-iso.sh"
 # offline installers (checksums in payload/SOURCES.txt; Git + LibreOffice verified against publisher SHA-256)
 [ -f $ISO/dl/utm-guest-tools-latest.iso ] || { mkdir -p $ISO/dl; curl -sL -o $ISO/dl/utm-guest-tools-latest.iso https://getutm.app/downloads/utm-guest-tools-latest.iso; }
@@ -16,7 +23,7 @@ ls $ISO/Win11_*ARM64*.iso >/dev/null 2>&1 || "$D/build-win-iso.sh"
 "$D/wait-ssh.sh" 3600                         # unattended Setup + OOBE + first-logon script
 # new VMs: drive 1 = NVMe system disk, 2 = installer ISO, 3 = seed ISO (has the offline payload and the password).
 # The seed stays attached for provisioning and is ejected before snapshotting.
-scp -q -F $VM/ssh_config -o LogLevel=ERROR "$D"/guest/* myco-win11:C:/myco/bin/
+scp -q -F "$VM/ssh_config" -o LogLevel=ERROR "$D"/guest/* myco-win11:C:/myco/bin/
 "$D/vssh" 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\bin\provision.ps1'
 "$D/vssh" 'C:\myco\bin\smoke.ps1'
 "$D/shutdown.sh"; "$D/set-cd.sh" 2 $ISO/empty.iso; "$D/set-cd.sh" 3 $ISO/empty.iso
