@@ -252,6 +252,8 @@ describe("CLI contract for a non-interactive agent (acceptance 4)", () => {
     const clean = cli(["--task", "df-s01", "--out", out, "--validate-only"]);
     expect(clean.status).toBe(0);
     expect(clean.stdout).toContain("ARTIFACTS: VALID");
+    // Several task dirs can share one --out; the check must say which it read.
+    expect(clean.stdout).toContain("task: df-s01");
 
     const path = join(out, "df-s01", "result.json");
     const record = JSON.parse(readFileSync(path, "utf8")) as {

@@ -124,17 +124,27 @@ pnpm myco-run --task df-s01 --out /tmp/myco-out --validate-only
 
 ```
 ARTIFACTS: VALID
+  task: df-s01
   dir: /tmp/myco-out/df-s01
   trace.jsonl lines: 27
 ```
 
-Now corrupt it and watch the check refuse. Edit `/tmp/myco-out/df-s01/result.json`
+Now corrupt it and watch the check refuse. (§4 uses its own directory so that a
+corrupt df-s01 cannot be confused with the df-s02 run from §3.) Re-run §2's happy
+path once with `--out /tmp/myco-out-corrupt`, then edit
+`/tmp/myco-out-corrupt/df-s01/result.json`
 and set `verdict.status` to `"probably-fine"` (any value other than `verified`,
 `refuted` or `uncertain`), then re-run the same command:
 
+```sh
+pnpm myco-run --task df-s01 --out /tmp/myco-out-corrupt --validate-only
+```
+
 ```
 ARTIFACTS: INVALID
-  ...
+  task: df-s01
+  dir: /tmp/myco-out-corrupt/df-s01
+  trace.jsonl lines: 27
   result.json $: value matches none of the anyOf branches
   result.json $.verdict.status: "probably-fine" is not a verdict a reader can act on
 ```
@@ -150,14 +160,12 @@ The viewer reads the same two files: `pnpm --filter viewer build`, then open
 
 ```sh
 pnpm typecheck
-pnpm exec vitest run --changed HEAD
+pnpm exec vitest run
 ```
 
-Measured: **~4 s** and **~12 s**. `--changed HEAD` runs every test file affected
-by an uncommitted change; on a clean clone with no edits it selects broadly, so
-treat it as the full suite. (These two figures were measured in a worktree of this
-tree rather than the clone, because the clone has no uncommitted change for
-`--changed` to select from; the 870-test full run is the same set.)
+Measured: **~4 s** and **~12 s** (870 tests). Use the full run: `--changed HEAD`
+finds nothing on a clean tree and exits 0 having run zero tests, which reads as a
+pass. It is only useful mid-edit.
 
 ## 6. Exit codes
 
@@ -207,14 +215,18 @@ intended state: a preflight that guesses is worse than one that refuses. So
 `--transport live` currently exits **2** at the preflight and writes no run
 directory.
 
-You can see the refusal on the development host without any of this, because a
-guest happens to be running:
+Which refusal you meet depends on the machine, so both are listed. This is the one
+this host printed:
 
 ```sh
 pnpm myco-run --transport live --task df-s01 --out /tmp/myco-out --gate-passed
 # myco-run: live transport refused (guest already running)
 # refusing: a qemu guest is already running, so this window is not ours
 ```
+
+On a machine that has not built the runtime, the same command refuses earlier with
+`myco-run: live transport refused (runtime binary absent: runtime/target/debug/myco-rt-mcp)`.
+Either way the exit code is 2 and no run directory is written.
 
 and without the GO:
 
@@ -238,9 +250,13 @@ non-interactive agent needs; `test/discovery/myco-run.test.ts` pins it.
 **Codex** (non-interactive exec, no TTY):
 
 ```sh
-pnpm myco-run --transport mock --task df-s01 --out /tmp/myco-out --json \
+pnpm --reporter=silent myco-run --transport mock --task df-s01 --out /tmp/myco-out --json \
   | tee /tmp/myco-out/df-s01.json
 ```
+
+`--reporter=silent` matters: without it pnpm prints its `> @myco/core@0.1.0
+myco-run` banner on stdout and the piped file is not JSON. The CLI itself prints
+exactly one object; the wrapper is what would break it.
 
 **Claude Code** (non-interactive print mode, JSON output):
 
@@ -266,7 +282,7 @@ clock (2026-11-23, macOS arm64):
 | refutation | `pnpm myco-run … --task df-s02` | 0.3 s |
 | re-check | `pnpm myco-run … --validate-only` | 0.3 s |
 | typecheck | `pnpm typecheck` | ~1 s |
-| tests | `pnpm exec vitest run --changed HEAD` | ~12 s |
+| tests | `pnpm exec vitest run` | ~12 s |
 | **total** | | **~20 s** |
 
 Things I had to guess, and what they cost:

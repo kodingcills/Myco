@@ -19,7 +19,7 @@
  * `scripts/s0-live.sh` reads the same two gates from the environment and its
  * launcher sets them.
  */
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -211,8 +211,18 @@ async function main(argv: readonly string[]): Promise<number> {
   // Re-check what a previous run wrote, without running anything: the exit code a
   // caller gets here is the same one the run itself would have returned.
   if (args.validateOnly) {
-    const artifacts = validateRunDir(join(outDir, args.task));
-    process.stdout.write(renderArtifactCheck(artifacts));
+    const runDir = join(outDir, args.task);
+    const artifacts = validateRunDir(runDir);
+    // Name the task and say why a directory is missing: with several task dirs
+    // under one --out, a silent "not readable" reads like the wrong dir was checked.
+    const reason = existsSync(runDir)
+      ? ""
+      : `  note: ${runDir} does not exist; --out must be the directory an earlier run\n` +
+        `        wrote ${args.task} into, not the task's own directory.\n`;
+    process.stdout.write(
+      renderArtifactCheck(artifacts).replace(/(\n)/, `$1  task: ${args.task}\n`),
+    );
+    if (reason) process.stdout.write(reason);
     return artifacts.ok ? 0 : EXIT_INVALID_ARTIFACTS;
   }
 
