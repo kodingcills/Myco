@@ -20,10 +20,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 RUN_DIR="${S0_RUN_DIR:-/tmp/myco-s0}"
 PID_FILE="$RUN_DIR/s0.pid"
 CHILD_FILE="$RUN_DIR/s0.child"
+LOCK_DIR="$RUN_DIR/s0.lock"
 LOG="$RUN_DIR/s0.log"
 PROBE="$RUN_DIR/probe.txt"
 RT_MCP="$ROOT/runtime/target/debug/myco-rt-mcp"
 mkdir -p "$RUN_DIR"
+# Everything a detached run would print goes to the log, including the probe and the
+# gate verdict, so a run nobody is watching leaves a complete record. The commands a
+# person asks directly answer on the terminal, because that is where they are looking.
+case "${1:-}" in
+  --probe | --status | --stop) ;;
+  *) exec >>"$LOG" 2>&1 ;;
+esac
 
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
@@ -88,7 +96,9 @@ run_sequence() {
   say "starting S0 sequence (detached child)"
   (
     cd "$ROOT"
-    exec pnpm exec tsx scripts/s0-live.ts --live
+    # Absolute path: the scoped fallback below matches on $ROOT, and a relative argv
+    # never contains it, so --stop could not reach its own child (2026-11-23).
+    exec pnpm exec tsx "$ROOT/scripts/s0-live.ts" --live
   ) >>"$LOG" 2>&1 &
   CHILD=$!
   echo "$CHILD" >"$CHILD_FILE"
@@ -98,6 +108,7 @@ run_sequence() {
   wait "$CHILD" || rc=$?
   say "child $CHILD exited with $rc"
   rm -f "$CHILD_FILE"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
   return "$rc"
 }
 
@@ -105,11 +116,12 @@ watchdog() {
   # The watchdog holds the pid file and reports the child's exit, so a run that
   # dies while no agent is watching still leaves a record.
   probe >>"$LOG" 2>&1
-  gate || { say "gate refused; not starting"; rm -f "$PID_FILE"; exit 2; }
+  gate || { say "gate refused; not starting"; rm -f "$PID_FILE"; rmdir "$LOCK_DIR" 2>/dev/null || true; exit 2; }
   local rc=0
   run_sequence || rc=$?
   say "watchdog done (rc $rc)"
   rm -f "$PID_FILE"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
   exit "$rc"
 }
 
@@ -118,7 +130,10 @@ case "${1:-}" in
   --status)
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
       echo "running: pid $(cat "$PID_FILE")"; else echo "not running"; fi
-    echo "log:  $LOG"; pgrep -fl "scripts/s0-live.ts --live|target/debug/myco-rt-mcp" || echo "children: none"; tail -n 5 "$LOG" 2>/dev/null || true ;;
+    echo "log:  $LOG"
+    # Anchored on $ROOT: an unanchored pattern reported other worktrees' children.
+    pgrep -fl -- "$ROOT/(scripts/s0-live\.ts|runtime/target/debug/myco-rt-mcp)" || echo "children: none"
+    tail -n 5 "$LOG" 2>/dev/null || true ;;
   --stop)
     # Stop the whole tree: the MCP server is a grandchild, and killing only the
     # watchdog leaves it holding the guest tools (seen 2026-11-23).
@@ -132,10 +147,17 @@ case "${1:-}" in
       fi
       rm -f "$FILE"
     done
-    # Scoped to this worktree: an unscoped pkill aborts another workstream's run
-    # on a host with a dozen worktrees.
-    pkill -f "$ROOT/.*scripts/s0-live.ts --live" 2>/dev/null || true
-    pkill -f "$ROOT/runtime/target/debug/myco-rt-mcp" 2>/dev/null || true
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    # Scoped to this worktree: an unscoped pkill aborts another workstream's run on a
+    # host with a dozen worktrees. Walk the pids from pgrep rather than relying on
+    # pkill's option parsing, and never signal the invoking shell.
+    STRAY="$(pgrep -f -- "$ROOT/.*scripts/s0-live\.ts --live" 2>/dev/null || true)"
+    STRAY="$STRAY $(pgrep -f -- "$ROOT/runtime/target/debug/myco-rt-mcp" 2>/dev/null || true)"
+    for PID in $STRAY; do
+      [[ "$PID" == "$" ]] && continue
+      pkill -P "$PID" 2>/dev/null || true
+      kill "$PID" 2>/dev/null || true
+    done
     [[ "$STALE" == 1 ]] && echo stopped || echo "not running" ;;
   --run)
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -143,8 +165,18 @@ case "${1:-}" in
     fi
     say "launching detached; log $LOG"
     nohup "$0" --watchdog >>"$LOG" 2>&1 &
-    echo $! >"$PID_FILE"
-    say "pid $(cat "$PID_FILE")"
+    CHILD=$!
+    # Claiming the run must be ONE atomic step. A noclobber redirect inside a subshell
+    # is not: bash parses the redirect before `set -C` runs in the same subshell, so it
+    # is a plain truncating write and concurrent --run calls both started (measured
+    # 2026-11-23: 28 double-starts in 30 rounds). mkdir is atomic everywhere.
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+      kill "$CHILD" 2>/dev/null || true
+      say "another --run holds the run lock; refusing to start a second sequence"
+      exit 1
+    fi
+    echo "$CHILD" >"$PID_FILE"
+    say "pid $CHILD"
     echo "watch with: $0 --status" ;;
   --watchdog) watchdog ;;
   *)
