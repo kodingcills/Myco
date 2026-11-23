@@ -91,3 +91,26 @@ describe("false-success audit", () => {
     expect(a.bounded).toBe(false);
   });
 });
+
+describe("the unbounded explanation names the real cause", () => {
+  it("says 'no success verdict' only when that is why nothing was audited", () => {
+    const allRefuted = auditFalseSuccess({ "0": { row: row() } });
+    expect(allRefuted.verdict).toContain("no row reached a success verdict");
+  });
+
+  it("does not claim that when a verified row exists but its audit was unavailable", () => {
+    // `audit()` throwing leaves audited:false with verdict "verified"
+    // (c1-trial.ts:93). The count is still right - falseSuccess is null, not
+    // true - but the first version of this string asserted "no row reached a
+    // success verdict", which is simply false for this ledger. A wrong
+    // explanation is how a correct number gets quoted for the wrong reason.
+    const auditThrew = auditFalseSuccess({
+      "0": { row: row({ verdict: "verified", audited: false, independentValuePresent: null }) },
+    });
+    expect(auditThrew.verified).toBe(1);
+    expect(auditThrew.audited).toBe(0);
+    expect(auditThrew.bounded).toBe(false);
+    expect(auditThrew.verdict).not.toContain("no row reached a success verdict");
+    expect(auditThrew.verdict).toContain("the audit was unavailable");
+  });
+});

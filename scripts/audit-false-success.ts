@@ -52,9 +52,19 @@ export function auditFalseSuccess(
   const falseSuccesses = rows.filter((r) => r.falseSuccess === true).length;
   const unaudited = rows.length - audited;
   const bounded = audited > 0;
+  // The unbounded explanation must name the ACTUAL reason nothing was audited.
+  // The first version asserted "no row reached a success verdict" unconditionally,
+  // which is wrong for a ledger that has verified rows whose audit threw
+  // (`independent-audit-unavailable`, c1-trial.ts:93). The count stays correct in
+  // that case; only the sentence was, and a wrong explanation is how a correct
+  // number gets quoted for the wrong reason.
+  const whyUnaudited =
+    verified === 0
+      ? "no row reached a success verdict, so the independent audit never ran"
+      : `${verified} row(s) reached a success verdict but none was audited - the audit was unavailable for them`;
   const verdict = bounded
     ? `${falseSuccesses} false success(es) in ${audited} audited row(s) of ${rows.length}; the bound covers the audited population only`
-    : `0 false successes OBSERVED across ${rows.length} row(s), but 0 audited: no row reached a success verdict, so the independent audit never ran and NO BOUND is supported by this corpus`;
+    : `0 false successes OBSERVED across ${rows.length} row(s), but 0 audited: ${whyUnaudited}, so NO BOUND is supported by this corpus`;
   return {
     rows: rows.length,
     verified,
