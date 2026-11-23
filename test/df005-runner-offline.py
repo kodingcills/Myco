@@ -432,8 +432,20 @@ def main() -> int:
         code, d = Harness(store_items=["fix login page", "update docs"],
                           a11y=False, geometry=True).run(scenario=scenario, **kwargs)
         res = json.loads((d / f"run-{scenario.lower()}-1" / "result.json").read_text())
-        total = sum(c["partial_score"]["weight"] for c in res["verdict"]["checks"])
+        weights = {c["name"].split(":")[-1]: c["partial_score"]["weight"]
+                   for c in res["verdict"]["checks"]}
+        total = sum(weights.values())
         expect(abs(total - 1.0) < 1e-9, f"{label}: weights sum to {total}")
+        # The sum alone is not enough: swapping two weights keeps it at 1.0
+        # while changing what a partial run scores. Pin the split.
+        expected_split = (
+            {"persisted-set-matches": 0.4, "agent-report-names-missing": 0.4,
+             "create-cost-observed": 0.0, "actions-delivered": 0.2}
+            if scenario == "DF-S02" else
+            {"persisted-set-matches": 0.7, "create-cost-observed": 0.0,
+             "actions-delivered": 0.3}
+        )
+        expect(weights == expected_split, f"{label}: split is {weights}")
         if scenario == "DF-S02":
             expect(res["verdict"]["score"] == 1.0,
                    f"a fully correct DF-S02 scores 1.0 (got {res['verdict']['score']})")
@@ -451,6 +463,19 @@ def main() -> int:
            f"a response with no outcome is recorded verbatim: {observed[:3]}")
     expect(not any(o == "{}" for o in observed),
            "no postcondition collapses the envelope to {}")
+
+    print("22. scores are rounded and the two encodings agree")
+    h = Harness(store_items=["fix login page"], a11y=False, geometry=True)
+    code, d = h.run(scenario="DF-S02", agent_report=report_text(
+        "Both 'BUG: crash on save' and 'Bugfix release notes' were dropped by a "
+        "starts-with prefix filter at save time."))
+    res = json.loads((d / "run-df-s02-1" / "result.json").read_text())
+    score = res["verdict"]["score"]
+    expect(score == round(score, 10), f"score is not float noise: {score!r}")
+    # check()'s published score and RunResult.score must be the same rule.
+    recomputed = round(sum(c["partial_score"]["weight"] * (1.0 if c["passed"] is True else 0.0)
+                           for c in res["verdict"]["checks"]), 10)
+    expect(score == recomputed, f"published {score} == recomputed {recomputed}")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0
