@@ -328,6 +328,41 @@ function freezeBinding(bundle: AttestedBundle | undefined): AttestedBundle | nul
   }
 }
 
+/** Read one observation into frozen primitives, or `null` when it is not one. */
+function readObservation(value: unknown): SaveObservation | null {
+  if (value === null || typeof value !== "object") return null;
+  try {
+    const { path, sha256, bytes, observedAt, afterLastSave } = value as SaveObservation;
+    if (
+      typeof path !== "string" ||
+      typeof sha256 !== "string" ||
+      typeof bytes !== "number" ||
+      typeof observedAt !== "string" ||
+      typeof afterLastSave !== "boolean"
+    )
+      return null;
+    return Object.freeze({ path, sha256, bytes, observedAt, afterLastSave });
+  } catch {
+    return null;
+  }
+}
+
+/** Snapshot the caller's observations, reading every field exactly once. */
+function snapshotObservations(value: unknown): readonly SaveObservation[] | null {
+  if (!Array.isArray(value)) return null;
+  try {
+    const out: SaveObservation[] = [];
+    for (const entry of value) {
+      const observation = readObservation(entry);
+      if (observation === null) return null;
+      out.push(observation);
+    }
+    return Object.freeze(out);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Copy the caller's hidden set into plain data, reading every field exactly once.
  *
@@ -431,10 +466,11 @@ function attestOrRefuse(input: AttestInput): Attestation {
   ) as Record<string, Uint8Array>;
   if (!input.finalFiles || typeof input.finalFiles !== "object")
     blockers.push("final state: none supplied, so no observation can be matched against it");
-  const safeObservations: readonly SaveObservation[] = Array.isArray(input.observations)
-    ? input.observations
-    : [];
-  if (!Array.isArray(input.observations))
+  // Snapshot ONCE, type-checked. The loop below used to read the caller's object at the
+  // check and again to build the frozen copy, so a getter could answer honestly for the
+  // check and dishonestly for the copy (round 1, finding 1).
+  const safeObservations = snapshotObservations(input.observations);
+  if (safeObservations === null)
     blockers.push("observations: none supplied, so nothing can be attested");
 
   // The fixture resolved from the commitment must be the fixture of the row being scored.
@@ -541,7 +577,7 @@ function attestOrRefuse(input: AttestInput): Attestation {
   //    final bytes. A missing observation is a blocker, never a pass.
   const accepted: SaveObservation[] = [];
   for (const path of required) {
-    const observation = safeObservations.find((candidate) => candidate.path === path);
+    const observation = (safeObservations ?? []).find((candidate) => candidate.path === path);
     if (observation === undefined) {
       blockers.push(`observer: no observation of ${path}`);
       continue;
@@ -564,18 +600,9 @@ function attestOrRefuse(input: AttestInput): Attestation {
       blockers.push(`observer: ${path} length disagrees with the observation`);
       continue;
     }
-    // Copy into frozen primitives. `accepted` held the caller's own observation objects, so
-    // mutating one after attest() changed what the attestation reported (R6 round 3,
-    // finding 2).
-    accepted.push(
-      Object.freeze({
-        path: observation.path,
-        sha256: observation.sha256,
-        bytes: observation.bytes,
-        observedAt: observation.observedAt,
-        afterLastSave: observation.afterLastSave,
-      }),
-    );
+    // `observation` is already the frozen snapshot, so the value checked above is the value
+    // reported. No second read of the caller's object.
+    accepted.push(observation);
   }
 
   // 3a. The observer must be one this gate can vouch for. Deny by default: `observerId` is

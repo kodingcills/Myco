@@ -489,6 +489,50 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     }
   });
 
+  it("v2 round 1 finding 1: an observation is read once, so a getter cannot toggle", async () => {
+    // The attack: `sha256` answers with the FINAL bytes on the first read (so the final-bytes
+    // check passes) and with DIFFERENT bytes on the second (so the copy reports a hash it
+    // never verified). The trace's last save holds those different bytes, so the trace check
+    // passes against the copy. Reading once makes the two disagree and the row is refused.
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const real = input.observations[0]!;
+    const finalBytes = run.files["store.json"]!;
+    const otherBytes = new TextEncoder().encode('{"items":[{"text":"different"}]}\n');
+    const finalHash = createHash("sha256").update(finalBytes).digest("hex");
+    const otherHash = createHash("sha256").update(otherBytes).digest("hex");
+    let reads = 0;
+    const shifty = {
+      ...real,
+      get sha256() {
+        reads += 1;
+        return reads === 1 ? finalHash : otherHash;
+      },
+    };
+    const trace = [...run.trace.slice(0, -1), saveEvent({ "store.json": otherBytes })];
+    const result = attest({
+      ...input,
+      trace,
+      observations: [shifty, ...input.observations.slice(1)],
+    });
+    expect(result.eligible, "a toggling sha256 getter was admitted").toBe(false);
+    // Whatever it reports must be the hash it actually checked.
+    for (const observation of result.accepted) expect(observation.sha256).toBe(finalHash);
+  });
+
+  it("v2 round 1 finding 1: a non-primitive observation field is refused", async () => {
+    const input = baseInput(await finishedRun());
+    const real = input.observations[0]!;
+    const result = attest({
+      ...input,
+      observations: [
+        { ...real, observedAt: { when: "now" } },
+        ...input.observations.slice(1),
+      ] as never,
+    });
+    expect(result.eligible, "a non-primitive observedAt was admitted").toBe(false);
+  });
+
   it("R6 round 3 finding 2: the attestation is deeply frozen", async () => {
     const run = await finishedRun();
     const att = attest(baseInput(run));
@@ -508,6 +552,15 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
       (refused.blockers as string[]).length = 0;
     }).toThrow();
     expect(refused.blockers.length).toBeGreaterThan(0);
+    // The catch-handler return is frozen the same way, including its empty arrays.
+    expect(Object.isFrozen(refused.accepted), "catch accepted is frozen").toBe(true);
+    expect(Object.isFrozen(refused.unexpectedFiles), "catch unexpectedFiles is frozen").toBe(true);
+    expect(() => {
+      (refused.accepted as unknown[]).push({});
+    }).toThrow();
+    expect(() => {
+      (refused.unexpectedFiles as string[]).push("x");
+    }).toThrow();
   });
 
   it("R6 round 2 finding 4: the returned attestation is frozen", async () => {

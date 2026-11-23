@@ -213,6 +213,19 @@ export function scoreDiscoveryTrial(
   }
 }
 
+/** A row for a trial record that could not even be read. */
+function malformedRow() {
+  return {
+    armId: "(unreadable)",
+    taskId: "(unreadable)",
+    promptHash: "(unreadable)",
+    planner: undefined,
+    status: "excluded" as const,
+    decisionEligible: false,
+    reason: "malformed" as const,
+  };
+}
+
 /** Read an identity field without letting a hostile accessor escape as a throw. */
 function safeField(evidence: unknown, key: string): string {
   try {
@@ -371,7 +384,28 @@ export function createDiscoveryComparison(
     }>,
   ) => {
     const results: ReturnType<typeof scoreDiscoveryTrial>[] = [];
-    for (const { evidence, input } of trials) {
+    // Materialise first, guarded: a broken iterator ends the batch, but rows already
+    // collected still score. Destructuring each record is guarded separately below, because
+    // a null record or a throwing `evidence` accessor used to abort everything (round 1,
+    // finding 2).
+    const records: unknown[] = [];
+    try {
+      for (const record of trials) records.push(record);
+    } catch {
+      // A throwing iterator is a broken batch; score what we have.
+    }
+    for (const record of records) {
+      let evidence: DiscoveryTrialEvidence;
+      let input: Omit<TrialInput, "intent">;
+      try {
+        ({ evidence, input } = record as {
+          evidence: DiscoveryTrialEvidence;
+          input: Omit<TrialInput, "intent">;
+        });
+      } catch {
+        results.push(malformedRow());
+        continue;
+      }
       // The attester is caller-supplied, so it can throw too. A throw there must cost one
       // row, not the batch.
       let attestation: Attestation | undefined;

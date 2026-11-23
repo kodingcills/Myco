@@ -304,6 +304,59 @@ describe("Discovery evidence grading", () => {
     }
   });
 
+  it("v2 round 1 finding 2: a malformed trial record costs one row, not the batch", () => {
+    // The loop destructured each record outside any guard, so a null record or a throwing
+    // `evidence` accessor aborted everything.
+    const bad: readonly [string, unknown][] = [
+      ["null record", null],
+      ["undefined record", undefined],
+      [
+        "throwing proxy",
+        new Proxy(
+          {},
+          {
+            get: () => {
+              throw new Error("trap");
+            },
+          },
+        ),
+      ],
+      [
+        "throwing evidence getter",
+        {
+          get evidence() {
+            throw new Error("x");
+          },
+          input,
+        },
+      ],
+      [
+        "throwing input getter",
+        {
+          evidence,
+          get input() {
+            throw new Error("x");
+          },
+        },
+      ],
+    ];
+    for (const [name, record] of bad) {
+      const comparison = createDiscoveryComparison(settings, refuseAll);
+      let threw = false;
+      let rows: ReturnType<typeof scoreDiscoveryTrial>[] = [];
+      try {
+        rows = comparison([{ evidence, input }, record as never, { evidence, input }]);
+      } catch {
+        threw = true;
+      }
+      expect(threw, `${name} aborted the batch`).toBe(false);
+      expect(rows, `${name} lost rows`).toHaveLength(3);
+      expect(rows[0]?.status, `${name} lost the first good row`).toBe("scored");
+      expect(rows[2]?.status, `${name} lost the last good row`).toBe("scored");
+      expect(rows[1]?.decisionEligible).toBe(false);
+    }
+  });
+
   it("R6 round 3 finding 1: one bad row does not abort the batch", () => {
     const comparison = createDiscoveryComparison(settings, refuseAll);
     const rows = comparison([
