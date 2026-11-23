@@ -4,8 +4,22 @@
 
 ## 0. Session 2026-11-23 10:25 ET — read this first
 
-Restarted thread. Preflight done; #315 amended (test-only), pushed, and a verifier round
-completed. **Head is now `434d1ba`; `LauncherPRVerifier2` (round 1) is running on it.**
+Restarted thread. Preflight done; #315 amended (test-only), pushed, and **round 1 PASSED**.
+**Head `5b610b2` (code `434d1ba`); PR #315 is MERGEABLE and `BEHIND` origin/main.**
+
+### 11:00 ET — round 1 verdict: PASS
+
+`LauncherPRVerifier2` at `434d1ba`: **correct, confidence 0.93**, no patch-introduced
+defect. Six checks, all green, independently reproduced:
+- targeted suite 7/7 on 3/3 runs;
+- check-then-write control fails 3/3 with the expected assertion;
+- `exec -a` scoping fix: 0 leaked sleepers and 0 leaked watchdogs across 3 runs;
+- a decoy `sleep 297` outside the suite survives and is the only sleeper;
+- `scripts/s0-live.sh` differs from `b92ee9f` in **comment lines only** (0 non-comment
+  changed lines); the `mkdir` claim line is byte-identical to `b92ee9f`.
+
+**Next: sync `origin/main` and merge** (outer loop's call on timing). `mergeStateStatus:
+BEHIND` as of 11:00. No verifier rounds remain to spend (1 of 3 used).
 
 ### 10:50 ET — round 1 verdict, its two nits, and the fix
 
