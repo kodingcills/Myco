@@ -17,8 +17,9 @@ issue has been split, closed, or superseded keeps its MVD id and gains a
 
 | Markdown row | Tag in heading | Linear today | How to read it |
 |---|---|---|---|
-| MVD-001 | TIF-53 | TIF-53 is not S0; **TIF-89** is "Discovery S0 first live run", reopened until the live run's evidence exists | MVD-001 stays the Direction A bounded proof; TIF-89 is the **execution** of MVD-001's acceptance 1–6, not a replacement for it |
-| MVD-005 | TIF-60 | unchanged as far as this repo can see; the outer loop has not reported a move | keep the tag |
+| MVD-001 | **was** TIF-53; the heading no longer carries it | TIF-53 is not S0. **TIF-89** is "Discovery S0 first live run", reopened until the live run's evidence exists | MVD-001 stays the Direction A bounded proof; TIF-89 is the **execution** of MVD-001's acceptance 1–6. A PR for the S0 run carries **TIF-89** |
+| MVD-005 | TIF-60 | **disagreement, escalated (2026-11-23):** the outer loop reports TIF-60 disagreeing with Linear; this repo has no Linear access and so cannot say what Linear now holds | keep the tag until the outer loop supplies the Linear id; no id is invented here |
+| *(not a Discovery row)* | **TIF-52** is **not** claimed here | `docs/backlog/m1.md` records that its M1-022 heading previously carried TIF-52, which belongs to Foundry EF-003; that heading now reads `(TIF: unassigned)` | Discovery claims no part of TIF-52. Nothing to change in this file |
 | (no markdown row) | — | TIF-86 (compare provenance, merged #203), TIF-103 (simulated notes, #215), TIF-106 (this reconciliation), TIF-107 (aliasing-bypass record), TIF-108 (compare nits) | Linear-only issues raised by review; they are tracked here by reference, not by a new MVD id |
 
 PRs carrying a Linear id say so in the title: `TIF-89` for #210 and #213 (S0 prep and
@@ -45,7 +46,7 @@ why anyone would choose it. The earlier "M2 = MCP/API" lock-in is retracted.
 
 Three directions are investigated with **bounded proofs**, not three products:
 
-- **A** — verified desktops for coding agents (TIF-53).
+- **A** — verified desktops for coding agents (executed under TIF-89; the old `TIF-53` label was stale).
 - **B** — verified operations for existing business software without adequate APIs (TIF-54).
 - **C** — branchable desktops for agent experimentation (TIF-55).
 
@@ -54,12 +55,12 @@ criterion (TIF-60) decide the wedge.
 
 ---
 
-### MVD-001 (TIF-53) Direction A bounded proof: verified desktop for a coding agent
+### MVD-001 (TIF: TIF-89 executes it) Direction A bounded proof: verified desktop for a coding agent
 - **linear_state:** the Linear issue that executes this row is **TIF-89** ("Discovery
   S0 first live run"), reopened 2026-11-22 until the live run's evidence exists. The
-  `TIF-53` tag in the heading is stale; TIF-53 is not S0. MVD-001's acceptance
-  criteria below are unchanged, and #210 (S0 prep) and #213 (offline sequence) close
-  neither this row nor TIF-89.
+  heading no longer carries a Linear tag, because `TIF-53` was stale and a future
+  reader would have taken it. MVD-001's acceptance criteria below are unchanged, and
+  #210 (S0 prep) and #213 (offline sequence) close neither this row nor TIF-89.
 - **status:** design in progress. Host-dependent half blocked on the guest window
   (memory-gated, see TIF-106's sibling in `docs/coordination/mvp-discovery-state.md`)
   and on Foundry's trusted ingest.
