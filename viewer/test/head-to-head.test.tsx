@@ -32,6 +32,12 @@ test("renders the decided row, the exact arm numbers, and the paired table", () 
   expect(text).toContain("1 silent-drop no yes");
   expect(text).toContain("screenshot-only");
   expect(text).toContain("A refused decision is a result");
+  // A cropped screenshot must not pass as live: the headline itself says simulated.
+  expect(text).toContain("A-stands (simulated)");
+  // Non-live rule notes are prefixed so no conclusion reads unqualified.
+  for (const note of fixture.decision.notes as string[]) {
+    expect(text).toContain(`Simulated: ${note}`);
+  }
   expect(html).toContain("data-simulated-badge");
   expect(text).toContain("Simulated");
   expect(text).toContain("Not a live result");
@@ -82,6 +88,12 @@ test("a live report carries no badge and says the rule returned the row", () => 
   const text = textOf(html);
   expect(html).not.toContain("data-simulated-badge");
   expect(text).toContain("The pre-registered rule returned this row");
+  expect(text).toContain("A-stands");
+  expect(text).not.toContain("A-stands (");
+  for (const note of fixture.decision.notes as string[]) {
+    expect(text).toContain(note);
+    expect(text).not.toContain(`Simulated: ${note}`);
+  }
 });
 
 test("rejects a run artifact and a malformed report", () => {

@@ -57,6 +57,13 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
   const { decision } = report;
   const provenance = report.provenance ?? { kind: "unknown" as const };
   const settled = decision.status === "decided";
+  const nonLive = provenance.kind !== "live";
+  const sourceLabel =
+    provenance.kind === "simulated"
+      ? "simulated"
+      : provenance.kind === "mixed"
+        ? "mixed"
+        : "unknown source";
   return (
     <section data-head-to-head aria-label="Head-to-head report">
       <header data-report-header>
@@ -65,6 +72,7 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
           <div className="flex items-center gap-2">
             <h1 className="type-title text-text-primary" tabIndex={-1}>
               {settled ? (decision.row ?? "No row") : "Not decided"}
+              {nonLive ? ` (${sourceLabel})` : ""}
             </h1>
             {provenance.kind !== "live" && (
               <span
@@ -201,6 +209,7 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
           <ul data-report-notes>
             {decision.notes.map((note) => (
               <li key={note} className="type-small text-text-primary">
+                {nonLive ? `${sourceLabel[0]?.toUpperCase()}${sourceLabel.slice(1)}: ` : ""}
                 {note}
               </li>
             ))}
