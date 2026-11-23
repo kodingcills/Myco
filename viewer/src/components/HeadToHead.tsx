@@ -1,4 +1,4 @@
-import { ArrowRight, CircleHelp, Minus } from "lucide-react";
+import { AlertTriangle, ArrowRight, CircleHelp, Minus } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { HeadToHeadReport } from "../data/head-to-head.ts";
 import { useViewer } from "../store.ts";
@@ -55,19 +55,42 @@ export function CompareApp() {
 
 export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
   const { decision } = report;
+  const provenance = report.provenance ?? { kind: "unknown" as const };
   const settled = decision.status === "decided";
   return (
     <section data-head-to-head aria-label="Head-to-head report">
       <header data-report-header>
         <div>
           <p className="type-micro text-text-secondary">Decision</p>
-          <h1 className="type-title text-text-primary" tabIndex={-1}>
-            {settled ? (decision.row ?? "No row") : "Not decided"}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="type-title text-text-primary" tabIndex={-1}>
+              {settled ? (decision.row ?? "No row") : "Not decided"}
+            </h1>
+            {provenance.kind !== "live" && (
+              <span
+                data-simulated-badge
+                className="type-data-small inline-flex items-center gap-1 px-1 border border-border-strong rounded-control text-text-primary bg-bg-surface3 whitespace-nowrap"
+                title="Not live guest evidence: this report is simulated, modelled, or replayed"
+              >
+                <AlertTriangle
+                  className="size-3 shrink-0 text-text-primary"
+                  strokeWidth={1.5}
+                  aria-hidden="true"
+                />
+                {provenance.kind === "simulated"
+                  ? "Simulated"
+                  : provenance.kind === "mixed"
+                    ? "Mixed"
+                    : "Unknown source"}
+              </span>
+            )}
+          </div>
           <p className="type-small text-text-secondary">
             {decision.status === "refused"
               ? `Refused: ${decision.reason ?? "no reason recorded"}`
-              : "The pre-registered rule returned this row"}
+              : provenance.kind !== "live"
+                ? "Not a live result: the arms below are not guest trials"
+                : "The pre-registered rule returned this row"}
           </p>
         </div>
       </header>
@@ -206,6 +229,42 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
               ))}
             </tbody>
           </table>
+        </section>
+      )}
+
+      {provenance && (
+        <section aria-label="Provenance">
+          <h2 className="type-micro text-text-secondary">Provenance</h2>
+          <p className="type-small text-text-primary">
+            {provenance.kind === "live"
+              ? "Live guest trials."
+              : provenance.kind === "simulated"
+                ? "Simulated: no guest trials back these numbers."
+                : provenance.kind === "mixed"
+                  ? "Mixed: at least one arm is not live guest evidence."
+                  : "Unknown source: the report does not say whether these are live trials."}
+          </p>
+          {provenance.note && <p className="type-small text-text-secondary">{provenance.note}</p>}
+          {provenance.arms && provenance.arms.length > 0 && (
+            <table data-report-table>
+              <thead className="type-micro text-text-secondary">
+                <tr>
+                  <th scope="col">Arm</th>
+                  <th scope="col">Source</th>
+                  <th scope="col">Live</th>
+                </tr>
+              </thead>
+              <tbody className="type-data">
+                {provenance.arms.map((arm) => (
+                  <tr key={arm.armId}>
+                    <td className="type-data-strong">{arm.armId}</td>
+                    <td>{arm.source}</td>
+                    <td>{arm.live ? "yes" : "no"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
       )}
 
