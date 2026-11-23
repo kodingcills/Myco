@@ -57,6 +57,9 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   the hidden split has separate roots and an import test proves `src/` cannot reach it.
 
 ### EF-003 (TIF-52) Fault injection for GUI-specific failure modes
+- **linear status:** **partial** (matches Linear; this doc uses the same word deliberately —
+  a doc that says "in progress" while Linear says "partial" is the drift this entry exists
+  to prevent).
 - **status:** **partial — six classes built and verified** (PR #122 merged c37d944, verifier
   PASS at 91c3371): stale-ui, interrupted-write, partial-persistence, crash-mid-save,
   permission-denied, and **autocorrect-rewrite** on the Writer table family
@@ -97,6 +100,10 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   environment (path test); a score report cannot be produced without its version triple.
 
 ### EF-005 (TIF-58) Baseline harness on the same tasks
+- **linear status:** **in progress** for the original harness scope. **Later work is
+  TIF-74** (see EF-006 below): the live transports, the trusted ingest, and the attestation
+  gate are tracked there, not here. This entry keeps the arm registry, the reference
+  policies, the paired comparison and the economics column.
 - **status:** in progress
 - **owner:** foundry-owner
 - **blocked_by:** EF-001, EF-002
@@ -119,3 +126,78 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   **Reset budget:** plan at ~21 s per cold restore (`scripts/reset-trial-vm.sh` default), not
   the 8.3 s live path; 100 trials is ~35 minutes of reset, so statistical power is affordable
   and the real cost to optimise is verification.
+
+### EF-006 (TIF-74) EF-005 later work: live transports, trusted ingest, attestation
+- **linear status:** **in progress** (Linear tracks this as TIF-74; EF-005/TIF-58 keeps the
+  original harness scope).
+- **owner:** foundry-owner
+- **blocked_by:** EF-001, EF-002
+- **description:** The work that turns the offline harness into something a live arm can run
+  and a decision can trust. Split out of EF-005 because it is a different kind of work: the
+  harness scores a model, this makes a real run gradeable and its evidence admissible.
+- **delivered (merged):**
+  - `src/foundry/baseline/recorder.ts` — the producer for the recorded-evidence schema the
+    discovery grader already reconciles (PR #171).
+  - `src/foundry/baseline/executor.ts` — the arm-facing `LiveTransport` runner: budget,
+    action attribution, transport failure → `incomplete` (PR #171).
+  - `src/foundry/baseline/compare.ts` — paired per-trial comparison with the exact sign test
+    (PR #171).
+  - `src/foundry/baseline/guest.ts` + `todo-transport.ts` — `GuestProtocol`, a fake guest
+    driving the real app model, and the todo transport with the `myco-agent` adapter
+    (PR #189).
+  - `src/foundry/baseline/attest.ts` — `SaveObserver` and the `attest()` gate (PR #192).
+- **remaining, and why it is not done:**
+  1. **A live `LiveTransport`** for the todo app on the same guest the Myco arm uses. The
+     harness is app-agnostic; this is one protocol implementation. Needs VM time.
+  2. **A genuinely independent observer.** `offlineObserver` hashes bytes it is handed,
+     which tests the gate's contract but not its premise. Needs a second guest connection.
+  3. **The fixture-identity decision** (see EF-007): `attest()` takes the fixture as an
+     argument, so a caller can pass the real `fixtureId` with a benign `persistenceFiles`.
+     No function can verify its own inputs' provenance; the fix is where the gate runs.
+  4. **Wiring `attest()` into `scoreDiscoveryTrial`.** This is the change that turns a
+     descriptive row into a decision input. It must not land before item 3 is decided.
+- **acceptance:** a live arm runs on grader-supplied hidden pairs through `executeTrial`; the
+  observer is a second channel, not a function the arm can call; `attest()` is wired in and
+  a run whose state oracle refutes can never be decision-eligible; the eligibility flip has
+  its own Tier 2 verifier PASS at the exact head.
+
+### EF-007 (TIF-pending) Decision: where the attestation gate runs
+- **linear status:** **needs a decision** (file as a new TIF issue; no id yet).
+- **owner:** outer-loop (decision), foundry-owner (implementation)
+- **blocked_by:** none
+- **description:** `attest()` (EF-006) takes the fixture as an argument and the observations
+  as an argument. A caller can therefore pass the real `fixtureId` with a benign
+  `persistenceFiles`, or supply observations and final bytes together, and a match between
+  two things the caller controls proves nothing. This is not fixable inside the function:
+  no code can verify its own inputs' provenance. Two options, both about *where* the gate
+  runs:
+  1. **Resolve the fixture from the hidden commitment.** The ingest looks the fixture up
+     itself and rejects any whose hash does not match `foundry/hidden-commitment.json`.
+     Cheaper, testable offline.
+  2. **Run the ingest out of the arm's reach.** A separate process the arm cannot call, with
+     `attest()` not exported to arm code. Stronger guarantee, more moving parts.
+- **acceptance:** a recorded decision naming one option, with the reason; the chosen option
+  implemented and tested; `attest()` cannot be satisfied by caller-supplied provenance under
+  the chosen design.
+
+### EF-008 (TIF-pending) Slot 5: Microsoft Hybrid Computer Use GUI arm
+- **linear status:** **needs an issue** (file as a new TIF issue; no id yet). Slot 5 is
+  currently documented only inside TIF-58's handoff note
+  ([docs/foundry/hcu-slot-5.md](../foundry/hcu-slot-5.md)), which means a run that needs its
+  own GO, its own spend cap and its own evidence has no issue to be tracked against.
+- **owner:** foundry-owner
+- **blocked_by:** EF-001, EF-002, Coordinator GO, a VM slot
+- **description:** Run Microsoft Hybrid Computer Use's `GUI` channel only (no `AX`, no shell)
+  over the 30 normal Calc record-edit trials in the finalized M1 v3 parameter order, as a
+  descriptive reference alongside C1. HCU is a computer layer, not an agent, so the planner
+  must be named in every row or the result is not a result. Spend cap **$0**; pause on quota
+  rather than swapping models.
+- **what exists:** the adapter boundary and offline acceptance checks are written
+  (`hcu-slot-5.md`); the evidence schema accepts an `hcu` sub-arm identity (PR #102); the
+  frozen v3 inputs were verified offline (both SHA-256 hashes matched, all 30 rows joined).
+- **what is missing:** a Windows ARM64 bundle with a pinned revision and hash; a live GUI-only
+  transport; a planner confirmed within the $0 cap; and the Coordinator's GO.
+- **acceptance:** the spike result recorded with evidence (a screenshot and a typed value
+  persisted, or the exact structured refusal code); 30 trials scored by the shared blind
+  judge on independently captured workbook evidence; skipped and unfinished trials reported
+  separately; the report names the planner and states that HCU is a layer, not an agent.
