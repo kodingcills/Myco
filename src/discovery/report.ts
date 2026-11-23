@@ -24,6 +24,10 @@ export interface NotRunArm {
 
 export interface HeadToHeadReportInput {
   readonly decision: Decision;
+  readonly provenance?: {
+    readonly kind: "live" | "simulated" | "mixed" | "unknown";
+    readonly note?: string;
+  };
   readonly arms: readonly ReportArm[];
   readonly notRun?: readonly NotRunArm[];
   readonly evidence?: readonly string[];
@@ -51,6 +55,12 @@ export function renderHeadToHeadReport(input: HeadToHeadReportInput): string {
   lines.push(
     `Task: \`${decision.taskId}\` · prompt variant: \`${decision.promptVariant}\` · paired refutable trials: **${decision.pairs}**`,
   );
+  lines.push("");
+  const provenance = input.provenance ?? { kind: "unknown" as const };
+  lines.push(
+    `Provenance: **${provenance.kind}**${provenance.kind === "live" ? "" : " — not live guest evidence"}`,
+  );
+  if (provenance.note) lines.push(provenance.note);
   lines.push("");
   lines.push("## Decision");
   lines.push("");
@@ -131,5 +141,10 @@ export function renderHeadToHeadReport(input: HeadToHeadReportInput): string {
   lines.push(
     "- A `refused` decision is a result: it means the pre-registered sample or the trusted ingest is not there yet.",
   );
+  if (decision.status === "refused") {
+    lines.push(
+      "- The decision counts are zero because there are no paired trials; the arm rows above are descriptive and are not a decision.",
+    );
+  }
   return `${lines.join("\n")}\n`;
 }

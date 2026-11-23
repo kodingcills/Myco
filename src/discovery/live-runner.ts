@@ -79,6 +79,8 @@ export interface LiveRunInput {
   readonly runsDir: string;
   readonly runId?: string;
   readonly taskId?: string;
+  /** True for a mock/dry-run transport; the artifact then says so. */
+  readonly simulated?: boolean;
 }
 
 export interface LiveRunResult {
@@ -314,6 +316,7 @@ export async function runDirectionALive(input: LiveRunInput): Promise<LiveRunRes
     startedAt: new Date().toISOString(),
     steps,
     verdict,
+    ...(input.simulated ? { simulated: true } : {}),
     ...(verification.status === "uncertain" ? { unresolvedState: verdict.reasons.join("; ") } : {}),
   };
   mkdirSync(join(input.runsDir, runId), { recursive: true });
