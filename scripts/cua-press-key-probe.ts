@@ -11,6 +11,12 @@
  *   (b) Cua delivered the key, and the LibreOffice "Non-standard file format"
  *       dialog is what stops the save     -> legitimate baseline outcome, score it
  *
+ * ANSWERED 2026-11-23: neither. Background `key_combo` on a SALFRAME window is
+ * refused outright with code=background_unavailable, and it is not about the
+ * key - `Ctrl+F12` is refused identically. Foreground delivery is accepted and
+ * the key genuinely arrives (a Save As dialog appears). See RESULT.md beside
+ * this script for the raw responses and the method.
+ *
  * The decisive part is the RAW response, not the derived verdict: `effect`,
  * `isError`, and `path` are consumed and flattened by `C1.execute` (c1.ts:91),
  * which returns only `{refused, verified}`. This drives the MCP session directly
