@@ -104,6 +104,23 @@ test("rejects a run artifact and a malformed report", () => {
   expect(parseHeadToHead(null)).toBeUndefined();
 });
 
+test("the decision is the page heading and tables carry scoped headers", () => {
+  const report = parseHeadToHead(fixture);
+  expect(report).toBeDefined();
+  if (!report) return;
+  const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
+  expect(html).toMatch(/<h1[^>]*>A-stands/);
+  // Not-run and paired tables must give every column a header with a scope, so a
+  // screen reader can name each cell.
+  const tables = html.split("<table").slice(1);
+  expect(tables.length).toBeGreaterThanOrEqual(3);
+  for (const table of tables) {
+    const headers = table.split("</thead>")[0]?.match(/<th\b[^>]*>/g) ?? [];
+    if (headers.length === 0) continue;
+    for (const header of headers) expect(header).toContain('scope="col"');
+  }
+});
+
 test("a pair row whose claim is unknown renders n/a, never no", () => {
   const report = parseHeadToHead({
     ...fixture,
