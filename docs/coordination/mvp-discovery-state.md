@@ -283,6 +283,15 @@ honest state, and it is why S1/S2 are the only slots that move the wedge.
 
 ## Log
 
+- 2026-11-23 (later still) · `docs/product/wedge-recommendation.md` merged (#278,
+  TIF-60): Direction A, narrowed, with its evidence and its gaps in separate
+  sections, and the pre-registered §4.1 rule table quoted rather than paraphrased
+  (three verifier rounds; the first rejection was for presenting the plan's
+  overturn conditions as the rule rows, the second for inventing two of those
+  conditions). Also merged: #277 (what the viewer does and does not show for a
+  `myco-run` artifact — verdict, score, steps and check render; the
+  claim-vs-persisted table reads `not recorded` because the artifact carries the
+  verdict and reason, not the persisted list).
 - 2026-11-23 (later) · Merged and closed out, in order: #248, #250, #256, #272.
   - **#250 / #256** (TIF-89): the live S0 path is real and gated. `RuntimeTransport`
     speaks MCP over `myco-rt-mcp` and reads the guest's published state; the
