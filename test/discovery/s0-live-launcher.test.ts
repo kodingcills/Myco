@@ -123,7 +123,10 @@ describe("s0-live.sh launcher", () => {
 
   it("admits exactly one --run under a real race, and the winner owns the pid", () => {
     const { script, runDir, env } = worktree();
-    for (let round = 0; round < 5; round += 1) {
+    // Check-then-write tears roughly one round in ten (measured 2026-11-23: 4/40
+    // rounds with two winners), so 30 rounds make the negative control dependable
+    // without making a green run slow — ~6 s.
+    for (let round = 0; round < 30; round += 1) {
       spawnSync("bash", ["-c", 'rm -rf "' + runDir + '"; mkdir -p "' + runDir + '"']);
       const racers = spawnSync(
         "bash",
@@ -148,13 +151,33 @@ describe("s0-live.sh launcher", () => {
       const [winners, refusals] = racers.stdout.trim().split("\n").map(Number);
       expect(winners).toBe(1);
       expect(refusals).toBe(7);
-      // Read the pid immediately: reading late raced a watchdog that had already gone.
+      // Before --stop: every `--run` that admitted itself logged the watchdog it
+      // launched (`say "pid $CHILD"`), so the live watchdogs are countable. `s0.pid`
+      // alone is not evidence: it is the treaty that a torn claim breaks, and the
+      // last writer wins it even when it names a child that has already been killed.
+      // `--run` routes its stdout to the shared log, not to the racer's own file,
+      // because the detached-run case is the one the log exists for.
+      const loggedPids = () =>
+        readFileSync(join(runDir, "s0.log"), "utf8")
+          .split("\n")
+          .map((line) => /^\S+ pid (\d+)$/.exec(line))
+          .filter((match): match is RegExpExecArray => match !== null)
+          .map((match) => Number(match[1]));
+      let pids: number[] = [];
+      for (let attempt = 0; attempt < 40 && !pids.some((pid) => alive(pid)); attempt += 1) {
+        spawnSync("bash", ["-c", "sleep 0.05"]);
+        pids = loggedPids();
+      }
+      const live = pids.filter((pid) => alive(pid));
+      expect(live).toHaveLength(1);
+      // Read the pid before --stop: a late read raced a watchdog that had already gone.
       const recorded = Number(readFileSync(join(runDir, "s0.pid"), "utf8").trim());
+      expect(recorded).toBe(live[0]);
       expect(alive(recorded)).toBe(true);
       launcher(script, runDir, ["--stop"], env);
       spawnSync("bash", ["-c", 'pkill -9 -f "' + runDir + '" 2>/dev/null']);
     }
-  });
+  }, 30_000);
 
   it("releases the run lock on every exit that is not a signal", () => {
     const { script, runDir, env } = worktree();
