@@ -209,7 +209,8 @@ fn tool_defs() -> Vec<Value> {
                 "session_id": {"type":"string"},
                 "token": {"type":"string"},
                 "read_root": {"type":"string","description":"Opt-in: absolute guest directory the session may read from (not '/'). Every read_file path is confined beneath it. Applied on every connect, including after reset. Read-only unless allow_write is also true."},
-                "allow_write": {"type":"boolean","description":"Opt-in, default false: also allow write_file under read_root. Requires read_root. Without it write_file is refused."}
+                "allow_write": {"type":"boolean","description":"Opt-in, default false: also allow write_file under read_root. Requires read_root. Without it write_file is refused."},
+                "introspection_file": {"type":"string","description":"Opt-in app introspection channel (ADR-0016): absolute guest path of the JSON state file an instrumented app publishes (e.g. myco-todo's widget state: entry_field geometry, listbox rows, entry text). observe then merges it as a11y_tree.introspection, and apps launched through act get MYCO_TODO_STATE_FILE set to it. Allowed characters: letters, digits, . _ - + /. Without it, introspection is null."}
             }}
         }),
         json!({
@@ -343,6 +344,10 @@ impl Server {
         let workspace = self.workspace.as_ref().map_err(|e| (-32000, e.clone()))?;
         let mut cfg = QemuConfig::for_repo(workspace, &token);
         cfg.session_id = id.clone();
+        // ADR-0016 / TIF-120: the introspection channel is opt-in per session.
+        // Validated before provisioning, like read_root: a bad path must not cost
+        // a VM boot.
+        apply_introspection_file(&mut cfg, args)?;
         // RT-015 is opt-in: a session gets file reads only when it names a root.
         // Validate BEFORE provisioning: a bad root must not cost a VM boot, and
         // must not leave a guest + lock behind (review must-fix 1).
@@ -930,6 +935,38 @@ mod protocol_edge_tests {
 }
 
 /// Minimal base64 (no dependency): the wire format for binary guest files.
+/// TIF-120: set the session's introspection file from `create`'s
+/// `introspection_file`, if given. The path travels inside the SSH remote
+/// command line, so it is restricted to a conservative character set (no
+/// spaces, quotes, `$`, `;` …) on top of being quoted there; it must be
+/// absolute, not `/`, and contain no `..` component.
+fn apply_introspection_file(cfg: &mut QemuConfig, args: &Value) -> Result<(), (i64, String)> {
+    let Some(raw) = args.get("introspection_file") else { return Ok(()) };
+    let Some(path) = raw.as_str() else {
+        return Err((-32602, "introspection_file must be a string".to_string()));
+    };
+    let p = std::path::Path::new(path);
+    let safe_chars = path
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b'+'));
+    if !p.is_absolute()
+        || p.parent().is_none()
+        || path.len() > 4096
+        || !safe_chars
+        || p.components().any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err((
+            -32602,
+            format!(
+                "introspection_file must be an absolute guest file path (not '/', no '..') \
+                 using only letters, digits and . _ - + /; got {path:?}"
+            ),
+        ));
+    }
+    cfg.introspection_file = Some(path.to_string());
+    Ok(())
+}
+
 fn base64_encode(input: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
@@ -1167,6 +1204,64 @@ mod read_file_tests {
 }
 
 #[cfg(test)]
+mod introspection_file_tests {
+    use super::*;
+
+    fn cfg() -> QemuConfig {
+        QemuConfig::for_repo(std::path::Path::new("."), "t")
+    }
+
+    /// TIF-120: create's introspection_file reaches the backend config (the
+    /// DF-S01 blocker was that nothing could set it).
+    #[test]
+    fn a_valid_path_is_applied_to_the_session_config() {
+        let mut c = cfg();
+        assert_eq!(c.introspection_file, None, "off by default");
+        apply_introspection_file(&mut c, &json!({"introspection_file": "/tmp/myco-todo-state.json"})).unwrap();
+        assert_eq!(c.introspection_file.as_deref(), Some("/tmp/myco-todo-state.json"));
+        let mut c = cfg();
+        apply_introspection_file(&mut c, &json!({})).unwrap();
+        assert_eq!(c.introspection_file, None, "absent argument leaves the channel off");
+    }
+
+    #[test]
+    fn unsafe_or_malformed_paths_are_refused() {
+        for bad in [
+            json!("relative/state.json"),
+            json!("/"),
+            json!("/tmp/../etc/passwd"),
+            json!("/tmp/a b.json"),
+            json!("/tmp/x';id;'"),
+            json!("/tmp/$(id).json"),
+            json!("/tmp/x\ny"),
+            json!(42),
+        ] {
+            let mut c = cfg();
+            let err = apply_introspection_file(&mut c, &json!({"introspection_file": bad})).unwrap_err();
+            assert_eq!(err.0, -32602, "{bad}");
+            assert_eq!(c.introspection_file, None, "a refused path must not be applied: {bad}");
+        }
+    }
+
+    /// Refused before provisioning: a bad path never costs a VM boot.
+    #[test]
+    fn create_refuses_a_bad_path_before_booting() {
+        let mut s = Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None };
+        let r: Value = serde_json::from_str(
+            &handle_line(
+                &mut s,
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create","arguments":{"introspection_file":"/tmp/a b"}}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("introspection_file"));
+        assert!(s.sessions.is_empty(), "no session may be created");
+    }
+}
+
+#[cfg(test)]
 mod read_root_validation_tests {
     use super::*;
     use std::collections::HashMap;
@@ -1385,6 +1480,7 @@ mod schema_contract_tests {
         ("create", "token", false),
         ("create", "read_root", false),
         ("create", "allow_write", false),
+        ("create", "introspection_file", false),
         ("observe", "session_id", true),
         ("act", "session_id", true),
         ("act", "action", true),

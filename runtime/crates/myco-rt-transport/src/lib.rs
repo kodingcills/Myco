@@ -36,13 +36,23 @@ pub enum TransportError {
 }
 
 /// Build the remote command line: token always, introspection file when enabled.
+///
+/// sshd hands this string to the guest's login shell, so the introspection path
+/// is single-quoted (TIF-120): a path is data, never shell syntax. The MCP layer
+/// additionally restricts its character set.
 fn remote_command(token: &str, agent_path: &str, introspection: Option<&str>) -> String {
     match introspection {
         Some(path) => format!(
-            "MYCO_RT_TOKEN={token} MYCO_INTROSPECTION_FILE={path} {agent_path}"
+            "MYCO_RT_TOKEN={token} MYCO_INTROSPECTION_FILE={} {agent_path}",
+            shell_single_quote(path)
         ),
         None => format!("MYCO_RT_TOKEN={token} {agent_path}"),
     }
+}
+
+/// POSIX single-quoting: wrap in '…' and turn each embedded ' into '\''.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Connection parameters for the SSH channel to a guest agent.
@@ -416,6 +426,22 @@ mod tests {
 
         ch.shutdown().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// TIF-120: the introspection path reaches the agent as one shell word,
+    /// whatever it contains; nothing in it can run as shell syntax.
+    #[test]
+    fn introspection_path_is_quoted_into_the_remote_command() {
+        assert_eq!(
+            remote_command("t", "/home/myco/bin/myco-rt-agent", Some("/tmp/state.json")),
+            "MYCO_RT_TOKEN=t MYCO_INTROSPECTION_FILE='/tmp/state.json' /home/myco/bin/myco-rt-agent"
+        );
+        assert_eq!(remote_command("t", "a", None), "MYCO_RT_TOKEN=t a");
+        // A hostile path round-trips through a real POSIX shell as plain data.
+        let hostile = "/tmp/x'; touch /tmp/pwned-myco; echo '$(id) `id`";
+        let cmd = format!("printf %s {}", shell_single_quote(hostile));
+        let out = Command::new("sh").arg("-c").arg(&cmd).output().unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), hostile);
     }
 
     #[test]

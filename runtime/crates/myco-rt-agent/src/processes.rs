@@ -79,19 +79,77 @@ impl Drop for Processes {
 }
 
 pub fn spawn(command: &str, args: &[String]) -> io::Result<Child> {
-    Command::new(command)
-        .args(args)
+    spawn_with_introspection(command, args, std::env::var("MYCO_INTROSPECTION_FILE").ok().as_deref())
+}
+
+/// `spawn` with the introspection path passed in rather than read from the
+/// agent's environment (so tests need not mutate process-wide env).
+pub fn spawn_with_introspection(command: &str, args: &[String], introspection: Option<&str>) -> io::Result<Child> {
+    let mut cmd = Command::new(command);
+    cmd.args(args)
         .env_remove("MYCO_RT_TOKEN")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    if let Some((key, value)) =
+        app_state_file_env(introspection, std::env::var_os(APP_STATE_FILE_ENV).is_some())
+    {
+        cmd.env(key, value);
+    }
+    cmd.spawn()
+}
+
+/// The env var an instrumented app publishes its state to (ADR-0016: Dogfood's
+/// myco-todo reads `$MYCO_TODO_STATE_FILE`).
+pub const APP_STATE_FILE_ENV: &str = "MYCO_TODO_STATE_FILE";
+
+/// ADR-0016 maps the app's state-file variable to the runtime's introspection
+/// file "at the runtime session layer"; TIF-120 found nothing did, so a
+/// launched app never published and observe had no `entry_field` to click. When
+/// the session's introspection channel is on, a launched app gets
+/// `MYCO_TODO_STATE_FILE` pointing at the file `observe` reads, unless the
+/// environment already names one (an explicit choice wins).
+pub fn app_state_file_env(introspection: Option<&str>, already_set: bool) -> Option<(&'static str, String)> {
+    match introspection {
+        Some(path) if !path.is_empty() && !already_set => Some((APP_STATE_FILE_ENV, path.to_string())),
+        _ => None,
+    }
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn launched_apps_publish_to_the_introspection_file() {
+        assert_eq!(
+            app_state_file_env(Some("/tmp/todo.json"), false),
+            Some((APP_STATE_FILE_ENV, "/tmp/todo.json".to_string())),
+            "channel on: the app must be told where observe will read"
+        );
+        assert_eq!(app_state_file_env(None, false), None, "channel off: nothing set");
+        assert_eq!(app_state_file_env(Some(""), false), None, "empty path is not a channel");
+        assert_eq!(app_state_file_env(Some("/tmp/todo.json"), true), None, "an explicit value wins");
+    }
+
+    /// End to end through a real child: the launched process sees the variable.
+    #[test]
+    fn spawned_child_receives_the_state_file_variable() {
+        let dir = std::env::temp_dir().join(format!("myco-spawn-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let out = dir.join("seen");
+        let mut child = spawn_with_introspection(
+            "sh",
+            &["-c".into(), format!("printf %s \"${APP_STATE_FILE_ENV}\" > {}", out.display())],
+            Some("/tmp/introspect-me.json"),
+        )
+        .unwrap();
+        child.wait().unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "/tmp/introspect-me.json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn kills_reaps_and_relaunches_only_owned_children() {
