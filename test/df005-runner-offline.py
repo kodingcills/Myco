@@ -44,6 +44,7 @@ FAILS: list[str] = []
 
 STUB_TEMPLATE = r'''#!/usr/bin/env python3
 import json, os, sys
+FILES = {}
 def text(o, err=False):
     return {"content": [{"type": "text", "text": json.dumps(o)}], "isError": err}
 for line in sys.stdin:
@@ -54,7 +55,8 @@ for line in sys.stdin:
         res = {"protocolVersion": "2024-11-05"}
     elif m == "tools/list":
         res = {"tools": [{"name": n} for n in
-                ("create", "observe", "act", "evidence", "reset", "destroy")]}
+                ("create", "observe", "act", "evidence", "reset", "destroy",
+                 "write_file", "read_file")]}
     else:
         n, a = r["params"]["name"], r["params"]["arguments"]
         if n == "observe":
@@ -85,6 +87,25 @@ for line in sys.stdin:
                 res = text({"ok": True, "outcome": {"kind": "failed", "reason": "synthetic"}})
             else:
                 res = text({"ok": True, "outcome": {"kind": "delivered_unverified"}})
+        elif n == "write_file":
+            FILES[a.get("path", "")] = a.get("content_base64", "")
+            res = text({"ok": True, "bytes_written": len(a.get("content_base64", ""))})
+        elif n == "read_file":
+            # Serve the REAL fixture for the app path, not whatever was written:
+            # a symmetric echo cannot catch a deploy that writes wrong bytes.
+            real = os.environ.get("STUB_REAL_FIXTURE", "")
+            if real and os.path.exists(real):
+                import base64 as _b
+                with open(real, "rb") as fh:
+                    served = _b.b64encode(fh.read()).decode()
+            else:
+                served = FILES.get(a.get("path", ""), "")
+            # Mirror the MCP handler's EXACT response object
+            # (main.rs:500-508) so the test fails if the runner drifts from the
+            # Rust contract, rather than from a stub written to match the reader.
+            res = text({"ok": True, "path": a.get("path", ""),
+                        "raw_bytes": len(served) // 4 * 3,
+                        "content_base64": served})
         elif n == "create":
             res = text({"ok": True, "session_id": a.get("session_id", "s")})
         else:
@@ -610,6 +631,185 @@ def main() -> int:
            f"create passes introspection_file: {args.get('introspection_file')!r}")
     expect(args.get("introspection_file", "").startswith("/"),
            "the path is absolute, as the runtime requires")
+
+    print("24. the runner deploys the fixture before launching it (TIF-158)")
+    # Two live DF-S01 windows were spent discovering the fixture was simply
+    # never deployed: the app path did not exist, nothing published, and every
+    # trial gapped at REQ-03 with introspection: not_published_yet.
+    h = Harness(store_items=["buy milk", "call mom", "write report"],
+                a11y=False, geometry=True)
+    log = h.dir / "calls.jsonl"
+    stub = h.dir / "deploy_stub.py"
+    stub.write_text(STUB_TEMPLATE.replace(
+        '        n, a = r["params"]["name"], r["params"]["arguments"]',
+        '        n, a = r["params"]["name"], r["params"]["arguments"]\n'
+        f'        open({str(log)!r}, "a").write(json.dumps({{"tool": n, "args": a}}) + "\\n")',
+    ))
+    h.stub = stub
+    code, d = h.run(scenario="DF-S01")
+    calls = [json.loads(l) for l in log.read_text().splitlines()]
+    order = [c["tool"] for c in calls]
+    expect("write_file" in order, f"the runner writes the fixture: {order}")
+    expect("read_file" in order, "it reads it back to verify")
+    # The deploy must precede the launch, or the app runs a stale/absent copy.
+    wf = order.index("write_file")
+    launched = [i for i, c in enumerate(calls)
+                if c["tool"] == "act" and c["args"].get("action", {}).get("kind") == "launch"]
+    expect(launched and wf < launched[0],
+           f"the deploy precedes the launch (write at {wf}, launch at {launched})")
+    # The create grant must cover the path the deploy writes to.
+    create = next(c for c in calls if c["tool"] == "create")
+    expect(create["args"].get("allow_write") is True,
+           f"create grants allow_write: {create['args'].get('allow_write')}")
+    root = create["args"].get("read_root", "")
+    # The grant root must exist AND be writable by the agent. FileGrant::open
+    # uses OFlags::DIRECTORY and the write needs O_CREAT there, so existence
+    # alone is not enough — /opt/myco exists but is root:root with no chown in
+    # the repo. /tmp is 1777 and the guest's own seeded apps already write there.
+    expect(root == "/tmp",
+           f"read_root is a root that is writable by construction: {root!r}")
+    expect(not root.endswith("/") and root != "/",
+           f"read_root is neither '/' nor trailing-slash: {root!r}")
+    # One session served this run, so one deploy is correct here; the point is
+    # that it happens before the launch, asserted above.
+    expect(order.count("write_file") == 1,
+           f"one deploy for a one-trial run: {order.count('write_file')}")
+    # The deployed path and the launched path must be the SAME file. Without
+    # this, a run could deploy a stale copy elsewhere and launch an absent
+    # APP_PATH — the original bug — with a green suite.
+    wrote = next(c for c in calls if c["tool"] == "write_file")["args"]["path"]
+    launch_call = next(c for c in calls
+                       if c["tool"] == "act"
+                       and c["args"].get("action", {}).get("kind") == "launch")
+    launched_arg = launch_call["args"]["action"]["args"][0]
+    expect(launched_arg.endswith("/" + wrote),
+           f"the launched path ends with the deployed name: {launched_arg!r} vs {wrote!r}")
+    # And the write path must be grant-relative: FileGrant::read refuses anything
+    # but Component::Normal parts, so an absolute path is rejected in the guest
+    # with "expected a grant-relative file path".
+    expect(not wrote.startswith("/"),
+           f"the write path is grant-relative, not absolute: {wrote!r}")
+    root = create["args"].get("read_root", "")
+    expect(launched_arg == f"{root}/{wrote}",
+           f"the absolute launch path is root + grant-relative name: "
+           f"{launched_arg!r} vs {root}/{wrote}")
+
+    print("25. a session without the write grant fails closed, not silently")
+    # Without write_file the deploy cannot run. Every trial would gap for a
+    # known reason, so the runner must stop and say which capability is missing
+    # rather than spend the slot.
+    h2 = Harness(store_items=["buy milk", "call mom", "write report"],
+                 a11y=False, geometry=True)
+    nostub = h2.dir / "nowrite_stub.py"
+    # A session created without read_root/allow_write gets an error from
+    # write_file, which is what the runtime returns. That must fail closed.
+    nosrc = STUB_TEMPLATE.replace(
+        '        elif n == "write_file":\n'
+        '            FILES[a.get("path", "")] = a.get("content_base64", "")\n'
+        '            res = text({"ok": True, "bytes_written": len(a.get("content_base64", ""))})',
+        '        elif n == "write_file":\n'
+        '            res = text({"ok": False, "error": "write_file requires allow_write"}, True)')
+    assert nosrc != STUB_TEMPLATE, "the no-write variant must change the stub"
+    nostub.write_text(nosrc)
+    h2.stub = nostub
+    code, d = h2.run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "gap", f"no write grant -> gap, not pass (got {row['state']})")
+    detail = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+    reason = detail["verdict"]["checks"][0]["reason"]
+    expect("not deployed" in reason, f"the reason names the deploy: {reason[:120]}")
+    expect("read_root" in reason or "allow_write" in reason,
+           f"it names the missing capability: {reason[:140]}")
+
+    print("26. --go runs preflight first and refuses on failure (TIF-158 fix B)")
+    # The check existed but --go never called it: it acquired the lock, booted a
+    # guest and spent a window without consulting the readiness gate it already
+    # had. Two windows were lost to that (TIF-158).
+    out3 = Path(tempfile.mkdtemp(prefix="df005-gate-"))
+    held = out3 / "held.lock"
+    holder = subprocess.Popen([sys.executable, "-c",
+        f"import fcntl,time;fd=open({str(held)!r},'w');"
+        "fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);"
+        "fd.write('99999 gate-holder');fd.flush();time.sleep(8)"])
+    time.sleep(0.5)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(RUNNER), "--go", "--scenario", "DF-S01", "--runs", "1",
+             "--eval-id", "gate", "--output-dir", str(out3 / "runs")],
+            capture_output=True, text=True, cwd=ROOT,
+            env={**os.environ, "MYCO_VM_LOCK_PATH": str(held)},
+        )
+        expect("running preflight before taking the slot" in proc.stdout,
+               "the gate announces itself")
+        expect("not taking the guest slot" in proc.stdout + proc.stderr,
+               f"--go refuses when preflight fails: {(proc.stdout+proc.stderr)[-160:]}")
+        expect("scenarios=[" not in proc.stdout,
+               "it stops BEFORE the trial loop")
+    finally:
+        holder.kill(); holder.wait()
+
+    print("27. --skip-preflight is honoured, and only with --go")
+    proc = subprocess.run(
+        [sys.executable, str(RUNNER), "--go", "--skip-preflight", "--scenario", "DF-S01",
+         "--runs", "1", "--eval-id", "skip", "--output-dir", str(out3 / "runs2")],
+        capture_output=True, text=True, cwd=ROOT,
+        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out3 / "free.lock")},
+    )
+    out = proc.stdout + proc.stderr
+    expect("running preflight before taking the slot" not in out,
+           "the escape hatch skips the gate")
+    # It still must not proceed past the lock when the server is missing.
+    expect("build server first" in out or "scenarios=[" in out or "refusing" in out,
+           f"it proceeds to the next gate rather than silently doing nothing: {out[-160:]}")
+
+    print("27b. the read-back reads the handler's declared key, and only it")
+    # The handler returns `content_base64` (main.rs:506). A reader that also
+    # accepts a `content` key works by accident and hides a contract drift.
+    # Check the CODE, not the file text: a comment mentioning the old form must
+    # not make this fail, and a real fallback must not hide in one.
+    import ast as _ast
+    tree = _ast.parse((ROOT / "scripts" / "df005-runner.py").read_text())
+    reads = [n for n in _ast.walk(tree)
+             if isinstance(n, _ast.Call)
+             and isinstance(n.func, _ast.Attribute) and n.func.attr == "get"
+             and isinstance(n.func.value, _ast.Name) and n.func.value.id == "back"]
+    keys = [n.args[0].value for n in reads if n.args and isinstance(n.args[0], _ast.Constant)]
+    expect("content_base64" in keys, f"the reader takes content_base64: {keys}")
+    expect(keys == ["content_base64"],
+           f"and takes ONLY that key, no undeclared fallback: {keys}")
+    handler = (ROOT / "runtime" / "crates" / "myco-rt-mcp" / "src" / "main.rs").read_text()
+    expect('"content_base64": encoded' in handler,
+           "and the handler really declares content_base64 (the reader matches it)")
+
+    print("28. the read-back compares BYTES, not a symmetric echo")
+    # Round 2: mutation (b) — a deploy that wrote the wrong bytes — SURVIVED,
+    # because the stub echoed whatever was written, so any two-sided write
+    # matched. The stub now serves the REAL fixture for read_file, so a deploy
+    # whose bytes differ from the repo copy is caught.
+    real_fixture = str(ROOT / "dogfood" / "apps" / "myco-todo" / "myco_todo.py")
+
+    h3 = Harness(store_items=["buy milk", "call mom", "write report"],
+                 a11y=False, geometry=True)
+    h3.env["STUB_REAL_FIXTURE"] = real_fixture
+    code, d = h3.run(scenario="DF-S01")
+    expect(ledger(d)["run-df-s01-1"]["state"] == "pass",
+           "a deploy matching the repo copy passes a bytes-verified read-back")
+
+    # The same stub, but the stub itself serves a DIFFERENT file for the app
+    # path than the runner uploads. The hash comparison must reject it.
+    other = h3.dir / "other.py"
+    other.write_text("# a different file\n")
+    h4 = Harness(store_items=["buy milk", "call mom", "write report"],
+                 a11y=False, geometry=True)
+    h4.env["STUB_REAL_FIXTURE"] = str(other)
+    code, d = h4.run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "gap",
+           f"a read-back that differs from the upload gaps (got {row['state']})")
+    reason = json.loads((d / "run-df-s01-1" / "result.json").read_text())[
+        "verdict"]["checks"][0]["reason"]
+    expect("does not match the repo copy" in reason,
+           f"the reason names the mismatch: {reason[:120]}")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0

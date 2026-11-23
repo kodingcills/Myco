@@ -27,7 +27,9 @@ Grading rules this harness enforces (DF-005 hardening, 2026-11-22):
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
+import hashlib
 import json
 import os
 import shlex
@@ -43,7 +45,22 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_SERVER = REPO / "runtime" / "target" / "debug" / "myco-rt-mcp"
 GUEST_DIR = Path(os.environ.get("MYCO_GUEST_DIR", REPO / "runtime" / "guest"))
 VM_LOCK_PATH = os.environ.get("MYCO_VM_LOCK_PATH", "/tmp/myco-win11.vm.lock")
-APP_PATH = "~/myco-todo/myco_todo.py"
+# The runtime's file grant is rooted at an EXISTING directory the agent can
+# WRITE: FileGrant::open uses OFlags::DIRECTORY with no mkdir op, and the write
+# needs O_CREAT in that directory. Existence and writability are different
+# claims, and only the second lets the deploy succeed.
+#
+# /tmp is the one root both are true for by construction on a fresh overlay: it
+# is 1777, and the guest's own seeded apps already write there
+# (seed/user-data: STATE_FILE = "/tmp/myco-tk-state.json"). /opt/myco exists but
+# is created implicitly root:root 0755 with no chown in the repo — the same
+# unproven shape as /home/myco/myco-todo, one directory over (TIF-158 round 2).
+GRANT_ROOT = "/tmp"
+APP_NAME = "myco_todo.py"
+# Absolute path for the launch argument; the grant-relative name for file ops.
+# FileGrant::read refuses anything but Component::Normal parts, so an absolute
+# path is rejected with "expected a grant-relative file path".
+APP_PATH = f"{GRANT_ROOT}/{APP_NAME}"
 
 # TIF-120: the guest path the fixture publishes its widget record to and the
 # runtime reads it back from. Passed on `create` (route 1, preferred over
@@ -507,6 +524,11 @@ def execute_scenario(
             # Route 1 (TIF-120): a per-session path wins over gui.env, and the
             # runtime sets MYCO_TODO_STATE_FILE to it for apps launched via act.
             "introspection_file": INTROSPECTION_PATH,
+            # TIF-158: the runner deploys the fixture itself, which needs the
+            # session's write grant. read_root confines every read/write beneath
+            # it, so this is the narrowest root that covers APP_PATH.
+            "read_root": GRANT_ROOT,
+            "allow_write": True,
         })
     except McpError as e:
         return gap("REQ-01", f"create failed: {e}")
@@ -542,6 +564,19 @@ def execute_scenario(
     node_count = count_nodes(obs.get("a11y_tree"))
     events.append({"type": "observation", "timestamp": now(),
                    "stateVersion": v_before, "nodeCount": node_count})
+
+    # --- deploy the fixture before launching it (TIF-158) ------------------
+    # The runner launches APP_PATH; on a fresh guest that path does not exist,
+    # so nothing publishes and every trial gaps at REQ-03 with
+    # `introspection: not_published_yet`. Two live DF-S01 windows were spent
+    # discovering that the fixture was simply never deployed.
+    #
+    # Fail closed: if the deploy cannot put a current fixture in place, every
+    # trial would gap for a known reason, so stop rather than spend the slot.
+    deployed, why = deploy_fixture(mcp, sid, APP_PATH)
+    if not deployed:
+        cleanup(mcp, sid)
+        return gap("REQ-04", f"fixture not deployed: {why}")
 
     # --- launch the app --------------------------------------------------
     try:
@@ -773,6 +808,62 @@ def introspection_record(obs: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(rec, dict) and "unavailable" not in rec:
         return rec
     return None
+
+
+def deploy_fixture(mcp: McpClient, sid: str, app_path: str) -> tuple[bool, str]:
+    """Put a current myco-todo in the guest; fail closed if it cannot.
+
+    Uses the runtime's own write_file/read_file over the session that will run
+    the trials — same channel, same guest, no separate state-dir resolution
+    (TIF-158). write_file is opt-in (needs read_root + allow_write on create),
+    so a session without those is reported as the capability gap it is.
+
+    Verification is a read-back, not an exec: the runtime exposes no command
+    execution, and `read_file` returning the exact bytes we wrote is the same
+    evidence a hash check would give.
+    """
+    # Derive the grant-relative name from the absolute launch path, so the two
+    # cannot drift: FileGrant refuses anything but Component::Normal parts, and
+    # the launch needs the absolute form.
+    if not app_path.startswith(GRANT_ROOT + "/"):
+        return False, f"{app_path} is outside the grant root {GRANT_ROOT}"
+    rel = app_path[len(GRANT_ROOT) + 1:]
+
+    local_app = REPO / "dogfood" / "apps" / "myco-todo" / "myco_todo.py"
+    if not local_app.exists():
+        return False, f"no fixture at {local_app}"
+    body = local_app.read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+
+    try:
+        wrote = mcp.call_tool("write_file", {
+            "session_id": sid,
+            "path": rel,
+            "content_base64": base64.b64encode(body).decode("ascii"),
+        })
+    except McpError as e:
+        return False, (f"write_file unavailable ({e}). Create the session with "
+                       "read_root and allow_write to let the runner deploy.")
+
+    try:
+        back = mcp.call_tool("read_file", {"session_id": sid, "path": rel})
+    except McpError as e:
+        return False, f"could not read the fixture back: {e}"
+
+    # The MCP read_file handler returns exactly `content_base64` (main.rs:506).
+    # An `or back.get("content")` chain read as if the wire had another shape and
+    # worked only because the first lookup was None — a claim asserted against a
+    # stub that mirrored the reader rather than the Rust contract.
+    encoded = back.get("content_base64")
+    try:
+        got = base64.b64decode(encoded)
+    except Exception as e:  # noqa: BLE001
+        return False, f"read-back was not base64: {e}"
+    if hashlib.sha256(got).hexdigest() != digest:
+        return False, (f"the deployed fixture does not match the repo copy "
+                       f"({digest[:12]} vs {hashlib.sha256(got).hexdigest()[:12]}, "
+                       f"wrote {wrote.get('bytes_written')} bytes)")
+    return True, f"deployed {rel} ({digest[:12]}, {len(body)} bytes), read-back matches"
 
 
 def observe_until_introspection(mcp: McpClient, sid: str, tries: int = 20,
@@ -1228,6 +1319,9 @@ def main() -> int:
     p.add_argument("--agent-report", help="agent transcript for verifier-graded clause (b)")
     p.add_argument("--preflight", action="store_true",
                    help="read-only readiness check; creates no session, mutates nothing")
+    p.add_argument("--skip-preflight", action="store_true",
+                   help="with --go: take the slot without running preflight first "
+                        "(the readiness gate is on by default)")
     args = p.parse_args()
 
     if args.preflight:
@@ -1242,6 +1336,21 @@ def main() -> int:
     if not offline:
         if not args.go:
             sys.exit("refusing to boot a guest without --go (wait for M1 Coordinator GO)")
+
+        # Run the readiness check BEFORE taking the lock or booting anything.
+        # Those were separate flags: --go acquired the lock, booted a guest and
+        # spent a window without ever consulting the check that exists to stop
+        # exactly that. Two windows were lost to it (TIF-158). A gate that is not
+        # wired to the action it guards is not a gate.
+        if not args.skip_preflight:
+            print("running preflight before taking the slot (--skip-preflight to override)")
+            rc = preflight()
+            if rc != 0:
+                sys.exit(
+                    "preflight failed; not taking the guest slot. Fix the checks above, "
+                    "or pass --skip-preflight if you know the failure is benign."
+                )
+
         lock_fd = acquire_vm_lock("df005-runner.py")
         if not DEFAULT_SERVER.exists():
             release_vm_lock(lock_fd)
