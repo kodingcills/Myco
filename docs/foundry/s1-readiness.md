@@ -90,15 +90,31 @@ which `replay.ts` already does.
 
 ## 4. What the Foundry will build next, in order
 
-1. **Independent save observer** (offline design, VM to run): a second reader that samples
-   the store at save time and records a hash, independent of the arm's recorder.
-2. **Ingest attestation** (offline): an ingest that accepts only artifacts carrying the
-   observer's record, and flips `decisionEligible` only when every binding matches.
-3. **The eligibility flip** (Tier 2, needs a verifier at the exact head): the one code change
-   that can turn a descriptive row into a decision input.
+1. ~~**Independent save observer**~~ — **built** (`src/foundry/baseline/attest.ts`):
+   `SaveObserver` samples the persistence files and records a hash, byte length and whether
+   the read came after the last save. The offline implementation is honest about being
+   offline; a live run must supply an observer whose `id` names the real second channel.
+2. ~~**Ingest attestation**~~ — **built** (`attest()` in the same file): strict by
+   construction, with no "assume fine" branch. It refuses a run when the recorder is
+   inconsistent or unfinished, when an audit names no recorded call or the wrong channel,
+   when any persistence file lacks an observation, when an observation predates the last
+   save, when the bytes changed after observation, when the screen reading came from the
+   arm, or when the last save's bytes disagree with the observation. The required file set
+   comes from the **fixture manifest**, not from the caller, and a fixture designating
+   nothing is refused. Files the app wrote beyond that set are reported as
+   `unexpectedFiles` rather than required: demanding an observation for every file in the
+   final state refuses honest runs that wrote a log, which is a worse failure than the one
+   it prevents. It also reports `screenConstrained`, so an empty pixel-arm screen reads as
+   "nothing to match" rather than "agreed".
+3. **The eligibility flip** — **not done, and deliberately so.** `scoreDiscoveryTrial` still
+   hardcodes `decisionEligible: false`. Wiring `attest()` into it is the one change that can
+   turn a descriptive row into a decision input, and it is Tier 2: it needs a full verifier
+   pass at the exact head, not a follow-up to this one.
 
-Item 1 and 2 are designable and testable offline against the fake guest. Item 3 is the
-scoring change and should not land without a full verifier pass.
+**What is still missing for a real S1 run**, beyond the flip: an observer that is genuinely
+independent. `offlineObserver` hashes bytes it is handed, which tests the gate's *contract*
+but cannot test the gate's *premise* — that the reader is not the arm. That requires a second
+connection to the guest, which is VM work.
 
 ## Sources
 
@@ -107,3 +123,30 @@ scoring change and should not land without a full verifier pass.
 - `docs/foundry/contract.md` §"Discovery comparison evidence" — the six bindings.
 - `docs/product/mvd-preregistration.md` §3 — decision eligibility.
 - `foundry/hidden-commitment.json`, `src/foundry/hidden-split/` — the merged split.
+## 5. The limit that no in-process gate can close — escalated
+
+Verification round 3 found two remaining issues. One is fixed (a save must now be explained
+by a GUI act, and malformed evidence returns a blocker instead of throwing). The other is
+**structural and needs a decision, not another round**:
+
+`attest()` takes the fixture as an argument. A caller can pass an object that keeps the real
+`fixtureId` but names a benign file as its `persistenceFiles`, and the gate will require an
+observation of the wrong file. Equally, a caller can supply the observations and the final
+bytes together, and a match between two things the caller controls proves nothing.
+
+**This is not fixable inside `attest()`.** The gate's premise is that the observer and the
+artifacts come from a channel the arm does not control, and no function can verify its own
+inputs' provenance. What the gate *can* do — and now does — is refuse an eligible verdict
+when anything is missing, inconsistent, or unattributable.
+
+**Decision needed (outer loop / Tiffany):** before `attest()` is wired into
+`scoreDiscoveryTrial`, the fixture identity must come from the hidden commitment rather than
+from a caller argument. Concretely, either:
+
+1. the ingest resolves the fixture itself from the hidden split and passes only a commitment
+   id, rejecting any fixture whose hash does not match `foundry/hidden-commitment.json`; or
+2. the ingest runs in a process the arm cannot call, and `attest()` is not exported to arm
+   code at all.
+
+Option 1 is cheaper and testable offline. Option 2 is the stronger guarantee. Both are
+changes to *where* the gate runs, which is why they are not part of this PR.

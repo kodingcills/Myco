@@ -40,8 +40,19 @@ export interface HeadToHeadArm {
   }[];
 }
 
+export interface HeadToHeadProvenance {
+  readonly kind: "live" | "simulated" | "mixed" | "unknown";
+  readonly note?: string;
+  readonly arms?: readonly {
+    readonly armId: string;
+    readonly source: string;
+    readonly live: boolean;
+  }[];
+}
+
 export interface HeadToHeadReport {
   readonly decision: HeadToHeadDecision;
+  readonly provenance?: HeadToHeadProvenance;
   readonly arms: readonly HeadToHeadArm[];
   readonly notRun?: readonly { readonly armId: string; readonly blocker: string }[];
   readonly evidence?: readonly string[];
@@ -135,6 +146,33 @@ export function parseHeadToHead(value: unknown): HeadToHeadReport | undefined {
     }
   }
 
+  // Absence is not evidence of liveness: a report that does not say where its
+  // numbers came from is "unknown", and the view must say so.
+  let provenance: HeadToHeadProvenance = { kind: "unknown" };
+  if (isRecord(value.provenance)) {
+    const kind = value.provenance.kind;
+    if (kind !== "live" && kind !== "simulated" && kind !== "mixed" && kind !== "unknown")
+      return undefined;
+    const arms: { armId: string; source: string; live: boolean }[] = [];
+    if (Array.isArray(value.provenance.arms)) {
+      for (const arm of value.provenance.arms) {
+        if (
+          !isRecord(arm) ||
+          typeof arm.armId !== "string" ||
+          typeof arm.source !== "string" ||
+          typeof arm.live !== "boolean"
+        )
+          return undefined;
+        arms.push({ armId: arm.armId, source: arm.source, live: arm.live });
+      }
+    }
+    provenance = {
+      kind,
+      note: typeof value.provenance.note === "string" ? value.provenance.note : undefined,
+      arms: arms.length > 0 ? arms : undefined,
+    };
+  }
+
   return {
     decision: {
       status: decision.status,
@@ -155,6 +193,7 @@ export function parseHeadToHead(value: unknown): HeadToHeadReport | undefined {
       pairRows,
     },
     arms,
+    provenance,
     notRun: notRun.length > 0 ? notRun : undefined,
     evidence: Array.isArray(value.evidence)
       ? value.evidence.filter((path): path is string => typeof path === "string")

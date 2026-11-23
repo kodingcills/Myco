@@ -371,8 +371,11 @@ class RunResult:
     started_at: str = ""
     duration: float = 0.0
     missing_req: str = "none"
-    ledger_state: str = "pass"
-    oracle: str = "verifier:verified+ground-truth"
+    # Fail-closed defaults: a construction site that forgets to state its
+    # verdict must not inherit a pass. Every site sets these explicitly today;
+    # this makes a future omission a gap rather than a fabricated success.
+    ledger_state: str = "gap"
+    oracle: str = "verifier:uncertain"
     unresolved: str | None = None
     trace_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -724,10 +727,13 @@ def find_ref_by_role(obs: dict[str, Any], roles: tuple[str, ...],
     return walk(obs.get("a11y_tree") or {})
 
 
+
 def introspection_record(obs: dict[str, Any]) -> dict[str, Any] | None:
     """The app-published widget record, or None when absent/unavailable.
 
     ADR-0016 tri-state: null (channel unset) | record | {"unavailable": reason}.
+    The global route needs this for click geometry, so it is live again after
+    being removed as dead code when only the ref route existed.
     """
     rec = (obs.get("a11y_tree") or {}).get("introspection")
     if isinstance(rec, dict) and "unavailable" not in rec:
@@ -735,17 +741,13 @@ def introspection_record(obs: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def introspection_unavailable(obs: dict[str, Any]) -> str | None:
-    """The channel's failure reason, when it exists but could not be read."""
-    rec = (obs.get("a11y_tree") or {}).get("introspection")
-    if isinstance(rec, dict) and "unavailable" in rec:
-        return str(rec["unavailable"])
-    return None
-
-
 def observe_until_introspection(mcp: McpClient, sid: str, tries: int = 20,
                                 delay: float = 0.25) -> dict[str, Any]:
-    """Poll observe() until the introspection record appears, or the budget ends."""
+    """Poll observe() until the introspection record appears, or the budget ends.
+
+    Returns the last observation rather than raising: the caller decides gap vs
+    proceed from the record, so the failure mode stays explicit.
+    """
     last: dict[str, Any] = {}
     for _ in range(tries):
         try:
@@ -756,6 +758,15 @@ def observe_until_introspection(mcp: McpClient, sid: str, tries: int = 20,
             return last
         time.sleep(delay)
     return last
+
+
+def introspection_unavailable(obs: dict[str, Any]) -> str | None:
+    """The channel's failure reason, when it exists but could not be read."""
+    rec = (obs.get("a11y_tree") or {}).get("introspection")
+    if isinstance(rec, dict) and "unavailable" in rec:
+        return str(rec["unavailable"])
+    return None
+
 
 
 def count_nodes(tree: Any) -> int:
@@ -887,6 +898,22 @@ def write_run_evidence(eval_dir: Path, run_id: str, task_id: str, res: RunResult
         json.dump(record, f, indent=2)
 
 
+def ledger_detail(sc: Scenario, res: RunResult) -> str:
+    """One-line ledger detail, including the failing check's reason.
+
+    The ledger is the artifact most consumers read; a bare `missing=REQ-04`
+    cannot distinguish "the app exposes no accessibility tree" from "the
+    introspection channel is broken". The first failing check's reason carries
+    that discriminator, so it goes in the detail.
+    """
+    base = f"{sc.sid} bucket={res.bucket} missing={res.missing_req}"
+    failing = next((c for c in res.checks if c["passed"] is not True), None)
+    if failing is None:
+        return base
+    reason = " ".join(str(failing["reason"]).split())
+    return f"{base} | {failing['name']}: {reason[:200]}"
+
+
 def ledger_row(eval_id: str, trial: int, run_id: str, res: RunResult, sc: Scenario) -> dict[str, Any]:
     return {
         "evalId": eval_id,
@@ -897,7 +924,7 @@ def ledger_row(eval_id: str, trial: int, run_id: str, res: RunResult, sc: Scenar
         "state": res.ledger_state,
         "oracle": res.oracle,
         "refusalCode": None,
-        "detail": f"{sc.sid} bucket={res.bucket} missing={res.missing_req}",
+        "detail": ledger_detail(sc, res),
     }
 
 
@@ -927,6 +954,9 @@ def summarize(results: dict[str, list[RunResult]]) -> None:
             print("gaps by requirement: " + ", ".join(f"{k}={v}" for k, v in sorted(gaps.items())))
 
 
+TOTAL_CHECKS = 6
+
+
 def preflight() -> int:
     """Read-only readiness check, run inside an approved guest window.
 
@@ -939,9 +969,10 @@ def preflight() -> int:
     """
     results: list[tuple[str, bool, str]] = []
 
-    def record(name: str, ok: bool, detail: str) -> None:
+    def record(name: str, ok: bool | None, detail: str) -> None:
         results.append((name, ok, detail))
-        print(f"  {'ok  ' if ok else 'FAIL'} {name}: {detail}")
+        mark = "ok  " if ok is True else ("skip" if ok is None else "FAIL")
+        print(f"  {mark} {name}: {detail}")
 
     print("DF-005 preflight (read-only; no session is created)")
 
@@ -988,6 +1019,19 @@ def preflight() -> int:
         except Exception as e:  # noqa: BLE001
             return 1, str(e)
 
+    # (e) Never probe the guest while another driver holds the lock. The checks
+    # are read-only, but they add load to someone else's live slot, so report
+    # them as not-run and let the operator see why they are missing.
+    if not lock_free:
+        for name in ("guest-ssh", "app-deployed", "app-self-test", "introspection-env"):
+            record(name, None, "not run: another driver holds the VM lock")
+        print()
+        print(f"preflight FAILED: 1 of {TOTAL_CHECKS} checks failed: vm-lock")
+        print("  not run (blocked by the above): guest-ssh, app-deployed, "
+              "app-self-test, introspection-env")
+        print("Fix these before spending the guest slot.")
+        return 1
+
     rc, out = guest("uname -sm")
     record("guest-ssh", rc == 0 and "Linux" in out, out[:80] or "no answer")
 
@@ -1017,14 +1061,28 @@ def preflight() -> int:
         record("introspection-env", rc4 == 0 and env.strip() not in ("", "0"),
                "MYCO_INTROSPECTION_FILE present in gui.env" if env.strip() not in ("", "0")
                else "absent: the app's widget state will be unobservable (REQ-03)")
+    else:
+        # No guest to ask: record the dependent checks as not-run rather than
+        # omitting them, so the summary never claims a count it did not measure.
+        for name in ("app-deployed", "app-self-test", "introspection-env"):
+            record(name, None, "not run: guest unreachable")
 
-    failed = [n for n, ok, _ in results if not ok]
+    failed = [n for n, ok, _ in results if ok is False]
+    skipped = [n for n, ok, _ in results if ok is None]
     print()
     if failed:
-        print(f"preflight FAILED: {len(failed)} check(s): {', '.join(failed)}")
+        print(f"preflight FAILED: {len(failed)} of {TOTAL_CHECKS} checks failed: "
+              f"{', '.join(failed)}")
+        if skipped:
+            print(f"  not run (blocked by the above): {', '.join(skipped)}")
         print("Fix these before spending the guest slot.")
         return 1
-    print(f"preflight OK: {len(results)} checks passed")
+    if skipped:
+        # Never report a partial run as a pass.
+        print(f"preflight INCOMPLETE: {len(skipped)} of {TOTAL_CHECKS} checks not run: "
+              f"{', '.join(skipped)}")
+        return 1
+    print(f"preflight OK: {len(results)}/{TOTAL_CHECKS} checks passed")
     return 0
 
 
