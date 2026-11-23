@@ -4,6 +4,43 @@
 booted. #314 is merged (15:36:18Z); this is a defect in it, reported rather than
 quietly patched.
 
+## CORRECTION (same day): the cause is CRLF, not the timeout
+
+An earlier revision of this file, and the merged PR #319, named
+`ConnectTimeout=10` as the cause. **That is wrong, and the probe slot disproved
+it.** The real cause is a string comparison that can never match.
+
+The guest's default shell is PowerShell, which emits **CRLF**. Command
+substitution strips the trailing `\n` and leaves the `\r`:
+
+```
+captured raw: 6f6b 0d          # "ok\r"
+[ "$v" = "ok" ]  ->  NO MATCH  # the CR remains
+```
+
+**This is why `wait-ssh.sh` works and this gate does not** — different
+comparisons against the same remote command:
+
+```
+wait-ssh.sh:    ssh ... | grep -q ok         # CR-tolerant  -> WORKS
+gate line 116:  [ "$(ssh ...)" = "ok" ]      # CR-intolerant -> NEVER MATCHES
+```
+
+Proven side by side against a CRLF-emitting command: `grep -q ok` matches,
+`= "ok"` does not, and `tr -d '\r'` before the compare matches.
+
+**Bash strips trailing newlines**, so the `\n` alone was never the problem — a
+plausible intermediate diagnosis that is also wrong.
+
+**The fix is one line: `tr -d '\r'` before the compare.** The repo already does
+this in three places (`m1-sweep.sh:89`, `m1-corrupt-suite.sh:80`,
+`reset-trial-vm.sh:49`), so it is idiomatic here.
+
+**The timeout observation below is still real but is NOT the cause.** Keep it
+only as a separate, secondary concern. Two timeout-based fix attempts were made
+and both were doomed, because raising a timeout cannot rescue a comparison that
+never succeeds.
+
 ## What happened
 
 The gate ran with a 200 s budget and reported:
@@ -15,55 +52,43 @@ wait-guest-ready: timeout after 200s: guest pid 30662 consumed 435s CPU and has 
 **The guest was booting and SSH came up moments later.** CPU had advanced to
 435 s, which is exactly what a healthy boot looks like.
 
-## The mechanism (verified in the source)
+## The secondary timing observation (not the cause)
 
 `scripts/wait-guest-ready.sh`:
 
 ```
-line 116:  ssh -F "$CFG" -o BatchMode=yes -o ConnectTimeout=10 myco-win11 'echo ok'
 line  40:  INTERVAL=${MYCO_READY_INTERVAL:-10}
-line  79:  while :; do
-line  82:    if [ $(( NOW - START )) -gt "$T" ]; then <timeout>; exit 1; fi   # checked BEFORE the sleep
-line  86:    sleep "$INTERVAL"
-...
-line 116:    if SEEN_PROGRESS=1 && ssh ... ; then <ready>; exit 0; fi
+line  82:  if [ $(( NOW - START )) -gt "$T" ]; then <timeout>; exit 1; fi   # before the sleep
+line  86:  sleep "$INTERVAL"
+line 116:  if SEEN_PROGRESS=1 && [ "$(ssh ... )" = "ok" ]; then <ready>; exit 0; fi
 ```
 
-Two facts compose into the defect:
+Two things are true of the timing, independent of the CRLF defect:
 
-1. **`ConnectTimeout=10` is too short for this guest's boot.** SSH takes
-   **~35–60 s** to answer while Windows is still coming up (measured ~59 s once,
-   18 s when warm). So the probe gives up at 10 s, never returns `ok`, and
-   **the AND never passes.**
-2. **The budget is checked *before* the sleep**, so each iteration really costs
-   `INTERVAL(10) + ssh(up to 10) = up to 20 s` against a budget that is only
-   decremented at the top. The overshoot compounds.
-
-Net: a guest that is genuinely booting can never satisfy the AND, the loop burns
-its whole budget, and it exits 1 with a message that says the guest "has not
-booted" — which is **false**, and is the same class of error as the defect this
-gate was built to fix, just inverted. The old gate said *ready* too early; this
-one says *not booting* too early.
+1. **SSH can be slow to answer during boot** (~35–60 s observed, ~59 s once,
+   18 s warm) against `ConnectTimeout=10`. Worth raising, but on its own it
+   would not have prevented the failure.
+2. **The budget is checked *before* the sleep**, so an iteration costs
+   `INTERVAL(10) + ssh(up to 10)`. The overshoot compounds.
 
 ## Why review could not catch it
 
 Both verifier rounds drove the gate with a **stubbed `ssh` that answers
-instantly**, so `SEEN_PROGRESS && ssh==ok` passed on the first iteration. The
-race is only reachable with a real, slow-booting guest. This is the strongest
-argument yet for the rule that a gate's timing behaviour needs at least one
-measurement against the real thing.
+instantly**, so the compare passed on the first iteration — the stub emitted
+`ok\n` with no `\r`, which is precisely the detail a stub erases.
 
-## Candidate fixes (to be chosen by measurement, not preference)
+**A stub that answers "correctly" can hide a defect in how the answer is read.**
+For this class of bug the stub must reproduce the transport's real bytes,
+including line endings.
 
-- **(a) Raise `ConnectTimeout` to ~30 s.** Simple, but it interacts with the
-  loop: a 30 s probe inside a 10 s interval changes the sampling rate, so the
-  CPU-progress cadence is no longer what `MIN_DELTA`/`FLAT` were tuned for.
-- **(b) Separate the probe cadence from the sample cadence**, so a slow probe
-  does not consume the CPU-sampling interval budget. More honest structurally,
-  since the two measurements want different periods.
+## Fix
 
-Whichever wins, the timeout message should stop asserting "has not booted" when
-what was observed is "SSH did not answer within the probe budget".
+`tr -d '\r'` before the compare. The timeout question (raise
+`ConnectTimeout`? separate probe from sample cadence?) is a separate, secondary
+decision.
+
+The timeout message should also stop asserting "has not booted" when what was
+observed is "SSH did not answer, or did not answer in the expected form".
 
 ## Not the same as TIF-164's original cause
 
