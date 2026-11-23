@@ -29,6 +29,7 @@ const app = {
   command: "python3",
   args: ["myco_todo.py"],
   storePath: "/tmp/store.json",
+  savePoint: { x: 210, y: 284 },
 };
 
 function verify(
@@ -61,6 +62,11 @@ describe("Direction A live runner", () => {
     expect(result.falseSuccess).toBe(false);
     expect(result.missing).toEqual([]);
     expect(result.claimed).toBe("saved 2 item(s)");
+    const traceText = readFileSync(join(dir, "clean", "trace.jsonl"), "utf8");
+    expect(traceText).toContain('"kind":"typeTextGlobal"');
+    expect(traceText).toContain('"kind":"clickAt"');
+    expect(traceText).toContain('"x":210');
+    expect(traceText).toContain('"y":284');
     const record: unknown = JSON.parse(readFileSync(join(dir, "clean", "result.json"), "utf8"));
     expect(validateSchema(record, resultRecordSchema)).toEqual([]);
     const trace = readFileSync(join(dir, "clean", "trace.jsonl"), "utf8")
@@ -231,6 +237,32 @@ describe("Direction A live runner", () => {
     expect(result.status).toBe("verified");
     const trace = readFileSync(join(dir, "reset", "trace.jsonl"), "utf8");
     expect(trace).toContain("reset-failed");
+  });
+
+  it("does not save when the click point misses the Save control", async () => {
+    const result = await runDirectionALive({
+      transport: new MockDesktop(),
+      probe,
+      app: { ...app, savePoint: { x: 10, y: 10 } },
+      items: ["one"],
+      verify,
+      runsDir: runsDir(),
+    });
+    expect(result.status).not.toBe("verified");
+    expect(result.persisted).toEqual([]);
+    expect(result.claimed).not.toMatch(/saved/i);
+  });
+
+  it("falls back to Tab traversal when the task package has no save point", async () => {
+    const result = await runDirectionALive({
+      transport: new MockDesktop(),
+      probe,
+      app: { ...app, savePoint: undefined },
+      items: ["one"],
+      verify,
+      runsDir: runsDir(),
+    });
+    expect(result.status).toBe("verified");
   });
 
   it("reports uncertain when typeText fails, even if the store would verify", async () => {
