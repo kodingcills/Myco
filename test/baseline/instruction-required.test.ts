@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isBaselineRow } from "../../src/baseline/index.ts";
@@ -64,18 +64,48 @@ describe("a C1 row must record its instruction or declare the gap", () => {
     expect(isBaselineRow(hcu)).toBe(true);
   });
 
-  it("all 29 recorded arm-002 rows validate, so the evidence survives the rule", () => {
-    // The count is pinned deliberately. An earlier draft of this work claimed
-    // "0 of 30" when the artifact has 30 ledger entries and only 29 rows - entry
-    // 9 is `omitted` with no row at all. Pinning 29 makes that distinction a
-    // failing test rather than a wrong sentence in a comment.
-    const files = readFileSync(
-      join(process.cwd(), "docs/research/experiments/c1-arm-002/accounting.json"),
-      "utf8",
-    );
-    const ledger = (JSON.parse(files) as { c1: Record<string, { row?: unknown }> }).c1;
-    const rows = Object.values(ledger).filter((e) => e.row !== undefined);
-    expect(rows.length).toBe(29);
-    expect(rows.every((e) => isBaselineRow(e.row))).toBe(true);
+  it("EVERY recorded C1 row in the repo validates, not just arm-002's", () => {
+    // The first version of this test swept only arm-002's ledger, and that is
+    // exactly how a real defect got through: the rule invalidated two rows under
+    // docs/research/experiments/c1-arm-001/ that were valid before it, and
+    // nothing failed. Annotating one corpus and testing that corpus is not a
+    // check. This walks every JSON file under docs/research and validates every
+    // embedded C1 row it finds, so a future corpus that predates the field fails
+    // here until it is annotated.
+    const root = join(process.cwd(), "docs/research");
+    const found: Array<{ where: string; row: unknown }> = [];
+    const visit = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          visit(full);
+          continue;
+        }
+        if (!entry.name.endsWith(".json")) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(readFileSync(full, "utf8"));
+        } catch {
+          continue; // a non-row JSON file is not evidence either way
+        }
+        const walk = (node: unknown, where: string): void => {
+          if (Array.isArray(node)) {
+            node.forEach((v, i) => walk(v, `${where}[${i}]`));
+            return;
+          }
+          if (!node || typeof node !== "object") return;
+          const o = node as Record<string, unknown>;
+          if (o.subArm === "c1" || o.subArm === "c2" || o.subArm === "hcu") {
+            found.push({ where, row: node });
+          }
+          for (const [k, v] of Object.entries(o)) walk(v, `${where}.${k}`);
+        };
+        walk(parsed, full.replace(`${root}/`, ""));
+      }
+    };
+    visit(root);
+    expect(found.length).toBeGreaterThan(29); // arm-002 alone is 29
+    const invalid = found.filter((f) => !isBaselineRow(f.row));
+    expect(invalid.map((f) => f.where)).toEqual([]);
   });
 });
