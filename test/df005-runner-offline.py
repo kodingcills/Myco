@@ -91,8 +91,17 @@ for line in sys.stdin:
             FILES[a.get("path", "")] = a.get("content_base64", "")
             res = text({"ok": True, "bytes_written": len(a.get("content_base64", ""))})
         elif n == "read_file":
-            res = text({"ok": True, "content": FILES.get(a.get("path", ""), ""),
-                        "raw_bytes": len(FILES.get(a.get("path", "")))})
+            # Serve the REAL fixture for the app path, not whatever was written:
+            # a symmetric echo cannot catch a deploy that writes wrong bytes.
+            real = os.environ.get("STUB_REAL_FIXTURE", "")
+            if real and os.path.exists(real):
+                import base64 as _b
+                with open(real, "rb") as fh:
+                    served = _b.b64encode(fh.read()).decode()
+            else:
+                served = FILES.get(a.get("path", ""), "")
+            res = text({"ok": True, "content_base64": served,
+                        "raw_bytes": len(served)})
         elif n == "create":
             res = text({"ok": True, "session_id": a.get("session_id", "s")})
         else:
@@ -649,12 +658,14 @@ def main() -> int:
     expect(create["args"].get("allow_write") is True,
            f"create grants allow_write: {create['args'].get('allow_write')}")
     root = create["args"].get("read_root", "")
-    # The grant root must be an EXISTING directory: FileGrant::open uses
-    # OFlags::DIRECTORY and no op creates one. /opt/myco is seeded; the
-    # /home/myco/myco-todo the first attempt used is not.
-    expect(root == "/opt/myco",
-           f"read_root is the seeded directory, not one that must be created: {root!r}")
-    expect(not root.endswith("/"), f"read_root is not '/' or a trailing-slash root: {root!r}")
+    # The grant root must exist AND be writable by the agent. FileGrant::open
+    # uses OFlags::DIRECTORY and the write needs O_CREAT there, so existence
+    # alone is not enough — /opt/myco exists but is root:root with no chown in
+    # the repo. /tmp is 1777 and the guest's own seeded apps already write there.
+    expect(root == "/tmp",
+           f"read_root is a root that is writable by construction: {root!r}")
+    expect(not root.endswith("/") and root != "/",
+           f"read_root is neither '/' nor trailing-slash: {root!r}")
     # One session served this run, so one deploy is correct here; the point is
     # that it happens before the launch, asserted above.
     expect(order.count("write_file") == 1,
@@ -746,6 +757,36 @@ def main() -> int:
     # It still must not proceed past the lock when the server is missing.
     expect("build server first" in out or "scenarios=[" in out or "refusing" in out,
            f"it proceeds to the next gate rather than silently doing nothing: {out[-160:]}")
+
+    print("28. the read-back compares BYTES, not a symmetric echo")
+    # Round 2: mutation (b) — a deploy that wrote the wrong bytes — SURVIVED,
+    # because the stub echoed whatever was written, so any two-sided write
+    # matched. The stub now serves the REAL fixture for read_file, so a deploy
+    # whose bytes differ from the repo copy is caught.
+    real_fixture = str(ROOT / "dogfood" / "apps" / "myco-todo" / "myco_todo.py")
+
+    h3 = Harness(store_items=["buy milk", "call mom", "write report"],
+                 a11y=False, geometry=True)
+    h3.env["STUB_REAL_FIXTURE"] = real_fixture
+    code, d = h3.run(scenario="DF-S01")
+    expect(ledger(d)["run-df-s01-1"]["state"] == "pass",
+           "a deploy matching the repo copy passes a bytes-verified read-back")
+
+    # The same stub, but the stub itself serves a DIFFERENT file for the app
+    # path than the runner uploads. The hash comparison must reject it.
+    other = h3.dir / "other.py"
+    other.write_text("# a different file\n")
+    h4 = Harness(store_items=["buy milk", "call mom", "write report"],
+                 a11y=False, geometry=True)
+    h4.env["STUB_REAL_FIXTURE"] = str(other)
+    code, d = h4.run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "gap",
+           f"a read-back that differs from the upload gaps (got {row['state']})")
+    reason = json.loads((d / "run-df-s01-1" / "result.json").read_text())[
+        "verdict"]["checks"][0]["reason"]
+    expect("does not match the repo copy" in reason,
+           f"the reason names the mismatch: {reason[:120]}")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0

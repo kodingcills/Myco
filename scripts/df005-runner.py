@@ -45,11 +45,17 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_SERVER = REPO / "runtime" / "target" / "debug" / "myco-rt-mcp"
 GUEST_DIR = Path(os.environ.get("MYCO_GUEST_DIR", REPO / "runtime" / "guest"))
 VM_LOCK_PATH = os.environ.get("MYCO_VM_LOCK_PATH", "/tmp/myco-win11.vm.lock")
-# The runtime's file grant is rooted at an EXISTING directory: FileGrant::open
-# uses OFlags::DIRECTORY with no mkdir op anywhere, so a root that does not yet
-# exist makes create retry for the whole desktop timeout and then fail. The seed
-# creates /opt/myco; /home/myco/myco-todo it does not (TIF-158, verified).
-GRANT_ROOT = "/opt/myco"
+# The runtime's file grant is rooted at an EXISTING directory the agent can
+# WRITE: FileGrant::open uses OFlags::DIRECTORY with no mkdir op, and the write
+# needs O_CREAT in that directory. Existence and writability are different
+# claims, and only the second lets the deploy succeed.
+#
+# /tmp is the one root both are true for by construction on a fresh overlay: it
+# is 1777, and the guest's own seeded apps already write there
+# (seed/user-data: STATE_FILE = "/tmp/myco-tk-state.json"). /opt/myco exists but
+# is created implicitly root:root 0755 with no chown in the repo — the same
+# unproven shape as /home/myco/myco-todo, one directory over (TIF-158 round 2).
+GRANT_ROOT = "/tmp"
 APP_NAME = "myco_todo.py"
 # Absolute path for the launch argument; the grant-relative name for file ops.
 # FileGrant::read refuses anything but Component::Normal parts, so an absolute
@@ -567,7 +573,7 @@ def execute_scenario(
     #
     # Fail closed: if the deploy cannot put a current fixture in place, every
     # trial would gap for a known reason, so stop rather than spend the slot.
-    deployed, why = deploy_fixture(mcp, sid, APP_NAME)
+    deployed, why = deploy_fixture(mcp, sid, APP_PATH)
     if not deployed:
         cleanup(mcp, sid)
         return gap("REQ-04", f"fixture not deployed: {why}")
@@ -816,6 +822,13 @@ def deploy_fixture(mcp: McpClient, sid: str, app_path: str) -> tuple[bool, str]:
     execution, and `read_file` returning the exact bytes we wrote is the same
     evidence a hash check would give.
     """
+    # Derive the grant-relative name from the absolute launch path, so the two
+    # cannot drift: FileGrant refuses anything but Component::Normal parts, and
+    # the launch needs the absolute form.
+    if not app_path.startswith(GRANT_ROOT + "/"):
+        return False, f"{app_path} is outside the grant root {GRANT_ROOT}"
+    rel = app_path[len(GRANT_ROOT) + 1:]
+
     local_app = REPO / "dogfood" / "apps" / "myco-todo" / "myco_todo.py"
     if not local_app.exists():
         return False, f"no fixture at {local_app}"
@@ -825,7 +838,7 @@ def deploy_fixture(mcp: McpClient, sid: str, app_path: str) -> tuple[bool, str]:
     try:
         wrote = mcp.call_tool("write_file", {
             "session_id": sid,
-            "path": app_path,
+            "path": rel,
             "content_base64": base64.b64encode(body).decode("ascii"),
         })
     except McpError as e:
@@ -833,7 +846,7 @@ def deploy_fixture(mcp: McpClient, sid: str, app_path: str) -> tuple[bool, str]:
                        "read_root and allow_write to let the runner deploy.")
 
     try:
-        back = mcp.call_tool("read_file", {"session_id": sid, "path": app_path})
+        back = mcp.call_tool("read_file", {"session_id": sid, "path": rel})
     except McpError as e:
         return False, f"could not read the fixture back: {e}"
 
@@ -846,7 +859,7 @@ def deploy_fixture(mcp: McpClient, sid: str, app_path: str) -> tuple[bool, str]:
         return False, (f"the deployed fixture does not match the repo copy "
                        f"({digest[:12]} vs {hashlib.sha256(got).hexdigest()[:12]}, "
                        f"wrote {wrote.get('bytes_written')} bytes)")
-    return True, f"deployed {local_app.name} ({digest[:12]}, {len(body)} bytes), read-back matches"
+    return True, f"deployed {rel} ({digest[:12]}, {len(body)} bytes), read-back matches"
 
 
 def observe_until_introspection(mcp: McpClient, sid: str, tries: int = 20,
