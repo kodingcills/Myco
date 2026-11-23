@@ -70,8 +70,8 @@ Committed to date, measured from the ledgers:
 |---|---|
 | `c1-spike/0.json` | $0.0768 |
 | `c1-arm/accounting.json` (aborted, 0 rows) | $0.0000 |
-| `c1-arm2/accounting.json` (finished) | **$1.56 charged** ($1.18 actually spent across the 29 scored rows; $0.38 is row 9's reservation, never spent but booked) |
-| **Total committed** | **$1.56 charged** — the figure that counts against the cap (the $1.11 and $1.63 figures were mid-run snapshots) |
+| `c1-arm2/accounting.json` (finished) | **$1.555362 charged** ($1.178562 actually spent across the 29 scored rows; $0.376800 is row 9's reservation, never spent but booked) |
+| **Total committed** | **$1.632162 charged** = spike $0.076800 + arm-002 $1.555362. The pre-existing "≈$1.11" (and its $1.0344 input) were mid-run snapshots; $1.63 was already the correct total and is now derived rather than asserted |
 
 Arm-003 runs to a **$9.00 cap on total committed spend**, and arm-002's final cost
 counts toward it. At arm-002's measured rate the remaining headroom is comfortable;
