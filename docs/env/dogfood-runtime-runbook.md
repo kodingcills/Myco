@@ -337,6 +337,55 @@ This script:
 4. Executes `python3 myco_todo.py --self-test` (verifying seeded bug `BUG in parser` dropped).
 5. Starts the app and verifies the visible X11 window using `xdotool`.
 
+### Step -1 — provision (only if the guest does not exist)
+
+The RT-020 guest state is **not** in every worktree: `runtime/guest/state/` is
+gitignored and survives in exactly one place, the Runtime owner's worktree. If
+preflight fails on `guest-ssh`, check there before assuming anything else:
+
+```
+/Users/tofuinparis/.t3/worktrees/Myco/myco-runtime-v0-46676654c2342d9e/runtime/guest/
+  state/noble-server-cloudimg-arm64.img   616 MB, SHA-256 50e24e1f…0348e
+  state/base-image.sha256                 matches the pin in fetch-image.sh
+  keys/id_ed25519.pub                     present
+  keys/id_ed25519                         NOT committed; regenerated on demand
+```
+
+Facts that make provisioning cheap **when the image is already there**:
+
+- `fetch-image.sh` is idempotent and hash-guarded: with a matching image present
+  it prints `already present and SHA-256 verified (skipping download)` and
+  returns. **No 616 MB download.**
+- `make-seed.sh` regenerates the keypair if `keys/id_ed25519` is missing, then
+  renders `seed/user-data` with whatever public key is on disk. So the `.pub`
+  present here is **not** a key you can reuse — the private half is gone, and
+  the seed must be re-rendered and the guest re-provisioned for the new key to
+  be authorized. `mkisofs` is available and the seed renders (385 KB).
+- No overlay exists (`state/*.qcow2` absent), so `create-overlay.sh` will build
+  one. Disk headroom matters: check `df -h` first.
+- `make-seed.sh` writes into the real `$STATE`, so it cannot be dry-run against
+  a throwaway directory. Treat it as a real step, not a rehearsal.
+
+**Do not provision under memory pressure.** If swap is near full with no VM
+running, a boot plus trials is exactly the setup that turns a real `verified`
+into a flaky `failure` — and a flaky `failure` is indistinguishable from a
+genuine one in the ledger. Wait for a healthy host.
+
+Provisioning sequence, once a window is approved:
+
+```bash
+runtime/guest/fetch-image.sh          # no-op when the image verifies
+runtime/guest/create-overlay.sh       # builds state/myco-runtime-v0.qcow2
+runtime/guest/make-seed.sh            # regenerates key, renders seed.iso
+runtime/guest/boot.sh                 # boots; wait for SSH on 10022
+python3 scripts/df005-runner.py --preflight   # must exit 0 before anything else
+```
+
+Verifying the key half without booting: point `MYCO_GUEST_DIR` at a temp dir
+with a freshly generated key and run `--preflight`. The failure should advance
+from "identity file not accessible" to "connection refused" — that means the
+key is fine and only the boot is missing.
+
 ---
 
 ## 7. Operational Discipline & VM Lock Protocol
