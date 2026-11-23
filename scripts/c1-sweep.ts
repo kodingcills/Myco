@@ -9,6 +9,7 @@ import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
 import { createPlanner } from "../src/baseline/planner.ts";
 import { runC1Sweep } from "../src/baseline/sweep.ts";
 import manifest from "../src/baseline/sweep-v3.json" with { type: "json" };
+import { saveGuestDocument } from "../src/baseline/c1-save.ts";
 import { cleanupTrialGuest } from "../src/integration/guest-health.ts";
 import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
@@ -287,6 +288,14 @@ async function main() {
         closeTransport,
         judge: judgeAudit.judge,
         audit: judgeAudit.audit,
+        // Same save semantics as M1: send Ctrl+S and answer the "Non-standard
+        // file format" dialog a converted .xlsx raises on first save. Without
+        // this the baseline's save is refused for a harness reason, and its
+        // rate is not comparable to M1's.
+        save: async () => {
+          const result = await saveGuestDocument({ client, xlsxPath });
+          return result.ok;
+        },
       };
     } catch (error) {
       // Reap before propagating: a prepare that dies half-way otherwise hands

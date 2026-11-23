@@ -14,6 +14,7 @@ import {
 import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
 import { createPlanner, MAX_CALL_MICROS } from "../src/baseline/planner.ts";
 import manifest from "../src/baseline/sweep-v3.json" with { type: "json" };
+import { saveGuestDocument } from "../src/baseline/c1-save.ts";
 import { cleanupTrialGuest } from "../src/integration/guest-health.ts";
 import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
 import { generateFixture } from "../src/tasks/fixture.ts";
