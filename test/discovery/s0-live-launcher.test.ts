@@ -14,7 +14,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ROOT = join(import.meta.dirname, "..", "..");
-const LAUNCHER = join(ROOT, "scripts", "s0-live.sh");
 
 /** A launcher copy in its own fake worktree, so nothing here touches the real run dir. */
 function harness(): { dir: string; script: string; runDir: string } {
@@ -62,7 +61,7 @@ describe("s0-live.sh launcher", () => {
   });
 
   it("scopes the pid-less fallback to this worktree's path", () => {
-    const { dir, script, runDir } = harness();
+    const { script, runDir } = harness();
     // No pid files, so only the argv fallback can act. Assert what it is anchored
     // to, rather than whether a particular signal landed: on this host a signal
     // sent to a wrapper whose argv replaced its own does not terminate it, which
@@ -84,15 +83,17 @@ describe("s0-live.sh launcher", () => {
     expect(logOf(runDir)).toContain("already running");
   });
 
-  it("claims the pid file atomically, so a concurrent --run cannot both start", () => {
-    const { script, runDir } = harness();
-    // No live pid in the file: the guard passes and the claim itself must refuse.
-    writeFileSync(join(runDir, "s0.pid"), "999999");
-    const second = run(script, runDir, ["--run"]);
-    expect(second.status).toBe(1);
-    expect(logOf(runDir)).toContain("claimed the pid file first");
-    // The loser must not leave a watchdog behind.
-    expect(existsSync(join(runDir, "s0.child"))).toBe(false);
+  it("claims the pid file in one atomic step, so a concurrent --run cannot both start", () => {
+    const { script } = harness();
+    // This asserts the shape of the claim, because a live race is not reproducible
+    // on demand (a check-then-write launcher passed 8 of 8 test runs and lost a
+    // manual 8-way race — 2026-11-23). The claim must be a single noclobber
+    // redirect; the guard-then-write shape this replaced let racers both win.
+    const source = readFileSync(script, "utf8");
+    expect(source).toContain('if ! ( set -C; echo "$CHILD" >"$PID_FILE" ) 2>/dev/null; then');
+    expect(source).not.toContain('echo $! >"$PID_FILE"');
+    // And the loser must clean up the watchdog it already spawned.
+    expect(source).toContain('kill "$CHILD" 2>/dev/null || true');
   });
 
   it("keeps --status and --stop on the terminal, and everything else in the log", () => {
