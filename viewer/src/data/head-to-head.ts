@@ -27,6 +27,8 @@ export interface HeadToHeadDecision {
     readonly faultClass: string;
     readonly mycoFalseSuccess: boolean;
     readonly comparatorFalseSuccess: boolean;
+    /** False when the artifacts do not record the claim a false success needs. */
+    readonly claimKnown?: boolean;
   }[];
 }
 
@@ -134,6 +136,7 @@ export function parseHeadToHead(value: unknown): HeadToHeadReport | undefined {
       faultClass: row.faultClass,
       mycoFalseSuccess: row.mycoFalseSuccess,
       comparatorFalseSuccess: row.comparatorFalseSuccess,
+      claimKnown: typeof row.claimKnown === "boolean" ? row.claimKnown : undefined,
     });
   }
 

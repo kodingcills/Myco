@@ -104,6 +104,38 @@ test("rejects a run artifact and a malformed report", () => {
   expect(parseHeadToHead(null)).toBeUndefined();
 });
 
+test("a pair row whose claim is unknown renders n/a, never no", () => {
+  const report = parseHeadToHead({
+    ...fixture,
+    decision: {
+      ...fixture.decision,
+      pairRows: [
+        {
+          seed: 1,
+          faultClass: "silent-drop",
+          mycoFalseSuccess: false,
+          comparatorFalseSuccess: false,
+          claimKnown: false,
+        },
+        {
+          seed: 2,
+          faultClass: "silent-drop",
+          mycoFalseSuccess: true,
+          comparatorFalseSuccess: false,
+          claimKnown: true,
+        },
+      ],
+    },
+  });
+  expect(report).toBeDefined();
+  if (!report) return;
+  const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
+  const text = textOf(html);
+  // The unknown row must not read as a denial, and the known row must still read.
+  expect(text).toContain("1 silent-drop n/a n/a");
+  expect(text).toContain("2 silent-drop yes no");
+});
+
 test("an unknown false-success value is not rendered as a measured zero", () => {
   const report = parseHeadToHead({
     ...fixture,

@@ -1,0 +1,188 @@
+{
+  "manifestSha256": "bb256a9b2b28ee929c94352887a3d4bc402f4a14181a2a41a16e82bf76351995",
+  "completed": 29,
+  "partial": true,
+  "c1ChargedMicros": 1555362,
+  "combinedChargedMicros": 1555362,
+  "rows": [
+    {
+      "index": 0,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 1,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 2,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 3,
+      "mycoVerdict": "refuted",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 4,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 5,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 6,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 7,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 8,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 9,
+      "mycoVerdict": "verified",
+      "omitted": "trial-interrupted"
+    },
+    {
+      "index": 10,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 11,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 12,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 13,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 14,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 15,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 16,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 17,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 18,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 19,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 20,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 21,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 22,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 23,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 24,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 25,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 26,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 27,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 28,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 29,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    }
+  ]
+}
