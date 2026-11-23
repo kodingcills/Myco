@@ -413,11 +413,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ]
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "1": {
@@ -1957,11 +1953,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ]
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "8": {
@@ -3204,11 +3196,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ]
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "15": {
@@ -4228,11 +4216,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ]
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "19": {
@@ -4647,11 +4631,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ]
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "20": {
@@ -5991,11 +5971,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ]
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "25": {
@@ -6864,11 +6840,7 @@
           "pipeReachable": true,
           "sessionIdentityMatches": true
         },
-        "deviations": [
-          "reset:cua-c1-base",
-          "step-budget-asymmetry",
-          "planner:claude-sonnet-5-5"
-        ]
+        "deviations": ["reset:cua-c1-base", "step-budget-asymmetry", "planner:claude-sonnet-5-5"]
       }
     },
     "29": {
