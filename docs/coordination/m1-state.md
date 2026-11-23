@@ -87,6 +87,25 @@ old code walked 11 trials before the cap stopped it; the new code stops at 2.
   **not yet merged to main**. `/tmp/baseline/c1-arm/accounting.json` is the
   live copy.
 
+## FROZEN: do not use the C1 watchdog for a new long run (TIF-121)
+
+**#208 (TIF-75) was REJECTED for a real defect — the watchdog never trips** — and it
+merged anyway before the fix landed. No watchdog fix is on `main`: the only
+watchdog files there are Runtime's `runtime/guest/idle-watchdog.sh` (a different
+thing entirely).
+
+**Consequence: any long run started now has no working watchdog.** Do not start the
+C1 arm, arm-003, or any multi-hour sweep until #208's fix merges. A detached run
+without a working watchdog is the exact failure the §C rule exists to prevent: it
+dies silently and leaves a partial artifact indistinguishable from a real result.
+
+The outer loop authorized one final Opus round on the fix. Until it PASSes:
+
+- **No new long run.** Short, bounded trials are fine.
+- **Manual watch** if something must run: check the pid, the log's mtime, and the
+  ledger growth every few minutes, and treat a stale log as a death, not a pause.
+- **TIF-121 carries the defect.** It is not a documentation issue.
+
 ## Open defects
 
 - **#153 — REJECTED by verifier.** Python half correct and mutation-verified,
