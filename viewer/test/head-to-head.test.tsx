@@ -110,13 +110,16 @@ test("the decision is the page heading and tables carry scoped headers", () => {
   if (!report) return;
   const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
   expect(html).toMatch(/<h1[^>]*>A-stands/);
-  // Not-run and paired tables must give every column a header with a scope, so a
-  // screen reader can name each cell.
+  // Exactly one heading, or a reader (and a screen reader) cannot tell which is
+  // the page title.
+  expect((html.match(/<h1\b/g) ?? []).length).toBe(1);
+  // Every table must be headed and every header scoped, so a screen reader can
+  // name each cell. A table that loses its <thead> must fail, not be skipped.
   const tables = html.split("<table").slice(1);
   expect(tables.length).toBeGreaterThanOrEqual(3);
   for (const table of tables) {
     const headers = table.split("</thead>")[0]?.match(/<th\b[^>]*>/g) ?? [];
-    if (headers.length === 0) continue;
+    expect(headers.length).toBeGreaterThan(0);
     for (const header of headers) expect(header).toContain('scope="col"');
   }
 });
