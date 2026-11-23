@@ -103,6 +103,18 @@ impl<B: Backend> Session<B> {
         RuntimeError::Backend(e.to_string())
     }
 
+    /// RT-016 process control is launch authority: launching, relaunching, and
+    /// killing guest processes all require the same `launch` permission that
+    /// `act(Launch)` checks. Without this the process-control ops were a side door
+    /// around the session's permission set (Tier-2 verifier, #226).
+    fn require_process_permission(&self) -> Result<(), RuntimeError> {
+        if self.config.permissions.allows("launch") {
+            Ok(())
+        } else {
+            Err(RuntimeError::PermissionDenied("launch".into()))
+        }
+    }
+
     /// `create`: finish provisioning and mark the session ready.
     pub fn create(&mut self) -> Result<(), RuntimeError> {
         self.backend.provision().map_err(Self::backend_err)?;
@@ -171,6 +183,7 @@ impl<B: Backend> Session<B> {
         B: crate::ops::GuestProcessControl,
     {
         self.require_ready()?;
+        self.require_process_permission()?;
         let handle = self
             .backend
             .launch_guest_process(command, args)
@@ -191,6 +204,7 @@ impl<B: Backend> Session<B> {
         B: crate::ops::GuestProcessControl,
     {
         self.require_ready()?;
+        self.require_process_permission()?;
         let exit = self
             .backend
             .kill_guest_process(handle)
@@ -206,6 +220,7 @@ impl<B: Backend> Session<B> {
         B: crate::ops::GuestProcessControl,
     {
         self.require_ready()?;
+        self.require_process_permission()?;
         let new_handle = self
             .backend
             .relaunch_guest_process(handle)

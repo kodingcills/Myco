@@ -753,7 +753,7 @@ No VM lock was taken; measurement is `ps`/`vm_stat`/`vm.swapusage` only.
 Main requires branches to be up to date before merging, so this also avoids the
 BEHIND→update churn that stalled #201/#209.
 
-## TIF-44 / RT-016: process control (2026-11-23)
+## TIF-44 / RT-016: process control (2026-11-22)
 
 Extended op delivered: `launch_process` / `kill_process` / `relaunch_process` MCP
 tools over a new `GuestProcessControl` core trait, mirroring `GuestFileRead`.
@@ -775,6 +775,20 @@ green. A fake-backend subtlety found by mutation: the phase-guard test only beca
 load-bearing after the fake stopped gating its own process ops on `provisioned`,
 because otherwise a removed guard passed for the wrong reason.
 
+Tier-2 review of #226 at c3a75b3: **REJECT**, fixed forward on the same PR:
+- launch/kill/relaunch bypassed the session's permission set (`act(Launch)` checks
+  `launch`; the process ops did not). All three now require `launch`; refusal tested.
+- Three mutants survived: dropping the relaunch guard (the after-destroy test
+  relaunched a *live* handle, so the fake's "still live" error passed it for the
+  wrong reason) and dropping the launch or relaunch version bump (nothing asserted
+  them). The test now relaunches a killed handle and asserts both bumps; all six
+  guard/bump/permission mutants now turn exactly one test red. 109/0.
+- The fake diverged from the real agent: it relaunched handles it never minted and
+  relaunched the same handle twice. It now refuses both and returns the cached exit
+  on a second kill, as `myco-rt-agent/src/processes.rs` does.
+- Status corrected from "done" to "implemented, in review; live acceptance pending".
+- Follow-up, not fixed: process ops write no trace events.
+
 Not done: live kill/relaunch against a real guest (no VM slot; per Tiffany's rule the
-second VM is post-M1). The guest-side ops are already unit-tested in
-`myco-rt-transport`.
+second VM is post-M1), so RT-016's acceptance test has not run. The guest-side ops
+are unit-tested in `myco-rt-transport`.
