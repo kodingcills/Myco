@@ -31,6 +31,15 @@ export interface Screenshot {
  * - `delivered`         the input landed and Cua verified it.
  * - `save-failed`       a save was attempted, was delivered, and did not take. This
  *                       is the ONLY outcome that counts against the model.
+ *
+ * `save-failed` is NOT produced by `classify` and cannot be: whether a save took
+ * effect is not visible in the transport response. Cua answers "did I deliver
+ * this input", and the save's success is established separately by the judge
+ * reading the document (`c1-judge.ts` returns `modified` when the cell is still
+ * dirty). It is in the union so the four transport outcomes have a name to be
+ * resolved into, and so a caller cannot add a fifth without noticing. Writing it
+ * from `classify` would be reporting a delivery as a document state, which is
+ * exactly the conflation this type exists to undo.
  */
 export type CuaOutcome =
   | "routing-refused"
