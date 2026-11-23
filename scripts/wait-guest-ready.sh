@@ -113,7 +113,18 @@ while :; do
   # guard is what makes that an AND: SSH answering on its own is not evidence of
   # a boot, because a stalled guest's sshd can still respond while the guest
   # itself is not executing.
-  if [ "$SEEN_PROGRESS" = "1" ] && [ "$(ssh -F "$CFG" -o BatchMode=yes -o ConnectTimeout=10 myco-win11 'echo ok' 2>/dev/null || true)" = "ok" ]; then
+  #
+  # `tr -d '\r'` is load-bearing, not tidiness. The guest's default shell is
+  # PowerShell, which terminates lines with CRLF. Command substitution strips the
+  # trailing `\n` and leaves the `\r`, so the capture is the three bytes `ok\r`
+  # and `[ "$v" = "ok" ]` can NEVER match - the gate then ignores SEEN_PROGRESS
+  # and runs to its full timeout, reporting a booting guest as dead. That is what
+  # happened on 2026-11-23, and it is why wait-ssh.sh has always worked beside it:
+  # that one compares with `ssh ... | grep -q ok`, which tolerates the CR.
+  #
+  # The repo already strips CR this way at reset-trial-vm.sh:49, so this is the
+  # house idiom rather than a new one.
+  if [ "$SEEN_PROGRESS" = "1" ] && [ "$(ssh -F "$CFG" -o BatchMode=yes -o ConnectTimeout=10 myco-win11 'echo ok' 2>/dev/null | tr -d '\r' || true)" = "ok" ]; then
     echo "wait-guest-ready: ssh up after $(( $(date +%s) - START ))s (guest CPU ${CUR}s)"
     exit 0
   fi

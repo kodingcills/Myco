@@ -34,11 +34,9 @@ let stubDir = "";
  */
 function stub(name: string, body: string): void {
   const marker = join(dir, `${name}.marker`);
-  writeFileSync(
-    join(stubDir, name),
-    ["#!/bin/bash", `echo ran >> "${marker}"`, body].join("\n") + "\n",
-    { mode: 0o755 },
-  );
+  writeFileSync(join(stubDir, name), `#!/bin/bash\necho ran >> "${marker}"\n${body}\n`, {
+    mode: 0o755,
+  });
 }
 
 /**
@@ -91,7 +89,12 @@ fi
 echo "PID TTY TIME CMD"`,
     );
     stub("pgrep", `echo "${GUEST_PID}"`);
-    stub("ssh", opts.sshAnswers ? "echo ok\nexit 0" : "exit 255");
+    // CRLF, because that is what the guest actually sends. The guest's default
+    // shell is PowerShell, so the answer is `ok\r\n`; command substitution strips
+    // the `\n` and leaves the `\r`. A stub emitting a bare `\n` cannot catch a
+    // comparison that ignores the CR - which is exactly how the CR-intolerant
+    // compare shipped, with this suite green.
+    stub("ssh", opts.sshAnswers ? 'printf "ok\\r\\n"\nexit 0' : "exit 255");
   }
 
   return new Promise((resolve) => {
