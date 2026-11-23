@@ -63,6 +63,12 @@ jobs:
       # One invocation is 30 rounds; `runs` repeats the whole file. A repeat is a fresh
       # vitest process, so a failure in one run never hides the others, and the step
       # never exits non-zero: the point is to collect all 20, then read the artifacts.
+      #
+      # GitHub runs this file with `bash -e`, and a failing pipeline is a failing last
+      # command (`tee`), so `-e` killed the step before the loop could record the rc —
+      # the first three dispatches each died mid-run and left an empty summary. The
+      # `set +e` around the pipeline only suspends `-e` for it; `-u` stays, so a typo
+      # in a variable name is still an error rather than an empty string.
       - name: Race
         run: |
           set -uo pipefail
@@ -71,15 +77,19 @@ jobs:
           failures=0
           for run in $(seq 1 "${{ inputs.runs || 1 }}"); do
             echo "::group::run $run"
+            set +e
             npx vitest run --pool=forks --no-file-parallelism \
               test/discovery/s0-live-launcher.test.ts 2>&1 | tee ".tif-170/run-$run.log"
             rc=${PIPESTATUS[0]}
+            set -e
             printf 'run\t%s\trc\t%s\n' "$run" "$rc" >> .tif-170/summary.tsv
-            [ "$rc" -eq 0 ] || failures=$((failures + 1))
             echo "::endgroup::"
-            # A failing round is the finding; stop early rather than burn the remaining
-            # budget on runs that can only add the same evidence.
-            [ "$rc" -eq 0 ] || break
+            if [ "$rc" -ne 0 ]; then
+              failures=$((failures + 1))
+              # A failing round is the finding; stop early rather than burn the
+              # remaining budget on runs that can only add the same evidence.
+              break
+            fi
           done
           {
             echo "### TIF-170 race summary"
