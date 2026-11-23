@@ -162,12 +162,20 @@ def acquire_vm_lock(driver: str = "df005-runner.py") -> int:
         os.write(fd, f"{os.getpid()} {driver}\n".encode())
     except Exception:
         pass
+    # TIF-137: this fd is passed down to the guest through McpClient(pass_fds=...),
+    # which makes it inheritable in the MCP server; boot.sh and qemu inherit it from
+    # there. Python fds are otherwise close-on-exec, so the lock used to end with the
+    # runner: after a Ctrl-C mid-trial the guest kept running on a host that looked free.
     return fd
 
 
 def release_vm_lock(fd: int) -> None:
+    # Close our copy only, never LOCK_UN: a flock belongs to the open file
+    # description, which the guest's qemu shares through the inherited copy, so an
+    # explicit unlock here would free the host while that guest still runs. The
+    # lock is released when the last holder (us, or the guest) closes it, which is
+    # what scripts/vm-lock.sh's release (`exec 9>&-`) does too.
     try:
-        fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
     except Exception:
         pass
@@ -181,7 +189,9 @@ class McpError(RuntimeError):
 
 
 class McpClient:
-    def __init__(self, cmd: list[str]):
+    def __init__(self, cmd: list[str], pass_fds: tuple[int, ...] = ()):
+        # pass_fds: the VM lock fd (TIF-137), so the guest the server boots
+        # inherits the lock and holds it for its whole life.
         self.proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -189,6 +199,7 @@ class McpClient:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            pass_fds=pass_fds,
         )
         self.msg_id = 0
 
@@ -1276,7 +1287,7 @@ def main() -> int:
             for n in range(1, args.runs + 1):
                 run_id = f"run-{sc.slug}-{n}"
                 print(f"  {sc.sid} {n}/{args.runs} ...", end=" ", flush=True)
-                mcp = McpClient(server_cmd)
+                mcp = McpClient(server_cmd, pass_fds=(lock_fd,) if lock_fd is not None else ())
                 try:
                     mcp.request("initialize", {
                         "protocolVersion": "2024-11-05", "capabilities": {},

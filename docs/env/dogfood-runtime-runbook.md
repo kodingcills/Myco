@@ -470,6 +470,26 @@ writes its state to that path. Like `launch_process` (arbitrary execution in the
 guest), this is inside the guest; the isolation boundary is the VM
 (`docs/research/runtime-safety-isolation.md`).
 
+**Every guest launch takes the host VM lock (TIF-137).** `boot.sh`, the only
+place in `runtime/` that starts qemu (so `create`, `reset`, `provision.sh
+--build-agent`, `smoke.sh`, `live-proof.sh` alike), takes `/tmp/myco-win11.vm.lock`
+before seeding, and qemu inherits it, so **a guest that `boot.sh` locked keeps the
+lock for as long as it runs**, released when it exits (`destroy`, `shutdown.sh`).
+If someone else
+holds it, `boot.sh` refuses with exit 10 (`create` fails with "Refusing to boot:
+the host VM lock is held by another owner"). A caller that already holds the lock,
+such as `df005-runner.py --go`, a trial driver, or `provision.sh --build-agent`, is
+recognised as an ancestor through the pid it recorded in the lock file and is not
+asked to lock twice. **Under such a caller the guest is locked only as long as the caller's lock
+reaches it.** `vm-lock.sh` drivers and `provision.sh` pass it down (fd 9 is
+inherited), and so does `df005-runner.py` since TIF-137 (`McpClient(pass_fds=…)`,
+and its release only closes its own copy, never `LOCK_UN`). So after a Ctrl-C
+mid-trial, the guest the runner booted still holds the host lock until it is
+destroyed. A caller that does *not* pass its lock down (a Python `os.open` fd is
+close-on-exec by default) makes `boot.sh` print `VM lock WARNING: the caller's lock
+was not inherited`: that guest is locked only while the caller runs. Either way, a
+session left running keeps the host locked, so `destroy` sessions you are done with.
+
 **Do not leave your own guest running.** The runtime's `create` boots its own
 guest from the same overlay; if one is already up, `boot.sh` exits 1 and every
 trial gaps with `script failed: boot.sh`. Boot only to build the agent, then shut
