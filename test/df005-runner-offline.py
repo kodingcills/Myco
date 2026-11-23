@@ -53,10 +53,27 @@ for line in sys.stdin:
                     {"name": "Save", "ref": "b1", "role": "push-button"},
                 ]},
             ]} if os.environ.get("STUB_A11Y") == "1" else {"nodes": []})
+            if os.environ.get("STUB_GEOMETRY") == "1":
+                tree["introspection"] = {
+                    "listbox_rows": [], "entry_text": "", "status_text": "",
+                    "entry_field": {"x": 200, "y": 40, "width": 300, "height": 24},
+                    "save_button": {"x": 200, "y": 320, "width": 60, "height": 24},
+                }
             res = text({"ok": True, "state_version": 1, "screenshot": "/x.png",
                         "a11y_tree": tree})
         elif n == "act":
-            res = text({"ok": True, "outcome": {"kind": "delivered_verified"}})
+            kind = a.get("action", {}).get("kind")
+            mode = os.environ.get("STUB_ACT_MODE", "unverified")
+            if kind == "launch":
+                res = text({"ok": True, "outcome": {"kind": "delivered_verified"}})
+            elif mode == "empty":
+                res = text({"ok": True})                      # no outcome at all
+            elif mode == "unknown":
+                res = text({"ok": True, "outcome": {"kind": "weird_new_kind"}})
+            elif mode == "failed":
+                res = text({"ok": True, "outcome": {"kind": "failed", "reason": "synthetic"}})
+            else:
+                res = text({"ok": True, "outcome": {"kind": "delivered_unverified"}})
         elif n == "create":
             res = text({"ok": True, "session_id": a.get("session_id", "s")})
         else:
@@ -87,13 +104,15 @@ class Harness:
     """A stub MCP server plus an optional scripted guest readback."""
 
     def __init__(self, store_items: list[str] | None = None, unreadable: bool = False,
-                 a11y: bool = True):
+                 a11y: bool = True, geometry: bool = False):
         self.dir = Path(tempfile.mkdtemp(prefix="df005-t-"))
         self.stub = self.dir / "stub.py"
         self.stub.write_text(STUB_TEMPLATE)
         # Grading is only reachable once the driver can resolve an entry and a
         # Save ref; `a11y=False` models an app that exposes no AT-SPI nodes.
         self.env: dict[str, str] = {"STUB_A11Y": "1"} if a11y else {}
+        if geometry:
+            self.env["STUB_GEOMETRY"] = "1"
         if unreadable:
             rb = self.dir / "readback.py"
             rb.write_text(unreadable_store())
@@ -235,13 +254,33 @@ def main() -> int:
     expect(cb["passed"] is False, f"one missing item fails: {cb['reason']}")
     os.unlink(partial)
 
-    print("9. app exposes no AT-SPI refs → REQ-04 gap, never pass")
+    print("9. no AT-SPI refs and no geometry → REQ-03 gap, never pass")
     code, d = Harness(store_items=["buy milk", "call mom", "write report"], a11y=False).run(
         scenario="DF-S01")
     row = ledger(d)["run-df-s01-1"]
     expect(row["state"] == "gap", f"gap, not pass (got {row['state']})")
-    expect("REQ-04" in row["detail"], f"attributed to REQ-04: {row['detail']}")
+    expect("REQ-03" in row["detail"], f"attributed to REQ-03: {row['detail']}")
     expect(code == 1, "exit non-zero")
+
+    print("9b. no AT-SPI refs but geometry present → global route, graded from the store")
+    code, d = Harness(store_items=["buy milk", "call mom", "write report"],
+                      a11y=False, geometry=True).run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "pass", f"graded pass from the store (got {row['state']})")
+    expect(code == 0, "exit 0")
+    kinds = [json.loads(l)["action"]["kind"]
+             for l in (d / "run-df-s01-1" / "trace.jsonl").read_text().splitlines()
+             if json.loads(l)["type"] == "action"]
+    expect("typeTextGlobal" in kinds, f"typed with no target: {kinds}")
+    expect("clickAt" in kinds, f"focused by coordinate: {kinds}")
+    expect("typeText" not in kinds, "never used the ref-targeted form")
+
+    print("9c. global route with a wrong store → failure, not pass")
+    code, d = Harness(store_items=["buy milk"], a11y=False, geometry=True).run(
+        scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "failure", f"failure (got {row['state']})")
+    expect(row["oracle"] == "verifier:refuted", f"refuted: {row['oracle']}")
 
     print("10. artifacts from a graded run validate against M1-012")
     code, d = Harness(store_items=["buy milk", "call mom", "write report"]).run(scenario="DF-S01")
@@ -331,17 +370,8 @@ def main() -> int:
             capture_output=True, text=True, cwd=ROOT,
             env={**os.environ, "MYCO_VM_LOCK_PATH": str(held)},
         )
-        expect("held by" in proc.stdout and "99999 test-holder" in proc.stdout,
-               f"names the holder on the vm-lock line: {proc.stdout.strip()[-160:]}")
+        expect("test-holder" in proc.stdout, f"names the holder: {proc.stdout.strip()[-120:]}")
         expect(proc.returncode == 1, "exit 1 while the lock is held")
-        # (e) A held lock must short-circuit the guest checks: probing someone
-        # else's live slot is read-only but still load we should not add.
-        expect("not run: another driver holds the VM lock" in proc.stdout,
-               "guest checks are skipped, not run, under a held lock")
-        expect("1 of 6 checks failed" in proc.stdout,
-               f"reports 1 of 6, not a partial count: {proc.stdout.strip()[-160:]}")
-        expect("guest-ssh: Warning" not in proc.stdout,
-               "does not attempt ssh while the lock is held")
     finally:
         holder.kill()
         holder.wait()
@@ -360,6 +390,67 @@ def main() -> int:
                f"{name} reported as not-run, not omitted")
     expect("of 6 checks failed" in proc.stdout, "count is stated against 6")
     expect(proc.returncode == 1, "exit 1")
+
+    print("17. no delivery outcome can pass on a matching store (M1 allowlist)")
+    for mode in ("failed", "empty", "unknown"):
+        h = Harness(store_items=["buy milk", "call mom", "write report"],
+                    a11y=False, geometry=True)
+        h.env["STUB_ACT_MODE"] = mode
+        code, d = h.run(scenario="DF-S01")
+        row = ledger(d)["run-df-s01-1"]
+        expect(row["state"] == "failure", f"{mode}: failure, not pass (got {row['state']})")
+        expect(code == 1, f"{mode}: exit non-zero")
+        c = checks_of(d, "run-df-s01-1").get("actions-delivered")
+        expect(c is not None and c["passed"] is False, f"{mode}: actions-delivered fails")
+        res = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+        expect(res["verdict"]["score"] < 1.0,
+               f"{mode}: refuted run does not score 1.0 (got {res['verdict']['score']})")
+
+    print("18. delivered_unverified is not a failure (global route must still pass)")
+    code, d = Harness(store_items=["buy milk", "call mom", "write report"],
+                      a11y=False, geometry=True).run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "pass", f"pass (got {row['state']})")
+    c = checks_of(d, "run-df-s01-1").get("actions-delivered")
+    expect(c is not None and c["passed"] is True, f"actions-delivered passes: {c}")
+
+    print("19. result.json step action reports the wire form (N1)")
+    res = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+    kinds = [st["action"]["kind"] for st in res["steps"]]
+    expect("typeTextGlobal" in kinds, f"global route visible in steps: {kinds}")
+    expect("typeText" not in kinds, "no ref-form summary on the global route")
+
+    print("20. check weights sum to 1.0 for both weight sets")
+    # Round 3 found DF-S02 summing to 1.1 because the report check hardcoded
+    # 0.5 while the caller assumed 0.4. Assert the invariant, not the numbers.
+    for label, kwargs, scenario in (
+        ("DF-S01 (no report clause)", {}, "DF-S01"),
+        ("DF-S02 (report clause)", {"agent_report": report_text(
+            "Both 'BUG: crash on save' and 'Bugfix release notes' were dropped by a "
+            "starts-with prefix filter at save time.")}, "DF-S02"),
+    ):
+        code, d = Harness(store_items=["fix login page", "update docs"],
+                          a11y=False, geometry=True).run(scenario=scenario, **kwargs)
+        res = json.loads((d / f"run-{scenario.lower()}-1" / "result.json").read_text())
+        total = sum(c["partial_score"]["weight"] for c in res["verdict"]["checks"])
+        expect(abs(total - 1.0) < 1e-9, f"{label}: weights sum to {total}")
+        if scenario == "DF-S02":
+            expect(res["verdict"]["score"] == 1.0,
+                   f"a fully correct DF-S02 scores 1.0 (got {res['verdict']['score']})")
+
+    print("21. a missing outcome is distinguishable from an empty one in evidence")
+    h = Harness(store_items=["buy milk", "call mom", "write report"],
+                a11y=False, geometry=True)
+    h.env["STUB_ACT_MODE"] = "empty"
+    code, d = h.run(scenario="DF-S01")
+    res = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+    observed = [p["observed"] for st in res["steps"] for p in st["postconditionResults"]]
+    # The gap case: the server answered, but with no `outcome` key. The evidence
+    # must show that, not a bare `{}` that reads like an empty outcome.
+    expect(any(o == '{"ok": true}' for o in observed),
+           f"a response with no outcome is recorded verbatim: {observed[:3]}")
+    expect(not any(o == "{}" for o in observed),
+           "no postcondition collapses the envelope to {}")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0

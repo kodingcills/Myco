@@ -318,7 +318,8 @@ def read_agent_report(path: str | None) -> tuple[str | None, str]:
         return None, f"agent report unreadable: {e}"
 
 
-def grade_report_clause_b(sc: Scenario, report: str | None) -> dict[str, Any]:
+def grade_report_clause_b(sc: Scenario, report: str | None,
+                          weight: float) -> dict[str, Any]:
     """DF-S02 clause (b): the report must name BOTH dropped items and the cause.
 
     Host-computable proxy for the pinned rubric (dogfood/scenarios/DF-S02): both
@@ -329,7 +330,7 @@ def grade_report_clause_b(sc: Scenario, report: str | None) -> dict[str, Any]:
     if report is None:
         return check(
             f"{sc.slug}:agent-report-names-missing", None,
-            "could not look: no agent transcript supplied for clause (b)", 0.5,
+            "could not look: no agent transcript supplied for clause (b)", weight,
         )
     low = report.lower()
     dropped = [a for a in sc.adds if a not in sc.expected]
@@ -352,7 +353,7 @@ def grade_report_clause_b(sc: Scenario, report: str | None) -> dict[str, Any]:
         if wrong_causes:
             problems.append(f"blames unrelated cause(s) {wrong_causes}")
         reason = "; ".join(problems)
-    return check(f"{sc.slug}:agent-report-names-missing", ok, reason, 0.5)
+    return check(f"{sc.slug}:agent-report-names-missing", ok, reason, weight)
 
 
 def now() -> str:
@@ -441,12 +442,16 @@ def execute_scenario(
     started_at = now()
     t0 = time.time()
     steps: list[tuple[dict[str, Any], dict[str, Any]]] = []  # (step, action)
+    all_postconditions: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
     def finish(res: RunResult) -> RunResult:
         res.started_at = started_at
         res.duration = time.time() - t0
-        res.steps = [s for s, _ in steps]
+        # `dispatched` is trace-only: EvidenceStep is closed
+        # (additionalProperties: false), so the wire actions must not leak into
+        # result.json. They are emitted as `action` events in trace.jsonl.
+        res.steps = [{k: v for k, v in s.items() if k != "dispatched"} for s, _ in steps]
         res.trace_events = events + build_step_events(res.started_at, steps)
         return res
 
@@ -520,57 +525,107 @@ def execute_scenario(
                    "postconditionResults": [predicate("launch_delivered", outcome)],
                    "stateVersionBefore": v_before, "stateVersionAfter": v_before + 1}, {}))
 
-    # --- resolve widget refs before acting -------------------------------
-    # Tk registers no AT-SPI nodes, and the runtime's closed Action union needs
-    # an AT-SPI ref for BOTH `click` and `typeText` (act.rs resolves the ref and
-    # fails with `unresolved_ref` otherwise). XTEST can type into a focused
-    # window, but the runtime exposes no focus-relative typing or coordinate
-    # click. So with no refs the run cannot be driven: that is a runtime gap
-    # (REQ-04), never something the harness may paper over.
+    # --- choose an actuation route ---------------------------------------
+    # Two routes, in order of preference:
+    #
+    #   ref route    — the app exposes AT-SPI nodes: click/typeText by ref.
+    #   global route — it exposes none (Tk registers zero, RT-003): clickAt a
+    #                  screen point to establish window focus, then
+    #                  typeTextGlobal into whatever has focus.
+    #
+    # The global route is the one the runtime's live proof uses
+    # (act_global_live.rs): clickAt the window centre, confirm the window is
+    # active out-of-band, then type with no target. Both global actions report
+    # `delivered_unverified` by design — there is nothing to read back at that
+    # layer — so the oracle below is the only thing that decides the run.
     entry_ref = find_ref_by_role(obs, ("entry", "text", "text-field"))
-    if entry_ref is None:
+    save_ref = find_ref_by_role(obs, ("push-button", "button"), name="Save")
+    route = "ref" if (entry_ref and save_ref) else "global"
+
+    field: dict[str, Any] = {}
+    save_geom: dict[str, Any] = {}
+    if route == "global":
+        # Geometry comes from the app's own introspection record, which the
+        # fixture publishes (REQ-03 option B). Without it there is no point to
+        # click, and guessing one would be a fabricated target.
+        intro = introspection_record(obs)
+        if intro is None:
+            obs = observe_until_introspection(mcp, sid)
+            intro = introspection_record(obs)
         unavailable = introspection_unavailable(obs)
-        why = f"; introspection: {unavailable}" if unavailable else ""
-        cleanup(mcp, sid)
-        return gap("REQ-04",
-                   "no AT-SPI entry ref for the app window and no focus-relative "
-                   f"typing action in the runtime's Action union{why}")
+        field = (intro or {}).get("entry_field") or {}
+        save_geom = (intro or {}).get("save_button") or {}
+        if not (isinstance(field, dict) and {"x", "y"} <= set(field)):
+            why = f"; introspection: {unavailable}" if unavailable else ""
+            cleanup(mcp, sid)
+            return gap("REQ-03",
+                       "no AT-SPI entry ref and no entry_field geometry in the "
+                       f"introspection record, so there is no point to click{why}")
+        if sc.save and not (isinstance(save_geom, dict) and {"x", "y"} <= set(save_geom)):
+            cleanup(mcp, sid)
+            return gap("REQ-03",
+                       "no AT-SPI Save ref and no save_button geometry in the "
+                       "introspection record")
 
     # --- add the scenario's items through the GUI ------------------------
     step = 2
     for item in sc.adds:
-        for action in (
-            {"kind": "click", "target": entry_ref},
-            {"kind": "keyPress", "keys": "ctrl+a"},          # clear leftovers
-            {"kind": "typeText", "target": entry_ref, "text": item},
-            {"kind": "keyPress", "keys": "Return"},
-        ):
+        if route == "ref":
+            actions = [
+                {"kind": "click", "target": entry_ref},
+                {"kind": "keyPress", "keys": "ctrl+a"},      # clear leftovers
+                {"kind": "typeText", "target": entry_ref, "text": item},
+                {"kind": "keyPress", "keys": "Return"},
+            ]
+        else:
+            actions = [
+                # Clicking inside the window establishes X focus; the entry has
+                # Tk focus already (focus_set at startup), so this is enough.
+                {"kind": "clickAt", "x": field["x"], "y": field["y"]},
+                {"kind": "keyPress", "keys": "ctrl+a"},
+                {"kind": "typeTextGlobal", "text": item},
+                {"kind": "keyPress", "keys": "Return"},
+            ]
+        outcomes = []
+        for action in actions:
             try:
-                act(mcp, sid, action)
+                outcomes.append(act(mcp, sid, action))
             except McpError as e:
                 cleanup(mcp, sid)
                 return gap("REQ-04", f"add {item!r} failed: {e}")
+        post = [predicate(f"add_delivered[{item}][{a['kind']}]", o)
+                for a, o in zip(actions, outcomes)]
+        all_postconditions.extend(post)
         steps.append(({"step": step,
-                       "action": {"kind": "typeText", "text": item},
+                       # Report the wire form, not a summary: a consumer reading
+                       # steps[].action.kind must be able to tell a ref-targeted
+                       # run from a global-input one.
+                       "action": ({"kind": "typeText", "text": item} if route == "ref"
+                                  else {"kind": "typeTextGlobal", "text": item}),
+                       "dispatched": actions,
                        "preconditionResults": [],
-                       "postconditionResults": [],
+                       "postconditionResults": post,
                        "stateVersionBefore": step, "stateVersionAfter": step + 1}, {}))
         step += 1
 
     # --- save ------------------------------------------------------------
     if sc.save:
-        save_ref = find_ref_by_role(obs, ("push-button", "button"), name="Save")
-        if save_ref is None:
-            cleanup(mcp, sid)
-            return gap("REQ-04",
-                       "no AT-SPI button ref named Save and no coordinate-click action")
+        save_action = (
+            {"kind": "click", "target": save_ref} if route == "ref"
+            else {"kind": "clickAt", "x": save_geom["x"], "y": save_geom["y"]}
+        )
         try:
-            act(mcp, sid, {"kind": "click", "target": save_ref})
+            save_outcome = act(mcp, sid, save_action)
         except McpError as e:
             cleanup(mcp, sid)
             return gap("REQ-04", f"save click failed: {e}")
-        steps.append(({"step": step, "action": {"kind": "click", "text": "Save"},
-                       "preconditionResults": [], "postconditionResults": [],
+        save_post = [predicate("save_delivered", save_outcome)]
+        all_postconditions.extend(save_post)
+        steps.append(({"step": step,
+                       "action": ({"kind": "click", "text": "Save"} if route == "ref"
+                                  else {"kind": "clickAt", "text": "Save"}),
+                       "dispatched": [save_action],
+                       "preconditionResults": [], "postconditionResults": save_post,
                        "stateVersionBefore": step, "stateVersionAfter": step + 1}, {}))
 
     # --- independent oracle: read the guest's store file back ------------
@@ -597,14 +652,38 @@ def execute_scenario(
 
     persisted = sorted(texts)
     expected = sorted(sc.expected)
-    weight = 0.5 if sc.report_clause_b else 1.0
-    checks = [check(f"{sc.slug}:persisted-set-matches", persisted == expected,
-                    f"persisted {persisted}, expected {expected}", weight)]
+    # Weights sum to 1.0. The delivery check carries real weight so a refuted
+    # run cannot report score 1.0 (it did, when that check weighed 0.0).
     if sc.report_clause_b:
-        checks.append(grade_report_clause_b(sc, agent_report))
+        w_persisted, w_report, w_delivery = 0.4, 0.4, 0.2
+    else:
+        w_persisted, w_report, w_delivery = 0.7, 0.0, 0.3
+    checks = [check(f"{sc.slug}:persisted-set-matches", persisted == expected,
+                    f"persisted {persisted}, expected {expected}", w_persisted)]
+    if sc.report_clause_b:
+        checks.append(grade_report_clause_b(sc, agent_report, w_report))
 
     checks.append(check(f"{sc.slug}:create-cost-observed", True,
                         f"create took {create_seconds:.2f}s", 0.0))
+
+    # Action outcomes are not evidence of the *outcome*, but a run whose actions
+    # all failed did not perform the task, and must not be graded `pass` just
+    # because the store already held the expected set (a stale store from a
+    # prior run, or an app that pre-seeds it). This is the false-success shape
+    # the harness exists to prevent, so a failed delivery is a failing check.
+    #
+    # `delivered_unverified` is NOT a failure: the global route reports it by
+    # design because there is nothing to read back at that layer, and the
+    # persisted store is what decides. Only an explicit `failed` counts.
+    failed_actions = [p for p in all_postconditions if p["passed"] is False]
+    checks.append(check(
+        f"{sc.slug}:actions-delivered",
+        not failed_actions,
+        "all actions delivered" if not failed_actions
+        else f"{len(failed_actions)} action(s) did not land: "
+             + "; ".join(f"{p['predicateName']}={p['observed']}" for p in failed_actions[:3]),
+        w_delivery,
+    ))
 
     cleanup(mcp, sid)
 
@@ -649,6 +728,38 @@ def find_ref_by_role(obs: dict[str, Any], roles: tuple[str, ...],
 
 
 
+def introspection_record(obs: dict[str, Any]) -> dict[str, Any] | None:
+    """The app-published widget record, or None when absent/unavailable.
+
+    ADR-0016 tri-state: null (channel unset) | record | {"unavailable": reason}.
+    The global route needs this for click geometry, so it is live again after
+    being removed as dead code when only the ref route existed.
+    """
+    rec = (obs.get("a11y_tree") or {}).get("introspection")
+    if isinstance(rec, dict) and "unavailable" not in rec:
+        return rec
+    return None
+
+
+def observe_until_introspection(mcp: McpClient, sid: str, tries: int = 20,
+                                delay: float = 0.25) -> dict[str, Any]:
+    """Poll observe() until the introspection record appears, or the budget ends.
+
+    Returns the last observation rather than raising: the caller decides gap vs
+    proceed from the record, so the failure mode stays explicit.
+    """
+    last: dict[str, Any] = {}
+    for _ in range(tries):
+        try:
+            last = mcp.call_tool("observe", {"session_id": sid})
+        except McpError:
+            return last
+        if introspection_record(last) is not None:
+            return last
+        time.sleep(delay)
+    return last
+
+
 def introspection_unavailable(obs: dict[str, Any]) -> str | None:
     """The channel's failure reason, when it exists but could not be read."""
     rec = (obs.get("a11y_tree") or {}).get("introspection")
@@ -678,20 +789,43 @@ def app_basename() -> str:
     return Path(APP_PATH).name
 
 
-def predicate(name: str, outcome: Any) -> dict[str, Any]:
-    kind = (outcome or {}).get("kind", "unknown") if isinstance(outcome, dict) else "unknown"
-    return {"predicateName": name, "passed": kind == "delivered_verified",
-            "observed": json.dumps(outcome, sort_keys=True)}
+DELIVERED_KINDS = ("delivered_verified", "delivered_unverified")
+
+
+def predicate(name: str, response: Any) -> dict[str, Any]:
+    """Did this action land? An ALLOWLIST over ADR-0003's outcome kinds.
+
+    `delivered_verified` and `delivered_unverified` both landed; everything else
+    did not. The allowlist matters: a denylist (`kind != "failed"`) treats a
+    missing outcome, an empty `{}`, or any future kind as delivered, so a
+    transport gap would grade as success. Verified: `{}` and an unknown kind
+    both fail this predicate.
+
+    `delivered_unverified` is not a failure — the global route reports it by
+    design because there is nothing to read back at that layer, and the
+    persisted store decides the run. Collapsing it to False would fail every
+    honest global-route run.
+
+    `PredicateResult.passed` is boolean-only (M1-012), so the exact kind is
+    preserved verbatim in `observed` rather than being coerced away.
+    """
+    outcome = response.get("outcome") if isinstance(response, dict) else None
+    kind = outcome.get("kind") if isinstance(outcome, dict) else None
+    return {"predicateName": name, "passed": kind in DELIVERED_KINDS,
+            "observed": json.dumps(response, sort_keys=True)}
 
 
 def act(mcp: McpClient, sid: str, action: dict[str, Any]) -> dict[str, Any]:
-    """Perform one action and return its three-way outcome.
+    """Perform one action and return the server's full response.
 
     A `failed` outcome is a real result (the action did not land), not an
     exception: the caller records it as a failing postcondition.
     """
-    res = mcp.call_tool("act", {"session_id": sid, "action": action})
-    return res.get("outcome", {})
+    # Return the whole response, not just `outcome`: a response with no
+    # `outcome` key must be distinguishable in the evidence from one whose
+    # outcome is an empty object. Collapsing both to `{}` made a transport gap
+    # look like an empty outcome.
+    return mcp.call_tool("act", {"session_id": sid, "action": action})
 
 
 def cleanup(mcp: McpClient, sid: str) -> None:
@@ -707,8 +841,13 @@ def cleanup(mcp: McpClient, sid: str) -> None:
 def build_step_events(started_at: str, steps: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for st, _ in steps:
-        out.append({"type": "action", "timestamp": started_at, "step": st["step"],
-                    "action": st["action"]})
+        # A step's `action` is the logical intent; `dispatched` holds the wire
+        # actions that carried it out. Recording the wire form is what lets a
+        # reader tell a ref-targeted run from a global-input one — they are
+        # indistinguishable from the intent alone and fail in different ways.
+        for action in (st.get("dispatched") or [st["action"]]):
+            out.append({"type": "action", "timestamp": started_at, "step": st["step"],
+                        "action": action})
         if st["preconditionResults"]:
             out.append({"type": "guard-evaluation", "timestamp": started_at, "step": st["step"],
                         "phase": "pre", "results": st["preconditionResults"],
