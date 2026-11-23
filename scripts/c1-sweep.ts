@@ -15,6 +15,7 @@ import { generateFixture } from "../src/tasks/fixture.ts";
 import { groundTruth } from "../src/tasks/intent.ts";
 import { AgentClient, SshTunnel } from "../src/win/agent-client.ts";
 import { persistedDiagnostic, probeC1Driver } from "./c1-driver-preflight.ts";
+import { parseSpendCeiling } from "./spend-ceiling.ts";
 
 async function main() {
   if (!process.argv.includes("--coordinator-go")) throw new Error("Coordinator GO required");
@@ -319,10 +320,20 @@ async function main() {
     const planner = createPlanner(fetch, { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY });
     console.log("--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]");
 
+    // Prior spend and the remaining budget come from the environment, because
+    // the ceiling is a property of the PROJECT, not of this directory's ledger.
+    // Both are required together: a remaining budget without a stated prior spend
+    // would be un-auditable, and prior spend without a remaining budget would let
+    // the caller inherit a default that cannot be spent. Fail closed if either is
+    // missing rather than defaulting to zero, which is how a fresh directory
+    // silently got a full allowance it had already spent part of (arm-003d).
+    const { priorSpendMicros, remainingMicros } = parseSpendCeiling(process.env);
+
     const report = await runC1Sweep({
       coordinatorGo: process.argv.includes("--coordinator-go"),
       directory,
-      armLimitMicros: 4_500_000,
+      priorSpendMicros,
+      armLimitMicros: remainingMicros,
       planner,
       prepare,
     });
