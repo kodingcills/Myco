@@ -283,6 +283,58 @@ honest state, and it is why S1/S2 are the only slots that move the wedge.
 
 ## Log
 
+- 2026-11-23 (later) · Merged and closed out, in order: #248, #250, #256, #272.
+  - **#250 / #256** (TIF-89): the live S0 path is real and gated. `RuntimeTransport`
+    speaks MCP over `myco-rt-mcp` and reads the guest's published state; the
+    launcher is detached, refuses without Coordinator GO + host lock, on a running
+    guest, on a missing binary, or on an unreadable process table, and its stop is
+    scoped to this worktree. Three verifier rounds on #250 and three on #256; every
+    REJECT found a defect I had shipped — a gate that threw on the no-guest case, a
+    `--stop` that killed other worktrees' processes, a watchdog that lost a failed
+    child's exit code, and a launcher that booted a guest without a Coordinator GO
+    (the PR #99 hole). The last is worth remembering: I fixed the hardware gate and
+    reinstated the hole the revert existed to close.
+  - **#256 also ships `myco-run`** and the quickstart; MVD-001 acceptances 1, 3 and
+    5 are met on the mock path, 2 and 6 need the guest, 4 needs a person to run it
+    inside Codex or Claude Code.
+  - **Open, not mine to decide:** S0 live stays closed on `oraclePresent` and
+    `guestClean`. I recommended narrowing `guestClean` to something the transport
+    can check (the app's store and published-state files absent before launch) and
+    recording the definition in the run's evidence. That changes what a S0 PASS
+    means, so it is Tiffany's and Foundry's call; a GO without that answer leaves
+    S0 unable to leave the preflight.
+  - **A defect I introduced and fixed:** the quickstart told a reader to run
+    `vitest run --changed HEAD`, which selects nothing on a clean tree and exits 0.
+    It was a verification claim over zero tests — the class this workstream exists
+    to kill.
+  No VM, no spend, no accounts.
+
+- 2026-11-23 (later) · Merged and closed out, in order: #248, #250, #256, #272.
+  - **#250 / #256** (TIF-89): the live S0 path is real and gated. `RuntimeTransport`
+    speaks MCP over `myco-rt-mcp` and reads the guest's published state; the
+    launcher is detached, refuses without Coordinator GO + host lock, on a running
+    guest, on a missing binary, or on an unreadable process table, and its stop is
+    scoped to this worktree. Three verifier rounds on #250 and three on #256; every
+    REJECT found a defect I had shipped — a gate that threw on the no-guest case, a
+    `--stop` that killed other worktrees' processes, a watchdog that lost a failed
+    child's exit code, and a launcher that booted a guest without a Coordinator GO
+    (the PR #99 hole). The last of those is the one worth remembering: I fixed the
+    hardware gate and reinstated the hole the revert existed to close.
+  - **#256 also ships `myco-run`** and the quickstart; MVD-001 acceptances 1, 3 and
+    5 are met on the mock path, 2 and 6 need the guest, 4 needs a person to run it
+    inside Codex or Claude Code.
+  - **Open, not mine to decide:** S0 live stays closed on `oraclePresent` and
+    `guestClean`. I recommended narrowing `guestClean` to something the transport
+    can check (the app's store and published-state files absent before launch) and
+    recording the definition in the run's evidence. That changes what a S0 PASS
+    means, so it is Tiffany's and Foundry's call; a GO without that answer would
+    leave S0 unable to leave the preflight.
+  - **A defect I introduced and fixed in the docs:** the quickstart told a reader
+    to run `vitest run --changed HEAD`, which selects nothing on a clean tree and
+    exits 0. A verifier caught it; it was a verification claim over zero tests,
+    the exact class this workstream exists to kill.
+  No VM, no spend, no accounts.
+
 - 2026-11-23 (early) · S0 prepped and made startable without an agent turn
   (TIF-89, PR #250). Direction A's live arm now has everything but the window:
   - `src/discovery/runtime-transport.ts` — MCP stdio client over `myco-rt-mcp`,
