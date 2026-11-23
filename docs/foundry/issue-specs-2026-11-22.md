@@ -1,15 +1,20 @@
-# Issue specs for the outer loop to file (2026-11-22)
+# Issue specs — filed (2026-11-22)
 
 The Foundry has no Linear connector (`docs/agents/issue-tracker.md`: agents do not have
-Linear credentials). Per the standing ISSUE-FIRST rule, these are the specs to file. Each is
-written so it can be pasted into Linear as-is: title, project, description, acceptance.
+Linear credentials), so these were written as specs for the outer loop to file. **All three
+have now been filed**; ids below. Kept in the repo because the acceptance criteria are the
+record of what was asked for.
 
-**Nothing in this file has been built yet.** The reconciliation work is committed on branch
-`tif-reconcile` and its PR is held until the id exists.
+| Spec | Linear id | State |
+|---|---|---|
+| Backlog reconciliation | **TIF-112** | open; branch `tif-112-reconcile` |
+| EF-008 slot 5 HCU | **TIF-113** | filed |
+| EF-007 attestation placement decision | **TIF-114** | decided: option 1, implemented in PR #211 |
+| EF-009 in-process brand forgeability | **TIF-115** | filed; known limit recorded in PR #211 |
 
 ---
 
-## 1. Reconciliation: backlog vs Linear on TIF-52 / TIF-58 / TIF-74
+## 1. Reconciliation: backlog vs Linear on TIF-52 / TIF-58 / TIF-74 — **TIF-112**
 
 - **Title:** `Foundry backlog: reconcile TIF-52, TIF-58 and TIF-74`
 - **Project:** P-TIF-6 Myco Evaluation Foundry
@@ -25,7 +30,7 @@ written so it can be pasted into Linear as-is: title, project, description, acce
   contract's Linear list matches the backlog.
 - **Branch:** `tif-NN-reconcile` · **PR title:** `TIF-NN: reconcile Foundry backlog with Linear`
 
-## 2. Slot 5: Microsoft Hybrid Computer Use GUI arm
+## 2. Slot 5: Microsoft Hybrid Computer Use GUI arm — **TIF-113**
 
 - **Title:** `EF-008: slot 5 HCU GUI arm on the 30 Calc trials`
 - **Project:** P-TIF-6 Myco Evaluation Foundry
@@ -46,7 +51,9 @@ written so it can be pasted into Linear as-is: title, project, description, acce
   judge on independently captured workbook evidence; skipped and unfinished trials reported
   separately; the report names the planner and states that HCU is a layer, not an agent.
 
-## 3. Decision: where the attestation gate runs
+## 3. Decision: where the attestation gate runs — **TIF-114**
+
+**Decided 2026-11-22:** option 1. Implemented in PR #211.
 
 - **Title:** `EF-007: decide where the attestation gate runs (fixture identity)`
 - **Project:** P-TIF-6 Myco Evaluation Foundry

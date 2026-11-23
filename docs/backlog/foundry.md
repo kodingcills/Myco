@@ -161,8 +161,9 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   a run whose state oracle refutes can never be decision-eligible; the eligibility flip has
   its own Tier 2 verifier PASS at the exact head.
 
-### EF-007 (TIF-pending) Decision: where the attestation gate runs
-- **linear status:** **needs a decision** (file as a new TIF issue; no id yet).
+### EF-007 (TIF-114) Decision: where the attestation gate runs
+- **linear status:** **decided 2026-11-22 — option 1** (resolve the fixture from the hidden
+  commitment), implemented in PR #211.
 - **owner:** outer-loop (decision), foundry-owner (implementation)
 - **blocked_by:** none
 - **description:** `attest()` (EF-006) takes the fixture as an argument and the observations
@@ -180,8 +181,8 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   implemented and tested; `attest()` cannot be satisfied by caller-supplied provenance under
   the chosen design.
 
-### EF-008 (TIF-pending) Slot 5: Microsoft Hybrid Computer Use GUI arm
-- **linear status:** **needs an issue** (file as a new TIF issue; no id yet). Slot 5 is
+### EF-008 (TIF-113) Slot 5: Microsoft Hybrid Computer Use GUI arm
+- **linear status:** **filed as TIF-113**. Slot 5 is
   currently documented only inside TIF-58's handoff note
   ([docs/foundry/hcu-slot-5.md](../foundry/hcu-slot-5.md)), which means a run that needs its
   own GO, its own spend cap and its own evidence has no issue to be tracked against.
@@ -201,3 +202,23 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   persisted, or the exact structured refusal code); 30 trials scored by the shared blind
   judge on independently captured workbook evidence; skipped and unfinished trials reported
   separately; the report names the planner and states that HCU is a layer, not an agent.
+
+### EF-009 (TIF-115) Hardening: run the attestation gate out of the arm's reach
+- **linear status:** **filed as TIF-115**. Follow-up to TIF-95, which took the cheap half of
+  the isolation option.
+- **owner:** foundry-owner
+- **blocked_by:** EF-006 (TIF-74)
+- **description:** TIF-95 closed the fixture-identity hole by resolving the fixture from the
+  hidden commitment, and stopped exporting `attest()` to arm-facing code with a transitive
+  import-closure test. That is a boundary, not isolation. The exploit is recorded in PR #211
+  as a known limit: `attestedBrand` is an own symbol property and
+  `Object.getOwnPropertySymbols` is public API, so a caller holding any real attestation can
+  copy the symbol onto a fresh `{ eligible: true }` and `isAttestation` accepts it. **No
+  in-process fix can bind** — nothing inside the process distinguishes a copied symbol from
+  one the module set. Full isolation means the ingest runs in a process the arm cannot call,
+  with the observations produced by a second guest connection rather than a function the arm
+  invokes.
+- **acceptance:** the ingest runs as a separate process with no shared memory or module
+  handle reachable from arm code; the observer is a second guest connection, not
+  `offlineObserver`; a test proves arm code cannot reach the gate even by dynamic import; the
+  import-closure test from TIF-95 is retained as a cheap first line.
