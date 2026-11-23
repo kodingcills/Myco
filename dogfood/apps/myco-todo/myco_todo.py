@@ -59,6 +59,7 @@ class TodoApp:
         self.store = store
         state_file = os.environ.get("MYCO_TODO_STATE_FILE")
         self.state_file = Path(state_file) if state_file else None
+        self.toplevel = root
         root.title("myco-todo")
         root.geometry("420x360")
 
@@ -88,6 +89,32 @@ class TodoApp:
             self.listbox.bind("<<ListboxSelect>>", lambda _event: self.publish_state())
             self.publish_state()
 
+    @staticmethod
+    def widget_center(widget, toplevel) -> dict[str, int] | None:
+        """Centre of `widget` in `toplevel`-relative coordinates, or None.
+
+        A driver that cannot reach an app through accessibility (Tk registers
+        zero AT-SPI nodes) still needs a point to click to move focus. The
+        runtime's `clickAt` takes guest screen coordinates and this record is
+        read by the runner, so publish the centre point plus the size.
+
+        Recomputed on every publish: geometry is not final until the window
+        maps, and changes on resize. Returns None while unmapped (width or
+        height 1) so a consumer cannot click a not-yet-placed pixel.
+        """
+        try:
+            width, height = widget.winfo_width(), widget.winfo_height()
+            if width <= 1 or height <= 1:
+                return None
+            return {
+                "x": widget.winfo_rootx() - toplevel.winfo_rootx() + width // 2,
+                "y": widget.winfo_rooty() - toplevel.winfo_rooty() + height // 2,
+                "width": width,
+                "height": height,
+            }
+        except Exception:  # noqa: BLE001 - geometry is best-effort metadata
+            return None
+
     def publish_state(self) -> None:
         if self.state_file is None:
             return
@@ -96,6 +123,11 @@ class TodoApp:
             "listbox_selection": [self.listbox.get(i) for i in self.listbox.curselection()],
             "status_text": self.status.cget("text"),
             "entry_text": self.entry_text.get(),
+            # TIF-122: the runner's global route needs click targets. Without
+            # these it gaps on REQ-03 with "no entry_field geometry" even when
+            # the introspection channel is wired.
+            "entry_field": self.widget_center(self.entry, self.toplevel),
+            "save_button": self.widget_center(self.save_button, self.toplevel),
         }
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=self.state_file.parent, delete=False
