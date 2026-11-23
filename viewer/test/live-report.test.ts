@@ -25,6 +25,13 @@ const c1Accounting = JSON.parse(
 const c1Report = JSON.parse(
   readFileSync(new URL("../fixtures/real/c1-arm2-report.json", import.meta.url), "utf8"),
 );
+// The committed arm-002 ledger: 30 rows, 29 refuted, 1 harness error.
+const arm002 = JSON.parse(
+  readFileSync(
+    new URL("../../docs/research/experiments/c1-arm-002/accounting.json", import.meta.url),
+    "utf8",
+  ),
+);
 
 test("reads a real Myco run directory", () => {
   const arm = armFromMycoResult(mycoResult, "myco", "m1-013/normal-711e16c1");
@@ -55,6 +62,16 @@ test("reads the real Foundry paired report without inventing a false success", (
   // The artifacts print verdicts but no agent claim, so a false success on the
   // pair side cannot be decided: the row must say so rather than say "no".
   expect(pairs?.pairRows.every((row) => row.claimKnown === false)).toBe(true);
+});
+
+test("reads the committed arm-002 ledger the way FINAL.md counts it", () => {
+  const arm = armFromFoundryAccounting(arm002, "c1", "c1-arm-002/accounting.json");
+  expect(arm?.trials.length).toBe(29);
+  expect(arm?.trials.filter((trial) => trial.verdict === "refuted").length).toBe(29);
+  expect(arm?.trials.filter((trial) => trial.verdict === "verified").length).toBe(0);
+  // The flag is present on every scored row, so the loader can decide rather than guess.
+  expect(arm?.trials.every((trial) => trial.falseSuccessKnown)).toBe(true);
+  expect(arm?.trials.filter((trial) => trial.falseSuccess).length).toBe(0);
 });
 
 test("provenance is derived from what the artifacts carry", () => {
