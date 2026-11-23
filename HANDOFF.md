@@ -4,9 +4,32 @@
 
 ## 0. Session 2026-11-23 10:25 ET — read this first
 
-Restarted thread. Preflight done; #315 amended (test-only) and pushed. **STOPPED SHORT OF
-MERGE on the outer loop's GO** — see below. Head `2f9c640`; PR is `BEHIND` and CI is
-re-running.
+Restarted thread. Preflight done; #315 amended (test-only) and pushed. Head `53d8a12`;
+**round-2 verifier `LauncherPRVerifierR2` is running on it**; CI on that head is in
+progress. The 11:29 merge GO was **voided** by the outer loop at 11:37.
+
+### 12:0x ET — round-2 fix: the stub records its sleeper (portable)
+
+The outer loop voided the `2f9c640` shebang patch and asked for the portable form: the
+stub records the sleeper's pid, `afterEach` kills it. Done at `53d8a12`:
+- the `pnpm` stub is `#!/bin/sh` again, backgrounds `sleep 297`, appends `$!` to
+  `<dir>/sleepers`, and `wait`s;
+- `afterEach` kills the launcher tree by path **and** the recorded sleeper pids.
+
+Why the earlier `exec -a` idea was abandoned: it is bash-only, and macOS's fake-green hid
+it. Both dash and bash **fork** the backgrounded `sleep`, so `$!` is exactly the process
+to signal — verified in dash and bash directly before writing it into the fixture.
+
+Verified at `53d8a12`:
+- ubuntu-latest (`/bin/sh -> /usr/bin/dash`), container: **7/7, 2/2 runs, 0 leaks**;
+- macOS (bash): **7/7, 3/3 runs, 0 leaks**;
+- check-then-write control still fails (`expected 2 to be 1`); `tsc` + `biome` clean.
+
+`origin/main` merged first (behind=2 → `#313`'s `qemu_running` name-set and `#319`'s docs;
+`#313` also touches `scripts/s0-live.sh`, auto-merged with **no conflict** — it changes only
+`qemu_running`, not the claim).
+
+**Next: merge only on round-2 PASS + 5/5 green CI.** Round 2 of 3.
 
 ### 11:45 ET — GO given, but CI found a real bug; merge is paused
 
@@ -52,8 +75,8 @@ defect. Six checks, all green, independently reproduced:
 - `scripts/s0-live.sh` differs from `b92ee9f` in **comment lines only** (0 non-comment
   changed lines); the `mkdir` claim line is byte-identical to `b92ee9f`.
 
-**Next: sync `origin/main` and merge** (outer loop's call on timing). `mergeStateStatus:
-BEHIND` as of 11:00. No verifier rounds remain to spend (1 of 3 used).
+Round 1 was later voided by the outer loop (see the 11:45 entry): it ran macOS only
+and missed a dash-only fixture bug. Round 2 is the supervising round.
 
 ### 10:50 ET — round 1 verdict, its two nits, and the fix
 
@@ -160,7 +183,7 @@ Discovery's own worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4`.
 
 | PR | What | Head | State |
 |---|---|---|---|
-| [#315](https://github.com/kodingcills/Myco/pull/315) | Part of TIF-138 — launcher claims a run atomically, and can stop what it started | `434d1ba` | OPEN, round-1 verifier `LauncherPRVerifier2` running; no auto-merge armed |
+| [#315](https://github.com/kodingcills/Myco/pull/315) | Part of TIF-138 — launcher claims a run atomically, and can stop what it started | `53d8a12` | OPEN, round-2 verifier `LauncherPRVerifierR2` running; no auto-merge armed |
 | [#300](https://github.com/kodingcills/Myco/pull/300) | Same scope, earlier attempt | `9171ed` | **CLOSED** at the 3-round cap (TIF-162), superseded by #315 |
 
 Other open PRs in my name are **other owners' ticket work** I am carrying, not
