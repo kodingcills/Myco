@@ -87,7 +87,7 @@ describe("a C1 row must record its instruction or declare the gap", () => {
     // nothing failed. Annotating one corpus and testing that corpus is not a
     // check. This scans the WHOLE repo, not one directory: the first version was
     // scoped to docs/research and that is how a defect survived a round - two C1
-    // corpora under viewer/fixtures/real/ are rejected by this rule and the sweep
+    // corpora under viewer/fixtures/real/ were rejected by this rule and the sweep
     // could not see them. A corpus the rule rejects, with no check that notices,
     // is the class of bug this test exists for - so the sweep walks everything and
     // skips only the directories that cannot contain recorded evidence.

@@ -168,7 +168,9 @@ export interface BaselineRow {
    * without `instruction` is a known gap rather than a silent omission.
    *
    * The rule `isBaselineRow` enforces: a C1 row must carry `instruction` OR
-   * carry this marker and no instruction. That keeps arm-002's 29 recorded rows
+   * carry this marker. A row carrying both is accepted, but the pair is
+   * contradictory - the marker asserts the field is absent - so writers should
+   * set one or the other and never both. That keeps arm-002's 29 recorded rows
    * valid as evidence - they were produced before the field existed and their
    * absence is a documented fact, not a defect in the artifact - while making a
    * NEW row that forgets the instruction fail validation instead of shipping
