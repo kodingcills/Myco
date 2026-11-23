@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { PreparedC1 } from "../../src/baseline/c1-trial.ts";
 import { runC1Trial } from "../../src/baseline/c1-trial.ts";
 import type { Planner } from "../../src/baseline/planner.ts";
-import { taskText } from "../../src/tasks/intent.ts";
+import { taskText } from "../../src/tasks/task-text.ts";
 
 const params = { fixtureSeed: "s", rowKey: "EMP-0001", column: "name", newValue: "REVISED-1" };
 

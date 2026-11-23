@@ -1,28 +1,36 @@
 /**
  * The calc-record-edit task text, in a module with **no imports**.
  *
- * This file exists because of an architectural constraint, and the constraint is
- * the point. `src/baseline/c1-trial.ts` is guarded by
- * `test/baseline/import-graph.test.ts`: it may not reach the task family's
- * fixture code, which pulls in `node:crypto`. The instruction text must be shared
- * between Myco's arm and the screenshot baseline — a baseline told a different
- * task is not a baseline — so it has to live somewhere both can import without
- * crossing that boundary.
+ * ## What this module is, and is not
  *
- * Zero dependencies is therefore a requirement, not a style choice. Do not add an
- * import here.
+ * It renders the task sentence **for the screenshot baseline** — the arm whose
+ * agent is given a sentence to read. It is deliberately import-free because
+ * `src/baseline/c1-trial.ts` is guarded by `test/baseline/import-graph.test.ts`
+ * and may not reach the task family's fixture code (`node:crypto` via
+ * `fixture.ts`). Zero dependencies is a requirement here, not a style choice.
  *
- * **Why this text matters.** The two arms were originally told different things:
+ * **It is not "one text both arms render."** An earlier revision of this header
+ * claimed that, and it was wrong: Myco's arm has no task sentence to render. It
+ * runs `windowsProgramFor(params)` (`src/integration/trial.ts:643`), a compiled
+ * guarded program of `click`/`typeText` steps with pre/postconditions, checked by
+ * an independent persisted-state verifier. It never prompts a model with prose.
  *
- * - Myco's intent (`src/tasks/intent.ts`): "…to `newValue`, **and save the file**."
- * - The baseline's task line (`c1-trial.ts:46` before this module): "Set the X
- *   cell for record Y to Z." — no save.
+ * The thing the two arms must share is therefore **the task specification** —
+ * `CalcRecordEditParams` plus the intent that ends "and save the file"
+ * (`./intent.ts`) — not a sentence. C1's failure was that its task line dropped
+ * the save requirement while Myco's program *does* save as an explicit step, so
+ * the arms were not measuring the same job.
+ *
+ * ## Why the text matters
+ *
+ * - Myco's intent: "…to `newValue`, **and save the file**" — and its program saves.
+ * - The baseline's original task line (`c1-trial.ts:46` before this module):
+ *   "Set the X cell for record Y to Z." — no save.
  *
  * The baseline's planner also saw "Save and close it" in its system prompt, so the
- * two arms differed in the task line itself. Twelve of the arm's refutations were
- * rows that typed the correct value and never saved: a task-completion difference
- * induced by the instruction, not a grounding failure. Arm-003 re-runs with this
- * text on both sides.
+ * two arms differed in the task line itself. Its refutations were dominated by
+ * rows that typed the correct value and never saved. Arm-003 re-runs with this
+ * text, so the baseline's stated job matches the job Myco's program executes.
  * See docs/research/experiments/c1-arm-003-design.md.
  */
 

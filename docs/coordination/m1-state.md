@@ -144,8 +144,12 @@ which ends "and save the file" (`src/tasks/intent.ts`). Arm-002's per-trial task
 line did not (`c1-trial.ts:46`), though its system prompt did say "Save and close
 it". Measured, from `rows/*.json`:
 
-- **0 `press_key` calls across 375 actions** (357 click, 18 type_text).
-- 12 of 21 refutations were `modified` — correct value typed, never saved
+- **0 `press_key` calls** — re-measured at 28 scored rows: 422 actions,
+  `click` 398 / `type_text` 24. (An earlier revision of this file said 375 /
+  357 / 18; that did not reproduce. The arm was still running, so treat any
+  count here as a snapshot and re-derive it from the ledger.)
+- `modified` was the plurality of refutations (16, vs `step-budget` 7 and
+  `persisted-mismatch` 5) — correct value typed, never saved
   (`c1-judge.ts:32`: document left open).
 - 296 of 308 clicks landed in a 10-px band at y=146 — the Name Box, one element,
   not a spread of cell attempts.
