@@ -357,6 +357,64 @@ Dogfood, not folded into a test PR.
   e2e assertion is updated to match the decision either way.
 - The MCP `evidence` handler's error path is covered for the destroyed case.
 
+**Decision (TIF-93, 2026-11-22): REFUSE. `evidence` gets `require_ready()`.**
+
+Tier 2 — behaviour change on the MCP surface. Owner build; outer loop (this thread).
+
+Why refuse rather than document-as-unguarded:
+- **Uniformity.** `observe`, `act`, `reset`, `read_guest_file` all guard. The
+  unguarded set is exactly `{evidence, destroy}`, and `destroy`'s exemption is
+  argued from REQ-12 (it must run from `Failed` to avoid stranding a guest).
+  `evidence` has no such argument — a re-read of a trace is served by the run
+  directory on disk, not by a guest round-trip, so nothing about the op needs a
+  dead session.
+- **The result is backend-dependent, which makes the current behaviour a latent
+  bug rather than dwelt-on semantics.** `FakeBackend::evidence` returns `Ok` with
+  synthetic paths on any phase, so the mocked e2e sees success. The real
+  `QemuLinuxBackend::evidence` reaches a backend whose `destroy` already deleted
+  the run directory (RT-006/RT-009: destroy deletes on-disk state), so the same
+  call on a real session is an unclassified backend error. A client cannot write
+  portable code against "sometimes Ok, sometimes backend error depending on the
+  implementation".
+
+**Pre-mortem (defensive checklist item 1) — top ways this fails on the real target:**
+
+1. **A real client calls evidence-after-destroy and depended on the trace path.**
+   Mitigation: per RT-021's own note this is a Tier-2 surface change and the PR
+   body carries the note to Dogfood; the alternative (silently returning a path
+   to deleted files) is worse for that same client. The error is
+   `IllegalTransition { from: Destroyed, to: Ready }` — the same shape every other
+   guarded op returns, so an existing handler already understands it.
+2. **The guard is put in the wrong layer.** If the MCP handler pre-checks phase,
+   the core still permits it and the CLI surface (`myco-rt`) diverges. Mitigation:
+   the guard goes in `Session::evidence` alongside the other ops; the MCP test
+   asserts through the handler so the wire surface is covered too.
+3. **`evidence` called from `Failed` breaks a legitimate recovery read.** A failed
+   reset leaves phase `Failed` and the run dir intact, so an operator may want the
+   trace before destroy. Mitigation: this is exactly what `require_ready()` would
+   *also* refuse — accepted. The trace is on disk at a known path from the prior
+   `evidence` call; recovering it does not need the op. If this turns out to
+   matter, the correct fix is a separate op with its own phase rule, not an
+   unguarded `evidence`.
+4. **Removing the mocked-e2e assertion hides a regression instead of pinning one.**
+   The current test asserts `s.evidence().is_ok()` on a destroyed fake. If that
+   line is merely deleted, a future guard removal is invisible. Mitigation: invert
+   it to assert `IllegalTransition`, and prove it with a mutation (remove the
+   guard → red).
+5. **Backend error classification drift.** `backend_err` stringifies, so a
+   destroyed-session backend failure today surfaces as an opaque string. Adding
+   the guard means the destroyed case no longer reaches the backend at all, so the
+   opaque string can only come from a live session. No new risk introduced.
+
+**Acceptance (this change):**
+- `Session::evidence` calls `require_ready()`; guarded identically to `observe`.
+- `mock_e2e::destroyed_session_refuses_every_operation` asserts `evidence` is
+  refused with `IllegalTransition { from: Destroyed }`, mutation-verified (guard
+  removed → the test fails).
+- MCP `evidence` handler covered for the destroyed case: tool error, not success.
+- `docs/coordination/runtime-state.md` records the MCP-surface change and the note
+  to Dogfood.
+
 ## RT-022 — the backend half of the act wire contract is untested
 
 **Found by:** the verifier of #186, as a caveat on an otherwise clean PASS.
@@ -385,3 +443,27 @@ stop being reviewable.
   either side fails somewhere deterministic and VM-free.
 - Ideally the two share one source of truth; if they cannot (crate dependency
   direction), the pair of tests is the contract.
+
+## RT-023 — `runtime/` is not `cargo fmt` clean, and nothing enforces it
+
+**Found by:** the verifier of #195, as a non-blocking note. Measured, not assumed:
+`cargo fmt -p myco-rt-backend-qemu -- --check` reports **59 diffs on `origin/main`**
+and the same 59 on #195's branch — so this is pre-existing and repo-wide, not
+introduced by that PR.
+
+**Why it matters beyond tidiness:** there is no `runtime/` CI job (see the standing
+gap above), so nothing runs `fmt --check` or `clippy` on this workspace. Formatting
+therefore drifts unopposed, and every future PR inherits a noisy diff baseline: a
+reviewer cannot tell formatting churn from a real change, and `cargo fmt` as a
+pre-commit habit would rewrite unrelated regions.
+
+**Not fixed here** because a repo-wide reformat is exactly the kind of change that
+buries a real diff, and it should be its own PR with no logic change in it.
+
+**Acceptance:**
+- One PR running `cargo fmt --all` across `runtime/` with **no** logic change, so it
+  can be reviewed as a no-op.
+- A `runtime/` CI job that runs `cargo fmt -- --check` and `cargo clippy`, so the
+  baseline cannot drift again. This is the same missing job as the standing gap
+  above; one job closes both.
+- Until then: do not treat a fmt-only diff in `runtime/` as a review finding.

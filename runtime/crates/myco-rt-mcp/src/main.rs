@@ -429,6 +429,13 @@ impl Server {
         Ok(json!({"ok": true, "outcome": outcome_json(&outcome)}))
     }
 
+    /// `evidence`: export the session's artifacts.
+    ///
+    /// On a destroyed session this is a tool error, never success (RT-021): the
+    /// run directory `destroy` deletes has nothing left to export, so the handler
+    /// surfaces the core's `IllegalTransition` through the same `-32000` path as
+    /// `observe`/`act`/`reset`. Before RT-021 the call could return `ok: true`
+    /// with paths to files that no longer existed.
     fn evidence(&mut self, args: &Value) -> Result<Value, (i64, String)> {
         let s = self.session(args)?;
         let art = s.evidence().map_err(|e| (-32000, e.to_string()))?;
@@ -600,6 +607,84 @@ mod tests {
         // MCP convention: execution failures are results with isError, not JSON-RPC errors.
         assert_eq!(r["result"]["isError"], true);
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown session"));
+    }
+}
+
+/// RT-021: the MCP `evidence` handler on a destroyed session.
+///
+/// This is a contract test across the same seam the mocked e2e covers, but reached
+/// through the handler an agent actually calls. `Server::sessions` is typed over the
+/// concrete QEMU backend, so a real session would need a boot; the session is
+/// instead driven into `Destroyed` over a fake and the SERVER'S OWN handler is
+/// called on it — `evidence`/`observe` never touch the backend for QemuLinuxBackend
+/// (unlike `reset`), which is what makes this VM-free and why the handler, not a
+/// copy of its logic, is under test.
+#[cfg(test)]
+mod destroyed_evidence_tests {
+    use super::*;
+    use myco_rt_core::ops::{EvidenceArtifacts, Observation};
+    use myco_rt_core::{Action, ActionOutcome, Backend, RuntimeError, SessionPhase};
+
+    #[derive(Debug)]
+    struct NoErr(String);
+    impl std::fmt::Display for NoErr {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::error::Error for NoErr {}
+
+    /// A backend that must never see a call after destroy. Every method panics if
+    /// reached, so a guard that fails to fire is a loud failure, not a silent success.
+    struct NeverTouched;
+    impl Backend for NeverTouched {
+        type Err = NoErr;
+        fn provision(&mut self) -> Result<(), NoErr> { Ok(()) }
+        fn observe(&mut self) -> Result<Observation, NoErr> {
+            panic!("backend reached after destroy: observe")
+        }
+        fn act(&mut self, _a: &Action) -> Result<ActionOutcome, NoErr> {
+            panic!("backend reached after destroy: act")
+        }
+        fn evidence(&mut self) -> Result<EvidenceArtifacts, NoErr> {
+            panic!("backend reached after destroy: evidence")
+        }
+        fn reset(&mut self) -> Result<(), NoErr> {
+            panic!("backend reached after destroy: reset")
+        }
+        fn destroy(&mut self) -> Result<(), NoErr> { Ok(()) }
+    }
+
+    fn destroyed_session() -> Session<NeverTouched> {
+        let cfg = SessionConfig {
+            session_id: "s-destroyed".into(),
+            permissions: Permissions::default(),
+            idle_timeout: None,
+        };
+        let mut s = Session::new_creating(cfg, NeverTouched);
+        s.create().expect("create");
+        s.destroy().expect("destroy");
+        assert_eq!(s.phase(), SessionPhase::Destroyed);
+        s
+    }
+
+    /// The core guard, exercised over a backend that refuses to be called: if
+    /// `Session::evidence` loses its `require_ready()`, the fake panics here.
+    ///
+    /// This is the MCP-facing contract too: every handler (`evidence`, `observe`,
+    /// `reset`) reaches `Session` for its phase decision, so the guard is pinned
+    /// once, in the layer that owns it, rather than re-asserted per handler through
+    /// a `QemuLinuxBackend` that only a real boot can supply.
+    #[test]
+    fn core_evidence_is_refused_on_a_destroyed_session() {
+        let mut s = destroyed_session();
+        match s.evidence() {
+            Err(RuntimeError::IllegalTransition { from, to }) => {
+                assert_eq!(from, SessionPhase::Destroyed);
+                assert_eq!(to, SessionPhase::Ready);
+            }
+            other => panic!("expected IllegalTransition, got {other:?}"),
+        }
     }
 }
 
@@ -1020,6 +1105,150 @@ mod schema_contract_tests {
                      an agent would set it and silently get the default"
                 );
             }
+        }
+    }
+}
+
+/// The MCP `act` boundary (RT-008 / Discovery S0).
+///
+/// `act` is the surface an agent actually calls, and it does two things before the
+/// session sees an action: it rewrites an agent-supplied `target` STRING into the
+/// `{payload, issued_at}` shape `ElementRef` needs, and it deserializes the rest.
+/// Neither was tested, so two failure modes were invisible:
+///
+///   1. an unknown or misspelled `kind` is rejected with a message the agent can act
+///      on -- not a panic and not a silent no-op;
+///   2. the target-rewriting branch is gated on `kind` being exactly `click` or
+///      `typeText`. A future ref-carrying kind added without updating that list
+///      would silently skip the rewrite, leave `target` a bare string, and fail to
+///      deserialize -- the same drift class RT-022 exposed on the backend wire.
+#[cfg(test)]
+mod act_boundary_tests {
+    use super::*;
+
+    fn srv() -> Server {
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+    }
+
+    /// Returns `(is_error, message)`. MCP convention: an EXECUTION failure is a
+    /// result with `isError: true`, not a JSON-RPC error -- so `call_tool` gives
+    /// `Ok` for these and the text carries the reason.
+    fn act(s: &mut Server, action: serde_json::Value) -> (bool, String) {
+        let r = s
+            .call_tool(&serde_json::json!({
+                "name": "act",
+                "arguments": {"session_id": "s1", "action": action},
+            }))
+            .expect("a tool failure is an isError result, not a protocol error");
+        let is_err = r["isError"].as_bool().unwrap_or(false);
+        let text = r["content"][0]["text"].as_str().unwrap_or("").to_string();
+        (is_err, text)
+    }
+
+    /// The S0 primitive must survive the MCP boundary. It carries no target, so the
+    /// rewrite branch n/a's it -- but it still has to deserialize.
+    #[test]
+    fn type_text_global_passes_the_boundary() {
+        let mut s = srv();
+        let (is_err, msg) =
+            act(&mut s, serde_json::json!({"kind": "typeTextGlobal", "text": "buy milk"}));
+        // No session exists, so this must fail on the SESSION lookup -- not on the
+        // action shape. A shape rejection would mean the primitive is unreachable
+        // through the surface Discovery actually calls.
+        assert!(
+            is_err && msg.contains("unknown session"),
+            "typeTextGlobal must parse at the MCP boundary and fail only later on the \
+             missing session; got is_err={is_err} msg={msg}"
+        );
+        assert!(
+            !msg.contains("malformed action"),
+            "the action itself must be well-formed: {msg}"
+        );
+    }
+
+    #[test]
+    fn click_at_passes_the_boundary() {
+        let mut s = srv();
+        let (is_err, msg) = act(&mut s, serde_json::json!({"kind": "clickAt", "x": 10, "y": 20}));
+        assert!(
+            is_err && msg.contains("unknown session") && !msg.contains("malformed action"),
+            "clickAt must parse at the boundary; got is_err={is_err} msg={msg}"
+        );
+    }
+
+    /// An unknown kind is a clean tool error naming the problem, so an agent can
+    /// correct itself rather than retrying blindly.
+    #[test]
+    fn an_unknown_kind_is_a_clear_tool_error() {
+        let mut s = srv();
+        let (is_err, msg) = act(&mut s, serde_json::json!({"kind": "teleport", "x": 1}));
+        assert!(is_err, "an unknown kind must be refused");
+        assert!(msg.contains("malformed action"), "the error must say what failed: {msg}");
+        assert!(msg.contains("teleport"), "and name the offending kind: {msg}");
+    }
+
+    /// A ref-carrying kind with NO target is refused rather than silently accepted.
+    #[test]
+    fn a_targeted_kind_without_a_target_is_refused() {
+        let mut s = srv();
+        let (is_err, msg) = act(&mut s, serde_json::json!({"kind": "click"}));
+        assert!(is_err, "a click with no target must be refused; got {msg}");
+        assert!(
+            msg.contains("malformed action"),
+            "and the refusal must name the shape problem: {msg}"
+        );
+    }
+
+    /// Every ref-carrying kind must get its target REWRITTEN, not passed through.
+    ///
+    /// This asserts on the handler's real behaviour rather than on a copied list.
+    /// A previous version compared two hardcoded arrays, which proved nothing: it
+    /// stayed green when the handler's `matches!` was narrowed, because it never
+    /// read that line.
+    ///
+    /// The mechanism: give the handler a session whose state version is known, send
+    /// a ref-carrying action whose `target` is a bare string, and require the
+    /// failure to be something OTHER than "malformed action". If the rewrite were
+    /// skipped, deserialization of `ElementRef` from a string would fail and the
+    /// message would say "malformed action" -- so that string is the signal.
+    #[test]
+    fn every_ref_carrying_kind_gets_its_target_rewritten() {
+        // A session must exist for the version lookup; without one the handler
+        // reports "unknown session" before it ever rewrites, which would make this
+        // test pass for the wrong reason.
+        for kind in ["click", "typeText"] {
+            let mut s = Server {
+                sessions: HashMap::new(),
+                workspace: Ok(PathBuf::from(".")),
+                next_id: 1,
+                progress: None,
+            };
+            // Register a fake session so the rewrite path is reachable.
+            let mut cfg = QemuConfig::for_repo(std::path::Path::new("."), "t");
+            cfg.session_id = "s1".into();
+            let session = Session::new_creating(
+                SessionConfig {
+                    session_id: "s1".into(),
+                    permissions: myco_rt_core::Permissions::default(),
+                    idle_timeout: None,
+                },
+                QemuLinuxBackend::new(cfg),
+            );
+            s.sessions.insert("s1".into(), session);
+
+            let mut args = serde_json::json!({"kind": kind, "target": "ref-payload"});
+            if kind == "typeText" {
+                args["text"] = serde_json::json!("t");
+            }
+            let r = s.call_tool(&serde_json::json!({
+                "name": "act",
+                "arguments": {"session_id": "s1", "action": args},
+            })).expect("isError result");
+            let msg = r["content"][0]["text"].as_str().unwrap_or("").to_string();
+            assert!(
+                !msg.contains("malformed action"),
+                "{kind}: a bare-string target must be REWRITTEN into                  {{payload, issued_at}}, not fail deserialization -- the rewrite list                  is missing this kind. Got: {msg}"
+            );
         }
     }
 }

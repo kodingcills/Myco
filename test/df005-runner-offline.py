@@ -331,11 +331,35 @@ def main() -> int:
             capture_output=True, text=True, cwd=ROOT,
             env={**os.environ, "MYCO_VM_LOCK_PATH": str(held)},
         )
-        expect("test-holder" in proc.stdout, f"names the holder: {proc.stdout.strip()[-120:]}")
+        expect("held by" in proc.stdout and "99999 test-holder" in proc.stdout,
+               f"names the holder on the vm-lock line: {proc.stdout.strip()[-160:]}")
         expect(proc.returncode == 1, "exit 1 while the lock is held")
+        # (e) A held lock must short-circuit the guest checks: probing someone
+        # else's live slot is read-only but still load we should not add.
+        expect("not run: another driver holds the VM lock" in proc.stdout,
+               "guest checks are skipped, not run, under a held lock")
+        expect("1 of 6 checks failed" in proc.stdout,
+               f"reports 1 of 6, not a partial count: {proc.stdout.strip()[-160:]}")
+        expect("guest-ssh: Warning" not in proc.stdout,
+               "does not attempt ssh while the lock is held")
     finally:
         holder.kill()
         holder.wait()
+
+    print("16. preflight accounts for all six checks when the guest is unreachable")
+    out2 = Path(tempfile.mkdtemp(prefix="df005-pf2-"))
+    proc = subprocess.run(
+        [sys.executable, str(RUNNER), "--preflight"],
+        capture_output=True, text=True, cwd=ROOT,
+        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out2 / "free.lock")},
+    )
+    # Off-guest, ssh fails; the three dependent checks must still be reported as
+    # not-run rather than silently omitted, so the "N of 6" count is honest.
+    for name in ("app-deployed", "app-self-test", "introspection-env"):
+        expect(f"skip {name}: not run: guest unreachable" in proc.stdout,
+               f"{name} reported as not-run, not omitted")
+    expect("of 6 checks failed" in proc.stdout, "count is stated against 6")
+    expect(proc.returncode == 1, "exit 1")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0

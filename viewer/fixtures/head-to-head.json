@@ -821,9 +821,22 @@
       "blocker": "account + card; not run"
     }
   ],
-  "evidence": [
-    "/tmp/baseline/c1-arm2/accounting.json",
-    "docs/research/experiments/m1-013-session1/normal-711e16c1/result.json"
-  ],
-  "generatedAt": "2026-11-22T23:30:00.000Z"
+  "evidence": ["viewer/fixtures/head-to-head.json (synthetic; not live)"],
+  "generatedAt": "2026-11-22T23:30:00.000Z",
+  "provenance": {
+    "kind": "simulated",
+    "note": "Synthetic fixture for layout review: 30 generated pairs, no guest trials.",
+    "arms": [
+      {
+        "armId": "myco",
+        "source": "viewer/fixtures/head-to-head.json (synthetic)",
+        "live": false
+      },
+      {
+        "armId": "hcu+shell",
+        "source": "viewer/fixtures/head-to-head.json (synthetic)",
+        "live": false
+      }
+    ]
+  }
 }
