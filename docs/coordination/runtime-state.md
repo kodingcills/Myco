@@ -738,3 +738,69 @@ and swap is already in use *before* any second VM. The cap is a ceiling, not a
 reservation (QEMU commits lazily), so the honest near-term charge is RSS, not `-m`.
 
 No VM lock was taken; measurement is `ps`/`vm_stat`/`vm.swapusage` only.
+
+## Standing rule: git sync (Tiffany, 2026-11-22 19:45 ET)
+
+1. Before resuming/picking up ANY existing branch or worktree: `git fetch origin`, then
+   rebase onto latest `origin/main` (merge if already shared), resolve conflicts, rerun
+   tests before new work.
+2. Right before opening a PR or pushing for review: fetch + sync with `origin/main`
+   again; confirm `git status` shows nothing behind and CI ran on the synced head.
+3. Never open a PR from a stale branch. Synced after a verifier PASS → reverify by tier
+   (Tier 0 needs only green CI).
+4. Pass this to every subagent/worker started.
+
+Main requires branches to be up to date before merging, so this also avoids the
+BEHIND→update churn that stalled #201/#209.
+
+## TIF-44 / RT-016: process control (2026-11-22)
+
+Extended op delivered: `launch_process` / `kill_process` / `relaunch_process` MCP
+tools over a new `GuestProcessControl` core trait, mirroring `GuestFileRead`.
+
+**Design finding:** RT-016's brief said "launch already exists via `act`", but
+`act:launch` returns only a delivery outcome — no handle. The guest agent's
+`kill_process`/`relaunch_process` require a **UUID handle** produced by its separate
+`launch_process` op, which the MCP server did not expose. So the complete fix is
+**three** tools, not two: `launch_process` is the entry point that mints the handle.
+
+Kill and relaunch bump the session state version, so outstanding refs invalidate
+exactly as after a delivered action; a subsequent `observe` is the only valid ref
+source. All three ops are phase-guarded like every other non-terminal op (RT-021).
+
+Verified: `cargo test --workspace` 107/0 (was 95 before this change). Mutations —
+drop the phase guard, drop the kill version bump — turn `process_control_is_refused_
+after_destroy` and `launch_kill_relaunch_round_trip` red respectively; restoring is
+green. A fake-backend subtlety found by mutation: the phase-guard test only became
+load-bearing after the fake stopped gating its own process ops on `provisioned`,
+because otherwise a removed guard passed for the wrong reason.
+
+Tier-2 review of #226 at c3a75b3: **REJECT**, fixed forward on the same PR:
+- launch/kill/relaunch bypassed the session's permission set (`act(Launch)` checks
+  `launch`; the process ops did not). All three now require `launch`; refusal tested.
+- Three mutants survived: dropping the relaunch guard (the after-destroy test
+  relaunched a *live* handle, so the fake's "still live" error passed it for the
+  wrong reason) and dropping the launch or relaunch version bump (nothing asserted
+  them). The test now relaunches a killed handle and asserts both bumps; all six
+  guard/bump/permission mutants now turn exactly one test red. 109/0.
+- The fake diverged from the real agent: it relaunched handles it never minted and
+  relaunched the same handle twice. It now refuses both and returns the cached exit
+  on a second kill, as `myco-rt-agent/src/processes.rs` does.
+- Status corrected from "done" to "implemented, in review; live acceptance pending".
+- Follow-up, not fixed: process ops write no trace events.
+
+Tier-2 re-review at 175e760: **REJECT** on one coordination defect, fixed forward:
+- The shipped tool shape contradicted the recorded REQ-09 decision in
+  `dogfood-state.md` (kill/relaunch as `act` kinds). That entry is now marked
+  SUPERSEDED with the shipped shape, the reason (`act:launch` mints no handle) and
+  the trace-event cost. `direction-a-live-execution-plan.md` G3 no longer says
+  RT-016 PASS.
+- Fake fidelity: `act(Launch)` no longer registers a handle, reset clears handles,
+  error text matches the agent's. Remaining known gap: an already-exited process
+  reports SIGKILL in the fake (live run only).
+- "A backend-refused op does not bump the version" is now asserted for all three
+  ops; moving the bump before the backend call turns one test red per op. 110/0.
+
+Not done: live kill/relaunch against a real guest (no VM slot; per Tiffany's rule the
+second VM is post-M1), so RT-016's acceptance test has not run. The guest-side ops
+are unit-tested in `myco-rt-transport`.

@@ -14,7 +14,7 @@ deploy and teardown. Numbers below use those means and are rounded up.
 |---|---|---|---|---|
 | 1 | **C1 arm-002, finish** | — | running | In flight; 11 scored at last read. MT4 continues |
 | 2 | **M1-016** reproducibility runbook + independent reproduction | M1-016 | 3–4 h | Needs a *fresh operator* on a fresh checkout; cannot be done by the arm's owner |
-| 3 | **arm-003** — baseline re-run with byte-identical task text (`docs/research/experiments/c1-arm-003-design.md`) | — | ~2.5 h | Queued **after** slot 2. $9.00 cap on total committed spend (**$1.63 charged**). Arm-002 is recorded, not scored |
+| 3 | **arm-003** — baseline re-run with byte-identical task text (`docs/research/experiments/c1-arm-003-design.md`) | — | ~2.5 h | Queued **after** slot 2. $9.00 cap on total committed spend, read from `report.json.c1ChargedMicros` (**$1.632162** at arm-002's close: spike $0.076800 + arm-002 $1.555362). Arm-002 is recorded, not scored |
 | 3b | **Corrupted / interrupted arm** for criterion 4 (≥10 trials, 0 false successes) | — | 1.5–2 h | The M1-014 combined audit already has 21 eligible trials at `6c4524e`; this slot only re-runs if that evidence is rejected |
 | 4 | **Scorecard regeneration** on retained artifacts | — | 15 min | `scripts/m1-scorecard.py`; host-side, needs the guest only if artifacts must be re-produced |
 

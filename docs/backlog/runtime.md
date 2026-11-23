@@ -189,7 +189,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   Phase-1 go signal for Dogfood); measured create/reset/destroy costs recorded.
 
 ### RT-015 (TIF-43) Extended op: host-side guest file read (Dogfood REQ-08)
-- **status:** implemented, in review (PR #112). MCP `read_file` tool, opt-in via
+- **status:** done — merged as PR #112 (2026-11-22). MCP `read_file` tool, opt-in via
   `create.read_root`; kernel-enforced confinement (`openat2` + RESOLVE_BENEATH |
   NO_SYMLINKS | NO_XDEV); 1 MiB cap; root `/` refused. **Path-grant enforcement is
   proven on Linux only** (`#[cfg(target_os = "linux")]`), so it is unverified on
@@ -203,7 +203,7 @@ Coordination: [../coordination/runtime-state.md](../coordination/runtime-state.m
   bytes match; permission denied for paths outside the session's grant (test).
 
 ### RT-016 (TIF-44) Extended op: process control (Dogfood REQ-09)
-- **status:** pending
+- **status:** implemented, in review; **live acceptance pending** (2026-11-22, PR #226). `GuestProcessControl` extension + `launch_process`/`kill_process`/`relaunch_process` MCP tools. `act:launch` returns no handle, so `launch_process` was required for kill/relaunch to name anything, which is why there are three tools, not two. All three are phase-guarded, require the session's `launch` permission (same as `act(Launch)`; added after the Tier-2 review found them bypassing it), and bump the state version. Tests: `mock_e2e` round trip, refusal paths, permission refusal, handle provenance (fake now mirrors the real agent: unknown/stale handles refused, second kill returns the cached exit); mutations of each guard, each version bump and each permission check turn a test red. `cargo test --workspace` 109/0. **Not met:** the acceptance integration test (kill the demo app mid-session against a live guest, observe it gone, relaunch, exit status, session still usable) has not run; it needs a VM slot. Follow-up: process ops do not write trace events yet (`act` does), so `trace.jsonl` shows version bumps with no step behind them.
 - **owner:** build
 - **blocked_by:** RT-first-path
 - **description:** Kill (SIGKILL) and relaunch a named guest process with exit
