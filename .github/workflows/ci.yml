@@ -69,7 +69,11 @@ jobs:
         with:
           workspaces: runtime
       - name: Test myco-rt-agent
-        run: cargo test -p myco-rt-agent 2>&1 | tee /tmp/agent-test.log
+        # pipefail: a job-level `defaults.run` makes the shell `bash -e` without
+        # pipefail, so `| tee` swallowed a compile failure (first run of this job).
+        run: |
+          set -o pipefail
+          cargo test -p myco-rt-agent 2>&1 | tee /tmp/agent-test.log
       - name: Confinement tests actually ran
         run: |
           set -euo pipefail
