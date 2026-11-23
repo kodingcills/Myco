@@ -31,6 +31,14 @@ Head-to-head (TIF-59) and recommendation/product criterion (TIF-60) decide.
   escalations; record what could not be run.
 - **Foundry owns ground truth.** Discovery does not write fixtures or verifiers
   and does not optimise against hidden tests.
+- **`myco-run` is the developer surface (MVD-001 acceptances 1/3/5).**
+  `pnpm myco-run --transport mock --task df-s01 --out DIR` prints the claim, the
+  persisted state read from the store, and the verdict, and its exit code comes
+  from a schema + cross-file validation of the artifacts. `docs/product/quickstart.md`
+  is the page a fresh agent follows; measured ~3 s from clone to a verified
+  report. Acceptance 4 (two agent environments) is documented and contract-tested
+  but not run inside Codex or Claude Code, and model cost is `not-measured`
+  because the mock path calls no model.
 - **S0 live is closed on purpose, and by whose hands.** `RuntimeTransport.evidence()`
   reports `oraclePresent` and `guestClean` as false because neither is the
   transport's to establish: the oracle is Foundry's injected verifier, and nothing
