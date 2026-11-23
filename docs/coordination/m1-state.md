@@ -23,6 +23,15 @@
   deploy check. Cua C1 and Foundry HCU await sequential handback. Discovery
   S0+S1 is tentative. Its disposable ARM64 QEMU+HVF guest uses a fresh Ubuntu
   24.04 cloud image overlay with no snapshot ID. RT-011 proof remains open.
+- **Discovery S0 is prepped and detached (TIF-89, PR #250).** The live path is
+  `scripts/s0-live.sh --run`: nohup + pid file + log + watchdog, a gate that
+  refuses on a running guest, a missing or non-executable `myco-rt-mcp`, or an
+  unreadable process table, and `--stop` scoped to this worktree. The transport
+  is `src/discovery/runtime-transport.ts` (MCP stdio over `myco-rt-mcp`), which
+  reads the app's own published state through `read_file` (RT-015) rather than
+  the runtime's optional introspection config. `--dry-run` gives DF-S01
+  verified and DF-S02 refuted offline. **No live S0 evidence yet:** the one
+  attempt was stopped two minutes into boot because the window was not ours.
 - [M1 backlog](../backlog/m1.md)
 
 ## Standing rule — defensive engineering (Tiffany-approved, 2026-11-22 16:00 ET)
