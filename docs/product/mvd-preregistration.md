@@ -336,7 +336,10 @@ LibreOffice Calc (and Writer where noted) and no Windows port of `myco-todo` is 
   window (queue slot 3) includes a `myco-todo` deploy check whose result is S0's readiness
   signal. Dates and readiness come from the Runtime Owner.
 - **S0 app merged candidate:** `dogfood/apps/myco-todo/myco_todo.py` merged in PR #89 (`1f4619a`), SHA-256
-  `c9671a046ecd1cc4c21475d570bbef029e4ee32e2d85c9ff85c720b24f379b57`.
+  `cb1086fc208804b487764cab06cbeae61c3884d39b95f57f608326b571ce53b1`
+  (updated by TIF-122, which adds `entry_field`/`save_button` geometry to the
+  published record in **screen** coordinates, as `clickAt` requires; the
+  previous pins were `3ffccbf3…` and, before that, `c9671a04…`).
   Headless self-test passed. This candidate fixes Tk startup, adds opt-in ADR-0016
   publication using the traced Tk variable, and retains the seeded persistence bug. Live Linux deployment and GUI verification remain required.
 - **Arms runnable on the Linux guest.** `myco` once RT-011, RT-015 (host-side file read) and the `myco-todo` deploy are done. `hcu+shell`
