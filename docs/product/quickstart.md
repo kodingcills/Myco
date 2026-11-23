@@ -209,12 +209,16 @@ today**. It refuses, in this order, unless:
 
 Step 5 is where it stops. `RuntimeTransport.evidence()` reports eight checks and
 today establishes six: the runtime answers, the guest is up, the app and the store
-are readable. Two are **not established by any owner yet**:
+are readable. Two are reported unproven:
 
-- `oraclePresent` — the oracle is the runner's injected verifier, not something a
-  file read can prove;
-- `guestClean` — nothing on the host can distinguish "no stray app process" from
-  "no read grant".
+- `oraclePresent` — Foundry's verifier validating this run, not something a file
+  read can prove. Unproven until Foundry wires it, so **an S0 PASS must not be
+  read as Foundry-oracle validation**.
+- `guestClean` — ratified on Tiffany's behalf (2026-11-23) as *the app's store and
+  published state files are absent before launch*. That is a pre-run observation,
+  and this object is built after the session exists, so it reports the check
+  unproven instead of inferring it. Every evidence record must state that this
+  definition was in force.
 
 The transport reports both as `false` rather than assuming them, which is the
 intended state: a preflight that guesses is worse than one that refuses. So
