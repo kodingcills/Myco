@@ -4,9 +4,33 @@
 
 ## 0. Session 2026-11-23 10:25 ET — read this first
 
-Restarted thread. Preflight done; #315 amended (test-only) and pushed. Head `53d8a12`;
-**round-2 verifier `LauncherPRVerifierR2` is running on it**; CI on that head is in
-progress. The 11:29 merge GO was **voided** by the outer loop at 11:37.
+**#315 IS MERGED** (`301dfe6`). **Compare-view must-fixes are open as
+[#324](https://github.com/kodingcills/Myco/pull/324)** at head `157ea0f`; **verifier PASSED** (0.97) and CI is running. Handoff-note PR [#323](https://github.com/kodingcills/Myco/pull/323) is open,
+waiting on a re-run of `check (macos-latest)`.
+
+### 12:35 ET — TIF-144…147 implemented, one Tier-1 PR
+
+[#324](https://github.com/kodingcills/Myco/pull/324), branch `tif-144-147-compare-view-fixes`
+off `301dfe6`, head `157ea0f`:
+
+| Id | Change | Spec |
+|---|---|---|
+| TIF-144 | `n/a`/`n/a (unknown)` → `not recorded` (missing) / `could not look` (unverifiable), as `MISSING`/`COULD_NOT_LOOK` constants | §4.6, §2.11 |
+| TIF-145 | Arm headers `Refuted`→`Failed`, `Uncertain`→`Unknown` | §4.3 (fixed words; no synonyms) |
+| TIF-146 | `?compare=` refuses off-origin by name; extracted as pure `resolveSameOriginReportUrl(raw, base)` so it tests without a DOM | §5 |
+| TIF-147 | Note names the decision's own `promptVariant`/`taskId`; `Generated` → `HH:MM:SS.mmm ET` local | §4.5 |
+
+Evidence: viewer suite **106 passed / 1 skipped**, `head-to-head.test.tsx` 12/12, `tsc` and
+Biome clean. **Five negative controls** run, each restored byte-clean: old headers, removed
+origin guard, raw `Z`, `n/a (unknown)`, and the parenthetical pairing. Screenshots at
+1440×900 in `docs/design/reviews/tif-144-147/`.
+
+**First verifier (`CompareViewVerifier`) hit a provider stream error while yielding** — no
+verdict. Its completed work matched mine on all four gates and controls; its one finding
+(the variant note paired `taskId` and `promptVariant`, and the fixture's taskId already
+embeds the variant) is fixed at `157ea0f`. `CompareViewVerifier2` confirmed it at `157ea0f`: **PASS, 0.97, no findings.**
+
+**Not done: TIF-148.** The outer loop said "then TIF-148"; it is next after #324.
 
 ### 12:2x ET — ROUND 2 PASS
 
@@ -199,8 +223,10 @@ Discovery's own worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4`.
 
 | PR | What | Head | State |
 |---|---|---|---|
-| [#315](https://github.com/kodingcills/Myco/pull/315) | Part of TIF-138 — launcher claims a run atomically, and can stop what it started | `53d8a12` | OPEN, round-2 verifier `LauncherPRVerifierR2` running; no auto-merge armed |
-| [#300](https://github.com/kodingcills/Myco/pull/300) | Same scope, earlier attempt | `9171ed` | **CLOSED** at the 3-round cap (TIF-162), superseded by #315 |
+| [#324](https://github.com/kodingcills/Myco/pull/324) | TIF-144…147 — the compare view back to gui-spec | `157ea0f` | OPEN, verifier PASS 0.97; waiting on 5/5 CI |
+| [#323](https://github.com/kodingcills/Myco/pull/323) | TIF-138 handoff note: #315 merged as `301dfe6` | `471f2ba` | OPEN, waiting on a `check (macos-latest)` re-run |
+| [#315](https://github.com/kodingcills/Myco/pull/315) | TIF-138 — launcher claims a run atomically | `1211c1d` | **MERGED** as `301dfe6` (squash) 17:14Z |
+| [#300](https://github.com/kodingcills/Myco/pull/300) | Same scope, earlier attempt | `9171ed` | **CLOSED** at the 3-round cap (TIF-162) |
 
 Other open PRs in my name are **other owners' ticket work** I am carrying, not
 Discovery's: #316 (TIF-166), #314 (TIF-164), #313 (TIF-163), #312 (TIF-158),
