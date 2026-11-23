@@ -319,10 +319,30 @@ async function main() {
     const planner = createPlanner(fetch, { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY });
     console.log("--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]");
 
+    // Prior spend and the remaining budget come from the environment, because
+    // the ceiling is a property of the PROJECT, not of this directory's ledger.
+    // Both are required together: a remaining budget without a stated prior spend
+    // would be un-auditable, and prior spend without a remaining budget would let
+    // the caller inherit a default that cannot be spent. Fail closed if either is
+    // missing rather than defaulting to zero, which is how a fresh directory
+    // silently got a full allowance it had already spent part of (arm-003d).
+    const priorSpendMicros = Number(process.env.MYCO_PRIOR_SPEND_MICROS);
+    const remainingMicros = Number(process.env.MYCO_ARM_LIMIT_MICROS);
+    if (
+      !Number.isSafeInteger(priorSpendMicros) ||
+      priorSpendMicros < 0 ||
+      !Number.isSafeInteger(remainingMicros) ||
+      remainingMicros <= 0
+    )
+      throw new Error(
+        "MYCO_PRIOR_SPEND_MICROS and MYCO_ARM_LIMIT_MICROS must both be set to safe non-negative integers; the spend ceiling is the project's, not this directory's",
+      );
+
     const report = await runC1Sweep({
       coordinatorGo: process.argv.includes("--coordinator-go"),
       directory,
-      armLimitMicros: 4_500_000,
+      priorSpendMicros,
+      armLimitMicros: remainingMicros,
       planner,
       prepare,
     });
