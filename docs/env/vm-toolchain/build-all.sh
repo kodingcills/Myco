@@ -9,6 +9,7 @@ D=$(cd "$(dirname "$0")" && pwd)
 # used ~/VMs/myco-win11 — a split-brain layout that silently builds the wrong VM.
 export VM_ROOT=${VM_ROOT:-$HOME/VMs/myco-win11}
 export ISO_ROOT=${ISO_ROOT:-$HOME/VMs/iso}
+export VM_TOOLS=${VM_TOOLS:-$HOME/VMs/tools}
 VM=$VM_ROOT; ISO=$ISO_ROOT
 ls $ISO/Win11_*ARM64*.iso >/dev/null 2>&1 || "$D/build-win-iso.sh"
 # offline installers (checksums in payload/SOURCES.txt; Git + LibreOffice verified against publisher SHA-256)
