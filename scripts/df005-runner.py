@@ -1222,7 +1222,20 @@ def preflight() -> int:
         return 1
 
     rc, out = guest("uname -sm")
-    record("guest-ssh", rc == 0 and "Linux" in out, out[:80] or "no answer")
+    guest_up = rc == 0 and "Linux" in out
+    if guest_up:
+        record("guest-ssh", True, out[:80])
+    else:
+        # A guest that is not up yet is NOT a preflight failure: `create()` boots
+        # it (backend `provision()` -> boot.sh), and `create()` runs after this
+        # gate. Recording it as `False` made the runner unreachable from a clean
+        # host; recording it as `None` would still exit 1 as INCOMPLETE. It is
+        # DEFERRED: unmeasurable now, measured by the run itself, and a guest that
+        # fails to come up shows as a `gap` per trial rather than being predicted
+        # here. Everything that can only be checked against a live guest
+        # (app-deployed, self-test, introspection) is likewise deferred, so this
+        # changes nothing about what the RUN will verify.
+        record("guest-ssh", None, f"deferred: no guest up yet ({out[:60] or 'no answer'}); create() boots it")
 
     if rc == 0:
         # 4. App deployed and current.
@@ -1283,14 +1296,21 @@ def preflight() -> int:
                f"with {INTROSPECTION_PATH} (equality is a proxy: it does not "
                "prove the app writes there)")
     else:
-        # No guest to ask: record the dependent checks as not-run rather than
-        # omitting them, so the summary never claims a count it did not measure.
+        # No guest to ask: record the dependents as DEFERRED (not skipped) for the
+        # same reason as guest-ssh above - the run boots the guest, so these become
+        # measurable then. Omitting them would let the summary claim a count it did
+        # not measure; calling them skipped would fail a run that is fine.
         for name in ("app-deployed", "app-self-test", "introspection-file",
                      "introspection-shadow"):
-            record(name, None, "not run: guest unreachable")
+            record(name, None, "deferred: no guest up yet; create() boots it")
 
     failed = [n for n, ok, _ in results if ok is False]
-    skipped = [n for n, ok, _ in results if ok is None]
+    # `deferred` is not `skipped`: a skip means "we could not measure this and the
+    # run will be graded blind", which must never pass. A defer means "this can
+    # only be measured with a guest up, and the run boots one". Distinguished so
+    # that "never report a partial run as a pass" keeps its teeth.
+    skipped = [n for n, ok, d in results if ok is None and not d.startswith("deferred:")]
+    deferred = [n for n, ok, d in results if ok is None and d.startswith("deferred:")]
     print()
     if failed:
         print(f"preflight FAILED: {len(failed)} of {TOTAL_CHECKS} checks failed: "
@@ -1304,7 +1324,9 @@ def preflight() -> int:
         print(f"preflight INCOMPLETE: {len(skipped)} of {TOTAL_CHECKS} checks not run: "
               f"{', '.join(skipped)}")
         return 1
-    print(f"preflight OK: {len(results)}/{TOTAL_CHECKS} checks passed")
+    measured = len(results) - len(deferred)
+    print(f"preflight OK: {measured}/{TOTAL_CHECKS} measured, "
+          f"{len(deferred)} deferred to the run ({', '.join(deferred)})")
     return 0
 
 
