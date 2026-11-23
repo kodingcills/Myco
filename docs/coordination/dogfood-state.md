@@ -134,6 +134,22 @@ asking for guest time on them would waste the slot.
 runs and app startup. No Windows guest involvement — this is the Linux RT-020
 desktop.
 
+## Working rules
+
+- **GIT SYNC (standing, Tiffany 2026-11-22 19:45 ET).** Before resuming or
+  picking up any existing branch or worktree: `git fetch origin`, rebase onto
+  the latest `origin/main` (or merge it in if the branch is shared), resolve
+  conflicts, and re-run the tests before doing new work. Right before opening a
+  PR or pushing for review: sync again and confirm nothing is behind. Never open
+  a PR from a stale branch. Syncing after a verifier PASS requires re-verifying
+  per the PR's tier (Tier 0 needs only green CI). Every subagent gets this rule
+  in its brief.
+- **Issue-first.** No PR without a TIF id in the title or body.
+- **One worktree per PR.** Never switch branches in a worktree a verifier is
+  using; a `git reset` there once clobbered a PR branch. When a branch is
+  checked out elsewhere, rebase via a temp branch and
+  `git push <tmp>:<remote-ref>`.
+
 ## Status
 
 ### 2026-11-22 — TIF-27: the runner can drive Tk apps (PR #205 merged `ced7e07`)
