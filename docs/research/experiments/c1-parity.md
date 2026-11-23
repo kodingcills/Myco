@@ -102,3 +102,79 @@ Worth keeping as the record of a near-miss: the alarm came from a plausible-look
 check that measured something adjacent to the claim. `sweep.ts:63` enforces the
 same comparison at run time (`ledger.manifestSha256 !== manifestSha256` throws
 "v3 manifest mismatch"), so the guard was working the whole time.
+
+## The save step is NOT parity — a capability asymmetry (TIF-90)
+
+**Found from arm-003c's first row, then investigated off-VM. This is a real
+parity break, and it is not a policy applied to both arms.**
+
+Both arms are told to save. They do not save the same way, and the difference is
+not a detail: **C1's save cannot succeed on a converted `.xlsx` even when the
+planner does everything else right.**
+
+### The two paths
+
+| | M1 arm | C1 arm |
+|---|---|---|
+| Declared step | `{ kind: "keyPress", keys: "ctrl+s" }` (`calc-record-edit.ts:163`) | `press_key` with `key: "Ctrl+s"` (`planner.ts:82`) |
+| Transport | **Myco agent ops** — `save`, `focus`, `keys` | **Cua `press_key`** |
+| What Ctrl+S actually does | `#runHelper({ op: "save" })` (`calc-adapter.ts:436`) | sends a raw key combo |
+| Format dialog | **handled** — the `save` op answers "Non-standard file format" (keep Excel format) | **none** |
+
+The declared step and the executed step differ on the M1 side, deliberately:
+`calc-adapter.ts:429` intercepts `ctrl+s` and calls the save helper instead, with
+this comment in the source:
+
+> Ctrl+S on a converted .xlsx raises the "Non-standard file format" dialog; the
+> save op answers it (keep Excel format).
+
+M1 therefore never sends a raw Ctrl+S. **C1's `press_key` has no equivalent** —
+`grep press_key src/win/calc-adapter.ts` returns nothing, because M1 does not use
+that route at all.
+
+### The observed evidence
+
+arm-003c row 0 is the first row in either arm where a save was attempted:
+
+```
+ 0 type_text @(70,146)  text='B39\n'          ← Name Box navigation
+ 1 type_text @(160,262) text='REVISED-908578\n' ← the CORRECT cell, correct value
+ 2 press_key key='Ctrl+s'                     ← the save, refused
+```
+
+`deviations: [... "cua-action-refused"]`, verdict `refuted/modified`. The planner
+did the sequence correctly and the save step was refused.
+
+Counts across the two arms:
+
+| | `press_key` | `cua-action-refused` |
+|---|---|---|
+| arm-002 | 0 | 0 |
+| arm-003c | 1 | 1 |
+
+arm-002 never attempted a save, so this asymmetry was invisible across all 29 of
+its rows. It surfaced the first time a planner actually tried.
+
+### Where the refusal comes from
+
+Not the harness allowlist. `c1.ts:38` accepts `Ctrl+s` — the grammar is
+`/^[a-z0-9+_-]{1,32}$/i` and the `i` flag permits mixed case. The refusal is the
+guest's own response: `c1.ts:98` sets
+`refused: result.isError === true || effect === "refused"`, and `c1-trial.ts:68`
+records it and breaks the trial loop.
+
+### Why this matters for the comparison
+
+A baseline that cannot complete the job's final step is not measuring the same
+job as an arm that can. Until the save paths are equivalent, **arm-003's refutation
+rate is not comparable to M1's**, and the difference is attributable to the
+harness rather than to the model.
+
+Two ways to close it, both upstream of this doc:
+1. Give the C1 path the same dialog handling — e.g. a `save` route in the guest
+   that C1 may call, so both arms answer the format dialog.
+2. Or have M1 send the raw combo too, so both fail equally. (Worse: it would
+   deliberately break the arm that works.)
+
+The first is the honest fix. Until it lands, any arm-003 number must be reported
+with this caveat attached.
