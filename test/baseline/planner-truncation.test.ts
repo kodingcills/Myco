@@ -14,8 +14,10 @@ import { createPlanner, PlannerFailure } from "../../src/baseline/planner.ts";
  * two-consecutive-identical-failure abort from ever firing, because a truncated
  * trial does not look like a failure — it looks like a bad agent.
  *
- * Measured across arm-003d r2 and the committed arm-002 rows: the largest
- * non-truncated completion is 248 tokens, and 22+ calls landed on exactly 256.
+ * Reproducible from the committed rows under
+ * `docs/research/experiments/c1-arm-002/rows/` (444 calls, 29 rows): the largest
+ * NON-truncated completion is 250 (row 26), and 22 calls across 22 distinct rows
+ * landed on exactly 256 - the ceiling, not the model's answer.
  */
 const shot = { mimeType: "image/png" as const, data: "aGk=" };
 const SYNTHETIC_KEY = ["sk", "ant", "synthetic", "key"].join("-");

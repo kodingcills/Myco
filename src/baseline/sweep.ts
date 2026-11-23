@@ -255,9 +255,20 @@ export async function runC1Sweep(options: {
         // agent. A repeated scored failure is the same signal as a repeated
         // omission; it is only quieter.
         //
-        // Keyed on the verdict AND reason AND step count: two `refuted` trials
-        // that failed differently are not a repeated cause, and collapsing them
-        // would abort a run that is merely having a hard time.
+        // Keyed on verdict AND reason AND step count. The step component is
+        // deliberately conservative, and the tradeoff is worth stating: two
+        // `refuted/persisted-mismatch` rows that differ in steps are genuinely
+        // different failures - one with 0 actions is a harness shape, one with 12
+        // is a real agent trajectory - so collapsing them would abort a run that
+        // is merely having a hard time.
+        //
+        // The cost is that harness noise in the step count can delay the abort by
+        // one trial: `s0, s1, s2, s2` stops on the third row rather than the
+        // second. That is the right direction to err. A delayed abort costs one
+        // trial; a false abort discards a healthy arm and misreports it as a
+        // harness fault. The identical-pair case - arm-003d r2's actual shape,
+        // `s0, s0` - still stops immediately, which is the case this rule exists
+        // for.
         noteCause(`scored:${row.verdict}:${row.verdictReason}:steps=${row.steps}`);
       }
       ledger.c1[index] = { status: "scored", micros, row };
