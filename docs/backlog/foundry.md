@@ -198,6 +198,8 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   the chosen design.
 
 ### EF-008 (TIF-113) Slot 5: Microsoft Hybrid Computer Use GUI arm
+- **status (2026-11-22): PARKED.** Parked by the outer loop until #211 lands and the M1
+  scorecard is supported. Nothing here starts before that.
 - **linear status:** **filed as TIF-113**. Slot 5 is
   currently documented only inside TIF-58's handoff note
   ([docs/foundry/hcu-slot-5.md](../foundry/hcu-slot-5.md)), which means a run that needs its
@@ -238,3 +240,34 @@ EF-001/EF-002 only; it does not own fixtures or hidden tests.
   handle reachable from arm code; the observer is a second guest connection, not
   `offlineObserver`; a test proves arm code cannot reach the gate even by dynamic import; the
   import-closure test from TIF-95 is retained as a cheap first line.
+
+### EF-010 (TIF-126) Guard: refuse a non-synthetic committed hidden set
+- **status (2026-11-22): PARKED.** Parked by the outer loop until #211 lands and the M1
+  scorecard is supported.
+- **linear status:** **filed as TIF-126**.
+- **owner:** foundry-owner
+- **blocked_by:** EF-006 (TIF-74)
+- **description:** The committed hidden set is derivable from the public seed label `fill(42)`
+  in `foundry/hidden-commitment.json`. That is correct while the file is marked
+  `synthetic: true` — it is a fixture for testing the commitment machinery, not a secret. It
+  becomes a fatal defect the moment a real split is committed under the same path, because
+  the set would be reconstructible from a public string and the "hidden" split would not be
+  hidden. The guard: refuse to load a committed hidden set whose `meta.synthetic` is not
+  exactly `true`, so a real split cannot be mistaken for the synthetic one and cannot be
+  committed under the synthetic file's name.
+- **acceptance:** loading a commitment whose `meta.synthetic` is `false`, absent, or any
+  non-`true` value is refused with a named blocker; the current synthetic file still loads;
+  a test covers both directions; the refusal names TIF-126 so a future reader sees why.
+
+## Parked until #211 lands and the M1 scorecard is supported (outer loop, 2026-11-22)
+
+Recorded here so the parking survives the session that was told about it.
+
+| Item | TIF | Why parked |
+|---|---|---|
+| EF-008 slot 5 HCU | TIF-113 | Needs a VM slot and a Coordinator GO; the host is memory-starved |
+| EF-009 out-of-process gate | TIF-115 | Follow-up to #211; designable offline but the exploit needs a second process |
+| EF-010 non-synthetic guard | TIF-126 | Follow-up to #211; not blocking |
+| Remaining EF-003 fault classes | TIF-52 | The 30-corrupted-trial run needs guest time |
+
+Unparking is the outer loop's call. Nothing in this table starts on its own.
