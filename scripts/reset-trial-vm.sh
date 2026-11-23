@@ -33,12 +33,32 @@ if [ -n "${MYCO_VM_SCRIPTS:-}" ] && [ ! -x "$VM_SCRIPTS/vm.sh" ]; then
   echo "reset-trial-vm: MYCO_VM_SCRIPTS is set but $VM_SCRIPTS/vm.sh is not executable; refusing to fall back to the real VM" >&2
   exit 2
 fi
+# The readiness gate is the one VM-adjacent script that lives in THIS repo, so
+# the version that runs is the version the tests exercise. The other lifecycle
+# scripts (vm.sh, vssh) stay in the VM dir per docs/eval-runbook.md.
+#
+# It is still resolved through VM_SCRIPTS so a test stub can shadow it, as
+# test/wait-guest-ready.test.ts and the reset-allowlist test both do.
+REPO_GATE=$(cd "$(dirname "$0")" && pwd)/wait-guest-ready.sh
+
 STOP_TIMEOUT=${MYCO_STOP_TIMEOUT:-30}
 SSH_WAIT_TIMEOUT=${MYCO_SSH_WAIT_TIMEOUT:-600}
 
 die() { echo "reset-trial-vm: $*" >&2; exit 1; }
 
 status() { "$VM_SCRIPTS/vm.sh" status 2>/dev/null | tr -d '\r' || true; }
+
+# Prefer the in-repo gate when no stub directory was requested, so the tested
+# copy is the deployed one; fall back to the VM dir only if it is missing.
+gate_script() {
+  if [ -n "${MYCO_VM_SCRIPTS:-}" ]; then
+    echo "$VM_SCRIPTS/wait-guest-ready.sh"
+  elif [ -x "$REPO_GATE" ]; then
+    echo "$REPO_GATE"
+  else
+    echo "$VM_SCRIPTS/wait-guest-ready.sh"
+  fi
+}
 
 # Refuse to touch a snapshot we do not own the name of; these are protected.
 # cua-c1-base (M1 Coordinator-approved): a derivative taken from a cold clean-base
@@ -78,7 +98,7 @@ fi
 #    SSH-only wait spends its whole budget and then fails - which is exactly what
 #    consumed the 2026-11-23 09:2x slot (TIF-164). wait-guest-ready.sh also
 #    requires guest CPU time to ADVANCE, which a non-booting guest never does.
-"$VM_SCRIPTS/wait-guest-ready.sh" "$SSH_WAIT_TIMEOUT" >/dev/null || die "guest did not reach a real boot within ${SSH_WAIT_TIMEOUT}s (see TIF-164)"
+"$(gate_script)" "$SSH_WAIT_TIMEOUT" >/dev/null || die "guest did not reach a real boot within ${SSH_WAIT_TIMEOUT}s (see TIF-164)"
 # 4. The guest clock is the snapshot's clock; resync so trial timestamps are sane.
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 if ! "$VM_SCRIPTS/vssh" "Set-Date -Date ([datetime]::Parse('$NOW').ToUniversalTime().ToLocalTime()) | Out-Null" >/dev/null 2>&1; then
