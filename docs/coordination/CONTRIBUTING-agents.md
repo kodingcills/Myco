@@ -215,6 +215,10 @@ A second Windows VM is **not** approved until M1 lands; do not create one. Measu
 
 ### C. Long runs are detached
 
-Any run longer than a few minutes is launched **detached** — `nohup`/`setsid`, logging to a file, writing a pid file — with a **watchdog** that auto-resumes or reports. It is never tied to an agent turn: a run that dies when a turn ends produces a partial artifact nobody can distinguish from a failure.
+Any run longer than a few minutes is launched **detached** — `nohup … & disown`, logging to a file, writing a pid file — with a **watchdog** that auto-resumes or reports. It is never tied to an agent turn: a run that dies when a turn ends produces a partial artifact nobody can distinguish from a failure.
+
+**`setsid` does not exist on macOS.** Use `nohup` + `disown`, and redirect the child's stdout/stderr to a file: a detached process that inherits the caller's pipe keeps that pipe open, so the invoking shell (or agent cell) blocks until the run ends — which defeats the purpose. Verified the hard way; see `docs/coordination/m1-016-brief.md` for the working form.
+
+A **pid alone is not a completion signal.** macOS reuses pids, so a recycled pid reads as "still running" forever. Wait on a marker the run writes as its last act, or on both.
 
 The C1 arm is the model: `scripts/c1-baseline.sh` logs to `progress.log`, holds a lock, and survives the turn that started it.
