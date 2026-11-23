@@ -54,7 +54,12 @@ qemu_running() {
   local table
   table="$(ps -Ao command)" || return 0
   [[ -n "$table" ]] || return 0
-  awk '{n=split($1,a,"/"); if (a[n]=="qemu-system-aarch64") found=1} END{exit !found}' <<<"$table"
+  # TIF-163: the four-name set, matching scripts/vm-state.sh. The CLI names alone
+  # miss a UTM guest, which runs as QEMULauncher — letting this gate allow a
+  # second guest to start while UTM already owns the host.
+  awk '{n=split($1,a,"/"); b=a[n]
+        if (b=="qemu-system-aarch64" || b=="QEMULauncher" ||
+            b=="qemu-aarch64-softmmu" || b=="qemu-system-aarch64-headless") found=1} END{exit !found}' <<<"$table"
 }
 
 gate() {
