@@ -45,7 +45,8 @@ describe("a C1 row must record its instruction or declare the gap", () => {
   });
 
   it("rejects an empty instruction rather than treating it as present", () => {
-    // `str("")` passes a typeof check, so this needs the length test too.
+    // An empty string is present-but-empty. `str` rejects it, so this pins that
+    // a C1 row cannot satisfy the rule with a value that records nothing.
     expect(isBaselineRow({ ...newRowWithoutInstruction(), instruction: "" })).toBe(false);
   });
 
@@ -55,6 +56,21 @@ describe("a C1 row must record its instruction or declare the gap", () => {
     expect(isBaselineRow(legacy)).toBe(true);
     expect(legacy.instruction).toBeUndefined();
     expect(legacy.instructionUnrecorded).toBe(true);
+  });
+
+  it("requires the marker to be exactly true, not merely truthy", () => {
+    // Nothing pinned this, so relaxing `=== true` to a truthy check would have
+    // passed the suite while letting `"true"`, 1 or {} stand in for the marker.
+    // The marker means "this record predates the field" - a fact, not a flag to
+    // be approximated.
+    for (const marker of ["true", 1, {}, []]) {
+      const row = { ...newRowWithoutInstruction(), instructionUnrecorded: marker };
+      expect(isBaselineRow(row), `marker ${JSON.stringify(marker)} must not count`).toBe(false);
+    }
+    // `false` is the honest value for a row that SHOULD have an instruction.
+    expect(isBaselineRow({ ...newRowWithoutInstruction(), instructionUnrecorded: false })).toBe(
+      false,
+    );
   });
 
   it("does not constrain non-C1 rows", () => {
@@ -69,16 +85,12 @@ describe("a C1 row must record its instruction or declare the gap", () => {
     // exactly how a real defect got through: the rule invalidated two rows under
     // docs/research/experiments/c1-arm-001/ that were valid before it, and
     // nothing failed. Annotating one corpus and testing that corpus is not a
-    // check. This walks every JSON file under docs/research and validates every
-    // embedded C1 row it finds, so a future corpus that predates the field fails
-    // here until it is annotated.
-    // Scans the WHOLE repo, not just docs/research. The first version scoped
-    // itself to docs/research and that is how the round-1 defect survived a
-    // round: two C1 corpora under viewer/fixtures/real/ are rejected by this
-    // rule and the sweep could not see them. A corpus the rule rejects, with no
-    // check that notices, is the class of bug this test exists for - so the
-    // sweep walks everything and skips only the directories that cannot contain
-    // recorded evidence.
+    // check. This scans the WHOLE repo, not one directory: the first version was
+    // scoped to docs/research and that is how a defect survived a round - two C1
+    // corpora under viewer/fixtures/real/ are rejected by this rule and the sweep
+    // could not see them. A corpus the rule rejects, with no check that notices,
+    // is the class of bug this test exists for - so the sweep walks everything and
+    // skips only the directories that cannot contain recorded evidence.
     const root = process.cwd();
     const SKIP = new Set([
       "node_modules",

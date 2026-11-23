@@ -244,7 +244,8 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     // TIF-128: a C1 row records the instruction it was given, or declares that it
     // predates the field. See `instructionUnrecorded` for why both are needed.
     (x.subArm !== "c1" ||
-      (str(x.instruction) && x.instruction.length > 0) ||
+      // `str` already rejects "", so no separate length check is needed.
+      str(x.instruction) ||
       (x.instruction === undefined && x.instructionUnrecorded === true)) &&
     str(x.verdictReason) &&
     (typeof x.falseSuccess === "boolean" || x.falseSuccess === null) &&
