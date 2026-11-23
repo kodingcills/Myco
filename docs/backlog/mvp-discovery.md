@@ -192,7 +192,20 @@ criterion (TIF-60) decide the wedge.
      HCU/Cua already provide; features without a measured job).
 
 ### MVD-006 (TIF-61) Coordination: public task set + host window
-- **status:** in progress (escalations filed).
+- **status:** **both halves delivered; the issue's own acceptance is met.** The task
+  set and the host window are recorded below, and no run has started outside one.
+- **delivered — task set (Foundry):** `src/foundry/tasks/bank.ts` holds the public
+  bank (`ef-t01-add-four-items`, `ef-t02-rename-row`, `ef-t03-whitespace-value`,
+  `ef-t04-delete-row`, plus `ef-t01b-add-four-items-noverify`); oracles live under
+  `src/foundry/oracles/` and are hidden by path. Discovery consumes them and writes
+  neither fixtures nor oracles. Foundry's answer to Discovery's S3 gap is
+  `docs/foundry/answer-discovery-s3-gap.md`.
+- **delivered — host window:** the S0 request and the Coordinator's memory
+  measurement are recorded in `docs/coordination/mvp-discovery-state.md`; the queue
+  slot is Discovery S0 in `docs/coordination/vm-queue.md`. The window is granted per
+  run, after the M1 sweep, and every request says so.
+- **not this row:** the live Direction A run itself is MVD-001 / TIF-89, which stays
+  open until its evidence exists.
 - **owner:** discovery-owner; foundry (task set/verifiers); runtime (RT-011/RT-015/RT-016); M1 coordinator (host)
 - **blocked_by:** none
 - **description:** Two shared-resource dependencies that gate every proof:
