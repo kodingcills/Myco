@@ -185,19 +185,28 @@ Run `pnpm install --frozen-lockfile` **before** diagnosing a failing gate, and b
 
 Three rules that replace blanket policies with risk-proportionate ones. They exist because the previous policy — one independent verifier at the exact head for every PR, one VM at a time, every long run inside an agent turn — cost more than it caught.
 
-### A. Adaptive verification
+### A. Adaptive verification (HARD ROUND CAP, Tiffany 2026-11-22 22:15 ET)
 
-Classify the PR **before** merging and **state the tier in the PR body**. Verifiers may bump a tier up, never down.
+We were over-verifying. Classify each PR before merging and **state the tier in the PR body**; verifiers may bump a tier up, never down.
 
-| Tier | What it covers | Requirement |
+| Tier | Scope | Requirement |
 |---|---|---|
-| **0** | Docs, prose, comments, state files. No executable code. | Green CI. **No verifier.** Prose nits never block. |
-| **1** | Small, low-risk code: tests, tooling, viewer/UI-only, refactors with tests, **<~100 lines**, and touching none of the tier-2 paths. | **One** verifier round. Minor nits become follow-up issues, not re-rounds. A push after PASS that only touches docs/tests does **not** need re-verification. |
-| **2** | Anything touching **scoring/verdicts, trial cleanup/recovery, VM/guest control, locks, spend caps, secrets, schemas, or M1 evidence numbers**. | Full independent verifier PASS **at the exact head** + green CI + the defensive checklist (pre-mortem, mutation check, fault injection). **Max 3 rounds**; still failing after round 3 → escalate to the outer loop with the disagreement rather than looping. |
+| **0** | Docs, prose, comments, state files. No executable code. | **Green CI. NO verifier.** Do not launch a verifier for a docs-only PR. |
+| **1** | Small, low-risk code: tests, tooling, viewer/UI-only, refactors with tests, <~100 lines, touching none of the tier-2 paths. | **One** verifier round. Nits become **follow-up TIF issues, never another round.** |
+| **2** | Scoring/verdicts, trial cleanup/recovery, VM/guest control, locks, spend caps, secrets, schemas, M1 evidence numbers. | Verifier PASS **at the exact head** + green CI. **Max 3 rounds.** |
 
-Worked examples from 2026-11-22: #162 (sweep abort logic) is **tier 2** — it stalls trials. #157 (evidence README/JSON) is **tier 2** — its numbers are M1 evidence. #152 and #149 (docs rules) are **tier 0**. #148 (a test asserting a schema line) is **tier 1**.
+**There is no "one more round" past 3.** If a PR is still finding **real bugs** after round 3, **SPLIT it**:
 
-**A push after PASS does not automatically void it.** What voids it is a *code* change. If the delta is docs/tests only, re-verify the delta, not the whole PR — three PRs today (#148, #162, #157) were re-verified in full for prose-only follow-ups.
+- Ship, or narrow the PR to, the parts that passed.
+- Put the remaining fixes in a **new, smaller PR** with its **own TIF issue** and a **fresh round 1**.
+
+That applies even when the failing round is the last authorized one.
+
+**Authorized final rounds, treated as last:** #208 (C1 offline replay, TIF-121) and #211 (Foundry TIF-95/TIF-125). If either finds another real bug, split it rather than running another round.
+
+**Record-only / partial PRs** put **"Part of TIF-xx"** in the body so Linear does not auto-close the issue on merge.
+
+**What this replaces.** The earlier phrasing ("max 3 rounds, then escalate") left an escape hatch that was used as "one more round." There is no longer an escape hatch; there is a split.
 
 ### B. Do not serialize on the VM
 

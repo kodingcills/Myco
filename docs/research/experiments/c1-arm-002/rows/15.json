@@ -1,0 +1,97 @@
+{
+  "index": 15,
+  "params": {
+    "fixtureSeed": "seed-d",
+    "rowKey": "EMP-0058",
+    "column": "salary",
+    "newValue": "$24827.84"
+  },
+  "cellRef": "E59",
+  "expected": "$24827.84",
+  "previousValue": "$41926.58",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "persisted-mismatch",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 80,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 563,
+      "completion": 159,
+      "cost": 0.002716
+    },
+    {
+      "prompt": 563,
+      "completion": 144,
+      "cost": 0.002566
+    },
+    {
+      "prompt": 563,
+      "completion": 131,
+      "cost": 0.002436
+    },
+    {
+      "prompt": 563,
+      "completion": 256,
+      "cost": 0.003686
+    }
+  ],
+  "cost": 0.011404000000000001,
+  "tokens": {
+    "in": 2252,
+    "out": 690
+  },
+  "modelCalls": 4,
+  "steps": 3,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 41712,
+  "resetMs": 202355,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 10.935546875
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}

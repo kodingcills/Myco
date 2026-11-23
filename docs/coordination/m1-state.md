@@ -23,6 +23,15 @@
   deploy check. Cua C1 and Foundry HCU await sequential handback. Discovery
   S0+S1 is tentative. Its disposable ARM64 QEMU+HVF guest uses a fresh Ubuntu
   24.04 cloud image overlay with no snapshot ID. RT-011 proof remains open.
+- **Discovery S0 is prepped and detached (TIF-89, PR #250).** The live path is
+  `scripts/s0-live.sh --run`: nohup + pid file + log + watchdog, a gate that
+  refuses on a running guest, a missing or non-executable `myco-rt-mcp`, or an
+  unreadable process table, and `--stop` scoped to this worktree. The transport
+  is `src/discovery/runtime-transport.ts` (MCP stdio over `myco-rt-mcp`), which
+  reads the app's own published state through `read_file` (RT-015) rather than
+  the runtime's optional introspection config. `--dry-run` gives DF-S01
+  verified and DF-S02 refuted offline. **No live S0 evidence yet:** the one
+  attempt was stopped two minutes into boot because the window was not ours.
 - [M1 backlog](../backlog/m1.md)
 
 ## Standing rule — defensive engineering (Tiffany-approved, 2026-11-22 16:00 ET)
@@ -142,9 +151,10 @@ scored as criterion 7.**
 **Why: instruction parity was violated.** Myco's arm was told the canonical intent,
 which ends "and save the file" (`src/tasks/intent.ts`). Arm-002's per-trial task
 line did not (`c1-trial.ts:46`), though its system prompt did say "Save and close
-it". Measured, from `rows/*.json`:
+it". Measured, from `accounting.json`:
 
-- **0 `press_key` calls** — re-measured at 28 scored rows: 422 actions,
+- **0 `press_key` calls** — 422 actions across all 29 scored rows (an index<29
+  subset gives the same 422, which is why an earlier revision said 28 rows),
   `click` 398 / `type_text` 24. (An earlier revision of this file said 375 /
   357 / 18; that did not reproduce. The arm was still running, so treat any
   count here as a snapshot and re-derive it from the ledger.)
@@ -153,8 +163,10 @@ it". Measured, from `rows/*.json`:
   **only 1 of the 16 had typed the expected value**; the other 15 typed a cell
   reference. Not "correct value typed, never saved" — that reading was retracted.
   (`c1-judge.ts:32`: document left open).
-- 296 of 308 clicks landed in a 10-px band at y=146 — the Name Box, one element,
-  not a spread of cell attempts.
+- **396 of 398 clicks** landed within ±5 px of y=146 (388 at exactly 146) — the
+  Name Box, one element, not a spread of cell attempts. (An earlier revision said
+  "296 of 308"; that does not reproduce against the ledger. Re-derive with
+  `accounting.json`.)
 
 A neighbouring-cell miss would have saved a wrong value and given
 `persisted-mismatch`. These were task-completion failures caused by the instruction.

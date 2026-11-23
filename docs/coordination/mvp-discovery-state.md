@@ -249,6 +249,34 @@ honest state, and it is why S1/S2 are the only slots that move the wedge.
 
 ## Log
 
+- 2026-11-23 (early) · S0 prepped and made startable without an agent turn
+  (TIF-89, PR #250). Direction A's live arm now has everything but the window:
+  - `src/discovery/runtime-transport.ts` — MCP stdio client over `myco-rt-mcp`,
+    implementing the runner's `DesktopTransport`. It reads the app's own
+    published state through `read_file` (RT-015) rather than the runtime's
+    optional introspection config, so the claim and the persisted store both
+    come from the guest. It returns observations and outcomes and cannot return
+    a verdict.
+  - `scripts/s0-live.sh` — detached launcher (nohup, pid file, log, watchdog).
+    The gate refuses on a running guest, a missing or non-executable
+    `myco-rt-mcp`, or an unreadable process table (fails closed); `--stop` is
+    scoped to this worktree; the watchdog records a failed child's exit code.
+  - `scripts/s0-live.ts --dry-run` produces DF-S01 verified and DF-S02 refuted
+    offline (exit 0); `--live` deploys over SSH, reads the window geometry with
+    xdotool, and runs both tasks.
+  - **No live evidence exists.** One attempt started at 03:15 and was stopped
+    two minutes into boot because the window was not ours (a guest from another
+    worktree was already up, and no Coordinator message could be delivered —
+    the peer id no longer resolves). The runs that produced `df-s01`/`df-s02`
+    are synthetic and labelled so. Correcting an earlier slip: the arm-002
+    entry's claim that a "first live run reported df-s01 verified" was wrong;
+    that run was synthetic.
+  - Three verifier rounds, REJECT/REJECT/PASS, each finding fixed and re-tested:
+    a gate that threw on the normal no-guest case, a `--stop` that killed other
+    worktrees' processes, an unscoped watchdog that lost a failed child's exit
+    code.
+  No VM left running; no spend; no accounts.
+
 - 2026-11-22 (afternoon, second) · Pre-registered decision rule implemented
   (`src/discovery/decision.ts`, 12 tests). It consumes Foundry-scored trials and
   returns the §4.1 rule row mechanically: refuses while any scoped row is not
