@@ -694,6 +694,55 @@ def main() -> int:
            f"the absolute launch path is root + grant-relative name: "
            f"{launched_arg!r} vs {root}/{wrote}")
 
+    # Structural, not observational: the assertions above read the CALLS, so a
+    # change that kept the two paths mutually consistent but moved both to a
+    # different value would still pass. What must hold is that ONE expression
+    # produces the write path and the launch path cannot be a second one. Check
+    # the source: the launch argument must be APP_PATH, and the write path must
+    # be derived from its argument, not built from a parallel constant.
+    import ast as _ast
+    tree = _ast.parse((ROOT / "scripts" / "df005-runner.py").read_text())
+
+    # 1. The launch's first argument is exactly APP_PATH.
+    launches = [n for n in _ast.walk(tree) if isinstance(n, _ast.Dict)
+                and any(isinstance(k, _ast.Constant) and k.value == "kind"
+                        and isinstance(v, _ast.Constant) and v.value == "launch"
+                        for k, v in zip(n.keys, n.values))]
+    expect(launches, "the runner builds a launch action")
+    launch_args = None
+    for d in launches:
+        for k, v in zip(d.keys, d.values):
+            if isinstance(k, _ast.Constant) and k.value == "args":
+                launch_args = v
+    # The launch dict is nested; find the "args" list whose first element is a Name.
+    arg_lists = [n for n in _ast.walk(tree) if isinstance(n, _ast.List)
+                 and n.elts and isinstance(n.elts[0], _ast.Name)]
+    expect(any(n.elts[0].id == "APP_PATH" for n in arg_lists),
+           "the launch's first argument is the APP_PATH constant, not a literal")
+
+    # 2. APP_PATH is built from GRANT_ROOT and APP_NAME, and nothing else defines
+    #    a second app path constant.
+    assigns = {t.id: n.value for n in _ast.walk(tree)
+               if isinstance(n, _ast.Assign) and len(n.targets) == 1
+               and isinstance(t := n.targets[0], _ast.Name)}
+    expect("APP_PATH" in assigns, "APP_PATH is module-level")
+    path_src = _ast.unparse(assigns["APP_PATH"])
+    expect("GRANT_ROOT" in path_src and "APP_NAME" in path_src,
+           f"APP_PATH derives from GRANT_ROOT and APP_NAME: {path_src}")
+    # No other module-level name may hold an app path (a parallel constant is
+    # exactly how the two could drift).
+    others = [k for k, v in assigns.items()
+              if k != "APP_PATH" and "APP_NAME" in _ast.unparse(v)]
+    expect(not others, f"no second constant builds an app path: {others}")
+
+    # 3. The grant-relative name is derived from the function's argument, so the
+    #    write and the launch cannot name different files.
+    fn = next(n for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)
+              and n.name == "deploy_fixture")
+    body = _ast.unparse(fn)
+    expect("app_path[len(GRANT_ROOT) + 1:]" in body.replace(" ", " "),
+           "deploy_fixture derives the relative name from its app_path argument")
+
     print("25. a session without the write grant fails closed, not silently")
     # Without write_file the deploy cannot run. Every trial would gap for a
     # known reason, so the runner must stop and say which capability is missing
