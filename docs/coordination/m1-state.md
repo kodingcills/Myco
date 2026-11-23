@@ -129,7 +129,7 @@ Today's classification: #162 → tier 2, #157 → tier 2, #152/#149 → tier 0, 
 **Second VM — measured answer (do not create; Tiffany approved it only after M1):**
 - Host: 24 GiB (`hw.memsize` 25,769,803,776), macOS on an M4 Pro.
 - Existing guest: **6 GiB** with `MemoryLock = true`, 6 CPUs (`myco-win11.utm/config.plist`).
-- Current: swap **5559/7168 MB used**, 62% memory free, load ~15 with the arm running.
+- Current: swap **5559/7168 MB used**, 62% memory free, load ~15 with the arm running. **(Swap is context, not a gate — see `CONTRIBUTING-agents.md`: swap grows on demand on macOS. The only gates are a live `memory_pressure` warn/critical and a held VM lock.)**
 - **Verdict: a second 6 GiB guest does not fit comfortably today.** MemoryLock pins the first guest's 6 GiB unreserved-able, swap is already 78% consumed, and the host is paging under one guest. A second guest would push swap past capacity and degrade both. **After M1**, a second VM is plausible only with (a) a reboot to clear the 5.6 GB of accumulated swap, and (b) `MemoryLock` off or a smaller second guest (4 GiB), and (c) 2 guests' worth of headroom verified before creating it.
 
 **C — Long runs are detached.** Anything over a few minutes: `nohup`/`setsid`, log to file, pid file, watchdog that resumes or reports. Never tied to an agent turn. `scripts/c1-baseline.sh` is the model — it holds a lock, logs to `progress.log`, and outlives the turn that started it.

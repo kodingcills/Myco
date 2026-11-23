@@ -241,3 +241,41 @@ Rules:
 - **Prefer widening the type at the boundary** (the function that returns the value) over narrowing the consumer.
 - **Never silence with `!` or `as`** when the real question is whether the value can be absent. A cast moves the failure to runtime, where it is more expensive.
 - **A file newly added to typecheck is a discovery event, not a regression.** Expect it to surface latent type lies; triage each one rather than making the errors go away.
+
+## Git sync (Tiffany-approved, 2026-11-22 19:45 ET)
+
+Main requires branches to be up to date before merging, so a stale branch is not
+just a merge conflict — it is a PR that cannot land and a verification that does
+not apply to the head that ships.
+
+1. **Before resuming or picking up ANY existing branch or worktree:** `git fetch
+   origin`, rebase onto the latest `origin/main` (merge it in if the branch is
+   already shared), resolve conflicts, and **re-run the tests before doing new
+   work**. Do not build on top of a head you have not synced.
+2. **Right before opening a PR or pushing for review:** fetch and sync again,
+   then confirm `git status` shows nothing behind and CI is running on the synced
+   head.
+3. **Never open a PR from a stale branch.**
+4. **If you synced after a verifier PASS**, re-verify according to the PR's tier:
+   **Tier 0** needs only green CI; **Tier 1 and Tier 2** need a fresh PASS at the
+   new head (or a proof the verified content is byte-identical — `git diff
+   <verified-sha>..<new-sha>` empty on the changed paths).
+5. **Pass this to every subagent and worker you start**, in its brief.
+
+Why it is a rule and not a habit: on 2026-11-23 `main` advanced 36 commits while
+one PR waited, and five consecutive rebases were needed before it could land.
+Each rebase reset the check set, so a PASS on an old head proved nothing about
+what would merge.
+
+**Never `git add -A` in a shared worktree.** It stages every untracked file in the
+tree, including other owners' work-in-progress. This has now bitten twice: once
+sweeping another owner's `docs/env/linux-runtime.md` deletion and
+`m1-sweep-record.py` into an unrelated commit, and once pulling an untracked
+`.github/workflows/issue-id.yml` from a different PR into a docs commit — which
+made an unrelated workflow run and **fail** on that PR's head. **Stage explicit
+paths.** If you need a broad add, `git status` first and name what you intend.
+
+**Never `git cherry-pick` a commit that ADDS a new file onto a diverged `main`.**
+It reads as a modify/delete conflict against a file that is simply absent from
+the base, and it wasted several cycles diagnosing a deletion that never happened.
+Rebase the whole branch instead.
