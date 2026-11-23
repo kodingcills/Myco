@@ -1,0 +1,74 @@
+{
+  "index": 13,
+  "params": {
+    "fixtureSeed": "seed-b",
+    "rowKey": "EMP-0096",
+    "column": "qty",
+    "newValue": "4140"
+  },
+  "cellRef": "C97",
+  "expected": "4140",
+  "previousValue": "940",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "persisted-mismatch",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 75,
+          "y": 146,
+          "text": "A97\n"
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 560,
+      "completion": 221,
+      "cost": 0.00333
+    },
+    {
+      "prompt": 560,
+      "completion": 256,
+      "cost": 0.00368
+    }
+  ],
+  "cost": 0.007010000000000001,
+  "tokens": {
+    "in": 1120,
+    "out": 477
+  },
+  "modelCalls": 2,
+  "steps": 1,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 56636,
+  "resetMs": 235145,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 12.7880859375
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}

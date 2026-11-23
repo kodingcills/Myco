@@ -1,0 +1,415 @@
+{
+  "index": 0,
+  "params": {
+    "fixtureSeed": "m1-013-live",
+    "rowKey": "EMP-0038",
+    "column": "name",
+    "newValue": "REVISED-908578"
+  },
+  "cellRef": "B39",
+  "expected": "REVISED-908578",
+  "previousValue": "Enzo Nakamura",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "step-budget",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 80,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 564,
+      "completion": 91,
+      "cost": 0.002038
+    },
+    {
+      "prompt": 564,
+      "completion": 128,
+      "cost": 0.002408
+    },
+    {
+      "prompt": 564,
+      "completion": 131,
+      "cost": 0.002438
+    },
+    {
+      "prompt": 564,
+      "completion": 130,
+      "cost": 0.002428
+    },
+    {
+      "prompt": 564,
+      "completion": 96,
+      "cost": 0.002088
+    },
+    {
+      "prompt": 564,
+      "completion": 127,
+      "cost": 0.002398
+    },
+    {
+      "prompt": 564,
+      "completion": 91,
+      "cost": 0.002038
+    },
+    {
+      "prompt": 564,
+      "completion": 153,
+      "cost": 0.002658
+    },
+    {
+      "prompt": 564,
+      "completion": 159,
+      "cost": 0.002718
+    },
+    {
+      "prompt": 564,
+      "completion": 101,
+      "cost": 0.002138
+    },
+    {
+      "prompt": 564,
+      "completion": 133,
+      "cost": 0.002458
+    },
+    {
+      "prompt": 564,
+      "completion": 135,
+      "cost": 0.002478
+    },
+    {
+      "prompt": 564,
+      "completion": 131,
+      "cost": 0.002438
+    },
+    {
+      "prompt": 564,
+      "completion": 156,
+      "cost": 0.002688
+    },
+    {
+      "prompt": 564,
+      "completion": 144,
+      "cost": 0.002568
+    },
+    {
+      "prompt": 564,
+      "completion": 99,
+      "cost": 0.002118
+    },
+    {
+      "prompt": 564,
+      "completion": 136,
+      "cost": 0.002488
+    },
+    {
+      "prompt": 564,
+      "completion": 91,
+      "cost": 0.002038
+    },
+    {
+      "prompt": 564,
+      "completion": 137,
+      "cost": 0.002498
+    },
+    {
+      "prompt": 564,
+      "completion": 129,
+      "cost": 0.002418
+    },
+    {
+      "prompt": 564,
+      "completion": 142,
+      "cost": 0.002548
+    },
+    {
+      "prompt": 564,
+      "completion": 136,
+      "cost": 0.002488
+    },
+    {
+      "prompt": 564,
+      "completion": 124,
+      "cost": 0.002368
+    },
+    {
+      "prompt": 564,
+      "completion": 103,
+      "cost": 0.002158
+    },
+    {
+      "prompt": 564,
+      "completion": 129,
+      "cost": 0.002418
+    },
+    {
+      "prompt": 564,
+      "completion": 156,
+      "cost": 0.002688
+    },
+    {
+      "prompt": 564,
+      "completion": 156,
+      "cost": 0.002688
+    },
+    {
+      "prompt": 564,
+      "completion": 130,
+      "cost": 0.002428
+    },
+    {
+      "prompt": 564,
+      "completion": 153,
+      "cost": 0.002658
+    },
+    {
+      "prompt": 564,
+      "completion": 140,
+      "cost": 0.002528
+    }
+  ],
+  "cost": 0.07251,
+  "tokens": {
+    "in": 16920,
+    "out": 3867
+  },
+  "modelCalls": 30,
+  "steps": 30,
+  "stepBudget": 30,
+  "budgetExhausted": true,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 145086,
+  "resetMs": 171639,
+  "acPower": true,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 13.08154296875
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner:claude-sonnet-5-5"
+  ]
+}

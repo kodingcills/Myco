@@ -36,25 +36,21 @@ class WidgetCenterTest(unittest.TestCase):
     def test_centre_is_screen_absolute(self):
         """`clickAt` takes screen coordinates, so the centre must be too.
 
-        A widget at screen (108, 208) sized 300x24 has its centre at
-        (108+150, 208+12) = (258, 220) on the display. Subtracting a toplevel
-        origin here would publish a window-relative point that `clickAt` reads
-        as a screen point, landing the click somewhere else entirely.
+        One case pins both properties at once: the value is the widget's centre
+        (not a corner), and it is in screen space (no window origin removed).
+        The round-1 bug published `rootx - toplevel_rootx + w//2`, which for a
+        window at screen (100, 85) gave (194, 19) instead of (294, 104) — a
+        click on the title bar, silently.
         """
-        entry = self.FakeWidget(108, 208, 300, 24)
-        self.assertEqual(myco_todo.TodoApp.widget_center(entry),
-                         {"x": 258, "y": 220, "width": 300, "height": 24})
-
-    def test_centre_does_not_subtract_a_window_origin(self):
-        """Regression: a non-zero window origin must not shift the result.
-
-        The bug this guards published `rootx - toplevel_rootx + w//2`. With a
-        window at screen (100, 85) that produced (194, 19) instead of the true
-        screen point (294, 104) — a click on the title bar, silently.
-        """
-        widget = self.FakeWidget(294 - 150, 104 - 12, 300, 24)   # centre (294, 104)
-        self.assertEqual(myco_todo.TodoApp.widget_center(widget)["x"], 294)
-        self.assertEqual(myco_todo.TodoApp.widget_center(widget)["y"], 104)
+        # Widget at screen (144, 92), 300x24 -> centre (294, 104).
+        widget = self.FakeWidget(144, 92, 300, 24)
+        self.assertEqual(myco_todo.TodoApp.widget_center(widget),
+                         {"x": 294, "y": 104, "width": 300, "height": 24})
+        # A different window origin must not shift the answer: same widget
+        # geometry, different absolute position, different centre.
+        moved = self.FakeWidget(144 + 37, 92 + 11, 300, 24)
+        self.assertEqual(myco_todo.TodoApp.widget_center(moved),
+                         {"x": 331, "y": 115, "width": 300, "height": 24})
 
     def test_unmapped_widget_has_no_centre(self):
         for width, height in ((1, 24), (300, 1), (0, 0)):

@@ -87,7 +87,7 @@ search, workflow compilation, multi-OS support beyond Linux ARM64, product UI.
   `--self-test` without Tk/display, retain ADR-0016 atomic write
   (`tempfile.NamedTemporaryFile` + replace), trace `entry_text` with `StringVar`, and
   add `test_myco_todo.py` skipping cleanly without display.
-  `myco_todo.py` SHA-256: `cb1086fc208804b487764cab06cbeae61c3884d39b95f57f608326b571ce53b1`.
+  `myco_todo.py` SHA-256: `7f10b1e7f2c2b829b5dfb2974d4163867b0b3c92d6a7f7a09f4273ed07864f56`.
 
 - **2026-11-22 — RT-020 live proof passes end-to-end (`08b3863`).** Runtime Owner
   executed live proof script (`rt020-proof.py --go --verify-myco-todo`, 11/11 steps
@@ -151,6 +151,34 @@ desktop.
   `git push <tmp>:<remote-ref>`.
 
 ## Status
+
+### 2026-11-23 — TIF-122 complete: the fixture publishes screen-space click targets
+
+Part of TIF-122. Two PRs, both merged:
+
+- **#249** (`3567d62`) — `publish_state()` now emits `entry_field` and
+  `save_button` as `{x, y, width, height}`. The first attempt published
+  **window-relative** coordinates into a channel that takes **screen-absolute**
+  ones (`clickAt` → xa11y `Point`, "origin is top-left of the primary
+  display"), which would have clicked the title bar silently. Caught by the
+  verifier; fixed to `winfo_rootx() + width // 2`.
+- **#252** (`89e8d41`) — dropped the now-dead `self.toplevel` handle (a live
+  window-origin handle is an invitation to reintroduce that bug), republish on
+  `<Configure>` so a WM move cannot leave a stale point, and consolidated the
+  two overlapping geometry tests into one that pins both properties.
+
+Fixture SHA-256 is now `7f10b1e7…4f56`. **The Discovery owner needs this value
+before their S0** — it changed three times today.
+
+**Deferred (TIF-pending, nits from #252's verification):**
+1. `root.bind("<Configure>", …)` sits mid-`__init__`; moving it to the last
+   statement would make the ordering guarantee explicit rather than incidental
+   (a pre-init publish raises `AttributeError`, which Tk swallows).
+2. The `<Configure>` republish has **no automated coverage** — `TodoGuiTest`
+   skips without Tk, so it passes CI by skipping. A test that moves the window
+   and asserts the geometry refreshes would close it.
+
+
 
 ### 2026-11-22 — TIF-27: the runner can drive Tk apps (PR #205 merged `ced7e07`)
 

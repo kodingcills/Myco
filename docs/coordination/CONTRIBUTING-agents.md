@@ -185,19 +185,28 @@ Run `pnpm install --frozen-lockfile` **before** diagnosing a failing gate, and b
 
 Three rules that replace blanket policies with risk-proportionate ones. They exist because the previous policy — one independent verifier at the exact head for every PR, one VM at a time, every long run inside an agent turn — cost more than it caught.
 
-### A. Adaptive verification
+### A. Adaptive verification (HARD ROUND CAP, Tiffany 2026-11-22 22:15 ET)
 
-Classify the PR **before** merging and **state the tier in the PR body**. Verifiers may bump a tier up, never down.
+We were over-verifying. Classify each PR before merging and **state the tier in the PR body**; verifiers may bump a tier up, never down.
 
-| Tier | What it covers | Requirement |
+| Tier | Scope | Requirement |
 |---|---|---|
-| **0** | Docs, prose, comments, state files. No executable code. | Green CI. **No verifier.** Prose nits never block. |
-| **1** | Small, low-risk code: tests, tooling, viewer/UI-only, refactors with tests, **<~100 lines**, and touching none of the tier-2 paths. | **One** verifier round. Minor nits become follow-up issues, not re-rounds. A push after PASS that only touches docs/tests does **not** need re-verification. |
-| **2** | Anything touching **scoring/verdicts, trial cleanup/recovery, VM/guest control, locks, spend caps, secrets, schemas, or M1 evidence numbers**. | Full independent verifier PASS **at the exact head** + green CI + the defensive checklist (pre-mortem, mutation check, fault injection). **Max 3 rounds**; still failing after round 3 → escalate to the outer loop with the disagreement rather than looping. |
+| **0** | Docs, prose, comments, state files. No executable code. | **Green CI. NO verifier.** Do not launch a verifier for a docs-only PR. |
+| **1** | Small, low-risk code: tests, tooling, viewer/UI-only, refactors with tests, <~100 lines, touching none of the tier-2 paths. | **One** verifier round. Nits become **follow-up TIF issues, never another round.** |
+| **2** | Scoring/verdicts, trial cleanup/recovery, VM/guest control, locks, spend caps, secrets, schemas, M1 evidence numbers. | Verifier PASS **at the exact head** + green CI. **Max 3 rounds.** |
 
-Worked examples from 2026-11-22: #162 (sweep abort logic) is **tier 2** — it stalls trials. #157 (evidence README/JSON) is **tier 2** — its numbers are M1 evidence. #152 and #149 (docs rules) are **tier 0**. #148 (a test asserting a schema line) is **tier 1**.
+**There is no "one more round" past 3.** If a PR is still finding **real bugs** after round 3, **SPLIT it**:
 
-**A push after PASS does not automatically void it.** What voids it is a *code* change. If the delta is docs/tests only, re-verify the delta, not the whole PR — three PRs today (#148, #162, #157) were re-verified in full for prose-only follow-ups.
+- Ship, or narrow the PR to, the parts that passed.
+- Put the remaining fixes in a **new, smaller PR** with its **own TIF issue** and a **fresh round 1**.
+
+That applies even when the failing round is the last authorized one.
+
+**Authorized final rounds, treated as last:** #208 (C1 offline replay, TIF-121) and #211 (Foundry TIF-95/TIF-125). If either finds another real bug, split it rather than running another round.
+
+**Record-only / partial PRs** put **"Part of TIF-xx"** in the body so Linear does not auto-close the issue on merge.
+
+**What this replaces.** The earlier phrasing ("max 3 rounds, then escalate") left an escape hatch that was used as "one more round." There is no longer an escape hatch; there is a split.
 
 ### B. Do not serialize on the VM
 
@@ -241,3 +250,41 @@ Rules:
 - **Prefer widening the type at the boundary** (the function that returns the value) over narrowing the consumer.
 - **Never silence with `!` or `as`** when the real question is whether the value can be absent. A cast moves the failure to runtime, where it is more expensive.
 - **A file newly added to typecheck is a discovery event, not a regression.** Expect it to surface latent type lies; triage each one rather than making the errors go away.
+
+## Git sync (Tiffany-approved, 2026-11-22 19:45 ET)
+
+Main requires branches to be up to date before merging, so a stale branch is not
+just a merge conflict — it is a PR that cannot land and a verification that does
+not apply to the head that ships.
+
+1. **Before resuming or picking up ANY existing branch or worktree:** `git fetch
+   origin`, rebase onto the latest `origin/main` (merge it in if the branch is
+   already shared), resolve conflicts, and **re-run the tests before doing new
+   work**. Do not build on top of a head you have not synced.
+2. **Right before opening a PR or pushing for review:** fetch and sync again,
+   then confirm `git status` shows nothing behind and CI is running on the synced
+   head.
+3. **Never open a PR from a stale branch.**
+4. **If you synced after a verifier PASS**, re-verify according to the PR's tier:
+   **Tier 0** needs only green CI; **Tier 1 and Tier 2** need a fresh PASS at the
+   new head (or a proof the verified content is byte-identical — `git diff
+   <verified-sha>..<new-sha>` empty on the changed paths).
+5. **Pass this to every subagent and worker you start**, in its brief.
+
+Why it is a rule and not a habit: on 2026-11-23 `main` advanced 36 commits while
+one PR waited, and five consecutive rebases were needed before it could land.
+Each rebase reset the check set, so a PASS on an old head proved nothing about
+what would merge.
+
+**Never `git add -A` in a shared worktree.** It stages every untracked file in the
+tree, including other owners' work-in-progress. This has now bitten twice: once
+sweeping another owner's `docs/env/linux-runtime.md` deletion and
+`m1-sweep-record.py` into an unrelated commit, and once pulling an untracked
+`.github/workflows/issue-id.yml` from a different PR into a docs commit — which
+made an unrelated workflow run and **fail** on that PR's head. **Stage explicit
+paths.** If you need a broad add, `git status` first and name what you intend.
+
+**Never `git cherry-pick` a commit that ADDS a new file onto a diverged `main`.**
+It reads as a modify/delete conflict against a file that is simply absent from
+the base, and it wasted several cycles diagnosing a deletion that never happened.
+Rebase the whole branch instead.

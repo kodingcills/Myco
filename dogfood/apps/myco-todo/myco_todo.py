@@ -59,7 +59,6 @@ class TodoApp:
         self.store = store
         state_file = os.environ.get("MYCO_TODO_STATE_FILE")
         self.state_file = Path(state_file) if state_file else None
-        self.toplevel = root
         root.title("myco-todo")
         root.geometry("420x360")
 
@@ -87,6 +86,10 @@ class TodoApp:
         if self.state_file is not None:
             self.entry_text.trace_add("write", lambda *_: self.publish_state())
             self.listbox.bind("<<ListboxSelect>>", lambda _event: self.publish_state())
+            # A window-manager move or resize changes every screen coordinate.
+            # Without this the published point goes stale and a click lands
+            # somewhere else, silently.
+            root.bind("<Configure>", lambda _event: self.publish_state())
             self.publish_state()
 
     @staticmethod

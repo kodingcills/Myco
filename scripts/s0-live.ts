@@ -16,7 +16,10 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runDirectionALive } from "../src/discovery/live-runner.ts";
 import { MockDesktop } from "../src/discovery/mock-desktop.ts";
+<<<<<<< HEAD
 import { checkGate, combinedPreflight, renderPreflight } from "../src/discovery/preflight.ts";
+=======
+>>>>>>> origin/main
 import { RuntimeTransport } from "../src/discovery/runtime-transport.ts";
 import {
   persistedStoreOracle,
@@ -102,6 +105,7 @@ function savePoint(): { x: number; y: number } {
 }
 
 async function live(): Promise<number> {
+<<<<<<< HEAD
   const gate = checkGate({
     coordinatorGo: process.env.MYCO_COORDINATOR_GO === "1",
     hostLock: process.env.MYCO_HOST_LOCK === "1",
@@ -110,6 +114,8 @@ async function live(): Promise<number> {
     process.stderr.write(`${renderPreflight(gate)}`);
     return 2;
   }
+=======
+>>>>>>> origin/main
   // Identity is the basename of argv[0], so an absolute path or an `exec -a`
   // wrapper still counts; a regex over argv matched an unrelated file path on
   // 2026-11-23. A failed `ps` is not evidence of an idle host: fail closed.
@@ -123,8 +129,11 @@ async function live(): Promise<number> {
     process.stderr.write("refusing: a qemu guest is already running\n");
     return 2;
   }
+<<<<<<< HEAD
   // The human/infra gate first: no boot and no probe without it. The launcher
   // checks the same two variables; this check covers a direct invocation.
+=======
+>>>>>>> origin/main
   const binary = join(ROOT, "runtime/target/debug/myco-rt-mcp");
   if (!existsSync(binary) || (statSync(binary).mode & 0o111) === 0) {
     process.stderr.write(
@@ -144,6 +153,7 @@ async function live(): Promise<number> {
       timeoutMs: 900_000,
     });
     await transport.initialize();
+<<<<<<< HEAD
     const session = await transport.create();
     const evidence = await transport.evidence(session);
     const preflight = combinedPreflight({ coordinatorGo: true, hostLock: true }, evidence);
@@ -153,6 +163,9 @@ async function live(): Promise<number> {
       process.stderr.write(`${renderPreflight(preflight)}`);
       return 2;
     }
+=======
+    await transport.create();
+>>>>>>> origin/main
     deploy();
     const point = savePoint();
     const result = await runDirectionALive({

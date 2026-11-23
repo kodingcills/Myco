@@ -1,0 +1,746 @@
+VM lock acquired. Starting C1 sweep at 2026-11-22T21:10:22Z...
+=== Starting C1 Screenshot Baseline Sweep in /tmp/baseline/c1-arm2 ===
+--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]
+
+--- Preparing Trial 0 (fixtureSeed: m1-013-live) ---
+[0] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[0] Reset complete in 171639ms
+Cua Driver daemon is not running
+[0] Cua driver pipe reachable: true
+[0] Starting myco-agent in Session 1...
+[0] Opening SSH tunnel for myco-agent...
+[0] myco-agent ping verified: windows
+[0] Converting fixture for seed: m1-013-live...
+[0] Fixture converted: C:/myco/runs/0/myco-87172-1795382037480-114084834\fixture.xlsx
+[0] Launching Calc on fixture with UNO accept socket 2002...
+[0] Finding Calc window in Cua...
+[0] Found Calc window: pid=2228, window_id=328092
+[0] Polling UNO socket readiness...
+[0] UNO socket ready (initial B39 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 1 (fixtureSeed: seed-b) ---
+[1] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[1] Reset complete in 193361ms
+Cua Driver daemon is not running
+[1] Cua driver pipe reachable: true
+[1] Starting myco-agent in Session 1...
+[1] Opening SSH tunnel for myco-agent...
+[1] myco-agent ping verified: windows
+[1] Converting fixture for seed: seed-b...
+[1] Fixture converted: C:/myco/runs/1/myco-87172-1795382499210-320577191\fixture.xlsx
+[1] Launching Calc on fixture with UNO accept socket 2002...
+[1] Finding Calc window in Cua...
+[1] Found Calc window: pid=4876, window_id=197024
+[1] Polling UNO socket readiness...
+[1] UNO socket ready (initial C24 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 2 (fixtureSeed: seed-c) ---
+[2] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[2] Reset complete in 161950ms
+[2] Cua driver pipe reachable: true
+[2] Starting myco-agent in Session 1...
+[2] Opening SSH tunnel for myco-agent...
+[2] myco-agent ping verified: windows
+[2] Converting fixture for seed: seed-c...
+[2] Fixture converted: C:/myco/runs/2/myco-87172-1795382790534-590861247\fixture.xlsx
+[2] Launching Calc on fixture with UNO accept socket 2002...
+[2] Finding Calc window in Cua...
+[2] Found Calc window: pid=6536, window_id=328092
+[2] Polling UNO socket readiness...
+[2] UNO socket ready (initial D60 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 3 (fixtureSeed: seed-d) ---
+[3] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[3] Reset complete in 140524ms
+Cua Driver daemon is not running
+[3] Cua driver pipe reachable: true
+[3] Starting myco-agent in Session 1...
+[3] Opening SSH tunnel for myco-agent...
+[3] myco-agent ping verified: windows
+[3] Converting fixture for seed: seed-d...
+[3] Fixture converted: C:/myco/runs/3/myco-87172-1795383128729-971232657\fixture.xlsx
+[3] Launching Calc on fixture with UNO accept socket 2002...
+[3] Finding Calc window in Cua...
+[3] Found Calc window: pid=6036, window_id=328098
+[3] Polling UNO socket readiness...
+[3] UNO socket ready (initial E10 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 4 (fixtureSeed: seed-e) ---
+[4] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[4] Reset complete in 150052ms
+Cua Driver daemon is not running
+[4] Cua driver pipe reachable: true
+[4] Starting myco-agent in Session 1...
+[4] Opening SSH tunnel for myco-agent...
+[4] myco-agent ping verified: windows
+[4] Converting fixture for seed: seed-e...
+[4] Fixture converted: C:/myco/runs/4/myco-87172-1795383385610-851331329\fixture.xlsx
+[4] Launching Calc on fixture with UNO accept socket 2002...
+[4] Finding Calc window in Cua...
+[4] Found Calc window: pid=5712, window_id=197074
+[4] Polling UNO socket readiness...
+[4] UNO socket ready (initial B12 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 5 (fixtureSeed: seed-f) ---
+[5] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[5] Reset complete in 139498ms
+Cua Driver daemon is not running
+[5] Cua driver pipe reachable: true
+[5] Starting myco-agent in Session 1...
+[5] Opening SSH tunnel for myco-agent...
+[5] myco-agent ping verified: windows
+[5] Converting fixture for seed: seed-f...
+[5] Fixture converted: C:/myco/runs/5/myco-87172-1795383740138-961708608\fixture.xlsx
+[5] Launching Calc on fixture with UNO accept socket 2002...
+[5] Finding Calc window in Cua...
+[5] Found Calc window: pid=3496, window_id=131726
+[5] Polling UNO socket readiness...
+[5] UNO socket ready (initial C23 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 6 (fixtureSeed: m1-013-live) ---
+[6] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[6] Reset complete in 170796ms
+[6] Cua driver pipe reachable: true
+[6] Starting myco-agent in Session 1...
+[6] Opening SSH tunnel for myco-agent...
+[6] myco-agent ping verified: windows
+[6] Converting fixture for seed: m1-013-live...
+[6] Fixture converted: C:/myco/runs/6/myco-87172-1795384037759-962729715\fixture.xlsx
+[6] Launching Calc on fixture with UNO accept socket 2002...
+[6] Finding Calc window in Cua...
+[6] Found Calc window: pid=6500, window_id=197088
+[6] Polling UNO socket readiness...
+[6] UNO socket ready (initial D6 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 7 (fixtureSeed: seed-b) ---
+[7] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[7] Reset complete in 164723ms
+Cua Driver daemon is not running
+[7] Cua driver pipe reachable: true
+[7] Starting myco-agent in Session 1...
+[7] Opening SSH tunnel for myco-agent...
+[7] myco-agent ping verified: windows
+[7] Converting fixture for seed: seed-b...
+[7] Fixture converted: C:/myco/runs/7/myco-87172-1795384347619-454292849\fixture.xlsx
+[7] Launching Calc on fixture with UNO accept socket 2002...
+[7] Finding Calc window in Cua...
+[7] Found Calc window: pid=1516, window_id=197080
+[7] Polling UNO socket readiness...
+[7] UNO socket ready (initial E96 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 8 (fixtureSeed: seed-c) ---
+[8] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[8] Reset complete in 147547ms
+Cua Driver daemon is not running
+[8] Cua driver pipe reachable: true
+[8] Starting myco-agent in Session 1...
+[8] Opening SSH tunnel for myco-agent...
+[8] myco-agent ping verified: windows
+[8] Converting fixture for seed: seed-c...
+[8] Fixture converted: C:/myco/runs/8/myco-87172-1795384750202-897597310\fixture.xlsx
+[8] Launching Calc on fixture with UNO accept socket 2002...
+[8] Finding Calc window in Cua...
+[8] Found Calc window: pid=4396, window_id=328258
+[8] Polling UNO socket readiness...
+[8] UNO socket ready (initial B126 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 9 (fixtureSeed: seed-d) ---
+[9] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[9] Reset complete in 156075ms
+Cua Driver daemon is not running
+Cua Driver daemon is not running
+[9] Cua driver pipe reachable: true
+[9] Starting myco-agent in Session 1...
+VM lock acquired. Starting C1 sweep at 2026-11-22T22:19:31Z...
+=== Starting C1 Screenshot Baseline Sweep in /tmp/baseline/c1-arm2 ===
+--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]
+FATAL C1 SWEEP ERROR: Error: EEXIST: file already exists, mkdir '/tmp/baseline/c1-arm2/.run-lock'
+    at mkdirSync (node:fs:1344:26)
+    at runC1Sweep (/Users/tofuinparis/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/src/baseline/sweep.ts:103:3)
+    at main (/Users/tofuinparis/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/scripts/c1-sweep.ts:314:26)
+    at <anonymous> (/Users/tofuinparis/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/scripts/c1-sweep.ts:334:1)
+    at ModuleJob.run (node:internal/modules/esm/module_job:370:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5) {
+  errno: -17,
+  code: 'EEXIST',
+  syscall: 'mkdir',
+  path: '/tmp/baseline/c1-arm2/.run-lock'
+}
+VM lock acquired. Starting C1 sweep at 2026-11-22T22:20:06Z...
+=== Starting C1 Screenshot Baseline Sweep in /tmp/baseline/c1-arm2 ===
+--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]
+
+--- Preparing Trial 10 (fixtureSeed: seed-e) ---
+[10] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[10] Reset complete in 196238ms
+Cua Driver daemon is not running
+[10] Cua driver pipe reachable: true
+[10] Starting myco-agent in Session 1...
+[10] Opening SSH tunnel for myco-agent...
+[10] myco-agent ping verified: windows
+[10] Converting fixture for seed: seed-e...
+[10] Fixture converted: C:/myco/runs/10/myco-41801-1795386268074-72977607\fixture.xlsx
+[10] Launching Calc on fixture with UNO accept socket 2002...
+[10] Finding Calc window in Cua...
+[10] Found Calc window: pid=7044, window_id=262254
+[10] Polling UNO socket readiness...
+[10] UNO socket ready (initial D35 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 11 (fixtureSeed: seed-f) ---
+[11] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[11] Reset complete in 195216ms
+Cua Driver daemon is not running
+[11] Cua driver pipe reachable: true
+[11] Starting myco-agent in Session 1...
+[11] Opening SSH tunnel for myco-agent...
+[11] myco-agent ping verified: windows
+[11] Converting fixture for seed: seed-f...
+[11] Fixture converted: C:/myco/runs/11/myco-41801-1795386683083-736976755\fixture.xlsx
+[11] Launching Calc on fixture with UNO accept socket 2002...
+[11] Finding Calc window in Cua...
+[11] Found Calc window: pid=1836, window_id=131708
+[11] Polling UNO socket readiness...
+[11] UNO socket ready (initial E13 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 12 (fixtureSeed: m1-013-live) ---
+[12] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[12] Reset complete in 199545ms
+Cua Driver daemon is not running
+[12] Cua driver pipe reachable: true
+[12] Starting myco-agent in Session 1...
+[12] Opening SSH tunnel for myco-agent...
+[12] myco-agent ping verified: windows
+[12] Converting fixture for seed: m1-013-live...
+[12] Fixture converted: C:/myco/runs/12/myco-41801-1795387105031-508482971\fixture.xlsx
+[12] Launching Calc on fixture with UNO accept socket 2002...
+[12] Finding Calc window in Cua...
+[12] Found Calc window: pid=3364, window_id=197170
+[12] Polling UNO socket readiness...
+[12] UNO socket ready (initial B21 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 13 (fixtureSeed: seed-b) ---
+[13] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[13] Reset complete in 235145ms
+Cua Driver daemon is not running
+[13] Cua driver pipe reachable: true
+[13] Starting myco-agent in Session 1...
+[13] Opening SSH tunnel for myco-agent...
+[13] myco-agent ping verified: windows
+[13] Converting fixture for seed: seed-b...
+[13] Fixture converted: C:/myco/runs/13/myco-41801-1795387568003-594283486\fixture.xlsx
+[13] Launching Calc on fixture with UNO accept socket 2002...
+[13] Finding Calc window in Cua...
+[13] Found Calc window: pid=3808, window_id=197204
+[13] Polling UNO socket readiness...
+[13] UNO socket ready (initial C97 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 14 (fixtureSeed: seed-c) ---
+[14] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[14] Reset complete in 208869ms
+Cua Driver daemon is not running
+[14] Cua driver pipe reachable: true
+[14] Starting myco-agent in Session 1...
+[14] Opening SSH tunnel for myco-agent...
+[14] myco-agent ping verified: windows
+[14] Converting fixture for seed: seed-c...
+[14] Fixture converted: C:/myco/runs/14/myco-41801-1795388007962-600373660\fixture.xlsx
+[14] Launching Calc on fixture with UNO accept socket 2002...
+[14] Finding Calc window in Cua...
+[14] Found Calc window: pid=6508, window_id=197236
+[14] Polling UNO socket readiness...
+[14] UNO socket ready (initial D107 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 15 (fixtureSeed: seed-d) ---
+[15] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[15] Reset complete in 202355ms
+Cua Driver daemon is not running
+[15] Cua driver pipe reachable: true
+[15] Starting myco-agent in Session 1...
+[15] Opening SSH tunnel for myco-agent...
+[15] myco-agent ping verified: windows
+[15] Converting fixture for seed: seed-d...
+[15] Fixture converted: C:/myco/runs/15/myco-41801-1795388596078-1225309\fixture.xlsx
+[15] Launching Calc on fixture with UNO accept socket 2002...
+[15] Finding Calc window in Cua...
+[15] Found Calc window: pid=2656, window_id=197236
+[15] Polling UNO socket readiness...
+[15] UNO socket ready (initial E59 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 16 (fixtureSeed: seed-e) ---
+[16] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[16] Reset complete in 202754ms
+Cua Driver daemon is not running
+Cua Driver daemon is not running
+[16] Cua driver pipe reachable: true
+[16] Starting myco-agent in Session 1...
+[16] Opening SSH tunnel for myco-agent...
+[16] myco-agent ping verified: windows
+[16] Converting fixture for seed: seed-e...
+[16] Fixture converted: C:/myco/runs/16/myco-41801-1795388980582-512188385\fixture.xlsx
+[16] Launching Calc on fixture with UNO accept socket 2002...
+[16] Finding Calc window in Cua...
+[16] Found Calc window: pid=8064, window_id=131716
+[16] Polling UNO socket readiness...
+[16] UNO socket ready (initial B29 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 17 (fixtureSeed: seed-f) ---
+[17] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[17] Reset complete in 182766ms
+Cua Driver daemon is not running
+[17] Cua driver pipe reachable: true
+[17] Starting myco-agent in Session 1...
+[17] Opening SSH tunnel for myco-agent...
+[17] myco-agent ping verified: windows
+[17] Converting fixture for seed: seed-f...
+[17] Fixture converted: C:/myco/runs/17/myco-41801-1795389386290-42467626\fixture.xlsx
+[17] Launching Calc on fixture with UNO accept socket 2002...
+[17] Finding Calc window in Cua...
+[17] Found Calc window: pid=2564, window_id=196764
+[17] Polling UNO socket readiness...
+[17] UNO socket ready (initial C33 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 18 (fixtureSeed: m1-013-live) ---
+[18] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[18] Reset complete in 186136ms
+Cua Driver daemon is not running
+[18] Cua driver pipe reachable: true
+[18] Starting myco-agent in Session 1...
+[18] Opening SSH tunnel for myco-agent...
+[18] myco-agent ping verified: windows
+[18] Converting fixture for seed: m1-013-live...
+[18] Fixture converted: C:/myco/runs/18/myco-41801-1795389814392-446142620\fixture.xlsx
+[18] Launching Calc on fixture with UNO accept socket 2002...
+[18] Finding Calc window in Cua...
+[18] Found Calc window: pid=7764, window_id=131644
+[18] Polling UNO socket readiness...
+[18] UNO socket ready (initial D27 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 19 (fixtureSeed: seed-b) ---
+[19] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[19] Reset complete in 22247ms
+[19] Cua driver pipe reachable: true
+[19] Starting myco-agent in Session 1...
+[19] Opening SSH tunnel for myco-agent...
+[19] myco-agent ping verified: windows
+[19] Converting fixture for seed: seed-b...
+[19] Fixture converted: C:/myco/runs/19/myco-41801-1795390075020-89054647\fixture.xlsx
+[19] Launching Calc on fixture with UNO accept socket 2002...
+[19] Finding Calc window in Cua...
+[19] Found Calc window: pid=7588, window_id=262206
+[19] Polling UNO socket readiness...
+[19] UNO socket ready (initial E60 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 20 (fixtureSeed: seed-c) ---
+[20] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[20] Reset complete in 208472ms
+Cua Driver daemon is not running
+[20] Cua driver pipe reachable: true
+[20] Starting myco-agent in Session 1...
+[20] Opening SSH tunnel for myco-agent...
+[20] myco-agent ping verified: windows
+[20] Converting fixture for seed: seed-c...
+[20] Fixture converted: C:/myco/runs/20/myco-41801-1795390446588-913151800\fixture.xlsx
+[20] Launching Calc on fixture with UNO accept socket 2002...
+[20] Finding Calc window in Cua...
+[20] Found Calc window: pid=7284, window_id=262392
+[20] Polling UNO socket readiness...
+[20] UNO socket ready (initial B64 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 21 (fixtureSeed: seed-d) ---
+[21] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[21] Reset complete in 182657ms
+Cua Driver daemon is not running
+[21] Cua driver pipe reachable: true
+[21] Starting myco-agent in Session 1...
+[21] Opening SSH tunnel for myco-agent...
+[21] myco-agent ping verified: windows
+[21] Converting fixture for seed: seed-d...
+[21] Fixture converted: C:/myco/runs/21/myco-41801-1795390936022-206266288\fixture.xlsx
+[21] Launching Calc on fixture with UNO accept socket 2002...
+[21] Finding Calc window in Cua...
+[21] Found Calc window: pid=6420, window_id=262338
+[21] Polling UNO socket readiness...
+[21] UNO socket ready (initial C59 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 22 (fixtureSeed: seed-e) ---
+[22] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[22] Reset complete in 161154ms
+Cua Driver daemon is not running
+[22] Cua driver pipe reachable: true
+[22] Starting myco-agent in Session 1...
+[22] Opening SSH tunnel for myco-agent...
+[22] myco-agent ping verified: windows
+[22] Converting fixture for seed: seed-e...
+[22] Fixture converted: C:/myco/runs/22/myco-41801-1795391303400-544501545\fixture.xlsx
+[22] Launching Calc on fixture with UNO accept socket 2002...
+[22] Finding Calc window in Cua...
+[22] Found Calc window: pid=7192, window_id=196756
+[22] Polling UNO socket readiness...
+[22] UNO socket ready (initial D28 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 23 (fixtureSeed: seed-f) ---
+[23] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[23] Reset complete in 155892ms
+[23] Cua driver pipe reachable: true
+[23] Starting myco-agent in Session 1...
+[23] Opening SSH tunnel for myco-agent...
+[23] myco-agent ping verified: windows
+[23] Converting fixture for seed: seed-f...
+[23] Fixture converted: C:/myco/runs/23/myco-41801-1795391705523-822016708\fixture.xlsx
+[23] Launching Calc on fixture with UNO accept socket 2002...
+[23] Finding Calc window in Cua...
+[23] Found Calc window: pid=7740, window_id=196758
+[23] Polling UNO socket readiness...
+[23] UNO socket ready (initial E4 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 24 (fixtureSeed: m1-013-live) ---
+[24] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[24] Reset complete in 187343ms
+Cua Driver daemon is not running
+[24] Cua driver pipe reachable: true
+[24] Starting myco-agent in Session 1...
+[24] Opening SSH tunnel for myco-agent...
+[24] myco-agent ping verified: windows
+[24] Converting fixture for seed: m1-013-live...
+[24] Fixture converted: C:/myco/runs/24/myco-41801-1795392121706-842679450\fixture.xlsx
+[24] Launching Calc on fixture with UNO accept socket 2002...
+[24] Finding Calc window in Cua...
+[24] Found Calc window: pid=4708, window_id=262404
+[24] Polling UNO socket readiness...
+[24] UNO socket ready (initial B26 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 25 (fixtureSeed: seed-b) ---
+[25] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[25] Reset complete in 178088ms
+Cua Driver daemon is not running
+[25] Cua driver pipe reachable: true
+[25] Starting myco-agent in Session 1...
+[25] Opening SSH tunnel for myco-agent...
+[25] myco-agent ping verified: windows
+[25] Converting fixture for seed: seed-b...
+[25] Fixture converted: C:/myco/runs/25/myco-41801-1795392580091-594897817\fixture.xlsx
+[25] Launching Calc on fixture with UNO accept socket 2002...
+[25] Finding Calc window in Cua...
+[25] Found Calc window: pid=5716, window_id=196756
+[25] Polling UNO socket readiness...
+[25] UNO socket ready (initial C49 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 26 (fixtureSeed: seed-c) ---
+[26] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[26] Reset complete in 183641ms
+Cua Driver daemon is not running
+[26] Cua driver pipe reachable: true
+[26] Starting myco-agent in Session 1...
+[26] Opening SSH tunnel for myco-agent...
+[26] myco-agent ping verified: windows
+[26] Converting fixture for seed: seed-c...
+[26] Fixture converted: C:/myco/runs/26/myco-41801-1795392969329-312921435\fixture.xlsx
+[26] Launching Calc on fixture with UNO accept socket 2002...
+[26] Finding Calc window in Cua...
+[26] Found Calc window: pid=7672, window_id=262688
+[26] Polling UNO socket readiness...
+[26] UNO socket ready (initial D102 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 27 (fixtureSeed: seed-d) ---
+[27] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[27] Reset complete in 193842ms
+Cua Driver daemon is not running
+Cua Driver daemon is not running
+[27] Cua driver pipe reachable: true
+[27] Starting myco-agent in Session 1...
+[27] Opening SSH tunnel for myco-agent...
+[27] myco-agent ping verified: windows
+[27] Converting fixture for seed: seed-d...
+[27] Fixture converted: C:/myco/runs/27/myco-41801-1795393404448-848536185\fixture.xlsx
+[27] Launching Calc on fixture with UNO accept socket 2002...
+[27] Finding Calc window in Cua...
+[27] Found Calc window: pid=1264, window_id=262750
+[27] Polling UNO socket readiness...
+[27] UNO socket ready (initial E62 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 28 (fixtureSeed: seed-e) ---
+[28] Resetting VM to cua-c1-base...
+reset-trial-vm: ready on 'cua-c1-base'
+[28] Reset complete in 170001ms
+Cua Driver daemon is not running
+[28] Cua driver pipe reachable: true
+[28] Starting myco-agent in Session 1...
+[28] Opening SSH tunnel for myco-agent...
+[28] myco-agent ping verified: windows
+[28] Converting fixture for seed: seed-e...
+[28] Fixture converted: C:/myco/runs/28/myco-41801-1795393754520-77799601\fixture.xlsx
+[28] Launching Calc on fixture with UNO accept socket 2002...
+[28] Finding Calc window in Cua...
+[28] Found Calc window: pid=7616, window_id=197132
+[28] Polling UNO socket readiness...
+[28] UNO socket ready (initial B38 readable)
+C1 driver preflight: match
+
+--- Preparing Trial 29 (fixtureSeed: seed-f) ---
+[29] Resetting VM to cua-c1-base...
+reset-trial-vm: WARNING guest clock resync failed; trial timestamps may be stale
+reset-trial-vm: ready on 'cua-c1-base'
+[29] Reset complete in 192589ms
+Cua Driver daemon is not running
+Cua Driver daemon is not running
+Cua Driver daemon is not running
+Cua Driver daemon is not running
+[29] Cua driver pipe reachable: true
+[29] Starting myco-agent in Session 1...
+[29] Opening SSH tunnel for myco-agent...
+[29] myco-agent ping verified: windows
+[29] Converting fixture for seed: seed-f...
+[29] Fixture converted: C:/myco/runs/29/myco-41801-1795394361644-605256726\fixture.xlsx
+[29] Launching Calc on fixture with UNO accept socket 2002...
+[29] Finding Calc window in Cua...
+[29] Found Calc window: pid=860, window_id=197190
+[29] Polling UNO socket readiness...
+[29] UNO socket ready (initial C10 readable)
+C1 driver preflight: match
+
+=== C1 SWEEP COMPLETE ===
+{
+  "manifestSha256": "bb256a9b2b28ee929c94352887a3d4bc402f4a14181a2a41a16e82bf76351995",
+  "completed": 29,
+  "partial": true,
+  "c1ChargedMicros": 1555362,
+  "combinedChargedMicros": 1555362,
+  "rows": [
+    {
+      "index": 0,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 1,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 2,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 3,
+      "mycoVerdict": "refuted",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 4,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 5,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 6,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 7,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 8,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 9,
+      "mycoVerdict": "verified",
+      "omitted": "trial-interrupted"
+    },
+    {
+      "index": 10,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 11,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 12,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 13,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 14,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 15,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 16,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 17,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 18,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 19,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 20,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 21,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 22,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 23,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 24,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 25,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 26,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 27,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 28,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    },
+    {
+      "index": 29,
+      "mycoVerdict": "verified",
+      "verdict": "refuted",
+      "planner": "planner:claude-sonnet-5-5"
+    }
+  ]
+}
+C1 sweep finished at 2026-11-23T00:41:50Z.
