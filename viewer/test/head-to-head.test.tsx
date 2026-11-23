@@ -220,6 +220,12 @@ test("the prompt-variant note names this decision's own variant, not a fixture's
   expect(text).toContain("other-variant");
   // The old copy hardcoded these two names; neither may survive.
   expect(text).not.toContain("ef-t01b");
+  // The note must name the variant as the thing this decision covers, rather than pairing the
+  // two fields in a parenthetical — the fixture's taskId already embeds the variant, so the
+  // pairing reads as a repetition. Match the sentence, not a count.
+  const note = text.slice(text.indexOf("does not pool"));
+  expect(note).toContain("covers the other-variant variant of some-other-task only");
+  expect(note).not.toMatch(/some-other-task\s*\(\s*other-variant\s*\)/);
 });
 
 test("a ?compare= address off this origin is refused, not fetched", () => {

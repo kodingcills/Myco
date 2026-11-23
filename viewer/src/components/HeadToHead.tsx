@@ -300,9 +300,10 @@ export function HeadToHeadView({ report }: { report: HeadToHeadReport }) {
         <h2 className="type-micro text-text-secondary">What this report does not say</h2>
         <ul data-report-notes>
           <li className="type-small text-text-secondary">
-            It does not pool prompt variants: <span className="type-data">{decision.taskId}</span> (
-            <span className="type-data">{decision.promptVariant}</span>) is this decision's variant,
-            and any other variant is a separate decision.
+            It does not pool prompt variants: this decision covers the{" "}
+            <span className="type-data">{decision.promptVariant}</span> variant of{" "}
+            <span className="type-data">{decision.taskId}</span> only; any other variant is a
+            separate decision.
           </li>
           <li className="type-small text-text-secondary">
             It does not treat <span className="type-data">uncertain</span> as success or failure;
