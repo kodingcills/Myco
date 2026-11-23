@@ -14,7 +14,7 @@
  * report with any non-live source says so.
  */
 
-export type ArmSourceKind = "myco-run-dir" | "foundry-arm" | "foundry-report";
+export type ArmSourceKind = "myco-run-dir" | "foundry-arm" | "foundry-final" | "foundry-report";
 
 export interface ArmSource {
   readonly armId: string;
@@ -131,6 +131,33 @@ export function pairsFromFoundryReport(value: unknown, source: string, faultClas
   return pairRows.length > 0 ? { pairRows, source } : undefined;
 }
 
+/**
+ * Foundry's final arm-002 summary: `{ arms: { c1: { rows: [{ verdict, … }] } } }`.
+ * Arm-002's per-row `falseSuccess` flag is the one key finding of the sweep, so it
+ * is read when present and reported unknown when absent — never defaulted to "no".
+ */
+export function armFromFoundryFinal(
+  value: unknown,
+  armId: string,
+  source: string,
+): LiveArm | undefined {
+  if (!isRecord(value) || !isRecord(value.arms) || !isRecord(value.arms[armId])) return undefined;
+  const rows = value.arms[armId].rows;
+  if (!Array.isArray(rows)) return undefined;
+  const trials: LiveArm["trials"] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) continue;
+    const verdict = verdictOf(row.verdict);
+    if (!verdict) continue;
+    trials.push({
+      verdict,
+      falseSuccess: row.falseSuccess === true,
+      falseSuccessKnown: typeof row.falseSuccess === "boolean",
+    });
+  }
+  return trials.length > 0 ? { armId, source, trials } : undefined;
+}
+
 export function intake(sources: readonly ArmSource[]): LiveIntake {
   const arms: LiveArm[] = [];
   const refused: { source: string; reason: string }[] = [];
@@ -147,6 +174,10 @@ export function intake(sources: readonly ArmSource[]): LiveIntake {
       const arm = armFromMycoResult(parsed, source.armId, source.path);
       if (arm) arms.push(arm);
       else refused.push({ source: source.path, reason: "no verdict" });
+    } else if (source.kind === "foundry-final") {
+      const arm = armFromFoundryFinal(parsed, source.armId, source.path);
+      if (arm) arms.push(arm);
+      else refused.push({ source: source.path, reason: `no arm rows for ${source.armId}` });
     } else if (source.kind === "foundry-arm") {
       const arm = armFromFoundryAccounting(parsed, source.armId, source.path, source.armId);
       if (arm) arms.push(arm);
