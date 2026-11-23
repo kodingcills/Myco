@@ -6,7 +6,7 @@ import { scoreTrial, type TrialInput } from "../oracles/blind.ts";
 import { oracleForApp } from "../oracles/state.ts";
 import { findTask, taskFixture } from "../tasks/bank.ts";
 import type { GuardTraceEvent } from "../types.ts";
-import { type Attestation, isAttestation } from "./attest.ts";
+import { type Attestation, bundleDigest, isAttestation } from "./attest.ts";
 
 type Setting =
   | null
@@ -137,12 +137,11 @@ function reconcileAudit(
 /**
  * Whether an attestation may make a row decision-eligible.
  *
- * `false` until TIF-125 binds the attestation to the row being scored and the scorer
- * re-derives the digest itself. Everything else in the gate still runs and still reports its
- * blockers; only the eligibility flip is withheld, so the evidence pipeline keeps being
- * exercised while nothing can be marked eligible on an unverified bundle.
+ * `true` here because this change IS the binding: the attestation carries the row it covers
+ * and the scorer re-derives the digest from the bytes it is about to score. On the narrowed
+ * TIF-95 branch it is `false`, so that branch fails closed until this lands.
  */
-export const ATTESTATION_BINDING_LANDED = false;
+export const ATTESTATION_BINDING_LANDED = true;
 
 /**
  * Score a discovery trial.
@@ -229,7 +228,29 @@ export function scoreDiscoveryTrial(
   // bundle. Until TIF-125 lands the binding and the scorer recomputes `bundleDigest` from
   // `input.actual.files`, no row may be decision-eligible on the strength of an attestation.
   // `ATTESTATION_BINDING_LANDED` is the single switch to flip when that work merges.
+  // The scorer re-derives the binding itself. It must not take the gate's word for which
+  // row the evidence describes: it holds the row, so it recomputes the digest from the
+  // bytes it is about to score and compares that to what the attestation claims (R6 1a).
   const attested = isAttestation(attestation);
+  const binding = attested ? attestation.binding : null;
+  const bindsThisRow =
+    binding !== null &&
+    binding.armId === armId &&
+    binding.taskId === taskId &&
+    binding.promptHash === promptHash &&
+    binding.bundleDigest === bundleDigest(input.actual.files);
+  if (attested && !bindsThisRow) {
+    return {
+      ...identity,
+      status: "scored" as const,
+      decisionEligible: false,
+      attestationBlockers: [
+        "binding: the attestation does not cover this row (R6 1a: the scorer re-derives the bundle digest)",
+      ],
+      storeReads: audit.storeReads,
+      result,
+    };
+  }
   const eligible = ATTESTATION_BINDING_LANDED && attested && attestation.eligible;
   return {
     ...identity,

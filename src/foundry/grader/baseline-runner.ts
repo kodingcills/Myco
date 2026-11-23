@@ -16,7 +16,12 @@ import type { FixtureManifest, GuardTraceEvent } from "../types.ts";
 
 /** Supplied by the grader. The committed fault is part of the hidden fixture identity. */
 export interface TaskSource {
-  resolve(task: FoundryTask): { fixture: FixtureManifest; committedFault?: FaultSpec };
+  resolve(task: FoundryTask): {
+    fixture: FixtureManifest;
+    committedFault?: FaultSpec;
+    /** The task fixture a hidden fixture was generated from; defaults to the fixture's own id. */
+    taskFixtureId?: string;
+  };
 }
 const publicSource: TaskSource = { resolve: (task) => ({ fixture: taskFixture(task) }) };
 
@@ -44,7 +49,9 @@ export function runArm(
   const budget = options.budget ?? 100;
   const rows = [];
   for (const task of tasks) {
-    const { fixture, committedFault } = (options.taskSource ?? publicSource).resolve(task);
+    const { fixture, committedFault, taskFixtureId } = (options.taskSource ?? publicSource).resolve(
+      task,
+    );
     const { initialState: initial } = fixture;
     // Two independent conditions, both load-bearing. The app check says which apps this
     // harness simulates; the store-path check says the simulation's hardcoded "store.json"
@@ -64,7 +71,14 @@ export function runArm(
     }
     if (fixture.fixtureId !== task.fixtureId) throw new Error("Task and fixture IDs differ");
     const hash = committedFault
-      ? fixtureHash({ fixture, intent: task.intent, fault: committedFault })
+      ? fixtureHash({
+          // A hidden fixture's own id is a hash; the task it was generated from is what the
+          // commitment binds to. A public source's fixture IS the task fixture.
+          taskFixtureId: taskFixtureId ?? fixture.fixtureId,
+          fixture,
+          intent: task.intent,
+          fault: committedFault,
+        })
       : publicFixtureHash(fixture, task.intent);
     const promptHash = createHash("sha256").update(task.prompt).digest("hex");
     const decoder = new TextDecoder();

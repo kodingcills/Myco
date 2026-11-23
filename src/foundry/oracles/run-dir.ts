@@ -20,7 +20,8 @@ function invalid(message: string): never {
   throw new EvidenceError("invalid", message);
 }
 function validHidden(v: unknown): v is HiddenFixture {
-  if (!shape(v, ["fixture", "intent", "fault"]) || !obj(v)) return false;
+  if (!shape(v, ["taskFixtureId", "fixture", "intent", "fault"]) || !obj(v)) return false;
+  if (typeof v.taskFixtureId !== "string" || v.taskFixtureId === "") return false;
   const f = v.fixture,
     i = v.intent,
     fault = v.fault;

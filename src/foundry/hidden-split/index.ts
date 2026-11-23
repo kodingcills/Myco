@@ -57,6 +57,12 @@ export function loadHiddenSplit(
 }
 const hash = (s: string | Uint8Array) => createHash("sha256").update(s).digest("hex");
 export interface HiddenFixture {
+  /**
+   * The task fixture this hidden fixture was generated from. The hidden fixture's own
+   * `fixture.fixtureId` is a hash, so without this the commitment cannot be tied back to
+   * the task a row claims to have run (TIF-125 R6 1d).
+   */
+  readonly taskFixtureId: string;
   readonly fixture: FixtureManifest;
   readonly intent: TaskIntent;
   readonly fault: FaultSpec;
@@ -102,6 +108,7 @@ export function generateHiddenFixtures(seed: Uint8Array, n: number): HiddenFixtu
         screenClaimsToTrap: claims,
       });
       return {
+        taskFixtureId: base.fixtureId,
         fixture,
         intent,
         fault: {
