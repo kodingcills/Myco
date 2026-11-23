@@ -214,11 +214,14 @@ export class RuntimeTransport implements DesktopTransport {
   /**
    * Host-side evidence for the preflight; it never assumes a check passed.
    *
-   * The transport cannot vouch for two of the eight checks and says so: the
-   * oracle is the runner's injected verifier, not something a file read
-   * establishes, and no probe here can show the guest has no stray app process.
-   * Those two keep the live path closed until their owners supply them, which is
-   * the intended state, not an oversight.
+   * Two of the eight checks are not the transport's to establish, and it reports
+   * them false rather than guessing. `guestClean` is the app's store and published
+   * state being absent before launch, which a caller must observe before the run —
+   * this object is built after the session exists, when the app may already have
+   * run. `oraclePresent` is Foundry's validator, not something a file read proves.
+   * So the live preflight refuses until a caller collects `guestClean` ahead of the
+   * run and Foundry can say it validated. That is the intended state, recorded in
+   * `docs/coordination/dogfood-state.md`.
    */
   async evidence(_session: DesktopSession): Promise<ProbeEvidence> {
     let runtimeReachable = false;
@@ -260,9 +263,11 @@ export class RuntimeTransport implements DesktopTransport {
       // The oracle is supplied by its owner; the transport claiming it present
       // would be the transport deciding what counts as verification.
       oraclePresent: false,
-      // Not established by this transport: it has no process probe, and a failed
-      // read cannot tell "no stray process" from "no read grant". It stays false
-      // until its owner supplies a real probe, so the live path stays closed.
+      // The ratified definition (Tiffany, 2026-11-23, TIF-27): the app's store and
+      // published state are absent before launch. Collecting it is practice before
+      // the run, not a probe: it says the run started from a known-empty app state,
+      // not that the guest is otherwise pristine. This transport is built after the
+      // session exists, so it cannot collect it and reports unproven.
       guestClean: false,
     };
   }
