@@ -69,26 +69,33 @@ fi
 
 # 2. Keypair (user-data authorizes the public key, so it must exist before seeding).
 #    Both key files are gitignored, so regenerating them never dirties git.
-REKEYED=0
-if [[ ! -f "$KEY" || ! -f "$PUB" ]]; then
-  echo "Generating guest SSH keypair ..."
-  rm -f "$KEY" "$PUB"
-  ssh-keygen -t ed25519 -N '' -C myco-rt-guest -f "$KEY" -q
-  REKEYED=1
+#
+#    Only a missing PRIVATE key means a new identity. A missing .pub alone (e.g. a
+#    `git pull` that removed the formerly tracked file) is rebuilt from the private
+#    key, so the guest's trusted key never changes underneath it.
+if [[ -f "$KEY" && ! -f "$PUB" ]]; then
+  echo "Public key missing; rebuilding it from the existing private key."
+  ssh-keygen -y -f "$KEY" > "$PUB"
 fi
 
 # A new key cannot reach an overlay where cloud-init already ran: the instance-id is
 # fixed, so ssh_authorized_keys is not re-applied and SSH would be refused. So a
-# re-key discards the (disposable) overlay, but never under a running guest.
+# re-key discards the (disposable) overlay. Decide BEFORE touching any key file, so
+# a refusal leaves a running guest's key intact (TIF-111 re-verifier).
 OVERLAY_ARGS=()
-if [[ $REKEYED -eq 1 && -f "$OVERLAY" ]]; then
-  if [[ -f "$STATE/qemu.pid" ]] && kill -0 "$(cat "$STATE/qemu.pid")" 2>/dev/null; then
-    echo "Refusing: new SSH key generated but a guest is running on the old overlay." >&2
-    echo "Stop it (runtime/guest/shutdown.sh), then re-run this script." >&2
-    exit 1
+if [[ ! -f "$KEY" ]]; then
+  if [[ -f "$OVERLAY" ]]; then
+    if [[ -f "$STATE/qemu.pid" ]] && kill -0 "$(cat "$STATE/qemu.pid")" 2>/dev/null; then
+      echo "Refusing: the SSH private key is missing but a guest is running on the overlay." >&2
+      echo "Stop it (runtime/guest/shutdown.sh), then re-run this script." >&2
+      exit 1
+    fi
+    echo "New key: the overlay will be recreated so cloud-init authorizes it."
+    OVERLAY_ARGS=(--recreate)
   fi
-  echo "New key: recreating the overlay so cloud-init authorizes it."
-  OVERLAY_ARGS=(--recreate)
+  echo "Generating guest SSH keypair ..."
+  rm -f "$PUB"
+  ssh-keygen -t ed25519 -N '' -C myco-rt-guest -f "$KEY" -q
 fi
 
 # 3. Base image (SHA-256 pinned in fetch-image.sh; ~600 MB first time).

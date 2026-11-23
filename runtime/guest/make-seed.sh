@@ -18,11 +18,25 @@ if [[ -z "$MAKER" ]]; then
   MAKER="mkisofs"
 fi
 
-[[ -f "$KEYS_DIR/id_ed25519" && -f "$PUBKEY_FILE" ]] || {
+# Never silently change the guest's identity (TIF-111 re-verifier):
+# - private key present, .pub missing: rebuild the .pub from it (same identity).
+# - private key missing with an existing overlay: refuse. cloud-init already ran in
+#   that overlay with the old key and will not re-apply a new one, so a fresh key
+#   would boot "OK" and then refuse SSH. provision.sh re-keys and recreates safely.
+# - private key missing, no overlay: a fresh guest; generate a new keypair.
+if [[ -f "$KEYS_DIR/id_ed25519" && ! -f "$PUBKEY_FILE" ]]; then
+  echo "Public key missing; rebuilding it from the existing private key." >&2
+  ssh-keygen -y -f "$KEYS_DIR/id_ed25519" > "$PUBKEY_FILE"
+elif [[ ! -f "$KEYS_DIR/id_ed25519" ]]; then
+  if [[ -f "$GUEST_DIR/state/myco-runtime-v0.qcow2" ]]; then
+    echo "Refusing: SSH private key missing but an overlay exists; a new key would not be" >&2
+    echo "authorized in it. Run runtime/guest/provision.sh (re-keys and recreates the overlay)." >&2
+    exit 1
+  fi
   echo "Keypair missing in $KEYS_DIR; generating keypair." >&2
-  rm -f "$KEYS_DIR/id_ed25519" "$PUBKEY_FILE"
+  rm -f "$PUBKEY_FILE"
   ssh-keygen -t ed25519 -N '' -C myco-rt-guest -f "$KEYS_DIR/id_ed25519" -q
-}
+fi
 
 mkdir -p "$GUEST_DIR/state"
 # Render user-data with the actual public key in place.

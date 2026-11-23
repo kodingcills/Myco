@@ -97,7 +97,7 @@ runtime/guest/create-overlay.sh      # qcow2 overlay over the pristine base
 runtime/guest/boot.sh                # QEMU+HVF, headless, daemonized (idempotent)
 runtime/guest/smoke.sh               # boots if needed; AT-SPI + input proofs
 runtime/guest/shutdown.sh            # clean shutdown over SSH; overlay kept
-runtime/guest/idle-watchdog.sh       # guest-side reaper: self-shutdown after MYCO_RT_IDLE_SECS idle
+runtime/guest/idle-watchdog.sh       # guest-side reaper (NOT installed by the seed yet): self-shutdown after MYCO_RT_IDLE_SECS idle
 runtime/guest/idle-watchdog-test.sh  # proves the reaper fires/holds, on the host, no VM
 scripts/memory-budget.sh             # read-only host/guest RSS + swap + second-VM headroom
 ```

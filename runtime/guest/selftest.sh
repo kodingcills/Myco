@@ -225,9 +225,46 @@ if [[ $rc -eq 1 && ! -f "$R/overlay-args.log" && "$out" == *Refusing* ]]; then
   ok "provision.sh refuses to re-key over a running guest's overlay"
 else bad "re-key under a live guest was not refused (rc=$rc): $out"; fi
 
+# ── 13. a missing .pub alone never re-keys, even with a live guest ─────────────
+# A `git pull` deletes the formerly tracked .pub while the private key and overlay
+# stay. Rebuild the .pub from the private key; never touch the guest's identity.
+K="$TMP/k13"; rm -rf "$K"; mkdir -p "$K/state" "$K/keys"
+cp "$HERE/provision.sh" "$K/"
+for s in fetch-image make-seed; do printf '#!/usr/bin/env bash\nexit 0\n' > "$K/$s.sh"; done
+printf '#!/usr/bin/env bash\necho "$*" >> "$(dirname "$0")/overlay-args.log"\n' > "$K/create-overlay.sh"
+chmod +x "$K"/*.sh
+ssh-keygen -t ed25519 -N '' -q -f "$K/keys/id_ed25519"; rm -f "$K/keys/id_ed25519.pub"
+touch "$K/state/myco-runtime-v0.qcow2"
+before="$(shasum "$K/keys/id_ed25519" | cut -d' ' -f1)"
+sleep 300 & live=$!; echo "$live" > "$K/state/qemu.pid"
+out="$(bash "$K/provision.sh" 2>&1)"; rc=$?
+kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+after="$(shasum "$K/keys/id_ed25519" | cut -d' ' -f1)"
+derived="$(ssh-keygen -y -f "$K/keys/id_ed25519" | cut -d' ' -f2)"
+if [[ $rc -eq 0 && "$before" == "$after" && "$(cut -d' ' -f2 "$K/keys/id_ed25519.pub" 2>/dev/null)" == "$derived" \
+      && "$(cat "$K/overlay-args.log" 2>/dev/null)" != *--recreate* ]]; then
+  ok "provision.sh rebuilds a missing .pub from the private key without re-keying"
+else bad "missing .pub with live guest: rc=$rc key-changed=$([[ $before == "$after" ]] && echo no || echo YES) / $out"; fi
+
+# ── 14. make-seed.sh (boot.sh's path) never silently re-keys ───────────────────
+M="$TMP/m14"; rm -rf "$M"; mkdir -p "$M/state" "$M/keys" "$M/seed" "$M/bin"
+cp "$HERE/make-seed.sh" "$M/"; printf 'k: __MYCO_PUBKEY__\n' > "$M/seed/user-data"; : > "$M/seed/meta-data"
+printf '#!/usr/bin/env bash\n: > "$1"\n' > "$M/bin/cloud-localds"; chmod +x "$M/bin/cloud-localds"
+touch "$M/state/myco-runtime-v0.qcow2"
+out="$(PATH="$M/bin:$PATH" bash "$M/make-seed.sh" 2>&1)"; rc=$?
+if [[ $rc -eq 1 && ! -f "$M/keys/id_ed25519" && "$out" == *Refusing* ]]; then
+  ok "make-seed.sh refuses to mint a new key over an existing overlay"
+else bad "make-seed.sh re-keyed over an existing overlay (rc=$rc): $out"; fi
+ssh-keygen -t ed25519 -N '' -q -f "$M/keys/id_ed25519"; rm -f "$M/keys/id_ed25519.pub"
+before="$(shasum "$M/keys/id_ed25519" | cut -d' ' -f1)"
+out="$(PATH="$M/bin:$PATH" bash "$M/make-seed.sh" 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$before" == "$(shasum "$M/keys/id_ed25519" | cut -d' ' -f1)" && -f "$M/keys/id_ed25519.pub" ]]; then
+  ok "make-seed.sh rebuilds a missing .pub from the existing private key"
+else bad "make-seed.sh with private key but no .pub (rc=$rc): $out"; fi
+
 echo
 if [[ $FAILURES -eq 0 ]]; then
-  echo "guest selftest OK: all 12 scenarios passed, no guest started, no download"
+  echo "guest selftest OK: all 14 scenarios passed, no guest started, no download"
   exit 0
 fi
 echo "guest selftest FAILED: $FAILURES scenario(s)" >&2
