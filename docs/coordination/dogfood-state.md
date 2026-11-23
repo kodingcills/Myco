@@ -150,21 +150,31 @@ independent verifier rounds (`deepseek-v4.1-flash`), CI 4/4 green:
 - Exit non-zero unless every trial is a genuine success.
 - `observation` events carry the schema-required `nodeCount`.
 
-### 2026-11-22 — REQ-13 filed: no focus-relative typing or coordinate click
+### 2026-11-22 — REQ-13 WITHDRAWN (it was my error, not a runtime gap)
 
-Found while fixing target resolution (PR #193). The runtime's `Action` union
-requires an AT-SPI ref for **both** `click` and `typeText` (`act.rs` resolves
-the ref and fails with `unresolved_ref`), and exposes **no** focus-relative
-typing or coordinate-click action. Tk registers zero AT-SPI nodes, so **no Tk
-app can be driven at all** — DF-S01/S02/S05 will gap on REQ-04 against the real
-fixture until this exists.
+I filed REQ-13 claiming the runtime had no focus-relative typing or coordinate
+click. **That was wrong.** `TypeTextGlobal { text }` and `ClickAt { x, y }` have
+been in `runtime/crates/myco-rt-core/src/ops.rs` since `9efb2d8`, with the agent
+implementation in `myco-rt-agent/src/act.rs`, the wire contract in #186, the
+runbook in #185, and a live proof in #188 (`act_global_live.rs`).
 
-| id | requirement | exercised by |
-|---|---|---|
-| REQ-13 | **Focus-relative input**: an action that types into the focused window without an AT-SPI ref (XTEST with real focus is proven to land in Tk on RT-003), and/or a coordinate click. Without it, apps with no accessibility tree are unactuatable. | DF-S01, DF-S02, DF-S05 |
+Cause: I read an older `ops.rs` from a stale worktree and inferred the `Action`
+union was closed without them, instead of reading the current file. The gap was
+in the Python runner, which only knew the ref-targeted forms.
 
-This is the single highest-value runtime ask from dogfood: it gates every
-scenario that needs to type into the fixture.
+Fixed in PR #205: the runner picks a route — ref route when AT-SPI nodes exist,
+global route (`clickAt` the entry's published geometry to establish X focus,
+then `typeTextGlobal`) when they do not. Grading is unchanged: the persisted
+store decides, and both global actions report `delivered_unverified` by design,
+so they are never treated as evidence.
+
+**REQ-13 is withdrawn; do not implement it.** The id stays reserved so no
+existing reference becomes ambiguous.
+
+Open question the DF-005 slot settles: whether a `clickAt` on the Tk window's
+entry geometry gives that window X focus under openbox. The runtime's live proof
+establishes it for the GTK sanity window; the Tk fixture is untested. A failure
+here reports `failure`/`refuted` with a readable trace, never a false pass.
 
 Phase 1 (DF-005 / TIF-27) is **UNBLOCKED** (2026-11-22):
 - Runtime first path (RT-011 / TIF-40) and arbitrary-agent safe desktop (RT-020 / TIF-56) passed live proof (`rt020-live-20261122-093115`) and independent verification, merged via PR #96.
