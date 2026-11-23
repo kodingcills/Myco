@@ -13,7 +13,7 @@
 //! The fake is intentionally realistic rather than minimal: an empty a11y tree or
 //! zero windows would let bugs through that a real observation would expose.
 
-use myco_rt_core::ops::{ProcessInfo, WindowInfo};
+use myco_rt_core::ops::{GuestProcessControl, ProcessExit, ProcessInfo, WindowInfo};
 use myco_rt_core::{
     Action, ActionOutcome, Backend, EvidenceArtifacts, ElementRef, Observation, Permissions,
     RuntimeError, Session, SessionConfig, SessionPhase, StateVersion,
@@ -44,11 +44,28 @@ struct FakeDesktop {
     resets: u32,
     /// Entry text, so a typed action is observable through `observe`.
     entry_text: String,
+    /// RT-016: handles that have been launched and not yet killed. A kill removes
+    /// the handle and records the exit; a relaunch of a live handle is refused.
+    live_handles: Vec<String>,
+    /// Killed handles and how they died. Mirrors the real agent
+    /// (`myco-rt-agent/src/processes.rs`): a second kill returns the cached exit,
+    /// a relaunch consumes the entry (so a second relaunch fails), and a handle
+    /// that is in neither list is unknown.
+    killed: Vec<(String, ProcessExit)>,
+    next_handle: u64,
 }
 
 impl FakeDesktop {
     fn new() -> Self {
-        Self { version: 0, provisioned: false, resets: 0, entry_text: String::new() }
+        Self {
+            version: 0,
+            provisioned: false,
+            resets: 0,
+            entry_text: String::new(),
+            live_handles: Vec::new(),
+            killed: Vec::new(),
+            next_handle: 1,
+        }
     }
 
     /// One entry node, shaped like what `observe` returns from a real guest.
@@ -99,6 +116,9 @@ impl Backend for FakeDesktop {
                 if command.is_empty() {
                     return Ok(ActionOutcome::Failed { reason: "empty command".into() });
                 }
+                // Like the real agent (act.rs), `act:launch` spawns WITHOUT
+                // registering a handle: only `launch_process` mints one. That gap
+                // is why RT-016 needs `launch_process` at all.
                 self.version += 1;
                 Ok(ActionOutcome::DeliveredVerified)
             }
@@ -118,8 +138,12 @@ impl Backend for FakeDesktop {
 
     fn reset(&mut self) -> Result<(), FakeErr> {
         self.resets += 1;
-        // A reset discards writes: the entry goes back to empty.
+        // A reset discards writes: the entry goes back to empty. The real reset
+        // reboots the guest and starts a fresh agent, so every process handle
+        // from before the reset is gone too.
         self.entry_text.clear();
+        self.live_handles.clear();
+        self.killed.clear();
         self.version += 1;
         Ok(())
     }
@@ -134,6 +158,67 @@ impl Backend for FakeDesktop {
     fn destroy(&mut self) -> Result<(), FakeErr> {
         self.provisioned = false;
         Ok(())
+    }
+}
+
+impl GuestProcessControl for FakeDesktop {
+    type ProcErr = FakeErr;
+
+    fn launch_guest_process(&mut self, command: &str, _args: &[String]) -> Result<String, FakeErr> {
+        // Deliberately does NOT gate on `provisioned`: the phase guard lives in
+        // `Session`, and a fake that also refused would let a removed guard pass
+        // the post-destroy test for the wrong reason (found by mutation).
+        if command.is_empty() {
+            return Err(FakeErr("empty command".into()));
+        }
+        let handle = format!("proc-{}", self.next_handle);
+        self.next_handle += 1;
+        self.live_handles.push(handle.clone());
+        self.version += 1;
+        Ok(handle)
+    }
+
+    fn kill_guest_process(&mut self, handle: &str) -> Result<ProcessExit, FakeErr> {
+        // A kill of an unknown handle is an error, never a silent success: the
+        // whole point of RT-016 is that "the process is gone" is reported honestly.
+        // A second kill returns the cached exit, as the real agent does.
+        if let Some((_, exit)) = self.killed.iter().find(|(h, _)| h == handle) {
+            return Ok(exit.clone());
+        }
+        let idx = self
+            .live_handles
+            .iter()
+            .position(|h| h == handle)
+            .ok_or_else(|| FakeErr(format!("unknown process handle {handle}")))?;
+        self.live_handles.remove(idx);
+        // Known gap vs the real agent: a process that had already exited reports
+        // its own code there; the fake has no process lifetimes and always says
+        // SIGKILL. Covered only by the live acceptance run.
+        let exit = ProcessExit { code: None, signal: Some(9) };
+        self.killed.push((handle.to_string(), exit.clone()));
+        self.version += 1;
+        Ok(exit)
+    }
+
+    fn relaunch_guest_process(&mut self, handle: &str) -> Result<String, FakeErr> {
+        // Relaunch names a handle that was killed; a still-live handle means the
+        // caller's model of the world is wrong and should fail loudly. Like the
+        // real agent, a handle this session never minted is unknown, and a
+        // relaunch consumes the killed entry so it cannot be relaunched twice.
+        if self.live_handles.iter().any(|h| h == handle) {
+            return Err(FakeErr(format!("kill process before relaunch: {handle}")));
+        }
+        let idx = self
+            .killed
+            .iter()
+            .position(|(h, _)| h == handle)
+            .ok_or_else(|| FakeErr(format!("unknown process handle {handle}")))?;
+        self.killed.remove(idx);
+        let new_handle = format!("proc-{}", self.next_handle);
+        self.next_handle += 1;
+        self.live_handles.push(new_handle.clone());
+        self.version += 1;
+        Ok(new_handle)
     }
 }
 
@@ -343,4 +428,155 @@ impl Backend for FailingReset {
     fn destroy(&mut self) -> Result<(), FakeErr> {
         Ok(())
     }
+}
+
+/// RT-016: launch -> kill -> relaunch over a fake, plus the refusal paths.
+///
+/// The observable contract is what a client can rely on: a launch returns a
+/// handle; a kill of that handle reports how it died and invalidates refs; a
+/// relaunch of a killed handle returns a new one; and every wrong call (unknown
+/// handle, relaunch of a live process, any op after destroy) is an error, never a
+/// silent success.
+#[test]
+fn launch_kill_relaunch_round_trip() {
+    let mut s = ready_session();
+    let before_launch = s.state_version();
+
+    // Launch returns a handle distinct from nothing: it is the name kill needs.
+    let handle = s
+        .launch_guest_process("/bin/sleep", &["60".into()])
+        .expect("launch");
+    assert!(!handle.is_empty(), "a launch must yield a usable handle");
+
+    // The launch changed the process set, so it bumped the version. Capture it to
+    // show the kill's bump below is real, not a fixed constant.
+    let after_launch = s.state_version();
+    assert!(
+        after_launch > before_launch,
+        "a launch changes the process set and must bump the state version"
+    );
+
+    // Kill reports a signal (SIGKILL), not a code: the fake models a killed
+    // process the way a real SIGKILL appears.
+    let exit = s.kill_guest_process(&handle).expect("kill");
+    assert_eq!(exit.signal, Some(9), "a SIGKILLed process reports signal 9");
+    assert_eq!(exit.code, None);
+    assert!(
+        s.state_version() > after_launch,
+        "a kill changes the process set and must bump the state version"
+    );
+
+    // Relaunch of the killed handle succeeds and yields a NEW handle.
+    let after_kill = s.state_version();
+    let replacement = s.relaunch_guest_process(&handle).expect("relaunch");
+    assert_ne!(replacement, handle, "a relaunch is a new process, new handle");
+    assert!(
+        s.state_version() > after_kill,
+        "a relaunch changes the process set and must bump the state version"
+    );
+}
+
+#[test]
+fn killing_an_unknown_handle_is_an_error() {
+    let mut s = ready_session();
+    let v = s.state_version();
+    let err = s.kill_guest_process("no-such-handle").unwrap_err();
+    assert_eq!(s.state_version(), v, "a kill the backend refuses must not bump the version");
+    assert!(
+        err.to_string().contains("unknown process handle"),
+        "an unknown handle must be refused, got: {err}"
+    );
+}
+
+#[test]
+fn relaunching_a_live_process_is_an_error() {
+    let mut s = ready_session();
+    let handle = s.launch_guest_process("/bin/sleep", &[]).expect("launch");
+    // Not killed yet: relaunch must refuse rather than silently spawn a second
+    // process behind the caller's back.
+    let v = s.state_version();
+    let err = s.relaunch_guest_process(&handle).unwrap_err();
+    assert_eq!(s.state_version(), v, "a relaunch the backend refuses must not bump the version");
+    assert!(
+        err.to_string().contains("kill process before relaunch"),
+        "relaunch of a live handle must be refused, got: {err}"
+    );
+}
+
+/// RT-016 obeys the same phase guard as every other non-terminal op (RT-021).
+#[test]
+fn process_control_is_refused_after_destroy() {
+    let mut s = ready_session();
+    let live = s.launch_guest_process("/bin/sleep", &[]).expect("launch");
+    // A KILLED handle for the relaunch check: the fake would happily relaunch it,
+    // so only the session's phase guard can make this fail. (Relaunching a live
+    // handle passed for the wrong reason, the fake's "still live" error; found by
+    // mutation in the Tier-2 review of #226.)
+    let killed = s.launch_guest_process("/bin/sleep", &[]).expect("launch");
+    s.kill_guest_process(&killed).expect("kill");
+    s.destroy().expect("destroy");
+
+    assert!(s.launch_guest_process("/bin/sleep", &[]).is_err(), "launch after destroy");
+    assert!(s.kill_guest_process(&live).is_err(), "kill after destroy");
+    assert!(s.relaunch_guest_process(&killed).is_err(), "relaunch after destroy");
+}
+
+/// Process control is launch authority: a session without the `launch`
+/// permission cannot launch, kill, or relaunch through the process-control ops,
+/// exactly as `act(Launch)` is refused. The backend is never reached.
+#[test]
+fn process_control_requires_the_launch_permission() {
+    // The permission check runs before the backend, so the handle values for
+    // kill/relaunch do not matter: each call must be refused, not reach the fake.
+    let mut s = session_with(Permissions { allowed_actions: vec![] });
+    s.create().expect("create");
+    assert!(matches!(
+        s.act(&Action::Launch { command: "/bin/sleep".into(), args: vec![] }),
+        Err(RuntimeError::PermissionDenied(_))
+    ), "act(Launch) is the reference refusal");
+    let v = s.state_version();
+    assert!(matches!(
+        s.launch_guest_process("/bin/sleep", &[]),
+        Err(RuntimeError::PermissionDenied(_))
+    ), "launch_process must honour the permission set");
+    assert!(matches!(
+        s.kill_guest_process("proc-0"),
+        Err(RuntimeError::PermissionDenied(_))
+    ), "kill_process must honour the permission set");
+    assert!(matches!(
+        s.relaunch_guest_process("proc-0"),
+        Err(RuntimeError::PermissionDenied(_))
+    ), "relaunch_process must honour the permission set");
+    assert_eq!(s.state_version(), v, "a refused op must not bump the version");
+}
+
+/// The fake now matches the real agent on handle provenance: a relaunch of a
+/// handle this session never minted, or a second relaunch of the same killed
+/// handle, is refused; a second kill reports the cached exit.
+#[test]
+fn relaunch_requires_a_killed_handle_from_this_session() {
+    let mut s = ready_session();
+    let v = s.state_version();
+    assert!(s.launch_guest_process("", &[]).is_err(), "empty command refused by the backend");
+    assert_eq!(s.state_version(), v, "a launch the backend refuses must not bump the version");
+    let err = s.relaunch_guest_process("proc-999").unwrap_err();
+    assert!(err.to_string().contains("unknown process handle"), "got: {err}");
+
+    let h = s.launch_guest_process("/bin/sleep", &[]).expect("launch");
+    let first = s.kill_guest_process(&h).expect("kill");
+    let again = s.kill_guest_process(&h).expect("second kill returns cached exit");
+    assert_eq!(first, again, "a second kill reports the same exit");
+    s.relaunch_guest_process(&h).expect("relaunch");
+    let err = s.relaunch_guest_process(&h).unwrap_err();
+    assert!(err.to_string().contains("unknown process handle"), "second relaunch: {err}");
+}
+
+/// A reset starts a fresh guest agent, so handles from before it are unknown.
+#[test]
+fn reset_invalidates_process_handles() {
+    let mut s = ready_session();
+    let live = s.launch_guest_process("/bin/sleep", &[]).expect("launch");
+    s.reset().expect("reset");
+    let err = s.kill_guest_process(&live).unwrap_err();
+    assert!(err.to_string().contains("unknown process handle"), "after reset: {err}");
 }
