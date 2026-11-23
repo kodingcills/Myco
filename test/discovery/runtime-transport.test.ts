@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RuntimeTransport } from "../../src/discovery/runtime-transport.ts";
 
-function transport(log: string): RuntimeTransport {
+function transport(): RuntimeTransport {
   return new RuntimeTransport({
     binary: process.execPath,
     args: [join(import.meta.dirname, "fake-mcp-server.mjs")],
@@ -21,7 +21,7 @@ describe("runtime MCP transport", () => {
     const dir = mkdtempSync(join(tmpdir(), "myco-mcp-"));
     const log = join(dir, "calls.log");
     process.env.FAKE_MCP_LOG = log;
-    const t = transport(log);
+    const t = transport();
     await t.initialize();
     const session = await t.create();
     expect(session.id).toBe("s0-test");

@@ -20,6 +20,7 @@ PID_FILE="$RUN_DIR/s0.pid"
 CHILD_FILE="$RUN_DIR/s0.child"
 LOG="$RUN_DIR/s0.log"
 PROBE="$RUN_DIR/probe.txt"
+RT_MCP="$ROOT/runtime/target/debug/myco-rt-mcp"
 mkdir -p "$RUN_DIR"
 
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
@@ -31,17 +32,31 @@ probe() {
     echo "memory_pressure: $(memory_pressure 2>/dev/null | awk -F': ' '/free percentage/{print $2}' || echo unavailable)"
     echo "pages_free_kb:   $(vm_stat | awk '/Pages free/{gsub(/\./,"",$3); print $3*16}')"
     echo "load:            $(sysctl -n vm.loadavg)"
-    echo "qemu:            $(pgrep -f qemu-system-aarch64 >/dev/null && echo RUNNING || echo down)"
+    echo "qemu:            $(qemu_running && echo RUNNING || echo down)"
+    echo "rt_mcp:          $([[ -x "$RT_MCP" ]] && echo present || echo MISSING)"
     echo "vm_lock:         $(ls /tmp/myco-*.lock 2>/dev/null | tr '\n' ' ' || echo none)"
     echo "git_head:        $(git -C "$ROOT" rev-parse --short HEAD)"
   } | tee "$PROBE"
 }
 
+qemu_running() {
+  ps -Ao command | awk '$1=="qemu-system-aarch64"{found=1} END{exit !found}'
+}
+
 gate() {
   # Refuse to start a guest while another one is running. Memory pressure is
   # reported, not gated: TIF-123/#244 made the live check informational.
-  if pgrep -f qemu-system-aarch64 >/dev/null; then
+  # Identity comes from the process table's command column, not a regex over
+  # argv: on 2026-11-23 `pgrep -f` matched a file path in an unrelated argv and
+  # would have been self-defeating by refusing on its own text.
+  if qemu_running; then
     say "REFUSED: a qemu guest is already running; the window is not ours"
+    return 2
+  fi
+  # The runtime binary is the only transport; a missing one must refuse here so
+  # the detached child never starts and never has to fail on it.
+  if [[ ! -x "$RT_MCP" ]]; then
+    say "REFUSED: $RT_MCP is missing; build it with cargo build -p myco-rt-mcp"
     return 2
   fi
   return 0

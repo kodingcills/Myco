@@ -11,7 +11,7 @@
  * a guest unless the gate passes: no qemu already running, and the runtime binary
  * present.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runDirectionALive } from "../src/discovery/live-runner.ts";
@@ -101,7 +101,10 @@ function savePoint(): { x: number; y: number } {
 }
 
 async function live(): Promise<number> {
-  if (sh("pgrep", ["-f", "qemu-system-aarch64"], false).length > 0) {
+  // Identity from the process table's command column: a regex over argv matched
+  // an unrelated file path on 2026-11-23 and would match this script's own text.
+  const qemu = spawnSync("ps", ["-Ao", "command"], { encoding: "utf8" }).stdout ?? "";
+  if (qemu.split("\n").some((line) => line.startsWith("qemu-system-aarch64"))) {
     process.stderr.write("refusing: a qemu guest is already running\n");
     return 2;
   }
