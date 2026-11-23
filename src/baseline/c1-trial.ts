@@ -35,7 +35,7 @@ export async function runC1Trial(
   planner: Planner,
 ): Promise<BaselineRow> {
   const started = performance.now();
-  const transcript: Transcript = { actions: [], claims: [] };
+  const transcript: Transcript = { actions: [], claims: [], deliveries: [] };
   const calls: Awaited<ReturnType<Planner["act"]>>["calls"] = [];
   const deviations = ["reset:cua-c1-base", "step-budget-asymmetry"];
   let observation: Observation = { kind: "unavailable" };
@@ -65,10 +65,26 @@ export async function runC1Trial(
         const resultOfAction = await c1.execute(action);
         if (resultOfAction.verified !== undefined)
           deviations.push(`cua-action-${steps}-verified:${resultOfAction.verified}`);
-        if (resultOfAction.refused) {
+        // The delivery mode is recorded for every action, because arm-003d
+        // declares escalation as a run condition: a row produced with foreground
+        // delivery is not the same measurement as one produced in background
+        // (TIF-167).
+        transcript.deliveries?.push({
+          step: steps,
+          mode: resultOfAction.deliveryMode,
+          escalated: resultOfAction.escalated,
+          outcome: resultOfAction.outcome,
+        });
+        // Only a routed refusal stops the trial: the delivery layer declined, so
+        // nothing downstream can be learned from continuing. A stall does NOT
+        // break here - the action was delivered, and stopping would silently
+        // drop whatever the app actually did with it.
+        if (resultOfAction.outcome === "routing-refused") {
           deviations.push("cua-action-refused");
           break;
         }
+        if (resultOfAction.outcome === "delivered-stalled")
+          deviations.push(`cua-action-${steps}-stalled`);
       }
     } finally {
       try {
@@ -86,7 +102,7 @@ export async function runC1Trial(
       observation = { kind: "step-budget" };
   }
   // The scorer receives only independent observations and the driver precondition.
-  const verdict = judge({ actions: [], claims: [] }, prepared.driver, observation);
+  const verdict = judge({ actions: [], claims: [], deliveries: [] }, prepared.driver, observation);
   let independentValuePresent: boolean | null = null;
   if (verdict.status === "verified") {
     try {

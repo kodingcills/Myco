@@ -24,7 +24,7 @@ function row(overrides: Partial<BaselineRow> = {}): BaselineRow {
     subArm: "c1",
     verdict: "refuted",
     verdictReason: "modified",
-    transcript: { actions: [], claims: [] },
+    transcript: { actions: [], claims: [], deliveries: [] },
     usage: [{ prompt: 100, completion: 50, cost: 0.001 }],
     cost: 0.001,
     tokens: { in: 100, out: 50 },
