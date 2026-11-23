@@ -222,3 +222,22 @@ Any run longer than a few minutes is launched **detached** — `nohup … & diso
 A **pid alone is not a completion signal.** macOS reuses pids, so a recycled pid reads as "still running" forever. Wait on a marker the run writes as its last act, or on both.
 
 The C1 arm is the model: `scripts/c1-baseline.sh` logs to `progress.log`, holds a lock, and survives the turn that started it.
+
+## When a file enters typecheck (standing note, 2026-11-22)
+
+Adding a file to the typecheck `include` list surfaces errors that are **sometimes type lies, not code bugs**. The cheapest fix — deleting the offending expression — silently removes real information.
+
+Worked example (PR #150): adding `scripts/c1-sweep.ts` to the include produced `TS2339: Property 'backend' does not exist on '{agent_version, session_id}'`. The author deleted the log expression to satisfy tsc. Then the live run printed:
+
+```
+ping verified: {"agent_version":"0.1.0","session_id":"…","backend":"windows"}
+```
+
+`backend` exists at runtime; the **type** was wrong. The correct fix was to widen `ping()`'s return type to optional `backend` and restore the log.
+
+Rules:
+
+- **Before deleting code to satisfy a checker, ask whether the checker or the code is wrong.** A type that omits a field the runtime sends is a type bug; deleting the consumer hides it and loses information.
+- **Prefer widening the type at the boundary** (the function that returns the value) over narrowing the consumer.
+- **Never silence with `!` or `as`** when the real question is whether the value can be absent. A cast moves the failure to runtime, where it is more expensive.
+- **A file newly added to typecheck is a discovery event, not a regression.** Expect it to surface latent type lies; triage each one rather than making the errors go away.
