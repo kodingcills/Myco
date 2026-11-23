@@ -1019,3 +1019,13 @@ Reconstructed actual state after a provider switch and a long gap. Recorded so t
 - **Row 8 corrected (#303):** the runbook and scorecard both claimed the VM toolchain was "not in the repo at all". It landed in **#206** at `docs/env/vm-toolchain/` (18 files). Corrected in three places, keeping the claim still true: never run end to end **from the repo**. Row 8 stays PARTIAL.
 - **Trace links (#303):** all 54 scorecard trace paths were plain code spans, none clickable. Converted to markdown links; 54 links, 0 text/target mismatches, 0 targets missing, 0 plain spans remaining.
 - **Host state:** no qemu, no c1-sweep, flock FREE. Booked spend unchanged at **$2.762570**; arm-003 and arm-003b each scored 0 rows and spent $0.00 cash.
+
+## Log 2026-11-23 (65) — reboot 11:47: inventory, and what was NOT lost
+- **Mac restarted 11:47:19 ET** (`kern.boottime` 1795452439). T3 was unreachable ~11:46-12:02. Load spiked to ~200 post-login and had fallen to **5.96** by 14:07.
+- **/tmp wiped again:** `baseline`, `m1-013`, `m1-014`, `t2-lc-verify`, `v304e-verify` all GONE. The durable evidence dir **`~/Myco-evidence/` survived** — that is why I moved DF-S01 output there rather than /tmp, and it worked.
+- **No orphaned VM state.** qemu 0, UTM `stopped`, runtime `SESSION.lock` absent, `qemu.pid` absent. **flock FREE.** The lock file reads `19182 boot.sh ...` — stale metadata from my own guest run, dead pid; the flock is the authority and it is free.
+- **No survivor processes:** c1-sweep 0, c1-baseline 0, df005 0, t2-lc 0, race.sh 0, arm-003 0.
+- **The `Virtualization.framework` process at 199% is COLIMA, not ours.** Traced by its open files: `~/.colima/_lima/colima/disk` and `_disks/colima/datadisk`, parented to `colima start`. It holds handles on `convert-disk-virtio.sh` from two worktrees, which is it reading them, not a Myco guest. Under the 300% gate, so it does not block a grant.
+- **One live process that is not debris:** a `docker run --cpus=2 -v .../tif-170-race` (pid 53475), Discovery's active work. **Not touched.**
+- **Gate state: CLEARED** (load 6.90, nothing non-VM above 300%).
+- **My worktree synced to origin/main `b2d37f16`**, clean.
