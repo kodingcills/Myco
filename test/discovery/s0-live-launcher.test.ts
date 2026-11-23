@@ -257,6 +257,10 @@ describe("s0-live.sh launcher", () => {
     }
   });
 
+  // TIF-170: skipped on main because it fails on ubuntu-latest with `expected 2 to be
+  // 1`, i.e. two racers exit 0 in one round. This branch is the diagnostic run, so it is
+  // enabled here and POSTURE-CHECKED below; see the workflow, and do not carry this
+  // enabled form back to main.
   it("admits exactly one --run under a real race, and the winner owns the pid", () => {
     const { dir, script, runDir, env } = worktree();
     // Check-then-write tears roughly one round in ten (measured 2026-11-23: 4/40
