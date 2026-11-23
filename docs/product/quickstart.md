@@ -155,7 +155,12 @@ decided by the validator, not by the in-memory verdict, so the summary's verdict
 line alone is never what a caller should trust.
 
 The viewer reads the same two files: `pnpm --filter viewer build`, then open
-`viewer/dist/index.html` and drop the run directory in.
+`viewer/dist/index.html` and drop the run directory in (or a `.mycotrace` zip of
+the two files). It shows the verdict, the score, the steps, and the check. Its
+claim-vs-persisted table is populated for M1's Calc records; for this item-list
+task it shows the check as `not recorded`, because the artifact carries the
+verdict and the reason but not the persisted list. The terminal summary above is
+the complete claim/state/verdict view for this task.
 
 ## 5. Prove the rest of the tree still holds (optional)
 
