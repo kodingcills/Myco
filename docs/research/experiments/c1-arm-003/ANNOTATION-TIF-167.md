@@ -56,3 +56,22 @@ entirely in background.
 
 Only a genuine save failure counts against the model; a routing refusal, a
 delivered action, and a stalled confirmation do not.
+
+## Note for the arm-003d operator (TIF-169)
+
+**Check duplicate stalls BY HAND in this arm.** A `Ctrl+S` that stalls and is then
+sent again by the planner appears in the raw `deliveries` list as **two
+`delivered-stalled` records for the same key** — which is the useful signal, but
+nothing names it as a duplicate yet. Comparing the deliveries list against the
+action list shows it: two consecutive stalls whose actions have the same
+signature means the app may have been asked to save twice.
+
+**TIF-169 adds `cua-action-N-resent-after-stall`** to flag exactly that case
+automatically. It is not in this arm because it landed after the round-3 freeze,
+and it does not change what the arm measures — only how loudly a duplicate is
+reported. A run without the flag is not invalid; it just needs the manual check.
+
+**What the arm does NOT need to worry about:** `TIF-169`'s other change makes
+`verified` always a boolean. Before it, a `delivered` action could report no
+verification flag at all. That affects how a row is *read*, not what the arm
+*records* — the raw response is in the transcript either way.
