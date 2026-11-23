@@ -46,6 +46,35 @@ rate has roughly doubled and the cause is worth knowing.
 
 Report **cash and booked separately**, never "$1.18" unqualified.
 
+## Output location — never `/tmp`
+
+**All run output, logs, ledgers and pid/exit files go under a durable, gitignored
+directory in the repo or worktree. `/tmp` is not durable on this host.**
+
+The incident that made this a rule: the Mac kernel-panicked at 04:38 ET on
+2026-11-23 (Wi-Fi driver `bcmwlan` crash loop) and rebooted. `/tmp` was wiped, so
+arm-003c's rows, `launch.log`, `progress.log` and `wrapper.exit` were **all lost**,
+along with arm-3 and arm-3b's ledgers. Three runs' evidence existed only in `/tmp`
+and none of it survived. The spend those runs booked is only known because the
+figures were quoted in conversation before the panic.
+
+Convention:
+
+```
+<repo or worktree>/runs/c1-arm3d/           # gitignored, survives a reboot
+  launch.log  progress.log  wrapper.pid  wrapper.exit
+  accounting.json  trials/c1/*.json
+```
+
+`runs/` is gitignored, so this is not "commit the output" — it is "keep it
+somewhere a reboot cannot delete." Evidence worth keeping permanently is copied
+into `docs/research/experiments/<arm>-<NNN>/` **and nothing is deleted from
+`runs/` until that copy is verified**; `/tmp` may be used only for things that are
+genuinely disposable.
+
+The ledger is the part that must survive: `accounting.json` is what makes the
+spend claim checkable, and after the reboot it is gone for three runs.
+
 ## Go / no-go gates
 
 | Gate | Check | Fail action |
@@ -131,3 +160,39 @@ It produces a **baseline** number under a corrected task text. It does not by
 itself establish M1 criterion 7 unless Myco's own arm ran the identical tasks
 under the identical initial state — that comparison is the Coordinator's to make,
 and the manifest hash is what makes it checkable.
+
+## Run history — what happened, and what it cost
+
+| Run | Outcome | Scored rows | Booked | Cause |
+|---|---|---|---|---|
+| arm-3 | aborted | 0 | $1.130400 | wrapper reaped at agent turn end |
+| arm-3b | aborted | 0 | $0.376800 | killed by the Coordinator mid-trial-0 |
+| **arm-003c** | **infrastructure abort** | **0** | **$0.051318** | **Mac kernel panic 04:38 ET; `/tmp` wiped with the run** |
+
+**arm-003c is an infrastructure abort, not a scored run.** It produced two rows
+(`refuted/modified`) before the panic and those rows are gone — they were in
+`/tmp`. Nothing is claimed from them here except the one finding that was quoted
+before the loss: the save attempt came back `cua-action-refused`, which is what
+prompted the parity investigation.
+
+**Ledger, rebuilt from what survives** (2026-11-23, post-reboot):
+
+| Source | Booked | Where it lives |
+|---|---|---|
+| spike | $0.076808 | `c1-arm-001/spike-trial-0.json` (repo) |
+| arm-001 | $0.000000 | `c1-arm-001/accounting.json` (repo) |
+| arm-002 | $1.555362 | `c1-arm-002/accounting.json` (repo) |
+| arm-3 | $1.130400 | **gone** — quoted pre-panic |
+| arm-3b | $0.376800 | **gone** — quoted pre-panic |
+| arm-003c | $0.051318 | **gone** — quoted pre-panic |
+| **committed** | **$3.190688** | |
+| **headroom to $9.00** | **$5.809312** | |
+
+The three wiped entries count because the API calls were made and billed, even
+though their ledgers no longer exist. Counting them is the conservative
+direction, and it is why the cap stays honest: the $9 limit is enforced by the
+runner against its own ledger, so a run cannot overrun — but the *reported* total
+must include what earlier runs spent.
+
+**Cash is $0 for all three wiped runs** — they produced no scored rows, so no
+trial cost was realized. The booked figure is reservations that were never spent.
