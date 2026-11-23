@@ -72,6 +72,8 @@ async function finishedRun(): Promise<FinishedRun> {
       armId: "screenshot-only",
       taskId: TASK.taskId,
       promptHash: PROMPT_HASH,
+      fixtureId: TASK.fixtureId,
+      fixtureHash: fixtureHash(HIDDEN_FIXTURE),
       budget: 40,
       persistencePaths: ["store.json"],
     },
@@ -339,6 +341,48 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     }
   });
 
+  it("R6 round 2 finding 3: the binding cannot be mutated or trapped after attest", async () => {
+    const run = await finishedRun();
+    const otherBundle = { "store.json": new TextEncoder().encode('{"items":[{"text":"else"}]}\n') };
+    const otherRun = { ...run, files: otherBundle } as FinishedRun;
+
+    // (i) Mutate the caller's own bundle object after attest() said eligible.
+    const input = baseInput(run);
+    const mutable = input.bundle!;
+    const attested = attest(input);
+    expect(attested.eligible).toBe(true);
+    mutable.bundleDigest = bundleDigest(otherBundle);
+    const afterMutation = scored(otherRun, attested);
+    if (afterMutation.status !== "scored") throw new Error("unreachable");
+    expect(afterMutation.decisionEligible, "a mutated binding was admitted").toBe(false);
+
+    // (ii) A getter that answers honestly for the gate and dishonestly for the scorer.
+    let reads = 0;
+    const trapped = {
+      ...baseInput(run).bundle!,
+      get bundleDigest() {
+        reads += 1;
+        return reads === 1 ? bundleDigest(run.files) : bundleDigest(otherBundle);
+      },
+    };
+    const trappedAttestation = attest({ ...baseInput(run), bundle: trapped });
+    const afterGetter = scored(otherRun, trappedAttestation);
+    if (afterGetter.status !== "scored") throw new Error("unreachable");
+    expect(afterGetter.decisionEligible, "a getter binding was admitted").toBe(false);
+
+    // (iii) A hostile binding must not throw out of the scorer and abort the batch.
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("trap");
+        },
+      },
+    );
+    const forged = { ...attested, binding: hostile } as typeof attested;
+    expect(() => scored(run, forged)).not.toThrow();
+  });
+
   it("R6 1d: an absent fixture identity is refused, not skipped", async () => {
     const run = await finishedRun();
     const input = baseInput(run);
@@ -359,7 +403,7 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
       evidence: { ...input.evidence, fixtureId: "ef-todo-other-v1" },
     });
     expect(foreign.eligible).toBe(false);
-    expect(foreign.blockers.join(" ")).toContain("the commitment resolves");
+    expect(foreign.blockers.join(" ")).toContain("is fixture");
   });
 
   it("R6 4: the fixture-hash binding and the unaudited-call clause are each load-bearing", async () => {
@@ -377,6 +421,60 @@ describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is 
     });
     expect(unaudited.eligible).toBe(false);
     expect(unaudited.blockers.join(" ")).toContain("not every call has an audit");
+  });
+
+  it("R6 round 2 finding 4 (A14): a claimed hash that names no fixture is refused", async () => {
+    // Without the `resolved === undefined` clause, a made-up hash claimed consistently with
+    // zero observations came out eligible with no blockers. The fixture-hash check alone
+    // does not catch it, because the caller writes both sides of that comparison.
+    const input = baseInput(await finishedRun());
+    const madeUp = "a".repeat(64);
+    const result = attest({
+      ...input,
+      claimedFixtureHash: madeUp,
+      evidence: { ...input.evidence, fixtureHash: madeUp },
+      observations: [],
+    });
+    expect(result.eligible, "a made-up hash was admitted").toBe(false);
+    expect(result.blockers.join(" ")).toContain("no hidden fixture hashes to");
+  });
+
+  it("R6 round 2 finding 1: a row naming an unknown task is refused", async () => {
+    // The registry is the only non-circular oracle here, so a task it does not know cannot
+    // be bound to any fixture.
+    const input = baseInput(await finishedRun());
+    const result = attest({
+      ...input,
+      evidence: { ...input.evidence, taskId: "ef-no-such-task" },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("names no known task");
+  });
+
+  it("R6 round 2 finding 1: a self-consistent foreign hidden fixture is refused", async () => {
+    // The attack: claim a hidden fixture for a DIFFERENT task, consistently. fixtureId,
+    // fixtureHash and claimedFixtureHash all agree with each other, so every comparison
+    // between caller-supplied values passes. Only the task registry can catch it.
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const foreign = HIDDEN.find((h) => h.taskFixtureId !== TASK.fixtureId)!;
+    const consistent = {
+      ...input,
+      claimedFixtureHash: fixtureHash(foreign),
+      evidence: {
+        ...input.evidence,
+        fixtureId: foreign.taskFixtureId,
+        fixtureHash: fixtureHash(foreign),
+      },
+    };
+    const result = attest(consistent);
+    expect(result.eligible, "a self-consistent foreign fixture was admitted").toBe(false);
+    expect(result.blockers.join(" ")).toContain("is fixture");
+
+    // And the scorer must refuse it too, not just the gate.
+    const scoredResult = scored(run, result);
+    if (scoredResult.status !== "scored") throw new Error("unreachable");
+    expect(scoredResult.decisionEligible).toBe(false);
   });
 
   it("R6 3: every malformed screen shape is refused, and the Proxy trap does not throw", async () => {

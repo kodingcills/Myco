@@ -191,6 +191,9 @@ export class ArmRecorder {
     armId: string;
     taskId: string;
     promptHash: string;
+    /** The fixture the row ran against. Required: the gate refuses evidence that omits it. */
+    fixtureId: string;
+    fixtureHash: string;
     status?: "finished" | "quota-exhausted";
     planner?: RecordedTrialEvidence["planner"];
   }): RecordedTrialEvidence {
@@ -199,6 +202,8 @@ export class ArmRecorder {
       armId: meta.armId,
       taskId: meta.taskId,
       promptHash: meta.promptHash,
+      fixtureId: meta.fixtureId,
+      fixtureHash: meta.fixtureHash,
       status: meta.status ?? (this.#limitHit ? "quota-exhausted" : "finished"),
       ...(meta.planner ? { planner: meta.planner } : {}),
       recordedCalls: calls,

@@ -6,7 +6,7 @@ import { scoreTrial, type TrialInput } from "../oracles/blind.ts";
 import { oracleForApp } from "../oracles/state.ts";
 import { findTask, taskFixture } from "../tasks/bank.ts";
 import type { GuardTraceEvent } from "../types.ts";
-import { type Attestation, bundleDigest, isAttestation } from "./attest.ts";
+import { type Attestation, type AttestedBundle, bundleDigest, isAttestation } from "./attest.ts";
 
 type Setting =
   | null
@@ -143,6 +143,24 @@ function reconcileAudit(
  */
 export const ATTESTATION_BINDING_LANDED = true;
 
+/** Read a binding defensively: a Proxy trap must not escape as a throw. */
+function readBinding(value: unknown): AttestedBundle | null {
+  if (value === null || typeof value !== "object") return null;
+  try {
+    const { armId, taskId, promptHash, bundleDigest: digest } = value as AttestedBundle;
+    if (
+      typeof armId !== "string" ||
+      typeof taskId !== "string" ||
+      typeof promptHash !== "string" ||
+      typeof digest !== "string"
+    )
+      return null;
+    return { armId, taskId, promptHash, bundleDigest: digest };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Score a discovery trial.
  *
@@ -232,7 +250,10 @@ export function scoreDiscoveryTrial(
   // row the evidence describes: it holds the row, so it recomputes the digest from the
   // bytes it is about to score and compares that to what the attestation claims (R6 1a).
   const attested = isAttestation(attestation);
-  const binding = attested ? attestation.binding : null;
+  // Reading a hostile binding must not throw: a throw here aborts the whole comparison
+  // batch, so one malformed row would take down every other row's score (R6 round 2,
+  // finding 3). An unreadable binding is simply not a binding.
+  const binding = attested ? readBinding(attestation.binding) : null;
   const bindsThisRow =
     binding !== null &&
     binding.armId === armId &&
@@ -275,8 +296,18 @@ export function scoreDiscoveryTrial(
   };
 }
 
-/** Reuse the same comparison across batches and quota pauses. */
-export function createDiscoveryComparison(comparisonSettings: PlannerSettings) {
+/**
+ * Reuse the same comparison across batches and quota pauses.
+ *
+ * `attester` is required, not optional. A comparison that silently skipped the gate would
+ * produce rows that look scored but were never admitted, which is the failure this whole
+ * workstream exists to prevent (R6 round 2, finding 2). A caller that genuinely wants
+ * descriptive rows calls `scoreDiscoveryTrial` directly and gets `decisionEligible: false`.
+ */
+export function createDiscoveryComparison(
+  comparisonSettings: PlannerSettings,
+  attester: (evidence: DiscoveryTrialEvidence, input: Omit<TrialInput, "intent">) => Attestation,
+) {
   const pinnedSettings = structuredClone(comparisonSettings);
   return (
     trials: Iterable<{
@@ -286,7 +317,7 @@ export function createDiscoveryComparison(comparisonSettings: PlannerSettings) {
   ) => {
     const results: ReturnType<typeof scoreDiscoveryTrial>[] = [];
     for (const { evidence, input } of trials) {
-      const trial = scoreDiscoveryTrial(evidence, input, pinnedSettings);
+      const trial = scoreDiscoveryTrial(evidence, input, pinnedSettings, attester(evidence, input));
       results.push(trial);
       if (trial.status === "paused") break;
     }

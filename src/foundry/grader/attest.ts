@@ -30,6 +30,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { RecordedTrialEvidence } from "../baseline/recorder.ts";
 import { commitment, fixtureHash, type HiddenFixture } from "../hidden-split/index.ts";
+import { findTask } from "../tasks/bank.ts";
 import type { GuardTraceEvent, ScreenView } from "../types.ts";
 
 /** One observation of one persistence file, taken by a reader that is not the arm. */
@@ -300,6 +301,27 @@ function field<T>(input: unknown, key: string, fallback: T): T {
   return (value === undefined ? fallback : value) as T;
 }
 
+/**
+ * Snapshot a caller-supplied binding into frozen primitives, or `null` when it is absent or
+ * unreadable. Reading a hostile Proxy here is caught, so a trap cannot escape as a throw.
+ */
+function freezeBinding(bundle: AttestedBundle | undefined): AttestedBundle | null {
+  if (bundle === null || typeof bundle !== "object") return null;
+  try {
+    const { armId, taskId, promptHash, bundleDigest: digest } = bundle;
+    if (
+      typeof armId !== "string" ||
+      typeof taskId !== "string" ||
+      typeof promptHash !== "string" ||
+      typeof digest !== "string"
+    )
+      return null;
+    return Object.freeze({ armId, taskId, promptHash, bundleDigest: digest });
+  } catch {
+    return null;
+  }
+}
+
 export function attest(input: AttestInput): Attestation {
   // Any throw becomes a blocker. The body below still guards its own fields for a precise
   // message; this is the backstop that makes "never throws" a property rather than a claim.
@@ -398,13 +420,24 @@ function attestOrRefuse(input: AttestInput): Attestation {
   // fixture for the same task.
   if (evidence?.fixtureId === undefined || evidence.fixtureId === "")
     blockers.push("binding: the row does not name the fixture it was run against");
-  else if (resolved !== undefined && resolved.taskFixtureId !== evidence.fixtureId)
-    // The commitment's fixture was generated from `resolved.taskFixtureId`; the row claims
-    // `evidence.fixtureId`. Comparing the hidden hash to a task fixture id compared two
-    // different id spaces, which refused the honest value and accepted any hidden fixture.
-    blockers.push(
-      `binding: the commitment resolves the fixture for ${resolved.taskFixtureId}, the row scores ${evidence.fixtureId}`,
-    );
+  else {
+    // The row's fixture must be the fixture of the task it claims. This is the check that
+    // is NOT circular: `findTask` is the registry, and the caller does not write it. Without
+    // it, a caller who claims a foreign hidden fixture consistently — fixtureId, fixtureHash
+    // and claimedFixtureHash all matching each other — is admitted, because every other
+    // comparison here is between two values the caller supplied (R6 round 2, finding 1).
+    const claimedTask = typeof evidence.taskId === "string" ? findTask(evidence.taskId) : undefined;
+    if (claimedTask === undefined)
+      blockers.push(`binding: the row names no known task (${String(evidence.taskId)})`);
+    else if (claimedTask.fixtureId !== evidence.fixtureId)
+      blockers.push(
+        `binding: task ${claimedTask.taskId} is fixture ${claimedTask.fixtureId}, the row scores ${evidence.fixtureId}`,
+      );
+    else if (resolved !== undefined && resolved.taskFixtureId !== claimedTask.fixtureId)
+      blockers.push(
+        `binding: the commitment resolves the fixture for ${resolved.taskFixtureId}, the task is ${claimedTask.fixtureId}`,
+      );
+  }
   if (evidence?.fixtureHash === undefined || evidence.fixtureHash === "")
     blockers.push("binding: the row does not name the fixture hash it was run against");
   else if (input.claimedFixtureHash !== evidence.fixtureHash)
@@ -423,8 +456,11 @@ function attestOrRefuse(input: AttestInput): Attestation {
   // 0. The attestation must name the row it is for, and the digest must match the bytes the
   //    gate just verified. Absent binding is a blocker, not a pass: an attestation that does
   //    not say what it attests cannot be evidence for anything.
-  const bundle = input.bundle;
-  if (bundle === undefined) {
+  // Read the caller's binding exactly ONCE, into frozen primitives, and use that snapshot
+  // for both this check and the returned attestation. Reading it twice let a getter answer
+  // honestly for the gate and dishonestly for the scorer (R6 round 2, finding 3).
+  const bundle = freezeBinding(input.bundle);
+  if (bundle === null) {
     blockers.push("binding: the attestation does not name the row it is for");
   } else {
     if (bundle.armId !== evidence?.armId)
@@ -573,6 +609,10 @@ function attestOrRefuse(input: AttestInput): Attestation {
     screenConstrained,
     unexpectedFiles: unexpected,
     resolvedFixtureId: resolved?.fixture.fixtureId ?? null,
-    binding: bundle ?? null,
+    // Copy the binding into frozen primitives. Returning the caller's own object let a
+    // caller mutate it, or define a getter that answers honestly for the gate and
+    // dishonestly for the scorer, after attest() had already said eligible (R6 round 2,
+    // finding 3). A copy taken here cannot change afterwards.
+    binding: bundle,
   };
 }

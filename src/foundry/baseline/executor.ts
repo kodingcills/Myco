@@ -54,6 +54,12 @@ export interface ExecutorOptions {
   readonly armId: string;
   readonly taskId: string;
   readonly promptHash: string;
+  /**
+   * The fixture this trial runs against, and its hash. Recorded on the evidence so the
+   * attestation gate can bind the row to the fixture it actually ran (TIF-125).
+   */
+  readonly fixtureId: string;
+  readonly fixtureHash: string;
   /** Actions allowed before the arm is considered to have exhausted its budget. */
   readonly budget: number;
   readonly persistencePaths: readonly string[];
@@ -172,6 +178,8 @@ export async function executeTrial(
     armId: options.armId,
     taskId: options.taskId,
     promptHash: options.promptHash,
+    fixtureId: options.fixtureId,
+    fixtureHash: options.fixtureHash,
     ...(options.planner ? { planner: options.planner } : {}),
   });
   const closed = recorder.close();

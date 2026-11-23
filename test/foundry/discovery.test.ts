@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { armRegistry, discoveryPlanner } from "../../src/foundry/baseline/registry.ts";
 import { recoverSave } from "../../src/foundry/faults/index.ts";
+import { attest } from "../../src/foundry/grader/attest.ts";
 import {
   createDiscoveryComparison,
   scoreDiscoveryTrial,
@@ -61,6 +62,9 @@ const input: Input = {
   ],
   selfReport: { claimsSuccess: true, text: "Done" },
 };
+
+/** An attester that refuses every row, for tests that want descriptive output. */
+const refuseAll = () => attest({} as never);
 
 describe("Discovery evidence grading", () => {
   it("pins the recorded comparison planner and queues the HCU+shell arm", () => {
@@ -188,7 +192,8 @@ describe("Discovery evidence grading", () => {
   });
 
   it("keeps public repeats descriptive even with caller-supplied hidden metadata", () => {
-    const comparison = createDiscoveryComparison(settings);
+    // These rows are meant to stay descriptive, so the attester refuses everything.
+    const comparison = createDiscoveryComparison(settings, refuseAll);
     const batch = Array.from({ length: 30 }, (_, seed) => ({
       evidence: { ...evidence, seed, fault: "silent-drop", commitmentRoot: "a".repeat(64) },
       input,
@@ -256,9 +261,29 @@ describe("Discovery evidence grading", () => {
     });
   });
 
+  it("R6 round 2 finding 2: the comparison attests every row it scores", () => {
+    // The gate must run on real rows, not only in tests that call attest() by hand. A
+    // comparison that skipped it would produce rows that look scored but were never
+    // admitted.
+    let calls = 0;
+    const counting = () => {
+      calls += 1;
+      return attest({} as never);
+    };
+    const comparison = createDiscoveryComparison(settings, counting);
+    const rows = comparison([
+      { evidence, input },
+      { evidence: { ...evidence, seed: 2 } as typeof evidence, input },
+      { evidence: { ...evidence, seed: 3 } as typeof evidence, input },
+    ]);
+    expect(rows).toHaveLength(3);
+    expect(calls).toBe(3);
+    expect(rows.every((row) => row.status === "scored" && !row.decisionEligible)).toBe(true);
+  });
+
   it("pauses on quota without consuming the next trial", () => {
     const mutableSettings = structuredClone(settings);
-    const comparison = createDiscoveryComparison(mutableSettings);
+    const comparison = createDiscoveryComparison(mutableSettings, refuseAll);
     function* trials() {
       yield { evidence, input };
       yield { evidence: { ...evidence, status: "quota-exhausted" } as const, input };
