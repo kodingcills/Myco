@@ -3,8 +3,10 @@
 Status: **proposed**, 2026-11-21. Owner: Evaluation Foundry (project P-TIF-6, team TIF).
 Linear: TIF-50 (EF-001 fixtures), TIF-51 (EF-002 verifiers), TIF-52 (EF-003 faults, partial),
 TIF-57 (EF-004 evidence/blind scoring/hidden split), TIF-58 (EF-005 baseline harness),
-TIF-74 (EF-006: EF-005 later work — live transports, trusted ingest, attestation).
-EF-007 (attestation placement decision) and EF-008 (slot 5 HCU) await issue ids.
+TIF-74 (EF-006: live transports, trusted ingest, attestation — a sibling of EF-005, not a
+sub-item of it). EF-007 is TIF-114 (attestation placement decision); EF-008 is TIF-113
+(slot 5 HCU); EF-009 is TIF-115 (out-of-process gate); EF-010 is TIF-126 (non-synthetic
+guard).
 Canonical backlog: [docs/backlog/foundry.md](../backlog/foundry.md).
 
 This document is the *interface* every Foundry deliverable answers to. It exists because
