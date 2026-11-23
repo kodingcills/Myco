@@ -64,7 +64,7 @@ wait-guest-ready: timeout after 200s: guest pid 30662 consumed 435s CPU and has 
 **The guest was booting and SSH came up moments later.** CPU had advanced to
 435 s, which is exactly what a healthy boot looks like.
 
-## The secondary timing observation (not the cause)
+## The mechanism (as first read — see the CORRECTION immediately below)
 
 `scripts/wait-guest-ready.sh`:
 
@@ -75,7 +75,43 @@ line  86:  sleep "$INTERVAL"
 line 116:  if SEEN_PROGRESS=1 && [ "$(ssh ... )" = "ok" ]; then <ready>; exit 0; fi
 ```
 
-Two things are true of the timing, independent of the string-compare hypothesis:
+## CORRECTION (2026-11-23, same day): the cause above is wrong
+
+**`ConnectTimeout=10` is NOT why the gate fails. The compare is CR-intolerant.**
+
+The guest's default shell is PowerShell, which terminates lines with CRLF, so the
+capture is the three bytes `ok\r` — command substitution strips the trailing `\n`
+and leaves the `\r`, and `[ "$v" = "ok" ]` can therefore **never** match, however
+long the timeout is. Measured against a CRLF-emitting stub:
+
+```
+raw bytes:   o k \r
+[ "$v" = "ok" ]                -> NO MATCH
+... | tr -d '\r' ; = "ok"      -> MATCH
+```
+
+This is also why `wait-ssh.sh` has always worked beside the broken gate on the
+same remote command: it compares with `ssh ... | grep -q ok`, which tolerates the
+CR, while the gate compared exact strings.
+
+So the two timeout-shaped readings below — mine, both of them — were treating a
+symptom that could not have been the cause. The timeout numbers are still real
+(SSH genuinely takes tens of seconds on a cold boot) and the compounding overshoot
+is still worth fixing, but **neither will make a comparison succeed that cannot
+succeed.** The fix is `tr -d '\r'` before the compare; the repo already does this
+at `reset-trial-vm.sh:49`.
+
+Recorded rather than deleted because the reasoning is instructive: a signal that
+never fires looks identical to a signal that fires too late, and only measuring
+the actual bytes tells them apart.
+
+## The original (incorrect) reading, kept for the record
+
+**Note added after the correction above:** both timing facts below are TRUE and
+independently worth fixing — they are simply not the cause of this failure. They
+are kept because a gate that overshoots its own budget is a real defect whether or
+not it is the one that bit here, and because deleting a correct observation to
+tidy a wrong conclusion would lose information.
 
 1. **SSH can be slow to answer during boot** (~35–60 s observed, ~59 s once,
    18 s warm) against `ConnectTimeout=10`. Worth raising, but on its own it
