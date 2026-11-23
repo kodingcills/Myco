@@ -6,7 +6,7 @@ import { scoreTrial, type TrialInput } from "../oracles/blind.ts";
 import { oracleForApp } from "../oracles/state.ts";
 import { findTask, taskFixture } from "../tasks/bank.ts";
 import type { GuardTraceEvent } from "../types.ts";
-import type { Attestation } from "./attest.ts";
+import { type Attestation, isAttestation } from "./attest.ts";
 
 type Setting =
   | null
@@ -208,14 +208,23 @@ export function scoreDiscoveryTrial(
   });
   // The gate decides eligibility; it never touches `result`. A refuted verdict stays
   // refuted whether or not the run is eligible, and an eligible run is not thereby verified.
-  const eligible = attestation?.eligible === true;
+  //
+  // The runtime check matters as much as the type: an untyped caller can pass a literal
+  // `{ eligible: true }` as `never`, and the brand is the only thing that distinguishes a
+  // real attestation from a claim about one.
+  const attested = isAttestation(attestation);
+  const eligible = attested && attestation.eligible;
   return {
     ...identity,
     status: "scored" as const,
     decisionEligible: eligible,
     // Always present, empty when eligible: a uniform shape means a reader cannot mistake
     // "no blockers recorded" for "no blockers existed".
-    attestationBlockers: eligible ? [] : (attestation?.blockers ?? ["no attestation supplied"]),
+    attestationBlockers: eligible
+      ? []
+      : attested
+        ? attestation.blockers
+        : ["no attestation supplied"],
     ...(eligible
       ? { attestation: { observerId: attestation.observerId, accepted: attestation.accepted } }
       : { decisionBlocker: "trusted-live-artifacts-unavailable" as const }),

@@ -88,12 +88,15 @@ describe("TIF-95: the attestation gate is not reachable from arm code", () => {
     const leaks = ARM_FACING.filter((file) => {
       if (!statSync(file).isFile()) return false;
       const source = readFileSync(file, "utf8");
-      // Static import, dynamic import, and require all count: a boundary that only catches
-      // `from "..."` is a boundary an arm can step around with `await import(...)`.
+      // A regex over specifiers can always be stepped around: a template literal, a
+      // computed specifier, or createRequire all reach the module without matching a
+      // literal pattern. So the rule is stronger and simpler — arm-facing code may not use
+      // dynamic module loading at all. That is enforceable and complete for the threat.
       return (
         /from\s+["'][^"']*grader\/attest/.test(source) ||
-        /import\s*\(\s*["'][^"']*grader\/attest/.test(source) ||
-        /require\s*\(\s*["'][^"']*grader\/attest/.test(source)
+        /\bimport\s*\(/.test(source) ||
+        /\brequire\s*\(/.test(source) ||
+        /\bcreateRequire\b/.test(source)
       );
     });
     expect(leaks).toEqual([]);

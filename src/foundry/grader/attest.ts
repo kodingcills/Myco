@@ -105,6 +105,18 @@ export interface AttestInput {
 
 const attestedBrand: unique symbol = Symbol("myco.attestation");
 
+/**
+ * Runtime counterpart to the brand. The type system stops a typed caller; this stops an
+ * untyped one, which is the boundary the scorer actually owns.
+ */
+export function isAttestation(value: unknown): value is Attestation {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as Record<symbol, unknown>)[attestedBrand] === true
+  );
+}
+
 export interface Attestation {
   /**
    * Brand: only `attest()` can produce an `Attestation`. Without it, a caller could hand
@@ -131,10 +143,19 @@ export interface Attestation {
  * Strict by construction: an empty blocker list is the only path to `eligible: true`, and
  * every check below can only add a blocker. There is no "assume fine" branch.
  */
-export interface AttestOptions {
-  /** Path to the committed commitment. Defaults to the repo's own file. */
-  readonly commitmentPath?: string;
-}
+/**
+ * The committed commitment, at a fixed location derived from this module rather than from
+ * the working directory or an argument. A caller-supplied path is not a commitment: it lets
+ * a caller write a file that vouches for a set they also wrote.
+ */
+const COMMITTED_COMMITMENT = join(
+  import.meta.dirname,
+  "..",
+  "..",
+  "..",
+  "foundry",
+  "hidden-commitment.json",
+);
 
 /** Reads the committed commitment, or null when it is absent or malformed. */
 function readTrustedCommitment(path: string): ReturnType<typeof commitment> | null {
@@ -165,7 +186,7 @@ function readTrustedCommitment(path: string): ReturnType<typeof commitment> | nu
   }
 }
 
-export function attest(input: AttestInput, options: AttestOptions = {}): Attestation {
+export function attest(input: AttestInput): Attestation {
   const blockers: string[] = [];
   const { evidence, observations, finalFiles } = input;
 
@@ -175,9 +196,7 @@ export function attest(input: AttestInput, options: AttestOptions = {}): Attesta
   // The trusted commitment is READ FROM THE COMMITTED FILE, never taken from the caller.
   // A caller-supplied commitment is not a commitment: it would let a forged set vouch for
   // itself, which is the hole this option exists to close.
-  const trusted = readTrustedCommitment(
-    options.commitmentPath ?? join(process.cwd(), "foundry", "hidden-commitment.json"),
-  );
+  const trusted = readTrustedCommitment(COMMITTED_COMMITMENT);
   const supplied = commitment(input.hiddenFixtures);
   if (trusted === null) {
     blockers.push("commitment: the committed commitment could not be read");

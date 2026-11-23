@@ -143,11 +143,17 @@ when anything is missing, inconsistent, or unattributable.
 
 - The gate now resolves the fixture from the hidden commitment and refuses any set that does
   not match `foundry/hidden-commitment.json`, or any claimed hash that no hidden fixture
-  produces. A caller can no longer name a benign `persistenceFiles`.
-- `attest()` moved to `src/foundry/grader/`, and an import-graph test fails if arm-facing code
-  imports it.
+  produces. A caller can no longer name a benign `persistenceFiles`, and the commitment is
+  read from a fixed path derived from the module — not from the working directory and not
+  from an argument, since a caller-supplied path is a file the caller wrote.
+- `attest()` moved to `src/foundry/grader/`, and a test fails if arm-facing code imports it.
+  The rule is that arm-facing code may not use dynamic module loading at all (`import()`,
+  `require()`, `createRequire`), because a regex over specifiers can always be stepped around
+  with a template literal or a computed name.
 - `attest()` is wired into `scoreDiscoveryTrial`: a row is decision-eligible only when the
-  gate admits it, and the gate never changes the verdict.
+  gate admits it, and the gate never changes the verdict. The result carries a runtime brand
+  as well as a type-level one, so an untyped caller passing a literal `{ eligible: true }`
+  is refused rather than trusted.
 
 **Still open (EF-009):** full process isolation. The import test is a boundary, not
 isolation — an arm running arbitrary code in the same process can still reach the module by

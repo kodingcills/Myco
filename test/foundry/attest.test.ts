@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { executeTrial } from "../../src/foundry/baseline/executor.ts";
 import { fakeGuest, LAYOUT } from "../../src/foundry/baseline/guest.ts";
@@ -11,7 +9,7 @@ import { todoTransport } from "../../src/foundry/baseline/todo-transport.ts";
 import { attest, offlineObserver, type SaveObservation } from "../../src/foundry/grader/attest.ts";
 import { scoreDiscoveryTrial } from "../../src/foundry/grader/discovery.ts";
 import {
-  commitment,
+  type commitment,
   fixtureHash,
   generateHiddenFixtures,
 } from "../../src/foundry/hidden-split/index.ts";
@@ -21,21 +19,18 @@ import type { GuardTraceEvent, ScreenView } from "../../src/foundry/types.ts";
 
 const TASK = findTask("ef-t01b-add-four-items-noverify")!;
 const SPEC = TODO_FIXTURE_SPECS.find((s) => s.fixtureId === TASK.fixtureId)!;
-/** A real hidden set, so the gate resolves the fixture from a commitment rather than a literal. */
-const HIDDEN = generateHiddenFixtures(new Uint8Array(32).fill(42), 1);
-const HIDDEN_FIXTURE = HIDDEN[0]!;
 
 /**
- * The gate reads the committed commitment from disk, so a test must supply a file that
- * matches its own hidden set. Writing one is the point: it proves the gate reads the file
- * rather than trusting an argument.
+ * The gate reads `foundry/hidden-commitment.json` at a fixed path, so the test must use the
+ * set that file commits to. That is the point: a test that could substitute its own
+ * commitment would not be testing the gate.
  */
-const COMMITMENT_DIR = mkdtempSync(join(tmpdir(), "myco-attest-"));
-const COMMITMENT_PATH = join(COMMITMENT_DIR, "hidden-commitment.json");
-writeFileSync(
-  COMMITMENT_PATH,
-  JSON.stringify({ meta: { synthetic: true }, commitment: commitment(HIDDEN) }, null, 2),
-);
+const COMMITTED = JSON.parse(readFileSync("foundry/hidden-commitment.json", "utf8")) as {
+  meta: { count: number };
+  commitment: ReturnType<typeof commitment>;
+};
+const HIDDEN = generateHiddenFixtures(new Uint8Array(32).fill(42), COMMITTED.meta.count);
+const HIDDEN_FIXTURE = HIDDEN[0]!;
 const PROMPT_HASH = createHash("sha256").update(TASK.prompt).digest("hex");
 
 /** A save event carrying the bytes the observer will see, so the binding can be placed. */
@@ -94,7 +89,7 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
   it("an eligible run is not thereby verified, and a refuted run stays refuted", async () => {
     const run = await finishedRun();
     const input = baseInput(run);
-    const attestation = attest(input, { commitmentPath: COMMITMENT_PATH });
+    const attestation = attest(input);
     expect(attestation.eligible).toBe(true);
 
     const scored = scoreDiscoveryTrial(
@@ -140,6 +135,29 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
     expect(scored).toBeDefined();
   });
 
+  it("a runtime literal is refused even though the type system was bypassed", async () => {
+    // The round-2 finding: passing an unbranded object as `never` satisfied the scorer,
+    // because the brand was compile-time only. The runtime check is what the scorer owns.
+    const run = await finishedRun();
+    const forged = { eligible: true, blockers: [], observerId: "forged" };
+    const scored = scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      {
+        fixture: taskFixture(TASK),
+        actual: { kind: "myco-todo", files: run.files },
+        screen: run.screen,
+        trace: run.trace,
+        selfReport: run.selfReport,
+        faultVersion: 0,
+      } as never,
+      { t: 0 },
+      forged as never,
+    );
+    if (scored.status !== "scored") throw new Error("unreachable");
+    expect(scored.decisionEligible).toBe(false);
+    expect(scored.attestationBlockers).toEqual(["no attestation supplied"]);
+  });
+
   it("without an attestation the row stays descriptive", async () => {
     const run = await finishedRun();
     const scored = scoreDiscoveryTrial(
@@ -161,10 +179,7 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
 
   it("a refused attestation keeps the row descriptive and names why", async () => {
     const run = await finishedRun();
-    const refused = attest(
-      { ...baseInput(run), observations: [] },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const refused = attest({ ...baseInput(run), observations: [] });
     const scored = scoreDiscoveryTrial(
       { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
       {
@@ -186,7 +201,7 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
 
 describe("EF-005 attestation gate", () => {
   it("admits a run whose observation matches the final bytes", async () => {
-    const result = attest(baseInput(await finishedRun()), { commitmentPath: COMMITMENT_PATH });
+    const result = attest(baseInput(await finishedRun()));
     expect(result.blockers).toEqual([]);
     expect(result.eligible).toBe(true);
     expect(result.accepted).toHaveLength(1);
@@ -194,7 +209,7 @@ describe("EF-005 attestation gate", () => {
 
   it("refuses a run with no observation at all", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest({ ...input, observations: [] }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, observations: [] });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("no observation of store.json");
   });
@@ -205,7 +220,7 @@ describe("EF-005 attestation gate", () => {
       ...o,
       afterLastSave: false,
     }));
-    const result = attest({ ...input, observations: stale }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, observations: stale });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("read before the last save");
   });
@@ -216,27 +231,24 @@ describe("EF-005 attestation gate", () => {
       ...input.finalFiles,
       "store.json": new TextEncoder().encode('{"items":[]}'),
     };
-    const result = attest({ ...input, finalFiles: tampered }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, finalFiles: tampered });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("changed after it was observed");
   });
 
   it("refuses a screen reading the arm supplied rather than the observer", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest({ ...input, screenObserved: false }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, screenObserved: false });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("supplied by the arm");
   });
 
   it("refuses a trace with no save to place the observation against", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        trace: input.trace.filter((e) => e.type !== "save-observed"),
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      trace: input.trace.filter((e) => e.type !== "save-observed"),
+    });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("no save was observed");
   });
@@ -249,33 +261,27 @@ describe("EF-005 attestation gate", () => {
         i === 0 ? { ...a, status: "incomplete" as const } : a,
       ),
     };
-    const result = attest({ ...input, evidence }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, evidence });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("an audit is incomplete");
   });
 
   it("refuses a call count that disagrees with the recorded calls", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        evidence: { ...input.evidence, recordedCallCount: input.evidence.recordedCalls.length + 1 },
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      evidence: { ...input.evidence, recordedCallCount: input.evidence.recordedCalls.length + 1 },
+    });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("call count does not match");
   });
 
   it("refuses a trial that did not finish", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        evidence: { ...input.evidence, status: "quota-exhausted" as const },
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      evidence: { ...input.evidence, status: "quota-exhausted" as const },
+    });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("not finished");
   });
@@ -284,41 +290,35 @@ describe("EF-005 attestation gate", () => {
     // A pixel arm reads no text. That is not a blocker, but a report must not read it as
     // "the screen oracle agreed".
     const input = baseInput(await finishedRun());
-    const result = attest(input, { commitmentPath: COMMITMENT_PATH });
+    const result = attest(input);
     expect(result.eligible).toBe(true);
     expect(result.screenConstrained).toBe(false);
   });
 
   it("reports a screen with text as constrained", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        screen: { visibleText: ["saved 1 item(s)"], reachable: true },
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      screen: { visibleText: ["saved 1 item(s)"], reachable: true },
+    });
     expect(result.screenConstrained).toBe(true);
   });
 
   it("names the observer, so a report can say which channel produced the evidence", async () => {
     const input = baseInput(await finishedRun());
-    expect(attest(input, { commitmentPath: COMMITMENT_PATH }).observerId).toBe("offline");
+    expect(attest(input).observerId).toBe("offline");
   });
 
   it("refuses an empty required set instead of admitting a run that observed nothing", async () => {
     // The P1 the verifier found: a caller-supplied list with no lower bound let
     // `requiredPaths: []` pass with zero observations.
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        hiddenFixtures: [],
-        claimedFixtureHash: "0".repeat(64),
-        finalFiles: {},
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      hiddenFixtures: [],
+      claimedFixtureHash: "0".repeat(64),
+      finalFiles: {},
+    });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("does not match the committed commitment");
   });
@@ -328,7 +328,7 @@ describe("EF-005 attestation gate", () => {
     // wrote a log. The fixture says what matters; anything else is reported.
     const input = baseInput(await finishedRun());
     const withExtra = { ...input.finalFiles, "app.log": new TextEncoder().encode("started\n") };
-    const result = attest({ ...input, finalFiles: withExtra }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, finalFiles: withExtra });
     expect(result.eligible).toBe(true);
     expect(result.unexpectedFiles).toEqual(["app.log"]);
   });
@@ -342,7 +342,7 @@ describe("EF-005 attestation gate", () => {
         i === 0 ? { ...a, callId: "ghost" } : a,
       ),
     };
-    const result = attest({ ...input, evidence }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, evidence });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("names no recorded call");
   });
@@ -355,7 +355,7 @@ describe("EF-005 attestation gate", () => {
         i === 0 ? { ...a, via: a.via === "gui" ? ("shell-exec" as const) : ("gui" as const) } : a,
       ),
     };
-    const result = attest({ ...input, evidence }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, evidence });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("recorded as");
   });
@@ -365,19 +365,16 @@ describe("EF-005 attestation gate", () => {
     // and be admitted, because checkTrace is clean when nothing changed and reconcileAudit
     // accepts an empty call set. Bytes conjured out of band are the false success itself.
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        evidence: {
-          ...input.evidence,
-          recordedCalls: [],
-          recordedCallCount: 0,
-          toolCallAudits: [],
-        },
-        trace: [saveEvent(input.finalFiles)],
+    const result = attest({
+      ...input,
+      evidence: {
+        ...input.evidence,
+        recordedCalls: [],
+        recordedCallCount: 0,
+        toolCallAudits: [],
       },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+      trace: [saveEvent(input.finalFiles)],
+    });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("no GUI call was recorded");
     expect(result.blockers.join(" ")).toContain("follows no GUI action");
@@ -387,10 +384,7 @@ describe("EF-005 attestation gate", () => {
     const input = baseInput(await finishedRun());
     const save = saveEvent(input.finalFiles);
     const actions = input.trace.filter((e) => e.type === "action");
-    const result = attest(
-      { ...input, trace: [save, ...actions] },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({ ...input, trace: [save, ...actions] });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("follows no GUI action");
   });
@@ -398,17 +392,14 @@ describe("EF-005 attestation gate", () => {
   it("returns a blocker rather than throwing on malformed evidence", async () => {
     // A gate that crashes on bad input is a gate an arm can disable by sending bad input.
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        evidence: {
-          ...input.evidence,
-          recordedCalls: undefined,
-          toolCallAudits: undefined,
-        } as never,
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      evidence: {
+        ...input.evidence,
+        recordedCalls: undefined,
+        toolCallAudits: undefined,
+      } as never,
+    });
     expect(result.eligible).toBe(false);
     expect(result.blockers.length).toBeGreaterThan(0);
   });
@@ -422,7 +413,7 @@ describe("EF-005 attestation gate", () => {
       recordedCallCount: input.evidence.recordedCalls.length + 1,
       toolCallAudits: [...input.evidence.toolCallAudits, input.evidence.toolCallAudits[0]!],
     };
-    const result = attest({ ...input, evidence }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, evidence });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("recorded more than once");
   });
@@ -440,7 +431,7 @@ describe("EF-005 attestation gate", () => {
         { callId: "io-1", via: "file-io" as const, status: "complete" as const, accesses: [] },
       ],
     };
-    const result = attest({ ...input, evidence }, { commitmentPath: COMMITMENT_PATH });
+    const result = attest({ ...input, evidence });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("reports no accesses");
   });
@@ -449,41 +440,32 @@ describe("EF-005 attestation gate", () => {
     // Checking only the event's type let any fabricated event satisfy the binding.
     const input = baseInput(await finishedRun());
     const wrongSave = saveEvent({ "store.json": new TextEncoder().encode('{"items":[]}') });
-    const result = attest(
-      {
-        ...input,
-        trace: [...input.trace.filter((e) => e.type !== "save-observed"), wrongSave],
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      trace: [...input.trace.filter((e) => e.type !== "save-observed"), wrongSave],
+    });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("differs from the observation");
   });
 
   it("refuses a save event that omits a file the observation covers", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        trace: [...input.trace.filter((e) => e.type !== "save-observed"), saveEvent({})],
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      trace: [...input.trace.filter((e) => e.type !== "save-observed"), saveEvent({})],
+    });
     expect(result.eligible).toBe(false);
     expect(result.blockers.join(" ")).toContain("does not include store.json");
   });
 
   it("collects every blocker rather than stopping at the first", async () => {
     const input = baseInput(await finishedRun());
-    const result = attest(
-      {
-        ...input,
-        observations: [],
-        screenObserved: false,
-        trace: [],
-      },
-      { commitmentPath: COMMITMENT_PATH },
-    );
+    const result = attest({
+      ...input,
+      observations: [],
+      screenObserved: false,
+      trace: [],
+    });
     expect(result.blockers.length).toBeGreaterThanOrEqual(3);
   });
 });
