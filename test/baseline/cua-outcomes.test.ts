@@ -14,8 +14,11 @@
  * real captures where one exists, so the fixtures are the shapes the driver
  * actually returns rather than shapes invented to fit the parser.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { connectC1, type Mcp } from "../../src/baseline/c1.ts";
+import { isBaselineRow } from "../../src/baseline/index.ts";
 
 const WINDOW = { pid: 3152, window_id: 328170 };
 
@@ -189,5 +192,50 @@ describe("Cua action outcomes", () => {
     const { result } = await executeOnce([DELIVERED]);
     expect(result.verified).toBe(true);
     expect(result.outcome).toBe("delivered");
+  });
+});
+
+describe("delivery records in recorded rows", () => {
+  // The rule is deliberately permissive about ABSENCE: committed trial rows must
+  // stay valid without being edited. An earlier version required the field and
+  // excused old rows with a marker, which meant rewriting 34 recorded rows - not
+  // this change's call, and the marker precedent (TIF-104) covered adding a field
+  // to rows being written then, not retrofitting a validator onto evidence.
+  const legacy = JSON.parse(
+    readFileSync(join(process.cwd(), "docs/research/experiments/c1-arm-002/rows/0.json"), "utf8"),
+  ) as Record<string, unknown>;
+
+  it("accepts a recorded row that predates delivery recording, unedited", () => {
+    // Verbatim from a committed row. If this fails, real evidence has been
+    // invalidated by a validator change rather than by anything in the artifact.
+    expect(isBaselineRow(legacy)).toBe(true);
+    // And it must still carry no fabricated field.
+    expect((legacy.transcript as Record<string, unknown>).deliveries).toBeUndefined();
+  });
+
+  it("accepts a row whose deliveries are well formed", () => {
+    const row = structuredClone(legacy);
+    (row.transcript as Record<string, unknown>).deliveries = [
+      { step: 1, mode: "background", escalated: false, outcome: "delivered" },
+      { step: 2, mode: "foreground", escalated: true, outcome: "delivered-stalled" },
+    ];
+    expect(isBaselineRow(row)).toBe(true);
+  });
+
+  it("rejects malformed deliveries rather than accepting anything", () => {
+    // The part worth protecting: a writer emitting a delivery record nobody can
+    // interpret must fail, so arm-003d's run condition stays auditable.
+    for (const bad of [
+      "garbage",
+      [{ step: 1 }],
+      [{ step: 1, mode: "sideways", escalated: false, outcome: "delivered" }],
+      [{ step: 1, mode: "background", escalated: "yes", outcome: "delivered" }],
+      [{ step: 1, mode: "background", escalated: false, outcome: "invented" }],
+      [{ step: 1, mode: "background", escalated: false, outcome: "delivered-dismissed" }],
+    ]) {
+      const row = structuredClone(legacy);
+      (row.transcript as Record<string, unknown>).deliveries = bad;
+      expect(isBaselineRow(row), `${JSON.stringify(bad)} should be rejected`).toBe(false);
+    }
   });
 });

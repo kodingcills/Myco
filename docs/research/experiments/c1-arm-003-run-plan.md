@@ -175,26 +175,6 @@ and the manifest hash is what makes it checkable.
 before the loss: the save attempt came back `cua-action-refused`, which is what
 prompted the parity investigation.
 
-**Annotation (TIF-167, 2026-11-23): that `cua-action-refused` was a ROUTING
-refusal, not a model failure.** The probe on a live guest settled it — background
-`key_combo` on a LibreOffice `SALFRAME` window is refused by Cua's delivery layer
-with `code=background_unavailable`, before the application is reached at all, and
-it is refused identically for `Ctrl+s` and for `Ctrl+F12`. So the save never
-failed, because it was never attempted: no `press_key` could have been delivered
-in background mode, which is also why arm-002 recorded zero `press_key` calls
-across 422 actions. This is recorded rather than corrected because the rows are
-gone and there is nothing to re-score; the point is that a reader must not carry
-away "C1 failed to save". Evidence: `docs/research/experiments/c1-press-key-probe/RESULT.md`.
-**arm-002 is unaffected** — its rows are `refuted/modified` on their own terms and
-no `press_key` was among them.
-
-**Run condition for arm-003d (TIF-167):** `key_combo` actions are attempted in
-background mode first and escalate ONCE to `delivery_mode:"foreground"` when Cua
-answers `background_unavailable`. Every action's delivery mode is recorded in the
-transcript, and the arm declares escalation as a condition rather than hiding it —
-a row produced with foreground delivery is not the same measurement as one
-produced entirely in background.
-
 **Ledger, rebuilt from what survives** (2026-11-23, post-reboot):
 
 | Source | Booked | Where it lives |

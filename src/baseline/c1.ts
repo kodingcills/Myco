@@ -22,8 +22,6 @@ export interface Screenshot {
  *
  * - `routing-refused`   the delivery layer declined to deliver; the app never saw
  *                       it. NOT a model outcome.
- * - `delivered-dismissed` the input landed and something closed the result - for a
- *                       save, a dialog the app itself opened. NOT a model outcome.
  * - `delivered-stalled` the input landed but Cua could not confirm the target read
  *                       it within its budget. NOT a model outcome: it is unproven
  *                       whether the app acted, and Cua requires reading the target
@@ -44,7 +42,6 @@ export interface Screenshot {
 export type CuaOutcome =
   | "routing-refused"
   | "delivered"
-  | "delivered-dismissed"
   | "delivered-stalled"
   | "save-failed";
 

@@ -361,6 +361,5 @@
     "planner:claude-sonnet-5-5"
   ],
   "provenance": "spike-2026-11-22, not an arm-001 trial",
-  "runId": "47c54948-4e12-428a-b355-886fc5543c43",
-  "deliveriesUnrecorded": true
+  "runId": "47c54948-4e12-428a-b355-886fc5543c43"
 }
