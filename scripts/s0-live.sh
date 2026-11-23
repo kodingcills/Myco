@@ -24,6 +24,13 @@ LOG="$RUN_DIR/s0.log"
 PROBE="$RUN_DIR/probe.txt"
 RT_MCP="$ROOT/runtime/target/debug/myco-rt-mcp"
 mkdir -p "$RUN_DIR"
+# Every message goes to the log, including the probe and the gate verdict, so a
+# run nobody is watching still leaves a complete record. `--status` and `--stop`
+# keep the terminal, because a person asking "is it running?" wants an answer.
+case "${1:-}" in
+  --status | --stop) ;;
+  *) exec >>"$LOG" 2>&1 ;;
+esac
 
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
@@ -88,7 +95,9 @@ run_sequence() {
   say "starting S0 sequence (detached child)"
   (
     cd "$ROOT"
-    exec pnpm exec tsx scripts/s0-live.ts --live
+    # Absolute script path: the scoped pkill below matches on $ROOT, and a
+    # relative argv never contains it, so --stop could not find its own child.
+    exec pnpm exec tsx "$ROOT/scripts/s0-live.ts" --live
   ) >>"$LOG" 2>&1 &
   CHILD=$!
   echo "$CHILD" >"$CHILD_FILE"
@@ -118,7 +127,10 @@ case "${1:-}" in
   --status)
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
       echo "running: pid $(cat "$PID_FILE")"; else echo "not running"; fi
-    echo "log:  $LOG"; pgrep -fl "scripts/s0-live.ts --live|target/debug/myco-rt-mcp" || echo "children: none"; tail -n 5 "$LOG" 2>/dev/null || true ;;
+    echo "log:  $LOG"
+    # Anchored on $ROOT: an unanchored pattern reported other worktrees' children.
+    pgrep -fl -- "$ROOT/(scripts/s0-live\.ts|runtime/target/debug/myco-rt-mcp)" || echo "children: none"
+    tail -n 5 "$LOG" 2>/dev/null || true ;;
   --stop)
     # Stop the whole tree: the MCP server is a grandchild, and killing only the
     # watchdog leaves it holding the guest tools (seen 2026-11-23).
@@ -133,9 +145,16 @@ case "${1:-}" in
       rm -f "$FILE"
     done
     # Scoped to this worktree: an unscoped pkill aborts another workstream's run
-    # on a host with a dozen worktrees.
-    pkill -f "$ROOT/.*scripts/s0-live.ts --live" 2>/dev/null || true
-    pkill -f "$ROOT/runtime/target/debug/myco-rt-mcp" 2>/dev/null || true
+    # on a host with a dozen worktrees. `--` ends option parsing, otherwise pkill
+    # reads a pattern starting with a path as a flag and matches nothing.
+    # `-P`: pkill sent to a process that merely has the pattern in argv does not
+    # do what it looks like it does. Walk the pid tree from the files instead.
+    STRAY="$(pgrep -f -- "$ROOT/.*scripts/s0-live\.ts --live" 2>/dev/null || true)"
+    STRAY="$STRAY $(pgrep -f -- "$ROOT/runtime/target/debug/myco-rt-mcp" 2>/dev/null || true)"
+    for PID in $STRAY; do
+      pkill -P "$PID" 2>/dev/null || true
+      kill "$PID" 2>/dev/null || true
+    done
     [[ "$STALE" == 1 ]] && echo stopped || echo "not running" ;;
   --run)
     if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -143,8 +162,16 @@ case "${1:-}" in
     fi
     say "launching detached; log $LOG"
     nohup "$0" --watchdog >>"$LOG" 2>&1 &
-    echo $! >"$PID_FILE"
-    say "pid $(cat "$PID_FILE")"
+    CHILD=$!
+    # `set -C` makes the redirect fail when the file exists, so claiming the pid
+    # file is one atomic step. Check-then-write let two concurrent `--run` calls
+    # both pass the guard and leave one child untracked (2026-11-23).
+    if ! ( set -C; echo "$CHILD" >"$PID_FILE" ) 2>/dev/null; then
+      kill "$CHILD" 2>/dev/null || true
+      say "another --run claimed the pid file first"
+      exit 1
+    fi
+    say "pid $CHILD"
     echo "watch with: $0 --status" ;;
   --watchdog) watchdog ;;
   *)
