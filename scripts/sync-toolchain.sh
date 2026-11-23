@@ -16,10 +16,12 @@
 # repo does not (wait-guest-ready.sh did), and removing them is not this
 # script's call. It only adds and updates repo-owned files.
 #
-# BEFORE RUNNING --go AGAINST A REAL HOST: the synced vm.sh must already take
-# the host VM lock and honour a parent-held one (TIF-164/TIF-166 B2, PR #304).
-# Syncing an older vm.sh onto a driver path that expects the newer one can make
-# things worse, not better. Check what you are about to push:
+# PREREQUISITE - satisfied: the synced vm.sh must take the host VM lock and
+# honour a parent-held one (TIF-164/TIF-166 B2). That landed in #304 (merged
+# as 08ef9f8), so any checkout of main at or after it has the right vm.sh.
+# If you are syncing from an older tree, check before running --go, because
+# putting an older vm.sh on a driver path that expects the newer one makes
+# things worse, not better:
 #
 #     scripts/sync-toolchain.sh --dry-run
 #     git -C <repo> log --oneline -1 -- docs/env/vm-toolchain/vm.sh
