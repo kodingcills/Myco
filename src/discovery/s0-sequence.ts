@@ -14,7 +14,6 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { evaluateDecision } from "./decision.ts";
 import {
   type DesktopTransport,
   type LiveRunResult,
@@ -24,7 +23,6 @@ import {
 } from "./live-runner.ts";
 import { MockDesktop } from "./mock-desktop.ts";
 import type { PreflightProbe } from "./preflight.ts";
-import { renderHeadToHeadReport } from "./report.ts";
 
 export const REVIEWED_PROBE: PreflightProbe = {
   coordinatorGo: true,
@@ -120,47 +118,40 @@ export async function runS0Sequence(
       runsDir: outputDir,
       runId: task.id,
       taskId: task.id === "df-s01" ? "df-s01" : "df-s02",
+      simulated: true,
     });
     runs.push({ id: task.id, title: task.title, expected: task.expected, result });
   }
-  // Each run is a normal trial (no fault class); pairs stay empty, so the rule
-  // refuses and the sequence says why instead of inventing a decision.
-  const decision = evaluateDecision({ trials: [] });
   const reportPath = join(outputDir, "s0-report.md");
-  writeFileSync(
-    reportPath,
-    renderHeadToHeadReport({
-      decision,
-      arms: runs.map((run) => ({
-        armId: run.id,
-        label: run.title,
-        trials: [
-          {
-            armId: run.id,
-            taskId: run.id,
-            promptVariant: "s0-mock",
-            seed: 0,
-            faultClass: null,
-            verdict: run.result.status === "aborted" ? "uncertain" : run.result.status,
-            falseSuccess: run.result.falseSuccess,
-            decisionEligible: false,
-          },
-        ],
-      })),
-      notRun: [
-        { armId: "myco (live)", blocker: "needs the guest window from the Coordinator" },
-        { armId: "hcu+shell", blocker: "needs the guest and Foundry's trusted ingest" },
-      ],
-      evidence: runs.map((run) => run.result.evidenceDir ?? "(no evidence)"),
-      generatedAt: new Date().toISOString(),
-    }),
-  );
+  writeFileSync(reportPath, renderS0Report(runs));
   return {
     runs,
     ok: runs.every((run) => run.result.status === run.expected),
     evidenceDirs: runs.flatMap((run) => (run.result.evidenceDir ? [run.result.evidenceDir] : [])),
     reportPath,
   };
+}
+
+export function renderS0Report(runs: readonly S0Run[]): string {
+  const lines: string[] = ["# S0 mock sequence — Direction A", ""];
+  lines.push("Provenance: **simulated** — mock desktop, no guest trials.");
+  lines.push("");
+  lines.push("| Scenario | Expected | Actual | False success | Missing | UI claim | Evidence |");
+  lines.push("|---|---|---|---|---:|---|---|");
+  for (const run of runs) {
+    lines.push(
+      `| ${run.id} | ${run.expected} | ${run.result.status} | ${run.result.falseSuccess ? "yes" : "no"} | ${run.result.missing.length} | ${run.result.claimed || "—"} | ${run.result.evidenceDir ?? "—"} |`,
+    );
+  }
+  lines.push("");
+  lines.push("## What this is not");
+  lines.push("");
+  lines.push("- It is not live evidence: no guest was booted and no kernel was involved.");
+  lines.push(
+    "- It is not a head-to-head decision: there are no paired trials, so no rule row is claimed.",
+  );
+  lines.push("- The live arm is not run; the guest window is the only missing piece.");
+  return `${lines.join("\n")}\n`;
 }
 
 export function renderS0Sequence(sequence: S0Sequence): string {

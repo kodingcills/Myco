@@ -25,12 +25,16 @@ describe("S0 mock sequence", () => {
     for (const run of sequence.runs) {
       const record: unknown = JSON.parse(readFileSync(join(output, run.id, "result.json"), "utf8"));
       expect(validateSchema(record, resultRecordSchema)).toEqual([]);
+      expect((record as { simulated?: boolean }).simulated).toBe(true);
     }
     expect(existsSync(join(output, "s0-report.md"))).toBe(true);
     const report = readFileSync(join(output, "s0-report.md"), "utf8");
     expect(report).toContain("df-s01");
     expect(report).toContain("df-s02");
-    expect(report).toContain("needs the guest window");
+    expect(report).toContain("Provenance: **simulated**");
+    expect(report).toContain("not live evidence");
+    expect(report).toContain("It is not a head-to-head decision");
+    expect(report).toContain("| df-s02 | refuted | refuted | yes | 2 |");
   });
 
   it("fails the sequence when a scenario does not match its expected verdict", async () => {
