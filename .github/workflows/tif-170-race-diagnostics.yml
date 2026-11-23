@@ -1,0 +1,95 @@
+# TIF-170: the s0-live launcher race fails only on ubuntu-latest CI.
+#
+# `test/discovery/s0-live-launcher.test.ts` "admits exactly one --run under a real
+# race" reported `expected 2 to be 1` on four consecutive main runs, and ~13,000 racer
+# invocations on the macOS dev host have not reproduced it. This job runs that one test
+# on the runner that sees it, and writes what a failing round left behind to a file and
+# to the job log.
+#
+# Diagnostics are off unless MYCO_TIF170_DIAG is set, so this branch's test file is the
+# same test everywhere else. SYNCING THIS FILE TO MAIN IS NOT A FIX: it is the harness
+# for the investigation, and the quarantine in #333 stays until a round explains itself.
+name: TIF-170 race diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: How many full test invocations to run
+        default: "20"
+        required: false
+      rounds:
+        description: Rounds inside each invocation (8 racers a round)
+        default: "30"
+        required: false
+  pull_request:
+    paths:
+      - .github/workflows/tif-170-race-diagnostics.yml
+      - test/discovery/s0-live-launcher.test.ts
+      - scripts/s0-live.sh
+
+permissions:
+  contents: read
+
+jobs:
+  race:
+    name: race x${{ inputs.runs || 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MYCO_TIF170_DIAG: ${{ github.workspace }}/.tif-170
+      MYCO_TIF170_ROUNDS: ${{ inputs.rounds || 30 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # One invocation is 30 rounds; `runs` repeats the whole file. A repeat is a fresh
+      # vitest process, so a failure in one run never hides the others, and the step
+      # never exits non-zero: the point is to collect all 20, then read the artifacts.
+      - name: Race
+        run: |
+          set -uo pipefail
+          : > .tif-170/summary.tsv 2>/dev/null || { mkdir -p .tif-170; : > .tif-170/summary.tsv; }
+          failures=0
+          for run in $(seq 1 "${{ inputs.runs || 1 }}"); do
+            echo "::group::run $run"
+            npx vitest run --pool=forks --no-file-parallelism \
+              test/discovery/s0-live-launcher.test.ts 2>&1 | tee ".tif-170/run-$run.log"
+            rc=${PIPESTATUS[0]}
+            echo -e "run\t${run}\trc\t${rc}" >> .tif-170/summary.tsv
+            [ "$rc" -eq 0 ] || failures=$((failures + 1))
+            echo "::endgroup::"
+            # A failing round is the finding; stop early rather than burn the remaining
+            # budget on runs that can only add the same evidence.
+            [ "$rc" -eq 0 ] || break
+          done
+          {
+            echo "### TIF-170 race summary"
+            echo '```'
+            cat .tif-170/summary.tsv
+            echo '```'
+            echo "failing runs: $failures"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Anomaly rounds in the log
+        if: always()
+        run: |
+          if ls .tif-170/round-*.failure.txt >/dev/null 2>&1; then
+            for f in .tif-170/round-*.failure.txt; do
+              echo "::group::$f"
+              cat "$f"
+              echo "::endgroup::"
+            done
+          else
+            echo "no failing round in this job"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tif-170-race-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tif-170
+          if-no-files-found: warn
