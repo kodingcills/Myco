@@ -63,7 +63,14 @@ for line in sys.stdin:
                         "a11y_tree": tree})
         elif n == "act":
             kind = a.get("action", {}).get("kind")
-            if os.environ.get("STUB_FAIL_ACTS") == "1" and kind != "launch":
+            mode = os.environ.get("STUB_ACT_MODE", "unverified")
+            if kind == "launch":
+                res = text({"ok": True, "outcome": {"kind": "delivered_verified"}})
+            elif mode == "empty":
+                res = text({"ok": True})                      # no outcome at all
+            elif mode == "unknown":
+                res = text({"ok": True, "outcome": {"kind": "weird_new_kind"}})
+            elif mode == "failed":
                 res = text({"ok": True, "outcome": {"kind": "failed", "reason": "synthetic"}})
             else:
                 res = text({"ok": True, "outcome": {"kind": "delivered_unverified"}})
@@ -369,15 +376,20 @@ def main() -> int:
         holder.kill()
         holder.wait()
 
-    print("17. failed actions cannot pass on a matching store (M1)")
-    h = Harness(store_items=["buy milk", "call mom", "write report"], a11y=False, geometry=True)
-    h.env["STUB_FAIL_ACTS"] = "1"
-    code, d = h.run(scenario="DF-S01")
-    row = ledger(d)["run-df-s01-1"]
-    expect(row["state"] == "failure", f"failure, not pass (got {row['state']})")
-    expect(code == 1, "exit non-zero")
-    c = checks_of(d, "run-df-s01-1").get("actions-delivered")
-    expect(c is not None and c["passed"] is False, f"actions-delivered check fails: {c}")
+    print("17. no delivery outcome can pass on a matching store (M1 allowlist)")
+    for mode in ("failed", "empty", "unknown"):
+        h = Harness(store_items=["buy milk", "call mom", "write report"],
+                    a11y=False, geometry=True)
+        h.env["STUB_ACT_MODE"] = mode
+        code, d = h.run(scenario="DF-S01")
+        row = ledger(d)["run-df-s01-1"]
+        expect(row["state"] == "failure", f"{mode}: failure, not pass (got {row['state']})")
+        expect(code == 1, f"{mode}: exit non-zero")
+        c = checks_of(d, "run-df-s01-1").get("actions-delivered")
+        expect(c is not None and c["passed"] is False, f"{mode}: actions-delivered fails")
+        res = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+        expect(res["verdict"]["score"] < 1.0,
+               f"{mode}: refuted run does not score 1.0 (got {res['verdict']['score']})")
 
     print("18. delivered_unverified is not a failure (global route must still pass)")
     code, d = Harness(store_items=["buy milk", "call mom", "write report"],

@@ -648,9 +648,14 @@ def execute_scenario(
 
     persisted = sorted(texts)
     expected = sorted(sc.expected)
-    weight = 0.5 if sc.report_clause_b else 1.0
+    # Weights sum to 1.0. The delivery check carries real weight so a refuted
+    # run cannot report score 1.0 (it did, when that check weighed 0.0).
+    if sc.report_clause_b:
+        w_persisted, w_report, w_delivery = 0.4, 0.4, 0.2
+    else:
+        w_persisted, w_report, w_delivery = 0.7, 0.0, 0.3
     checks = [check(f"{sc.slug}:persisted-set-matches", persisted == expected,
-                    f"persisted {persisted}, expected {expected}", weight)]
+                    f"persisted {persisted}, expected {expected}", w_persisted)]
     if sc.report_clause_b:
         checks.append(grade_report_clause_b(sc, agent_report))
 
@@ -671,9 +676,9 @@ def execute_scenario(
         f"{sc.slug}:actions-delivered",
         not failed_actions,
         "all actions delivered" if not failed_actions
-        else f"{len(failed_actions)} action(s) reported failed: "
+        else f"{len(failed_actions)} action(s) did not land: "
              + "; ".join(f"{p['predicateName']}={p['observed']}" for p in failed_actions[:3]),
-        0.0,
+        w_delivery,
     ))
 
     cleanup(mcp, sid)
@@ -772,21 +777,28 @@ def app_basename() -> str:
     return Path(APP_PATH).name
 
 
-def predicate(name: str, outcome: Any) -> dict[str, Any]:
-    """Three-valued delivery predicate (ADR-0003's outcome, not collapsed).
+DELIVERED_KINDS = ("delivered_verified", "delivered_unverified")
 
-    `delivered_verified` -> True, `failed` -> False, `delivered_unverified` ->
-    None. The last is not a failure: the global route reports it by design
-    because there is nothing to read back at that layer, and the persisted store
-    is what decides the run. Collapsing it to False would fail every honest
-    global-route run; collapsing it to True would let a silent no-op pass.
+
+def predicate(name: str, outcome: Any) -> dict[str, Any]:
+    """Did this action land? An ALLOWLIST over ADR-0003's outcome kinds.
+
+    `delivered_verified` and `delivered_unverified` both landed; everything else
+    did not. The allowlist matters: a denylist (`kind != "failed"`) treats a
+    missing outcome, an empty `{}`, or any future kind as delivered, so a
+    transport gap would grade as success. Verified: `{}` and an unknown kind
+    both fail this predicate.
+
+    `delivered_unverified` is not a failure — the global route reports it by
+    design because there is nothing to read back at that layer, and the
+    persisted store decides the run. Collapsing it to False would fail every
+    honest global-route run.
+
+    `PredicateResult.passed` is boolean-only (M1-012), so the exact kind is
+    preserved verbatim in `observed` rather than being coerced away.
     """
-    kind = (outcome or {}).get("kind", "unknown") if isinstance(outcome, dict) else "unknown"
-    # The predicate is named "..._delivered", so it answers "did the action
-    # land": `delivered_verified` and `delivered_unverified` both did, `failed`
-    # did not. PredicateResult.passed is boolean-only (M1-012), so the exact
-    # three-way kind lives in `observed` rather than being collapsed away.
-    return {"predicateName": name, "passed": kind != "failed",
+    kind = outcome.get("kind") if isinstance(outcome, dict) else None
+    return {"predicateName": name, "passed": kind in DELIVERED_KINDS,
             "observed": json.dumps(outcome, sort_keys=True)}
 
 
