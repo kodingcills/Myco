@@ -7,6 +7,7 @@ import {
 } from "../../src/foundry/baseline/executor.ts";
 import { ArmRecorder } from "../../src/foundry/baseline/recorder.ts";
 import { scoreDiscoveryTrial } from "../../src/foundry/grader/discovery.ts";
+import { fixtureHash, generateHiddenFixtures } from "../../src/foundry/hidden-split/index.ts";
 import { findTask, taskFixture } from "../../src/foundry/tasks/bank.ts";
 import type { ScreenView, TraceAct } from "../../src/foundry/types.ts";
 
@@ -57,6 +58,7 @@ function fakeGuest(options: { failOnAct?: TraceAct["kind"]; status?: string } = 
 }
 
 const TASK = findTask("ef-t01-add-four-items")!;
+const HIDDEN = generateHiddenFixtures(new Uint8Array(32).fill(42), 2);
 const PROMPT_HASH = createHash("sha256").update(TASK.prompt).digest("hex");
 
 function options(overrides: Partial<Parameters<typeof executeTrial>[3]> = {}) {
@@ -64,6 +66,8 @@ function options(overrides: Partial<Parameters<typeof executeTrial>[3]> = {}) {
     armId: "screenshot-only" as const,
     taskId: TASK.taskId,
     promptHash: PROMPT_HASH,
+    fixtureId: TASK.fixtureId,
+    fixtureHash: fixtureHash(HIDDEN[0]!),
     budget: 20,
     persistencePaths: ["store.json"],
     ...overrides,

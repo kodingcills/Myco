@@ -30,6 +30,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { RecordedTrialEvidence } from "../baseline/recorder.ts";
 import { commitment, fixtureHash, type HiddenFixture } from "../hidden-split/index.ts";
+import { findTask } from "../tasks/bank.ts";
 import type { GuardTraceEvent, ScreenView } from "../types.ts";
 
 /** One observation of one persistence file, taken by a reader that is not the arm. */
@@ -99,9 +100,8 @@ function safeObserverId(input: unknown): string {
   const id = (input as { observerId?: unknown }).observerId;
   return typeof id === "string" ? id : "(none)";
 }
-function trustObservers(input: unknown): SaveObserver | null {
+function trustObservers(input: unknown, id: string): SaveObserver | null {
   if (!input || typeof input !== "object") return null;
-  const id = safeObserverId(input);
   const bypass = (input as { [CONTRACT_TEST_MARKER]?: unknown })[CONTRACT_TEST_MARKER];
   if (bypass === CONTRACT_TEST_MARKER && id === OFFLINE_OBSERVER_ID) return offlineObserver();
   return LIVE_OBSERVERS.get(id) ?? null;
@@ -151,6 +151,33 @@ export interface AttestInput {
   readonly claimedFixtureHash: string;
   /** Whether the screen reading came from the observer rather than the arm. */
   readonly screenObserved: boolean;
+  /**
+   * The row this attestation is FOR: the arm, task, prompt and planner the evidence
+   * describes, plus a digest of the bundle being scored. Without it an attestation from one
+   * bundle marked a different bundle eligible — evidence not tied to the thing it is
+   * evidence of, which is the same defect class as a fabricated observer (TIF-125).
+   */
+  readonly bundle?: AttestedBundle;
+}
+
+/** Identity of the row an attestation covers. The digest covers the scored bytes. */
+export interface AttestedBundle {
+  readonly armId: string;
+  readonly taskId: string;
+  readonly promptHash: string;
+  /** SHA-256 over the persisted files being scored. Binds the attestation to this bundle. */
+  readonly bundleDigest: string;
+}
+
+/**
+ * A digest of the persisted files, order-independent so a caller cannot be rejected for
+ * building the map in a different order. This is the value the attestation is bound to.
+ */
+export function bundleDigest(files: Readonly<Record<string, Uint8Array>>): string {
+  const entries = Object.entries(files)
+    .map(([path, bytes]) => `${path}:${createHash("sha256").update(bytes).digest("hex")}`)
+    .sort();
+  return createHash("sha256").update(entries.join("\n")).digest("hex");
 }
 
 const attestedBrand: unique symbol = Symbol("myco.attestation");
@@ -176,11 +203,17 @@ const attestedBrand: unique symbol = Symbol("myco.attestation");
  * untyped one, which is the boundary the scorer actually owns.
  */
 export function isAttestation(value: unknown): value is Attestation {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as Record<symbol, unknown>)[attestedBrand] === true
-  );
+  // A Proxy whose `get` trap throws must not escape: the brand read is the first thing the
+  // scorer does, and a throw there aborts the whole comparison batch (R6 round 2, finding 3).
+  try {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      (value as Record<symbol, unknown>)[attestedBrand] === true
+    );
+  } catch {
+    return false;
+  }
 }
 
 export interface Attestation {
@@ -201,6 +234,11 @@ export interface Attestation {
   readonly unexpectedFiles: readonly string[];
   /** The fixture the gate resolved from the commitment, or null when it could not. */
   readonly resolvedFixtureId: string | null;
+  /**
+   * The row this attestation covers, so the scorer can re-derive the digest itself rather
+   * than trusting `eligible` (R6 1a). `null` when the caller supplied no binding.
+   */
+  readonly binding: AttestedBundle | null;
 }
 
 /**
@@ -268,30 +306,157 @@ function field<T>(input: unknown, key: string, fallback: T): T {
   return (value === undefined ? fallback : value) as T;
 }
 
+/**
+ * Snapshot a caller-supplied binding into frozen primitives, or `null` when it is absent or
+ * unreadable. Reading a hostile Proxy here is caught, so a trap cannot escape as a throw.
+ */
+function freezeBinding(bundle: AttestedBundle | undefined): AttestedBundle | null {
+  if (bundle === null || typeof bundle !== "object") return null;
+  try {
+    const { armId, taskId, promptHash, bundleDigest: digest } = bundle;
+    if (
+      typeof armId !== "string" ||
+      typeof taskId !== "string" ||
+      typeof promptHash !== "string" ||
+      typeof digest !== "string"
+    )
+      return null;
+    return Object.freeze({ armId, taskId, promptHash, bundleDigest: digest });
+  } catch {
+    return null;
+  }
+}
+
+/** Snapshot the final file map into plain data, reading every field exactly once. */
+function snapshotFiles(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object") return {};
+  try {
+    const copy: unknown = structuredClone(value);
+    return copy !== null && typeof copy === "object" ? (copy as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Copy the caller's evidence into plain data, reading every field exactly once. */
+function snapshotEvidence(value: unknown): RecordedTrialEvidence | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  try {
+    return structuredClone(value) as RecordedTrialEvidence;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Copy the caller's trace into plain data, reading every field exactly once. */
+function snapshotTrace(value: unknown): readonly GuardTraceEvent[] {
+  if (!Array.isArray(value)) return [];
+  try {
+    const copy: unknown = structuredClone(value);
+    return Array.isArray(copy) ? (copy as GuardTraceEvent[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Read one string field, once. */
+function readStringField(input: unknown, key: string): string {
+  try {
+    const value = (input as Record<string, unknown> | null | undefined)?.[key];
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Read one observation into frozen primitives, or `null` when it is not one. */
+function readObservation(value: unknown): SaveObservation | null {
+  if (value === null || typeof value !== "object") return null;
+  try {
+    const { path, sha256, bytes, observedAt, afterLastSave } = value as SaveObservation;
+    if (
+      typeof path !== "string" ||
+      typeof sha256 !== "string" ||
+      typeof bytes !== "number" ||
+      typeof observedAt !== "string" ||
+      typeof afterLastSave !== "boolean"
+    )
+      return null;
+    return Object.freeze({ path, sha256, bytes, observedAt, afterLastSave });
+  } catch {
+    return null;
+  }
+}
+
+/** Snapshot the caller's observations, reading every field exactly once. */
+function snapshotObservations(value: unknown): readonly SaveObservation[] | null {
+  if (!Array.isArray(value)) return null;
+  try {
+    const out: SaveObservation[] = [];
+    for (const entry of value) {
+      const observation = readObservation(entry);
+      if (observation === null) return null;
+      out.push(observation);
+    }
+    return Object.freeze(out);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copy the caller's hidden set into plain data, reading every field exactly once.
+ *
+ * `Array.isArray` is true for a Proxy, and a getter can answer differently on each read, so
+ * the set must be snapshotted before any check uses it. A set that cannot be copied is not
+ * a set.
+ */
+function snapshotFixtures(value: unknown): readonly HiddenFixture[] | null {
+  if (!Array.isArray(value)) return null;
+  try {
+    const copy: unknown = structuredClone(value);
+    return Array.isArray(copy) ? (copy as HiddenFixture[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function attest(input: AttestInput): Attestation {
   // Any throw becomes a blocker. The body below still guards its own fields for a precise
   // message; this is the backstop that makes "never throws" a property rather than a claim.
   try {
     return attestOrRefuse(input);
-  } catch (error) {
-    return {
+  } catch {
+    // The backstop must not touch `input` either: reading a hostile Proxy's fields here
+    // would throw again from inside the handler and defeat the whole property (R6 3).
+    return Object.freeze({
       [attestedBrand]: true as const,
       eligible: false,
-      blockers: [
-        `input: malformed, could not be evaluated (${error instanceof Error ? error.message : "unknown error"})`,
-      ],
-      observerId: safeObserverId(input),
-      accepted: [],
+      blockers: Object.freeze([
+        "input: malformed, could not be evaluated (the input could not be read)",
+      ]),
+      observerId: "(unreadable)",
+      accepted: Object.freeze([]),
       screenConstrained: false,
-      unexpectedFiles: [],
+      unexpectedFiles: Object.freeze([]),
       resolvedFixtureId: null,
-    };
+      binding: null,
+    });
   }
 }
 
 function attestOrRefuse(input: AttestInput): Attestation {
   const blockers: string[] = [];
-  const evidence = field<RecordedTrialEvidence | undefined>(input, "evidence", undefined);
+  // Snapshot EVERY caller field exactly once, at entry. Each of these was read more than
+  // once — `evidence.taskId` three times, `claimedFixtureHash` twice, `observerId` three
+  // times, `trace` three times — so a getter could answer honestly for one check and
+  // dishonestly for another (round 3, finding 3). structuredClone reads each field once and
+  // yields plain data; a value that cannot be copied is treated as absent, which fails
+  // closed.
+  const evidence = snapshotEvidence(field<unknown>(input, "evidence", undefined));
+  const claimedHash = readStringField(input, "claimedFixtureHash");
+  const observerId = safeObserverId(input);
+  const trace = snapshotTrace(field<unknown>(input, "trace", undefined));
 
   // Option 1: the fixture is resolved from the commitment, never taken from the caller.
   // A caller-supplied fixture could keep the real id and name a benign file; a fixture
@@ -301,7 +466,11 @@ function attestOrRefuse(input: AttestInput): Attestation {
   // itself, which is the hole this option exists to close.
   const commitmentPath = findCommittedCommitment();
   const trusted = commitmentPath === null ? null : readTrustedCommitment(commitmentPath);
-  const hiddenFixtures = Array.isArray(input.hiddenFixtures) ? input.hiddenFixtures : null;
+  // Snapshot ONCE. The set was read at the commitment check, at the resolve, and again for
+  // taskFixtureId and persistenceFiles; a Proxy array or a getter could answer differently
+  // each time, admitting a fixture that is not in the commitment (R6 round 2, finding 1).
+  // structuredClone reads every field exactly once and yields plain data.
+  const hiddenFixtures = snapshotFixtures(input.hiddenFixtures);
   if (hiddenFixtures === null) {
     blockers.push("hidden fixtures: none supplied, so no fixture can be resolved");
   }
@@ -318,12 +487,10 @@ function attestOrRefuse(input: AttestInput): Attestation {
   }
 
   const resolved = (hiddenFixtures ?? []).find(
-    (candidate) => fixtureHash(candidate) === input.claimedFixtureHash,
+    (candidate) => fixtureHash(candidate) === claimedHash,
   );
   if (resolved === undefined)
-    blockers.push(
-      `commitment: no hidden fixture hashes to ${input.claimedFixtureHash.slice(0, 12)}…`,
-    );
+    blockers.push(`commitment: no hidden fixture hashes to ${claimedHash.slice(0, 12)}…`);
 
   // The required set is the resolved fixture's own list. Files the app wrote beyond it (a
   // log, a sidecar) are reported but not required to be observed: demanding an observation
@@ -331,15 +498,62 @@ function attestOrRefuse(input: AttestInput): Attestation {
   // the one it would prevent.
   // Every field a caller supplies is guarded: a gate that throws on malformed input is one
   // an arm can disable by sending malformed input.
-  const safeFinalFiles: Readonly<Record<string, Uint8Array>> =
-    input.finalFiles && typeof input.finalFiles === "object" ? input.finalFiles : {};
-  if (!input.finalFiles || typeof input.finalFiles !== "object")
+  // Snapshot ONCE. `finalFiles` was read five times and each entry twice, so a getter could
+  // show different bytes to different checks (round 1, finding 3).
+  const rawFiles: Record<string, unknown> = snapshotFiles(input.finalFiles);
+  // A string where bytes belong is not persisted state. Accepting it let a caller pass
+  // "content" and have the gate digest it as though it were a file.
+  const malformed = Object.entries(rawFiles)
+    .filter(([, bytes]) => !(bytes instanceof Uint8Array))
+    .map(([path]) => path);
+  if (malformed.length > 0)
+    blockers.push(`final state: ${malformed.join(", ")} is not a byte array`);
+  const safeFinalFiles: Readonly<Record<string, Uint8Array>> = Object.fromEntries(
+    Object.entries(rawFiles).filter(([, bytes]) => bytes instanceof Uint8Array),
+  ) as Record<string, Uint8Array>;
+  if (Object.keys(rawFiles).length === 0 && !Array.isArray(input.finalFiles))
     blockers.push("final state: none supplied, so no observation can be matched against it");
-  const safeObservations: readonly SaveObservation[] = Array.isArray(input.observations)
-    ? input.observations
-    : [];
-  if (!Array.isArray(input.observations))
+  // Snapshot ONCE, type-checked. The loop below used to read the caller's object at the
+  // check and again to build the frozen copy, so a getter could answer honestly for the
+  // check and dishonestly for the copy (round 1, finding 1).
+  const safeObservations = snapshotObservations(input.observations);
+  if (safeObservations === null)
     blockers.push("observations: none supplied, so nothing can be attested");
+
+  // The fixture resolved from the commitment must be the fixture of the row being scored.
+  // Round 5 showed the gate resolving f26bcd… while the scorer graded a different task
+  // fixture, so the commitment evidence was about something else entirely.
+  // Mandatory (R6 1d): an absent fixtureId used to skip the check entirely, and every real
+  // row omitted it, so the binding never ran in production.
+  //
+  // The comparison is task-fixture to task-fixture. A hidden fixture's `fixtureId` is its
+  // task fixture's id; the hidden fixture's own hash is `claimedFixtureHash`. Comparing the
+  // hidden hash against a task fixture id refused the honest value and accepted any hidden
+  // fixture for the same task.
+  if (evidence?.fixtureId === undefined || evidence.fixtureId === "")
+    blockers.push("binding: the row does not name the fixture it was run against");
+  else {
+    // The row's fixture must be the fixture of the task it claims. This is the check that
+    // is NOT circular: `findTask` is the registry, and the caller does not write it. Without
+    // it, a caller who claims a foreign hidden fixture consistently — fixtureId, fixtureHash
+    // and claimedFixtureHash all matching each other — is admitted, because every other
+    // comparison here is between two values the caller supplied (R6 round 2, finding 1).
+    const claimedTask = typeof evidence.taskId === "string" ? findTask(evidence.taskId) : undefined;
+    if (claimedTask === undefined)
+      blockers.push(`binding: the row names no known task (${String(evidence.taskId)})`);
+    else if (claimedTask.fixtureId !== evidence.fixtureId)
+      blockers.push(
+        `binding: task ${claimedTask.taskId} is fixture ${claimedTask.fixtureId}, the row scores ${evidence.fixtureId}`,
+      );
+    else if (resolved !== undefined && resolved.taskFixtureId !== claimedTask.fixtureId)
+      blockers.push(
+        `binding: the commitment resolves the fixture for ${resolved.taskFixtureId}, the task is ${claimedTask.fixtureId}`,
+      );
+  }
+  if (evidence?.fixtureHash === undefined || evidence.fixtureHash === "")
+    blockers.push("binding: the row does not name the fixture hash it was run against");
+  else if (claimedHash !== evidence.fixtureHash)
+    blockers.push("binding: the scored fixture hash differs from the attested one");
 
   const required: readonly string[] =
     resolved === undefined ? [] : [...new Set<string>(resolved.fixture.persistenceFiles)].sort();
@@ -350,6 +564,29 @@ function attestOrRefuse(input: AttestInput): Attestation {
   const unexpected = Object.keys(safeFinalFiles)
     .filter((path) => !required.includes(path))
     .sort();
+
+  // 0. The attestation must name the row it is for, and the digest must match the bytes the
+  //    gate just verified. Absent binding is a blocker, not a pass: an attestation that does
+  //    not say what it attests cannot be evidence for anything.
+  // Read the caller's binding exactly ONCE, into frozen primitives, and use that snapshot
+  // for both this check and the returned attestation. Reading it twice let a getter answer
+  // honestly for the gate and dishonestly for the scorer (R6 round 2, finding 3).
+  const bundle = freezeBinding(input.bundle);
+  if (bundle === null) {
+    blockers.push("binding: the attestation does not name the row it is for");
+  } else {
+    if (bundle.armId !== evidence?.armId)
+      blockers.push(`binding: attested arm ${bundle.armId}, scored ${evidence?.armId ?? "none"}`);
+    if (bundle.taskId !== evidence?.taskId)
+      blockers.push(
+        `binding: attested task ${bundle.taskId}, scored ${evidence?.taskId ?? "none"}`,
+      );
+    if (bundle.promptHash !== evidence?.promptHash)
+      blockers.push("binding: attested prompt differs from the scored prompt");
+    const digest = bundleDigest(safeFinalFiles);
+    if (bundle.bundleDigest !== digest)
+      blockers.push("binding: the attested bundle digest does not match the scored bytes");
+  }
 
   // 1. The recorder must be closed and internally consistent. An open or inconsistent
   //    recording means the arm's account of itself is incomplete.
@@ -387,7 +624,7 @@ function attestOrRefuse(input: AttestInput): Attestation {
   //    final bytes. A missing observation is a blocker, never a pass.
   const accepted: SaveObservation[] = [];
   for (const path of required) {
-    const observation = safeObservations.find((candidate) => candidate.path === path);
+    const observation = (safeObservations ?? []).find((candidate) => candidate.path === path);
     if (observation === undefined) {
       blockers.push(`observer: no observation of ${path}`);
       continue;
@@ -410,6 +647,8 @@ function attestOrRefuse(input: AttestInput): Attestation {
       blockers.push(`observer: ${path} length disagrees with the observation`);
       continue;
     }
+    // `observation` is already the frozen snapshot, so the value checked above is the value
+    // reported. No second read of the caller's object.
     accepted.push(observation);
   }
 
@@ -417,28 +656,44 @@ function attestOrRefuse(input: AttestInput): Attestation {
   //     a string the caller writes, so "refuse the literal offline" refuses nothing — the
   //     same fabrication with observerId "Offline" or "vm-guest" passed. Only an observer
   //     registered here, and only when it reports its own identity, counts.
-  const registered = trustObservers(input);
+  const registered = trustObservers(input, observerId);
   if (registered === null) {
     blockers.push(
-      `observer: "${safeObserverId(input)}" is not a registered live observer; a caller cannot name its own provenance`,
+      `observer: "${observerId}" is not a registered live observer; a caller cannot name its own provenance`,
     );
-  } else if (registered.id !== safeObserverId(input)) {
+  } else if (registered.id !== observerId) {
     blockers.push("observer: the identity does not match the registered observer");
   }
 
   // 3b. The screen reading must come from the observer, not the arm. A caller-supplied
   //    visibleText is an unchecked claim, and it feeds the screen oracle.
-  if (!input.screenObserved)
+  if (input.screenObserved !== true)
     blockers.push("screen: the reading was supplied by the arm, not observed");
+  const screenValue: unknown = field<unknown>(input, "screen", undefined);
+  // Read `visibleText` and `reachable` ONCE each, so the value checked is the value
+  // reported (round 1, finding 4).
+  const screenText: unknown =
+    screenValue !== null && typeof screenValue === "object"
+      ? (screenValue as { visibleText?: unknown }).visibleText
+      : undefined;
+  const screenReachable: unknown =
+    screenValue !== null && typeof screenValue === "object"
+      ? (screenValue as { reachable?: unknown }).reachable
+      : undefined;
+  const screenOk = Array.isArray(screenText) && typeof screenReachable === "boolean";
+  if (!screenOk) blockers.push("screen: the reading is not a screen view");
   // A pixel arm legitimately reads no text (Tk exposes no AT-SPI node), so an empty screen
   // is not a blocker. It is reported through `screenConstrained` so a reader can tell
   // "the screen oracle had nothing to match" from "the screen oracle agreed".
-  const screenConstrained = input.screen.reachable && input.screen.visibleText.length > 0;
+  const safeScreen: ScreenView = screenOk
+    ? { visibleText: screenText as string[], reachable: screenReachable as boolean }
+    : { visibleText: [], reachable: false };
+  const screenConstrained = safeScreen.reachable && safeScreen.visibleText.length > 0;
 
   // 4. The observation must be placeable against a save the trace actually recorded, and
   //    that save's bytes must agree with what the observer saw. Checking only the event
   //    type lets any fabricated event of the right shape satisfy the binding.
-  const saves = input.trace.filter((event) => event.type === "save-observed");
+  const saves = trace.filter((event) => event.type === "save-observed");
   // A save the app did not perform is not a save. Require at least one GUI call, and
   // require the last save to follow a GUI action in the trace: bytes conjured out of band
   // with no act to explain them are the exact false success this gate exists to catch.
@@ -448,8 +703,8 @@ function attestOrRefuse(input: AttestInput): Attestation {
   if (saves.length === 0) {
     blockers.push("trace: no save was observed, so the observation cannot be placed");
   } else {
-    const lastSaveIndex = input.trace.lastIndexOf(saves[saves.length - 1]!);
-    const guiActBefore = input.trace
+    const lastSaveIndex = trace.lastIndexOf(saves[saves.length - 1]!);
+    const guiActBefore = trace
       .slice(0, lastSaveIndex)
       .some((event) => event.type === "action" && event.callId !== undefined);
     if (!guiActBefore)
@@ -467,14 +722,21 @@ function attestOrRefuse(input: AttestInput): Attestation {
     }
   }
 
-  return {
+  return Object.freeze({
     [attestedBrand]: true as const,
     eligible: blockers.length === 0,
-    blockers,
-    observerId: safeObserverId(input),
-    accepted,
+    // Freeze the arrays too: Object.freeze is shallow, so a caller could clear `blockers`
+    // and break "empty iff eligible" (R6 round 3, finding 2).
+    blockers: Object.freeze([...blockers]),
+    observerId,
+    accepted: Object.freeze([...accepted]),
     screenConstrained,
-    unexpectedFiles: unexpected,
+    unexpectedFiles: Object.freeze([...unexpected]),
     resolvedFixtureId: resolved?.fixture.fixtureId ?? null,
-  };
+    // Copy the binding into frozen primitives. Returning the caller's own object let a
+    // caller mutate it, or define a getter that answers honestly for the gate and
+    // dishonestly for the scorer, after attest() had already said eligible (R6 round 2,
+    // finding 3). A copy taken here cannot change afterwards.
+    binding: bundle,
+  });
 }
