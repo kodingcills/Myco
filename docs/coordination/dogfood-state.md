@@ -136,6 +136,44 @@ desktop.
 
 ## Status
 
+### 2026-11-22 — TIF-27: the runner can drive Tk apps (PR #205 merged `ced7e07`)
+
+The DF-005 runner now picks an actuation route:
+
+| route | when | actions |
+|---|---|---|
+| ref | the app exposes AT-SPI nodes | `click`/`typeText` by ref |
+| global | it exposes none (Tk registers zero, RT-003) | `clickAt` the entry's published geometry to establish X focus, then `typeTextGlobal` |
+
+Grading is unchanged: the persisted store decides, and both global actions
+report `delivered_unverified` by design, so they are never treated as evidence.
+
+Four verifier rounds found four real defects, all in code I had just written:
+
+1. The verdict came only from the store, so all-`failed` actions still passed on
+   a matching store. Fixed with an `actions-delivered` check.
+2. That check used a **denylist** (`kind != "failed"`), so a missing outcome,
+   `{}`, or an unknown kind still passed. Fixed with an allowlist.
+3. `w_report` was dead code — the report check hardcoded 0.5 — so DF-S02 weights
+   summed to 1.1 and a correct DF-S02 scored 0.6. Fixed, with a test that
+   asserts the sum rather than the numbers.
+4. `act()` collapsed a missing `outcome` key to `{}`, so a transport gap was
+   indistinguishable from an empty outcome in the evidence. It now returns the
+   full response.
+
+The pattern worth remembering: each round fixed the reported hole and left a
+narrower one of the same class. The invariant tests (weights sum to 1.0; a
+no-outcome response is recorded verbatim) exist to stop that, not just to cover
+the instances.
+
+**Still unverified (guest-only):** whether `clickAt` on the Tk window's entry
+geometry gives that window X focus under openbox. The runtime's live proof
+establishes it for the GTK sanity window; the Tk fixture is untested. With the
+`actions-delivered` check in place, a focus failure now surfaces as
+`failure`/`refuted` rather than a silent pass.
+
+
+
 ### 2026-11-22 — DF-005 harness hardened (PR #169 merged `32ac252`)
 
 The shipped runner graded an offline stub MCP server `pass / verifier:verified+ground-truth`
