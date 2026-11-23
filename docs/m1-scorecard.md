@@ -83,7 +83,7 @@ rather than a source-reading exercise. A mutation-verified test
 
 **Arm-003** (planned, queued after M1-016) re-runs 30 trials with the shared text,
 the same Sonnet planner, the same snapshot, and a **$9.00 cap on total committed
-spend** (**$1.63 charged**). Design:
+spend**, read from `report.json.c1ChargedMicros` (**$1.632162** at arm-002's close: spike $0.076800 + arm-002 $1.555362). Design:
 `docs/research/experiments/c1-arm-003-design.md`.
 
 ## Reliability row, regenerate
