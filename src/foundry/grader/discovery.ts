@@ -203,22 +203,23 @@ export function digestSafely(files: unknown): string | null {
   }
 }
 
-/** Read a binding defensively: a Proxy trap must not escape as a throw. */
+/**
+ * Read a binding, requiring every field to be a primitive string.
+ *
+ * No try of its own: `readBindingSafely` wraps the call, and a throw from a hostile getter
+ * is caught there. An inner try that no input can reach is dead defence, so it is not here.
+ */
 function readBinding(value: unknown): AttestedBundle | null {
   if (value === null || typeof value !== "object") return null;
-  try {
-    const { armId, taskId, promptHash, bundleDigest: digest } = value as AttestedBundle;
-    if (
-      typeof armId !== "string" ||
-      typeof taskId !== "string" ||
-      typeof promptHash !== "string" ||
-      typeof digest !== "string"
-    )
-      return null;
-    return { armId, taskId, promptHash, bundleDigest: digest };
-  } catch {
+  const { armId, taskId, promptHash, bundleDigest: digest } = value as AttestedBundle;
+  if (
+    typeof armId !== "string" ||
+    typeof taskId !== "string" ||
+    typeof promptHash !== "string" ||
+    typeof digest !== "string"
+  )
     return null;
-  }
+  return { armId, taskId, promptHash, bundleDigest: digest };
 }
 
 /**

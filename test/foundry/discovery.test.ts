@@ -504,6 +504,25 @@ describe("Discovery evidence grading", () => {
     expect(rows[0]?.status, "a toggling field changed the row's status").toBe("scored");
   });
 
+  it("v3: readBinding's own try is load-bearing", () => {
+    // `readBinding` is private and `readBindingSafely` wraps it, so its try looks redundant.
+    // It is not: caculating the destructure itself can throw (a Proxy `ownKeys`/`getOwnProperty`
+    // trap), and that is outside the safe wrapper when the wrapper's value is a Proxy.
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys: () => {
+          throw new Error("trap");
+        },
+        getOwnPropertyDescriptor: () => {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(() => readBindingSafely({ binding: hostile } as never)).not.toThrow();
+    expect(readBindingSafely({ binding: hostile } as never)).toBeNull();
+  });
+
   it("v3: digestSafely and readBindingSafely are total", () => {
     // Called directly, so the outer catch in scoreDiscoveryTrial cannot mask a throw.
     expect(() => digestSafely(null), "digestSafely threw on null").not.toThrow();
