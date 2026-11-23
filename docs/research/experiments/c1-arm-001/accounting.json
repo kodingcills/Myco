@@ -15,6 +15,7 @@
         "cellRef": "B39",
         "expected": "REVISED-908578",
         "previousValue": "Enzo Nakamura",
+        "instructionUnrecorded": true,
         "subArm": "c1",
         "verdict": "uncertain",
         "verdictReason": "driver-unreachable",

@@ -9,6 +9,7 @@
   "cellRef": "B21",
   "expected": "REVISED-72912",
   "previousValue": "Faye Ito",
+  "instructionUnrecorded": true,
   "subArm": "c1",
   "verdict": "refuted",
   "verdictReason": "modified",
