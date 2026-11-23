@@ -32,6 +32,10 @@ test("renders the decided row, the exact arm numbers, and the paired table", () 
   expect(text).toContain("1 silent-drop no yes");
   expect(text).toContain("screenshot-only");
   expect(text).toContain("A refused decision is a result");
+  expect(html).toContain("data-simulated-badge");
+  expect(text).toContain("Simulated");
+  expect(text).toContain("Not a live result");
+  expect(text).toContain("viewer/fixtures/head-to-head.json (synthetic)");
   // A decision row is not a run verdict: no verdict badge anywhere.
   expect(html).not.toContain('data-verdict="Verified"');
 });
@@ -53,6 +57,31 @@ test("a refused decision renders as not decided, never as a pass", () => {
   expect(text).toContain("Not decided");
   expect(text).toContain("Refused: insufficient-pairs");
   expect(html).not.toContain('data-verdict="Verified"');
+});
+
+test("a report with no provenance is unknown, never live-looking", () => {
+  const { provenance: _provenance, ...withoutProvenance } = fixture;
+  const report = parseHeadToHead(withoutProvenance);
+  expect(report?.provenance?.kind).toBe("unknown");
+  if (!report) return;
+  const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
+  const text = textOf(html);
+  expect(html).toContain("data-simulated-badge");
+  expect(text).toContain("Unknown source");
+  expect(text).toContain("Not a live result");
+});
+
+test("a live report carries no badge and says the rule returned the row", () => {
+  const report = parseHeadToHead({
+    ...fixture,
+    provenance: { kind: "live", arms: [] },
+  });
+  expect(report).toBeDefined();
+  if (!report) return;
+  const html = renderToStaticMarkup(<HeadToHeadView report={report} />);
+  const text = textOf(html);
+  expect(html).not.toContain("data-simulated-badge");
+  expect(text).toContain("The pre-registered rule returned this row");
 });
 
 test("rejects a run artifact and a malformed report", () => {
