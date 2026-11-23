@@ -1,0 +1,185 @@
+{
+  "index": 26,
+  "params": {
+    "fixtureSeed": "seed-c",
+    "rowKey": "EMP-0101",
+    "column": "joined",
+    "newValue": "2024-11-07"
+  },
+  "cellRef": "D102",
+  "expected": "2024-11-07",
+  "previousValue": "2021-04-02",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "modified",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "A102\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 147,
+          "text": "D102\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "D102\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 80,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 147
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 60,
+          "y": 146,
+          "text": "A102\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 80,
+          "y": 146
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 564,
+      "completion": 128,
+      "cost": 0.002408
+    },
+    {
+      "prompt": 564,
+      "completion": 192,
+      "cost": 0.003048
+    },
+    {
+      "prompt": 564,
+      "completion": 243,
+      "cost": 0.003558
+    },
+    {
+      "prompt": 564,
+      "completion": 250,
+      "cost": 0.003628
+    },
+    {
+      "prompt": 564,
+      "completion": 136,
+      "cost": 0.002488
+    },
+    {
+      "prompt": 564,
+      "completion": 222,
+      "cost": 0.003348
+    },
+    {
+      "prompt": 564,
+      "completion": 175,
+      "cost": 0.002878
+    },
+    {
+      "prompt": 564,
+      "completion": 93,
+      "cost": 0.002058
+    },
+    {
+      "prompt": 564,
+      "completion": 221,
+      "cost": 0.003338
+    },
+    {
+      "prompt": 564,
+      "completion": 166,
+      "cost": 0.002788
+    },
+    {
+      "prompt": 564,
+      "completion": 256,
+      "cost": 0.003688
+    }
+  ],
+  "cost": 0.033228,
+  "tokens": {
+    "in": 6204,
+    "out": 2082
+  },
+  "modelCalls": 11,
+  "steps": 10,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 69616,
+  "resetMs": 183641,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 11.75537109375
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}

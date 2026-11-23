@@ -1,0 +1,218 @@
+{
+  "index": 8,
+  "params": {
+    "fixtureSeed": "seed-c",
+    "rowKey": "EMP-0125",
+    "column": "name",
+    "newValue": "REVISED-545101"
+  },
+  "cellRef": "B126",
+  "expected": "REVISED-545101",
+  "previousValue": "Gil Petrov",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "modified",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "B126\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 80,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 147
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 564,
+      "completion": 133,
+      "cost": 0.002458
+    },
+    {
+      "prompt": 564,
+      "completion": 151,
+      "cost": 0.002638
+    },
+    {
+      "prompt": 564,
+      "completion": 135,
+      "cost": 0.002478
+    },
+    {
+      "prompt": 564,
+      "completion": 155,
+      "cost": 0.002678
+    },
+    {
+      "prompt": 564,
+      "completion": 133,
+      "cost": 0.002458
+    },
+    {
+      "prompt": 564,
+      "completion": 150,
+      "cost": 0.002628
+    },
+    {
+      "prompt": 564,
+      "completion": 162,
+      "cost": 0.002748
+    },
+    {
+      "prompt": 564,
+      "completion": 174,
+      "cost": 0.002868
+    },
+    {
+      "prompt": 564,
+      "completion": 140,
+      "cost": 0.002528
+    },
+    {
+      "prompt": 564,
+      "completion": 164,
+      "cost": 0.002768
+    },
+    {
+      "prompt": 564,
+      "completion": 241,
+      "cost": 0.003538
+    },
+    {
+      "prompt": 564,
+      "completion": 182,
+      "cost": 0.002948
+    },
+    {
+      "prompt": 564,
+      "completion": 131,
+      "cost": 0.002438
+    },
+    {
+      "prompt": 564,
+      "completion": 256,
+      "cost": 0.003688
+    }
+  ],
+  "cost": 0.038862,
+  "tokens": {
+    "in": 7896,
+    "out": 2307
+  },
+  "modelCalls": 14,
+  "steps": 13,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 69032,
+  "resetMs": 147547,
+  "acPower": true,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 13.99609375
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}

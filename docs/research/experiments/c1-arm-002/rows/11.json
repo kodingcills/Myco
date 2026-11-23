@@ -1,0 +1,146 @@
+{
+  "index": 11,
+  "params": {
+    "fixtureSeed": "seed-f",
+    "rowKey": "EMP-0012",
+    "column": "salary",
+    "newValue": "$33579.52"
+  },
+  "cellRef": "E13",
+  "expected": "$33579.52",
+  "previousValue": "$65326.88",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "modified",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 80,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "E13\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 563,
+      "completion": 146,
+      "cost": 0.002586
+    },
+    {
+      "prompt": 563,
+      "completion": 149,
+      "cost": 0.002616
+    },
+    {
+      "prompt": 563,
+      "completion": 158,
+      "cost": 0.002706
+    },
+    {
+      "prompt": 563,
+      "completion": 160,
+      "cost": 0.002726
+    },
+    {
+      "prompt": 563,
+      "completion": 113,
+      "cost": 0.002256
+    },
+    {
+      "prompt": 563,
+      "completion": 244,
+      "cost": 0.003566
+    },
+    {
+      "prompt": 563,
+      "completion": 154,
+      "cost": 0.002666
+    },
+    {
+      "prompt": 563,
+      "completion": 256,
+      "cost": 0.003686
+    }
+  ],
+  "cost": 0.022808000000000002,
+  "tokens": {
+    "in": 4504,
+    "out": 1380
+  },
+  "modelCalls": 8,
+  "steps": 7,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 47229,
+  "resetMs": 195216,
+  "acPower": true,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 9.10400390625
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}

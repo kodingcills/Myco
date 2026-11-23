@@ -1,0 +1,134 @@
+{
+  "index": 12,
+  "params": {
+    "fixtureSeed": "m1-013-live",
+    "rowKey": "EMP-0020",
+    "column": "name",
+    "newValue": "REVISED-72912"
+  },
+  "cellRef": "B21",
+  "expected": "REVISED-72912",
+  "previousValue": "Faye Ito",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "modified",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 150,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "B21\n"
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 564,
+      "completion": 155,
+      "cost": 0.002678
+    },
+    {
+      "prompt": 564,
+      "completion": 155,
+      "cost": 0.002678
+    },
+    {
+      "prompt": 564,
+      "completion": 132,
+      "cost": 0.002448
+    },
+    {
+      "prompt": 564,
+      "completion": 154,
+      "cost": 0.002668
+    },
+    {
+      "prompt": 564,
+      "completion": 143,
+      "cost": 0.002558
+    },
+    {
+      "prompt": 564,
+      "completion": 249,
+      "cost": 0.003618
+    },
+    {
+      "prompt": 564,
+      "completion": 256,
+      "cost": 0.003688
+    }
+  ],
+  "cost": 0.020336,
+  "tokens": {
+    "in": 3948,
+    "out": 1244
+  },
+  "modelCalls": 7,
+  "steps": 6,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 54377,
+  "resetMs": 199545,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 8.263671875
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}
