@@ -7,9 +7,30 @@ export interface Action {
   tool: string;
   arguments: unknown;
 }
+/**
+ * How one action was delivered, and what became of it.
+ *
+ * Recorded per action rather than aggregated because arm-003d declares delivery
+ * mode as a run condition (TIF-167): a row produced with foreground escalation
+ * measures something different from one produced entirely in background, and a
+ * count would hide which actions escalated.
+ */
+export interface ActionDelivery {
+  step: number;
+  mode: "background" | "foreground";
+  /** True when background refused and the action was retried once in foreground. */
+  escalated: boolean;
+  outcome:
+    | "routing-refused"
+    | "delivered"
+    | "delivered-dismissed"
+    | "delivered-stalled"
+    | "save-failed";
+}
 export interface Transcript {
   actions: Action[];
   claims: Claim[];
+  deliveries: ActionDelivery[];
 }
 export interface DriverPrecondition {
   hostVersion: string;
