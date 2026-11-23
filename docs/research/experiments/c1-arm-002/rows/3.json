@@ -1,0 +1,60 @@
+{
+  "index": 3,
+  "params": {
+    "fixtureSeed": "seed-d",
+    "rowKey": "EMP-0009",
+    "column": "salary",
+    "newValue": "$12458.13"
+  },
+  "cellRef": "E10",
+  "expected": "$12458.13",
+  "previousValue": "$77544.00",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "persisted-mismatch",
+  "transcript": {
+    "actions": [],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 563,
+      "completion": 256,
+      "cost": 0.003686
+    }
+  ],
+  "cost": 0.003686,
+  "tokens": {
+    "in": 563,
+    "out": 256
+  },
+  "modelCalls": 1,
+  "steps": 0,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 18862,
+  "resetMs": 140524,
+  "acPower": true,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 13.546875
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}

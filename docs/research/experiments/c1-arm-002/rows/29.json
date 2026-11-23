@@ -1,0 +1,60 @@
+{
+  "index": 29,
+  "params": {
+    "fixtureSeed": "seed-f",
+    "rowKey": "EMP-0009",
+    "column": "qty",
+    "newValue": "2723"
+  },
+  "cellRef": "C10",
+  "expected": "2723",
+  "previousValue": "400",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "persisted-mismatch",
+  "transcript": {
+    "actions": [],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 560,
+      "completion": 256,
+      "cost": 0.00368
+    }
+  ],
+  "cost": 0.00368,
+  "tokens": {
+    "in": 560,
+    "out": 256
+  },
+  "modelCalls": 1,
+  "steps": 0,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 46310,
+  "resetMs": 192589,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 16.7734375
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}
