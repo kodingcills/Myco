@@ -192,7 +192,25 @@ criterion (TIF-60) decide the wedge.
      HCU/Cua already provide; features without a measured job).
 
 ### MVD-006 (TIF-61) Coordination: public task set + host window
-- **status:** in progress (escalations filed).
+- **linear_state:** the `TIF-61` tag has not been reported as drifting; the outer
+  loop lists TIF-52/53/60 as the disagreements, and MVD-006 is none of them.
+- **status:** **task set delivered; host window requested and queued, not granted.**
+  The row's own acceptance also requires the window to be recorded "with start/end
+  and owner" — that value does not exist yet, so this row is not closed.
+- **delivered — task set (Foundry):** `src/foundry/tasks/bank.ts` holds the public
+  bank (`ef-t01-add-four-items`, `ef-t02-rename-row`, `ef-t03-whitespace-value`,
+  `ef-t04-delete-row`, plus `ef-t01b-add-four-items-noverify`); oracles live under
+  `src/foundry/oracles/` and are hidden by path. Discovery consumes them and writes
+  neither fixtures nor oracles. Foundry's answer to Discovery's S3 gap is
+  `docs/foundry/answer-discovery-s3-gap.md`.
+- **requested — host window (not yet granted):** the S0 request is recorded in
+  `docs/coordination/mvp-discovery-state.md`, which says plainly that "the request
+  is not assumed granted"; the queue slot is Discovery S0 in
+  `docs/coordination/vm-queue.md`. The host-memory measurement that gates it lives in
+  `docs/coordination/runtime-state.md` (`scripts/memory-budget.sh`). No start, end, or
+  owner value is recorded, because no window has been handed over.
+- **not this row:** the live Direction A run itself is MVD-001 / TIF-89, which stays
+  open until its evidence exists.
 - **owner:** discovery-owner; foundry (task set/verifiers); runtime (RT-011/RT-015/RT-016); M1 coordinator (host)
 - **blocked_by:** none
 - **description:** Two shared-resource dependencies that gate every proof:
