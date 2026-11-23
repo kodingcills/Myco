@@ -39,15 +39,15 @@ Head-to-head (TIF-59) and recommendation/product criterion (TIF-60) decide.
   report. Acceptance 4 (two agent environments) is documented and contract-tested
   but not run inside Codex or Claude Code, and model cost is `not-measured`
   because the mock path calls no model.
-- **S0 live is closed on purpose, and by whose hands.** `RuntimeTransport.evidence()`
-  reports `oraclePresent` and `guestClean` as false because neither is the
-  transport's to establish: the oracle is Foundry's injected verifier, and nothing
-  in the runtime today can list guest processes (`read_file` cannot tell "no stray
-  process" from "no file grant"). So the preflight refuses and `--transport live`
-  exits before a run directory exists. Opening it needs either a guest process
-  probe or an agreed narrower definition of `guestClean`; that is a decision for
-  Tiffany and Foundry, not something to paper over by defaulting the two fields
-  true. The launcher also refuses without `MYCO_COORDINATOR_GO=1` and
+- **`guestClean` is ratified; `oraclePresent` is not.** The outer loop ratified on
+  Tiffany's behalf (2026-11-23): `guestClean` means *the app's store and published
+  state files are absent before launch* — advisory, detectable, and it catches the
+  contamination that matters (a stale app holding a previous trial's state). Every
+  S0 evidence record must state that this definition was in force. `oraclePresent`
+  stays unproven: Foundry's verifier has not validated anything in an S0 run, so an
+  S0 PASS must not claim MVD-001 coverage. `RuntimeTransport.evidence()` reports
+  both unproven and the preflight refuses, so nothing can pass on a weaker claim in
+  the meantime. The launcher also refuses without `MYCO_COORDINATOR_GO=1` and
   `MYCO_HOST_LOCK=1` — the hole PR #99 was reverted for.
 - **Model policy.** Judgment/verification `cheaperinference/deepseek-v4.1-flash`;
   building `cheaperinference/glm-5.3`; no kimi-k3.

@@ -1,0 +1,41 @@
+# S0 mock sequence — Direction A
+
+Provenance: **simulated** — mock desktop, no guest trials.
+
+| Scenario | Expected | Actual | False success | Missing | UI claim | Evidence |
+|---|---|---|---|---:|---|---|
+| df-s01 | verified | verified | no | 0 | saved 4 item(s) | /tmp/s0-offline/runs/df-s01 |
+| df-s02 | refuted | refuted | yes | 2 | saved 4 item(s) | /tmp/s0-offline/runs/df-s02 |
+
+## What this is not
+
+- It is not live evidence: no guest was booted and no kernel was involved.
+- It is not a head-to-head decision: there are no paired trials, so no rule row is claimed.
+- The live arm is not run; the guest window is the only missing piece.
+
+## How this was produced
+
+    S0_RUN_DIR=/tmp/s0-offline pnpm exec tsx scripts/s0-live.ts --dry-run
+    pnpm myco-run --transport mock --task df-s02 --out /tmp/s0-offline/cli
+    pnpm myco-run --task df-s02 --out /tmp/s0-offline/runs --validate-only
+
+Both tasks ran on the mock contract double, 2026-11-23. Every `result.json` here
+carries `simulated: true`. Two writers produce these records and only one of them
+adds economics: the `myco-run` CLI writes
+`economics.provenance: "mock"` with `wallClockBasis: "mock-contract-double"`, while
+the S0 sequence script above calls the runner directly and writes no `economics`
+block at all. Neither can therefore be quoted as a live latency — the absence is
+labelled by `simulated: true`, not by a number. No guest was booted and port 10022
+was not opened.
+
+The two dropped items DF-S02 names from the persisted store:
+
+    MISSING  bug: login page crashes on save
+    MISSING  BUG: token expires too early
+
+What this proves: the orchestration, the oracle comparison, the false-success
+accounting and the artifact validation all work end to end offline.
+
+What it does not prove: that a real guest can be driven. MVD-001 acceptances 2
+and 6 need a live guest, and `oraclePresent` stays unproven until Foundry's
+verifier validates a run, so a pass here is not MVD-001 coverage.
