@@ -251,6 +251,28 @@ Rules:
 - **Never silence with `!` or `as`** when the real question is whether the value can be absent. A cast moves the failure to runtime, where it is more expensive.
 - **A file newly added to typecheck is a discovery event, not a regression.** Expect it to surface latent type lies; triage each one rather than making the errors go away.
 
+## Targeted testing (Tiffany-approved, 2026-11-22 22:17 ET)
+
+Running the full suite after every edit is wasted time — it is minutes of signal buried in minutes of noise, and it is what CI is for.
+
+1. **While iterating:** run only the tests covering the changed files or modules.
+   ```
+   pnpm exec vitest run test/baseline/task-text.test.ts        # by file
+   pnpm exec vitest run -t "accepts a battery row"             # by name
+   pnpm exec vitest related src/baseline/c1-trial.ts           # by dependency graph
+   cargo test -p myco-rt-core session_                          # by crate + filter
+   ```
+   Do **not** run the full suite after every edit.
+
+2. **Once, right before opening a PR or pushing for review:** run the full suite.
+   CI runs it too; this is the local confirmation that you are not handing over a red build.
+
+3. **After a git sync**, rerun the full suite **only if the merge touched your changed area or shared code** — schemas, `src/core/`, scoring. Otherwise run the targeted tests plus a **byte-identity diff** of the changed paths (`git diff <verified>..<new> -- <paths>`), which is already how this repo carries a PASS across a rebase.
+
+4. **Verifiers** run the **targeted tests and the mutation checks for the claim under review**, and rely on **green CI** for everything else. A verifier does not re-run the whole suite locally to no purpose.
+
+**Why this pairs with the hard round cap:** a verifier re-running 813 tests proves nothing about the claim under review, while re-running the three tests that pin the claim — and mutating the fix to prove they fail — is the whole check. Targeted + mutation is the evidence; a green full suite is CI's job.
+
 ## Git sync (Tiffany-approved, 2026-11-22 19:45 ET)
 
 Main requires branches to be up to date before merging, so a stale branch is not
