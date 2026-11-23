@@ -48,6 +48,9 @@ const names = [
 const base = fixture("empty");
 const row: BaselineRow = {
   subArm: "c1",
+  // TIF-128: a C1 row must record the instruction it was given, or declare that
+  // it predates the field. This fixture is a C1 row, so it carries the sentence.
+  instruction: 'Set the cell at record r, column c, to "x", and save the file.',
   index: 0,
   params: { fixtureSeed: "1", rowKey: "r", column: "c", newValue: "x" },
   cellRef: "A1",

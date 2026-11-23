@@ -163,6 +163,19 @@ export interface BaselineRow {
    * See docs/research/experiments/c1-parity.md for why that mattered.
    */
   instruction?: string;
+  /**
+   * Set when the record predates instruction recording (TIF-104), so a C1 row
+   * without `instruction` is a known gap rather than a silent omission.
+   *
+   * The rule `isBaselineRow` enforces: a C1 row must carry `instruction` OR
+   * carry this marker and no instruction. That keeps arm-002's 29 recorded rows
+   * valid as evidence - they were produced before the field existed and their
+   * absence is a documented fact, not a defect in the artifact - while making a
+   * NEW row that forgets the instruction fail validation instead of shipping
+   * unverifiable evidence. Requiring the field unconditionally was the
+   * alternative and it would have silently invalidated all 29.
+   */
+  instructionUnrecorded?: true;
   /** Narrowed to match Myco's `CalcRecordEditParams`: a numeric value here would
    *  render `to 9733,` while Myco's identical intent renders `to "9733",`, which is
    *  an input-shape divergence in a task-text comparison (TIF-104). */
@@ -228,6 +241,11 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     value(x.expected) &&
     value(x.previousValue) &&
     (x.verdict === "verified" || x.verdict === "refuted" || x.verdict === "uncertain") &&
+    // TIF-128: a C1 row records the instruction it was given, or declares that it
+    // predates the field. See `instructionUnrecorded` for why both are needed.
+    (x.subArm !== "c1" ||
+      (str(x.instruction) && x.instruction.length > 0) ||
+      (x.instruction === undefined && x.instructionUnrecorded === true)) &&
     str(x.verdictReason) &&
     (typeof x.falseSuccess === "boolean" || x.falseSuccess === null) &&
     typeof x.audited === "boolean" &&

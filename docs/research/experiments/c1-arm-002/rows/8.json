@@ -9,6 +9,7 @@
   "cellRef": "B126",
   "expected": "REVISED-545101",
   "previousValue": "Gil Petrov",
+  "instructionUnrecorded": true,
   "subArm": "c1",
   "verdict": "refuted",
   "verdictReason": "modified",
