@@ -147,6 +147,18 @@ export function compareRowFiles(a: string, b: string): number {
   return na - nb;
 }
 
+/**
+ * The CLI's exit contract, extracted so it can be tested without spawning a
+ * process. A mutation dropping either clause (rows failing to reproduce, OR
+ * cost drift) previously survived the whole suite, because the check was inline
+ * at module scope and nothing exercised it. Drift matters on its own: it means
+ * the stored cost has diverged from the usage records, so the reported spend
+ * would be wrong even when every verdict reproduces.
+ */
+export function exitCodeFor(failedRows: number, driftingRows: number): number {
+  return failedRows > 0 || driftingRows > 0 ? 1 : 0;
+}
+
 export function replayDirectory(directory: string): ReplayResult[] {
   const files = readdirSync(directory)
     .filter((f) => f.endsWith(".json"))
@@ -184,5 +196,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       for (const d of drift) console.log(`  idx=${d.index} costDelta=${d.costDelta}`);
     }
   }
-  if (bad.length > 0 || drift.length > 0) process.exitCode = 1;
+  if (exitCodeFor(bad.length, drift.length) !== 0)
+    process.exitCode = exitCodeFor(bad.length, drift.length);
 }
