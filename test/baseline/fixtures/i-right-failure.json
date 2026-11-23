@@ -1,8 +1,7 @@
 {
   "transcript": {
     "actions": [],
-    "claims": ["failure"],
-    "deliveries": []
+    "claims": ["failure"]
   },
   "driver": {
     "hostVersion": "1",
