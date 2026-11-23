@@ -219,15 +219,29 @@ therefore became partial JSON, the planner found no parseable decision, and
 `planner-no-action` was scored **against the agent** — a harness fault recorded as
 an agent failure.
 
-**Measured, not inferred.** Across the committed arm-002 rows the largest
-**non-truncated** completion is **248 tokens**, and **22+ calls landed on exactly
-256** — the ceiling, not the model's answer. Those include `persisted-mismatch`
-rows at 1 and 3 steps.
+**Measured, not inferred.** Across the committed arm-002 rows (444 calls, 29 rows)
+the largest **non-truncated** completion is **250 tokens** (row 26), and **22 calls
+across 22 distinct rows landed on exactly 256** — the ceiling, not the model's
+answer.
+
+**What that does and does not establish.** It establishes that **arm-002 ran under
+the defective configuration**, so its numbers are not directly comparable to a run
+without it. It does **not** establish that truncation caused arm-002's results, and
+this document must not be read that way:
+
+- **Almost every 256-hit has a real trajectory** — rows with 3, 7, 14, 20 and 28
+  steps. A truncated *final* call after 28 successful actions is not what produced
+  that row's verdict.
+- **Only row 13 has the pure truncation signature** (1 step, completions
+  `[221, 256]`), the same shape that stopped arm-003d r2 at trials 3 and 4.
+- `FINAL.md` attributes arm-002's **zero-action `modified` rows to the model typing
+  cell references into the Name Box**, which is an independent explanation and
+  remains the recorded one for those rows.
 
 **Consequence.** arm-002's headline figures — 29 refuted, `modified` 16 of 29 — are
-counts from a run whose output ceiling was clipping real answers, so they cannot be
-compared against a run without it. **arm-002 must not be re-run**: it is recorded
-as superseded, not re-measured.
+counts from a run **on a defective configuration**, so they cannot be compared
+against a run without it. **arm-002 must not be re-run**: it is recorded as
+superseded, not re-measured.
 
 **The canonical C1 baseline is arm-003d, run with the fix (#340).** Those are the
 numbers comparable to Myco's arm. **Instruction parity still applies** — the shared
