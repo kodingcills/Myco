@@ -4,8 +4,27 @@
 
 ## 0. Session 2026-11-23 10:25 ET — read this first
 
-Restarted thread. Preflight and the #315 Tier-2 pre-check are done. **Nothing pushed,
-no verifier spawned, nothing of mine is running.**
+Restarted thread. Preflight done; #315 amended (test-only) and pushed; ONE Tier-2
+round-1 verifier (`LauncherPRVerifier`) is running on head `75467ed`. **Launcher code is
+byte-identical to `b92ee9f`; only the test and handoff changed.**
+
+### 10:37 ET — outer-loop rulings and what was done
+
+1. **No #316 conflict.** #315 does not touch `scripts/run-s0*.sh`; the `mkdir` claim stays.
+2. **Test-only amendment AUTHORISED**, launcher untouched. Done at `75467ed`:
+   the race test now asserts, *before any `--stop`*, that exactly one racer's watchdog is
+   still alive and that `s0.pid` names it; 30 rounds; explicit 30 s timeout.
+3. **Negative control: revert A confirmed, revert B does not exist.**
+   - HEAD, 30 rounds: PASS 3/3 (~7.7 s each).
+   - Revert A (check-then-write on `$PID_FILE`, 30 rounds): **FAILS 4/4** — `expected 2 to be 1`.
+   - Revert B (subshell noclobber): **not reproducible against this launcher at all.**
+     With the pid-file guard *also* removed, 320 racers in 40 rounds still admitted exactly
+     one. So no test can be made to fail against B here; that is a property of the code
+     (`--run` kills its own watchdog on refusal, and the pid-file guard short-circuits
+     first), not a gap in the test. The outer loop's "must fail against both reverts"
+     premise from §1 is **falsified by measurement** and should be retired.
+4. Pushed `75467ed` on `tif-138-launcher-claim` after merging `origin/main` (`a5fb548`).
+   PR linked; no watch armed (the merge is the outer loop's call).
 
 ### Host preflight (the requested first task)
 
