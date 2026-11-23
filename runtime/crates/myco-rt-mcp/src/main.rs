@@ -208,7 +208,8 @@ fn tool_defs() -> Vec<Value> {
             "inputSchema": {"type":"object","properties":{
                 "session_id": {"type":"string"},
                 "token": {"type":"string"},
-                "read_root": {"type":"string","description":"Opt-in: absolute guest directory the session may read from (not '/'). Every read_file path is confined beneath it. Applied on every connect, including after reset."}
+                "read_root": {"type":"string","description":"Opt-in: absolute guest directory the session may read from (not '/'). Every read_file path is confined beneath it. Applied on every connect, including after reset. Read-only unless allow_write is also true."},
+                "allow_write": {"type":"boolean","description":"Opt-in, default false: also allow write_file under read_root. Requires read_root. Without it write_file is refused."}
             }}
         }),
         json!({
@@ -239,7 +240,7 @@ fn tool_defs() -> Vec<Value> {
         }),
         json!({
             "name": "write_file",
-            "description": "Write/replace a guest file (RT-017), confined to the session's read_root grant (the same grant read_file uses). Content is base64. Returns bytes written; read it back with read_file to confirm.",
+            "description": "Write/replace a regular guest file (RT-017), confined beneath the session's read_root. Opt-in: the session must be created with read_root AND allow_write=true. Content is base64, capped at 1 MiB decoded. FIFOs, devices, directories, symlinks and hard-linked files are refused. Not atomic (truncate then write); read it back with read_file to confirm. Returns bytes_written.",
             "inputSchema": {"type":"object","required":["session_id","path","content_base64"],"properties":{
                 "session_id": {"type":"string"},
                 "path": {"type":"string","description":"Path relative to the session's grant"},
@@ -364,10 +365,19 @@ impl Server {
                 Some(root.to_string())
             }
         };
+        // RT-017 write is a second, explicit opt-in on top of the read grant.
+        let allow_write = args["allow_write"].as_bool().unwrap_or(false);
+        if allow_write && read_root.is_none() {
+            return Err((-32602, "allow_write requires read_root".to_string()));
+        }
+        let mut permissions = Permissions::default();
+        if allow_write {
+            permissions.allowed_actions.push(myco_rt_core::WRITE_FILE_PERMISSION.into());
+        }
         let mut session = Session::new_creating(
             SessionConfig {
                 session_id: id.clone(),
-                permissions: Permissions::default(),
+                permissions,
                 idle_timeout: None,
             },
             {
@@ -509,7 +519,15 @@ impl Server {
         let encoded = args["content_base64"]
             .as_str()
             .ok_or((-32602, "missing content_base64".to_string()))?;
+        // Cap BEFORE decoding, so an oversize payload costs nothing more here and
+        // never reaches the guest (the agent and transport re-check).
+        if encoded.len() > WRITE_FILE_MAX_ENCODED {
+            return Err((-32602, "content exceeds 1 MiB limit".to_string()));
+        }
         let bytes = base64_decode(encoded).map_err(|e| (-32602, format!("bad content_base64: {e}")))?;
+        if bytes.len() > WRITE_FILE_LIMIT {
+            return Err((-32602, "content exceeds 1 MiB limit".to_string()));
+        }
         let s = self.session(args)?;
         let written = s
             .write_guest_file(path, &bytes)
@@ -936,8 +954,14 @@ fn base64_encode(input: &[u8]) -> String {
 /// Strict on purpose: rejects any length that is not a multiple of 4 and any
 /// character outside the alphabet, so a caller sending malformed content gets a
 /// clear error instead of silently-corrupt bytes written to a guest file.
+/// RT-017 write cap, matching the agent's and transport's `WRITE_LIMIT` and
+/// `read_file`'s 1 MiB cap.
+const WRITE_FILE_LIMIT: usize = 1024 * 1024;
+/// Base64 length of a `WRITE_FILE_LIMIT`-byte payload (4 chars per 3 bytes, padded).
+const WRITE_FILE_MAX_ENCODED: usize = WRITE_FILE_LIMIT.div_ceil(3) * 4;
+
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    let mut value_of = |c: u8| -> Result<u8, String> {
+    let value_of = |c: u8| -> Result<u8, String> {
         match c {
             b'A'..=b'Z' => Ok(c - b'A'),
             b'a'..=b'z' => Ok(c - b'a' + 26),
@@ -1010,6 +1034,39 @@ mod read_file_tests {
         );
         assert_eq!(r["result"]["isError"], true);
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("missing path"));
+    }
+
+    /// RT-017: an oversize payload is refused before decoding and before any
+    /// session lookup (so it costs nothing and never reaches a guest).
+    #[test]
+    fn write_file_refuses_oversize_content_before_anything_else() {
+        let mut s = srv();
+        let big = "A".repeat(WRITE_FILE_MAX_ENCODED + 4);
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"write_file","arguments":{{"session_id":"nope","path":"f","content_base64":"{big}"}}}}}}"#
+        );
+        let r = call(&mut s, &body);
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("1 MiB"), "must be the size refusal, not 'unknown session': {text}");
+    }
+
+    /// The encoded cap admits exactly a 1 MiB payload.
+    #[test]
+    fn write_file_cap_admits_exactly_one_mib() {
+        assert_eq!(WRITE_FILE_MAX_ENCODED, base64_encode(&vec![0u8; WRITE_FILE_LIMIT]).len());
+    }
+
+    /// A write grant needs a read root; refused before any VM is touched.
+    #[test]
+    fn allow_write_without_read_root_is_refused() {
+        let mut s = srv();
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"create","arguments":{"allow_write":true}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("allow_write requires read_root"));
     }
 
     #[test]
@@ -1270,6 +1327,7 @@ mod schema_contract_tests {
         ("create", "session_id", false),
         ("create", "token", false),
         ("create", "read_root", false),
+        ("create", "allow_write", false),
         ("observe", "session_id", true),
         ("act", "session_id", true),
         ("act", "action", true),

@@ -9,6 +9,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Largest `write_file` payload, matching the agent's cap and `read_file`'s.
+pub const WRITE_LIMIT: usize = 1024 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("spawn failed: {0}")]
@@ -272,14 +275,18 @@ impl Channel {
     /// RT-017: write bytes to a grant-relative guest file path. Bytes travel as a
     /// JSON array of numbers, the same encoding `read_file` uses.
     pub fn write_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, TransportError> {
+        if bytes.len() > WRITE_LIMIT {
+            return Err(TransportError::Protocol("write_file content exceeds 1 MiB limit".into()));
+        }
         let resp: serde_json::Value = self.extension(
             "write_file",
             serde_json::json!({"path": path, "content": bytes}),
         )?;
-        Ok(resp
-            .get("bytes_written")
+        // Report only what the agent confirmed; never assume the full length.
+        resp.get("bytes_written")
             .and_then(|v: &serde_json::Value| v.as_u64())
-            .unwrap_or(bytes.len() as u64) as usize)
+            .map(|n| n as usize)
+            .ok_or_else(|| TransportError::Protocol("write_file reply has no bytes_written".into()))
     }
 
     pub fn launch_process(&mut self, command: &str, args: &[String]) -> Result<String, TransportError> {

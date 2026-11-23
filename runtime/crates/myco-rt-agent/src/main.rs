@@ -252,6 +252,13 @@ fn main() {
                         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no file grant")
                     })?;
                     let path = request_path(&req, "path")?;
+                    // Size-check before deserializing: the host caps at 1 MiB too,
+                    // but the agent must not trust that (a huge array costs ~32x
+                    // its byte count as a JSON Value).
+                    let len = req.get("content").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+                    if len > file_grant::WRITE_LIMIT {
+                        return Err(std::io::Error::other("content exceeds 1 MiB limit"));
+                    }
                     // Bytes arrive as a JSON array of numbers, the same encoding
                     // `read_file` sends them in — no new wire format, and symmetric
                     // with the read a caller confirms the write with.

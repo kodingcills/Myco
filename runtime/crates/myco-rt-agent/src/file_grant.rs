@@ -2,7 +2,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path};
 
 use rustix::fd::OwnedFd;
-use rustix::fs::{CWD, Mode, OFlags, ResolveFlags, openat2};
+use rustix::fs::{CWD, FileType, Mode, OFlags, ResolveFlags, fcntl_setfl, fstat, ftruncate, openat2};
 
 #[derive(Debug)]
 pub struct FileGrant(OwnedFd);
@@ -63,14 +63,26 @@ impl FileGrant {
         Ok(bytes)
     }
 
-    /// Write/replace a file inside the grant (RT-017).
+    /// Write/replace a regular file inside the grant (RT-017).
     ///
-    /// Same confinement as `read`: grant-relative, no symlink traversal, no mount
-    /// crossing. `CREATE | TRUNC` replaces the file atomically enough for the
-    /// fix-the-bug scenarios (DF-S03) — the caller then reads it back with `read`
-    /// to confirm, which is the read-back that makes the write verifiable rather
-    /// than assumed.
+    /// Same confinement as `read`: grant-relative, no symlink traversal (any
+    /// component), no mount crossing. On top of that, a write only ever lands on a
+    /// regular file with a single link:
+    /// - A FIFO, device, socket or directory is refused. The open is `O_NONBLOCK`,
+    ///   so a FIFO with no reader fails with ENXIO instead of blocking the
+    ///   single-threaded agent (which wedged the whole session until `reset`).
+    ///   `O_NOCTTY` stops a tty from becoming the agent's controlling terminal.
+    /// - `nlink > 1` is refused, so a hard link planted in the grant cannot be used
+    ///   to truncate a file that lives outside it.
+    /// - Content is capped at `WRITE_LIMIT` (1 MiB, matching `read`).
+    ///
+    /// Not atomic: the file is truncated, then written. ENOSPC or an agent crash
+    /// mid-write leaves a short file. The caller confirms with a `read` back,
+    /// which is what makes the write verifiable rather than assumed.
     pub fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if bytes.len() > WRITE_LIMIT {
+            return Err(io::Error::other("content exceeds 1 MiB limit"));
+        }
         if path.as_os_str().is_empty()
             || !path
                 .components()
@@ -84,15 +96,35 @@ impl FileGrant {
         let fd = openat2(
             &self.0,
             path,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC,
+            // No O_TRUNC here: truncation happens only after the target is proven
+            // to be a regular, singly-linked file.
+            OFlags::WRONLY | OFlags::CREATE | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
             Mode::from_bits_truncate(0o644),
             ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
         )?;
+        let stat = fstat(&fd)?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "expected a regular file",
+            ));
+        }
+        if stat.st_nlink != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "refusing to write a file with more than one hard link",
+            ));
+        }
+        fcntl_setfl(&fd, OFlags::empty())?;
+        ftruncate(&fd, 0)?;
         let mut file = std::fs::File::from(fd);
         use std::io::Write;
         file.write_all(bytes)
     }
 }
+
+/// Largest content `write` accepts, matching `read`'s cap.
+pub const WRITE_LIMIT: usize = 1024 * 1024;
 
 #[cfg(test)]
 mod tests {
@@ -187,6 +219,103 @@ mod write_tests {
         let g = grant(&root);
         g.write(Path::new("f"), b"new").expect("write");
         assert_eq!(read_to_string(root.join("f")).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A shorter replacement must not leave the old tail behind (proves TRUNC).
+    #[test]
+    fn a_shorter_write_leaves_no_stale_tail() {
+        let root = tmp("shorter");
+        std::fs::write(root.join("f"), "a much longer old body").unwrap();
+        grant(&root).write(Path::new("f"), b"new").expect("write");
+        assert_eq!(read_to_string(root.join("f")).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A final-component symlink pointing outside the grant is refused, and the
+    /// outside file is untouched. (Exercises NO_SYMLINKS/BENEATH; `..` alone is
+    /// stopped by the component check before openat2 runs.)
+    #[test]
+    fn write_refuses_a_final_symlink_out_of_the_grant() {
+        let root = tmp("sym-final");
+        let outside = tmp("sym-final-outside");
+        std::fs::write(outside.join("target"), "keep").unwrap();
+        std::os::unix::fs::symlink(outside.join("target"), root.join("link")).unwrap();
+        assert!(grant(&root).write(Path::new("link"), b"pwned").is_err());
+        assert_eq!(read_to_string(outside.join("target")).unwrap(), "keep");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// The same through an intermediate directory symlink.
+    #[test]
+    fn write_refuses_an_intermediate_symlink_out_of_the_grant() {
+        let root = tmp("sym-mid");
+        let outside = tmp("sym-mid-outside");
+        std::os::unix::fs::symlink(&outside, root.join("dir")).unwrap();
+        assert!(grant(&root).write(Path::new("dir/new"), b"pwned").is_err());
+        assert!(!outside.join("new").exists(), "nothing may be created outside the grant");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A FIFO with no reader must fail fast, not block the agent.
+    #[test]
+    fn write_to_a_fifo_fails_fast_instead_of_blocking() {
+        let root = tmp("fifo");
+        rustix::fs::mknodat(
+            CWD,
+            root.join("pipe").as_path(),
+            FileType::Fifo,
+            Mode::from_bits_truncate(0o644),
+            0,
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        assert!(grant(&root).write(Path::new("pipe"), b"x").is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "write blocked on a FIFO");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_refuses_a_directory() {
+        let root = tmp("dir");
+        create_dir(root.join("sub")).unwrap();
+        assert!(grant(&root).write(Path::new("sub"), b"x").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A hard link in the grant to a file outside it must not be truncated.
+    #[test]
+    fn write_refuses_a_hard_linked_file() {
+        let root = tmp("hardlink");
+        let outside = tmp("hardlink-outside");
+        std::fs::write(outside.join("secret"), "keep").unwrap();
+        std::fs::hard_link(outside.join("secret"), root.join("alias")).unwrap();
+        let err = grant(&root).write(Path::new("alias"), b"x").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(read_to_string(outside.join("secret")).unwrap(), "keep");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn write_refuses_absolute_dot_and_empty_paths() {
+        let root = tmp("paths");
+        let g = grant(&root);
+        for bad in ["/etc/passwd", ".", "./f", ""] {
+            let err = g.write(Path::new(bad), b"x").unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{bad:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_refuses_content_over_the_limit() {
+        let root = tmp("big");
+        let err = grant(&root).write(Path::new("f"), &vec![0u8; WRITE_LIMIT + 1]).unwrap_err();
+        assert!(err.to_string().contains("1 MiB"), "{err}");
+        assert!(!root.join("f").exists(), "an oversize write must not create the file");
         let _ = std::fs::remove_dir_all(&root);
     }
 
