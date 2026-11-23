@@ -203,11 +203,12 @@ criterion (TIF-60) decide the wedge.
   `src/foundry/oracles/` and are hidden by path. Discovery consumes them and writes
   neither fixtures nor oracles. Foundry's answer to Discovery's S3 gap is
   `docs/foundry/answer-discovery-s3-gap.md`.
-- **requested — host window (not yet granted):** the S0 request and the Coordinator's
-  memory measurement are recorded in `docs/coordination/mvp-discovery-state.md`,
-  which says plainly that "the request is not assumed granted"; the queue slot is
-  Discovery S0 in `docs/coordination/vm-queue.md`. No start, end, or owner value is
-  recorded, because no window has been handed over.
+- **requested — host window (not yet granted):** the S0 request is recorded in
+  `docs/coordination/mvp-discovery-state.md`, which says plainly that "the request
+  is not assumed granted"; the queue slot is Discovery S0 in
+  `docs/coordination/vm-queue.md`. The host-memory measurement that gates it lives in
+  `docs/coordination/runtime-state.md` (`scripts/memory-budget.sh`). No start, end, or
+  owner value is recorded, because no window has been handed over.
 - **not this row:** the live Direction A run itself is MVD-001 / TIF-89, which stays
   open until its evidence exists.
 - **owner:** discovery-owner; foundry (task set/verifiers); runtime (RT-011/RT-015/RT-016); M1 coordinator (host)
