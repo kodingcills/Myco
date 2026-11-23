@@ -145,7 +145,7 @@ function reconcileAudit(
 export const ATTESTATION_BINDING_LANDED = false;
 
 /** Read the binding through its accessor, so a throwing getter cannot escape. */
-function readBindingSafely(attestation: Attestation): AttestedBundle | null {
+export function readBindingSafely(attestation: Attestation): AttestedBundle | null {
   try {
     return readBinding(attestation.binding);
   } catch {
@@ -195,7 +195,7 @@ function snapshotActual(value: unknown): TrialInput["actual"] {
 }
 
 /** Digest the scored bytes, or `null` when they are not a file map. */
-function digestSafely(files: unknown): string | null {
+export function digestSafely(files: unknown): string | null {
   try {
     return bundleDigest(files as Readonly<Record<string, Uint8Array>>);
   } catch {

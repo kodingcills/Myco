@@ -5,6 +5,8 @@ import { recoverSave } from "../../src/foundry/faults/index.ts";
 import { attest } from "../../src/foundry/grader/attest.ts";
 import {
   createDiscoveryComparison,
+  digestSafely,
+  readBindingSafely,
   scoreDiscoveryTrial,
 } from "../../src/foundry/grader/discovery.ts";
 import { parseGuardTrace, serialiseGuardTrace } from "../../src/foundry/guard.ts";
@@ -476,6 +478,16 @@ describe("Discovery evidence grading", () => {
   it("v3: the attester and the scorer see the same evidence", () => {
     // They read the caller's record separately, so a toggling field could show one value to
     // the gate and another to the guard (round 1, finding 2).
+    //
+    // The assertion must be the STATUS, not `decisionEligible`: that is false while the flag
+    // is off no matter what the code does (round 2, finding 1). With the snapshot removed,
+    // the attester reads 4 audits and the scorer reads [], so the row comes back
+    // `excluded/audit` instead of `scored`.
+    const honest = createDiscoveryComparison(settings, (e) => attest({ evidence: e } as never))([
+      { evidence: evidence as never, input },
+    ]);
+    expect(honest[0]?.status, "the honest row should score").toBe("scored");
+
     let reads = 0;
     const shifty = {
       ...evidence,
@@ -484,10 +496,30 @@ describe("Discovery evidence grading", () => {
         return reads === 1 ? (evidence.recordedCalls ?? []) : [];
       },
     };
-    const comparison = createDiscoveryComparison(settings, (e) => attest({ evidence: e } as never));
-    const rows = comparison([{ evidence: shifty as never, input }]);
+    const rows = createDiscoveryComparison(settings, (e) => attest({ evidence: e } as never))([
+      { evidence: shifty as never, input },
+    ]);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.decisionEligible).toBe(false);
+    expect(reads, "the record's evidence was read more than once").toBe(1);
+    expect(rows[0]?.status, "a toggling field changed the row's status").toBe("scored");
+  });
+
+  it("v3: digestSafely and readBindingSafely are total", () => {
+    // Called directly, so the outer catch in scoreDiscoveryTrial cannot mask a throw.
+    expect(() => digestSafely(null), "digestSafely threw on null").not.toThrow();
+    expect(digestSafely(null)).toBeNull();
+    expect(digestSafely({ "store.json": 42 })).toBeNull();
+    expect(() => digestSafely({ "store.json": undefined })).not.toThrow();
+    expect(digestSafely({ "store.json": new Uint8Array([1]) })).toBeTypeOf("string");
+
+    const throwingAccessor = Object.defineProperty({}, "binding", {
+      get() {
+        throw new Error("trap");
+      },
+      enumerable: true,
+    }) as never;
+    expect(() => readBindingSafely(throwingAccessor), "readBindingSafely threw").not.toThrow();
+    expect(readBindingSafely(throwingAccessor)).toBeNull();
   });
 
   it("v2 round 3 finding 1: a truthy non-true done ends the batch, not an infinite loop", () => {
