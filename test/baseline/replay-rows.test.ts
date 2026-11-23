@@ -1,5 +1,8 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { replayRow } from "../../scripts/replay-arm-rows.ts";
+import { replayDirectory, replayRow } from "../../scripts/replay-arm-rows.ts";
 import { type BaselineRow, falseSuccess } from "../../src/baseline/index.ts";
 
 /** A minimal row in the shape the live sweep writes, so the replay contract is
@@ -118,11 +121,22 @@ describe("offline arm-row replay", () => {
     for (const r of [verifiedPresent, verifiedAbsent, verifiedUnknown]) {
       expect(r.replayed).toBe("verified");
     }
-    // The values themselves are asserted through falseSuccess's own contract.
-    expect(falseSuccess("verified", true)).toBe(false);
+    // The verified arm must be distinguished by RECORDED falseSuccess, not just
+    // by the replayed status. Without this, a verified row whose stored
+    // falseSuccess is wrong still reads as matched, because the fixture default
+    // is false and only the present=true case can disagree.
+    const lookalike = replayRow(
+      row({
+        verdict: "verified",
+        verdictReason: "persisted-match",
+        independentValuePresent: false,
+      }),
+    );
+    expect(lookalike.replayed).toBe("verified");
+    // Stored falseSuccess says "no false success" while the value is absent, so
+    // the row is internally inconsistent and must not read as matched.
     expect(falseSuccess("verified", false)).toBe(true);
-    expect(falseSuccess("verified", null)).toBe(null);
-    expect(falseSuccess("refuted", false)).toBe(false);
+    expect(lookalike.matched).toBe(false);
   });
 
   it("detects a cost that does not match the raw usage records", () => {
@@ -132,18 +146,20 @@ describe("offline arm-row replay", () => {
 });
 
 describe("replay row ordering", () => {
-  it("sorts numerically so 2 precedes 10, and is stable for non-numeric names", () => {
-    // Parsing alone yields NaN for a non-numeric name, which silently produces
-    // an arbitrary order rather than an obvious one. This pins both branches.
-    const order = ["10.json", "2.json", "profile.json", "1.json"].sort((a, b) => {
-      const na = Number.parseInt(a, 10);
-      const nb = Number.parseInt(b, 10);
-      if (Number.isNaN(na) || Number.isNaN(nb)) return a.localeCompare(b);
-      return na - nb;
-    });
-    expect(order[0]).toBe("1.json");
-    expect(order[1]).toBe("2.json");
-    expect(order[2]).toBe("10.json");
-    expect(order[3]).toBe("profile.json");
+  it("replayDirectory returns rows in numeric order, not lexical", () => {
+    // Drives replayDirectory end to end rather than the comparator alone.
+    // Calling compareRowFiles directly passes even when replayDirectory stops
+    // sorting - the comparator exists and works, but nothing uses it. Found by
+    // deleting the .sort() call and watching this test still pass.
+    const dir = mkdtempSync(join(tmpdir(), "myco-replay-order-"));
+    for (const name of ["10.json", "2.json", "1.json"]) {
+      writeFileSync(
+        join(dir, name),
+        JSON.stringify(
+          row({ index: Number.parseInt(name, 10), verdictReason: "modified" }) as never,
+        ),
+      );
+    }
+    expect(replayDirectory(dir).map((r) => r.index)).toEqual([1, 2, 10]);
   });
 });

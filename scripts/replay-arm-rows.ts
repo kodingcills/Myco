@@ -38,7 +38,12 @@ function observationFor(reason: string, row: BaselineRow): Observation {
     case "unavailable":
       return { kind: reason };
     case "driver-unreachable":
-      // Synthetic: force an unreachable driver so judge() takes its guard path.
+      // NOT a fixpoint on its own: judge() reports this reason from its
+      // driverReady guard, which fires BEFORE the observation is consulted, so
+      // any observation kind reproduces it as long as the driver is unreachable.
+      // replayRow therefore also forces sessionIdentityMatches:false for this
+      // reason - the two must change together, and removing either silently
+      // breaks reproduction for this branch.
       return { kind: "unavailable" };
     default:
       throw new Error(`unmapped verdictReason ${JSON.stringify(reason)}; add it to observationFor`);
@@ -97,18 +102,22 @@ export function replayRow(row: BaselineRow): ReplayResult {
   };
 }
 
+/**
+ * Row-file order: numeric where both names parse, lexical otherwise. Exported so
+ * the test drives the real comparator rather than a copy of it - a copy passes
+ * even if this function stops being used.
+ */
+export function compareRowFiles(a: string, b: string): number {
+  const na = Number.parseInt(a, 10);
+  const nb = Number.parseInt(b, 10);
+  if (Number.isNaN(na) || Number.isNaN(nb)) return a.localeCompare(b);
+  return na - nb;
+}
+
 export function replayDirectory(directory: string): ReplayResult[] {
   const files = readdirSync(directory)
     .filter((f) => f.endsWith(".json"))
-    // Numeric where both names are numeric, so 2 sorts before 10; otherwise fall
-    // back to lexical order. Parsing alone gives NaN for a non-numeric name,
-    // which silently produces an arbitrary order rather than an obvious one.
-    .sort((a, b) => {
-      const na = Number.parseInt(a, 10);
-      const nb = Number.parseInt(b, 10);
-      if (Number.isNaN(na) || Number.isNaN(nb)) return a.localeCompare(b);
-      return na - nb;
-    });
+    .sort(compareRowFiles);
   return files.map((f) =>
     replayRow(JSON.parse(readFileSync(join(directory, f), "utf8")) as BaselineRow),
   );

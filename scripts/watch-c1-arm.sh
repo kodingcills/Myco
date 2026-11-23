@@ -39,7 +39,7 @@ reasons = Counter(r.get("verdictReason") for r in (e.get("row", {}) for e in sco
 print(f"[watch] rows={len(scored)} committed=${committed:.4f}/${limit:.2f} silent={silent}m reasons={dict(reasons)}")
 if committed > limit:
     print("[watch] TRIGGER committed spend over limit"); sys.exit(9)
-if silent >= 20:
+if silent >= SILENT_MIN:
     print(f"[watch] TRIGGER silent {silent}m - tell the Coordinator"); sys.exit(10)
 PY
   code=$?
