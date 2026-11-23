@@ -65,6 +65,8 @@ describe("Direction A live runner", () => {
     const traceText = readFileSync(join(dir, "clean", "trace.jsonl"), "utf8");
     expect(traceText).toContain('"kind":"typeTextGlobal"');
     expect(traceText).toContain('"kind":"clickAt"');
+    expect(traceText).toContain('"x":210');
+    expect(traceText).toContain('"y":284');
     const record: unknown = JSON.parse(readFileSync(join(dir, "clean", "result.json"), "utf8"));
     expect(validateSchema(record, resultRecordSchema)).toEqual([]);
     const trace = readFileSync(join(dir, "clean", "trace.jsonl"), "utf8")
@@ -235,6 +237,20 @@ describe("Direction A live runner", () => {
     expect(result.status).toBe("verified");
     const trace = readFileSync(join(dir, "reset", "trace.jsonl"), "utf8");
     expect(trace).toContain("reset-failed");
+  });
+
+  it("does not save when the click point misses the Save control", async () => {
+    const result = await runDirectionALive({
+      transport: new MockDesktop(),
+      probe,
+      app: { ...app, savePoint: { x: 10, y: 10 } },
+      items: ["one"],
+      verify,
+      runsDir: runsDir(),
+    });
+    expect(result.status).not.toBe("verified");
+    expect(result.persisted).toEqual([]);
+    expect(result.claimed).not.toMatch(/saved/i);
   });
 
   it("falls back to Tab traversal when the task package has no save point", async () => {

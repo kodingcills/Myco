@@ -75,12 +75,14 @@ export class MockDesktop implements DesktopTransport {
       case "typeTextGlobal":
         this.entry += action.text;
         this.version += 1;
-        return "delivered_verified";
+        // The runtime reports delivered_unverified for targetless input: there is
+        // no element to read back, so a verification claim would be untrue.
+        return "delivered_unverified";
       case "clickAt":
         // The Save control sits in the lower band of the 420x360 window.
         if (action.y >= 272 && action.y <= 296) this.save();
         this.version += 1;
-        return "delivered_verified";
+        return "delivered_unverified";
       case "keyPress":
         return this.press(action.keys);
     }
