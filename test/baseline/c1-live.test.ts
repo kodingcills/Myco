@@ -417,10 +417,14 @@ describe("C1 host harness", () => {
     const result = await planner.act("test", { mimeType: "image/png", data: "AA==" });
     const count = request.mock.calls[0]?.[1];
     const messages = request.mock.calls[1]?.[1];
-    expect(JSON.parse(String(messages?.body))).toEqual({
-      ...JSON.parse(String(count?.body)),
-      max_tokens: 256,
-    });
+    // The point is that the paying call is the Count-Tokens body PLUS max_tokens,
+    // not that the ceiling is one particular number - the ceiling is asserted in
+    // planner-truncation.test.ts, where its value is the subject. Pinning 256 here
+    // made a deliberate raise of that ceiling look like a vision regression.
+    const paying = JSON.parse(String(messages?.body));
+    const countBody = JSON.parse(String(count?.body));
+    expect(typeof paying.max_tokens).toBe("number");
+    expect({ ...paying, max_tokens: 0 }).toEqual({ ...countBody, max_tokens: 0 });
     expect(JSON.parse(String(messages?.body)).model).toBe("claude-sonnet-5-5");
     expect(new Headers(messages?.headers).has("anthropic-beta")).toBe(false);
     expect(result.calls[0]?.usage).toEqual({ prompt: 100, completion: 12, cost: 0.00032 });
@@ -521,6 +525,37 @@ describe("C1 sweep abort-early", () => {
       .filter(Boolean);
     expect(reasons).toContain("repeated-cause");
     expect(report.completed).toBe(0);
+  });
+
+  // The SCORED case, which the omission test above does not cover (TIF-164).
+  //
+  // arm-003d r2 trials 3 and 4 both SCORED `refuted/persisted-mismatch` with zero
+  // steps and one truncated model call. The abort rule was wired only to
+  // omissions and driver-unreachable, so a repeated scored failure incremented
+  // nothing and the sweep kept buying trials that were measuring the output
+  // ceiling rather than the agent. Reverting the scored branch makes this fail:
+  // every row is prepared instead of stopping at two.
+  it("stops after two consecutive identical SCORED failures", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-scored-"));
+    directories.push(directory);
+    let prepares = 0;
+    const report = await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      // A judge that always finds the document unsaved: the r2 shape. The trial
+      // completes and scores, it does not throw.
+      planner: planner(),
+      prepare: async () => {
+        prepares += 1;
+        return prepared();
+      },
+    });
+    expect(prepares).toBeLessThan(5);
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
+      .map((e) => e.reason)
+      .filter(Boolean);
+    expect(reasons).toContain("repeated-cause");
   });
 
   // Mutation B in the earlier review: dropping the reset (`else consecutive += 1`)
