@@ -4,16 +4,25 @@
 booted. #314 is merged (15:36:18Z); this is a defect in it, reported rather than
 quietly patched.
 
-## CORRECTION (same day): the timeout was wrong; the cause is UNEXPLAINED
+## CORRECTION (same day): the timeout was wrong; the cause is the CR in the compare
 
 An earlier revision of this file, and the merged PR #319, named
-`ConnectTimeout=10` as the cause. **That is wrong, and the probe slot disproved
-it.** The live failure is **UNEXPLAINED**, and the most likely mechanism is a
-string comparison that cannot match.
+`ConnectTimeout=10` as the cause. **That is wrong.** At the time of this section
+the live failure was unexplained and a string comparison was the leading
+candidate; it has since been **measured** — the guest's `ssh ... 'echo ok'`
+returns `ok\r`, so the strict compare can never match. The sections below carry
+both the measurement and the reasoning that led to it.
 
-## Evidence status: this is a HYPOTHESIS, not a measured cause
+## Evidence status: MEASURED — the earlier "hypothesis" framing is superseded
 
-Being precise, because I asserted this more strongly than I could support:
+**This section originally said the cause was a hypothesis with the CR untested.
+That is no longer true, and the correction below carries the measurement.** The
+live guest's `ssh ... 'echo ok'` was captured with `od` and returns `o k \r` — the
+three bytes, matching the prediction — so the CR is no longer an inference. The
+bullets are kept because the reasoning was sound at the time and the distinction
+matters; only the status has changed.
+
+What was true when written, and remains true of the reasoning:
 
 - **Solid:** `grep -q ok` (in `wait-ssh.sh`, which works) is CR*and*-newline
   tolerant by construction, while `[ "$(ssh ...)" = "ok" ]` requires an exact
@@ -21,17 +30,17 @@ Being precise, because I asserted this more strongly than I could support:
 - **Solid:** bash command substitution strips trailing newlines, so the earlier
   "trailing newline" hypothesis is **wrong** — `ok\n` becomes `ok` and matches.
 - **Solid:** `tr -d '\r'` before the compare makes the strict form tolerant.
-- **NOT MEASURED: that this guest actually emits `\r`.** The `6f6b 0d` I quoted
-  was produced by **simulating** PowerShell with `printf "ok\r\n"`, not by
-  capturing the real guest. **No committed artefact records what the guest's
-  `ssh ... 'echo ok'` actually returns.** The inference is plausible (PowerShell
-  writes CRLF, and the earlier `tr -d '\r'` idiom appears in three repo scripts
-  for exactly this guest), but it is an inference.
+- **NOW MEASURED: this guest emits `\r`.** This bullet originally said the
+  opposite, and it was right to: the `6f6b 0d` first quoted came from
+  **simulating** PowerShell with `printf "ok\r\n"`, not from the guest, and no
+  committed artefact recorded the real bytes. That gap has since been closed — a
+  live capture shows the probe returns `o k \r` (three bytes), `[ "$v" = "ok" ]`
+  is NO MATCH, and `tr -d '\r'` then compare is MATCH. **The prediction was
+  right and the evidence now exists.**
 
-**So the honest state is: four hypotheses were eliminated by measurement, a
-fifth (CR) is the leading candidate and is untested, and the requested live
-capture is what would settle it.** The capture needs to record the probe's
-stdout, stderr and exit code *inside* the gate against a running guest.
+**The requested live capture has since been taken, and it settled it:** the guest
+returns `ok\r`, so the comparison could never match. The four eliminations stand,
+and the fifth candidate turned out to be the cause.
 
 If the capture shows `ok` with no `\r`, then CR is eliminated too and the cause
 is something none of the five accounts for.
@@ -129,7 +138,7 @@ instantly**, so the compare passed on the first iteration — the stub emitted
 For this class of bug the stub must reproduce the transport's real bytes,
 including line endings.
 
-## Candidate fix (pending the live capture)
+## Candidate fix — SHIPPED (the live capture confirmed the mechanism)
 
 `tr -d '\r'` before the compare makes the strict form tolerant, matching `wait-ssh.sh`. The timeout question (raise
 `ConnectTimeout`? separate probe from sample cadence?) is a separate, secondary
