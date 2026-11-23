@@ -62,7 +62,11 @@ for line in sys.stdin:
             res = text({"ok": True, "state_version": 1, "screenshot": "/x.png",
                         "a11y_tree": tree})
         elif n == "act":
-            res = text({"ok": True, "outcome": {"kind": "delivered_verified"}})
+            kind = a.get("action", {}).get("kind")
+            if os.environ.get("STUB_FAIL_ACTS") == "1" and kind != "launch":
+                res = text({"ok": True, "outcome": {"kind": "failed", "reason": "synthetic"}})
+            else:
+                res = text({"ok": True, "outcome": {"kind": "delivered_unverified"}})
         elif n == "create":
             res = text({"ok": True, "session_id": a.get("session_id", "s")})
         else:
@@ -364,6 +368,30 @@ def main() -> int:
     finally:
         holder.kill()
         holder.wait()
+
+    print("17. failed actions cannot pass on a matching store (M1)")
+    h = Harness(store_items=["buy milk", "call mom", "write report"], a11y=False, geometry=True)
+    h.env["STUB_FAIL_ACTS"] = "1"
+    code, d = h.run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "failure", f"failure, not pass (got {row['state']})")
+    expect(code == 1, "exit non-zero")
+    c = checks_of(d, "run-df-s01-1").get("actions-delivered")
+    expect(c is not None and c["passed"] is False, f"actions-delivered check fails: {c}")
+
+    print("18. delivered_unverified is not a failure (global route must still pass)")
+    code, d = Harness(store_items=["buy milk", "call mom", "write report"],
+                      a11y=False, geometry=True).run(scenario="DF-S01")
+    row = ledger(d)["run-df-s01-1"]
+    expect(row["state"] == "pass", f"pass (got {row['state']})")
+    c = checks_of(d, "run-df-s01-1").get("actions-delivered")
+    expect(c is not None and c["passed"] is True, f"actions-delivered passes: {c}")
+
+    print("19. result.json step action reports the wire form (N1)")
+    res = json.loads((d / "run-df-s01-1" / "result.json").read_text())
+    kinds = [st["action"]["kind"] for st in res["steps"]]
+    expect("typeTextGlobal" in kinds, f"global route visible in steps: {kinds}")
+    expect("typeText" not in kinds, "no ref-form summary on the global route")
 
     print(f"\n{'FAILED' if FAILS else 'PASSED'}: {len(FAILS)} failure(s)")
     return 1 if FAILS else 0

@@ -438,6 +438,7 @@ def execute_scenario(
     started_at = now()
     t0 = time.time()
     steps: list[tuple[dict[str, Any], dict[str, Any]]] = []  # (step, action)
+    all_postconditions: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
     def finish(res: RunResult) -> RunResult:
@@ -588,13 +589,18 @@ def execute_scenario(
             except McpError as e:
                 cleanup(mcp, sid)
                 return gap("REQ-04", f"add {item!r} failed: {e}")
+        post = [predicate(f"add_delivered[{item}][{a['kind']}]", o)
+                for a, o in zip(actions, outcomes)]
+        all_postconditions.extend(post)
         steps.append(({"step": step,
-                       "action": {"kind": "typeText", "text": item},
+                       # Report the wire form, not a summary: a consumer reading
+                       # steps[].action.kind must be able to tell a ref-targeted
+                       # run from a global-input one.
+                       "action": ({"kind": "typeText", "text": item} if route == "ref"
+                                  else {"kind": "typeTextGlobal", "text": item}),
                        "dispatched": actions,
                        "preconditionResults": [],
-                       "postconditionResults": [
-                           predicate(f"add_delivered[{item}]", o) for o in outcomes
-                       ],
+                       "postconditionResults": post,
                        "stateVersionBefore": step, "stateVersionAfter": step + 1}, {}))
         step += 1
 
@@ -605,13 +611,17 @@ def execute_scenario(
             else {"kind": "clickAt", "x": save_geom["x"], "y": save_geom["y"]}
         )
         try:
-            act(mcp, sid, save_action)
+            save_outcome = act(mcp, sid, save_action)
         except McpError as e:
             cleanup(mcp, sid)
             return gap("REQ-04", f"save click failed: {e}")
-        steps.append(({"step": step, "action": {"kind": "click", "text": "Save"},
+        save_post = [predicate("save_delivered", save_outcome)]
+        all_postconditions.extend(save_post)
+        steps.append(({"step": step,
+                       "action": ({"kind": "click", "text": "Save"} if route == "ref"
+                                  else {"kind": "clickAt", "text": "Save"}),
                        "dispatched": [save_action],
-                       "preconditionResults": [], "postconditionResults": [],
+                       "preconditionResults": [], "postconditionResults": save_post,
                        "stateVersionBefore": step, "stateVersionAfter": step + 1}, {}))
 
     # --- independent oracle: read the guest's store file back ------------
@@ -646,6 +656,25 @@ def execute_scenario(
 
     checks.append(check(f"{sc.slug}:create-cost-observed", True,
                         f"create took {create_seconds:.2f}s", 0.0))
+
+    # Action outcomes are not evidence of the *outcome*, but a run whose actions
+    # all failed did not perform the task, and must not be graded `pass` just
+    # because the store already held the expected set (a stale store from a
+    # prior run, or an app that pre-seeds it). This is the false-success shape
+    # the harness exists to prevent, so a failed delivery is a failing check.
+    #
+    # `delivered_unverified` is NOT a failure: the global route reports it by
+    # design because there is nothing to read back at that layer, and the
+    # persisted store is what decides. Only an explicit `failed` counts.
+    failed_actions = [p for p in all_postconditions if p["passed"] is False]
+    checks.append(check(
+        f"{sc.slug}:actions-delivered",
+        not failed_actions,
+        "all actions delivered" if not failed_actions
+        else f"{len(failed_actions)} action(s) reported failed: "
+             + "; ".join(f"{p['predicateName']}={p['observed']}" for p in failed_actions[:3]),
+        0.0,
+    ))
 
     cleanup(mcp, sid)
 
@@ -744,8 +773,20 @@ def app_basename() -> str:
 
 
 def predicate(name: str, outcome: Any) -> dict[str, Any]:
+    """Three-valued delivery predicate (ADR-0003's outcome, not collapsed).
+
+    `delivered_verified` -> True, `failed` -> False, `delivered_unverified` ->
+    None. The last is not a failure: the global route reports it by design
+    because there is nothing to read back at that layer, and the persisted store
+    is what decides the run. Collapsing it to False would fail every honest
+    global-route run; collapsing it to True would let a silent no-op pass.
+    """
     kind = (outcome or {}).get("kind", "unknown") if isinstance(outcome, dict) else "unknown"
-    return {"predicateName": name, "passed": kind == "delivered_verified",
+    # The predicate is named "..._delivered", so it answers "did the action
+    # land": `delivered_verified` and `delivered_unverified` both did, `failed`
+    # did not. PredicateResult.passed is boolean-only (M1-012), so the exact
+    # three-way kind lives in `observed` rather than being collapsed away.
+    return {"predicateName": name, "passed": kind != "failed",
             "observed": json.dumps(outcome, sort_keys=True)}
 
 
