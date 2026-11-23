@@ -80,6 +80,21 @@ jobs:
           n=$(grep -cE '^test file_grant::.* \.\.\. ok$' /tmp/agent-test.log || true)
           echo "file_grant tests passed: $n"
           [ "$n" -gt 0 ] || { echo "::error::zero file_grant tests ran on Linux (TIF-119)"; exit 1; }
+      # RT-017: the agent/wire round trip (transport <-> real agent) is Linux-only
+      # too, as is RT-015's read over the channel; core + mcp hold the Session and
+      # MCP-surface tests. Build the agent explicitly so the transport tests never
+      # spawn a stale cached binary.
+      - name: Test transport (real agent over the wire), core, mcp
+        run: |
+          set -o pipefail
+          cargo build -p myco-rt-agent
+          cargo test -p myco-rt-transport -p myco-rt-core -p myco-rt-mcp 2>&1 | tee /tmp/host-test.log
+      - name: Wire round trip actually ran
+        run: |
+          set -euo pipefail
+          for t in file_write_over_control_channel_round_trips_through_the_agent agent_refuses_an_oversize_write_on_its_own file_read_over_control_channel_requires_grant; do
+            grep -qE "^test tests::$t \.\.\. ok$" /tmp/host-test.log || { echo "::error::$t did not run and pass on Linux"; exit 1; }
+          done
 
   # Runs both verdict fixture sizes on main pushes and PRs labelled `perf`.
   # The hosted 10k check compares the median against calibrated runner caps.

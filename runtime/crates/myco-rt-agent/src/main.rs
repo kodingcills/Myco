@@ -252,9 +252,10 @@ fn main() {
                         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no file grant")
                     })?;
                     let path = request_path(&req, "path")?;
-                    // Size-check before deserializing: the host caps at 1 MiB too,
-                    // but the agent must not trust that (a huge array costs ~32x
-                    // its byte count as a JSON Value).
+                    // Size-check before converting the array. This bounds only the
+                    // copy and the Vec<u8>: the request line has already been read
+                    // and parsed whole by the loop above, so the real bound on an
+                    // oversize request is the host's 1 MiB cap (MCP + transport).
                     let len = req.get("content").and_then(|v| v.as_array()).map_or(0, |a| a.len());
                     if len > file_grant::WRITE_LIMIT {
                         return Err(std::io::Error::other("content exceeds 1 MiB limit"));

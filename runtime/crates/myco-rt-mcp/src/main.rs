@@ -365,15 +365,10 @@ impl Server {
                 Some(root.to_string())
             }
         };
-        // RT-017 write is a second, explicit opt-in on top of the read grant.
-        let allow_write = args["allow_write"].as_bool().unwrap_or(false);
-        if allow_write && read_root.is_none() {
-            return Err((-32602, "allow_write requires read_root".to_string()));
-        }
-        let mut permissions = Permissions::default();
-        if allow_write {
-            permissions.allowed_actions.push(myco_rt_core::WRITE_FILE_PERMISSION.into());
-        }
+        let permissions = session_permissions(
+            read_root.is_some(),
+            args["allow_write"].as_bool().unwrap_or(false),
+        )?;
         let mut session = Session::new_creating(
             SessionConfig {
                 session_id: id.clone(),
@@ -949,17 +944,33 @@ fn base64_encode(input: &[u8]) -> String {
     out
 }
 
-/// Minimal base64 decode (no dependency), the inverse of `base64_encode`.
-///
-/// Strict on purpose: rejects any length that is not a multiple of 4 and any
-/// character outside the alphabet, so a caller sending malformed content gets a
-/// clear error instead of silently-corrupt bytes written to a guest file.
+/// The permission set a `create` call grants. RT-017 write is a second, explicit
+/// opt-in on top of the read grant: `read_root` alone must never yield
+/// `writeFile` (Tier-2 verifier, #229). Pure, so both directions are testable
+/// without booting a VM.
+fn session_permissions(has_read_root: bool, allow_write: bool) -> Result<Permissions, (i64, String)> {
+    if allow_write && !has_read_root {
+        return Err((-32602, "allow_write requires read_root".to_string()));
+    }
+    let mut permissions = Permissions::default();
+    if allow_write {
+        permissions.allowed_actions.push(myco_rt_core::WRITE_FILE_PERMISSION.into());
+    }
+    Ok(permissions)
+}
+
 /// RT-017 write cap, matching the agent's and transport's `WRITE_LIMIT` and
 /// `read_file`'s 1 MiB cap.
 const WRITE_FILE_LIMIT: usize = 1024 * 1024;
 /// Base64 length of a `WRITE_FILE_LIMIT`-byte payload (4 chars per 3 bytes, padded).
 const WRITE_FILE_MAX_ENCODED: usize = WRITE_FILE_LIMIT.div_ceil(3) * 4;
 
+/// Minimal base64 decode (no dependency), the inverse of `base64_encode`.
+///
+/// Strict on purpose: rejects any length that is not a multiple of 4 and any
+/// character outside the alphabet, `=` anywhere but the final one or two
+/// positions, and non-canonical trailing bits (e.g. `AA=B`, `AB==`), so a caller sending malformed content gets a
+/// clear error instead of silently-corrupt bytes written to a guest file.
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     let value_of = |c: u8| -> Result<u8, String> {
         match c {
@@ -972,18 +983,33 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         }
     };
     let bytes = input.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err("length must be a multiple of 4".into());
     }
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for chunk in bytes.chunks(4) {
-        let pad = chunk.iter().filter(|&&c| c == b'=').count();
-        if pad > 2 {
-            return Err("too much padding".into());
+    let chunks = bytes.len() / 4;
+    let mut out = Vec::with_capacity(chunks * 3);
+    for (idx, chunk) in bytes.chunks(4).enumerate() {
+        // Padding may only appear as a suffix of the LAST quantum: "x===" and
+        // "xy=z" and any '=' before the final chunk are malformed.
+        let pad = match (chunk[2], chunk[3]) {
+            (b'=', b'=') => 2,
+            (_, b'=') => 1,
+            (b'=', _) => return Err("padding must come last".into()),
+            _ => 0,
+        };
+        if pad > 0 && idx + 1 != chunks {
+            return Err("padding must come last".into());
+        }
+        if chunk[0] == b'=' || chunk[1] == b'=' {
+            return Err("padding must come last".into());
         }
         let mut vals = [0u8; 4];
-        for (i, &c) in chunk.iter().enumerate() {
-            vals[i] = if c == b'=' { 0 } else { value_of(c)? };
+        for (i, &c) in chunk.iter().enumerate().take(4 - pad) {
+            vals[i] = value_of(c)?;
+        }
+        // Canonical form: the bits a padded quantum discards must be zero.
+        if (pad == 2 && vals[1] & 0x0f != 0) || (pad == 1 && vals[2] & 0x03 != 0) {
+            return Err("non-canonical base64 (stray trailing bits)".into());
         }
         let n = (u32::from(vals[0]) << 18)
             | (u32::from(vals[1]) << 12)
@@ -1036,25 +1062,56 @@ mod read_file_tests {
         assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("missing path"));
     }
 
-    /// RT-017: an oversize payload is refused before decoding and before any
-    /// session lookup (so it costs nothing and never reaches a guest).
-    #[test]
-    fn write_file_refuses_oversize_content_before_anything_else() {
-        let mut s = srv();
-        let big = "A".repeat(WRITE_FILE_MAX_ENCODED + 4);
+    fn write_call(s: &mut Server, content: &str) -> String {
         let body = format!(
-            r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"write_file","arguments":{{"session_id":"nope","path":"f","content_base64":"{big}"}}}}}}"#
+            r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"write_file","arguments":{{"session_id":"nope","path":"f","content_base64":"{content}"}}}}}}"#
         );
-        let r = call(&mut s, &body);
+        let r = call(s, &body);
         assert_eq!(r["result"]["isError"], true);
-        let text = r["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("1 MiB"), "must be the size refusal, not 'unknown session': {text}");
+        r["result"]["content"][0]["text"].as_str().unwrap().to_string()
     }
 
-    /// The encoded cap admits exactly a 1 MiB payload.
+    /// RT-017: the PRE-decode cap. Oversize input that is not even valid base64
+    /// is refused for size, so it is never decoded (without this cap the error
+    /// would be "bad content_base64").
     #[test]
-    fn write_file_cap_admits_exactly_one_mib() {
-        assert_eq!(WRITE_FILE_MAX_ENCODED, base64_encode(&vec![0u8; WRITE_FILE_LIMIT]).len());
+    fn write_file_refuses_oversize_input_before_decoding() {
+        let text = write_call(&mut srv(), &"*".repeat(WRITE_FILE_MAX_ENCODED + 4));
+        assert!(text.contains("1 MiB"), "must be the pre-decode size refusal: {text}");
+    }
+
+    /// The POST-decode cap: LIMIT+1 bytes encode to exactly WRITE_FILE_MAX_ENCODED
+    /// chars, so they pass the length check and only the decoded-size check stops
+    /// them (without it this would reach the session lookup).
+    #[test]
+    fn write_file_refuses_one_byte_over_after_decoding() {
+        let encoded = base64_encode(&vec![0u8; WRITE_FILE_LIMIT + 1]);
+        assert_eq!(encoded.len(), WRITE_FILE_MAX_ENCODED, "fixture: LIMIT+1 fits the encoded cap");
+        let text = write_call(&mut srv(), &encoded);
+        assert!(text.contains("1 MiB"), "must be the post-decode size refusal: {text}");
+    }
+
+    /// Exactly 1 MiB is admitted past both caps (it fails later, at the session
+    /// lookup), so the caps are not off by one quantum.
+    #[test]
+    fn write_file_admits_exactly_one_mib() {
+        let text = write_call(&mut srv(), &base64_encode(&vec![0u8; WRITE_FILE_LIMIT]));
+        assert!(text.contains("unknown session"), "1 MiB must pass the caps: {text}");
+    }
+
+    /// The read grant never becomes a write grant by itself; `allow_write` adds
+    /// `writeFile` and nothing else.
+    #[test]
+    fn read_root_alone_grants_no_write_and_allow_write_grants_it() {
+        let w = myco_rt_core::WRITE_FILE_PERMISSION;
+        assert!(!session_permissions(false, false).unwrap().allows(w));
+        assert!(!session_permissions(true, false).unwrap().allows(w), "read_root alone must not grant writeFile");
+        let rw = session_permissions(true, true).unwrap();
+        assert!(rw.allows(w), "read_root + allow_write must grant writeFile");
+        let mut expected = Permissions::default().allowed_actions;
+        expected.push(w.into());
+        assert_eq!(rw.allowed_actions, expected, "allow_write adds exactly writeFile");
+        assert!(session_permissions(false, true).is_err(), "allow_write requires read_root");
     }
 
     /// A write grant needs a read root; refused before any VM is touched.
@@ -1580,6 +1637,11 @@ mod write_file_tests {
     fn base64_decode_rejects_malformed_input() {
         assert!(base64_decode("abc").is_err(), "length not a multiple of 4");
         assert!(base64_decode("ab*d").is_err(), "character outside the alphabet");
+        assert!(base64_decode("Zg==Zm9v").is_err(), "padding before the last quantum");
+        assert!(base64_decode("AA=B").is_err(), "'=' before a data char");
+        assert!(base64_decode("A===").is_err(), "three pad chars");
+        assert!(base64_decode("AB==").is_err(), "non-canonical trailing bits (2 pad)");
+        assert!(base64_decode("AAB=").is_err(), "non-canonical trailing bits (1 pad)");
     }
 
     #[test]

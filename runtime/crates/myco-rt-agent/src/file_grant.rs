@@ -68,10 +68,11 @@ impl FileGrant {
     /// Same confinement as `read`: grant-relative, no symlink traversal (any
     /// component), no mount crossing. On top of that, a write only ever lands on a
     /// regular file with a single link:
-    /// - A FIFO, device, socket or directory is refused. The open is `O_NONBLOCK`,
-    ///   so a FIFO with no reader fails with ENXIO instead of blocking the
-    ///   single-threaded agent (which wedged the whole session until `reset`).
-    ///   `O_NOCTTY` stops a tty from becoming the agent's controlling terminal.
+    /// - A FIFO, device, socket or directory is refused. An existing target is
+    ///   probed with `O_PATH` first, so a device is refused without being opened
+    ///   for write; the write open is `O_NONBLOCK|O_NOCTTY` regardless, so a FIFO
+    ///   can never block the single-threaded agent (which wedged the whole session
+    ///   until `reset`). New files are created `O_EXCL`.
     /// - `nlink > 1` is refused, so a hard link planted in the grant cannot be used
     ///   to truncate a file that lives outside it.
     /// - Content is capped at `WRITE_LIMIT` (1 MiB, matching `read`).
@@ -93,34 +94,62 @@ impl FileGrant {
                 "expected a grant-relative file path",
             ));
         }
-        let fd = openat2(
-            &self.0,
-            path,
-            // No O_TRUNC here: truncation happens only after the target is proven
-            // to be a regular, singly-linked file.
-            OFlags::WRONLY | OFlags::CREATE | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
-            Mode::from_bits_truncate(0o644),
-            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
-        )?;
-        let stat = fstat(&fd)?;
-        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "expected a regular file",
-            ));
-        }
-        if stat.st_nlink != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "refusing to write a file with more than one hard link",
-            ));
-        }
+        const RESOLVE: ResolveFlags = ResolveFlags::BENEATH
+            .union(ResolveFlags::NO_SYMLINKS)
+            .union(ResolveFlags::NO_XDEV);
+        // Probe first with O_PATH, which opens nothing for I/O: an existing device
+        // node (a watchdog, say, under an odd grant root) is refused WITHOUT ever
+        // being opened for write, so no open-time side effect can fire.
+        let fd = match openat2(&self.0, path, OFlags::PATH | OFlags::CLOEXEC, Mode::empty(), RESOLVE) {
+            Ok(probe) => {
+                require_single_link_regular(&fstat(&probe)?)?;
+                // Reopen the SAME inode for writing via its fd, never by path
+                // again, so a swap between probe and open cannot redirect it.
+                // No O_TRUNC: truncation waits until the target is re-checked.
+                use std::os::fd::AsRawFd;
+                openat2(
+                    CWD,
+                    format!("/proc/self/fd/{}", probe.as_raw_fd()).as_str(),
+                    OFlags::WRONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
+                    Mode::empty(),
+                    ResolveFlags::empty(),
+                )?
+            }
+            // A new file: O_EXCL so it is created here and now, never an existing
+            // object that appeared after the probe.
+            Err(rustix::io::Errno::NOENT) => openat2(
+                &self.0,
+                path,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
+                Mode::from_bits_truncate(0o644),
+                RESOLVE,
+            )?,
+            Err(e) => return Err(e.into()),
+        };
+        // Re-check on the fd we will actually write (definitive, race-free).
+        require_single_link_regular(&fstat(&fd)?)?;
         fcntl_setfl(&fd, OFlags::empty())?;
         ftruncate(&fd, 0)?;
         let mut file = std::fs::File::from(fd);
         use std::io::Write;
         file.write_all(bytes)
     }
+}
+
+/// A write lands only on a regular file with exactly one link: FIFOs, devices,
+/// sockets and directories are refused, and so is a hard link that could alias a
+/// file outside the grant.
+fn require_single_link_regular(stat: &rustix::fs::Stat) -> io::Result<()> {
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "expected a regular file"));
+    }
+    if stat.st_nlink != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "refusing to write a file with more than one hard link",
+        ));
+    }
+    Ok(())
 }
 
 /// Largest content `write` accepts, matching `read`'s cap.
