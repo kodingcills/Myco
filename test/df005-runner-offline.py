@@ -100,8 +100,12 @@ for line in sys.stdin:
                     served = _b.b64encode(fh.read()).decode()
             else:
                 served = FILES.get(a.get("path", ""), "")
-            res = text({"ok": True, "content_base64": served,
-                        "raw_bytes": len(served)})
+            # Mirror the MCP handler's EXACT response object
+            # (main.rs:500-508) so the test fails if the runner drifts from the
+            # Rust contract, rather than from a stub written to match the reader.
+            res = text({"ok": True, "path": a.get("path", ""),
+                        "raw_bytes": len(served) // 4 * 3,
+                        "content_base64": served})
         elif n == "create":
             res = text({"ok": True, "session_id": a.get("session_id", "s")})
         else:
@@ -757,6 +761,25 @@ def main() -> int:
     # It still must not proceed past the lock when the server is missing.
     expect("build server first" in out or "scenarios=[" in out or "refusing" in out,
            f"it proceeds to the next gate rather than silently doing nothing: {out[-160:]}")
+
+    print("27b. the read-back reads the handler's declared key, and only it")
+    # The handler returns `content_base64` (main.rs:506). A reader that also
+    # accepts a `content` key works by accident and hides a contract drift.
+    # Check the CODE, not the file text: a comment mentioning the old form must
+    # not make this fail, and a real fallback must not hide in one.
+    import ast as _ast
+    tree = _ast.parse((ROOT / "scripts" / "df005-runner.py").read_text())
+    reads = [n for n in _ast.walk(tree)
+             if isinstance(n, _ast.Call)
+             and isinstance(n.func, _ast.Attribute) and n.func.attr == "get"
+             and isinstance(n.func.value, _ast.Name) and n.func.value.id == "back"]
+    keys = [n.args[0].value for n in reads if n.args and isinstance(n.args[0], _ast.Constant)]
+    expect("content_base64" in keys, f"the reader takes content_base64: {keys}")
+    expect(keys == ["content_base64"],
+           f"and takes ONLY that key, no undeclared fallback: {keys}")
+    handler = (ROOT / "runtime" / "crates" / "myco-rt-mcp" / "src" / "main.rs").read_text()
+    expect('"content_base64": encoded' in handler,
+           "and the handler really declares content_base64 (the reader matches it)")
 
     print("28. the read-back compares BYTES, not a symmetric echo")
     # Round 2: mutation (b) — a deploy that wrote the wrong bytes — SURVIVED,

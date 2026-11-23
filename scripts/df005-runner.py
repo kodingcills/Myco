@@ -850,7 +850,11 @@ def deploy_fixture(mcp: McpClient, sid: str, app_path: str) -> tuple[bool, str]:
     except McpError as e:
         return False, f"could not read the fixture back: {e}"
 
-    encoded = back.get("content") or back.get("content_base64") or ""
+    # The MCP read_file handler returns exactly `content_base64` (main.rs:506).
+    # An `or back.get("content")` chain read as if the wire had another shape and
+    # worked only because the first lookup was None — a claim asserted against a
+    # stub that mirrored the reader rather than the Rust contract.
+    encoded = back.get("content_base64")
     try:
         got = base64.b64decode(encoded)
     except Exception as e:  # noqa: BLE001
