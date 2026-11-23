@@ -122,9 +122,8 @@ rather than the bulky run directories:
 docs/research/experiments/m1-013-sweep-v3/trials.jsonl` reproduces
 **29/30 verified, MEETS NUMERIC THRESHOLD**, Wilson 95% 0.83–0.99.
 
-The full run trees (`/tmp/m1-013/sweep-v3/runs/`, and 138 MB under `/tmp/m1-014` — a figure from the
-live working tree that no committed file can corroborate) are **not**
-committed: they are per-trial screenshots and traces, reproducible from the scripts
+The full run trees are **not** committed: they are per-trial screenshots and
+traces, reproducible from the scripts
 and not needed to check a number.
 
 ## Row 7 slots — filled by arm-003 (TIF-90), not by arm-002
