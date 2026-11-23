@@ -1,0 +1,231 @@
+{
+  "index": 10,
+  "params": {
+    "fixtureSeed": "seed-e",
+    "rowKey": "EMP-0034",
+    "column": "joined",
+    "newValue": "2024-06-29"
+  },
+  "cellRef": "D35",
+  "expected": "2024-06-29",
+  "previousValue": "2020-11-07",
+  "subArm": "c1",
+  "verdict": "refuted",
+  "verdictReason": "modified",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "A35\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 70,
+          "y": 146,
+          "text": "D35\n"
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 70,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 146
+        }
+      },
+      {
+        "tool": "click",
+        "arguments": {
+          "x": 75,
+          "y": 147
+        }
+      }
+    ],
+    "claims": []
+  },
+  "usage": [
+    {
+      "prompt": 564,
+      "completion": 160,
+      "cost": 0.002728
+    },
+    {
+      "prompt": 564,
+      "completion": 169,
+      "cost": 0.002818
+    },
+    {
+      "prompt": 564,
+      "completion": 149,
+      "cost": 0.002618
+    },
+    {
+      "prompt": 564,
+      "completion": 157,
+      "cost": 0.002698
+    },
+    {
+      "prompt": 564,
+      "completion": 108,
+      "cost": 0.002208
+    },
+    {
+      "prompt": 564,
+      "completion": 245,
+      "cost": 0.003578
+    },
+    {
+      "prompt": 564,
+      "completion": 206,
+      "cost": 0.003188
+    },
+    {
+      "prompt": 564,
+      "completion": 167,
+      "cost": 0.002798
+    },
+    {
+      "prompt": 564,
+      "completion": 231,
+      "cost": 0.003438
+    },
+    {
+      "prompt": 564,
+      "completion": 207,
+      "cost": 0.003198
+    },
+    {
+      "prompt": 564,
+      "completion": 195,
+      "cost": 0.003078
+    },
+    {
+      "prompt": 564,
+      "completion": 169,
+      "cost": 0.002818
+    },
+    {
+      "prompt": 564,
+      "completion": 225,
+      "cost": 0.003378
+    },
+    {
+      "prompt": 564,
+      "completion": 189,
+      "cost": 0.003018
+    },
+    {
+      "prompt": 564,
+      "completion": 256,
+      "cost": 0.003688
+    }
+  ],
+  "cost": 0.04525,
+  "tokens": {
+    "in": 8460,
+    "out": 2833
+  },
+  "modelCalls": 15,
+  "steps": 14,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 83860,
+  "resetMs": 196238,
+  "acPower": true,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 5.0556640625
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}
