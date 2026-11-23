@@ -13,6 +13,15 @@ SSH_PORT=10022
 EDK2="/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
 PID_FILE="$STATE/qemu.pid"
 
+# RT-013 (TIF-47): the guest RAM cap is configurable, not a literal buried in the
+# QEMU invocation. Default 2048 MB is the measured working value (docs/env/
+# linux-runtime.md); raise it with MYCO_RT_GUEST_MB when a scenario needs more, and
+# record why in that scenario's evidence. The cap is a ceiling, not a reservation:
+# QEMU commits lazily, so a 2048 MB cap does not charge the host 2048 MB up front
+# (measured 2026-11-22: host RSS ~ 0 while idle, see scripts/memory-budget.sh).
+GUEST_MB="${MYCO_RT_GUEST_MB:-2048}"
+[[ "$GUEST_MB" =~ ^[0-9]+$ ]] || { echo "MYCO_RT_GUEST_MB must be an integer MB, got '$GUEST_MB'" >&2; exit 1; }
+
 [[ -f "$EDK2" ]] || { echo "Missing UEFI firmware: $EDK2 (brew install qemu)" >&2; exit 1; }
 
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -25,13 +34,13 @@ rm -f "$PID_FILE"
 "$GUEST_DIR/make-seed.sh"
 
 : > "$SERIAL_LOG"
-echo "Booting guest (serial log: $SERIAL_LOG) ..."
+echo "Booting guest (-m ${GUEST_MB} MB, serial log: $SERIAL_LOG) ..."
 qemu-system-aarch64 \
   -machine virt \
   -cpu host \
   -accel hvf \
   -smp 2 \
-  -m 2048 \
+  -m "$GUEST_MB" \
   -display none \
   -serial file:"$SERIAL_LOG" \
   -monitor none \
