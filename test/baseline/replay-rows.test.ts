@@ -121,6 +121,18 @@ describe("offline arm-row replay", () => {
     for (const r of [verifiedPresent, verifiedAbsent, verifiedUnknown]) {
       expect(r.replayed).toBe("verified");
     }
+    // matched must depend on the REAL falseSuccess computation, not just the
+    // replayed status. These three rows have independentValuePresent
+    // true/false/null against a stored falseSuccess of false, so exactly one of
+    // them should agree:
+    //   present=true  -> falseSuccess false  -> agrees -> matched
+    //   present=false -> falseSuccess true   -> disagrees -> not matched
+    //   present=null  -> falseSuccess null   -> disagrees -> not matched
+    // Dropping independentValuePresent from that call (so it reads null for all
+    // three) makes present=true stop agreeing, which is what these pin.
+    expect(verifiedPresent.matched).toBe(true);
+    expect(verifiedAbsent.matched).toBe(false);
+    expect(verifiedUnknown.matched).toBe(false);
     // The verified arm must be distinguished by RECORDED falseSuccess, not just
     // by the replayed status. Without this, a verified row whose stored
     // falseSuccess is wrong still reads as matched, because the fixture default
@@ -186,6 +198,38 @@ describe("the match rule has three independent halves", () => {
 
   it("rejects a falseSuccess that differs while status and reason match", () => {
     expect(matchesRecorded("refuted", "modified", true, ok)).toBe(false);
+  });
+
+  it("accepts a verified row that genuinely has no false success", () => {
+    // The positive case for the verified arm. Without it, dropping
+    // independentValuePresent from the falseSuccess call (so it reads the
+    // replayed status with a null value) passes the suite AND the live replay,
+    // because every verified fixture only ever asserted matched:false. That
+    // mutation destroys verified-arm scoring outright - the exact property M1
+    // rests on - and nothing caught it.
+    expect(
+      matchesRecorded("verified", "persisted-match", false, {
+        status: "verified",
+        reason: "persisted-match",
+        falseSuccess: false,
+      }),
+    ).toBe(true);
+
+    // ...and the same row WITH a false success must not read as matched.
+    expect(
+      matchesRecorded("verified", "persisted-match", true, {
+        status: "verified",
+        reason: "persisted-match",
+        falseSuccess: true,
+      }),
+    ).toBe(true);
+    expect(
+      matchesRecorded("verified", "persisted-match", false, {
+        status: "verified",
+        reason: "persisted-match",
+        falseSuccess: true,
+      }),
+    ).toBe(false);
   });
 
   it("treats null and false as different, so an unaudited row is not a pass", () => {

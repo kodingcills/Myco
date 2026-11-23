@@ -28,9 +28,15 @@ while true; do
   fi
   now=$(date +%s)
   silent_min=$(( (now - last_change) / 60 ))
-  python3 - "$OUT" "$LIMIT_USD" "$silent_min" <<'PY'
+  python3 - "$OUT" "$LIMIT_USD" "$silent_min" "$SILENT_MIN" <<'PY'
 import glob, json, sys
 out, limit, silent = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
+# The threshold arrives as argv[4], not as a shell name: this block is a quoted
+# heredoc, so bash variables are NOT interpolated into it. Referencing SILENT_MIN
+# directly here raised NameError on every iteration, which made the watcher exit
+# non-zero immediately - it never reported a stall or a spend breach, i.e. it was
+# broken in exactly the way it exists to prevent.
+silent_limit = int(sys.argv[4])
 ledger = json.load(open(f"{out}/accounting.json"))["c1"]
 committed = sum(e.get("micros", 0) for e in ledger.values()) / 1_000_000
 scored = [e for e in ledger.values() if e.get("status") == "scored"]
@@ -39,7 +45,7 @@ reasons = Counter(r.get("verdictReason") for r in (e.get("row", {}) for e in sco
 print(f"[watch] rows={len(scored)} committed=${committed:.4f}/${limit:.2f} silent={silent}m reasons={dict(reasons)}")
 if committed > limit:
     print("[watch] TRIGGER committed spend over limit"); sys.exit(9)
-if silent >= SILENT_MIN:
+if silent >= silent_limit:
     print(f"[watch] TRIGGER silent {silent}m - tell the Coordinator"); sys.exit(10)
 PY
   code=$?
