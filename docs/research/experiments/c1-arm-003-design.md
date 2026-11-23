@@ -111,13 +111,25 @@ run; power is recorded, never enforced).
 2. **Every row carries an `instruction` field** and it is byte-identical across all
    30 trials. A diff between any two rows' `instruction` must be empty. This is the
    parity claim, checked from the artifact rather than from source.
+
+   **This criterion is currently unenforced, and must be made enforceable before
+   the arm runs.** As of `144ed80` the producer exists (`c1-trial.ts:103` sets
+   `instruction: taskText(...)`) but the field is **optional** in both the row type
+   (`src/baseline/index.ts:165`) and the `isBaselineRow` validator, and **0 of 30**
+   arm-002 rows actually carry it. So an earlier revision of this document claimed
+   the field was "emitted on every row" on the strength of the producer alone —
+   that was wrong: nothing enforces it and no artifact demonstrates it. Arm-003
+   would satisfy the claim only because `runC1Trial` happens to be the sole
+   producer. Making the field required and validated is the pre-condition that
+   turns this from an assertion into a check.
 3. **Spend ≤ $9.00 committed**, counting every ledger status plus the spike. Report
    `scored + omitted + reserved`, not scored alone — an omitted trial made real API
    calls before it died.
 4. **`falseSuccess` is reported as observed, not as a bound.** Arm-002 has
-   `audited: false` on every row, so "0 false successes" there is unaudited and
+   `audited: false` on every row (`c1-trial.ts:91` — the ref earlier in this
+   document said :88, which was stale), so "0 false successes" there is unaudited and
    supports no bound. Arm-003 must audit the `verified` rows (the audit only runs
-   on `verified`, `c1-trial.ts:88`) or state plainly that it did not.
+   on `verified`, `c1-trial.ts:91`) or state plainly that it did not.
 5. **The comparison is stated as a comparison.** Arm-003 vs arm-002 differs in the
    task text; that is the independent variable and must be named in the write-up.
 

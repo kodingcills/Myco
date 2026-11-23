@@ -1,0 +1,42 @@
+{
+  "denominator": 30,
+  "recorded": 30,
+  "notRun": [],
+  "complete": true,
+  "verified": 29,
+  "byStatus": {
+    "refuted": 1,
+    "verified": 29
+  },
+  "nonVerdict": 0,
+  "disqualified": false,
+  "meetsThreshold": true,
+  "stillReachable": true,
+  "wilson95": [
+    0.833,
+    0.994
+  ],
+  "seeds": {
+    "m1-013-live": 5,
+    "seed-b": 5,
+    "seed-c": 5,
+    "seed-e": 5,
+    "seed-f": 5,
+    "seed-d": 4
+  },
+  "columns": {
+    "name": 8,
+    "qty": 8,
+    "joined": 7,
+    "salary": 6
+  },
+  "recordsWithoutFixtureHash": [],
+  "failures": [
+    {
+      "index": 3,
+      "status": "refuted",
+      "seed": "seed-d",
+      "reason": "cell E10 expected \"$12458.13\" but live document has \"$77544.00\""
+    }
+  ]
+}

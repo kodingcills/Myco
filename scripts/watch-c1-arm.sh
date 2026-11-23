@@ -27,7 +27,24 @@ SILENT_MIN=${3:-20}
 # you start it precisely because you think the run may already be stuck.
 if [ -f "$OUT/progress.log" ]; then
   last_size=$(wc -c < "$OUT/progress.log" | tr -d ' ')
-  last_change=$(stat -f %m "$OUT/progress.log" 2>/dev/null || echo "$(date +%s)")
+  # Portable mtime. BSD `stat -f %m`, GNU `stat -c %Y`.
+  #
+  # The subtlety that cost a CI cycle: on GNU stat, `-f %m` is not a clean
+  # failure. It treats `%m` as a FILENAME, writes "cannot read file system
+  # information for '%m'" plus a filesystem dump to STDOUT, and exits 1 - so
+  # capturing the attempt and testing the value afterwards means the capture
+  # holds multi-line garbage with the real epoch buried inside it. Probe the
+  # FLAG first on a throwaway invocation and only capture from the form that
+  # works on this platform.
+  last_change=""
+  if [ "$(uname -s)" = "Darwin" ]; then
+    last_change=$(stat -f %m "$OUT/progress.log" 2>/dev/null)
+  else
+    last_change=$(stat -c %Y "$OUT/progress.log" 2>/dev/null)
+  fi
+  case "${last_change:-}" in
+    "" | *[!0-9]*) last_change=$(date +%s) ;;
+  esac
 else
   last_size=0
   last_change=$(date +%s)
