@@ -336,7 +336,9 @@ agent_sandbox() {
   printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo boot >> "$d/order.log"; sleep 300 & echo $! > "$d/state/qemu.pid"\n' > "$d/boot.sh"
   printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo shutdown >> "$d/order.log"; kill "$(cat "$d/state/qemu.pid")" 2>/dev/null; rm -f "$d/state/qemu.pid"\n' > "$d/shutdown.sh"
   # build stub: fail-build -> exit 1; build-no-output -> "succeed" but produce nothing
-  printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo build >> "$d/order.log"; [[ -f "$d/fail-build" ]] && exit 1; [[ -f "$d/build-no-output" ]] && exit 0; echo new > "$d/state/myco-rt-agent-aarch64"\n' > "$d/build-agent-in-guest.sh"
+  # build stub: fail-build -> exit 1; build-no-output -> "succeed" but produce nothing;
+  # build-partial -> leave a truncated (non-empty) agent, then fail
+  printf '#!/usr/bin/env bash\nd="$(dirname "$0")"; echo build >> "$d/order.log"; [[ -f "$d/build-partial" ]] && { echo trunc > "$d/state/myco-rt-agent-aarch64"; exit 1; }; [[ -f "$d/fail-build" ]] && exit 1; [[ -f "$d/build-no-output" ]] && exit 0; echo new > "$d/state/myco-rt-agent-aarch64"\n' > "$d/build-agent-in-guest.sh"
   # ssh stub answers `cloud-init status` like the real thing
   printf '#!/usr/bin/env bash\nd="%s"; if [[ -f "$d/ci-error" ]]; then echo "status: error"; elif [[ -f "$d/not-ready" ]]; then echo "status: running"; else echo "status: done"; fi\n' "$d" > "$d/bin/ssh"
   chmod +x "$d"/*.sh "$d/bin/ssh"
@@ -395,6 +397,26 @@ out="$(prov "$A" --rebuild-agent 2>&1)"; rc=$?; reap "$A"
 if [[ $rc -ne 0 && "$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null)" == old && "$out" == *"missing"* ]]; then
   ok "a rebuild that produces nothing fails and restores the previous agent"
 else bad "silent rebuild: rc=$rc agent=$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null) / $out"; fi
+
+A="$TMP/a19h2"; agent_sandbox "$A"; echo old > "$A/state/myco-rt-agent-aarch64"; touch "$A/build-partial"
+out="$(prov "$A" --rebuild-agent 2>&1)"; rc=$?; reap "$A"
+chk="$(bash "$A/provision.sh" --check 2>&1)"; crc=$?
+if [[ $rc -ne 0 && "$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null)" == old && ! -e "$A/state/myco-rt-agent-aarch64.prev" && $crc -eq 0 ]]; then
+  ok "a rebuild that leaves a truncated agent and fails restores the previous agent"
+else bad "partial rebuild: rc=$rc agent=$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null) prev=$(cat "$A/state/myco-rt-agent-aarch64.prev" 2>/dev/null) / $out"; fi
+
+A="$TMP/a19h3"; agent_sandbox "$A"; touch "$A/build-partial"
+out="$(prov "$A" --build-agent 2>&1)"; rc=$?; reap "$A"
+chk="$(bash "$A/provision.sh" --check 2>&1)"; crc=$?
+if [[ $rc -ne 0 && ! -e "$A/state/myco-rt-agent-aarch64" && $crc -eq 1 && "$chk" != *"Provisioned."* ]]; then
+  ok "a first build that leaves a truncated agent and fails leaves no agent behind"
+else bad "partial first build: rc=$rc check-rc=$crc agent=$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null) / $chk"; fi
+
+A="$TMP/a19h4"; agent_sandbox "$A"; echo old > "$A/state/myco-rt-agent-aarch64"; touch "$A/not-ready"
+out="$(MYCO_RT_CLOUDINIT_WAIT_SECS=1 prov "$A" --rebuild-agent 2>&1)"; rc=$?; reap "$A"
+if [[ $rc -ne 0 && "$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null)" == old ]]; then
+  ok "a rebuild that fails before building leaves the existing agent untouched"
+else bad "pre-build failure: rc=$rc agent=$(cat "$A/state/myco-rt-agent-aarch64" 2>/dev/null) / $out"; fi
 
 A="$TMP/a19i"; agent_sandbox "$A"
 ( source "$VMLOCK_SCRIPT"; MYCO_VM_LOCK_PATH="$A/vm.lock"; VM_LOCK_PATH="$A/vm.lock"; vm_lock_acquire selftest-holder >/dev/null 2>&1 && sleep 30 ) & holder=$!

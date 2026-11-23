@@ -57,5 +57,9 @@ echo "[build] cargo build --release -p myco-rt-agent (native, in guest)"
 "${SSH[@]}" 'set -e; mkdir -p ~/bin && rm -f ~/bin/myco-rt-agent && cp ~/myco-build/target/release/myco-rt-agent ~/bin/myco-rt-agent && chmod +x ~/bin/myco-rt-agent && ls -la ~/bin/myco-rt-agent'
 # Keep a host-side copy: reset() recreates the overlay, which deletes ~/myco-build
 # and ~/bin inside the guest, so the backend must be able to reinstall from here.
-"${SCP[@]}" myco@localhost:~/bin/myco-rt-agent "$GUEST_DIR/state/myco-rt-agent-aarch64" >/dev/null
+# Copy to a temp name and rename into place: an interrupted or failed scp (disk
+# full, dropped connection, Ctrl-C) must never leave a truncated agent at the path
+# create installs from (TIF-120 review round 2).
+"${SCP[@]}" myco@localhost:~/bin/myco-rt-agent "$GUEST_DIR/state/myco-rt-agent-aarch64.tmp" >/dev/null
+mv -f "$GUEST_DIR/state/myco-rt-agent-aarch64.tmp" "$GUEST_DIR/state/myco-rt-agent-aarch64"
 echo "[build] OK: /home/myco/bin/myco-rt-agent (host copy: runtime/guest/state/myco-rt-agent-aarch64)"

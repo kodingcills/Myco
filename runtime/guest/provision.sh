@@ -192,12 +192,19 @@ elif [[ -s "$AGENT" && $AGENT_MODE == build ]]; then
 else
   take_locks
   BOOTED_HERE=0
+  BUILD_STARTED=0; BUILD_OK=0
   cleanup() {
     local rc=$?
     if [[ $BOOTED_HERE -eq 1 ]]; then "$GUEST_DIR/shutdown.sh" || true; fi
-    # A failed (re)build must not cost the agent that worked before it.
-    if [[ ! -s "$AGENT" && -s "$AGENT.prev" ]]; then
-      mv -f "$AGENT.prev" "$AGENT"; echo "Restored the previous agent ($AGENT)." >&2
+    # A build that started but did not succeed leaves nothing at the agent path
+    # but the previous agent: whatever it wrote there (possibly a truncated
+    # partial copy, which `-s` cannot tell from a good one) is discarded, and the
+    # agent that worked before is put back. Decided by BUILD_OK, not by size.
+    if [[ $BUILD_STARTED -eq 1 && $BUILD_OK -ne 1 ]]; then
+      rm -f "$AGENT" "$AGENT.tmp"
+      if [[ -s "$AGENT.prev" ]]; then
+        mv -f "$AGENT.prev" "$AGENT"; echo "Restored the previous agent ($AGENT)." >&2
+      fi
     fi
     release_locks
     return $rc
@@ -232,6 +239,7 @@ else
   done
   # Move the old agent aside: a stale copy must not satisfy the success check below,
   # and cleanup restores it if the build fails.
+  BUILD_STARTED=1
   if [[ -s "$AGENT" ]]; then mv -f "$AGENT" "$AGENT.prev"; fi
   # Retry once: a first build on a fresh overlay has hit transient toolchain hiccups.
   if ! "$GUEST_DIR/build-agent-in-guest.sh"; then
@@ -239,6 +247,7 @@ else
     "$GUEST_DIR/build-agent-in-guest.sh" || { echo "FAIL: agent build (after retry)" >&2; exit 1; }
   fi
   [[ -s "$AGENT" ]] || { echo "FAIL: build reported success but $AGENT is missing" >&2; exit 1; }
+  BUILD_OK=1
   rm -f "$AGENT.prev"
 fi
 
