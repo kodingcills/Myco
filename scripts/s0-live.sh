@@ -46,6 +46,10 @@ probe() {
 # A guest is identified by the basename of its argv[0], so an absolute path or an
 # `exec -a` wrapper still counts. A failed `ps` is not evidence of an idle host:
 # the gate must fail closed, so an unreadable table reports a guest.
+#
+# Identity comes from the basename of argv[0], not a regex over argv: on
+# 2026-11-23 `pgrep -f qemu-system-aarch64` matched a file path in an unrelated
+# argv and would have been self-defeating by matching its own text.
 qemu_running() {
   local table
   table="$(ps -Ao command)" || return 0
@@ -54,15 +58,6 @@ qemu_running() {
 }
 
 gate() {
-  # Refuse to start a guest while another one is running. Memory pressure is
-  # reported, not gated: TIF-123/#244 made the live check informational.
-  # Identity comes from the process table's command column, not a regex over
-  # argv: on 2026-11-23 `pgrep -f` matched a file path in an unrelated argv and
-  # would have been self-defeating by refusing on its own text.
-  if qemu_running; then
-    say "REFUSED: a qemu guest is already running; the window is not ours"
-    return 2
-  fi
   # The gate the runtime and the human own: no boot, and no probe, without them.
   # Environment variables are a stopgap until the coordinator's lock backend is
   # named in the runbook; they are read here and nowhere else.
@@ -72,6 +67,12 @@ gate() {
   fi
   if [[ "${MYCO_HOST_LOCK:-}" != "1" ]]; then
     say "REFUSED: the shared host lock is not held by this run (MYCO_HOST_LOCK=1 when it is)"
+    return 2
+  fi
+  # Refuse to start a guest while another one is running. Memory pressure is
+  # reported, not gated: TIF-123/#244 made the live check informational.
+  if qemu_running; then
+    say "REFUSED: a qemu guest is already running; the window is not ours"
     return 2
   fi
   # The runtime binary is the only transport; a missing one must refuse here so

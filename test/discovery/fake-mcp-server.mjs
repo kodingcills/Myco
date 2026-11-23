@@ -25,7 +25,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
   if (message.method !== "tools/call") return;
   const { name, arguments: args } = message.params;
+  const failing = process.env.FAKE_MCP_FAIL === name;
   if (log) appendFileSync(log, `${name} ${JSON.stringify(args)}\n`);
+  if (failing) {
+    return send(message.id, {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ ok: false, code: -32000, error: `${name} failed` }),
+        },
+      ],
+      isError: true,
+    });
+  }
   if (name === "create") return send(message.id, text({ ok: true, session_id: args.session_id }));
   if (name === "observe")
     return send(message.id, text({ ok: true, state_version: 7, windows: [{ id: "myco-todo" }] }));

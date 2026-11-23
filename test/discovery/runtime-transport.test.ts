@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RuntimeTransport } from "../../src/discovery/runtime-transport.ts";
 
-function transport(): RuntimeTransport {
+function transport(failing = ""): RuntimeTransport {
+  process.env.FAKE_MCP_FAIL = failing;
   return new RuntimeTransport({
     binary: process.execPath,
     args: [join(import.meta.dirname, "fake-mcp-server.mjs")],
@@ -54,5 +55,22 @@ describe("runtime MCP transport", () => {
     expect(calls).toContain('"kind":"clickAt"');
     expect(calls).toContain("reset");
     expect(calls).toContain("destroy");
+  });
+
+  it("reports every check unproven when the guest cannot be observed", async () => {
+    process.env.FAKE_MCP_LOG = "";
+    const t = transport("observe");
+    await t.initialize();
+    const session = await t.create();
+    const evidence = await t.evidence(session);
+    expect(evidence).toEqual({
+      runtimeReachable: false,
+      guestReady: false,
+      appPresent: false,
+      storeReadable: false,
+      oraclePresent: false,
+      guestClean: false,
+    });
+    await t.destroy();
   });
 });
