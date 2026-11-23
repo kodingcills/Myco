@@ -100,6 +100,44 @@ pub trait GuestFileRead {
     fn read_guest_file(&mut self, path: &str) -> Result<Vec<u8>, Self::ReadErr>;
 }
 
+/// Exit status of a managed guest process (RT-016).
+///
+/// Either field may be absent: a process that exited normally has `code` and no
+/// `signal`; one killed by a signal has `signal` and no `code`. Modelled as two
+/// `Option`s rather than a single status because "exited 0" and "killed by 0" are
+/// different facts and collapsing them would lose which happened.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProcessExit {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
+/// Extension capability (RT-016): a backend that can kill and relaunch a named
+/// guest process. Separate from `Backend` for the same reason as `GuestFileRead`:
+/// process control is an extension beyond the six-op surface, and a backend that
+/// cannot do it is still a valid backend.
+///
+/// `launch` already exists as an `act` kind; this adds the two ops an oracle needs
+/// to test recovery — kill a process mid-session and bring it back — without a
+/// shell.
+pub trait GuestProcessControl {
+    type ProcErr: std::error::Error + Send + Sync + 'static;
+    /// Launch a process and return a handle that `kill_guest_process` and
+    /// `relaunch_guest_process` accept. Distinct from `Action::Launch`, which
+    /// starts a process but returns no handle: without this, kill/relaunch have
+    /// nothing to name.
+    fn launch_guest_process(
+        &mut self,
+        command: &str,
+        args: &[String],
+    ) -> Result<String, Self::ProcErr>;
+    /// SIGKILL the process behind `handle`, returning how it died.
+    fn kill_guest_process(&mut self, handle: &str) -> Result<ProcessExit, Self::ProcErr>;
+    /// Relaunch the process behind a previously-killed `handle`, returning a new
+    /// handle for the replacement.
+    fn relaunch_guest_process(&mut self, handle: &str) -> Result<String, Self::ProcErr>;
+}
+
 /// The host backend seam. Implementations: QemuLinuxBackend (RT-006), later
 /// UtmWindowsBackend (RT-012) and CloudBackend. The six runtime ops route here.
 pub trait Backend: Send {

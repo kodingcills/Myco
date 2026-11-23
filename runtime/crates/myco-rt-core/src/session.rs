@@ -103,6 +103,18 @@ impl<B: Backend> Session<B> {
         RuntimeError::Backend(e.to_string())
     }
 
+    /// RT-016 process control is launch authority: launching, relaunching, and
+    /// killing guest processes all require the same `launch` permission that
+    /// `act(Launch)` checks. Without this the process-control ops were a side door
+    /// around the session's permission set (Tier-2 verifier, #226).
+    fn require_process_permission(&self) -> Result<(), RuntimeError> {
+        if self.config.permissions.allows("launch") {
+            Ok(())
+        } else {
+            Err(RuntimeError::PermissionDenied("launch".into()))
+        }
+    }
+
     /// `create`: finish provisioning and mark the session ready.
     pub fn create(&mut self) -> Result<(), RuntimeError> {
         self.backend.provision().map_err(Self::backend_err)?;
@@ -161,6 +173,60 @@ impl<B: Backend> Session<B> {
         self.backend
             .read_guest_file(path)
             .map_err(|e| RuntimeError::Backend(e.to_string()))
+    }
+
+    /// `launch_process` (RT-016): launch a process and return a handle that
+    /// `kill_guest_process`/`relaunch_guest_process` accept. Guarded like the
+    /// other non-terminal ops; bumps the version because the process set changed.
+    pub fn launch_guest_process(&mut self, command: &str, args: &[String]) -> Result<String, RuntimeError>
+    where
+        B: crate::ops::GuestProcessControl,
+    {
+        self.require_ready()?;
+        self.require_process_permission()?;
+        let handle = self
+            .backend
+            .launch_guest_process(command, args)
+            .map_err(|e| RuntimeError::Backend(e.to_string()))?;
+        self.state_version = StateVersion(self.state_version.0 + 1);
+        Ok(handle)
+    }
+
+    /// `kill_process` (RT-016): SIGKILL a managed guest process through the
+    /// backend's process-control extension. Guarded like every other non-terminal
+    /// op — a destroyed session has no processes to kill.
+    ///
+    /// A successful kill invalidates outstanding refs, exactly like a delivered
+    /// action: the process set changed, so the next observation is the only valid
+    /// source of refs. The version bump is what makes a stale ref fail closed.
+    pub fn kill_guest_process(&mut self, handle: &str) -> Result<crate::ops::ProcessExit, RuntimeError>
+    where
+        B: crate::ops::GuestProcessControl,
+    {
+        self.require_ready()?;
+        self.require_process_permission()?;
+        let exit = self
+            .backend
+            .kill_guest_process(handle)
+            .map_err(|e| RuntimeError::Backend(e.to_string()))?;
+        self.state_version = StateVersion(self.state_version.0 + 1);
+        Ok(exit)
+    }
+
+    /// `relaunch_process` (RT-016): bring a killed process back, returning a new
+    /// handle. Also bumps the version for the same reason as `kill_guest_process`.
+    pub fn relaunch_guest_process(&mut self, handle: &str) -> Result<String, RuntimeError>
+    where
+        B: crate::ops::GuestProcessControl,
+    {
+        self.require_ready()?;
+        self.require_process_permission()?;
+        let new_handle = self
+            .backend
+            .relaunch_guest_process(handle)
+            .map_err(|e| RuntimeError::Backend(e.to_string()))?;
+        self.state_version = StateVersion(self.state_version.0 + 1);
+        Ok(new_handle)
     }
 
     /// `evidence`: export this session's artifacts (trace.jsonl + result.json,
