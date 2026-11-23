@@ -98,7 +98,9 @@ fi
 #    SSH-only wait spends its whole budget and then fails - which is exactly what
 #    consumed the 2026-11-23 09:2x slot (TIF-164). wait-guest-ready.sh also
 #    requires guest CPU time to ADVANCE, which a non-booting guest never does.
-"$(gate_script)" "$SSH_WAIT_TIMEOUT" >/dev/null || die "guest did not reach a real boot within ${SSH_WAIT_TIMEOUT}s (see TIF-164)"
+GATE=$(gate_script)
+[ -x "$GATE" ] || die "readiness gate not found: '$GATE' (expected the in-repo scripts/wait-guest-ready.sh, or one via MYCO_VM_SCRIPTS). Refusing to skip the boot check."
+"$GATE" "$SSH_WAIT_TIMEOUT" >/dev/null || die "guest did not reach a real boot within ${SSH_WAIT_TIMEOUT}s (see TIF-164)"
 # 4. The guest clock is the snapshot's clock; resync so trial timestamps are sane.
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 if ! "$VM_SCRIPTS/vssh" "Set-Date -Date ([datetime]::Parse('$NOW').ToUniversalTime().ToLocalTime()) | Out-Null" >/dev/null 2>&1; then
