@@ -384,60 +384,39 @@ export function createDiscoveryComparison(
     }>,
   ) => {
     const results: ReturnType<typeof scoreDiscoveryTrial>[] = [];
-    // LAZY, and guarded per step. Materialising the iterable first would pull trials after
-    // a quota pause, so a lazy source keeps running and an infinite one never returns
-    // (round 2, finding 1). Each `next()`, `done` and `value` read is guarded separately, so
-    // a broken iterator ends the batch without losing rows already collected, and a bad
-    // record costs one row.
-    let iterator: Iterator<unknown>;
+    // LAZY, via `for...of`. A hand-rolled `while` over the iterator got two things wrong
+    // that the language construct gets right: it treated a truthy-but-not-`true` `done` as
+    // "not done" (an infinite loop on `{done: 1}`), and `break` skipped `iterator.return()`,
+    // so a generator's `finally` never ran (round 3, findings 1 and 2). The outer try keeps
+    // rows already collected when the iterator itself breaks; the inner try keeps a bad
+    // record from costing the batch.
     try {
-      iterator = trials[Symbol.iterator]();
+      for (const record of trials) {
+        let evidence: DiscoveryTrialEvidence;
+        let input: Omit<TrialInput, "intent">;
+        try {
+          ({ evidence, input } = record as {
+            evidence: DiscoveryTrialEvidence;
+            input: Omit<TrialInput, "intent">;
+          });
+        } catch {
+          results.push(malformedRow());
+          continue;
+        }
+        // The attester is caller-supplied, so it can throw too. A throw there must cost one
+        // row, not the batch.
+        let attestation: Attestation | undefined;
+        try {
+          attestation = attester(evidence, input);
+        } catch {
+          attestation = undefined;
+        }
+        const trial = scoreDiscoveryTrial(evidence, input, pinnedSettings, attestation);
+        results.push(trial);
+        if (trial.status === "paused") break;
+      }
     } catch {
-      return results;
-    }
-    while (true) {
-      let step: IteratorResult<unknown>;
-      try {
-        step = iterator.next();
-      } catch {
-        break;
-      }
-      let done: boolean;
-      try {
-        done = step.done === true;
-      } catch {
-        break;
-      }
-      if (done) break;
-      let record: unknown;
-      try {
-        record = step.value;
-      } catch {
-        results.push(malformedRow());
-        continue;
-      }
-      let evidence: DiscoveryTrialEvidence;
-      let input: Omit<TrialInput, "intent">;
-      try {
-        ({ evidence, input } = record as {
-          evidence: DiscoveryTrialEvidence;
-          input: Omit<TrialInput, "intent">;
-        });
-      } catch {
-        results.push(malformedRow());
-        continue;
-      }
-      // The attester is caller-supplied, so it can throw too. A throw there must cost one
-      // row, not the batch.
-      let attestation: Attestation | undefined;
-      try {
-        attestation = attester(evidence, input);
-      } catch {
-        attestation = undefined;
-      }
-      const trial = scoreDiscoveryTrial(evidence, input, pinnedSettings, attestation);
-      results.push(trial);
-      if (trial.status === "paused") break;
+      // A broken iterator ends the batch; rows already collected still score.
     }
     return results;
   };

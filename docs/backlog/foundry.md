@@ -376,3 +376,34 @@ that subset safe (TOCTOU, throws, freeze). The rest is here, with a fresh round 
   `.find` was refused for the wrong reason (the hash no longer matched), and a `try`-removal
   mutant was a syntax error. Check the mutant compiles before scoring it, and check the
   mutant admits an input the real code refuses.
+
+## TIF-128: the binding's remaining read-once gaps (split from #265, 2026-11-23)
+
+Round 3 of #265 rejected at `432d549` with four in-scope findings. The cap says split, not
+round 4. Findings 1 and 2 (the hand-rolled loop's infinite `done` and its skipped
+`iterator.return()`) were fixed in #265 by reverting to `for...of`, which gets both right.
+Findings 3 and 4 are here, with a fresh round 1.
+
+### EF-015 (TIF-128) Snapshot `evidence` and `claimedFixtureHash`; cover the commitment check
+- **status:** open
+- **owner:** foundry-owner
+- **tier:** 2 (grading and oracle code)
+- **blocked_by:** #265
+- **description:** Two findings from the round-3 rejection, both the same read-once class as
+  the observation fix that already landed:
+  1. **`evidence.taskId` is read three times** (`attest.ts:494` twice, `:533`) and
+     **`claimedFixtureHash` twice** (`:440`, `:508`). A toggling getter gets `eligible: true`
+     for a foreign task's hidden fixture, or for a `fixtureHash` never checked against the
+     commitment. The scorer then reads `taskId` a fourth time, so it would score one task
+     with another's evidence. Fix: snapshot `evidence` and `claimedFixtureHash` once at
+     entry, as `snapshotObservations` and `snapshotFixtures` already do.
+  2. **The commitment `taskFixtureId` check (`attest.ts:501`) has no test.** Removing it
+     admits a foreign hidden fixture with an honest `fixtureId`, and every test still passes.
+     It is one of the two non-circular bindings, so it needs a test whose input the real code
+     refuses and the mutant admits.
+- **acceptance:** a toggling getter on `evidence.taskId` or `claimedFixtureHash` cannot make
+  a row eligible; the value checked is the value reported; the `taskFixtureId` clause has a
+  test that fails when it is removed. **The eligibility flag flips only after a PASS.**
+- **also open from the same round (out of scope there):** `observerId` is read three times
+  (`attest.ts:612`, `:617`, `:676`), so the id reported can differ from the id checked. Same
+  class; fix it in the same pass.

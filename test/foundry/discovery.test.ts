@@ -409,6 +409,44 @@ describe("Discovery evidence grading", () => {
     expect(rows.every((row) => row.status === "scored" && !row.decisionEligible)).toBe(true);
   });
 
+  it("v2 round 3 finding 1: a truthy non-true done ends the batch, not an infinite loop", () => {
+    // A hand-rolled loop tested `done === true`, so `{done: 1}` read as "not done" and the
+    // loop ran forever, growing memory. `for...of` stops on any truthy `done`.
+    for (const done of [1, "yes", true] as const) {
+      let pulls = 0;
+      const source = {
+        [Symbol.iterator]: () => ({
+          next: () => {
+            pulls += 1;
+            if (pulls > 50) throw new Error("pulled past the cap");
+            return { done, value: { evidence, input } };
+          },
+        }),
+      };
+      const rows = createDiscoveryComparison(settings, refuseAll)(source as never);
+      expect(rows.length, `done=${JSON.stringify(done)} did not stop`).toBeLessThanOrEqual(1);
+      expect(pulls, `done=${JSON.stringify(done)} kept pulling`).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("v2 round 3 finding 2: a quota pause calls iterator.return()", () => {
+    // `break` out of a hand-rolled loop skips `return()`, so a generator's `finally` never
+    // runs and its cleanup is lost.
+    let cleaned = false;
+    function* trials() {
+      try {
+        yield { evidence, input };
+        yield { evidence: { ...evidence, status: "quota-exhausted" } as const, input };
+        yield { evidence, input };
+      } finally {
+        cleaned = true;
+      }
+    }
+    const rows = createDiscoveryComparison(settings, refuseAll)(trials());
+    expect(rows).toHaveLength(2);
+    expect(cleaned, "the generator's finally did not run").toBe(true);
+  });
+
   it("v2 round 2 finding 1: a broken iterator ends the batch without losing rows", () => {
     // Each step of the iteration is guarded separately: a throwing `next()`, a throwing
     // `done` getter, or a throwing `value` getter must not abort the batch or lose rows
