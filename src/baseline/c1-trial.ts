@@ -49,11 +49,16 @@ export async function runC1Trial(
   const started = performance.now();
   const transcript: Transcript = { actions: [], claims: [], deliveries: [] };
   /**
-   * The last action left unconfirmed, if any. Used only to detect that the SAME
-   * action was sent again while its predecessor's effect is still unknown, which
-   * for a save means the app may now hold two dialogs.
+   * Actions whose effect is still unconfirmed, by signature.
+   *
+   * A SET, not a single slot. The first version tracked only the immediately
+   * preceding action, so `save`-stall -> `click`-stall -> `save` overwrote the
+   * save's signature with the click's and the second save went unflagged - even
+   * though the first save's effect was still unknown and the app could hold two
+   * dialogs. That is precisely the hazard this guard exists to name, missed
+   * whenever the planner does anything in between.
    */
-  let lastStalled: string | undefined;
+  const unconfirmed = new Set<string>();
   const calls: Awaited<ReturnType<Planner["act"]>>["calls"] = [];
   const deviations = ["reset:cua-c1-base", "step-budget-asymmetry"];
   let observation: Observation = { kind: "unavailable" };
@@ -116,11 +121,14 @@ export async function runC1Trial(
         // non-stall outcome never sees it. That bug shipped in the first draft of
         // this guard and the test caught it.
         const stalledKey = actionSignature(action);
-        if (lastStalled !== undefined && lastStalled === stalledKey)
+        if (unconfirmed.has(stalledKey))
           deviations.push(`cua-action-${steps}-resent-after-stall`);
-        // A stall arms the guard; any other outcome clears it, because the input's
-        // effect is no longer unknown.
-        lastStalled = resultOfAction.outcome === "delivered-stalled" ? stalledKey : undefined;
+        // A stall marks THIS action unconfirmed; any other outcome for it clears
+        // the mark, because its effect is now known. Other signatures are
+        // untouched - clearing one action's uncertainty says nothing about
+        // another's.
+        if (resultOfAction.outcome === "delivered-stalled") unconfirmed.add(stalledKey);
+        else unconfirmed.delete(stalledKey);
       }
     } finally {
       try {

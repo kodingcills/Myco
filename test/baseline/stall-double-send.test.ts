@@ -143,21 +143,24 @@ describe("a stall must not become a silent double-send", () => {
     expect(row.deviations?.some((d) => d.includes("resent-after-stall"))).toBe(false);
   });
 
-  it("clears the arming when an intervening action succeeds", async () => {
-    // The case that makes the clearing logic load-bearing: a stall arms the guard,
-    // then a DIFFERENT action succeeds, then the first action is sent again. The
-    // repeat is not a duplicate of an unconfirmed input, because something else
-    // ran and resolved in between.
+  it("still flags the save when something ELSE ran in between", async () => {
+    // The miss the round-1 verifier found, and the case the first version of this
+    // guard got wrong: a single slot tracked "the immediately preceding action",
+    // so a stall on ANY action overwrote the save's signature and the second save
+    // went unflagged - even though the first save's effect was still unknown.
+    //
+    // A successful CLICK in between does not resolve the SAVE's uncertainty, so
+    // the save is still a duplicate hazard and must be flagged. The guard tracks
+    // the set of unconfirmed actions, not the last one.
     //
     // The response script must account for escalation: a background refusal costs
     // TWO calls (refuse, then the foreground retry). Getting that wrong silently
-    // shortens the run and the test passes or fails for the wrong reason - which
-    // is how the first draft of this file ended up vacuous.
+    // shortens the run and the test passes or fails for the wrong reason.
     const mcp = scriptedMcp([
       REFUSE, // step 1 background
-      STALL, // step 1 foreground -> arms with the save's signature
-      { structuredContent: { verified: true } }, // step 2, a click
-      { structuredContent: { verified: true } }, // step 3, the save again
+      STALL, // step 1 foreground -> the save is unconfirmed
+      { structuredContent: { verified: true } }, // step 2: a click, confirmed
+      { structuredContent: { verified: true } }, // step 3: the save again
     ]);
     let issued = 0;
     const planner = {
@@ -180,10 +183,36 @@ describe("a stall must not become a silent double-send", () => {
       prepared(mcp),
       planner,
     );
-    // One stall, then a different action, then the save again: the third step is
-    // NOT a duplicate of an unconfirmed save, so it must not be flagged.
     expect(row.deviations?.filter((d) => d.includes("-stalled")).length).toBe(1);
-    expect(row.deviations?.some((d) => d.includes("resent-after-stall"))).toBe(false);
+    // The save is sent again while its effect is unconfirmed, so this MUST flag.
+    expect(row.deviations).toContain("cua-action-3-resent-after-stall");
+  });
+
+  it("flags the repeat once, then clears the mark on its success", async () => {
+    // The honest semantics, and my own test premise was wrong twice before this:
+    // when the SAME action is sent again while unconfirmed, that repeat IS the
+    // hazard, so it is flagged - and only THEN does its outcome settle the
+    // question. A stall therefore costs exactly one flag, not a permanent mark.
+    //
+    // What must not happen is one stall flagging every later save forever; that
+    // is what the clearing prevents, and it is asserted by the fourth step below
+    // being unflagged.
+    const mcp = scriptedMcp([
+      REFUSE, // step 1 background
+      STALL, // step 1 foreground -> the save is unconfirmed
+      { structuredContent: { verified: true } }, // step 2: the repeat -> flagged, then resolved
+      { structuredContent: { verified: true } }, // step 3: a new decision, not a duplicate
+    ]);
+    const row = await runC1Trial(
+      { index: 0, params: targetParams, cellRef: "B2", expected: "x", previousValue: "y" },
+      prepared(mcp),
+      plannerRepeatingSave(3),
+    );
+    const flags = row.deviations?.filter((d) => d.includes("resent-after-stall")) ?? [];
+    expect(flags).toHaveLength(1);
+    expect(flags[0]).toBe("cua-action-2-resent-after-stall");
+    // And the third save is NOT flagged: the mark cleared when step 2 succeeded.
+    expect(row.deviations?.some((d) => d.includes("cua-action-3-resent"))).toBe(false);
   });
 
   it("does not flag a repeat when the first attempt was confirmed", async () => {
