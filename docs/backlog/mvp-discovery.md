@@ -2,8 +2,27 @@
 
 Canonical in-repo backlog for the MVP Discovery workstream. The outer loop mirrors
 this into Linear, team TIF, project **P-TIF-5 Myco MVP Discovery**. Agents in this
-repo may read Linear and update only the issue they work on, never create or restructure issues (AGENTS.md, docs/agents/issue-tracker.md); MVD ids are the record,
-and the `(TIF-nn)` tag is copied from the Linear issue it mirrors.
+repo may read Linear and update only the issue they work on, never create or
+restructure issues (AGENTS.md, docs/agents/issue-tracker.md).
+
+**MVD ids are the record; Linear ids are a mirror and drift.** The `(TIF-nn)` tag on
+each heading is the Linear issue the outer loop mirrored *at the time the heading was
+written*. When Linear restructures, the tag goes stale and the markdown does not —
+so a stale tag is not evidence that the markdown row is wrong, and neither is it
+permission to renumber: **ids are stable, never renumbered.** A row whose Linear
+issue has been split, closed, or superseded keeps its MVD id and gains a
+`linear_state` line saying so.
+
+### Known Linear drift (recorded 2026-11-22, outer loop)
+
+| Markdown row | Tag in heading | Linear today | How to read it |
+|---|---|---|---|
+| MVD-001 | TIF-53 | TIF-53 is not S0; **TIF-89** is "Discovery S0 first live run", reopened until the live run's evidence exists | MVD-001 stays the Direction A bounded proof; TIF-89 is the **execution** of MVD-001's acceptance 1–6, not a replacement for it |
+| MVD-005 | TIF-60 | unchanged as far as this repo can see; the outer loop has not reported a move | keep the tag |
+| (no markdown row) | — | TIF-86 (compare provenance, merged #203), TIF-103 (simulated notes, #215), TIF-106 (this reconciliation), TIF-107 (aliasing-bypass record), TIF-108 (compare nits) | Linear-only issues raised by review; they are tracked here by reference, not by a new MVD id |
+
+PRs carrying a Linear id say so in the title: `TIF-89` for #210 and #213 (S0 prep and
+the offline sequence), `TIF-86` for #203, `TIF-103` for #215.
 
 Ids are stable; never renumber. `blocked_by` lists markdown ids. Owner roles:
 `discovery-owner` (this thread), `build` (glm-5.3), `judgment`/verifier
@@ -36,8 +55,14 @@ criterion (TIF-60) decide the wedge.
 ---
 
 ### MVD-001 (TIF-53) Direction A bounded proof: verified desktop for a coding agent
-- **status:** design in progress. Host-dependent half blocked on runtime first path
-  (RT-011) and on host release by M1.
+- **linear_state:** the Linear issue that executes this row is **TIF-89** ("Discovery
+  S0 first live run"), reopened 2026-11-22 until the live run's evidence exists. The
+  `TIF-53` tag in the heading is stale; TIF-53 is not S0. MVD-001's acceptance
+  criteria below are unchanged, and #210 (S0 prep) and #213 (offline sequence) close
+  neither this row nor TIF-89.
+- **status:** design in progress. Host-dependent half blocked on the guest window
+  (memory-gated, see TIF-106's sibling in `docs/coordination/mvp-discovery-state.md`)
+  and on Foundry's trusted ingest.
 - **owner:** discovery-owner (design, DX surface), build (implementation), foundry (task set + oracle)
 - **blocked_by:** MVD-006 (host window), RT-first-path, RT-015
 - **surfaces:** developer surface per `docs/product/dev-surface-decision.md` (SDK over
@@ -145,6 +170,8 @@ criterion (TIF-60) decide the wedge.
 > `docs/product/mvd-preregistration.md`.
 
 ### MVD-005 (TIF-60) Recommendation and product criterion
+- **linear_state:** tag unchanged (the outer loop has not reported a move). If Linear
+  ever splits this row, record the split here rather than editing the tag.
 - **status:** provisional recommendation in `docs/product/mvp-discovery-plan.md`;
   final after MVD-004.
 - **owner:** discovery-owner, judgment (independent review)
