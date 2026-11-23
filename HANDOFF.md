@@ -4,11 +4,31 @@
 
 ## 0. Session 2026-11-23 10:25 ET — read this first
 
-Restarted thread. Preflight done; #315 amended (test-only) and pushed; ONE Tier-2
-round-1 verifier (`LauncherPRVerifier`) is running on head `75467ed`. **Launcher code is
-byte-identical to `b92ee9f`; only the test and handoff changed.**
+Restarted thread. Preflight done; #315 amended (test-only), pushed, and a verifier round
+completed. **Head is now `434d1ba`; `LauncherPRVerifier2` (round 1) is running on it.**
 
-### 10:37 ET — outer-loop rulings and what was done
+### 10:50 ET — round 1 verdict, its two nits, and the fix
+
+`LauncherPRVerifier` returned **correct** (confidence 0.88) on `75467ed`: 8/8 PASS at
+head, 3/3 FAIL against revert A, and it independently confirmed the revert-B gap (20/20
+rounds admit one, with and without the pid guard). Two P3s, both fixed at `434d1ba`:
+
+- **The `--run` comment was wrong.** It justified `mkdir` by claiming bash truncates
+  through noclobber. On bash 3.2.57 `( set -C; : > f )` refuses and exits 1, and admits
+  exactly one winner in 20/20 races of eight. The `mkdir` code was always right; the
+  rationale and the "28 double-starts in 30 rounds" figure were unsupported and are gone.
+- **The cleanup killed other people's processes.** `afterEach` ran an unscoped
+  `pkill -9 -f "sleep 297"`. Its fix took four approaches: the sleeper's argv is exactly
+  `sleep 297`, its parent stub dies and orphans it, macOS has no `setsid`, and ppid
+  matching fails the moment the parent is reaped (29 orphans in one 30-round run). What
+  works: the stub now `exec -a "<dir>/sentinel" sleep 297`, so argv[0] carries the fixture
+  path and the existing dir-scoped `pkill -f <dir>` reaps it. Measured: 0 leaked sleepers
+  across 3 suite runs, and a decoy `sleep 297` started outside the suite survives.
+
+Re-verified at `434d1ba`: HEAD 7/7, revert A still fails 3/3, lint/typecheck clean,
+launcher differs from `b92ee9f` only in that comment.
+
+### 10:37 ET — outer-loop rulings
 
 1. **No #316 conflict.** #315 does not touch `scripts/run-s0*.sh`; the `mkdir` claim stays.
 2. **Test-only amendment AUTHORISED**, launcher untouched. Done at `75467ed`:
@@ -92,7 +112,7 @@ Discovery's own worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4`.
 
 | PR | What | Head | State |
 |---|---|---|---|
-| [#315](https://github.com/kodingcills/Myco/pull/315) | Part of TIF-138 — launcher claims a run atomically, and can stop what it started | `b92ee9f` | OPEN, round 1 verifier `LauncherPRVerifier` running; no auto-merge armed |
+| [#315](https://github.com/kodingcills/Myco/pull/315) | Part of TIF-138 — launcher claims a run atomically, and can stop what it started | `434d1ba` | OPEN, round-1 verifier `LauncherPRVerifier2` running; no auto-merge armed |
 | [#300](https://github.com/kodingcills/Myco/pull/300) | Same scope, earlier attempt | `9171ed` | **CLOSED** at the 3-round cap (TIF-162), superseded by #315 |
 
 Other open PRs in my name are **other owners' ticket work** I am carrying, not
@@ -102,18 +122,21 @@ Discovery's: #316 (TIF-166), #314 (TIF-164), #313 (TIF-163), #312 (TIF-158),
 `origin/main` when this was written: `6d19507`.
 
 **What #315 must keep** (from #300's three rounds, all independently reproduced):
-- `--run` claims the run with `mkdir "$RUN_DIR/s0.lock"`. A noclobber redirect inside a
-  subshell is **not** atomic — bash parses the redirect before `set -C` runs in the same
-  subshell — measured at 28 double-starts in 30 rounds. `mkdir` measured 0 in 400.
+- `--run` claims the run with `mkdir "$RUN_DIR/s0.lock"`. The subshell-noclobber
+  alternative is not a claim at all — on bash 3.2.57 `( set -C; : > f )` refuses and exits
+  1, and admits exactly one winner in 320 racers (measured 2026-11-23, §0). `mkdir` is the
+  form that both claims and fails cleanly, and it measured 0 double-starts in 400.
 - The child is spawned with an **absolute** script path so the `$ROOT`-anchored `--stop`
   fallback can match it; the fallback walks pids from `pgrep` and never signals the shell.
 - `--status` is anchored on `$ROOT`; unanchored it listed other worktrees' children.
 - The probe and gate verdict go to the log; `--probe`/`--status`/`--stop` answer on the
   terminal (a person asked).
 - The lock is released on gate refusal, watchdog exit and `--stop`.
-- The race test must fail against **both** reverts: check-then-write → `expected 8 to be 1`,
-  subshell noclobber → `expected 3 to be 1`. #300's own test passed against the revert,
-  which is the specific failure this one exists to avoid.
+- The race test must fail against the **check-then-write revert** (`expected N to be 1`).
+  The "subshell noclobber → `expected 3 to be 1`" requirement is **retired by measurement**
+  (2026-11-23, §0): that revert admits exactly one winner in 320 racers across 40 rounds,
+  with and without the pid-file guard, so no test can be made to fail against it.
+  #300's own test passed against its revert, which is the failure this one avoids.
 
 ## 2. Linear
 
