@@ -35,30 +35,34 @@ the cap will spend ~$2.36 producing **21 more refutations for the same cause**.
 can dismiss a format dialog it has never been told about. That is a **task-design** question,
 not a harness bug, and it decides whether resuming is worth the money.
 
-## Consequence 2: the two-consecutive abort rule is structurally unable to fire here
+## Consequence 2: the abort cannot tell a fault from a diagnosed agent limit
 
-**This is the part worth acting on.** Every row has the same verdict and reason, so the coarse
-signal was there — yet the run never aborted:
+Every scored row carries the identical `(refuted, step-budget)`, yet the run never aborted:
 
+```ts
+noteCause(`scored:${verdict}:${verdictReason}:actions=${actionSignature(row)}`)
 ```
-sweep.ts  noteCause(`scored:${verdict}:${verdictReason}:actions=${actionSignature(row)}`)
-```
 
-**`actionSignature` differs on every row** (13/13 vs 7/11 vs 4/8 …), so
-`consecutive` never reaches 2 even though all nine failures are one cause.
+`actionSignature` differs on every row (13/13 vs 7/11 vs 4/8 …), so `consecutive` never
+reaches 2.
 
-**This is the same defect as TIF-181 and TIF-186, one level up:**
+**A coarse key would have stopped this run — and that would have been the WRONG outcome.**
+**Corrected 2026-11-24 by lead ruling.** An earlier revision of this note said *"a run that
+fails 9/9 for one reason should stop at 2."* Applied to scored rows, **that would stop the
+resumed r6 at its second row and the row-7 arm could never complete** — these rows fail for a
+**diagnosed agent limitation**, not a fault, and a 30-row arm exists to measure exactly that.
 
-| ticket | key was too fine | fixed to |
-|---|---|---|
-| TIF-181 | verdict + step count | action histogram |
-| TIF-186 | `trial-interrupted:${message}` | the fault class |
-| **this** | verdict + reason + **action signature** | **verdict + reason alone** |
+### The rule
 
-**A run that fails 9/9 for one reason should stop at 2.** The action signature was added to
-avoid a false abort on "a real agent trajectory" — but when the *verdict and reason* already
-match, the signature is not evidence of a different cause, it is evidence of the same cause
-being approached differently.
+| row kind | behaviour |
+|---|---|
+| **fault classes** — `omitted`, `trial-interrupted`, driver/reset faults | **abort at 2, unchanged** — the sweep is measuring the harness, not the agent |
+| **scored rows** | abort at 2 **unless the operator explicitly accepts the diagnosed cause** (`--accept-scored-cause 'refuted:step-budget'`); the accepted cause is written into the run identity and ledger so it is auditable |
+| any other scored cause | still aborts at 2 |
+
+**The abort key stays as coarse as it is for faults; scored rows get an explicit, auditable
+opt-in rather than an automatic stop.** The distinction: **a repeated *fault* means the harness
+is broken; a repeated *diagnosed agent failure* means the arm is doing its job.**
 
 ## The decisive argument: the edit lands 9/9, only the save fails
 
