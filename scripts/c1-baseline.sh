@@ -110,12 +110,17 @@ fi
 # that forgets to export it is a real operator path. Without this check the watcher
 # would quietly fall back to a run-local figure and under-report the cap, which is the
 # defect this change exists to remove.
-# SET IS NOT ENOUGH - IT MUST BE A NUMBER. Testing only for setness let `""`, `"   "`
-# and `"abc"` through, and those convert to `0.000000`, which is exactly the run-local
-# default this whole change deletes. A round-2 verifier measured all three reaching the
-# watcher. The pattern mirrors `parseSpendCeiling`'s `/^\d+$/` in scripts/spend-ceiling.ts,
-# so the launcher and the sweep accept and reject the same strings - otherwise the two
-# really can disagree about what the project has already spent.
+# SET IS NOT ENOUGH - IT MUST BE A NUMBER, AND A SAFE ONE. Testing only for setness let
+# `""`, `"   "` and `"abc"` through; all three convert to `0.000000`, which is exactly
+# the run-local default this change deletes. A round-2 verifier measured them reaching
+# the watcher.
+#
+# The rule is deliberately the SAME as `parseSpendCeiling` in scripts/spend-ceiling.ts:
+# digits only, AND within `Number.MAX_SAFE_INTEGER`. A round-3 verifier caught an earlier
+# version of this comment claiming the two agreed while checking only the character
+# class - so `9007199254740992` and above were accepted here and thrown there. Claiming
+# agreement without checking it is the same defect class as the one being fixed, so the
+# bound is enforced below rather than asserted in a comment.
 case "${MYCO_PRIOR_SPEND_MICROS:-}" in
   "")
     echo "c1-baseline: MYCO_PRIOR_SPEND_MICROS is unset or empty - the watchdog would report a run-local figure. Export it (0 only for a genuinely fresh project)." >&2
@@ -124,6 +129,14 @@ case "${MYCO_PRIOR_SPEND_MICROS:-}" in
     echo "c1-baseline: MYCO_PRIOR_SPEND_MICROS must be a whole number of micro-dollars (digits only); got '$MYCO_PRIOR_SPEND_MICROS'. Anything non-numeric would silently become 0 and the watchdog would under-report the cap." >&2
     exit 6 ;;
 esac
+# `Number.MAX_SAFE_INTEGER`, exact. Checked in python3 because an awk/double comparison
+# rounds at this magnitude and would accept 9007199254740993 - the one value the bound
+# exists to reject. The sweep refuses anything above it, so the launcher must too.
+if ! python3 -c 'import sys; v = sys.argv[1]; sys.exit(0 if int(v) <= 2**53 - 1 else 1)' \
+     "$MYCO_PRIOR_SPEND_MICROS" 2>/dev/null; then
+  echo "c1-baseline: MYCO_PRIOR_SPEND_MICROS exceeds the largest safe integer (9007199254740991); the sweep would refuse it, so the launcher must not start a watcher on it." >&2
+  exit 6
+fi
 
 source "$WS/scripts/vm-lock.sh"
 echo "Acquiring VM lock for c1-baseline.sh..."
