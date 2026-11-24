@@ -52,3 +52,10 @@ pid with `kill -0` before concluding anything.
 - **exit 10** → the flock was taken between the gate and the launch; wait and re-run. Nothing was
   created on the guest.
 - **any refutation** → stop per §6. The runbook says fix the generator first.
+
+## Fencing (added after attempt B)
+
+`run-live` now takes the VM flock (TIF-191, merged as `865389fc`), so a §6 run **cannot** be reset
+out from under it any more: a driver that tries gets `REFUSED_VM_LOCKED` instead. On a build
+before that, the gate above is the only protection, and it is a race — attempt B passed the gate
+and was reset 55 s later.
