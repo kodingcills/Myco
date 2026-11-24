@@ -256,3 +256,67 @@ field is kept but must not be used to classify; `pre` order is the usable signal
 
 A `local` inside the `--run` case branch — a runtime error (`local: can only be used in a
 function`) that `bash -n` does not catch, found by the first fixture run.
+
+---
+
+## Update 2026-11-24 — the claim path read statically, and three candidates tested
+
+**Goal.** Name the mechanism that lets the first two arrivals to `mkdir` both win inside a
+~2.4 ms window, with no `rmdir` anywhere.
+
+**Hypothesis.** Something in the claim path admits a racer **without a fresh `mkdir`**:
+(a) a `mkdir -p` or `[ -d ] ||` pre-check; (b) a stale-lock or adopt path that treats a lock
+with no pid file yet as eligible; (c) a second claim site that logs `mkdir-won` on a branch
+that did not create the directory.
+
+**Result: all three are ruled out, statically and by experiment.**
+
+### (a) No `mkdir -p` and no `[ -d ]` on the lock
+
+`scripts/s0-live.sh` has exactly one `mkdir -p`, at line 27, on `$RUN_DIR` — the **parent**
+of the lock. The lock is claimed by a bare `mkdir "$LOCK_DIR"` with no `-p`, and no `[ -d ]`
+test guards it. There is no construct that returns 0 because the directory already exists.
+
+### (c) Exactly one claim site
+
+`mkdir-won` is logged at one place only, on the `then` branch of `if mkdir "$LOCK_DIR"`, so
+it is reachable only when `mkdir` itself returned 0. No second site logs it.
+
+### (b) No adopt path — and a 500 ms pid-less hold does not reproduce it
+
+The only reads of `$PID_FILE` are the `--run` guard (line 226), `--status` (192) and
+`--stop` (203). Nothing treats a lock without a pid file as stale, and nothing `rmdir`s on
+that basis.
+
+Tested directly. The hypothesis says the second arrival wins because the first winner has
+not yet written `s0.pid`; so hold the lock with **no pid file written** and see whether a
+second racer is admitted. A probe sleeping after a successful `mkdir` and before the
+`echo > "$PID_FILE"`:
+
+| hold | rounds | racers/round | rounds with >1 winner |
+|---|---|---|---|
+| 50 ms | 1 | 8 | 0 |
+| **500 ms** | **20** | **8** | **0** |
+
+A window 200× wider than the observed 2.4 ms produces **zero** double-admits. The pid-less
+lock is not what admits the second racer.
+
+### What that leaves
+
+Every path that can reach `mkdir-won` requires `mkdir` to have returned 0, and no code path
+admits a racer around it. So the surviving statement is the narrowest one:
+
+> **`mkdir` returned 0 twice on a directory that already existed.**
+
+That is not normal behaviour for `mkdir` on ext4 or on the container's overlayfs, where a
+direct test shows the second call losing. It is either specific to the runner's filesystem
+under 4-vCPU contention, or it is something `mkdir` does that no reading of the script can
+predict.
+
+The next thing that would settle it is not another hypothesis about the script but a
+**kernel-level observation on the runner** — for example `strace` on the two `mkdir` calls
+of a failing round, or a `mkdir` loop on the runner's own tmpdir under load to see whether
+that filesystem ever returns success for an existing directory.
+
+Five hypotheses and this static reading have now been exhausted; the remaining explanations
+are outside the script.
