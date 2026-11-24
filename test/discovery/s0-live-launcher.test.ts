@@ -288,7 +288,10 @@ describe("s0-live.sh launcher", () => {
         ],
         { encoding: "utf8", env: { ...process.env, ...env } },
       );
-      const [winners, refusals] = racers.stdout.trim().split("\n").map(Number);
+      const [winnerCount, refusalCount] = racers.stdout.trim().split("\n").map(Number);
+      // `map(Number)` yields `number | undefined`; a missing line counts as zero.
+      const winners = winnerCount ?? 0;
+      const refusals = refusalCount ?? 0;
       // Before anything touches the round dir: the state the failure left, plus who is
       // still alive. The process tree must be read here, while the watchdogs and their
       // sleepers are up, because `--stop` below tears them down.
