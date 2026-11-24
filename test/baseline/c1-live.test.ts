@@ -8,7 +8,12 @@ import { connectC1, type Mcp } from "../../src/baseline/c1.ts";
 import { type PreparedC1, runC1Trial } from "../../src/baseline/c1-trial.ts";
 import { judge } from "../../src/baseline/index.ts";
 import { mcpStdio } from "../../src/baseline/mcp-stdio.ts";
-import { createPlanner, MAX_CALL_MICROS, type Planner } from "../../src/baseline/planner.ts";
+import {
+  createPlanner,
+  MAX_CALL_MICROS,
+  type Planner,
+  PlannerFailure,
+} from "../../src/baseline/planner.ts";
 import { runC1Sweep } from "../../src/baseline/sweep.ts";
 
 const shot = { type: "image", mimeType: "image/png", data: "eA==" } as const;
@@ -188,14 +193,28 @@ describe("C1 host harness", () => {
       armLimitMicros: 30 * MAX_CALL_MICROS * 2,
     };
     const report = await runC1Sweep(options);
+    // TIF-186: index 1's prepare throws BEFORE any planner call, so it books 0, not
+    // its 30-call reservation. The old expectation - 30 * MAX_CALL_MICROS + 400 -
+    // counted a hold for a trial that provably spent nothing, which is the phantom
+    // spend that shrank arm-003d r5's apparent cap from $4.48 of cash to $6.30.
+    // TIF-186: index 1's prepare throws BEFORE any planner call, so it books 0, not
+    // its 30-call reservation. Two consequences, both intended:
+    //   - the charge is 400 (index 0's real cost), not 30 * MAX_CALL_MICROS + 400
+    //   - `completed` rises from 1 to 3, because booking 0 for a trial that spent
+    //     nothing consumes the arm limit more slowly. The old behaviour let a
+    //     phantom hold stop a run that was affordable - what happened to arm-003d
+    //     r5, whose apparent cap read $6.30 against $4.48 of cash.
     expect(report).toMatchObject({
-      completed: 1,
+      completed: 3,
       partial: true,
-      c1ChargedMicros: 30 * MAX_CALL_MICROS + 400,
+      c1ChargedMicros: 1200,
     });
     expect(report.rows[0]).toMatchObject({ verdict: "refuted" });
     expect(report.rows[1]).toMatchObject({ omitted: "trial-interrupted" });
-    expect(report.rows[3]).toMatchObject({ mycoVerdict: "refuted", omitted: "spend-limit" });
+    // Row 3 now SCORES rather than being omitted spend-limit: without index 1's
+    // phantom reservation consuming the arm limit, the budget stretches further.
+    // The cap still binds eventually - that is asserted by the dedicated cap test.
+    expect(report.rows[3]).toMatchObject({ mycoVerdict: "refuted" });
     const rowPath = join(root, "trials", "c1", "0.json");
     const row = JSON.parse(readFileSync(rowPath, "utf8"));
     expect(row).toMatchObject({
@@ -206,7 +225,11 @@ describe("C1 host harness", () => {
     rmSync(rowPath);
     expect(await runC1Sweep(options)).toEqual(report);
     expect(JSON.parse(readFileSync(rowPath, "utf8"))).toEqual(row);
-    expect(prepare).toHaveBeenCalledTimes(2);
+    // 4, not 2: without the phantom reservation the arm limit stretches further, so
+    // more trials are prepared. The point of this assertion is that the RERUN does
+    // not prepare again for already-scored or already-interrupted indices, which the
+    // `toEqual(report)` above pins.
+    expect(prepare).toHaveBeenCalledTimes(4);
   });
 
   it("enforces GO and both default and combined caps before preparation", async () => {
@@ -683,6 +706,62 @@ describe("C1 sweep abort-early", () => {
     expect(reasons).toContain("repeated-cause");
   });
 
+  // TIF-186. The abort must fire on the FAULT CLASS, not on the message text.
+  //
+  // arm-003d r5 omitted trials 2 and 3 as `trial-interrupted` and kept going. The
+  // cause key was `trial-interrupted:${error.message}`, so two omissions of the
+  // same class but with different messages - an SSH banner timeout, then a throw
+  // later in the trial - produced different keys and `consecutive` never reached
+  // 2. Two identical interruptions burned $0.61 of cap each for no data.
+  //
+  // The pre-existing exclusion test above passes because it throws the SAME
+  // message every time, so it could not see this. This is the case that failed in
+  // production.
+  it("stops after two consecutive omissions with DIFFERENT messages", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-mixed-"));
+    directories.push(directory);
+    let prepares = 0;
+    const messages = [
+      "Connection timed out during banner exchange",
+      "guest screenshot unavailable: window never read",
+      "UNO socket timed out before becoming ready",
+    ];
+    await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      planner: planner(),
+      prepare: async () => {
+        // A DIFFERENT message each time, same fault class: prepare failed.
+        throw new Error(messages[prepares++ % messages.length]);
+      },
+    });
+    expect(prepares).toBeLessThan(5);
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
+      .map((e) => e.reason)
+      .filter(Boolean);
+    expect(reasons).toContain("repeated-cause");
+  });
+
+  // And the message must still be readable, because the abort no longer keys on it:
+  // without persisting it, a run that stops cannot be diagnosed from its artifacts.
+  it("persists the omission message as detail even though it no longer keys the abort", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-detail-"));
+    directories.push(directory);
+    await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      planner: planner(),
+      prepare: async () => {
+        throw new Error("Connection timed out during banner exchange");
+      },
+    });
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const first = ledger.c1["0"] as { reason?: string; detail?: string };
+    expect(first.reason).toBe("trial-interrupted");
+    expect(first.detail).toContain("banner exchange");
+  });
+
   // Mutation B in the earlier review: dropping the reset (`else consecutive += 1`)
   // left the suite green, because the only test used one cause. This pins the
   // reset — alternating causes must never accumulate into an abort.
@@ -696,8 +775,15 @@ describe("C1 sweep abort-early", () => {
       planner: planner(),
       prepare: async () => {
         prepares += 1;
-        // Alternate the throw message so the cause string changes every trial.
-        throw new Error(`session-command-failed-${prepares % 2}`);
+        // TIF-186 changed what distinguishes a cause: the MESSAGE no longer does,
+        // because keying on it meant two same-class faults with different messages
+        // never aborted (arm-003d r5). The reset still has to work, so it is
+        // exercised with a signal that genuinely alternates - the omission CLASS.
+        // A prepare failure is `trial-interrupted`; the other arm of this throws
+        // `PlannerFailure`, which is `planner-failed`. Different classes, so the
+        // counter must reset between them.
+        if (prepares % 2 === 0) throw new Error("session-command-failed");
+        throw new PlannerFailure("Anthropic messages API call failed");
       },
     });
     const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
