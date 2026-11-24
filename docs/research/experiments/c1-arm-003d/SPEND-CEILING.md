@@ -38,18 +38,31 @@ $ MYCO_PRIOR_SPEND_MICROS=3190688 MYCO_ARM_LIMIT_MICROS=5809312
 ```
 
 And the ceiling is enforced **per trial**, not once at the start
-(`src/baseline/sweep.ts:188-195`):
+(`src/baseline/sweep.ts`, corrected by TIF-187):
 
 ```ts
 const reservation = planner.paid ? MAX_TRIAL_MICROS : 0;
 const c1 = charged(ledger.c1);
 if (stopReason ||
-    priorSpend + c1 + reservation > armLimit ||                              // arm
-    priorSpend + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT) {   // combined
+    c1 + reservation > armLimit ||                                          // this RUN
+    priorSpend + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT) {  // PROJECT
 ```
 
-`priorSpend` is in **both**, so neither ceiling can be satisfied by a run that only knows
-about this directory's ledger.
+**`priorSpend` belongs in the COMBINED check only, and an earlier version of this section
+said "both" — that was wrong, and it described a real bug.** `armLimit` is already the
+*remaining* budget (`ceiling − prior`), so adding prior spend to it subtracted the same
+amount twice. Against the pre-fix code, a launcher who followed this document's own advice
+(`MYCO_ARM_LIMIT_MICROS=<remaining>`) had **every trial omitted**:
+
+```
+prior 4,480,732 + reservation 607,200 = 5,087,932  >  armLimit 4,519,268   ->  all omitted
+```
+
+`r6` ran only because it was launched with `MYCO_ARM_LIMIT_MICROS=9000000`, **the ceiling
+rather than the remainder** — which made the arm check non-binding and hid the defect.
+
+**TIF-187 fixed the code; this section now matches it.** The launch advice below is
+unchanged and correct: pass the **remaining** budget, and it works.
 
 ## Also fail-closed, three ways
 
