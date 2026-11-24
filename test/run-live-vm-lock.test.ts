@@ -13,12 +13,12 @@
 
 import type { ChildProcess } from "node:child_process";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { afterEach, expect, it } from "vitest";
-import { acquireVmLock, VmLockedError } from "../src/integration/vm-lock.ts";
+import { acquireVmLock, lockOwnedByAncestor, VmLockedError } from "../src/integration/vm-lock.ts";
 
 const REPO = join(__dirname, "..");
 const RUN_LIVE = join(REPO, "src", "integration", "run-live.ts");
@@ -200,4 +200,69 @@ it("does not accept a lock record naming a pid that is not an ancestor", async (
   });
 
   expect(result.status, result.stderr).toBe(REFUSED);
+});
+
+/**
+ * The ownership rules in `lockOwnedByAncestor`, each pinned by a case that fails
+ * when that rule is removed.
+ *
+ * These call the predicate directly with its two seams (`owner`, `ancestorOf`)
+ * rather than building a real driver ancestor. That is not a shortcut: on macOS the
+ * pid a shell reports for itself is not reliably an ancestor of what it goes on to
+ * spawn, so no harness can construct that chain on purpose — an earlier version of
+ * this file did try, and every case passed while the predicate returned false for an
+ * unrelated reason. `isAncestor`'s own walk is covered by the sweep-child case above.
+ */
+function owned(options: {
+  owner?: number;
+  record: string;
+  ancestorOf?: (pid: number) => boolean;
+}): boolean {
+  const { lock } = tempLock();
+  writeFileSync(lock, options.record);
+  return lockOwnedByAncestor({
+    path: lock,
+    owner: options.owner ?? LIVE_SELF,
+    ancestorOf: options.ancestorOf ?? (() => true),
+  });
+}
+
+// A live pid that is not special: this test runner's own.
+const LIVE_SELF = process.pid;
+
+it("rejects a claim naming pid 1, which is a live ancestor nobody may own", () => {
+  expect(owned({ owner: 1, record: "1 m1-sweep.sh\n" })).toBe(false);
+  expect(owned({ owner: 0, record: "0 m1-sweep.sh\n" })).toBe(false);
+});
+
+it("rejects a record whose driver is not allowed to own the lock", () => {
+  expect(owned({ record: `${LIVE_SELF} not-a-driver.sh\n` })).toBe(false);
+  // The same pid with a real driver is accepted, so the rejection is the driver.
+  expect(owned({ record: `${LIVE_SELF} m1-sweep.sh\n` })).toBe(true);
+});
+
+it("rejects a record naming a live process when the owner variable names someone else", () => {
+  expect(owned({ owner: LIVE_SELF, record: `${process.ppid} m1-sweep.sh\n` })).toBe(false);
+});
+
+it("rejects a stale record whose pid is dead even though it names a real driver", () => {
+  // This runner's own short-lived child, reaped before the predicate runs.
+  const dead = Number(spawnSync("bash", ["-c", "echo $$"], { encoding: "utf8" }).stdout.trim());
+  expect(Number.isInteger(dead) && dead > 1).toBe(true);
+  expect(owned({ owner: dead, record: `${dead} m1-sweep.sh\n` })).toBe(false);
+});
+
+it("rejects an unreadable or corrupt record rather than assuming ownership", () => {
+  const { lock } = tempLock();
+  expect(lockOwnedByAncestor({ path: lock, owner: LIVE_SELF, ancestorOf: () => true })).toBe(false);
+  writeFileSync(lock, "not-a-pid m1-sweep.sh\n");
+  expect(lockOwnedByAncestor({ path: lock, owner: LIVE_SELF, ancestorOf: () => true })).toBe(false);
+  writeFileSync(lock, `${LIVE_SELF}\n`);
+  // A record with no driver fails the driver rule, not the parse.
+  expect(lockOwnedByAncestor({ path: lock, owner: LIVE_SELF, ancestorOf: () => true })).toBe(false);
+});
+
+it("requires the walk to confirm ancestry, not just a live matching pid", () => {
+  expect(owned({ record: `${LIVE_SELF} m1-sweep.sh\n`, ancestorOf: () => false })).toBe(false);
+  expect(owned({ record: `${LIVE_SELF} m1-sweep.sh\n`, ancestorOf: () => true })).toBe(true);
 });

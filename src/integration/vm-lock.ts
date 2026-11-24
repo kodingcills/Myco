@@ -49,6 +49,16 @@ export interface VmLockOptions {
   path?: string;
   /** Recorded in the lock file for diagnosis. */
   driver?: string;
+  /**
+   * The record this process may claim ownership from; defaults to
+   * `MYCO_VM_LOCK_OWNER`. A seam, so the ownership rules can be tested without a
+   * real driver in the process's ancestry — the pid a shell reports for itself is
+   * not reliably an ancestor of what it spawns on macOS, so no harness can build
+   * that chain on purpose.
+   */
+  owner?: number;
+  /** The ppid chain walk; defaults to `/bin/ps`. Seam, for the same reason. */
+  ancestorOf?: (pid: number) => boolean;
 }
 
 /** The lock is held by someone else. `holder` is the record that named them. */
@@ -125,7 +135,7 @@ export function acquireVmLockUnlessOwnedByAncestor(
  */
 export function lockOwnedByAncestor(options: VmLockOptions = {}): boolean {
   const path = options.path ?? process.env.MYCO_VM_LOCK_PATH ?? DEFAULT_VM_LOCK_PATH;
-  const owner = Number(process.env.MYCO_VM_LOCK_OWNER ?? "");
+  const owner = options.owner ?? Number(process.env.MYCO_VM_LOCK_OWNER ?? "");
   if (!Number.isInteger(owner) || owner <= 1) return false;
 
   let record: { pid: number; driver: string };
@@ -142,7 +152,7 @@ export function lockOwnedByAncestor(options: VmLockOptions = {}): boolean {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EPERM") return false;
   }
-  return isAncestor(owner);
+  return options.ancestorOf ? options.ancestorOf(owner) : isAncestor(owner);
 }
 
 function parseLockRecord(text: string): { pid: number; driver: string } {
