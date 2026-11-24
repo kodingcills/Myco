@@ -18,6 +18,7 @@ import process from "node:process";
 import { generateParameterSets } from "../tasks/intent.ts";
 import { AgentClient, SshTunnel } from "../win/agent-client.ts";
 import { LIVE_CORRUPTION_MODES, runTrial } from "./trial.ts";
+import { acquireVmLockUnlessOwnedByAncestor, VmLockedError } from "./vm-lock.ts";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -30,6 +31,25 @@ async function main(): Promise<void> {
   const recovery = process.argv.includes("--recovery");
   const seed = arg("seed") ?? "m1-013-live";
   const socket = arg("uno-socket") ?? "2002";
+
+  // The VM lock, before anything touches the guest (TIF-191). A driver that holds
+  // it is either running trials or resetting the snapshot, and a §6 run under a
+  // reset measured 19 rows of 0-1 ms `uncertain` because the tunnel died with the
+  // guest. Refuse instead. A sweep spawns this as a child and already owns the
+  // lock, so that case inherits rather than re-acquires.
+  try {
+    const lock = acquireVmLockUnlessOwnedByAncestor({ driver: "run-live.ts" });
+    // process.exit runs this handler, which is the normal path for the modes below.
+    if (lock) process.on("exit", () => lock.release());
+  } catch (error) {
+    if (error instanceof VmLockedError) {
+      process.stderr.write(`REFUSED_VM_LOCKED: holder ${error.holder}\n`);
+      process.exit(10);
+    }
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(10);
+  }
+
   let token = process.env.MYCO_AGENT_TOKEN;
   if (!token) {
     try {
