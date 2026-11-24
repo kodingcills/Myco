@@ -58,22 +58,33 @@ function privateLockPath(): string {
 }
 
 /**
- * The environment for EVERY launcher spawn in this file.
+ * The ONLY way a test in this file starts the launcher.
  *
- * One helper rather than a literal per call site, because the property under test is
- * "no spawn can take the shared lock". Three inline env literals meant a fourth spawn
- * could be added without the lock path and nothing would notice - and a file-level check
- * cannot see the difference, since the other spawns still supply it. Routing all three
- * through here makes the omission impossible to express.
+ * It owns the `spawnSync` CALL as well as the environment, which the previous version did
+ * not. A round-1 verifier showed why that matters: routing the env through a helper is not
+ * enough, because a spawn can keep any `launcherEnv(` reference in the file and still pass
+ * its own inline environment - the guard counted text occurrences, saw a helper use, and
+ * stayed green while that spawn took the SHARED lock. Making the helper own the spawn
+ * removes the call site entirely, and the guard can then assert that the launcher path
+ * appears exactly once in this file.
  */
-function launcherEnv(overrides: Record<string, string | undefined> = {}) {
-  return {
-    ...process.env,
-    HOME: bareHome(),
-    ANTHROPIC_API_KEY: DUMMY_KEY,
-    MYCO_VM_LOCK_PATH: privateLockPath(),
-    ...overrides,
-  };
+function spawnLauncher(
+  runDir: string,
+  extraArgs: string[] = [],
+  overrides: Record<string, string | undefined> = {},
+) {
+  return spawnSync("bash", ["scripts/c1-baseline.sh", runDir, "--coordinator-go", ...extraArgs], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 20_000,
+    env: {
+      ...process.env,
+      HOME: bareHome(),
+      ANTHROPIC_API_KEY: DUMMY_KEY,
+      MYCO_VM_LOCK_PATH: privateLockPath(),
+      ...overrides,
+    },
+  });
 }
 
 function bareHome(): string {
@@ -175,15 +186,8 @@ describe("a missing prior spend is refused, not defaulted", () => {
   });
 
   it("the launcher refuses when MYCO_PRIOR_SPEND_MICROS is unset", async () => {
-    const { spawnSync } = await import("node:child_process");
     const dir = ledgerDir({ "0": scored(100_000) });
-    const env = launcherEnv({ MYCO_PRIOR_SPEND_MICROS: undefined });
-    const run = spawnSync("bash", ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env,
-      timeout: 20_000,
-    });
+    const run = spawnLauncher(dir, ["--resume"], { MYCO_PRIOR_SPEND_MICROS: undefined });
     // Exit 6 is the documented code for this refusal, and it must fire BEFORE the VM
     // lock is attempted: a launch that cannot report spend honestly should not take
     // the VM to discover that.
@@ -206,20 +210,10 @@ describe("a non-numeric prior spend is refused, not converted to zero", () => {
 
   for (const bad of badPriors) {
     it(`the launcher refuses MYCO_PRIOR_SPEND_MICROS=${JSON.stringify(bad)}`, async () => {
-      const { spawnSync } = await import("node:child_process");
       const dir = ledgerDir({ "0": scored(100_000) });
-      const run = spawnSync(
-        "bash",
-        ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          // Set but not numeric. Exit 6, not 10: this must be refused before the VM
-          // lock is attempted, so it cannot be confused with "the VM is busy".
-          env: launcherEnv({ MYCO_PRIOR_SPEND_MICROS: bad }),
-          timeout: 20_000,
-        },
-      );
+      // Set but not numeric. Exit 6, not 10: this must be refused before the VM lock is
+      // attempted, so it cannot be confused with "the VM is busy".
+      const run = spawnLauncher(dir, ["--resume"], { MYCO_PRIOR_SPEND_MICROS: bad });
       expect(run.status).toBe(6);
       expect(`${run.stdout}${run.stderr}`).toMatch(/MYCO_PRIOR_SPEND_MICROS/);
     });
@@ -294,19 +288,10 @@ describe("the launcher agrees with the sweep about valid prior spend", () => {
       // What the launcher does. 6 is its refusal code; anything else means it got past
       // the guard and reached the VM lock, i.e. it accepted the value.
       const dir = ledgerDir({ "0": scored(100_000) });
-      const run = spawnSync(
-        "bash",
-        ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          // Same hermeticity as the other launcher tests: an empty HOME and a dummy
-          // key, so the run reaches the guard this test is about rather than stopping
-          // at the secrets check that precedes it.
-          env: launcherEnv({ MYCO_PRIOR_SPEND_MICROS: value }),
-          timeout: 20_000,
-        },
-      );
+      // Same hermeticity as every other launcher spawn: `spawnLauncher` owns the empty
+      // HOME, the dummy key and the private lock path, so this test reaches the guard it
+      // is about rather than stopping at the secrets check that precedes it.
+      const run = spawnLauncher(dir, ["--resume"], { MYCO_PRIOR_SPEND_MICROS: value });
       const launcherAccepts = run.status !== 6;
 
       expect(

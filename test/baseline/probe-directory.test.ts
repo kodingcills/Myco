@@ -63,24 +63,41 @@ describe("no test writes into a live run", () => {
     // it, and exits - leaving metadata that names a dead process and looks exactly like a
     // live sweep. Measured: the shared lock's text changed to `25410 c1-baseline.sh`, then
     // `57102 c1-baseline.sh`, then `4939 c1-baseline.sh`, all dead, all from test runs,
-    // while a real arm was live and while I was investigating them as mystery launches.
+    // while a real arm was live.
     //
-    // TWO COUNTS, because position-based checks failed. A spawn may declare its `env` in a
-    // const ABOVE the call, so "is launcherEnv in the following window" is false for a
-    // correctly-routed spawn - an earlier version of this guard failed at baseline for
-    // that reason. Counting is immune to layout:
-    //   - the private path must be set in exactly ONE place, the helper
-    //   - every spawn must consume the helper, so uses == spawns + the definition
+    // ONE REFERENCE, NOT A ROUTING CONVENTION. A round-1 verifier broke an earlier version
+    // of this guard by keeping a `launcherEnv(` reference in the file while passing an
+    // inline environment to one spawn: the counts still looked right and the guard stayed
+    // green while that spawn took the SHARED lock. Counting helper uses was never going to
+    // catch that, because it cannot see which expression reached the spawn.
+    //
+    // So the launcher path itself may appear exactly ONCE, inside the one wrapper that
+    // owns both the spawn call and its environment. A second reference - a new spawn, an
+    // inline env, a different spawn function - is a failure by construction, and there is
+    // no call site left to tamper with.
+    const stripComments = (text: string) =>
+      text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     for (const { path, text } of testSources()) {
-      if (!/scripts\/c1-baseline\.sh/.test(text)) continue;
-      const spawns = [...text.matchAll(/"scripts\/c1-baseline\.sh"/g)].length;
-      const helperUses = [...text.matchAll(/launcherEnv\(/g)].length;
-      // The colon matters: a COMMENT mentioning `$MYCO_VM_LOCK_PATH` is not a site
-      // that sets it, and counting it made this assertion fail at baseline.
-      const lockPathSites = [...text.matchAll(/MYCO_VM_LOCK_PATH:/g)].length;
-      // spawns + 1 definition. Dropping the helper from one spawn lowers this and fails;
-      // inlining the path raises `lockPathSites` and fails.
-      expect({ path, helperUses }).toEqual({ path, helperUses: spawns + 1 });
+      const code = stripComments(text);
+      const at = code.indexOf("scripts/c1-baseline.sh");
+      if (at < 0) continue;
+      // Exactly one reference...
+      const references = [...code.matchAll(/scripts\/c1-baseline\.sh/g)].length;
+      expect({ path, references }).toEqual({ path, references: 1 });
+      // ...and it must be an ARGUMENT TO A SPAWN, not a stray literal that happens to be
+      // the only mention. The previous version accepted `const x = "scripts/c1-baseline.sh"`
+      // in a file that never spawned it - and, worse, would accept a spawn built some
+      // other way. Looking back for the call is what ties the reference to the spawn.
+      const before = code.slice(Math.max(0, at - 300), at);
+      expect({ path, spawning: before.includes("spawnSync(") }).toEqual({
+        path,
+        spawning: true,
+      });
+      // And the wrapper must still SET the private path. Dropping that line leaves the
+      // spawn intact and the reference count unchanged, so it needs its own assertion -
+      // an earlier rewrite of this guard lost this check and a mutation walked through.
+      // The colon matters: a COMMENT mentioning `$MYCO_VM_LOCK_PATH` is not a site.
+      const lockPathSites = [...code.matchAll(/MYCO_VM_LOCK_PATH:/g)].length;
       expect({ path, lockPathSites }).toEqual({ path, lockPathSites: 1 });
     }
   });
