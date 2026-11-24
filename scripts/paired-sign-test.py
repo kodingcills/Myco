@@ -292,7 +292,11 @@ def markdown(result):
         # "below what four decimals can show", which is the same misreading the
         # all-ties rule exists to avoid.
         row_count = result["sign_test"].get("discordant", 0)
-        shown = "p < 0.0001" if p < 0.0001 else f"p = {p:.4f}"
+        # SCIENTIFIC NOTATION for small p, as the outer loop specified. `p < 0.0001`
+        # was the first attempt and it is weaker than it looks: 3.7e-09 and 4.9e-05
+        # both print identically, so two very different amounts of evidence read the
+        # same. The actual value is always shown now.
+        shown = f"p = {p:.3e}" if p < 0.001 else f"p = {p:.4f}"
         lines.append(
             f"**Exact sign test (two-sided): {shown}** over {row_count} "
             f"discordant pairs."
