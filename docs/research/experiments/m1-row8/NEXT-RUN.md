@@ -113,3 +113,53 @@ guest only, and my file operations were confined to this worktree and `/tmp`.
 **If Shot's `--resume` needs anything from the guest's `runs\20`, it is gone**; it was r6's output
 directory, not its input, and `--resume` reads the host ledger.
 
+## The §6 window, as of 2026-11-24 10:00Z
+
+**r6 holds the VM** (`c1-baseline` pid 21994, node 22027) for its resume, expected ~2h. The
+row-8 §6 goes **after** it releases, on the corrected runbook (#405 merged `2833a941`).
+
+### The launch sequence
+
+1. **Confirm r6 is finished and the flock is free, read-only.** Use `lsof`, never a flock probe:
+   a probe takes `LOCK_EX|LOCK_NB` for an instant, and drivers acquire with `LOCK_NB` and no
+   retry, so a probe and a real driver starting together can make the DRIVER exit 10 (F5).
+   ```bash
+   lsof /tmp/myco-win11.vm.lock          # empty = free
+   ps -eo pid,command | grep -E "[c]1-baseline|[m]1-sweep"   # nothing = no driver
+   ```
+   The lock FILE text is not evidence — it is the last writer and is routinely a dead pid. In
+   fact TIF-202 means launcher **tests** write it, so it can name a `c1-baseline` that never ran.
+
+2. **Clean the guest *past* §6.1's filter.** A C1 run leaves `C:\myco\runs\20`; `myco-*` does
+   not match it, so the old check printed nothing (a false clean) and every row then failed
+   `leftover run dirs: 20`. r6 also left two stray `soffice`. §6.1 now excludes only
+   `myco-admin` and `profiles` (#405). Run the check, confirm it prints nothing.
+
+3. **Fetch a fresh token.** The cached `~/.myco-token` belongs to the last deploy and gives
+   `AUTH_FAILED` *after* the guest has been touched:
+   ```bash
+   ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > /tmp/s6-token
+   ```
+
+4. **Launch, detached, with an explicit runs dir.** `nohup` + `caffeinate`; **macOS has no
+   `setsid`** and a launcher built on it dies instantly and silently (empty log, dead pid file,
+   no exit file). Use `--runs-dir runs/s6-final` so the evidence is not mixed with the §1.2 test
+   fixtures:
+   ```bash
+   pnpm exec tsx src/integration/run-live.ts --mode values --limit 20 --runs-dir runs/s6-final
+   ```
+
+5. **Watch liveness, not the log.** A `values` run prints its JSON array **once at the end**, so
+   **a silent log is the healthy shape** — attempt A died because that was read as a hang.
+   Liveness is a new dir under `runs/s6-final/values/` every ~48s. `/tmp/row8-watch.sh` does
+   exactly this, and checks ownership with `lsof` so it can never fail the run it watches.
+
+6. **§6 takes the flock itself.** `run-live` acquires it and refuses with **exit 10** if another
+   driver holds it. Exit 10 is *not* a generator failure — someone else holds the VM; wait and
+   re-run.
+
+### Recorded §6 result, 2026-11-24 08:34-08:49Z: 20/20 verified, exit 0
+
+Already PASSED once on this hardware (see [`S6-PASS.md`](S6-PASS.md)). The rerun exists to show a
+*first-time operator* can reproduce it, not to re-measure the generator.
+

@@ -44,6 +44,70 @@
 - **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
 - **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
 
+## Log 2026-11-24 (73) — an issue-first CI job is sitting untracked and needs its owner
+- **`scripts/check-tif-id.py` and `.github/workflows/issue-id.yml` are untracked in the
+  m1-foundation worktree and are on no branch.** They exist only inside T3 checkpoint refs
+  (`git log --all -- <path>` finds them solely under
+  `refs/t3/orchestration-v2/checkpoints/...`), so if this worktree is cleaned up they are gone.
+- **They are not strays — they are finished work.** 110 + 43 lines. Every PR must reference a
+  Linear TIF issue; the rule lives in `docs/coordination/CONTRIBUTING-agents.md` and this job is
+  what makes it true rather than conventional. `python3 scripts/check-tif-id.py --self-test`
+  passes **all 14 cases**, covering the injection cases (a title like `$(rm -rf /)` is data, never
+  shell) and the `no-issue: <reason>` opt-out for bot PRs.
+- **I did NOT commit them, and this entry is why.** `CONTRIBUTING-agents.md:355` names this exact
+  file as the artifact that once got swept into an unrelated docs commit by `git add -A`, making
+  an unrelated workflow run and **fail** on that PR's head. Shipping another owner's WIP would
+  repeat the mistake this repo has already recorded twice.
+- **Owner action needed: the author should commit the two files on their own branch and open the
+  PR.** They are complete and self-testing; nothing appears to be missing. If the owner is unknown,
+  this is a candidate TIF — the outer loop assigns ids. The workflow is deliberately not marked
+  required yet (`push: branches: [main]` is there so the outer loop can mark it required once it
+  lands).
+- **Consequence of it not landing:** the issue-first rule stays conventional. Nothing enforces it,
+  which is consistent with the outer loop having proxied issue creation while Linear access was
+  unconfirmed.
+
+## Log 2026-11-24 (72) — the two TIF-200 decisions, answered from r6's own calls
+- **Both decisions the outer loop asked for are already implemented in #400, and I verified its
+  numbers rather than accepting them.** Re-measured from `~/Projects/myco-runs/c1-r6/trials/c1/*.json`
+  (field `.usage[].completion`, 19 scored rows): **570 calls, min 77, median 254, P90 401, P99 535,
+  max 615.** Nothing above 615 at all, nothing above 768, so `1024/max = 1.67` — **40% headroom, not
+  the ~66% #400's comment states**; that comment understates it. The conclusion is unaffected and
+  if anything stronger.
+- **(b) IS 1024 TOO LOW? No, on this evidence — and the lead's save-dialog hypothesis is not
+  supported.** The hypothesis was that the truncation is a *consequence of the long decisions the
+  save-dialog loop produces*. **Zero of 570 calls exceed 615**, so the loop does not generate
+  unusually long replies; the index-20 call is an outlier ~1.7x beyond anything else in the arm, and
+  the shape of a reply that runs past every observed sample without approaching it is a **degenerate
+  repeat**, not a ceiling that is too tight. Raising the bound would make a runaway more expensive,
+  and the cap is not unlimited, so #400 correctly keeps `MAX_OUTPUT = 1024` and bounds the runaway
+  instead of accommodating it.
+
+  (An earlier revision said "with only $1.75 of cap left". **That figure was unanchored** — it did
+  not come from `report.json`, whose value at that stop was `c1ChargedMicros: 2765970`, i.e.
+  $6.234030 of headroom. A verifier caught it after it had been restated to four decimals in the
+  rows-7/8 draft, which is how a hedge becomes a measurement. Corrected here at the source.)
+- **(a) SHOULD ONE PLANNER FAILURE STOP AN ARM? No — and it no longer does.** Verified at
+  `origin/pull/400/head`: the assignment `if (failed) stopReason = "planner-failed"` is gone,
+  replaced by `noteCause(failed ? "planner-failed" : "trial-interrupted")` plus
+  `micros: billed ?? reservation`, so a truncation now needs **two consecutive occurrences** like
+  every other cause and books its **actual cost**. That is the same fix I would have written.
+- **#400's cost validation is strictly fail-closed, and I checked the bound rather than the
+  claim:** `billed` requires `Number.isSafeInteger(offered) && offered >= 0 && offered <= reservation`,
+  else the FULL reservation is kept. Negative (would make `charged()` go backwards and fire the cap
+  *later*), `NaN` (would make `NaN > LIMIT` false and silently kill the cap), `Infinity` and
+  fractional all fall back to the reservation. So the change can only ever bound *tighter* than
+  before, never looser — the direction that matters against a hard cap.
+- **Reservation arithmetic confirmed:** `MAX_CALL_MICROS` 20,240 → 30,480 and the per-trial
+  reservation 607,200 → 914,400 at `MAX_OUTPUT = 1024` with `MAX_INPUT * 2 + MAX_OUTPUT * 10`. The
+  outer loop is right that this makes the guard more conservative.
+- **The flock is FREE, and the "run-live pid 2536 holds it" reading is stale.** 2536 was *my* §6
+  run; it finished 08:49:46Z, `ps -p 2536` is empty and `lsof` shows no holder. The lock *text* still
+  reads `2536 run-live.ts` because the record is the last writer and is not cleared on release —
+  exactly the trap the runbook §2 note describes. **r6's resume is not waiting on me.**
+- **#400 is docs+code and touches no VM state**, so I did not treat it as blocked by row 8; it
+  queues normally behind its verifier.
+
 ## Log 2026-11-24 (71) — §6 PASSES 20/20; TIF-195 closed; row 8 unblocked through §6
 - **§6 PASSES: 20/20 verified, exit 0**, 08:34:06Z → 08:49:46Z (15m40s), zero refuted and zero
   harness errors, columns `name`/`qty`/`joined`/`salary` ×5, per-row 44.7–99.1 s. **F9 is
