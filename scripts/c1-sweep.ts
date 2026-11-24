@@ -25,7 +25,7 @@ async function main() {
   let activeTunnel: SshTunnel | undefined;
 
   /**
-   * Per-command budget for a guest round trip, matching the preflight's.
+   * Per-command budget for a guest round trip. SET FROM MEASUREMENT (TIF-186).
    *
    * These calls had NO timeout: execFileSync waits forever, so a wedged guest
    * hangs the sweep instead of failing it, and the arm reports nothing at all.
@@ -33,8 +33,23 @@ async function main() {
    * why an unbounded call is a real hazard rather than a theoretical one. This
    * is a liveness budget, not a performance target: a slow guest costs seconds,
    * a dead one fails.
+   *
+   * WHY 150s AND NOT 45s. The old 45s cap was BELOW the measured cost of the
+   * thing it bounds, so it had to fire. arm-003d r5 lost trials 2 and 3 to
+   * "Connection timed out during banner exchange" and burned $0.61 of cap each.
+   * Three back-to-back reset->SSH-ready timings on this host measured:
+   *
+   *     237s, 206s, 203s
+   *
+   * DECREASING, so that is the host's steady state rather than escalating
+   * thermal/disk/memory pressure. r3's reset was 152s for the same snapshot and
+   * script, so SSH-answer latency on top of the reset is roughly 85s at worst.
+   * 150s is ~1.75x that maximum: comfortably above the observed cost, still far
+   * below the 600s SSH_WAIT_TIMEOUT reset-trial-vm.sh already uses for this same
+   * guest, and below the point where a genuinely wedged guest would waste an
+   * arm's worth of wall time before failing.
    */
-  const GUEST_TIMEOUT_MS = 45_000;
+  const GUEST_TIMEOUT_MS = 150_000;
 
   async function prepare(
     target: (typeof manifest.rows)[number],
