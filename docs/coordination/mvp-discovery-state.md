@@ -234,9 +234,11 @@ below runs now, offline, in parallel with M1.
 | N5 | **Direction B/C dry-run validation**: all three task packages run offline and emit schema-valid evidence | done 2026-11-22: A `REFUTED` (false success caught), B `UNCERTAIN` (interrupted write, 0 duplicates), C `VERIFIED` (modeled timings, explicitly not evidence) | done |
 | N6 | **Docs**: keep plan/teardown/state current; no science moves without data | — | ongoing |
 | N7 | **S3 resolved with Foundry** (`docs/foundry/answer-discovery-s3-gap.md`, PR #176): a todo screenshot arm is EF-005's, and `not-run` + C1-descriptive is the correct report today. Foundry asked for one wording nit in the C1 note | coordination, no code | done |
-| N8 | **Direction A mock live runner**: exercise the full task → act → verify → report path against a fake transport, so the live run is a config change once the act op lands | no guest; the transport is injected | next |
-| N9 | **Report section for the Cua/HCU arms** once EF-005 produces pairs; the report already has the not-run table | no guest | next |
-| N10 | **Viewer head-to-head view** over the same report input (v0 reads a single run) | no guest | next |
+| N8 | **Direction A mock live runner**: exercise the full task → act → verify → report path against a fake transport, so the live run is a config change once the act op lands | no guest; the transport is injected | **done** — `src/discovery/live-runner.ts`, `src/discovery/mock-desktop.ts`, `test/discovery/live-runner.test.ts` (PR #187, `5c10cd3`), later wired to `typeTextGlobal`/`clickAt` and the S0 mock sequence (#210/#212). The runner is transport-agnostic; the seeded `BUG` double exercises the false-success path offline. |
+| N9 | **Report section for the Cua/HCU arms** once EF-005 produces pairs; the report already has the not-run table | no guest | **done** — `src/discovery/report.ts` (`NotRunArm`, `HeadToHeadReportInput`) renders the not-run arms; real Cua/HCU pairs still await EF-005, which is the missing *input*, not missing code. |
+| N10 | **Viewer head-to-head view** over the same report input (v0 reads a single run) | no guest | **done** — `viewer/src/data/head-to-head.ts`, `viewer/test/head-to-head.test.tsx`, `viewer/fixtures/head-to-head.json` (synthetic, labelled), screenshots in `viewer/screenshots/head-to-head-*.png`. Live intake is a separate, outer-loop-gated item (`viewer/DEVIATIONS.md`, TIF-108). |
+
+**Corrected 2026-11-24:** the three rows above read `next` long after they shipped; this state file was the lagging copy, not the code. With them done, **the non-VM queue is empty**. Nothing in Discovery is startable without the guest window (MVD-001/002/006) or a runtime capability that does not exist yet (MVD-003), except MVD-008, whose remaining half needs a 1,000-screenshot run and Tiffany's Chrome Stable result — both heavier than the current host window allows.
 
 ### S0 is not guest-blocked; it is act-blocked (2026-11-22, 18:00 ET)
 
@@ -265,6 +267,10 @@ consumes it); (b) a report section for the Cua/HCU arms once EF-005 produces pai
 (c) the Viewer's head-to-head view over the same report input, since the v0 Viewer only
 reads a single run.
 
+> **2026-11-24:** (b) and (c) have since shipped (N9, N10 above), so of this list only
+> (a) remains, and (a) is Foundry's, not Discovery's. Discovery has no startable non-VM
+> work until the guest window opens or the runtime grows the global-text op.
+
 
 ### What actually needs the guest (batched, M1 first)
 
@@ -282,6 +288,36 @@ dry-runs are simulated, and no Myco/hcu+shell pair exists on `ef-t01b`. That is 
 honest state, and it is why S1/S2 are the only slots that move the wedge.
 
 ## Log
+
+- 2026-11-24 · **TIF-170 done** — #376 merged as `cf0377d0`. The launcher's
+  bare-`mkdir` claim is replaced by an `flock` held for the run's lifetime, and the
+  race test is un-quarantined (the quarantine #333 added is removed; `runIf(DIAG)`
+  is gone and the test runs in every job). So the launcher now cannot double-admit
+  a run even where `mkdir` did — that admission was the last mechanism under which
+  two `--run`s could share a worktree, which the S0 gating depends on.
+  - **Mechanism.** `exec 9>>"$LOCK_FILE"` → `flock(9, LOCK_EX|LOCK_NB)` →
+    `nohup "$0" --watchdog &`. The lock belongs to the open file description, so
+    the watchdog inherits and holds it; the kernel releases it when the last
+    inheriting process exits. Order is the whole fix — opening after the spawn
+    gives the child no fd and the lock dies with `--run`.
+  - **Evidence.** Both arms on the 4-vCPU `tif-170-race-diagnostics` runner, 11
+    invocations × 40 rounds (440) each: `mkdir` arm reproduced at round 8; `flock`
+    arm 11/11 clean, zero double-admits. The un-quarantined test then passed on
+    ubuntu (9.1 s) and macos (15.8 s) inside the ordinary `check` jobs, not just
+    the diagnostics job.
+  - **Verifier.** Independent Tier-2 reviewer at head `0741d897`: `correct`,
+    confidence 0.85. It confirmed the primitive excludes across processes, the
+    watchdog really inherits it (HELD from a separate process), `--stop` releases
+    it, and a losing `--run` exits 1 / logs `flock-lost` / closes fd 9 / leaves no
+    stray child. Its one finding (P2, not a blocker) was that the lock's lifetime
+    is the run *tree's*, so a descendant that survives `--stop` keeps it and the
+    next `--run` refuses until that stray is gone — that is now stated in the
+    comment above the `exec` (`84075b0a`, comment-only).
+  - **Merge note.** The verified behaviour is unchanged from `0741d897` to the
+    merged head: the only non-sync delta is that comment-only block plus the
+    two-to-three main-sync merges. No re-verification round was spent on a
+    comment-only commit; the syncs pulled in unrelated docs only.
+  - No VM, no spend, no accounts. Host load kept low: no repeated race loops.
 
 - 2026-11-23 (later still) · `docs/product/wedge-recommendation.md` merged (#278,
   TIF-60): Direction A, narrowed, with its evidence and its gaps in separate
