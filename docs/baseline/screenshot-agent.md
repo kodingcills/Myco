@@ -1199,7 +1199,7 @@ The outer loop manages the credential. The harness receives it at runtime.
 
 | Item | Value |
 |---|---|
-| Env var | `ANTHROPIC_API_KEY` in the host process environment. Keep the credential out of the worktree, logs, traces, transcripts, rows, and pull requests. |
+| Key file | `MYCO_ANTHROPIC_KEY_FILE` points at `~/.myco/secrets/anthropic.env`; the planner reads the key from it at the point of use (TIF-206), so the key is never in a process environment or argv. An ambient `ANTHROPIC_API_KEY` is still honoured. Keep the credential out of the worktree, logs, traces, transcripts, rows, and pull requests. |
 | Account | An Anthropic API key with billing enabled. |
 | Model | `claude-sonnet-5-5`, short-context pricing, $2 / $10 per MTok in/out. |
 | Expected spend, C1 | $1.13-$5.58 per 30 trials (§8.4 planning estimate; no caching assumed). |

@@ -301,12 +301,18 @@ Expected tail:
 DEPLOY OK
 ```
 
-**The token rotates on every deploy.** `run-live.ts` reads `MYCO_AGENT_TOKEN`, falling back to
-`~/.myco-token` (`src/integration/run-live.ts:32-41`). Re-fetch it after every deploy:
+**The token rotates on every deploy.** Re-fetch it after every deploy, into a file, never through
+a shell variable (the host's secret guard refuses commands that carry the token, TIF-206; §5).
+`umask 077` first, so the file is never world-readable, even briefly:
 
 ```bash
-export MYCO_AGENT_TOKEN="$(~/VMs/myco-win11/scripts/vssh 'Get-Content C:\ProgramData\Myco\agent.token')"
+(umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token)
 ```
+
+`run-live.ts` reads `~/.myco-token` when `MYCO_AGENT_TOKEN` is unset
+(`src/integration/run-live.ts:53-62`), so leave `MYCO_AGENT_TOKEN` unset (`unset MYCO_AGENT_TOKEN`
+if an earlier shell exported a stale one: a set variable wins over the file). The §5 CLI reads only
+the file.
 
 If it fails:
 
@@ -321,38 +327,53 @@ If it fails:
 ## 5. Prove the agent is on the desktop
 
 The agent's `ping` reports its session; `session_info` reports the window station and desktop
-(both ops, `agent/README.md`). **UNVERIFIED** as a command — the shape is the one
-`deploy-to-vm.sh` uses for `ping`, with the op swapped:
+(both ops, `agent/README.md`). The old inline recipe printed the token into the command line,
+which the host's enforced secret guard refuses (TIF-206, F16), so no agent could run it; it is
+replaced by a repo CLI that reads the token from a file. **UNVERIFIED live:** the CLI below has
+not yet been run against the VM. Its exit codes and token handling are covered by unit tests
+(`test/session-info.test.ts`) only.
+
+Fetch a fresh token (the deploy rotates it, §4) the way `docs/research/experiments/m1-row8/NEXT-RUN.md`
+does — from the guest, redirected to a file, never through a shell variable, with `umask 077` so
+the file is never world-readable, even briefly:
 
 ```bash
-ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11 &
-printf '{"id":1,"token":"%s","op":"session_info","params":{}}\n' "$MYCO_AGENT_TOKEN" | nc -w 5 127.0.0.1 8765
+(umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token)
 ```
 
-Expected:
+Then run the §5 proof:
+
+```bash
+pnpm exec tsx src/integration/session-info.ts            # or: --token-file PATH (default ~/.myco-token)
+```
+
+The CLI opens its own ssh tunnel (`SshTunnel`), takes and releases the VM lock, prints the
+`session_info` result JSON to stdout, and always stops the tunnel — so the old manual-tunnel
+teardown is no longer needed; nothing of §5 is left listening on 8765.
+
+Exit codes (`src/integration/session-info-core.ts` header): `0` desktop proof passed;
+`2` the agent is in session 0 and/or not on `WinSta0` — **stop, do not run trials**;
+`3` could not ask the agent or could not evaluate its answer — bad invocation (usage); token file
+missing, unreadable, or empty; tunnel did not come up or agent unreachable; auth failure or any
+other `ok:false`; a malformed `session_info` result (including `ok:true` with no result); the
+tunnel teardown failing;
+`10` `REFUSED_VM_LOCKED: …` — the VM lock is held (holder named), or its state could not be
+determined.
+
+Expected stdout on the passing path:
 
 ```json
-{"ok": true, "id": 1, "result": {"session_id": 1, "window_station": "WinSta0", "desktop": "Default", "user": "MYCO-WIN11\\myco"}}
+{"session_id":1,"window_station":"WinSta0","desktop":"Default","user":"MYCO-WIN11\\myco"}
 ```
 
 **`run-live`'s per-trial line is NOT this proof, and cannot be.** It prints
 `agent ping ok: 0.1.0 session <id>` on stderr (`src/integration/run-live.ts:69`), and that id is
-`ping`'s `session_id` — which is a **random hex GUID generated per agent start**
-(`agent/myco_agent/__init__.py:4`: `SESSION_ID = uuid.uuid4().hex`; returned by
-`agent/myco_agent/ops.py:8`). It is **not the Windows session number**, so no value of that line
-can distinguish session 1 from session 0. The desktop proof is the `session_info` call above,
-which reads the real number through `ProcessIdToSessionId`
-(`agent/myco_agent/windows_backend.py:292-317`). An earlier revision presented the ping line as
-"the same fact" — it is not (F9/F10, 2026-11-24).
-
-**Close the manual tunnel before §6.** §5 opens it with `ssh … -N -L 8765:… &` above. §9 lists
-"a manual tunnel from an earlier step" as a cause of §6 failing to bind — and `run-live` silently
-reuses a stale listener rather than erroring, so the failure is invisible. The teardown belongs
-here, not in a troubleshooting row you read afterwards:
-
-```bash
-pkill -f 'ssh .*-N -L 8765' || true
-```
+`ping`'s `session_id`, which is a **random hex GUID generated per agent start**
+(`agent/myco_agent/__init__.py:4`, `uuid.uuid4().hex`; returned by `agent/myco_agent/ops.py:8`).
+It is **not the Windows session number**, so no value of that line can distinguish session 1 from
+session 0. The desktop proof is the `session_info` call above, which reads the real number through
+`ProcessIdToSessionId` (`agent/myco_agent/windows_backend.py:288-321`). An earlier revision
+presented the ping line as "the same fact"; it is not (F9/F10, 2026-11-24).
 
 **Why this is a gate, not a nicety.** Windows puts services in session 0, which has no visible
 window station; `sshd` is a service, so everything it spawns inherits session 0 and cannot see or
@@ -375,7 +396,42 @@ trials.
 Prerequisite for reliability numbers: if a generated value does not survive Calc's input path,
 a `refuted` verdict may be a generator defect rather than an execution defect.
 
-**UNVERIFIED.** Reset (§3) and deploy (§4) first, then run once on a quiet host. Do **not**
+**UNVERIFIED.** Reset (§3) and deploy (§4) first, then run once on a quiet host.
+
+**When you may skip §3 and §4 (F20).** On a **row-8 reproduction run, never**: the point of the
+run is that a fresh operator can do every step, so reset, deploy and §5 are part of what is being
+tested. Outside row 8, for example re-measuring the generator on a guest that another driver
+has just released, skipping is acceptable only when all three hold: §5 passes on the guest as it
+stands, a fresh token was fetched after the last deploy, and §6.1 prints nothing after cleanup.
+Record the skip, and why, next to the §6 result. A skip that is not recorded reads as a full run.
+
+**The M1 lock procedure: each step takes and releases the lock itself (F20; lead ruling 2026-11-24).**
+Do not hold the VM flock by hand across steps, and the lock code is not changed for M1. A child
+accepts an ancestor's lock only when the ancestor is one of the named drivers (`m1-sweep.sh`,
+`m1-corrupt-suite.sh`, `c1-baseline.sh`, `c1-sweep.sh`, `c1-spike.sh`, per `vm_lock_owned_by_parent`
+in `scripts/vm-lock.sh` and `PARENT_DRIVERS` in `src/integration/vm-lock.ts`). Under an
+operator-held lock, §3.1 and §6 would refuse with exit 10. So run each step through its own
+script, and **before every step** run the gate check, read-only:
+
+```bash
+lsof /tmp/myco-win11.vm.lock || echo free     # a table = someone owns the VM: wait
+```
+
+Use `lsof`, not a `fcntl.flock` probe: a probe holds `LOCK_EX` for an instant, and a driver
+starting in that instant refuses with exit 10 (F5).
+
+| step | how it holds the lock |
+|---|---|
+| §3.1 `scripts/reset-trial-vm.sh` | takes it, releases on exit |
+| §4 `agent/bootstrap/deploy-to-vm.sh` | **does not take it.** Run it straight after the gate check prints `free`. Inside a §7.3 sweep it runs as a child of `m1-sweep.sh` and is covered by the sweep's lock |
+| §5 the `session_info` check | takes it, releases on exit (TIF-209) |
+| §6.1 check and cleanup (`vssh`/`scp`) | **do not take it.** Run them straight after the gate check |
+| §6 and §7.1/§7.2 `run-live` | takes it, releases on exit |
+| §7.3 `scripts/m1-sweep.sh`, §7.4 `scripts/m1-corrupt-suite.sh` | take it for the whole sweep; their children inherit it |
+
+Between steps the VM is unlocked, so another driver can take it. If a step exits 10, wait for the
+named holder and re-run the step. If the gate check shows an owner you did not expect, stop and
+report it. Do not break the lock. An operator-session lock wrapper is a post-M1 change. Do **not**
 interleave with other work on the guest. `--mode values` runs its parameter sets back to back
 without resets, so running it on a contaminated guest (leftover `soffice`, leftover run dirs)
 measures the contamination, not the generator (log 27).
@@ -406,7 +462,21 @@ scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-clean.ps1 myco-win11:'C:/myco/g
 it leaves one `run-dir myco-<hostpid>-<nonce>-<nonce>` and possibly one `soffice` behind. A run
 that is not a trial — the C1 arms write `C:\myco\runs\<index>` — leaves a directory whose name
 matches nothing in particular, including a bare number. Clean them before re-running, or the
-re-run measures the residue:
+re-run measures the residue.
+
+**A stray C1 guest dir is not row-8 evidence. Copy it aside, then clean it (F17).** A
+`C:\myco\runs\<index>` directory belongs to a C1 arm's trial, not to this run. It proves
+nothing about row 8 and must not be cited as row-8 evidence. But it may be the only guest-side
+copy of that C1 trial, so do not delete it unseen. For each `run-dir` line the check printed
+whose name is not `myco-<hostpid>-<nonce>-<nonce>` (your own aborted §6 residue), copy the
+directory to the host first:
+
+```bash
+mkdir -p /tmp/row8-guest-residue
+scp -q -r -F ~/VMs/myco-win11/ssh_config myco-win11:'C:/myco/runs/<name>' /tmp/row8-guest-residue/
+```
+
+Record the copied path in your report so the C1 owner can find it. Then run the cleanup:
 
 ```bash
 cat > /tmp/guest-cleanup.ps1 <<'EOF'
@@ -424,9 +494,14 @@ scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-cleanup.ps1 myco-win11:'C:/myco
 Then re-run `guest-clean.ps1` and confirm it prints nothing.
 
 **Do not delete** `C:\myco\runs\profiles` or `C:\myco\runs\myco_uia_act.py*` — those are the
-profile root and the agent's own script plus its result files, not trial residue. `profiles`
-sub-dirs are reported as residue but do **not** trip the guard; only `soffice` and `myco-*` run
-dirs do.
+profile root and the agent's own script plus its result files, not trial residue.
+
+**What trips the trial's contamination guard (F18).** From `src/integration/guest-health.ts`
+(`probeGuestHealth`, `guestContaminated`): **any** running `soffice`, and **any** directory
+directly under `C:\myco\runs` other than `myco-admin`, `profiles` and the trial's own, **whatever
+its name**: `myco-*`, a bare `20` or `29`, anything. Sub-directories *inside*
+`C:\myco\runs\profiles` are reported as `leftover profiles` but do **not** trip the guard. The
+§6.1 check above prints exactly the set that trips it, so a clean check means a clean guard.
 
 ### 6.2 Hold the VM, or nothing else may touch it
 
@@ -475,6 +550,12 @@ like a pass). Row shape, from the committed run
 ```
 
 Recorded result: **20/20 verified** (5 values × `name`, `qty`, `joined`, `salary`), 2026-11-20.
+
+**How long it takes (F21).** The sample row's `elapsedMs` (33 s) is one quiet-host row, not a
+rate. The 2026-11-24 row-8 run took **17 min 7 s for 20 rows**: per row min 36 s, mean 51 s,
+max 94 s, at 1-min load 4.7–9.5. **Plan 12–20 min** for §6, and expect one new run dir every
+~40–90 s. A run past ~30 min with no new dir is the time to check the pid (§9). Before that,
+silence is normal.
 
 **Re-checked 2026-11-24, and not yet reproduced end to end.** Two attempts were made on a
 guest that had been reset and verified clean (§6.1). **Every row that reached the verifier
