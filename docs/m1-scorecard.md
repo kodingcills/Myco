@@ -23,23 +23,43 @@ Every trial row below links to its own directory under
 `docs/research/experiments/m1-runs/`, and each carries the two files the viewer
 reads: `result.json` (verdict, evidence) and `trace.jsonl` (timeline).
 
+The **Viewer** column is a deep link that names that row's run by its own `runId`
+(the fragment is `#?run=<runId>`, read from the row's `result.json`). Open the run
+directory from the column beside it, and the viewer selects that run; the id in the
+link is what makes the selection land on the right trace. The viewer is a static
+single-file app and cannot read a folder by itself, so the link carries the
+selection, not the bytes.
+
 ```sh
 # One line: build the single-file viewer and open one trial's run.
 pnpm --filter viewer build && open "viewer/dist/myco-viewer.html"   # then drop docs/research/experiments/m1-runs/m1-013/trial-0 on it
+```
+
+Both scripts hold the table to the artifacts:
+
+```sh
+python3 scripts/check-scorecard-links.py        # every link resolves, and every
+                                                # fragment matches its result.json runId
+python3 scripts/scorecard-viewer-links.py       # rewrite the table; --check verifies
 ```
 
 The viewer is a static single-file app — it reads the run **in the browser**, so
 there is no server to start and no `myco view <run>` CLI (that is designed in
 `docs/design/gui-spec.md` but **not implemented**; do not quote it as if it were).
 Open the built file, then drag a `trial-<n>` directory onto it. The URL carries
-`#?run=trial-<n>`, so a link can deep-link a trial once the folder is loaded.
+`#?run=<runId>` — the run's own id from its `result.json`, **not** the folder name
+(`viewer/src/store.ts` keys a run by `result.json`'s `runId` once the result parses,
+so `#?run=trial-0` selects nothing). A selection made before the folder is opened is
+pending, and applies when the run with that id arrives.
 
 **Screenshots are deliberately not committed.** A `/tmp` run directory is ~8 MB of
 per-step PNGs; `result.json` + `trace.jsonl` is ~8 KB, and the viewer renders the
 verdict, evidence and timeline from those two alone. All 54 trials cost 504 KB.
 
-**Verified:** `scripts/check-scorecard-links.py` asserts every link resolves and
-carries both files. Run it after editing the table:
+**Verified:** `scripts/check-scorecard-links.py` asserts every link resolves, carries
+both files, and that each row's viewer fragment matches that row's `result.json`
+`runId` — every row must carry one. `scripts/scorecard-viewer-links.py --check` holds
+the table to the generated form. Run both after editing the table:
 
 ```sh
 python3 scripts/check-scorecard-links.py
@@ -47,62 +67,62 @@ python3 scripts/check-scorecard-links.py
 
 ## Trial traces
 
-| Trial | Run directory |
-|---|---|
-| M1-013 #00 | [`docs/research/experiments/m1-runs/m1-013/trial-0/`](docs/research/experiments/m1-runs/m1-013/trial-0/) |
-| M1-013 #01 | [`docs/research/experiments/m1-runs/m1-013/trial-1/`](docs/research/experiments/m1-runs/m1-013/trial-1/) |
-| M1-013 #02 | [`docs/research/experiments/m1-runs/m1-013/trial-2/`](docs/research/experiments/m1-runs/m1-013/trial-2/) |
-| M1-013 #03 | [`docs/research/experiments/m1-runs/m1-013/trial-3/`](docs/research/experiments/m1-runs/m1-013/trial-3/) |
-| M1-013 #04 | [`docs/research/experiments/m1-runs/m1-013/trial-4/`](docs/research/experiments/m1-runs/m1-013/trial-4/) |
-| M1-013 #05 | [`docs/research/experiments/m1-runs/m1-013/trial-5/`](docs/research/experiments/m1-runs/m1-013/trial-5/) |
-| M1-013 #06 | [`docs/research/experiments/m1-runs/m1-013/trial-6/`](docs/research/experiments/m1-runs/m1-013/trial-6/) |
-| M1-013 #07 | [`docs/research/experiments/m1-runs/m1-013/trial-7/`](docs/research/experiments/m1-runs/m1-013/trial-7/) |
-| M1-013 #08 | [`docs/research/experiments/m1-runs/m1-013/trial-8/`](docs/research/experiments/m1-runs/m1-013/trial-8/) |
-| M1-013 #09 | [`docs/research/experiments/m1-runs/m1-013/trial-9/`](docs/research/experiments/m1-runs/m1-013/trial-9/) |
-| M1-013 #10 | [`docs/research/experiments/m1-runs/m1-013/trial-10/`](docs/research/experiments/m1-runs/m1-013/trial-10/) |
-| M1-013 #11 | [`docs/research/experiments/m1-runs/m1-013/trial-11/`](docs/research/experiments/m1-runs/m1-013/trial-11/) |
-| M1-013 #12 | [`docs/research/experiments/m1-runs/m1-013/trial-12/`](docs/research/experiments/m1-runs/m1-013/trial-12/) |
-| M1-013 #13 | [`docs/research/experiments/m1-runs/m1-013/trial-13/`](docs/research/experiments/m1-runs/m1-013/trial-13/) |
-| M1-013 #14 | [`docs/research/experiments/m1-runs/m1-013/trial-14/`](docs/research/experiments/m1-runs/m1-013/trial-14/) |
-| M1-013 #15 | [`docs/research/experiments/m1-runs/m1-013/trial-15/`](docs/research/experiments/m1-runs/m1-013/trial-15/) |
-| M1-013 #16 | [`docs/research/experiments/m1-runs/m1-013/trial-16/`](docs/research/experiments/m1-runs/m1-013/trial-16/) |
-| M1-013 #17 | [`docs/research/experiments/m1-runs/m1-013/trial-17/`](docs/research/experiments/m1-runs/m1-013/trial-17/) |
-| M1-013 #18 | [`docs/research/experiments/m1-runs/m1-013/trial-18/`](docs/research/experiments/m1-runs/m1-013/trial-18/) |
-| M1-013 #19 | [`docs/research/experiments/m1-runs/m1-013/trial-19/`](docs/research/experiments/m1-runs/m1-013/trial-19/) |
-| M1-013 #20 | [`docs/research/experiments/m1-runs/m1-013/trial-20/`](docs/research/experiments/m1-runs/m1-013/trial-20/) |
-| M1-013 #21 | [`docs/research/experiments/m1-runs/m1-013/trial-21/`](docs/research/experiments/m1-runs/m1-013/trial-21/) |
-| M1-013 #22 | [`docs/research/experiments/m1-runs/m1-013/trial-22/`](docs/research/experiments/m1-runs/m1-013/trial-22/) |
-| M1-013 #23 | [`docs/research/experiments/m1-runs/m1-013/trial-23/`](docs/research/experiments/m1-runs/m1-013/trial-23/) |
-| M1-013 #24 | [`docs/research/experiments/m1-runs/m1-013/trial-24/`](docs/research/experiments/m1-runs/m1-013/trial-24/) |
-| M1-013 #25 | [`docs/research/experiments/m1-runs/m1-013/trial-25/`](docs/research/experiments/m1-runs/m1-013/trial-25/) |
-| M1-013 #26 | [`docs/research/experiments/m1-runs/m1-013/trial-26/`](docs/research/experiments/m1-runs/m1-013/trial-26/) |
-| M1-013 #27 | [`docs/research/experiments/m1-runs/m1-013/trial-27/`](docs/research/experiments/m1-runs/m1-013/trial-27/) |
-| M1-013 #28 | [`docs/research/experiments/m1-runs/m1-013/trial-28/`](docs/research/experiments/m1-runs/m1-013/trial-28/) |
-| M1-013 #29 | [`docs/research/experiments/m1-runs/m1-013/trial-29/`](docs/research/experiments/m1-runs/m1-013/trial-29/) |
-| M1-014 corrupted #00 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-0/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-0/) |
-| M1-014 corrupted #01 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-1/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-1/) |
-| M1-014 corrupted #02 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-2/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-2/) |
-| M1-014 corrupted #03 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-3/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-3/) |
-| M1-014 corrupted #04 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-4/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-4/) |
-| M1-014 corrupted #05 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-5/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-5/) |
-| M1-014 corrupted #06 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-6/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-6/) |
-| M1-014 corrupted #07 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-7/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-7/) |
-| M1-014 corrupted #08 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-8/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-8/) |
-| M1-014 corrupted #09 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-9/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-9/) |
-| M1-014 corrupted #10 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-10/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-10/) |
-| M1-014 corrupted #11 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-11/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-11/) |
-| M1-014 corrupted #12 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-12/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-12/) |
-| M1-014 corrupted #13 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-13/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-13/) |
-| M1-014 corrupted #14 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-14/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-14/) |
-| M1-014 corrupted #15 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-15/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-15/) |
-| M1-014 corrupted #16 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-16/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-16/) |
-| M1-014 corrupted #17 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-17/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-17/) |
-| M1-014 supplement #00 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-0/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-0/) |
-| M1-014 supplement #01 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-1/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-1/) |
-| M1-014 supplement #02 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-2/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-2/) |
-| M1-014 supplement #03 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-3/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-3/) |
-| M1-014 supplement #04 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-4/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-4/) |
-| M1-014 supplement #05 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-5/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-5/) |
+| Trial | Run directory | Viewer |
+|---|---|---|
+| M1-013 #00 | [`docs/research/experiments/m1-runs/m1-013/trial-0/`](docs/research/experiments/m1-runs/m1-013/trial-0/) | [View](viewer/dist/myco-viewer.html#?run=47c54948-4e12-428a-b355-886fc5543c43) |
+| M1-013 #01 | [`docs/research/experiments/m1-runs/m1-013/trial-1/`](docs/research/experiments/m1-runs/m1-013/trial-1/) | [View](viewer/dist/myco-viewer.html#?run=17fb9c18-9d6e-4596-9028-7264d7100ec4) |
+| M1-013 #02 | [`docs/research/experiments/m1-runs/m1-013/trial-2/`](docs/research/experiments/m1-runs/m1-013/trial-2/) | [View](viewer/dist/myco-viewer.html#?run=b98b388c-a613-44c4-bf18-0fcc36a93ce4) |
+| M1-013 #03 | [`docs/research/experiments/m1-runs/m1-013/trial-3/`](docs/research/experiments/m1-runs/m1-013/trial-3/) | [View](viewer/dist/myco-viewer.html#?run=5e9a0f04-944a-417b-b8f9-256831070b1b) |
+| M1-013 #04 | [`docs/research/experiments/m1-runs/m1-013/trial-4/`](docs/research/experiments/m1-runs/m1-013/trial-4/) | [View](viewer/dist/myco-viewer.html#?run=08e57f57-beec-4aed-8547-cb9b7019f109) |
+| M1-013 #05 | [`docs/research/experiments/m1-runs/m1-013/trial-5/`](docs/research/experiments/m1-runs/m1-013/trial-5/) | [View](viewer/dist/myco-viewer.html#?run=c789a5cd-09d2-4a39-91e3-89eeaf81409d) |
+| M1-013 #06 | [`docs/research/experiments/m1-runs/m1-013/trial-6/`](docs/research/experiments/m1-runs/m1-013/trial-6/) | [View](viewer/dist/myco-viewer.html#?run=62d0c038-5b4e-4f37-adde-156b4c268a17) |
+| M1-013 #07 | [`docs/research/experiments/m1-runs/m1-013/trial-7/`](docs/research/experiments/m1-runs/m1-013/trial-7/) | [View](viewer/dist/myco-viewer.html#?run=d16f0c35-4e68-43a0-bc67-8aeb64abbb33) |
+| M1-013 #08 | [`docs/research/experiments/m1-runs/m1-013/trial-8/`](docs/research/experiments/m1-runs/m1-013/trial-8/) | [View](viewer/dist/myco-viewer.html#?run=06ed1b7a-b2d9-430d-9502-7975e102369d) |
+| M1-013 #09 | [`docs/research/experiments/m1-runs/m1-013/trial-9/`](docs/research/experiments/m1-runs/m1-013/trial-9/) | [View](viewer/dist/myco-viewer.html#?run=9cb646fb-3fb4-46b4-a6de-b6bd1f0607c7) |
+| M1-013 #10 | [`docs/research/experiments/m1-runs/m1-013/trial-10/`](docs/research/experiments/m1-runs/m1-013/trial-10/) | [View](viewer/dist/myco-viewer.html#?run=18754672-52fe-4580-964e-7ad1b9bc9782) |
+| M1-013 #11 | [`docs/research/experiments/m1-runs/m1-013/trial-11/`](docs/research/experiments/m1-runs/m1-013/trial-11/) | [View](viewer/dist/myco-viewer.html#?run=3ca1da5b-02c8-40ba-a084-17146df66c7c) |
+| M1-013 #12 | [`docs/research/experiments/m1-runs/m1-013/trial-12/`](docs/research/experiments/m1-runs/m1-013/trial-12/) | [View](viewer/dist/myco-viewer.html#?run=f37b4559-afc3-462d-b4cb-21d97926111e) |
+| M1-013 #13 | [`docs/research/experiments/m1-runs/m1-013/trial-13/`](docs/research/experiments/m1-runs/m1-013/trial-13/) | [View](viewer/dist/myco-viewer.html#?run=a5081761-7269-44f3-9d61-627c7d90085b) |
+| M1-013 #14 | [`docs/research/experiments/m1-runs/m1-013/trial-14/`](docs/research/experiments/m1-runs/m1-013/trial-14/) | [View](viewer/dist/myco-viewer.html#?run=7f6c4b4b-78e0-4762-a6c8-4f1a27a905a3) |
+| M1-013 #15 | [`docs/research/experiments/m1-runs/m1-013/trial-15/`](docs/research/experiments/m1-runs/m1-013/trial-15/) | [View](viewer/dist/myco-viewer.html#?run=e26b2dd4-5b3a-4240-90a0-a8bc95acbaaa) |
+| M1-013 #16 | [`docs/research/experiments/m1-runs/m1-013/trial-16/`](docs/research/experiments/m1-runs/m1-013/trial-16/) | [View](viewer/dist/myco-viewer.html#?run=9254b0bb-57f7-4048-886d-430b177b194f) |
+| M1-013 #17 | [`docs/research/experiments/m1-runs/m1-013/trial-17/`](docs/research/experiments/m1-runs/m1-013/trial-17/) | [View](viewer/dist/myco-viewer.html#?run=47e0679e-7dc0-48ce-b5fd-8eb8632376dd) |
+| M1-013 #18 | [`docs/research/experiments/m1-runs/m1-013/trial-18/`](docs/research/experiments/m1-runs/m1-013/trial-18/) | [View](viewer/dist/myco-viewer.html#?run=32b8d246-6c6d-45c0-8bfc-52fb6b260591) |
+| M1-013 #19 | [`docs/research/experiments/m1-runs/m1-013/trial-19/`](docs/research/experiments/m1-runs/m1-013/trial-19/) | [View](viewer/dist/myco-viewer.html#?run=777da935-7e7f-4102-8774-edabe1209395) |
+| M1-013 #20 | [`docs/research/experiments/m1-runs/m1-013/trial-20/`](docs/research/experiments/m1-runs/m1-013/trial-20/) | [View](viewer/dist/myco-viewer.html#?run=b7a4e65b-f694-4239-9b71-85b4a022171a) |
+| M1-013 #21 | [`docs/research/experiments/m1-runs/m1-013/trial-21/`](docs/research/experiments/m1-runs/m1-013/trial-21/) | [View](viewer/dist/myco-viewer.html#?run=9fdb3ffd-0122-4238-8610-7400d7851100) |
+| M1-013 #22 | [`docs/research/experiments/m1-runs/m1-013/trial-22/`](docs/research/experiments/m1-runs/m1-013/trial-22/) | [View](viewer/dist/myco-viewer.html#?run=cecf0da9-06a0-4d24-9fea-f92dd308c957) |
+| M1-013 #23 | [`docs/research/experiments/m1-runs/m1-013/trial-23/`](docs/research/experiments/m1-runs/m1-013/trial-23/) | [View](viewer/dist/myco-viewer.html#?run=1f829736-690f-4937-8603-af8b04c3641b) |
+| M1-013 #24 | [`docs/research/experiments/m1-runs/m1-013/trial-24/`](docs/research/experiments/m1-runs/m1-013/trial-24/) | [View](viewer/dist/myco-viewer.html#?run=53691ccb-f128-4974-ad9d-225878f8b166) |
+| M1-013 #25 | [`docs/research/experiments/m1-runs/m1-013/trial-25/`](docs/research/experiments/m1-runs/m1-013/trial-25/) | [View](viewer/dist/myco-viewer.html#?run=0f417a3e-7cd7-4d98-823c-6002ad94a13b) |
+| M1-013 #26 | [`docs/research/experiments/m1-runs/m1-013/trial-26/`](docs/research/experiments/m1-runs/m1-013/trial-26/) | [View](viewer/dist/myco-viewer.html#?run=8bdd93f9-224e-46e8-82a5-9a60458dc14b) |
+| M1-013 #27 | [`docs/research/experiments/m1-runs/m1-013/trial-27/`](docs/research/experiments/m1-runs/m1-013/trial-27/) | [View](viewer/dist/myco-viewer.html#?run=6a0f620d-185e-4a01-b695-5777f1684735) |
+| M1-013 #28 | [`docs/research/experiments/m1-runs/m1-013/trial-28/`](docs/research/experiments/m1-runs/m1-013/trial-28/) | [View](viewer/dist/myco-viewer.html#?run=1e4b438a-a721-42c6-b2cc-e3a5fd0f8428) |
+| M1-013 #29 | [`docs/research/experiments/m1-runs/m1-013/trial-29/`](docs/research/experiments/m1-runs/m1-013/trial-29/) | [View](viewer/dist/myco-viewer.html#?run=55168d00-5f5e-406c-9f43-f4842aff76d3) |
+| M1-014 corrupted #00 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-0/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-0/) | [View](viewer/dist/myco-viewer.html#?run=2a9306de-59f4-4db7-b464-e61896a7dddd) |
+| M1-014 corrupted #01 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-1/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-1/) | [View](viewer/dist/myco-viewer.html#?run=c20e884d-1727-4b1d-8837-4ce929f50084) |
+| M1-014 corrupted #02 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-2/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-2/) | [View](viewer/dist/myco-viewer.html#?run=84fd870c-35bd-4762-b522-39785c045cb9) |
+| M1-014 corrupted #03 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-3/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-3/) | [View](viewer/dist/myco-viewer.html#?run=ad45732a-61dc-47ab-b974-f7e1b304f754) |
+| M1-014 corrupted #04 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-4/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-4/) | [View](viewer/dist/myco-viewer.html#?run=6dceded8-548d-4c00-9b9c-a296a73de4a0) |
+| M1-014 corrupted #05 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-5/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-5/) | [View](viewer/dist/myco-viewer.html#?run=e29ff840-f87c-4186-8c73-a769589a87e9) |
+| M1-014 corrupted #06 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-6/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-6/) | [View](viewer/dist/myco-viewer.html#?run=86aee642-60d8-48cb-bc37-58b8936106fd) |
+| M1-014 corrupted #07 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-7/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-7/) | [View](viewer/dist/myco-viewer.html#?run=757a84aa-2e5d-4b3f-bd43-436de2879ce3) |
+| M1-014 corrupted #08 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-8/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-8/) | [View](viewer/dist/myco-viewer.html#?run=f20c03aa-5821-42d8-b0e2-39e4390d681e) |
+| M1-014 corrupted #09 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-9/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-9/) | [View](viewer/dist/myco-viewer.html#?run=94a1e72a-5e5f-499c-8d71-b4607f276915) |
+| M1-014 corrupted #10 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-10/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-10/) | [View](viewer/dist/myco-viewer.html#?run=f271db2d-5984-4db0-9c19-24cf606cb583) |
+| M1-014 corrupted #11 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-11/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-11/) | [View](viewer/dist/myco-viewer.html#?run=0b40c4b2-047c-4159-b7d5-2b4eabbd5961) |
+| M1-014 corrupted #12 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-12/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-12/) | [View](viewer/dist/myco-viewer.html#?run=6c8ecdaa-847b-4ab4-8dc9-277f817fb7e0) |
+| M1-014 corrupted #13 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-13/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-13/) | [View](viewer/dist/myco-viewer.html#?run=5ab6ca20-419a-4edf-9766-f8cdeab2d5f5) |
+| M1-014 corrupted #14 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-14/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-14/) | [View](viewer/dist/myco-viewer.html#?run=9a52181c-37df-4232-b2af-d483d3e02c54) |
+| M1-014 corrupted #15 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-15/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-15/) | [View](viewer/dist/myco-viewer.html#?run=3754f5fc-06b8-45ee-9044-d8c4af66f844) |
+| M1-014 corrupted #16 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-16/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-16/) | [View](viewer/dist/myco-viewer.html#?run=0dd9be22-6458-4042-9d08-fd31abc25a4e) |
+| M1-014 corrupted #17 | [`docs/research/experiments/m1-runs/m1-014-corrupted/trial-17/`](docs/research/experiments/m1-runs/m1-014-corrupted/trial-17/) | [View](viewer/dist/myco-viewer.html#?run=27770c7a-ad12-4e80-99fa-3f0fb9ef320e) |
+| M1-014 supplement #00 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-0/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-0/) | [View](viewer/dist/myco-viewer.html#?run=2c69637b-59ed-49f1-bd1b-d72d66d117cf) |
+| M1-014 supplement #01 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-1/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-1/) | [View](viewer/dist/myco-viewer.html#?run=99fba57c-55cc-4669-81d2-4782e8ea37ec) |
+| M1-014 supplement #02 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-2/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-2/) | [View](viewer/dist/myco-viewer.html#?run=d28a135e-18ee-4961-977a-1e42d6c0dfdb) |
+| M1-014 supplement #03 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-3/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-3/) | [View](viewer/dist/myco-viewer.html#?run=36309df6-121d-4008-805d-14e9c268af93) |
+| M1-014 supplement #04 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-4/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-4/) | [View](viewer/dist/myco-viewer.html#?run=68f573de-0035-486c-95f1-3f0d68ab7c43) |
+| M1-014 supplement #05 | [`docs/research/experiments/m1-runs/m1-014-supplement/trial-5/`](docs/research/experiments/m1-runs/m1-014-supplement/trial-5/) | [View](viewer/dist/myco-viewer.html#?run=17fd5661-0b85-48e6-ac43-b501a4ff089d) |
 
 ## Evidence durability (M1-016, 2026-11-23)
 
