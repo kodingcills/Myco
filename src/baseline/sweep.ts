@@ -281,8 +281,8 @@ function acquireRunLock(directory: string): string {
     if (Number.isSafeInteger(parsed) && parsed > 0) owner = parsed;
   } catch {
     // No owner file, or one that did not parse: stale in every ordinary case. A live
-      // holder always writes a parseable pid, so an unreadable owner is an UNKNOWN
-      // rather than a confirmed death - see the trade documented on acquireRunLock.
+    // holder always writes a parseable pid, so an unreadable owner is an UNKNOWN
+    // rather than a confirmed death - see the trade documented on acquireRunLock.
   }
   if (owner !== undefined && isProcessAlive(owner))
     throw new Error(
