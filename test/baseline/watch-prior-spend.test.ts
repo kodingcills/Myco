@@ -38,6 +38,44 @@ import { afterEach, describe, expect, it } from "vitest";
  */
 const DUMMY_KEY = "not-a-real-key";
 
+/**
+ * A private VM lock path (TIF-202).
+ *
+ * `scripts/c1-baseline.sh` sources `scripts/vm-lock.sh`, which acquires
+ * `$MYCO_VM_LOCK_PATH` or the SHARED `/tmp/myco-win11.vm.lock`. Without this every test
+ * that spawns the launcher would take the REAL lock, write its own pid into it, and exit -
+ * leaving stale metadata that names a dead process and mimics a live sweep. Measured: the
+ * shared lock's text changed to `25410 c1-baseline.sh` and then `57102 c1-baseline.sh`
+ * (both dead) during test runs, and I spent time investigating them as mystery launches
+ * while a real arm was live.
+ *
+ * A test must never write a lock another run depends on.
+ */
+function privateLockPath(): string {
+  const dir = mkdtempSync(join(tmpdir(), "myco-vmlock-"));
+  dirs.push(dir);
+  return join(dir, "vm.lock");
+}
+
+/**
+ * The environment for EVERY launcher spawn in this file.
+ *
+ * One helper rather than a literal per call site, because the property under test is
+ * "no spawn can take the shared lock". Three inline env literals meant a fourth spawn
+ * could be added without the lock path and nothing would notice - and a file-level check
+ * cannot see the difference, since the other spawns still supply it. Routing all three
+ * through here makes the omission impossible to express.
+ */
+function launcherEnv(overrides: Record<string, string | undefined> = {}) {
+  return {
+    ...process.env,
+    HOME: bareHome(),
+    ANTHROPIC_API_KEY: DUMMY_KEY,
+    MYCO_VM_LOCK_PATH: privateLockPath(),
+    ...overrides,
+  };
+}
+
 function bareHome(): string {
   // Registered for cleanup like every other temp directory here. It was not, and a
   // single run of this file left 358 `myco-nohome-*` directories behind in the system
@@ -139,12 +177,7 @@ describe("a missing prior spend is refused, not defaulted", () => {
   it("the launcher refuses when MYCO_PRIOR_SPEND_MICROS is unset", async () => {
     const { spawnSync } = await import("node:child_process");
     const dir = ledgerDir({ "0": scored(100_000) });
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      HOME: bareHome(),
-      ANTHROPIC_API_KEY: DUMMY_KEY,
-    };
-    delete env.MYCO_PRIOR_SPEND_MICROS;
+    const env = launcherEnv({ MYCO_PRIOR_SPEND_MICROS: undefined });
     const run = spawnSync("bash", ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"], {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -183,12 +216,7 @@ describe("a non-numeric prior spend is refused, not converted to zero", () => {
           encoding: "utf8",
           // Set but not numeric. Exit 6, not 10: this must be refused before the VM
           // lock is attempted, so it cannot be confused with "the VM is busy".
-          env: {
-            ...process.env,
-            HOME: bareHome(),
-            ANTHROPIC_API_KEY: DUMMY_KEY,
-            MYCO_PRIOR_SPEND_MICROS: bad,
-          },
+          env: launcherEnv({ MYCO_PRIOR_SPEND_MICROS: bad }),
           timeout: 20_000,
         },
       );
@@ -275,12 +303,7 @@ describe("the launcher agrees with the sweep about valid prior spend", () => {
           // Same hermeticity as the other launcher tests: an empty HOME and a dummy
           // key, so the run reaches the guard this test is about rather than stopping
           // at the secrets check that precedes it.
-          env: {
-            ...process.env,
-            HOME: bareHome(),
-            ANTHROPIC_API_KEY: DUMMY_KEY,
-            MYCO_PRIOR_SPEND_MICROS: value,
-          },
+          env: launcherEnv({ MYCO_PRIOR_SPEND_MICROS: value }),
           timeout: 20_000,
         },
       );

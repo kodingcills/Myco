@@ -56,6 +56,35 @@ describe("no test writes into a live run", () => {
     }
   });
 
+  it("never lets a test write the SHARED VM lock", () => {
+    // TIF-202. `scripts/c1-baseline.sh` sources `scripts/vm-lock.sh`, which acquires
+    // `$MYCO_VM_LOCK_PATH` or the shared `/tmp/myco-win11.vm.lock`. A test that spawns the
+    // launcher without setting that variable takes the REAL lock, writes its own pid into
+    // it, and exits - leaving metadata that names a dead process and looks exactly like a
+    // live sweep. Measured: the shared lock's text changed to `25410 c1-baseline.sh`, then
+    // `57102 c1-baseline.sh`, then `4939 c1-baseline.sh`, all dead, all from test runs,
+    // while a real arm was live and while I was investigating them as mystery launches.
+    //
+    // TWO COUNTS, because position-based checks failed. A spawn may declare its `env` in a
+    // const ABOVE the call, so "is launcherEnv in the following window" is false for a
+    // correctly-routed spawn - an earlier version of this guard failed at baseline for
+    // that reason. Counting is immune to layout:
+    //   - the private path must be set in exactly ONE place, the helper
+    //   - every spawn must consume the helper, so uses == spawns + the definition
+    for (const { path, text } of testSources()) {
+      if (!/scripts\/c1-baseline\.sh/.test(text)) continue;
+      const spawns = [...text.matchAll(/"scripts\/c1-baseline\.sh"/g)].length;
+      const helperUses = [...text.matchAll(/launcherEnv\(/g)].length;
+      // The colon matters: a COMMENT mentioning `$MYCO_VM_LOCK_PATH` is not a site
+      // that sets it, and counting it made this assertion fail at baseline.
+      const lockPathSites = [...text.matchAll(/MYCO_VM_LOCK_PATH:/g)].length;
+      // spawns + 1 definition. Dropping the helper from one spawn lowers this and fails;
+      // inlining the path raises `lockPathSites` and fails.
+      expect({ path, helperUses }).toEqual({ path, helperUses: spawns + 1 });
+      expect({ path, lockPathSites }).toEqual({ path, lockPathSites: 1 });
+    }
+  });
+
   it("creates the directory it hands to the launcher, rather than reusing one", () => {
     // Narrower than a general cleanup rule, and deliberately so: that rule fires on
     // pre-existing tests that leak a temp dir, which is a different (and harmless)
