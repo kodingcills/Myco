@@ -76,7 +76,9 @@ function privateLockPath(): string {
  *      blank it, or redirect it to the shared path.
  *   2. The assembled environment is CHECKED before the spawn. If the path is missing or is
  *      the shared default, this throws instead of starting a process that could take the
- *      lock a real arm depends on.
+ *      lock a real arm depends on. The check takes the resolver as a parameter so the
+ *      guard can be EXERCISED: an unreachable guard is prose, and round 3 deleted this one
+ *      with the whole suite green. The suite now asserts it throws rather than trusting it.
  *
  * Anything routed through here therefore cannot write the shared lock, whatever the call
  * site looks like. A spawn that bypasses the wrapper entirely is a different problem, and
@@ -89,17 +91,24 @@ const SHARED_VM_LOCK = "/tmp/myco-win11.vm.lock";
  * The launcher's environment, with the lock path assigned LAST.
  *
  * Extracted so the guarantee is directly testable: an override cannot displace, blank, or
- * redirect the lock path, because the assignment follows the spread. The check below is a
- * backstop for a future edit that moves the assignment - unreachable today, which is the
- * point.
+ * redirect the lock path, because the assignment follows the spread.
+ *
+ * The check below guards a future edit that moves the assignment. It takes `resolveLock` as
+ * a parameter so the SUITE CAN REACH IT - round 3 removed the check with 283/283 still
+ * green, because nothing could make a correct assignment trip it. An unasserted guard is
+ * prose, and this PR has now shipped that mistake in two different forms. The test that
+ * exercises it is "throws rather than spawning against the shared lock".
  */
-function launcherEnvFor(overrides: Record<string, string | undefined> = {}) {
+function launcherEnvFor(
+  overrides: Record<string, string | undefined> = {},
+  resolveLock: () => string = privateLockPath,
+) {
   const env: Record<string, string | undefined> = {
     ...process.env,
     HOME: bareHome(),
     ANTHROPIC_API_KEY: DUMMY_KEY,
     ...overrides,
-    MYCO_VM_LOCK_PATH: privateLockPath(),
+    MYCO_VM_LOCK_PATH: resolveLock(),
   };
   if (!env.MYCO_VM_LOCK_PATH || env.MYCO_VM_LOCK_PATH === SHARED_VM_LOCK)
     throw new Error(
@@ -358,6 +367,17 @@ describe("an override cannot reach the shared lock", () => {
     const a = launcherEnvFor();
     const b = launcherEnvFor();
     expect(a.MYCO_VM_LOCK_PATH).not.toBe(b.MYCO_VM_LOCK_PATH);
+  });
+
+  it("throws rather than spawning against the shared lock", () => {
+    // Round 3 deleted this check and the whole suite stayed green, because a correct
+    // assignment cannot trip it - so it was load-bearing prose. The resolver is a
+    // parameter precisely so the guard is REACHABLE here: this fails if the check is
+    // removed, which is the property the comment claims.
+    expect(() => launcherEnvFor({}, () => SHARED_VM_LOCK)).toThrow(/SHARED lock/);
+    expect(() => launcherEnvFor({}, () => "")).toThrow(/SHARED lock/);
+    // And the default resolver is the private one, so the guard is not simply always-on.
+    expect(launcherEnvFor().MYCO_VM_LOCK_PATH).toMatch(/myco-vmlock-/);
   });
 });
 
