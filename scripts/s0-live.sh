@@ -44,11 +44,20 @@ say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 # stamps cannot order a claim against an rmdir. `date +%N` is GNU-only, so `%s.%N` is
 # computed where the C library supports it and falls back to whole seconds elsewhere.
 lock_trace() {
-  local ns
+  local ns ino
   ns="$(date +%s.%N 2>/dev/null || true)"
   [ -n "$ns" ] || ns="$(date +%s)"
-  printf '%s %s pid=%s %s %s\n' \
-    "$ns" "${TIF170_TRACE_ROLE:-run}" "$$" "$1" "${2:-}" \
+  # The path and the inode are what separate "the same lock twice" from "two different
+  # locks". GNU `stat` is `-c %i` and BSD is `-f %i`; they must be tried in that order,
+  # because on GNU `stat -f` means `--file-system` and prints a whole filesystem report
+  # while still exiting 0 — so a BSD-first chain silently yields a report, not an inode.
+  # `none` means the path was absent when this line was written.
+  ino="$(stat -c %i "$LOCK_DIR" 2>/dev/null || stat -f %i "$LOCK_DIR" 2>/dev/null || true)"
+  case "$ino" in
+    '' | *[!0-9]*) ino=none ;;
+  esac
+  printf '%s %s pid=%s %s %s path=%s ino=%s\n' \
+    "$ns" "${TIF170_TRACE_ROLE:-run}" "$$" "$1" "${2:-}" "$LOCK_DIR" "${ino:-none}" \
     >>"$LOG" 2>/dev/null || true
 }
 
