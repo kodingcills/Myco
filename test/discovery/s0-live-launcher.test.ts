@@ -1,16 +1,22 @@
+// biome-ignore-all lint/suspicious/noConsole: the TIF-170 diagnostics print a round's
+// captured evidence to the job log, so a failure is visible even when the artifact never
+// uploads. Only reached when MYCO_TIF170_DIAG is set.
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpus, tmpdir, uptime } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -106,6 +112,125 @@ function alive(pid: number): boolean {
   return spawnSync("kill", ["-0", String(pid)]).status === 0;
 }
 
+// TIF-170 diagnostics. CI-only: MYCO_TIF170_DIAG=<dir> turns on a dump of everything a
+// failing round leaves behind, so the one run that reproduces on a GitHub runner
+// carries its own evidence. Unset, none of this runs and the test is unchanged.
+const DIAG = process.env.MYCO_TIF170_DIAG || "";
+// The round cap defaults to the tested 30; the CI workflow raises it so a dispatch can
+// hunt for a failure inside a single vitest invocation.
+const ROUNDS = Number(process.env.MYCO_TIF170_ROUNDS || 30);
+
+/** `mtime`, `ctime` and `birth` in ns where the filesystem provides them. */
+function times(path: string): string {
+  const s = statSync(path, { bigint: true, throwIfNoEntry: false });
+  return s
+    ? `mtime=${s.mtimeNs} ctime=${s.ctimeNs} birth=${s.birthtimeNs} ino=${s.ino} size=${s.size}`
+    : "absent";
+}
+
+/** The whole log, every line numbered, so a `pid N` claim can be ordered against a loss. */
+function numberedLog(runDir: string): string[] {
+  const log = logOf(runDir);
+  return log === ""
+    ? ["  (no s0.log)"]
+    : log
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line, index) => `  ${String(index + 1).padStart(3, " ")}| ${line}`);
+}
+
+/** Where the claim, the pid file, the racer output and the rc files landed, in time order. */
+function runDirChronology(runDir: string): string[] {
+  const names = ["s0.lock", "s0.pid", "s0.child"];
+  try {
+    for (const name of readdirSync(runDir)) {
+      if (/^(out|rc)\.\d+$/.test(name)) {
+        names.push(name);
+      }
+    }
+  } catch {
+    // A round dir that does not exist is itself the finding; `times` reports it.
+  }
+  const stamped = names.map((name) => {
+    const path = join(runDir, name);
+    const s = statSync(path, { bigint: true, throwIfNoEntry: false });
+    return { name, sort: s ? s.mtimeNs : 0n, text: `  ${name.padEnd(9)} ${times(path)}` };
+  });
+  stamped.sort((a, b) => (a.sort < b.sort ? -1 : a.sort > b.sort ? 1 : 0));
+  return ["--- times, mtime ns ascending (claim order) ---", ...stamped.map((s) => s.text)];
+}
+
+/** The process tree, scoped to the fixture dirs of this round. */
+function processTree(dirs: string[]): string[] {
+  const ps = spawnSync("ps", ["-eo", "pid,ppid,lstart,stat,args"], { encoding: "utf8" });
+  const lines = (ps.stdout || "").split("\n").filter((line) => line !== "");
+  const head = lines.slice(0, 1);
+  const hit = lines.filter((line) => dirs.some((dir) => dir !== "" && line.includes(dir)));
+  return [
+    "--- ps -eo pid,ppid,lstart,stat,args, filtered to this round's dirs ---",
+    ...head,
+    ...hit,
+  ];
+}
+
+function hostContext(): string[] {
+  // macOS has no `nproc`; the CI target is ubuntu, and this branch also runs locally.
+  const nproc = spawnSync("nproc", { encoding: "utf8" }).stdout?.trim() || "?";
+  return [
+    "--- host ---",
+    `  nproc=${nproc}` +
+      ` cpus().length=${cpus().length} uptime_s=${Math.round(uptime())}` +
+      ` node=${process.version} platform=${process.platform}`,
+  ];
+}
+
+/**
+ * Everything a round leaves behind, as raw bytes, for the one case the exit codes
+ * cannot explain: two racers that both exited 0. The rc values say how many won; only
+ * the log's claim records, the file times and the process tree say whether one of them
+ * won the claim, or whether both exited 0 with a single claim and one lost watchdog.
+ */
+function dumpRound(
+  runDir: string,
+  round: number,
+  dirs: string[],
+  counts: { winners: number; refusals: number },
+): string {
+  const rcs: string[] = [];
+  try {
+    for (const name of readdirSync(runDir)
+      .filter((n) => /^rc\.\d+$/.test(n))
+      .sort()) {
+      rcs.push(`  ${name} = ${readFileSync(join(runDir, name), "utf8").trim()}`);
+    }
+  } catch {
+    rcs.push("  (no run dir)");
+  }
+  const outs: string[] = [];
+  try {
+    for (const name of readdirSync(runDir)
+      .filter((n) => /^out\.\d+$/.test(n))
+      .sort()) {
+      const body = readFileSync(join(runDir, name), "utf8").trim();
+      outs.push(`  ${name}: ${body === "" ? "(empty)" : JSON.stringify(body)}`);
+    }
+  } catch {
+    // The rc block already reports a missing run dir.
+  }
+  return [
+    `=== TIF-170 round ${round}: winners=${counts.winners} refusals=${counts.refusals}`,
+    ...hostContext(),
+    `--- racer rc (indexed) ---`,
+    ...rcs,
+    `--- racer stdout/stderr (indexed; --run sends its say lines to the log) ---`,
+    ...outs,
+    `--- s0.log, numbered in file order (claim = "pid N", loss = "holds the run lock") ---`,
+    ...numberedLog(runDir),
+    ...runDirChronology(runDir),
+    ...processTree(dirs),
+  ].join("\n");
+}
+
 describe("s0-live.sh launcher", () => {
   it("refuses to start without the Coordinator GO and the host lock", () => {
     const { script, runDir } = worktree();
@@ -143,68 +268,102 @@ describe("s0-live.sh launcher", () => {
     }
   });
 
-  // TIF-170: this test fails on ubuntu-latest with `expected 2 to be 1`, i.e. two racers
-  // exit 0 in one round. It is skipped here so it stops blocking main and every other PR
-  // while the cause is settled — four consecutive main runs (2f419c1, 8fc960b, 25cc48b,
-  // f209ac9) were red on this single assertion. It is NOT dismissed as a flake: see
-  // TIF-170. Do not delete the assertions below; unskip this when the fix lands.
-  it.skip("admits exactly one --run under a real race, and the winner owns the pid", () => {
-    const { script, runDir, env } = worktree();
-    // Check-then-write tears roughly one round in ten (measured 2026-11-23: 4/40
-    // rounds with two winners), so 30 rounds make the negative control dependable
-    // without making a green run slow — ~10 s.
-    for (let round = 0; round < 30; round += 1) {
-      spawnSync("bash", ["-c", 'rm -rf "' + runDir + '"; mkdir -p "' + runDir + '"']);
-      const racers = spawnSync(
-        "bash",
-        [
-          "-c",
-          'for i in 1 2 3 4 5 6 7 8; do ( S0_RUN_DIR="' +
-            runDir +
-            '" bash "' +
-            script +
-            '" --run >"' +
-            runDir +
-            '/out.$i" 2>&1; echo $? >"' +
-            runDir +
-            '/rc.$i" ) & done; wait; cat "' +
-            runDir +
-            '"/rc.* | grep -c "^0$"; cat "' +
-            runDir +
-            '"/rc.* | grep -c "^1$"',
-        ],
-        { encoding: "utf8", env: { ...process.env, ...env } },
-      );
-      const [winners, refusals] = racers.stdout.trim().split("\n").map(Number);
-      expect(winners).toBe(1);
-      expect(refusals).toBe(7);
-      // Before --stop: every `--run` that admitted itself logged the watchdog it
-      // launched (`say "pid $CHILD"`), so the live watchdogs are countable. `s0.pid`
-      // alone is not evidence: it is the treaty that a torn claim breaks, and the
-      // last writer wins it even when it names a child that has already been killed.
-      // `--run` routes its stdout to the shared log, not to the racer's own file,
-      // because the detached-run case is the one the log exists for.
-      const loggedPids = () =>
-        readFileSync(join(runDir, "s0.log"), "utf8")
-          .split("\n")
-          .map((line) => /^\S+ pid (\d+)$/.exec(line))
-          .filter((match): match is RegExpExecArray => match !== null)
-          .map((match) => Number(match[1]));
-      let pids: number[] = [];
-      for (let attempt = 0; attempt < 40 && !pids.some((pid) => alive(pid)); attempt += 1) {
-        spawnSync("bash", ["-c", "sleep 0.05"]);
-        pids = loggedPids();
+  // TIF-170: skipped by default, exactly as main leaves it (#333), because it fails on
+  // ubuntu-latest with `expected 2 to be 1` — two racers exit 0 in one round, ~1 run in
+  // 5. Running it in every CI job would put that back on main's critical path, which is
+  // what the quarantine exists to prevent. It runs ONLY when the diagnostics dir is set,
+  // which is what the workflow does, so the normal `check` job stays green and the
+  // diagnostic job captures the failure. Do not carry an unconditional form back to main.
+  it.runIf(DIAG !== "")(
+    "admits exactly one --run under a real race, and the winner owns the pid",
+    () => {
+      const { dir, script, runDir, env } = worktree();
+      // Check-then-write tears roughly one round in ten (measured 2026-11-23: 4/40
+      // rounds with two winners), so 30 rounds make the negative control dependable
+      // without making a green run slow — ~10 s.
+      for (let round = 0; round < ROUNDS; round += 1) {
+        spawnSync("bash", ["-c", 'rm -rf "' + runDir + '"; mkdir -p "' + runDir + '"']);
+        const racers = spawnSync(
+          "bash",
+          [
+            "-c",
+            'for i in 1 2 3 4 5 6 7 8; do ( S0_RUN_DIR="' +
+              runDir +
+              '" bash "' +
+              script +
+              '" --run >"' +
+              runDir +
+              '/out.$i" 2>&1; echo $? >"' +
+              runDir +
+              '/rc.$i" ) & done; wait; cat "' +
+              runDir +
+              '"/rc.* | grep -c "^0$"; cat "' +
+              runDir +
+              '"/rc.* | grep -c "^1$"',
+          ],
+          { encoding: "utf8", env: { ...process.env, ...env } },
+        );
+        const [winnerCount, refusalCount] = racers.stdout.trim().split("\n").map(Number);
+        // `map(Number)` yields `number | undefined`; a missing line counts as zero.
+        const winners = winnerCount ?? 0;
+        const refusals = refusalCount ?? 0;
+        // Before anything touches the round dir: the state the failure left, plus who is
+        // still alive. The process tree must be read here, while the watchdogs and their
+        // sleepers are up, because `--stop` below tears them down.
+        const anomaly = winners !== 1 || refusals !== 7;
+        if (DIAG !== "") {
+          mkdirSync(DIAG, { recursive: true });
+          if (anomaly || round === 0) {
+            const evidence = dumpRound(runDir, round, [dir, runDir], { winners, refusals });
+            const where = join(
+              DIAG,
+              anomaly ? `round-${round}.failure.txt` : `round-${round}.baseline.txt`,
+            );
+            writeFileSync(where, evidence + "\n");
+            if (anomaly) {
+              // Unbuffered: vitest prints it inside the failed assertion, so the job log
+              // carries the evidence even when the artifact never uploads.
+              appendFileSync(2, evidence + "\n");
+            }
+            // Printed for every run, so a green CI round still shows what was captured.
+            console.log(
+              `TIF-170 round ${round}: winners=${winners} refusals=${refusals} -> ${where}`,
+            );
+          }
+        }
+        expect(winners).toBe(1);
+        expect(refusals).toBe(7);
+        // Before --stop: every `--run` that admitted itself logged the watchdog it
+        // launched (`say "pid $CHILD"`), so the live watchdogs are countable. `s0.pid`
+        // alone is not evidence: it is the treaty that a torn claim breaks, and the
+        // last writer wins it even when it names a child that has already been killed.
+        // `--run` routes its stdout to the shared log, not to the racer's own file,
+        // because the detached-run case is the one the log exists for.
+        const loggedPids = () =>
+          readFileSync(join(runDir, "s0.log"), "utf8")
+            .split("\n")
+            .map((line) => /^\S+ pid (\d+)$/.exec(line))
+            .filter((match): match is RegExpExecArray => match !== null)
+            .map((match) => Number(match[1]));
+        let pids: number[] = [];
+        for (let attempt = 0; attempt < 40 && !pids.some((pid) => alive(pid)); attempt += 1) {
+          spawnSync("bash", ["-c", "sleep 0.05"]);
+          pids = loggedPids();
+        }
+        const live = pids.filter((pid) => alive(pid));
+        expect(live).toHaveLength(1);
+        // Read the pid before --stop: a late read raced a watchdog that had already gone.
+        const recorded = Number(readFileSync(join(runDir, "s0.pid"), "utf8").trim());
+        expect(recorded).toBe(live[0]);
+        expect(alive(recorded)).toBe(true);
+        launcher(script, runDir, ["--stop"], env);
+        spawnSync("bash", ["-c", 'pkill -9 -f "' + runDir + '" 2>/dev/null']);
       }
-      const live = pids.filter((pid) => alive(pid));
-      expect(live).toHaveLength(1);
-      // Read the pid before --stop: a late read raced a watchdog that had already gone.
-      const recorded = Number(readFileSync(join(runDir, "s0.pid"), "utf8").trim());
-      expect(recorded).toBe(live[0]);
-      expect(alive(recorded)).toBe(true);
-      launcher(script, runDir, ["--stop"], env);
-      spawnSync("bash", ["-c", 'pkill -9 -f "' + runDir + '" 2>/dev/null']);
-    }
-  }, 30_000);
+      // A CI hunt runs far more rounds than the 30 the local test does; 2 s a round is
+      // ample on a healthy host and the cap only exists to stop a hung round running on.
+    },
+    Math.max(30_000, ROUNDS * 2_000),
+  );
 
   it("releases the run lock on every exit that is not a signal", () => {
     const { script, runDir, env } = worktree();
