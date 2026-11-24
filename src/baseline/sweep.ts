@@ -7,7 +7,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  rmdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -236,6 +236,68 @@ function actionSignature(row: BaselineRow): string {
 }
 
 /**
+ * Take the per-directory run lock, clearing one that a dead process left behind.
+ *
+ * The lock is a directory, so it is atomic to create - but nothing removed it when a
+ * run was killed. arm-003d's r6 was stopped with SIGKILL, left `.run-lock` behind,
+ * and every later attempt died with `EEXIST: mkdir .../.run-lock` before a single
+ * trial ran. The resume feature could not resume the exact run it was built for, and
+ * the only fix was for an operator to know to `rmdir` a hidden directory first.
+ *
+ * The block now records an owner pid INSIDE the directory. On collision:
+ *   - owner alive  -> refuse, naming the pid. Two sweeps in one directory share one
+ *                     ledger, so this must stay a hard stop.
+ *   - owner dead   -> the run it belonged to is over; clear and take it.
+ *   - no owner     -> written before owner files existed, or killed between mkdir and
+ *                     the write. Stale by definition, since a live holder would have
+ *                     written one; clear it.
+ *
+ * Fail closed on every unsure path: only a POSITIVELY dead owner is overridden.
+ */
+function acquireRunLock(directory: string): string {
+  const lock = join(directory, ".run-lock");
+  const ownerPath = join(lock, "owner.pid");
+  const create = () => {
+    mkdirSync(lock, { mode: 0o700 });
+    writeFileSync(ownerPath, `${process.pid}\n`, { mode: 0o600 });
+  };
+  try {
+    create();
+    return lock;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  // Somebody holds it, or somebody left it. Decide which.
+  let owner: number | undefined;
+  try {
+    const raw = readFileSync(ownerPath, "utf8").trim();
+    const parsed = Number(raw);
+    if (Number.isSafeInteger(parsed) && parsed > 0) owner = parsed;
+  } catch {
+    // No owner file: stale by definition (a live holder always writes one).
+  }
+  if (owner !== undefined && isProcessAlive(owner))
+    throw new Error(
+      `refusing to run: ${lock} is held by live pid ${owner}; two sweeps must not share one ledger`,
+    );
+  // Positively dead (or unrecorded) - clear the leftover and take the lock.
+  rmSync(lock, { recursive: true, force: true });
+  create();
+  return lock;
+}
+
+/** True when a pid exists and is not a zombie. Signal 0 only checks existence. */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means it exists but belongs to someone else - still alive.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
  * Hosts one C1 evaluation. Prepare owns reset and fixture placement, and must
  * be supplied by the Coordinator's live wrapper after approval.
  */
@@ -333,8 +395,7 @@ export async function runC1Sweep(options: {
   }
   const { directory } = options;
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const lock = join(directory, ".run-lock");
-  mkdirSync(lock, { mode: 0o700 });
+  const lock = acquireRunLock(directory);
   try {
     const path = join(directory, "accounting.json");
     const ledger = loadLedger(path);
@@ -811,6 +872,8 @@ export async function runC1Sweep(options: {
     writeJson(join(directory, "report.json"), report);
     return report;
   } finally {
-    rmdirSync(lock);
+    // `rmSync`, not `rmdirSync`: the lock directory now holds `owner.pid`, so a
+    // bare rmdir would throw here and mask the run's own result.
+    rmSync(lock, { recursive: true, force: true });
   }
 }
