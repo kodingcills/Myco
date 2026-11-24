@@ -38,6 +38,99 @@ import { afterEach, describe, expect, it } from "vitest";
  */
 const DUMMY_KEY = "not-a-real-key";
 
+/**
+ * A private VM lock path (TIF-202).
+ *
+ * `scripts/c1-baseline.sh` sources `scripts/vm-lock.sh`, which acquires
+ * `$MYCO_VM_LOCK_PATH` or the SHARED `/tmp/myco-win11.vm.lock`. Without this every test
+ * that spawns the launcher would take the REAL lock, write its own pid into it, and exit -
+ * leaving stale metadata that names a dead process and mimics a live sweep. Measured: the
+ * shared lock's text changed to `25410 c1-baseline.sh` and then `57102 c1-baseline.sh`
+ * (both dead) during test runs, and I spent time investigating them as mystery launches
+ * while a real arm was live.
+ *
+ * A test must never write a lock another run depends on.
+ */
+function privateLockPath(): string {
+  const dir = mkdtempSync(join(tmpdir(), "myco-vmlock-"));
+  dirs.push(dir);
+  return join(dir, "vm.lock");
+}
+
+/**
+ * The ONLY way a test in this file starts the launcher.
+ *
+ * RUNTIME ENFORCEMENT, not a routing convention. Two rounds of review showed that counting
+ * text cannot establish this property: a verifier satisfied every textual check with
+ *
+ *     const LAUNCHER = (() => { spawnSync("echo", []); return "scripts/c1-baseline.sh"; })();
+ *     spawnSync(LAUNCHER, [dir, "--coordinator-go", "--resume"], { env: { ...process.env } });
+ *
+ * - one launcher literal, a `spawnSync(` in the lookback, one lock-path site - and then
+ * MEASURED that spawn reaching `vm_lock_acquire` on the shared lock. An alias defeats any
+ * check that reads the source.
+ *
+ * So the guarantee lives where it can be kept:
+ *
+ *   1. `MYCO_VM_LOCK_PATH` is assigned AFTER `...overrides`, so no caller can remove it,
+ *      blank it, or redirect it to the shared path.
+ *   2. The assembled environment is CHECKED before the spawn. If the path is missing or is
+ *      the shared default, this throws instead of starting a process that could take the
+ *      lock a real arm depends on. The check takes the resolver as a parameter so the
+ *      guard can be EXERCISED: an unreachable guard is prose, and round 3 deleted this one
+ *      with the whole suite green. The suite now asserts it throws rather than trusting it.
+ *
+ * Anything routed through here therefore cannot write the shared lock, whatever the call
+ * site looks like. A spawn that bypasses the wrapper entirely is a different problem, and
+ * `probe-directory.test.ts` covers only the textual part of it - which is all a text check
+ * can do, and is described there as such rather than as air-tight.
+ */
+const SHARED_VM_LOCK = "/tmp/myco-win11.vm.lock";
+
+/**
+ * The launcher's environment, with the lock path assigned LAST.
+ *
+ * Extracted so the guarantee is directly testable: an override cannot displace, blank, or
+ * redirect the lock path, because the assignment follows the spread.
+ *
+ * The check below guards a future edit that moves the assignment. It takes `resolveLock` as
+ * a parameter so the SUITE CAN REACH IT - round 3 removed the check with 283/283 still
+ * green, because nothing could make a correct assignment trip it. An unasserted guard is
+ * prose, and this PR has now shipped that mistake in two different forms. The test that
+ * exercises it is "throws rather than spawning against the shared lock".
+ */
+function launcherEnvFor(
+  overrides: Record<string, string | undefined> = {},
+  resolveLock: () => string = privateLockPath,
+) {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: bareHome(),
+    ANTHROPIC_API_KEY: DUMMY_KEY,
+    ...overrides,
+    MYCO_VM_LOCK_PATH: resolveLock(),
+  };
+  if (!env.MYCO_VM_LOCK_PATH || env.MYCO_VM_LOCK_PATH === SHARED_VM_LOCK)
+    throw new Error(
+      `refusing to spawn the launcher against the SHARED lock (${String(env.MYCO_VM_LOCK_PATH)}); a test must never write a lock a live arm depends on`,
+    );
+  return env;
+}
+
+function spawnLauncher(
+  runDir: string,
+  extraArgs: string[] = [],
+  overrides: Record<string, string | undefined> = {},
+) {
+  const env = launcherEnvFor(overrides);
+  return spawnSync("bash", ["scripts/c1-baseline.sh", runDir, "--coordinator-go", ...extraArgs], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 20_000,
+    env,
+  });
+}
+
 function bareHome(): string {
   // Registered for cleanup like every other temp directory here. It was not, and a
   // single run of this file left 358 `myco-nohome-*` directories behind in the system
@@ -123,7 +216,6 @@ function watchLine(
  */
 describe("a missing prior spend is refused, not defaulted", () => {
   it("the watcher refuses to run without its 4th argument", async () => {
-    const { spawnSync } = await import("node:child_process");
     const dir = ledgerDir({ "0": scored(100_000) });
     const run = spawnSync("bash", ["scripts/watch-c1-arm.sh", dir, "900.00", "25"], {
       cwd: process.cwd(),
@@ -137,20 +229,8 @@ describe("a missing prior spend is refused, not defaulted", () => {
   });
 
   it("the launcher refuses when MYCO_PRIOR_SPEND_MICROS is unset", async () => {
-    const { spawnSync } = await import("node:child_process");
     const dir = ledgerDir({ "0": scored(100_000) });
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      HOME: bareHome(),
-      ANTHROPIC_API_KEY: DUMMY_KEY,
-    };
-    delete env.MYCO_PRIOR_SPEND_MICROS;
-    const run = spawnSync("bash", ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env,
-      timeout: 20_000,
-    });
+    const run = spawnLauncher(dir, ["--resume"], { MYCO_PRIOR_SPEND_MICROS: undefined });
     // Exit 6 is the documented code for this refusal, and it must fire BEFORE the VM
     // lock is attempted: a launch that cannot report spend honestly should not take
     // the VM to discover that.
@@ -173,25 +253,10 @@ describe("a non-numeric prior spend is refused, not converted to zero", () => {
 
   for (const bad of badPriors) {
     it(`the launcher refuses MYCO_PRIOR_SPEND_MICROS=${JSON.stringify(bad)}`, async () => {
-      const { spawnSync } = await import("node:child_process");
       const dir = ledgerDir({ "0": scored(100_000) });
-      const run = spawnSync(
-        "bash",
-        ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          // Set but not numeric. Exit 6, not 10: this must be refused before the VM
-          // lock is attempted, so it cannot be confused with "the VM is busy".
-          env: {
-            ...process.env,
-            HOME: bareHome(),
-            ANTHROPIC_API_KEY: DUMMY_KEY,
-            MYCO_PRIOR_SPEND_MICROS: bad,
-          },
-          timeout: 20_000,
-        },
-      );
+      // Set but not numeric. Exit 6, not 10: this must be refused before the VM lock is
+      // attempted, so it cannot be confused with "the VM is busy".
+      const run = spawnLauncher(dir, ["--resume"], { MYCO_PRIOR_SPEND_MICROS: bad });
       expect(run.status).toBe(6);
       expect(`${run.stdout}${run.stderr}`).toMatch(/MYCO_PRIOR_SPEND_MICROS/);
     });
@@ -199,7 +264,6 @@ describe("a non-numeric prior spend is refused, not converted to zero", () => {
 
   for (const bad of ["nan", "inf", "-inf", "-3", "abc"]) {
     it(`the watcher refuses a prior of ${JSON.stringify(bad)}`, async () => {
-      const { spawnSync } = await import("node:child_process");
       const dir = ledgerDir({ "0": scored(100_000) });
       const source = execFileSync(
         "sed",
@@ -266,24 +330,10 @@ describe("the launcher agrees with the sweep about valid prior spend", () => {
       // What the launcher does. 6 is its refusal code; anything else means it got past
       // the guard and reached the VM lock, i.e. it accepted the value.
       const dir = ledgerDir({ "0": scored(100_000) });
-      const run = spawnSync(
-        "bash",
-        ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          // Same hermeticity as the other launcher tests: an empty HOME and a dummy
-          // key, so the run reaches the guard this test is about rather than stopping
-          // at the secrets check that precedes it.
-          env: {
-            ...process.env,
-            HOME: bareHome(),
-            ANTHROPIC_API_KEY: DUMMY_KEY,
-            MYCO_PRIOR_SPEND_MICROS: value,
-          },
-          timeout: 20_000,
-        },
-      );
+      // Same hermeticity as every other launcher spawn: `spawnLauncher` owns the empty
+      // HOME, the dummy key and the private lock path, so this test reaches the guard it
+      // is about rather than stopping at the secrets check that precedes it.
+      const run = spawnLauncher(dir, ["--resume"], { MYCO_PRIOR_SPEND_MICROS: value });
       const launcherAccepts = run.status !== 6;
 
       expect(
@@ -291,6 +341,43 @@ describe("the launcher agrees with the sweep about valid prior spend", () => {
         `${JSON.stringify(value)}: sweep=${sweepAccepts ? "accept" : "throw"}`,
       ).toEqual({ value, launcherAccepts: sweepAccepts });
     }
+  });
+});
+
+describe("an override cannot reach the shared lock", () => {
+  // The property the textual guard cannot establish. A verifier defeated every text check
+  // with an alias and then MEASURED the spawn reaching `vm_lock_acquire` on the shared lock.
+  // This asserts the guarantee where it is kept: the lock path is assigned after the
+  // spread, and the assembled environment is checked before any process starts.
+  it("displaces an override that names the shared lock", () => {
+    const env = launcherEnvFor({ MYCO_VM_LOCK_PATH: SHARED_VM_LOCK });
+    expect(env.MYCO_VM_LOCK_PATH).not.toBe(SHARED_VM_LOCK);
+    expect(env.MYCO_VM_LOCK_PATH).toMatch(/myco-vmlock-/);
+  });
+
+  it("displaces an override that blanks it", () => {
+    const env = launcherEnvFor({ MYCO_VM_LOCK_PATH: undefined });
+    expect(env.MYCO_VM_LOCK_PATH).toBeTruthy();
+    expect(env.MYCO_VM_LOCK_PATH).toMatch(/myco-vmlock-/);
+  });
+
+  it("gives every call its OWN lock file", () => {
+    // Two spawns sharing one lock file would serialise against each other, which is the
+    // same interference in a quieter form.
+    const a = launcherEnvFor();
+    const b = launcherEnvFor();
+    expect(a.MYCO_VM_LOCK_PATH).not.toBe(b.MYCO_VM_LOCK_PATH);
+  });
+
+  it("throws rather than spawning against the shared lock", () => {
+    // Round 3 deleted this check and the whole suite stayed green, because a correct
+    // assignment cannot trip it - so it was load-bearing prose. The resolver is a
+    // parameter precisely so the guard is REACHABLE here: this fails if the check is
+    // removed, which is the property the comment claims.
+    expect(() => launcherEnvFor({}, () => SHARED_VM_LOCK)).toThrow(/SHARED lock/);
+    expect(() => launcherEnvFor({}, () => "")).toThrow(/SHARED lock/);
+    // And the default resolver is the private one, so the guard is not simply always-on.
+    expect(launcherEnvFor().MYCO_VM_LOCK_PATH).toMatch(/myco-vmlock-/);
   });
 });
 
