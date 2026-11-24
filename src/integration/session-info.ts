@@ -22,8 +22,10 @@
  * refusals — goes through one sink (`emit`, below) that replaces any
  * occurrence of the token value with `[REDACTED]`, so a misbehaving agent
  * cannot echo the token back out. The ssh argv (`sshTunnelArgs`) never
- * contains the token, and no child is spawned with the token in its
- * environment.
+ * contains the token, and the ssh child gets an environment scrubbed of it
+ * (`tunnelOptionsFor`: `MYCO_AGENT_TOKEN` and any variable whose value
+ * contains the token are dropped), so an operator shell that still exports
+ * the token does not hand it to ssh either.
  *
  * VM lock: taken the way `run-live.ts` takes it
  * (`acquireVmLockUnlessOwnedByAncestor`), recorded under driver
@@ -46,10 +48,10 @@
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { pathToFileURL } from "node:url";
-import { AgentClient, SshTunnel } from "../win/agent-client.ts";
-import { acquireVmLockUnlessOwnedByAncestor, VmLockedError, type VmLock } from "./vm-lock.ts";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
+import { AgentClient, SshTunnel, type SshTunnelOptions } from "../win/agent-client.ts";
+import { acquireVmLockUnlessOwnedByAncestor, type VmLock, VmLockedError } from "./vm-lock.ts";
 
 export const EXIT_OK = 0;
 export const EXIT_GATE = 2;
@@ -109,17 +111,37 @@ export function readTokenFile(path: string): string {
   return token;
 }
 
+/**
+ * The tunnel options for a token: production defaults, plus a copy of `env`
+ * with every token-bearing variable removed, so the ssh child never sees the
+ * token. Existing `SshTunnel` callers pass no `env` and keep inheriting.
+ */
+export function tunnelOptionsFor(token: string, env: NodeJS.ProcessEnv): SshTunnelOptions {
+  const scrubbed: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (name === "MYCO_AGENT_TOKEN") continue;
+    if (value !== undefined && token !== "" && value.includes(token)) continue;
+    scrubbed[name] = value;
+  }
+  return { env: scrubbed };
+}
+
 /** The §5 gate classification, from the agent's session_info result. */
 export function classifySessionInfo(result: unknown): {
   code: typeof EXIT_OK | typeof EXIT_GATE | typeof EXIT_BLOCKED;
   reason?: string;
 } {
   if (typeof result !== "object" || result === null) {
-    return { code: EXIT_BLOCKED, reason: `malformed session_info result: ${JSON.stringify(result)}` };
+    return {
+      code: EXIT_BLOCKED,
+      reason: `malformed session_info result: ${JSON.stringify(result)}`,
+    };
   }
-  const { session_id: sessionId, window_station: windowStation } = result as Record<string, unknown>;
-  const sessionOk =
-    typeof sessionId === "number" && Number.isInteger(sessionId) && sessionId > 0;
+  const { session_id: sessionId, window_station: windowStation } = result as Record<
+    string,
+    unknown
+  >;
+  const sessionOk = typeof sessionId === "number" && Number.isInteger(sessionId) && sessionId > 0;
   const stationOk = windowStation === "WinSta0";
   if (sessionOk && stationOk) return { code: EXIT_OK };
   // Definitive gate: both fields are readable and at least one proves the
@@ -135,7 +157,8 @@ export function classifySessionInfo(result: unknown): {
   }
   const problems: string[] = [];
   if (!sessionReadable) problems.push(`session_id ${JSON.stringify(sessionId) ?? "undefined"}`);
-  if (!stationReadable) problems.push(`window_station ${JSON.stringify(windowStation) ?? "undefined"}`);
+  if (!stationReadable)
+    problems.push(`window_station ${JSON.stringify(windowStation) ?? "undefined"}`);
   return { code: EXIT_BLOCKED, reason: `malformed session_info result: ${problems.join(", ")}` };
 }
 
@@ -143,15 +166,26 @@ export function classifySessionInfo(result: unknown): {
  * The §5 step. Returns the exit code; prints everything through the
  * redaction sink. The lock (when taken) and the tunnel are always released.
  */
-export async function runSessionInfo(
-  argv: string[],
-  deps: SessionInfoDeps,
-): Promise<number> {
+export async function runSessionInfo(argv: string[], deps: SessionInfoDeps): Promise<number> {
+  // The one sink: every stdout/stderr string this CLI produces passes through
+  // here, so the token cannot leak even when the agent or the transport puts
+  // it inside an error message or the result JSON. `secret` is empty until the
+  // token is read; nothing printed before then can contain it.
+  let secret = "";
+  const emit = (text: string, channel: "stdout" | "stderr"): void => {
+    if (secret !== "" && text.includes(secret)) {
+      text = text.split(secret).join("[REDACTED]");
+    }
+    (channel === "stdout" ? deps.stdout : deps.stderr)(text);
+  };
+  const message = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
   let tokenFile: string;
   try {
     tokenFile = tokenFileFromArgv(argv) ?? DEFAULT_TOKEN_FILE;
   } catch (error) {
-    deps.stderr(error instanceof Error ? error.message : String(error));
+    emit(message(error), "stderr");
     return EXIT_BLOCKED;
   }
 
@@ -163,23 +197,12 @@ export async function runSessionInfo(
     lock = deps.acquireLock();
   } catch (error) {
     if (error instanceof VmLockedError) {
-      deps.stderr(`REFUSED_VM_LOCKED: holder ${error.holder}`);
+      emit(`REFUSED_VM_LOCKED: holder ${error.holder}`, "stderr");
       return EXIT_VM_LOCKED;
     }
-    deps.stderr(error instanceof Error ? error.message : String(error));
+    emit(message(error), "stderr");
     return EXIT_VM_LOCKED;
   }
-
-  // The one sink: every stdout/stderr byte this CLI produces passes through
-  // here, so the token cannot leak even when the agent or the transport puts
-  // it inside an error message or the result JSON.
-  let secret = "";
-  const emit = (text: string, channel: "stdout" | "stderr"): void => {
-    if (secret !== "" && text.includes(secret)) {
-      text = text.split(secret).join("[REDACTED]");
-    }
-    (channel === "stdout" ? deps.stdout : deps.stderr)(text);
-  };
 
   try {
     try {
@@ -187,7 +210,7 @@ export async function runSessionInfo(
       secret = token;
     } catch (error) {
       // readToken's contract: the message names the path, never the contents.
-      emit(error instanceof Error ? error.message : String(error), "stderr");
+      emit(message(error), "stderr");
       return EXIT_BLOCKED;
     }
 
@@ -195,7 +218,7 @@ export async function runSessionInfo(
     try {
       connection = await deps.connect(secret);
     } catch (error) {
-      emit(error instanceof Error ? error.message : String(error), "stderr");
+      emit(message(error), "stderr");
       return EXIT_BLOCKED;
     }
 
@@ -208,11 +231,16 @@ export async function runSessionInfo(
     } catch (error) {
       // AgentUnreachableError (transport) or AgentOpError (auth/op failure):
       // both mean the desktop proof could not be made.
-      emit(error instanceof Error ? error.message : String(error), "stderr");
+      emit(message(error), "stderr");
       return EXIT_BLOCKED;
     } finally {
       await connection.stop();
     }
+  } catch (error) {
+    // Anything unexpected (e.g. a teardown that throws): still through the
+    // sink, still a "could not ask the agent" exit, lock still released.
+    emit(message(error), "stderr");
+    return EXIT_BLOCKED;
   } finally {
     lock?.release();
   }
@@ -222,7 +250,7 @@ export async function runSessionInfo(
 function productionDeps(): SessionInfoDeps {
   return {
     connect: async (token: string): Promise<SessionInfoConnection> => {
-      const tunnel = new SshTunnel();
+      const tunnel = new SshTunnel(tunnelOptionsFor(token, process.env));
       try {
         await tunnel.start();
       } catch (error) {
@@ -241,7 +269,13 @@ function productionDeps(): SessionInfoDeps {
 
 // Entry guard: run only when executed directly, not when imported by tests.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runSessionInfo(process.argv.slice(2), productionDeps()).then((code) => {
-    process.exit(code);
-  });
+  runSessionInfo(process.argv.slice(2), productionDeps()).then(
+    (code) => process.exit(code),
+    // runSessionInfo catches and redacts everything itself; this only guards
+    // against a bug there, and prints no error text that could carry the token.
+    () => {
+      process.stderr.write("session-info: internal error\n");
+      process.exit(EXIT_BLOCKED);
+    },
+  );
 }

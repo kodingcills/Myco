@@ -33,6 +33,7 @@ import {
   type SessionInfoConnection,
   type SessionInfoDeps,
   tokenFileFromArgv,
+  tunnelOptionsFor,
 } from "../src/integration/session-info.ts";
 import { type VmLock, VmLockedError } from "../src/integration/vm-lock.ts";
 import { sshTunnelArgs } from "../src/win/agent-client.ts";
@@ -58,6 +59,8 @@ interface Harness {
   agent: {
     result?: unknown;
     error?: Error;
+    /** Thrown by the tunnel teardown. */
+    stopError?: Error;
     onToken?: (token: string) => void;
   };
 }
@@ -116,8 +119,17 @@ function harness(lockError?: Error, tokenError?: Error): Harness {
       captured.tunnelsStarted++;
       // What production really spawns (SshTunnel → sshTunnelArgs): captured so
       // the leak scan can prove the token never enters a child's argv or env.
-      captured.spawnArgv = sshTunnelArgs();
-      captured.spawnEnv = {};
+      // The env is the real scrub applied to a shell that still exports the
+      // token (directly and embedded in another variable).
+      const options = tunnelOptionsFor(token, {
+        PATH: "/usr/bin",
+        MYCO_AGENT_TOKEN: token,
+        OTHER_VAR: `prefix-${token}-suffix`,
+      });
+      captured.spawnArgv = sshTunnelArgs(options);
+      captured.spawnEnv = Object.fromEntries(
+        Object.entries(options.env ?? {}).map(([k, v]) => [k, `${k}=${v ?? ""}`]),
+      );
       agent.onToken?.(token);
       return {
         client: {
@@ -130,6 +142,7 @@ function harness(lockError?: Error, tokenError?: Error): Harness {
         },
         stop: async () => {
           captured.tunnelsStopped++;
+          if (agent.stopError) throw agent.stopError;
         },
       };
     },
@@ -299,6 +312,19 @@ describe("runSessionInfo", () => {
     expect(captured.lockReleased).toBe(1);
   });
 
+  it("tunnel teardown throws with the token in its message: exit 3, redacted, lock released (FAULT)", async () => {
+    const probe = probes.push(attachConsoleProbe()) - 1;
+    const { deps, captured, agent } = harness();
+    agent.result = HAPPY;
+    agent.stopError = new Error(`ssh teardown failed; last request carried ${SENTINEL}`);
+    const code = await runSessionInfo([], deps);
+    expect(code).toBe(3);
+    expect(visibleChannels(captured, probes[probe] as ConsoleProbe)).not.toContain(SENTINEL);
+    expect(captured.stderr.join("\n")).toContain("[REDACTED]");
+    expect(captured.tunnelsStopped).toBe(1);
+    expect(captured.lockReleased).toBe(1);
+  });
+
   it("ok:false error message echoes the token: nowhere in output (FAULT)", async () => {
     const probe = probes.push(attachConsoleProbe()) - 1;
     const { deps, captured, agent } = harness();
@@ -367,6 +393,18 @@ describe("runSessionInfo", () => {
       "-N",
       "myco-win11",
     ]);
+  });
+});
+
+describe("tunnelOptionsFor", () => {
+  it("drops MYCO_AGENT_TOKEN and any variable carrying the token; keeps the rest", () => {
+    const options = tunnelOptionsFor(SENTINEL, {
+      PATH: "/usr/bin",
+      HOME: "/Users/someone",
+      MYCO_AGENT_TOKEN: "anything",
+      OTHER_VAR: `x${SENTINEL}y`,
+    });
+    expect(options.env).toEqual({ PATH: "/usr/bin", HOME: "/Users/someone" });
   });
 });
 

@@ -351,7 +351,7 @@ Exit codes (`src/integration/session-info.ts` header): `0` desktop proof passed;
 Expected stdout on the passing path:
 
 ```json
-{"session_id": 1, "window_station": "WinSta0", "desktop": "Default", "user": "MYCO-WIN11\\myco"}
+{"session_id":1,"window_station":"WinSta0","desktop":"Default","user":"MYCO-WIN11\\myco"}
 ```
 
 **Why this is a gate, not a nicety.** Windows puts services in session 0, which has no visible

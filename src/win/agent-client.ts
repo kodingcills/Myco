@@ -196,6 +196,12 @@ export interface SshTunnelOptions {
   sshPath?: string;
   /** Per-call timeout for agent requests through the tunnel (default 15_000ms). */
   timeoutMs?: number;
+  /**
+   * Environment for the ssh child. Omitted (every existing caller): the child
+   * inherits `process.env`, exactly as before. The session-info CLI (TIF-209)
+   * passes a copy scrubbed of the agent token.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** The argv `SshTunnel` spawns, exported for tests and runbooks. */
@@ -251,7 +257,11 @@ export class SshTunnel implements AgentTransport {
     if (this.child && this.child.exitCode === null) return;
     const sshPath = this.options.sshPath ?? "ssh";
     const args = sshTunnelArgs(this.options);
-    this.child = spawn(sshPath, args, { stdio: "ignore", detached: false });
+    this.child = spawn(sshPath, args, {
+      stdio: "ignore",
+      detached: false,
+      ...(this.options.env ? { env: this.options.env } : {}),
+    });
     this.child.on("error", () => {
       // surfaced via health check / transport failures
     });
@@ -398,7 +408,12 @@ export class AgentClient {
    * confused with `ping`'s `session_id`, a per-start GUID — see
    * `docs/eval-runbook.md` §5 (F9/F10).
    */
-  sessionInfo(): Promise<{ session_id: number; window_station: string; desktop: string; user: string }> {
+  sessionInfo(): Promise<{
+    session_id: number;
+    window_station: string;
+    desktop: string;
+    user: string;
+  }> {
     return this.request("session_info") as Promise<{
       session_id: number;
       window_station: string;
