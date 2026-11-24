@@ -35,6 +35,23 @@ esac
 
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
+# TIF-170: who touches the lock, and when. Log-only — it never changes control flow,
+# never signals anything, and its own failure is swallowed so it cannot break a run.
+# The claim record (`say "pid ..."`) shows THAT two claims happened; this shows WHICH
+# process removed the lock between them, which is the part no experiment has named yet.
+#
+# Sub-second precision matters: a whole round runs inside one second, so second-granular
+# stamps cannot order a claim against an rmdir. `date +%N` is GNU-only, so `%s.%N` is
+# computed where the C library supports it and falls back to whole seconds elsewhere.
+lock_trace() {
+  local ns
+  ns="$(date +%s.%N 2>/dev/null || true)"
+  [ -n "$ns" ] || ns="$(date +%s)"
+  printf '%s %s pid=%s %s %s\n' \
+    "$ns" "${TIF170_TRACE_ROLE:-run}" "$$" "$1" "${2:-}" \
+    >>"$LOG" 2>/dev/null || true
+}
+
 probe() {
   {
     echo "# S0 pre-run gate, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -113,7 +130,9 @@ run_sequence() {
   wait "$CHILD" || rc=$?
   say "child $CHILD exited with $rc"
   rm -f "$CHILD_FILE"
+  lock_trace rmdir-before sequence
   rmdir "$LOCK_DIR" 2>/dev/null || true
+  lock_trace rmdir-done sequence
   return "$rc"
 }
 
@@ -121,12 +140,16 @@ watchdog() {
   # The watchdog holds the pid file and reports the child's exit, so a run that
   # dies while no agent is watching still leaves a record.
   probe >>"$LOG" 2>&1
-  gate || { say "gate refused; not starting"; rm -f "$PID_FILE"; rmdir "$LOCK_DIR" 2>/dev/null || true; exit 2; }
+  gate || { say "gate refused; not starting"; rm -f "$PID_FILE"
+    lock_trace rmdir-before watchdog-gate; rmdir "$LOCK_DIR" 2>/dev/null || true
+    lock_trace rmdir-done watchdog-gate; exit 2; }
   local rc=0
   run_sequence || rc=$?
   say "watchdog done (rc $rc)"
   rm -f "$PID_FILE"
+  lock_trace rmdir-before watchdog-exit
   rmdir "$LOCK_DIR" 2>/dev/null || true
+  lock_trace rmdir-done watchdog-exit
   exit "$rc"
 }
 
@@ -152,7 +175,9 @@ case "${1:-}" in
       fi
       rm -f "$FILE"
     done
+    lock_trace rmdir-before stop
     rmdir "$LOCK_DIR" 2>/dev/null || true
+    lock_trace rmdir-done stop
     # Scoped to this worktree: an unscoped pkill aborts another workstream's run on a
     # host with a dozen worktrees. Walk the pids from pgrep rather than relying on
     # pkill's option parsing, and never signal the invoking shell.
@@ -175,7 +200,10 @@ case "${1:-}" in
     # fails cleanly when the directory exists. The noclobber alternative is reachable
     # only through a construct that also refuses, and #300's earlier attempt showed the
     # guard it replaced could admit two runs; `mkdir` is the form that cannot.
-    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      lock_trace mkdir-won run-claim
+    else
+      lock_trace mkdir-lost run-claim
       kill "$CHILD" 2>/dev/null || true
       say "another --run holds the run lock; refusing to start a second sequence"
       exit 1
