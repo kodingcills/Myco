@@ -51,7 +51,10 @@ afterEach(() => {
 function worktree(): { dir: string; script: string; runDir: string; env: NodeJS.ProcessEnv } {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "myco-launcher-")));
   mkdirSync(join(dir, "scripts"), { recursive: true });
-  cpSync(join(ROOT, "scripts", "s0-live.sh"), join(dir, "scripts", "s0-live.sh"));
+  cpSync(
+    join(ROOT, "scripts", process.env.MYCO_TIF170_LAUNCHER || "s0-live.sh"),
+    join(dir, "scripts", "s0-live.sh"),
+  );
   const runDir = join(dir, "run");
   mkdirSync(runDir, { recursive: true });
   const bin = join(dir, "bin");
