@@ -44,6 +44,34 @@
 - **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
 - **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
 
+## Log 2026-11-24 (71) — §6 PASSES 20/20; TIF-195 closed; row 8 unblocked through §6
+- **§6 PASSES: 20/20 verified, exit 0**, 08:34:06Z → 08:49:46Z (15m40s), zero refuted and zero
+  harness errors, columns `name`/`qty`/`joined`/`salary` ×5, per-row 44.7–99.1 s. **F9 is
+  retired** — the runbook's `20/20` now reproduces. Evidence:
+  `docs/research/experiments/m1-row8/{S6-PASS.md,s6-evidence/}` (PR #401, merged `d2917a06`).
+- **The run held the flock as `2536 run-live.ts` for its whole life** and released on exit: TIF-191
+  demonstrably working in production, on the first real §6 after it landed. Nothing could reset
+  the guest out from under it.
+- **Not pooled with attempts A and B.** Those verified every row that reached the verifier
+  (16 of 16, 0 refuted) but never completed — one lost its host process, one was cold-reset — and
+  ran at load 5.8–10.0. Only this run is a 20/20.
+- **Four preconditions each failed once before this run worked, all now in `NEXT-RUN.md` (#399):**
+  a free flock with no driver; a guest cleaned **past §6.1's `myco-*` filter** (r6 left two stray
+  `soffice` and a run dir literally named `20`, the C1 sweep output, which the filter does not
+  match); a **freshly fetched token** (r6 installed its own, so the cached `~/.myco-token` gave
+  `AUTH_FAILED` *after* the guest had been touched); and **`nohup`, not `setsid` — `setsid` does
+  not exist on macOS** and a launcher built on it dies instantly and silently, costing two launches.
+- **TIF-195 closed.** `main` re-verified the seam narrowing at `c80c0cb3` → **PASS** (PR #395,
+  merged `ba9c0c06`). The verifier found the fix stronger than claimed: it is enforced **at runtime**
+  as well as by the type — `acquireVmLockUnlessOwnedByAncestor` builds a fresh `{path, driver}`, so
+  a widened object, an `as` cast, an interface extension and a prototype-inherited key were all
+  dropped while the lock was still acquired. Its ruling on the author's cast disclosure: the cast
+  reproduces but **does not block**, since only editing the module body can reopen it.
+- **TIF-187 runbook fixes landed as #396, and #387 closed as superseded.** #387 was **not**
+  superseded by #388/#391 — main had none of its six fixes (F1, F3-runbook-side, F5, F6, F9, F11).
+  I rebased it onto main and resolved two conflicts by keeping both sides, since they are
+  complementary; closing #387 avoided a force-update for no gain.
+
 ## Log 2026-11-24 (70) — I merged TIF-191 past its verifier; TIF-195 corrects it
 - **Process miss, mine.** #390 was Tier 2 (locks). Round 1 PASSed at `c4ab78a`, then I **changed
   code** — `cf66dbb0`, the two test seams on `lockOwnedByAncestor` — and merged as `865389fc`
