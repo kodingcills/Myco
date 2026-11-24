@@ -55,6 +55,13 @@ interface RunIdentity {
    * Kept because the two are not equally strong evidence.
    */
   adopted?: boolean;
+  /**
+   * Scored causes the operator explicitly accepted as diagnosed agent failures.
+   * Absent or empty means "none accepted", which is the default and the stricter
+   * reading; a reader can therefore tell an arm that ran under an acceptance from
+   * one that never needed it.
+   */
+  acceptedScoredCauses?: readonly string[];
 }
 interface Ledger {
   manifestSha256: string;
@@ -278,6 +285,22 @@ export async function runC1Sweep(options: {
    * a mismatch, only fill an absence.
    */
   adoptIdentity?: boolean;
+  /**
+   * Scored causes the operator has DIAGNOSED as genuine agent failures, as
+   * `verdict:reason` strings (e.g. `refuted:step-budget`).
+   *
+   * A repeated scored cause normally aborts the arm at its second occurrence,
+   * because two identical failures mean the sweep is measuring the harness. That
+   * inference is wrong once the cause has actually been diagnosed: every row
+   * reproducing a known agent limitation is EXPECTED, and aborting at the second
+   * one would stop an arm precisely because it is behaving as understood.
+   *
+   * Accepted causes break the run of failures instead of contributing to it.
+   * Anything not listed still aborts at 2, so this narrows the rule rather than
+   * disabling it. Recorded in the ledger identity so the acceptance is auditable
+   * after the fact.
+   */
+  acceptScoredCauses?: readonly string[];
   planner?: Planner;
   prepare(
     target: (typeof manifest.rows)[number],
@@ -315,6 +338,17 @@ export async function runC1Sweep(options: {
     // costs nothing.
     let priorSpendMicros = priorSpend;
     const runResume = options.resume === true;
+    // Validated rather than trusted: a typo'd cause would silently accept nothing
+    // (safe) OR, worse, look like it was in force when it was not. Empty strings
+    // and entries without a colon are rejected so the flag cannot be half-applied.
+    const acceptedScoredCauses = new Set<string>(
+      (options.acceptScoredCauses ?? []).map((cause) => cause.trim()).filter(Boolean),
+    );
+    for (const cause of acceptedScoredCauses)
+      if (!/^[a-z-]+:[a-z-]+$/i.test(cause))
+        throw new Error(
+          `invalid accepted scored cause "${cause}": expected verdict:reason, e.g. refuted:step-budget`,
+        );
     if (runResume) {
       if (options.identity)
         assertResumable(ledger, options.identity, path, options.adoptIdentity === true);
@@ -352,6 +386,30 @@ export async function runC1Sweep(options: {
     if (!ledger.identity && options.identity) {
       ledger.identity = options.identity;
       writeJson(path, ledger);
+    }
+    // The acceptance is part of the run's identity: an arm that ran with
+    // `refuted:step-budget` accepted is a different experiment from one that did
+    // not, and a reviewer must be able to see which. Written once, then asserted
+    // on later resumes so a resumed arm cannot quietly change its acceptance.
+    if (ledger.identity && acceptedScoredCauses.size > 0 && !ledger.identity.acceptedScoredCauses) {
+      ledger.identity = {
+        ...ledger.identity,
+        acceptedScoredCauses: [...acceptedScoredCauses].sort(),
+      };
+      writeJson(path, ledger);
+    }
+    if (runResume && ledger.identity?.acceptedScoredCauses) {
+      const previous = new Set(ledger.identity.acceptedScoredCauses);
+      for (const cause of acceptedScoredCauses)
+        if (!previous.has(cause))
+          throw new Error(
+            `refusing to resume ${path}: accepted scored cause "${cause}" was not in force when this run was recorded (recorded: ${[...previous].join(", ") || "none"})`,
+          );
+      for (const cause of previous)
+        if (!acceptedScoredCauses.has(cause))
+          throw new Error(
+            `refusing to resume ${path}: accepted scored cause "${cause}" was in force for this run but is not passed now; the resumed rows would not be comparable`,
+          );
     }
     const persist = () => writeJson(path, ledger);
     const planner = options.planner ?? createPlanner();
@@ -459,9 +517,13 @@ export async function runC1Sweep(options: {
         // against the true combined limit rather than against a budget that has
         // already had it removed. This is the binding ceiling for a real launch.
         //
-        // On a resume this is `priorSpendMicros`, which already folds in this
-        // directory's committed cash - so a resumed run measures the PROJECT, not
-        // a second $9 allowance for the half it re-executes.
+        // On a resume `priorSpendMicros` stays the EXTERNAL figure; this
+        // directory's committed cash arrives through `charged(ledger.c1)` in the
+        // same expression. It is deliberately NOT folded into prior spend as
+        // well - that counts it twice and shrinks the usable budget by the amount
+        // already paid. A round-1 verifier flagged an earlier version of this
+        // comment for saying the opposite, which is the sentence someone would
+        // cite to reintroduce the double count.
         priorSpendMicros + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT
       ) {
         stopReason ??= "spend-limit";
@@ -576,7 +638,27 @@ export async function runC1Sweep(options: {
         // harness fault. The identical-pair case - arm-003d r2's actual shape,
         // `s0, s0` - still stops immediately, which is the case this rule exists
         // for.
-        noteCause(`scored:${row.verdict}:${row.verdictReason}:actions=${actionSignature(row)}`);
+        //
+        // AN ACCEPTED CAUSE IS NOT A FAULT SIGNAL. When the operator has diagnosed
+        // a scored cause as a genuine agent failure, every row reproducing it is
+        // expected, not suspicious - and the rule as written would stop the arm at
+        // the second such row, which is exactly what the r6 resume must not do.
+        // Accepting it RESETS the run of failures rather than merely skipping the
+        // increment: an accepted row must break the chain, or a genuine fault
+        // before it could pair with one after it across an accepted row that says
+        // nothing about either.
+        //
+        // The acceptance is per verdict:reason and recorded in the ledger
+        // identity, so a reader can tell an arm that ran with an accepted cause
+        // from one that simply never saw the fault. Anything NOT accepted still
+        // aborts at the second occurrence.
+        const causeKey = `${row.verdict}:${row.verdictReason}`;
+        if (acceptedScoredCauses.has(causeKey)) {
+          lastCause = undefined;
+          consecutive = 0;
+        } else {
+          noteCause(`scored:${row.verdict}:${row.verdictReason}:actions=${actionSignature(row)}`);
+        }
       }
       ledger.c1[index] = { status: "scored", micros, row };
       persist();

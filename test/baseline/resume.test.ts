@@ -538,6 +538,117 @@ describe("c1-sweep --resume", () => {
     expect(report.partial).toBe(true);
   });
 
+  it("continues past an ACCEPTED scored cause, and still aborts on an unaccepted one", async () => {
+    // The r6 shape: every row fails the same diagnosed way (the agent pressing
+    // Escape on LibreOffice's format dialog and discarding the save). Left alone,
+    // the repeated-cause rule stops the arm at the second row - correctly, for a
+    // suspected harness fault, but wrongly once the cause has been DIAGNOSED.
+    //
+    // One run, one judge verdict, so every row carries the same cause. The only
+    // difference between the two halves is whether the operator accepted it.
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    // A judge that always returns the same kind, so `verdict:reason` is constant.
+    // That is what makes the cause repeat; a varying judge would hide the rule.
+    const fixed = (): PreparedC1 =>
+      ({
+        ...(prepared({ n: 0 }) as object),
+        judge: async () => ({ kind: "persisted", actual: "wrong", expected: "right" }),
+      }) as never;
+
+    // NOT accepted: the arm must stop at the second identical scored cause.
+    const strict = await runC1Sweep({ ...base, prepare: async () => fixed() });
+    expect(strict).toMatchObject({ stopReason: "repeated-cause" });
+    expect(strict.completed).toBeLessThan(30);
+
+    // ACCEPTED: the same shape runs to the end of the manifest.
+    const dir2 = directory();
+    const accepted = await runC1Sweep({
+      ...base,
+      directory: dir2,
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => fixed(),
+    });
+    expect(accepted.stopReason).toBeUndefined();
+    expect(accepted.completed).toBe(30);
+    // Recorded, so a reader can tell this arm ran under an acceptance.
+    expect(JSON.parse(readFileSync(join(dir2, "accounting.json"), "utf8")).identity).toMatchObject({
+      acceptedScoredCauses: ["refuted:step-budget"],
+    });
+    // And it really is the same cause the strict run aborted on, so the only
+    // difference between the two runs is the acceptance.
+    const strictRow = Object.values(
+      ledgerOf(dir).c1 as Record<
+        string,
+        { status: string; row?: { verdict: string; verdictReason: string } }
+      >,
+    ).find((e) => e.status === "scored");
+    expect(`${strictRow?.row?.verdict}:${strictRow?.row?.verdictReason}`).toBe(
+      "refuted:step-budget",
+    );
+  });
+
+  it("refuses to resume when the acceptance in force has changed", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    const tick = nextTick();
+    await runC1Sweep({
+      ...base,
+      prepare: crashingPrepare(2, 1, tick),
+      acceptScoredCauses: ["refuted:step-budget"],
+    });
+
+    // Recorded as accepted:step-budget. Dropping it or adding another would make
+    // the resumed rows incomparable with the ones already recorded, so both are
+    // refused rather than silently reconciled.
+    await expect(
+      runC1Sweep({
+        ...base,
+        resume: true,
+        adoptIdentity: true,
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/was in force for this run but is not passed now/);
+    await expect(
+      runC1Sweep({
+        ...base,
+        resume: true,
+        adoptIdentity: true,
+        acceptScoredCauses: ["refuted:step-budget", "refuted:modified"],
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/was not in force when this run was recorded/);
+  });
+
+  it("rejects a malformed accepted cause rather than half-applying it", async () => {
+    await expect(
+      runC1Sweep({
+        coordinatorGo: true,
+        directory: directory(),
+        planner: planner(),
+        priorSpendMicros: 0,
+        armLimitMicros: 9_000_000,
+        identity: IDENTITY,
+        acceptScoredCauses: ["step-budget"],
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/expected verdict:reason/);
+  });
+
   it("writes a checkable identity into a fresh run so a later resume can use it", async () => {
     const dir = directory();
     await runC1Sweep({

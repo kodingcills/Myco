@@ -559,6 +559,28 @@ MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
 - **The abort rule survives.** The consecutive-identical-cause counter is rebuilt from the
   ledger, so two failures either side of a crash still trip `repeated-cause`, and the report
   names it in `stopReason`.
+- **Accepting a DIAGNOSED scored cause.** Two identical *omissions* mean the sweep is
+  measuring the harness, and they abort. Two identical *scored* failures can mean the same
+  thing — or they can mean the agent has a known, diagnosed limitation and every row will
+  reproduce it. Left alone, the rule stops such an arm at its second row and the comparison
+  never completes. `--accept-scored-cause 'verdict:reason'` (repeatable, requires nothing
+  else) records the operator's diagnosis:
+
+  ```bash
+  bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume --adopt-identity \
+    --accept-scored-cause 'refuted:step-budget'
+  ```
+
+  An accepted cause **breaks the run of failures** rather than contributing to it. Anything
+  not accepted still aborts at the second occurrence, so this narrows the rule instead of
+  disabling it. The acceptance is written into the run identity
+  (`identity.acceptedScoredCauses`) so a reader can tell an arm that ran under one from an
+  arm that never needed it, and a resume whose acceptance differs from the recorded one is
+  refused — the two halves would not be comparable.
+
+  What it is for: r6's rows all fail by pressing `Escape` on LibreOffice's "Keep Current
+  Format" dialog, which cancels the save. That is a characteristic failure of the **baseline
+  agent**, judged and recorded in the scorecard, not a harness fault.
 - **Writes are atomic.** Every checkpoint is temp-file + fsync + rename, so a crash mid-write
   cannot corrupt the ledger.
 
