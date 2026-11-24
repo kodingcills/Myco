@@ -271,13 +271,12 @@ describe("s0-live.sh launcher", () => {
     }
   });
 
-  // TIF-170: skipped by default, exactly as main leaves it (#333), because it fails on
-  // ubuntu-latest with `expected 2 to be 1` — two racers exit 0 in one round, ~1 run in
-  // 5. Running it in every CI job would put that back on main's critical path, which is
-  // what the quarantine exists to prevent. It runs ONLY when the diagnostics dir is set,
-  // which is what the workflow does, so the normal `check` job stays green and the
-  // diagnostic job captures the failure. Do not carry an unconditional form back to main.
-  it.runIf(DIAG !== "")(
+  // TIF-170: un-quarantined. #333 skipped this because it failed on ubuntu-latest with
+  // `expected 2 to be 1`; the mkdir claim it exercised has since been replaced by an
+  // flock held for the run's lifetime, and on the same 4-vCPU runner that reproduced the
+  // failure the flock arm completed 11 invocations x 40 rounds with zero double-admits
+  // (the mkdir arm reproduced at round 8). It runs in every job again.
+  it(
     "admits exactly one --run under a real race, and the winner owns the pid",
     () => {
       const { dir, script, runDir, env } = worktree();
