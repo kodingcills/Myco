@@ -22,7 +22,7 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -45,7 +45,19 @@ function bareHome(): string {
 const scored = (micros: number) => ({ status: "scored", micros });
 const dirs: string[] = [];
 function ledgerDir(c1: Record<string, { status: string; micros: number }>, c2 = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "myco-watch-"));
+  // Under HOME, NOT `tmpdir()`. The launcher refuses a run directory under /tmp or
+  // /var/tmp by design (TIF-164: a reboot took arm-003c's ledger), and `tmpdir()` is
+  // `/tmp` on Linux CI but `/var/folders/...` on macOS - so this passed locally and
+  // exited 2 on the runner. Any test that spawns the real launcher needs a durable
+  // path, which is the launcher's own contract.
+  const dir = mkdtempSync(join(homedir(), ".myco-watch-test-"));
+  // ASSERT THE CONTRACT rather than trusting where `homedir()` happens to point. The
+  // launcher refuses a run directory under /tmp, and on Linux CI `tmpdir()` IS /tmp
+  // while on macOS it is /var/folders - so a helper using `tmpdir()` passed here and
+  // exited 2 on the runner. A direct check catches that on BOTH platforms instead of
+  // only where the two disagree.
+  if (dir.startsWith("/tmp/") || dir.startsWith("/var/tmp/"))
+    throw new Error(`test run directory must not be under /tmp: ${dir}`);
   dirs.push(dir);
   writeFileSync(
     join(dir, "accounting.json"),
