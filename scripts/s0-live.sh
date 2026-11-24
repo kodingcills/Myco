@@ -233,9 +233,13 @@ case "${1:-}" in
     # fails cleanly when the directory exists. The noclobber alternative is reachable
     # only through a construct that also refuses, and #300's earlier attempt showed the
     # guard it replaced could admit two runs; `mkdir` is the form that cannot.
-    # TIF-170: the pre-call stamp is the reading that separates the creator from a later
-    # observer. Compare it with the line's `birth=`: a creator's `pre` is before the birth
-    # (the call straddled the creation), an observer's `pre` is at or after it.
+    # TIF-170: the pre-call stamp is the reading that orders racers against each other:
+    # the racer with the earliest `pre` reached `mkdir` first, and the next `mkdir-won`
+    # after it is the anomaly. Compare `pre` values with each other — NOT with `birth=`.
+    # The `pre`-vs-`birth` comparison does not discriminate: measured on the runner, a
+    # single racer that certainly created the lock shows `birth` about 1 ms BEFORE its own
+    # `pre` (three runs, -0.73/-1.33/-1.38 ms), because the shell's clock and the kernel's
+    # `btime` are different sources. Derivation: s0-launcher-race-flake/FLAKE.md.
     # Not local: this is a case branch, not a function.
     t_before="$(date +%s.%N 2>/dev/null || true)"
     [ -n "$t_before" ] || t_before="$(date +%s)"
