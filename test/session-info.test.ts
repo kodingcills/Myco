@@ -24,17 +24,17 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   classifySessionInfo,
   DEFAULT_TOKEN_FILE,
   readTokenFile,
   runSessionInfo,
-  tokenFileFromArgv,
   type SessionInfoConnection,
   type SessionInfoDeps,
+  tokenFileFromArgv,
 } from "../src/integration/session-info.ts";
-import { VmLockedError, type VmLock } from "../src/integration/vm-lock.ts";
+import { type VmLock, VmLockedError } from "../src/integration/vm-lock.ts";
 import { sshTunnelArgs } from "../src/win/agent-client.ts";
 
 const SENTINEL = "tok-SENTINEL-a1b2c3d4e5f6";
@@ -80,7 +80,9 @@ function attachConsoleProbe(): ConsoleProbe {
   return {
     spies,
     text: () => spies.flatMap((spy) => spy.mock.calls.flat().map(String)).join("\n"),
-    clear: () => spies.forEach((spy) => spy.mockClear()),
+    clear: () => {
+      for (const spy of spies) spy.mockClear();
+    },
   };
 }
 
@@ -136,7 +138,7 @@ function harness(lockError?: Error, tokenError?: Error): Harness {
       captured.lockAcquired++;
       return fakeLock(captured);
     },
-    readToken: (path: string): string => {
+    readToken: (_path: string): string => {
       if (tokenError) throw tokenError;
       return SENTINEL;
     },
@@ -182,9 +184,17 @@ describe("classifySessionInfo", () => {
   it("gates session 0 and non-WinSta0 stations", () => {
     expect(classifySessionInfo({ ...HAPPY, session_id: 0 }).code).toBe(2);
     expect(
-      classifySessionInfo({ session_id: 1, window_station: "Service-0x0-3e7$Default", desktop: "Default", user: "x" }).code,
+      classifySessionInfo({
+        session_id: 1,
+        window_station: "Service-0x0-3e7$Default",
+        desktop: "Default",
+        user: "x",
+      }).code,
     ).toBe(2);
-    expect(classifySessionInfo({ ...HAPPY, session_id: 0, window_station: "Service-0x0-3e7$Default" }).code).toBe(2);
+    expect(
+      classifySessionInfo({ ...HAPPY, session_id: 0, window_station: "Service-0x0-3e7$Default" })
+        .code,
+    ).toBe(2);
   });
 
   it("treats unreadable shapes as blocked (exit 3), including a string session id and a null result", () => {
@@ -278,7 +288,9 @@ describe("runSessionInfo", () => {
   it("transport error whose message embeds the token: nowhere in output (FAULT)", async () => {
     const probe = probes.push(attachConsoleProbe()) - 1;
     const { deps, captured, agent } = harness();
-    agent.error = new Error(`agent at 127.0.0.1:8765 unreachable: auth failed for token ${SENTINEL} (ECONNRESET)`);
+    agent.error = new Error(
+      `agent at 127.0.0.1:8765 unreachable: auth failed for token ${SENTINEL} (ECONNRESET)`,
+    );
     const code = await runSessionInfo([], deps);
     expect(code).toBe(3);
     expect(visibleChannels(captured, probes[probe] as ConsoleProbe)).not.toContain(SENTINEL);

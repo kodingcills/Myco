@@ -321,37 +321,37 @@ If it fails:
 ## 5. Prove the agent is on the desktop
 
 The agent's `ping` reports its session; `session_info` reports the window station and desktop
-(both ops, `agent/README.md`). **UNVERIFIED** as a command — the shape is the one
-`deploy-to-vm.sh` uses for `ping`, with the op swapped:
+(both ops, `agent/README.md`). **UNVERIFIED** as a command — the old inline recipe printed the
+token into the command line, which the host's enforced secret guard refuses (TIF-206, F16), so
+no agent could run it; it is replaced by a repo CLI that reads the token from a file:
+
+Fetch a fresh token (the deploy rotates it, §4) the way `docs/research/experiments/m1-row8/NEXT-RUN.md`
+does — from the guest, redirected to a file, never through a shell variable:
 
 ```bash
-ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11 &
-printf '{"id":1,"token":"%s","op":"session_info","params":{}}\n' "$MYCO_AGENT_TOKEN" | nc -w 5 127.0.0.1 8765
+~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token
+chmod 600 ~/.myco-token
 ```
 
-Expected:
+Then run the §5 proof:
+
+```bash
+pnpm exec tsx src/integration/session-info.ts            # or: --token-file PATH (default ~/.myco-token)
+```
+
+The CLI opens its own ssh tunnel (`SshTunnel`), takes and releases the VM lock, prints the
+`session_info` result JSON to stdout, and always stops the tunnel — so the old manual-tunnel
+teardown is no longer needed; nothing of §5 is left listening on 8765.
+
+Exit codes (`src/integration/session-info.ts` header): `0` desktop proof passed;
+`2` the agent is in session 0 and/or not on `WinSta0` — **stop, do not run trials**;
+`3` could not ask the agent (bad/unreadable token file, tunnel or auth failure);
+`10` `REFUSED_VM_LOCKED: holder …` — the VM lock is held.
+
+Expected stdout on the passing path:
 
 ```json
-{"ok": true, "id": 1, "result": {"session_id": 1, "window_station": "WinSta0", "desktop": "Default", "user": "MYCO-WIN11\\myco"}}
-```
-
-**`run-live`'s per-trial line is NOT this proof, and cannot be.** It prints
-`agent ping ok: 0.1.0 session <id>` on stderr (`src/integration/run-live.ts:69`), and that id is
-`ping`'s `session_id` — which is a **random hex GUID generated per agent start**
-(`agent/myco_agent/__init__.py:4`: `SESSION_ID = uuid.uuid4().hex`; returned by
-`agent/myco_agent/ops.py:8`). It is **not the Windows session number**, so no value of that line
-can distinguish session 1 from session 0. The desktop proof is the `session_info` call above,
-which reads the real number through `ProcessIdToSessionId`
-(`agent/myco_agent/windows_backend.py:292-317`). An earlier revision presented the ping line as
-"the same fact" — it is not (F9/F10, 2026-11-24).
-
-**Close the manual tunnel before §6.** §5 opens it with `ssh … -N -L 8765:… &` above. §9 lists
-"a manual tunnel from an earlier step" as a cause of §6 failing to bind — and `run-live` silently
-reuses a stale listener rather than erroring, so the failure is invisible. The teardown belongs
-here, not in a troubleshooting row you read afterwards:
-
-```bash
-pkill -f 'ssh .*-N -L 8765' || true
+{"session_id": 1, "window_station": "WinSta0", "desktop": "Default", "user": "MYCO-WIN11\\myco"}
 ```
 
 **Why this is a gate, not a nicety.** Windows puts services in session 0, which has no visible
