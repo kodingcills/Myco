@@ -16,8 +16,7 @@
  * `/tmp` on Linux but not macOS) before it was made hermetic. Anything that reaches out
  * of a temporary directory is a portability and contamination hazard at once.
  */
-import { readFileSync } from "node:fs";
-import { globSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -26,7 +25,10 @@ const TEST_ROOT = join(process.cwd(), "test");
 /** Every test source, so a new file is covered without being listed here. */
 function testSources(): { path: string; text: string }[] {
   return globSync("**/*.{ts,tsx,py,sh}", { cwd: TEST_ROOT })
-    .map((rel) => ({ path: join(TEST_ROOT, rel), text: readFileSync(join(TEST_ROOT, rel), "utf8") }))
+    .map((rel) => ({
+      path: join(TEST_ROOT, rel),
+      text: readFileSync(join(TEST_ROOT, rel), "utf8"),
+    }))
     .filter(({ path }) => !path.endsWith("probe-directory.test.ts"));
 }
 
