@@ -26,6 +26,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+/**
+ * A HOME with no secrets file.
+ *
+ * The launcher loads `~/.myco/secrets/anthropic.env` and exits 1 when the key is
+ * missing, which happens BEFORE or AFTER the prior-spend guard depending on where the
+ * guard sits. A test that inherits the developer's HOME therefore passes locally and
+ * fails in CI - which is exactly what happened: the guard was below the key check, and
+ * every assertion here saw exit 1 instead of 6. Pointing HOME at an empty directory
+ * makes the test measure the guard rather than the machine.
+ */
+const DUMMY_KEY = "not-a-real-key";
+
+function bareHome(): string {
+  return mkdtempSync(join(tmpdir(), "myco-nohome-"));
+}
+
 const scored = (micros: number) => ({ status: "scored", micros });
 const dirs: string[] = [];
 function ledgerDir(c1: Record<string, { status: string; micros: number }>, c2 = {}) {
@@ -103,7 +119,11 @@ describe("a missing prior spend is refused, not defaulted", () => {
   it("the launcher refuses when MYCO_PRIOR_SPEND_MICROS is unset", async () => {
     const { spawnSync } = await import("node:child_process");
     const dir = ledgerDir({ "0": scored(100_000) });
-    const env = { ...process.env };
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      HOME: bareHome(),
+      ANTHROPIC_API_KEY: DUMMY_KEY,
+    };
     delete env.MYCO_PRIOR_SPEND_MICROS;
     const run = spawnSync("bash", ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"], {
       cwd: process.cwd(),
@@ -143,7 +163,12 @@ describe("a non-numeric prior spend is refused, not converted to zero", () => {
           encoding: "utf8",
           // Set but not numeric. Exit 6, not 10: this must be refused before the VM
           // lock is attempted, so it cannot be confused with "the VM is busy".
-          env: { ...process.env, MYCO_PRIOR_SPEND_MICROS: bad },
+          env: {
+            ...process.env,
+            HOME: bareHome(),
+            ANTHROPIC_API_KEY: DUMMY_KEY,
+            MYCO_PRIOR_SPEND_MICROS: bad,
+          },
           timeout: 20_000,
         },
       );
