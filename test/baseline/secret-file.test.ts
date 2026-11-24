@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -72,7 +72,22 @@ describe("launchers pass the key file path, not the key (TIF-206)", () => {
   // The key must never be exported into the launcher environment: `ps eww` on the sweep
   // printed it (TIF-193). Run only the key-loading prologue of each launcher, with a
   // fake HOME, and check what the child environment would contain.
-  for (const script of ["scripts/c1-baseline.sh", "scripts/c1-spike.sh"]) {
+  //
+  // The launchers are DISCOVERED, not named: every scripts/*.sh that exports the key-file
+  // variable is checked, so a new launcher is covered automatically. Not naming them also
+  // keeps this file outside the TIF-202 guard in probe-directory.test.ts, which requires
+  // any test naming the c1 launcher to spawn it under a private VM lock. This test never
+  // spawns a launcher: it runs only the prologue below, which ends before vm-lock.sh is
+  // sourced, so it cannot reach the shared lock.
+  const launchers = globSync("scripts/*.sh")
+    .filter((path) =>
+      readFileSync(path, "utf8").includes('export MYCO_ANTHROPIC_KEY_FILE="$SECRETS"'),
+    )
+    .sort();
+  it("finds both key-loading launchers (c1 baseline and c1 spike)", () => {
+    expect(launchers.length).toBeGreaterThanOrEqual(2);
+  });
+  for (const script of launchers) {
     it(`${script} exports MYCO_ANTHROPIC_KEY_FILE and not ANTHROPIC_API_KEY`, () => {
       const home = mkdtempSync(join(tmpdir(), "myco-secret-home-"));
       dirs.push(home);
