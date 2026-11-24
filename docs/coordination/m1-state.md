@@ -44,6 +44,28 @@
 - **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
 - **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
 
+## Log 2026-11-24 (69) — main went red for 6 merges' worth of attention it did not deserve
+- **`main` after #388 (`77bed54c`) failed CI on `viewer verdict budget (macos-latest)`.** Cause:
+  the 10 000-step verdict median regressed 35%+ over the darwin baseline (490.6 ms vs the 425.8 ms
+  limit; samples 354–791 ms, a 2.2x spread). **Not caused by #388** — that PR and the two before it
+  touched no viewer code.
+- **The regression does not reproduce.** A plain rerun (`attempt=2`) took **all 7 jobs green**,
+  including the same job on the same commit. So the gate is not measuring the change under test.
+- **The gate is unsound on its face: the `viewer verdict budget (${{ matrix.os }})` job is
+  `skipping` on every PR**, and only runs on `main` after the merge. A timing gate that never runs
+  on the PR and only runs post-merge can only ever produce red `main` — it cannot block a bad
+  merge, and it does not run where the change is reviewable. **Needs the outer loop's decision:**
+  either give it a sane tolerance (a 2.2x sample spread against a 35% limit cannot pass reliably)
+  or make it non-blocking on a shared runner. Not fixed here — it is not M1 row 8 and it is not
+  mine to retune.
+- **Correction to a stale notification:** a PR event for #388 arrived at 07:0xZ saying "all 5
+  required checks passed"; **#388 was already merged at 06:50:46Z** and this was the post-merge
+  re-run of the pre-merge head. Checked `state` rather than acting on the notice.
+- **#391 conflicted after #388 merged** — both appended to the same two files. Resolved by taking
+  main's `m1-state.md` and re-inserting my (68) entry verbatim from the commit object, and appending
+  the fencing note to `NEXT-RUN.md` on the branch after the merge. Verified the resulting diff is
+  additive only (+35 lines, 2 files, no deletions).
+
 ## Log 2026-11-24 (68) — TIF-191 built; VM order reversed to r6-first
 - **VM order (lead, 06:48Z): r6 keeps the guest until it finishes.** Interrupting a live paid run
   costs more than waiting. Nothing touches the guest or the flock while `c1-baseline` pid 36343
