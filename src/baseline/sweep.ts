@@ -248,11 +248,17 @@ function actionSignature(row: BaselineRow): string {
  *   - owner alive  -> refuse, naming the pid. Two sweeps in one directory share one
  *                     ledger, so this must stay a hard stop.
  *   - owner dead   -> the run it belonged to is over; clear and take it.
- *   - no owner     -> written before owner files existed, or killed between mkdir and
- *                     the write. Stale by definition, since a live holder would have
- *                     written one; clear it.
+ *   - no owner, or an UNPARSEABLE one -> cleared. A live holder always writes a
+ *                     parseable pid, so this is stale in every ordinary case.
  *
- * Fail closed on every unsure path: only a POSITIVELY dead owner is overridden.
+ * WHAT THE LAST CASE DOES NOT PROVE, corrected after a verifier measured it: an
+ * unreadable owner is UNKNOWN, not confirmed-dead. The genuine window is microseconds
+ * (a SIGKILL between mkdir and the write), and it is the trade that lets a killed run
+ * be resumed at all - but it is the one path where a lock a live holder owns can be
+ * cleared, so the sentence "fail closed on every unsure path" was too strong and is
+ * gone. A live owner with a READABLE pid is always refused, including under pid reuse:
+ * a recycled pid pointing at an unrelated live process makes the lock refuse forever,
+ * which is stuck rather than unsafe.
  */
 function acquireRunLock(directory: string): string {
   const lock = join(directory, ".run-lock");

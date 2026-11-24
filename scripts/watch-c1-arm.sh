@@ -6,8 +6,21 @@
 # just scored rows. An omitted trial still made real API calls before it died
 # (arm-002 trial 9 holds $0.3768 that way), and a reserved row holds a live
 # reservation, so a scored-only figure under-reports by the amount most likely
-# to matter when a cap is being approached. This mirrors charged() in
-# src/baseline/sweep.ts, which is what the fail-closed cap check actually uses.
+# to matter when a cap is being approached.
+#
+# IT IS NOT THE WHOLE CEILING, AND REPORTING IT THAT WAY WAS A DEFECT (TIF-192).
+# The fail-closed check in src/baseline/sweep.ts is
+#
+#     priorSpendMicros + charged(ledger.c1) + charged(ledger.c2) + reservation
+#         > COMBINED_LIMIT
+#
+# so the ledger alone is only the run-local HALF of it. This script previously
+# printed `committed=$2.2268/$9.00` with no prior spend, which reads as "the
+# project has spent $2.23 of $9" when the project had actually committed $6.70.
+# That understatement is the dangerous direction: the watcher's whole job is to
+# warn before a cap is reached, and it was comparing a partial figure against a
+# whole-Arm limit. Prior spend now arrives as a fourth argument, so the printed
+# number and the trigger both mean what the guard means.
 #
 # Exits 0 when the sweep ends, 9 on spend over the limit, 10 when the run has
 # been silent longer than SILENT_MIN (a stalled guest looks exactly like a slow
@@ -15,6 +28,10 @@
 OUT=${1:-/tmp/baseline/c1-arm2}
 LIMIT_USD=${2:-4.00}
 SILENT_MIN=${3:-20}
+# Spend committed by EARLIER runs, in dollars. Defaults to 0 so a standalone call
+# still works, but the trigger is then run-local - the launcher always passes the
+# real figure, and prints a warning when it does not.
+PRIOR_USD=${4:-0}
 # Seed both from the log's OWN mtime, not from "now" and not from an empty size.
 #
 # Starting last_change at script start made every existing log look freshly
@@ -60,9 +77,10 @@ while true; do
   fi
   now=$(date +%s)
   silent_min=$(( (now - last_change) / 60 ))
-  python3 - "$OUT" "$LIMIT_USD" "$silent_min" "$SILENT_MIN" <<'PY'
+  python3 - "$OUT" "$LIMIT_USD" "$silent_min" "$SILENT_MIN" "$PRIOR_USD" <<'PY'
 import glob, json, sys
 out, limit, silent = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
+prior = float(sys.argv[5])
 # The threshold arrives as argv[4], not as a shell name: this block is a quoted
 # heredoc, so bash variables are NOT interpolated into it. Referencing SILENT_MIN
 # directly here raised NameError on every iteration, which made the watcher exit
@@ -70,11 +88,19 @@ out, limit, silent = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
 # broken in exactly the way it exists to prevent.
 silent_limit = int(sys.argv[4])
 ledger = json.load(open(f"{out}/accounting.json"))["c1"]
-committed = sum(e.get("micros", 0) for e in ledger.values()) / 1_000_000
+local = sum(e.get("micros", 0) for e in ledger.values()) / 1_000_000
+# The number the CAP is measured against, which is prior + this run.
+committed = prior + local
 scored = [e for e in ledger.values() if e.get("status") == "scored"]
 from collections import Counter
 reasons = Counter(r.get("verdictReason") for r in (e.get("row", {}) for e in scored) if r)
-print(f"[watch] rows={len(scored)} committed=${committed:.4f}/${limit:.2f} silent={silent}m reasons={dict(reasons)}")
+# Both figures, because they answer different questions: `local` is what this run
+# spent, `committed` is what the cap sees. Printing only one is what made the old
+# line misleading.
+print(
+    f"[watch] rows={len(scored)} local=${local:.4f} prior=${prior:.4f} "
+    f"committed=${committed:.4f}/${limit:.2f} silent={silent}m reasons={dict(reasons)}"
+)
 if committed > limit:
     print("[watch] TRIGGER committed spend over limit"); sys.exit(9)
 if silent >= silent_limit:
