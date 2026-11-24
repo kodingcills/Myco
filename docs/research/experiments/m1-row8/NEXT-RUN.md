@@ -6,17 +6,22 @@ holds the VM until it finishes, by lead's order. Nothing below touches the guest
 ## Gate
 
 ```bash
-# 1. The flock must be FREE. Any driver still in ps means wait.
-python3 -c 'import fcntl
-f=open("/tmp/myco-win11.vm.lock","a+")
-try: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB); print("FREE")
-except BlockingIOError: print("HELD")
-finally: fcntl.flock(f,fcntl.LOCK_UN)' 2>/dev/null
+# 1. Nobody may own the VM. Read-only: lsof, never a flock probe (F5, F19).
+lsof /tmp/myco-win11.vm.lock || echo "free"      # a table = someone owns it
 ps -eo pid,command | grep -E "[c]1-baseline|[m]1-sweep|[r]eset-trial-vm" || echo "no driver"
 ```
 
-Both must show free / none. Then clear the stale record (§2 of the runbook) and verify the guest
-is clean (§6.1), which is where attempt A's leftover `myco-80877-…` dir came from.
+Both must show free / none. **Do not use a `fcntl.flock` probe here.** An earlier revision of
+this block did, and step 1 of the launch sequence below forbids it: a probe holds `LOCK_EX` for
+an instant, and a driver starting in that instant refuses with exit 10 (F5). Then verify the
+guest is clean (§6.1), which is where attempt A's leftover `myco-80877-…` dir came from.
+
+**This page skips §3 reset and §4 deploy, and that is only acceptable outside row 8 (F20).** The
+§6 run below was a generator re-measure on the guest r6 left. A **row-8 reproduction does not
+skip them**; see the runbook §6, "When you may skip §3 and §4". The M1 lock procedure is in
+the runbook §6 as well: each step takes and releases the lock through its own script, and you run
+the `lsof` gate check before every step. Deploy and the §6.1 check and cleanup do not take the
+lock, so the gate check is all that guards them.
 
 ## Launch — §6, survivor-detached
 
@@ -38,8 +43,9 @@ The launcher writes:
 | `/tmp/s6-run.log` | `launch …` line, then the JSON array at the end. **Silence is normal** |
 | `/tmp/s6-run.exit` | `exit=0` means 20/20 verified; `1` a non-verified row; `2` no sets; `10` lock held |
 
-**Liveness is the guest run dirs, not the log** — one new dir under `runs/s6-final/values` every
-~48 s, and `result.json` appears when each trial finishes:
+**Liveness is the guest run dirs, not the log**: one new dir under `runs/s6-final/values` every
+~40–90 s (mean 51 s, 17 min 7 s for all 20 on 2026-11-24 at load 5–9; F21), and `result.json`
+appears when each trial finishes:
 
 ```bash
 ls runs/s6-final/values | wc -l
@@ -103,6 +109,10 @@ which predates the Cua install.
 - `C:\myco\runs\20` — the C1 sweep's output dir, holding r6's trial dir
   `myco-36375-1795508434142-964161670` and a `profiles/`. It is the guest half of the run, and
   `vm-lock`/§6.1 treat it as contamination; `myco-admin` is recreated on demand by `runGuestScript`.
+  **It was deleted without a copy, and that is no longer the rule (F17).** A stray C1 guest dir is
+  not row-8 evidence, but it may be the only guest-side copy of that C1 trial. Copy it to the
+  host first (`scp -r … /tmp/row8-guest-residue/`, runbook §6.1), record the path, then clean.
+  The 11:4xZ row-8 operator did this for `runs\29` (`/private/tmp/row8-guest-residue/29`, 53 files).
 - `C:\myco\profiles\myco-*` throwaway UNO profiles.
 
 **Mac — untouched.** `/Users/tofuinparis/Projects/myco-runs/c1-r6/` is intact (644K:
@@ -133,7 +143,9 @@ row-8 §6 goes **after** it releases, on the corrected runbook (#405 merged `283
 2. **Clean the guest *past* §6.1's filter.** A C1 run leaves `C:\myco\runs\20`; `myco-*` does
    not match it, so the old check printed nothing (a false clean) and every row then failed
    `leftover run dirs: 20`. r6 also left two stray `soffice`. §6.1 now excludes only
-   `myco-admin` and `profiles` (#405). Run the check, confirm it prints nothing.
+   `myco-admin` and `profiles` (#405). Run the check. If it lists a C1 dir (a bare number),
+   copy it aside before the cleanup (runbook §6.1, F17): it is not row-8 evidence, but it is
+   not yours to destroy unseen. Re-run the check and confirm it prints nothing.
 
 3. **Fetch a fresh token.** The cached `~/.myco-token` belongs to the last deploy and gives
    `AUTH_FAILED` *after* the guest has been touched:
@@ -151,7 +163,7 @@ row-8 §6 goes **after** it releases, on the corrected runbook (#405 merged `283
 
 5. **Watch liveness, not the log.** A `values` run prints its JSON array **once at the end**, so
    **a silent log is the healthy shape** — attempt A died because that was read as a hang.
-   Liveness is a new dir under `runs/s6-final/values/` every ~48s. `/tmp/row8-watch.sh` does
+   Liveness is a new dir under `runs/s6-final/values/` every ~40–90 s; plan 12–20 min in all (F21). `/tmp/row8-watch.sh` does
    exactly this, and checks ownership with `lsof` so it can never fail the run it watches.
 
 6. **§6 takes the flock itself.** `run-live` acquires it and refuses with **exit 10** if another
