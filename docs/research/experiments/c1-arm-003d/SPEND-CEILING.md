@@ -70,7 +70,7 @@ MYCO_ARM_LIMIT_MICROS=<remaining> \
 ```
 
 where `remaining = 9000000 - 3190688 = 5809312` **if the full $9 ceiling is to be spent**.
-Pass a smaller number for a tighter cap; the guard refuses an arm limit that overshoots.
+Pass a smaller number for a tighter cap.
 
 **Do not pass `4_500_000`.** That is `DEFAULT_ARM_LIMIT` (`src/baseline/sweep.ts:21`),
 which is what a caller gets when it does not state the remaining budget — and with
@@ -78,7 +78,39 @@ which is what a caller gets when it does not state the remaining budget — and 
 while the run plan says $9.00. That is the same "artifact says one thing, mechanism does
 another" shape the owner correctly refused to launch under.
 
+### What actually guards the $9, stated precisely
+
+**Corrected after testing.** An earlier draft of this note said "the guard refuses an arm
+limit that overshoots." **That is only true for the default.** The startup check is:
+
+```ts
+if (priorSpend + armLimit > COMBINED_LIMIT && armLimit === DEFAULT_ARM_LIMIT) throw …
+```
+
+`&& armLimit === DEFAULT_ARM_LIMIT` means an **explicit** overshooting arm limit is
+accepted, verified: `priorSpendMicros: 3190688, armLimitMicros: 6000000` starts without
+complaint.
+
+**The $9 is still enforced** — by the per-trial combined check, which is the real
+backstop and includes `priorSpend`:
+
+```ts
+priorSpend + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT   // stops the trial
+```
+
+So an overshooting `armLimitMicros` raises the per-arm ceiling but **cannot** breach the
+combined one: spend stops once `prior + c1 + reservation` reaches 9,000,000. **Passing the
+remaining budget is therefore about making the arm ceiling honest, not about avoiding an
+overspend.**
+
+**The practical consequence, which is why the instruction stands:** with
+`armLimitMicros` overshooting, the run can *start* against a ceiling it will later be
+stopped by — rows already written, then a `spend-limit` stop partway. The run plan would
+again predict one number and the arm report another. Pass the remainder.
+
 ## If the guard refuses at the first trial
 
-That is the guard working. Check which of the two conditions tripped — the message
-distinguishes them — and pass the **remaining** budget rather than raising the ceiling.
+Check which condition tripped. `prior + c1 + reservation > armLimit` is the arm ceiling;
+`… > COMBINED_LIMIT` is the project ceiling. Only the latter is absolute — and if it
+trips, the project budget is genuinely exhausted, so **the answer is not to raise it.**
+
