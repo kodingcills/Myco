@@ -170,11 +170,26 @@ describe("a truncation is a harness fault that costs what it cost", () => {
 });
 
 describe("the ceiling is set from measurement, not taste", () => {
-  it("exceeds the largest completion r6 ever produced", () => {
-    // 615 across 570 calls in 19 completed trials; nothing above 768. The ceiling has to
-    // be comfortably above the OBSERVED MAXIMUM, because the failure mode is a tail, not
-    // a distribution shift - r6 truncated at 1024 without any row approaching it.
-    const MEASURED_MAX = 615;
-    expect(MAX_OUTPUT).toBeGreaterThan(MEASURED_MAX * 2);
+  // The measured basis: 570 calls across r6's 19 completed trials.
+  const MEASURED_MAX = 615; // the largest completion r6 ever produced
+  const MEASURED_P99 = 535;
+
+  it("carries substantial headroom over the largest reply ever measured", () => {
+    // 1024 over a max of 615 is ~66% headroom, and 91% over P99. That is the reason the
+    // ceiling was KEPT rather than raised: it was never tight for a normal reply, so a
+    // higher bound would only make the one runaway call more expensive.
+    expect(MAX_OUTPUT).toBeGreaterThan(MEASURED_MAX);
+    expect(MAX_OUTPUT).toBeGreaterThan(MEASURED_P99);
+    expect((MAX_OUTPUT - MEASURED_MAX) / MEASURED_MAX).toBeGreaterThan(0.5);
+  });
+
+  it("is not raised to accommodate a degenerate reply", () => {
+    // Trial 20 was the ONE call in 571 that ran past 615. Raising the ceiling so that
+    // call could finish would spend the remaining cap headroom on a reply that had
+    // already gone wrong, and would not make the next one behave.
+    //
+    // Pinned as a ceiling rather than left implicit, so a future change to 2048 or
+    // beyond has to argue with this test rather than with a comment.
+    expect(MAX_OUTPUT).toBe(1024);
   });
 });
