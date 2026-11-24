@@ -810,7 +810,20 @@ def execute_scenario(
         w_delivery,
     ))
 
-    cleanup(mcp, sid)
+    # The teardown result is not discardable on the SUCCESS path either. Every
+    # check below grades the persisted STORE, not the session, so a `destroy`
+    # that failed left `bucket = "success"` reachable with the guest still
+    # allocated - the exact false-success shape the M1 criterion is about, one
+    # layer below where it was first fixed. Same treatment as the readiness
+    # timeout above: no `dirty` bucket exists in scoring.md, so the honest bucket
+    # is `gap` (the runtime could not complete the scenario), naming the leak.
+    teardown = cleanup(mcp, sid)
+    if teardown:
+        # REQ-01, not REQ-05: the leak is a failure to complete the run, not an
+        # evidence-schema fault. Naming a requirement the reason does not match
+        # is how a ledger loses the ability to say which layer failed.
+        return gap("REQ-01",
+                   f"the run completed but the session was NOT freed: {teardown}")
 
     all_passed = all(c["passed"] is True for c in checks)
     any_unknown = any(c["passed"] is None for c in checks)
