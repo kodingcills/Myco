@@ -504,6 +504,61 @@ harness error, and 2 if the requested fault did not land.
 The final report includes the published OpenAdapt counts for context. Report live results only
 after this suite has run on the reserved guest.
 
+### 7.5 The C1 screenshot baseline sweep, and resuming it
+
+The screenshot-agent baseline runs through `scripts/c1-baseline.sh`, which wraps
+`scripts/c1-sweep.ts` under the VM lock, under `caffeinate`, **with a watchdog**. It is a
+different driver from §7.3/§7.4 and its ledger is `$OUT/accounting.json`, not `trials.jsonl`.
+
+```bash
+OUT="$HOME/Projects/myco-runs/c1-r6"          # durable: never under /tmp (TIF-164)
+MYCO_PRIOR_SPEND_MICROS=4480732 \
+MYCO_ARM_LIMIT_MICROS=4519268 \
+  bash scripts/c1-baseline.sh "$OUT" --coordinator-go
+```
+
+**Spend.** Both variables are required and the pair is validated. `MYCO_PRIOR_SPEND_MICROS` is
+what the project spent before this directory; `MYCO_ARM_LIMIT_MICROS` is this arm's **remaining**
+budget. The guards are `c1 + reservation > armLimit` (this run) and
+`priorSpend + c1 + c2 + reservation > COMBINED_LIMIT` ($9.00, the project). Prior spend is
+counted **once**, in the combined check. A launch that passes the ceiling as the arm limit is
+accepted but overstates the arm report; pass the remainder.
+
+**Watchdog.** The launcher starts `scripts/watch-c1-arm.sh` and appends to `$OUT/watch.log`,
+naming the pid in `progress.log` and writing `$OUT/watch.pid` while the run is live. It reports
+rows, committed spend against the limit, silence in minutes, and the reasons on record. Without
+it a guest that dies mid-trial leaves the sweep hung on SSH with nothing said — r6 ran 1h45m
+that way. Override the thresholds with `MYCO_WATCH_LIMIT_USD` and `MYCO_WATCH_SILENT_MIN`.
+The watchdog is started with FD 9 closed: it must not inherit the VM lock, or killing it
+orphans a child that keeps the lock held after the sweep exits.
+
+**Resuming.** If a run dies, re-issue the same command with the same `OUT` and add `--resume`:
+
+```bash
+MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
+  bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume
+```
+
+- **Scored trials are skipped.** Pass/refuted rows are not re-bought. A trial left `reserved`
+  by the crash, or omitted `trial-interrupted`, is re-attempted with a fresh reservation.
+- **Deliberate stops are left alone.** `spend-limit`, `driver-unreachable` and `repeated-cause`
+  are decisions, not crashes; a resume does not reinterpret them as work to do.
+- **Spend is counted once.** The ledger already carries the directory's committed cash, so it
+  is not added to prior spend as well. A resume whose prior plus committed exceeds the ceiling
+  is refused at startup.
+- **It refuses to continue the wrong experiment.** The ledger records the model, snapshot and
+  planner type. A resume whose manifest checksum, model, snapshot or planner differs, or a
+  ledger written before identity was recorded, is refused with the field named. This is not
+  advisory: two different experiments must not become one 30-row artifact.
+- **The abort rule survives.** The consecutive-identical-cause counter is rebuilt from the
+  ledger, so two failures either side of a crash still trip `repeated-cause`, and the report
+  names it in `stopReason`.
+- **Writes are atomic.** Every checkpoint is temp-file + fsync + rename, so a crash mid-write
+  cannot corrupt the ledger.
+
+The result is one artifact for the whole arm: rescoring a resumed run needs no merge, and the
+row count is the manifest's, not the sum of attempts.
+
 ## 8. Evidence
 
 ### 8.1 Layout

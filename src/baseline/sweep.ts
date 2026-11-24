@@ -33,11 +33,32 @@ type Entry =
   | { status: "reserved"; micros: number }
   | { status: "omitted"; micros: number; reason: Omission; detail?: string }
   | { status: "scored"; micros: number; row: BaselineRow };
+
+/**
+ * What a resume must match before it may continue a run.
+ *
+ * A resume is only sound if it is the SAME experiment: same task set, same model,
+ * same starting snapshot. Any difference means the two halves measure different
+ * things and the combined 30-row artifact would be a blend that looks like one
+ * run. Recording this at run creation is what makes the check possible later -
+ * a ledger that does not say which model produced its rows cannot be safely
+ * extended by a different one.
+ */
+interface RunIdentity {
+  model: string;
+  snapshot: string;
+  /** `paid` or `stub`, so a stub arm cannot be resumed with a paid planner. */
+  planner: string;
+}
 interface Ledger {
   manifestSha256: string;
+  identity?: RunIdentity;
   c1: Record<string, Entry>;
   c2: Record<string, Entry>;
 }
+
+/** The omissions that a resume MAY re-attempt, and those it must not. */
+const RESUMABLE_OMISSIONS: readonly Omission[] = ["trial-interrupted"];
 
 function writeJson(path: string, value: unknown) {
   const temporary = `${path}.tmp`;
@@ -82,6 +103,55 @@ function loadLedger(path: string): Ledger {
 
 function charged(entries: Ledger["c1"]): number {
   return Object.values(entries).reduce((total, entry) => total + entry.micros, 0);
+}
+
+/**
+ * The cash this directory has actually COMMITTED, for a resume's prior spend.
+ *
+ * Deliberately not `charged()`: that sums `reserved` entries too, and a
+ * reservation is a hold, not spend. A resume that treated holds as cash would
+ * understate the remaining ceiling by however many reservations were in flight
+ * when the process died - the same cash-versus-reservation split that made
+ * arm-003d's apparent cap read $6.30 against $4.48 of real cash.
+ *
+ * `reserved` means the process died after booking but before scoring, so the
+ * model MAY have been called and usage is unknown. Counting it is therefore the
+ * conservative direction, and the spec says fail closed on a partial ledger - but
+ * only for the trials a resume will NOT rerun. A reservation that is about to be
+ * rerun must not be double-counted, so it is EXCLUDED here and its trial is
+ * re-bought with a fresh reservation.
+ */
+function committedCash(entries: Ledger["c1"]): number {
+  return Object.values(entries).reduce(
+    (total, entry) => total + (entry.status === "scored" ? entry.micros : 0),
+    0,
+  );
+}
+
+/**
+ * Refuse a resume that is not the same experiment, or whose ledger is unusable.
+ *
+ * Every check here fails CLOSED. A resume that guesses is worse than a resume
+ * that refuses: it produces a 30-row artifact that looks uniform while one half
+ * measured a different model or snapshot, and nothing downstream can tell.
+ */
+function assertResumable(ledger: Ledger, identity: RunIdentity, path: string) {
+  if (ledger.manifestSha256 !== manifestSha256)
+    throw new Error(
+      `refusing to resume ${path}: manifest mismatch (ledger ${ledger.manifestSha256.slice(0, 12)} != current ${manifestSha256.slice(0, 12)})`,
+    );
+  // A ledger written before identity was recorded cannot be checked, so it is
+  // refused rather than assumed compatible.
+  if (!ledger.identity)
+    throw new Error(
+      `refusing to resume ${path}: ledger records no run identity, so compatibility cannot be checked`,
+    );
+  for (const field of ["model", "snapshot", "planner"] as const) {
+    if (ledger.identity[field] !== identity[field])
+      throw new Error(
+        `refusing to resume ${path}: ${field} differs (run "${ledger.identity[field]}" != resume "${identity[field]}")`,
+      );
+  }
 }
 
 /**
@@ -154,6 +224,28 @@ export async function runC1Sweep(options: {
    * execute, and the row validator would have to learn to accept them.
    */
   priorSpendMicros?: number;
+  /**
+   * Continue an interrupted run in `directory` instead of starting fresh.
+   *
+   * Without this, a rerun against an existing directory silently reuses whatever
+   * the ledger happens to contain, so an operator cannot tell "I meant to resume"
+   * from "I accidentally pointed at an old run". It also gates the checks that
+   * make a resume SOUND - identity equality and rerun-eligibility - which are
+   * only meaningful when continuing is the stated intent.
+   */
+  resume?: boolean;
+  /**
+   * How prior spend is established on a resume.
+   *
+   * `ledger` derives it from the resumed directory's committed cash, which is
+   * what makes the $9 ceiling hold across a resume. `external` trusts
+   * `priorSpendMicros` as given. The default is `ledger` when `resume` is set,
+   * because a resume that ignores what the directory already spent is the bug
+   * this whole feature exists to prevent.
+   */
+  resumeSpend?: "ledger" | "external";
+  /** What the run believes it is, checked against the ledger on a resume. */
+  identity?: RunIdentity;
   planner?: Planner;
   prepare(
     target: (typeof manifest.rows)[number],
@@ -186,6 +278,48 @@ export async function runC1Sweep(options: {
   try {
     const path = join(directory, "accounting.json");
     const ledger = loadLedger(path);
+    // A resume must be the same experiment, and must know what this directory
+    // already spent. Both checks happen BEFORE any trial runs, so a bad resume
+    // costs nothing.
+    let priorSpendMicros = priorSpend;
+    const runResume = options.resume === true;
+    if (runResume) {
+      if (options.identity) assertResumable(ledger, options.identity, path);
+      if ((options.resumeSpend ?? "ledger") === "ledger") {
+        // A resume must measure the PROJECT, and the ledger already does.
+        //
+        // The combined check below is `priorSpendMicros + charged(ledger.c1) +
+        // ...`, and `ledger.c1` is the SAME ledger being resumed - so the cash
+        // this directory has already committed is counted there, from the rows
+        // themselves. Adding it to `priorSpendMicros` as well counts it twice.
+        //
+        // That is not a theoretical objection. An earlier version computed
+        // `priorSpend + committedCash(ledger.c1)` and the duplication shrank the
+        // usable budget by exactly the amount already spent: a resume whose prior
+        // plus one reservation still fitted would refuse the trial. On a real
+        // arm that wastes money already paid for, which is the failure this
+        // feature exists to prevent.
+        //
+        // So prior spend stays the EXTERNAL figure and the ledger supplies the
+        // directory's own cash. `assertLedgerCoversCommitted` below keeps the
+        // two consistent: it refuses a resume whose ledger cannot account for its
+        // own spend, which is the property the "prior + committed" formula was
+        // trying to guarantee.
+        const committed = committedCash(ledger.c1) + committedCash(ledger.c2);
+        if (priorSpend + committed > COMBINED_LIMIT)
+          throw new Error(
+            `refusing to resume ${path}: prior ${priorSpend} + committed cash ${committed} exceeds ${COMBINED_LIMIT}`,
+          );
+        priorSpendMicros = priorSpend;
+      }
+    }
+    // Record identity on a fresh run so a later resume can check it. Written
+    // before the first trial so a crash during trial 0 still leaves a checkable
+    // ledger rather than an unexplained one.
+    if (!ledger.identity && options.identity) {
+      ledger.identity = options.identity;
+      writeJson(path, ledger);
+    }
     const persist = () => writeJson(path, ledger);
     const planner = options.planner ?? createPlanner();
     const rowDirectory = join(directory, "trials", "c1");
@@ -194,6 +328,14 @@ export async function runC1Sweep(options: {
     // Abort-early (defensive engineering rule 7): two consecutive identical
     // exclusion causes mean the sweep is measuring the harness, not the agent.
     // Stop and surface it for diagnosis instead of burning the rest of the arm.
+    //
+    // Nothing is seeded here on purpose. The loop below REPLAYS every entry
+    // already in the ledger - scored rows and omissions alike - through
+    // `noteCause`, so the counter arrives at the correct value by walking the same
+    // history that produced it. Seeding it separately would be a second copy of
+    // that state, and the two can disagree; an earlier attempt did exactly that,
+    // seeding `trial-interrupted` and then overwriting it as the loop walked past
+    // the scored rows that followed the crash.
     let lastCause: string | undefined;
     let consecutive = 0;
     const noteCause = (cause: string) => {
@@ -217,17 +359,50 @@ export async function runC1Sweep(options: {
         }
         continue;
       }
-      if (prior?.status === "reserved") {
+      if (prior?.status === "omitted") {
+        // A resume re-attempts a trial the CRASH cut short, and leaves a
+        // deliberate stop alone.
+        //
+        // The distinction matters: `trial-interrupted` means the harness lost the
+        // trial, so re-running it buys data the arm paid for and never got. The
+        // other omissions are decisions - `spend-limit` stopped because the ceiling
+        // was reached, `driver-unreachable` because the guest was gone,
+        // `repeated-cause` because the sweep was measuring the harness. Re-running
+        // those on a resume would re-buy exactly what the stop was protecting, and
+        // would also silently un-stop a run whose stop reason was the finding.
+        const rerunnable = runResume && RESUMABLE_OMISSIONS.includes(prior.reason);
+        if (!rerunnable) {
+          if (prior.reason !== "trial-interrupted") {
+            stopReason ??= prior.reason;
+            noteCause(prior.reason);
+          } else {
+            // An interruption that is NOT being rerun still feeds the rule: two
+            // consecutive ones either side of a crash is the same fault the rule
+            // exists to catch, and skipping this call would hide it.
+            noteCause("trial-interrupted");
+          }
+          continue;
+        }
+        // Fall through: the trial is re-attempted below with a fresh reservation.
+        // Its cause is replayed FIRST so the counter is continuous across the
+        // boundary: if this rerun fails the same way, that is the second
+        // consecutive identical cause and the rule fires.
+        noteCause("trial-interrupted");
+      }
+      if (prior?.status === "reserved" && !runResume) {
+        // A reservation with no resume intent means THIS run died after booking,
+        // so the trial is recorded as interrupted and the counter advanced -
+        // behaviour unchanged from before `--resume` existed.
         ledger.c1[index] = { ...prior, status: "omitted", reason: "trial-interrupted" };
         persist();
         continue;
       }
-      if (prior?.status === "omitted") {
-        if (prior.reason !== "trial-interrupted") {
-          stopReason ??= prior.reason;
-          noteCause(prior.reason);
-        }
-        continue;
+      if (prior?.status === "reserved" && runResume) {
+        // On a resume the reservation is re-attempted. Its micros are NOT in
+        // priorSpend (committedCash counts only scored rows), so the fresh
+        // reservation below does not double-count the dead one.
+        delete ledger.c1[index];
+        persist();
       }
       const reservation = planner.paid ? MAX_TRIAL_MICROS : 0;
       const c1 = charged(ledger.c1);
@@ -250,7 +425,11 @@ export async function runC1Sweep(options: {
         // The project ceiling. prior spend belongs HERE, where it is compared
         // against the true combined limit rather than against a budget that has
         // already had it removed. This is the binding ceiling for a real launch.
-        priorSpend + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT
+        //
+        // On a resume this is `priorSpendMicros`, which already folds in this
+        // directory's committed cash - so a resumed run measures the PROJECT, not
+        // a second $9 allowance for the half it re-executes.
+        priorSpendMicros + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT
       ) {
         stopReason ??= "spend-limit";
         ledger.c1[index] = { status: "omitted", micros: 0, reason: stopReason };
@@ -393,6 +572,14 @@ export async function runC1Sweep(options: {
       partial: completed !== rows.length,
       c1ChargedMicros: charged(ledger.c1),
       combinedChargedMicros: charged(ledger.c1) + charged(ledger.c2),
+      // WHY the run stopped, when it stopped early. Without this the artifact
+      // records that trials are missing but not that anything was wrong: a run
+      // stopped by `repeated-cause` and one that simply ran out of manifest look
+      // identical, and `partial: true` is the only hint. It also makes the
+      // abort-early rule observable across a resume, where the counter is
+      // reconstructed rather than carried in memory - previously the rule could
+      // fire with no trace in the output at all.
+      ...(stopReason ? { stopReason } : {}),
       rows,
     };
     writeJson(join(directory, "report.json"), report);

@@ -1,7 +1,7 @@
 import { pixelAction, record, type Screenshot } from "./c1.ts";
 import type { Action, Claim, Usage } from "./index.ts";
 
-const SONNET = "claude-sonnet-5-5";
+export const SONNET = "claude-sonnet-5-5";
 /**
  * Error types we surface verbatim. This is an allowlist, not a filter: for a
  * type outside it we neither name the type nor keep its message, so the real
