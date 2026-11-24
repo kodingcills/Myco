@@ -92,17 +92,17 @@ if [ ${#EXTRA[@]} -gt 0 ] && [ ! -f "$OUT/accounting.json" ]; then
   exit 3
 fi
 
-# Load Anthropic API key strictly from ~/.myco/secrets/anthropic.env without printing
+# Anthropic API key: pass the secrets file PATH, never the key itself (TIF-206).
+# This used to `set -a; source` the file, which exported the key into the environment of
+# caffeinate, node, tee and every child, so `ps eww` on the sweep printed it (TIF-193).
+# The planner now reads the file at the point of use (src/baseline/secret-file.ts).
+# An ambient ANTHROPIC_API_KEY is still honoured for back-compat.
 SECRETS="$HOME/.myco/secrets/anthropic.env"
-if [ -f "$SECRETS" ]; then
-  set -a
-  source "$SECRETS"
-  set +a
-fi
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && ! { [ -f "$SECRETS" ] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?ANTHROPIC_API_KEY=.+' "$SECRETS"; }; then
   echo "ERROR: ANTHROPIC_API_KEY required in $SECRETS for paid Sonnet planner" >&2
   exit 1
 fi
+export MYCO_ANTHROPIC_KEY_FILE="$SECRETS"
 
 # REFUSE rather than default. The sweep itself fails closed when this is unset
 # (`parseSpendCeiling` requires both vars), so a launch that got this far has it - but
