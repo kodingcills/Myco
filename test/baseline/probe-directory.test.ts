@@ -80,7 +80,7 @@ describe("no test writes into a live run", () => {
     // THE REAL GUARANTEE IS BEHAVIOURAL and lives in `watch-prior-spend.test.ts`:
     // `spawnLauncher` assigns `MYCO_VM_LOCK_PATH` AFTER spreading overrides, so no caller
     // can displace, blank, or redirect it, and it checks the assembled environment before
-    // starting a process. That is enforced by tests that fail if the ORDER changes; this
+    // starting a process. The ORDER is enforced by tests that fail if it changes; this
     // file is a cheap lint on top of it, not the defence.
     const stripComments = (text: string) =>
       text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -104,11 +104,13 @@ describe("no test writes into a live run", () => {
       // spawn intact and the reference count unchanged, so it needs its own assertion -
       // an earlier rewrite of this guard lost this check and a mutation walked through.
       //
-      // Counting the ASSIGNMENT (`MYCO_VM_LOCK_PATH: privateLockPath()`) rather than every
-      // mention of the key: tests legitimately NAME it in override literals - that is how
-      // the displacement guarantee is tested - and counting those made the guard fail on
-      // its own new tests.
-      const assignments = [...code.matchAll(/MYCO_VM_LOCK_PATH:\s*privateLockPath\(\)/g)].length;
+      // Counting the ASSIGNMENT - the lock path BOUND to a call, i.e. `resolveLock()` or
+      // `privateLockPath()`, never a bare `undefined` and never a literal - rather than
+      // every mention of the key: tests legitimately NAME it in override literals, which is
+      // how the displacement guarantee is tested, and counting those made the guard fail on
+      // its own new tests. This tracks the assignment as `launcherEnvFor` evolves rather
+      // than pinning one resolver's name.
+      const assignments = [...code.matchAll(/MYCO_VM_LOCK_PATH:\s*\w+\(\)/g)].length;
       expect({ path, assignments }).toEqual({ path, assignments: 1 });
     }
   });
