@@ -1,0 +1,144 @@
+launch 2026-11-24T08:34:06Z pid=2522 runs=runs/s6-final limit=20
+agent ping ok: 0.1.0 session 4b3c0f87b0f8413b90d8990422df661b
+[
+  {
+    "column": "name",
+    "typed": "REVISED-908578",
+    "status": "verified",
+    "reason": "cell B39 (record EMP-0038, column name) persisted as \"REVISED-908578\"",
+    "elapsedMs": 71444
+  },
+  {
+    "column": "qty",
+    "typed": "9733",
+    "status": "verified",
+    "reason": "cell C24 (record EMP-0023, column qty) persisted as \"9733\"",
+    "elapsedMs": 43366
+  },
+  {
+    "column": "joined",
+    "typed": "2024-05-28",
+    "status": "verified",
+    "reason": "cell D60 (record EMP-0059, column joined) persisted as \"2024-05-28\"",
+    "elapsedMs": 51483
+  },
+  {
+    "column": "salary",
+    "typed": "$12458.13",
+    "status": "verified",
+    "reason": "cell E10 (record EMP-0009, column salary) persisted as \"$12458.13\"",
+    "elapsedMs": 44509
+  },
+  {
+    "column": "name",
+    "typed": "REVISED-465160",
+    "status": "verified",
+    "reason": "cell B12 (record EMP-0011, column name) persisted as \"REVISED-465160\"",
+    "elapsedMs": 44878
+  },
+  {
+    "column": "qty",
+    "typed": "9986",
+    "status": "verified",
+    "reason": "cell C23 (record EMP-0022, column qty) persisted as \"9986\"",
+    "elapsedMs": 50427
+  },
+  {
+    "column": "joined",
+    "typed": "2024-03-26",
+    "status": "verified",
+    "reason": "cell D6 (record EMP-0005, column joined) persisted as \"2024-03-26\"",
+    "elapsedMs": 48385
+  },
+  {
+    "column": "salary",
+    "typed": "$36824.23",
+    "status": "verified",
+    "reason": "cell E96 (record EMP-0095, column salary) persisted as \"$36824.23\"",
+    "elapsedMs": 43175
+  },
+  {
+    "column": "name",
+    "typed": "REVISED-545101",
+    "status": "verified",
+    "reason": "cell B126 (record EMP-0125, column name) persisted as \"REVISED-545101\"",
+    "elapsedMs": 44091
+  },
+  {
+    "column": "qty",
+    "typed": "7897",
+    "status": "verified",
+    "reason": "cell C5 (record EMP-0004, column qty) persisted as \"7897\"",
+    "elapsedMs": 45796
+  },
+  {
+    "column": "joined",
+    "typed": "2024-06-29",
+    "status": "verified",
+    "reason": "cell D35 (record EMP-0034, column joined) persisted as \"2024-06-29\"",
+    "elapsedMs": 45415
+  },
+  {
+    "column": "salary",
+    "typed": "$33579.52",
+    "status": "verified",
+    "reason": "cell E13 (record EMP-0012, column salary) persisted as \"$33579.52\"",
+    "elapsedMs": 42061
+  },
+  {
+    "column": "name",
+    "typed": "REVISED-72912",
+    "status": "verified",
+    "reason": "cell B21 (record EMP-0020, column name) persisted as \"REVISED-72912\"",
+    "elapsedMs": 42911
+  },
+  {
+    "column": "qty",
+    "typed": "4140",
+    "status": "verified",
+    "reason": "cell C97 (record EMP-0096, column qty) persisted as \"4140\"",
+    "elapsedMs": 41272
+  },
+  {
+    "column": "joined",
+    "typed": "2024-10-09",
+    "status": "verified",
+    "reason": "cell D107 (record EMP-0106, column joined) persisted as \"2024-10-09\"",
+    "elapsedMs": 41495
+  },
+  {
+    "column": "salary",
+    "typed": "$24827.84",
+    "status": "verified",
+    "reason": "cell E59 (record EMP-0058, column salary) persisted as \"$24827.84\"",
+    "elapsedMs": 45233
+  },
+  {
+    "column": "name",
+    "typed": "REVISED-723439",
+    "status": "verified",
+    "reason": "cell B29 (record EMP-0028, column name) persisted as \"REVISED-723439\"",
+    "elapsedMs": 47556
+  },
+  {
+    "column": "qty",
+    "typed": "9513",
+    "status": "verified",
+    "reason": "cell C33 (record EMP-0032, column qty) persisted as \"9513\"",
+    "elapsedMs": 48087
+  },
+  {
+    "column": "joined",
+    "typed": "2024-09-19",
+    "status": "verified",
+    "reason": "cell D27 (record EMP-0026, column joined) persisted as \"2024-09-19\"",
+    "elapsedMs": 52326
+  },
+  {
+    "column": "salary",
+    "typed": "$6286.05",
+    "status": "verified",
+    "reason": "cell E60 (record EMP-0059, column salary) persisted as \"$6286.05\"",
+    "elapsedMs": 46116
+  }
+]finished 2026-11-24T08:49:46Z
