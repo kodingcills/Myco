@@ -194,10 +194,6 @@ describe("C1 host harness", () => {
     };
     const report = await runC1Sweep(options);
     // TIF-186: index 1's prepare throws BEFORE any planner call, so it books 0, not
-    // its 30-call reservation. The old expectation - 30 * MAX_CALL_MICROS + 400 -
-    // counted a hold for a trial that provably spent nothing, which is the phantom
-    // spend that shrank arm-003d r5's apparent cap from $4.48 of cash to $6.30.
-    // TIF-186: index 1's prepare throws BEFORE any planner call, so it books 0, not
     // its 30-call reservation. Two consequences, both intended:
     //   - the charge is 400 (index 0's real cost), not 30 * MAX_CALL_MICROS + 400
     //   - `completed` rises from 1 to 3, because booking 0 for a trial that spent
@@ -713,8 +709,9 @@ describe("C1 sweep abort-early", () => {
   // left the whole suite green - the fix was only half mutation-protected.
   //
   // What reaches the trial catch: a throw from `connect()`, which runs inside
-  // runC1Trial's outer try. The trial retries at most RUN_TRIAL_ATTEMPTS times
-  // before rethrowing, so the differing messages below are delivered in order.
+  // runC1Trial's outer try. There is no retry loop - connect() is called once per
+  // trial - so `connects++` advances by one for each of the 30 manifest entries and
+  // the messages below are delivered in order, one per trial.
   it("stops after two consecutive TRIAL-catch omissions with DIFFERENT messages", async () => {
     const directory = mkdtempSync(join(tmpdir(), "myco-abort-trialcatch-"));
     directories.push(directory);
