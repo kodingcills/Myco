@@ -392,6 +392,21 @@ export class AgentClient {
     }>;
   }
 
+  /**
+   * Read-only desktop proof (`agent/myco_agent/windows_backend.py:288-321`):
+   * Windows session number, window station, desktop, and user. Not to be
+   * confused with `ping`'s `session_id`, a per-start GUID — see
+   * `docs/eval-runbook.md` §5 (F9/F10).
+   */
+  sessionInfo(): Promise<{ session_id: number; window_station: string; desktop: string; user: string }> {
+    return this.request("session_info") as Promise<{
+      session_id: number;
+      window_station: string;
+      desktop: string;
+      user: string;
+    }>;
+  }
+
   /** Read-only UNO readback (getValue/getString/getError/isModified). */
   unoEval(params: {
     call: string;
