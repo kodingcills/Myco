@@ -1,0 +1,162 @@
+[
+  {
+    "runId": "052491c9-e126-40b4-9631-677f905fb335",
+    "column": "qty",
+    "rowKey": "EMP-0032",
+    "typed": "9513",
+    "status": "verified",
+    "reason": "cell C33 (record EMP-0032, column qty) persisted as \"9513\""
+  },
+  {
+    "runId": "05923426-fa2a-4ab6-a3a5-e0b311d4d521",
+    "column": "name",
+    "rowKey": "EMP-0038",
+    "typed": "REVISED-908578",
+    "status": "verified",
+    "reason": "cell B39 (record EMP-0038, column name) persisted as \"REVISED-908578\""
+  },
+  {
+    "runId": "0bed67ab-8411-458f-91d0-5f8973a88d7f",
+    "column": "salary",
+    "rowKey": "EMP-0095",
+    "typed": "$36824.23",
+    "status": "verified",
+    "reason": "cell E96 (record EMP-0095, column salary) persisted as \"$36824.23\""
+  },
+  {
+    "runId": "279eef4a-85a3-4dbf-a087-4df60617a9c0",
+    "column": "joined",
+    "rowKey": "EMP-0005",
+    "typed": "2024-03-26",
+    "status": "verified",
+    "reason": "cell D6 (record EMP-0005, column joined) persisted as \"2024-03-26\""
+  },
+  {
+    "runId": "2ef68b12-ccb5-470b-a6a3-c2f5ab84b5b6",
+    "column": "name",
+    "rowKey": "EMP-0125",
+    "typed": "REVISED-545101",
+    "status": "verified",
+    "reason": "cell B126 (record EMP-0125, column name) persisted as \"REVISED-545101\""
+  },
+  {
+    "runId": "443ff99f-5797-43af-b5b0-7d93c4ee8615",
+    "column": "name",
+    "rowKey": "EMP-0020",
+    "typed": "REVISED-72912",
+    "status": "verified",
+    "reason": "cell B21 (record EMP-0020, column name) persisted as \"REVISED-72912\""
+  },
+  {
+    "runId": "4ee95450-c64d-4511-91d1-49a30b0ab966",
+    "column": "joined",
+    "rowKey": "EMP-0034",
+    "typed": "2024-06-29",
+    "status": "verified",
+    "reason": "cell D35 (record EMP-0034, column joined) persisted as \"2024-06-29\""
+  },
+  {
+    "runId": "56185b50-97b9-49ed-90c6-0e32a0eaafc9",
+    "column": "joined",
+    "rowKey": "EMP-0059",
+    "typed": "2024-05-28",
+    "status": "verified",
+    "reason": "cell D60 (record EMP-0059, column joined) persisted as \"2024-05-28\""
+  },
+  {
+    "runId": "5ca61ee9-0189-4d26-a595-a3fcd6626167",
+    "column": "salary",
+    "rowKey": "EMP-0012",
+    "typed": "$33579.52",
+    "status": "verified",
+    "reason": "cell E13 (record EMP-0012, column salary) persisted as \"$33579.52\""
+  },
+  {
+    "runId": "5e59302f-fb29-4a68-a990-84350fd25949",
+    "column": "qty",
+    "rowKey": "EMP-0004",
+    "typed": "7897",
+    "status": "verified",
+    "reason": "cell C5 (record EMP-0004, column qty) persisted as \"7897\""
+  },
+  {
+    "runId": "688deefc-6670-4da8-9dad-389eba1e5fba",
+    "column": "qty",
+    "rowKey": "EMP-0023",
+    "typed": "9733",
+    "status": "verified",
+    "reason": "cell C24 (record EMP-0023, column qty) persisted as \"9733\""
+  },
+  {
+    "runId": "71b96c3c-dda0-4545-920c-70c0fed602e3",
+    "column": "salary",
+    "rowKey": "EMP-0058",
+    "typed": "$24827.84",
+    "status": "verified",
+    "reason": "cell E59 (record EMP-0058, column salary) persisted as \"$24827.84\""
+  },
+  {
+    "runId": "75402d92-df93-4e2e-afae-0141a19383b4",
+    "column": "salary",
+    "rowKey": "EMP-0059",
+    "typed": "$6286.05",
+    "status": "verified",
+    "reason": "cell E60 (record EMP-0059, column salary) persisted as \"$6286.05\""
+  },
+  {
+    "runId": "777af982-ef16-4d61-8a6f-ad8ecad2a6cb",
+    "column": "name",
+    "rowKey": "EMP-0011",
+    "typed": "REVISED-465160",
+    "status": "verified",
+    "reason": "cell B12 (record EMP-0011, column name) persisted as \"REVISED-465160\""
+  },
+  {
+    "runId": "9d764d8e-3879-4c60-bdca-5f5037af271d",
+    "column": "joined",
+    "rowKey": "EMP-0106",
+    "typed": "2024-10-09",
+    "status": "verified",
+    "reason": "cell D107 (record EMP-0106, column joined) persisted as \"2024-10-09\""
+  },
+  {
+    "runId": "a19af6c0-6a9e-4a17-a9bf-f0610cf35632",
+    "column": "joined",
+    "rowKey": "EMP-0026",
+    "typed": "2024-09-19",
+    "status": "verified",
+    "reason": "cell D27 (record EMP-0026, column joined) persisted as \"2024-09-19\""
+  },
+  {
+    "runId": "e9e75e4f-9f6d-460c-aa5a-71eb45684379",
+    "column": "qty",
+    "rowKey": "EMP-0022",
+    "typed": "9986",
+    "status": "verified",
+    "reason": "cell C23 (record EMP-0022, column qty) persisted as \"9986\""
+  },
+  {
+    "runId": "f81efc28-ddb5-4a92-b92c-9c82ded600e8",
+    "column": "name",
+    "rowKey": "EMP-0028",
+    "typed": "REVISED-723439",
+    "status": "verified",
+    "reason": "cell B29 (record EMP-0028, column name) persisted as \"REVISED-723439\""
+  },
+  {
+    "runId": "fa8a9411-9b8a-4ff9-9c0f-efd08d6198f7",
+    "column": "qty",
+    "rowKey": "EMP-0096",
+    "typed": "4140",
+    "status": "verified",
+    "reason": "cell C97 (record EMP-0096, column qty) persisted as \"4140\""
+  },
+  {
+    "runId": "fbcafb04-0f9f-4eca-b06c-9e6e7d1a0c7c",
+    "column": "salary",
+    "rowKey": "EMP-0009",
+    "typed": "$12458.13",
+    "status": "verified",
+    "reason": "cell E10 (record EMP-0009, column salary) persisted as \"$12458.13\""
+  }
+]

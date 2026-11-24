@@ -49,15 +49,28 @@ export interface VmLockOptions {
   path?: string;
   /** Recorded in the lock file for diagnosis. */
   driver?: string;
-  /**
-   * The record this process may claim ownership from; defaults to
-   * `MYCO_VM_LOCK_OWNER`. A seam, so the ownership rules can be tested without a
-   * real driver in the process's ancestry — the pid a shell reports for itself is
-   * not reliably an ancestor of what it spawns on macOS, so no harness can build
-   * that chain on purpose.
-   */
+}
+
+/**
+ * Seams for {@link lockOwnedByAncestor}, kept out of {@link VmLockOptions} on
+ * purpose.
+ *
+ * `ancestorOf` replaces the ancestry walk outright, so a caller that passed it to
+ * the real entry point could certify any live pid as an ancestor and skip taking the
+ * lock with no error — the exact silence this module exists to remove. Only the
+ * predicate accepts it; {@link acquireVmLockUnlessOwnedByAncestor} takes plain
+ * {@link VmLockOptions} and calls the predicate with no seams, so production cannot
+ * reach it. A verifier round flagged the exported seam as a footgun; this is the
+ * narrowing that closes it.
+ *
+ * The seam exists because no harness can build a real ancestor chain on purpose: the
+ * pid a shell reports for itself is not reliably an ancestor of what it spawns on
+ * macOS.
+ */
+interface OwnershipSeams {
+  /** The record this process may claim ownership from; defaults to MYCO_VM_LOCK_OWNER. */
   owner?: number;
-  /** The ppid chain walk; defaults to `/bin/ps`. Seam, for the same reason. */
+  /** The ppid chain walk; defaults to walking `/bin/ps`. */
   ancestorOf?: (pid: number) => boolean;
 }
 
@@ -123,7 +136,9 @@ export function acquireVmLock(options: VmLockOptions = {}): VmLock {
 export function acquireVmLockUnlessOwnedByAncestor(
   options: VmLockOptions = {},
 ): VmLock | undefined {
-  if (lockOwnedByAncestor(options)) return undefined;
+  // Never forwards a seam: this is the production entry point, and the ancestry
+  // walk is the thing it must not be able to skip.
+  if (lockOwnedByAncestor({ path: options.path, driver: options.driver })) return undefined;
   return acquireVmLock(options);
 }
 
@@ -133,7 +148,7 @@ export function acquireVmLockUnlessOwnedByAncestor(
  * {@link acquireVmLock} — the safe direction, since a genuinely held lock still
  * refuses there.
  */
-export function lockOwnedByAncestor(options: VmLockOptions = {}): boolean {
+export function lockOwnedByAncestor(options: VmLockOptions & OwnershipSeams = {}): boolean {
   const path = options.path ?? process.env.MYCO_VM_LOCK_PATH ?? DEFAULT_VM_LOCK_PATH;
   const owner = options.owner ?? Number(process.env.MYCO_VM_LOCK_OWNER ?? "");
   if (!Number.isInteger(owner) || owner <= 1) return false;
