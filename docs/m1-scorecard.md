@@ -56,8 +56,10 @@ pending, and applies when the run with that id arrives.
 per-step PNGs; `result.json` + `trace.jsonl` is ~8 KB, and the viewer renders the
 verdict, evidence and timeline from those two alone. All 54 trials cost 504 KB.
 
-**Verified:** `scripts/check-scorecard-links.py` asserts every link resolves and
-carries both files. Run it after editing the table:
+**Verified:** `scripts/check-scorecard-links.py` asserts every link resolves, carries
+both files, and that each row's viewer fragment matches that row's `result.json`
+`runId` — every row must carry one. `scripts/scorecard-viewer-links.py --check` holds
+the table to the generated form. Run both after editing the table:
 
 ```sh
 python3 scripts/check-scorecard-links.py
