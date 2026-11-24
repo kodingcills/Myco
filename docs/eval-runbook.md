@@ -375,7 +375,25 @@ trials.
 Prerequisite for reliability numbers: if a generated value does not survive Calc's input path,
 a `refuted` verdict may be a generator defect rather than an execution defect.
 
-**UNVERIFIED.** Reset (§3) and deploy (§4) first, then run once on a quiet host. Do **not**
+**UNVERIFIED.** Reset (§3) and deploy (§4) first, then run once on a quiet host.
+
+**When you may skip §3 and §4 (F20).** On a **row-8 reproduction run, never**: the point of the
+run is that a fresh operator can do every step, so reset, deploy and §5 are part of what is being
+tested. Outside row 8, for example re-measuring the generator on a guest that another driver
+has just released, skipping is acceptable only when all three hold: §5 passes on the guest as it
+stands, a fresh token was fetched after the last deploy, and §6.1 prints nothing after cleanup.
+Record the skip, and why, next to the §6 result. A skip that is not recorded reads as a full run.
+
+**Which steps take the VM flock, and which do not (F20).** `scripts/reset-trial-vm.sh` (§3.1),
+`run-live` (§6) and the sweep drivers (§7) each take the flock themselves and exit 10 if another
+process holds it. Deploy (§4) and the §6.1 check and cleanup **do not**: they reach the guest with
+`vssh`/`scp` directly. **You cannot hold the flock by hand across steps.** A child accepts an
+ancestor's lock only when the ancestor is one of the named drivers (`m1-sweep.sh`,
+`m1-corrupt-suite.sh`, `c1-baseline.sh`, `c1-sweep.sh`, `c1-spike.sh`, per `vm_lock_owned_by_parent`
+in `scripts/vm-lock.sh` and `PARENT_DRIVERS` in `src/integration/vm-lock.ts`). Under an
+operator-held lock, §3.1 and §6 would therefore refuse with exit 10. Instead, run
+`lsof /tmp/myco-win11.vm.lock` right before each unlocked step and go ahead only if it prints
+nothing, the same read-only check as §2. Do **not**
 interleave with other work on the guest. `--mode values` runs its parameter sets back to back
 without resets, so running it on a contaminated guest (leftover `soffice`, leftover run dirs)
 measures the contamination, not the generator (log 27).
@@ -406,7 +424,21 @@ scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-clean.ps1 myco-win11:'C:/myco/g
 it leaves one `run-dir myco-<hostpid>-<nonce>-<nonce>` and possibly one `soffice` behind. A run
 that is not a trial — the C1 arms write `C:\myco\runs\<index>` — leaves a directory whose name
 matches nothing in particular, including a bare number. Clean them before re-running, or the
-re-run measures the residue:
+re-run measures the residue.
+
+**A stray C1 guest dir is not row-8 evidence. Copy it aside, then clean it (F17).** A
+`C:\myco\runs\<index>` directory belongs to a C1 arm's trial, not to this run. It proves
+nothing about row 8 and must not be cited as row-8 evidence. But it may be the only guest-side
+copy of that C1 trial, so do not delete it unseen. For each `run-dir` line the check printed
+whose name is not `myco-<hostpid>-<nonce>-<nonce>` (your own aborted §6 residue), copy the
+directory to the host first:
+
+```bash
+mkdir -p /tmp/row8-guest-residue
+scp -q -r -F ~/VMs/myco-win11/ssh_config myco-win11:'C:/myco/runs/<name>' /tmp/row8-guest-residue/
+```
+
+Record the copied path in your report so the C1 owner can find it. Then run the cleanup:
 
 ```bash
 cat > /tmp/guest-cleanup.ps1 <<'EOF'
@@ -424,9 +456,14 @@ scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-cleanup.ps1 myco-win11:'C:/myco
 Then re-run `guest-clean.ps1` and confirm it prints nothing.
 
 **Do not delete** `C:\myco\runs\profiles` or `C:\myco\runs\myco_uia_act.py*` — those are the
-profile root and the agent's own script plus its result files, not trial residue. `profiles`
-sub-dirs are reported as residue but do **not** trip the guard; only `soffice` and `myco-*` run
-dirs do.
+profile root and the agent's own script plus its result files, not trial residue.
+
+**What trips the trial's contamination guard (F18).** From `src/integration/guest-health.ts`
+(`probeGuestHealth`, `guestContaminated`): **any** running `soffice`, and **any** directory
+directly under `C:\myco\runs` other than `myco-admin`, `profiles` and the trial's own, **whatever
+its name**: `myco-*`, a bare `20` or `29`, anything. Sub-directories *inside*
+`C:\myco\runs\profiles` are reported as `leftover profiles` but do **not** trip the guard. The
+§6.1 check above prints exactly the set that trips it, so a clean check means a clean guard.
 
 ### 6.2 Hold the VM, or nothing else may touch it
 
@@ -475,6 +512,12 @@ like a pass). Row shape, from the committed run
 ```
 
 Recorded result: **20/20 verified** (5 values × `name`, `qty`, `joined`, `salary`), 2026-11-20.
+
+**How long it takes (F21).** The sample row's `elapsedMs` (33 s) is one quiet-host row, not a
+rate. The 2026-11-24 row-8 run took **17 min 7 s for 20 rows**: per row min 36 s, mean 51 s,
+max 94 s, at 1-min load 4.7–9.5. **Plan 12–20 min** for §6, and expect one new run dir every
+~40–90 s. A run past ~30 min with no new dir is the time to check the pid (§9). Before that,
+silence is normal.
 
 **Re-checked 2026-11-24, and not yet reproduced end to end.** Two attempts were made on a
 guest that had been reset and verified clean (§6.1). **Every row that reached the verifier
