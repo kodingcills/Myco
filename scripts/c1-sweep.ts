@@ -43,11 +43,20 @@ async function main() {
    *
    * DECREASING, so that is the host's steady state rather than escalating
    * thermal/disk/memory pressure. r3's reset was 152s for the same snapshot and
-   * script, so SSH-answer latency on top of the reset is roughly 85s at worst.
-   * 150s is ~1.75x that maximum: comfortably above the observed cost, still far
-   * below the 600s SSH_WAIT_TIMEOUT reset-trial-vm.sh already uses for this same
-   * guest, and below the point where a genuinely wedged guest would waste an
-   * arm's worth of wall time before failing.
+   * script, so the reset itself accounts for ~150-200s of each figure above.
+   *
+   * 150s is therefore deliberately generous rather than tight. The readiness gate
+   * (wait-guest-ready.sh) only declares the guest up AFTER a real ssh round trip
+   * succeeds, so by the time the sweep issues its first guest command the
+   * transport is already warm and commands take the 6-11s measured under sweep
+   * load - NOT the ~85s difference between these timings and r3's reset. The
+   * budget is set to absorb a cold or slow guest without failing the arm, and it
+   * stays far below the 600s SSH_WAIT_TIMEOUT reset-trial-vm.sh already uses for
+   * this same guest.
+   *
+   * TIF-187: an earlier version of this comment claimed the ~85s was live SSH
+   * latency the budget had to cover. It is not reachable in the sweep, so the
+   * reasoning overstated the risk. The VALUE is unchanged and still right.
    */
   const GUEST_TIMEOUT_MS = 150_000;
 
