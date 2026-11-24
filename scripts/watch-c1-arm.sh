@@ -28,10 +28,13 @@
 OUT=${1:-/tmp/baseline/c1-arm2}
 LIMIT_USD=${2:-4.00}
 SILENT_MIN=${3:-20}
-# Spend committed by EARLIER runs, in dollars. Defaults to 0 so a standalone call
-# still works, but the trigger is then run-local - the launcher always passes the
-# real figure, and prints a warning when it does not.
-PRIOR_USD=${4:-0}
+# Spend committed by EARLIER runs, in dollars.
+#
+# REQUIRED, not defaulted. It previously fell back to 0, which silently reverted the
+# whole comparison to run-local - the exact understatement this file exists to remove
+# - whenever the argument was missing. `${4?}` makes its absence a hard error instead,
+# so a caller that forgets it gets a refusal rather than a reassuring number.
+PRIOR_USD=${4?prior spend is a required argument: pass dollars committed by earlier runs, e.g. 4.480732}
 # Seed both from the log's OWN mtime, not from "now" and not from an empty size.
 #
 # Starting last_change at script start made every existing log look freshly

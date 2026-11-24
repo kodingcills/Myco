@@ -280,13 +280,15 @@ function acquireRunLock(directory: string): string {
     const parsed = Number(raw);
     if (Number.isSafeInteger(parsed) && parsed > 0) owner = parsed;
   } catch {
-    // No owner file: stale by definition (a live holder always writes one).
+    // No owner file, or one that did not parse: stale in every ordinary case. A live
+      // holder always writes a parseable pid, so an unreadable owner is an UNKNOWN
+      // rather than a confirmed death - see the trade documented on acquireRunLock.
   }
   if (owner !== undefined && isProcessAlive(owner))
     throw new Error(
       `refusing to run: ${lock} is held by live pid ${owner}; two sweeps must not share one ledger`,
     );
-  // Positively dead (or unrecorded) - clear the leftover and take the lock.
+  // Positively dead, or unparseable/unrecorded - clear the leftover and take the lock.
   rmSync(lock, { recursive: true, force: true });
   create();
   return lock;
