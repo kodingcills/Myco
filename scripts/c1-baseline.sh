@@ -134,10 +134,14 @@ WATCH_SILENT="${MYCO_WATCH_SILENT_MIN:-20}"
 # the sweep had exited. Measured: a leaked `sleep 300` owned
 # /tmp/myco-win11.vm.lock after a probe run finished, blocking the next arm.
 # The watchdog does not need the VM, so it is given no descriptor to hold.
-bash "$WS/scripts/watch-c1-arm.sh" "$OUT" "$WATCH_LIMIT" "$WATCH_SILENT" >>"$WATCH" 2>&1 9>&- &
+# Prior spend is passed so the watcher measures what the GUARD measures. It comes
+# from the same MYCO_PRIOR_SPEND_MICROS the sweep reads, converted here rather than
+# re-derived, so the two can never disagree about what the project had already spent.
+WATCH_PRIOR=$(awk -v m="${MYCO_PRIOR_SPEND_MICROS:-0}" 'BEGIN { printf "%.6f", m / 1000000 }')
+bash "$WS/scripts/watch-c1-arm.sh" "$OUT" "$WATCH_LIMIT" "$WATCH_SILENT" "$WATCH_PRIOR" >>"$WATCH" 2>&1 9>&- &
 WATCH_PID=$!
 echo "$WATCH_PID" > "$OUT/watch.pid"
-echo "watchdog pid $WATCH_PID -> $WATCH (limit \$$WATCH_LIMIT, silent ${WATCH_SILENT}m)" | tee -a "$PROGRESS"
+echo "watchdog pid $WATCH_PID -> $WATCH (ceiling \$$WATCH_LIMIT, prior \$$WATCH_PRIOR, silent ${WATCH_SILENT}m)" | tee -a "$PROGRESS"
 
 # The sweep writes its own pid so a later reader does not have to guess which
 # process belonged to this directory.
