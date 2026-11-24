@@ -58,7 +58,7 @@ function watchLine(
   // script passes, so this exercises the real source text.
   const source = execFileSync(
     "sed",
-    ["-n", "/^import glob, json, sys$/,/^PY$/p", "scripts/watch-c1-arm.sh"],
+    ["-n", "/^import glob, json/,/^PY$/p", "scripts/watch-c1-arm.sh"],
     {
       encoding: "utf8",
     },
@@ -117,6 +117,63 @@ describe("a missing prior spend is refused, not defaulted", () => {
     expect(run.status).toBe(6);
     expect(`${run.stdout}${run.stderr}`).toMatch(/MYCO_PRIOR_SPEND_MICROS is unset/);
   });
+});
+
+/**
+ * Set is not the same as numeric (round-2 defects D1 and D2).
+ *
+ * Both round-1 guards tested only that SOMETHING was supplied, so a value that was
+ * present but unparseable walked straight through and reverted to run-local arithmetic
+ * - the exact understatement the change removes. `""` converts to 0 in `awk`, and
+ * `nan`/`-inf`/negatives make `committed > limit` permanently false, so the trigger is
+ * disarmed with no error at all.
+ */
+describe("a non-numeric prior spend is refused, not converted to zero", () => {
+  const badPriors = ["", "   ", "abc", "4.5", "-1", "4e6"];
+
+  for (const bad of badPriors) {
+    it(`the launcher refuses MYCO_PRIOR_SPEND_MICROS=${JSON.stringify(bad)}`, async () => {
+      const { spawnSync } = await import("node:child_process");
+      const dir = ledgerDir({ "0": scored(100_000) });
+      const run = spawnSync(
+        "bash",
+        ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          // Set but not numeric. Exit 6, not 10: this must be refused before the VM
+          // lock is attempted, so it cannot be confused with "the VM is busy".
+          env: { ...process.env, MYCO_PRIOR_SPEND_MICROS: bad },
+          timeout: 20_000,
+        },
+      );
+      expect(run.status).toBe(6);
+      expect(`${run.stdout}${run.stderr}`).toMatch(/MYCO_PRIOR_SPEND_MICROS/);
+    });
+  }
+
+  for (const bad of ["nan", "inf", "-inf", "-3", "abc"]) {
+    it(`the watcher refuses a prior of ${JSON.stringify(bad)}`, async () => {
+      const { spawnSync } = await import("node:child_process");
+      const dir = ledgerDir({ "0": scored(100_000) });
+      const source = execFileSync(
+        "sed",
+        ["-n", "/^import glob, json/,/^PY$/p", "scripts/watch-c1-arm.sh"],
+        { encoding: "utf8" },
+      )
+        .replace(/^PY$/m, "")
+        .trim();
+      const run = spawnSync("python3", ["-", dir, "4.00", "0", "20", bad], {
+        input: source,
+        encoding: "utf8",
+      });
+      // 11 is the refusal code. Without it these values leave `committed > limit`
+      // permanently False and the watcher loops for ever, reporting a figure that can
+      // never trigger - worse than no watcher, because it looks like one.
+      expect(run.status).toBe(11);
+      expect(run.stdout).toMatch(/REFUSED prior spend/);
+    });
+  }
 });
 
 describe("the watchdog measures the same spend the cap does", () => {

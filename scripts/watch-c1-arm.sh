@@ -81,9 +81,21 @@ while true; do
   now=$(date +%s)
   silent_min=$(( (now - last_change) / 60 ))
   python3 - "$OUT" "$LIMIT_USD" "$silent_min" "$SILENT_MIN" "$PRIOR_USD" <<'PY'
-import glob, json, sys
+import glob, json, math, sys
 out, limit, silent = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
-prior = float(sys.argv[5])
+# PARSING IS NOT VALIDATION. `float()` accepts "nan", "inf" and "-inf", and every one
+# of them disarms the spend trigger without an error: `nan > limit` is False and
+# `-inf > limit` is False, so the watcher loops reporting a number that can never fire.
+# A negative prior is equally meaningless - spend cannot be un-spent. A round-2
+# verifier measured all three reaching the loop. Refuse before the first iteration.
+try:
+    prior = float(sys.argv[5])
+except ValueError:
+    print(f"[watch] REFUSED prior spend '{sys.argv[5]}' is not a number")
+    sys.exit(11)
+if not math.isfinite(prior) or prior < 0:
+    print(f"[watch] REFUSED prior spend {sys.argv[5]} is not a finite non-negative number")
+    sys.exit(11)
 # The threshold arrives as argv[4], not as a shell name: this block is a quoted
 # heredoc, so bash variables are NOT interpolated into it. Referencing SILENT_MIN
 # directly here raised NameError on every iteration, which made the watcher exit
