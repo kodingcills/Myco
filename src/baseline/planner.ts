@@ -80,7 +80,8 @@ const MAX_INPUT = 5_000;
  *
  * **Nothing in any completed row reached 768**, so 1024 carries **~66% headroom over the
  * largest reply ever measured here** (615) and 91% over P99 (535). Trial 20 truncated AT
- * 1024 - the ONE call in 571 that ran past 615 - and the evidence says that is a
+ * 1024 - the one call that ran past every other completion in the arm (570 recorded,
+ * of at least 571 attempted) - and the evidence says that is a
  * DEGENERATE REPEAT rather than a ceiling that is too tight: every other call in the arm
  * sat comfortably under it.
  *
