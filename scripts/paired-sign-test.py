@@ -45,13 +45,52 @@ EXPECTED_INDICES = 30
 UNDERPOWERED_BELOW = 6
 
 
+# The verdict vocabulary is OWNED by scripts/m1-scorecard.py and by the typed writers
+# (VerdictStatus in src/core/verify.ts, the Omission union in src/baseline/sweep.ts).
+# It is not re-derived by substring matching here: a token like `not-verified` or
+# `pre-verified` would have passed the old substring test while failing the
+# authority's `== "verified"`. Equality is the rule, and it is the only rule.
+PASSING = "verified"
+
+
 def passed(verdict):
-    """The generator's pass rule, and the only one: `verified`."""
-    return "verified" in str(verdict) and "refuted" not in str(verdict) and "unverified" not in str(verdict)
+    """The authority's pass rule: exactly `verified`, nothing that contains it."""
+    return verdict == PASSING
+
+
+def has_verdict(verdict):
+    """True only for a real verdict, i.e. something the arm actually decided.
+
+    A missing index, a `reserved`/`omitted` ledger entry, or a non-verdict status such
+    as `harness-error` or `seed-mismatch` is NOT a verdict and must not be paired as
+    though it were a loss for that arm.
+    """
+    return verdict is not None and verdict in REAL_VERDICTS
+
+
+# Every status that represents an actual decision by an arm's own judge.
+REAL_VERDICTS = frozenset({"verified", "refuted", "uncertain"})
+
+# Statuses that mean "no verdict was produced". Kept in step with m1-scorecard.py's
+# vocabulary so the two scripts accept and reject the same files.
+NON_VERDICT_STATUSES = frozenset(
+    {
+        "harness-error",
+        "reset-failed",
+        "deploy-failed",
+        "token-failed",
+        "param-error",
+        "seed-mismatch",
+    }
+)
 
 
 def myco_verdicts(path):
-    """index -> verdict from the Myco sweep's flat trials.jsonl."""
+    """index -> verdict from the Myco sweep's flat trials.jsonl.
+
+    A `seed-mismatch` DISQUALIFIES the arm rather than counting as a failure: the trial
+    ran against the wrong fixture, so it is not a paired observation at all.
+    """
     out = {}
     with Path(path).open(encoding="utf-8") as handle:
         for line in handle:
@@ -61,14 +100,35 @@ def myco_verdicts(path):
             index = record.get("index", record.get("trial"))
             if index is None:
                 continue
-            out[int(index)] = record.get("status") or record.get("verdict") or "unknown"
+            index = int(index)
+            if not 0 <= index < EXPECTED_INDICES:
+                raise SystemExit(f"{path}: invalid trial index {index} (expected 0..29)")
+            if index in out:
+                raise SystemExit(f"{path}: duplicate trial index {index}")
+            status = record.get("status") or record.get("verdict")
+            if status == "seed-mismatch":
+                raise SystemExit(
+                    f"{path}: index {index} is seed-mismatch - the arm ran against the "
+                    "wrong fixture, so this pairing is DISQUALIFIED"
+                )
+            if status is not None and status not in REAL_VERDICTS | NON_VERDICT_STATUSES:
+                raise SystemExit(f"{path}: invalid status {status!r} at index {index}")
+            out[index] = status
     return out
 
 
 def c1_verdicts(path):
     """index -> verdict from the C1 arm's accounting.json (row nested under `row`)."""
     document = json.loads(Path(path).read_text(encoding="utf-8"))
-    ledger = document.get("c1", document)
+    # Require the real shape. An earlier version fell back to the whole document,
+    # which accepted a file with no `c1` key and silently treated unrelated top-level
+    # keys as the ledger - the same numbers, from the wrong object.
+    if "c1" not in document or not isinstance(document["c1"], dict):
+        raise SystemExit(
+            f"{path}: expected an accounting.json with a `c1` object; "
+            f"found keys {sorted(document)[:8]}"
+        )
+    ledger = document["c1"]
     out = {}
     for key, entry in ledger.items():
         if not isinstance(entry, dict):
@@ -117,6 +177,21 @@ def build(myco_path, c1_path):
     myco = myco_verdicts(myco_path)
     c1 = c1_verdicts(c1_path)
 
+    # Completeness is derived, never assumed. A pair is only evidence if BOTH arms
+    # produced a real verdict for that index. Anything else is reported, not silently
+    # scored.
+    #
+    # Why this exists: a missing record counting as a failure is the right rule for a
+    # single arm's rate - it can only make that arm look worse. In a PAIRED test the
+    # same rule does something else entirely: every index the baseline never ran
+    # becomes a `myco-only` pair, which ADDS TO b. So an empty baseline arm produced
+    # `p = 3.7e-09` and `underpowered: False` on 29 discordant pairs, from no data at
+    # all, and exited 0. A verifier found that before this shipped. m1-scorecard.py
+    # prints INCOMPLETE in the same situation; this now does too.
+    myco_missing = [i for i in range(EXPECTED_INDICES) if not has_verdict(myco.get(i))]
+    c1_missing = [i for i in range(EXPECTED_INDICES) if not has_verdict(c1.get(i))]
+    complete = not myco_missing and not c1_missing
+
     rows = []
     b = c = ties_pass = ties_fail = 0
     for index in range(EXPECTED_INDICES):
@@ -143,11 +218,17 @@ def build(myco_path, c1_path):
             }
         )
 
-    p, detail = exact_sign_test(b, c)
+    # A p-value is only reported for a COMPLETE pairing. An incomplete one still gets
+    # its table and its counts - those are diagnostic - but the statistic is withheld
+    # rather than computed over indices one arm never ran.
+    p, detail = exact_sign_test(b, c) if complete else (None, {"withheld": "incomplete pairing"})
     return {
         "indices": EXPECTED_INDICES,
-        "myco_recorded": len(myco),
-        "c1_recorded": len(c1),
+        "complete": complete,
+        "myco_missing_verdict": myco_missing,
+        "c1_missing_verdict": c1_missing,
+        "myco_recorded": sum(1 for i in range(EXPECTED_INDICES) if has_verdict(myco.get(i))),
+        "c1_recorded": sum(1 for i in range(EXPECTED_INDICES) if has_verdict(c1.get(i))),
         "paired_rows": rows,
         "b_myco_only": b,
         "c_baseline_only": c,
@@ -173,6 +254,25 @@ def markdown(result):
         lines.append(f"| {row['index']} | {row['myco']} | {row['baseline']} | {row['pair']} |")
 
     lines.append("")
+    if not result["complete"]:
+        lines.append("**INCOMPLETE PAIRING — the p-value is WITHHELD.**")
+        lines.append("")
+        lines.append(
+            f"- indices with no Myco verdict: {len(result['myco_missing_verdict'])}"
+            f"{' (' + ', '.join(map(str, result['myco_missing_verdict'][:12])) + ')' if result['myco_missing_verdict'] else ''}"
+        )
+        lines.append(
+            f"- indices with no baseline verdict: {len(result['c1_missing_verdict'])}"
+            f"{' (' + ', '.join(map(str, result['c1_missing_verdict'][:12])) + ')' if result['c1_missing_verdict'] else ''}"
+        )
+        lines.append("")
+        lines.append(
+            "A paired test needs a verdict on BOTH sides of every index. Where one side "
+            "has none, that index is shown in the table but is not evidence, and no "
+            "p-value is computed — an index one arm never ran would otherwise count as a "
+            "win for the other."
+        )
+        lines.append("")
     lines.append("| | count |")
     lines.append("|---|---|")
     lines.append(f"| b — Myco pass, baseline fail | **{result['b_myco_only']}** |")
@@ -182,12 +282,19 @@ def markdown(result):
 
     p = result["p_two_sided"]
     lines.append("")
-    if p is None:
+    if p is None and result["complete"]:
         lines.append("**Exact sign test: not computable — no discordant pairs.** An all-tied")
         lines.append("comparison is no evidence in either direction, not a significant result.")
+    elif p is None:
+        lines.append("**Exact sign test: WITHHELD — the pairing is incomplete.** See above.")
     else:
+        # Never render a small p as 0.0000: that reads as "no chance" rather than
+        # "below what four decimals can show", which is the same misreading the
+        # all-ties rule exists to avoid.
+        row_count = result["sign_test"].get("discordant", 0)
+        shown = "p < 0.0001" if p < 0.0001 else f"p = {p:.4f}"
         lines.append(
-            f"**Exact sign test (two-sided): p = {p:.4f}** over {result['sign_test']['discordant']} "
+            f"**Exact sign test (two-sided): {shown}** over {row_count} "
             f"discordant pairs."
         )
     if result["underpowered"]:
@@ -205,9 +312,10 @@ def self_test():
     """Pin the exact test against hand-computed values.
 
     These are the numbers that make the statistic trustworthy, so they are checked
-    rather than asserted: (5,0) -> 2*(1+5)/2**6, (6,0) -> 2/2**6, (5,5) -> 1, and
-    the all-tied case must be None rather than 0, because "no discordant pairs" is
-    no evidence and a p of 0 would read as overwhelming evidence.
+    rather than asserted: (5,0) -> 2*1/2**5 = 0.0625, (6,0) -> 2*1/2**6 = 0.03125,
+    (4,1) -> 2*(1+5)/2**5 = 0.375, (6,1) -> 2*(1+7)/2**7 = 0.125, (5,5) -> capped to
+    1.0, and the all-tied case must be None rather than 0, because "no discordant
+    pairs" is no evidence and a p of 0 would read as overwhelming evidence.
     """
     cases = [(5, 0, 0.0625), (6, 0, 0.03125), (5, 5, 1.0), (4, 1, 0.375), (6, 1, 0.125)]
     failures = []
@@ -218,6 +326,48 @@ def self_test():
     p, _ = exact_sign_test(0, 0)
     if p is not None:
         failures.append(f"all-tied: got {p}, expected None (no evidence either way)")
+
+    # The guards a verifier round showed were UNCAUGHT by the previous self-test, and
+    # whose absence produced a "significant" result from an empty baseline arm.
+    for token, want in [
+        ("verified", True),
+        ("refuted", False),
+        ("uncertain", False),
+        ("harness-error", False),
+        ("seed-mismatch", False),
+        ("unverified", False),
+        ("not-verified", False),
+        ("verified-partial", False),
+        ("pre-verified", False),
+    ]:
+        got = passed(token)
+        if got != want:
+            failures.append(f"passed({token!r}) = {got}, expected {want}")
+
+    # has_verdict separates "decided" from "no verdict", which is what stops an index
+    # one arm never ran from counting as a win for the other.
+    for token, want in [
+        ("verified", True),
+        ("refuted", True),
+        ("uncertain", True),
+        ("harness-error", False),
+        ("reserved", False),
+        ("planner-failed", False),
+        (None, False),
+    ]:
+        got = has_verdict(token)
+        if got != want:
+            failures.append(f"has_verdict({token!r}) = {got}, expected {want}")
+
+    # The threshold: five discordant pairs cannot reach alpha=0.05, six can. If this
+    # constant drifts, the underpowered statement silently stops being true.
+    if exact_sign_test(5, 0)[0] < 0.05:
+        failures.append(
+            "threshold: (5,0) = 0.0625 must NOT reach significance, so 5 discordant "
+            "pairs are genuinely underpowered"
+        )
+    if exact_sign_test(6, 0)[0] >= 0.05:
+        failures.append("threshold: (6,0) = 0.03125 must reach significance")
     if failures:
         print("SELF-TEST FAILED:")
         for f in failures:
@@ -246,7 +396,9 @@ def main():
         print(json.dumps(result, indent=2))
     else:
         print(markdown(result))
-    return 0
+    # Non-zero on an incomplete pairing: a caller piping this into a report must not
+    # have to parse prose to learn the statistic is withheld.
+    return 0 if result["complete"] else 3
 
 
 if __name__ == "__main__":
