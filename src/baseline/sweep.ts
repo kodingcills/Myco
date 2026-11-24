@@ -14,7 +14,13 @@ import { join } from "node:path";
 import { groundTruth } from "../tasks/intent.ts";
 import { type PreparedC1, RESET_SNAPSHOT, runC1Trial, STEP_BUDGET } from "./c1-trial.ts";
 import { type BaselineRow, isBaselineRow } from "./index.ts";
-import { createPlanner, MAX_CALL_MICROS, type Planner, PlannerFailure } from "./planner.ts";
+import {
+  createPlanner,
+  MAX_CALL_MICROS,
+  MAX_OUTPUT,
+  type Planner,
+  PlannerFailure,
+} from "./planner.ts";
 import manifest from "./sweep-v3.json" with { type: "json" };
 
 const COMBINED_LIMIT = 9_000_000;
@@ -748,12 +754,22 @@ export async function runC1Sweep(options: {
           planner,
         );
       } catch (error) {
-        // A throw from the TRIAL itself: the model may already have been called and
-        // the error carries no usage, so the cost is UNKNOWN and the reservation
-        // stays booked. Fail closed - under-reporting spend is the dangerous way to
-        // be wrong when the cap is hard.
+        // A throw from the TRIAL itself. TIF-200 split the two cases apart.
+        //
+        // A PlannerFailure that CARRIES a cost (a truncated reply is billed, and its
+        // usage is known) books the ACTUAL charge. Any other throw may have called the
+        // model without reporting usage, so the cost is UNKNOWN and the full
+        // reservation stays booked - fail closed, because under-reporting spend against
+        // a hard cap is the dangerous direction.
         const failed = error instanceof PlannerFailure;
-        if (failed) stopReason = "planner-failed";
+        const billed = failed ? error.costMicros : undefined;
+        // ONE FAILURE MUST NOT END A PAID ARM. This used to be
+        // `if (failed) stopReason = "planner-failed"` - an ASSIGNMENT, so the first
+        // measurable provider fault stopped a 30-trial run. r6 lost trials 21-29 to a
+        // single truncation. Every other cause in this file needs TWO consecutive
+        // occurrences before it aborts, and a truncation is a harness/config fault of
+        // exactly that kind, so it now counts the same way.
+        //
         // The abort keys on the FAULT CLASS, never on the message text. The message
         // is not lost - it is persisted as `detail` below, so a run that stops can be
         // diagnosed from its own artifacts rather than from logs.
@@ -771,7 +787,7 @@ export async function runC1Sweep(options: {
         noteCause(failed ? "planner-failed" : "trial-interrupted");
         ledger.c1[index] = {
           status: "omitted",
-          micros: reservation,
+          micros: billed ?? reservation,
           reason: failed ? "planner-failed" : "trial-interrupted",
           detail: error instanceof Error ? error.message : String(error),
         };
@@ -871,6 +887,12 @@ export async function runC1Sweep(options: {
       // ledger because the report is what a reader scores from, and an arm that
       // ran with a diagnosed cause accepted must not look like one that never
       // needed the exception.
+      // The output ceiling these rows ran under. r6 is the reason it is here: rows 0-19
+      // ran at 1024 and row 20 truncated at that ceiling, so the ARM reports a
+      // configuration change mid-flight. Without this the artifact says nothing about
+      // the number that ended a trial, and a later reader would have to find it in the
+      // code at the time of the run.
+      maxOutputTokens: MAX_OUTPUT,
       acceptedScoredCauses: [...(ledger.identity?.acceptances?.at(-1)?.causes ?? [])].sort(),
       ...(ledger.identity?.acceptances?.at(-1)
         ? { acceptedFromTrial: ledger.identity.acceptances.at(-1)?.fromTrial }

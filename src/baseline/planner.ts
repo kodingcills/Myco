@@ -100,7 +100,27 @@ const MAX_INPUT = 5_000;
  * so raising it raises the fail-closed reservation (376,800 -> 607,200 micros per
  * trial, 1.61x) rather than hiding the increase.
  */
-const MAX_OUTPUT = 1024;
+/**
+ * Output ceiling per model call. RAISED FROM MEASUREMENT (TIF-200).
+ *
+ * r6's 19 completed trials contain **570 model calls**. Their completion sizes:
+ *
+ *     min 77 | median 254 | P90 401 | P99 535 | MAX 615
+ *
+ * **Nothing in any completed row reached 768**, let alone 1024 - yet trial 20's call
+ * truncated AT 1024. So the ceiling was not tight for a normal reply; that one call ran
+ * to more than 615 tokens where every other call stayed under it.
+ *
+ * 1024 was therefore ABOVE every observed normal response and the arm still died on it,
+ * which is the argument for headroom rather than for a bigger typical value: the failure
+ * is a tail, not a distribution shift. 2048 gives **3.3x the largest completion ever
+ * measured here** while still bounding a runaway reply.
+ *
+ * This is also the reservation's input (`MAX_CALL_MICROS`), so raising it raises the
+ * worst-case per-trial hold. That is the honest cost of a larger ceiling and is why this
+ * is not simply set to the model's maximum.
+ */
+export const MAX_OUTPUT = 2048;
 // Integer microdollars at the frozen short-context input and output rates.
 export const MAX_CALL_MICROS = MAX_INPUT * 2 + MAX_OUTPUT * 10;
 const PROMPT = [
@@ -132,7 +152,23 @@ function scrubBadRequestMessage(message: string, key: string): string {
   );
 }
 
-export class PlannerFailure extends Error {}
+/**
+ * A fault on OUR side of the boundary - an unusable provider response, a refusal, or a
+ * reply we declined to treat as an answer.
+ *
+ * `costMicros` carries the charge we can PROVE for the call that failed. A truncated
+ * reply is billed, and its usage is known, so the sweep can book the real figure instead
+ * of the full reservation. Leaving it undefined means unknown, and the sweep then keeps
+ * the reservation - the fail-closed direction, unchanged.
+ */
+export class PlannerFailure extends Error {
+  constructor(
+    message: string,
+    readonly costMicros?: number,
+  ) {
+    super(message);
+  }
+}
 
 export interface Planner {
   paid: boolean;
@@ -295,6 +331,13 @@ export function createPlanner(
             if (data.stop_reason === "max_tokens")
               throw new PlannerFailure(
                 `Anthropic response truncated at max_tokens=${MAX_OUTPUT}; the reply is partial and must not be scored as an agent decision`,
+                // The truncated call's usage was recorded above, so its cost is KNOWN
+                // and is carried out rather than discarded with the throw. Booking it
+                // is what makes a harness fault cost what it actually cost instead of
+                // the full reservation.
+                Math.round(
+                  calls.reduce((total, call) => total + (call.usage.cost ?? 0), 0) * 1_000_000,
+                ),
               );
           } else {
             if (!allowFallback) throw new PlannerFailure("Anthropic messages API call failed");
