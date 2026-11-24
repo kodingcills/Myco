@@ -308,26 +308,20 @@ export async function runC1Sweep(options: {
         // be wrong when the cap is hard.
         const failed = error instanceof PlannerFailure;
         if (failed) stopReason = "planner-failed";
-        // Carry the message into the cause for BOTH branches: a bare
-        // `trial-interrupted` made every distinct prepare failure look like the
-        // same cause, so abort-early fired on two *different* faults and the
-        // ledger could not say which. The cause string is the diagnosis.
-        // `trial-interrupted` remains the recorded reason for an unexpected
-        // throw (runC1Trial swallows PlannerFailure inside its own try, so in
-        // practice only prepare() throws here), but the cause carries detail.
-        // The abort keys on the FAULT CLASS, never on the message text.
+        // The abort keys on the FAULT CLASS, never on the message text. The message
+        // is not lost - it is persisted as `detail` below, so a run that stops can be
+        // diagnosed from its own artifacts rather than from logs.
         //
-        // arm-003d r5 omitted trials 2 and 3 and kept going: the key was
-        // `trial-interrupted:${message}`, two omissions of the same class carried
+        // An earlier version carried the message INTO the key
+        // (`trial-interrupted:${message}`). That let two omissions of the same class
+        // look like two different causes, so abort-early never fired:
+        //
+        // arm-003d r5 omitted trials 2 and 3 and kept going. The two carried
         // different messages (an SSH banner timeout, then a throw later in the
         // trial), so `consecutive` never reached 2 and each one burned $0.61 of cap
         // for no data. Keying on the message also meant the rule could only see a
         // fault that reproduced its TEXT, which is the wrong resolution for "the
-        // sweep is measuring the harness".
-        //
-        // The message is not lost: it moves to `detail`, the same way the
-        // planner-failed branch already persisted it, so a run that stops can be
-        // diagnosed from its own artifacts. TIF-186.
+        // sweep is measuring the harness". TIF-186.
         noteCause(failed ? "planner-failed" : "trial-interrupted");
         ledger.c1[index] = {
           status: "omitted",

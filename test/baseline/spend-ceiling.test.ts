@@ -101,9 +101,15 @@ describe("spend ceiling env parsing", () => {
       // The point: the guard ADMITTED trials instead of omitting them. A
       // spend-limit omission is booked before prepare is ever called, so seeing
       // any trial-interrupted row proves the arm check passed.
-      const omitted = report.rows.filter((r) => r.omitted === "spend-limit").length;
+      // `report.rows` is a discriminated union, so `omitted` is not reachable
+      // without narrowing: the scored arm of the union has no such property.
+      const omitted = report.rows.filter(
+        (r) => "omitted" in r && r.omitted === "spend-limit",
+      ).length;
       expect(omitted).toBe(0);
-      expect(report.rows.some((r) => r.omitted === "trial-interrupted")).toBe(true);
+      expect(report.rows.some((r) => "omitted" in r && r.omitted === "trial-interrupted")).toBe(
+        true,
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
