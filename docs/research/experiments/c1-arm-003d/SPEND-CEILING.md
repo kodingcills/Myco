@@ -44,12 +44,18 @@ And the ceiling is enforced **per trial**, not once at the start
 const reservation = planner.paid ? MAX_TRIAL_MICROS : 0;
 const c1 = charged(ledger.c1);
 if (stopReason ||
-    priorSpend + c1 + reservation > armLimit ||                              // arm
+    c1 + reservation > armLimit ||                                          // arm
     priorSpend + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT) {   // combined
 ```
 
-`priorSpend` is in **both**, so neither ceiling can be satisfied by a run that only knows
-about this directory's ledger.
+`priorSpend` is in the **combined** ceiling only, and that is the one that matters.
+
+**TIF-187 corrected this block.** It previously showed `priorSpend` in **both** checks, and
+`armLimit` is already the *remaining* budget (`ceiling − prior`). Counting prior spend in
+both places subtracted it twice: with prior spend `4,480,732` and a `607,200` reservation
+the arm check computed `5,087,932 > 4,519,268` and omitted **every** trial. The `arm` check
+is scoped to this run; the `combined` check is the project ceiling and is where prior spend
+belongs.
 
 ## Also fail-closed, three ways
 
@@ -110,8 +116,8 @@ again predict one number and the arm report another. Pass the remainder.
 
 ## If the guard refuses at the first trial
 
-Check which condition tripped. `prior + c1 + reservation > armLimit` is the arm ceiling;
-`… > COMBINED_LIMIT` is the project ceiling. Only the latter is absolute — and if it
+Check which condition tripped. `c1 + reservation > armLimit` is the arm ceiling — this
+**run's** spend against the remaining budget; `… > COMBINED_LIMIT` is the project ceiling. Only the latter is absolute — and if it
 trips, the project budget is genuinely exhausted, so **the answer is not to raise it.**
 
 
@@ -176,6 +182,18 @@ ceiling. Passing the ceiling is accepted and the run still stops at $9.00 — bu
 report will show an arm limit of $9.00 that was never spendable, which is the
 artifact-says-one-thing shape this whole thread is about.
 
+**This instruction was unlaunchable until TIF-187, and the run it was derived from did not
+follow it.** The guard used to add `priorSpend` to `armLimit` as well as to
+`COMBINED_LIMIT`, so the documented value had prior spend subtracted twice and could not
+start a trial at all: r6's first launch used `ceiling − prior` exactly as prescribed and
+produced `completed: 0` with all 30 rows `omitted: spend-limit`.
+
+For the record, the live r5 environment two sections above is
+`MYCO_ARM_LIMIT_MICROS=9000000` — **the ceiling**, not the remainder. r5 produced its rows
+*because* it departed from this rule, which is why the contradiction went unnoticed: the
+run that worked was the one that ignored the instruction, and the instruction was never
+exercised against a real launch until it silently omitted everything.
+
 ## The relaunch values, verified end to end (2026-11-24)
 
 `#334` merged at `6c6b77a7` (20:21 ET), so the mechanism is on `main`. The owner's
@@ -185,7 +203,8 @@ proposed relaunch parameters, run through the real parser and guard:
 MYCO_PRIOR_SPEND_MICROS=3570688   (3190688 committed + 376800 aborted reservation)
 MYCO_ARM_LIMIT_MICROS=5429312     (9000000 − 3570688)
   -> parsed { priorSpendMicros: 3570688, remainingMicros: 5429312 }
-  -> prior + arm = 9000000 vs COMBINED 9000000 -> WITHIN
+  -> arm check     : c1 + reservation > 5429312           -> a trial STARTS
+  -> combined check: 3570688 + c1 + reservation > 9000000 -> WITHIN
   -> accepted at startup
 ```
 

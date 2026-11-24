@@ -822,6 +822,15 @@ def execute_scenario(
         # REQ-01, not REQ-05: the leak is a failure to complete the run, not an
         # evidence-schema fault. Naming a requirement the reason does not match
         # is how a ledger loses the ability to say which layer failed.
+        #
+        # A reviewer could argue for REQ-02, which is literally "Destroy: tear
+        # down a session and free its resources; no state leaks between
+        # sessions." It is NOT used anywhere in this runner, so choosing it here
+        # would be the first correct use of that id rather than a drift. The
+        # reason this uses REQ-01 anyway is CONSISTENCY: the readiness-timeout
+        # path below already attributes a leaked session to REQ-01, and two
+        # conventions for one condition is worse than one imperfect label. The
+        # precise signal is the message text, not the id.
         return gap("REQ-01",
                    f"the run completed but the session was NOT freed: {teardown}")
 
