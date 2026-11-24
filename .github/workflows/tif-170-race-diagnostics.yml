@@ -48,18 +48,26 @@ jobs:
         run: npm install -g pnpm@10
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      # #333 quarantines this test with `it.skip` on main. A skipped test runs no
-      # rounds and reports success, so a diagnostics run that quietly inherited the
-      # skip would look green and prove nothing. Fail the job instead.
-      - name: The race test is enabled, not skipped
+      # The race test is gated on MYCO_TIF170_DIAG, the env this job sets. A run that
+      # silently skipped it would execute zero rounds and report green, which is the
+      # failure mode this step exists to catch: prove the gate resolves to "runs" here.
+      - name: The race test runs in this job
         run: |
           set -euo pipefail
-          if grep -q 'it\.skip("admits exactly one --run' test/discovery/s0-live-launcher.test.ts; then
-            echo "::error::the race test is it.skip in this revision; this branch unskips it"
+          mkdir -p .tif-170
+          npx vitest run --pool=forks --no-file-parallelism \
+            test/discovery/s0-live-launcher.test.ts --reporter=json --outputFile=.tif-170/guard.json \
+            >/dev/null 2>&1 || true
+          if grep -q '"status": "skipped"' .tif-170/guard.json &&
+             grep -q 'admits exactly one --run under a real race' .tif-170/guard.json; then
+            echo "::error::the race test was skipped in this job; the diagnostics ran zero rounds"
             exit 1
           fi
-          npx vitest list test/discovery/s0-live-launcher.test.ts | grep -q 'admits exactly one --run'
-          echo "the race test is registered"
+          if ! grep -q 'admits exactly one --run under a real race' .tif-170/guard.json; then
+            echo "::error::the race test is not registered at all"
+            exit 1
+          fi
+          echo "the race test ran under MYCO_TIF170_DIAG"
       # One invocation is 30 rounds; `runs` repeats the whole file. A repeat is a fresh
       # vitest process, so a failure in one run never hides the others, and the step
       # never exits non-zero: the point is to collect all 20, then read the artifacts.

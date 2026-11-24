@@ -268,11 +268,13 @@ describe("s0-live.sh launcher", () => {
     }
   });
 
-  // TIF-170: skipped on main because it fails on ubuntu-latest with `expected 2 to be
-  // 1`, i.e. two racers exit 0 in one round. This branch is the diagnostic run, so it is
-  // enabled here and POSTURE-CHECKED below; see the workflow, and do not carry this
-  // enabled form back to main.
-  it(
+  // TIF-170: skipped by default, exactly as main leaves it (#333), because it fails on
+  // ubuntu-latest with `expected 2 to be 1` — two racers exit 0 in one round, ~1 run in
+  // 5. Running it in every CI job would put that back on main's critical path, which is
+  // what the quarantine exists to prevent. It runs ONLY when the diagnostics dir is set,
+  // which is what the workflow does, so the normal `check` job stays green and the
+  // diagnostic job captures the failure. Do not carry an unconditional form back to main.
+  it.runIf(DIAG !== "")(
     "admits exactly one --run under a real race, and the winner owns the pid",
     () => {
       const { dir, script, runDir, env } = worktree();
