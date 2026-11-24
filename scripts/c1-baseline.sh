@@ -104,6 +104,17 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   exit 1
 fi
 
+# REFUSE rather than default. The sweep itself fails closed when this is unset
+# (`parseSpendCeiling` requires both vars), so a launch that got this far has it - but
+# the variable lives in the AMBIENT shell, not in the secrets file, so a resume shell
+# that forgets to export it is a real operator path. Without this check the watcher
+# would quietly fall back to a run-local figure and under-report the cap, which is the
+# defect this change exists to remove.
+if [ -z "${MYCO_PRIOR_SPEND_MICROS+x}" ]; then
+  echo "c1-baseline: MYCO_PRIOR_SPEND_MICROS is unset - the watchdog would report a run-local figure. Export it (0 only for a genuinely fresh project)." >&2
+  exit 6
+fi
+
 source "$WS/scripts/vm-lock.sh"
 echo "Acquiring VM lock for c1-baseline.sh..."
 vm_lock_acquire c1-baseline.sh "$PROGRESS" || exit "$?"
@@ -137,7 +148,7 @@ WATCH_SILENT="${MYCO_WATCH_SILENT_MIN:-20}"
 # Prior spend is passed so the watcher measures what the GUARD measures. It comes
 # from the same MYCO_PRIOR_SPEND_MICROS the sweep reads, converted here rather than
 # re-derived, so the two can never disagree about what the project had already spent.
-WATCH_PRIOR=$(awk -v m="${MYCO_PRIOR_SPEND_MICROS:-0}" 'BEGIN { printf "%.6f", m / 1000000 }')
+WATCH_PRIOR=$(awk -v m="$MYCO_PRIOR_SPEND_MICROS" 'BEGIN { printf "%.6f", m / 1000000 }')
 bash "$WS/scripts/watch-c1-arm.sh" "$OUT" "$WATCH_LIMIT" "$WATCH_SILENT" "$WATCH_PRIOR" >>"$WATCH" 2>&1 9>&- &
 WATCH_PID=$!
 echo "$WATCH_PID" > "$OUT/watch.pid"

@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+const scored = (micros: number) => ({ status: "scored", micros });
 const dirs: string[] = [];
 function ledgerDir(c1: Record<string, { status: string; micros: number }>, c2 = {}) {
   const dir = mkdtempSync(join(tmpdir(), "myco-watch-"));
@@ -74,7 +75,49 @@ function watchLine(
   return { line: (run.stdout ?? "").trim(), code: run.status ?? -1 };
 }
 
-const scored = (micros: number) => ({ status: "scored", micros });
+/**
+ * The wiring, not just the arithmetic (round-1 defects F1 and F3).
+ *
+ * The unit tests above hand the watcher's Python block its argv directly, so they pin
+ * the maths but say nothing about the shell that feeds it. A round-1 verifier found
+ * exactly that gap: the suite passed whether or not the launcher passed the prior at
+ * all, because the watcher silently defaulted it to 0 - reverting to the run-local
+ * understatement this change exists to remove, on the one operator path (a resume shell
+ * that forgot to export the variable) most likely to hit it.
+ */
+describe("a missing prior spend is refused, not defaulted", () => {
+  it("the watcher refuses to run without its 4th argument", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const dir = ledgerDir({ "0": scored(100_000) });
+    const run = spawnSync("bash", ["scripts/watch-c1-arm.sh", dir, "900.00", "25"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    // Non-zero, and the message names the argument rather than the script silently
+    // reporting a number computed from half the ceiling.
+    expect(run.status).not.toBe(0);
+    expect(`${run.stdout}${run.stderr}`).toMatch(/prior spend is a required argument/);
+  });
+
+  it("the launcher refuses when MYCO_PRIOR_SPEND_MICROS is unset", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const dir = ledgerDir({ "0": scored(100_000) });
+    const env = { ...process.env };
+    delete env.MYCO_PRIOR_SPEND_MICROS;
+    const run = spawnSync("bash", ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+      timeout: 20_000,
+    });
+    // Exit 6 is the documented code for this refusal, and it must fire BEFORE the VM
+    // lock is attempted: a launch that cannot report spend honestly should not take
+    // the VM to discover that.
+    expect(run.status).toBe(6);
+    expect(`${run.stdout}${run.stderr}`).toMatch(/MYCO_PRIOR_SPEND_MICROS is unset/);
+  });
+});
 
 describe("the watchdog measures the same spend the cap does", () => {
   it("adds prior spend to the ledger, rather than reporting the ledger alone", () => {
