@@ -85,11 +85,6 @@ function charged(entries: Ledger["c1"]): number {
 }
 
 /**
- * Hosts one C1 evaluation. Prepare owns reset and fixture placement, and must
- * be supplied by the Coordinator's live wrapper after approval.
- */
-
-/**
  * A summary of what a trial's agent DID, for the repeated-cause rule.
  *
  * The rule exists to catch "the sweep is measuring the harness, not the agent",
@@ -107,6 +102,20 @@ function charged(entries: Ledger["c1"]): number {
  * exact sequence would be too brittle - two runs of a real task never match
  * byte-for-byte - and using only the step count is too coarse, which is the bug
  * this replaces.
+ *
+ * WHAT THIS DOES AND DOES NOT FIX, stated because the distinction is easy to
+ * overstate: it separates trials whose COMPOSITION differs - r3's press_keyx28 +
+ * type_textx2 versus clickx5 + press_keyx20 + type_textx5, which is the case that
+ * stopped the arm. It does NOT separate trials with the same composition and a
+ * different ORDER, or the same composition and different coordinates. Two
+ * `click`-heavy trials that converge on the same tool mix will still be read as a
+ * repeated cause even if they acted on different cells.
+ *
+ * That residual is a deliberate limit, not an oversight: at the resolution this
+ * key measures, two trials doing the same KINDS of things at the same RATES are
+ * the same shape. If an arm later aborts on a pair that differs only in
+ * coordinates, the honest fix is to key on the action sequence, and this comment
+ * is the record of why that tradeoff was taken the other way first.
  */
 function actionSignature(row: BaselineRow): string {
   const counts: Record<string, number> = {};
@@ -120,6 +129,11 @@ function actionSignature(row: BaselineRow): string {
     .map(([tool, n]) => `${tool}x${n}`)
     .join(",");
 }
+
+/**
+ * Hosts one C1 evaluation. Prepare owns reset and fixture placement, and must
+ * be supplied by the Coordinator's live wrapper after approval.
+ */
 
 export async function runC1Sweep(options: {
   coordinatorGo: boolean;

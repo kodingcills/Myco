@@ -576,24 +576,33 @@ describe("C1 sweep abort-early", () => {
     //
     // Two shapes, both 30 actions, both exhausting the budget, different tools:
     // the r3 pattern (28 press_keys + 2 type_texts vs 20/5/5) in miniature.
-    // COMPOSITION varies per trial, not order. A histogram counts tools, so
-    // reordering the same mix yields the same signature and the rule would abort -
-    // correctly, because two trials doing the same kinds of things at the same
-    // rates are the same shape to a rate-based signal. r3's real pair differed in
-    // COMPOSITION (28 press_keys + 2 type_texts vs 20/5/5), which is what this
-    // reproduces: each trial spends a different share of its 30 steps on each tool.
-    const shape = (trial: number) =>
-      Array.from({ length: 30 }, (_, i) => {
-        // Kept well inside 30 so no late trial clips into an identical shape - the
-        // test is about VARIED effort, and a fixture that saturates stops varying.
-        const clicks = (trial % 5) * 3;
-        const types = (trial % 4) * 2;
-        return i < clicks
-          ? { tool: "click", arguments: { x: 222, y: 262 } }
+    // Reproduces r3's ACTUAL pair, then keeps varying so no later trial collides.
+    //
+    // r3 trial 0 was press_keyx28 + type_textx2 and trial 1 was
+    // clickx5 + press_keyx20 + type_textx5. Using a modulo schedule here was
+    // wrong: `(trial % 5) + (trial % 4)` yields only 20 distinct shapes across 30
+    // trials, so trials 0 and 20 were identical, and trial 0 collapsed to
+    // press_keyx30 rather than r3's mixed shape.
+    const shape = (trial: number) => {
+      // trial 0 is r3 verbatim: press_keyx28 + type_textx2.
+      //
+      // Every later trial gets a DISTINCT (clicks, types) pair, using the fact that
+      // (n % 5, n // 5) is injective over n in 0..29. Three earlier attempts failed
+      // here and each failure is instructive: clamping saturated five trials into
+      // one shape, two out-of-phase modulo cycles repeated at their LCM, and a
+      // single-stride lattice collided 8 times. Injectivity has to be CONSTRUCTED,
+      // not hoped for from coprime-looking constants.
+      const lo = trial - 1;
+      const types = trial === 0 ? 2 : 1 + Math.floor(lo / 5);
+      const clicks = trial === 0 ? 0 : 2 + (lo % 5) * 3;
+      return Array.from({ length: 30 }, (_, i) =>
+        i < clicks
+          ? { tool: "click", arguments: { x: 222 + i, y: 262 } }
           : i < clicks + types
-            ? { tool: "type_text", arguments: { x: 222, y: 261, text: "9733\n" } }
-            : { tool: "press_key", arguments: { x: 300, y: 261, key: "Ctrl+s" } };
-      });
+            ? { tool: "type_text", arguments: { x: 222, y: 261, text: `v${trial}-${i}\n` } }
+            : { tool: "press_key", arguments: { x: 300, y: 261, key: "Ctrl+s" } },
+      );
+    };
     let queued: { tool: string; arguments: unknown }[] = [];
     let trial = -1;
     const varied = {
@@ -632,7 +641,10 @@ describe("C1 sweep abort-early", () => {
     directories.push(directory);
     let prepares = 0;
     // Built fresh per trial from the same recipe, so every trial's action SHAPE is
-    // byte-identical - the harness-fault signature this rule must still catch.
+    // identical - the harness-fault signature this rule must still catch. The
+    // coordinates vary slightly per action, which is deliberate: the key counts
+    // TOOLS, so a fault that reproduces its tool mix still aborts even when the
+    // coordinates differ.
     const identical = () =>
       Array.from({ length: 30 }, (_, i) => ({
         tool: "press_key",
