@@ -262,8 +262,8 @@ counts from a run **on a defective configuration**, so they cannot be compared
 against a run without it. **arm-002 must not be re-run**: it is recorded as
 superseded, not re-measured.
 
-**The canonical C1 baseline is arm-003d, run with the fix (#340).** Those are the
-numbers comparable to Myco's arm. **Instruction parity still applies** — the shared
+**The canonical C1 baseline is arm-003d, run with the fix (#340).** Its run **r6** is the one
+row 7 compares with Myco's arm (`docs/research/experiments/c1-arm-003/r6/`). **Instruction parity still applies** — the shared
 task text above is a separate requirement, unaffected by this ruling.
 
 **Fix and evidence:** PR #340 (`fix(TIF-164): a truncated reply is a harness fault,
@@ -272,14 +272,16 @@ observed completion, throws `PlannerFailure` on `stop_reason: "max_tokens"` so t
 trial is **omitted** rather than scored, and wires the two-consecutive-failure abort
 to scored rows.
 
-**Arm-003** (planned, queued after M1-016) re-runs 30 trials with the shared text,
+**Arm-003** (completed as run r6 on 2026-11-24, 30/30 scored; see row 7) re-ran 30 trials with the shared text,
 the same Sonnet planner, the same snapshot, and a **$9.00 cap on total committed
 spend**, read from `report.json.c1ChargedMicros` (**$1.632162** at arm-002's close: spike $0.076800 + arm-002 $1.555362). Design:
 `docs/research/experiments/c1-arm-003-design.md`.
 
 ### The C1 baseline's characteristic failure mode: the save dialog
 
-**Ruled by the lead 2026-11-24, on r6's 9 scored rows.** The baseline agent's
+**Diagnosed 2026-11-24 in `c1-arm-003d/SAVE-DIALOG-LOOP.md` (#381), on r6's first 9 scored rows**
+(the lead's ruling in #382 concerned the abort key, not this verdict). Across all 30 rows, 27 of the
+29 step-budget failures show the pattern; rows 13 and 21 do not (row 7). The baseline agent's
 dominant failure is **not** failing to find or edit the cell — it is failing to
 **commit the save**, because saving an `.xlsx` opens LibreOffice's "Keep Current
 Format" dialog and the agent presses **`Escape`**, which dismisses the dialog *and
