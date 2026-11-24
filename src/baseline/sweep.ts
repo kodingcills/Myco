@@ -92,6 +92,21 @@ export async function runC1Sweep(options: {
   coordinatorGo: boolean;
   directory: string;
   armLimitMicros?: number;
+  /**
+   * Spend committed by EARLIER runs, in micros.
+   *
+   * The ledger in `directory` counts only its own trials, so a run started in a
+   * fresh directory sees a zero total and its caps silently measure the run
+   * rather than the project. arm-003d hit exactly that: $3.19 was already
+   * committed against a $9 ceiling, the new directory started at zero, and the
+   * $9 assertion would have been satisfied by a ledger that knew about $4.50 of
+   * it. The ceiling has to include what was already spent or it is not a ceiling.
+   *
+   * Deliberately a SEPARATE number rather than a ledger field: writing prior
+   * spend into `c1`/`c2` would fabricate entries for trials this run did not
+   * execute, and the row validator would have to learn to accept them.
+   */
+  priorSpendMicros?: number;
   planner?: Planner;
   prepare(
     target: (typeof manifest.rows)[number],
@@ -102,6 +117,20 @@ export async function runC1Sweep(options: {
   const armLimit = options.armLimitMicros ?? DEFAULT_ARM_LIMIT;
   if (!Number.isSafeInteger(armLimit) || armLimit < 0 || armLimit > COMBINED_LIMIT)
     throw new Error("invalid arm spend cap");
+  // Fail closed on a bad seed rather than treating it as zero: a caller that
+  // cannot state prior spend must not silently get an unbounded ceiling, which
+  // is the failure this parameter exists to prevent.
+  const priorSpend = options.priorSpendMicros ?? 0;
+  if (!Number.isSafeInteger(priorSpend) || priorSpend < 0 || priorSpend > COMBINED_LIMIT)
+    throw new Error("invalid prior spend");
+  if (priorSpend + armLimit > COMBINED_LIMIT && armLimit === DEFAULT_ARM_LIMIT) {
+    // The default arm limit is a per-arm default, not a budget; if prior spend
+    // plus it would breach the combined ceiling, the caller must say what is
+    // left rather than inherit a limit that cannot be spent.
+    throw new Error(
+      `prior spend ${priorSpend} + default arm limit ${armLimit} exceeds ${COMBINED_LIMIT}; pass armLimitMicros as the REMAINING budget`,
+    );
+  }
   const { directory } = options;
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const lock = join(directory, ".run-lock");
@@ -156,8 +185,11 @@ export async function runC1Sweep(options: {
       const c1 = charged(ledger.c1);
       if (
         stopReason ||
-        c1 + reservation > armLimit ||
-        c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT
+        // `priorSpend` is added to BOTH ceilings. Without it the combined limit
+        // is enforced against this run's ledger alone and a fresh directory gets
+        // a $9 allowance it has already spent part of.
+        priorSpend + c1 + reservation > armLimit ||
+        priorSpend + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT
       ) {
         stopReason ??= "spend-limit";
         ledger.c1[index] = { status: "omitted", micros: 0, reason: stopReason };
@@ -211,6 +243,33 @@ export async function runC1Sweep(options: {
       if (row.verdictReason === "driver-unreachable") {
         stopReason ??= "driver-unreachable";
         noteCause("driver-unreachable");
+      } else {
+        // A SCORED failure also feeds the abort-early rule.
+        //
+        // The rule above is documented as "two consecutive identical exclusion
+        // causes mean the sweep is measuring the harness, not the agent", but it
+        // was only wired to omissions and driver-unreachable. arm-003d r2 trials
+        // 3 and 4 both scored `refuted/persisted-mismatch` with zero steps and a
+        // single truncated model call, so nothing incremented the counter and the
+        // sweep kept buying trials that were measuring the ceiling, not the
+        // agent. A repeated scored failure is the same signal as a repeated
+        // omission; it is only quieter.
+        //
+        // Keyed on verdict AND reason AND step count. The step component is
+        // deliberately conservative, and the tradeoff is worth stating: two
+        // `refuted/persisted-mismatch` rows that differ in steps are genuinely
+        // different failures - one with 0 actions is a harness shape, one with 12
+        // is a real agent trajectory - so collapsing them would abort a run that
+        // is merely having a hard time.
+        //
+        // The cost is that harness noise in the step count can delay the abort by
+        // one trial: `s0, s1, s2, s2` stops on the third row rather than the
+        // second. That is the right direction to err. A delayed abort costs one
+        // trial; a false abort discards a healthy arm and misreports it as a
+        // harness fault. The identical-pair case - arm-003d r2's actual shape,
+        // `s0, s0` - still stops immediately, which is the case this rule exists
+        // for.
+        noteCause(`scored:${row.verdict}:${row.verdictReason}:steps=${row.steps}`);
       }
       ledger.c1[index] = { status: "scored", micros, row };
       persist();

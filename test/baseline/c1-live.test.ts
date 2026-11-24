@@ -228,6 +228,48 @@ describe("C1 host harness", () => {
     const report = await runC1Sweep(options);
     expect(report).toMatchObject({ combinedChargedMicros: 8_700_000, completed: 0 });
     expect(report.rows[0]).toMatchObject({ omitted: "spend-limit" });
+
+    // TIF-164/TIF-90: prior spend counts against the ceiling.
+    //
+    // The ledger in a run directory holds only that run's trials, so a fresh
+    // directory previously got a full allowance it had already spent part of.
+    // arm-003d hit this: $3.19 was committed against a $9 ceiling and the new
+    // ledger started at zero. Fail-closed means a prior-spend seed that is
+    // present but ignored must BLOCK the run, not merely be absent from the math.
+    // A fresh spy per case: the shared one is asserted against earlier in this
+    // test, and reusing it would make an unrelated count failure look like a
+    // seed failure.
+    const fresh = {
+      directory: directory(),
+      coordinatorGo: true,
+      prepare: vi.fn(async () => prepared()),
+      planner,
+    };
+    // Plenty of room: prior spend is small, so the run proceeds. This is the
+    // control that proves the assertion below is about the seed and not about a
+    // universally-impossible cap.
+    const roomy = await runC1Sweep({ ...fresh, priorSpendMicros: 100_000 });
+    expect(roomy.completed).toBeGreaterThan(0);
+    // Remaining budget of one trial's reservation: prior spend must consume it,
+    // or the run would buy a second trial with money already gone.
+    const tight = await runC1Sweep({
+      directory: directory(),
+      coordinatorGo: true,
+      prepare: vi.fn(async () => prepared()),
+      planner,
+      priorSpendMicros: 9_000_000 - 376_800,
+      // The seed consumes almost the whole ceiling, so the caller must state
+      // what is LEFT rather than inherit the per-arm default - which is the
+      // fail-closed behaviour this parameter adds.
+      armLimitMicros: 376_800,
+    });
+    expect(tight.rows[0]).toMatchObject({ omitted: "spend-limit" });
+    // And an invalid seed is refused outright rather than treated as zero.
+    for (const bad of [-1, 1.5, Number.NaN, 9_000_001]) {
+      await expect(runC1Sweep({ ...fresh, priorSpendMicros: bad })).rejects.toThrow(
+        "invalid prior spend",
+      );
+    }
     expect(prepare).not.toHaveBeenCalled();
   });
 
@@ -375,10 +417,14 @@ describe("C1 host harness", () => {
     const result = await planner.act("test", { mimeType: "image/png", data: "AA==" });
     const count = request.mock.calls[0]?.[1];
     const messages = request.mock.calls[1]?.[1];
-    expect(JSON.parse(String(messages?.body))).toEqual({
-      ...JSON.parse(String(count?.body)),
-      max_tokens: 256,
-    });
+    // The point is that the paying call is the Count-Tokens body PLUS max_tokens,
+    // not that the ceiling is one particular number - the ceiling is asserted in
+    // planner-truncation.test.ts, where its value is the subject. Pinning 256 here
+    // made a deliberate raise of that ceiling look like a vision regression.
+    const paying = JSON.parse(String(messages?.body));
+    const countBody = JSON.parse(String(count?.body));
+    expect(typeof paying.max_tokens).toBe("number");
+    expect({ ...paying, max_tokens: 0 }).toEqual({ ...countBody, max_tokens: 0 });
     expect(JSON.parse(String(messages?.body)).model).toBe("claude-sonnet-5-5");
     expect(new Headers(messages?.headers).has("anthropic-beta")).toBe(false);
     expect(result.calls[0]?.usage).toEqual({ prompt: 100, completion: 12, cost: 0.00032 });
@@ -479,6 +525,37 @@ describe("C1 sweep abort-early", () => {
       .filter(Boolean);
     expect(reasons).toContain("repeated-cause");
     expect(report.completed).toBe(0);
+  });
+
+  // The SCORED case, which the omission test above does not cover (TIF-164).
+  //
+  // arm-003d r2 trials 3 and 4 both SCORED `refuted/persisted-mismatch` with zero
+  // steps and one truncated model call. The abort rule was wired only to
+  // omissions and driver-unreachable, so a repeated scored failure incremented
+  // nothing and the sweep kept buying trials that were measuring the output
+  // ceiling rather than the agent. Reverting the scored branch makes this fail:
+  // every row is prepared instead of stopping at two.
+  it("stops after two consecutive identical SCORED failures", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-scored-"));
+    directories.push(directory);
+    let prepares = 0;
+    const report = await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      // A judge that always finds the document unsaved: the r2 shape. The trial
+      // completes and scores, it does not throw.
+      planner: planner(),
+      prepare: async () => {
+        prepares += 1;
+        return prepared();
+      },
+    });
+    expect(prepares).toBeLessThan(5);
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
+      .map((e) => e.reason)
+      .filter(Boolean);
+    expect(reasons).toContain("repeated-cause");
   });
 
   // Mutation B in the earlier review: dropping the reset (`else consecutive += 1`)

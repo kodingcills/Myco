@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { HeadToHeadReport } from "./data/head-to-head.ts";
 import type { RunFileInput } from "./data/loaders.ts";
+import { reportFromRuns } from "./data/report-from-runs.ts";
 import { joinSteps } from "./data/steps.ts";
 import type { RunData, RunUpdate, SourceRef } from "./data/types.ts";
 import type { DisplayVerdict } from "./data/verdict.ts";
@@ -33,6 +34,8 @@ interface ViewerStore {
   comparison?: HeadToHeadReport;
   comparisonName?: string;
   openComparison(name: string, report: HeadToHeadReport): void;
+  /** TIF-148: build the compare table from the runs already open. False when none carry a verdict. */
+  compareOpenRuns(): boolean;
   closeComparison(): void;
   selection: Selection;
   mode: Mode;
@@ -126,6 +129,18 @@ export const useViewer = create<ViewerStore>((set, get) => ({
   runs: [],
   openComparison(name, report) {
     set({ comparison: report, comparisonName: name });
+  },
+  compareOpenRuns() {
+    // TIF-148: the compare table is reachable from the runs already open, with no file
+    // drop and no URL. `reportFromRuns` refuses a run with no verdict by name.
+    const { runs } = get();
+    const report = reportFromRuns(runs);
+    if (!report) return false;
+    set({
+      comparison: report,
+      comparisonName: `${runs.length} open run${runs.length === 1 ? "" : "s"}`,
+    });
+    return true;
   },
   closeComparison() {
     set({ comparison: undefined, comparisonName: undefined });

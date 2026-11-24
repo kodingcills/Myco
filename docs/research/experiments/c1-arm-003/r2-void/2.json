@@ -1,0 +1,144 @@
+{
+  "index": 2,
+  "params": {
+    "fixtureSeed": "seed-c",
+    "rowKey": "EMP-0059",
+    "column": "joined",
+    "newValue": "2024-05-28"
+  },
+  "cellRef": "D60",
+  "expected": "2024-05-28",
+  "previousValue": "2023-07-30",
+  "subArm": "c1",
+  "instruction": "Set the cell at record EMP-0059, column joined, to \"2024-05-28\", and save the file.",
+  "verdict": "refuted",
+  "verdictReason": "modified",
+  "transcript": {
+    "actions": [
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 80,
+          "y": 146,
+          "text": "D60\n"
+        }
+      },
+      {
+        "tool": "type_text",
+        "arguments": {
+          "x": 283,
+          "y": 260,
+          "text": "2024-05-28\n"
+        }
+      },
+      {
+        "tool": "press_key",
+        "arguments": {
+          "x": 312,
+          "y": 261,
+          "key": "Ctrl+s"
+        }
+      },
+      {
+        "tool": "press_key",
+        "arguments": {
+          "x": 283,
+          "y": 260,
+          "key": "ctrl+a"
+        }
+      }
+    ],
+    "claims": [],
+    "deliveries": [
+      {
+        "step": 1,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 2,
+        "mode": "background",
+        "escalated": false,
+        "outcome": "delivered"
+      },
+      {
+        "step": 3,
+        "mode": "foreground",
+        "escalated": true,
+        "outcome": "delivered"
+      },
+      {
+        "step": 4,
+        "mode": "foreground",
+        "escalated": true,
+        "outcome": "delivered"
+      }
+    ]
+  },
+  "usage": [
+    {
+      "prompt": 571,
+      "completion": 203,
+      "cost": 0.003172
+    },
+    {
+      "prompt": 571,
+      "completion": 219,
+      "cost": 0.003332
+    },
+    {
+      "prompt": 571,
+      "completion": 256,
+      "cost": 0.003702
+    },
+    {
+      "prompt": 571,
+      "completion": 248,
+      "cost": 0.003622
+    },
+    {
+      "prompt": 571,
+      "completion": 256,
+      "cost": 0.003702
+    }
+  ],
+  "cost": 0.01753,
+  "tokens": {
+    "in": 2855,
+    "out": 1182
+  },
+  "modelCalls": 5,
+  "steps": 4,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 62087,
+  "resetMs": 176493,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 10.26171875
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "cua-action-1-verified:false",
+    "cua-action-2-verified:false",
+    "cua-action-3-verified:false",
+    "cua-action-4-verified:false",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}

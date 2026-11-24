@@ -1,0 +1,62 @@
+{
+  "index": 4,
+  "params": {
+    "fixtureSeed": "seed-e",
+    "rowKey": "EMP-0011",
+    "column": "name",
+    "newValue": "REVISED-465160"
+  },
+  "cellRef": "B12",
+  "expected": "REVISED-465160",
+  "previousValue": "Gil Jovic",
+  "subArm": "c1",
+  "instruction": "Set the cell at record EMP-0011, column name, to \"REVISED-465160\", and save the file.",
+  "verdict": "refuted",
+  "verdictReason": "persisted-mismatch",
+  "transcript": {
+    "actions": [],
+    "claims": [],
+    "deliveries": []
+  },
+  "usage": [
+    {
+      "prompt": 571,
+      "completion": 256,
+      "cost": 0.003702
+    }
+  ],
+  "cost": 0.003702,
+  "tokens": {
+    "in": 571,
+    "out": 256
+  },
+  "modelCalls": 1,
+  "steps": 0,
+  "stepBudget": 30,
+  "budgetExhausted": false,
+  "audited": false,
+  "independentValuePresent": null,
+  "falseSuccess": false,
+  "elapsedMs": 5948,
+  "resetMs": 35329,
+  "acPower": false,
+  "caffeinate": true,
+  "hostLoad": {
+    "loadAvg1": 12.005859375
+  },
+  "screenshotSource": "cua-window",
+  "resumed": false,
+  "recoveryEvents": 0,
+  "driver": {
+    "hostVersion": "0.56.4",
+    "guestVersion": "0.56.4",
+    "pipeReachable": true,
+    "sessionIdentityMatches": true
+  },
+  "deviations": [
+    "reset:cua-c1-base",
+    "step-budget-asymmetry",
+    "planner-no-action",
+    "planner:claude-sonnet-5-5"
+  ]
+}
