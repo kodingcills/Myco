@@ -248,11 +248,17 @@ function actionSignature(row: BaselineRow): string {
  *   - owner alive  -> refuse, naming the pid. Two sweeps in one directory share one
  *                     ledger, so this must stay a hard stop.
  *   - owner dead   -> the run it belonged to is over; clear and take it.
- *   - no owner     -> written before owner files existed, or killed between mkdir and
- *                     the write. Stale by definition, since a live holder would have
- *                     written one; clear it.
+ *   - no owner, or an UNPARSEABLE one -> cleared. A live holder always writes a
+ *                     parseable pid, so this is stale in every ordinary case.
  *
- * Fail closed on every unsure path: only a POSITIVELY dead owner is overridden.
+ * WHAT THE LAST CASE DOES NOT PROVE, corrected after a verifier measured it: an
+ * unreadable owner is UNKNOWN, not confirmed-dead. The genuine window is microseconds
+ * (a SIGKILL between mkdir and the write), and it is the trade that lets a killed run
+ * be resumed at all - but it is the one path where a lock a live holder owns can be
+ * cleared, so the sentence "fail closed on every unsure path" was too strong and is
+ * gone. A live owner with a READABLE pid is always refused, including under pid reuse:
+ * a recycled pid pointing at an unrelated live process makes the lock refuse forever,
+ * which is stuck rather than unsafe.
  */
 function acquireRunLock(directory: string): string {
   const lock = join(directory, ".run-lock");
@@ -274,13 +280,15 @@ function acquireRunLock(directory: string): string {
     const parsed = Number(raw);
     if (Number.isSafeInteger(parsed) && parsed > 0) owner = parsed;
   } catch {
-    // No owner file: stale by definition (a live holder always writes one).
+    // No owner file, or one that did not parse: stale in every ordinary case. A live
+    // holder always writes a parseable pid, so an unreadable owner is an UNKNOWN
+    // rather than a confirmed death - see the trade documented on acquireRunLock.
   }
   if (owner !== undefined && isProcessAlive(owner))
     throw new Error(
       `refusing to run: ${lock} is held by live pid ${owner}; two sweeps must not share one ledger`,
     );
-  // Positively dead (or unrecorded) - clear the leftover and take the lock.
+  // Positively dead, or unparseable/unrecorded - clear the leftover and take the lock.
   rmSync(lock, { recursive: true, force: true });
   create();
   return lock;

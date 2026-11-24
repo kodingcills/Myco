@@ -104,6 +104,33 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   exit 1
 fi
 
+# REFUSE rather than default. The sweep itself fails closed when this is unset
+# (`parseSpendCeiling` requires both vars), so a launch that got this far has it - but
+# the variable lives in the AMBIENT shell, not in the secrets file, so a resume shell
+# that forgets to export it is a real operator path. Without this check the watcher
+# would quietly fall back to a run-local figure and under-report the cap, which is the
+# defect this change exists to remove.
+# SET IS NOT ENOUGH - IT MUST BE A NUMBER. Testing only for setness let `""`, `"   "`
+# and `"abc"` through, and those convert to `0.000000`, which is exactly the run-local
+# default this whole change deletes. A round-2 verifier measured all three reaching the
+# watcher.
+#
+# WHAT THIS GUARD DOES AND DOES NOT COVER, stated because an earlier comment here claimed
+# more than it checked: it rejects everything that is not digits, which is the class of
+# input the verifier demonstrated. It does NOT enforce `Number.isSafeInteger`, which
+# `parseSpendCeiling` also requires - so a value above 2^53 passes HERE and is thrown
+# THERE. That is safe in this direction: the sweep refuses, the launch aborts, and no
+# watcher runs on a number the guard would reject. Closing the gap is TIF-197; until then
+# do not describe the two parsers as equivalent.
+case "${MYCO_PRIOR_SPEND_MICROS:-}" in
+  "")
+    echo "c1-baseline: MYCO_PRIOR_SPEND_MICROS is unset or empty - the watchdog would report a run-local figure. Export it (0 only for a genuinely fresh project)." >&2
+    exit 6 ;;
+  *[!0-9]*)
+    echo "c1-baseline: MYCO_PRIOR_SPEND_MICROS must be a whole number of micro-dollars (digits only); got '$MYCO_PRIOR_SPEND_MICROS'. Anything non-numeric would silently become 0 and the watchdog would under-report the cap." >&2
+    exit 6 ;;
+esac
+
 source "$WS/scripts/vm-lock.sh"
 echo "Acquiring VM lock for c1-baseline.sh..."
 vm_lock_acquire c1-baseline.sh "$PROGRESS" || exit "$?"
@@ -134,10 +161,16 @@ WATCH_SILENT="${MYCO_WATCH_SILENT_MIN:-20}"
 # the sweep had exited. Measured: a leaked `sleep 300` owned
 # /tmp/myco-win11.vm.lock after a probe run finished, blocking the next arm.
 # The watchdog does not need the VM, so it is given no descriptor to hold.
-bash "$WS/scripts/watch-c1-arm.sh" "$OUT" "$WATCH_LIMIT" "$WATCH_SILENT" >>"$WATCH" 2>&1 9>&- &
+# Prior spend is passed so the watcher measures what the GUARD measures. It comes
+# from the same MYCO_PRIOR_SPEND_MICROS the sweep reads, converted here rather than
+# re-derived, so the two cannot disagree about what the project had already spent:
+# both read the same string, and the guard below refuses anything that is not a whole
+# number, so neither can silently convert a bad value to 0.
+WATCH_PRIOR=$(awk -v m="$MYCO_PRIOR_SPEND_MICROS" 'BEGIN { printf "%.6f", m / 1000000 }')
+bash "$WS/scripts/watch-c1-arm.sh" "$OUT" "$WATCH_LIMIT" "$WATCH_SILENT" "$WATCH_PRIOR" >>"$WATCH" 2>&1 9>&- &
 WATCH_PID=$!
 echo "$WATCH_PID" > "$OUT/watch.pid"
-echo "watchdog pid $WATCH_PID -> $WATCH (limit \$$WATCH_LIMIT, silent ${WATCH_SILENT}m)" | tee -a "$PROGRESS"
+echo "watchdog pid $WATCH_PID -> $WATCH (ceiling \$$WATCH_LIMIT, prior \$$WATCH_PRIOR, silent ${WATCH_SILENT}m)" | tee -a "$PROGRESS"
 
 # The sweep writes its own pid so a later reader does not have to guess which
 # process belonged to this directory.
