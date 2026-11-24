@@ -590,13 +590,30 @@ orphans a child that keeps the lock held after the sweep exits.
 
   An accepted cause **breaks the run of failures** rather than contributing to it. Anything
   not accepted still aborts at the second occurrence, so this narrows the rule instead of
-  disabling it. The acceptance appears in **both** the report (`acceptedScoredCauses`) and
-  the run identity (`identity.acceptedScoredCauses`) so a reader can tell an arm that ran
-  under one from an arm that never needed it. A resume must match the recorded acceptance
-  **exactly** — adding one to a run that recorded none is refused as firmly as dropping
-  one, because the first half would be misreported as covered by an acceptance that did not
-  exist when its rows were produced. An acceptance with no run identity to record it is
-  refused outright rather than applied untracked.
+  disabling it.
+
+  **An acceptance is recorded with the trial it started at**, as a history:
+
+  ```json
+  "acceptances": [{ "causes": ["refuted:step-budget"], "fromTrial": 2 }]
+  ```
+
+  That matters for r6, whose first rows ran with **no** acceptance and whose operator
+  accepted the cause only on resuming. A flat list would claim those earlier rows were
+  covered by a decision that had not been made yet — the ledger would rewrite history to
+  make the arm look uniform. Adding a cause on a resume appends a segment starting at the
+  first trial that resume executes; the rows before it keep the terms they actually ran
+  under. **Dropping** a cause is still refused: rows already recorded ran under it, and no
+  start index can undo that. An acceptance with no run identity to record it is refused
+  outright rather than applied untracked. `report.json` carries the latest segment as
+  `acceptedScoredCauses` plus `acceptedFromTrial`, so a reader scoring from the report
+  cannot mistake a partial acceptance for an arm-wide one.
+
+  **Audit record, not a behavioural switch.** With the counter as written, the boundary has
+  no observable effect on *when* the arm aborts — an accepted cause resets the run and a
+  changed cause also resets it, so the two orderings leave the same counter behind. The
+  segment exists so the artifact does not overstate what was in force, which is the thing a
+  later reader would otherwise get wrong.
 
   **Attack surface, stated:** the acceptance key is `verdict:reason` only, while the abort
   key also includes the action signature and step count. Accepting a cause broadly enough

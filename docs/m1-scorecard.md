@@ -324,6 +324,11 @@ past a stop. Its key is `verdict:reason`, coarser than the abort key, so accepti
 cause broadly (e.g. `refuted:persisted-mismatch`) would silence the alarm that caught
 arm-003d r2's harness fault. The spend cap still bounds the damage.
 
+It is also **recorded as starting at the resume**, not for the whole arm
+(`acceptances: [{ causes, fromTrial }]`). r6's first nine rows ran with no acceptance at
+all, and the ledger must not be rewritten to look as though the diagnosis had been made
+when they were produced.
+
 **Not changed, deliberately:** the planner prompt and `STEP_BUDGET`. Teaching the
 agent about the dialog would break parity with Myco's arm, which is the whole point of
 the comparison.
