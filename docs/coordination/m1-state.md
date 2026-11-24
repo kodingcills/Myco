@@ -41,6 +41,9 @@
   Coordinator GO.
 - [M1 backlog](../backlog/m1.md)
 
+- **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
+- **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
+
 ## Log 2026-11-24 (66) — TIF-177 shipped; TIF-178 opens its test gaps
 - **TIF-177 Done.** #342 merged as `7317fd75`: the post-create readiness gate fails closed, and `cleanup()` reports a dirty teardown instead of swallowing it. Verified at head `d2480eba` (MERGEABLE CLEAN, 5/5) before merge.
 - **The fix's own test ran nowhere.** `test/df005-postcreate-gate.py` — the only test catching a `cleanup` that returns early and leaks — was executed by **nothing**: `pnpm test` is vitest + schema-validate, and `test/df005-runner.selftest.sh` is referenced from no workflow and no script. That is how the round-1 regression shipped green, and the wiring bug predates the PR. Fixed in #342 by `test/df005-contract-gates.test.ts`, which runs both gates under vitest. **Visible in CI:** `check (macos-latest)` went from ~1m15s to **2m8s**, the gates executing.
