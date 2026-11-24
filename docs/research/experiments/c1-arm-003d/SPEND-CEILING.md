@@ -175,3 +175,53 @@ prior 4,030,512 + c1 607,200 + reservation > 9,000,000 ?   -> trial proceeds whi
 ceiling. Passing the ceiling is accepted and the run still stops at $9.00 — but the arm
 report will show an arm limit of $9.00 that was never spendable, which is the
 artifact-says-one-thing shape this whole thread is about.
+
+## The relaunch values, verified end to end (2026-11-24)
+
+`#334` merged at `6c6b77a7` (20:21 ET), so the mechanism is on `main`. The owner's
+proposed relaunch parameters, run through the real parser and guard:
+
+```
+MYCO_PRIOR_SPEND_MICROS=3570688   (3190688 committed + 376800 aborted reservation)
+MYCO_ARM_LIMIT_MICROS=5429312     (9000000 − 3570688)
+  -> parsed { priorSpendMicros: 3570688, remainingMicros: 5429312 }
+  -> prior + arm = 9000000 vs COMBINED 9000000 -> WITHIN
+  -> accepted at startup
+```
+
+**Counting the aborted `376800` is the conservative direction and correct:** it was real
+spend, not a reservation to reclaim, so carrying it in prior spend understates the
+remaining budget rather than overstating it.
+
+### The empty-string hole is closed, at this head
+
+`Number('')` is `0`, so an empty `MYCO_PRIOR_SPEND_MICROS` used to parse as "no prior
+spend" and silently restore the unlimited ceiling — reachable by the likeliest operator
+mistake. The parser is now `/^\d+$/`-gated (`scripts/spend-ceiling.ts:25`). Every case
+the owner named, re-run here:
+
+| input | result |
+|---|---|
+| empty prior / empty arm | REFUSE |
+| whitespace | REFUSE |
+| `abc` | REFUSE |
+| `1.5` | REFUSE |
+| arm limit `0` | REFUSE |
+| **`priorSpend` > COMBINED** | **accepted by `parseSpendCeiling`, REFUSED by `runC1Sweep`** |
+| valid pair | PASS |
+
+### Correction: over-limit is refused one layer later, not by the parser
+
+The owner reported that "over-limit refuses" alongside the other cases. **It does refuse —
+but not where they tested.** `parseSpendCeiling` accepts `99999999`; `runC1Sweep` then
+throws `invalid prior spend` at `src/baseline/sweep.ts:171` because the value exceeds
+`COMBINED_LIMIT`. **The behaviour is correct and intentionally layered** — the environment
+boundary parses, the sweep validates against the ceiling — but the two layers differ, so
+the table above records which layer does which.
+
+### No fabricated rows
+
+`priorSpend` appears only in the ceiling comparisons (`sweep.ts:238-239`); it is never
+written to the ledger. A fresh `outDir` therefore starts empty and produces exactly the
+rows it executed, which is why the owner's choice of a fresh directory plus an env seed is
+right rather than carrying the old ledger forward.
