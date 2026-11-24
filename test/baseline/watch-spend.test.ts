@@ -55,12 +55,20 @@ const scored = (micros: number) => ({
  * report, then killed. A stub process with the matching argv keeps the
  * "sweep ended" early-exit path from firing first.
  */
-async function runWatcher(dir: string, limit: string): Promise<{ out: string; code: number }> {
+async function runWatcher(
+  dir: string,
+  limit: string,
+  // Prior spend is a REQUIRED argument (TIF-192): the watcher measures prior + this
+  // run, so a call without it is refused rather than silently reporting a run-local
+  // figure. These tests are about the ledger arithmetic, so they pass 0 and assert
+  // against the run-local column, which is still reported.
+  prior = "0",
+): Promise<{ out: string; code: number }> {
   const stub = startSweepStub(dir);
   // detached so the whole group can be signalled: the script's own `sleep 300`
   // keeps the stdout pipe open, so killing only bash leaves the test waiting for
   // a close that never arrives.
-  const child = spawn("bash", [SCRIPT, dir, limit, "20"], {
+  const child = spawn("bash", [SCRIPT, dir, limit, "20", prior], {
     env: { ...process.env, PATH: process.env.PATH },
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
