@@ -72,35 +72,28 @@ const PROVIDER_ERROR_TYPES = new Set([
 const OLLAMA = "qwen3.8-uncensored";
 const MAX_INPUT = 5_000;
 /**
- * Output ceiling per model call.
+ * Output ceiling per model call. KEPT AT 1024, ON MEASUREMENT (TIF-200).
  *
- * 256 was clipping REAL responses. Reproducible from the committed rows under
- * `docs/research/experiments/c1-arm-002/rows/` (444 calls, 29 rows): the largest
- * NON-truncated completion is **250** (row 26), and **22 calls across 22 distinct
- * rows landed on exactly 256** - the ceiling, not the model's answer.
+ * r6's 19 completed trials hold **570 model calls**. Their completion sizes:
  *
- * The failure this caused: a reply cut off mid-JSON gave the planner no parseable
- * decision, and the trial scored `planner-no-action` / `persisted-mismatch` - a
- * HARNESS fault recorded as an agent failure. That deflates the baseline and, at
- * two consecutive identical failures, breaks the abort rule it should have
- * triggered. arm-003d r2 trials 3 and 4 were exactly that shape: 0 steps, one
- * call, completion 256. (Those rows are not committed, so they are named as the
- * motivation and not cited as evidence.)
+ *     min 77 | median 254 | P90 400 | P99 535 | MAX 615
  *
- * Scope, stated precisely: 256-hits occur across MOST verdicts, not only the
- * zero-action ones, so truncation is not the sole reason a call reaches the
- * ceiling. `FINAL.md` attributes arm-002's zero-action rows to the model typing
- * cell references rather than to clipping. What is proven is that the ceiling was
- * REACHED 22 times and that 250 is the largest answer that got through - which is
- * enough to say the cap was binding.
+ * **Nothing in any completed row reached 768**, so 1024 carries **~66% headroom over the
+ * largest reply ever measured here** (615) and 91% over P99 (535). Trial 20 truncated AT
+ * 1024 - the ONE call in 571 that ran past 615 - and the evidence says that is a
+ * DEGENERATE REPEAT rather than a ceiling that is too tight: every other call in the arm
+ * sat comfortably under it.
  *
- * 1024 is ~4x that maximum, so clipping would need an answer four times longer
- * than any observed. Chosen as a config value with headroom, not fitted to the
- * data. The cost is coupled on purpose: MAX_CALL_MICROS below derives from this,
- * so raising it raises the fail-closed reservation (376,800 -> 607,200 micros per
- * trial, 1.61x) rather than hiding the increase.
+ * A higher ceiling was implemented and then REVERTED on the lead's ruling, and the
+ * reasoning is worth keeping: raising it to 2048 would have made a degenerate repeat
+ * merely MORE EXPENSIVE, with only $1.75 of headroom left in the project cap. The
+ * runaway reply is the thing to bound, not the thing to accommodate.
+ *
+ * The failure mode is therefore handled where it belongs - a truncated reply books its
+ * ACTUAL cost and needs two consecutive occurrences to stop the arm - rather than by
+ * widening the bound that caught it.
  */
-const MAX_OUTPUT = 1024;
+export const MAX_OUTPUT = 1024;
 // Integer microdollars at the frozen short-context input and output rates.
 export const MAX_CALL_MICROS = MAX_INPUT * 2 + MAX_OUTPUT * 10;
 const PROMPT = [
@@ -132,7 +125,23 @@ function scrubBadRequestMessage(message: string, key: string): string {
   );
 }
 
-export class PlannerFailure extends Error {}
+/**
+ * A fault on OUR side of the boundary - an unusable provider response, a refusal, or a
+ * reply we declined to treat as an answer.
+ *
+ * `costMicros` carries the charge we can PROVE for the call that failed. A truncated
+ * reply is billed, and its usage is known, so the sweep can book the real figure instead
+ * of the full reservation. Leaving it undefined means unknown, and the sweep then keeps
+ * the reservation - the fail-closed direction, unchanged.
+ */
+export class PlannerFailure extends Error {
+  constructor(
+    message: string,
+    readonly costMicros?: number,
+  ) {
+    super(message);
+  }
+}
 
 export interface Planner {
   paid: boolean;
@@ -295,6 +304,13 @@ export function createPlanner(
             if (data.stop_reason === "max_tokens")
               throw new PlannerFailure(
                 `Anthropic response truncated at max_tokens=${MAX_OUTPUT}; the reply is partial and must not be scored as an agent decision`,
+                // The truncated call's usage was recorded above, so its cost is KNOWN
+                // and is carried out rather than discarded with the throw. Booking it
+                // is what makes a harness fault cost what it actually cost instead of
+                // the full reservation.
+                Math.round(
+                  calls.reduce((total, call) => total + (call.usage.cost ?? 0), 0) * 1_000_000,
+                ),
               );
           } else {
             if (!allowFallback) throw new PlannerFailure("Anthropic messages API call failed");
