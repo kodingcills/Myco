@@ -65,16 +65,23 @@ describe("no test writes into a live run", () => {
     // `57102 c1-baseline.sh`, then `4939 c1-baseline.sh`, all dead, all from test runs,
     // while a real arm was live.
     //
-    // ONE REFERENCE, NOT A ROUTING CONVENTION. A round-1 verifier broke an earlier version
-    // of this guard by keeping a `launcherEnv(` reference in the file while passing an
-    // inline environment to one spawn: the counts still looked right and the guard stayed
-    // green while that spawn took the SHARED lock. Counting helper uses was never going to
-    // catch that, because it cannot see which expression reached the spawn.
+    // WHAT THIS CHECK IS AND IS NOT. It is TEXTUAL, and two rounds of review established
+    // that no textual check can establish this property. A verifier defeated an earlier
+    // version with an alias:
     //
-    // So the launcher path itself may appear exactly ONCE, inside the one wrapper that
-    // owns both the spawn call and its environment. A second reference - a new spawn, an
-    // inline env, a different spawn function - is a failure by construction, and there is
-    // no call site left to tamper with.
+    //     const LAUNCHER = (() => { spawnSync("echo", []); return "scripts/c1-baseline.sh"; })();
+    //     spawnSync(LAUNCHER, [dir, "--coordinator-go", "--resume"], { env: { ...process.env } });
+    //
+    // one launcher literal, a `spawnSync(` in the lookback, one lock-path site - and then
+    // it MEASURED that spawn reaching `vm_lock_acquire` on the shared lock. So this check
+    // catches the ordinary mistake (a second literal, an obvious second spawn) and NOT a
+    // determined evasion through aliasing. It is not air-tight and does not claim to be.
+    //
+    // THE REAL GUARANTEE IS BEHAVIOURAL and lives in `watch-prior-spend.test.ts`:
+    // `spawnLauncher` assigns `MYCO_VM_LOCK_PATH` AFTER spreading overrides, so no caller
+    // can displace, blank, or redirect it, and it checks the assembled environment before
+    // starting a process. That is enforced by tests that fail if the ORDER changes; this
+    // file is a cheap lint on top of it, not the defence.
     const stripComments = (text: string) =>
       text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     for (const { path, text } of testSources()) {
@@ -96,9 +103,13 @@ describe("no test writes into a live run", () => {
       // And the wrapper must still SET the private path. Dropping that line leaves the
       // spawn intact and the reference count unchanged, so it needs its own assertion -
       // an earlier rewrite of this guard lost this check and a mutation walked through.
-      // The colon matters: a COMMENT mentioning `$MYCO_VM_LOCK_PATH` is not a site.
-      const lockPathSites = [...code.matchAll(/MYCO_VM_LOCK_PATH:/g)].length;
-      expect({ path, lockPathSites }).toEqual({ path, lockPathSites: 1 });
+      //
+      // Counting the ASSIGNMENT (`MYCO_VM_LOCK_PATH: privateLockPath()`) rather than every
+      // mention of the key: tests legitimately NAME it in override literals - that is how
+      // the displacement guarantee is tested - and counting those made the guard fail on
+      // its own new tests.
+      const assignments = [...code.matchAll(/MYCO_VM_LOCK_PATH:\s*privateLockPath\(\)/g)].length;
+      expect({ path, assignments }).toEqual({ path, assignments: 1 });
     }
   });
 

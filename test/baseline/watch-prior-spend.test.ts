@@ -60,30 +60,65 @@ function privateLockPath(): string {
 /**
  * The ONLY way a test in this file starts the launcher.
  *
- * It owns the `spawnSync` CALL as well as the environment, which the previous version did
- * not. A round-1 verifier showed why that matters: routing the env through a helper is not
- * enough, because a spawn can keep any `launcherEnv(` reference in the file and still pass
- * its own inline environment - the guard counted text occurrences, saw a helper use, and
- * stayed green while that spawn took the SHARED lock. Making the helper own the spawn
- * removes the call site entirely, and the guard can then assert that the launcher path
- * appears exactly once in this file.
+ * RUNTIME ENFORCEMENT, not a routing convention. Two rounds of review showed that counting
+ * text cannot establish this property: a verifier satisfied every textual check with
+ *
+ *     const LAUNCHER = (() => { spawnSync("echo", []); return "scripts/c1-baseline.sh"; })();
+ *     spawnSync(LAUNCHER, [dir, "--coordinator-go", "--resume"], { env: { ...process.env } });
+ *
+ * - one launcher literal, a `spawnSync(` in the lookback, one lock-path site - and then
+ * MEASURED that spawn reaching `vm_lock_acquire` on the shared lock. An alias defeats any
+ * check that reads the source.
+ *
+ * So the guarantee lives where it can be kept:
+ *
+ *   1. `MYCO_VM_LOCK_PATH` is assigned AFTER `...overrides`, so no caller can remove it,
+ *      blank it, or redirect it to the shared path.
+ *   2. The assembled environment is CHECKED before the spawn. If the path is missing or is
+ *      the shared default, this throws instead of starting a process that could take the
+ *      lock a real arm depends on.
+ *
+ * Anything routed through here therefore cannot write the shared lock, whatever the call
+ * site looks like. A spawn that bypasses the wrapper entirely is a different problem, and
+ * `probe-directory.test.ts` covers only the textual part of it - which is all a text check
+ * can do, and is described there as such rather than as air-tight.
  */
+const SHARED_VM_LOCK = "/tmp/myco-win11.vm.lock";
+
+/**
+ * The launcher's environment, with the lock path assigned LAST.
+ *
+ * Extracted so the guarantee is directly testable: an override cannot displace, blank, or
+ * redirect the lock path, because the assignment follows the spread. The check below is a
+ * backstop for a future edit that moves the assignment - unreachable today, which is the
+ * point.
+ */
+function launcherEnvFor(overrides: Record<string, string | undefined> = {}) {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: bareHome(),
+    ANTHROPIC_API_KEY: DUMMY_KEY,
+    ...overrides,
+    MYCO_VM_LOCK_PATH: privateLockPath(),
+  };
+  if (!env.MYCO_VM_LOCK_PATH || env.MYCO_VM_LOCK_PATH === SHARED_VM_LOCK)
+    throw new Error(
+      `refusing to spawn the launcher against the SHARED lock (${String(env.MYCO_VM_LOCK_PATH)}); a test must never write a lock a live arm depends on`,
+    );
+  return env;
+}
+
 function spawnLauncher(
   runDir: string,
   extraArgs: string[] = [],
   overrides: Record<string, string | undefined> = {},
 ) {
+  const env = launcherEnvFor(overrides);
   return spawnSync("bash", ["scripts/c1-baseline.sh", runDir, "--coordinator-go", ...extraArgs], {
     cwd: process.cwd(),
     encoding: "utf8",
     timeout: 20_000,
-    env: {
-      ...process.env,
-      HOME: bareHome(),
-      ANTHROPIC_API_KEY: DUMMY_KEY,
-      MYCO_VM_LOCK_PATH: privateLockPath(),
-      ...overrides,
-    },
+    env,
   });
 }
 
@@ -172,7 +207,6 @@ function watchLine(
  */
 describe("a missing prior spend is refused, not defaulted", () => {
   it("the watcher refuses to run without its 4th argument", async () => {
-    const { spawnSync } = await import("node:child_process");
     const dir = ledgerDir({ "0": scored(100_000) });
     const run = spawnSync("bash", ["scripts/watch-c1-arm.sh", dir, "900.00", "25"], {
       cwd: process.cwd(),
@@ -221,7 +255,6 @@ describe("a non-numeric prior spend is refused, not converted to zero", () => {
 
   for (const bad of ["nan", "inf", "-inf", "-3", "abc"]) {
     it(`the watcher refuses a prior of ${JSON.stringify(bad)}`, async () => {
-      const { spawnSync } = await import("node:child_process");
       const dir = ledgerDir({ "0": scored(100_000) });
       const source = execFileSync(
         "sed",
@@ -299,6 +332,32 @@ describe("the launcher agrees with the sweep about valid prior spend", () => {
         `${JSON.stringify(value)}: sweep=${sweepAccepts ? "accept" : "throw"}`,
       ).toEqual({ value, launcherAccepts: sweepAccepts });
     }
+  });
+});
+
+describe("an override cannot reach the shared lock", () => {
+  // The property the textual guard cannot establish. A verifier defeated every text check
+  // with an alias and then MEASURED the spawn reaching `vm_lock_acquire` on the shared lock.
+  // This asserts the guarantee where it is kept: the lock path is assigned after the
+  // spread, and the assembled environment is checked before any process starts.
+  it("displaces an override that names the shared lock", () => {
+    const env = launcherEnvFor({ MYCO_VM_LOCK_PATH: SHARED_VM_LOCK });
+    expect(env.MYCO_VM_LOCK_PATH).not.toBe(SHARED_VM_LOCK);
+    expect(env.MYCO_VM_LOCK_PATH).toMatch(/myco-vmlock-/);
+  });
+
+  it("displaces an override that blanks it", () => {
+    const env = launcherEnvFor({ MYCO_VM_LOCK_PATH: undefined });
+    expect(env.MYCO_VM_LOCK_PATH).toBeTruthy();
+    expect(env.MYCO_VM_LOCK_PATH).toMatch(/myco-vmlock-/);
+  });
+
+  it("gives every call its OWN lock file", () => {
+    // Two spawns sharing one lock file would serialise against each other, which is the
+    // same interference in a quieter form.
+    const a = launcherEnvFor();
+    const b = launcherEnvFor();
+    expect(a.MYCO_VM_LOCK_PATH).not.toBe(b.MYCO_VM_LOCK_PATH);
   });
 });
 
