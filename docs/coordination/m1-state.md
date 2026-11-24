@@ -44,6 +44,41 @@
 - **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
 - **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
 
+## Log 2026-11-24 (67) — row 8 §6: 16/16 verified, 0 refuted, never finished
+- **§6 is neither passed nor refuted.** Two attempts on a reset, verified-clean guest:
+  **every row that reached the verifier verified (16 of 16), and no row was refuted.** Both
+  attempts were cut short by infrastructure, so `20/20` on a quiet host is **still outstanding**
+  and §7 stays blocked behind it. Evidence: `docs/research/experiments/m1-row8/README.md`.
+- **Attempt A (06:19–06:33Z): 15 verified, then the host process vanished mid-trial-16.**
+  15 `result.json` written one per ~48 s; the 16th dir left empty; **no crash report, no stack,
+  no output** — the log held only `agent ping ok`. `run-live` prints its array once at the end
+  of the loop, so **a silent log is the expected shape of a healthy `values` run**; liveness is
+  the guest run dirs, not the log. Cause unproven; the launcher was not survivor-detached, so a
+  session teardown is the leading hypothesis and is untested.
+- **Attempt B (06:37–06:40Z): row 1 verified, then a baseline driver cold-reset the guest at
+  trial 2.** `reset-trial-vm.sh cua-c1-base` started 06:38:14Z from the baseline worktree (pid
+  36434); QEMU restarted 06:38:40Z (44955 → 36509); the tunnel died with the guest and rows 3–20
+  each returned `uncertain` in **0–1 ms**. Exited 1 — a shape that reads like a generator failure
+  and was not one.
+- **F12, the real defect: `run-live` takes no VM flock.** `grep -c vm_lock
+  src/integration/run-live.ts` = 0, while `m1-sweep.sh`, `m1-corrupt-suite.sh`,
+  `reset-trial-vm.sh`, `c1-baseline.sh` and `c1-spike.sh` all acquire. So a §6 attempt holds no
+  ownership evidence, a driver that legitimately acquires the lock cannot detect it, and nothing
+  warns either side. **Not fixed here**: making `run-live` acquire would start refusing to run
+  when another driver is active, which is a behaviour change and an outer-loop decision.
+- **Runbook fixed (Tier 0, PR #388, `4a4c7ac7`):** §6.1 verifies the guest is clean and gives the
+  cleanup for an aborted attempt (one leftover run dir fails every later row — the 20/20
+  `uncertain` result explained); §6.2 requires a proven-free flock and no running driver; §2
+  gains a race-free way to clear a stale lock record, since a dead pid there reads exactly like a
+  live owner. §6's `20/20` is now labelled not-yet-reproduced with the real record.
+- **Stale lock, resolved as a non-issue:** `/tmp/myco-win11.vm.lock` read `44837 reset-trial-vm.sh`
+  with pid 44837 dead while the flock was **free** (`lsof` empty). `vm_lock_acquire` truncates and
+  rewrites only after the kernel grants the lock, so a stale pid never blocks a driver — it only
+  misleads a human.
+- **Row-8 rerun NOT launched.** It needs the guest exclusively for 3–4 h and the r6 resume holds
+  the flock and is spending against the $9 cap; launching would repeat exactly the collision that
+  killed attempt B, and would corrupt a scored arm. It waits for r6 to finish.
+
 ## Log 2026-11-24 (66) — TIF-177 shipped; TIF-178 opens its test gaps
 - **TIF-177 Done.** #342 merged as `7317fd75`: the post-create readiness gate fails closed, and `cleanup()` reports a dirty teardown instead of swallowing it. Verified at head `d2480eba` (MERGEABLE CLEAN, 5/5) before merge.
 - **The fix's own test ran nowhere.** `test/df005-postcreate-gate.py` — the only test catching a `cleanup` that returns early and leaks — was executed by **nothing**: `pnpm test` is vitest + schema-validate, and `test/df005-runner.selftest.sh` is referenced from no workflow and no script. That is how the round-1 regression shipped green, and the wiring bug predates the PR. Fixed in #342 by `test/df005-contract-gates.test.ts`, which runs both gates under vitest. **Visible in CI:** `check (macos-latest)` went from ~1m15s to **2m8s**, the gates executing.
