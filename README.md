@@ -27,28 +27,40 @@ Core invariant: **`ActResult` never claims goal success, and the runner never de
 
 ## Setup
 
-Node 24 required. `npm` works out of the box; CI uses `pnpm`.
+Node 24 required. **This is a pnpm workspace, and `npm install` does not install it correctly** —
+use `pnpm`.
 
 ```sh
-npm install
-npm run typecheck
-npm run lint
-npm test
-npm run build
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
 ```
 
-All five are verified to run on a clean checkout. `pnpm install --frozen-lockfile` then `pnpm typecheck && pnpm lint && pnpm test` is the CI path.
+All five are run on a clean checkout before merge, and each of them was re-run by hand on a fresh
+worktree on 2026-11-24. `pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test`
+is the CI path, and it is the path that actually works.
 
-> **If a gate fails unexpectedly,** run `pnpm install --frozen-lockfile` first — a stale `node_modules` produces a false `TS2307` that looks like a broken build.
+> **`npm install` looks like it succeeds and leaves the repo broken.** npm does not understand the
+> `viewer/` workspace, so it installs the root package and skips the viewer's dependencies.
+> `npm run typecheck` and `npm run lint` then fail with `TS2307: Cannot find module 'react'` from
+> `viewer/src/components/App.tsx` — which reads as a broken build but is a missing install.
+> `npm run build` and `npm test` happen to pass, because `build` does not touch the viewer and
+> `test` uses a different path. **Measured 2026-11-24: all four pass under `pnpm`, two fail under
+> `npm`.**
+>
+> **If any gate fails with `TS2307`,** run `pnpm install --frozen-lockfile` before diagnosing
+> anything else — a stale or npm-shaped `node_modules` is the usual cause.
 
 ### Run something
 
 ```sh
 # The M1 task family, against the fake app — no VM, no network.
-npm run test:task
+pnpm test:task
 ```
 
-`test:task` **exits 1 on purpose.** It runs the `todo-save` trap: the UI claims `"saved 7 item(s)"` while two `BUG:`-prefixed items never reach the store. That is the false-success case Myco exists to catch, so a non-zero exit is the pass condition — the output prints `Final Verdict: REFUTED` and `False Success Caught: YES`. A `0` here would mean the harness missed it.
+`test:task` **exits 1 on purpose.** It runs the `todo-save` trap: the UI claims `"saved 7 item(s)"` while two `BUG:`-prefixed items never reach the store. That is the false-success case Myco exists to catch, so a non-zero exit is the pass condition — the output prints `Final Verdict: REFUTED` and `False Success Caught: YES`. A `0` here would mean the harness missed it. **Observed 2026-11-24: exit 1, with both those lines.**
 
 ```sh
 # A full mock run with evidence, then validate what it wrote.
@@ -72,7 +84,7 @@ Retained evidence is committed so a number can be re-checked without a VM:
 python3 scripts/m1-scorecard.py docs/research/experiments/m1-013-sweep-v3/trials.jsonl
 ```
 
-That is the check that matters: the claim in the scorecard can be regenerated from committed data in one command.
+That is the check that matters: the claim in the scorecard can be regenerated from committed data in one command. **Observed 2026-11-24: `29/30 verified, MEETS NUMERIC THRESHOLD`, Wilson 95% 0.83–0.99 — the scorecard's headline number, regenerated from the committed `trials.jsonl` with no VM.**
 
 ---
 
