@@ -28,6 +28,24 @@ async function main() {
   // that records no identity is a judgement call about paid data, and it must be
   // visible in the command that made it.
   const adoptIdentity = process.argv.includes("--adopt-identity");
+  // `--accept-scored-cause refuted:step-budget` (repeatable). A scored cause the
+  // operator has DIAGNOSED as a genuine agent failure; every row reproducing it is
+  // then expected rather than a fault signature. Anything not accepted still
+  // aborts the arm at its second occurrence.
+  const acceptScoredCauses: string[] = [];
+  for (let i = 0; i < process.argv.length; i += 1) {
+    const arg = process.argv[i] ?? "";
+    if (arg === "--accept-scored-cause") {
+      const value = process.argv[i + 1];
+      if (!value || value.startsWith("--"))
+        throw new Error(
+          "--accept-scored-cause requires a verdict:reason value, e.g. refuted:step-budget",
+        );
+      acceptScoredCauses.push(value);
+    } else if (arg.startsWith("--accept-scored-cause=")) {
+      acceptScoredCauses.push(arg.slice("--accept-scored-cause=".length));
+    }
+  }
   const directory =
     process.argv.slice(2).find((arg) => !arg.startsWith("--")) || "/tmp/baseline/c1";
   console.log(
@@ -374,6 +392,7 @@ async function main() {
       prepare,
       resume,
       adoptIdentity,
+      acceptScoredCauses,
       // The identity a resume is checked against. Recorded on a fresh run so a
       // later resume has something to compare, and asserted on a resume so a
       // different model or snapshot cannot extend someone else's run.
