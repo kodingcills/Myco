@@ -307,11 +307,22 @@ step (`get_window_state` with `include_screenshot`, no caching) and the edit lan
 **Consequence for the rule set.** Because every row fails the same diagnosed way, the
 two-consecutive-identical-failures abort — which exists to catch a *harness* fault —
 would stop the arm at the second row and the comparison would never complete. The
-fix is an explicit, recorded acceptance (`--accept-scored-cause
-'refuted:step-budget'`) rather than weakening the rule: accepted causes break the run
-of failures, anything unaccepted still aborts at 2, and the acceptance is written
-into the run identity so a reader can tell an arm that ran under one from an arm that
-never needed it.
+fix is an explicit, recorded acceptance rather than weakening the rule: accepted
+causes break the run of failures, anything unaccepted still aborts at 2, and the
+acceptance appears in **both** the report and the run identity so a reader can tell an
+arm that ran under one from an arm that never needed it. r6's resume command, which
+must be repeated in full on every attempt:
+
+```bash
+MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
+  bash scripts/c1-baseline.sh ~/Projects/myco-runs/c1-r6 --coordinator-go \
+  --resume --adopt-identity --accept-scored-cause 'refuted:step-budget'
+```
+
+The acceptance is a **narrow, recorded exception for a diagnosed cause** — not a way
+past a stop. Its key is `verdict:reason`, coarser than the abort key, so accepting a
+cause broadly (e.g. `refuted:persisted-mismatch`) would silence the alarm that caught
+arm-003d r2's harness fault. The spend cap still bounds the damage.
 
 **Not changed, deliberately:** the planner prompt and `STEP_BUDGET`. Teaching the
 agent about the dialog would break parity with Myco's arm, which is the whole point of

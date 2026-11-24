@@ -634,6 +634,216 @@ describe("c1-sweep --resume", () => {
     ).rejects.toThrow(/was not in force when this run was recorded/);
   });
 
+  it("an accepted cause RESETS the run of failures rather than skipping the increment", async () => {
+    // The two behaviours differ ONLY when a fault sits on each side of an accepted
+    // row:  fault, accepted, fault.
+    //
+    //   reset (correct) : the accepted row clears the count, so the second fault
+    //                     starts a fresh run of one and the arm continues
+    //   skip-increment  : the accept leaves `consecutive` at 1, the second fault
+    //                     takes it to 2, and the arm aborts
+    //
+    // Reaching the end of the manifest discriminates them. Accepting EVERY row
+    // cannot: with nothing left to compare against, both behaviours continue, which
+    // is why an earlier version of this test passed with the reset removed.
+    //
+    // The causes must also DIFFER, or the rows would not be distinguishable. A
+    // planner that stops early leaves the steps short, so `budgetExhausted` is
+    // false and the judge's own verdict stands as `persisted-mismatch`. A planner
+    // that loops to STEP_BUDGET makes the observation `step-budget`. Alternating
+    // the two shapes per trial gives the fault/accepted/fault sequence.
+    const dir = directory();
+    // Alternating shapes: even trials stop immediately (short -> persisted-mismatch),
+    // odd trials run to STEP_BUDGET (long -> step-budget). That yields
+    // mismatch, budget, mismatch, budget, ... so an unaccepted fault sits on each
+    // side of an accepted one.
+    let trial = 0;
+    let stepInTrial = 0;
+    const alternating: Planner = {
+      paid: true,
+      act: async () => {
+        const calls = [
+          {
+            model: "claude-sonnet-5-5" as const,
+            usage: { prompt: 1_000, completion: 100, cost: 0.001 },
+          },
+        ];
+        if (trial % 2 === 0) {
+          trial += 1;
+          return { calls, decision: "done" as const };
+        }
+        stepInTrial += 1;
+        if (stepInTrial >= 30) {
+          stepInTrial = 0;
+          trial += 1;
+        }
+        return { calls, decision: { tool: "click" as const, arguments: { x: 1, y: 2 } } };
+      },
+    } as never;
+    // A judge that never confirms, so a short row scores `persisted-mismatch` and a
+    // long one scores `step-budget`.
+    const judged = (): PreparedC1 =>
+      ({
+        ...(prepared(nextTick()) as object),
+        judge: async () => ({ kind: "persisted", actual: "wrong", expected: "right" }),
+      }) as never;
+
+    const report = await runC1Sweep({
+      coordinatorGo: true,
+      directory: dir,
+      planner: alternating,
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+      // Only `step-budget` is accepted. `persisted-mismatch` around it is not.
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => judged(),
+    });
+
+    const scored = Object.values(
+      ledgerOf(dir).c1 as Record<string, { status: string; row?: { verdictReason: string } }>,
+    )
+      .filter((e) => e.status === "scored")
+      .map((e) => `${e.row?.verdictReason}`);
+    // Precondition: the sequence really does contain both causes, or the test
+    // proves nothing about the reset.
+    expect(scored).toContain("persisted-mismatch");
+    expect(scored).toContain("step-budget");
+    // The unaccepted fault appears on both sides of an accepted row and the arm
+    // still finishes - only a reset allows that.
+    expect(report.stopReason).toBeUndefined();
+    expect(report.completed).toBe(30);
+  });
+
+  it("replays already-scored causes across a resume, so two identical scored failures still abort", async () => {
+    // A round-1 verifier found this missing: the loop comment claimed it replayed
+    // "scored rows and omissions alike", but only `driver-unreachable` was fed to
+    // the counter. Two identical scored causes straddling a crash therefore never
+    // reached 2 and the rule could not see them.
+    //
+    // The observable difference is WHEN the abort lands:
+    //   replaying  : row 0 replayed (1) + the resumed row (2) -> aborts at row 1
+    //   not        : row 0 ignored, so the count starts at the resumed row -> 1,
+    //                and the abort arrives a row LATER
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    // Every trial stops immediately and the judge never confirms, so every row is
+    // `refuted/persisted-mismatch` with the same action signature.
+    const shortPlanner: Planner = {
+      paid: true,
+      act: async () => ({
+        calls: [
+          {
+            model: "claude-sonnet-5-5" as const,
+            usage: { prompt: 1_000, completion: 100, cost: 0.001 },
+          },
+        ],
+        decision: "done" as const,
+      }),
+    } as never;
+    const judged = (): PreparedC1 =>
+      ({
+        ...(prepared(nextTick()) as object),
+        judge: async () => ({ kind: "persisted", actual: "wrong", expected: "right" }),
+      }) as never;
+
+    // Row 0 scores, then the run stops for spend so nothing after it exists - the
+    // shape a process death leaves, without depending on crash plumbing. A small
+    // arm limit admits exactly one reservation.
+    await runC1Sweep({
+      ...base,
+      armLimitMicros: MAX_TRIAL_MICROS,
+      planner: shortPlanner,
+      prepare: async () => judged(),
+    });
+    expect(scoredIndexes(dir)).toEqual([0]);
+    // Drop the spend-limit omissions so the resume sees them as trials that never
+    // ran, which is what a crash leaves.
+    const path = join(dir, "accounting.json");
+    const led = JSON.parse(readFileSync(path, "utf8"));
+    for (const key of Object.keys(led.c1)) if (key !== "0") delete led.c1[key];
+    writeFileSync(path, JSON.stringify(led, null, 2));
+
+    // Resume: row 0's cause must be REPLAYED before row 1 scores, or the pair is
+    // invisible.
+    const report = await runC1Sweep({
+      ...base,
+      planner: shortPlanner,
+      resume: true,
+      prepare: async () => judged(),
+    });
+    expect(report).toMatchObject({ stopReason: "repeated-cause" });
+    // Aborted after row 1, not after row 2. The aborting row is still recorded,
+    // so 2 scored rows means the pair was seen as consecutive; without the replay
+    // the count would start at the resumed row and the abort would land a row
+    // later, leaving 3.
+    expect(report.completed).toBe(2);
+  });
+
+  it("records the acceptance in the REPORT, not only the ledger", async () => {
+    const dir = directory();
+    const report = await runC1Sweep({
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => prepared(nextTick()),
+    });
+    // A reader scores from the report; an arm that ran under an exception must not
+    // look like one that never needed it.
+    expect(report).toMatchObject({ acceptedScoredCauses: ["refuted:step-budget"] });
+  });
+
+  it("refuses an acceptance that cannot be recorded, rather than applying it untracked", async () => {
+    await expect(
+      runC1Sweep({
+        coordinatorGo: true,
+        directory: directory(),
+        planner: planner(),
+        priorSpendMicros: 0,
+        armLimitMicros: 9_000_000,
+        // No identity: nowhere to record the acceptance.
+        acceptScoredCauses: ["refuted:step-budget"],
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/without a run identity to record it/);
+  });
+
+  it("refuses to ADD an acceptance to a run that recorded none", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    // Recorded with NO acceptance.
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
+
+    // Resuming WITH one would make the ledger claim the whole arm ran under an
+    // acceptance that was not in force for its first rows. An earlier version
+    // wrote the acceptance before comparing it, so this passed silently.
+    await expect(
+      runC1Sweep({
+        ...base,
+        resume: true,
+        acceptScoredCauses: ["refuted:step-budget"],
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/was not in force when this run was recorded/);
+  });
+
   it("rejects a malformed accepted cause rather than half-applying it", async () => {
     await expect(
       runC1Sweep({

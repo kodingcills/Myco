@@ -532,12 +532,28 @@ that way. Override the thresholds with `MYCO_WATCH_LIMIT_USD` and `MYCO_WATCH_SI
 The watchdog is started with FD 9 closed: it must not inherit the VM lock, or killing it
 orphans a child that keeps the lock held after the sweep exits.
 
-**Resuming.** If a run dies, re-issue the same command with the same `OUT` and add `--resume`:
+- **Resuming.** If a run dies, re-issue the same command with the same `OUT` and add `--resume`:
 
-```bash
-MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
-  bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume
-```
+  ```bash
+  MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
+    bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume
+  ```
+
+  **Every flag the original run used must be repeated on every resume** — the launcher
+  forwards them to `c1-sweep.ts`, and the run refuses rather than quietly running under
+  different terms. For a pre-identity ledger whose scored cause has been diagnosed (r6), the
+  complete command is:
+
+  ```bash
+  MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
+    bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume --adopt-identity \
+      --accept-scored-cause 'refuted:step-budget'
+  ```
+
+  Omitting `--adopt-identity` is refused (no recorded identity to check), and omitting
+  `--accept-scored-cause` is refused once the ledger records one — both on purpose: a
+  resumed half that runs under different terms is not comparable with the half already
+  recorded.
 
 - **Scored trials are skipped.** Pass/refuted rows are not re-bought. A trial left `reserved`
   by the crash, or omitted `trial-interrupted`, is re-attempted with a fresh reservation.
@@ -563,8 +579,9 @@ MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
   measuring the harness, and they abort. Two identical *scored* failures can mean the same
   thing — or they can mean the agent has a known, diagnosed limitation and every row will
   reproduce it. Left alone, the rule stops such an arm at its second row and the comparison
-  never completes. `--accept-scored-cause 'verdict:reason'` (repeatable, requires nothing
-  else) records the operator's diagnosis:
+  never completes. `--accept-scored-cause 'verdict:reason'` (repeatable) records the operator's
+  diagnosis. It requires `--resume` and must be repeated on **every** resume — see the
+  complete r6 command above:
 
   ```bash
   bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume --adopt-identity \
@@ -573,10 +590,21 @@ MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
 
   An accepted cause **breaks the run of failures** rather than contributing to it. Anything
   not accepted still aborts at the second occurrence, so this narrows the rule instead of
-  disabling it. The acceptance is written into the run identity
-  (`identity.acceptedScoredCauses`) so a reader can tell an arm that ran under one from an
-  arm that never needed it, and a resume whose acceptance differs from the recorded one is
-  refused — the two halves would not be comparable.
+  disabling it. The acceptance appears in **both** the report (`acceptedScoredCauses`) and
+  the run identity (`identity.acceptedScoredCauses`) so a reader can tell an arm that ran
+  under one from an arm that never needed it. A resume must match the recorded acceptance
+  **exactly** — adding one to a run that recorded none is refused as firmly as dropping
+  one, because the first half would be misreported as covered by an acceptance that did not
+  exist when its rows were produced. An acceptance with no run identity to record it is
+  refused outright rather than applied untracked.
+
+  **Attack surface, stated:** the acceptance key is `verdict:reason` only, while the abort
+  key also includes the action signature and step count. Accepting a cause broadly enough
+  (say `refuted:persisted-mismatch`) would silence exactly the alarm that caught arm-003d
+  r2's harness fault, and a full arm of garbage would then report `completed: 30,
+  partial: false` with no `stopReason`. The spend cap still bounds the damage, and the
+  acceptance is recorded — but **accept a cause only after diagnosing it**, not to get past
+  a stop.
 
   What it is for: r6's rows all fail by pressing `Escape` on LibreOffice's "Keep Current
   Format" dialog, which cancels the save. That is a characteristic failure of the **baseline

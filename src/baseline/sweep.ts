@@ -384,32 +384,55 @@ export async function runC1Sweep(options: {
     // before the first trial so a crash during trial 0 still leaves a checkable
     // ledger rather than an unexplained one.
     if (!ledger.identity && options.identity) {
-      ledger.identity = options.identity;
-      writeJson(path, ledger);
-    }
-    // The acceptance is part of the run's identity: an arm that ran with
-    // `refuted:step-budget` accepted is a different experiment from one that did
-    // not, and a reviewer must be able to see which. Written once, then asserted
-    // on later resumes so a resumed arm cannot quietly change its acceptance.
-    if (ledger.identity && acceptedScoredCauses.size > 0 && !ledger.identity.acceptedScoredCauses) {
       ledger.identity = {
-        ...ledger.identity,
-        acceptedScoredCauses: [...acceptedScoredCauses].sort(),
+        ...options.identity,
+        ...(acceptedScoredCauses.size > 0
+          ? { acceptedScoredCauses: [...acceptedScoredCauses].sort() }
+          : {}),
       };
       writeJson(path, ledger);
     }
-    if (runResume && ledger.identity?.acceptedScoredCauses) {
-      const previous = new Set(ledger.identity.acceptedScoredCauses);
+
+    // The acceptance is part of the run's identity: an arm that ran with
+    // `refuted:step-budget` accepted is a different experiment from one that did
+    // not, and a reviewer must be able to see which.
+    //
+    // ORDER MATTERS AND WAS WRONG. An earlier version WROTE the acceptance into
+    // the identity before comparing it, so a resume that supplied one against a
+    // ledger recording none compared the caller's value with itself and passed.
+    // The ledger then claimed the whole arm had run under an acceptance that was
+    // not in force for its first rows. The comparison now runs FIRST and the
+    // write only ever happens for a fresh run.
+    if (runResume) {
+      const recorded = ledger.identity?.acceptedScoredCauses ?? [];
+      const previous = new Set(recorded);
+      // Exact equality in BOTH directions. Adding is as much a change as dropping:
+      // if the first half ran with nothing accepted, a second half that accepts a
+      // cause is a different experiment, and the artifact would misreport the first
+      // half as having been covered by an acceptance that did not exist yet.
       for (const cause of acceptedScoredCauses)
         if (!previous.has(cause))
           throw new Error(
-            `refusing to resume ${path}: accepted scored cause "${cause}" was not in force when this run was recorded (recorded: ${[...previous].join(", ") || "none"})`,
+            `refusing to resume ${path}: accepted scored cause "${cause}" was not in force when this run was recorded (recorded: ${recorded.join(", ") || "none"})`,
           );
       for (const cause of previous)
         if (!acceptedScoredCauses.has(cause))
           throw new Error(
             `refusing to resume ${path}: accepted scored cause "${cause}" was in force for this run but is not passed now; the resumed rows would not be comparable`,
           );
+    } else if (acceptedScoredCauses.size > 0) {
+      // A fresh run records what it is about to accept. `identity` is REQUIRED
+      // here: an acceptance with nowhere to record it would apply with no trace,
+      // which is the one thing an auditable exception must not do.
+      if (!ledger.identity)
+        throw new Error(
+          "cannot accept a scored cause without a run identity to record it against; pass the run identity so the acceptance is auditable",
+        );
+      ledger.identity = {
+        ...ledger.identity,
+        acceptedScoredCauses: [...acceptedScoredCauses].sort(),
+      };
+      writeJson(path, ledger);
     }
     const persist = () => writeJson(path, ledger);
     const planner = options.planner ?? createPlanner();
@@ -444,9 +467,26 @@ export async function runC1Sweep(options: {
       const prior = ledger.c1[index];
       if (prior?.status === "scored") {
         writeJson(join(rowDirectory, `${index}.json`), prior.row);
+        // REPLAY the scored cause, so the counter is continuous across a resume.
+        //
+        // The comment below the loop already claimed this ("scored rows and
+        // omissions alike"), but only `driver-unreachable` was replayed - so two
+        // consecutive identical scored causes straddling a crash never reached
+        // `consecutive >= 2` and the rule silently could not see them. Found by a
+        // round-1 verifier probing exactly that shape.
         if (prior.row.verdictReason === "driver-unreachable") {
           stopReason ??= "driver-unreachable";
           noteCause("driver-unreachable");
+        } else if (acceptedScoredCauses.has(`${prior.row.verdict}:${prior.row.verdictReason}`)) {
+          // Same rule as a live row: an accepted cause breaks the run rather
+          // than extending it, or the replay would abort an arm that is behaving
+          // exactly as diagnosed.
+          lastCause = undefined;
+          consecutive = 0;
+        } else {
+          noteCause(
+            `scored:${prior.row.verdict}:${prior.row.verdictReason}:actions=${actionSignature(prior.row)}`,
+          );
         }
         continue;
       }
@@ -695,6 +735,11 @@ export async function runC1Sweep(options: {
       // reconstructed rather than carried in memory - previously the rule could
       // fire with no trace in the output at all.
       ...(stopReason ? { stopReason } : {}),
+      // The acceptance the run operated under. In the report as well as the
+      // ledger because the report is what a reader scores from, and an arm that
+      // ran with a diagnosed cause accepted must not look like one that never
+      // needed the exception.
+      acceptedScoredCauses: [...acceptedScoredCauses].sort(),
       rows,
     };
     writeJson(join(directory, "report.json"), report);
