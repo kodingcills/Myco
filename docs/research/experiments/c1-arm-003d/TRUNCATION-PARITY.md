@@ -53,16 +53,28 @@ the agent."* **It was only called for omissions and `driver-unreachable`.** Two 
 on the third row rather than the second. **A delayed abort costs one trial; a false abort
 discards a healthy arm and misreports it as a harness fault.**
 
-## Relaunch arithmetic, verified from the ledger
+## Relaunch arithmetic — SUPERSEDED, do not use
+
+An earlier revision of this note gave `prior 3653712 / remaining 5346288` for the next
+relaunch. **That was the r2-era figure and is wrong now** — r3 and r5 spent after it.
+
+**Current cash prior, and the value to use:**
 
 ```
-prior committed before today   3,190,688
-c1-arm003d-r2 booked             463,024   <- verified: sum of row micros, exact match
-prior spend (seed)            3,653,712
-combined ceiling              9,000,000
-REMAINING                     5,346,288
+committed before today      3,190,688
+r1 reservation (booked)       376,800
+r2 ledger total               463,024
+r3 (2 scored trials)          228,970
+r5                            221,250
+prior spend (seed)          4,480,732
+combined ceiling            9,000,000
+REMAINING                   4,519,268
 ```
 
-Use `MYCO_PRIOR_SPEND_MICROS=3653712` and `MYCO_ARM_LIMIT_MICROS=5346288`, **not** the
-ceiling — passing the ceiling is accepted but makes the arm report claim headroom that was
-never spendable (the arm-vs-remaining distinction documented in `SPEND-CEILING.md`).
+Use `MYCO_PRIOR_SPEND_MICROS=4480732` and `MYCO_ARM_LIMIT_MICROS=4519268`. Computed for
+**TIF-186 (#359)** by the Screenshot owner and the outer loop; recorded here so the stale
+figure above cannot be picked up by a later reader.
+
+**Not** the ceiling: passing `MYCO_ARM_LIMIT_MICROS=9000000` is accepted but makes the arm
+report claim headroom that was never spendable — the arm-vs-remaining distinction in
+`SPEND-CEILING.md`.
