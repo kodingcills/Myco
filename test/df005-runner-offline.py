@@ -547,8 +547,11 @@ def main() -> int:
         # The denominator must be MEASURED, not asserted: count the check lines
         # actually printed and compare to the "of N" claim. Omitting a check
         # that needs neither the lock nor the guest is the defect this guards.
+        # `defer ` is a mark of its own now (a deferral is not a skip), so the
+        # counter must list all four or it undercounts and the "of N" check
+        # reads as a missing check.
         check_lines = [l for l in proc.stdout.splitlines()
-                       if l.lstrip().startswith(("ok ", "FAIL ", "skip "))]
+                       if l.lstrip().startswith(("ok ", "FAIL ", "skip ", "defer "))]
         expect("create-schema" in proc.stdout,
                "create-schema is reported even while the lock is held")
         expect(len(check_lines) == 8,
@@ -586,7 +589,7 @@ def main() -> int:
     # phrased against the new wording here.)
     for name in ("app-deployed", "app-self-test", "introspection-file",
                  "introspection-shadow"):
-        expect(f"skip {name}: deferred: no guest up yet" in proc.stdout,
+        expect(f"defer {name}: deferred: no guest up yet" in proc.stdout,
                f"{name} reported as not-run, not omitted")
     # TIF-27: with no guest up, the preflight now SUCCEEDS while accounting for
     # every check - the dependents are deferred to the run rather than failed, and
@@ -687,7 +690,7 @@ def main() -> int:
 
     expect("FAIL guest-ssh" in off_out,
            "offline: an absent guest is a real defect, because a stub boots none")
-    expect("skip guest-ssh: deferred:" in live_out,
+    expect("defer guest-ssh: deferred:" in live_out,
            "live: the same absent guest DEFERS, because create() boots one")
     expect("offline/stub server boots no guest" in off_out,
            "offline: the reason names the stub server, so the FAIL is attributable")
