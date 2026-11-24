@@ -44,6 +44,56 @@
 - **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
 - **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
 
+## Log 2026-11-24 (69) — main went red for 6 merges' worth of attention it did not deserve
+- **`main` after #388 (`77bed54c`) failed CI on `viewer verdict budget (macos-latest)`.** Cause:
+  the 10 000-step verdict median regressed 35%+ over the darwin baseline (490.6 ms vs the 425.8 ms
+  limit; samples 354–791 ms, a 2.2x spread). **Not caused by #388** — that PR and the two before it
+  touched no viewer code.
+- **The regression does not reproduce.** A plain rerun (`attempt=2`) took **all 7 jobs green**,
+  including the same job on the same commit. So the gate is not measuring the change under test.
+- **The gate is unsound on its face: the `viewer verdict budget (${{ matrix.os }})` job is
+  `skipping` on every PR**, and only runs on `main` after the merge. A timing gate that never runs
+  on the PR and only runs post-merge can only ever produce red `main` — it cannot block a bad
+  merge, and it does not run where the change is reviewable. **Needs the outer loop's decision:**
+  either give it a sane tolerance (a 2.2x sample spread against a 35% limit cannot pass reliably)
+  or make it non-blocking on a shared runner. Not fixed here — it is not M1 row 8 and it is not
+  mine to retune.
+- **Correction to a stale notification:** a PR event for #388 arrived at 07:0xZ saying "all 5
+  required checks passed"; **#388 was already merged at 06:50:46Z** and this was the post-merge
+  re-run of the pre-merge head. Checked `state` rather than acting on the notice.
+- **#391 conflicted after #388 merged** — both appended to the same two files. Resolved by taking
+  main's `m1-state.md` and re-inserting my (68) entry verbatim from the commit object, and appending
+  the fencing note to `NEXT-RUN.md` on the branch after the merge. Verified the resulting diff is
+  additive only (+35 lines, 2 files, no deletions).
+
+## Log 2026-11-24 (68) — TIF-191 built; VM order reversed to r6-first
+- **VM order (lead, 06:48Z): r6 keeps the guest until it finishes.** Interrupting a live paid run
+  costs more than waiting. Nothing touches the guest or the flock while `c1-baseline` pid 36343
+  holds it. Row-8 §6 → §7 → the row-8 rerun go the moment it releases.
+- **#388 MERGED** as `77bed54c`, Tier 0, 5/5 green: runbook §6.1 (guest clean + cleanup for an
+  aborted attempt), §6.2, and §2's race-free stale-lock clearing. Carries `Part of TIF-191`.
+- **TIF-191 = F12, and the lead's call is acquire-and-fail-closed.** PR #390, head `c4ab78a7`.
+  `run-live` now takes the flock before the token read, the tunnel, `mkdir runs/` or any guest
+  contact, and refuses with exit **10** naming the holder. A sweep's child **inherits** the lock
+  its ancestor owns instead of refusing, so §7 is unaffected: `vm_lock_owned_by_parent`'s rule,
+  reimplemented in TypeScript in `src/integration/vm-lock.ts`. Node has no `flock`, so the
+  descriptor is handed to `python3` as fd 3 and Node keeps its copy open — the same kernel object
+  `vm-lock.sh` uses, so the two sides interlock.
+- **Measured, all five tests and the full suite:** `pnpm typecheck` and `pnpm lint` clean,
+  `pnpm test` **973 passed / 1 skipped**, schema-validate ok. **Mutation-verified three ways** —
+  removing the acquire fails 2, disabling ancestor inheritance fails 1, making contention
+  non-fatal fails 3. A test bug was caught **by the mutation run, not by inspection**: `bash -c`
+  **execs** its last command, so the owning sweep pid vanished and the ancestor check correctly
+  reported no owner.
+- **Tests are hermetic by construction:** every case uses a temp `MYCO_VM_LOCK_PATH` and a sandbox
+  `HOME` with no `.myco-token`. The first draft read the host's real token and started dialling
+  the guest — caught because the assertion expected a token error and got a tunnel error.
+- **#391** (Tier 0) adds `docs/research/experiments/m1-row8/NEXT-RUN.md`: the §6 launch ready but
+  unrun, survivor-detached through `setsid`, with the gate (flock free **and** no driver), and the
+  point that liveness is the **guest run dirs**, never the log.
+- **Attempt A's death is now attributed as the lead's hypothesis:** the omp session teardown at
+  06:33:04Z, when turns were failing. That is why every launch from here is survivor-detached.
+
 ## Log 2026-11-24 (67) — row 8 §6: 16/16 verified, 0 refuted, never finished
 - **§6 is neither passed nor refuted.** Two attempts on a reset, verified-clean guest:
   **every row that reached the verifier verified (16 of 16), and no row was refuted.** Both
