@@ -20,8 +20,10 @@ import { describe, expect, it } from "vitest";
 
 const root = join(import.meta.dirname, "..");
 
-function gate(script: string): Promise<{ status: number | null; output: string }> {
-  const { promise, resolve } = Promise.withResolvers<{ status: number | null; output: string }>();
+type GateResult = { status: number | null; output: string };
+
+function run(script: string): Promise<GateResult> {
+  const { promise, resolve } = Promise.withResolvers<GateResult>();
   const child = spawn("python3", [join(root, "test", script)], {
     cwd: root,
     stdio: ["ignore", "pipe", "pipe"],
@@ -37,19 +39,45 @@ function gate(script: string): Promise<{ status: number | null; output: string }
   return promise;
 }
 
+/**
+ * Run a gate and require that it did work before it said PASSED.
+ *
+ * Asserting only `PASSED` + exit 0 made this wrapper trust its subject's own
+ * self-report: replacing both gate files with `print('PASSED: 0 failure(s)')`
+ * left two green tests over two no-op scripts.
+ *
+ * Each `expect(...)` in a gate prints one `ok`/`FAIL` line, so counting them
+ * requires the gate to have run assertions. `minAssertions` is a floor, not an
+ * exact number, so adding assertions does not require touching this file; the
+ * real counts are 24 and 153, so both floors sit below with room.
+ *
+ * **What this does NOT do.** A gate that prints a hundred plausible `ok` lines
+ * and exits 0 defeats it - a verifier demonstrated exactly that in three lines.
+ * This is a higher bar, not independent evidence; any gate that can print is
+ * still trusted for the content of what it prints. Proving more would need the
+ * wrapper to own the assertion list, diff against a committed transcript, or
+ * require the gate to demonstrate it touched the runner. The goal here is
+ * narrow: make an emptied or stubbed gate fail loudly rather than pass quietly.
+ */
+async function gate(script: string, minAssertions: number): Promise<GateResult> {
+  const r = await run(script);
+  const assertions = (r.output.match(/^\s+(ok|FAIL)\s/gm) ?? []).length;
+  expect(
+    assertions,
+    `${script} printed ${assertions} assertion lines; a gate that reports PASSED ` +
+      `without running its assertions is indistinguishable from an emptied file`,
+  ).toBeGreaterThanOrEqual(minAssertions);
+  expect(r.output).toContain("PASSED");
+  expect(r.status).toBe(0);
+  return r;
+}
+
 describe("df005 contract gates", () => {
   it("cleanup frees the session with both tools, and refuses to leak", async () => {
-    const r = await gate("df005-postcreate-gate.py");
-    // The gate prints `PASSED: N assertion(s)` on success, and names each
-    // failed assertion otherwise - so a failure reads as the property, not
-    // as "exit 1".
-    expect(r.output).toContain("PASSED");
-    expect(r.status).toBe(0);
+    await gate("df005-postcreate-gate.py", 10);
   }, 120_000);
 
   it("the offline runner reports deferral rather than failure", async () => {
-    const r = await gate("df005-runner-offline.py");
-    expect(r.output).toContain("PASSED");
-    expect(r.status).toBe(0);
+    await gate("df005-runner-offline.py", 100);
   }, 300_000);
 });
