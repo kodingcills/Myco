@@ -20,6 +20,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 RUN_DIR="${S0_RUN_DIR:-/tmp/myco-s0}"
 PID_FILE="$RUN_DIR/s0.pid"
 CHILD_FILE="$RUN_DIR/s0.child"
+LOCK_FILE="$RUN_DIR/s0.flock"
 LOCK_DIR="$RUN_DIR/s0.lock"
 LOG="$RUN_DIR/s0.log"
 PROBE="$RUN_DIR/probe.txt"
@@ -84,6 +85,16 @@ lock_trace() {
     "${3:-none}" "$birth" \
     >>"$LOG" 2>/dev/null || true
 }
+
+# TIF-170: the claim. Take a kernel flock on fd 9 and leave it open: the lock belongs to
+# the inherited open file description, so it survives this process and is held by the
+# watchdog for the run's whole lifetime. The kernel releases it when the last inheriting
+# process exits, which is what `--stop` and a crash both rely on.
+#
+# Non-blocking: a second `--run` is refused because the kernel already holds the lock, not
+# because a directory could not be created. Exits 0 when the lock is ours.
+#
+# Written to $LOCK_FILE and never removed, so every contender locks the same inode.
 
 probe() {
   {
@@ -208,6 +219,8 @@ case "${1:-}" in
       fi
       rm -f "$FILE"
     done
+    # TIF-170: the flock needs no explicit release here — `--stop` kills the holders, and
+    # the kernel drops the lock when the last inheriting process exits.
     lock_trace rmdir-before stop
     rmdir "$LOCK_DIR" 2>/dev/null || true
     lock_trace rmdir-done stop
@@ -227,8 +240,6 @@ case "${1:-}" in
       echo "already running: pid $(cat "$PID_FILE")"; exit 1
     fi
     say "launching detached; log $LOG"
-    nohup "$0" --watchdog >>"$LOG" 2>&1 &
-    CHILD=$!
     # Claiming the run must be ONE atomic step. `mkdir` gives that in one syscall and
     # fails cleanly when the directory exists. The noclobber alternative is reachable
     # only through a construct that also refuses, and #300's earlier attempt showed the
@@ -240,14 +251,47 @@ case "${1:-}" in
     # single racer that certainly created the lock shows `birth` about 1 ms BEFORE its own
     # `pre` (three runs, -0.73/-1.33/-1.38 ms), because the shell's clock and the kernel's
     # `btime` are different sources. Derivation: s0-launcher-race-flake/FLAKE.md.
-    # Not local: this is a case branch, not a function.
     t_before="$(date +%s.%N 2>/dev/null || true)"
     [ -n "$t_before" ] || t_before="$(date +%s)"
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-      lock_trace mkdir-won run-claim "$t_before"
+    # TIF-170: the kernel lock decides, not `mkdir`. Order is the whole mechanism —
+    # 1. this shell opens fd 9; 2. the kernel grants or refuses the flock; 3. only then
+    # is the watchdog spawned, so it inherits the same open file description. A function's
+    # `exec` would not persist to this shell, and opening after the spawn gives the child
+    # no fd, which silently releases the lock the moment `--run` exits.
+    #
+    # The lock belongs to the open file description, so its lifetime is the RUN TREE's:
+    # the watchdog holds it, and so does every descendant that inherits fd 9 (the
+    # sequence child does — verified with lsof). The kernel releases it when the last of
+    # them exits. That is why `--stop`, which kills the holders, needs no explicit unlock.
+    # The consequence worth knowing: a descendant that survives `--stop` keeps the lock,
+    # and the next `--run` refuses with exit 1 until that stray is gone.
+    # Not local: this is a case branch, not a function.
+    claim_rc=0
+    exec 9>>"$LOCK_FILE" || claim_rc=1
+    if [ "$claim_rc" -eq 0 ]; then
+      python3 - "$LOCK_FILE" "$$" <<'PY' || claim_rc=$?
+import fcntl, os, sys
+path, pid = sys.argv[1:]
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(2)
+# Overwrite stale metadata only after the kernel granted exclusive access.
+os.ftruncate(9, 0)
+os.write(9, ("%s s0-live.sh\n" % pid).encode())
+PY
+    fi
+    if [ "$claim_rc" -eq 0 ]; then
+      lock_trace flock-won run-claim "$t_before"
+      # Spawned with fd 9 already open, so this child inherits the lock.
+      nohup "$0" --watchdog >>"$LOG" 2>&1 &
+      CHILD=$!
+      # The directory stays as a claim marker for readers and the diagnostics; it is no
+      # longer what excludes a second claimant.
+      mkdir "$LOCK_DIR" 2>/dev/null || true
     else
-      lock_trace mkdir-lost run-claim "$t_before"
-      kill "$CHILD" 2>/dev/null || true
+      lock_trace flock-lost run-claim "$t_before"
+      exec 9>&-
       say "another --run holds the run lock; refusing to start a second sequence"
       exit 1
     fi
