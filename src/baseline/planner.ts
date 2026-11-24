@@ -101,26 +101,28 @@ const MAX_INPUT = 5_000;
  * trial, 1.61x) rather than hiding the increase.
  */
 /**
- * Output ceiling per model call. RAISED FROM MEASUREMENT (TIF-200).
+ * Output ceiling per model call. KEPT AT 1024, ON MEASUREMENT (TIF-200).
  *
- * r6's 19 completed trials contain **570 model calls**. Their completion sizes:
+ * r6's 19 completed trials hold **570 model calls**. Their completion sizes:
  *
  *     min 77 | median 254 | P90 401 | P99 535 | MAX 615
  *
- * **Nothing in any completed row reached 768**, let alone 1024 - yet trial 20's call
- * truncated AT 1024. So the ceiling was not tight for a normal reply; that one call ran
- * to more than 615 tokens where every other call stayed under it.
+ * **Nothing in any completed row reached 768**, so 1024 carries **~66% headroom over the
+ * largest reply ever measured here** (615) and 91% over P99 (535). Trial 20 truncated AT
+ * 1024 - the ONE call in 571 that ran past 615 - and the evidence says that is a
+ * DEGENERATE REPEAT rather than a ceiling that is too tight: every other call in the arm
+ * sat comfortably under it.
  *
- * 1024 was therefore ABOVE every observed normal response and the arm still died on it,
- * which is the argument for headroom rather than for a bigger typical value: the failure
- * is a tail, not a distribution shift. 2048 gives **3.3x the largest completion ever
- * measured here** while still bounding a runaway reply.
+ * A higher ceiling was implemented and then REVERTED on the lead's ruling, and the
+ * reasoning is worth keeping: raising it to 2048 would have made a degenerate repeat
+ * merely MORE EXPENSIVE, with only $1.75 of headroom left in the project cap. The
+ * runaway reply is the thing to bound, not the thing to accommodate.
  *
- * This is also the reservation's input (`MAX_CALL_MICROS`), so raising it raises the
- * worst-case per-trial hold. That is the honest cost of a larger ceiling and is why this
- * is not simply set to the model's maximum.
+ * The failure mode is therefore handled where it belongs - a truncated reply books its
+ * ACTUAL cost and needs two consecutive occurrences to stop the arm - rather than by
+ * widening the bound that caught it.
  */
-export const MAX_OUTPUT = 2048;
+export const MAX_OUTPUT = 1024;
 // Integer microdollars at the frozen short-context input and output rates.
 export const MAX_CALL_MICROS = MAX_INPUT * 2 + MAX_OUTPUT * 10;
 const PROMPT = [
