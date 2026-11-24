@@ -16,7 +16,7 @@
  *     the cap has consumed and can stop an affordable run early - the opposite error to
  *     the one fail-closed booking guards against, but an error either way.
  *
- * The measured basis for the ceiling is in planner.ts: 570 calls across r6's 19 completed
+ * The measured basis for the ceiling is in planner.ts: 570 RECORDED calls across r6's 19 completed
  * trials, max completion 615, nothing above 768.
  */
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -218,7 +218,10 @@ describe("a cost the ledger cannot trust is not booked", () => {
 });
 
 describe("the ceiling is set from measurement, not taste", () => {
-  // The measured basis: 570 calls across r6's 19 completed trials.
+  // The measured basis: 570 RECORDED calls across r6's 19 completed trials (19 x 30).
+  // Trial 20's call was never recorded - a truncated reply is omitted before its usage
+  // is written - so the attempted count is at least 571 and is not derivable from the
+  // artifact. Cite the recorded number, not a denominator that was never measured.
   const MEASURED_MAX = 615; // the largest completion r6 ever produced
   const MEASURED_P99 = 535;
 
