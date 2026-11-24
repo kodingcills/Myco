@@ -762,7 +762,28 @@ export async function runC1Sweep(options: {
         // reservation stays booked - fail closed, because under-reporting spend against
         // a hard cap is the dangerous direction.
         const failed = error instanceof PlannerFailure;
-        const billed = failed ? error.costMicros : undefined;
+        // VALIDATED, not trusted. `PlannerFailure.costMicros` is a public constructor
+        // argument, and the booking feeds a HARD CAP. A round-1 verifier measured what
+        // an unvalidated value does to that cap:
+        //
+        //   negative   -> charged() goes negative, so the guard fires LATER (fail-open)
+        //   NaN        -> `NaN > LIMIT` is false, so the cap is silently dead in-run
+        //   over-reservation, Infinity -> the ledger totals exceed the ceiling unguarded
+        //   fractional -> a non-integer micros value, against the ledger's invariant
+        //
+        // A non-integer, negative, or over-reservation figure is therefore treated as
+        // UNKNOWN and the full reservation is kept. Only a plausible charge is booked:
+        // the charge has to be a safe non-negative integer no larger than the hold that
+        // stands in for it. `loadLedger` would reject the rest on the next resume, but
+        // the run itself must not be corrupted before it gets there.
+        const offered = failed ? error.costMicros : undefined;
+        const billed =
+          offered !== undefined &&
+          Number.isSafeInteger(offered) &&
+          offered >= 0 &&
+          offered <= reservation
+            ? offered
+            : undefined;
         // ONE FAILURE MUST NOT END A PAID ARM. This used to be
         // `if (failed) stopReason = "planner-failed"` - an ASSIGNMENT, so the first
         // measurable provider fault stopped a 30-trial run. r6 lost trials 21-29 to a
