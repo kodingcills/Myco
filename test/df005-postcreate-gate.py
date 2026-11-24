@@ -164,8 +164,17 @@ def main() -> int:
     expect(leaked.bucket == "gap", f"6a: a guest that never came up is a gap (got {leaked.bucket})")
     expect("LEAKED" in leak_text,
            "6a: the gap NAMES THE LEAK when the session could not be freed")
-    expect("could not free session" in leak_text,
-           "6a: the leak text carries the teardown's own reason, not just a flag")
+    # Assert the teardown's own REASON, not merely the phrase that precedes it.
+    # `"could not free session" in leak_text` was a prefix test: it stayed green
+    # under `f"could not free session {sid}: teardown failed"` and under
+    # `f"could not free session {sid}"`, neither of which carries {destroy_error}.
+    # `FakeMcp(teardown_works=False)` raises `reset refused to release` and
+    # `destroy refused to release`; the reported reason must be DESTROY's, since
+    # destroy is the operation that actually frees the guest.
+    expect("destroy refused to release" in leak_text,
+           "6a: the leak carries destroy's own error text, not just a prefix")
+    expect("reset refused to release" not in leak_text.split("AND THE SESSION LEAKED")[-1],
+           "6a: the reported reason is destroy's, not reset's - the last error wins")
 
     # 6b. teardown SUCCEEDS -> a clean gap, and NOT described as leaked. The
     # asymmetry is the whole point of the branch, so both sides are asserted:

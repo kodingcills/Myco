@@ -636,7 +636,11 @@ def main() -> int:
     # in a fresh clone).
     expect("mcp-server" in proc.stdout, "the server check is reported in both cases")
     if proc.returncode == 0:
-        expect(True, "exit 0 with a built server: no guest yet is not a failure")
+        # An always-true `expect(True, ...)` used to sit here. It printed `ok` for
+        # a property nobody checked, and it inflated the assertion count the
+        # vitest floor relies on. The real property at rc 0: nothing failed.
+        expect("FAIL" not in proc.stdout,
+               "exit 0 means no check failed - not merely that the exit code was 0")
     else:
         expect("mcp-server" in proc.stdout and "FAIL" in proc.stdout,
                "exit 1 is attributable to the missing server, not to the guest defer")

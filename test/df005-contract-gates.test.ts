@@ -40,18 +40,24 @@ function run(script: string): Promise<GateResult> {
 }
 
 /**
- * Run a gate and require that it actually did work before it said PASSED.
+ * Run a gate and require that it did work before it said PASSED.
  *
  * Asserting only `PASSED` + exit 0 made this wrapper trust its subject's own
  * self-report: replacing both gate files with `print('PASSED: 0 failure(s)')`
- * left two green tests over two no-op scripts. That is the same class of hole
- * the wrapper exists to close, one level up - a check whose evidence is the
- * claim it is checking.
+ * left two green tests over two no-op scripts.
  *
- * Each `expect(...)` in a gate prints one `ok`/`FAIL` line, so the count is the
- * gate proving it ran its assertions. `minAssertions` is a floor, not an exact
- * number, so adding assertions does not require touching this file; the values
- * sit well below the real counts (153 and 12) and well above one.
+ * Each `expect(...)` in a gate prints one `ok`/`FAIL` line, so counting them
+ * requires the gate to have run assertions. `minAssertions` is a floor, not an
+ * exact number, so adding assertions does not require touching this file; the
+ * real counts are 24 and 153, so both floors sit below with room.
+ *
+ * **What this does NOT do.** A gate that prints a hundred plausible `ok` lines
+ * and exits 0 defeats it - a verifier demonstrated exactly that in three lines.
+ * This is a higher bar, not independent evidence; any gate that can print is
+ * still trusted for the content of what it prints. Proving more would need the
+ * wrapper to own the assertion list, diff against a committed transcript, or
+ * require the gate to demonstrate it touched the runner. The goal here is
+ * narrow: make an emptied or stubbed gate fail loudly rather than pass quietly.
  */
 async function gate(script: string, minAssertions: number): Promise<GateResult> {
   const r = await run(script);
