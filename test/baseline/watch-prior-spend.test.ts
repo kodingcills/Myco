@@ -315,7 +315,6 @@ describe("the launcher agrees with the sweep about valid prior spend", () => {
   // 13 launcher spawns, each a real shell run, so the default 5s is not enough.
   it("accepts/rejects the same strings as parseSpendCeiling", { timeout: 120_000 }, async () => {
     const { parseSpendCeiling } = await import("../../scripts/spend-ceiling.ts");
-    const { spawnSync } = await import("node:child_process");
 
     for (const value of cases) {
       // What the sweep would do.
