@@ -1,57 +1,64 @@
-# s0-live-launcher's race test is flaky, and it makes CI red on main
 
-**Found 2026-11-23** while trying to merge a docs-only PR. Recorded because it is
-blocking every PR behind it, not because the docs change is at fault.
+---
 
-## What fails
+## Update 2026-11-24 — the hypothesis that was killed, and what is now measured
 
-```
-test/discovery/s0-live-launcher.test.ts:174
-  expect(winners).toBe(1);
-AssertionError: expected 2 to be 1
-```
+### It is a real double-admit, not a bad reading
 
-The test spawns **8 concurrent `--run` racers** and asserts that **exactly one**
-wins the launcher's claim. On a loaded CI runner, **two** admit themselves.
+The open question above ("nobody has measured which") is answered. On unmodified
+`scripts/s0-live.sh`, a failing round's capture contains **two `pid N` lines** in
+`s0.log` and **two live `bash .../s0-live.sh --watchdog` processes** in the `ps` taken
+after `wait` and before `--stop`. `say "pid $CHILD"` is emitted only after
+`mkdir "$LOCK_DIR"` returns 0, so **two `mkdir` calls both succeeded** on a path that was
+absent at both moments. Two racers really did exit 0.
 
-## It is not the docs PR
+That rules out the "log read mid-write" reading. The `--stop`-ordering artefact is not
+involved either: the snapshot precedes `--stop`.
 
-- The failing PR touches only `docs/backlog/dogfood.md` and a research note.
-- **It passes locally every time** — 4 consecutive runs, `Tests 7 passed (7)`.
-- **`main` itself fails it.** Recent main runs: `8fc960b` failure, `2f419c1`
-  failure, `57f5c3e` success. So the flake predates this PR and is intermittent
-  on main.
+### Frequency, and why the dev host never saw it
 
-## Why it flakes
+| Host | Rounds | Double-admits |
+|---|---|---|
+| ubuntu-latest (`nproc=4`), 5 invocations | 9, 18, 18, 19, 23 | **~1 round in 5** |
+| 14-core macOS dev host | ~13,000 racer invocations | **0** |
 
-The assertion is about **mutual exclusion under contention**: 8 processes race to
-claim one run, and the test requires the count of admitted winners to be exactly 1.
-Two admitted means either the claim is not fully atomic under load, or the test's
-counting method (grepping a shared log for `^1$`) is racing the writers.
+The gap is core count. This is why every local sweep came back clean.
 
-**The counting method is the likelier culprit.** The test reads a *shared* log
-after the racers exit, and the comment at `:176` notes `--run` routes stdout to
-that shared log rather than each racer's own file. A shared append target plus 8
-writers plus a grep after exit is a read-after-write assumption, which is exactly
-what a loaded runner breaks.
+### Hypothesis tested: `--stop`'s unconditional `rmdir "$LOCK_DIR"` — FALSIFIED
 
-## Why it matters beyond this PR
+**Statement.** The test calls `--stop` every round; `--stop` removes the lock without
+asking who owns it. If that removal lands after a later racer claimed, a second `mkdir`
+succeeds. Prediction: an owner-checked `--stop` (remove only when no live process owns
+the lock) would stop the double-admit.
 
-`check (ubuntu-latest)` is a **required** status check. A flaky required check
-means:
+**Method.** One workflow dispatch per arm, same parameters (6 invocations × 40 rounds),
+against `scripts/s0-live.sh` and against a variant differing only in that `--stop` block.
 
-- every PR can be blocked at random, with no code change at fault;
-- re-running "until green" is the only remedy, which trains everyone to treat a
-  red required check as noise;
-- the launcher's *actual* atomicity property is asserted by a test that cannot
-  distinguish "the claim admitted two" from "the log was read mid-write" — so a
-  genuine regression here would be dismissed as the known flake.
+| Arm | Launcher | Failing rounds |
+|---|---|---|
+| A | shipped | 15 |
+| B | owner-checked `--stop` | 6, 11 |
 
-## Not fixed here
+Both arms reproduced, and B's capture shows the identical signature — two `pid N` lines
+(5195, 5197), `rc.5=0` and `rc.8=0`, six refusals. **The owner check does not prevent
+the second claim.**
 
-The test belongs to TIF-138 / #315. Fixing it means either making the count
-race-free (per-racer output, or count under the launcher's own lock) or widening
-the assertion with a documented tolerance — and **widening it without first
-determining which reading is true would hide a real defect**. That is the
-distinction worth preserving: the flake is a test-methodology problem *or* a
-launcher-atomicity problem, and nobody has measured which.
+- A: <https://github.com/kodingcills/Myco/actions/runs/45302113079>
+- B: <https://github.com/kodingcills/Myco/actions/runs/45302130418>
+- branch `tif-170-stop-variant`, commit `bf524683`
+
+### What this leaves
+
+The remover has still not been named. What is settled:
+
+- two `mkdir` calls succeed, so something removes the lock between them;
+- it is not the loser's process tree (no surviving grandchild; the tsx grandchild dies
+  with its watchdog);
+- it is not the winner's own watchdog teardown (40 pristine rounds sampling the lock
+  every 20 ms: zero flaps);
+- it is not `--stop`'s unconditional rmdir, by this experiment.
+
+The remaining candidate is the **pid-file guard window**: between the guard reading
+`s0.pid` and the `mkdir` that claims, a concurrent round's teardown can clear both. That
+is testable the same way — dispatch with the guard's window widened by a sleep — and the
+harness to do it now exists on main.
