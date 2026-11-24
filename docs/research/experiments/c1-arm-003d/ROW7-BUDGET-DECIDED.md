@@ -30,19 +30,31 @@ The scorecard entry must carry, in the row itself rather than in a note:
 - the **cash** figure, not the booked figure — reservations are holds, not spend
 - that arm-002 remains **not** a baseline, so a reader does not substitute it
 
-## The cost basis for any future re-budget
+## The cost basis — CORRECTED 2026-11-24 05:16Z
 
-**Do not project from arm-002's $0.054/trial.** That rate was measured on r2, whose
-completions were clipped at `MAX_OUTPUT=256` — cheap *and* truncated. Post-#340 replies run
-7,265–9,723 output tokens, and the measured cost is **266,804 u$ per scored trial**, roughly
-5× arm-002's rate.
+An earlier revision of this note gave **266,804 u$ per scored trial**. **That was wrong.**
+It divided the booked ledger total (which includes reservations for reserved trials and the
+full reservation for omitted ones) by the number of SCORED rows, and so charged the arm for
+spend it had not incurred.
 
-**At that rate, a full 30-trial arm needs ~8.0M u$ for the arm alone** — which is why the $9
-ceiling cannot fund 30 trials on top of $4.48M of prior spend. A higher cap is the only way
-to get a complete arm, and that is a spend decision, not an engineering one.
+**The measured cost, from r6's own ledger:**
 
-## Status
+```
+9 scored rows          total 1,012,370 u$   = $1.012370
+per scored row         112,485 u$           = $0.112485
+prior committed        4,480,732 u$
+REAL PROJECT SPEND     5,493,102 u$         = $5.493102  of $9.00
+HEADROOM               3,506,898 u$         = $3.506898
+```
 
-- `R6-BUDGET-WALL.md` — the measurement and the three options; option (2) is the one taken.
-- `c1-r6` — 9 scored, 2 omitted at the time of the decision; paused for the E96 diagnosis.
-- No further action from me on the budget unless the cap is raised.
+**21 rows remain, needing 21 x 112,485 = 2,362,185 u$ — which fits inside the 3,506,898
+headroom.** So **arm-003 is expected to complete all 30 rows under the $9 ceiling**, and a
+PARTIAL arm applies **only if the fail-closed cap actually binds**, which the projection says
+it will not.
+
+The earlier note's ~8.0M figure for a full arm was derived from the same wrong rate and is
+also withdrawn.
+
+**What remains true from that section:** arm-002's $0.054/trial is not a valid basis either,
+because its completions were clipped at `MAX_OUTPUT=256`. The current rate is 2x that, not
+5x, and the reason is the same — post-#340 replies are real.
