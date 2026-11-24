@@ -170,25 +170,37 @@ class Harness:
         # used to hang this harness indefinitely; under vitest the whole worker
         # then died on an RPC timeout 295s later, which looks like a broken test
         # rather than a broken run. A timeout is now a test failure with a name.
+        #
+        # The budget is generous (120s against a designed 2s readiness wait, and
+        # ~115s for the whole file) because the point is to catch an unbounded
+        # hang, not to bound a slow-but-correct run. A run killed here may be a
+        # hang OUTSIDE wait_ready - a stuck ssh child, say - so the message says
+        # so rather than implying the readiness gate; that ambiguity is the
+        # reason to read the driver's own output before raising the number.
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT,
                                   env={**os.environ, **self.env}, timeout=timeout_s)
         except subprocess.TimeoutExpired as e:
+            partial = (e.stdout or b"").decode("utf-8", "replace")[-400:]
             raise AssertionError(
-                f"the driver did not finish within {timeout_s}s "
-                f"(scenario {scenario}): a run that never returns is a failure, not a hang"
+                f"the driver did not finish within {timeout_s}s (scenario {scenario}). "
+                f"This is an unbounded hang, not a slow pass - but it may be a wait "
+                f"OUTSIDE the readiness gate (a stuck subprocess), so check the "
+                f"driver's last output before raising this number. "
+                f"Last output: {partial!r}"
             ) from e
         return proc.returncode, out / "e"
 
 
 @contextlib.contextmanager
 def mutated_runner(mutated: str):
-    """Swap the driver's source in, and put it back on *any* exit.
+    """Swap the driver's source in, and put it back on any exception exit.
 
-    `try/finally` covers exceptions but not a signal: killing this test while it
-    held a mutated driver left `if False:` on disk and the working tree dirty,
-    which then poisons every later case. Exact restoration is asserted, not
-    assumed, because the failure mode is silent.
+    `try/finally` covers exceptions. It does NOT cover SIGKILL or SIGTERM: a
+    kill mid-mutation still leaves the mutated file on disk and the tree dirty.
+    Exact restoration is asserted on the paths that do run, because the failure
+    mode is otherwise silent - but do not read this as signal-safe. A SIGINT
+    during a local run is the realistic case, and it will need `git checkout`.
 
     The guest-readiness wait is shortened while mutated. Removing the offline
     gate is a MUTATION, so the driver walks the live path and blocks on
@@ -624,7 +636,11 @@ def main() -> int:
     # in a fresh clone).
     expect("mcp-server" in proc.stdout, "the server check is reported in both cases")
     if proc.returncode == 0:
-        expect(True, "exit 0 with a built server: no guest yet is not a failure")
+        # An always-true `expect(True, ...)` used to sit here. It printed `ok` for
+        # a property nobody checked, and it inflated the assertion count the
+        # vitest floor relies on. The real property at rc 0: nothing failed.
+        expect("FAIL" not in proc.stdout,
+               "exit 0 means no check failed - not merely that the exit code was 0")
     else:
         expect("mcp-server" in proc.stdout and "FAIL" in proc.stdout,
                "exit 1 is attributable to the missing server, not to the guest defer")
@@ -645,18 +661,29 @@ def main() -> int:
             code = df005.preflight(offline=offline)
         return code, buf.getvalue()
 
-    # Same stubbed environment the preflight needs to get as far as the guest
-    # check, so the two calls differ only by `offline`.
-    saved = dict(os.environ)
+    # BOTH `GUEST_DIR` and `VM_LOCK_PATH` are bound at IMPORT time
+    # (`scripts/df005-runner.py:46-47`), so setting `os.environ` here has no
+    # effect on an already-imported module. The original version of this case did
+    # exactly that and only appeared to work when no live lock was held: with one
+    # held, the guest check is skipped as "not run: another driver holds the VM
+    # lock" before the offline branch is ever reached, so the case silently
+    # stopped testing the property. Patch both module attributes.
+    saved_env = dict(os.environ)
+    saved_guest_dir = df005.GUEST_DIR
+    saved_lock_path = df005.VM_LOCK_PATH
+    out_dir = Path(tempfile.mkdtemp(prefix="df005-offp-"))
+    no_guest = out_dir / "no-guest"
+    no_guest.mkdir(parents=True, exist_ok=True)
     try:
-        out_dir = Path(tempfile.mkdtemp(prefix="df005-offp-"))
-        os.environ["MYCO_VM_LOCK_PATH"] = str(out_dir / "free.lock")
-        os.environ["MYCO_GUEST_DIR"] = str(out_dir / "no-guest")
+        df005.GUEST_DIR = no_guest
+        df005.VM_LOCK_PATH = str(out_dir / "free.lock")
         off_rc, off_out = _capture(True)
         live_rc, live_out = _capture(False)
     finally:
+        df005.GUEST_DIR = saved_guest_dir
+        df005.VM_LOCK_PATH = saved_lock_path
         os.environ.clear()
-        os.environ.update(saved)
+        os.environ.update(saved_env)
 
     expect("FAIL guest-ssh" in off_out,
            "offline: an absent guest is a real defect, because a stub boots none")
@@ -664,8 +691,23 @@ def main() -> int:
            "live: the same absent guest DEFERS, because create() boots one")
     expect("offline/stub server boots no guest" in off_out,
            "offline: the reason names the stub server, so the FAIL is attributable")
-    expect(live_rc == 0 or "vm-lock" in live_out or "mcp-server" in live_out,
-           "live: nothing fails except ambient checks (server binary, lock)")
+    # Assert the live verdict's FAILED-CHECK SET directly. The previous form was
+    # `live_rc == 0 or "vm-lock" in live_out or "mcp-server" in live_out`, and
+    # preflight prints both of those lines unconditionally, so the second and
+    # third disjuncts were always true and the assertion could not fail - it
+    # still passed while guest-ssh was FAILing. Read the actual failures.
+    live_failures = sorted(
+        line.split(":")[0].replace("FAIL", "").strip()
+        for line in live_out.splitlines()
+        if line.strip().startswith("FAIL")
+    )
+    # The server binary and the vm lock are ambient to the host, so they may
+    # legitimately fail here; the guest must not, because live DEFERS it.
+    unexpected = [f for f in live_failures if f not in ("mcp-server", "vm-lock")]
+    expect(not unexpected,
+           f"live: no check fails except the ambient ones (server, lock); got {unexpected}")
+    expect("guest-ssh" not in live_failures,
+           "live: guest-ssh is deferred, never failed - the branches are inverted correctly")
 
     print("17. no delivery outcome can pass on a matching store (M1 allowlist)")
     for mode in ("failed", "empty", "unknown"):
