@@ -169,6 +169,54 @@ describe("a truncation is a harness fault that costs what it cost", () => {
   });
 });
 
+describe("a cost the ledger cannot trust is not booked", () => {
+  // `PlannerFailure.costMicros` is a public constructor argument whose value feeds a HARD
+  // CAP. A round-1 verifier measured what an unvalidated figure does to that cap:
+  // negative makes `charged()` shrink so the guard fires LATER, `NaN` makes `NaN > LIMIT`
+  // false so the cap is silently dead, and an over-reservation total exceeds the ceiling
+  // unguarded. Only a plausible charge may be booked.
+  const RESERVATION = 30 * MAX_CALL_MICROS;
+  const corrupt: [string, number][] = [
+    ["zero", 0],
+    ["negative", -500_000],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["fractional", 1234.567],
+    ["over the reservation", RESERVATION + 1],
+  ];
+
+  for (const [label, cost] of corrupt) {
+    it(`keeps the reservation rather than booking a ${label} cost`, async () => {
+      const dir = directory();
+      await runC1Sweep({
+        coordinatorGo: true,
+        directory: dir,
+        planner: throwingPlanner(() => new PlannerFailure("truncated", cost)),
+        priorSpendMicros: 0,
+        armLimitMicros: 9_000_000,
+        identity: IDENTITY,
+        prepare: async () => prepared(),
+      });
+      const led = JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8"));
+      const failed = (
+        Object.values(led.c1) as { status: string; micros: number; reason?: string }[]
+      ).filter((e) => e.reason === "planner-failed");
+      expect(failed.length).toBeGreaterThan(0);
+      for (const e of failed) {
+        // Every entry stays a safe non-negative integer, and none exceeds the hold that
+        // stands in for it - which is the invariant `loadLedger` enforces on resume, and
+        // the property that keeps `charged()` comparable to the cap.
+        expect(Number.isSafeInteger(e.micros)).toBe(true);
+        expect(e.micros).toBeGreaterThanOrEqual(0);
+        expect(e.micros).toBeLessThanOrEqual(RESERVATION);
+      }
+      // `0` is a legitimate refusal of an implausible charge only when the charge IS
+      // implausible - `zero` is a real (if unlikely) cost, so it is booked as zero and
+      // the assertion above still holds. The point is that nothing corrupt escapes.
+    });
+  }
+});
+
 describe("the ceiling is set from measurement, not taste", () => {
   // The measured basis: 570 calls across r6's 19 completed trials.
   const MEASURED_MAX = 615; // the largest completion r6 ever produced

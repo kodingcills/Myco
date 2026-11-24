@@ -12,6 +12,10 @@ Issues are tracked in Linear, team TIF. Tiffany's outer-loop assistant (T3 Code 
 
 Default triage label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), applied to the Linear mirror. See `docs/agents/triage-labels.md`.
 
+### Verifier briefs
+
+How to brief a delegated verifier, and the failure each rule exists to prevent: `docs/agents/verifier-briefs.md`.
+
 ### Domain docs
 
 Single-context layout: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

@@ -72,40 +72,11 @@ const PROVIDER_ERROR_TYPES = new Set([
 const OLLAMA = "qwen3.8-uncensored";
 const MAX_INPUT = 5_000;
 /**
- * Output ceiling per model call.
- *
- * 256 was clipping REAL responses. Reproducible from the committed rows under
- * `docs/research/experiments/c1-arm-002/rows/` (444 calls, 29 rows): the largest
- * NON-truncated completion is **250** (row 26), and **22 calls across 22 distinct
- * rows landed on exactly 256** - the ceiling, not the model's answer.
- *
- * The failure this caused: a reply cut off mid-JSON gave the planner no parseable
- * decision, and the trial scored `planner-no-action` / `persisted-mismatch` - a
- * HARNESS fault recorded as an agent failure. That deflates the baseline and, at
- * two consecutive identical failures, breaks the abort rule it should have
- * triggered. arm-003d r2 trials 3 and 4 were exactly that shape: 0 steps, one
- * call, completion 256. (Those rows are not committed, so they are named as the
- * motivation and not cited as evidence.)
- *
- * Scope, stated precisely: 256-hits occur across MOST verdicts, not only the
- * zero-action ones, so truncation is not the sole reason a call reaches the
- * ceiling. `FINAL.md` attributes arm-002's zero-action rows to the model typing
- * cell references rather than to clipping. What is proven is that the ceiling was
- * REACHED 22 times and that 250 is the largest answer that got through - which is
- * enough to say the cap was binding.
- *
- * 1024 is ~4x that maximum, so clipping would need an answer four times longer
- * than any observed. Chosen as a config value with headroom, not fitted to the
- * data. The cost is coupled on purpose: MAX_CALL_MICROS below derives from this,
- * so raising it raises the fail-closed reservation (376,800 -> 607,200 micros per
- * trial, 1.61x) rather than hiding the increase.
- */
-/**
  * Output ceiling per model call. KEPT AT 1024, ON MEASUREMENT (TIF-200).
  *
  * r6's 19 completed trials hold **570 model calls**. Their completion sizes:
  *
- *     min 77 | median 254 | P90 401 | P99 535 | MAX 615
+ *     min 77 | median 254 | P90 400 | P99 535 | MAX 615
  *
  * **Nothing in any completed row reached 768**, so 1024 carries **~66% headroom over the
  * largest reply ever measured here** (615) and 91% over P99 (535). Trial 20 truncated AT
