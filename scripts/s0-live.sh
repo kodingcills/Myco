@@ -43,6 +43,12 @@ say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 # Sub-second precision matters: a whole round runs inside one second, so second-granular
 # stamps cannot order a claim against an rmdir. `date +%N` is GNU-only, so `%s.%N` is
 # computed where the C library supports it and falls back to whole seconds elsewhere.
+#
+# `birth=` is the lock's creation time, read from the filesystem. On ext4 it needs an inode
+# large enough that `statx` reports `btime`; where the filesystem does not record one,
+# `stat -c %W` returns 0 and this writes `none` rather than a misleading epoch. A `none`
+# birth means the pre/post comparison cannot be made for that line, not that the lock was
+# created at the epoch.
 lock_trace() {
   local ns ino
   ns="$(date +%s.%N 2>/dev/null || true)"
@@ -56,8 +62,26 @@ lock_trace() {
   case "$ino" in
     '' | *[!0-9]*) ino=none ;;
   esac
-  printf '%s %s pid=%s %s %s path=%s ino=%s\n' \
+  # The lock's own birth time, so a line can be placed relative to the creation. Reported
+  # as epoch-seconds-with-fraction, the same shape as the stamps, so a `pre` can be
+  # compared with it directly instead of by eye.
+  #
+  # GNU `%w` carries nanoseconds; BSD has no `%w` and `%B` is whole seconds only, so the
+  # conversion runs through `date -d`, which is GNU too. Where neither yields a usable
+  # value the line says `none`, which means "this line cannot be compared", not "created
+  # at the epoch".
+  local birth raw
+  raw="$(stat -c %w "$LOCK_DIR" 2>/dev/null || true)"
+  birth=""
+  [ -n "$raw" ] && birth="$(date -d "$raw" +%s.%N 2>/dev/null || true)"
+  [ -n "$birth" ] || birth="$(stat -c %W "$LOCK_DIR" 2>/dev/null || stat -f %B "$LOCK_DIR" 2>/dev/null || true)"
+  case "$birth" in
+    '' | 0 | *[!0-9.]*) birth=none ;;
+  esac
+  # $3 is the stamp taken BEFORE the caller's operation, when the caller supplied one.
+  printf '%s %s pid=%s %s %s path=%s ino=%s pre=%s birth=%s\n' \
     "$ns" "${TIF170_TRACE_ROLE:-run}" "$$" "$1" "${2:-}" "$LOCK_DIR" "${ino:-none}" \
+    "${3:-none}" "$birth" \
     >>"$LOG" 2>/dev/null || true
 }
 
@@ -209,10 +233,20 @@ case "${1:-}" in
     # fails cleanly when the directory exists. The noclobber alternative is reachable
     # only through a construct that also refuses, and #300's earlier attempt showed the
     # guard it replaced could admit two runs; `mkdir` is the form that cannot.
+    # TIF-170: the pre-call stamp is the reading that orders racers against each other:
+    # the racer with the earliest `pre` reached `mkdir` first, and the next `mkdir-won`
+    # after it is the anomaly. Compare `pre` values with each other — NOT with `birth=`.
+    # The `pre`-vs-`birth` comparison does not discriminate: measured on the runner, a
+    # single racer that certainly created the lock shows `birth` about 1 ms BEFORE its own
+    # `pre` (three runs, -0.73/-1.33/-1.38 ms), because the shell's clock and the kernel's
+    # `btime` are different sources. Derivation: s0-launcher-race-flake/FLAKE.md.
+    # Not local: this is a case branch, not a function.
+    t_before="$(date +%s.%N 2>/dev/null || true)"
+    [ -n "$t_before" ] || t_before="$(date +%s)"
     if mkdir "$LOCK_DIR" 2>/dev/null; then
-      lock_trace mkdir-won run-claim
+      lock_trace mkdir-won run-claim "$t_before"
     else
-      lock_trace mkdir-lost run-claim
+      lock_trace mkdir-lost run-claim "$t_before"
       kill "$CHILD" 2>/dev/null || true
       say "another --run holds the run lock; refusing to start a second sequence"
       exit 1

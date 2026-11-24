@@ -214,6 +214,21 @@ def main() -> int:
     expect(destroy_fails.calls == ["reset", "destroy"],
            f"both tools still attempted when destroy fails (got {destroy_fails.calls})")
 
+    # --- 8. destroy is ALWAYS called, and a leak on the SUCCESS path is caught ---
+    # Requested by the Tier-2 round-1 verdict, which read an older head and found
+    # the success path discarding cleanup()'s return: every check grades the
+    # persisted STORE, not the session, so a failed `destroy` left `success`
+    # reachable with the guest still allocated. The fix routes it to `gap`. These
+    # two assertions are what fail if that is reverted.
+    #
+    # A session whose teardown is fine must still have had BOTH tools called -
+    # `reset` alone returns the session to Ready and does NOT free it, so a
+    # `reset`-only teardown is a leak that reports success.
+    healthy = FakeMcp()
+    df005.cleanup(healthy, "s8")
+    expect(healthy.calls == ["reset", "destroy"],
+           f"8a: cleanup calls BOTH reset and destroy, in order (got {healthy.calls})")
+
     # --- 5. the bucket vocabulary is not invented ----------------------------
     # The gate reports `gap` because scoring.md has no `dirty` bucket. Assert the
     # constant the message uses is real, so a future edit cannot quietly name a
