@@ -157,6 +157,8 @@ once an owner confirms.
   before it lands.
 - **#162 — open**, defensive rule + abort-early, verifier running.
 
+- **NEW (TIF-178 verifier, 2026-11-24) — a leaked session can still reach `bucket = "success"`.** `cleanup()`'s return value is inspected at exactly one of its twelve call sites, the readiness-timeout path (`scripts/df005-runner.py:598`). The primary success path (`:813`) discards it, and nothing downstream catches the leak: every check grades the **persisted store**, not the session, so an unfreed `destroy` still yields `success/pass`. This is not the swallowing #342 fixed — it is the same *class* one layer up, on the scoring path rather than the teardown path. **Not fixed in #347** (which is test-only): the fix changes scoring semantics, so it needs an outer-loop decision. Options: route the teardown result into the `gap` bucket as `:598` does, or add a session-liveness check to the grading set. **Consequence if left:** a `pass` row can be recorded with the guest still allocated, which is the M1 false-success shape the vision doc's "zero false successes" criterion is about.
+
 ## Next actions
 
 1. #156 must-fixes: propagate `preflight.diagnostic` into the row/omission, and
