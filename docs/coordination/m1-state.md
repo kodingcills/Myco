@@ -41,6 +41,15 @@
   Coordinator GO.
 - [M1 backlog](../backlog/m1.md)
 
+## Log 2026-11-24 (66) — TIF-177 shipped; TIF-178 opens its test gaps
+- **TIF-177 Done.** #342 merged as `7317fd75`: the post-create readiness gate fails closed, and `cleanup()` reports a dirty teardown instead of swallowing it. Verified at head `d2480eba` (MERGEABLE CLEAN, 5/5) before merge.
+- **The fix's own test ran nowhere.** `test/df005-postcreate-gate.py` — the only test catching a `cleanup` that returns early and leaks — was executed by **nothing**: `pnpm test` is vitest + schema-validate, and `test/df005-runner.selftest.sh` is referenced from no workflow and no script. That is how the round-1 regression shipped green, and the wiring bug predates the PR. Fixed in #342 by `test/df005-contract-gates.test.ts`, which runs both gates under vitest. **Visible in CI:** `check (macos-latest)` went from ~1m15s to **2m8s**, the gates executing.
+- **TIF-178 opened (PR #347, `edbd9ac7`) for the test gaps that remained.** Deleting the leak-REPORTING code still left every suite green, because the gate test drove `cleanup()` and `wait_ready()` only in isolation, never `execute_scenario`. #347 adds the composition case and the reset/destroy asymmetry (a `FakeMcp` that could not express "reset fails, destroy succeeds"), and fixes 17b, which was **silently testing nothing**: it set `os.environ`, but `GUEST_DIR` and `VM_LOCK_PATH` bind at **import** time (`df005-runner.py:46-47`) — so that assignment did nothing, and on a host holding the VM lock the case passed while the guest check was skipped as "not run". It now patches the module attributes.
+- **Six mutations verified, each caught by a named assertion** — including the round-1 early return, `teardown = None`, and recording any tool's error (which breaks the asymmetry).
+- **Two verifier rounds each found something green CI did not:** round 1 a regression I introduced; round 2 a test I wrote that could never fail. Treat a green suite as unproven until a mutation makes it fail.
+- **Known, unfixed, flagged:** `test/df005-runner-offline.py` mutates `scripts/df005-runner.py` on disk during cases 12/13. Restoration is asserted on exception paths but is **not signal-safe**; my own kill left `if False:` on disk mid-session. A file that edits its own subject is a hazard in a shared CI checkout.
+- **CI cost:** the gate suite adds ~2 minutes to `check` on every run, on a job already cancelled ~37% of the time. Flagged to the outer loop before it surfaces as a new flake.
+
 ## Standing rule — defensive engineering (Tiffany-approved, 2026-11-22 16:00 ET)
 
 Applies to **every owner, builder and verifier**, and is repeated in every owner
