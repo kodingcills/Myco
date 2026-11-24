@@ -82,7 +82,25 @@ interface Ledger {
 }
 
 /** The omissions that a resume MAY re-attempt, and those it must not. */
-const RESUMABLE_OMISSIONS: readonly Omission[] = ["trial-interrupted"];
+/**
+ * Omissions a resume may RE-ATTEMPT: the ones where the HARNESS lost the trial.
+ *
+ * `trial-interrupted` means the process or the guest died mid-trial.
+ *
+ * `planner-failed` means the PROVIDER gave us something unusable - a truncation, a
+ * refusal, a rejected call - which TIF-200 classifies as a harness/config fault. r6 is
+ * the case that exposed the omission: it stopped with 10 `planner-failed` rows, and a
+ * resume could re-attempt only the single `trial-interrupted` one, so the ten trials the
+ * arm had already paid to reach were unrecoverable. A fault category that cannot be
+ * retried is a fault category the arm cannot recover from.
+ *
+ * The remaining omissions are DECISIONS and stay non-resumable:
+ *   - `spend-limit`         the ceiling was reached; re-running re-buys what it stopped
+ *   - `driver-unreachable`  the guest was gone; the run is measuring nothing
+ *   - `repeated-cause`      the sweep was measuring the harness; that IS the finding
+ * Re-attempting those would silently un-stop a run whose stop reason was the result.
+ */
+const RESUMABLE_OMISSIONS: readonly Omission[] = ["trial-interrupted", "planner-failed"];
 
 function writeJson(path: string, value: unknown) {
   const temporary = `${path}.tmp`;
