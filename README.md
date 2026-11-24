@@ -42,16 +42,27 @@ All five are run on a clean checkout before merge, and each of them was re-run b
 worktree on 2026-11-24. `pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test`
 is the CI path, and it is the path that actually works.
 
-> **`npm install` looks like it succeeds and leaves the repo broken.** npm does not understand the
-> `viewer/` workspace, so it installs the root package and skips the viewer's dependencies.
-> `npm run typecheck` and `npm run lint` then fail with `TS2307: Cannot find module 'react'` from
-> `viewer/src/components/App.tsx` — which reads as a broken build but is a missing install.
-> `npm run build` and `npm test` happen to pass, because `build` does not touch the viewer and
-> `test` uses a different path. **Measured 2026-11-24: all four pass under `pnpm`, two fail under
-> `npm`.**
+> **`npm install` exits 0 and leaves the repo broken.** npm does not understand the `viewer/`
+> workspace, so it installs the root package, leaves `viewer/node_modules` **empty**, and reports
+> success. Captured on a clean worktree of `cb805ae5` with no pre-existing `node_modules`:
 >
-> **If any gate fails with `TS2307`,** run `pnpm install --frozen-lockfile` before diagnosing
-> anything else — a stale or npm-shaped `node_modules` is the usual cause.
+> | command | under `npm install` | under `pnpm install --frozen-lockfile` |
+> |---|---|---|
+> | `npm install` | exit **0** — and `viewer/node_modules` is empty | — |
+> | `pnpm install --frozen-lockfile` | — | exit 0 |
+> | `typecheck` | exit **2** — 36 × `TS2307: Cannot find module '@base-ui/react/…'` | exit 0 |
+> | `lint` | exit **1** — `ERR_MODULE_NOT_FOUND: Cannot find package 'tailwindcss'` | exit 0 |
+> | `test` | exit **1** — `4 failed / 77 passed / 1 skipped` | exit 0 |
+> | `build` | exit 0 | exit 0 |
+>
+> **Three gates fail, not all four — `build` genuinely passes**, because it compiles the root
+> package and never touches the viewer. The three failures do not fail the same way: `typecheck`
+> fails in TypeScript, `lint` fails earlier at Node module resolution, and `test` fails because the
+> root `test` script ends in `pnpm schema-validate`, which also needs the viewer's packages.
+>
+> **So `TS2307` alone is not the signal.** If *any* gate fails after an `npm install`, with a
+> missing-module error of any kind, run `pnpm install --frozen-lockfile` before diagnosing anything
+> else — the install is the likely cause, not your change.
 
 ### Run something
 
@@ -60,7 +71,8 @@ is the CI path, and it is the path that actually works.
 pnpm test:task
 ```
 
-`test:task` **exits 1 on purpose.** It runs the `todo-save` trap: the UI claims `"saved 7 item(s)"` while two `BUG:`-prefixed items never reach the store. That is the false-success case Myco exists to catch, so a non-zero exit is the pass condition — the output prints `Final Verdict: REFUTED` and `False Success Caught: YES`. A `0` here would mean the harness missed it. **Observed 2026-11-24: exit 1, with both those lines.**
+`test:task` **exits 1 on purpose.** It runs the `todo-save` trap: the UI claims `"saved 7 item(s)"` while two `BUG:`-prefixed items never reach the store. That is the false-success case Myco exists to catch, so a non-zero exit is the pass condition — the output prints `Final Verdict: REFUTED` and `False Success Caught: YES`. A `0` here would mean the harness missed it. **Observed 2026-11-24: exit 1, with both those lines**
+— taken under a `pnpm`-populated `node_modules`, which is the state this page tells you to create.
 
 ```sh
 # A full mock run with evidence, then validate what it wrote.
