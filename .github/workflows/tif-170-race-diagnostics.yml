@@ -32,6 +32,8 @@ on:
       - test/discovery/s0-live-launcher.test.ts
       - scripts/s0-live.sh
       - scripts/s0-live-stopowner.sh
+      - scripts/s0-live-guardclosed.sh
+      - scripts/s0-live-guardwide.sh
 
 permissions:
   contents: read
