@@ -13,6 +13,7 @@ import {
 } from "../src/baseline/c1-trial.ts";
 import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
 import { createPlanner, MAX_CALL_MICROS } from "../src/baseline/planner.ts";
+import { resolveAnthropicKey } from "../src/baseline/secret-file.ts";
 import manifest from "../src/baseline/sweep-v3.json" with { type: "json" };
 import { cleanupTrialGuest } from "../src/integration/guest-health.ts";
 import { WindowsFixtureConverter } from "../src/integration/windows-fixture.ts";
@@ -49,7 +50,7 @@ async function main() {
     );
     return fetch(url, init);
   };
-  const planner = createPlanner(paidFetch, { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY });
+  const planner = createPlanner(paidFetch, { ANTHROPIC_API_KEY: resolveAnthropicKey() });
   const target = manifest.rows[0];
   if (!target) throw new Error("manifest has no rows; nothing to run");
   console.log("Target:", JSON.stringify(target));

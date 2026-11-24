@@ -10,6 +10,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPlanner } from "../src/baseline/planner.ts";
+import { resolveAnthropicKey } from "../src/baseline/secret-file.ts";
 
 const directory = process.argv[2] || "/tmp/baseline/c1-realpng-probe";
 const imagePath = process.argv[3];
@@ -31,8 +32,8 @@ try {
   result.imageWidth = png.readUInt32BE(16);
   result.imageHeight = png.readUInt32BE(20);
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY required");
+  const apiKey = resolveAnthropicKey();
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY required (or MYCO_ANTHROPIC_KEY_FILE)");
 
   let countRequests = 0;
   let messageRequests = 0;
