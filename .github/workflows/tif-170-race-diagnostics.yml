@@ -22,11 +22,16 @@ on:
         description: Rounds inside each invocation (8 racers a round)
         default: "30"
         required: false
+      launcher:
+        description: Launcher under scripts/ the fixture copies (s0-live.sh or a variant)
+        default: s0-live.sh
+        required: false
   pull_request:
     paths:
       - .github/workflows/tif-170-race-diagnostics.yml
       - test/discovery/s0-live-launcher.test.ts
       - scripts/s0-live.sh
+      - scripts/s0-live-stopowner.sh
 
 permissions:
   contents: read
@@ -39,6 +44,9 @@ jobs:
     env:
       MYCO_TIF170_DIAG: ${{ github.workspace }}/.tif-170
       MYCO_TIF170_ROUNDS: ${{ inputs.rounds || 30 }}
+      # Which launcher the fixture copies. The default is the shipped one; the variant
+      # differs only in whether `--stop` removes the lock unconditionally.
+      MYCO_TIF170_LAUNCHER: ${{ inputs.launcher || 's0-live.sh' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
