@@ -246,9 +246,36 @@ export async function runC1Sweep(options: {
       ledger.c1[index] = { status: "reserved", micros: reservation };
       persist();
       let row: BaselineRow;
+      // `prepare` and the trial are separated so their costs can be told apart.
+      //
+      // TIF-186: `prepare()` never touches the planner - `createPlanner` is
+      // constructed separately and only `runC1Trial` uses it - so a throw from
+      // prepare PROVES no model call was made, and the trial should book $0 rather
+      // than the full reservation. arm-003d r5 booked 607,200 twice for
+      // interruptions that made no call, which shrank the apparent cap from $4.48
+      // of cash to $6.30 and would have stopped a run that was affordable.
+      //
+      // A throw from runC1Trial is different: it may have called the model before
+      // failing, and the error carries no usage, so its cost is UNKNOWN. That case
+      // keeps the reservation, because under-reporting spend against a hard cap is
+      // the dangerous direction.
+      let preparedForTrial: Awaited<ReturnType<typeof options.prepare>> | undefined;
+      const gt = groundTruth(params);
       try {
-        const gt = groundTruth(params);
-        const prepared = await options.prepare(structuredClone(target), RESET_SNAPSHOT);
+        preparedForTrial = await options.prepare(structuredClone(target), RESET_SNAPSHOT);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        noteCause(error instanceof PlannerFailure ? "planner-failed" : "trial-interrupted");
+        ledger.c1[index] = {
+          status: "omitted",
+          micros: 0,
+          reason: error instanceof PlannerFailure ? "planner-failed" : "trial-interrupted",
+          detail,
+        };
+        persist();
+        continue;
+      }
+      try {
         row = await runC1Trial(
           {
             index,
@@ -257,10 +284,14 @@ export async function runC1Sweep(options: {
             expected: gt.expectedValue,
             previousValue: gt.previousValue,
           },
-          prepared,
+          preparedForTrial,
           planner,
         );
       } catch (error) {
+        // A throw from the TRIAL itself: the model may already have been called and
+        // the error carries no usage, so the cost is UNKNOWN and the reservation
+        // stays booked. Fail closed - under-reporting spend is the dangerous way to
+        // be wrong when the cap is hard.
         const failed = error instanceof PlannerFailure;
         if (failed) stopReason = "planner-failed";
         // Carry the message into the cause for BOTH branches: a bare
@@ -270,16 +301,25 @@ export async function runC1Sweep(options: {
         // `trial-interrupted` remains the recorded reason for an unexpected
         // throw (runC1Trial swallows PlannerFailure inside its own try, so in
         // practice only prepare() throws here), but the cause carries detail.
-        noteCause(
-          failed
-            ? `planner-failed:${error.message}`
-            : `trial-interrupted:${(error as Error)?.message ?? String(error)}`,
-        );
+        // The abort keys on the FAULT CLASS, never on the message text.
+        //
+        // arm-003d r5 omitted trials 2 and 3 and kept going: the key was
+        // `trial-interrupted:${message}`, two omissions of the same class carried
+        // different messages (an SSH banner timeout, then a throw later in the
+        // trial), so `consecutive` never reached 2 and each one burned $0.61 of cap
+        // for no data. Keying on the message also meant the rule could only see a
+        // fault that reproduced its TEXT, which is the wrong resolution for "the
+        // sweep is measuring the harness".
+        //
+        // The message is not lost: it moves to `detail`, the same way the
+        // planner-failed branch already persisted it, so a run that stops can be
+        // diagnosed from its own artifacts. TIF-186.
+        noteCause(failed ? "planner-failed" : "trial-interrupted");
         ledger.c1[index] = {
           status: "omitted",
           micros: reservation,
           reason: failed ? "planner-failed" : "trial-interrupted",
-          ...(failed ? { detail: error.message } : {}),
+          detail: error instanceof Error ? error.message : String(error),
         };
         persist();
         continue;
