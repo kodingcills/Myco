@@ -301,12 +301,18 @@ Expected tail:
 DEPLOY OK
 ```
 
-**The token rotates on every deploy.** `run-live.ts` reads `MYCO_AGENT_TOKEN`, falling back to
-`~/.myco-token` (`src/integration/run-live.ts:32-41`). Re-fetch it after every deploy:
+**The token rotates on every deploy.** Re-fetch it after every deploy, into a file, never through
+a shell variable (the host's secret guard refuses commands that carry the token, TIF-206; §5).
+`umask 077` first, so the file is never world-readable, even briefly:
 
 ```bash
-export MYCO_AGENT_TOKEN="$(~/VMs/myco-win11/scripts/vssh 'Get-Content C:\ProgramData\Myco\agent.token')"
+(umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token)
 ```
+
+`run-live.ts` reads `~/.myco-token` when `MYCO_AGENT_TOKEN` is unset
+(`src/integration/run-live.ts:53-62`), so leave `MYCO_AGENT_TOKEN` unset (`unset MYCO_AGENT_TOKEN`
+if an earlier shell exported a stale one: a set variable wins over the file). The §5 CLI reads only
+the file.
 
 If it fails:
 
@@ -321,16 +327,18 @@ If it fails:
 ## 5. Prove the agent is on the desktop
 
 The agent's `ping` reports its session; `session_info` reports the window station and desktop
-(both ops, `agent/README.md`). **UNVERIFIED** as a command — the old inline recipe printed the
-token into the command line, which the host's enforced secret guard refuses (TIF-206, F16), so
-no agent could run it; it is replaced by a repo CLI that reads the token from a file:
+(both ops, `agent/README.md`). The old inline recipe printed the token into the command line,
+which the host's enforced secret guard refuses (TIF-206, F16), so no agent could run it; it is
+replaced by a repo CLI that reads the token from a file. **UNVERIFIED live:** the CLI below has
+not yet been run against the VM. Its exit codes and token handling are covered by unit tests
+(`test/session-info.test.ts`) only.
 
 Fetch a fresh token (the deploy rotates it, §4) the way `docs/research/experiments/m1-row8/NEXT-RUN.md`
-does — from the guest, redirected to a file, never through a shell variable:
+does — from the guest, redirected to a file, never through a shell variable, with `umask 077` so
+the file is never world-readable, even briefly:
 
 ```bash
-~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token
-chmod 600 ~/.myco-token
+(umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token)
 ```
 
 Then run the §5 proof:
@@ -343,16 +351,29 @@ The CLI opens its own ssh tunnel (`SshTunnel`), takes and releases the VM lock, 
 `session_info` result JSON to stdout, and always stops the tunnel — so the old manual-tunnel
 teardown is no longer needed; nothing of §5 is left listening on 8765.
 
-Exit codes (`src/integration/session-info.ts` header): `0` desktop proof passed;
+Exit codes (`src/integration/session-info-core.ts` header): `0` desktop proof passed;
 `2` the agent is in session 0 and/or not on `WinSta0` — **stop, do not run trials**;
-`3` could not ask the agent (bad/unreadable token file, tunnel or auth failure);
-`10` `REFUSED_VM_LOCKED: holder …` — the VM lock is held.
+`3` could not ask the agent or could not evaluate its answer — bad invocation (usage); token file
+missing, unreadable, or empty; tunnel did not come up or agent unreachable; auth failure or any
+other `ok:false`; a malformed `session_info` result (including `ok:true` with no result); the
+tunnel teardown failing;
+`10` `REFUSED_VM_LOCKED: …` — the VM lock is held (holder named), or its state could not be
+determined.
 
 Expected stdout on the passing path:
 
 ```json
 {"session_id":1,"window_station":"WinSta0","desktop":"Default","user":"MYCO-WIN11\\myco"}
 ```
+
+**`run-live`'s per-trial line is NOT this proof, and cannot be.** It prints
+`agent ping ok: 0.1.0 session <id>` on stderr (`src/integration/run-live.ts:69`), and that id is
+`ping`'s `session_id`, which is a **random hex GUID generated per agent start**
+(`agent/myco_agent/__init__.py:4`, `uuid.uuid4().hex`; returned by `agent/myco_agent/ops.py:8`).
+It is **not the Windows session number**, so no value of that line can distinguish session 1 from
+session 0. The desktop proof is the `session_info` call above, which reads the real number through
+`ProcessIdToSessionId` (`agent/myco_agent/windows_backend.py:288-321`). An earlier revision
+presented the ping line as "the same fact"; it is not (F9/F10, 2026-11-24).
 
 **Why this is a gate, not a nicety.** Windows puts services in session 0, which has no visible
 window station; `sshd` is a service, so everything it spawns inherits session 0 and cannot see or

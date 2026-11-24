@@ -1,5 +1,6 @@
 /**
- * TIF-209 (F16): the §5 desktop-proof CLI (`src/integration/session-info.ts`).
+ * TIF-209 (F16): the §5 desktop-proof CLI (`src/integration/session-info.ts`, logic in
+ * `session-info-core.ts`).
  *
  * The contract under test:
  * - exit 0 + result JSON on stdout when session_id is a non-zero integer and
@@ -21,22 +22,36 @@
  * recorded, and the token file always resolves to a synthetic sentinel.
  */
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   classifySessionInfo,
   DEFAULT_TOKEN_FILE,
+  productionDeps,
   readTokenFile,
+  redactToken,
   runSessionInfo,
   type SessionInfoConnection,
   type SessionInfoDeps,
+  type SessionInfoTunnel,
   tokenFileFromArgv,
   tunnelOptionsFor,
-} from "../src/integration/session-info.ts";
+} from "../src/integration/session-info-core.ts";
 import { type VmLock, VmLockedError } from "../src/integration/vm-lock.ts";
-import { sshTunnelArgs } from "../src/win/agent-client.ts";
+import {
+  type AgentRequest,
+  type AgentResponse,
+  AgentUnreachableError,
+  SshTunnel,
+  type SshTunnelOptions,
+  sshTunnelArgs,
+} from "../src/win/agent-client.ts";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const SENTINEL = "tok-SENTINEL-a1b2c3d4e5f6";
 
@@ -61,6 +76,10 @@ interface Harness {
     error?: Error;
     /** Thrown by the tunnel teardown. */
     stopError?: Error;
+    /** Thrown by `connect` itself (the tunnel never came up). */
+    connectError?: Error;
+    /** The token the fake token file holds (default SENTINEL). */
+    token?: string;
     onToken?: (token: string) => void;
   };
 }
@@ -116,6 +135,7 @@ function harness(lockError?: Error, tokenError?: Error): Harness {
   const agent: Harness["agent"] = {};
   const deps: SessionInfoDeps = {
     connect: async (token: string): Promise<SessionInfoConnection> => {
+      if (agent.connectError) throw agent.connectError;
       captured.tunnelsStarted++;
       // What production really spawns (SshTunnel → sshTunnelArgs): captured so
       // the leak scan can prove the token never enters a child's argv or env.
@@ -153,7 +173,7 @@ function harness(lockError?: Error, tokenError?: Error): Harness {
     },
     readToken: (_path: string): string => {
       if (tokenError) throw tokenError;
-      return SENTINEL;
+      return agent.token ?? SENTINEL;
     },
     stdout: (text: string) => captured.stdout.push(text),
     stderr: (text: string) => captured.stderr.push(text),
@@ -419,5 +439,297 @@ describe("readTokenFile (real fs, synthetic token)", () => {
     writeFileSync(emptyPath, "   \n");
     expect(() => readTokenFile(emptyPath)).toThrow(emptyPath);
     expect(() => readTokenFile(join(dir, "missing"))).toThrow(join(dir, "missing"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-1 verifier findings (D1–D5)
+// ---------------------------------------------------------------------------
+
+/** A synthetic token that differs from SENTINEL: what a stale operator shell
+ * might still export. It must never reach the agent or the ssh child. */
+const ENV_TOKEN = "env-token-SYNTHETIC-zz99887766";
+
+/** A synthetic token that changes under JSON escaping (`"` and `\`). */
+const QUOTED_TOKEN = 'tok"quoted\\SENTINEL-0123456789';
+
+describe("CLI entry point (subprocess, no VM: usage errors return before the lock) — D1", () => {
+  it("a bad argument exits 3 with usage, both directly and through a symlinked path — never a silent 0", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-tif209-link-"));
+    const link = join(dir, "repo");
+    symlinkSync(REPO_ROOT, link, "dir");
+    const tsx = join(REPO_ROOT, "node_modules", ".bin", "tsx");
+    for (const root of [REPO_ROOT, link]) {
+      const run = spawnSync(tsx, [join(root, "src/integration/session-info.ts"), "--token-file"], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      expect({ root: root === link ? "symlink" : "direct", status: run.status }).toEqual({
+        root: root === link ? "symlink" : "direct",
+        status: 3,
+      });
+      expect(run.stderr).toContain("usage: --token-file needs a PATH argument");
+      expect(run.stdout).toBe("");
+    }
+  }, 120_000);
+});
+
+describe("runSessionInfo exit paths, end to end — D3", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("bad invocation: exit 3 with usage on stderr; no lock taken, no token read, no tunnel", async () => {
+    attachConsoleProbe();
+    const { deps, captured } = harness(undefined, new Error("token must not be read"));
+    const code = await runSessionInfo(["--token-file"], deps);
+    expect(code).toBe(3);
+    expect(captured.stderr.join("\n")).toContain("usage: --token-file needs a PATH argument");
+    expect(captured.lockAcquired).toBe(0);
+    expect(captured.tunnelsStarted).toBe(0);
+    expect(captured.stdout).toEqual([]);
+  });
+
+  it("lock state undeterminable (plain Error from the acquirer): exit 10, reason named; no token read, no tunnel", async () => {
+    attachConsoleProbe();
+    const { deps, captured } = harness(
+      new Error("EACCES: permission denied, open '/tmp/test-myco-win11.vm.lock'"),
+      new Error("token must not be read"),
+    );
+    const code = await runSessionInfo([], deps);
+    expect(code).toBe(10);
+    expect(captured.stderr.join("\n")).toContain("REFUSED_VM_LOCKED: lock state undeterminable");
+    expect(captured.stderr.join("\n")).toContain("EACCES");
+    expect(captured.tunnelsStarted).toBe(0);
+    expect(captured.stdout).toEqual([]);
+  });
+
+  it("connect() throws (tunnel unreachable): exit 3, reason on stderr, lock released", async () => {
+    attachConsoleProbe();
+    const { deps, captured, agent } = harness();
+    agent.connectError = new AgentUnreachableError(
+      "ssh tunnel exited with code 255 before becoming healthy",
+    );
+    const code = await runSessionInfo([], deps);
+    expect(code).toBe(3);
+    expect(captured.stderr.join("\n")).toContain("exited with code 255");
+    expect(captured.stdout).toEqual([]);
+    expect(captured.lockAcquired).toBe(1);
+    expect(captured.lockReleased).toBe(1);
+  });
+
+  it("malformed result: exit 3, malformed-result reason on stderr, tunnel and lock released", async () => {
+    attachConsoleProbe();
+    const { deps, captured, agent } = harness();
+    agent.result = { session_id: "1", window_station: "WinSta0" };
+    const code = await runSessionInfo([], deps);
+    expect(code).toBe(3);
+    expect(captured.stderr.join("\n")).toContain('malformed session_info result: session_id "1"');
+    expect(captured.tunnelsStopped).toBe(1);
+    expect(captured.lockReleased).toBe(1);
+  });
+});
+
+/** A tunnel stand-in for `productionDeps`'s `makeTunnel` seam: records the
+ * options it was built with and every request, and answers with `respond`. */
+function recordingTunnel(respond: (request: AgentRequest) => AgentResponse) {
+  const record = {
+    options: [] as SshTunnelOptions[],
+    requests: [] as AgentRequest[],
+    started: 0,
+    stopped: 0,
+  };
+  const makeTunnel = (options: SshTunnelOptions): SessionInfoTunnel => {
+    record.options.push(options);
+    return {
+      start: async () => {
+        record.started++;
+      },
+      stop: async () => {
+        record.stopped++;
+      },
+      call: async (request: AgentRequest) => {
+        record.requests.push(request);
+        return respond(request);
+      },
+    };
+  };
+  return { record, makeTunnel };
+}
+
+/** `productionDeps` with only the lock and the output channels replaced, and a
+ * real token file holding `token`; the tunnel comes from the seam. */
+function productionHarness(
+  makeTunnel: (options: SshTunnelOptions) => SessionInfoTunnel,
+  token = SENTINEL,
+) {
+  const dir = mkdtempSync(join(tmpdir(), "myco-tif209-prod-"));
+  const tokenPath = join(dir, "token");
+  writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
+  const out = { stdout: [] as string[], stderr: [] as string[], released: 0 };
+  const deps: SessionInfoDeps = {
+    ...productionDeps({ makeTunnel }),
+    acquireLock: () => ({
+      path: "/tmp/test-myco-win11.vm.lock",
+      holder: "12345 session-info.ts",
+      release: () => {
+        out.released++;
+      },
+    }),
+    stdout: (text: string) => out.stdout.push(text),
+    stderr: (text: string) => out.stderr.push(text),
+  };
+  return { deps, out, argv: ["--token-file", tokenPath] };
+}
+
+describe("productionDeps: the token comes only from the file; the ssh child gets a scrubbed env — D2", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("a stale MYCO_AGENT_TOKEN in process env is ignored and absent from the tunnel's env", async () => {
+    attachConsoleProbe();
+    vi.stubEnv("MYCO_AGENT_TOKEN", ENV_TOKEN);
+    vi.stubEnv("MYCO_TEST_CARRIER", `carrier-${SENTINEL}-carrier`);
+    const { record, makeTunnel } = recordingTunnel((request) => ({
+      ok: true,
+      id: request.id,
+      result: HAPPY,
+    }));
+    const { deps, out, argv } = productionHarness(makeTunnel);
+    const code = await runSessionInfo(argv, deps);
+    expect(code).toBe(0);
+    // The agent authenticated with the file's token, not the exported one.
+    expect(record.requests.map((r) => [r.op, r.token === SENTINEL, r.token === ENV_TOKEN])).toEqual(
+      [["session_info", true, false]],
+    );
+    // The tunnel was built with an explicit, scrubbed env (not inherited, not
+    // process.env as-is). Boolean checks only: a failure must not print the
+    // real environment into the test log.
+    expect(record.options).toHaveLength(1);
+    const childEnv = record.options[0]?.env;
+    expect(childEnv).toBeDefined();
+    const values = Object.values(childEnv ?? {});
+    expect("MYCO_AGENT_TOKEN" in (childEnv ?? {})).toBe(false);
+    expect("MYCO_TEST_CARRIER" in (childEnv ?? {})).toBe(false);
+    expect(values.some((v) => v?.includes(SENTINEL))).toBe(false);
+    expect(values.some((v) => v?.includes(ENV_TOKEN))).toBe(false);
+    // Everything else is inherited, so ssh still finds its config and agent.
+    expect(childEnv?.PATH).toBe(process.env.PATH);
+    expect(record.started).toBe(1);
+    expect(record.stopped).toBe(1);
+    expect(out.released).toBe(1);
+    expect([...out.stdout, ...out.stderr].join("\n")).not.toContain(SENTINEL);
+  });
+
+  it("SshTunnel hands options.env to the spawned process (real spawn of a stand-in ssh)", async () => {
+    vi.stubEnv("MYCO_AGENT_TOKEN", ENV_TOKEN);
+    const dir = mkdtempSync(join(tmpdir(), "myco-tif209-spawn-"));
+    const namesOut = join(dir, "names");
+    const script = join(dir, "fake-ssh");
+    // Writes only variable NAMES (never values) plus one marker value, to a
+    // path that exists only in the env we pass. If SshTunnel dropped
+    // options.env, the child would inherit process env, the path variable would
+    // be unset, and nothing would be written.
+    writeFileSync(
+      script,
+      [
+        "#!/bin/sh",
+        'out="$MYCO_TEST_NAMES_OUT"',
+        '[ -n "$out" ] || exit 0',
+        '/usr/bin/env | /usr/bin/cut -d= -f1 > "$out"',
+        'printf "%s" "$MYCO_TEST_MARK" > "$out.mark"',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(script, 0o755);
+    const options = tunnelOptionsFor(SENTINEL, {
+      PATH: "/usr/bin:/bin",
+      MYCO_AGENT_TOKEN: SENTINEL,
+      MYCO_TEST_NAMES_OUT: namesOut,
+      MYCO_TEST_MARK: "mark-42",
+    });
+    // localPort 1: nothing listens there, so start() never mistakes another
+    // listener (e.g. a live 8765 tunnel) for health; the stand-in exits at once.
+    const tunnel = new SshTunnel({ ...options, sshPath: script, localPort: 1 });
+    await expect(tunnel.start(5_000)).rejects.toThrow(/exited with code 0/);
+    await tunnel.stop();
+    const names = readFileSync(namesOut, "utf8").split("\n").filter(Boolean);
+    expect(readFileSync(`${namesOut}.mark`, "utf8")).toBe("mark-42");
+    expect(names).toContain("MYCO_TEST_MARK");
+    expect(names).not.toContain("MYCO_AGENT_TOKEN");
+    expect(names).not.toContain("HOME");
+  });
+});
+
+describe("redaction sink: escaped and partial echoes — D4", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("redacts the raw token, its JSON-escaped form, and fragments of 12+ characters; not shorter ones", () => {
+    const escaped = JSON.stringify(QUOTED_TOKEN).slice(1, -1);
+    expect(escaped).not.toBe(QUOTED_TOKEN);
+    expect(redactToken(`raw ${QUOTED_TOKEN} end`, QUOTED_TOKEN)).toBe("raw [REDACTED] end");
+    expect(redactToken(`json "${escaped}" end`, QUOTED_TOKEN)).toBe('json "[REDACTED]" end');
+    expect(redactToken(`head:${SENTINEL.slice(0, 12)}`, SENTINEL)).toBe("head:[REDACTED]");
+    expect(redactToken(`mid ${SENTINEL.slice(5, 20)} end`, SENTINEL)).toBe("mid [REDACTED] end");
+    // Documented limit: an 11-character fragment is left alone.
+    expect(redactToken(`short ${SENTINEL.slice(0, 11)}`, SENTINEL)).toBe(
+      `short ${SENTINEL.slice(0, 11)}`,
+    );
+    expect(redactToken("no token here", "")).toBe("no token here");
+  });
+
+  it("a truncated malformed-NDJSON echo (half the token) never reaches stderr (FAULT)", async () => {
+    attachConsoleProbe();
+    const { deps, captured, agent } = harness();
+    const line = `{"id":1,"token":"${SENTINEL}","op":"session_info"}`;
+    // What SocketTransport does with a malformed line: the first N characters.
+    const cut = line.slice(0, line.indexOf(SENTINEL) + 15);
+    agent.error = new AgentUnreachableError(`agent sent malformed NDJSON: ${cut}`);
+    const code = await runSessionInfo([], deps);
+    expect(code).toBe(3);
+    const stderr = captured.stderr.join("\n");
+    expect(stderr).toContain("malformed NDJSON");
+    expect(stderr).toContain("[REDACTED]");
+    expect(stderr).not.toContain(SENTINEL.slice(0, 12));
+  });
+
+  it("a token with quote and backslash, echoed inside the result JSON, is redacted in escaped form (FAULT)", async () => {
+    attachConsoleProbe();
+    const { deps, captured, agent } = harness();
+    agent.token = QUOTED_TOKEN;
+    agent.result = { ...HAPPY, debug_token: QUOTED_TOKEN };
+    const code = await runSessionInfo([], deps);
+    expect(code).toBe(0);
+    const stdout = captured.stdout.join("\n");
+    expect(stdout).toContain("[REDACTED]");
+    expect(stdout).not.toContain(JSON.stringify(QUOTED_TOKEN).slice(1, -1));
+    expect(stdout).not.toContain(QUOTED_TOKEN);
+  });
+});
+
+describe("ok:true with no result — D5", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("exits 3 with the malformed-result reason (real AgentClient), not a TypeError; nothing on stdout", async () => {
+    attachConsoleProbe();
+    const { record, makeTunnel } = recordingTunnel(
+      (request) => ({ ok: true, id: request.id }) as unknown as AgentResponse,
+    );
+    const { deps, out, argv } = productionHarness(makeTunnel);
+    const code = await runSessionInfo(argv, deps);
+    expect(code).toBe(3);
+    const stderr = out.stderr.join("\n");
+    expect(stderr).toContain("malformed session_info result");
+    expect(stderr).not.toMatch(/TypeError|Cannot read|undefined \(reading/);
+    expect(out.stdout).toEqual([]);
+    expect(record.stopped).toBe(1);
+    expect(out.released).toBe(1);
   });
 });
