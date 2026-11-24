@@ -580,7 +580,7 @@ describe("c1-sweep --resume", () => {
     expect(accepted.completed).toBe(30);
     // Recorded, so a reader can tell this arm ran under an acceptance.
     expect(JSON.parse(readFileSync(join(dir2, "accounting.json"), "utf8")).identity).toMatchObject({
-      acceptedScoredCauses: ["refuted:step-budget"],
+      acceptances: [{ causes: ["refuted:step-budget"], fromTrial: 0 }],
     });
     // And it really is the same cause the strict run aborted on, so the only
     // difference between the two runs is the acceptance.
@@ -595,7 +595,7 @@ describe("c1-sweep --resume", () => {
     );
   });
 
-  it("refuses to resume when the acceptance in force has changed", async () => {
+  it("refuses to DROP an acceptance that already governed recorded rows", async () => {
     const dir = directory();
     const base = {
       coordinatorGo: true,
@@ -605,33 +605,89 @@ describe("c1-sweep --resume", () => {
       armLimitMicros: 9_000_000,
       identity: IDENTITY,
     };
-    const tick = nextTick();
     await runC1Sweep({
       ...base,
-      prepare: crashingPrepare(2, 1, tick),
+      prepare: crashingPrepare(2, 1, nextTick()),
       acceptScoredCauses: ["refuted:step-budget"],
     });
 
-    // Recorded as accepted:step-budget. Dropping it or adding another would make
-    // the resumed rows incomparable with the ones already recorded, so both are
-    // refused rather than silently reconciled.
+    // Those rows really did run under it and no start index can undo that, so
+    // dropping it is refused rather than silently reinterpreted.
     await expect(
-      runC1Sweep({
-        ...base,
-        resume: true,
-        adoptIdentity: true,
-        prepare: async () => prepared(nextTick()),
-      }),
-    ).rejects.toThrow(/was in force for this run but is not passed now/);
-    await expect(
-      runC1Sweep({
-        ...base,
-        resume: true,
-        adoptIdentity: true,
-        acceptScoredCauses: ["refuted:step-budget", "refuted:modified"],
-        prepare: async () => prepared(nextTick()),
-      }),
-    ).rejects.toThrow(/was not in force when this run was recorded/);
+      runC1Sweep({ ...base, resume: true, prepare: async () => prepared(nextTick()) }),
+    ).rejects.toThrow(/were in force for rows already recorded but are not passed now/);
+  });
+
+  it("records an acceptance ADDED on resume as starting at the resume, not for the whole arm", async () => {
+    // The r6 shape: rows scored with NO acceptance, then the operator diagnoses the
+    // cause and resumes accepting it. The ledger must say WHEN it started rather
+    // than rewrite history and claim the earlier rows were covered by a decision
+    // that had not been made yet.
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    // First run: no acceptance at all.
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
+    expect(JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8")).identity.acceptances).toBeUndefined();
+
+    // Resume WITH one. It applies from the first trial this resume executes, which
+    // is the first unfinished index - NOT trial 0.
+    const report = await runC1Sweep({
+      ...base,
+      resume: true,
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => prepared(nextTick()),
+    });
+    const segments = JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8")).identity
+      .acceptances as { causes: string[]; fromTrial: number }[];
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.causes).toEqual(["refuted:step-budget"]);
+    // The first run interrupted trial 2, so the resume re-executes from there and
+    // the acceptance cannot claim the rows before it.
+    expect(segments[0]?.fromTrial).toBe(2);
+    // The report says the same thing, so a reader scoring from report.json cannot
+    // mistake it for an arm-wide acceptance.
+    expect(report).toMatchObject({
+      acceptedScoredCauses: ["refuted:step-budget"],
+      acceptedFromTrial: 2,
+    });
+  });
+
+  it("a later acceptance extends the history rather than overwriting the first", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    await runC1Sweep({
+      ...base,
+      prepare: crashingPrepare(2, 1, nextTick()),
+      acceptScoredCauses: ["refuted:step-budget"],
+    });
+    await runC1Sweep({
+      ...base,
+      resume: true,
+      acceptScoredCauses: ["refuted:step-budget", "refuted:modified"],
+      prepare: async () => prepared(nextTick()),
+    });
+    const segments = JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8")).identity
+      .acceptances as { causes: string[]; fromTrial: number }[];
+    // The opening rows keep the terms they ran under; the second entry records
+    // where the extra cause began.
+    expect(segments).toHaveLength(2);
+    expect(segments[0]?.causes).toEqual(["refuted:step-budget"]);
+    expect(segments[1]?.causes).toEqual(["refuted:modified", "refuted:step-budget"]);
+    expect(segments[1]?.fromTrial).toBeGreaterThan(segments[0]?.fromTrial ?? 0);
   });
 
   it("an accepted cause RESETS the run of failures rather than skipping the increment", async () => {
@@ -816,32 +872,6 @@ describe("c1-sweep --resume", () => {
         prepare: async () => prepared(nextTick()),
       }),
     ).rejects.toThrow(/without a run identity to record it/);
-  });
-
-  it("refuses to ADD an acceptance to a run that recorded none", async () => {
-    const dir = directory();
-    const base = {
-      coordinatorGo: true,
-      directory: dir,
-      planner: planner(),
-      priorSpendMicros: 0,
-      armLimitMicros: 9_000_000,
-      identity: IDENTITY,
-    };
-    // Recorded with NO acceptance.
-    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
-
-    // Resuming WITH one would make the ledger claim the whole arm ran under an
-    // acceptance that was not in force for its first rows. An earlier version
-    // wrote the acceptance before comparing it, so this passed silently.
-    await expect(
-      runC1Sweep({
-        ...base,
-        resume: true,
-        acceptScoredCauses: ["refuted:step-budget"],
-        prepare: async () => prepared(nextTick()),
-      }),
-    ).rejects.toThrow(/was not in force when this run was recorded/);
   });
 
   it("rejects a malformed accepted cause rather than half-applying it", async () => {

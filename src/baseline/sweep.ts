@@ -56,12 +56,17 @@ interface RunIdentity {
    */
   adopted?: boolean;
   /**
-   * Scored causes the operator explicitly accepted as diagnosed agent failures.
-   * Absent or empty means "none accepted", which is the default and the stricter
-   * reading; a reader can therefore tell an arm that ran under an acceptance from
-   * one that never needed it.
+   * When each scored cause was accepted, in order.
+   *
+   * A HISTORY rather than a flat list, because an acceptance is not always in
+   * force for the whole arm. r6's first rows ran with none; the operator accepted
+   * `refuted:step-budget` only when resuming. Recording that as a single list
+   * would claim the earlier rows were covered by a decision that had not been
+   * made yet - the ledger would rewrite history to make the arm look uniform.
+   *
+   * `fromTrial` is the first manifest index the acceptance applied to.
    */
-  acceptedScoredCauses?: readonly string[];
+  acceptances?: readonly { causes: readonly string[]; fromTrial: number }[];
 }
 interface Ledger {
   manifestSha256: string;
@@ -383,57 +388,102 @@ export async function runC1Sweep(options: {
     // Record identity on a fresh run so a later resume can check it. Written
     // before the first trial so a crash during trial 0 still leaves a checkable
     // ledger rather than an unexplained one.
-    if (!ledger.identity && options.identity) {
-      ledger.identity = {
-        ...options.identity,
-        ...(acceptedScoredCauses.size > 0
-          ? { acceptedScoredCauses: [...acceptedScoredCauses].sort() }
-          : {}),
-      };
-      writeJson(path, ledger);
-    }
+    // Which trials this invocation will actually EXECUTE, which is what an
+    // acceptance can honestly claim to cover. Scored rows are skipped, so an
+    // acceptance added now cannot apply to them.
+    const willExecute = manifest.rows
+      .map(({ index }) => index)
+      .filter((index) => {
+        const entry = ledger.c1[index];
+        if (!entry) return true;
+        if (entry.status === "reserved") return runResume;
+        if (entry.status === "scored") return false;
+        return runResume && RESUMABLE_OMISSIONS.includes(entry.reason);
+      });
+    const firstExecuted: number = willExecute[0] ?? manifest.rows.length;
 
-    // The acceptance is part of the run's identity: an arm that ran with
-    // `refuted:step-budget` accepted is a different experiment from one that did
-    // not, and a reviewer must be able to see which.
-    //
-    // ORDER MATTERS AND WAS WRONG. An earlier version WROTE the acceptance into
-    // the identity before comparing it, so a resume that supplied one against a
-    // ledger recording none compared the caller's value with itself and passed.
-    // The ledger then claimed the whole arm had run under an acceptance that was
-    // not in force for its first rows. The comparison now runs FIRST and the
-    // write only ever happens for a fresh run.
-    if (runResume) {
-      const recorded = ledger.identity?.acceptedScoredCauses ?? [];
-      const previous = new Set(recorded);
-      // Exact equality in BOTH directions. Adding is as much a change as dropping:
-      // if the first half ran with nothing accepted, a second half that accepts a
-      // cause is a different experiment, and the artifact would misreport the first
-      // half as having been covered by an acceptance that did not exist yet.
-      for (const cause of acceptedScoredCauses)
-        if (!previous.has(cause))
-          throw new Error(
-            `refusing to resume ${path}: accepted scored cause "${cause}" was not in force when this run was recorded (recorded: ${recorded.join(", ") || "none"})`,
-          );
-      for (const cause of previous)
-        if (!acceptedScoredCauses.has(cause))
-          throw new Error(
-            `refusing to resume ${path}: accepted scored cause "${cause}" was in force for this run but is not passed now; the resumed rows would not be comparable`,
-          );
-    } else if (acceptedScoredCauses.size > 0) {
-      // A fresh run records what it is about to accept. `identity` is REQUIRED
-      // here: an acceptance with nowhere to record it would apply with no trace,
-      // which is the one thing an auditable exception must not do.
-      if (!ledger.identity)
+    // Record identity on a fresh run so a later resume can check it. Written
+    // before the first trial so a crash during trial 0 still leaves a checkable
+    // ledger rather than an unexplained one.
+    if (!ledger.identity) {
+      if (!options.identity && acceptedScoredCauses.size > 0)
         throw new Error(
           "cannot accept a scored cause without a run identity to record it against; pass the run identity so the acceptance is auditable",
         );
-      ledger.identity = {
-        ...ledger.identity,
-        acceptedScoredCauses: [...acceptedScoredCauses].sort(),
-      };
-      writeJson(path, ledger);
+      if (options.identity)
+        ledger.identity = {
+          ...options.identity,
+          ...(acceptedScoredCauses.size > 0
+            ? { acceptances: [{ causes: [...acceptedScoredCauses].sort(), fromTrial: 0 }] }
+            : {}),
+        };
+      if (options.identity) writeJson(path, ledger);
     }
+
+    // Compare BEFORE writing, and record WHEN rather than rewriting history.
+    //
+    // Two bugs lived here. The first: the write sat above the comparison, so a
+    // resume supplying an acceptance against a ledger recording none compared the
+    // caller's value with itself and passed. The second: even once ordered
+    // correctly, the only safe answer was to refuse - because a flat list cannot
+    // say that an acceptance started partway through an arm.
+    //
+    // It can, now. An acceptance added on a resume is recorded with the first
+    // trial it applies to, so r6's ledger says "none for the first rows,
+    // `refuted:step-budget` from trial N" instead of claiming the whole arm ran
+    // under a decision made later. DROPPING or REPLACING an acceptance is still
+    // refused: rows already recorded ran under it, and no start index can undo
+    // that.
+    // Runs even when the resume passes NO acceptance: dropping every cause is the
+    // most complete change of terms there is, and an earlier version only entered
+    // this block when something was passed, so dropping them all slipped through.
+    if (runResume) {
+      const segments = ledger.identity?.acceptances ?? [];
+      const latest = segments[segments.length - 1];
+      const recorded = new Set(latest?.causes ?? []);
+      const added = [...acceptedScoredCauses].filter((cause) => !recorded.has(cause));
+      const dropped = [...recorded].filter((cause) => !acceptedScoredCauses.has(cause));
+      if (dropped.length > 0)
+        throw new Error(
+          `refusing to resume ${path}: accepted scored cause(s) ${dropped.map((c) => `"${c}"`).join(", ")} were in force for rows already recorded but are not passed now; the resumed rows would not be comparable`,
+        );
+      if (added.length > 0) {
+        // A superset: the new causes apply from the first trial this resume
+        // executes, and the earlier rows keep the terms they actually ran under.
+        if (!ledger.identity)
+          throw new Error(
+            "cannot accept a scored cause without a run identity to record it against; pass the run identity so the acceptance is auditable",
+          );
+        ledger.identity = {
+          ...ledger.identity,
+          acceptances: [
+            ...segments,
+            { causes: [...acceptedScoredCauses].sort(), fromTrial: firstExecuted },
+          ],
+        };
+        writeJson(path, ledger);
+      }
+    }
+
+    // What is in force for a given trial: the latest segment that starts at or
+    // before it.
+    //
+    // HONEST LIMIT OF THIS MECHANISM, stated so nobody later assumes more: with the
+    // counter as written, a segment boundary has NO observable effect on WHEN the
+    // arm aborts. An accepted cause resets the run and a changed cause also resets
+    // it, so "row 0 counted under the old terms, then reset at row 1" and "row 0
+    // reset under the new terms" leave the same counter behind. The boundary is
+    // therefore an AUDIT RECORD - it stops the ledger claiming a later decision
+    // covered earlier rows - not a behavioural switch. It is still the right thing
+    // to write: the alternative is a flat list that rewrites history, and this is
+    // what an operator reading the artifact needs to see.
+    const acceptanceInForce = (index: number): Set<string> => {
+      const segments = ledger.identity?.acceptances ?? [];
+      let causes: readonly string[] = [];
+      for (const segment of segments) if (segment.fromTrial <= index) causes = segment.causes;
+      return new Set(causes);
+    };
+
     const persist = () => writeJson(path, ledger);
     const planner = options.planner ?? createPlanner();
     const rowDirectory = join(directory, "trials", "c1");
@@ -477,7 +527,9 @@ export async function runC1Sweep(options: {
         if (prior.row.verdictReason === "driver-unreachable") {
           stopReason ??= "driver-unreachable";
           noteCause("driver-unreachable");
-        } else if (acceptedScoredCauses.has(`${prior.row.verdict}:${prior.row.verdictReason}`)) {
+        } else if (
+          acceptanceInForce(index).has(`${prior.row.verdict}:${prior.row.verdictReason}`)
+        ) {
           // Same rule as a live row: an accepted cause breaks the run rather
           // than extending it, or the replay would abort an arm that is behaving
           // exactly as diagnosed.
@@ -693,7 +745,7 @@ export async function runC1Sweep(options: {
         // from one that simply never saw the fault. Anything NOT accepted still
         // aborts at the second occurrence.
         const causeKey = `${row.verdict}:${row.verdictReason}`;
-        if (acceptedScoredCauses.has(causeKey)) {
+        if (acceptanceInForce(index).has(causeKey)) {
           lastCause = undefined;
           consecutive = 0;
         } else {
@@ -739,7 +791,10 @@ export async function runC1Sweep(options: {
       // ledger because the report is what a reader scores from, and an arm that
       // ran with a diagnosed cause accepted must not look like one that never
       // needed the exception.
-      acceptedScoredCauses: [...acceptedScoredCauses].sort(),
+      acceptedScoredCauses: [...(ledger.identity?.acceptances?.at(-1)?.causes ?? [])].sort(),
+      ...(ledger.identity?.acceptances?.at(-1)
+        ? { acceptedFromTrial: ledger.identity.acceptances.at(-1)?.fromTrial }
+        : {}),
       rows,
     };
     writeJson(join(directory, "report.json"), report);
