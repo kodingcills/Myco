@@ -21,11 +21,16 @@ is clean (§6.1), which is where attempt A's leftover `myco-80877-…` dir came 
 ## Launch — §6, survivor-detached
 
 ```bash
-/tmp/s6-run.sh runs/s6-final 20
+/tmp/s6-launch.sh runs/s6-final 20
 ```
 
-`/tmp/s6-run.sh` uses **`setsid`** so the job owns its own session and no omp teardown can reap it
-(attempt A died that way at 06:33:04Z, leaving one empty run dir). It writes:
+**`setsid` DOES NOT EXIST ON macOS.** Checked 2026-11-24: `which setsid` is empty. A launcher built
+on it fails **instantly and silently** — the background job dies before writing a byte, so the log
+is empty, the pid file names a dead process, and no exit file appears. Two launches were lost to
+this before `which setsid` was the first thing checked. **Use `nohup`**, optionally wrapped in
+`caffeinate` to keep the host awake.
+
+The launcher writes:
 
 | file | meaning |
 |---|---|
@@ -59,3 +64,24 @@ pid with `kill -0` before concluding anything.
 out from under it any more: a driver that tries gets `REFUSED_VM_LOCKED` instead. On a build
 before that, the gate above is the only protection, and it is a race — attempt B passed the gate
 and was reset 55 s later.
+
+## The guest is not clean after a C1 run
+
+r6 finished at 08:2xZ and released the flock, and the guest it left was **not** clean:
+
+- **two stray `soffice` processes** (`soffice 6644`, `soffice 3868`), and
+- **a run dir literally named `20`** — the C1 sweep's output directory, holding the C1 trial
+  `myco-36375-…` dir and a `profiles/`. §6.1's `myco-*` filter does **not** match a dir named
+  `20`, so the standard cleanup leaves it and every §6 row then fails
+  `guest contaminated — leftover run dirs: 20`.
+
+The §6 command also needs a **fresh token**: the one in `~/.myco-token` is what the *last* run
+fetched, and r6 installed its own. A stale one gives `AUTH_FAILED` after the guest has already
+been touched. Fetch it first:
+
+```bash
+~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > /tmp/s6-token
+```
+
+Both were hit on 2026-11-24 immediately after r6 released the guest.
+
