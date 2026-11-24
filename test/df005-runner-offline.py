@@ -110,6 +110,16 @@ for line in sys.stdin:
                         "content_base64": served})
         elif n == "create":
             res = text({"ok": True, "session_id": a.get("session_id", "s")})
+        elif n in ("reset", "destroy"):
+            # STUB_TEARDOWN_FAIL lets a test reach the SUCCESS path (past the
+            # readiness gate, through the graded scenario) and then fail only the
+            # teardown - which is the case the success-path leak check exists for.
+            # Without this seam, every harness case gaps at the readiness gate and
+            # the leak check at the end of execute_scenario is unreachable.
+            if (os.environ.get("STUB_TEARDOWN_FAIL") == n):
+                res = text({"ok": False, "error": f"{n} refused (injected)"}, err=True)
+            else:
+                res = text({"ok": True})
         else:
             res = text({"ok": True})
     print(json.dumps({"jsonrpc": "2.0", "id": i, "result": res}), flush=True)
@@ -138,7 +148,8 @@ class Harness:
     """A stub MCP server plus an optional scripted guest readback."""
 
     def __init__(self, store_items: list[str] | None = None, unreadable: bool = False,
-                 a11y: bool = True, geometry: bool = False):
+                 a11y: bool = True, geometry: bool = False,
+                 teardown_fail: str | None = None):
         self.dir = Path(tempfile.mkdtemp(prefix="df005-t-"))
         self.stub = self.dir / "stub.py"
         self.stub.write_text(STUB_TEMPLATE)
@@ -147,6 +158,11 @@ class Harness:
         self.env: dict[str, str] = {"STUB_A11Y": "1"} if a11y else {}
         if geometry:
             self.env["STUB_GEOMETRY"] = "1"
+        if teardown_fail:
+            # Reach the END of a graded run with only the teardown broken, so the
+            # success-path leak check is exercised rather than skipped. "reset"
+            # or "destroy".
+            self.env["STUB_TEARDOWN_FAIL"] = teardown_fail
         if unreadable:
             rb = self.dir / "readback.py"
             rb.write_text(unreadable_store())
@@ -315,6 +331,21 @@ def main() -> int:
     expect(code == 0, "exit 0 when the oracle passes")
     expect(ledger(d)["run-df-s01-1"]["state"] == "pass", "ledger state `pass`")
     expect(ledger(d)["run-df-s01-1"]["oracle"] == "verifier:verified+ground-truth", "oracle verified")
+
+    print("3b. a graded run whose session was NOT freed is a gap, never a pass")
+    # The leak check at the END of execute_scenario is unreachable from every
+    # other case in this file: they either gap at the readiness gate or tear down
+    # cleanly. So the success path - where a failed `destroy` would otherwise let
+    # a row score `pass` with the guest still allocated - had no coverage. This
+    # case drives a competent run and breaks ONLY the teardown.
+    code, d = Harness(store_items=["buy milk", "call mom", "write report"],
+                      teardown_fail="destroy").run(scenario="DF-S01")
+    state = ledger(d)["run-df-s01-1"]["state"]
+    expect(state != "pass",
+           f"a run whose session was never freed is NOT a pass (got {state})")
+    expect(state == "gap",
+           f"a leaked session on the success path lands in gap (got {state})")
+    expect(code != 0, f"and it exits non-zero (got {code})")
 
     print("4. guest store wrong after a completed run → failure, not verified")
     code, d = Harness(store_items=["buy milk"]).run(scenario="DF-S01")
