@@ -139,6 +139,27 @@ A **`HELD` flock is the only evidence of ownership.** Free + a named pid means t
 file is stale; free + `vm-state.sh` exit 0 means a guest is running with nobody
 holding the lock, which is the case to stop and report rather than proceed.
 
+**To clear a stale record** — do it under the lock, so it cannot race a driver acquiring it:
+
+```bash
+python3 - <<'PY'
+import fcntl
+f = open("/tmp/myco-win11.vm.lock", "a+")
+try:
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit("HELD — a driver owns the host; do not touch the record")
+f.seek(0); f.truncate(0); f.flush()
+print("cleared a stale lock record (the flock was free)")
+PY
+```
+
+Clearing is housekeeping, not a prerequisite: `vm_lock_acquire` truncates and rewrites the
+record only after the kernel grants the lock, so a stale pid never blocks a driver. It is worth
+clearing because a dead pid in that file reads exactly like a live owner — the 2026-11-24
+row-8 operator saw `44837 reset-trial-vm.sh` (dead) with the flock free and had no way to tell
+the two apart from the file alone.
+
 ```bash
 ~/VMs/myco-win11/scripts/wait-ssh.sh 120
 ~/VMs/myco-win11/scripts/vssh 'whoami'
@@ -302,6 +323,56 @@ interleave with other work on the guest. `--mode values` runs its parameter sets
 without resets, so running it on a contaminated guest (leftover `soffice`, leftover run dirs)
 measures the contamination, not the generator (log 27).
 
+### 6.1 Prove the guest is clean before you start
+
+`--mode values` runs 20 sets back to back on one guest, so **a single leftover run dir fails
+every row** — measured 2026-11-24: 20/20 `uncertain`, every reason
+`could not look: guest contaminated — leftover run dirs: myco-54774-…; refusing to read a
+foreign document`. That is the M1-019 guard doing its job; it will not score someone else's
+document. Do not start §6 until this prints nothing:
+
+```bash
+cat > /tmp/guest-clean.ps1 <<'EOF'
+Get-Process soffice* -ErrorAction SilentlyContinue | ForEach-Object { "soffice $($_.Id)" }
+Get-ChildItem C:\myco\runs -Directory | Where-Object Name -like 'myco-*' | ForEach-Object { "run-dir $($_.Name)" }
+EOF
+scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-clean.ps1 myco-win11:'C:/myco/guest-clean.ps1'
+~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-clean.ps1'
+```
+
+**If a previous §6 attempt was aborted** — killed, Ctrl-C'd, or interrupted by a guest reset —
+it leaves one `run-dir myco-<hostpid>-<nonce>-<nonce>` and possibly one `soffice` behind. Clean
+them before re-running, or the re-run measures the residue:
+
+```bash
+cat > /tmp/guest-cleanup.ps1 <<'EOF'
+Get-Process soffice* -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-ChildItem C:\myco\runs -Directory | Where-Object Name -like 'myco-*' | Remove-Item -Recurse -Force
+Get-ChildItem C:\myco\profiles -Directory -ErrorAction SilentlyContinue | Where-Object Name -like 'myco-*' | Remove-Item -Recurse -Force
+EOF
+scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-cleanup.ps1 myco-win11:'C:/myco/guest-cleanup.ps1'
+~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-cleanup.ps1'
+```
+
+Then re-run `guest-clean.ps1` and confirm it prints nothing.
+
+**Do not delete** `C:\myco\runs\profiles` or `C:\myco\runs\myco_uia_act.py*` — those are the
+profile root and the agent's own script plus its result files, not trial residue. `profiles`
+sub-dirs are reported as residue but do **not** trip the guard; only `soffice` and `myco-*` run
+dirs do.
+
+### 6.2 Hold the VM, or nothing else may touch it
+
+`run-live` **does not take the VM flock** — the sweep driver (§7.3) does, but this entrypoint
+does not, so a §6 attempt holds no ownership evidence. Measured 2026-11-24: a baseline driver
+acquired the lock and cold-reset the guest to its own snapshot ~55 s into a §6 run. The first
+row verified; the tunnel then died with the guest, and **the next 19 rows each returned
+`uncertain` in 0–1 ms** — `could not look: agent unreachable — ssh tunnel is not running (call
+start() first)`. The run exited 1 with one genuine verdict and 19 harness aborts.
+
+So before §6: prove the flock is **FREE** (§2) and that no driver is running, and expect
+nobody to start one. A held flock means wait — do not run §6 under a reset.
+
 ```bash
 pnpm exec tsx src/integration/run-live.ts --mode values --limit 20
 ```
@@ -317,6 +388,15 @@ like a pass). Row shape, from the committed run
 ```
 
 Recorded result: **20/20 verified** (5 values × `name`, `qty`, `joined`, `salary`), 2026-11-20.
+
+**Re-checked 2026-11-24, and not yet reproduced end to end.** Two attempts were made on a
+guest that had been reset and verified clean (§6.1). **Every row that reached the verifier
+verified — 16 of 16, zero refutations — and no row failed a generator check.** Neither attempt
+completed: in the first the host process disappeared mid-trial-16 (15 rows written, the 16th
+left empty, no crash report and no output; cause unproven), and in the second a lock-holding
+driver cold-reset the guest at trial 2 (§6.2). **`20/20` on a quiet host is therefore still
+outstanding**, but the failure mode this section warns about — a *refutation* — has not
+occurred on a clean guest in any of the 16 rows.
 
 **A refutation means: stop.** A non-verified row names the mismatch in `reason`. Before blaming
 the generator, rule out contamination (reset, then re-run) and contention. If it reproduces on a

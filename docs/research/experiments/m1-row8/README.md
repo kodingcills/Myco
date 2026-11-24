@@ -140,3 +140,67 @@ needs the environment prepared *before* the agent begins.
 **Not yet established:** whether §6 passes on a genuinely quiet host (load < 4). The follow-up
 check ran at load 5.8–10.0, so it cleared the contamination question but **not** the contention
 one. A clean-host §6 remains outstanding.
+
+## §6 on a cleaned, owned guest — 2026-11-24, 16/16 verified, 0 refuted
+
+Two attempts after resetting the guest and removing the residue above. **No row was refuted and
+no row failed a generator check.** Neither run finished, for two unrelated reasons, and both are
+now runbook steps.
+
+### Attempt A — 06:19–06:33Z, 15 verified, then the host process vanished
+
+```
+runs/values/<runId>/result.json     15 rows   all "verified"
+runs/values/f1b42488-…/             empty     trial 16 started, never wrote a result
+```
+
+The 15 rows span 06:19:43–06:33:04 at ~48 s each, one cell per row, e.g.
+`cell B39 (record EMP-0038, column name) persisted as "REVISED-908578"`. At 06:33:04 the dir for
+trial 16 was created and the process was gone. **No crash report, no stack, no output**: the log
+held only the `agent ping ok` line, because `run-live` writes its JSON array once at the end of
+the loop (`src/integration/run-live.ts:156`) — **a silent log is the expected shape of a healthy
+`values` run, not a symptom.** Cause unproven; the process was not survivor-detached, so a
+harness/session teardown is the leading hypothesis and is untested.
+
+Leftovers after it: one guest run dir `myco-80877-1795501985546-716442753`, no `soffice`.
+
+### Attempt B — 06:37–06:40Z, 1 verified then 19 harness aborts
+
+Relaunched detached via the broker, after deleting the guest residue (`--runs-dir runs/s6-clean2`).
+
+| row | elapsed | verdict |
+|---|---|---|
+| 1 `name` | 44 656 ms | **verified** — `cell B39 … persisted as "REVISED-908578"` |
+| 2 `qty` | 99 135 ms | uncertain — `UNO readback of C24 failed — ssh tunnel is not running` |
+| 3–20 | 0–1 ms | uncertain — `agent unreachable — ssh tunnel is not running (call start() first)` |
+
+**A concurrent driver cold-reset the guest underneath the run.** Measured from the host, not
+inferred:
+
+```
+01:38:14 local (06:38:14Z)  bash scripts/reset-trial-vm.sh cua-c1-base   # baseline worktree, pid 36434
+01:38:21 local              bash .../wait-guest-ready.sh 600             # pid 36523
+01:38:40 local              QEMU pid 44955 -> 36509                      # the guest restarted
+```
+
+`run-live` **takes no VM flock** — `scripts/m1-sweep.sh` sources `scripts/vm-lock.sh`, this
+entrypoint does not — so the §6 attempt held no ownership evidence and the driver's
+`vm_lock_acquire` succeeded rather than refusing. The tunnel then died with the guest, and
+`SshTunnel.call` rejects immediately when its child is gone (`src/win/agent-client.ts:296-299`),
+which is why the remaining rows cost 0–1 ms each.
+
+### What this changes
+
+| | finding |
+|---|---|
+| **F12** | **`run-live` holds no VM lock, so §6 can be reset out from under while it runs.** A driver that legitimately acquires the lock cannot detect it. Every later row degrades to a 0 ms `uncertain` and the run exits 1 looking like a generator failure. Runbook §6.2 now requires a proven-free flock and no running driver. |
+| **F13** | An aborted §6 leaves a guest run dir that fails **every** row of the next attempt with one `guest-contaminated` reason. Runbook §6.1 now verifies cleanliness and gives the cleanup. |
+| **F14** | A `values` run prints nothing until the loop ends, so "no output after 15 minutes" is **not** evidence of a hang. Liveness is the guest run dirs, one every ~48 s. |
+| — | F8 is corrected, not reproduced: `elapsedMs` is a number in every row tonight (44 656, 99 135, …), not `null`. |
+
+### Status of the §6 gate
+
+**§6 is not refuted.** On a guest that was clean and belonged to the run, 16 of 16 rows verified
+and none was refuted. **It is also not yet passed:** `20/20` has not been observed on a quiet
+host, because both attempts were cut short by infrastructure. The gate stays open, and §7 stays
+blocked behind it, until one uninterrupted 20-row run exists.
