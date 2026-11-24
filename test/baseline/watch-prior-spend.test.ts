@@ -213,6 +213,79 @@ describe("a non-numeric prior spend is refused, not converted to zero", () => {
   }
 });
 
+/**
+ * The launcher must accept and reject EXACTLY the strings the sweep does.
+ *
+ * A round-3 verifier caught the earlier comment claiming this while checking only the
+ * character class: `parseSpendCeiling` also requires `Number.isSafeInteger`, so
+ * `9007199254740992` and above were accepted by the launcher and thrown by the sweep.
+ * Claiming agreement without checking it is the same defect class as the one this PR
+ * fixes, so the test compares the two implementations directly rather than restating
+ * an intention.
+ */
+describe("the launcher agrees with the sweep about valid prior spend", () => {
+  const cases = [
+    "",
+    "   ",
+    "abc",
+    "4.5",
+    "-1",
+    "4e6",
+    "0",
+    "4480732",
+    "9007199254740991", // Number.MAX_SAFE_INTEGER
+    "9007199254740992", // 2^53 - the first value the sweep refuses
+    "9007199254740993",
+    "9999999999999999999",
+    "123456789012345678901234567890",
+  ];
+
+  // 13 launcher spawns, each a real shell run, so the default 5s is not enough.
+  it("accepts/rejects the same strings as parseSpendCeiling", { timeout: 120_000 }, async () => {
+    const { parseSpendCeiling } = await import("../../scripts/spend-ceiling.ts");
+    const { spawnSync } = await import("node:child_process");
+
+    for (const value of cases) {
+      // What the sweep would do.
+      let sweepAccepts: boolean;
+      try {
+        parseSpendCeiling({ MYCO_PRIOR_SPEND_MICROS: value, MYCO_ARM_LIMIT_MICROS: "1" });
+        sweepAccepts = true;
+      } catch {
+        sweepAccepts = false;
+      }
+
+      // What the launcher does. 6 is its refusal code; anything else means it got past
+      // the guard and reached the VM lock, i.e. it accepted the value.
+      const dir = ledgerDir({ "0": scored(100_000) });
+      const run = spawnSync(
+        "bash",
+        ["scripts/c1-baseline.sh", dir, "--coordinator-go", "--resume"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          // Same hermeticity as the other launcher tests: an empty HOME and a dummy
+          // key, so the run reaches the guard this test is about rather than stopping
+          // at the secrets check that precedes it.
+          env: {
+            ...process.env,
+            HOME: bareHome(),
+            ANTHROPIC_API_KEY: DUMMY_KEY,
+            MYCO_PRIOR_SPEND_MICROS: value,
+          },
+          timeout: 20_000,
+        },
+      );
+      const launcherAccepts = run.status !== 6;
+
+      expect(
+        { value, launcherAccepts },
+        `${JSON.stringify(value)}: sweep=${sweepAccepts ? "accept" : "throw"}`,
+      ).toEqual({ value, launcherAccepts: sweepAccepts });
+    }
+  });
+});
+
 describe("the watchdog measures the same spend the cap does", () => {
   it("adds prior spend to the ledger, rather than reporting the ledger alone", () => {
     // 9 scored rows and two live reservations, the shape r6 was in.
