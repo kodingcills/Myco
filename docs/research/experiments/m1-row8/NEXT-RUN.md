@@ -85,3 +85,31 @@ been touched. Fetch it first:
 
 Both were hit on 2026-11-24 immediately after r6 released the guest.
 
+## Handoff: r6 resume (Shot) — the flock is FREE as of 2026-11-24 08:5xZ
+
+r6 ended **PARTIAL at trial 19** on a `max_tokens=1024` truncation (harness fault, TIF-200), and
+Shot resumes it from trial 20. **The flock is free and no driver is running.** My §6 run finished
+at 08:49:46Z and released it; nothing of mine holds the guest now.
+
+**Match the reset target to r6's snapshot.** r6 resumed from `cua-c1-base` (`/tmp/c1-r6-resume.log`:
+`Resetting VM to cua-c1-base...`). My §6 ran on the post-r6 guest and required no reset, so
+whichever snapshot Shot resumes against, it should be the one r6 was built on — not `clean-base`,
+which predates the Cua install.
+
+### What I removed, and what I did not touch
+
+**Guest (Windows) — removed, r6's own residue, recreated automatically:**
+- two stray `soffice` processes (`6644`, `3868`) left by r6's teardown;
+- `C:\myco\runs\20` — the C1 sweep's output dir, holding r6's trial dir
+  `myco-36375-1795508434142-964161670` and a `profiles/`. It is the guest half of the run, and
+  `vm-lock`/§6.1 treat it as contamination; `myco-admin` is recreated on demand by `runGuestScript`.
+- `C:\myco\profiles\myco-*` throwaway UNO profiles.
+
+**Mac — untouched.** `/Users/tofuinparis/Projects/myco-runs/c1-r6/` is intact (644K:
+`accounting.json`, `report.json`, `progress.log`, `run.pid`, `trials*`, `watch.*`). **Nothing on the
+host side was read, moved, or deleted by me** — my cleanup used `vssh` + PowerShell against the
+guest only, and my file operations were confined to this worktree and `/tmp`.
+
+**If Shot's `--resume` needs anything from the guest's `runs\20`, it is gone**; it was r6's output
+directory, not its input, and `--resume` reads the host ledger.
+
