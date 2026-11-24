@@ -15,7 +15,10 @@ Two subcommands.
                    index, refuse unless every pair names the same task (fixtureSeed,
                    rowKey, column, value), then print the paired table, both tallies,
                    and the exact two-sided sign test on the discordant pairs.
-                   --check additionally asserts the numbers quoted in docs/m1-scorecard.md.
+                   --check additionally asserts that row 7 of docs/m1-scorecard.md quotes
+                   these computed numbers: it reads the row, it does not trust constants.
+                   The prior spend ($4.4807) and the cap total are NOT computed here; they
+                   come from c1-arm-003d/ROW7-BUDGET-DECIDED.md.
 
 The graded field is `row.verdict` / `row.verdictReason`, set by judge()
 (src/baseline/index.ts) and written by c1-trial.ts. It is NOT `mycoVerdict`, which
@@ -63,6 +66,21 @@ def extract(ledger_path: Path) -> None:
             raise SystemExit(f"ledger key {key} carries row index {row['index']}")
         out = {f: row[f] for f in ROW_FIELDS}
         out.update(row["params"])  # fixtureSeed, rowKey, column, newValue
+        # Derived from the transcript, which the extract does not carry: does any
+        # type_text enter the row's expected value, and how many Ctrl+S / Escape
+        # presses. This is what the save-dialog mechanism claim is checked against.
+        actions = row["transcript"]["actions"]
+        keys = [str(a["arguments"].get("key", "")).lower() for a in actions if a["tool"] == "press_key"]
+        out["typedExpected"] = any(
+            a["tool"] == "type_text" and str(a["arguments"].get("text", "")).strip() == row["expected"]
+            for a in actions
+        )
+        out["actions"] = len(actions)
+        out["pressKey"] = len(keys)
+        out["ctrlS"] = keys.count("ctrl+s")
+        out["escape"] = keys.count("escape")
+        out["claims"] = row["transcript"]["claims"]
+        out["deviations"] = [d for d in row["deviations"] if not d.startswith("cua-action-")]
         out["ledgerStatus"] = entry["status"]
         out["micros"] = entry["micros"]
         rows.append(out)
@@ -122,6 +140,11 @@ def compare(check: bool) -> int:
     myco_only = pairs[("verified", "refuted")] + pairs[("verified", "uncertain")]
     base_only = pairs[("refuted", "verified")] + pairs[("uncertain", "verified")]
     p = sign_test_two_sided(myco_only, base_only)
+    budget_rows = [r for r in r6.values() if r["verdictReason"] == "step-budget"]
+    save_loop = sorted(r["index"] for r in budget_rows if r["typedExpected"] and r["ctrlS"] > 0)
+    other_budget = sorted(r["index"] for r in budget_rows if not (r["typedExpected"] and r["ctrlS"] > 0))
+    audited = sum(1 for r in r6.values() if r["audited"])
+    asym = sum(1 for r in r6.values() if "step-budget-asymmetry" in r["deviations"])
 
     print()
     print(f"v3 status       : {dict(sorted(v3_tally.items()))}")
@@ -131,30 +154,36 @@ def compare(check: bool) -> int:
     print(f"pairs (v3, r6)  : {dict(sorted(pairs.items()))}")
     print(f"discordant      : Myco-only {myco_only}, baseline-only {base_only}, exact two-sided p = {p:.3g}")
     print(f"r6 scored spend : {micros} micros = ${micros / 1e6:.4f}")
+    print(f"step-budget rows: {len(budget_rows)}; typed expected + >=1 Ctrl+S: {len(save_loop)}; other: {other_budget}")
+    for i in other_budget:
+        r = r6[i]
+        print(f"  index {i}: typedExpected={r['typedExpected']} pressKey={r['pressKey']} actions={r['actions']}")
+    print(f"audited rows    : {audited} of 30; step-budget-asymmetry deviation on {asym} of 30")
     print(f"source ledger   : {doc['source']} sha256 {doc['sourceSha256']}")
 
     if check:
-        want = {
-            "v3": {"verified": 29, "refuted": 1},
-            "r6": {"refuted": 30},
-            "reason": {"step-budget": 29, "modified": 1},
-            "falseSuccess": 0,
-            "pairs": {("verified", "refuted"): 29, ("refuted", "refuted"): 1},
-            "micros": 3371350,
-        }
-        got = {
-            "v3": dict(v3_tally),
-            "r6": dict(r6_tally),
-            "reason": dict(r6_reason),
-            "falseSuccess": r6_false,
-            "pairs": dict(pairs),
-            "micros": micros,
-        }
-        bad = [k for k in want if want[k] != got[k]]
-        if bad:
-            print(f"CHECK FAILED on {bad}: want {want}, got {got}", file=sys.stderr)
+        row7 = next(
+            (l for l in (ROOT / "docs/m1-scorecard.md").read_text().splitlines() if l.startswith("| 7 |")),
+            "",
+        )
+        want = [
+            f"**{v3_tally['verified']} verified, {v3_tally['refuted']} refuted**",
+            f"**{r6_tally.get('verified', 0)} verified, {r6_tally['refuted']} refuted**",
+            f"**`step-budget` {r6_reason['step-budget']}, `modified` {r6_reason['modified']}**",
+            f"Myco-only success **{myco_only}**, baseline-only **{base_only}**",
+            f"**p = {p:.1e}**".replace("e-0", "e-"),
+            f"**{len(save_loop)} of the {len(budget_rows)}**",
+            f"rows {other_budget[0]} and {other_budget[1]}" if len(other_budget) == 2 else "rows ?",
+            f"falseSuccess {r6_false}/30, but {audited} of 30 audited",
+            f"on all {asym} rows",
+            f"${micros / 1e6:.4f} scored in r6",
+            doc["sourceSha256"][:8],
+        ]
+        missing = [w for w in want if w not in row7]
+        if missing:
+            print(f"CHECK FAILED: row 7 of docs/m1-scorecard.md does not quote {missing}", file=sys.stderr)
             return 1
-        print("CHECK OK: the numbers in docs/m1-scorecard.md row 7 match the committed artifacts")
+        print(f"CHECK OK: row 7 quotes all {len(want)} computed figures")
     return 0
 
 

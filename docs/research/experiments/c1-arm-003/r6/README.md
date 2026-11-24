@@ -1,8 +1,12 @@
 # arm-003 r6: the graded-field ledger extract
 
 `ledger-extract.json` holds r6's 30 graded rows: task (`fixtureSeed`, `rowKey`, `column`,
-`newValue`), `verdict`, `verdictReason`, `falseSuccess`, steps and per-row charged micros. It
-leaves out transcripts and usage. The full ledger stays on the host, because it is ~485 KB of
+`newValue`), `verdict`, `verdictReason`, `falseSuccess`, `audited`, steps, per-row charged
+micros and the harness `deviations`. It leaves out transcripts and usage, but keeps five fields
+derived from each transcript: `typedExpected` (did any `type_text` enter the expected value),
+`actions`, `pressKey`, `ctrlS`, `escape`, plus the agent's `claims`. Those fields carry the
+save-dialog split in row 7 (27 of 29 step-budget rows typed the value and pressed Ctrl+S; rows
+13 and 21 did neither). The full ledger stays on the host, because it is ~485 KB of
 agent transcripts:
 
 ```
