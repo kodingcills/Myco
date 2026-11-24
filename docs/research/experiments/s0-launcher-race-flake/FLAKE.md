@@ -108,3 +108,55 @@ change to `lock_trace`'s printf rather than a new experiment.
 
 Recorded here because it is the first result about the mechanism rather than about a
 candidate for it.
+
+---
+
+## Update 2026-11-24 — the path and inode, and a flaw in how they were read
+
+The trace was extended to record `path=` and `ino=` per line (PR #364), to answer whether
+the two claims are the same lock twice or two different locks.
+
+### The capture (round 13, run 45316678834, 10 invocations x 40 rounds)
+
+```
+.808890100   s0.lock born            ino=8529976
+.816359845   pid=15662  mkdir-won    path=.../run/s0.lock  ino=8529976
+.821474865   pid=15668  mkdir-won    path=.../run/s0.lock  ino=8529976
+.829...      s0.pid born
+.834054328   pid=15666  mkdir-lost   path=.../run/s0.lock  ino=8529976
+```
+
+**Same path, one inode, two `mkdir-won`** 5.1 ms apart. `rc.1 = 0`, `rc.5 = 0`.
+
+### Why that inode field cannot be read as "the inode this call created"
+
+The lock was **born at `.808890100`**, 7.4 ms *before* the first `mkdir-won` at
+`.816359845`. A successful `mkdir` creates the directory; the inode of what it created
+would be stamped at the moment of the call. This trace samples `stat` on `$LOCK_DIR`
+*after* the call, so it reports whatever the path is *now*, not what the call made.
+
+That makes `ino=` useless for attribution here: it would print `8529976` for a winner, a
+loser, and a late observer alike. **The field answers "does the lock exist at this
+instant" and nothing more.** The finding that survives is narrower than it first looks:
+
+- **both calls returned 0** (that is the `mkdir` exit status, not an inference);
+- on the **same path**;
+- with **no rmdir** in the capture;
+- and a **single** lock inode.
+
+### What would actually attribute creation
+
+`mkdir` cannot report the inode it made, so the honest way to tell "created" from
+"found existing" is to compare the lock's **birth time** against each call's own stamp:
+the racer whose stamp is at or after the birth is the creator, and any *later* `mkdir-won`
+on the same inode is a second success on an existing directory. That comparison is
+available from the data already captured — the times dump carries the birth, the trace
+carries each call — and it is what the next round should run on the existing artifacts
+before any more instrumentation is written.
+
+### Not claimed
+
+`mkdir` returning 0 twice on an existing directory is not normal on ext4 or on the
+container's overlayfs, where a direct test shows the second call losing. So either the
+runner's filesystem differs in this respect, or something removes the lock in a way this
+trace does not see. Both remain open; the five hypotheses tested so far are listed above.
