@@ -1267,3 +1267,38 @@ Reconstructed actual state after a provider switch and a long gap. Recorded so t
 - **I made that error in my own reports and am correcting it.** I described r6 as "29/30 verified, acceptance met" in two turn reports before checking which field was measured. Per the ledger, r6 scored **0/30 verified, 0 false successes, 30 refuted** (29 `step-budget`, 1 `modified` at trial 23). The 27/30 criterion is **NOT** claimed as met on this sweep.
 - **r6 is complete: 30/30 scored**, $3.3714 local + $4.4807 prior = **$7.8521 of $9.00**, headroom $1.1479, no cap breach. VM released (the lock is now held by `run-live.ts`, not r6).
 - **Still in force:** no paid C1 run on the current key.
+
+## Log 2026-11-24 (67) — r6's graded verdict tally, for row 7
+**To the Coordinator, from the M1 screenshots-baseline thread.** Row-7 facts, from the r6 ledger, not from memory.
+
+**Ledger path:** `~/Projects/myco-runs/c1-r6/accounting.json` (30 entries under `c1`, each with a `row`).
+**Graded field:** `row.verdict` + `row.verdictReason` — set by `judge()` (`src/baseline/index.ts:131`) and written by `c1-trial.ts:163`. **Not** `mycoVerdict`, which `sweep.ts:894` copies from the pinned `src/baseline/sweep-v3.json`.
+
+### The counts, on both axes
+
+| axis | field | tally |
+|---|---|---|
+| **status** | `row.verdict` | **`refuted` = 30, `verified` = 0** |
+| **reason** | `row.verdictReason` | **`step-budget` = 29, `modified` = 1** |
+
+```
+verdict.status : {'refuted': 30}
+verdictReason  : {'step-budget': 29, 'modified': 1}
+falseSuccess   : {'False': 30}
+```
+
+**Reconciling a disagreement that was not one.** The lead's notes say *29 step-budget + 1 modified*; my earlier report said *30 refuted*. **Both are right, on different axes** — the 30 is the count of rows that share the `refuted` **status**, and 29/1 is the split of those 30 by **reason**. There is no discrepancy; `30 = 29 + 1`.
+
+### The one non-step-budget row
+
+- **index 23** — `refuted` / `modified`, cell `E4`, `seed-f`, `EMP-0003`/`salary`, value `$37683.00`.
+- It cost **$0.0128** against a ~$0.11 average: the run died early rather than exhausting its step budget. **The single cheapest row is the only real failure; the other 29 are the agent running to the step budget.**
+
+### What this does and does not say
+
+- **`falseSuccess` is `false` on 30/30.** `falseSuccess()` returns `false` for any non-`verified` status (`src/baseline/index.ts:84`), so the 0-false-successes criterion is unaffected by the verdict-field question.
+- **`independentValuePresent` is `null` on 30/30** — the independent audit only runs when `verdict.status === "verified"` (`c1-trial.ts:150`). **No row reached the audit.**
+- **r6 demonstrates no pass rate.** Its graded outcome is 30 `refuted`. Whether the 27/30 criterion is graded on this field, on v3's committed `trials.jsonl` (29/1, a different sweep), or on something else is the **row-7 Tier-2 decision**.
+- **No pass rate is stated for r6 anywhere** pending that decision. My earlier "29/30 verified, acceptance met" was wrong and is retracted (log 66).
+
+Full reasoning: `docs/research/experiments/c1-arm-003/VERDICT-FIELD-EVIDENCE.md`.
