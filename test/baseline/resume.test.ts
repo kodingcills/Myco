@@ -634,7 +634,9 @@ describe("c1-sweep --resume", () => {
     };
     // First run: no acceptance at all.
     await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
-    expect(JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8")).identity.acceptances).toBeUndefined();
+    expect(
+      JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8")).identity.acceptances,
+    ).toBeUndefined();
 
     // Resume WITH one. It applies from the first trial this resume executes, which
     // is the first unfinished index - NOT trial 0.

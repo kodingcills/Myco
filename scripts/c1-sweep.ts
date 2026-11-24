@@ -45,7 +45,9 @@ async function main() {
     } else if (arg.startsWith("--accept-scored-cause=")) {
       const value = arg.slice("--accept-scored-cause=".length);
       if (value.trim().length === 0)
-        throw new Error("--accept-scored-cause= needs a verdict:reason value, e.g. refuted:step-budget");
+        throw new Error(
+          "--accept-scored-cause= needs a verdict:reason value, e.g. refuted:step-budget",
+        );
       acceptScoredCauses.push(value);
     }
   }
