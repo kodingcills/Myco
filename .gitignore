@@ -19,3 +19,6 @@ recovery.local.json.*.tmp
 # `git add -A`. Nothing reads them.
 /[0-9]*
 !/[0-9]*[!0-9]*
+
+# TIF-206: pnpm content store was once committed by accident; never again.
+.pnpm-store/

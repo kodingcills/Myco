@@ -7,6 +7,7 @@ import { independentC1Judge } from "../src/baseline/c1-judge.ts";
 import { type PreparedC1, RESET_SNAPSHOT } from "../src/baseline/c1-trial.ts";
 import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
 import { createPlanner, SONNET } from "../src/baseline/planner.ts";
+import { resolveAnthropicKey } from "../src/baseline/secret-file.ts";
 import { runC1Sweep } from "../src/baseline/sweep.ts";
 import manifest from "../src/baseline/sweep-v3.json" with { type: "json" };
 import { cleanupTrialGuest } from "../src/integration/guest-health.ts";
@@ -376,7 +377,7 @@ async function main() {
   }
 
   try {
-    const planner = createPlanner(fetch, { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY });
+    const planner = createPlanner(fetch, { ANTHROPIC_API_KEY: resolveAnthropicKey() });
     console.log("--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]");
 
     // Prior spend and the remaining budget come from the environment, because
