@@ -56,9 +56,14 @@
   save-dialog loop produces*. **Zero of 570 calls exceed 615**, so the loop does not generate
   unusually long replies; the index-20 call is an outlier ~1.7x beyond anything else in the arm, and
   the shape of a reply that runs past every observed sample without approaching it is a **degenerate
-  repeat**, not a ceiling that is too tight. Raising the bound would make a runaway more expensive
-  with only $1.75 of cap left, so #400 correctly keeps `MAX_OUTPUT = 1024` and bounds the runaway
+  repeat**, not a ceiling that is too tight. Raising the bound would make a runaway more expensive,
+  and the cap is not unlimited, so #400 correctly keeps `MAX_OUTPUT = 1024` and bounds the runaway
   instead of accommodating it.
+
+  (An earlier revision said "with only $1.75 of cap left". **That figure was unanchored** — it did
+  not come from `report.json`, whose value at that stop was `c1ChargedMicros: 2765970`, i.e.
+  $6.234030 of headroom. A verifier caught it after it had been restated to four decimals in the
+  rows-7/8 draft, which is how a hedge becomes a measurement. Corrected here at the source.)
 - **(a) SHOULD ONE PLANNER FAILURE STOP AN ARM? No — and it no longer does.** Verified at
   `origin/pull/400/head`: the assignment `if (failed) stopReason = "planner-failed"` is gone,
   replaced by `noteCause(failed ? "planner-failed" : "trial-interrupted")` plus

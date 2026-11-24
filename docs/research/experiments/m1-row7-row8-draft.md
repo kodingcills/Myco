@@ -50,7 +50,14 @@ flight (`--resume --adopt-identity --accept-scored-cause refuted:step-budget`).
 
 **Prior r6 stop, for the record:** PARTIAL at 19 scored / 11 omitted (1 `trial-interrupted`,
 10 `planner-failed`), stopped by a **harness** fault — one `max_tokens=1024` truncation — not by
-the spend cap. Headroom at that point was **$1.7533 of $9.00**, so the cap never bound.
+the spend cap. From `report.json` at that stop (`c1ChargedMicros: 2765970`), headroom was
+**$6.234030 of $9.00**.
+
+> An earlier revision of this draft said "$1.7533 of $9.00". **No artifact supports that figure.**
+> It came from a rounded prose aside elsewhere in the repo ("with only $1.75 of cap left") and was
+> restated here to four decimals, which turned a hedge into a precise-looking measurement. Caught by
+> a verifier round before merge. It is the exact defect class this document exists to prevent, and
+> it is left visible rather than quietly deleted.
 
 ### The 30-row pair is required, not optional
 
@@ -71,7 +78,7 @@ from an M1-013 sweep the Coordinator has declared final.
 |---|---|---|
 | Runbook | `docs/eval-runbook.md`, all commands checked against the repo | PR #33 |
 | Sweep driver | `scripts/m1-sweep.sh` | PR #53 |
-| VM toolchain in the repo | **18 files** (recursive; 14 top-level entries + 2 dirs), incl. `build-all.sh`, `reset.sh`, `vssh`, `guest/`, `seed/` | `docs/env/vm-toolchain/`, #206 — re-counted 2026-11-24 with `find -type f` |
+| VM toolchain in the repo | **18 files** — 12 top-level files + 6 under `guest/` and `seed/`. `find docs/env/vm-toolchain -type f` gives 18; `ls -A` gives 14 top-level entries, which **already includes** the two directories | `docs/env/vm-toolchain/`, #206 — re-counted 2026-11-24 with `find -type f` |
 | **§6 generator proof** | **20/20 verified, exit 0** — 08:34:06Z→08:49:46Z, zero refuted | `docs/research/experiments/m1-row8/S6-PASS.md` |
 | Guest-clean precondition | §6.1 now excludes only `myco-admin`/`profiles`; a C1 run's `runs\20` is reported | #405 (`2833a941`) |
 | Ownership check | read-only via `lsof`; a flock probe can make a real driver exit 10 | #405, #409 |
@@ -85,7 +92,7 @@ driver at trial 2. Those are **not** pooled with it.
 
 | Step | Pass condition | Status |
 |---|---|---|
-| 1. Read only the repo | reaches a runnable sequence without a question the repo could answer | **PARTIAL** — a fresh operator found 15 gaps (F1–F15); the substantive ones are fixed in #405 |
+| 1. Read only the repo | reaches a runnable sequence without a question the repo could answer | **PARTIAL** — a fresh operator returned 15 findings, of which the substantive ones are fixed in #405; the identifiers run **F1–F14** (there is no F15 — the operator's count and its labels do not agree, and the labels are what a reader can follow) |
 | 2. Preconditions (§1) | obtains the VM bundle, `ssh_config`, key, host scripts, GUI permission — nothing else | **PASS** (prior run) |
 | 3. Reset → deploy → desktop proof | each step's stated output observed | **PASS** (prior run, exact match) |
 | 4. Generator proof (§6) | 20/20 | **PASS** (`S6-PASS.md`) |
