@@ -53,6 +53,12 @@
 - **Known, unfixed, flagged:** `test/df005-runner-offline.py` mutates `scripts/df005-runner.py` on disk during cases 12/13. Restoration is asserted on exception paths but is **not signal-safe**; my own kill left `if False:` on disk mid-session. A file that edits its own subject is a hazard in a shared CI checkout.
 - **CI cost:** the gate suite adds ~2 minutes to `check` on every run, on a job already cancelled ~37% of the time. Flagged to the outer loop before it surfaces as a new flake.
 
+- **DF-S01's preflight deadlock is RESOLVED (#338, `73b8ef8d`).** `preflight()` ran *before* `acquire_vm_lock()` and `create()`, and hard-failed on `guest-ssh` when no guest was up — but `create()` is what boots the guest (`provision()` → `boot.sh`). **Both orderings deadlocked:** booting first made the runner fail `vm-lock`, because `boot.sh` holds the host flock for the guest's lifetime. Fixed by DEFERRING the guest-dependent checks (`guest-ssh`, `app-deployed`, `app-self-test`, `introspection-file`, `introspection-shadow`) rather than failing them — "unmeasurable now, measured by the run". Verified from a clean host, no guest and a free lock:
+  ```
+  preflight OK: 3/8 measured, 5 deferred to the run   rc=0
+  ```
+  **Deferring is the right call, not a workaround:** a guest that fails to come up still shows as a `gap` per trial, so nothing about what the run verifies is weakened, and the summary cannot claim a count it did not measure.
+
 ## Standing rule — defensive engineering (Tiffany-approved, 2026-11-22 16:00 ET)
 
 Applies to **every owner, builder and verifier**, and is repeated in every owner
