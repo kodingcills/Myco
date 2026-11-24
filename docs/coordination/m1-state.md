@@ -1257,3 +1257,48 @@ Reconstructed actual state after a provider switch and a long gap. Recorded so t
 - **One live process that is not debris:** a `docker run --cpus=2 -v .../tif-170-race` (pid 53475), Discovery's active work. **Not touched.**
 - **Gate state: CLEARED** (load 6.90, nothing non-VM above 300%).
 - **My worktree synced to origin/main `b2d37f16`**, clean.
+
+## Log 2026-11-24 (66) — TIF-202 and TIF-204 DONE; r6 complete; the mycoVerdict hazard
+- **TIF-202 DONE.** Merged as **#408** (`da4c48f7`, squash) after syncing with main. The sync was verified **patch-equivalent**: `probe-directory.test.ts` stayed `a0a7bd25ffbf` and `watch-prior-spend.test.ts` stayed `98bb6e359c6e` across it, so the tree hash moved only from main's own files. 5/5 checks green, `MERGEABLE/CLEAN`, merged normally — no `--admin`, no `--auto`, no force.
+- **TIF-204 DONE.** Both asks landed through #408: the test asserting the SHARED-lock throw, and the `probe-directory.test.ts` reword naming the ordering. **#413 was CLOSED as superseded** — same two files, byte-identical; the lead ruled merge whichever is green first and close the other. Never merged twice.
+- **Three rounds proved text cannot enforce the property.** Round 2 defeated every textual predicate with an alias and MEASURED the spawn reaching `vm_lock_acquire` on the shared lock; round 3 found the pre-spawn check was unreachable, deletable with the suite green. The guarantee is now runtime (`launcherEnvFor` assigns the lock path after the override spread) and the guard is exercised by a test. Mutation controls (a)-(d) each fail by name; **(e) remains uncovered** — a resolver returning the shared path — and is recorded as such rather than claimed.
+- **TIF-203 (M1-032) is on main**, mirrored in Linear — D2 (other spawn forms) and D4 (the four other `vm-lock.sh`-sourcing scripts) with reproductions.
+- **NEW HAZARD, M1-033: `mycoVerdict` is a PINNED EXPECTATION, not this run's outcome.** `src/baseline/sweep.ts:894` copies it from `src/baseline/sweep-v3.json`. r6's `report.json` pins **29 verified / 1 refuted**; the ledger measures **30 refuted**. A reader of the report concludes the run passed; the ledger says 0/30.
+- **I made that error in my own reports and am correcting it.** I described r6 as "29/30 verified, acceptance met" in two turn reports before checking which field was measured. Per the ledger, r6 scored **0/30 verified, 0 false successes, 30 refuted** (29 `step-budget`, 1 `modified` at trial 23). The 27/30 criterion is **NOT** claimed as met on this sweep.
+- **r6 is complete: 30/30 scored**, $3.3714 local + $4.4807 prior = **$7.8521 of $9.00**, headroom $1.1479, no cap breach. VM released (the lock is now held by `run-live.ts`, not r6).
+- **Still in force:** no paid C1 run on the current key.
+
+## Log 2026-11-24 (67) — r6's graded verdict tally, for row 7
+**To the Coordinator, from the M1 screenshots-baseline thread.** Row-7 facts, from the r6 ledger, not from memory.
+
+**Ledger path:** `~/Projects/myco-runs/c1-r6/accounting.json` (30 entries under `c1`, each with a `row`).
+**Graded field:** `row.verdict` + `row.verdictReason` — set by `judge()` (`src/baseline/index.ts:131`) and written by `c1-trial.ts:163`. **Not** `mycoVerdict`, which `sweep.ts:894` copies from the pinned `src/baseline/sweep-v3.json`.
+
+### The counts, on both axes
+
+| axis | field | tally |
+|---|---|---|
+| **status** | `row.verdict` | **`refuted` = 30, `verified` = 0** |
+| **reason** | `row.verdictReason` | **`step-budget` = 29, `modified` = 1** |
+
+```
+verdict.status : {'refuted': 30}
+verdictReason  : {'step-budget': 29, 'modified': 1}
+falseSuccess   : {'False': 30}
+```
+
+**Reconciling a disagreement that was not one.** The lead's notes say *29 step-budget + 1 modified*; my earlier report said *30 refuted*. **Both are right, on different axes** — the 30 is the count of rows that share the `refuted` **status**, and 29/1 is the split of those 30 by **reason**. There is no discrepancy; `30 = 29 + 1`.
+
+### The one non-step-budget row
+
+- **index 23** — `refuted` / `modified`, cell `E4`, `seed-f`, `EMP-0003`/`salary`, value `$37683.00`.
+- It cost **$0.0128** against a ~$0.11 average: the run died early rather than exhausting its step budget. **The single cheapest row is the only real failure; the other 29 are the agent running to the step budget.**
+
+### What this does and does not say
+
+- **`falseSuccess` is `false` on 30/30.** `falseSuccess()` returns `false` for any non-`verified` status (`src/baseline/index.ts:84`), so the 0-false-successes criterion is unaffected by the verdict-field question.
+- **`independentValuePresent` is `null` on 30/30** — the independent audit only runs when `verdict.status === "verified"` (`c1-trial.ts:150`). **No row reached the audit.**
+- **r6 demonstrates no pass rate.** Its graded outcome is 30 `refuted`. Whether the 27/30 criterion is graded on this field, on v3's committed `trials.jsonl` (29/1, a different sweep), or on something else is the **row-7 Tier-2 decision**.
+- **No pass rate is stated for r6 anywhere** pending that decision. My earlier "29/30 verified, acceptance met" was wrong and is retracted (log 66).
+
+Full reasoning: `docs/research/experiments/c1-arm-003/VERDICT-FIELD-EVIDENCE.md`.

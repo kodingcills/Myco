@@ -56,6 +56,65 @@ describe("no test writes into a live run", () => {
     }
   });
 
+  it("never lets a test write the SHARED VM lock", () => {
+    // TIF-202. `scripts/c1-baseline.sh` sources `scripts/vm-lock.sh`, which acquires
+    // `$MYCO_VM_LOCK_PATH` or the shared `/tmp/myco-win11.vm.lock`. A test that spawns the
+    // launcher without setting that variable takes the REAL lock, writes its own pid into
+    // it, and exits - leaving metadata that names a dead process and looks exactly like a
+    // live sweep. Measured: the shared lock's text changed to `25410 c1-baseline.sh`, then
+    // `57102 c1-baseline.sh`, then `4939 c1-baseline.sh`, all dead, all from test runs,
+    // while a real arm was live.
+    //
+    // WHAT THIS CHECK IS AND IS NOT. It is TEXTUAL, and two rounds of review established
+    // that no textual check can establish this property. A verifier defeated an earlier
+    // version with an alias:
+    //
+    //     const LAUNCHER = (() => { spawnSync("echo", []); return "scripts/c1-baseline.sh"; })();
+    //     spawnSync(LAUNCHER, [dir, "--coordinator-go", "--resume"], { env: { ...process.env } });
+    //
+    // one launcher literal, a `spawnSync(` in the lookback, one lock-path site - and then
+    // it MEASURED that spawn reaching `vm_lock_acquire` on the shared lock. So this check
+    // catches the ordinary mistake (a second literal, an obvious second spawn) and NOT a
+    // determined evasion through aliasing. It is not air-tight and does not claim to be.
+    //
+    // THE REAL GUARANTEE IS BEHAVIOURAL and lives in `watch-prior-spend.test.ts`:
+    // `spawnLauncher` assigns `MYCO_VM_LOCK_PATH` AFTER spreading overrides, so no caller
+    // can displace, blank, or redirect it, and it checks the assembled environment before
+    // starting a process. The ORDER is enforced by tests that fail if it changes; this
+    // file is a cheap lint on top of it, not the defence.
+    const stripComments = (text: string) =>
+      text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    for (const { path, text } of testSources()) {
+      const code = stripComments(text);
+      const at = code.indexOf("scripts/c1-baseline.sh");
+      if (at < 0) continue;
+      // Exactly one reference...
+      const references = [...code.matchAll(/scripts\/c1-baseline\.sh/g)].length;
+      expect({ path, references }).toEqual({ path, references: 1 });
+      // ...and it must be an ARGUMENT TO A SPAWN, not a stray literal that happens to be
+      // the only mention. The previous version accepted `const x = "scripts/c1-baseline.sh"`
+      // in a file that never spawned it - and, worse, would accept a spawn built some
+      // other way. Looking back for the call is what ties the reference to the spawn.
+      const before = code.slice(Math.max(0, at - 300), at);
+      expect({ path, spawning: before.includes("spawnSync(") }).toEqual({
+        path,
+        spawning: true,
+      });
+      // And the wrapper must still SET the private path. Dropping that line leaves the
+      // spawn intact and the reference count unchanged, so it needs its own assertion -
+      // an earlier rewrite of this guard lost this check and a mutation walked through.
+      //
+      // Counting the ASSIGNMENT - the lock path BOUND to a call, i.e. `resolveLock()` or
+      // `privateLockPath()`, never a bare `undefined` and never a literal - rather than
+      // every mention of the key: tests legitimately NAME it in override literals, which is
+      // how the displacement guarantee is tested, and counting those made the guard fail on
+      // its own new tests. This tracks the assignment as `launcherEnvFor` evolves rather
+      // than pinning one resolver's name.
+      const assignments = [...code.matchAll(/MYCO_VM_LOCK_PATH:\s*\w+\(\)/g)].length;
+      expect({ path, assignments }).toEqual({ path, assignments: 1 });
+    }
+  });
+
   it("creates the directory it hands to the launcher, rather than reusing one", () => {
     // Narrower than a general cleanup rule, and deliberately so: that rule fires on
     // pre-existing tests that leak a temp dir, which is a different (and harmless)
