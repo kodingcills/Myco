@@ -214,12 +214,20 @@ def main() -> int:
     expect(destroy_fails.calls == ["reset", "destroy"],
            f"both tools still attempted when destroy fails (got {destroy_fails.calls})")
 
-    # --- 8. destroy is ALWAYS called, and a leak on the SUCCESS path is caught ---
+    # --- 8. destroy is ALWAYS called (8a), and the SUCCESS path catches a leak (3b) ---
     # Requested by the Tier-2 round-1 verdict, which read an older head and found
     # the success path discarding cleanup()'s return: every check grades the
     # persisted STORE, not the session, so a failed `destroy` left `success`
-    # reachable with the guest still allocated. The fix routes it to `gap`. These
-    # two assertions are what fail if that is reverted.
+    # reachable with the guest still allocated. The fix routes it to `gap`.
+    #
+    # These are TWO DIFFERENT guards, not two views of one:
+    #   8a (here) - cleanup calls BOTH tools. It calls cleanup() in isolation
+    #     against a FakeMcp, so it CANNOT observe a discarded return value and
+    #     does not fail on that revert. It guards a `reset`-only teardown, which
+    #     returns the session to Ready without freeing it.
+    #   3b (test/df005-runner-offline.py) - a real graded run, which is where the
+    #     discarded return was. That is the regression test for this fix.
+    # A green 8a is NOT protection against the success-path leak; only 3b is.
     #
     # A session whose teardown is fine must still have had BOTH tools called -
     # `reset` alone returns the session to Ready and does NOT free it, so a
