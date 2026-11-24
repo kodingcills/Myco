@@ -5,8 +5,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSecretFromFile, resolveAnthropicKey } from "../../src/baseline/secret-file.ts";
 
-// Synthetic values only. Nothing here touches a real secrets file.
-const FAKE = "sk-ant-TESTONLY-not-a-real-key";
+// Synthetic values only. Nothing here touches a real secrets file. FAKE is a plain
+// fixture string, deliberately not key-shaped, so the tracked-file credential scan
+// (FORBIDDEN_IN_COMMITTED_FILES) and gitleaks never match it. Nothing below depends on
+// the value having a real key's shape.
+const FAKE = "fixture-anthropic-key-not-a-real-secret";
 const dirs: string[] = [];
 function secretsFile(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "myco-secret-file-"));
