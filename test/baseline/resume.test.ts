@@ -409,6 +409,71 @@ describe("c1-sweep --resume", () => {
     ).rejects.toThrow(/no run identity/);
   });
 
+  it("refuses a ledger with no identity by default, but can ADOPT one explicitly", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    const tick = nextTick();
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, tick) });
+
+    // Strip the identity, which is the shape of a ledger written before identity
+    // recording existed - r6's ledger is exactly this.
+    const path = join(dir, "accounting.json");
+    const led = JSON.parse(readFileSync(path, "utf8"));
+    delete led.identity;
+    writeFileSync(path, JSON.stringify(led, null, 2));
+
+    // Default stays FAIL-CLOSED: an unverifiable ledger is refused, and the
+    // message names the way out rather than leaving the operator guessing.
+    await expect(
+      runC1Sweep({ ...base, resume: true, prepare: async () => prepared(nextTick()) }),
+    ).rejects.toThrow(/no run identity/);
+
+    // Explicit adoption continues, and RECORDS that the identity was asserted at
+    // resume time rather than captured when the rows were produced - the two are
+    // not equally strong evidence and the artifact must not blur them.
+    const report = await runC1Sweep({
+      ...base,
+      resume: true,
+      adoptIdentity: true,
+      prepare: async () => prepared(nextTick()),
+    });
+    expect(report.rows.length).toBe(30);
+    const adopted = JSON.parse(readFileSync(path, "utf8")).identity;
+    expect(adopted).toMatchObject({ ...IDENTITY, adopted: true });
+  });
+
+  it("adoption cannot launder a MISMATCHED identity", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
+
+    // A ledger that already says "some other model" must stay refused even with
+    // adoption: adoption fills an ABSENCE, it does not overwrite a disagreement.
+    await expect(
+      runC1Sweep({
+        ...base,
+        resume: true,
+        adoptIdentity: true,
+        identity: { ...IDENTITY, model: "someone-elses-model" },
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/model differs/);
+  });
+
   it("keeps the abort-early rule working across a resume boundary", async () => {
     const dir = directory();
     const base = {
@@ -471,6 +536,420 @@ describe("c1-sweep --resume", () => {
     // Trial 0 stays omitted, so the run is partial - 29 of 30 - and the stop
     // reason is what says the shortfall was a harness decision, not a long tail.
     expect(report.partial).toBe(true);
+  });
+
+  it("continues past an ACCEPTED scored cause, and still aborts on an unaccepted one", async () => {
+    // The r6 shape: every row fails the same diagnosed way (the agent pressing
+    // Escape on LibreOffice's format dialog and discarding the save). Left alone,
+    // the repeated-cause rule stops the arm at the second row - correctly, for a
+    // suspected harness fault, but wrongly once the cause has been DIAGNOSED.
+    //
+    // One run, one judge verdict, so every row carries the same cause. The only
+    // difference between the two halves is whether the operator accepted it.
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    // A judge that always returns the same kind, so `verdict:reason` is constant.
+    // That is what makes the cause repeat; a varying judge would hide the rule.
+    const fixed = (): PreparedC1 =>
+      ({
+        ...(prepared({ n: 0 }) as object),
+        judge: async () => ({ kind: "persisted", actual: "wrong", expected: "right" }),
+      }) as never;
+
+    // NOT accepted: the arm must stop at the second identical scored cause.
+    const strict = await runC1Sweep({ ...base, prepare: async () => fixed() });
+    expect(strict).toMatchObject({ stopReason: "repeated-cause" });
+    expect(strict.completed).toBeLessThan(30);
+
+    // ACCEPTED: the same shape runs to the end of the manifest.
+    const dir2 = directory();
+    const accepted = await runC1Sweep({
+      ...base,
+      directory: dir2,
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => fixed(),
+    });
+    expect(accepted.stopReason).toBeUndefined();
+    expect(accepted.completed).toBe(30);
+    // Recorded, so a reader can tell this arm ran under an acceptance.
+    expect(JSON.parse(readFileSync(join(dir2, "accounting.json"), "utf8")).identity).toMatchObject({
+      acceptances: [{ causes: ["refuted:step-budget"], fromTrial: 0 }],
+    });
+    // And it really is the same cause the strict run aborted on, so the only
+    // difference between the two runs is the acceptance.
+    const strictRow = Object.values(
+      ledgerOf(dir).c1 as Record<
+        string,
+        { status: string; row?: { verdict: string; verdictReason: string } }
+      >,
+    ).find((e) => e.status === "scored");
+    expect(`${strictRow?.row?.verdict}:${strictRow?.row?.verdictReason}`).toBe(
+      "refuted:step-budget",
+    );
+  });
+
+  it("refuses to DROP an acceptance that already governed recorded rows", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    await runC1Sweep({
+      ...base,
+      prepare: crashingPrepare(2, 1, nextTick()),
+      acceptScoredCauses: ["refuted:step-budget"],
+    });
+
+    // Those rows really did run under it and no start index can undo that, so
+    // dropping it is refused rather than silently reinterpreted.
+    await expect(
+      runC1Sweep({ ...base, resume: true, prepare: async () => prepared(nextTick()) }),
+    ).rejects.toThrow(/were in force for rows already recorded but are not passed now/);
+  });
+
+  it("records an acceptance ADDED on resume as starting at the resume, not for the whole arm", async () => {
+    // The r6 shape: rows scored with NO acceptance, then the operator diagnoses the
+    // cause and resumes accepting it. The ledger must say WHEN it started rather
+    // than rewrite history and claim the earlier rows were covered by a decision
+    // that had not been made yet.
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    // First run: no acceptance at all.
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
+    expect(
+      JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8")).identity.acceptances,
+    ).toBeUndefined();
+
+    // Resume WITH one. It applies from the first trial this resume executes, which
+    // is the first unfinished index - NOT trial 0.
+    const report = await runC1Sweep({
+      ...base,
+      resume: true,
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => prepared(nextTick()),
+    });
+    const segments = JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8")).identity
+      .acceptances as { causes: string[]; fromTrial: number }[];
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.causes).toEqual(["refuted:step-budget"]);
+    // The first run interrupted trial 2, so the resume re-executes from there and
+    // the acceptance cannot claim the rows before it.
+    expect(segments[0]?.fromTrial).toBe(2);
+    // The report says the same thing, so a reader scoring from report.json cannot
+    // mistake it for an arm-wide acceptance.
+    expect(report).toMatchObject({
+      acceptedScoredCauses: ["refuted:step-budget"],
+      acceptedFromTrial: 2,
+    });
+  });
+
+  it("ADOPTING an identity-less ledger WITH an acceptance works — the r6 resume command", async () => {
+    // A round-2 verifier found this combination untested, and it is the one the
+    // documented r6 command uses: a pre-identity ledger, adopt, and accept, all at
+    // once. It failed loudly there because adding an acceptance to a ledger that
+    // recorded none was refused; recording the start index is what makes it work.
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
+
+    // Strip the identity: exactly r6's ledger shape.
+    const path = join(dir, "accounting.json");
+    const led = JSON.parse(readFileSync(path, "utf8"));
+    delete led.identity;
+    writeFileSync(path, JSON.stringify(led, null, 2));
+
+    const report = await runC1Sweep({
+      ...base,
+      resume: true,
+      adoptIdentity: true,
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => prepared(nextTick()),
+    });
+
+    expect(report.rows.length).toBe(30);
+    const identity = JSON.parse(readFileSync(path, "utf8")).identity;
+    // Adopted AND accepted, both recorded, with the acceptance starting at the
+    // first trial the resume ran rather than claiming the whole arm.
+    expect(identity).toMatchObject({ ...IDENTITY, adopted: true });
+    expect(identity.acceptances).toHaveLength(1);
+    expect(identity.acceptances[0].causes).toEqual(["refuted:step-budget"]);
+    expect(identity.acceptances[0].fromTrial).toBeGreaterThan(0);
+  });
+
+  it("refuses a BLANK accepted cause instead of silently accepting nothing", async () => {
+    // A round-2 verifier reached this through `--accept-scored-cause="$UNSET"`: the
+    // value was trimmed away downstream, the arm ran with no acceptance, and it
+    // aborted at the second scored row - the exact failure the flag prevents.
+    for (const blank of ["", "   ", "\t"]) {
+      await expect(
+        runC1Sweep({
+          coordinatorGo: true,
+          directory: directory(),
+          planner: planner(),
+          priorSpendMicros: 0,
+          armLimitMicros: 9_000_000,
+          identity: IDENTITY,
+          acceptScoredCauses: [blank],
+          prepare: async () => prepared(nextTick()),
+        }),
+        JSON.stringify(blank),
+      ).rejects.toThrow(/is blank/);
+    }
+  });
+
+  it("a later acceptance extends the history rather than overwriting the first", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    await runC1Sweep({
+      ...base,
+      prepare: crashingPrepare(2, 1, nextTick()),
+      acceptScoredCauses: ["refuted:step-budget"],
+    });
+    await runC1Sweep({
+      ...base,
+      resume: true,
+      acceptScoredCauses: ["refuted:step-budget", "refuted:modified"],
+      prepare: async () => prepared(nextTick()),
+    });
+    const segments = JSON.parse(readFileSync(join(dir, "accounting.json"), "utf8")).identity
+      .acceptances as { causes: string[]; fromTrial: number }[];
+    // The opening rows keep the terms they ran under; the second entry records
+    // where the extra cause began.
+    expect(segments).toHaveLength(2);
+    expect(segments[0]?.causes).toEqual(["refuted:step-budget"]);
+    expect(segments[1]?.causes).toEqual(["refuted:modified", "refuted:step-budget"]);
+    expect(segments[1]?.fromTrial).toBeGreaterThan(segments[0]?.fromTrial ?? 0);
+  });
+
+  it("an accepted cause RESETS the run of failures rather than skipping the increment", async () => {
+    // The two behaviours differ ONLY when a fault sits on each side of an accepted
+    // row:  fault, accepted, fault.
+    //
+    //   reset (correct) : the accepted row clears the count, so the second fault
+    //                     starts a fresh run of one and the arm continues
+    //   skip-increment  : the accept leaves `consecutive` at 1, the second fault
+    //                     takes it to 2, and the arm aborts
+    //
+    // Reaching the end of the manifest discriminates them. Accepting EVERY row
+    // cannot: with nothing left to compare against, both behaviours continue, which
+    // is why an earlier version of this test passed with the reset removed.
+    //
+    // The causes must also DIFFER, or the rows would not be distinguishable. A
+    // planner that stops early leaves the steps short, so `budgetExhausted` is
+    // false and the judge's own verdict stands as `persisted-mismatch`. A planner
+    // that loops to STEP_BUDGET makes the observation `step-budget`. Alternating
+    // the two shapes per trial gives the fault/accepted/fault sequence.
+    const dir = directory();
+    // Alternating shapes: even trials stop immediately (short -> persisted-mismatch),
+    // odd trials run to STEP_BUDGET (long -> step-budget). That yields
+    // mismatch, budget, mismatch, budget, ... so an unaccepted fault sits on each
+    // side of an accepted one.
+    let trial = 0;
+    let stepInTrial = 0;
+    const alternating: Planner = {
+      paid: true,
+      act: async () => {
+        const calls = [
+          {
+            model: "claude-sonnet-5-5" as const,
+            usage: { prompt: 1_000, completion: 100, cost: 0.001 },
+          },
+        ];
+        if (trial % 2 === 0) {
+          trial += 1;
+          return { calls, decision: "done" as const };
+        }
+        stepInTrial += 1;
+        if (stepInTrial >= 30) {
+          stepInTrial = 0;
+          trial += 1;
+        }
+        return { calls, decision: { tool: "click" as const, arguments: { x: 1, y: 2 } } };
+      },
+    } as never;
+    // A judge that never confirms, so a short row scores `persisted-mismatch` and a
+    // long one scores `step-budget`.
+    const judged = (): PreparedC1 =>
+      ({
+        ...(prepared(nextTick()) as object),
+        judge: async () => ({ kind: "persisted", actual: "wrong", expected: "right" }),
+      }) as never;
+
+    const report = await runC1Sweep({
+      coordinatorGo: true,
+      directory: dir,
+      planner: alternating,
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+      // Only `step-budget` is accepted. `persisted-mismatch` around it is not.
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => judged(),
+    });
+
+    const scored = Object.values(
+      ledgerOf(dir).c1 as Record<string, { status: string; row?: { verdictReason: string } }>,
+    )
+      .filter((e) => e.status === "scored")
+      .map((e) => `${e.row?.verdictReason}`);
+    // Precondition: the sequence really does contain both causes, or the test
+    // proves nothing about the reset.
+    expect(scored).toContain("persisted-mismatch");
+    expect(scored).toContain("step-budget");
+    // The unaccepted fault appears on both sides of an accepted row and the arm
+    // still finishes - only a reset allows that.
+    expect(report.stopReason).toBeUndefined();
+    expect(report.completed).toBe(30);
+  });
+
+  it("replays already-scored causes across a resume, so two identical scored failures still abort", async () => {
+    // A round-1 verifier found this missing: the loop comment claimed it replayed
+    // "scored rows and omissions alike", but only `driver-unreachable` was fed to
+    // the counter. Two identical scored causes straddling a crash therefore never
+    // reached 2 and the rule could not see them.
+    //
+    // The observable difference is WHEN the abort lands:
+    //   replaying  : row 0 replayed (1) + the resumed row (2) -> aborts at row 1
+    //   not        : row 0 ignored, so the count starts at the resumed row -> 1,
+    //                and the abort arrives a row LATER
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    // Every trial stops immediately and the judge never confirms, so every row is
+    // `refuted/persisted-mismatch` with the same action signature.
+    const shortPlanner: Planner = {
+      paid: true,
+      act: async () => ({
+        calls: [
+          {
+            model: "claude-sonnet-5-5" as const,
+            usage: { prompt: 1_000, completion: 100, cost: 0.001 },
+          },
+        ],
+        decision: "done" as const,
+      }),
+    } as never;
+    const judged = (): PreparedC1 =>
+      ({
+        ...(prepared(nextTick()) as object),
+        judge: async () => ({ kind: "persisted", actual: "wrong", expected: "right" }),
+      }) as never;
+
+    // Row 0 scores, then the run stops for spend so nothing after it exists - the
+    // shape a process death leaves, without depending on crash plumbing. A small
+    // arm limit admits exactly one reservation.
+    await runC1Sweep({
+      ...base,
+      armLimitMicros: MAX_TRIAL_MICROS,
+      planner: shortPlanner,
+      prepare: async () => judged(),
+    });
+    expect(scoredIndexes(dir)).toEqual([0]);
+    // Drop the spend-limit omissions so the resume sees them as trials that never
+    // ran, which is what a crash leaves.
+    const path = join(dir, "accounting.json");
+    const led = JSON.parse(readFileSync(path, "utf8"));
+    for (const key of Object.keys(led.c1)) if (key !== "0") delete led.c1[key];
+    writeFileSync(path, JSON.stringify(led, null, 2));
+
+    // Resume: row 0's cause must be REPLAYED before row 1 scores, or the pair is
+    // invisible.
+    const report = await runC1Sweep({
+      ...base,
+      planner: shortPlanner,
+      resume: true,
+      prepare: async () => judged(),
+    });
+    expect(report).toMatchObject({ stopReason: "repeated-cause" });
+    // Aborted after row 1, not after row 2. The aborting row is still recorded,
+    // so 2 scored rows means the pair was seen as consecutive; without the replay
+    // the count would start at the resumed row and the abort would land a row
+    // later, leaving 3.
+    expect(report.completed).toBe(2);
+  });
+
+  it("records the acceptance in the REPORT, not only the ledger", async () => {
+    const dir = directory();
+    const report = await runC1Sweep({
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => prepared(nextTick()),
+    });
+    // A reader scores from the report; an arm that ran under an exception must not
+    // look like one that never needed it.
+    expect(report).toMatchObject({ acceptedScoredCauses: ["refuted:step-budget"] });
+  });
+
+  it("refuses an acceptance that cannot be recorded, rather than applying it untracked", async () => {
+    await expect(
+      runC1Sweep({
+        coordinatorGo: true,
+        directory: directory(),
+        planner: planner(),
+        priorSpendMicros: 0,
+        armLimitMicros: 9_000_000,
+        // No identity: nowhere to record the acceptance.
+        acceptScoredCauses: ["refuted:step-budget"],
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/without a run identity to record it/);
+  });
+
+  it("rejects a malformed accepted cause rather than half-applying it", async () => {
+    await expect(
+      runC1Sweep({
+        coordinatorGo: true,
+        directory: directory(),
+        planner: planner(),
+        priorSpendMicros: 0,
+        armLimitMicros: 9_000_000,
+        identity: IDENTITY,
+        acceptScoredCauses: ["step-budget"],
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/expected verdict:reason/);
   });
 
   it("writes a checkable identity into a fresh run so a later resume can use it", async () => {
