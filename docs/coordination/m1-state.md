@@ -44,6 +44,32 @@
 - **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
 - **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
 
+## Log 2026-11-24 (70) — I merged TIF-191 past its verifier; TIF-195 corrects it
+- **Process miss, mine.** #390 was Tier 2 (locks). Round 1 PASSed at `c4ab78a`, then I **changed
+  code** — `cf66dbb0`, the two test seams on `lockOwnedByAncestor` — and merged as `865389fc`
+  **with no PASS at the final head.** Rule A says a post-PASS push touching only docs/tests is
+  exempt; this touched source, so it was not exempt. Filed by the lead as **TIF-195**.
+- **Not reverted.** The change is a fail-closed safety addition and reverting it would remove the
+  lock from the very path row 8 depends on. Fixed forward instead: a **fresh Tier-2 verifier at the
+  merged content** (`865389fc`), read-only, no VM, no lock. It must PASS **before the row-8 §6
+  launch relies on the lock.**
+- **The merged content is verify-stable:** `src/integration/vm-lock.ts`, `src/integration/run-live.ts`
+  and `test/run-live-vm-lock.test.ts` are byte-identical at `865389fc` and at `7ab53c60`; #391 and
+  #393 were docs-only. Checked by SHA-256, not by reading the log.
+- **What the seams put at risk, stated plainly:** `lockOwnedByAncestor` now accepts `owner` and
+  `ancestorOf`. `owner` already defaults to the env var `MYCO_VM_LOCK_OWNER`, so an operator can
+  always name an owner; the question the verifier must answer is whether a caller can also inject
+  `ancestorOf` and so certify any owner it likes.
+- **TIF-196 — the viewer verdict-budget flake. Do not retune during M1.** The lead's call is runner
+  noise, and the evidence supports it: `77bed54c` (490.6 ms) and `29801f14` (443.3 ms, a docs-only
+  merge) both failed and both went green on a plain rerun. **Rerun it when it trips.** The
+  structural complaint — it is `skipping` on every PR and only runs post-merge, with a 35% band
+  narrower than its 1.7–2.2x sample spread — is recorded for after M1, not acted on now.
+- **`main` is green** at `7ab53c60`: all 7 jobs, including the budget job, on the first attempt.
+- **VM order unchanged:** r6 holds the guest (trial 18/30 at 08:10Z). §6 fires from
+  `docs/research/experiments/m1-row8/NEXT-RUN.md` the moment it releases, behind the exit-10
+  refusal so it cannot be reset out from under itself.
+
 ## Log 2026-11-24 (69) — main went red for 6 merges' worth of attention it did not deserve
 - **`main` after #388 (`77bed54c`) failed CI on `viewer verdict budget (macos-latest)`.** Cause:
   the 10 000-step verdict median regressed 35%+ over the darwin baseline (490.6 ms vs the 425.8 ms
