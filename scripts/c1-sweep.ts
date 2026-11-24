@@ -24,6 +24,10 @@ async function main() {
   // is the point: the ledger lives there, and a resume that pointed somewhere
   // else would be a new run wearing a resume's name.
   const resume = process.argv.includes("--resume");
+  // Adoption is its own flag rather than implied by --resume: resuming a ledger
+  // that records no identity is a judgement call about paid data, and it must be
+  // visible in the command that made it.
+  const adoptIdentity = process.argv.includes("--adopt-identity");
   const directory =
     process.argv.slice(2).find((arg) => !arg.startsWith("--")) || "/tmp/baseline/c1";
   console.log(
@@ -369,6 +373,7 @@ async function main() {
       planner,
       prepare,
       resume,
+      adoptIdentity,
       // The identity a resume is checked against. Recorded on a fresh run so a
       // later resume has something to compare, and asserted on a resume so a
       // different model or snapshot cannot extend someone else's run.

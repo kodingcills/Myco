@@ -409,6 +409,71 @@ describe("c1-sweep --resume", () => {
     ).rejects.toThrow(/no run identity/);
   });
 
+  it("refuses a ledger with no identity by default, but can ADOPT one explicitly", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    const tick = nextTick();
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, tick) });
+
+    // Strip the identity, which is the shape of a ledger written before identity
+    // recording existed - r6's ledger is exactly this.
+    const path = join(dir, "accounting.json");
+    const led = JSON.parse(readFileSync(path, "utf8"));
+    delete led.identity;
+    writeFileSync(path, JSON.stringify(led, null, 2));
+
+    // Default stays FAIL-CLOSED: an unverifiable ledger is refused, and the
+    // message names the way out rather than leaving the operator guessing.
+    await expect(
+      runC1Sweep({ ...base, resume: true, prepare: async () => prepared(nextTick()) }),
+    ).rejects.toThrow(/no run identity/);
+
+    // Explicit adoption continues, and RECORDS that the identity was asserted at
+    // resume time rather than captured when the rows were produced - the two are
+    // not equally strong evidence and the artifact must not blur them.
+    const report = await runC1Sweep({
+      ...base,
+      resume: true,
+      adoptIdentity: true,
+      prepare: async () => prepared(nextTick()),
+    });
+    expect(report.rows.length).toBe(30);
+    const adopted = JSON.parse(readFileSync(path, "utf8")).identity;
+    expect(adopted).toMatchObject({ ...IDENTITY, adopted: true });
+  });
+
+  it("adoption cannot launder a MISMATCHED identity", async () => {
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
+
+    // A ledger that already says "some other model" must stay refused even with
+    // adoption: adoption fills an ABSENCE, it does not overwrite a disagreement.
+    await expect(
+      runC1Sweep({
+        ...base,
+        resume: true,
+        adoptIdentity: true,
+        identity: { ...IDENTITY, model: "someone-elses-model" },
+        prepare: async () => prepared(nextTick()),
+      }),
+    ).rejects.toThrow(/model differs/);
+  });
+
   it("keeps the abort-early rule working across a resume boundary", async () => {
     const dir = directory();
     const base = {

@@ -43,12 +43,21 @@ EXTRA=()
 for arg in "$@"; do
   case "$arg" in
     --resume) EXTRA+=("--resume") ;;
+    --adopt-identity) EXTRA+=("--adopt-identity") ;;
     --coordinator-go) ;;
   esac
 done
 
 cd "$WS"
 mkdir -p "$OUT"
+# Adoption only means anything alongside a resume.
+case " ${EXTRA[*]:-} " in
+  *" --adopt-identity "*)
+    case " ${EXTRA[*]:-} " in
+      *" --resume "*) ;;
+      *) echo "c1-baseline: --adopt-identity requires --resume" >&2; exit 4 ;;
+    esac ;;
+esac
 if [ ${#EXTRA[@]} -gt 0 ] && [ ! -f "$OUT/accounting.json" ]; then
   echo "c1-baseline: --resume given but $OUT/accounting.json does not exist; nothing to resume" >&2
   exit 3

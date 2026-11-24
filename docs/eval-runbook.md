@@ -550,6 +550,12 @@ MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
   planner type. A resume whose manifest checksum, model, snapshot or planner differs, or a
   ledger written before identity was recorded, is refused with the field named. This is not
   advisory: two different experiments must not become one 30-row artifact.
+- **Adopting an identity-less ledger.** A run that crashed *before* identity recording existed
+  has real rows and committed spend but nothing to check. The default is still to refuse it.
+  `--adopt-identity` (requires `--resume`) asserts the current identity, records it with
+  `adopted: true` so a later reader can see it was asserted at resume time rather than captured
+  when the rows were produced, and continues. It fills an **absence** only: a ledger that
+  already records a *different* model, snapshot or planner stays refused.
 - **The abort rule survives.** The consecutive-identical-cause counter is rebuilt from the
   ledger, so two failures either side of a crash still trip `repeated-cause`, and the report
   names it in `stopReason`.
