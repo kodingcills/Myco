@@ -193,7 +193,7 @@ which is why the remaining rows cost 0–1 ms each.
 
 | | finding |
 |---|---|
-| **F12** | **`run-live` holds no VM lock, so §6 can be reset out from under while it runs.** A driver that legitimately acquires the lock cannot detect it. Every later row degrades to a 0 ms `uncertain` and the run exits 1 looking like a generator failure. Runbook §6.2 now requires a proven-free flock and no running driver. |
+| **F12** | **`run-live` holds no VM lock, so §6 can be reset out from under while it runs.** A driver that legitimately acquires the lock cannot detect it. Every later row degrades to a 0 ms `uncertain` and the run exits 1 looking like a generator failure. **Fixed by TIF-191:** `run-live` takes the flock and refuses with exit 10, while a child of a lock-owning driver inherits it instead of refusing. |
 | **F13** | An aborted §6 leaves a guest run dir that fails **every** row of the next attempt with one `guest-contaminated` reason. Runbook §6.1 now verifies cleanliness and gives the cleanup. |
 | **F14** | A `values` run prints nothing until the loop ends, so "no output after 15 minutes" is **not** evidence of a hang. Liveness is the guest run dirs, one every ~48 s. |
 | — | F8 is corrected, not reproduced: `elapsedMs` is a number in every row tonight (44 656, 99 135, …), not `null`. |
