@@ -1208,18 +1208,52 @@ def create_accepts_introspection(timeout: float = 15.0) -> tuple[bool, str]:
 def preflight(offline: bool = False) -> int:
     """Read-only readiness check, run inside an approved guest window.
 
-    Every check here is something that, if wrong, wastes the slot: a missing
-    server binary, an unreachable guest, an undeployed or stale app, a dead
-    introspection channel, or a held lock. Nothing is mutated — no create, no
-    launch, no reset — so this is safe to run first and cheap to repeat.
+    Most checks here are things that, if wrong, waste the slot: a missing server
+    binary, a held lock, or a `create` that does not declare `introspection_file`.
+    Those still hard-fail.
 
-    Exit 0 when every check passes, 1 otherwise. Prints one line per check.
+    The guest-dependent checks (`guest-ssh` and everything needing a live guest:
+    `app-deployed`, `app-self-test`, `introspection-file`, `introspection-shadow`)
+    are DEFERRED when no guest is up, and do NOT fail. That is deliberate: this
+    gate runs before `create()`, and `create()` is what boots the guest, so
+    requiring a guest here made the runner unreachable from an idle host. Booting
+    first instead deadlocks on the flock, which `boot.sh` holds for the guest's
+    lifetime. So "no guest yet" is not a defect - the run boots one, and the
+    trial path re-establishes each of these more strongly (see the comment at the
+    `deferred:` call site). What is NOT deferred is the accounting: a deferred
+    check is printed, excluded from `measured`, and never counted as passed, so
+    the summary cannot claim a count it did not measure.
+
+    Nothing is mutated — no create, no launch, no reset — so this is safe to run
+    first and cheap to repeat.
+
+    Exit 0 when no check fails, 1 otherwise. Prints one line per check.
     """
     results: list[tuple[str, bool, str]] = []
 
-    def record(name: str, ok: bool | None, detail: str) -> None:
-        results.append((name, ok, detail))
-        mark = "ok  " if ok is True else ("skip" if ok is None else "FAIL")
+    def record(name: str, ok: bool | None, detail: str,
+               deferred: bool = False) -> None:
+        """Record one check's outcome.
+
+        `deferred` is an explicit field, not inferred from the detail text. The
+        earlier version split results with `detail.startswith("deferred:")`,
+        which fails BOTH ways: a deferral whose wording changed would silently
+        become `skipped` (fails safe but wrongly), and a `skipped` check whose
+        reason happened to start with "deferred:" would silently count as
+        deferred - which does not fail the run at all. Failing OPEN is the one
+        outcome this gate must never produce, so the reason is now carried by
+        construction rather than by a string prefix. `ok is None and not
+        deferred` is a skip; `ok is None and deferred` is a deferral.
+        """
+        results.append((name, ok, detail, deferred))
+        if ok is True:
+            mark = "ok  "
+        elif deferred:
+            mark = "defer"
+        elif ok is None:
+            mark = "skip"
+        else:
+            mark = "FAIL"
         print(f"  {mark} {name}: {detail}")
 
     print("DF-005 preflight (read-only; no session is created)")
@@ -1331,7 +1365,8 @@ def preflight(offline: bool = False) -> int:
         # the ability to ask BEFORE there is a guest to ask.
         record("guest-ssh", None,
                f"deferred: no guest yet ({out[:60] or 'no answer'}); "
-               "create() boots one and wait_ready() gates it")
+               "create() boots one and wait_ready() gates it",
+               deferred=True)
 
     if rc == 0:
         # 4. App deployed and current.
@@ -1398,15 +1433,18 @@ def preflight(offline: bool = False) -> int:
         # not measure; calling them skipped would fail a run that is fine.
         for name in ("app-deployed", "app-self-test", "introspection-file",
                      "introspection-shadow"):
-            record(name, None, "deferred: no guest up yet; create() boots it")
+            record(name, None, "deferred: no guest up yet; create() boots it",
+                   deferred=True)
 
-    failed = [n for n, ok, _ in results if ok is False]
+    failed = [n for n, ok, _d, _dfr in results if ok is False]
     # `deferred` is not `skipped`: a skip means "we could not measure this and the
     # run will be graded blind", which must never pass. A defer means "this can
     # only be measured with a guest up, and the run boots one". Distinguished so
     # that "never report a partial run as a pass" keeps its teeth.
-    skipped = [n for n, ok, d in results if ok is None and not d.startswith("deferred:")]
-    deferred = [n for n, ok, d in results if ok is None and d.startswith("deferred:")]
+    # `deferred` is a field now, not a string prefix (see record()). A skip means
+    # "we could not measure this"; a deferral means "the run will measure it".
+    skipped = [n for n, ok, d, dfr in results if ok is None and not dfr]
+    deferred = [n for n, ok, d, dfr in results if ok is None and dfr]
     print()
     if failed:
         print(f"preflight FAILED: {len(failed)} of {TOTAL_CHECKS} checks failed: "
