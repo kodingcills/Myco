@@ -44,6 +44,26 @@
 - **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
 - **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
 
+## Log 2026-11-24 (74) — TIF-206 follow-up: the SAI MCP child still gets the key in its env
+- **TIF-206 fixed the Anthropic path and left the SAI path as it was.** `scripts/sai/mcp.ts:73`
+  spawns the MCP child with `env: { PATH: process.env.PATH, SAI_API_KEY: apiKey }` — the key is
+  handed to the child **through the environment**, which is the exact shape TIF-193 leaked through.
+  Anything that can read that child's environment (`ps eww`) sees a live credential, which is what
+  TIF-206 exists to prevent on the other path.
+- **The good news is the reading side is already right.** `scripts/sai/client.ts` loads the key from
+  the one permitted file (`~/.myco/secrets/sai.env`), parses `SAI_API_KEY=` itself, and
+  **"throws without echoing file contents"**. So the value is already file-sourced and the file
+  already exists; only the handoff to the child is wrong.
+- **Follow-up, post-M1, Low:** pass the key FILE PATH to the child and have it read at use, the
+  pattern `src/baseline/secret-file.ts` now establishes for Anthropic. Scope: `scripts/sai/mcp.ts`,
+  its caller in `scripts/sai/run.ts`, and `test/sai/mcp.test.ts`, which currently asserts the
+  env-injection shape at `test/sai/mcp.test.ts:15` and would need to assert the path handoff instead.
+- **Why Low and not blocking:** the SAI arm is post-M1 and the child is `@simular-ai/sai-mcp@0.6.0`,
+  a third-party binary whose own key-reading interface we do not control — so this may not be
+  fixable from our side without upstream support, which is part of why it is a follow-up and not a
+  defect to fix in TIF-206's PR.
+- **Not fixed here.** Filing it is the deliverable; the outer loop assigns the id.
+
 ## Log 2026-11-24 (73) — an issue-first CI job is sitting untracked and needs its owner
 - **`scripts/check-tif-id.py` and `.github/workflows/issue-id.yml` are untracked in the
   m1-foundation worktree and are on no branch.** They exist only inside T3 checkpoint refs
