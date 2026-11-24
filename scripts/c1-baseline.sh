@@ -39,13 +39,34 @@ fi
 # `--resume` is forwarded, never inferred: a relaunch into an existing directory
 # without it is a FRESH run that happens to reuse the ledger's files, and the two
 # must be distinguishable afterwards.
+#
+# EVERY forwarding pass must carry the flag AND its value. `--accept-scored-cause`
+# takes an argument, and a single-token loop would drop it silently - the sweep would
+# then run with no acceptance, the arm would abort at the second scored row, and the
+# command that produced it would look correct in the log. That is the same defect the
+# round-1 review found in the runbook, one layer down, so it is handled explicitly
+# here rather than folded into the pattern match.
 EXTRA=()
-for arg in "$@"; do
+shift_args=("$@")
+i=0
+while [ "$i" -lt "${#shift_args[@]}" ]; do
+  arg="${shift_args[$i]}"
   case "$arg" in
+    --coordinator-go) ;;
     --resume) EXTRA+=("--resume") ;;
     --adopt-identity) EXTRA+=("--adopt-identity") ;;
-    --coordinator-go) ;;
+    --accept-scored-cause)
+      value="${shift_args[$((i + 1))]:-}"
+      if [ -z "$value" ] || [ "${value#--}" != "$value" ]; then
+        echo "c1-baseline: --accept-scored-cause needs a verdict:reason value, e.g. refuted:step-budget" >&2
+        exit 5
+      fi
+      EXTRA+=("--accept-scored-cause" "$value")
+      i=$((i + 1)) ;;
+    --accept-scored-cause=*)
+      EXTRA+=("--accept-scored-cause" "${arg#--accept-scored-cause=}") ;;
   esac
+  i=$((i + 1))
 done
 
 cd "$WS"
