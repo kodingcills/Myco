@@ -508,8 +508,21 @@ describe("C1 host harness", () => {
       detail: "Anthropic token count rejected: HTTP 401 (authentication_error)",
     });
     expect(JSON.stringify(report)).not.toContain(key);
-    expect(prepare).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledTimes(1);
+    // TIF-200 CHANGED THIS COUNT FROM 1 TO 2, and the change is the point.
+    //
+    // A planner failure used to stop the sweep on its FIRST occurrence, so exactly one
+    // trial ran. r6 lost trials 21-29 that way: a single truncated reply ended a paid
+    // arm. Every other cause needs TWO consecutive occurrences before it aborts, and a
+    // provider fault is of that kind, so `planner-failed` now counts the same way.
+    //
+    // The properties this test exists for are unchanged and still asserted above: the
+    // 401 is OMITTED as a planner fault rather than scored against the agent, no Ollama
+    // fallback is taken, and the key is never echoed. What changed is that the arm needs
+    // a second identical failure before it stops - and it then stops for the same reason
+    // every other repeated cause stops.
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(report.stopReason).toBe("repeated-cause");
   });
 });
 

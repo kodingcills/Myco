@@ -14,7 +14,13 @@ import { join } from "node:path";
 import { groundTruth } from "../tasks/intent.ts";
 import { type PreparedC1, RESET_SNAPSHOT, runC1Trial, STEP_BUDGET } from "./c1-trial.ts";
 import { type BaselineRow, isBaselineRow } from "./index.ts";
-import { createPlanner, MAX_CALL_MICROS, type Planner, PlannerFailure } from "./planner.ts";
+import {
+  createPlanner,
+  MAX_CALL_MICROS,
+  MAX_OUTPUT,
+  type Planner,
+  PlannerFailure,
+} from "./planner.ts";
 import manifest from "./sweep-v3.json" with { type: "json" };
 
 const COMBINED_LIMIT = 9_000_000;
@@ -76,7 +82,25 @@ interface Ledger {
 }
 
 /** The omissions that a resume MAY re-attempt, and those it must not. */
-const RESUMABLE_OMISSIONS: readonly Omission[] = ["trial-interrupted"];
+/**
+ * Omissions a resume may RE-ATTEMPT: the ones where the HARNESS lost the trial.
+ *
+ * `trial-interrupted` means the process or the guest died mid-trial.
+ *
+ * `planner-failed` means the PROVIDER gave us something unusable - a truncation, a
+ * refusal, a rejected call - which TIF-200 classifies as a harness/config fault. r6 is
+ * the case that exposed the omission: it stopped with 10 `planner-failed` rows, and a
+ * resume could re-attempt only the single `trial-interrupted` one, so the ten trials the
+ * arm had already paid to reach were unrecoverable. A fault category that cannot be
+ * retried is a fault category the arm cannot recover from.
+ *
+ * The remaining omissions are DECISIONS and stay non-resumable:
+ *   - `spend-limit`         the ceiling was reached; re-running re-buys what it stopped
+ *   - `driver-unreachable`  the guest was gone; the run is measuring nothing
+ *   - `repeated-cause`      the sweep was measuring the harness; that IS the finding
+ * Re-attempting those would silently un-stop a run whose stop reason was the result.
+ */
+const RESUMABLE_OMISSIONS: readonly Omission[] = ["trial-interrupted", "planner-failed"];
 
 function writeJson(path: string, value: unknown) {
   const temporary = `${path}.tmp`;
@@ -748,12 +772,43 @@ export async function runC1Sweep(options: {
           planner,
         );
       } catch (error) {
-        // A throw from the TRIAL itself: the model may already have been called and
-        // the error carries no usage, so the cost is UNKNOWN and the reservation
-        // stays booked. Fail closed - under-reporting spend is the dangerous way to
-        // be wrong when the cap is hard.
+        // A throw from the TRIAL itself. TIF-200 split the two cases apart.
+        //
+        // A PlannerFailure that CARRIES a cost (a truncated reply is billed, and its
+        // usage is known) books the ACTUAL charge. Any other throw may have called the
+        // model without reporting usage, so the cost is UNKNOWN and the full
+        // reservation stays booked - fail closed, because under-reporting spend against
+        // a hard cap is the dangerous direction.
         const failed = error instanceof PlannerFailure;
-        if (failed) stopReason = "planner-failed";
+        // VALIDATED, not trusted. `PlannerFailure.costMicros` is a public constructor
+        // argument, and the booking feeds a HARD CAP. A round-1 verifier measured what
+        // an unvalidated value does to that cap:
+        //
+        //   negative   -> charged() goes negative, so the guard fires LATER (fail-open)
+        //   NaN        -> `NaN > LIMIT` is false, so the cap is silently dead in-run
+        //   over-reservation, Infinity -> the ledger totals exceed the ceiling unguarded
+        //   fractional -> a non-integer micros value, against the ledger's invariant
+        //
+        // A non-integer, negative, or over-reservation figure is therefore treated as
+        // UNKNOWN and the full reservation is kept. Only a plausible charge is booked:
+        // the charge has to be a safe non-negative integer no larger than the hold that
+        // stands in for it. `loadLedger` would reject the rest on the next resume, but
+        // the run itself must not be corrupted before it gets there.
+        const offered = failed ? error.costMicros : undefined;
+        const billed =
+          offered !== undefined &&
+          Number.isSafeInteger(offered) &&
+          offered >= 0 &&
+          offered <= reservation
+            ? offered
+            : undefined;
+        // ONE FAILURE MUST NOT END A PAID ARM. This used to be
+        // `if (failed) stopReason = "planner-failed"` - an ASSIGNMENT, so the first
+        // measurable provider fault stopped a 30-trial run. r6 lost trials 21-29 to a
+        // single truncation. Every other cause in this file needs TWO consecutive
+        // occurrences before it aborts, and a truncation is a harness/config fault of
+        // exactly that kind, so it now counts the same way.
+        //
         // The abort keys on the FAULT CLASS, never on the message text. The message
         // is not lost - it is persisted as `detail` below, so a run that stops can be
         // diagnosed from its own artifacts rather than from logs.
@@ -771,7 +826,7 @@ export async function runC1Sweep(options: {
         noteCause(failed ? "planner-failed" : "trial-interrupted");
         ledger.c1[index] = {
           status: "omitted",
-          micros: reservation,
+          micros: billed ?? reservation,
           reason: failed ? "planner-failed" : "trial-interrupted",
           detail: error instanceof Error ? error.message : String(error),
         };
@@ -871,6 +926,12 @@ export async function runC1Sweep(options: {
       // ledger because the report is what a reader scores from, and an arm that
       // ran with a diagnosed cause accepted must not look like one that never
       // needed the exception.
+      // The output ceiling these rows ran under. r6 is the reason it is here: rows 0-19
+      // ran at 1024 and row 20 truncated at that ceiling, so the ARM reports a
+      // configuration change mid-flight. Without this the artifact says nothing about
+      // the number that ended a trial, and a later reader would have to find it in the
+      // code at the time of the run.
+      maxOutputTokens: MAX_OUTPUT,
       acceptedScoredCauses: [...(ledger.identity?.acceptances?.at(-1)?.causes ?? [])].sort(),
       ...(ledger.identity?.acceptances?.at(-1)
         ? { acceptedFromTrial: ledger.identity.acceptances.at(-1)?.fromTrial }
