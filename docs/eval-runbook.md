@@ -8,11 +8,18 @@ two steps that need a human are marked GUI-ONLY.
 Scope: M1-016 (TIF-20), acceptance row 8 of `docs/architecture/m1.md`. Environment facts:
 `docs/env/windows.md`. Incident history quoted inline: `docs/coordination/m1-state.md` log N.
 
-**Read this first.** Nothing below was executed while writing it: `myco-win11` was held by the
-coordinator and UTM was being restarted in the GUI (log 37). So every expected output is a
-*shape*, not a transcript, except where a measured value is quoted with its log or date.
-Commands needing the VM are therefore **UNVERIFIED** until you run them — verify each output
-before moving on.
+**Read this first.** This file was originally written without executing anything — `myco-win11`
+was held by the coordinator (log 37) — so the expected outputs are *shapes*, not transcripts,
+except where a measured value is quoted with its log or date.
+
+**It has since been executed end to end, and the markers are no longer uniform.** As of
+2026-11-24: §1, §2, §3.2, §4 and §5 have each been run and their outputs matched
+(`docs/research/experiments/m1-row8/`), and **§6 has since PASSED 20/20** (`S6-PASS.md`). §3.1 and
+§7.3/§7.4 have not been re-run by a fresh operator. Take a step-level `UNVERIFIED` marker as
+"not re-checked recently", not as "never run" — and where a section's own marker contradicts this
+paragraph, the section is the one to fix (F3, 2026-11-24).
+
+Commands needing the VM still deserve a check of their output before you move on.
 
 | Marker | Meaning |
 |---|---|
@@ -136,8 +143,24 @@ finally: fcntl.flock(f,fcntl.LOCK_UN)' 2>/dev/null || true
 ```
 
 A **`HELD` flock is the only evidence of ownership.** Free + a named pid means the
-file is stale; free + `vm-state.sh` exit 0 means a guest is running with nobody
-holding the lock, which is the case to stop and report rather than proceed.
+file is stale.
+
+**Free + a running guest is the NORMAL state, not a stop.** It is what every driver
+leaves behind when it releases — r6 and the §6 attempts both finish with the guest
+still up. Report it and proceed; do not stop and ask. (An earlier revision said
+"stop and report", which a fresh operator read literally and would have stopped at
+§2 on every run — finding F4, 2026-11-24.) The state that IS worth reporting is the
+opposite one: a guest that is running while some *other* process claims to own it.
+
+**Check ownership read-only if you only want to look.** The probe below takes the
+flock for an instant, and `scripts/vm-lock.sh:34` acquires with `LOCK_NB` and no
+retry — so a probe and a real driver starting in the same moment can make the driver
+refuse with exit 10. Measured as F5 on 2026-11-24. When you only need to know
+whether anyone owns the VM, use `lsof` instead:
+
+```bash
+lsof /tmp/myco-win11.vm.lock     # a table = someone owns it; empty = nobody does
+```
 
 **NEVER hold the flock as a "reservation".** This section has no way to express *"the VM is
 reserved for you"*, so a coordinator who holds the lock to keep the VM free **makes the VM
@@ -197,10 +220,10 @@ the agent install, so a reset deletes the agent (log 10).
 
 ### 3.1 COLD path — primary
 
-**UNVERIFIED** — `scripts/reset-trial-vm.sh` is the deliverable of PR #32
-(`feat/m1-013-cold-reset`), still open and pending its 5-consecutive-cold-reset check (log 37).
-It is **not on `main`** (`main` has no `scripts/` directory). Get it from the PR branch, or use
-§3.2.
+**Verified, and on `main`.** `scripts/reset-trial-vm.sh` is present and executable at the
+checkout you are reading (PR #32 merged long ago; the 5-consecutive-cold-reset check was
+recorded at log 37). The earlier "not on `main` / get it from the PR branch" note was stale by
+2026-11-24 — `main` has a `scripts/` directory, and §1.3 and §2.0 above already use it.
 
 ```bash
 scripts/reset-trial-vm.sh            # optional arg: snapshot name; default clean-base
@@ -208,7 +231,8 @@ scripts/reset-trial-vm.sh            # optional arg: snapshot name; default clea
 
 What it does (read from the script): force-stop → wait for `stopped` (30 s cap) → **refuse** if
 the state is `resuming` → restore → start → `wait-ssh.sh 600` → resync the guest clock. It
-accepts only `clean-base`, `clean-base-live`, `m1-agent-live` as snapshot names and never
+accepts only `clean-base`, `clean-base-live`, `m1-agent-live`, **`cua-c1-base`** (the C1
+screenshot-baseline snapshot, and the one the C1 arms run on) as snapshot names and never
 restores onto a running VM.
 
 Expected: `reset-trial-vm: ready on 'clean-base'`. Cold boot costs ~21 s once UTM is warm, and
@@ -273,7 +297,7 @@ Expected tail:
 
 ```
 ==> ping verified:
-{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": 1, ...}}
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "<random hex GUID, not 1>", ...}}
 DEPLOY OK
 ```
 
@@ -311,8 +335,24 @@ Expected:
 {"ok": true, "id": 1, "result": {"session_id": 1, "window_station": "WinSta0", "desktop": "Default", "user": "MYCO-WIN11\\myco"}}
 ```
 
-`run-live.ts` prints the same fact in one line before every trial:
-`agent ping ok: 0.1.0 session 1` on stderr.
+**`run-live`'s per-trial line is NOT this proof, and cannot be.** It prints
+`agent ping ok: 0.1.0 session <id>` on stderr (`src/integration/run-live.ts:69`), and that id is
+`ping`'s `session_id` — which is a **random hex GUID generated per agent start**
+(`agent/myco_agent/__init__.py:4`: `SESSION_ID = uuid.uuid4().hex`; returned by
+`agent/myco_agent/ops.py:8`). It is **not the Windows session number**, so no value of that line
+can distinguish session 1 from session 0. The desktop proof is the `session_info` call above,
+which reads the real number through `ProcessIdToSessionId`
+(`agent/myco_agent/windows_backend.py:292-317`). An earlier revision presented the ping line as
+"the same fact" — it is not (F9/F10, 2026-11-24).
+
+**Close the manual tunnel before §6.** §5 opens it with `ssh … -N -L 8765:… &` above. §9 lists
+"a manual tunnel from an earlier step" as a cause of §6 failing to bind — and `run-live` silently
+reuses a stale listener rather than erroring, so the failure is invisible. The teardown belongs
+here, not in a troubleshooting row you read afterwards:
+
+```bash
+pkill -f 'ssh .*-N -L 8765' || true
+```
 
 **Why this is a gate, not a nicety.** Windows puts services in session 0, which has no visible
 window station; `sshd` is a service, so everything it spawns inherits session 0 and cannot see or
@@ -351,20 +391,30 @@ document. Do not start §6 until this prints nothing:
 ```bash
 cat > /tmp/guest-clean.ps1 <<'EOF'
 Get-Process soffice* -ErrorAction SilentlyContinue | ForEach-Object { "soffice $($_.Id)" }
-Get-ChildItem C:\myco\runs -Directory | Where-Object Name -like 'myco-*' | ForEach-Object { "run-dir $($_.Name)" }
+# Everything that is not ours, minus the two names the agent owns. NOT a 'myco-*' filter:
+# a C1 run leaves C:\myco\runs\20, which 'myco-*' does not match, so that filter prints
+# nothing (a false clean) and every row then fails 'leftover run dirs: 20' (F13).
+Get-ChildItem C:\myco\runs -Directory |
+  Where-Object { $_.Name -notin @('myco-admin','profiles') } |
+  ForEach-Object { "run-dir $($_.Name)" }
 EOF
 scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-clean.ps1 myco-win11:'C:/myco/guest-clean.ps1'
 ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-clean.ps1'
 ```
 
 **If a previous §6 attempt was aborted** — killed, Ctrl-C'd, or interrupted by a guest reset —
-it leaves one `run-dir myco-<hostpid>-<nonce>-<nonce>` and possibly one `soffice` behind. Clean
-them before re-running, or the re-run measures the residue:
+it leaves one `run-dir myco-<hostpid>-<nonce>-<nonce>` and possibly one `soffice` behind. A run
+that is not a trial — the C1 arms write `C:\myco\runs\<index>` — leaves a directory whose name
+matches nothing in particular, including a bare number. Clean them before re-running, or the
+re-run measures the residue:
 
 ```bash
 cat > /tmp/guest-cleanup.ps1 <<'EOF'
 Get-Process soffice* -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-ChildItem C:\myco\runs -Directory | Where-Object Name -like 'myco-*' | Remove-Item -Recurse -Force
+# Same reason as the check above: remove everything except the agent's own names.
+Get-ChildItem C:\myco\runs -Directory |
+  Where-Object { $_.Name -notin @('myco-admin','profiles') } |
+  Remove-Item -Recurse -Force
 Get-ChildItem C:\myco\profiles -Directory -ErrorAction SilentlyContinue | Where-Object Name -like 'myco-*' | Remove-Item -Recurse -Force
 EOF
 scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-cleanup.ps1 myco-win11:'C:/myco/guest-cleanup.ps1'
@@ -406,8 +456,13 @@ Before §6 you still want to know *why* nobody holds it — a free flock plus a 
 the good state, and a §2 flock that reads `HELD` means wait:
 
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode values --limit 20
+pnpm exec tsx src/integration/run-live.ts --mode values --limit 20 --runs-dir runs/s6-final
 ```
+
+**Use an explicit `--runs-dir`.** Without it the run writes into `runs/`, which §1.2's `pnpm test`
+has already filled with schema-valid fixture directories — so §8.2's `validate-live` can report
+`ALL OK` on the *tests'* artifacts rather than on this run (F11/F14, 2026-11-24). A dedicated
+directory also makes the §6 evidence unambiguous.
 
 Expected: a JSON array of 20 rows, every one `"status": "verified"`, exit code 0 (non-zero if any
 row is not verified; exit 2 if the generator yields no sets — a broken generator must not look
@@ -458,7 +513,9 @@ guest another driver owns; it starts its own SSH tunnel (8765) and needs `MYCO_A
 as JSON.
 
 **`runs/` is gitignored and EMPTY on a fresh clone — but `pnpm test` (§1.2) populates it with
-fixture dirs** (`direction-a-todo-save`, `run-df-s01-1`, `test-dir-*`, six of them as measured
+fixture dirs** (`direction-a-todo-save`, `direction-a-todo-save.mycotrace`, `test-dir-b-clean`,
+`test-dir-b-interrupted`, `test-dir-c-comparison` — **five**, re-measured 2026-11-24; an earlier
+revision said six and listed `run-df-s01-1`, which that commit does not create)
 2026-11-24). **`validate-live` (§8.2) will then report `ALL OK` on those fixtures**, which are
 schema-valid, without validating anything the operator ran. **That is a false PASS.** Validate an
 explicit run directory, or clear `runs/` between §1 and §8.
