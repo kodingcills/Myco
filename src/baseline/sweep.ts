@@ -175,7 +175,8 @@ export async function runC1Sweep(options: {
     // plus it would breach the combined ceiling, the caller must say what is
     // left rather than inherit a limit that cannot be spent.
     throw new Error(
-      `prior spend ${priorSpend} + default arm limit ${armLimit} exceeds ${COMBINED_LIMIT}; pass armLimitMicros as the REMAINING budget`,
+      `prior spend ${priorSpend} + default arm limit ${armLimit} exceeds ${COMBINED_LIMIT}; ` +
+        "pass armLimitMicros explicitly so priorSpend + armLimitMicros stays within the combined ceiling",
     );
   }
   const { directory } = options;
@@ -232,10 +233,23 @@ export async function runC1Sweep(options: {
       const c1 = charged(ledger.c1);
       if (
         stopReason ||
-        // `priorSpend` is added to BOTH ceilings. Without it the combined limit
-        // is enforced against this run's ledger alone and a fresh directory gets
-        // a $9 allowance it has already spent part of.
-        priorSpend + c1 + reservation > armLimit ||
+        // TWO ceilings, and prior spend belongs in exactly one of them.
+        //
+        // `armLimit` is the REMAINING budget (MYCO_ARM_LIMIT_MICROS, documented as
+        // ceiling - prior), so this check is scoped to THIS RUN: the trials it has
+        // scored plus the reservation it is about to hold.
+        //
+        // TIF-187: this used to read `priorSpend + c1 + reservation > armLimit`,
+        // which adds prior spend to a value prior spend was already subtracted
+        // from - the subtraction happened twice. A caller who followed the
+        // documented rule (arm = 9000000 - prior) then had every trial omitted:
+        // with prior 4480732 and a 607200 reservation, 5087932 > 4519268, so r6's
+        // first launch produced `completed: 0` and 30 `spend-limit` rows. The
+        // configuration the documentation prescribes could not start a trial.
+        c1 + reservation > armLimit ||
+        // The project ceiling. prior spend belongs HERE, where it is compared
+        // against the true combined limit rather than against a budget that has
+        // already had it removed. This is the binding ceiling for a real launch.
         priorSpend + c1 + charged(ledger.c2) + reservation > COMBINED_LIMIT
       ) {
         stopReason ??= "spend-limit";
@@ -294,26 +308,20 @@ export async function runC1Sweep(options: {
         // be wrong when the cap is hard.
         const failed = error instanceof PlannerFailure;
         if (failed) stopReason = "planner-failed";
-        // Carry the message into the cause for BOTH branches: a bare
-        // `trial-interrupted` made every distinct prepare failure look like the
-        // same cause, so abort-early fired on two *different* faults and the
-        // ledger could not say which. The cause string is the diagnosis.
-        // `trial-interrupted` remains the recorded reason for an unexpected
-        // throw (runC1Trial swallows PlannerFailure inside its own try, so in
-        // practice only prepare() throws here), but the cause carries detail.
-        // The abort keys on the FAULT CLASS, never on the message text.
+        // The abort keys on the FAULT CLASS, never on the message text. The message
+        // is not lost - it is persisted as `detail` below, so a run that stops can be
+        // diagnosed from its own artifacts rather than from logs.
         //
-        // arm-003d r5 omitted trials 2 and 3 and kept going: the key was
-        // `trial-interrupted:${message}`, two omissions of the same class carried
+        // An earlier version carried the message INTO the key
+        // (`trial-interrupted:${message}`). That let two omissions of the same class
+        // look like two different causes, so abort-early never fired:
+        //
+        // arm-003d r5 omitted trials 2 and 3 and kept going. The two carried
         // different messages (an SSH banner timeout, then a throw later in the
         // trial), so `consecutive` never reached 2 and each one burned $0.61 of cap
         // for no data. Keying on the message also meant the rule could only see a
         // fault that reproduced its TEXT, which is the wrong resolution for "the
-        // sweep is measuring the harness".
-        //
-        // The message is not lost: it moves to `detail`, the same way the
-        // planner-failed branch already persisted it, so a run that stops can be
-        // diagnosed from its own artifacts. TIF-186.
+        // sweep is measuring the harness". TIF-186.
         noteCause(failed ? "planner-failed" : "trial-interrupted");
         ledger.c1[index] = {
           status: "omitted",
