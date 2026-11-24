@@ -44,7 +44,7 @@ pnpm install --frozen-lockfile
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
 ```
 
-Expected: four green commands. `pnpm test` runs vitest and then `schemas/validate-artifacts.ts`
+Expected: four green commands. `pnpm test` runs vitest and then `schema-validate` (the pnpm alias; the file is `schemas/validate-artifacts.ts`)
 (→ `validated artifacts for N trials (all ok)`). This proves the host half without touching the
 VM; do it before any VM work so a later failure is unambiguous.
 
@@ -139,6 +139,18 @@ A **`HELD` flock is the only evidence of ownership.** Free + a named pid means t
 file is stale; free + `vm-state.sh` exit 0 means a guest is running with nobody
 holding the lock, which is the case to stop and report rather than proceed.
 
+**NEVER hold the flock as a "reservation".** This section has no way to express *"the VM is
+reserved for you"*, so a coordinator who holds the lock to keep the VM free **makes the VM
+unusable to the very operator being tested** — a held flock is indistinguishable from a
+competing owner, and the primary reset (§3.1) will refuse. That happened on 2026-11-24 and cost
+the row-8 operator its §3.1 step and two "should I break this lock?" questions it could not
+answer. **If the VM must be kept free, do it by agreement, not by holding the lock.** The test
+begins only when **both** are true: the flock is `FREE` **and** no process outside the operator's
+own work holds a claim on the guest.
+
+**The stale lock file is expected, and it is not a signal.** Its contents name the last writer
+and routinely name a dead pid. Read the flock; ignore the text. (Same class as TIF-180.)
+
 **To clear a stale record** — do it under the lock, so it cannot race a driver acquiring it:
 
 ```bash
@@ -148,7 +160,7 @@ f = open("/tmp/myco-win11.vm.lock", "a+")
 try:
     fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except BlockingIOError:
-    raise SystemExit("HELD — a driver owns the host; do not touch the record")
+    raise SystemExit("HELD - a driver owns the host; do not touch the record")
 f.seek(0); f.truncate(0); f.flush()
 print("cleared a stale lock record (the flock was free)")
 PY
@@ -156,12 +168,13 @@ PY
 
 Clearing is housekeeping, not a prerequisite: `vm_lock_acquire` truncates and rewrites the
 record only after the kernel grants the lock, so a stale pid never blocks a driver. It is worth
-clearing because a dead pid in that file reads exactly like a live owner — the 2026-11-24
+clearing because a dead pid in that file reads exactly like a live owner - the 2026-11-24
 row-8 operator saw `44837 reset-trial-vm.sh` (dead) with the flock free and had no way to tell
 the two apart from the file alone.
 
 ```bash
 ~/VMs/myco-win11/scripts/wait-ssh.sh 120
+
 ~/VMs/myco-win11/scripts/vssh 'whoami'
 ```
 
@@ -206,7 +219,10 @@ cannot wedge, versus the live path's ~7 s when healthy.
 ### 3.2 Fallback — `reset.sh cold`
 
 **UNVERIFIED**, but this one is already exercised: `reset.sh cold` restore `clean-base` → cold
-boot, ~20 s (VM README, measured 2026-11-18).
+boot; the ~20 s figure is the VM README's and is **wrong for the in-repo path** — a
+cold reset measured **279 s end to end (234 s to SSH)** on 2026-11-24 under load ~9.7, and
+**134–152 s** when quiet. **Use 180–280 s as the planning range**, and see the decision rule in
+§6: a step that exceeds its range is *evidence about the host*, not about the repo.
 
 ```bash
 ~/VMs/myco-win11/scripts/reset.sh cold
@@ -246,7 +262,8 @@ conclusion (log 37).
 agent/bootstrap/deploy-to-vm.sh
 ```
 
-Foreground, 100–180 s (measured 126.9 s and ~176 s). It copies the agent tree to
+Foreground, **100–420 s** (measured 126.9 s and ~176 s quiet; **418 s** on 2026-11-24 under
+load ~9.7). The 100–180 s figure is the quiet case only. It copies the agent tree to
 `C:\Program Files\Myco\agent`, writes a **fresh token** to `C:\ProgramData\Myco\agent.token`,
 installs pywin32/comtypes/uiautomation into LibreOffice's own Python, registers the `MycoAgent`
 task, launches it through `run-interactive.ps1` (interactive session), and pings it through
@@ -413,10 +430,24 @@ driver cold-reset the guest at trial 2 (§6.2). **`20/20` on a quiet host is the
 outstanding**, but the failure mode this section warns about — a *refutation* — has not
 occurred on a clean guest in any of the 16 rows.
 
-**A refutation means: stop.** A non-verified row names the mismatch in `reason`. Before blaming
-the generator, rule out contamination (reset, then re-run) and contention. If it reproduces on a
-clean guest, the generator's AutoCorrect-immune predicate or Calc's input path is wrong, and every
-subsequent trial number is suspect. Fix that first.
+**A refutation means: stop.** A non-verified row names the mismatch in `reason`.
+
+**Bounded retry — exactly one.** Before blaming the generator: reset (§3), confirm the host is
+quiet (**load < 4**, no test suite or race test running, no other VM user), and re-run **once**.
+**If the second run is also refuted, STOP and report** — do not loop. The runbook previously said
+"reset, then re-run" with no bound, which on 2026-11-24 left a naive operator unable to decide
+whether to spend another 30+ min, and no way to tell a generator defect from contention.
+
+**The decision rule, so it is not a judgement call:**
+
+| first run | second run on a quiet host | conclusion |
+|---|---|---|
+| refuted | **verified 20/20** | the first failure was contention — continue |
+| refuted | refuted | **generator defect** — file it, stop, every later trial number is suspect |
+| refuted | cannot get a quiet host | **INCONCLUSIVE** — report as such; do **not** record as a repo failure |
+
+**A run stopped for host contention is not a failed row-8 test.** Record the load average and the
+step, and say plainly that attribution was impossible.
 
 ## 7. The trials
 
@@ -425,6 +456,12 @@ All live trials run through one entrypoint: `src/integration/run-live.ts`, modes
 guest another driver owns; it starts its own SSH tunnel (8765) and needs `MYCO_AGENT_TOKEN`
 (§4). Each run writes `runs/<runId>/{trace.jsonl,result.json}` (§8) and prints the trial report
 as JSON.
+
+**`runs/` is gitignored and EMPTY on a fresh clone — but `pnpm test` (§1.2) populates it with
+fixture dirs** (`direction-a-todo-save`, `run-df-s01-1`, `test-dir-*`, six of them as measured
+2026-11-24). **`validate-live` (§8.2) will then report `ALL OK` on those fixtures**, which are
+schema-valid, without validating anything the operator ran. **That is a false PASS.** Validate an
+explicit run directory, or clear `runs/` between §1 and §8.
 
 ### 7.1 Normal trial
 
