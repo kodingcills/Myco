@@ -363,15 +363,30 @@ dirs do.
 
 ### 6.2 Hold the VM, or nothing else may touch it
 
-`run-live` **does not take the VM flock** — the sweep driver (§7.3) does, but this entrypoint
-does not, so a §6 attempt holds no ownership evidence. Measured 2026-11-24: a baseline driver
+`run-live` **takes the VM flock itself** (TIF-191). If another driver owns the host it refuses
+before touching the guest:
+
+```
+REFUSED_VM_LOCKED: holder 36343 c1-baseline.sh
+exit 10
+```
+
+Exit **10** is that refusal, and it is not a generator failure — wait for the named holder to
+finish, then re-run. Nothing has been created on the guest or in `runs/` when it happens.
+
+This was not always so, and the reason is worth keeping. Measured 2026-11-24: a baseline driver
 acquired the lock and cold-reset the guest to its own snapshot ~55 s into a §6 run. The first
 row verified; the tunnel then died with the guest, and **the next 19 rows each returned
 `uncertain` in 0–1 ms** — `could not look: agent unreachable — ssh tunnel is not running (call
-start() first)`. The run exited 1 with one genuine verdict and 19 harness aborts.
+start() first)`. The run exited 1 with one genuine verdict and 19 harness aborts, which reads
+exactly like a generator defect and was not one.
 
-So before §6: prove the flock is **FREE** (§2) and that no driver is running, and expect
-nobody to start one. A held flock means wait — do not run §6 under a reset.
+A driver that spawns `run-live` as a child (§7.3, §7.4) keeps working: the child inherits the
+lock its ancestor owns (`MYCO_VM_LOCK_OWNER`) instead of refusing it. So the sweep does not need
+to change, and running `run-live` **by hand** is the case this guards.
+
+Before §6 you still want to know *why* nobody holds it — a free flock plus a running guest is
+the good state, and a §2 flock that reads `HELD` means wait:
 
 ```bash
 pnpm exec tsx src/integration/run-live.ts --mode values --limit 20
@@ -406,8 +421,10 @@ subsequent trial number is suspect. Fix that first.
 ## 7. The trials
 
 All live trials run through one entrypoint: `src/integration/run-live.ts`, modes `normal`,
-`kill`, `values`. It starts its own SSH tunnel (8765) and needs `MYCO_AGENT_TOKEN` (§4). Each run
-writes `runs/<runId>/{trace.jsonl,result.json}` (§8) and prints the trial report as JSON.
+`kill`, `values`. It takes the VM lock (§6.2) and refuses with exit **10** rather than drive a
+guest another driver owns; it starts its own SSH tunnel (8765) and needs `MYCO_AGENT_TOKEN`
+(§4). Each run writes `runs/<runId>/{trace.jsonl,result.json}` (§8) and prints the trial report
+as JSON.
 
 ### 7.1 Normal trial
 
@@ -416,7 +433,8 @@ pnpm exec tsx src/integration/run-live.ts --mode normal --seed m1-013-trial-01
 ```
 
 Expected: `"verdict": {"status": "verified", "reasons": ["cell … persisted as \"…\""]}`,
-`"completed": true`, **exit 0** (non-verified exits 1). Recorded wall times: 34.3 s, 40.2 s,
+`"completed": true`, **exit 0** (non-verified exits 1; exit 10 is the lock refusal of §6.2 and
+means the trial never ran). Recorded wall times: 34.3 s, 40.2 s,
 55.1 s. Report fields: `runId, verdict, completed, elapsedMs, xlsxPath, guardFailure?, cleanup`.
 
 For a non-`verified` normal trial, read `verdict.reasons[0]` and find the failing stage.
