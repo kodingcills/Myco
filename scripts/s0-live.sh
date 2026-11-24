@@ -251,18 +251,21 @@ case "${1:-}" in
     # single racer that certainly created the lock shows `birth` about 1 ms BEFORE its own
     # `pre` (three runs, -0.73/-1.33/-1.38 ms), because the shell's clock and the kernel's
     # `btime` are different sources. Derivation: s0-launcher-race-flake/FLAKE.md.
-    # Not local: this is a case branch, not a function.
     t_before="$(date +%s.%N 2>/dev/null || true)"
     [ -n "$t_before" ] || t_before="$(date +%s)"
-    # The kernel lock decides. `claim_lock` holds fd 9 for the run's lifetime; the
-    # watchdog inherits it below, so the lock outlives this process and is released by
-    # the kernel when the run's last process exits.
-    # Not local: this is a case branch, not a function. The fd is opened HERE, in the
-    # --run shell, so the watchdog spawned below inherits the same open file description
-    # and the lock is held for the run's lifetime — a function's `exec` would not persist.
-    # 1. This shell opens the fd; 2. the kernel grants or refuses the flock; 3. only then
-    # is the watchdog spawned, so it inherits the SAME open file description and holds the
-    # lock for the run's lifetime. Opening after the spawn would give the child no fd.
+    # TIF-170: the kernel lock decides, not `mkdir`. Order is the whole mechanism —
+    # 1. this shell opens fd 9; 2. the kernel grants or refuses the flock; 3. only then
+    # is the watchdog spawned, so it inherits the same open file description. A function's
+    # `exec` would not persist to this shell, and opening after the spawn gives the child
+    # no fd, which silently releases the lock the moment `--run` exits.
+    #
+    # The lock belongs to the open file description, so its lifetime is the RUN TREE's:
+    # the watchdog holds it, and so does every descendant that inherits fd 9 (the
+    # sequence child does — verified with lsof). The kernel releases it when the last of
+    # them exits. That is why `--stop`, which kills the holders, needs no explicit unlock.
+    # The consequence worth knowing: a descendant that survives `--stop` keeps the lock,
+    # and the next `--run` refuses with exit 1 until that stray is gone.
+    # Not local: this is a case branch, not a function.
     claim_rc=0
     exec 9>>"$LOCK_FILE" || claim_rc=1
     if [ "$claim_rc" -eq 0 ]; then
