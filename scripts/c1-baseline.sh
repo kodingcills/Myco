@@ -113,9 +113,15 @@ fi
 # SET IS NOT ENOUGH - IT MUST BE A NUMBER. Testing only for setness let `""`, `"   "`
 # and `"abc"` through, and those convert to `0.000000`, which is exactly the run-local
 # default this whole change deletes. A round-2 verifier measured all three reaching the
-# watcher. The pattern mirrors `parseSpendCeiling`'s `/^\d+$/` in scripts/spend-ceiling.ts,
-# so the launcher and the sweep accept and reject the same strings - otherwise the two
-# really can disagree about what the project has already spent.
+# watcher.
+#
+# WHAT THIS GUARD DOES AND DOES NOT COVER, stated because an earlier comment here claimed
+# more than it checked: it rejects everything that is not digits, which is the class of
+# input the verifier demonstrated. It does NOT enforce `Number.isSafeInteger`, which
+# `parseSpendCeiling` also requires - so a value above 2^53 passes HERE and is thrown
+# THERE. That is safe in this direction: the sweep refuses, the launch aborts, and no
+# watcher runs on a number the guard would reject. Closing the gap is TIF-197; until then
+# do not describe the two parsers as equivalent.
 case "${MYCO_PRIOR_SPEND_MICROS:-}" in
   "")
     echo "c1-baseline: MYCO_PRIOR_SPEND_MICROS is unset or empty - the watchdog would report a run-local figure. Export it (0 only for a genuinely fresh project)." >&2
