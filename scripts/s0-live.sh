@@ -39,9 +39,16 @@ say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 # never signals anything, and its own failure is swallowed so it cannot break a run.
 # The claim record (`say "pid ..."`) shows THAT two claims happened; this shows WHICH
 # process removed the lock between them, which is the part no experiment has named yet.
+#
+# Sub-second precision matters: a whole round runs inside one second, so second-granular
+# stamps cannot order a claim against an rmdir. `date +%N` is GNU-only, so `%s.%N` is
+# computed where the C library supports it and falls back to whole seconds elsewhere.
 lock_trace() {
+  local ns
+  ns="$(date +%s.%N 2>/dev/null || true)"
+  [ -n "$ns" ] || ns="$(date +%s)"
   printf '%s %s pid=%s %s %s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${TIF170_TRACE_ROLE:-run}" "$$" "$1" "${2:-}" \
+    "$ns" "${TIF170_TRACE_ROLE:-run}" "$$" "$1" "${2:-}" \
     >>"$LOG" 2>/dev/null || true
 }
 
