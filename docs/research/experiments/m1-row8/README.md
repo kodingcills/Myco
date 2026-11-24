@@ -25,7 +25,7 @@ progress could not be lost. Everything below summarises it; the report is the ev
 | §5 `session_info` | **PASS** (exact match) | 9 s | — |
 | §6 generator proof | **FAIL — 1/14 verified** | 900 s, killed at cap | F8, F9 |
 | §7 trials/sweeps | **NOT RUN** — blocked by §6 | — | F10 |
-| §8.2 `validate-live` | **PASS** | 1 s | F11 |
+| §8.2 `validate-live` | **PASS — but on fixture dirs, not run evidence** (F11) | 1 s | F11 |
 
 **The operator reached §5 with every expected output matching exactly** — host gate green,
 VM sanity, cold reset, deploy (`DEPLOY OK`), and the desktop proof's JSON matching the runbook
@@ -63,7 +63,7 @@ before any repo-side conclusion about §6.**
 | **F8** | expected-result shape drift: `elapsedMs` null where the runbook shows numbers |
 | **F9** | §6's recorded "20/20 verified (2026-11-20)" did not reproduce under contention — see above |
 | **F10** | no guidance on what to do when the lock state contradicts the premise |
-| **F11** | `validate-live` passed but the step's expected output is under-specified |
+| **F11** | **`runs/` is contaminated by test fixtures before §8.2 validates it** — see below |
 
 **The pattern across F1, F2, F5, F6, F7, F8 is one class: the runbook's quoted outputs and
 timings are stale.** Every one is a one-line fix, and together they are the most valuable output
@@ -89,3 +89,22 @@ naive operator has no move available. F10 is the same gap from the other side.
 
 **Row 8 is therefore NOT passable as of this run, and the run should not be counted as a fail
 against the repo.** It produced 11 findings and one clean positive (§1–§5).
+
+### F11 is more serious than "minor": §8.2's PASS is not evidence
+
+**The operator's finding, verified:**
+
+- `runs/` is **gitignored** (`.gitignore:3`), so a fresh clone has none.
+- **§1.2 runs `pnpm test`**, which creates fixture dirs there. Measured after a test run:
+  `direction-a-todo-save`, `direction-a-todo-save.mycotrace`, `run-df-s01-1`,
+  `test-dir-b-clean`, `test-dir-b-interrupted`, `test-dir-c-comparison` — **6 dirs**.
+- **§8.2 then runs `validate-live` over `runs/`, and it reports `ALL OK`** — because the
+  fixtures are schema-valid.
+
+**So the runbook's own order (§1 tests, then §8 evidence validation) makes the evidence check
+pass on artifacts the *repo's tests* produced rather than on any run the operator performed.**
+A naive operator reads `ALL OK` as "my evidence validates". **It is a false PASS, and it is the
+one step in the table that cannot be trusted at face value.**
+
+**Fix:** §8 should validate an explicit run directory (or `runs/` should be emptied between
+§1 and §8), and the runbook should say that `pnpm test` populates `runs/` with fixtures.
