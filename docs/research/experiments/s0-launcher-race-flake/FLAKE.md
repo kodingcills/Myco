@@ -160,3 +160,51 @@ before any more instrumentation is written.
 container's overlayfs, where a direct test shows the second call losing. So either the
 runner's filesystem differs in this respect, or something removes the lock in a way this
 trace does not see. Both remain open; the five hypotheses tested so far are listed above.
+
+---
+
+## Update 2026-11-24 — a pre-call stamp, and why the birth comparison still does not attribute
+
+Added a `pre=` stamp (taken immediately before `mkdir`) and a `birth=` field (the lock's
+filesystem creation time, `stat -c %w` converted to epoch-with-fraction), so a line could
+be classified as the creator or a later observer. Predicted discriminator: a creator's
+`pre` is before the birth, an observer's is at or after.
+
+### It does not discriminate. Measured, not assumed.
+
+**A single racer that certainly created the lock** — three consecutive runs:
+
+| run | `pre` | `birth` | birth minus pre |
+|---|---|---|---|
+| 1 | `.567152055` | `.566420976` | −0.73 ms |
+| 2 | `.574754102` | `.573420942` | −1.33 ms |
+| 3 | `.581798443` | `.580420908` | −1.38 ms |
+
+In every case the filesystem's recorded birth is **about a millisecond earlier** than the
+`pre` stamp of the very call that created it. So `pre < birth` is false even for a creator,
+and the classifier is noise: across five 8-racer rounds it reported 0, 1, 0, 0 and **2**
+creators, where the truth is exactly 1.
+
+Two independent clock sources disagree at the sub-millisecond scale: `date +%s.%N` in the
+shell and the kernel's `btime` as reported by `statx`. Neither is wrong; they are not the
+same measurement, and the ~1 ms offset between them is larger than the interval the
+comparison needs to resolve.
+
+### What is still sound
+
+- **`pre=`** is a real reading taken before the call, so it orders a racer's own call
+  against any other racer's line. It cannot be compared with `birth=`, but it *can* be
+  compared with another `pre` — which is enough to say which racer reached `mkdir` first.
+- **`ino=` and `path=`** still hold (one inode, one path, from the previous round).
+- The verdict on the mechanism is unchanged: **two `mkdir` calls return 0 on the same
+  existing path with no `rmdir`**, and nothing yet names what makes the second one succeed.
+
+### The next thing that would actually attribute
+
+Not another clock read. Either:
+
+- have the **winner write its own pid into the lock** at creation and read that back, so the
+  lock names its creator directly rather than by timestamp; or
+- classify by `pre=` order alone, which needs no birth at all: the racer with the earliest
+  `pre` that also recorded `mkdir-won` is the creator, and any *later* `mkdir-won` is the
+  anomaly. That is available from this round's data and needs no new instrumentation.
