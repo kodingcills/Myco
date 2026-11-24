@@ -49,6 +49,12 @@ interface RunIdentity {
   snapshot: string;
   /** `paid` or `stub`, so a stub arm cannot be resumed with a paid planner. */
   planner: string;
+  /**
+   * Set only when the identity was ASSERTED at resume time for a ledger written
+   * before identity recording existed. Absent means it was captured at run time.
+   * Kept because the two are not equally strong evidence.
+   */
+  adopted?: boolean;
 }
 interface Ledger {
   manifestSha256: string;
@@ -135,17 +141,34 @@ function committedCash(entries: Ledger["c1"]): number {
  * that refuses: it produces a 30-row artifact that looks uniform while one half
  * measured a different model or snapshot, and nothing downstream can tell.
  */
-function assertResumable(ledger: Ledger, identity: RunIdentity, path: string) {
+function assertResumable(
+  ledger: Ledger,
+  identity: RunIdentity,
+  path: string,
+  adoptIdentity: boolean,
+) {
   if (ledger.manifestSha256 !== manifestSha256)
     throw new Error(
       `refusing to resume ${path}: manifest mismatch (ledger ${ledger.manifestSha256.slice(0, 12)} != current ${manifestSha256.slice(0, 12)})`,
     );
-  // A ledger written before identity was recorded cannot be checked, so it is
-  // refused rather than assumed compatible.
-  if (!ledger.identity)
-    throw new Error(
-      `refusing to resume ${path}: ledger records no run identity, so compatibility cannot be checked`,
-    );
+  // A ledger written before identity was recorded cannot be CHECKED, so the
+  // default is to refuse it rather than assume compatibility.
+  //
+  // An explicit adoption path exists because there is one honest use for it: a
+  // run that crashed BEFORE identity recording existed, whose rows are real and
+  // whose spend is already committed. Refusing those forever would strand paid
+  // data and force a fresh 30-trial arm - exactly the waste this feature exists
+  // to prevent. The adoption is recorded in the ledger so a later reader can see
+  // the identity was asserted at resume time rather than captured at run time,
+  // and it never silently upgrades a ledger that already HAS a different identity.
+  if (!ledger.identity) {
+    if (!adoptIdentity)
+      throw new Error(
+        `refusing to resume ${path}: ledger records no run identity, so compatibility cannot be checked (pass --adopt-identity to assert the current one, which is recorded as adopted)`,
+      );
+    ledger.identity = { ...identity, adopted: true };
+    writeJson(path, ledger);
+  }
   for (const field of ["model", "snapshot", "planner"] as const) {
     if (ledger.identity[field] !== identity[field])
       throw new Error(
@@ -246,6 +269,15 @@ export async function runC1Sweep(options: {
   resumeSpend?: "ledger" | "external";
   /** What the run believes it is, checked against the ledger on a resume. */
   identity?: RunIdentity;
+  /**
+   * Permit a resume of a ledger that records NO identity, by asserting the
+   * current one and recording it as adopted.
+   *
+   * Only for ledgers written before identity recording existed. A ledger that
+   * already carries a DIFFERENT identity is still refused - this cannot launder
+   * a mismatch, only fill an absence.
+   */
+  adoptIdentity?: boolean;
   planner?: Planner;
   prepare(
     target: (typeof manifest.rows)[number],
@@ -284,7 +316,8 @@ export async function runC1Sweep(options: {
     let priorSpendMicros = priorSpend;
     const runResume = options.resume === true;
     if (runResume) {
-      if (options.identity) assertResumable(ledger, options.identity, path);
+      if (options.identity)
+        assertResumable(ledger, options.identity, path, options.adoptIdentity === true);
       if ((options.resumeSpend ?? "ledger") === "ledger") {
         // A resume must measure the PROJECT, and the ledger already does.
         //
