@@ -85,9 +85,56 @@ function charged(entries: Ledger["c1"]): number {
 }
 
 /**
+ * A summary of what a trial's agent DID, for the repeated-cause rule.
+ *
+ * The rule exists to catch "the sweep is measuring the harness, not the agent",
+ * and it previously keyed on verdict+reason+step count. arm-003d r3 showed that
+ * is wrong: trials 0 and 1 BOTH scored `refuted/step-budget` with 30 steps and
+ * aborted as a repeated cause, but their action sequences were plainly different
+ * - 28 press_keys and 2 type_texts versus 20 press_keys, 5 clicks and 5
+ * type_texts. Two trials that tried different things and both ran out of budget
+ * is a hard task, not a repeated fault, and aborting it discards real baseline
+ * data.
+ *
+ * The tool histogram is deliberately the key rather than the full sequence: a
+ * harness fault reproduces the SAME shape (r2's truncated rows were one call,
+ * zero actions), while an agent working a hard problem varies it. Using the
+ * exact sequence would be too brittle - two runs of a real task never match
+ * byte-for-byte - and using only the step count is too coarse, which is the bug
+ * this replaces.
+ *
+ * WHAT THIS DOES AND DOES NOT FIX, stated because the distinction is easy to
+ * overstate: it separates trials whose COMPOSITION differs - r3's press_keyx28 +
+ * type_textx2 versus clickx5 + press_keyx20 + type_textx5, which is the case that
+ * stopped the arm. It does NOT separate trials with the same composition and a
+ * different ORDER, or the same composition and different coordinates. Two
+ * `click`-heavy trials that converge on the same tool mix will still be read as a
+ * repeated cause even if they acted on different cells.
+ *
+ * That residual is a deliberate limit, not an oversight: at the resolution this
+ * key measures, two trials doing the same KINDS of things at the same RATES are
+ * the same shape. If an arm later aborts on a pair that differs only in
+ * coordinates, the honest fix is to key on the action sequence, and this comment
+ * is the record of why that tradeoff was taken the other way first.
+ */
+function actionSignature(row: BaselineRow): string {
+  const counts: Record<string, number> = {};
+  for (const action of row.transcript.actions) counts[action.tool] = (counts[action.tool] ?? 0) + 1;
+  // Tools the trial never used are omitted, not printed as `toolx0`: a shape is
+  // the set of things that HAPPENED, and padding it with zeroes makes two
+  // different shapes look more alike than they are.
+  return Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([tool, n]) => `${tool}x${n}`)
+    .join(",");
+}
+
+/**
  * Hosts one C1 evaluation. Prepare owns reset and fixture placement, and must
  * be supplied by the Coordinator's live wrapper after approval.
  */
+
 export async function runC1Sweep(options: {
   coordinatorGo: boolean;
   directory: string;
@@ -269,7 +316,7 @@ export async function runC1Sweep(options: {
         // harness fault. The identical-pair case - arm-003d r2's actual shape,
         // `s0, s0` - still stops immediately, which is the case this rule exists
         // for.
-        noteCause(`scored:${row.verdict}:${row.verdictReason}:steps=${row.steps}`);
+        noteCause(`scored:${row.verdict}:${row.verdictReason}:actions=${actionSignature(row)}`);
       }
       ledger.c1[index] = { status: "scored", micros, row };
       persist();

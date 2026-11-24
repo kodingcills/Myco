@@ -535,11 +535,17 @@ describe("C1 sweep abort-early", () => {
   // nothing and the sweep kept buying trials that were measuring the output
   // ceiling rather than the agent. Reverting the scored branch makes this fail:
   // every row is prepared instead of stopping at two.
+  //
+  // This is the ZERO-ACTION case: the planner returns nothing, so the histogram
+  // is empty and identical on both trials - which is why an empty shape still
+  // aborts. (TIF-181 later changed the key from verdict+steps to that histogram;
+  // this test's premise is unchanged by it, but the shape it relies on is worth
+  // naming.)
   it("stops after two consecutive identical SCORED failures", async () => {
     const directory = mkdtempSync(join(tmpdir(), "myco-abort-scored-"));
     directories.push(directory);
     let prepares = 0;
-    const report = await runC1Sweep({
+    await runC1Sweep({
       coordinatorGo: true,
       directory,
       // A judge that always finds the document unsaved: the r2 shape. The trial
@@ -550,6 +556,125 @@ describe("C1 sweep abort-early", () => {
         return prepared();
       },
     });
+    expect(prepares).toBeLessThan(5);
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
+      .map((e) => e.reason)
+      .filter(Boolean);
+    expect(reasons).toContain("repeated-cause");
+  });
+
+  // TIF-181. The rule keys on the ACTION HISTOGRAM, not on verdict+steps.
+  //
+  // arm-003d r3 aborted on trials 0 and 1, which both scored refuted/step-budget
+  // at 30 steps but did plainly different things: 28 press_keys + 2 type_texts
+  // versus 20 press_keys + 5 clicks + 5 type_texts. That is a hard task, not a
+  // repeated harness fault, and aborting it threw away real baseline data the
+  // run had already paid for.
+  it("does NOT abort when two step-budget failures took different actions", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-varied-"));
+    directories.push(directory);
+    let prepares = 0;
+    // A FACTORY, not a shared array: the first draft reused one array, so trial 1
+    // consumed what trial 0 had left and both signatures collapsed to the same
+    // shape. Building fresh per trial is the difference between testing the rule
+    // and testing the fixture.
+    //
+    // Two shapes, both 30 actions, both exhausting the budget, different tools:
+    // the r3 pattern (28 press_keys + 2 type_texts vs 20/5/5) in miniature.
+    // Reproduces r3's ACTUAL pair, then keeps varying so no later trial collides.
+    //
+    // r3 trial 0 was press_keyx28 + type_textx2 and trial 1 was
+    // clickx5 + press_keyx20 + type_textx5. Using a modulo schedule here was
+    // wrong: `(trial % 5) + (trial % 4)` yields only 20 distinct shapes across 30
+    // trials, so trials 0 and 20 were identical, and trial 0 collapsed to
+    // press_keyx30 rather than r3's mixed shape.
+    const shape = (trial: number) => {
+      // trial 0 is r3 verbatim: press_keyx28 + type_textx2.
+      //
+      // Every later trial gets a DISTINCT (clicks, types) pair, using the fact that
+      // (n % 5, n // 5) is injective over n in 0..29. Three earlier attempts failed
+      // here and each failure is instructive: clamping saturated five trials into
+      // one shape, two out-of-phase modulo cycles repeated at their LCM, and a
+      // single-stride lattice collided 8 times. Injectivity has to be CONSTRUCTED,
+      // not hoped for from coprime-looking constants.
+      const lo = trial - 1;
+      const types = trial === 0 ? 2 : 1 + Math.floor(lo / 5);
+      const clicks = trial === 0 ? 0 : 2 + (lo % 5) * 3;
+      return Array.from({ length: 30 }, (_, i) =>
+        i < clicks
+          ? { tool: "click", arguments: { x: 222 + i, y: 262 } }
+          : i < clicks + types
+            ? { tool: "type_text", arguments: { x: 222, y: 261, text: `v${trial}-${i}\n` } }
+            : { tool: "press_key", arguments: { x: 300, y: 261, key: "Ctrl+s" } },
+      );
+    };
+    let queued: { tool: string; arguments: unknown }[] = [];
+    let trial = -1;
+    const varied = {
+      paid: true,
+      calls: [],
+      async act() {
+        return { decision: queued.shift() ?? ("failure" as const), calls: [] };
+      },
+    } as unknown as Planner;
+    await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      planner: varied,
+      prepare: async () => {
+        prepares += 1;
+        trial += 1;
+        queued = shape(trial);
+        return prepared();
+      },
+    });
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
+      .map((e) => e.reason)
+      .filter(Boolean);
+    // The whole point: varied effort must NOT stop the arm.
+    expect(reasons).not.toContain("repeated-cause");
+    // And it kept going rather than stopping after the pair - the assertion that
+    // makes `prepares` load-bearing instead of decorative.
+    expect(prepares).toBeGreaterThan(2);
+  });
+
+  // The other side of the same rule, and the reason it still exists: an IDENTICAL
+  // action sequence repeated is a harness fault and MUST abort.
+  it("DOES abort when two scored failures repeat the identical action sequence", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-identical-"));
+    directories.push(directory);
+    let prepares = 0;
+    // Built fresh per trial from the same recipe, so every trial's action SHAPE is
+    // identical - the harness-fault signature this rule must still catch. The
+    // coordinates vary slightly per action, which is deliberate: the key counts
+    // TOOLS, so a fault that reproduces its tool mix still aborts even when the
+    // coordinates differ.
+    const identical = () =>
+      Array.from({ length: 30 }, (_, i) => ({
+        tool: "press_key",
+        arguments: { x: 320, y: 278, key: i % 2 ? "Escape" : "Ctrl+s" },
+      }));
+    let queued: { tool: string; arguments: unknown }[] = [];
+    const same = {
+      paid: true,
+      calls: [],
+      async act() {
+        return { decision: queued.shift() ?? ("failure" as const), calls: [] };
+      },
+    } as unknown as Planner;
+    await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      planner: same,
+      prepare: async () => {
+        prepares += 1;
+        queued = identical();
+        return prepared();
+      },
+    });
+    // Must stop early: the identical shape is the fault signature.
     expect(prepares).toBeLessThan(5);
     const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
     const reasons = Object.values(ledger.c1 as Record<string, { reason?: string }>)
