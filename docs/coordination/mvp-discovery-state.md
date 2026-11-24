@@ -234,9 +234,11 @@ below runs now, offline, in parallel with M1.
 | N5 | **Direction B/C dry-run validation**: all three task packages run offline and emit schema-valid evidence | done 2026-11-22: A `REFUTED` (false success caught), B `UNCERTAIN` (interrupted write, 0 duplicates), C `VERIFIED` (modeled timings, explicitly not evidence) | done |
 | N6 | **Docs**: keep plan/teardown/state current; no science moves without data | — | ongoing |
 | N7 | **S3 resolved with Foundry** (`docs/foundry/answer-discovery-s3-gap.md`, PR #176): a todo screenshot arm is EF-005's, and `not-run` + C1-descriptive is the correct report today. Foundry asked for one wording nit in the C1 note | coordination, no code | done |
-| N8 | **Direction A mock live runner**: exercise the full task → act → verify → report path against a fake transport, so the live run is a config change once the act op lands | no guest; the transport is injected | next |
-| N9 | **Report section for the Cua/HCU arms** once EF-005 produces pairs; the report already has the not-run table | no guest | next |
-| N10 | **Viewer head-to-head view** over the same report input (v0 reads a single run) | no guest | next |
+| N8 | **Direction A mock live runner**: exercise the full task → act → verify → report path against a fake transport, so the live run is a config change once the act op lands | no guest; the transport is injected | **done** — `src/discovery/live-runner.ts`, `src/discovery/mock-desktop.ts`, `test/discovery/live-runner.test.ts` (PR #187, `5c10cd3`), later wired to `typeTextGlobal`/`clickAt` and the S0 mock sequence (#210/#212). The runner is transport-agnostic; the seeded `BUG` double exercises the false-success path offline. |
+| N9 | **Report section for the Cua/HCU arms** once EF-005 produces pairs; the report already has the not-run table | no guest | **done** — `src/discovery/report.ts` (`NotRunArm`, `HeadToHeadReportInput`) renders the not-run arms; real Cua/HCU pairs still await EF-005, which is the missing *input*, not missing code. |
+| N10 | **Viewer head-to-head view** over the same report input (v0 reads a single run) | no guest | **done** — `viewer/src/data/head-to-head.ts`, `viewer/test/head-to-head.test.tsx`, `viewer/fixtures/head-to-head.json` (synthetic, labelled), screenshots in `viewer/screenshots/head-to-head-*.png`. Live intake is a separate, outer-loop-gated item (`viewer/DEVIATIONS.md`, TIF-108). |
+
+**Corrected 2026-11-24:** the three rows above read `next` long after they shipped; this state file was the lagging copy, not the code. With them done, **the non-VM queue is empty**. Nothing in Discovery is startable without the guest window (MVD-001/002/006) or a runtime capability that does not exist yet (MVD-003), except MVD-008, whose remaining half needs a 1,000-screenshot run and Tiffany's Chrome Stable result — both heavier than the current host window allows.
 
 ### S0 is not guest-blocked; it is act-blocked (2026-11-22, 18:00 ET)
 
@@ -264,6 +266,10 @@ model-only guard so a todo arm can be scored at all (Foundry owns the harness; D
 consumes it); (b) a report section for the Cua/HCU arms once EF-005 produces pairs;
 (c) the Viewer's head-to-head view over the same report input, since the v0 Viewer only
 reads a single run.
+
+> **2026-11-24:** (b) and (c) have since shipped (N9, N10 above), so of this list only
+> (a) remains, and (a) is Foundry's, not Discovery's. Discovery has no startable non-VM
+> work until the guest window opens or the runtime grows the global-text op.
 
 
 ### What actually needs the guest (batched, M1 first)
