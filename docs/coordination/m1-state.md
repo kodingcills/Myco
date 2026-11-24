@@ -44,6 +44,29 @@
 - **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
 - **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
 
+## Log 2026-11-24 (73) — an issue-first CI job is sitting untracked and needs its owner
+- **`scripts/check-tif-id.py` and `.github/workflows/issue-id.yml` are untracked in the
+  m1-foundation worktree and are on no branch.** They exist only inside T3 checkpoint refs
+  (`git log --all -- <path>` finds them solely under
+  `refs/t3/orchestration-v2/checkpoints/...`), so if this worktree is cleaned up they are gone.
+- **They are not strays — they are finished work.** 110 + 43 lines. Every PR must reference a
+  Linear TIF issue; the rule lives in `docs/coordination/CONTRIBUTING-agents.md` and this job is
+  what makes it true rather than conventional. `python3 scripts/check-tif-id.py --self-test`
+  passes **all 14 cases**, covering the injection cases (a title like `$(rm -rf /)` is data, never
+  shell) and the `no-issue: <reason>` opt-out for bot PRs.
+- **I did NOT commit them, and this entry is why.** `CONTRIBUTING-agents.md:355` names this exact
+  file as the artifact that once got swept into an unrelated docs commit by `git add -A`, making
+  an unrelated workflow run and **fail** on that PR's head. Shipping another owner's WIP would
+  repeat the mistake this repo has already recorded twice.
+- **Owner action needed: the author should commit the two files on their own branch and open the
+  PR.** They are complete and self-testing; nothing appears to be missing. If the owner is unknown,
+  this is a candidate TIF — the outer loop assigns ids. The workflow is deliberately not marked
+  required yet (`push: branches: [main]` is there so the outer loop can mark it required once it
+  lands).
+- **Consequence of it not landing:** the issue-first rule stays conventional. Nothing enforces it,
+  which is consistent with the outer loop having proxied issue creation while Linear access was
+  unconfirmed.
+
 ## Log 2026-11-24 (72) — the two TIF-200 decisions, answered from r6's own calls
 - **Both decisions the outer loop asked for are already implemented in #400, and I verified its
   numbers rather than accepting them.** Re-measured from `~/Projects/myco-runs/c1-r6/trials/c1/*.json`
