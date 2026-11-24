@@ -535,6 +535,12 @@ describe("C1 sweep abort-early", () => {
   // nothing and the sweep kept buying trials that were measuring the output
   // ceiling rather than the agent. Reverting the scored branch makes this fail:
   // every row is prepared instead of stopping at two.
+  //
+  // This is the ZERO-ACTION case: the planner returns nothing, so the histogram
+  // is empty and identical on both trials - which is why an empty shape still
+  // aborts. (TIF-181 later changed the key from verdict+steps to that histogram;
+  // this test's premise is unchanged by it, but the shape it relies on is worth
+  // naming.)
   it("stops after two consecutive identical SCORED failures", async () => {
     const directory = mkdtempSync(join(tmpdir(), "myco-abort-scored-"));
     directories.push(directory);
@@ -558,7 +564,7 @@ describe("C1 sweep abort-early", () => {
     expect(reasons).toContain("repeated-cause");
   });
 
-  // TIF-181. The rule keys on the ACTION SEQUENCE, not on verdict+steps.
+  // TIF-181. The rule keys on the ACTION HISTOGRAM, not on verdict+steps.
   //
   // arm-003d r3 aborted on trials 0 and 1, which both scored refuted/step-budget
   // at 30 steps but did plainly different things: 28 press_keys + 2 type_texts
