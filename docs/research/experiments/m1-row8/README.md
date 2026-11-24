@@ -108,3 +108,35 @@ one step in the table that cannot be trusted at face value.**
 
 **Fix:** §8 should validate an explicit run directory (or `runs/` should be emptied between
 §1 and §8), and the runbook should say that `pnpm test` populates `runs/` with fixtures.
+
+## §6 diagnosed: the guest was contaminated, not the generator
+
+**Follow-up check 2026-11-24, after the row-8 run.** Running the runbook's own §6 command on the
+guest the operator had left:
+
+```
+pnpm exec tsx src/integration/run-live.ts --mode values --limit 20
+
+20 rows, all "uncertain", exit 1. Every row reason:
+  could not look: guest contaminated — leftover run dirs:
+  myco-54774-1795498578019-67975384; leftover profiles: ...;
+  refusing to read a foreign document
+```
+
+**The guard is working correctly.** The leftover run dir is from the **operator's own earlier §6
+attempt** (§1–§5 ran before it), and `run-live` **refused to read a foreign document rather than
+report a verdict about someone else's run.** The runbook warns about precisely this: *"running it
+on a contaminated guest measures the contamination, not the generator."*
+
+**So the row-8 §6 failure (1/14, then 13/14 refuted) was contamination plus contention — NOT a
+generator defect**, which is consistent with the operator's own caution that it could not be
+attributed.
+
+**Consequence for the re-run protocol:** the guest must be **reset and verified clean** before the
+operator starts, not merely idle. **The first run's operator inherited a guest left dirty by its
+own precondition steps** — a harness flaw, not an operator error, and it is why a fresh-agent test
+needs the environment prepared *before* the agent begins.
+
+**Not yet established:** whether §6 passes on a genuinely quiet host (load < 4). The follow-up
+check ran at load 5.8–10.0, so it cleared the contamination question but **not** the contention
+one. A clean-host §6 remains outstanding.
