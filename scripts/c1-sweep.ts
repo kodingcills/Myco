@@ -37,13 +37,16 @@ async function main() {
     const arg = process.argv[i] ?? "";
     if (arg === "--accept-scored-cause") {
       const value = process.argv[i + 1];
-      if (!value || value.startsWith("--"))
+      if (!value || value.trim().length === 0 || value.startsWith("--"))
         throw new Error(
           "--accept-scored-cause requires a verdict:reason value, e.g. refuted:step-budget",
         );
       acceptScoredCauses.push(value);
     } else if (arg.startsWith("--accept-scored-cause=")) {
-      acceptScoredCauses.push(arg.slice("--accept-scored-cause=".length));
+      const value = arg.slice("--accept-scored-cause=".length);
+      if (value.trim().length === 0)
+        throw new Error("--accept-scored-cause= needs a verdict:reason value, e.g. refuted:step-budget");
+      acceptScoredCauses.push(value);
     }
   }
   const directory =

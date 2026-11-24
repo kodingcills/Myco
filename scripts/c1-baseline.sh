@@ -57,14 +57,22 @@ while [ "$i" -lt "${#shift_args[@]}" ]; do
     --adopt-identity) EXTRA+=("--adopt-identity") ;;
     --accept-scored-cause)
       value="${shift_args[$((i + 1))]:-}"
-      if [ -z "$value" ] || [ "${value#--}" != "$value" ]; then
+      if [ -z "$(printf '%s' "$value" | tr -d '[:space:]')" ] || [ "${value#--}" != "$value" ]; then
         echo "c1-baseline: --accept-scored-cause needs a verdict:reason value, e.g. refuted:step-budget" >&2
         exit 5
       fi
       EXTRA+=("--accept-scored-cause" "$value")
       i=$((i + 1)) ;;
     --accept-scored-cause=*)
-      EXTRA+=("--accept-scored-cause" "${arg#--accept-scored-cause=}") ;;
+      value="${arg#--accept-scored-cause=}"
+      # Blank is refused, not forwarded: downstream would trim it away and the arm
+      # would run with no acceptance, which is the silent failure this flag exists
+      # to avoid. `$CAUSE` unset in an `--accept-scored-cause="$CAUSE"` call lands here.
+      if [ -z "$(printf '%s' "$value" | tr -d '[:space:]')" ]; then
+        echo "c1-baseline: --accept-scored-cause= needs a verdict:reason value, e.g. refuted:step-budget" >&2
+        exit 5
+      fi
+      EXTRA+=("--accept-scored-cause" "$value") ;;
   esac
   i=$((i + 1))
 done

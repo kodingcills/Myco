@@ -659,6 +659,67 @@ describe("c1-sweep --resume", () => {
     });
   });
 
+  it("ADOPTING an identity-less ledger WITH an acceptance works — the r6 resume command", async () => {
+    // A round-2 verifier found this combination untested, and it is the one the
+    // documented r6 command uses: a pre-identity ledger, adopt, and accept, all at
+    // once. It failed loudly there because adding an acceptance to a ledger that
+    // recorded none was refused; recording the start index is what makes it work.
+    const dir = directory();
+    const base = {
+      coordinatorGo: true,
+      directory: dir,
+      planner: planner(),
+      priorSpendMicros: 0,
+      armLimitMicros: 9_000_000,
+      identity: IDENTITY,
+    };
+    await runC1Sweep({ ...base, prepare: crashingPrepare(2, 1, nextTick()) });
+
+    // Strip the identity: exactly r6's ledger shape.
+    const path = join(dir, "accounting.json");
+    const led = JSON.parse(readFileSync(path, "utf8"));
+    delete led.identity;
+    writeFileSync(path, JSON.stringify(led, null, 2));
+
+    const report = await runC1Sweep({
+      ...base,
+      resume: true,
+      adoptIdentity: true,
+      acceptScoredCauses: ["refuted:step-budget"],
+      prepare: async () => prepared(nextTick()),
+    });
+
+    expect(report.rows.length).toBe(30);
+    const identity = JSON.parse(readFileSync(path, "utf8")).identity;
+    // Adopted AND accepted, both recorded, with the acceptance starting at the
+    // first trial the resume ran rather than claiming the whole arm.
+    expect(identity).toMatchObject({ ...IDENTITY, adopted: true });
+    expect(identity.acceptances).toHaveLength(1);
+    expect(identity.acceptances[0].causes).toEqual(["refuted:step-budget"]);
+    expect(identity.acceptances[0].fromTrial).toBeGreaterThan(0);
+  });
+
+  it("refuses a BLANK accepted cause instead of silently accepting nothing", async () => {
+    // A round-2 verifier reached this through `--accept-scored-cause="$UNSET"`: the
+    // value was trimmed away downstream, the arm ran with no acceptance, and it
+    // aborted at the second scored row - the exact failure the flag prevents.
+    for (const blank of ["", "   ", "\t"]) {
+      await expect(
+        runC1Sweep({
+          coordinatorGo: true,
+          directory: directory(),
+          planner: planner(),
+          priorSpendMicros: 0,
+          armLimitMicros: 9_000_000,
+          identity: IDENTITY,
+          acceptScoredCauses: [blank],
+          prepare: async () => prepared(nextTick()),
+        }),
+        JSON.stringify(blank),
+      ).rejects.toThrow(/is blank/);
+    }
+  });
+
   it("a later acceptance extends the history rather than overwriting the first", async () => {
     const dir = directory();
     const base = {

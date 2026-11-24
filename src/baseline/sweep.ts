@@ -346,9 +346,20 @@ export async function runC1Sweep(options: {
     // Validated rather than trusted: a typo'd cause would silently accept nothing
     // (safe) OR, worse, look like it was in force when it was not. Empty strings
     // and entries without a colon are rejected so the flag cannot be half-applied.
-    const acceptedScoredCauses = new Set<string>(
-      (options.acceptScoredCauses ?? []).map((cause) => cause.trim()).filter(Boolean),
-    );
+    // A blank value is REJECTED, never filtered away.
+    //
+    // The earlier version trimmed and dropped empties, so `--accept-scored-cause=""`
+    // produced an empty set and the arm ran with no acceptance at all - the silent
+    // failure this whole mechanism exists to prevent, reachable by one unset shell
+    // variable. Discarding a value the operator explicitly supplied is the wrong
+    // default in something that guards a hard cap.
+    const requestedCauses = options.acceptScoredCauses ?? [];
+    const blank = requestedCauses.find((cause) => cause.trim().length === 0);
+    if (blank !== undefined)
+      throw new Error(
+        "accepted scored cause is blank; pass verdict:reason, e.g. refuted:step-budget (an empty value would silently accept nothing)",
+      );
+    const acceptedScoredCauses = new Set<string>(requestedCauses.map((cause) => cause.trim()));
     for (const cause of acceptedScoredCauses)
       if (!/^[a-z-]+:[a-z-]+$/i.test(cause))
         throw new Error(
