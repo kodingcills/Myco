@@ -283,6 +283,36 @@ honest state, and it is why S1/S2 are the only slots that move the wedge.
 
 ## Log
 
+- 2026-11-24 · **TIF-170 done** — #376 merged as `cf0377d0`. The launcher's
+  bare-`mkdir` claim is replaced by an `flock` held for the run's lifetime, and the
+  race test is un-quarantined (the quarantine #333 added is removed; `runIf(DIAG)`
+  is gone and the test runs in every job). So the launcher now cannot double-admit
+  a run even where `mkdir` did — that admission was the last mechanism under which
+  two `--run`s could share a worktree, which the S0 gating depends on.
+  - **Mechanism.** `exec 9>>"$LOCK_FILE"` → `flock(9, LOCK_EX|LOCK_NB)` →
+    `nohup "$0" --watchdog &`. The lock belongs to the open file description, so
+    the watchdog inherits and holds it; the kernel releases it when the last
+    inheriting process exits. Order is the whole fix — opening after the spawn
+    gives the child no fd and the lock dies with `--run`.
+  - **Evidence.** Both arms on the 4-vCPU `tif-170-race-diagnostics` runner, 11
+    invocations × 40 rounds (440) each: `mkdir` arm reproduced at round 8; `flock`
+    arm 11/11 clean, zero double-admits. The un-quarantined test then passed on
+    ubuntu (9.1 s) and macos (15.8 s) inside the ordinary `check` jobs, not just
+    the diagnostics job.
+  - **Verifier.** Independent Tier-2 reviewer at head `0741d897`: `correct`,
+    confidence 0.85. It confirmed the primitive excludes across processes, the
+    watchdog really inherits it (HELD from a separate process), `--stop` releases
+    it, and a losing `--run` exits 1 / logs `flock-lost` / closes fd 9 / leaves no
+    stray child. Its one finding (P2, not a blocker) was that the lock's lifetime
+    is the run *tree's*, so a descendant that survives `--stop` keeps it and the
+    next `--run` refuses until that stray is gone — that is now stated in the
+    comment above the `exec` (`84075b0a`, comment-only).
+  - **Merge note.** The verified behaviour is unchanged from `0741d897` to the
+    merged head: the only non-sync delta is that comment-only block plus the
+    two-to-three main-sync merges. No re-verification round was spent on a
+    comment-only commit; the syncs pulled in unrelated docs only.
+  - No VM, no spend, no accounts. Host load kept low: no repeated race loops.
+
 - 2026-11-23 (later still) · `docs/product/wedge-recommendation.md` merged (#278,
   TIF-60): Direction A, narrowed, with its evidence and its gaps in separate
   sections, and the pre-registered §4.1 rule table quoted rather than paraphrased
