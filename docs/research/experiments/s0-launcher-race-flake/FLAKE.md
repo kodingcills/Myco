@@ -1,64 +1,60 @@
 
 ---
 
-## Update 2026-11-24 — the hypothesis that was killed, and what is now measured
+## Update 2026-11-24 (later) — the guard window is not it either
 
-### It is a real double-admit, not a bad reading
+**Goal.** Test whether the pid-file guard window is where the second claim slips through.
 
-The open question above ("nobody has measured which") is answered. On unmodified
-`scripts/s0-live.sh`, a failing round's capture contains **two `pid N` lines** in
-`s0.log` and **two live `bash .../s0-live.sh --watchdog` processes** in the `ps` taken
-after `wait` and before `--stop`. `say "pid $CHILD"` is emitted only after
-`mkdir "$LOCK_DIR"` returns 0, so **two `mkdir` calls both succeeded** on a path that was
-absent at both moments. Two racers really did exit 0.
+**Hypothesis.** `--run`'s guard reads `$PID_FILE`, and `$PID_FILE` is written *after* the
+claim, so on a round's first claim the guard sees nothing and `mkdir` alone decides. If a
+racer passes the guard and, before its `mkdir`, a concurrent teardown removes
+`$LOCK_DIR`, that `mkdir` succeeds alongside the real winner.
 
-That rules out the "log read mid-write" reading. The `--stop`-ordering artefact is not
-involved either: the snapshot precedes `--stop`.
+**FALSIFIED.** Three arms, one dispatch each, identical parameters (6 invocations × 40
+rounds):
 
-### Frequency, and why the dev host never saw it
+| Arm | Launcher | Window | Failing rounds |
+|---|---|---|---|
+| A | `s0-live.sh` (baseline) | as shipped | 1 |
+| B | `s0-live-guardclosed.sh` | **closed** — guard asks the lock | 0, 12 |
+| C | `s0-live-guardwide.sh` | **held open 50 ms** | 14 |
 
-| Host | Rounds | Double-admits |
+Closing the window did not remove the double-admit (B failed twice, more than the
+baseline), and widening it 50 ms did not raise the rate (C once, the same as A). Every
+failure has the same signature: two `pid N` lines, two racers at `rc=0`, six refusals —
+so it is the same mechanism in all three arms.
+
+- A: <https://github.com/kodingcills/Myco/actions/runs/45312593627>
+- B: <https://github.com/kodingcills/Myco/actions/runs/45312596920>
+- C: <https://github.com/kodingcills/Myco/actions/runs/45312600265>
+- branch `tif-170-guard-window`, PR #360
+
+### Hypotheses tested and ruled out
+
+| Hypothesis | Experiment | Result |
 |---|---|---|
-| ubuntu-latest (`nproc=4`), 5 invocations | 9, 18, 18, 19, 23 | **~1 round in 5** |
-| 14-core macOS dev host | ~13,000 racer invocations | **0** |
+| The loser's process tree survives (killed by pid, not group) | descendant census, 100 loaded rounds | no surviving grandchild; never two claims |
+| The winner's watchdog removes the lock during its own teardown | 40 rounds sampling the lock every 20 ms | zero flaps |
+| `--stop`'s unconditional rmdir clears a live lock | two-arm dispatch vs an owner-checked `--stop` | both arms reproduced |
+| The pid-file guard window | three-arm dispatch: closed vs widened vs baseline | all three reproduced |
 
-The gap is core count. This is why every local sweep came back clean.
+### What the experiments have established
 
-### Hypothesis tested: `--stop`'s unconditional `rmdir "$LOCK_DIR"` — FALSIFIED
+- It is a **real double-admit**: two `mkdir` calls both return 0 (proved by two `pid N`
+  lines, which is the only place `say "pid $CHILD"` runs).
+- It needs **many cores' worth of contention to show**: ~1 round in 5 on 4-vCPU ubuntu,
+  zero in ~13,000 racer invocations on a 14-core dev host.
+- It is **not** any of the four candidates above, and it is **not** sensitive to the
+  guard→claim window at all, which rules out the whole class of "a teardown between the
+  two steps" explanations.
 
-**Statement.** The test calls `--stop` every round; `--stop` removes the lock without
-asking who owns it. If that removal lands after a later racer claimed, a second `mkdir`
-succeeds. Prediction: an owner-checked `--stop` (remove only when no live process owns
-the lock) would stop the double-admit.
+### What is left, honestly
 
-**Method.** One workflow dispatch per arm, same parameters (6 invocations × 40 rounds),
-against `scripts/s0-live.sh` and against a variant differing only in that `--stop` block.
+Nobody has named the remover. Every candidate that removes `$LOCK_DIR` has been tested
+with a discriminator on the runner that reproduces the bug, and none moves the rate.
 
-| Arm | Launcher | Failing rounds |
-|---|---|---|
-| A | shipped | 15 |
-| B | owner-checked `--stop` | 6, 11 |
-
-Both arms reproduced, and B's capture shows the identical signature — two `pid N` lines
-(5195, 5197), `rc.5=0` and `rc.8=0`, six refusals. **The owner check does not prevent
-the second claim.**
-
-- A: <https://github.com/kodingcills/Myco/actions/runs/45302113079>
-- B: <https://github.com/kodingcills/Myco/actions/runs/45302130418>
-- branch `tif-170-stop-variant`, commit `bf524683`
-
-### What this leaves
-
-The remover has still not been named. What is settled:
-
-- two `mkdir` calls succeed, so something removes the lock between them;
-- it is not the loser's process tree (no surviving grandchild; the tsx grandchild dies
-  with its watchdog);
-- it is not the winner's own watchdog teardown (40 pristine rounds sampling the lock
-  every 20 ms: zero flaps);
-- it is not `--stop`'s unconditional rmdir, by this experiment.
-
-The remaining candidate is the **pid-file guard window**: between the guard reading
-`s0.pid` and the `mkdir` that claims, a concurrent round's teardown can clear both. That
-is testable the same way — dispatch with the guard's window widened by a sleep — and the
-harness to do it now exists on main.
+The next thing worth doing is not another hypothesis but **direct observation**: the
+diagnostics need to record *which* process removes the lock, with a timestamp, in the
+failing round. That means `--run`, `--stop` and the watchdog stamping their own
+`mkdir`/`rmdir` with `$$` into the round's log — a launcher change that belongs with a
+fix, not with a diagnostics branch, and one this harness can then exercise.
