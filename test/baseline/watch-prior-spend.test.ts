@@ -93,11 +93,16 @@ const SHARED_VM_LOCK = "/tmp/myco-win11.vm.lock";
  * Extracted so the guarantee is directly testable: an override cannot displace, blank, or
  * redirect the lock path, because the assignment follows the spread.
  *
- * The check below guards a future edit that moves the assignment. It takes `resolveLock` as
- * a parameter so the SUITE CAN REACH IT - round 3 removed the check with 283/283 still
- * green, because nothing could make a correct assignment trip it. An unasserted guard is
- * prose, and this PR has now shipped that mistake in two different forms. The test that
- * exercises it is "throws rather than spawning against the shared lock".
+ * The check below guards against a resolver that YIELDS the shared path (or nothing), and
+ * against the assignment being deleted outright. It does NOT guard against the assignment
+ * being MOVED before `...overrides` - a mutation control confirmed that moving it leaves
+ * this check silent, and the two displacement tests fail instead. Saying it guarded a move
+ * was wrong, and it is the same overstated-comment defect this PR exists to remove.
+ *
+ * It takes `resolveLock` as a parameter so the SUITE CAN REACH IT - round 3 removed the
+ * check with 283/283 still green, because nothing could make a correct assignment trip it.
+ * An unasserted guard is prose, and this PR has now shipped that mistake in two forms. The
+ * test that exercises it is "throws rather than spawning against the shared lock".
  */
 function launcherEnvFor(
   overrides: Record<string, string | undefined> = {},
@@ -315,7 +320,6 @@ describe("the launcher agrees with the sweep about valid prior spend", () => {
   // 13 launcher spawns, each a real shell run, so the default 5s is not enough.
   it("accepts/rejects the same strings as parseSpendCeiling", { timeout: 120_000 }, async () => {
     const { parseSpendCeiling } = await import("../../scripts/spend-ceiling.ts");
-    const { spawnSync } = await import("node:child_process");
 
     for (const value of cases) {
       // What the sweep would do.
