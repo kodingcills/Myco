@@ -208,3 +208,51 @@ Not another clock read. Either:
 - classify by `pre=` order alone, which needs no birth at all: the racer with the earliest
   `pre` that also recorded `mkdir-won` is the creator, and any *later* `mkdir-won` is the
   anomaly. That is available from this round's data and needs no new instrumentation.
+---
+ 
+## Update 2026-11-24 — a pre-call stamp, and the split the old traces could not see
+
+`lock_trace` now carries `pre=` (a timestamp taken immediately **before** `mkdir`, in the
+racer's own process) and `birth=` (the lock's filesystem creation time). Two dispatches;
+two rounds reproduced.
+
+### The classifier works on `pre`, and it shows a pair, not a pair-of-anomaly
+
+Round 12, all racers sorted by `pre` — the time each reached `mkdir`:
+
+| `pre` (before the call) | pid | `mkdir` |
+|---|---|---|
+| `.596847043` | 29631 | **won** |
+| `.597539782` | 29639 | **won** |
+| `.599989147` | 29635 | lost |
+| `.607108147` | 29633 | lost |
+| `.608327607` | 29640 | lost |
+| `.618819452` | 29641 | lost |
+| `.624579493` | 29644 | lost |
+| `.629688477` | 29645 | lost |
+
+Round 14 has the same shape: the two earliest `pre` stamps both won (`.852359219`,
+`.855467521`) and everything from `.868` onward lost.
+
+**So the double-admit is the first *two* arrivals, and only those.** It is not one winner
+plus a late anomaly — the boundary is between `pre=.5975` (won) and `pre=.5999` (lost), a
+2.4 ms window at the start of the round. From the third racer onward the lock behaves
+exactly as designed.
+
+That is a sharper statement than any earlier round could make, because every earlier trace
+sampled *after* the call and could not order the racers at all. It relocates the question
+again: not "what removes the lock" (nothing does) but **"why do the first two arrivals both
+get past a claim that admits one"** — a window at the start of a round, involving exactly
+two processes.
+
+### `birth=` remains unusable for ordering — confirmed again
+
+The lock's `birth` in round 12 is `.605670525`, later than both wins, and in the
+single-racer control it is consistently ~1 ms *earlier* than the `pre` of the call that
+made it. Two clock sources that disagree by more than the interval being resolved. The
+field is kept but must not be used to classify; `pre` order is the usable signal.
+
+### Also fixed
+
+A `local` inside the `--run` case branch — a runtime error (`local: can only be used in a
+function`) that `bash -n` does not catch, found by the first fixture run.
