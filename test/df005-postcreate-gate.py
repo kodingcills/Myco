@@ -164,7 +164,8 @@ def main() -> int:
     expect(leaked.bucket == "gap", f"6a: a guest that never came up is a gap (got {leaked.bucket})")
     expect("LEAKED" in leak_text,
            "6a: the gap NAMES THE LEAK when the session could not be freed")
-    expect("s" in leak_text or True, "6a: (the leak text is present)")
+    expect("could not free session" in leak_text,
+           "6a: the leak text carries the teardown's own reason, not just a flag")
 
     # 6b. teardown SUCCEEDS -> a clean gap, and NOT described as leaked. The
     # asymmetry is the whole point of the branch, so both sides are asserted:
