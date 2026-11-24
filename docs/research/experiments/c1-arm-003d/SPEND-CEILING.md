@@ -114,3 +114,64 @@ Check which condition tripped. `prior + c1 + reservation > armLimit` is the arm 
 `… > COMBINED_LIMIT` is the project ceiling. Only the latter is absolute — and if it
 trips, the project budget is genuinely exhausted, so **the answer is not to raise it.**
 
+
+## Round-2 status: already merged, and the coverage is real (2026-11-24)
+
+The request for a round-2 verifier at `a406f99` arrived after the work had merged. **All of
+it is on `main` in `6c6b77a7`**, which is #334 itself — `a406f99` is not an ancestor, but
+`scripts/spend-ceiling.ts` and `test/baseline/spend-ceiling.test.ts` are both present, with
+**8 cases, all passing**:
+
+```
+accepts the pair the arm-003d relaunch uses
+refuses an EMPTY prior spend rather than reading it as zero
+refuses an empty remaining budget rather than reading it as zero
+refuses every form that lenient coercion would accept
+accepts a zero PRIOR spend, which is legitimate
+refuses a missing variable
+refuses a zero remaining budget
+refuses a value beyond the safe-integer range
+```
+
+**The negative control reproduces, verified here rather than taken on report.** Reverting
+the parse to plain `Number(raw)` fails exactly **2 of 8**, including the empty-string case:
+
+```
+× refuses an EMPTY prior spend rather than reading it as zero
+× refuses every form that lenient coercion would accept
+Tests  2 failed | 6 passed (8)
+```
+
+So the test is bound to the real parse — not a restatement of it — and **the defect cannot
+return without a test failing.** That is the durable part, and it is the reason round 1's
+finding is closed rather than merely worked around.
+
+## The live arm-003d-r5 run and its ceiling
+
+A run (`c1-arm003d-r5`) was live while this was written, on
+`myco-m1-baseline-7e3d9d6a63257831` at `d40f6539` — a tree that **does** carry the #334
+guard. Its environment:
+
+```
+MYCO_PRIOR_SPEND_MICROS=4030512   MYCO_ARM_LIMIT_MICROS=9000000
+```
+
+**`prior + arm = 13,030,512` against a 9,000,000 ceiling, and it was accepted at startup.**
+That is the documented limitation, not a new one: the startup refusal fires only when
+`armLimit === DEFAULT_ARM_LIMIT`, and `9000000 !== 4500000`.
+
+**The run is nevertheless capped at $9.00**, by the per-trial combined check:
+
+```
+prior 4,030,512 + c1 607,200 + reservation > 9,000,000 ?   -> trial proceeds while under
+```
+
+**Effective headroom: $9.00 − $4.030512 = $4.969488.** The oversized arm limit makes the
+*arm* ceiling permissive; it cannot breach the *combined* one.
+
+### The lesson for launchers
+
+`MYCO_ARM_LIMIT_MICROS` should be the **remaining** budget (`ceiling − prior`), not the
+ceiling. Passing the ceiling is accepted and the run still stops at $9.00 — but the arm
+report will show an arm limit of $9.00 that was never spendable, which is the
+artifact-says-one-thing shape this whole thread is about.
