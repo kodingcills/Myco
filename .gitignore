@@ -12,3 +12,10 @@ verdict-budget.ndjson
 
 recovery.local.json
 recovery.local.json.*.tmp
+
+# TIF-171: bare-integer files at the repo root are never source. They come from a
+# shell redirect whose target built to a counter ("echo $n > $i"), produced by
+# local probe/trial loops run with the repo as cwd, and were swept into #322 by
+# `git add -A`. Nothing reads them.
+/[0-9]*
+!/[0-9]*[!0-9]*
