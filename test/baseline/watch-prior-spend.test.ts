@@ -39,10 +39,18 @@ import { afterEach, describe, expect, it } from "vitest";
 const DUMMY_KEY = "not-a-real-key";
 
 function bareHome(): string {
-  return mkdtempSync(join(tmpdir(), "myco-nohome-"));
+  // Registered for cleanup like every other temp directory here. It was not, and a
+  // single run of this file left 358 `myco-nohome-*` directories behind in the system
+  // temp dir - a leak the outer loop spotted as a "minor nit" that was measured at two
+  // orders of magnitude more than that. `dirs` is emptied by the `afterEach` below, so
+  // anything created here must go into it.
+  const dir = mkdtempSync(join(tmpdir(), "myco-nohome-"));
+  dirs.push(dir);
+  return dir;
 }
 
 const scored = (micros: number) => ({ status: "scored", micros });
+/** Every temporary directory this file creates, so `afterEach` can remove all of them. */
 const dirs: string[] = [];
 function ledgerDir(c1: Record<string, { status: string; micros: number }>, c2 = {}) {
   // Under HOME, NOT `tmpdir()`. The launcher refuses a run directory under /tmp or
