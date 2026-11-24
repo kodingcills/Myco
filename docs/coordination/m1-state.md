@@ -51,6 +51,11 @@
   touched no viewer code.
 - **The regression does not reproduce.** A plain rerun (`attempt=2`) took **all 7 jobs green**,
   including the same job on the same commit. So the gate is not measuring the change under test.
+- **Second occurrence, 2026-11-24 ~07:44Z, on a docs-only merge.** `29801f14` (the `NEXT-RUN.md`
+  note, two markdown files) failed the same job: median **443.3 ms** against the 425.8 limit,
+  samples `363.9 … 635.9`. **A PR that touches no viewer code cannot regress viewer performance**,
+  which settles it: the numbers are runner noise, not a property of the commit. Committed medians
+  so far — 490.6, 443.3, against a 35% band with sample spreads of 2.2x and 1.7x.
 - **The gate is unsound on its face: the `viewer verdict budget (${{ matrix.os }})` job is
   `skipping` on every PR**, and only runs on `main` after the merge. A timing gate that never runs
   on the PR and only runs post-merge can only ever produce red `main` — it cannot block a bad
