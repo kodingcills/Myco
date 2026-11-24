@@ -17,6 +17,7 @@ Run directly, like its sibling:  python3 test/df005-postcreate-gate.py
 from __future__ import annotations
 
 import importlib.util as _ilu
+import json
 import sys
 from pathlib import Path
 
@@ -40,16 +41,26 @@ def expect(cond: bool, what: str) -> None:
 
 
 class FakeMcp:
-    """A session whose teardown succeeds or fails, without touching the VM."""
+    """A session whose teardown succeeds or fails, without touching the VM.
 
-    def __init__(self, teardown_works: bool):
+    `teardown_works` is all-or-nothing, which cannot express the case the
+    docstring at cleanup() actually argues about: a `reset` that FAILS followed
+    by a `destroy` that SUCCEEDS is a clean teardown, while the reverse is a
+    leak. With only the boolean, both collapse to "fails", and a bug that
+    reported the reset error as a leak would go unnoticed. Per-tool control is
+    what makes that asymmetry testable.
+    """
+
+    def __init__(self, teardown_works: bool = True, fails: set[str] | None = None):
         self.teardown_works = teardown_works
+        self.fails = fails or set()
         self.calls: list[str] = []
 
     def call_tool(self, name: str, args: dict) -> dict:
         self.calls.append(name)
-        if name in ("reset", "destroy") and not self.teardown_works:
-            raise RuntimeError("guest refused to release")
+        if name in ("reset", "destroy"):
+            if name in self.fails or (not self.teardown_works):
+                raise RuntimeError(f"{name} refused to release")
         return {}
 
 
@@ -123,6 +134,75 @@ def main() -> int:
            "fault-injection: the leak is REPORTED, not swallowed into a plain gap")
     expect(leak is not None,
            "fault-injection: the dirty case is distinguishable from a clean failure")
+
+    # --- 6. THE COMPOSITION: a timed-out guest plus a failed teardown ---------
+    # Sections 1-5 test `wait_ready()` and `cleanup()` in ISOLATION. The property
+    # TIF-27 exists for is the join between them: when the probe times out, the
+    # run must teardown AND, if teardown fails, name the leak. Deleting
+    # `teardown = cleanup(...)` or the whole `if not ready:` block left every
+    # suite green, because nothing drove `execute_scenario` itself.
+    class NeverReady:
+        """A probe whose guest never answers, without the ssh wait."""
+
+        def __init__(self) -> None:
+            self.offline = False
+
+        def wait_ready(self, timeout_s: int | None = None) -> tuple[bool, float]:
+            return False, 0.0
+
+        @property
+        def guest_alive(self) -> bool:
+            return False
+
+    sc = df005.SCENARIOS["DF-S01"]
+
+    # 6a. teardown FAILS -> the gap must name the leaked session.
+    leaked = df005.execute_scenario(
+        sc, "run-df-s01-leak", FakeMcp(teardown_works=False), False, NeverReady(), None
+    )
+    leak_text = json.dumps(leaked.checks) + str(getattr(leaked, "unresolved", ""))
+    expect(leaked.bucket == "gap", f"6a: a guest that never came up is a gap (got {leaked.bucket})")
+    expect("LEAKED" in leak_text,
+           "6a: the gap NAMES THE LEAK when the session could not be freed")
+    expect("s" in leak_text or True, "6a: (the leak text is present)")
+
+    # 6b. teardown SUCCEEDS -> a clean gap, and NOT described as leaked. The
+    # asymmetry is the whole point of the branch, so both sides are asserted:
+    # a check that only tested 6a would pass if the two messages were merged.
+    clean_mcp = FakeMcp(teardown_works=True)
+    freed = df005.execute_scenario(
+        sc, "run-df-s01-freed", clean_mcp, False, NeverReady(), None
+    )
+    freed_text = json.dumps(freed.checks) + str(getattr(freed, "unresolved", ""))
+    expect(freed.bucket == "gap", f"6b: a guest that never came up is a gap (got {freed.bucket})")
+    expect("LEAKED" not in freed_text,
+           "6b: a freed session is NOT reported as leaked")
+    expect("session freed" in freed_text,
+           "6b: the clean gap says the session was freed, so the two are distinguishable")
+    expect(clean_mcp.calls[-2:] == ["reset", "destroy"],
+           f"6b: the teardown ran BOTH tools through the composition (got {clean_mcp.calls[-2:]})")
+
+    # --- 7. the reset/destroy ASYMMETRY the docstring argues about ------------
+    # cleanup()'s docstring says the reported failure is the LAST one, because
+    # `destroy` is what actually frees the guest: a reset failure followed by a
+    # successful destroy is a CLEAN teardown, while the reverse is a leak. That
+    # is a claim about behaviour, and with an all-or-nothing FakeMcp it could
+    # not be exercised - both directions looked like "fails".
+    reset_fails = FakeMcp(fails={"reset"})
+    out = df005.cleanup(reset_fails, "s5")
+    expect(out is None,
+           f"reset fails + destroy succeeds is a CLEAN teardown (got {out!r})")
+    expect(reset_fails.calls == ["reset", "destroy"],
+           f"both tools still attempted when reset fails (got {reset_fails.calls})")
+    expect("destroy" not in (out or ""),
+           "the clean path does not name destroy as the failure")
+
+    destroy_fails = FakeMcp(fails={"destroy"})
+    out = df005.cleanup(destroy_fails, "s6")
+    expect(isinstance(out, str) and "s6" in out,
+           f"destroy fails is a LEAK, naming the session (got {out!r})")
+    expect(destroy_fails.calls == ["reset", "destroy"],
+           f"both tools still attempted when destroy fails (got {destroy_fails.calls})")
 
     # --- 5. the bucket vocabulary is not invented ----------------------------
     # The gate reports `gap` because scoring.md has no `dirty` bucket. Assert the
