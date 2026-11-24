@@ -384,16 +384,33 @@ has just released, skipping is acceptable only when all three hold: §5 passes o
 stands, a fresh token was fetched after the last deploy, and §6.1 prints nothing after cleanup.
 Record the skip, and why, next to the §6 result. A skip that is not recorded reads as a full run.
 
-**Which steps take the VM flock, and which do not (F20).** `scripts/reset-trial-vm.sh` (§3.1),
-`run-live` (§6) and the sweep drivers (§7) each take the flock themselves and exit 10 if another
-process holds it. Deploy (§4) and the §6.1 check and cleanup **do not**: they reach the guest with
-`vssh`/`scp` directly. **You cannot hold the flock by hand across steps.** A child accepts an
-ancestor's lock only when the ancestor is one of the named drivers (`m1-sweep.sh`,
+**The M1 lock procedure: each step takes and releases the lock itself (F20; lead ruling 2026-11-24).**
+Do not hold the VM flock by hand across steps, and the lock code is not changed for M1. A child
+accepts an ancestor's lock only when the ancestor is one of the named drivers (`m1-sweep.sh`,
 `m1-corrupt-suite.sh`, `c1-baseline.sh`, `c1-sweep.sh`, `c1-spike.sh`, per `vm_lock_owned_by_parent`
 in `scripts/vm-lock.sh` and `PARENT_DRIVERS` in `src/integration/vm-lock.ts`). Under an
-operator-held lock, §3.1 and §6 would therefore refuse with exit 10. Instead, run
-`lsof /tmp/myco-win11.vm.lock` right before each unlocked step and go ahead only if it prints
-nothing, the same read-only check as §2. Do **not**
+operator-held lock, §3.1 and §6 would refuse with exit 10. So run each step through its own
+script, and **before every step** run the gate check, read-only:
+
+```bash
+lsof /tmp/myco-win11.vm.lock || echo free     # a table = someone owns the VM: wait
+```
+
+Use `lsof`, not a `fcntl.flock` probe: a probe holds `LOCK_EX` for an instant, and a driver
+starting in that instant refuses with exit 10 (F5).
+
+| step | how it holds the lock |
+|---|---|
+| §3.1 `scripts/reset-trial-vm.sh` | takes it, releases on exit |
+| §4 `agent/bootstrap/deploy-to-vm.sh` | **does not take it.** Run it straight after the gate check prints `free`. Inside a §7.3 sweep it runs as a child of `m1-sweep.sh` and is covered by the sweep's lock |
+| §5 the `session_info` check | takes it, releases on exit (TIF-209) |
+| §6.1 check and cleanup (`vssh`/`scp`) | **do not take it.** Run them straight after the gate check |
+| §6 and §7.1/§7.2 `run-live` | takes it, releases on exit |
+| §7.3 `scripts/m1-sweep.sh`, §7.4 `scripts/m1-corrupt-suite.sh` | take it for the whole sweep; their children inherit it |
+
+Between steps the VM is unlocked, so another driver can take it. If a step exits 10, wait for the
+named holder and re-run the step. If the gate check shows an owner you did not expect, stop and
+report it. Do not break the lock. An operator-session lock wrapper is a post-M1 change. Do **not**
 interleave with other work on the guest. `--mode values` runs its parameter sets back to back
 without resets, so running it on a contaminated guest (leftover `soffice`, leftover run dirs)
 measures the contamination, not the generator (log 27).

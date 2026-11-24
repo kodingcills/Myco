@@ -18,8 +18,10 @@ guest is clean (§6.1), which is where attempt A's leftover `myco-80877-…` dir
 
 **This page skips §3 reset and §4 deploy, and that is only acceptable outside row 8 (F20).** The
 §6 run below was a generator re-measure on the guest r6 left. A **row-8 reproduction does not
-skip them**; see the runbook §6, "When you may skip §3 and §4". Deploy and the §6.1 check and
-cleanup do not take the flock, so run the `lsof` check right before each one.
+skip them**; see the runbook §6, "When you may skip §3 and §4". The M1 lock procedure is in
+the runbook §6 as well: each step takes and releases the lock through its own script, and you run
+the `lsof` gate check before every step. Deploy and the §6.1 check and cleanup do not take the
+lock, so the gate check is all that guards them.
 
 ## Launch — §6, survivor-detached
 
