@@ -278,6 +278,61 @@ the same Sonnet planner, the same snapshot, and a **$9.00 cap on total committed
 spend**, read from `report.json.c1ChargedMicros` (**$1.632162** at arm-002's close: spike $0.076800 + arm-002 $1.555362). Design:
 `docs/research/experiments/c1-arm-003-design.md`.
 
+### The C1 baseline's characteristic failure mode: the save dialog
+
+**Ruled by the lead 2026-11-24, on r6's 9 scored rows.** The baseline agent's
+dominant failure is **not** failing to find or edit the cell — it is failing to
+**commit the save**, because saving an `.xlsx` opens LibreOffice's "Keep Current
+Format" dialog and the agent presses **`Escape`**, which dismisses the dialog *and
+cancels the save*.
+
+The evidence is that the edit succeeds:
+
+| | |
+|---|---|
+| rows that typed the **correct value** into the **correct cell** | **9 of 9** |
+| rows that attempted a save | **9 of 9** |
+| rows that completed a save | **0 of 9** |
+| `Ctrl+S` presses immediately followed by `Escape` | **61 of 76 (80%)** |
+
+Row 9 is the pure case — `click → Ctrl+S → Escape` repeated nine times with nothing
+else. Diagnosis and measurements:
+`docs/research/experiments/c1-arm-003d/SAVE-DIALOG-LOOP.md`.
+
+**This is what the row-7 comparison is meant to show**, and it is a finding about the
+baseline, not a defect in the harness: the harness requests a fresh frame on every
+step (`get_window_state` with `include_screenshot`, no caching) and the edit lands in
+9/9 rows, so observation and coordinates work. It matches the r3 modal-loop ruling.
+
+**Consequence for the rule set.** Because every row fails the same diagnosed way, the
+two-consecutive-identical-failures abort — which exists to catch a *harness* fault —
+would stop the arm at the second row and the comparison would never complete. The
+fix is an explicit, recorded acceptance rather than weakening the rule: accepted
+causes break the run of failures, anything unaccepted still aborts at 2, and the
+acceptance appears in **both** the report and the run identity so a reader can tell an
+arm that ran under one from an arm that never needed it. r6's resume command, which
+must be repeated in full on every attempt:
+
+```bash
+MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
+  bash scripts/c1-baseline.sh ~/Projects/myco-runs/c1-r6 --coordinator-go \
+  --resume --adopt-identity --accept-scored-cause 'refuted:step-budget'
+```
+
+The acceptance is a **narrow, recorded exception for a diagnosed cause** — not a way
+past a stop. Its key is `verdict:reason`, coarser than the abort key, so accepting a
+cause broadly (e.g. `refuted:persisted-mismatch`) would silence the alarm that caught
+arm-003d r2's harness fault. The spend cap still bounds the damage.
+
+It is also **recorded as starting at the resume**, not for the whole arm
+(`acceptances: [{ causes, fromTrial }]`). r6's first nine rows ran with no acceptance at
+all, and the ledger must not be rewritten to look as though the diagnosis had been made
+when they were produced.
+
+**Not changed, deliberately:** the planner prompt and `STEP_BUDGET`. Teaching the
+agent about the dialog would break parity with Myco's arm, which is the whole point of
+the comparison.
+
 ## Reliability row, regenerate
 
 ```bash
