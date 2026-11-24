@@ -58,3 +58,53 @@ diagnostics need to record *which* process removes the lock, with a timestamp, i
 failing round. That means `--run`, `--stop` and the watchdog stamping their own
 `mkdir`/`rmdir` with `$$` into the round's log — a launcher change that belongs with a
 fix, not with a diagnostics branch, and one this harness can then exercise.
+
+---
+
+## Update 2026-11-24 — the lock trace, and what it rules out
+
+Instrumentation was added (`lock_trace` in `scripts/s0-live.sh`, PR #362) so every
+`mkdir`/`rmdir` on the lock is stamped with its pid and a sub-second time. Two dispatches
+reproduced the race; the second carries usable ordering.
+
+### The capture (round 27, run 45314693888)
+
+Ordered by the trace's own sub-second stamps:
+
+| time | pid | op |
+|---|---|---|
+| `.084626460` | — | `s0.lock` born (one inode, 8543836) |
+| `.099621877` | 64235 | `mkdir-won` |
+| `.103022761` | 64232 | **`mkdir-won`** |
+| `.108161519` | 64234 | `mkdir-lost` |
+| `.109607515` | 64230 | `mkdir-lost` |
+
+`rmdir-before` + `rmdir-done` lines in the whole capture: **0**. `s0.lock` entries in the
+times dump: **1**. Winners: `rc.2 = 0`, `rc.4 = 0`.
+
+### What that means
+
+Two `mkdir` calls returned 0 **3.4 ms apart, with the lock already present and never
+removed**. So **the lock is not being removed at all** — which is why all four earlier
+hypotheses failed: every one of them was a theory about *what removes the lock*, and the
+answer is that nothing does.
+
+That relocates the question. It is no longer "who removes the lock" but "how can a second
+`mkdir` on an existing path return 0". Candidates a future attempt should look at, none
+yet tested:
+
+- whether both winners are actually creating the **same** path (the trace records pid and
+  op, not the path or the resulting inode, so this is unproven);
+- whether `$RUN_DIR` differs between racers in a way that makes `$LOCK_DIR` differ;
+- whether an `rmdir` happens in a process this trace does not cover (a *previous* round's
+  watchdog tearing down against the same `RUN_DIR` after the next round started).
+
+### The instrumentation's own gap
+
+The trace records pid and op but **not the path and not the resulting inode**, so it
+cannot distinguish "same path twice" from "two different paths". Adding both — plus the
+inode of what each `mkdir` created — is the obvious next increment, and it is a small
+change to `lock_trace`'s printf rather than a new experiment.
+
+Recorded here because it is the first result about the mechanism rather than about a
+candidate for it.
