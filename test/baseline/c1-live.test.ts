@@ -706,6 +706,50 @@ describe("C1 sweep abort-early", () => {
     expect(reasons).toContain("repeated-cause");
   });
 
+  // TIF-187. The same abort rule, exercised through the TRIAL catch rather than
+  // prepare's. TIF-186 changed the key at BOTH noteCause call sites, but the
+  // different-messages test below only reaches prepare's: its prepare throws, so
+  // runC1Trial is never entered. Reverting the trial-catch key alone therefore
+  // left the whole suite green - the fix was only half mutation-protected.
+  //
+  // What reaches the trial catch: a throw from `connect()`, which runs inside
+  // runC1Trial's outer try. The trial retries at most RUN_TRIAL_ATTEMPTS times
+  // before rethrowing, so the differing messages below are delivered in order.
+  it("stops after two consecutive TRIAL-catch omissions with DIFFERENT messages", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "myco-abort-trialcatch-"));
+    directories.push(directory);
+    const messages = [
+      "mcp request timed out mid-trial",
+      "guest window closed while the trial was running",
+      "screenshot decode failed during the trial",
+    ];
+    let connects = 0;
+    await runC1Sweep({
+      coordinatorGo: true,
+      directory,
+      planner: planner(),
+      // prepare SUCCEEDS, so the throw below happens inside runC1Trial - that is
+      // the whole point: this must exercise the trial catch, not prepare's.
+      prepare: async () => ({
+        ...prepared(),
+        connect: async () => {
+          throw new Error(messages[connects++ % messages.length]);
+        },
+      }),
+    });
+    const ledger = JSON.parse(readFileSync(join(directory, "accounting.json"), "utf8"));
+    const entries = Object.values(
+      ledger.c1 as Record<string, { reason?: string; detail?: string }>,
+    );
+    const reasons = entries.map((e) => e.reason).filter(Boolean);
+    // The class is the key, so two same-class omissions trip the rule even though
+    // their messages differ - the arm-003d r5 failure.
+    expect(reasons).toContain("repeated-cause");
+    // The message is still preserved, so a stopped run is diagnosable.
+    const details = entries.map((e) => e.detail).filter(Boolean) as string[];
+    expect(details.some((d) => messages.some((m) => d.includes(m)))).toBe(true);
+  });
+
   // TIF-186. The abort must fire on the FAULT CLASS, not on the message text.
   //
   // arm-003d r5 omitted trials 2 and 3 as `trial-interrupted` and kept going. The
