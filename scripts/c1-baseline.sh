@@ -39,16 +39,54 @@ fi
 # `--resume` is forwarded, never inferred: a relaunch into an existing directory
 # without it is a FRESH run that happens to reuse the ledger's files, and the two
 # must be distinguishable afterwards.
+#
+# EVERY forwarding pass must carry the flag AND its value. `--accept-scored-cause`
+# takes an argument, and a single-token loop would drop it silently - the sweep would
+# then run with no acceptance, the arm would abort at the second scored row, and the
+# command that produced it would look correct in the log. That is the same defect the
+# round-1 review found in the runbook, one layer down, so it is handled explicitly
+# here rather than folded into the pattern match.
 EXTRA=()
-for arg in "$@"; do
+shift_args=("$@")
+i=0
+while [ "$i" -lt "${#shift_args[@]}" ]; do
+  arg="${shift_args[$i]}"
   case "$arg" in
-    --resume) EXTRA+=("--resume") ;;
     --coordinator-go) ;;
+    --resume) EXTRA+=("--resume") ;;
+    --adopt-identity) EXTRA+=("--adopt-identity") ;;
+    --accept-scored-cause)
+      value="${shift_args[$((i + 1))]:-}"
+      if [ -z "$(printf '%s' "$value" | tr -d '[:space:]')" ] || [ "${value#--}" != "$value" ]; then
+        echo "c1-baseline: --accept-scored-cause needs a verdict:reason value, e.g. refuted:step-budget" >&2
+        exit 5
+      fi
+      EXTRA+=("--accept-scored-cause" "$value")
+      i=$((i + 1)) ;;
+    --accept-scored-cause=*)
+      value="${arg#--accept-scored-cause=}"
+      # Blank is refused, not forwarded: downstream would trim it away and the arm
+      # would run with no acceptance, which is the silent failure this flag exists
+      # to avoid. `$CAUSE` unset in an `--accept-scored-cause="$CAUSE"` call lands here.
+      if [ -z "$(printf '%s' "$value" | tr -d '[:space:]')" ]; then
+        echo "c1-baseline: --accept-scored-cause= needs a verdict:reason value, e.g. refuted:step-budget" >&2
+        exit 5
+      fi
+      EXTRA+=("--accept-scored-cause" "$value") ;;
   esac
+  i=$((i + 1))
 done
 
 cd "$WS"
 mkdir -p "$OUT"
+# Adoption only means anything alongside a resume.
+case " ${EXTRA[*]:-} " in
+  *" --adopt-identity "*)
+    case " ${EXTRA[*]:-} " in
+      *" --resume "*) ;;
+      *) echo "c1-baseline: --adopt-identity requires --resume" >&2; exit 4 ;;
+    esac ;;
+esac
 if [ ${#EXTRA[@]} -gt 0 ] && [ ! -f "$OUT/accounting.json" ]; then
   echo "c1-baseline: --resume given but $OUT/accounting.json does not exist; nothing to resume" >&2
   exit 3
