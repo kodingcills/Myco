@@ -8,6 +8,28 @@ Agents can already touch desktop software. The unsolved problem is *trust* — k
 
 ---
 
+## M1 results
+
+M1 was signed off on 2026-11-25 ([#444](https://github.com/kodingcills/Myco/pull/444)). All 8
+acceptance rows are DONE; row 8 (reproducibility) is DONE **given the VM bundle**, because the ISO,
+payloads and `clean-base` snapshots live outside the repo. The numbers below are taken from
+[docs/m1-scorecard.md](docs/m1-scorecard.md), which is the record:
+
+| Row | Result |
+|---|---|
+| 3. Reliability | 29/30 verified |
+| 4. Failure detection | 0 false successes |
+| 7. Baseline | Myco 29/30 verified vs the screenshot baseline 0/30, on the same 30 tasks paired by index; p = 3.73e-9 |
+| 8. Reproducibility | a fresh operator's sweep: 28/30 verified; the corrupted suite: 18/18 recorded and eligible, 0 false successes |
+
+Recompute every number from committed artifacts, with no VM:
+
+```sh
+python3 scripts/scorecard-check.py
+```
+
+---
+
 ## What runs today
 
 | Surface | What it does | Needs a VM? |
@@ -29,7 +51,9 @@ Core invariant: **`ActResult` never claims goal success, and the runner never de
 
 Prerequisites: Node ≥ 24 (`engines` in `package.json`) and pnpm 10 on your `PATH`; the repo does
 not install pnpm for you. **This is a pnpm workspace, and `npm install` does not install it
-correctly** — use `pnpm`.
+correctly** — use `pnpm`. The `python3 scripts/…` checks below also need Python 3 (standard library
+only; checked on 3.11, 3.12 and 3.13). An older Node only warns `Unsupported engine` at install; it
+does not stop the install, so check `node -v` yourself.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -45,9 +69,25 @@ on 2026-11-25 (macOS arm64, Node 24.4.1, pnpm 10.34.9): install ~1 s from a warm
 `Ignored build scripts: esbuild`; nothing on this page needs it approved.
 `pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test` is the CI path.
 
-Run the suite with `pnpm test`, not a bare `pnpm exec vitest run`. The bare run puts
-`test/discovery/s0-live-launcher.test.ts` in parallel with everything else, and its lock test is
-flaky there (1 failure in 3 bare runs on 2026-11-25). `pnpm test` runs that file on its own.
+Run the suite with `pnpm test`, not a bare `pnpm exec vitest run`. `pnpm test` runs
+`test/discovery/s0-live-launcher.test.ts` on its own, in one forked process, because that file
+spawns and signals real processes; it also runs `pnpm schema-validate`. The launcher's lock test
+used to flake when the bare run put it in parallel with everything else. #454 (TIF-233) fixed the
+cause, and 3 of 3 bare runs passed after that fix on 2026-11-25, so the isolation is now kept as a
+precaution.
+
+Run `pnpm test` as a **non-root user**, in an environment whose PID 1 reaps orphaned processes. In a
+container, that means a non-root user and `docker run --init` (or an equivalent init). Otherwise
+`pnpm test` exits 1 for reasons that have nothing to do with the repo:
+
+- As root, 2 tests in `test/deploy-copy-retry.test.ts` fail (the `MYCO_TOKEN_OUT` "unwritable"
+  cases), because root can write to a `chmod 0500` directory or a `0400` file.
+- Under a PID 1 that does not reap orphans promptly, the `--stop` test in
+  `test/discovery/s0-live-launcher.test.ts` fails with `expected true to be false`. The child it
+  stopped is left as a zombie, and `kill -0` still succeeds on a zombie.
+
+Both were seen on a Linux cloud container on 2026-11-25. Run as a non-root user under a reaping
+init, `pnpm test` exited 0.
 
 > **`npm install` exits 0 and leaves the repo broken.** npm does not understand the `viewer/`
 > workspace, so it installs the root package, leaves `viewer/node_modules` **empty**, and reports

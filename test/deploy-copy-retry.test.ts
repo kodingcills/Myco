@@ -421,8 +421,48 @@ describe("deploy-to-vm host token file (row-8 H5)", () => {
     installStubs({ scpDrops: 0 });
     const r = await runDeploy({ MYCO_TOKEN_OUT: join(dir, "no-such-dir", "tok") });
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain("MYCO_TOKEN_OUT directory");
+    const missing = join(dir, "no-such-dir");
+    // The full line: the missing-directory check, not the writability check that
+    // would also fail on a missing directory, and the remedy (TIF-229).
+    expect(r.stderr).toContain(
+      `deploy-to-vm: MYCO_TOKEN_OUT directory ${missing} does not exist: create it (mkdir -p -m 700 '${missing}') or point MYCO_TOKEN_OUT into an existing directory you own\n`,
+    );
+    expect(r.stderr).not.toContain("is not writable");
     expect(r.scpCalls).toBe(0);
+  });
+
+  it("refuses a MYCO_TOKEN_OUT whose parent is a file, before copying anything", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const notDir = join(dir, "plain-file");
+    writeFileSync(notDir, "x\n");
+    const r = await runDeploy({ MYCO_TOKEN_OUT: `${notDir}/tok` });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(
+      `deploy-to-vm: MYCO_TOKEN_OUT directory ${notDir} exists but is not a directory: point MYCO_TOKEN_OUT into a directory you own\n`,
+    );
+    expect(r.scpCalls).toBe(0);
+  });
+
+  it("refuses a MYCO_TOKEN_OUT that is a directory, or a symlink to one, before copying", {
+    timeout: SLOW,
+  }, async () => {
+    // mv onto a directory (or a link to one) would move the token INTO it.
+    installStubs({ scpDrops: 0 });
+    const tokDir = join(dir, "tokdir");
+    mkdirSync(tokDir);
+    const linkToDir = join(dir, "tokdir-link");
+    symlinkSync(tokDir, linkToDir);
+    for (const out of [tokDir, linkToDir]) {
+      const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(
+        `deploy-to-vm: MYCO_TOKEN_OUT ${out} is a directory, not a file path: set MYCO_TOKEN_OUT to a file inside it, e.g. ${out}/agent-token\n`,
+      );
+      expect(r.scpCalls).toBe(0);
+      expect(readdirSync(tokDir)).toEqual([]);
+    }
   });
 
   it("leaves it untouched when the agent never answers the ping", {
@@ -469,7 +509,10 @@ describe("deploy-to-vm host token file (row-8 H5)", () => {
       // rotated) also exits 1, so the exit code alone cannot tell them apart.
       expect(r.scpCalls).toBe(0);
       expect(r.status).toBe(1);
-      expect(r.stderr).toContain(`MYCO_TOKEN_OUT directory ${outDir} is not writable`);
+      const out = join(outDir, "agent-token");
+      expect(r.stderr).toContain(
+        `deploy-to-vm: MYCO_TOKEN_OUT directory ${outDir} is not writable: the token is written to a temp file there and renamed over ${out}, so you need write and search permission on the directory. Fix: chmod u+wx '${outDir}' if you own it, or point MYCO_TOKEN_OUT into a directory you own\n`,
+      );
       expect(existsSync(join(dir, "scp.marker"))).toBe(false);
       expect(readdirSync(outDir)).toEqual([]);
     } finally {
@@ -477,19 +520,81 @@ describe("deploy-to-vm host token file (row-8 H5)", () => {
     }
   });
 
-  it("refuses an existing MYCO_TOKEN_OUT file it cannot write, before copying anything", {
+  /**
+   * Make the script see every existing file as another user's. A test cannot
+   * chown a file away without root, so a stub `id` (first on PATH) reports a uid
+   * that owns nothing here; the script's ownership check compares against it.
+   */
+  function pretendOtherUser(): void {
+    writeFileSync(join(stubDir, "id"), `#!/bin/bash\necho 4242999\n`, { mode: 0o755 });
+  }
+
+  for (const kind of ["file", "symlink"] as const) {
+    it(`refuses an existing MYCO_TOKEN_OUT ${kind} owned by another user, before copying`, {
+      timeout: SLOW,
+    }, async () => {
+      installStubs({ scpDrops: 0 });
+      pretendOtherUser();
+      const target = join(dir, "someone-elses-token");
+      writeFileSync(target, "another-operators-value\n");
+      chmodSync(target, 0o600);
+      const out = kind === "file" ? target : join(dir, "someone-elses-link");
+      if (kind === "symlink") symlinkSync(target, out);
+      const before = readFileSync(target);
+      const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(
+        `deploy-to-vm: MYCO_TOKEN_OUT ${out} exists and is owned by another user (another operator's token, G25); the deploy replaces this file and will not replace someone else's. Fix: set MYCO_TOKEN_OUT to a private path (docs/eval-runbook.md section 4), or have its owner remove it\n`,
+      );
+      expect(r.scpCalls).toBe(0);
+      expect(readFileSync(target).equals(before)).toBe(true);
+      expect(lstatSync(out).isSymbolicLink()).toBe(kind === "symlink");
+    });
+  }
+
+  it("replaces your own mode-400 token file: the rename never writes into it (TIF-229)", {
     timeout: SLOW,
   }, async () => {
     installStubs({ scpDrops: 0 });
-    const out = join(dir, "someone-elses-token");
-    writeFileSync(out, "another-operators-value\n");
+    const outDir = join(dir, "private");
+    mkdirSync(outDir);
+    const out = join(outDir, "agent-token");
+    writeFileSync(out, "previous-deploy-value\n");
     chmodSync(out, 0o400);
-    const before = readFileSync(out);
     const r = await runDeploy({ MYCO_TOKEN_OUT: out });
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain(`MYCO_TOKEN_OUT ${out} exists and is not writable`);
-    expect(r.scpCalls).toBe(0);
-    expect(readFileSync(out).equals(before)).toBe(true);
+    expect(r.stderr).not.toContain("MYCO_TOKEN_OUT");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("DEPLOY OK");
+    expect(mode(out).toString(8)).toBe("600");
+    const sent = guestToken();
+    expect(readFileSync(out).equals(sent)).toBe(true);
+    expect(readdirSync(outDir)).toEqual(["agent-token"]);
+    expect(leaksToken(r, sent.toString("utf8"))).toBe(false);
+  });
+
+  it("replaces your own symlink to an unwritable target, leaving the target alone (TIF-229)", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const target = join(dir, "readonly-target");
+    writeFileSync(target, "not-a-token-file\n");
+    chmodSync(target, 0o400);
+    const before = readFileSync(target);
+    const outDir = join(dir, "private");
+    mkdirSync(outDir);
+    const out = join(outDir, "agent-token");
+    symlinkSync(target, out);
+    const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+    expect(r.stderr).not.toContain("MYCO_TOKEN_OUT");
+    expect(r.status).toBe(0);
+    expect(readFileSync(target).equals(before)).toBe(true);
+    expect(mode(target).toString(8)).toBe("400");
+    const st = lstatSync(out);
+    expect(st.isSymbolicLink()).toBe(false);
+    expect((st.mode & 0o777).toString(8)).toBe("600");
+    const sent = guestToken();
+    expect(readFileSync(out).equals(sent)).toBe(true);
+    expect(leaksToken(r, sent.toString("utf8"))).toBe(false);
   });
 
   it("replaces a symlink at MYCO_TOKEN_OUT with a regular file, leaving its target alone", {

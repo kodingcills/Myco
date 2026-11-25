@@ -20,5 +20,5 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765

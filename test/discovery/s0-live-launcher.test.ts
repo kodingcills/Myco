@@ -60,16 +60,17 @@ function worktree(): { dir: string; script: string; runDir: string; env: NodeJS.
   const bin = join(dir, "bin");
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "ps"), "#!/bin/sh\nprintf 'launchd\\n'\n");
-  // A plain `sleep 297` orphans itself when its parent stub dies and cannot be found by
-  // path (measured 2026-11-23: 29 orphans after a 30-round run). `exec -a` fixed that on
-  // macOS but broke on Ubuntu, where `/bin/sh` is dash and `exec` has no `-a`: the stub
-  // exited 127 and every watchdog was already dead. So the stub records the sleeper's own
-  // pid in the fixture and afterEach kills exactly those — `sh` is enough, and both
-  // shells fork the backgrounded `sleep` rather than exec'ing it, so `$!` is the process
-  // that must be signalled.
+  // TIF-233: the stub `exec`s the sleeper, so the sleeper IS the sequence child: same
+  // pid, and a direct child of the watchdog, which `--stop` reaches with `pkill -P`.
+  // A backgrounded `sleep 297 &` was a grandchild instead: `--stop` killed the stub and
+  // orphaned the sleeper, which inherited fd 9 and so kept the run's flock for 297 s —
+  // the next `--run` was refused whenever `--stop` landed after the child had started,
+  // which parallel load made likely. `exec` without `-a` is portable to dash. The stub
+  // records its own pid (`$$` survives the exec), so afterEach still kills exactly the
+  // sleepers this fixture started and nothing else on the host.
   writeFileSync(
     join(bin, "pnpm"),
-    `#!/bin/sh\nsleep 297 &\necho $! >> ${JSON.stringify(join(dir, "sleepers"))}\nwait\n`,
+    `#!/bin/sh\necho $$ >> ${JSON.stringify(join(dir, "sleepers"))}\nexec sleep 297\n`,
   );
   chmodSync(join(bin, "ps"), 0o755);
   chmodSync(join(bin, "pnpm"), 0o755);
@@ -82,7 +83,7 @@ function worktree(): { dir: string; script: string; runDir: string; env: NodeJS.
     dir,
     script: join(dir, "scripts", "s0-live.sh"),
     runDir,
-    env: { PATH: bin + ":" + process.env.PATH, MYCO_COORDINATOR_GO: "1", MYCO_HOST_LOCK: "1" },
+    env: { PATH: `${bin}:${process.env.PATH}`, MYCO_COORDINATOR_GO: "1", MYCO_HOST_LOCK: "1" },
   };
 }
 
@@ -103,7 +104,7 @@ function startDetached(argv: string): number {
   // explicitly, so `exec -a` is safe here; the fixture's `pnpm` stub cannot assume it.
   const out = spawnSync(
     "bash",
-    ["-c", "nohup bash -c \"exec -a '" + argv + "' sleep 297\" >/dev/null 2>&1 & echo $!"],
+    ["-c", `nohup bash -c "exec -a '${argv}' sleep 297" >/dev/null 2>&1 & echo $!`],
     {
       encoding: "utf8",
     },
@@ -113,6 +114,27 @@ function startDetached(argv: string): number {
 
 function alive(pid: number): boolean {
   return spawnSync("kill", ["-0", String(pid)]).status === 0;
+}
+
+/** Whether `pid` still runs. Unlike `alive`, a zombie counts as gone: it has exited, so
+ * the kernel has already dropped any flock it held, and only its reaping is pending.
+ * `ps -o stat=` prints a state starting with `Z` for a zombie on macOS and Linux, and
+ * nothing when the pid is gone. */
+function running(pid: number): boolean {
+  const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+  const stat = (state.stdout ?? "").trim();
+  return stat !== "" && !stat.startsWith("Z");
+}
+
+/** Poll `done` every 50 ms for up to `ms`; true when it held before the deadline. */
+function waitFor(done: () => boolean, ms = 5_000): boolean {
+  for (let waited = 0; waited < ms; waited += 50) {
+    if (done()) {
+      return true;
+    }
+    spawnSync("bash", ["-c", "sleep 0.05"]);
+  }
+  return done();
 }
 
 // TIF-170 diagnostics. CI-only: MYCO_TIF170_DIAG=<dir> turns on a dump of everything a
@@ -255,17 +277,17 @@ describe("s0-live.sh launcher", () => {
 
   it("lets --stop reach a child whose pid file was lost, and spares another worktree", () => {
     const { dir, script, runDir } = worktree();
-    const mine = startDetached("node " + join(dir, "scripts", "s0-live.ts") + " --live");
+    const mine = startDetached(`node ${join(dir, "scripts", "s0-live.ts")} --live`);
     // A second, unrelated tree: the fallback is anchored on this one's $ROOT only.
     const other = realpathSync(mkdtempSync(join(tmpdir(), "myco-sibling-")));
     made.push(other);
-    const sibling = startDetached("node " + join(other, "scripts", "s0-live.ts") + " --live");
+    const sibling = startDetached(`node ${join(other, "scripts", "s0-live.ts")} --live`);
     try {
       launcher(script, runDir, ["--stop"], { MYCO_COORDINATOR_GO: "1", MYCO_HOST_LOCK: "1" });
-      // The signal is asynchronous: give it a moment before asserting it landed.
-      spawnSync("bash", ["-c", "sleep 0.3"]);
-      expect(alive(mine)).toBe(false);
-      expect(alive(sibling)).toBe(true);
+      // The signal is asynchronous, and the reaper may be slow: `running` counts the
+      // killed child as gone once it is a zombie, where `kill -0` would still reach it.
+      expect(waitFor(() => !running(mine))).toBe(true);
+      expect(running(sibling)).toBe(true);
     } finally {
       spawnSync("kill", ["-9", String(sibling)]);
     }
@@ -284,7 +306,7 @@ describe("s0-live.sh launcher", () => {
       // rounds with two winners), so 30 rounds make the negative control dependable
       // without making a green run slow — ~10 s.
       for (let round = 0; round < ROUNDS; round += 1) {
-        spawnSync("bash", ["-c", 'rm -rf "' + runDir + '"; mkdir -p "' + runDir + '"']);
+        spawnSync("bash", ["-c", `rm -rf "${runDir}"; mkdir -p "${runDir}"`]);
         const racers = spawnSync(
           "bash",
           [
@@ -321,11 +343,11 @@ describe("s0-live.sh launcher", () => {
               DIAG,
               anomaly ? `round-${round}.failure.txt` : `round-${round}.baseline.txt`,
             );
-            writeFileSync(where, evidence + "\n");
+            writeFileSync(where, `${evidence}\n`);
             if (anomaly) {
               // Unbuffered: vitest prints it inside the failed assertion, so the job log
               // carries the evidence even when the artifact never uploads.
-              appendFileSync(2, evidence + "\n");
+              appendFileSync(2, `${evidence}\n`);
             }
             // Printed for every run, so a green CI round still shows what was captured.
             console.log(
@@ -359,7 +381,7 @@ describe("s0-live.sh launcher", () => {
         expect(recorded).toBe(live[0]);
         expect(alive(recorded)).toBe(true);
         launcher(script, runDir, ["--stop"], env);
-        spawnSync("bash", ["-c", 'pkill -9 -f "' + runDir + '" 2>/dev/null']);
+        spawnSync("bash", ["-c", `pkill -9 -f "${runDir}" 2>/dev/null`]);
       }
       // A CI hunt runs far more rounds than the 30 the local test does; 2 s a round is
       // ample on a healthy host and the cap only exists to stop a hung round running on.
@@ -368,18 +390,120 @@ describe("s0-live.sh launcher", () => {
   );
 
   it("releases the run lock on every exit that is not a signal", () => {
-    const { script, runDir, env } = worktree();
+    const { dir, script, runDir, env } = worktree();
     const lock = join(runDir, "s0.lock");
     expect(launcher(script, runDir, ["--watchdog"]).status).toBe(2);
     expect(existsSync(lock)).toBe(false);
     launcher(script, runDir, ["--run"], env);
     expect(existsSync(lock)).toBe(true);
+    // TIF-233: stop a run in one known state — its sequence child running, as recorded
+    // by the stub — not wherever the watchdog happened to be when this spawn was
+    // scheduled. Stopped mid-probe, the watchdog's `$(...)` grandchildren hold fd 9
+    // until they finish, so whether the next claim won depended on load.
+    const child = join(runDir, "s0.child");
+    const sleepers = join(dir, "sleepers");
+    // Sizes, not existence: the watchdog's `echo >` truncates before it writes. Read in
+    // that window, `Number("")` is pid 0, which `kill -0` treats as the whole process
+    // group, so the wait below could never pass.
+    const nonEmpty = (file: string) => existsSync(file) && statSync(file).size > 0;
+    expect(waitFor(() => nonEmpty(child) && nonEmpty(sleepers))).toBe(true);
+    const pidsIn = (file: string) =>
+      readFileSync(file, "utf8")
+        .split("\n")
+        .filter((line) => /^\d+$/.test(line.trim()))
+        .map(Number);
+    // The watchdog and the child --stop signals by pid file, plus the sleeper the stub
+    // recorded. With `exec` the sleeper is the child; were it a grandchild that --stop
+    // never reaches (TIF-233), it would keep fd 9, and the wait below would fail on it.
+    const holders = [
+      ...new Set([...pidsIn(join(runDir, "s0.pid")), ...pidsIn(child), ...pidsIn(sleepers)]),
+    ];
+    expect(holders.length).toBeGreaterThanOrEqual(2);
     launcher(script, runDir, ["--stop"], env);
     expect(existsSync(lock)).toBe(false);
+    // `kill` returns before the target exits, and the kernel frees the flock only when
+    // the last holder has exited. A zombie has exited, so `running` counts it as gone
+    // rather than waiting on its parent to reap it.
+    expect(waitFor(() => !holders.some((pid) => running(pid)))).toBe(true);
     // A leaked lock would make this refusal permanent.
     expect(launcher(script, runDir, ["--run"], env).status).toBe(0);
     expect(alive(Number(readFileSync(join(runDir, "s0.pid"), "utf8").trim()))).toBe(true);
     launcher(script, runDir, ["--stop"], env);
+  });
+
+  it("counts a zombie as gone, though kill -0 still reaches it", () => {
+    // `sleep 0.1` exits and its parent, now `exec`ed into `sleep 30`, never reaps it.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "myco-zombie-")));
+    made.push(dir);
+    const file = join(dir, "zombie");
+    const out = spawnSync(
+      "bash",
+      [
+        "-c",
+        `nohup bash -c 'sleep 0.1 & echo $! >${JSON.stringify(file)}; exec sleep 30' ` +
+          ">/dev/null 2>&1 </dev/null & echo $!",
+      ],
+      { encoding: "utf8" },
+    );
+    const parent = Number(out.stdout.trim());
+    try {
+      expect(parent).toBeGreaterThan(0);
+      expect(waitFor(() => existsSync(file) && statSync(file).size > 0)).toBe(true);
+      const zombie = Number(readFileSync(file, "utf8").trim());
+      expect(zombie).toBeGreaterThan(0);
+      const state = () =>
+        spawnSync("ps", ["-o", "stat=", "-p", String(zombie)], { encoding: "utf8" }).stdout.trim();
+      expect(waitFor(() => state().startsWith("Z"))).toBe(true);
+      expect(alive(zombie)).toBe(true);
+      expect(running(zombie)).toBe(false);
+      expect(running(parent)).toBe(true);
+    } finally {
+      if (parent > 0) spawnSync("kill", ["-9", String(parent)]);
+    }
+  });
+
+  it("--stop never signals its own shell, even when its argv matches the stray pattern", () => {
+    const { dir, script, runDir } = worktree();
+    // Extra arguments are ignored, but they are in this shell's argv, so the scoped pgrep
+    // for a stray `s0-live.ts --live` matches the --stop process itself, and any forked
+    // copy of it, such as a command-substitution subshell that is still alive while pgrep
+    // scans. Linux's procps pgrep excludes only itself; BSD pgrep on macOS also excludes
+    // its ancestors unless given `-a`. The pgrep shim makes macOS match the way Linux
+    // does, so the guard is tested on both.
+    const shims = join(dir, "shims");
+    mkdirSync(shims);
+    if (process.platform === "darwin") {
+      writeFileSync(join(shims, "pgrep"), '#!/bin/sh\nexec /usr/bin/pgrep -a "$@"\n');
+      chmodSync(join(shims, "pgrep"), 0o755);
+    }
+    // `kill` is a builtin, but every pid the stray loop walks is first passed to the
+    // external `pkill -P`, so this shim records exactly the pids --stop chose to signal.
+    const realPkill = spawnSync("bash", ["-c", "type -P pkill"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    const walked = join(dir, "walked");
+    writeFileSync(
+      join(shims, "pkill"),
+      `#!/bin/sh\necho "$*" >> ${JSON.stringify(walked)}\nexec ${realPkill} "$@"\n`,
+    );
+    chmodSync(join(shims, "pkill"), 0o755);
+    const env: NodeJS.ProcessEnv = { PATH: `${shims}:${process.env.PATH}` };
+    // A real stray in this worktree: the guard must not stop --stop from reaching it.
+    const stray = startDetached(`node ${join(dir, "scripts", "s0-live.ts")} --live`);
+    const result = launcher(
+      script,
+      runDir,
+      ["--stop", join(dir, "scripts", "s0-live.ts"), "--live"],
+      env,
+    );
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("not running");
+    expect(result.stderr).toBe("");
+    expect(waitFor(() => !running(stray))).toBe(true);
+    // Only the stray was walked: not this shell, and not a subshell that had already
+    // exited by the time it would have been signalled.
+    expect(readFileSync(walked, "utf8").trim().split("\n")).toEqual([`-P ${stray}`]);
   });
 
   it("keeps --probe, --status and --stop on the terminal", () => {

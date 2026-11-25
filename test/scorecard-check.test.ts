@@ -218,6 +218,27 @@ describe("scorecard-check", () => {
     );
   }, 120_000);
 
+  it("pins who signed M1 off, on whose delegation and when, and fails when any of them changes", () => {
+    const ok = run("--no-subchecks");
+    expect(ok.stdout).toMatch(/^unchecked +signoff +sign-off signer, delegator and dates/m);
+    const original = readFileSync(SCORECARD, "utf8");
+    for (const [from, to] of [
+      ["by Grok Bot (outer-loop engineering lead)", "by Someone (outer-loop engineering lead)"],
+      ["Grok Bot (outer-loop engineering lead)", "Grok Bot (contributor)"],
+      ["Tiffany McCormick's delegation", "Someone's delegation"],
+      ["signed off 2026-11-25", "signed off 2026-11-26"],
+      ["delegation of 2026-11-23", "delegation of 2026-11-22"],
+    ] as const) {
+      const result = checkMutated(mutate(original, from, to));
+      expect(result.status, `${from} -> ${to}`).toBe(1);
+      expect(result.mismatch).toContainEqual(
+        expect.stringMatching(
+          /^MISMATCH signoff: sign-off signer, delegator and dates: inventoried as unchecked, but the doc no longer says/,
+        ),
+      );
+    }
+  }, 120_000);
+
   it("lists the booked spike and the $1.632162 total as unchecked, never ok", () => {
     const result = run("--no-subchecks");
     const lines = result.stdout.split("\n").filter((line) => line.includes("1.632162"));
@@ -241,6 +262,12 @@ describe("scorecard-check", () => {
   const R3 = "re-verified tonight. **Note";
   const inRow3 = (text: string): [string, string] => [R3, `re-verified tonight. ${text} **Note`];
   const TABLE_END = "|\n\n## M1 sign-off";
+  const SEPARATOR = "|---|---|---|---|---|";
+  const REGENERATE_END = "from the runbook.\n\n## Open risk:";
+  const appendToRegenerate = (text: string): [string, string] => [
+    REGENERATE_END,
+    `from the runbook.\n\n${text}\n\n## Open risk:`,
+  ];
   const cases: [string, [string, string], RegExp][] = [
     [
       "a new reference (TIF-999)",
@@ -301,6 +328,156 @@ describe("scorecard-check", () => {
       ["## Open risk:", "# Foo\n\nNothing.\n\n## Open risk:"],
       /^MISMATCH layout: # Foo: .*does not classify/,
     ],
+    // TIF-230: the gaps the #434 verifier found, each a mutation main's checker passed.
+    [
+      "a number in the Trial traces section",
+      [
+        "|\n\n## Evidence durability",
+        "|\n\nAll 31 of these trials verified.\n\n## Evidence durability",
+      ],
+      /^UNATTRIBUTED traces: .*\['31'\]/,
+    ],
+    [
+      "a renumbered Trial traces label",
+      ["| M1-013 #05 |", "| M1-013 #50 |"],
+      /^MISMATCH traces: m1-013: 30 rows/,
+    ],
+    [
+      "an out-of-scope heading with extra text",
+      ["## Reliability row, regenerate\n", "## Reliability row, regenerate: 31 of 40\n"],
+      /^MISMATCH layout: ## Reliability row, regenerate: 31 of 40: .*does not classify/,
+    ],
+    [
+      "the test-plan heading with extra text",
+      [
+        "## Reproducibility test plan (row 8)\n",
+        "## Reproducibility test plan (row 8): 31 of 40 passed\n",
+      ],
+      /^MISMATCH layout: ## Reproducibility test plan \(row 8\): 31 of 40 passed: .*does not classify/,
+    ],
+    [
+      "Sweep v3 renamed Sweep v2",
+      ["Sweep v3 ran all 30", "Sweep v2 ran all 30"],
+      /^MISMATCH row 1: identifier words: word 1/,
+    ],
+    [
+      "a trial-0 identifier changed",
+      ["`#?run=trial-0` selects", "`#?run=spike-trial-0` selects"],
+      /^MISMATCH viewer: identifier words: word 7/,
+    ],
+    [
+      "one pinned identifier swapped for another (r6 for r3)",
+      ["arm-003 r6 vs Myco", "arm-003 r3 vs Myco"],
+      /^MISMATCH row 7: identifier words: word 3: the doc has 'r3' where IDENTIFIER_PINS has 'r6'/,
+    ],
+    [
+      "a (1) enumerator outside row 7",
+      inRow3("(1) refute was re-run."),
+      /^UNATTRIBUTED row 3: .*\['1'\]/,
+    ],
+    [
+      "a (5) enumerator after row 7's (4)",
+      ["(0 rows) |", "(0 rows). (5) Five rows were re-graded |"],
+      /^UNATTRIBUTED row 7: .*\['5'\]/,
+    ],
+    [
+      "row 7 losing an enumerator",
+      ["(3) The transcripts", "The transcripts"],
+      /^MISMATCH row 7: enumerators: 2 in-order/,
+    ],
+    // TIF-230 round 2, D1: the criterion table's header and separator lines sat in no
+    // segment, so a number on either escaped the sweep.
+    [
+      "a figure in the criterion table's Status header",
+      ["| # | Criterion | Status |", "| # | Criterion | Status (8/8) |"],
+      /^MISMATCH layout: criterion table: the header line must be exactly/,
+    ],
+    [
+      "a figure in the criterion table's Criterion header",
+      ["| # | Criterion |", "| # | Criterion (31 of 30) |"],
+      /^MISMATCH layout: criterion table: the header line must be exactly/,
+    ],
+    [
+      "a trailing number on the criterion table's separator",
+      [`${SEPARATOR}\n| 1 |`, `${SEPARATOR} 31\n| 1 |`],
+      /^MISMATCH layout: criterion table: the separator line must be exactly/,
+    ],
+    [
+      "a trailing comment on the criterion table's separator",
+      [`${SEPARATOR}\n| 1 |`, `${SEPARATOR} <!-- 8 rows -->\n| 1 |`],
+      /^MISMATCH layout: criterion table: the separator line must be exactly/,
+    ],
+    // TIF-230 round 2, D2: every rendered heading form, placed at the end of an
+    // out-of-scope section, starts an unknown section instead of inheriting the exemption.
+    [
+      "an ATX heading indented by three spaces",
+      appendToRegenerate("   ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: {4}## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "a setext heading underlined with ---",
+      appendToRegenerate("Sweep v3 result\n---\n\n31 of 30 verified."),
+      /^MISMATCH layout: Sweep v3 result \/ ---: .*does not classify/,
+    ],
+    [
+      "a setext heading underlined with ===",
+      appendToRegenerate("Sweep v3 result\n===\n\n31 of 30 verified."),
+      /^MISMATCH layout: Sweep v3 result \/ ===: .*does not classify/,
+    ],
+    [
+      "an HTML <h2> heading",
+      appendToRegenerate("<h2>Sweep v3 result</h2>\n\n31 of 30 verified."),
+      /^MISMATCH layout: <h2>Sweep v3 result<\/h2>: .*does not classify/,
+    ],
+    // TIF-230 round 3, D3: a pipe line with no delimiter row under it is a paragraph, so
+    // an underline makes it a setext heading.
+    [
+      "a pipe line underlined with === (no delimiter row, so not a table)",
+      appendToRegenerate("| Sweep v3 result |\n===\n\n31 of 30 verified."),
+      /^MISMATCH layout: \| Sweep v3 result \| \/ ===: .*does not classify/,
+    ],
+    [
+      "a pipe line underlined with --- (no delimiter row, so not a table)",
+      appendToRegenerate("| Sweep v3 result |\n---\n\n31 of 30 verified."),
+      /^MISMATCH layout: \| Sweep v3 result \| \/ ---: .*does not classify/,
+    ],
+    // TIF-230 round 3, D4: a heading inside a container (blockquote, list item, or a
+    // nesting of them) is still a heading.
+    [
+      "an ATX heading in a blockquote",
+      appendToRegenerate("> ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: > ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a - list item",
+      appendToRegenerate("- ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: - ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a * list item",
+      appendToRegenerate("* ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: \* ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a + list item",
+      appendToRegenerate("+ ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: \+ ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a 1. list item",
+      appendToRegenerate("1. ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: 1\. ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a 1) list item",
+      appendToRegenerate("1) ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: 1\) ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a list item inside a blockquote",
+      appendToRegenerate("> - ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: > - ## Sweep v3 result: .*does not classify/,
+    ],
   ];
   it.each(cases)(
     "fails on %s",
@@ -314,7 +491,49 @@ describe("scorecard-check", () => {
     120_000,
   );
 
-  // The identifier list is exactly the word-internal digit runs of the committed doc:
+  // TIF-230: a compact `|2|31` first cell. Main skipped a fixed five characters, so the
+  // 31 escaped, and its status check missed row 2's DONE, so "All 7 of 8" passed too.
+  it("fails on a compact |2|31 row prefix: only the row number is skipped", () => {
+    let text = readFileSync(SCORECARD, "utf8");
+    text = mutate(text, "| 2 | Independent", "|2|31 Independent");
+    text = mutate(text, "All 8 rows are DONE", "All 7 of 8 rows are DONE");
+    const result = checkMutated(text);
+    expect(result.status).toBe(1);
+    expect(result.unattributed).toContainEqual(
+      expect.stringMatching(/^UNATTRIBUTED row 2: .*\['31'\]/),
+    );
+    expect(result.mismatch).toContainEqual(
+      expect.stringMatching(/^MISMATCH status: rows DONE: expected 'All 8 rows are DONE'/),
+    );
+  }, 120_000);
+
+  // TIF-230 round 2, D2: a `---` that is a thematic break (after a blank line) or ends a
+  // table is not a setext underline, so neither adds a heading.
+  // Round 3 (D3): only a real table (header + delimiter row) shields the line above an
+  // underline; under one, `---` is a thematic break and `===` is another table row.
+  it("does not read a thematic break or a --- after a table as a setext heading", () => {
+    const text = mutate(
+      readFileSync(SCORECARD, "utf8"),
+      REGENERATE_END,
+      "from the runbook.\n\n---\n\n| Step | Command |\n|---|---|\n| regenerate | the script |\n---\n\n" +
+        "| Step | Command |\n|---|---|\n| regenerate | the script |\n===\n\n## Open risk:",
+    );
+    const result = checkMutated(text);
+    expect(result.mismatch).toEqual([]);
+    expect(result.unattributed).toEqual([]);
+    expect(result.status).toBe(0);
+  }, 120_000);
+
+  it("sweeps Trial traces as an in-scope section", () => {
+    const result = run("--no-subchecks");
+    expect(result.stdout).toMatch(/in scope +## Trial traces/);
+    expect(result.stdout).toMatch(/^swept +traces +number sweep/m);
+    expect(result.stdout).toMatch(
+      /^ok +traces +the table is the header and exactly the committed trials/m,
+    );
+  }, 120_000);
+
+  // The identifier pins are exactly the word-internal digit runs of the committed doc:
   // nothing in it is unused, and nothing the sweep skipped is missing from it.
   it("skips exactly the listed identifier words in the committed scorecard", () => {
     const result = run("--identifiers");

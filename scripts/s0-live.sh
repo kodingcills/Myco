@@ -226,11 +226,14 @@ case "${1:-}" in
     lock_trace rmdir-done stop
     # Scoped to this worktree: an unscoped pkill aborts another workstream's run on a
     # host with a dozen worktrees. Walk the pids from pgrep rather than relying on
-    # pkill's option parsing, and never signal the invoking shell.
-    STRAY="$(pgrep -f -- "$ROOT/.*scripts/s0-live\.ts --live" 2>/dev/null || true)"
-    STRAY="$STRAY $(pgrep -f -- "$ROOT/runtime/target/debug/myco-rt-mcp" 2>/dev/null || true)"
+    # pkill's option parsing, and never signal the invoking shell. Each substitution
+    # `exec`s pgrep: otherwise its subshell, a fork of this shell with the same argv, is
+    # alive while pgrep scans, matches whenever this shell does, and has exited before
+    # the loop below would signal it (TIF-249).
+    STRAY="$(exec pgrep -f -- "$ROOT/.*scripts/s0-live\.ts --live" 2>/dev/null)" || true
+    STRAY="$STRAY $(exec pgrep -f -- "$ROOT/runtime/target/debug/myco-rt-mcp" 2>/dev/null)" || true
     for PID in $STRAY; do
-      [[ "$PID" == "$" ]] && continue
+      [[ "$PID" == "$$" ]] && continue
       pkill -P "$PID" 2>/dev/null || true
       kill "$PID" 2>/dev/null || true
     done

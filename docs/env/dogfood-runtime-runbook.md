@@ -353,7 +353,7 @@ gitignored and survives in exactly one place, the Runtime owner's worktree. If
 preflight fails on `guest-ssh`, check there before assuming anything else:
 
 ```
-/Users/tofuinparis/.t3/worktrees/Myco/myco-runtime-v0-46676654c2342d9e/runtime/guest/
+~/.t3/worktrees/Myco/myco-runtime-v0-46676654c2342d9e/runtime/guest/
   state/noble-server-cloudimg-arm64.img   616 MB, SHA-256 50e24e1f…0348e
   state/base-image.sha256                 matches the pin in fetch-image.sh
   keys/id_ed25519.pub                     present

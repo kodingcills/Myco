@@ -175,9 +175,9 @@ VM lock acquired. Starting C1 sweep at 2026-11-22T22:19:31Z...
 --> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]
 FATAL C1 SWEEP ERROR: Error: EEXIST: file already exists, mkdir '/tmp/baseline/c1-arm2/.run-lock'
     at mkdirSync (node:fs:1344:26)
-    at runC1Sweep (/Users/tofuinparis/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/src/baseline/sweep.ts:103:3)
-    at main (/Users/tofuinparis/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/scripts/c1-sweep.ts:314:26)
-    at <anonymous> (/Users/tofuinparis/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/scripts/c1-sweep.ts:334:1)
+    at runC1Sweep (~/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/src/baseline/sweep.ts:103:3)
+    at main (~/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/scripts/c1-sweep.ts:314:26)
+    at <anonymous> (~/.t3/worktrees/Myco/myco-m1-baseline-7e3d9d6a63257831/scripts/c1-sweep.ts:334:1)
     at ModuleJob.run (node:internal/modules/esm/module_job:370:25)
     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5) {

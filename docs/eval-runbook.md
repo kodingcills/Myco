@@ -32,6 +32,24 @@ Commands needing the VM still deserve a check of their output before you move on
 | **UNVERIFIED** | Correct shape, not executed at writing time; confirm the output yourself |
 | **GUI-ONLY** | Cannot be done over SSH or by a script (2 steps, both in §1/§3) |
 
+**Row-8 lessons (2026-11-25).** What the row-8 operators had to learn the hard way. Each line
+points to the section that holds the detail; read it there.
+
+- **Token:** the deploy writes the fresh token to `${MYCO_TOKEN_OUT:-~/.myco-token}`. Always set a
+  private path under your own clone, and pass it to `run-live` and `session_info` as
+  `--token-file` ([§4](#4-deploy-the-agent), [§5](#5-prove-the-agent-is-on-the-desktop)).
+- **Deploy copy:** hash-checked (`verified N files on the guest`), redone in full if sshd drops it,
+  3 attempts at most ([§4](#4-deploy-the-agent), "If it fails").
+- **Cold reset:** the readiness gate waits for a stable sshd, 3 consecutive answers 5 s apart
+  ([§3.1](#31-cold-path--primary)).
+- **Convert deadline:** 360 s. A miss is `uncertain` and tagged as a harness fault
+  ([§7.1](#71-normal-trial)).
+- **Agent calls:** `run-live` times out an agent call at 60 s (TIF-216) ([§7.1](#71-normal-trial)).
+- **Load gate:** resume a paused sweep only when the 1-min load stays under 10 for 3 minutes
+  ([§7.3](#73-the-30-trial-sweep)).
+- **Validation:** `validate-live` fails on 0 run dirs, and `--expect N` pins the count
+  ([§8.2](#82-validate)).
+
 ## 1. Preconditions
 
 ### 1.1 What must already exist
@@ -330,6 +348,34 @@ conclusion (log 37).
 agent/bootstrap/deploy-to-vm.sh
 ```
 
+> **Before any sweep (§7.3, §7.4): the token file must be replaceable, or every trial fails
+> (TIF-229).** Every deploy rewrites `~/.myco-token`, or `$MYCO_TOKEN_OUT` if it is set in the
+> driver's environment, and the sweep drivers run this deploy once per trial
+> (`scripts/m1-sweep.sh`, `scripts/m1-corrupt-suite.sh`). If the deploy cannot replace that file,
+> it exits 1 before copying anything, the driver records the trial `deploy-failed`, and the next
+> trial hits the same wall: **all 30 trials end `deploy-failed`**, with the reason only in
+> `$OUT/progress.log` (a `deploy-to-vm: MYCO_TOKEN_OUT …` line).
+>
+> The deploy writes a temp file in the file's **directory** and renames it over the file. So the
+> rule is: the directory must exist and be writable and searchable by you, and an existing file
+> (or symlink) at the path must be **owned by you**. Its own mode does not matter (a mode-400 file
+> of yours is replaced), and a symlink is replaced, never written through. Check, from the shell
+> that launches the sweep, without printing the path (§1.3, J4):
+>
+> ```bash
+> d=$(dirname "${MYCO_TOKEN_OUT:-$HOME/.myco-token}"); f="${MYCO_TOKEN_OUT:-$HOME/.myco-token}"
+> [ -d "$d" ] && [ -w "$d" ] && [ -x "$d" ] && echo "dir ok" || echo "DIR NOT WRITABLE"
+> { [ ! -e "$f" ] && [ ! -L "$f" ]; } || [ -n "$(find "$f" -maxdepth 0 -user "$(id -u)")" ] \
+>   && echo "file ok" || echo "FILE OWNED BY ANOTHER USER"
+> ```
+>
+> Fix: `mkdir -p -m 700` the directory if it is missing; `chmod u+wx` it if it is yours and not
+> writable; otherwise, or if the file belongs to another operator, set a private
+> `MYCO_TOKEN_OUT` under your clone (below) and export it in the shell that launches the sweep.
+> The deploy prints the same remedy in its refusal line. A one-off `deploy-to-vm.sh` by hand is
+> the quickest end-to-end check: it refuses in under a second, before touching the guest, if the
+> path is wrong.
+
 Foreground, **100–420 s** (measured 126.9 s and ~176 s quiet; **418 s** on 2026-11-24 under
 load ~9.7). The 100–180 s figure is the quiet case only. It copies the agent tree to
 `C:\Program Files\Myco\agent`, writes a **fresh token** to `C:\ProgramData\Myco\agent.token`,
@@ -408,8 +454,9 @@ fetch was refused by an agent session's permission system, and §5 and §6 then 
   call, to the same path (`export MYCO_TOKEN_OUT="$PWD/runs/token-$USER/agent-token"` from the same
   clone root), before the command that uses it (row-8 J9). Do not print it to check it (§1.3,
   J4). The directory
-  must exist and be writable by you, and an existing file there must be writable; the deploy
-  checks all three before it copies anything, and otherwise refuses (exit 1, guest untouched).
+  must exist and be writable by you, and an existing file there must be yours (its mode does not
+  matter: it is replaced, not written into); the deploy checks this before it copies anything,
+  and otherwise refuses with a remedy (exit 1, guest untouched; the box at the top of §4).
   Even with a private file, a later deploy by anyone rotates the guest token, so do not run
   single trials while a sweep is deploying.
 - **`run-live.ts` reads `--token-file PATH`, else `MYCO_AGENT_TOKEN`, else `~/.myco-token`**
@@ -807,7 +854,15 @@ For a non-`verified` normal trial, read `verdict.reasons[0]` and find the failin
 `fixture convert did not produce … within 360000ms` is a setup timeout before Calc opens the
 document (deadline `FIXTURE_CONVERT_DEADLINE_MS = 360_000`, `src/integration/trial.ts:133`, since
 TIF-219; it was 60000 ms before). Record it as `uncertain`. The timeout message alone cannot distinguish a slow
-conversion from a failed process or an unreachable guest.
+conversion from a failed process or an unreachable guest. Myco has not acted yet at this point, so
+the trial tags a deadline miss as a harness fault: predicate `fixture-convert-deadline`, reason
+`could not look: harness fault, fixture convert deadline — …` (`src/integration/trial.ts`). It
+still counts as non-verified; row 8 counts such rows strictly (`m1-row8-sweep2/README.md`).
+Any other convert failure keeps the plain `fixture-convert` predicate.
+
+`run-live` gives each agent call over the tunnel 60 s (`src/integration/run-live.ts`). Before
+TIF-216 (#427) the tunnel's own 15 s timeout silently won, and three of the first row-8 sweep's
+four misses traced to it. A checkout older than #427 still has the 15 s limit.
 
 ### 7.2 Corrupted trial (kill Calc mid-program)
 
@@ -1334,13 +1389,31 @@ deleted. Use the agent's `screenshot` op if you need one.
 pnpm exec tsx src/integration/validate-live.ts runs/row8-7.1     # the --runs-dir you passed
 ```
 
-The validator walks its argument recursively (TIF-223), so a nested layout is checked, not
-skipped. Any directory holding `result.json` or `trace.jsonl` is a run directory: `runs/`, `$OUT`,
-`$OUT/runs` (`runs/<index>/<runId>/`) and a `--mode values` tree (§6, `values/<runId>/`) all work.
-It exits non-zero when it finds no run directory (`NO RUN DIRS …`), and when a run directory has
-only one of the two files (`INCOMPLETE run dir <path>: missing …`). Before TIF-223 it read one
-level only and printed `ALL OK` with exit 0 on **0** files (operator report G30); if you run an
-older checkout, a `0 result.json` line is a failure, not a pass.
+The validator walks the **whole tree** under its argument (TIF-223, TIF-226): it never stops
+descending at a run directory. `runs/`, `$OUT`, `$OUT/runs` (`runs/<index>/<runId>/`), a single
+run dir and a `--mode values` tree (§6, `values/<runId>/`) all work. A directory holding
+`result.json` or `trace.jsonl` with no run files anywhere below it is a run directory; each one is
+validated and counted, and `--expect` compares against that count. The rules
+(`src/integration/validate-live.ts`, its header comment):
+
+- **Run files at two levels fail as ambiguous.** A directory that holds run files *and* has runs
+  below it (a stray `result.json` at the top of `$OUT`, or a run nested inside a run) is reported
+  as `AMBIGUOUS run dir <path>: …` and counts as a failure. Its own files are not counted; every
+  run below it is still validated.
+- **Symlinks are refused, never followed:** `REFUSED symlink <path>: …`, a failure. Pass the link's
+  target to validate it. The root argument itself may be a symlink.
+- **Hidden directories are validated** like any other, so a run under `.old/` is checked and
+  counted, not skipped.
+- **Unreadable or malformed entries are reported per path** on stderr (`UNREADABLE <path>: …`,
+  `MALFORMED result …`, `MALFORMED trace …[i]`), and the summary line is still printed, ending
+  `K FAILURES`, with exit 1. A socket, FIFO or device is reported as `SKIPPED <path>: …` and is not
+  a failure. Nothing is skipped silently.
+- **An empty `trace.jsonl` fails:** `INVALID trace <run>: empty trace: a run must record events`.
+- It also fails when it finds no run directory (`NO RUN DIRS …`), when a run directory has only one
+  of the two files (`INCOMPLETE run dir <path>: missing …`), and on any schema-invalid record.
+
+Before TIF-223 it read one level only and printed `ALL OK` with exit 0 on **0** files (operator
+report G30); if you run an older checkout, a `0 result.json` line is a failure, not a pass.
 
 **For a sweep (§7.3) or the suite (§7.4), check the count against the ledger.** Pass the ledger's
 run count as `--expect`; any other count exits non-zero:
