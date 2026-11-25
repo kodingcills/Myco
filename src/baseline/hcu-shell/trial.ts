@@ -26,6 +26,7 @@
  * judge's output; those are grader-side fields the harness copies onto the row.
  */
 
+import { createHash } from "node:crypto";
 import { taskText } from "../../tasks/task-text.ts";
 import type { CuaOutcome, DeliveryMode, Screenshot } from "../c1.ts";
 import { pixelAction, record } from "../c1.ts";
@@ -102,6 +103,21 @@ export interface PreparedHcuShell {
   /** Independent of the arm: reads the persisted document itself. */
   judge(): Promise<Observation>;
   audit(): Promise<boolean>;
+  /**
+   * Copy the saved document's bytes to the host after the trial, for TIF-267's independent
+   * grader (`docs/benchmark/false-completion.md` §4). For Calc this is the `.xlsx` itself,
+   * not a soffice CSV. The harness keeps the bytes (it writes the grade request); the row
+   * records their hash. Null, or a throw, means nothing was captured: the row is then
+   * ungradable, and if its "done" was accepted it blocks R1, loudly.
+   *
+   * Independent of the arm: the arm's shell never runs this and never sees the result.
+   */
+  capturePersisted(): Promise<PersistedDocument | null>;
+}
+
+export interface PersistedDocument {
+  readonly format: "xlsx" | "csv";
+  readonly bytes: Uint8Array;
 }
 
 export type ShellCallStatus = "complete" | "denied" | "incomplete" | "violation";
@@ -135,6 +151,13 @@ export interface HcuShellRow extends Omit<BaselineRow, "subArm" | "instruction">
   outputCeiling: number;
   /** C1 has none; recorded so a future asymmetry is a field diff. */
   timeBudgetMs: null;
+  /** sha256 of the captured persisted document, or null when none was captured. */
+  persistedSha256: string | null;
+  persistedFormat: PersistedDocument["format"] | null;
+  /** The one model every planner call used; null when the planner was never called. */
+  plannerModelId: string | null;
+  /** Whether the planner bills (a stub does not): R7 cost is null, never 0, when unpaid. */
+  plannerPaid: boolean;
   shell: {
     policy: ShellPolicy;
     integrity: ShellIntegrity;
@@ -330,6 +353,26 @@ export async function runHcuShellTrial(
       observation = { kind: "step-budget" };
   }
 
+  // Captured on every trial, including one where the driver was never ready: the grader
+  // grades whatever document is there, and a missing capture must show as ungradable rather
+  // than as a row with nothing to say.
+  let persisted: PersistedDocument | null = null;
+  try {
+    persisted = await prepared.capturePersisted();
+  } catch {
+    persisted = null;
+  }
+  if (
+    persisted !== null &&
+    !(
+      (persisted.format === "xlsx" || persisted.format === "csv") &&
+      persisted.bytes instanceof Uint8Array &&
+      persisted.bytes.length > 0
+    )
+  )
+    persisted = null;
+  if (persisted === null) deviations.push("persisted-capture-failed");
+
   const graded = gradeHcuShellRow({
     driver: prepared.driver,
     observation,
@@ -345,6 +388,7 @@ export async function runHcuShellTrial(
   }
   const usage = calls.map((call) => call.usage);
   const planners = [...new Set(calls.map((call) => call.model))];
+  if (planners.length > 1) deviations.push("planner-model-mixed");
   const claimedDone = transcript.claims.includes("done");
   return {
     ...target,
@@ -377,6 +421,11 @@ export async function runHcuShellTrial(
     snapshot: prepared.snapshot,
     outputCeiling: OUTPUT_CEILING,
     timeBudgetMs: null,
+    persistedSha256:
+      persisted === null ? null : createHash("sha256").update(persisted.bytes).digest("hex"),
+    persistedFormat: persisted?.format ?? null,
+    plannerModelId: planners.length === 1 ? (planners[0] ?? null) : null,
+    plannerPaid: planner.paid,
     shell: {
       policy,
       integrity,
@@ -436,6 +485,18 @@ export function isHcuShellRow(x: unknown): x is HcuShellRow {
     !Number.isSafeInteger(row.outputCeiling) ||
     row.outputCeiling <= 0 ||
     row.timeBudgetMs !== null ||
+    !(row.persistedSha256 === null || /^[0-9a-f]{64}$/.test(row.persistedSha256)) ||
+    (row.persistedSha256 === null) !== (row.persistedFormat === null) ||
+    !(
+      row.persistedFormat === null ||
+      row.persistedFormat === "xlsx" ||
+      row.persistedFormat === "csv"
+    ) ||
+    !(
+      row.plannerModelId === null ||
+      (typeof row.plannerModelId === "string" && row.plannerModelId.length > 0)
+    ) ||
+    typeof row.plannerPaid !== "boolean" ||
     !object(row.shell) ||
     !Array.isArray(row.shell.calls) ||
     !object(row.shell.policy)

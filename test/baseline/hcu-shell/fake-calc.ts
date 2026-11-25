@@ -19,6 +19,7 @@ import {
 } from "../../../src/baseline/hcu-shell/shell-tool.ts";
 import type { HcuGui, PreparedHcuShell } from "../../../src/baseline/hcu-shell/trial.ts";
 import type { Action, Observation } from "../../../src/baseline/index.ts";
+import { buildXlsx, calcImport, toCalcCell } from "../../benchmark/xlsx-writer.ts";
 
 export const DOC_DIR = "c:/myco/work";
 export const DOC = `${DOC_DIR}/task.xlsx`;
@@ -50,6 +51,14 @@ export interface FakeCalcOptions {
   shellFails?: boolean;
   /** HCU not ready. */
   driverDown?: boolean;
+  /**
+   * The pristine fixture CSV. When given, `capturePersisted` returns the whole saved
+   * workbook as a Calc-shaped `.xlsx` (TIF-267's test writer), with the persisted cells
+   * applied the way Calc would type them. Without it, capture returns null.
+   */
+  fixtureCsv?: string;
+  /** Make the host-side capture of the saved document throw. */
+  captureFails?: boolean;
 }
 
 export interface FakeCalc {
@@ -179,6 +188,13 @@ export function fakeCalc(options: FakeCalcOptions): FakeCalc {
       };
     },
     audit: async () => persisted[options.cellRef] === options.expected,
+    async capturePersisted() {
+      if (options.captureFails) throw new Error("guest file copy failed");
+      if (options.fixtureCsv === undefined) return null;
+      const cells = calcImport(options.fixtureCsv);
+      for (const [ref, value] of Object.entries(persisted)) cells[ref] = toCalcCell(value);
+      return { format: "xlsx", bytes: buildXlsx({ cells, customDateFormat: true }) };
+    },
   };
   return { prepared, policy, shellLog, persisted: () => ({ ...persisted }) };
 }

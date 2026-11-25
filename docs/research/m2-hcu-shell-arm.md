@@ -14,6 +14,7 @@ coding agent with HCU and shell access can read [the store] itself"
 | Trial loop, row type, grader rule, row validator | `src/baseline/hcu-shell/trial.ts` |
 | Shell tool and its boundary | `src/baseline/hcu-shell/shell-tool.ts` |
 | Planner prompt and reply parser | `src/baseline/hcu-shell/decision.ts` |
+| Shared-ledger arm row and grade request (TIF-267) | `src/baseline/hcu-shell/ledger.ts` |
 | Cost estimate (arithmetic only) | `scripts/m2-hcu-shell-cost.ts` |
 | Tests: boundary, loop, prompt parity, import boundary, fake end-to-end | `test/baseline/hcu-shell/` |
 
@@ -48,6 +49,52 @@ The row is the M1 C1 ledger row (`BaselineRow`) with `subArm: "hcu+shell"` and t
 `shell.policy` and re-checks every access. A row that says `clean` while one of its calls
 read outside the boundary fails. `isBaselineRow` accepts these rows too, so existing C1
 tooling can read them.
+
+## Rows in the shared benchmark ledger (TIF-267)
+
+The R2 grade is not this arm's judge. TIF-267's independent grader decides it
+(`docs/benchmark/false-completion.md` §4, `schemas/benchmark-ledger.ts`, PR #474, merged into
+this branch before it merges to main). The grader reads only the saved document's bytes
+against the pinned pristine fixture and the intent. It never takes the agent's claim or
+any verdict. The internal row above stays as the arm's own evidence. Three things connect it
+to the benchmark:
+
+1. **Capture.** `PreparedHcuShell.capturePersisted()` copies the saved document's bytes to the
+   host after every trial, including one where the driver never came up. For Calc this is
+   the `.xlsx` itself. The harness keeps the bytes, and the row records `persistedSha256` and
+   `persistedFormat`. A failed or empty capture becomes `persistedSha256: null` plus the
+   deviation `persisted-capture-failed`. The grader then returns `ungradable`, and an accepted
+   DONE on such a row is counted as `acceptedUngradable`. That is loud by design: it blocks
+   R1 for the gated arm and shows in R2 for this one. The capture is the harness's, never the
+   arm's: the shell does not run it and the planner never sees it.
+2. **Arm row.** `benchmarkArmRow(row, meta)` writes `myco.benchmark.arm-row/1`:
+   - `arm: "hcu+shell"` and `gate: null`;
+   - `claim`: `done`, `not-done` (the agent said failure) or `no-claim`;
+   - `accepted = claim is done`, the rule the check recomputes;
+   - `instructionSha256` of the exact task text, `fixtureSha256`, `outputCeiling` and
+     `persistedSha256`;
+   - `cause`: harness for a driver, integrity, capture or routing fault, otherwise agent for
+     a non-accepted row;
+   - `cost`: `modelUsd` is null for a stub planner (never 0), `wallClockS` is measured, and
+     `vmS` is null.
+
+   The arm row has no verdict field.
+   `plannerModelId` comes from the arm's configuration, and a trial whose calls used a
+   different model throws instead of writing a mislabelled row.
+3. **Grade request.** `gradeRequest(row, …)` writes the line `scripts/benchmark-grade.ts`
+   reads: the fixture file and hash, the captured file (null exactly when nothing was
+   captured), the task's intent, and the column types. Paths must be relative, as the
+   grader requires, so no host path reaches a row.
+
+`test/baseline/hcu-shell/e2e.test.ts` runs the whole chain on fakes. It runs the 30 pinned
+tasks, captures a Calc-shaped `.xlsx` per trial, and writes `arm.jsonl` and `requests.jsonl`.
+It then runs TIF-267's own grader CLI over the requests and its `checkBenchmark` with
+`--expect hcu+shell=30` semantics. The check reports no errors, and TIF-267's grader agrees
+with the arm's own judge on every trial. A second run drops one capture, and that accepted
+DONE comes back `ungradable` and counted.
+
+The arm's modules import nothing from `src/benchmark/`, which the import-boundary test
+enforces, so the arm shares no code with the grader that scores it.
 
 ## The shell tool
 
@@ -110,7 +157,7 @@ rest are R2's parity requirements.
 | Gap | Status | How, or what remains |
 |---|---|---|
 | Complete tool-call audits | **Closed** | Every shell call is recorded with its status and resolved accesses. A call the guest cannot audit makes the row `uncertain`. GUI actions keep C1's per-action delivery records |
-| Independently observed save snapshots | **Closed (offline)** | The verdict comes from the judge's own read of the persisted document, and that observation is on the row. The live judge for the HCU guest (`independentC1Judge`, the C1 one) gets wired in M2-12 |
+| Independently observed save snapshots | **Closed (offline)** | The saved `.xlsx` is captured on the host per trial and graded by TIF-267's grader from its bytes. The arm's own judge observation also stays on the internal row as a cross-check. The live capture over the guest agent is M2-12's |
 | Trusted live evidence ingestion | **Remaining** | TIF-125 (attestation binding). Until it lands, rows are descriptive |
 | Coordinated VM time | **Remaining** | M2-12 |
 | Same task set | **Closed** | The arm runs the 30 pinned rows in `src/baseline/sweep-v3.json`, the set row 7 used. The fake end-to-end test pins index and params against it |
@@ -120,8 +167,8 @@ rest are R2's parity requirements.
 | Same step budget | **Closed against C1** | 30 steps, and shell calls spend the same budget as GUI actions, so the shell buys no extra turns. The gate arm's budget is not defined until M2-02 |
 | Same time budget | **Closed against C1** | Neither arm has one (`timeBudgetMs: null`). The gate arm's is undefined |
 | Same app state reset | **Closed in the interface; remaining in practice** | `prepare` restores a named snapshot, and the row records `snapshot` and `resetMs`. No snapshot with HCU installed exists yet (C1 used `cua-c1-base`) |
-| Same evidence and ledger format | **Closed against M1** | Rows are a superset of the C1 `BaselineRow`, and `isBaselineRow` accepts them. **Seam:** TIF-267's ledger format is not on main, so an adapter is a follow-up |
-| One independent grader | **Closed against M1, seam to TIF-267** | `gradeHcuShellRow` is a pure function of recorded evidence, and the fake run re-grades every row with it. The TIF-267 grader plugs in at the same place |
+| Same evidence and ledger format | **Closed (against PR #474)** | `benchmarkArmRow` writes TIF-267's `arm-row/1`, validated against the published schema. The internal row stays a superset of the C1 `BaselineRow`. Depends on #474 merging; this branch merges it rather than copying it |
+| One independent grader | **Closed (against PR #474)** | Both arms are graded by TIF-267's grader from captured bytes, and joined by its check on `trialKey`. Proven end to end on fakes |
 | Verdict integrity (TIF-266) | **Closed for this arm** | The four layers above. M2-03 owns the general CI isolation test |
 | HCU GUI transport | **Remaining** | `HcuGui` is the C1 Cua connection's shape. The HCU implementation needs the guest (`baseline-status.md`, item 2) |
 | Paid planner | **Remaining** | The interface (`HcuShellPlanner`), prompt and parser are built. The Messages-API adapter is a follow-up, since it is only needed for M2-12 |
@@ -175,8 +222,11 @@ every call. The "ceiling" row is every call at the raised input bound with full 
 - A paid planner adapter for this arm: Messages API, an input gate raised to the ceiling
   above, and the same truncation handling as #340. Also a sweep runner with the C1 spend
   ceiling and resume rules.
-- An adapter from `HcuShellRow` to TIF-267's ledger row once it merges, and an R2 compare script
-  in the style of `row7-compare.py` (M2-11 / M2-12).
+- An R2 compare script in the style of `row7-compare.py`: pair the two arms' rows by task,
+  over TIF-267's grade rows (M2-11 / M2-12). The check already gives per-arm counts, but not
+  the paired sign test.
+- A `taskSetVersion` and `taskId` scheme shared with TIF-267's task set (its PR 2). The fake
+  run uses `m1-sweep-v3` and `calc-<index>` as placeholders.
 - A reset snapshot with HCU installed, plus its reset timing (M2-01).
 - A defined step and time budget for the gate arm (M2-02), so the parity rows above can be
   closed against it.

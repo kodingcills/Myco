@@ -5,12 +5,15 @@
  * *arm's own code* away from it: nothing under `src/baseline/hcu-shell/` may import, even
  * transitively, the module that computes the expected value (`src/tasks/intent.ts`), the
  * fixture generator, the pinned manifest (which carries Myco's verdicts), the Foundry
- * oracles and grader, or the guest verifier the independent judge uses.
+ * oracles and grader, TIF-267's benchmark grader, or the guest verifier the independent
+ * judge uses. The one external import allowed is `node:crypto`, for hashing.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+
+const ALLOWED_EXTERNAL = new Set(["node:crypto"]);
 
 const FORBIDDEN = [
   /\/src\/tasks\/intent\.ts$/,
@@ -20,6 +23,8 @@ const FORBIDDEN = [
   /\/src\/integration\//,
   /\/src\/baseline\/c1-judge\.ts$/,
   /\/src\/baseline\/sweep\.ts$/,
+  // TIF-267's independent grader and its check: the arm must not share code with them.
+  /\/src\/benchmark\//,
   /\.json$/,
 ];
 
@@ -65,7 +70,9 @@ describe("hcu+shell import boundary", () => {
   it("covers every module in the arm", () => expect(armModules.length).toBeGreaterThanOrEqual(3));
   it.each(armModules)("%s reaches no ground-truth module", (entry) => {
     const hits = reachable(entry).filter(
-      (path) => FORBIDDEN.some((re) => re.test(path)) || !path.startsWith("/"),
+      (path) =>
+        FORBIDDEN.some((re) => re.test(path)) ||
+        (!path.startsWith("/") && !ALLOWED_EXTERNAL.has(path)),
     );
     expect(hits).toEqual([]);
   });
