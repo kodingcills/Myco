@@ -13,14 +13,25 @@ const EXPECTED_LAUNCHERS = ["c1-baseline.sh", "c1-spike.sh"];
 /**
  * Strip shell comments with a small quoting lexer over the whole file, matching bash:
  *  - A `#` starts a comment only in code context and only at the start of a word: at the
- *    start of the text, or after whitespace, `;&|()`, or the OPENING backtick of a
- *    command substitution. So `echo "step #2"`, `${#arr[@]}` and `` `true`#x `` keep their
- *    text. A comment ends at the newline, or, inside backticks, at the closing backtick
- *    (`` echo `# c`; export … `` runs the export).
+ *    start of the text, or after an UNESCAPED blank or `;&|`, a bare `(`, the `)` of a
+ *    subshell, `$(`, or the OPENING backtick of a command substitution. So `echo "step
+ *    #2"`, `${#arr[@]}`, `` `true`#x ``, `$(true)#x` (the `)` of `$(…)` does not end the
+ *    word) and `\ #` / `\;#` (an escaped character is word text) keep their text (TIF-248
+ *    round 2). A comment ends at the newline, or, inside backticks, at the closing
+ *    backtick (`` echo `# c`; export … `` runs the export).
+ *  - Backticks end like bash: the next unescaped backtick closes the innermost open
+ *    backtick substitution, whatever was opened inside it (`"`, `'`, `${`, `$(`, a bare
+ *    `(`), because bash finds it with a flat scan before parsing the inside (TIF-248
+ *    round 2: `` `${x:- #`# `` and `` `( #` `` end at their second backtick).
  *  - A stack of contexts follows `'…'`, `"…"` (with `\` escapes), ANSI-C `$'…'` (with `\`
  *    escapes, so `$'a\' #'` is one string), and nested `$(…)`, bare `(…)` and backticks,
  *    whose insides are code again even within double quotes (`"$(printf "%s #" y)"` and
  *    `` "`printf "%s #" y`" `` are one word each). Quoted strings may span lines.
+ *  - Parameter expansion `${…}`, in code or inside `"…"`, is its own context (TIF-248, #447
+ *    round-3 D7): in it `'…'`, `"…"`, `$'…'`, `$(…)`, backticks and a nested `${…}` open
+ *    their own contexts, a `#` is an operator or literal (never a comment), a bare `(` is
+ *    literal, and the matching `}` closes it. So `"${x:-" #"}"` is ONE word, as in bash
+ *    5, not a string, a comment and a stray quote.
  *  - Line continuation is lexed, not pre-joined: an unescaped `\` before a newline, in
  *    code or `"…"` context only, is deleted with nothing in its place, so `a\⏎#b` is the
  *    word `a#b`. It is NOT a continuation inside a comment (the next line is code), inside
@@ -33,7 +44,9 @@ const EXPECTED_LAUNCHERS = ["c1-baseline.sh", "c1-spike.sh"];
  *    are read in order. The terminator matches like bash: `<<-` strips leading tabs
  *    (plain `<<` does not); with an unquoted delimiter a body line ending in an odd run
  *    of backslashes joins the next before matching (D3); a `WORD\r` line (CRLF file)
- *    never terminates (D4). An unterminated body runs to the end of the text, verbatim.
+ *    never terminates a `WORD` heredoc (D4). On a CRLF operator line (`cat <<WORD\r`) the
+ *    CR is part of the delimiter, so only a `WORD\r` line terminates it (TIF-248, #447
+ *    round-3 N1). An unterminated body runs to the end of the text, verbatim.
  *    `opts.heredocs: false` turns detection off (strategy (b) in launcherKeyViolations).
  * Newlines outside continuations are kept, so each output line is one source line or one
  * continued statement.
@@ -51,14 +64,38 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
     }
     src += text[k];
   }
-  type Ctx = "sq" | "dq" | "ansi" | "paren" | "bt";
+  // "paren" is `$(…)`, "sub" a bare `(…)` subshell: bash ends a word after the `)` of a
+  // subshell, not after the `)` of a command substitution (`$(true)#x` is one word).
+  type Ctx = "sq" | "dq" | "ansi" | "paren" | "sub" | "bt" | "brace";
   const stack: Ctx[] = [];
   const pendingHeredocs: { delim: string; stripTabs: boolean; quoted: boolean }[] = [];
   let out = "";
+  // `out.length` at the last word start in code context. A `#` starts a comment only
+  // there. Tracked as an index, not by looking at the last character of `out`, because an
+  // escaped blank or operator (`\ `, `\;`) is word text, not a break (TIF-248 round 2 BS).
+  let wordStartAt = 0;
   for (let i = 0; i < src.length; i++) {
     const c = src[i] ?? "";
     const next = src[i + 1] ?? "";
     const top = stack[stack.length - 1];
+    // bash finds the end of a backtick substitution with a flat scan: the next unescaped
+    // backtick ends it, whatever quotes, `${`, `$(` or `(` were opened inside (TIF-248
+    // round 2 R1 and backtick-paren). So while a `bt` is open, a backtick in ANY context
+    // closes the innermost `bt` and everything opened inside it, and `\` escapes even
+    // inside '…'.
+    const btAt = stack.lastIndexOf("bt");
+    if (btAt !== -1) {
+      if (top === "sq" && c === "\\") {
+        out += c + next;
+        i++;
+        continue;
+      }
+      if (c === "`") {
+        stack.length = btAt;
+        out += c;
+        continue;
+      }
+    }
     if (top === "sq") {
       if (c === "'") stack.pop();
     } else if (top === "ansi") {
@@ -75,32 +112,63 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
         continue;
       }
       if (c === '"') stack.pop();
-      else if (c === "$" && next === "(") {
-        stack.push("paren");
+      else if (c === "$" && (next === "(" || next === "{")) {
+        stack.push(next === "(" ? "paren" : "brace");
         out += c + next;
         i++;
+        wordStartAt = out.length;
         continue;
-      } else if (c === "`") stack.push("bt");
-    } else {
-      // Code context: top level, inside `$(…)`/`(…)`, or inside backticks.
+      } else if (c === "`") {
+        stack.push("bt");
+        out += c;
+        wordStartAt = out.length;
+        continue;
+      }
+    } else if (top === "brace") {
+      // Inside `${…}`, in code or in "…" (D7): quotes, `$'…'`, `$(…)`, backticks and a
+      // nested `${` open their own contexts, so `"${x:-" #"}"` is one word. A `#` here is
+      // an operator or literal, never a comment; a bare `(` is literal; `}` closes.
       if (c === "\\") {
         if (next !== "\n") out += c + next;
         i++;
         continue;
       }
-      const prev = out[out.length - 1];
-      if (
-        c === "#" &&
-        (prev === undefined || /[\s;&|()]/.test(prev) || (prev === "`" && top === "bt"))
-      ) {
-        const stop = top === "bt" ? /[\n`]/ : /\n/;
+      if (c === "$" && (next === "(" || next === "{" || next === "'")) {
+        stack.push(next === "(" ? "paren" : next === "{" ? "brace" : "ansi");
+        out += c + next;
+        i++;
+        wordStartAt = out.length;
+        continue;
+      }
+      if (c === "}") stack.pop();
+      else if (c === "'") stack.push("sq");
+      else if (c === '"') stack.push("dq");
+      else if (c === "`") {
+        stack.push("bt");
+        out += c;
+        wordStartAt = out.length;
+        continue;
+      }
+    } else {
+      // Code context: top level, inside `$(…)`/`(…)`, or inside backticks.
+      if (c === "\\") {
+        // An escaped character is word text, so it never moves wordStartAt: `\ #` and
+        // `\;#` are words in bash, not a comment (BS). `\⏎` is deleted outright, so
+        // `echo \⏎#c` is still a comment, as in bash.
+        if (next !== "\n") out += c + next;
+        i++;
+        continue;
+      }
+      if (c === "#" && out.length === wordStartAt) {
+        const stop = btAt !== -1 ? /[\n`]/ : /\n/;
         while (i + 1 < src.length && !stop.test(src[i + 1] ?? "")) i++;
         continue;
       }
-      if (c === "$" && next === "'") {
-        stack.push("ansi");
+      if (c === "$" && (next === "'" || next === "{" || next === "(")) {
+        stack.push(next === "'" ? "ansi" : next === "{" ? "brace" : "paren");
         out += c + next;
         i++;
+        if (next === "(") wordStartAt = out.length;
         continue;
       }
       if (heredocs && c === "<" && next === "<" && src[i + 2] !== "<" && src[i - 1] !== "<") {
@@ -128,6 +196,8 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
             j++;
           }
         }
+        // A CRLF operator line: bash keeps the CR in the delimiter word (N1).
+        if (src[j] === "\n" && crBefore.has(j)) delim += "\r";
         if (delim !== "") {
           pendingHeredocs.push({ delim, stripTabs, quoted });
           out += src.slice(i, j);
@@ -161,20 +231,37 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
               line += phys;
               break;
             }
-            if (!crEnd && (stripTabs ? line.replace(/^\t+/, "") : line) === delim) break;
+            const body = stripTabs ? line.replace(/^\t+/, "") : line;
+            if (body + (crEnd ? "\r" : "") === delim) break;
           }
         }
         i = j - 1;
+        wordStartAt = out.length;
         continue;
       }
+      // Word breaks: an unescaped blank or `;&|`, a bare `(`, the `)` of a subshell or a
+      // stray `)` (case patterns), and an OPENING backtick. NOT the `)` of `$(…)`: bash
+      // keeps `$(true)#x` as one word (TIF-248 round 2). A closing backtick is handled
+      // above and is not a break either (`` `true`#x `` is one word).
+      let brk = /[\s;&|]/.test(c);
       if (c === "'") stack.push("sq");
       else if (c === '"') stack.push("dq");
-      else if (c === "(") stack.push("paren");
-      else if (c === ")" && top === "paren") stack.pop();
-      else if (c === "`") {
-        if (top === "bt") stack.pop();
-        else stack.push("bt");
+      else if (c === "(") {
+        stack.push("sub");
+        brk = true;
+      } else if (c === ")") {
+        if (top === "paren") stack.pop();
+        else {
+          if (top === "sub") stack.pop();
+          brk = true;
+        }
+      } else if (c === "`") {
+        stack.push("bt");
+        brk = true;
       }
+      out += c;
+      if (brk) wordStartAt = out.length;
+      continue;
     }
     out += c;
   }
@@ -186,6 +273,15 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
  * for flat quotes on ONE line only, and joins continuations with a space first. It is
  * weaker on its own, but it resets its quote state at every line, so no construct can
  * carry a misread quote from one line into the next (the round-2 D3/D4 heredoc hides).
+ * TIF-248 left it verbatim on purpose: it misreads `"${x:-" #"}"` (#447 round-3 D7) like
+ * main did, but the union needs only one strategy to catch a line, and (a)/(b) now do.
+ * Teaching (c) the same `${…}` rule would make it a second copy of (a)'s logic and remove
+ * the independence that makes it useful: its value is that it fails DIFFERENTLY.
+ * One exception (TIF-248 round 2, BS): a `#` right after an ESCAPED blank or operator
+ * (`\ #`, `\;#`) is word text in bash, and main's copy cut the line there. The fix is one
+ * condition (`escapedAt`), reads no new syntax, and can only make (c) strip less, so it
+ * adds flags and cannot hide a line the verbatim copy caught. The `)#` and backtick fixes
+ * need (a)'s context stack and stay out of (c).
  */
 function stripShellCommentsPerLine(text: string): string {
   const joined = text.replace(/\r\n/g, "\n").replace(/\\\n/g, " ");
@@ -193,6 +289,7 @@ function stripShellCommentsPerLine(text: string): string {
     .split("\n")
     .map((line) => {
       let quote: '"' | "'" | null = null;
+      let escapedAt = -1; // TIF-248 round 2 BS: an escaped blank is not a word break
       for (let i = 0; i < line.length; i++) {
         const c = line[i];
         if (quote === "'") {
@@ -202,9 +299,13 @@ function stripShellCommentsPerLine(text: string): string {
           else if (c === '"') quote = null;
         } else if (c === "\\") {
           i++;
+          escapedAt = i;
         } else if (c === "'" || c === '"') {
           quote = c;
-        } else if (c === "#" && (i === 0 || /[\s;&|()]/.test(line[i - 1] ?? ""))) {
+        } else if (
+          c === "#" &&
+          (i === 0 || (/[\s;&|()]/.test(line[i - 1] ?? "") && escapedAt !== i - 1))
+        ) {
           return line.slice(0, i);
         }
       }
@@ -315,7 +416,8 @@ const SECRETS_FILE_MENTION =
  * it (`export OTHER="$(printenv | grep …)"`). Exporting the value under another name IS
  * caught when the line names the secrets file or the literal key name; it is not caught
  * otherwise. None of the three strippers is a full shell parser. A line is missed only
- * when ALL THREE misread it; known cases, each pinned by a "known limitation" test:
+ * when ALL THREE misread it. The list below is NOT exhaustive: it names the cases known
+ * today, each pinned by a "known limitation" test, and other misreads may exist:
  *  - `)` in a `case` pattern inside `$(…)` closes the substitution early in (a) and (b),
  *    and (c) misreads the same line, so `x="$(case a in a) echo " #";; esac)"; export …`
  *    hides the export (a false negative of the union).
@@ -632,6 +734,63 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     "cat <<EOF\nit's 'x\n\tEOF\nX=\"a'\nEOF\nY=\"b\n #\"; export ANTHROPIC_API_KEY=x",
     // M22b: both heredocs on one line are read, in order.
     "cat <<A <<B\na\nA\nit's\nB\nX=\"b'\n #\"; export ANTHROPIC_API_KEY=x",
+    // TIF-248 (#447 round-3 D7): nested quotes inside "${…}". Each was clean under the
+    // union at 9b11dc25 (all three strategies misread it) and bash 5.2.21 runs the export.
+    // The per-line strategy (c) still misses each, so the row fails if the `${` context is
+    // mutated away.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-" #"}"; export ANTHROPIC_API_KEY=x', // round-3 D7 minimal form
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-\'" #\'}"; export ANTHROPIC_API_KEY=x', // '…' inside ${…} inside "…"
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-\'}" #\'}"; export ANTHROPIC_API_KEY=x', // a quoted '}' does not close ${…}
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-${y:-" #"}}"; export ANTHROPIC_API_KEY=x', // nested ${…${…}…}
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-${y:-"a"}" #"}"; export ANTHROPIC_API_KEY=x', // nested, then quotes
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'x=a; echo "${x/"a"/" #"}"; export ANTHROPIC_API_KEY=x', // ${x/pat/rep}
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'x=a; echo "${x#*" #"}"; export ANTHROPIC_API_KEY=x', // ${x#…} with # and quotes
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-"a\n #"}"; export ANTHROPIC_API_KEY=x', // the nested string spans lines
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-" #"}"; read -r ANTHROPIC_API_KEY <<< x', // another rule after the prefix
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    "echo ${x:- #}; export ANTHROPIC_API_KEY=x", // unquoted ${…} in code: the `#` is literal
+    // TIF-248 (#447 round-3 N1): bash's delimiter is `EOF\r`, so the LF `EOF` is body.
+    "cat <<EOF\r\nEOF\nit's\nEOF\r\necho 'q #'; export ANTHROPIC_API_KEY=x",
+    // A second unquoted ${…} in code (#460 round-1 nit); (c) misses it, so it pins the
+    // code-context `${` rule.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    "x=a; echo ${x/a/ #}; export ANTHROPIC_API_KEY=x",
+    // TIF-248 round 2 (#460 round-1 verifier). Each was checked against GNU bash 5.3.20,
+    // which runs the export. R1: bash ends a backtick substitution at the next unescaped
+    // backtick, even inside a `${` opened in it, so the `#` after it is word text. Flagged
+    // at 9b11dc25, clean at f18fdd22; (c) misses both, so they pin the fix.
+    "echo `${x:- #`#; export ANTHROPIC_API_KEY=x",
+    "echo `echo ${x:- #`#; export ANTHROPIC_API_KEY=x",
+    // BS: a `#` after an ESCAPED blank or operator is word text, not a comment. Clean
+    // under the union at 9b11dc25 and f18fdd22. The last row hides from (c) through the
+    // D7 prefix, so it fails if (a)/(b) regress.
+    "echo \\ #; export ANTHROPIC_API_KEY=x",
+    "echo \\;#; export ANTHROPIC_API_KEY=x",
+    "echo \\|#; export ANTHROPIC_API_KEY=x",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-" #"}"; echo \\ #; export ANTHROPIC_API_KEY=x',
+    // `)#`: the `)` of `$(…)` does not end the word, so the `#` is word text. Clean at
+    // 9b11dc25 and f18fdd22; (c) misses each.
+    "echo $(true)#; export ANTHROPIC_API_KEY=x",
+    "echo x$(echo a)#y; export ANTHROPIC_API_KEY=x",
+    "echo $()#; export ANTHROPIC_API_KEY=x",
+    // Backtick-paren: a bare `(` inside backticks cannot hide the closing backtick. A
+    // comment opened inside the `(` still ends at that backtick (first two rows), and the
+    // backtick closes the substitution rather than opening a new one, so a `#` after it
+    // is word text (last two rows). Clean at 9b11dc25 and f18fdd22; (c) misses each.
+    "echo `( #`; export ANTHROPIC_API_KEY=x",
+    "echo `(true; ( #`; export ANTHROPIC_API_KEY=x",
+    "echo `( #`#; export ANTHROPIC_API_KEY=x",
+    "echo `(true; ( #`#; export ANTHROPIC_API_KEY=x",
   ];
   for (const line of forbidden) {
     it(`flags ${JSON.stringify(line)}`, () => {
@@ -648,6 +807,10 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     expect(wholeFile("echo $'a\\'' # export ANTHROPIC_API_KEY=x")).toEqual([]);
     // TIF-236 round 2: an OPENING backtick is a word start, so this comment is stripped.
     expect(wholeFile("echo `# export ANTHROPIC_API_KEY=x`")).toEqual([]);
+    // TIF-248 round 2: the `)` of a SUBSHELL ends a word (unlike `$(…)`'s), and `\⏎` is
+    // deleted, so a `#` after either is still a comment, as in bash.
+    expect(launcherKeyViolations("(true) # export ANTHROPIC_API_KEY=x")).toEqual([]);
+    expect(launcherKeyViolations("echo \\\n# export ANTHROPIC_API_KEY=x")).toEqual([]);
     // A continuation inside "…" joins with nothing; the comment after the string strips.
     expect(launcherKeyViolations('echo "a\\\nb" # export ANTHROPIC_API_KEY=x')).toEqual([]);
     // A heredoc body is data: a `#` line in it is kept, and the line after the
@@ -708,6 +871,51 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     ).toBe(2);
     // A quoted delimiter keeps `\` literal: `foo\` does not swallow the terminator.
     expect(wholeFile("cat <<'EOF'\nfoo\\\nEOF\n# export ANTHROPIC_API_KEY=x")).toEqual([]);
+  });
+  it("strategy (a) alone handles a CRLF heredoc operator line (TIF-248, #447 round-3 N1)", () => {
+    // bash keeps the CR in the delimiter, so the LF `EOF` line is body text and only the
+    // `EOF\r` line ends the heredoc; reading the delimiter as `EOF` would let `it's` open a
+    // quote that hides the export.
+    expect(
+      wholeFile("cat <<EOF\r\nEOF\nit's\nEOF\r\necho 'q #'; export ANTHROPIC_API_KEY=x").length,
+    ).toBe(2);
+    // An all-CRLF heredoc still ends at its `EOF\r` line: the body line is kept (flagged)
+    // and the comment after the terminator strips.
+    expect(
+      wholeFile(
+        "cat <<EOF\r\n# export ANTHROPIC_API_KEY=x\r\nEOF\r\n# export ANTHROPIC_API_KEY=y\r\n",
+      ),
+    ).toEqual(["assigns the key: # export ANTHROPIC_API_KEY=x"]);
+  });
+  it("strategy (a) alone reads nested quotes in a parameter expansion (TIF-248, #447 round-3 D7)", () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(wholeFile('echo "${x:-" #"}"; export ANTHROPIC_API_KEY=x').length).toBe(2);
+    // A real comment after the expansion still strips, and `${#…}` / `${x#…}` stay text.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(wholeFile('echo "${x:-" #"}" # export ANTHROPIC_API_KEY=x')).toEqual([]);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(wholeFile("echo ${x#*#} ${#x} # export ANTHROPIC_API_KEY=x")).toEqual([]);
+    // A `}` inside a nested quote does not close the expansion.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(wholeFile('echo "${x/b/"}"}" # export ANTHROPIC_API_KEY=x')).toEqual([]);
+  });
+  it("each strategy reads the TIF-248 round-2 word-break classes like bash 5 (#460)", () => {
+    const noHeredoc = (t: string) => launcherKeyViolations(t, { strategies: ["no-heredoc"] });
+    const perLine = (t: string) => launcherKeyViolations(t, { strategies: ["per-line"] });
+    // (a) and (b): R1, BS, `)#` and backtick-paren each leave the export visible.
+    for (const t of [
+      "echo `${x:- #`#; export ANTHROPIC_API_KEY=x",
+      "echo \\ #; export ANTHROPIC_API_KEY=x",
+      "echo $(true)#; export ANTHROPIC_API_KEY=x",
+      "echo `( #`; export ANTHROPIC_API_KEY=x",
+    ]) {
+      expect(wholeFile(t).length, t).toBe(2);
+      expect(noHeredoc(t).length, t).toBe(2);
+    }
+    // (c) learns BS only (a one-condition change to the verbatim copy): an escaped blank
+    // or operator before `#` is not a word break.
+    expect(perLine("echo \\ #; export ANTHROPIC_API_KEY=x").length).toBe(2);
+    expect(perLine("echo \\;#; export ANTHROPIC_API_KEY=x").length).toBe(2);
   });
   it("heredoc delimiters are unquoted before matching (false positives only if broken)", () => {
     // The body line is kept (flagged); the line after the terminator is code again and

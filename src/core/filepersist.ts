@@ -24,6 +24,11 @@ export function readCsvSpreadsheet(filePath: string): PersistedState {
       `cannot read ${filePath}: file missing or unreadable`,
     );
   }
+  return parseCsvSpreadsheet(content, filePath);
+}
+
+/** Parse CSV text already read from `filePath` (the gate reads bytes itself, TIF-265). */
+export function parseCsvSpreadsheet(content: string, filePath: string): PersistedState {
   const cells: Record<string, string> = {};
   const lines = content.split(/\r?\n/).filter((line) => line !== "");
   for (let r = 0; r < lines.length; r++) {
