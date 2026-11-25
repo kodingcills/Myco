@@ -1,8 +1,9 @@
 # Guest-side half of deploy-to-vm.sh. Run over SSH (session 0 is fine):
 #   powershell -ExecutionPolicy Bypass -File guest-deploy.ps1 -Stage prepare
 #   powershell -ExecutionPolicy Bypass -File guest-deploy.ps1 -Stage register
+#   powershell -ExecutionPolicy Bypass -File guest-deploy.ps1 -Stage manifest
 # Keeps PowerShell quoting out of the bash script.
-param([Parameter(Mandatory = $true)][ValidateSet('prepare', 'register')] [string]$Stage)
+param([Parameter(Mandatory = $true)][ValidateSet('prepare', 'register', 'manifest')] [string]$Stage)
 
 $ErrorActionPreference = 'Stop'
 $agentDir = 'C:\Program Files\Myco\agent'
@@ -12,6 +13,29 @@ if ($Stage -eq 'prepare') {
     New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
     New-Item -ItemType Directory -Force -Path (Split-Path $tokenPath) | Out-Null
     Write-Output "prepared $agentDir and $(Split-Path $tokenPath)"
+    exit 0
+}
+
+if ($Stage -eq 'manifest') {
+    # TIF-220: what landed on the guest, so deploy-to-vm.sh can refuse a partial
+    # copy left by a dropped scp. One line per file under the three copied roots,
+    # "<sha256 lowercase>  <relative/path>" - the exact format of `shasum -a 256`
+    # on the host, which deploy-to-vm.sh compares against line for line.
+    $root = (Resolve-Path -LiteralPath $agentDir).Path.TrimEnd('\')
+    # A root that is missing (a dropped copy) simply contributes no lines; the
+    # host then reports those files as missing. Files and directories are
+    # enumerated separately rather than relying on Get-ChildItem's handling of
+    # a file path under -Recurse.
+    $files = foreach ($name in @('myco_agent', 'bootstrap', 'pyproject.toml')) {
+        $p = Join-Path $root $name
+        if (Test-Path -LiteralPath $p -PathType Leaf) { Get-Item -LiteralPath $p -Force }
+        elseif (Test-Path -LiteralPath $p -PathType Container) { Get-ChildItem -LiteralPath $p -Recurse -File -Force }
+    }
+    foreach ($f in $files) {
+        $rel = $f.FullName.Substring($root.Length + 1).Replace('\', '/')
+        $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        Write-Output "$hash  $rel"
+    }
     exit 0
 }
 

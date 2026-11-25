@@ -230,7 +230,8 @@ scripts/reset-trial-vm.sh            # optional arg: snapshot name; default clea
 ```
 
 What it does (read from the script): force-stop → wait for `stopped` (30 s cap) → **refuse** if
-the state is `resuming` → restore → start → `wait-ssh.sh 600` → resync the guest clock. It
+the state is `resuming` → restore → start → `wait-guest-ready.sh 600` (guest CPU must advance, then
+SSH must answer 3 consecutive probes 5 s apart, TIF-220) → resync the guest clock. It
 accepts only `clean-base`, `clean-base-live`, `m1-agent-live`, **`cua-c1-base`** (the C1
 screenshot-baseline snapshot, and the one the C1 arms run on) as snapshot names and never
 restores onto a running VM.
@@ -321,7 +322,8 @@ If it fails:
 | `deploy-to-vm: missing ssh config …` / `nc not found` / `openssl not found` | host prerequisite | fix the host (§1) |
 | `ModuleNotFoundError` on `session_info`, or `uia`/`pywin32` import errors from the agent | deps missing from **LibreOffice's** Python | `guest-deploy.ps1` installs them; re-run the deploy and read its pip output |
 | agent answers on the wrong interpreter, or `uno` fails to import | agent started under system Python instead of `C:\Program Files\LibreOffice\program\python.exe` | you are on old bootstrap code; the interpreter is fixed on `main` (log 18) |
-| `scp: Connection closed` | guest or UTM unhealthy | §2, then §3.3 |
+| `deploy-to-vm: copy attempt 1/3 failed; redoing the whole copy` | sshd dropped a connection while settling after a cold boot (TIF-220; 1 in 28 cycles) | nothing, if a later attempt prints `copy succeeded … verified`. The copy is redone in full and hash-checked, never resumed |
+| `scp: Connection closed` followed by `copy to guest failed on all 3 attempts` | guest or UTM unhealthy, not a settling blip | §2, then §3.3 |
 | ping never answers, no error | agent started in session 0 | §5 — this is the failure that matters |
 
 ## 5. Prove the agent is on the desktop
@@ -989,7 +991,7 @@ Every row is a failure we actually hit.
 | Symptom | What it is | Fix |
 |---|---|---|
 | `session_info` → `session_id: 0`, `window_station: Service-0x0-…`; `uia_tree` returns ~6 title-bar nodes; trials fail at `adapter-available` | Agent in session 0: no window station, UIA blind. `schtasks /Run` from SSH does not move it | Redeploy (§4) so it starts via `run-interactive.ps1`; re-check §5. Delete trials run in this state (log 16/18) |
-| `scp: Connection closed` during deploy | Guest unreachable mid-resume, or UTM wedged | §2; if `resuming`, §3.3 (log 35) |
+| `scp: Connection closed` during deploy, then `copy to guest failed on all 3 attempts` | Guest unreachable mid-resume, or UTM wedged. A single drop that a later copy attempt recovers is sshd settling after a cold boot (TIF-220), not this | §2; if `resuming`, §3.3 (log 35) |
 | `UTM error -2700 "Operation not available"`; `status` stuck `resuming`; `kill` says "not running" while status says `resuming` | The live-resume wedge | **GUI-ONLY**: quit + reopen UTM, re-run the cold reset. §3.1 detects it (log 35/37) |
 | Trial `uncertain`, reason `fixture convert did not produce … within <N>ms` | The guest-side headless convert did not write the workbook before the deadline. A cold convert right after a reset was measured at 30.8 s and once at 169.4 s (`docs/research/experiments/m1-013-convert-timeout.md`), so this can happen on a healthy host. Heavy host contention (another QEMU guest, Ollama, swap exhaustion) makes it worse (log 30) | **Count it**: it is an `uncertain` verdict and stays in the denominator. Never drop it from reliability numbers. If it recurs, stop at a trial boundary and investigate; separately, check the host gates and that no other guest is running |
 | Text value `refuted`; persisted value is sentence-cased (`revised-908578` → `Revised-908578`) | Calc AutoCorrect rewrote a lowercase-leading value | Correct behaviour of the verifier. Use the generator's values (`REVISED-######`, numerics) or `--new-value` with an AutoCorrect-immune string. A case-insensitive check here would be a false success (log 21; `src/tasks/intent.ts`) |

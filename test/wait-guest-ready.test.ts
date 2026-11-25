@@ -13,7 +13,7 @@
  * silently booting the guest (a verifier did exactly that on 2026-11-23).
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -67,6 +67,12 @@ function runGate(opts: {
   sshAnswers: boolean;
   timeout?: number;
   noProcess?: boolean;
+  /**
+   * Per-probe SSH outcomes, "ok" or "drop"; the last one repeats. Overrides
+   * `sshAnswers`. Models sshd answering once and then dropping while it settles
+   * after a cold boot (TIF-220).
+   */
+  sshTrace?: string[];
 }): Promise<GateRun> {
   if (opts.noProcess) {
     stub("ps", "exit 1");
@@ -94,7 +100,24 @@ echo "PID TTY TIME CMD"`,
     // the `\n` and leaves the `\r`. A stub emitting a bare `\n` cannot catch a
     // comparison that ignores the CR - which is exactly how the CR-intolerant
     // compare shipped, with this suite green.
-    stub("ssh", opts.sshAnswers ? 'printf "ok\\r\\n"\nexit 0' : "exit 255");
+    if (opts.sshTrace) {
+      const sshTracePath = join(dir, "ssh.trace");
+      writeFileSync(sshTracePath, opts.sshTrace.join("\n"));
+      const sshCursor = join(dir, "ssh.cursor");
+      writeFileSync(sshCursor, "0");
+      stub(
+        "ssh",
+        `i=$(cat "${sshCursor}")
+n=${opts.sshTrace.length}
+v=$(sed -n "$((i<n?i+1:n))p" "${sshTracePath}")
+echo $((i+1)) > "${sshCursor}"
+if [ "$v" = ok ]; then printf "ok\\r\\n"; exit 0; fi
+echo "Connection to 127.0.0.1 closed by remote host." >&2
+exit 255`,
+      );
+    } else {
+      stub("ssh", opts.sshAnswers ? 'printf "ok\\r\\n"\nexit 0' : "exit 255");
+    }
   }
 
   return new Promise((resolve) => {
@@ -105,7 +128,14 @@ echo "PID TTY TIME CMD"`,
     // way. `HOME` points at the temp dir so the SSH config the gate reads does
     // not exist, making a fall-through to real ssh unable to authenticate.
     const child = spawn("bash", [GATE, String(opts.timeout ?? 20)], {
-      env: { PATH: `${stubDir}:/usr/bin:/bin`, HOME: dir, MYCO_READY_INTERVAL: "1" },
+      // MYCO_READY_STABLE_SPACING=0 keeps the TIF-220 stability probes from
+      // adding real seconds; the probe count and drop logic are unchanged.
+      env: {
+        PATH: `${stubDir}:/usr/bin:/bin`,
+        HOME: dir,
+        MYCO_READY_INTERVAL: "1",
+        MYCO_READY_STABLE_SPACING: "0",
+      },
     });
     let stdout = "";
     let stderr = "";
@@ -215,5 +245,54 @@ describe("wait-guest-ready", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("no qemu process");
     expect(r.markers).toContain("pgrep");
+  });
+  // TIF-220: row-8 trial 14's reset passed this gate on one answered probe, and
+  // the deploy's first scp seconds later was dropped by the still-settling sshd.
+  describe("stable readiness after a cold boot (TIF-220)", () => {
+    const booting = ["00:01", "00:11", "00:21"];
+
+    it("does not declare ready on one answer: it re-probes until the answer holds", {
+      timeout: SLOW,
+    }, async () => {
+      const r = await runGate({ cpuTrace: booting, sshAnswers: true, timeout: 45 });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("stable for 3 consecutive probes");
+      // The ssh stub appends one marker line per probe.
+      const probes = readFileSync(join(dir, "ssh.marker"), "utf8").trim().split("\n");
+      expect(probes).toHaveLength(3);
+    });
+
+    it("rides out a transient drop right after the first answer", {
+      timeout: SLOW,
+    }, async () => {
+      // The trial-14 shape: answers, drops, then settles. Ready only after
+      // three consecutive answers that follow the drop.
+      const r = await runGate({
+        cpuTrace: booting,
+        sshAnswers: true,
+        sshTrace: ["ok", "drop", "ok", "ok", "ok"],
+        timeout: 45,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stderr).toContain("ssh dropped after answering (drop 1/3)");
+      expect(r.stdout).toContain("stable for 3 consecutive probes");
+    });
+
+    it("fails loudly, and fast, when sshd keeps dropping after it answered", {
+      timeout: SLOW,
+    }, async () => {
+      // A persistent drop is a broken guest, not a settling one: it must not be
+      // retried into a "ready", and must not burn the whole budget either.
+      const r = await runGate({
+        cpuTrace: booting,
+        sshAnswers: true,
+        sshTrace: ["ok", "drop"],
+        timeout: 600,
+      });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("dropped 3 times");
+      expect(r.stderr).toContain("guest or UTM unhealthy");
+      expect(r.stdout).not.toContain("ssh up");
+    });
   });
 });
