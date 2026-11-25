@@ -21,6 +21,11 @@ const EXPECTED_LAUNCHERS = ["c1-baseline.sh", "c1-spike.sh"];
  *    escapes, so `$'a\' #'` is one string), and nested `$(…)`, bare `(…)` and backticks,
  *    whose insides are code again even within double quotes (`"$(printf "%s #" y)"` and
  *    `` "`printf "%s #" y`" `` are one word each). Quoted strings may span lines.
+ *  - Parameter expansion `${…}`, in code or inside `"…"`, is its own context (TIF-248, #447
+ *    round-3 D7): in it `'…'`, `"…"`, `$'…'`, `$(…)`, backticks and a nested `${…}` open
+ *    their own contexts, a `#` is an operator or literal (never a comment), a bare `(` is
+ *    literal, and the matching `}` closes it. So `"${x:-" #"}"` is ONE word, as in bash
+ *    5, not a string, a comment and a stray quote.
  *  - Line continuation is lexed, not pre-joined: an unescaped `\` before a newline, in
  *    code or `"…"` context only, is deleted with nothing in its place, so `a\⏎#b` is the
  *    word `a#b`. It is NOT a continuation inside a comment (the next line is code), inside
@@ -33,7 +38,9 @@ const EXPECTED_LAUNCHERS = ["c1-baseline.sh", "c1-spike.sh"];
  *    are read in order. The terminator matches like bash: `<<-` strips leading tabs
  *    (plain `<<` does not); with an unquoted delimiter a body line ending in an odd run
  *    of backslashes joins the next before matching (D3); a `WORD\r` line (CRLF file)
- *    never terminates (D4). An unterminated body runs to the end of the text, verbatim.
+ *    never terminates a `WORD` heredoc (D4). On a CRLF operator line (`cat <<WORD\r`) the
+ *    CR is part of the delimiter, so only a `WORD\r` line terminates it (TIF-248, #447
+ *    round-3 N1). An unterminated body runs to the end of the text, verbatim.
  *    `opts.heredocs: false` turns detection off (strategy (b) in launcherKeyViolations).
  * Newlines outside continuations are kept, so each output line is one source line or one
  * continued statement.
@@ -51,7 +58,7 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
     }
     src += text[k];
   }
-  type Ctx = "sq" | "dq" | "ansi" | "paren" | "bt";
+  type Ctx = "sq" | "dq" | "ansi" | "paren" | "bt" | "brace";
   const stack: Ctx[] = [];
   const pendingHeredocs: { delim: string; stripTabs: boolean; quoted: boolean }[] = [];
   let out = "";
@@ -75,12 +82,31 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
         continue;
       }
       if (c === '"') stack.pop();
-      else if (c === "$" && next === "(") {
-        stack.push("paren");
+      else if (c === "$" && (next === "(" || next === "{")) {
+        stack.push(next === "(" ? "paren" : "brace");
         out += c + next;
         i++;
         continue;
       } else if (c === "`") stack.push("bt");
+    } else if (top === "brace") {
+      // Inside `${…}`, in code or in "…" (D7): quotes, `$'…'`, `$(…)`, backticks and a
+      // nested `${` open their own contexts, so `"${x:-" #"}"` is one word. A `#` here is
+      // an operator or literal, never a comment; a bare `(` is literal; `}` closes.
+      if (c === "\\") {
+        if (next !== "\n") out += c + next;
+        i++;
+        continue;
+      }
+      if (c === "$" && (next === "(" || next === "{" || next === "'")) {
+        stack.push(next === "(" ? "paren" : next === "{" ? "brace" : "ansi");
+        out += c + next;
+        i++;
+        continue;
+      }
+      if (c === "}") stack.pop();
+      else if (c === "'") stack.push("sq");
+      else if (c === '"') stack.push("dq");
+      else if (c === "`") stack.push("bt");
     } else {
       // Code context: top level, inside `$(…)`/`(…)`, or inside backticks.
       if (c === "\\") {
@@ -97,8 +123,8 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
         while (i + 1 < src.length && !stop.test(src[i + 1] ?? "")) i++;
         continue;
       }
-      if (c === "$" && next === "'") {
-        stack.push("ansi");
+      if (c === "$" && (next === "'" || next === "{")) {
+        stack.push(next === "'" ? "ansi" : "brace");
         out += c + next;
         i++;
         continue;
@@ -128,6 +154,8 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
             j++;
           }
         }
+        // A CRLF operator line: bash keeps the CR in the delimiter word (N1).
+        if (src[j] === "\n" && crBefore.has(j)) delim += "\r";
         if (delim !== "") {
           pendingHeredocs.push({ delim, stripTabs, quoted });
           out += src.slice(i, j);
@@ -161,7 +189,8 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
               line += phys;
               break;
             }
-            if (!crEnd && (stripTabs ? line.replace(/^\t+/, "") : line) === delim) break;
+            const body = stripTabs ? line.replace(/^\t+/, "") : line;
+            if (body + (crEnd ? "\r" : "") === delim) break;
           }
         }
         i = j - 1;
@@ -186,6 +215,10 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
  * for flat quotes on ONE line only, and joins continuations with a space first. It is
  * weaker on its own, but it resets its quote state at every line, so no construct can
  * carry a misread quote from one line into the next (the round-2 D3/D4 heredoc hides).
+ * TIF-248 left it verbatim on purpose: it misreads `"${x:-" #"}"` (#447 round-3 D7) like
+ * main did, but the union needs only one strategy to catch a line, and (a)/(b) now do.
+ * Teaching (c) the same `${…}` rule would make it a second copy of (a)'s logic and remove
+ * the independence that makes it useful: its value is that it fails DIFFERENTLY.
  */
 function stripShellCommentsPerLine(text: string): string {
   const joined = text.replace(/\r\n/g, "\n").replace(/\\\n/g, " ");
@@ -315,7 +348,8 @@ const SECRETS_FILE_MENTION =
  * it (`export OTHER="$(printenv | grep …)"`). Exporting the value under another name IS
  * caught when the line names the secrets file or the literal key name; it is not caught
  * otherwise. None of the three strippers is a full shell parser. A line is missed only
- * when ALL THREE misread it; known cases, each pinned by a "known limitation" test:
+ * when ALL THREE misread it. The list below is NOT exhaustive: it names the cases known
+ * today, each pinned by a "known limitation" test, and other misreads may exist:
  *  - `)` in a `case` pattern inside `$(…)` closes the substitution early in (a) and (b),
  *    and (c) misreads the same line, so `x="$(case a in a) echo " #";; esac)"; export …`
  *    hides the export (a false negative of the union).
@@ -632,6 +666,32 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     "cat <<EOF\nit's 'x\n\tEOF\nX=\"a'\nEOF\nY=\"b\n #\"; export ANTHROPIC_API_KEY=x",
     // M22b: both heredocs on one line are read, in order.
     "cat <<A <<B\na\nA\nit's\nB\nX=\"b'\n #\"; export ANTHROPIC_API_KEY=x",
+    // TIF-248 (#447 round-3 D7): nested quotes inside "${…}". Each was clean under the
+    // union at 9b11dc25 (all three strategies misread it) and bash 5.2.21 runs the export.
+    // The per-line strategy (c) still misses each, so the row fails if the `${` context is
+    // mutated away.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-" #"}"; export ANTHROPIC_API_KEY=x', // round-3 D7 minimal form
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-\'" #\'}"; export ANTHROPIC_API_KEY=x', // '…' inside ${…} inside "…"
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-\'}" #\'}"; export ANTHROPIC_API_KEY=x', // a quoted '}' does not close ${…}
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-${y:-" #"}}"; export ANTHROPIC_API_KEY=x', // nested ${…${…}…}
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-${y:-"a"}" #"}"; export ANTHROPIC_API_KEY=x', // nested, then quotes
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'x=a; echo "${x/"a"/" #"}"; export ANTHROPIC_API_KEY=x', // ${x/pat/rep}
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'x=a; echo "${x#*" #"}"; export ANTHROPIC_API_KEY=x', // ${x#…} with # and quotes
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-"a\n #"}"; export ANTHROPIC_API_KEY=x', // the nested string spans lines
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    'echo "${x:-" #"}"; read -r ANTHROPIC_API_KEY <<< x', // another rule after the prefix
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    "echo ${x:- #}; export ANTHROPIC_API_KEY=x", // unquoted ${…} in code: the `#` is literal
+    // TIF-248 (#447 round-3 N1): bash's delimiter is `EOF\r`, so the LF `EOF` is body.
+    "cat <<EOF\r\nEOF\nit's\nEOF\r\necho 'q #'; export ANTHROPIC_API_KEY=x",
   ];
   for (const line of forbidden) {
     it(`flags ${JSON.stringify(line)}`, () => {
@@ -708,6 +768,33 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     ).toBe(2);
     // A quoted delimiter keeps `\` literal: `foo\` does not swallow the terminator.
     expect(wholeFile("cat <<'EOF'\nfoo\\\nEOF\n# export ANTHROPIC_API_KEY=x")).toEqual([]);
+  });
+  it("strategy (a) alone handles a CRLF heredoc operator line (TIF-248, #447 round-3 N1)", () => {
+    // bash keeps the CR in the delimiter, so the LF `EOF` line is body text and only the
+    // `EOF\r` line ends the heredoc; reading the delimiter as `EOF` would let `it's` open a
+    // quote that hides the export.
+    expect(
+      wholeFile("cat <<EOF\r\nEOF\nit's\nEOF\r\necho 'q #'; export ANTHROPIC_API_KEY=x").length,
+    ).toBe(2);
+    // An all-CRLF heredoc still ends at its `EOF\r` line: the body line is kept (flagged)
+    // and the comment after the terminator strips.
+    expect(
+      wholeFile(
+        "cat <<EOF\r\n# export ANTHROPIC_API_KEY=x\r\nEOF\r\n# export ANTHROPIC_API_KEY=y\r\n",
+      ),
+    ).toEqual(["assigns the key: # export ANTHROPIC_API_KEY=x"]);
+  });
+  it("strategy (a) alone reads nested quotes in a parameter expansion (TIF-248, #447 round-3 D7)", () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(wholeFile('echo "${x:-" #"}"; export ANTHROPIC_API_KEY=x').length).toBe(2);
+    // A real comment after the expansion still strips, and `${#…}` / `${x#…}` stay text.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(wholeFile('echo "${x:-" #"}" # export ANTHROPIC_API_KEY=x')).toEqual([]);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(wholeFile("echo ${x#*#} ${#x} # export ANTHROPIC_API_KEY=x")).toEqual([]);
+    // A `}` inside a nested quote does not close the expansion.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(wholeFile('echo "${x/b/"}"}" # export ANTHROPIC_API_KEY=x')).toEqual([]);
   });
   it("heredoc delimiters are unquoted before matching (false positives only if broken)", () => {
     // The body line is kept (flagged); the line after the terminator is code again and
