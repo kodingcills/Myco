@@ -10,6 +10,8 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { benchmarkGradeRequestSchema } from "../schemas/benchmark-ledger.ts";
+import { validateSchema } from "../schemas/validate.ts";
 import { type ColumnType, grade } from "../src/benchmark/grade/grade.ts";
 import { gradeRow } from "../src/benchmark/grade/row.ts";
 
@@ -45,7 +47,19 @@ if (lines.length === 0) {
   process.exit(1);
 }
 for (const line of lines) {
-  const req = JSON.parse(line) as GradeRequest;
+  const parsed: unknown = JSON.parse(line);
+  const issues = validateSchema(parsed, benchmarkGradeRequestSchema);
+  const types = (parsed as { columnTypes?: Record<string, unknown> }).columnTypes ?? {};
+  const badType = Object.entries(types).find(
+    ([, t]) => !["key", "text", "integer", "date", "currency"].includes(t as string),
+  );
+  if (issues.length > 0 || badType !== undefined) {
+    process.stderr.write(
+      `invalid grade request: ${issues.map((i) => `${i.path} ${i.message}`).join("; ")}${badType ? ` columnTypes.${badType[0]} is not a column type` : ""}\n`,
+    );
+    process.exit(1);
+  }
+  const req = parsed as GradeRequest;
   const persistedPath = req.persistedFile === null ? null : local(req.persistedFile);
   const result = grade({
     fixtureCsv: readFileSync(local(req.fixtureFile)),

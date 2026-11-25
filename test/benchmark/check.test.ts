@@ -81,7 +81,14 @@ describe("benchmark check: R1", () => {
     const r = checkBenchmark(rows, grades, { expectTrials: { "myco-gate": 4 } });
     expect(r.errors).toEqual([]);
     expect(r.ok).toBe(true);
-    expect(r.r1).toEqual({ pass: true, reasons: [] });
+    expect(r.r1?.pass).toBe(true);
+    expect(r.r1?.reasons).toEqual([]);
+    expect(r.r1?.falseAcceptRate).toEqual({ numerator: 0, denominator: 2, wilson95: wilson(0, 2) });
+    expect(r.r1?.falseAcceptPerTrial).toEqual({
+      numerator: 0,
+      denominator: 4,
+      wilson95: wilson(0, 4),
+    });
     const c = r.arms[0]!;
     expect(c).toMatchObject({
       trials: 4,
@@ -129,11 +136,34 @@ describe("benchmark check: R1", () => {
   });
 
   it("does not let a refused false DONE count against the gate", () => {
-    const rows = [arm(1, { gate: { called: true, verdict: "refuted" } })];
-    const r = checkBenchmark(rows, [gradeOf(rows[0]!, "fail")], {
-      expectTrials: { "myco-gate": 1 },
+    const rows = [arm(1), arm(2, { gate: { called: true, verdict: "refuted" } })];
+    const r = checkBenchmark(rows, [gradeOf(rows[0]!, "pass"), gradeOf(rows[1]!, "fail")], {
+      expectTrials: { "myco-gate": 2 },
     });
     expect(r.r1?.pass).toBe(true);
+    expect(r.arms[0]?.falseDoneAccepted).toBe(0);
+  });
+
+  it("does not pass R1 vacuously when the gate accepted nothing (no bound exists)", () => {
+    const rows = Array.from({ length: 100 }, (_, i) =>
+      arm(i, { gate: { called: true, verdict: "refuted" } }),
+    );
+    const r = checkBenchmark(
+      rows,
+      rows.map((row) => gradeOf(row, "pass")),
+      { expectTrials: { "myco-gate": 100 } },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.r1?.pass).toBe(false);
+    expect(r.r1?.reasons).toEqual([
+      "insufficient evidence: no accepted DONE, so no false-accept bound can be reported",
+    ]);
+    expect(r.r1?.falseAcceptRate).toEqual({ numerator: 0, denominator: 0, wilson95: null });
+    expect(r.r1?.falseAcceptPerTrial).toEqual({
+      numerator: 0,
+      denominator: 100,
+      wilson95: wilson(0, 100),
+    });
   });
 
   it("grades the hcu+shell arm under the same grader, with no R1 of its own", () => {
@@ -248,6 +278,27 @@ describe("benchmark check: ledger consistency", () => {
     ],
     ["an extra field", [{ ...ok[0], secretToken: "x" }], okGrades, expect1, /unexpected property/],
     ["a malformed hash", [{ ...ok[0], fixtureSha256: "abc" }], okGrades, expect1, /fixtureSha256/],
+    [
+      "a duplicate grade row",
+      ok,
+      [okGrades[0], okGrades[0]],
+      expect1,
+      /duplicate grade for trialKey t1/,
+    ],
+    [
+      "mixed task-set versions",
+      [ok[0], arm(2, { taskSetVersion: "fc-v2" })],
+      [okGrades[0], gradeOf(arm(2), "pass")],
+      { expectTrials: { "myco-gate": 2 } },
+      /mixed taskSetVersion: fc-v1, fc-v2/,
+    ],
+    [
+      "a grade for another task",
+      ok,
+      [{ ...okGrades[0], taskId: "fc-other" }],
+      expect1,
+      /grade taskId fc-other != arm taskId fc-1/,
+    ],
   ];
   for (const [name, armRows, gradeRows, opts, pattern] of BROKEN) {
     it(`rejects ${name}`, () => {

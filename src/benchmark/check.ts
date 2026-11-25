@@ -13,7 +13,9 @@
  *    exclusions, M2 plan §2);
  *  - the false-accept rate's numerator is false-DONE-accepted plus accepted-ungradable,
  *    its denominator is accepted claims; the per-trial rate (denominator all trials) is
- *    reported beside it;
+ *    reported beside it as a diagnostic;
+ *  - R1 needs that bound: with no accepted DONE there is none, and R1 reports
+ *    "insufficient evidence" instead of passing vacuously;
  *  - every count states its denominator, and the check fails on zero rows or on a row
  *    count that differs from the expected count (lesson L3: validators passed on empty
  *    input).
@@ -91,6 +93,13 @@ export interface ArmCounts {
 export interface R1Verdict {
   readonly pass: boolean;
   readonly reasons: readonly string[];
+  /**
+   * The bound R1 reports: (false DONE accepted + accepted ungradable) over accepted DONEs,
+   * with its Wilson 95% interval. R1 cannot pass while this has denominator 0.
+   */
+  readonly falseAcceptRate: Rate;
+  /** Same numerator over all gated trials. Diagnostic only; not the R1 bound. */
+  readonly falseAcceptPerTrial: Rate;
 }
 
 export interface CheckResult {
@@ -292,7 +301,19 @@ export function checkBenchmark(
     if (gated.falseDoneAccepted > 0) reasons.push(`${gated.falseDoneAccepted} false DONE accepted`);
     if (gated.acceptedUngradable > 0)
       reasons.push(`${gated.acceptedUngradable} accepted DONE could not be graded`);
-    r1 = { pass: reasons.length === 0, reasons };
+    // No accepted DONE means no false-accept bound exists: "0 false DONE accepted" would be
+    // true of a gate that never verifies anything. R1 needs the bound (M2 plan row R1).
+    if (gated.accepted === 0 || gated.falseAcceptRate.wilson95 === null) {
+      reasons.push(
+        "insufficient evidence: no accepted DONE, so no false-accept bound can be reported",
+      );
+    }
+    r1 = {
+      pass: reasons.length === 0,
+      reasons,
+      falseAcceptRate: gated.falseAcceptRate,
+      falseAcceptPerTrial: gated.falseAcceptPerTrial,
+    };
   }
 
   return {

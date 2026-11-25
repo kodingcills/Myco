@@ -137,6 +137,15 @@ function decodeXml(text: string): string {
     const code = entity.startsWith("#x")
       ? Number.parseInt(entity.slice(2), 16)
       : Number.parseInt(entity.slice(1), 10);
+    // XML 1.0 allows only scalar values: no surrogates, nothing past U+10FFFF.
+    if (
+      !Number.isInteger(code) ||
+      code < 0 ||
+      code > 0x10ffff ||
+      (code >= 0xd800 && code <= 0xdfff)
+    ) {
+      throw new SheetReadError(`invalid character reference &${entity};`);
+    }
     return String.fromCodePoint(code);
   });
 }

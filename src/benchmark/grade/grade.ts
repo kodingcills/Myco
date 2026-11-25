@@ -177,6 +177,14 @@ export function grade(input: GradeInput): GradeResult {
   }
 
   const header = pristine[0] ?? [];
+  const untyped = header.filter((name) => input.columnTypes[name] === undefined);
+  if (header.length === 0 || untyped.length > 0) {
+    return ungradable(
+      input,
+      `column types missing for: ${untyped.length > 0 ? untyped.map((n) => JSON.stringify(n)).join(", ") : "(no header row)"}`,
+      persistedSha256,
+    );
+  }
   const col = header.indexOf(input.intent.column);
   const keyRows = pristine.flatMap((row, r) =>
     r > 0 && row[0] === input.intent.rowKey ? [r] : [],
@@ -200,6 +208,19 @@ export function grade(input: GradeInput): GradeResult {
   if (input.persisted === null) {
     return ungradable(input, "persisted document was not captured", persistedSha256);
   }
+  const looksZip =
+    input.persisted.bytes.length >= 4 &&
+    input.persisted.bytes[0] === 0x50 &&
+    input.persisted.bytes[1] === 0x4b &&
+    input.persisted.bytes[2] === 0x03 &&
+    input.persisted.bytes[3] === 0x04;
+  if (looksZip !== (input.persisted.format === "xlsx")) {
+    return ungradable(
+      input,
+      `persisted document is declared ${input.persisted.format} but its bytes ${looksZip ? "are" : "are not"} a zip container`,
+      persistedSha256,
+    );
+  }
   let actual: Grid;
   try {
     actual =
@@ -207,10 +228,14 @@ export function grade(input: GradeInput): GradeResult {
         ? readXlsxGrid(input.persisted.bytes)
         : readCsvGrid(input.persisted.bytes);
   } catch (error) {
-    if (error instanceof SheetReadError || error instanceof TypeError) {
-      return ungradable(input, `persisted document unreadable: ${error.message}`, persistedSha256);
-    }
-    throw error;
+    // Any failure to read the document is "could not look". An unexpected exception from
+    // the reader must cost one trial, never the rest of a grading batch.
+    const kind =
+      error instanceof SheetReadError
+        ? ""
+        : ` (${error instanceof Error ? error.name : "non-Error throw"})`;
+    const message = error instanceof Error ? error.message : String(error);
+    return ungradable(input, `persisted document unreadable${kind}: ${message}`, persistedSha256);
   }
 
   // Compare every cell in the union of the pristine extent and the persisted content.

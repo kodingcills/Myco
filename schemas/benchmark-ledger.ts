@@ -136,3 +136,55 @@ export const benchmarkGradeRowSchema: JsonSchema = {
     mismatchCount: { type: "integer", minimum: 0 },
   },
 };
+
+/**
+ * Grade request (input to `scripts/benchmark-grade.ts`, one JSON line per trial). Written
+ * by the arm harness; read only by the grader. It names local files, so it is internal and
+ * never published. There is no field for the agent's claim or the gate verdict.
+ */
+const relativeFile: JsonSchema = {
+  type: "string",
+  // Relative, inside the request directory: no leading slash, no drive, no `..` segment.
+  pattern: "^(?![A-Za-z]:)(?![\\\\/])(?!.*(^|[\\\\/])\\.\\.([\\\\/]|$)).{1,512}$",
+};
+export const benchmarkGradeRequestSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "trialKey",
+    "taskId",
+    "fixtureSha256",
+    "fixtureFile",
+    "persistedFile",
+    "persistedFormat",
+    "intent",
+    "columnTypes",
+  ],
+  properties: {
+    trialKey,
+    /** Must equal the arm row's `taskId` (the check fails otherwise). */
+    taskId,
+    fixtureSha256: sha256Hex,
+    fixtureFile: relativeFile,
+    /** Null when the harness captured no document: the grade is `ungradable`. */
+    persistedFile: { anyOf: [relativeFile, { type: "null" }] },
+    /** `xlsx` for a Calc-saved workbook (both arms on the VM); `csv` for the fake app. */
+    persistedFormat: { type: "string", enum: ["xlsx", "csv"] },
+    intent: {
+      type: "object",
+      additionalProperties: false,
+      required: ["rowKey", "column", "newValue"],
+      properties: {
+        rowKey: { type: "string", minLength: 1 },
+        column: { type: "string", minLength: 1 },
+        newValue: { type: "string" },
+      },
+    },
+    /** Every header column of the fixture must be typed, or the grade is `ungradable`. */
+    columnTypes: {
+      type: "object",
+      properties: {},
+      additionalProperties: true,
+    },
+  },
+};
