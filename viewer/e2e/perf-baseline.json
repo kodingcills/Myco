@@ -3,7 +3,7 @@
   "platforms": {
     "darwin": {
       "1000": { "baselineMedian": null, "hardMedian": 150 },
-      "10000": { "baselineMedian": 315.4, "hardMedian": 580 }
+      "10000": { "baselineMedian": 339.1, "hardMedian": 580 }
     },
     "linux": {
       "1000": { "baselineMedian": null, "hardMedian": 150 },
