@@ -10,6 +10,7 @@
  * `-env:UserInstallation` isolation the verifier uses for its CSV readback.
  */
 
+import { loadavg } from "node:os";
 import type { FixtureConverter } from "../tasks/fixture.ts";
 import type { AgentClient } from "../win/agent-client.ts";
 
@@ -31,11 +32,22 @@ export interface WindowsFixtureConverterOptions {
  * `durationMs` is wall time and can exceed `deadlineMs` on a miss: the deadline is
  * checked before each poll, so one in-flight `read_file` (up to its own RPC timeout)
  * may finish after the deadline passes.
+ *
+ * `hostLoadStart` / `hostLoadEnd` (TIF-219) are the host's 1-minute load average when
+ * the convert began and when it ended, so a slow or missed convert can be attributed to
+ * host CPU starvation (the guest's QEMU competes for the same cores) or ruled out.
  */
 export interface ConvertTiming {
   deadlineMs: number;
   durationMs: number;
   outcome: "arrived" | "deadline" | "error";
+  hostLoadStart: number;
+  hostLoadEnd: number;
+}
+
+/** Host 1-minute load average, two decimals. `os.loadavg()` is a cheap syscall. */
+function hostLoad1m(): number {
+  return Math.round((loadavg()[0] ?? 0) * 100) / 100;
 }
 
 interface ConvertResult {
@@ -78,8 +90,15 @@ export class WindowsFixtureConverter implements FixtureConverter {
     const profile = `${this.#profileDir}/${nonce()}`;
     this.#lastDirs = { runDir: dir, profile };
     const started = Date.now();
+    const hostLoadStart = hostLoad1m();
     const timing = (outcome: ConvertTiming["outcome"]): ConvertTiming => {
-      this.#lastTiming = { deadlineMs: this.#timeoutMs, durationMs: Date.now() - started, outcome };
+      this.#lastTiming = {
+        deadlineMs: this.#timeoutMs,
+        durationMs: Date.now() - started,
+        outcome,
+        hostLoadStart,
+        hostLoadEnd: hostLoad1m(),
+      };
       return this.#lastTiming;
     };
     timing("error"); // overwritten below; stays "error" if the write/launch throws

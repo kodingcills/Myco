@@ -113,12 +113,22 @@ export interface TrialOptions {
 }
 
 /**
- * Deadline for the guest-side fixture `.xlsx` to appear (M1-013 decision, approved
- * 2026-11-21). A cold headless convert right after a reset was measured at 30.8 s and
- * once at 169.4 s, so the earlier 60 s converter default could mark a healthy trial
- * uncertain. Each agent RPC keeps its own timeout; this bounds only the arrival poll.
+ * Deadline for the guest-side fixture `.xlsx` to appear. Each agent RPC keeps its own
+ * timeout; this bounds only the arrival poll.
+ *
+ * M1-013 (2026-11-21) set 240 s = 1.4168 x the slowest sample then (169.4 s).
+ * TIF-219 (2026-11-24) reapplies that same margin to the slowest convert since
+ * measured: row-8 sweep op3 trial 3 (`seed-d`, host 1-min load 12-16) was still
+ * converting at 240 483 ms. Treating that censored value as if it had just arrived:
+ * 240 483 x 1.4168 = 340 708 ms, rounded up to the next whole minute = 360 s. It
+ * covers every arrived sample (max 221 207 ms, 61% of the deadline) and the censored
+ * one only if it would have finished by 360 s, which is unknown. Trial budget: the
+ * pessimistic slow-but-passing path (m1-014-calc-cold-start.md) grows from 1 170 s
+ * to 1 290 s, inside the 1 500 s sweep alarm. A miss is still `uncertain` and is
+ * tagged as a harness fault (`fixture-convert-deadline`). See
+ * docs/research/experiments/m1-013-convert-timeout.md, "TIF-219".
  */
-export const FIXTURE_CONVERT_DEADLINE_MS = 240_000;
+export const FIXTURE_CONVERT_DEADLINE_MS = 360_000;
 
 export interface TrialReport {
   runId: string;
@@ -347,6 +357,21 @@ async function runTrialBody(ctx: TrialBodyContext): Promise<TrialBody> {
     await converter.convert(ctx.fixtureCsv);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // TIF-219: a deadline miss means the guest never produced the workbook in time,
+    // before Myco acted. Tag it as a harness fault so it is never read as a Myco
+    // failure, but keep the verdict uncertain: it can never count as verified.
+    if (converter.lastTiming?.outcome === "deadline") {
+      return abortTrial(
+        {
+          step: -1,
+          phase: "precondition",
+          predicateName: "fixture-convert-deadline",
+          observed: message,
+          reason: `harness fault: fixture convert deadline: ${message}`,
+        },
+        `could not look: harness fault, fixture convert deadline — ${message}`,
+      );
+    }
     return abortTrial(
       {
         step: -1,
