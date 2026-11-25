@@ -11,9 +11,12 @@
 //                                      catches a regression. Never set in normal CI.
 // MYCO_VIEWER_BUDGET_INJECT_ATTEMPT=<n> -> test-only: apply the injection to attempt <n> only
 //                                      (1 or 2), to prove a passing retry is visible in CI.
-// A CI retry prints "verdict budget retry: attempt 1 missed; re-measuring once." to the test's
-// stdout, which the default dot reporter echoes into the job log, and adds the same note to
-// the attempt 2 report line.
+//                                      Unset or 0 means every attempt. Any other value throws
+//                                      when the file loads, so a typo fails the proof run
+//                                      instead of silently disabling injection.
+// A CI retry prints "verdict budget retry (<steps> steps): attempt 1 missed; re-measuring once."
+// followed by the miss lines to the test's stdout, which the default dot reporter echoes into
+// the job log, and adds the same note to the attempt 2 report line.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,7 +29,14 @@ const strict = process.env.MYCO_VIEWER_STRICT_BUDGET === "1";
 const ci = process.env.CI === "true";
 const samples = ci ? 20 : Number(process.env.MYCO_VIEWER_BUDGET_SAMPLES ?? 20);
 const injectMs = Number(process.env.MYCO_VIEWER_BUDGET_INJECT_MS ?? 0);
-const injectAttempt = Number(process.env.MYCO_VIEWER_BUDGET_INJECT_ATTEMPT ?? 0);
+const injectAttempt = parseInjectAttempt(process.env.MYCO_VIEWER_BUDGET_INJECT_ATTEMPT);
+function parseInjectAttempt(raw: string | undefined): 0 | 1 | 2 {
+  if (raw === undefined || raw === "" || raw === "0") return 0;
+  if (raw === "1" || raw === "2") return Number(raw) as 1 | 2;
+  throw new Error(
+    `MYCO_VIEWER_BUDGET_INJECT_ATTEMPT must be unset, 0, 1 or 2; got ${JSON.stringify(raw)}`,
+  );
+}
 const injectFor = (attempt: number) =>
   injectAttempt === 0 || injectAttempt === attempt ? injectMs : 0;
 

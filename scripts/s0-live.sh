@@ -230,7 +230,7 @@ case "${1:-}" in
     STRAY="$(pgrep -f -- "$ROOT/.*scripts/s0-live\.ts --live" 2>/dev/null || true)"
     STRAY="$STRAY $(pgrep -f -- "$ROOT/runtime/target/debug/myco-rt-mcp" 2>/dev/null || true)"
     for PID in $STRAY; do
-      [[ "$PID" == "$" ]] && continue
+      [[ "$PID" == "$$" ]] && continue
       pkill -P "$PID" 2>/dev/null || true
       kill "$PID" 2>/dev/null || true
     done

@@ -116,6 +116,16 @@ function alive(pid: number): boolean {
   return spawnSync("kill", ["-0", String(pid)]).status === 0;
 }
 
+/** Whether `pid` still runs. Unlike `alive`, a zombie counts as gone: it has exited, so
+ * the kernel has already dropped any flock it held, and only its reaping is pending.
+ * `ps -o stat=` prints a state starting with `Z` for a zombie on macOS and Linux, and
+ * nothing when the pid is gone. */
+function running(pid: number): boolean {
+  const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+  const stat = (state.stdout ?? "").trim();
+  return stat !== "" && !stat.startsWith("Z");
+}
+
 /** Poll `done` every 50 ms for up to `ms`; true when it held before the deadline. */
 function waitFor(done: () => boolean, ms = 5_000): boolean {
   for (let waited = 0; waited < ms; waited += 50) {
@@ -392,22 +402,90 @@ describe("s0-live.sh launcher", () => {
     // until they finish, so whether the next claim won depended on load.
     const child = join(runDir, "s0.child");
     const sleepers = join(dir, "sleepers");
-    expect(
-      waitFor(() => existsSync(child) && existsSync(sleepers) && statSync(sleepers).size > 0),
-    ).toBe(true);
-    const holders = [join(runDir, "s0.pid"), child].map((file) =>
-      Number(readFileSync(file, "utf8").trim()),
-    );
+    // Sizes, not existence: the watchdog's `echo >` truncates before it writes. Read in
+    // that window, `Number("")` is pid 0, which `kill -0` treats as the whole process
+    // group, so the wait below could never pass.
+    const nonEmpty = (file: string) => existsSync(file) && statSync(file).size > 0;
+    expect(waitFor(() => nonEmpty(child) && nonEmpty(sleepers))).toBe(true);
+    const pidsIn = (file: string) =>
+      readFileSync(file, "utf8")
+        .split("\n")
+        .filter((line) => /^\d+$/.test(line.trim()))
+        .map(Number);
+    // The watchdog and the child --stop signals by pid file, plus the sleeper the stub
+    // recorded. With `exec` the sleeper is the child; were it a grandchild that --stop
+    // never reaches (TIF-233), it would keep fd 9, and the wait below would fail on it.
+    const holders = [
+      ...new Set([...pidsIn(join(runDir, "s0.pid")), ...pidsIn(child), ...pidsIn(sleepers)]),
+    ];
+    expect(holders.length).toBeGreaterThanOrEqual(2);
     launcher(script, runDir, ["--stop"], env);
     expect(existsSync(lock)).toBe(false);
     // `kill` returns before the target exits, and the kernel frees the flock only when
-    // the last holder is gone. Wait for exactly the processes --stop signalled; a holder
-    // --stop failed to reach stays alive, and this fails instead of waiting it out.
-    expect(waitFor(() => !holders.some((pid) => alive(pid)))).toBe(true);
+    // the last holder has exited. A zombie has exited, so `running` counts it as gone
+    // rather than waiting on its parent to reap it.
+    expect(waitFor(() => !holders.some((pid) => running(pid)))).toBe(true);
     // A leaked lock would make this refusal permanent.
     expect(launcher(script, runDir, ["--run"], env).status).toBe(0);
     expect(alive(Number(readFileSync(join(runDir, "s0.pid"), "utf8").trim()))).toBe(true);
     launcher(script, runDir, ["--stop"], env);
+  });
+
+  it("counts a zombie as gone, though kill -0 still reaches it", () => {
+    // `sleep 0.1` exits and its parent, now `exec`ed into `sleep 30`, never reaps it.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "myco-zombie-")));
+    made.push(dir);
+    const file = join(dir, "zombie");
+    const out = spawnSync(
+      "bash",
+      [
+        "-c",
+        `nohup bash -c 'sleep 0.1 & echo $! >${JSON.stringify(file)}; exec sleep 30' ` +
+          ">/dev/null 2>&1 </dev/null & echo $!",
+      ],
+      { encoding: "utf8" },
+    );
+    const parent = Number(out.stdout.trim());
+    try {
+      expect(parent).toBeGreaterThan(0);
+      expect(waitFor(() => existsSync(file) && statSync(file).size > 0)).toBe(true);
+      const zombie = Number(readFileSync(file, "utf8").trim());
+      expect(zombie).toBeGreaterThan(0);
+      const state = () =>
+        spawnSync("ps", ["-o", "stat=", "-p", String(zombie)], { encoding: "utf8" }).stdout.trim();
+      expect(waitFor(() => state().startsWith("Z"))).toBe(true);
+      expect(alive(zombie)).toBe(true);
+      expect(running(zombie)).toBe(false);
+      expect(running(parent)).toBe(true);
+    } finally {
+      if (parent > 0) spawnSync("kill", ["-9", String(parent)]);
+    }
+  });
+
+  it("--stop never signals its own shell, even when its argv matches the stray pattern", () => {
+    const { dir, script, runDir } = worktree();
+    // Extra arguments are ignored, but they are in this shell's argv, so the scoped pgrep
+    // for a stray `s0-live.ts --live` matches the --stop process itself. Linux's procps
+    // pgrep excludes only itself; BSD pgrep on macOS also excludes its ancestors unless
+    // given `-a`. The shim makes macOS match the way Linux does, so the guard is tested
+    // on both.
+    const env: NodeJS.ProcessEnv = {};
+    if (process.platform === "darwin") {
+      const shims = join(dir, "pgrep-shim");
+      mkdirSync(shims);
+      writeFileSync(join(shims, "pgrep"), '#!/bin/sh\nexec /usr/bin/pgrep -a "$@"\n');
+      chmodSync(join(shims, "pgrep"), 0o755);
+      env.PATH = `${shims}:${process.env.PATH}`;
+    }
+    const result = launcher(
+      script,
+      runDir,
+      ["--stop", join(dir, "scripts", "s0-live.ts"), "--live"],
+      env,
+    );
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("not running");
   });
 
   it("keeps --probe, --status and --stop on the terminal", () => {
