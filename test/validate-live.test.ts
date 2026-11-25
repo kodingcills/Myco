@@ -249,6 +249,65 @@ describe("validate-live walk (TIF-226)", () => {
     );
   });
 
+  it("an empty trace.jsonl is INVALID, same rule as run-artifacts", () => {
+    const root = tempDir();
+    runAt(join(root, "run-a"), 0);
+    runAt(join(root, "run-b"), 1);
+    writeFileSync(join(root, "run-b", "trace.jsonl"), "");
+    const r = run(root);
+    expectFailedSummary(r);
+    expect(r.stderr).toContain("INVALID trace run-b: empty trace: a run must record events");
+  });
+
+  it.skipIf(IS_ROOT)(
+    "a chmod 000 result.json is UNREADABLE with a summary line (skipped as root: root reads mode-000 files)",
+    () => {
+      const root = tempDir();
+      runAt(join(root, "run-a"), 0);
+      const resultPath = join(root, "run-a", "result.json");
+      chmodSync(resultPath, 0o000);
+      locked.push(resultPath);
+      const r = run(root);
+      expectFailedSummary(r);
+      expect(r.stderr).toContain(`UNREADABLE ${resultPath}: EACCES`);
+    },
+  );
+
+  it("a FIFO is reported as SKIPPED and is not a failure", () => {
+    const root = tempDir();
+    runAt(join(root, "run-a"), 0);
+    const fifo = join(root, "pipe");
+    const mk = spawnSync("mkfifo", [fifo]);
+    expect(mk.status, String(mk.stderr)).toBe(0);
+    const r = run(root);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^validated 1 result\.json .*: ALL OK\n$/);
+    expect(r.stderr).toContain(`SKIPPED ${fifo}: not a regular file or directory`);
+  });
+
+  it("a root argument that is a symlink is followed", () => {
+    const root = tempDir();
+    const links = tempDir();
+    nestedRuns(root, [0, 1]);
+    const link = join(links, "out");
+    symlinkSync(root, link);
+    const r = run(link, "--expect", "2");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^validated 2 result\.json .*: ALL OK\n$/);
+  });
+
+  it("a symlink loop is REFUSED, not followed", () => {
+    const root = tempDir();
+    nestedRuns(root, [0]);
+    symlinkSync(root, join(root, "loop"));
+    symlinkSync("self", join(root, "self"));
+    const r = run(root);
+    expectFailedSummary(r);
+    expect(r.stderr).toContain(`REFUSED symlink ${join(root, "loop")}`);
+    expect(r.stderr).toContain(`REFUSED symlink ${join(root, "self")}`);
+    expect(r.stdout).toMatch(/^validated 1 result\.json/);
+  });
+
   it("committed m1-row8-corrupt pack: 18 results + 321 trace events", () => {
     const corrupt = resolve("docs/research/experiments/m1-row8-corrupt/runs");
     const r = run(corrupt, "--expect", "18");

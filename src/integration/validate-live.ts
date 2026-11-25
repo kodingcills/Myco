@@ -25,7 +25,13 @@
  *   - Hidden directories are walked like any other, so a run under `.old/` is
  *     validated (and counted) instead of skipped.
  *   - Any other entry type (socket, FIFO, device) is reported as
- *     `SKIPPED <path>: ...` on stderr. Nothing is skipped silently.
+ *     `SKIPPED <path>: ...` on stderr and is not a failure. Nothing is
+ *     skipped silently.
+ *   - An entry whose type the directory listing does not report (a filesystem
+ *     returning DT_UNKNOWN) is `lstat`ed and classified by that, then handled
+ *     by the rules above. Node's `readdir` already does this fallback itself;
+ *     the tool repeats it so the rule does not depend on Node internals. If the
+ *     `lstat` fails, the entry is `UNREADABLE` (a failure).
  *
  * Output (unchanged on success):
  *   `validated N result.json + M trace events in <dir>: ALL OK` and exit 0.
@@ -40,6 +46,8 @@
  *   - an unreadable directory or file, or a run file that is not a regular
  *     file, e.g. a `result.json` directory (`UNREADABLE <path>: <reason>`).
  *   - malformed JSON (`MALFORMED result <run>` / `MALFORMED trace <run>[i]`).
+ *   - an empty `trace.jsonl` (no events): `INVALID trace <run>: empty trace: a
+ *     run must record events`, the same rule as src/discovery/run-artifacts.ts.
  *   - a schema-invalid record (`INVALID result ...` / `INVALID trace ...`).
  * A malformed `--expect` value or a root that is not a directory exits 2.
  */
@@ -86,6 +94,33 @@ function reason(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+type EntryKind = "symlink" | "dir" | "file" | "other";
+
+/** The entry's type from the listing, or from `lstat` when the listing has none. */
+function kindOf(e: Dirent, path: string): EntryKind | undefined {
+  let kind: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean } = e;
+  const known =
+    e.isSymbolicLink() ||
+    e.isDirectory() ||
+    e.isFile() ||
+    e.isFIFO() ||
+    e.isSocket() ||
+    e.isBlockDevice() ||
+    e.isCharacterDevice();
+  if (!known) {
+    try {
+      kind = lstatSync(path);
+    } catch (err) {
+      fail(`UNREADABLE ${path}: type unknown and lstat failed: ${reason(err)}`);
+      return undefined;
+    }
+  }
+  if (kind.isSymbolicLink()) return "symlink";
+  if (kind.isDirectory()) return "dir";
+  if (kind.isFile()) return "file";
+  return "other";
+}
+
 /**
  * Every run directory under root (root included), sorted for stable output.
  * Walks the whole tree; reports AMBIGUOUS, REFUSED, UNREADABLE and SKIPPED
@@ -108,13 +143,14 @@ function findRunDirs(root: string): string[] {
     let below = false;
     for (const e of entries) {
       const path = join(dir, e.name);
-      if (e.isSymbolicLink()) {
+      const kind = kindOf(e, path);
+      if (kind === "symlink") {
         fail(`REFUSED symlink ${path}: symlinks are not followed; pass the target directly`);
-      } else if (e.isDirectory()) {
+      } else if (kind === "dir") {
         // A directory named result.json / trace.jsonl is a broken run file,
         // reported when the run is validated; do not walk into it.
         if (!here.includes(e)) below = walk(path) || below;
-      } else if (!e.isFile()) {
+      } else if (kind === "other") {
         process.stderr.write(`SKIPPED ${path}: not a regular file or directory\n`);
       }
     }
@@ -173,10 +209,9 @@ for (const runDir of runDirs) {
   }
   const traceText = readRunFile(tracePath);
   if (traceText !== undefined) {
-    for (const [i, line] of traceText
-      .split("\n")
-      .filter((l) => l !== "")
-      .entries()) {
+    const lines = traceText.split("\n").filter((l) => l !== "");
+    if (lines.length === 0) fail(`INVALID trace ${label}: empty trace: a run must record events`);
+    for (const [i, line] of lines.entries()) {
       let event: unknown;
       try {
         event = JSON.parse(line);
