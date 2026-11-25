@@ -41,7 +41,7 @@ Commands needing the VM still deserve a check of their output before you move on
 | UTM 5.0.9+ with VM `myco-win11` | macOS host, GUI session | UUID `6C6414A1-9449-4E30-9503-F3F6726C8FFE`, 6 vCPU / **6 GB** (8 GB until 2026-11-21; see `~/VMs/myco-win11/README.md` Changelog) / VirtIO disk, en-US Win11 Pro ARM64 26100 |
 | Snapshot `clean-base` | inside the VM bundle | disk-only, VM powered off. The cold reset target |
 | Snapshot `clean-base-live` | inside the VM bundle | RAM+disk, desktop logged in. Restores in ~8 s but wedges UTM under rapid cycling (§3.3) |
-| Host SSH config + key | `~/VMs/myco-win11/{ssh_config,id_ed25519}` | alias `myco-win11` → 127.0.0.1:2222, user `myco`, key-only |
+| Host SSH config + key | `~/VMs/myco-win11/ssh_config` and the private key it names | alias `myco-win11` → 127.0.0.1:2222, user `myco`, key-only. **Check:** `test -e ~/VMs/myco-win11/ssh_config`; the key's only check is §2's `vssh 'whoami'` answering. Never test, read or name the key file in a command: the host secret guard blocks it (TIF-206) |
 | VM lifecycle scripts | `~/VMs/myco-win11/scripts/` | `vm.sh`, `reset.sh`, `wait-ssh.sh`, `vssh`, `shutdown.sh`. **Not in the repo** |
 | Guest toolchain | baked into the snapshots | LibreOffice 26.8.3 native ARM64, Python 3.12.10 at `C:\Program Files\Python312-arm64\python.exe`, pywin32 312 / comtypes 1.5.0 / pywinauto 0.6.9 / uiautomation 2.0.29, OpenSSH 9.5 |
 | Interactive launcher | guest `C:\myco\bin\run-interactive.ps1` | the only way to start a GUI process from SSH (session-0 problem, §5) |
@@ -56,7 +56,11 @@ pnpm install --frozen-lockfile
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
 ```
 
-Expected: four green commands. `pnpm test` runs vitest and then `schema-validate` (the pnpm alias; the file is `schemas/validate-artifacts.ts`)
+Expected: four green commands. `pnpm test` (`package.json` `scripts.test`) runs vitest **twice**,
+then `schema-validate`: first the main suite (every file except the s0 launcher test), then a
+second run of `test/discovery/s0-live-launcher.test.ts` alone with `--pool=forks
+--no-file-parallelism`, so a second, short `Test Files 1 passed` block is expected; then
+`schema-validate` (the pnpm alias; the file is `schemas/validate-artifacts.ts`)
 (→ `validated artifacts for N trials (all ok)`). This proves the host half without touching the
 VM; do it before any VM work so a later failure is unambiguous. `schema-validate` prints its
 per-trial `ok …` lines with no newline between them, so expect one long line before the summary.
@@ -145,19 +149,20 @@ snapshot.
 **Ownership is the flock, never the lock file.** `/tmp/myco-win11.vm.lock` keeps
 the last writer's `<pid> <driver>` after release, so its contents name a dead pid
 routinely — two different stale contents were read on the morning of 2026-11-23
-while the flock was free both times. Take a non-blocking `flock` to learn whether
-the host is in use:
+while the flock was free both times. Check whether the host is in use with `lsof`,
+read-only:
 
 ```bash
-python3 -c 'import fcntl,sys
-f=open("/tmp/myco-win11.vm.lock","a+")
-try: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB); print("FREE")
-except BlockingIOError: print("HELD — someone owns the host")
-finally: fcntl.flock(f,fcntl.LOCK_UN)' 2>/dev/null || true
+lsof /tmp/myco-win11.vm.lock || echo free     # a table = someone owns it; free = nobody does
 ```
 
-A **`HELD` flock is the only evidence of ownership.** Free + a named pid means the
-file is stale.
+**A process holding the file open (an `lsof` table) is the only evidence of
+ownership.** `free` plus a named pid in the file means the file is stale.
+
+This is the only ownership check to use. Do not probe with `fcntl.flock`: a probe takes the
+flock for an instant, and `scripts/vm-lock.sh:34` acquires with `LOCK_NB` and no retry, so a
+probe and a real driver starting in the same moment can make the driver refuse with exit 10
+(measured as F5 on 2026-11-24). The same `lsof` line is the gate check before every step in §6.
 
 **Free + a running guest is the NORMAL state, not a stop.** It is what every driver
 leaves behind when it releases — r6 and the §6 attempts both finish with the guest
@@ -166,27 +171,17 @@ still up. Report it and proceed; do not stop and ask. (An earlier revision said
 §2 on every run — finding F4, 2026-11-24.) The state that IS worth reporting is the
 opposite one: a guest that is running while some *other* process claims to own it.
 
-**Check ownership read-only if you only want to look.** The probe below takes the
-flock for an instant, and `scripts/vm-lock.sh:34` acquires with `LOCK_NB` and no
-retry — so a probe and a real driver starting in the same moment can make the driver
-refuse with exit 10. Measured as F5 on 2026-11-24. When you only need to know
-whether anyone owns the VM, use `lsof` instead:
-
-```bash
-lsof /tmp/myco-win11.vm.lock     # a table = someone owns it; empty = nobody does
-```
-
 **NEVER hold the flock as a "reservation".** This section has no way to express *"the VM is
 reserved for you"*, so a coordinator who holds the lock to keep the VM free **makes the VM
 unusable to the very operator being tested** — a held flock is indistinguishable from a
 competing owner, and the primary reset (§3.1) will refuse. That happened on 2026-11-24 and cost
 the row-8 operator its §3.1 step and two "should I break this lock?" questions it could not
 answer. **If the VM must be kept free, do it by agreement, not by holding the lock.** The test
-begins only when **both** are true: the flock is `FREE` **and** no process outside the operator's
+begins only when **both** are true: the `lsof` check prints `free` **and** no process outside the operator's
 own work holds a claim on the guest.
 
 **The stale lock file is expected, and it is not a signal.** Its contents name the last writer
-and routinely name a dead pid. Read the flock; ignore the text. (Same class as TIF-180.)
+and routinely name a dead pid. Read `lsof`; ignore the text. (Same class as TIF-180.)
 
 **To clear a stale record** — do it under the lock, so it cannot race a driver acquiring it:
 
@@ -218,6 +213,10 @@ the two apart from the file alone.
 Expected: `ssh up after Ns` (17 s fresh boot, longer after a cold restore under load), then
 `myco-win11\myco`. A timeout here with UTM showing `started` is usually host RAM pressure
 (§9, contention row) — check for other QEMU guests before touching the VM.
+
+**`vssh 'whoami'` answering is also the §1.1 check that the host SSH key is present and
+accepted.** The guest is key-only, so an answer proves the key works; there is no separate key
+check, and you must not `test`, `cat` or `ls` the key file (the secret guard blocks it).
 
 Optional deep check of the guest toolchain (197 UIA elements, 6/6 recorded):
 
@@ -315,13 +314,21 @@ task, launches it through `run-interactive.ps1` (interactive session), and pings
 agent "via schtasks /run". That comment is stale; the launch is `run-interactive.ps1`, as the
 script's own output says.)
 
-Expected tail:
+Expected tail (the last lines it prints):
 
 ```
 ==> ping verified:
 {"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "<random hex GUID, not 1>", ...}}
+
 DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F <ssh_config> -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 ```
+
+`DEPLOY OK` is not the last line: the three `token` / `tunnel` / `ops` hint lines follow it
+(`agent/bootstrap/deploy-to-vm.sh`, its last lines). None of them carries the token: the `token`
+line names the guest path, and `ops` prints a literal `<token>`.
 
 **The token rotates on every deploy.** Re-fetch it after every deploy, into a file, never through
 a shell variable (the host's secret guard refuses commands that carry the token, TIF-206; §5).
@@ -439,7 +446,11 @@ trials.
 Prerequisite for reliability numbers: if a generated value does not survive Calc's input path,
 a `refuted` verdict may be a generator defect rather than an execution defect.
 
-**UNVERIFIED.** Reset (§3) and deploy (§4) first, then run once on a quiet host.
+(measured) **PASSED 20/20.** The coordinator's run on 2026-11-24 08:34–08:49Z gave 20/20
+verified, exit 0 (`docs/research/experiments/m1-row8/S6-PASS.md`), and a fresh row-8 operator's
+run on 2026-11-24 11:42–11:59Z gave 20/20 verified, exit 0, `validate-live` ALL OK on its runs
+dir (recorded in the host-only operator report, not committed; that run skipped the §3 reset and
+§4 deploy, F20). Reset (§3) and deploy (§4) first, then run once on a quiet host.
 
 **When you may skip §3 and §4 (F20).** On a **row-8 reproduction run, never**: the point of the
 run is that a fresh operator can do every step, so reset, deploy and §5 are part of what is being
@@ -485,10 +496,17 @@ measures the contamination, not the generator (log 27).
 every row** — measured 2026-11-24: 20/20 `uncertain`, every reason
 `could not look: guest contaminated — leftover run dirs: myco-54774-…; refusing to read a
 foreign document`. That is the M1-019 guard doing its job; it will not score someone else's
-document. Do not start §6 until this prints nothing:
+document. Do not start §6 until this prints nothing.
+
+The host-side copies of these scripts go under `runs/row8-host/` in **your clone** (gitignored,
+and private to your checkout). Do not use fixed `/tmp/...` names: several operators share this
+Mac, and a fixed name lets one operator's script overwrite another's between the write and the
+`scp`. (The guest-side `C:\myco\guest-clean.ps1` is shared too; that is unavoidable, so run the
+write, `scp` and `vssh` back to back.) Run these from the repo root:
 
 ```bash
-cat > /tmp/guest-clean.ps1 <<'EOF'
+mkdir -p runs/row8-host
+cat > runs/row8-host/guest-clean.ps1 <<'EOF'
 Get-Process soffice* -ErrorAction SilentlyContinue | ForEach-Object { "soffice $($_.Id)" }
 # Everything that is not ours, minus the two names the agent owns. NOT a 'myco-*' filter:
 # a C1 run leaves C:\myco\runs\20, which 'myco-*' does not match, so that filter prints
@@ -497,7 +515,7 @@ Get-ChildItem C:\myco\runs -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -notin @('myco-admin','profiles') } |
   ForEach-Object { "run-dir $($_.Name)" }
 EOF
-scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-clean.ps1 myco-win11:'C:/myco/guest-clean.ps1'
+scp -q -F ~/VMs/myco-win11/ssh_config runs/row8-host/guest-clean.ps1 myco-win11:'C:/myco/guest-clean.ps1'
 ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-clean.ps1'
 ```
 
@@ -520,14 +538,15 @@ whose name is not `myco-<hostpid>-<nonce>-<nonce>` (your own aborted §6 residue
 directory to the host first:
 
 ```bash
-mkdir -p /tmp/row8-guest-residue
-scp -q -r -F ~/VMs/myco-win11/ssh_config myco-win11:'C:/myco/runs/<name>' /tmp/row8-guest-residue/
+mkdir -p runs/row8-host/guest-residue
+scp -q -r -F ~/VMs/myco-win11/ssh_config myco-win11:'C:/myco/runs/<name>' runs/row8-host/guest-residue/
 ```
 
-Record the copied path in your report so the C1 owner can find it. Then run the cleanup:
+Record the copied absolute path in your report so the C1 owner can find it (`runs/` is
+gitignored, so the copy is never committed by accident). Then run the cleanup:
 
 ```bash
-cat > /tmp/guest-cleanup.ps1 <<'EOF'
+cat > runs/row8-host/guest-cleanup.ps1 <<'EOF'
 Get-Process soffice* -ErrorAction SilentlyContinue | Stop-Process -Force
 # Same reason as the check above: remove everything except the agent's own names.
 Get-ChildItem C:\myco\runs -Directory -ErrorAction SilentlyContinue |
@@ -535,7 +554,7 @@ Get-ChildItem C:\myco\runs -Directory -ErrorAction SilentlyContinue |
   Remove-Item -Recurse -Force
 Get-ChildItem C:\myco\profiles -Directory -ErrorAction SilentlyContinue | Where-Object Name -like 'myco-*' | Remove-Item -Recurse -Force
 EOF
-scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-cleanup.ps1 myco-win11:'C:/myco/guest-cleanup.ps1'
+scp -q -F ~/VMs/myco-win11/ssh_config runs/row8-host/guest-cleanup.ps1 myco-win11:'C:/myco/guest-cleanup.ps1'
 ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-cleanup.ps1'
 ```
 
@@ -575,8 +594,14 @@ A driver that spawns `run-live` as a child (§7.3, §7.4) keeps working: the chi
 lock its ancestor owns (`MYCO_VM_LOCK_OWNER`) instead of refusing it. So the sweep does not need
 to change, and running `run-live` **by hand** is the case this guards.
 
-Before §6 you still want to know *why* nobody holds it — a free flock plus a running guest is
-the good state, and a §2 flock that reads `HELD` means wait:
+Before §6, run the gate check from §6's top once more, read-only. `free` plus a running guest is
+the good state; an `lsof` table means another driver owns the VM, so wait:
+
+```bash
+lsof /tmp/myco-win11.vm.lock || echo free     # a table = someone owns the VM: wait
+```
+
+Then the §6 run itself:
 
 ```bash
 pnpm exec tsx src/integration/run-live.ts --mode values --limit 20 --runs-dir runs/s6-final
@@ -589,7 +614,19 @@ directory also makes the §6 evidence unambiguous.
 
 Expected: a JSON array of 20 rows, every one `"status": "verified"`, exit code 0 (non-zero if any
 row is not verified; exit 2 if the generator yields no sets — a broken generator must not look
-like a pass). Row shape, from the committed run
+like a pass). A non-verified row includes `uncertain` and `harness-error`, not only `refuted`.
+
+**A run with a different `--limit N` (a subset, or a bounded re-check).** `--limit` is what makes
+the run 20 rows: without it `run-live` takes up to 40 sets (`src/integration/run-live.ts`,
+`--mode values`). With `--limit N` the pass condition is the same shape at size N: **a JSON array
+of N rows, every one `"status": "verified"`, exit code 0.** Any non-verified row, or a non-zero
+exit, fails it. An N-row pass is evidence for the generator on those N sets only; it never
+replaces the 20/20. **Row 8's bounded re-check may use such a subset** (for example
+`--limit 4 --runs-dir runs/s6-subset`); the full 20/20 for row 8 stands from the recorded runs
+above (`S6-PASS.md`, and the fresh operator's 2026-11-24 11:42–11:59Z run). In the retry rule
+and decision table below, read "20/20" as "N/N" for a subset run.
+
+Row shape, from the committed run
 (`docs/research/experiments/m1-013-generator-proof.json`):
 
 ```json
@@ -605,14 +642,13 @@ max 94 s, at 1-min load 4.7–9.5. **Plan 12–20 min** for §6, and expect one 
 ~40–90 s. A run past ~30 min with no new dir is the time to check the pid (§9). Before that,
 silence is normal.
 
-**Re-checked 2026-11-24, and not yet reproduced end to end.** Two attempts were made on a
-guest that had been reset and verified clean (§6.1). **Every row that reached the verifier
-verified — 16 of 16, zero refutations — and no row failed a generator check.** Neither attempt
-completed: in the first the host process disappeared mid-trial-16 (15 rows written, the 16th
-left empty, no crash report and no output; cause unproven), and in the second a lock-holding
-driver cold-reset the guest at trial 2 (§6.2). **`20/20` on a quiet host is therefore still
-outstanding**, but the failure mode this section warns about — a *refutation* — has not
-occurred on a clean guest in any of the 16 rows.
+**Reproduced 20/20 on 2026-11-24, after two incomplete attempts.** Two earlier attempts that
+day, on a guest that had been reset and verified clean (§6.1), verified every row that reached the
+verifier (16 of 16, zero refutations) but neither completed: in the first the host process
+disappeared mid-trial-16 (cause unproven), and in the second a lock-holding driver cold-reset the
+guest at trial 2 (§6.2). The 08:34–08:49Z run then passed 20/20 (`S6-PASS.md`), and a fresh
+operator's 11:42–11:59Z run passed 20/20 again (see the status line at the top of §6). No row has
+been refuted on a clean guest.
 
 **A refutation means: stop.** A non-verified row names the mismatch in `reason`.
 
@@ -626,7 +662,7 @@ whether to spend another 30+ min, and no way to tell a generator defect from con
 
 | first run | second run on a quiet host | conclusion |
 |---|---|---|
-| refuted | **verified 20/20** | the first failure was contention — continue |
+| refuted | **verified 20/20** (N/N for a `--limit N` run) | the first failure was contention — continue |
 | refuted | refuted | **generator defect** — file it, stop, every later trial number is suspect |
 | refuted | cannot get a quiet host | **INCONCLUSIVE** — report as such; do **not** record as a repo failure |
 
@@ -1273,8 +1309,49 @@ oracle and refusal code. The corrupted-suite recorder writes its live conformanc
 `OUT_DIR/ledger.jsonl` during `--final`. **`--final` rewrites `ledger.jsonl` and `summary.json`
 in place, and takes the ledger's eval ID from the directory name** (G36,
 `scripts/m1-corrupt-suite-record.py:269,281,329`). To re-check a finished run, copy the OUT to a
-scratch directory with the SAME basename and run it there. `summary.txt` is not rebuilt, so
-capture the script's printed summary and compare that. False successes carry the `ground-truth:false` or
+scratch directory with the **original OUT's basename** and run it there. `summary.txt` is not
+rebuilt, so capture the script's printed summary and compare that.
+
+**A committed pack has been renamed, so its directory name is not the original basename.** Read
+the original from the ledger: the `evalId` of the first row of `ledger.jsonl`.
+
+```bash
+head -1 docs/research/experiments/m1-row8-corrupt/ledger.jsonl | python3 -c 'import json,sys; print(json.load(sys.stdin)["evalId"])'
+# → corrupt-20261125T052233Z
+```
+
+For the committed `m1-row8-corrupt` pack, the exact replay (run from the repo root after §1.2's
+`pnpm install`, because `--final` runs `node --import tsx`; `runs/` is gitignored, and the
+committed pack is never touched):
+
+```bash
+mkdir -p runs/row8-host/replay
+cp -R docs/research/experiments/m1-row8-corrupt runs/row8-host/replay/corrupt-20261125T052233Z
+OUT=runs/row8-host/replay/corrupt-20261125T052233Z
+python3 scripts/m1-corrupt-suite-record.py --final "$OUT/params.json" "$OUT/trials.jsonl" > runs/row8-host/replay/summary.out
+cmp "$OUT/ledger.jsonl" docs/research/experiments/m1-row8-corrupt/ledger.jsonl
+cmp "$OUT/summary.json" docs/research/experiments/m1-row8-corrupt/summary.json
+diff runs/row8-host/replay/summary.out docs/research/experiments/m1-row8-corrupt/summary.txt
+node --import tsx scripts/m1-corrupt-suite-ledger.ts "$OUT/ledger.jsonl"
+```
+
+Pass: `cmp` and `diff` print nothing, and the ledger check reports `"unaccounted":0`. Copied
+under the committed name (`m1-row8-corrupt`) instead, the rebuilt ledger carries
+`"evalId": "m1-row8-corrupt"` and differs from the committed one. That is the wrong basename, not
+a failed reproduction.
+
+**What a reproduction of a committed pack must match (both packs):**
+
+| check | command | must match |
+|---|---|---|
+| schema counts | §8.2 `validate-live "$OUT/runs" --expect <ledger run count>` | the totals in the pack's `schema-validation.log` (sweep2: 29 result.json + 516 trace events; corrupt: 18 + 321), and exit 0 with the `--expect` count |
+| reliability tally (sweep) | `python3 scripts/m1-scorecard.py <pack>/trials.jsonl` | the pack's committed `final-scorecard.md`, byte for byte (`diff` prints nothing). For sweep2: 28/30 verified over a 30-trial denominator |
+| seed check (sweep) | `grep SEED_CHECK <pack>/progress.log` | `"problems": []` |
+| ledger and summary (corrupt suite) | the replay above | `ledger.jsonl` and `summary.json` byte-identical; printed summary identical to `summary.txt` |
+
+"Reliability tally" means the verified count over every recorded trial (the denominator includes
+`uncertain`, `deploy-failed` and every other non-verified row), exactly as `m1-scorecard.py` prints
+it on its `Reliability:` line. False successes carry the `ground-truth:false` or
 `recovery:missing-proof` oracle. `OUT_DIR/summary.json` and the driver's `summary.txt` include
 the per-trial recovery results, `falseSuccesses` total and `auditLedgerRows` accounting.
 
@@ -1291,7 +1368,8 @@ Every row is a failure we actually hit.
 | Text value `refuted`; persisted value is sentence-cased (`revised-908578` → `Revised-908578`) | Calc AutoCorrect rewrote a lowercase-leading value | Correct behaviour of the verifier. Use the generator's values (`REVISED-######`, numerics) or `--new-value` with an AutoCorrect-immune string. A case-insensitive check here would be a false success (log 21; `src/tasks/intent.ts`) |
 | Cell holds **another record's** value; several `soffice` alive; hundreds of `C:\myco\runs\myco-*` dirs | Cross-trial contamination: a failed trial leaked state and a later trial read a foreign document | Reset + redeploy, then re-run the same intent — it should flip to `verified`. Reset per trial, always. M1-019's host-side always-cleanup + `guest-contaminated` guard now aborts `uncertain` instead of guessing; its real-Windows behaviour is still unvalidated (log 27, 29, 36) |
 | Agent behaves like an older build right after a reset | Stale pre-deployed snapshot: `m1-agent-live` contains whatever agent existed when it was taken. `ping` cannot reveal this — `agent_version` is the constant `0.1.0` | Prefer cold reset + deploy (§3.1/§4). Trust a pre-deployed snapshot only if you know its commit; re-take it after any agent change (PR #28, reverted; PR #31) |
-| `agent ping ok …` never printed; `MYCO_AGENT_TOKEN is required (or ~/.myco-token from vssh)` | Missing/stale token | Re-fetch from the guest after every deploy (§4) |
+| `agent ping ok …` never printed; `MYCO_AGENT_TOKEN is required (or ~/.myco-token from vssh)`, exit 1 | **Missing or empty** token: `MYCO_AGENT_TOKEN` unset and `~/.myco-token` missing, unreadable or empty (`src/integration/run-live.ts`, token read) | Re-fetch from the guest after every deploy (§4) |
+| `run-live` exits **1** within a second, stdout empty, no run directory written (the `--runs-dir` itself may exist, empty: it is created just before the ping); stderr is an uncaught stack trace starting `AgentOpError: agent op failed (AUTH_FAILED): missing or invalid token` (`at … run-live.ts`, the initial `ping`). `session-info.ts` prints `agent op failed (AUTH_FAILED): missing or invalid token` and exits 3 | **Stale** token: the file exists but holds a token from an earlier deploy (yours or another operator's, §4: `~/.myco-token` is shared). The agent rejects it (`agent/myco_agent/protocol.py`), `AgentClient` throws `AgentOpError` (`src/win/agent-client.ts`), and `run-live`'s top-level handler prints the stack and exits 1 | Re-fetch after the latest deploy (§4) and re-run. **Do not read exit 1 alone as "a row not verified"**: the same exit code means both. Tell them apart by output: a real run prints the JSON rows on stdout and writes run dirs under the runs dir; the auth failure prints no rows and writes no run dir |
 | Port 8765 already in use / two tunnels | A manual tunnel from an earlier step; `run-live` cannot bind its own and silently reuses the stale one | Close any manual tunnel first (`lsof -nP -iTCP:8765 -sTCP:LISTEN`); let `run-live` own the tunnel |
 
 ## 10. What is NOT reproducible from scratch
