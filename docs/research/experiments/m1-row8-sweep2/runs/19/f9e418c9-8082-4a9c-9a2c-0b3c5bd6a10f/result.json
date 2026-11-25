@@ -1,0 +1,146 @@
+{
+  "runId": "f9e418c9-8082-4a9c-9a2c-0b3c5bd6a10f",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-b",
+    "rowKey": "EMP-0059",
+    "column": "salary",
+    "newValue": "$6286.05"
+  },
+  "instruction": "Set the cell at record EMP-0059, column salary, to \"$6286.05\", and save the file.",
+  "startedAt": "2026-11-25T03:14:51.774Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-b\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-46609-1795576498119-895234946\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-46609-1795576498119-895234946\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "E60"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-b\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-46609-1795576498119-895234946\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell E60 located at record EMP-0059, column salary, holds fixture value \"$65063.77\"",
+          "passed": true,
+          "observed": "value=\"$65063.77\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "E60"
+        },
+        "value": "$6286.05"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-46609-1795576498119-895234946\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell E60 located at record EMP-0059, column salary, holds fixture value \"$65063.77\"",
+          "passed": true,
+          "observed": "value=\"$65063.77\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell E60 holds \"$6286.05\"",
+          "passed": true,
+          "observed": "value=\"$6286.05\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell E60 holds \"$6286.05\"",
+          "passed": true,
+          "observed": "value=\"$6286.05\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell E60 (record EMP-0059, column salary) persisted as \"$6286.05\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell E60 (record EMP-0059, column salary) persisted as \"$6286.05\""
+    ]
+  }
+}

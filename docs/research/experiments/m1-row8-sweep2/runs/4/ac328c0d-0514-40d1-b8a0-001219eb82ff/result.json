@@ -1,0 +1,146 @@
+{
+  "runId": "ac328c0d-0514-40d1-b8a0-001219eb82ff",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-e",
+    "rowKey": "EMP-0011",
+    "column": "name",
+    "newValue": "REVISED-465160"
+  },
+  "instruction": "Set the cell at record EMP-0011, column name, to \"REVISED-465160\", and save the file.",
+  "startedAt": "2026-11-25T01:34:36.614Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-e\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-28477-1795570477057-744438907\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-28477-1795570477057-744438907\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B12"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-e\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-28477-1795570477057-744438907\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B12 located at record EMP-0011, column name, holds fixture value \"Gil Jovic\"",
+          "passed": true,
+          "observed": "value=\"Gil Jovic\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B12"
+        },
+        "value": "REVISED-465160"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-28477-1795570477057-744438907\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B12 located at record EMP-0011, column name, holds fixture value \"Gil Jovic\"",
+          "passed": true,
+          "observed": "value=\"Gil Jovic\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B12 holds \"REVISED-465160\"",
+          "passed": true,
+          "observed": "value=\"REVISED-465160\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B12 holds \"REVISED-465160\"",
+          "passed": true,
+          "observed": "value=\"REVISED-465160\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B12 (record EMP-0011, column name) persisted as \"REVISED-465160\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B12 (record EMP-0011, column name) persisted as \"REVISED-465160\""
+    ]
+  }
+}

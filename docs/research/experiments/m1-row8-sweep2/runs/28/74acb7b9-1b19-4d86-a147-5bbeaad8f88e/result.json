@@ -1,0 +1,146 @@
+{
+  "runId": "74acb7b9-1b19-4d86-a147-5bbeaad8f88e",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-e",
+    "rowKey": "EMP-0037",
+    "column": "name",
+    "newValue": "REVISED-924750"
+  },
+  "instruction": "Set the cell at record EMP-0037, column name, to \"REVISED-924750\", and save the file.",
+  "startedAt": "2026-11-25T04:35:59.815Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-e\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-43295-1795581363643-531377422\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-43295-1795581363643-531377422\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B38"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-e\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-43295-1795581363643-531377422\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B38 located at record EMP-0037, column name, holds fixture value \"Enzo Larsen\"",
+          "passed": true,
+          "observed": "value=\"Enzo Larsen\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B38"
+        },
+        "value": "REVISED-924750"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-43295-1795581363643-531377422\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B38 located at record EMP-0037, column name, holds fixture value \"Enzo Larsen\"",
+          "passed": true,
+          "observed": "value=\"Enzo Larsen\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B38 holds \"REVISED-924750\"",
+          "passed": true,
+          "observed": "value=\"REVISED-924750\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B38 holds \"REVISED-924750\"",
+          "passed": true,
+          "observed": "value=\"REVISED-924750\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B38 (record EMP-0037, column name) persisted as \"REVISED-924750\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B38 (record EMP-0037, column name) persisted as \"REVISED-924750\""
+    ]
+  }
+}

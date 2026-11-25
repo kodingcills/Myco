@@ -14,7 +14,7 @@ reproduced the 30-trial normal sweep. This is the §7.3 part of scorecard row 8 
 | status | count | trials |
 |---|---|---|
 | verified | 28 | all others |
-| uncertain | 1 | 3: fixture convert missed its 240 000 ms deadline (`convertMs 240483`) at host load 12–16 |
+| uncertain | 1 | 3: fixture convert missed its 240 000 ms deadline (`convertMs 240483`) at host 1-min load 12–15 during its convert window |
 | deploy-failed | 1 | 14: the guest's sshd dropped the agent copy right after a cold reset (`scp: Connection closed`) |
 
 **Strict count (lead ruling, 2026-11-25):** both non-verified rows are harness faults in which
@@ -54,4 +54,7 @@ is a runbook finding for §8.2.
 
 `trials.jsonl` (the ledger), `params.json`, `fingerprints.json`, `progress.log`, `supervise.log`,
 `final-scorecard.md`, `schema-validation.log`, and `runs/<index>/<runId>/{result.json,trace.jsonl}`
-for the 29 trials that ran. Screenshots are not committed, as for the other experiment packs.
+for the 29 trials that ran. The repo's `.gitignore` excludes `runs/` and `*.log`, so these are
+force-added (`git add -f`), as other experiment packs do. `progress.log` contains the agent's ping
+`session_id` values: random per-agent-start GUIDs (runbook §5), not credentials. Every `"token"`
+field in it is the deploy script's literal `<token>` placeholder. Screenshots are not committed, as for the other experiment packs.
