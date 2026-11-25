@@ -218,6 +218,25 @@ describe("scorecard-check", () => {
     );
   }, 120_000);
 
+  it("pins who signed M1 off and on whose delegation, and fails when either changes", () => {
+    const ok = run("--no-subchecks");
+    expect(ok.stdout).toMatch(/^unchecked +signoff +sign-off signer, delegator and dates/m);
+    const original = readFileSync(SCORECARD, "utf8");
+    for (const [from, to] of [
+      ["by Grok Bot (outer-loop engineering lead)", "by Someone (outer-loop engineering lead)"],
+      ["Grok Bot (outer-loop engineering lead)", "Grok Bot (contributor)"],
+      ["Tiffany McCormick's delegation", "Someone's delegation"],
+    ] as const) {
+      const result = checkMutated(mutate(original, from, to));
+      expect(result.status, `${from} -> ${to}`).toBe(1);
+      expect(result.mismatch).toContainEqual(
+        expect.stringMatching(
+          /^MISMATCH signoff: sign-off signer, delegator and dates: inventoried as unchecked, but the doc no longer says/,
+        ),
+      );
+    }
+  }, 120_000);
+
   it("lists the booked spike and the $1.632162 total as unchecked, never ok", () => {
     const result = run("--no-subchecks");
     const lines = result.stdout.split("\n").filter((line) => line.includes("1.632162"));

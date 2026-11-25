@@ -1176,9 +1176,10 @@ def check_signoff(r: Report, doc: Path, scorecard, row7, v3: dict) -> None:
     """The M1 sign-off record: each re-check figure recomputed with the same tools rows
     3-8 use; the run's own provenance (SHA, CI runs, dates, this script's count) is unchecked."""
     s = "signoff"
-    r.unchecked(s, "sign-off and delegation dates",
-                "the sign-off's own dates (the lead's record of the sign-off and of the delegation), not figures from an artifact",
-                doc=("M1 signed off 2026-11-25", "delegation of 2026-11-23"))
+    r.unchecked(s, "sign-off signer, delegator and dates",
+                "who signed, on whose delegation, and when: the lead's own record of the sign-off and of the delegation, "
+                "not figures from an artifact; pinned so a changed signer, delegator or date fails",
+                doc=("M1 signed off 2026-11-25 by Grok Bot (outer-loop engineering lead) on Tiffany McCormick's delegation of 2026-11-23",))
     r.unchecked(s, "re-check commit and CI runs",
                 "the main SHA the lead re-checked and the GitHub Actions run ids for it; true by construction of that run, "
                 "and no committed artifact records them",
