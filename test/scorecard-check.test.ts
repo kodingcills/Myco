@@ -320,6 +320,63 @@ describe("scorecard-check", () => {
       ["## Open risk:", "# Foo\n\nNothing.\n\n## Open risk:"],
       /^MISMATCH layout: # Foo: .*does not classify/,
     ],
+    // TIF-230: the gaps the #434 verifier found, each a mutation main's checker passed.
+    [
+      "a number in the Trial traces section",
+      [
+        "|\n\n## Evidence durability",
+        "|\n\nAll 31 of these trials verified.\n\n## Evidence durability",
+      ],
+      /^UNATTRIBUTED traces: .*\['31'\]/,
+    ],
+    [
+      "a renumbered Trial traces label",
+      ["| M1-013 #05 |", "| M1-013 #50 |"],
+      /^MISMATCH traces: m1-013: 30 rows/,
+    ],
+    [
+      "an out-of-scope heading with extra text",
+      ["## Reliability row, regenerate\n", "## Reliability row, regenerate: 31 of 40\n"],
+      /^MISMATCH layout: ## Reliability row, regenerate: 31 of 40: .*does not classify/,
+    ],
+    [
+      "the test-plan heading with extra text",
+      [
+        "## Reproducibility test plan (row 8)\n",
+        "## Reproducibility test plan (row 8): 31 of 40 passed\n",
+      ],
+      /^MISMATCH layout: ## Reproducibility test plan \(row 8\): 31 of 40 passed: .*does not classify/,
+    ],
+    [
+      "Sweep v3 renamed Sweep v2",
+      ["Sweep v3 ran all 30", "Sweep v2 ran all 30"],
+      /^MISMATCH row 1: identifier words: word 1/,
+    ],
+    [
+      "a trial-0 identifier changed",
+      ["`#?run=trial-0` selects", "`#?run=spike-trial-0` selects"],
+      /^MISMATCH viewer: identifier words: word 7/,
+    ],
+    [
+      "one pinned identifier swapped for another (r6 for r3)",
+      ["arm-003 r6 vs Myco", "arm-003 r3 vs Myco"],
+      /^MISMATCH row 7: identifier words: word 3: the doc has 'r3' where IDENTIFIER_PINS has 'r6'/,
+    ],
+    [
+      "a (1) enumerator outside row 7",
+      inRow3("(1) refute was re-run."),
+      /^UNATTRIBUTED row 3: .*\['1'\]/,
+    ],
+    [
+      "a (5) enumerator after row 7's (4)",
+      ["(0 rows) |", "(0 rows). (5) Five rows were re-graded |"],
+      /^UNATTRIBUTED row 7: .*\['5'\]/,
+    ],
+    [
+      "row 7 losing an enumerator",
+      ["(3) The transcripts", "The transcripts"],
+      /^MISMATCH row 7: enumerators: 2 in-order/,
+    ],
   ];
   it.each(cases)(
     "fails on %s",
@@ -333,7 +390,32 @@ describe("scorecard-check", () => {
     120_000,
   );
 
-  // The identifier list is exactly the word-internal digit runs of the committed doc:
+  // TIF-230: a compact `|2|31` first cell. Main skipped a fixed five characters, so the
+  // 31 escaped, and its status check missed row 2's DONE, so "All 7 of 8" passed too.
+  it("fails on a compact |2|31 row prefix: only the row number is skipped", () => {
+    let text = readFileSync(SCORECARD, "utf8");
+    text = mutate(text, "| 2 | Independent", "|2|31 Independent");
+    text = mutate(text, "All 8 rows are DONE", "All 7 of 8 rows are DONE");
+    const result = checkMutated(text);
+    expect(result.status).toBe(1);
+    expect(result.unattributed).toContainEqual(
+      expect.stringMatching(/^UNATTRIBUTED row 2: .*\['31'\]/),
+    );
+    expect(result.mismatch).toContainEqual(
+      expect.stringMatching(/^MISMATCH status: rows DONE: expected 'All 8 rows are DONE'/),
+    );
+  }, 120_000);
+
+  it("sweeps Trial traces as an in-scope section", () => {
+    const result = run("--no-subchecks");
+    expect(result.stdout).toMatch(/in scope +## Trial traces/);
+    expect(result.stdout).toMatch(/^swept +traces +number sweep/m);
+    expect(result.stdout).toMatch(
+      /^ok +traces +the table is the header and exactly the committed trials/m,
+    );
+  }, 120_000);
+
+  // The identifier pins are exactly the word-internal digit runs of the committed doc:
   // nothing in it is unused, and nothing the sweep skipped is missing from it.
   it("skips exactly the listed identifier words in the committed scorecard", () => {
     const result = run("--identifiers");
