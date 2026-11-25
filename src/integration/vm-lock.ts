@@ -26,7 +26,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { closeSync, openSync, readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, statSync } from "node:fs";
 import process from "node:process";
 
 export const DEFAULT_VM_LOCK_PATH = "/tmp/myco-win11.vm.lock";
@@ -43,6 +43,19 @@ export const PARENT_DRIVERS = [
   "c1-sweep.sh",
   "c1-spike.sh",
 ] as const;
+
+/**
+ * Parents that prove ownership through the inherited descriptor alone (TIF-210),
+ * mirroring the `vm-session.sh` case of `vm_lock_owned_by_parent`. The operator
+ * session wrapper is not in {@link PARENT_DRIVERS} on purpose: those accept any
+ * descendant via the ppid walk, while a session child must carry the wrapper's
+ * FD 9 — the open file description that holds the flock. See
+ * {@link inheritedFdHoldsLock}.
+ */
+export const FD_PROVEN_PARENT_DRIVERS = ["vm-session.sh"] as const;
+
+/** The descriptor scripts/vm-lock.sh holds the flock on, inherited by children. */
+const LOCK_FD = 9;
 
 export interface VmLockOptions {
   /** Lock file; defaults to MYCO_VM_LOCK_PATH, then DEFAULT_VM_LOCK_PATH. */
@@ -72,6 +85,12 @@ interface OwnershipSeams {
   owner?: number;
   /** The ppid chain walk; defaults to walking `/bin/ps`. */
   ancestorOf?: (pid: number) => boolean;
+  /**
+   * The descriptor checked for an fd-proven parent; defaults to 9. Tests point it
+   * at a descriptor they opened, which can only make the proof harder to pass:
+   * whatever fd is named must still be the holder's open file description.
+   */
+  lockFd?: number;
 }
 
 /** The lock is held by someone else. `holder` is the record that named them. */
@@ -160,14 +179,50 @@ export function lockOwnedByAncestor(options: VmLockOptions & OwnershipSeams = {}
     return false;
   }
   if (record.pid !== owner) return false;
-  if (!PARENT_DRIVERS.includes(record.driver as (typeof PARENT_DRIVERS)[number])) return false;
+  const fdProven = FD_PROVEN_PARENT_DRIVERS.includes(
+    record.driver as (typeof FD_PROVEN_PARENT_DRIVERS)[number],
+  );
+  if (!fdProven && !PARENT_DRIVERS.includes(record.driver as (typeof PARENT_DRIVERS)[number])) {
+    return false;
+  }
   // EPERM means the process exists but is not ours to signal, so it is alive.
   try {
     process.kill(owner, 0);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EPERM") return false;
   }
+  // No ancestry fallback for an fd-proven parent: descending from the wrapper is
+  // not evidence, carrying its descriptor is.
+  if (fdProven) return inheritedFdHoldsLock(path, options.lockFd ?? LOCK_FD);
   return options.ancestorOf ? options.ancestorOf(owner) : isAncestor(owner);
+}
+
+/**
+ * True when `fd` is the open file description holding the flock on `path`.
+ *
+ * Two checks, both required. `samestat`: the descriptor is the lock file, not a
+ * reused fd number (a Node launcher's own fd 9 is a pipe or kqueue). Then a
+ * `LOCK_EX | LOCK_NB` on a dup of it: on the holder's description that is a no-op,
+ * because the exclusive lock is already on it; on a description this process
+ * opened itself it fails while the holder lives. That second check is what turns
+ * "has the file open" into "inherited the lock". It runs only after samestat, so it
+ * never touches any file but the lock file. Any failure is false.
+ */
+function inheritedFdHoldsLock(path: string, fd: number): boolean {
+  try {
+    const held = fstatSync(fd);
+    const file = statSync(path);
+    if (held.dev !== file.dev || held.ino !== file.ino) return false;
+  } catch {
+    return false;
+  }
+  const result = spawnSync(
+    "python3",
+    ["-c", "import fcntl\nfcntl.flock(3, fcntl.LOCK_EX | fcntl.LOCK_NB)"],
+    // Child fd 3 is a dup of `fd`: the same open file description.
+    { stdio: ["ignore", "ignore", "ignore", fd], timeout: 10_000 },
+  );
+  return result.error === undefined && result.status === 0;
 }
 
 function parseLockRecord(text: string): { pid: number; driver: string } {

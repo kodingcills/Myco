@@ -79,12 +79,42 @@ PY
   export MYCO_VM_LOCK_OWNER=$$
 }
 
+# True only when this process's FD 9 IS the holder's lock: the same file as
+# $VM_LOCK_PATH (samestat) AND the same open file description that holds the
+# flock. The second half is what makes the fd an inheritance proof rather than
+# a path check: a process that opens the lock file itself gets a NEW open file
+# description, and LOCK_NB on it fails while the real holder lives. On the
+# holder's own description the call is a no-op (the lock is already exclusive
+# on it), so it never takes, drops or races the lock. It is only reached after
+# samestat passed, so it never touches any file but the lock file.
+vm_lock_fd_is_holders() {
+  python3 - "$VM_LOCK_PATH" <<'PY'
+import fcntl
+import os
+import sys
+
+try:
+    if not os.path.samestat(os.fstat(9), os.stat(sys.argv[1])):
+        sys.exit(1)
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(1)
+PY
+}
+
 vm_lock_owned_by_parent() {
   local pid driver owner="${MYCO_VM_LOCK_OWNER:-}"
   [ -n "$owner" ] &&
     read -r pid driver < "$VM_LOCK_PATH" &&
     [ "$pid" = "$owner" ] &&
     case "$driver" in
+      # The operator-session wrapper (TIF-210). It proves ownership through the
+      # inherited descriptor ONLY: no ppid-chain fallback, so a process that
+      # merely descends from the wrapper, or names its pid, is refused unless
+      # it also carries the wrapper's FD 9.
+      vm-session.sh)
+        kill -0 "$pid" 2>/dev/null && vm_lock_fd_is_holders
+        ;;
       m1-sweep.sh|m1-corrupt-suite.sh|c1-baseline.sh|c1-sweep.sh|c1-spike.sh)
         kill -0 "$pid" 2>/dev/null &&
           python3 - "$VM_LOCK_PATH" "$owner" <<'PY'
