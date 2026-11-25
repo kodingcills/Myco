@@ -15,6 +15,7 @@ import process from "node:process";
 import { afterEach, expect, it } from "vitest";
 import {
   acquireVmLock,
+  acquireVmLockUnlessOwnedByAncestor,
   DEFAULT_VM_LOCK_PATH,
   lockOwnedByAncestor,
   VmLockedError,
@@ -136,6 +137,7 @@ it("passes the command's status through and releases the lock when the child cra
 for (const [signal, number] of [
   ["SIGTERM", 15],
   ["SIGINT", 2],
+  ["SIGHUP", 1],
 ] as const) {
   it(`on ${signal} stops the command and releases the lock`, async () => {
     const { dir, lock, env } = fixture();
@@ -158,6 +160,35 @@ for (const [signal, number] of [
     expect(result).toEqual({ code: 128 + number, signal: null });
   }, 15_000);
 }
+
+it("stops the command on a signal sent the moment the session starts", async () => {
+  // Round 2 regression: a signal forwarded before the forked child had exec'd ran
+  // the wrapper's own trap inside the child and was lost, so `sleep 30` ran on
+  // with the lock held. Now every immediate SIGTERM must end the session at once.
+  const { lock, env } = fixture();
+  for (let round = 0; round < 5; round += 1) {
+    const started = Date.now();
+    const { child, exited } = await startWrapper(["sleep", "30"], env, lock);
+    child.kill("SIGTERM");
+    expect({ round, result: await exited }).toEqual({ round, result: { code: 143, signal: null } });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(readFileSync(lock, "utf8")).toBe("");
+    expect(lockIsFree(lock)).toBe(true); // writes its own record; checked second
+    writeFileSync(lock, "");
+  }
+}, 30_000);
+
+it("gives the command the operator's stdin", () => {
+  const { env } = fixture();
+  const result = spawnSync("bash", [WRAPPER, "--", "cat"], {
+    encoding: "utf8",
+    timeout: 20_000,
+    env,
+    input: "from-the-operator\n",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe("from-the-operator\n");
+});
 
 it("accepts a shell step started under the wrapper", async () => {
   const { lock, env } = fixture();
@@ -214,13 +245,121 @@ it("refuses a forger that names the wrapper's pid without holding its inherited 
     });
   }
   // The TypeScript gate, against a descriptor this process opened on the lock file.
+  // `ancestorOf: () => true` grants descent outright, so only the fd proof refuses.
   const fd = openSync(lock, "a");
   try {
     expect(lockOwnedByAncestor({ path: lock, owner: child.pid, lockFd: fd })).toBe(false);
+    expect(
+      lockOwnedByAncestor({ path: lock, owner: child.pid, lockFd: fd, ancestorOf: () => true }),
+    ).toBe(false);
   } finally {
     closeSync(fd);
   }
   expect(lockOwnedByAncestor({ path: lock, owner: child.pid })).toBe(false);
+});
+
+it("refuses a descendant of the wrapper whose FD 9 is not the wrapper's lock", () => {
+  // Descent passes for these, so each is refused by the fd proof alone.
+  const { dir, env } = fixture();
+  const other = join(dir, "other.file");
+  writeFileSync(other, "");
+  const forgeries = {
+    // FD 9 open on some other file: the same fd number, not the lock
+    otherFile: `exec 9>>"${other}"; ${FAKE_STEP}`,
+    // FD 9 reopened on the lock file: its own open file description
+    ownOpen: `exec 9>>"$MYCO_VM_LOCK_PATH"; ${FAKE_STEP}`,
+  };
+  for (const [name, script] of Object.entries(forgeries)) {
+    const result = runSync([WRAPPER, "--", "bash", "-c", script], env);
+    expect({ name, status: result.status, out: result.stdout.trim() }).toEqual({
+      name,
+      status: 10,
+      out: "",
+    });
+  }
+});
+
+it("clears its own record on exit, so no stale vm-session.sh record survives", async () => {
+  const { lock, env } = fixture();
+  expect(runSync([WRAPPER, "--", "true"], env).status).toBe(0);
+  expect(readFileSync(lock, "utf8")).toBe("");
+  expect(runSync([WRAPPER, "--", "bash", "-c", "exit 4"], env).status).toBe(4);
+  expect(readFileSync(lock, "utf8")).toBe("");
+  const { child, exited } = await startWrapper(["sleep", "30"], env, lock);
+  child.kill("SIGTERM");
+  await exited;
+  expect(readFileSync(lock, "utf8")).toBe("");
+  // The other drivers keep their diagnostic record after release, as before.
+  const sweep = runSync(["-c", 'source "$GUARD"; vm_lock_acquire m1-sweep.sh'], env);
+  expect(sweep.status, sweep.stderr).toBe(0);
+  expect(readFileSync(lock, "utf8")).toMatch(/^\d+ m1-sweep\.sh\n$/);
+});
+
+it("refuses a stale record whose pid is reused by a live process (verifier D1, F6b/F6c)", () => {
+  const { dir, lock, env } = fixture();
+  // A live unrelated process stands in for the reused pid; the lock itself is FREE.
+  const reused = spawn("sleep", ["30"]);
+  running.push(reused);
+  const pid = String(reused.pid);
+  const stale = () => writeFileSync(lock, `${pid} vm-session.sh\n`);
+  const forged = { ...env, MYCO_VM_LOCK_OWNER: pid };
+
+  // F6b, the shell gate: a self-opened FD 9 on the lock file must not be accepted.
+  stale();
+  const shell = runSync(
+    [
+      "-c",
+      `exec 9>>"$MYCO_VM_LOCK_PATH"; source "$GUARD"; vm_lock_owned_by_parent && echo INHERITED`,
+    ],
+    forged,
+  );
+  expect(shell.stdout).not.toContain("INHERITED");
+  expect(shell.status).not.toBe(0);
+
+  // F6c, the TS gate, through the production entry point in a node child.
+  stale();
+  const step = join(dir, "forged-step.ts");
+  writeFileSync(
+    step,
+    `import { acquireVmLockUnlessOwnedByAncestor } from ${JSON.stringify(join(REPO, "src/integration/vm-lock.ts"))};
+const lock = acquireVmLockUnlessOwnedByAncestor({ driver: "forged-step.ts" });
+console.log(lock === undefined ? "INHERITED" : "ACQUIRED");
+`,
+  );
+  const node = runSync(
+    ["-c", `exec 9>>"$MYCO_VM_LOCK_PATH"; exec node --import tsx "${step}"`],
+    forged,
+  );
+  expect(node.status, node.stderr).toBe(0);
+  // It took the free lock for itself, in its own name: it did not borrow the stale one.
+  expect(node.stdout.trim()).toBe("ACQUIRED");
+
+  // And the predicate directly, with the forger's own descriptor.
+  stale();
+  const fd = openSync(lock, "a");
+  try {
+    expect(lockOwnedByAncestor({ path: lock, owner: Number(pid), lockFd: fd })).toBe(false);
+  } finally {
+    closeSync(fd);
+  }
+  // The refusals did not leave the lock taken.
+  expect(lockIsFree(lock)).toBe(true);
+});
+
+it("refuses a nested vm-session.sh inside a session", () => {
+  const { env } = fixture();
+  const result = runSync([WRAPPER, "--", "bash", "-c", `"${WRAPPER}" -- echo SHOULD-NOT-RUN`], env);
+  expect(result.status).toBe(10);
+  expect(result.stdout).not.toContain("SHOULD-NOT-RUN");
+  expect(result.stderr).toMatch(/REFUSED_VM_LOCKED: holder \d+ vm-session\.sh/);
+});
+
+it("gives the production entry point no way to take the lockFd seam", () => {
+  // Type-level: VmLockOptions has no lockFd, so passing one does not compile.
+  const typeCheckOnly = (path: string) =>
+    // @ts-expect-error lockFd is a test seam of lockOwnedByAncestor only
+    acquireVmLockUnlessOwnedByAncestor({ path, lockFd: 3 });
+  expect(typeof typeCheckOnly).toBe("function");
 });
 
 it("refuses a descendant of the wrapper that does not carry FD 9 (no ppid fallback)", () => {

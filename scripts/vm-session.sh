@@ -13,6 +13,10 @@
 # flock. A process that only names the wrapper's pid, or opens the lock file on
 # its own, is refused.
 #
+# On exit the wrapper clears its own record (under the flock) before closing
+# FD 9, so the lock file is empty after a session that was not SIGKILLed. A background descendant that
+# kept FD 9 keeps the lock held after the wrapper exits, until it exits too.
+#
 # Run several steps as one session with a shell:
 #   scripts/vm-session.sh -- bash -c 'scripts/reset-trial-vm.sh && ...'
 #
@@ -31,42 +35,102 @@ fi
 shift
 
 source "$(dirname "$0")/vm-lock.sh"
-vm_lock_acquire vm-session.sh || exit "$?"
-trap vm_lock_release EXIT
 
-child=
-forward() {
-  local name=$1 number=$2
-  trap '' TERM INT HUP
-  if [ -n "$child" ]; then
-    kill -"$name" "$child" 2>/dev/null
-    wait "$child" 2>/dev/null
+# A signal before the supervisor below has blocked its signals: clear our record
+# if we wrote one (we then hold the flock), and exit. No command has started yet.
+vm_session_abort() {
+  local pid driver
+  if read -r pid driver < "$VM_LOCK_PATH" 2>/dev/null &&
+    [ "$pid" = "$$" ] && [ "$driver" = "vm-session.sh" ]; then
+    : > "$VM_LOCK_PATH"
   fi
-  vm_lock_release
-  exit $((128 + number))
+  exit "$1"
 }
-trap 'forward TERM 15' TERM
-trap 'forward INT 2' INT
-trap 'forward HUP 1' HUP
+trap 'vm_session_abort 143' TERM
+trap 'vm_session_abort 130' INT
+trap 'vm_session_abort 129' HUP
 
-echo "vm-session: holding $VM_LOCK_PATH as $$ vm-session.sh" >&2
+vm_lock_acquire vm-session.sh || exit "$?"
 
-# A non-interactive shell starts background jobs with SIGINT and SIGQUIT
-# ignored, and `trap -` cannot undo that, so exec through a python3 shim that
-# restores the defaults (python3 is already required by vm-lock.sh). `0<&0`
-# keeps the operator's stdin instead of the /dev/null a background job gets.
-python3 -c '
+# The supervisor is python3 (already required by vm-lock.sh), exec'd so it keeps
+# this pid (the recorded owner, MYCO_VM_LOCK_OWNER) and FD 9. Bash cannot do this
+# part safely: a background job of a non-interactive shell starts with SIGINT
+# ignored, and a signal forwarded while the forked child has not exec'd yet runs
+# the parent's trap inside the child and is lost (measured: 9 of 10 SIGTERMs
+# landed there and the command ran to completion). The supervisor blocks the
+# signals BEFORE forking, and the child resets them to their defaults and only
+# then unblocks, so a signal in that window is delivered to it, not lost.
+#
+# Paths out, all of which clear the record (only if it is still ours) while FD 9
+# still holds the flock, then close FD 9:
+#   - the command exits: its status, or 128+n if a signal killed it
+#   - SIGTERM / SIGINT / SIGHUP to the wrapper: forwarded to the command; once it
+#     has exited, exit 128+n of the first one
+#   - the command cannot be run: 127
+# A SIGKILL of the wrapper leaves the record, and so does a signal in the few ms
+# between this exec and the supervisor blocking its signals (python3 startup; no
+# command exists yet, so nothing is orphaned and the kernel frees the lock). The
+# gate's ancestry check is what keeps such a stale record from being reused (see
+# vm_lock_fd_is_holders). "holding" is printed only once signals are blocked.
+exec python3 -c '
 import os, signal, sys
-for s in (signal.SIGINT, signal.SIGQUIT):
-    signal.signal(s, signal.SIG_DFL)
+
+FORWARD = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+WAITED = set(FORWARD) | {signal.SIGCHLD}
+path, cmd = sys.argv[1], sys.argv[2:]
+me = f"{os.getpid()} vm-session.sh"
+
+# Block first, then install handlers: a blocked signal stays pending for sigwait,
+# and a handler (rather than SIG_DFL) keeps SIGCHLD from being discarded.
+signal.pthread_sigmask(signal.SIG_BLOCK, WAITED)
+for s in WAITED:
+    signal.signal(s, lambda *_: None)
+print(f"vm-session: holding {path} as {me}", file=sys.stderr, flush=True)
+
+def release():
+    try:
+        with open(path) as f:
+            if f.read().strip() == me:
+                os.ftruncate(9, 0)
+    except OSError:
+        pass
+    try:
+        os.close(9)
+    except OSError:
+        pass
+
+def as_status(status):
+    if os.WIFSIGNALED(status):
+        return 128 + os.WTERMSIG(status)
+    return os.WEXITSTATUS(status)
+
+pid = os.fork()
+if pid == 0:
+    try:
+        # Python ignores SIGPIPE and SIGXFSZ; an ignored disposition survives
+        # exec, so restore every one this process touched.
+        for s in WAITED | {signal.SIGQUIT, signal.SIGPIPE, signal.SIGXFSZ}:
+            signal.signal(s, signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_SETMASK, [])
+        os.execvp(cmd[0], cmd)
+    except OSError as error:
+        print(f"vm-session: cannot run {cmd[0]}: {error.strerror}", file=sys.stderr)
+    os._exit(127)
+
+first = None
 try:
-    os.execvp(sys.argv[1], sys.argv[1:])
-except OSError as error:
-    print(f"vm-session: cannot run {sys.argv[1]}: {error.strerror}", file=sys.stderr)
-    sys.exit(127)
-' "$@" 0<&0 &
-child=$!
-wait "$child"
-status=$?
-child=
-exit "$status"
+    while True:
+        got = signal.sigwait(WAITED)
+        if got in FORWARD:
+            first = first or got
+            try:
+                os.kill(pid, got)
+            except ProcessLookupError:
+                pass
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done == pid:
+            break
+finally:
+    release()
+sys.exit(128 + first if first else as_status(status))
+' "$VM_LOCK_PATH" "$@"

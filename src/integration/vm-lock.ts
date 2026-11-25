@@ -191,10 +191,13 @@ export function lockOwnedByAncestor(options: VmLockOptions & OwnershipSeams = {}
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EPERM") return false;
   }
-  // No ancestry fallback for an fd-proven parent: descending from the wrapper is
-  // not evidence, carrying its descriptor is.
-  if (fdProven) return inheritedFdHoldsLock(path, options.lockFd ?? LOCK_FD);
-  return options.ancestorOf ? options.ancestorOf(owner) : isAncestor(owner);
+  const ancestor = options.ancestorOf ?? isAncestor;
+  // An fd-proven parent needs BOTH: descent (checked first, so a non-descendant is
+  // refused before the flock half can run on its descriptor; verifier D1, a stale
+  // record whose pid was reused) AND the wrapper's descriptor. The drivers in
+  // PARENT_DRIVERS accept descent alone, as before.
+  if (fdProven) return ancestor(owner) && inheritedFdHoldsLock(path, options.lockFd ?? LOCK_FD);
+  return ancestor(owner);
 }
 
 /**
@@ -207,6 +210,12 @@ export function lockOwnedByAncestor(options: VmLockOptions & OwnershipSeams = {}
  * opened itself it fails while the holder lives. That second check is what turns
  * "has the file open" into "inherited the lock". It runs only after samestat, so it
  * never touches any file but the lock file. Any failure is false.
+ *
+ * It is not side-effect-free when the lock is FREE: the flock then succeeds and
+ * takes the lock on this process's descriptor. The caller runs the ancestry check
+ * first, which limits that to a descendant of the recorded owner, and
+ * `scripts/vm-session.sh` clears its record on exit, so a cleanly finished session
+ * leaves no record to match.
  */
 function inheritedFdHoldsLock(path: string, fd: number): boolean {
   try {

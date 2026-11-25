@@ -190,7 +190,8 @@ Expected: `started`. Other values: `stopped` → start it; `resuming` → wedge,
 snapshot.
 
 **Ownership is the flock, never the lock file.** `/tmp/myco-win11.vm.lock` keeps
-the last writer's `<pid> <driver>` after release, so its contents name a dead pid
+the last writer's `<pid> <driver>` after release (every driver except `vm-session.sh`, which
+clears its own record on exit, §6, so an empty file is normal too), so its contents name a dead pid
 routinely — two different stale contents were read on the morning of 2026-11-23
 while the flock was free both times. Check whether the host is in use with `lsof`,
 read-only:
@@ -601,13 +602,16 @@ lsof /tmp/myco-win11.vm.lock || echo free     # free again once the session exit
 The wrapper takes the lock once (record `<pid> vm-session.sh`), runs the command with the lock's
 descriptor (FD 9) inherited, and releases it when the command exits: normally, on a crash, or on
 Ctrl-C / `kill` (SIGINT, SIGTERM and SIGHUP are forwarded to the command, the wrapper waits for it,
-then exits `128+signal`). It exits **10** with `REFUSED_VM_LOCKED` if the lock is held, and
+then exits `128+signal`). On every one of those exits it clears its record, so the lock file
+is empty afterwards (unlike the other drivers, §2); only a SIGKILLed wrapper leaves
+`<pid> vm-session.sh` behind. It exits **10** with `REFUSED_VM_LOCKED` if the lock is held, and
 otherwise with the command's own status. While it runs, `lsof` lists the wrapper and its
 children, which is correct: the VM is in use.
 
-- A step accepts the session's lock only if it **inherited FD 9** from the wrapper: the
-  descriptor must be the lock file *and* the open file description that holds the flock. Being
-  a descendant, or setting `MYCO_VM_LOCK_OWNER` to the wrapper's pid, is not enough, and a
+- A step accepts the session's lock only if it **inherited FD 9** from the wrapper: it must be a
+  descendant of the recorded wrapper, *and* its FD 9 must be the lock file *and* the open file
+  description that holds the flock. Being a descendant alone, or setting `MYCO_VM_LOCK_OWNER` to
+  the wrapper's pid, is not enough, and a
   second wrapper, a sweep or any other driver started elsewhere still refuses with exit 10.
 - **Start TypeScript steps with `node --import tsx`, not `pnpm exec tsx`, under the wrapper.**
   `pnpm exec`, `npx` and the `tsx` CLI start their child with stdio only, so FD 9 does not reach
