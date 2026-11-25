@@ -269,9 +269,11 @@ def group_alive():
     return bool(members())
 
 def send(sig):
+    # macOS answers EPERM, not ESRCH, for a group that holds only a zombie (the
+    # command died and is not reaped yet): nothing is left to signal either way.
     try:
         os.killpg(group, sig)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         return
     if shared and sig in signal.sigpending():
         # Our own copy of what we just sent; take it back.
@@ -279,7 +281,7 @@ def send(sig):
     # A stopped process only acts on a signal once it continues.
     try:
         os.killpg(group, signal.SIGCONT)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
 
 first = None

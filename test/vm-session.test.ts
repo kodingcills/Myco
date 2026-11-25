@@ -656,3 +656,20 @@ it.skipIf(ptyMissing !== null)(
   },
   100_000,
 );
+
+it("ends with 128+n when the signal comes just as the command exits", () => {
+  // The command signals the wrapper and exits at once, so the wrapper forwards to
+  // a group that holds only an unreaped zombie. macOS answers that killpg with
+  // EPERM (not ESRCH); the wrapper must still exit 143, with the lock released.
+  const { lock, env } = fixture();
+  for (let round = 0; round < 5; round += 1) {
+    const result = runSync([WRAPPER, "--", "bash", "-c", 'kill -TERM "$PPID"'], env);
+    expect({ round, status: result.status, stderr: result.stderr }).toEqual({
+      round,
+      status: 143,
+      stderr: expect.not.stringContaining("Traceback"),
+    });
+    expect(readFileSync(lock, "utf8")).toBe("");
+    expect(lockIsFree(lock)).toBe(true);
+  }
+});
