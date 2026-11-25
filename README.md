@@ -29,7 +29,9 @@ Core invariant: **`ActResult` never claims goal success, and the runner never de
 
 Prerequisites: Node ≥ 24 (`engines` in `package.json`) and pnpm 10 on your `PATH`; the repo does
 not install pnpm for you. **This is a pnpm workspace, and `npm install` does not install it
-correctly** — use `pnpm`.
+correctly** — use `pnpm`. The `python3 scripts/…` checks below also need Python 3 (standard library
+only; checked on 3.11, 3.12 and 3.13). An older Node only warns `Unsupported engine` at install; it
+does not stop the install, so check `node -v` yourself.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -48,6 +50,19 @@ on 2026-11-25 (macOS arm64, Node 24.4.1, pnpm 10.34.9): install ~1 s from a warm
 Run the suite with `pnpm test`, not a bare `pnpm exec vitest run`. The bare run puts
 `test/discovery/s0-live-launcher.test.ts` in parallel with everything else, and its lock test is
 flaky there (1 failure in 3 bare runs on 2026-11-25). `pnpm test` runs that file on its own.
+
+Run `pnpm test` as a **non-root user**, in an environment whose PID 1 reaps orphaned processes. In a
+container, that means a non-root user and `docker run --init` (or an equivalent init). Otherwise
+`pnpm test` exits 1 for reasons that have nothing to do with the repo:
+
+- As root, 2 tests in `test/deploy-copy-retry.test.ts` fail (the `MYCO_TOKEN_OUT` "unwritable"
+  cases), because root can write to a `chmod 0500` directory or a `0400` file.
+- Under a PID 1 that does not reap orphans promptly, the `--stop` test in
+  `test/discovery/s0-live-launcher.test.ts` fails with `expected true to be false`. The child it
+  stopped is left as a zombie, and `kill -0` still succeeds on a zombie.
+
+Both were seen on a Linux cloud container on 2026-11-25. Run as a non-root user under a reaping
+init, `pnpm test` exited 0.
 
 > **`npm install` exits 0 and leaves the repo broken.** npm does not understand the `viewer/`
 > workspace, so it installs the root package, leaves `viewer/node_modules` **empty**, and reports
