@@ -8,6 +8,28 @@ Agents can already touch desktop software. The unsolved problem is *trust* — k
 
 ---
 
+## M1 results
+
+M1 was signed off on 2026-11-25 ([#444](https://github.com/kodingcills/Myco/pull/444)). All 8
+acceptance rows are DONE; row 8 (reproducibility) is DONE **given the VM bundle**, because the ISO,
+payloads and `clean-base` snapshots live outside the repo. The numbers below are taken from
+[docs/m1-scorecard.md](docs/m1-scorecard.md), which is the record:
+
+| Row | Result |
+|---|---|
+| 3. Reliability | 29/30 verified |
+| 4. Failure detection | 0 false successes |
+| 7. Baseline | Myco 29/30 verified vs the screenshot baseline 0/30, on the same 30 tasks paired by index; p = 3.73e-9 |
+| 8. Reproducibility | a fresh operator's sweep: 28/30 verified; the corrupted suite: 18/18 recorded and eligible, 0 false successes |
+
+Recompute every number from committed artifacts, with no VM:
+
+```sh
+python3 scripts/scorecard-check.py
+```
+
+---
+
 ## What runs today
 
 | Surface | What it does | Needs a VM? |
