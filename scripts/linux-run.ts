@@ -19,8 +19,9 @@ import { join, resolve } from "node:path";
 import { calcActuator, pythonBinary, pythonUnoAvailable } from "../src/linux/actuator.ts";
 import { isScriptedAgent, SCRIPTED_AGENTS, type ScriptedAgent } from "../src/linux/agent.ts";
 import { CORRUPTIONS, type Corruption } from "../src/linux/corrupt.ts";
+import { renderRun, runDemo } from "../src/linux/demo.ts";
 import { verifySavedWorkbook } from "../src/linux/oracle.ts";
-import { DEMO_SCENARIOS, DEMO_TASK, type LinuxRunRecord, runLinuxTask } from "../src/linux/run.ts";
+import { DEMO_SCENARIOS, DEMO_TASK, runLinuxTask } from "../src/linux/run.ts";
 import { csvToXlsxBytes, sofficeBinary, sofficeVersion } from "../src/linux/soffice.ts";
 import { intentFor } from "../src/tasks/calc-record-edit.ts";
 
@@ -120,43 +121,6 @@ function prerequisites(): { ok: boolean; lines: string[] } {
   return { ok: version !== null && uno, lines };
 }
 
-function render(record: LinuxRunRecord, what?: string): string {
-  const o = record.oracle;
-  const did = record.actuator.ok
-    ? `typed "${record.agent.value}" into ${record.agent.cell}; ${record.agent.save ? "saved" : "did NOT save"}`
-    : `actuator failed: ${record.actuator.error ?? "unknown"}`;
-  const lines = [
-    `== ${record.name}${what ? ` — ${what}` : ""}`,
-    `1. Claim (what the agent said)`,
-    `   ${record.agent.claim}`,
-    `   (what it actually did: ${did})`,
-  ];
-  if (record.actuator.ok && record.actuator.after !== undefined) {
-    lines.push(
-      `   (Calc showed "${record.actuator.after}" in ${record.agent.cell} before closing)`,
-    );
-  }
-  if (record.corruption) {
-    lines.push(
-      `   (afterwards: ${record.corruption.kind} corruption, ${record.corruption.detail})`,
-    );
-  }
-  lines.push(
-    `2. Observed saved state (read from saved.xlsx, not from the agent)`,
-    `   cell ${o.cellRef ?? "?"}: expected "${o.expected ?? "?"}", saved ${o.observed === null ? "<unreadable>" : `"${o.observed}"`}`,
-    `3. Verdict`,
-    `   ${o.verdict.status.toUpperCase()}`,
-    ...o.verdict.reasons.map((r) => `   - ${r}`),
-  );
-  if (o.verdict.status === "refuted") {
-    lines.push(`   FALSE COMPLETION CAUGHT: the agent said done and the saved file disagrees.`);
-  } else if (o.verdict.status === "uncertain") {
-    lines.push(`   NOT ACCEPTED: the agent said done, but the saved file could not be read.`);
-  }
-  lines.push(`   run dir: ${record.runDir}`, "");
-  return lines.join("\n");
-}
-
 function runOne(name: string, agent: ScriptedAgent, out: string, corrupt?: Corruption) {
   return runLinuxTask({
     name,
@@ -208,49 +172,16 @@ function main(argv: readonly string[]): number {
   if (args.mode === "single") {
     const name = args.corrupt ? `${args.agent}-corrupt-${args.corrupt}` : args.agent;
     const record = runOne(name, args.agent, args.out, args.corrupt);
-    process.stdout.write(args.json ? `${JSON.stringify(record, null, 2)}\n` : render(record));
+    process.stdout.write(args.json ? `${JSON.stringify(record, null, 2)}\n` : renderRun(record));
     return record.actuator.ok ? 0 : 1;
   }
 
-  const results = DEMO_SCENARIOS.map((s) => {
-    const record = runOne(s.name, s.agent, args.out, s.corrupt);
-    const pass = record.actuator.ok && record.oracle.verdict.status === s.expect;
-    if (!args.json) process.stdout.write(render(record, s.what));
-    return { scenario: s, record, pass };
+  return runDemo({
+    scenarios: DEMO_SCENARIOS,
+    run: (s) => runOne(s.name, s.agent, args.out, s.corrupt),
+    json: args.json,
+    write: (text) => process.stdout.write(text),
   });
-  const allPass = results.every((r) => r.pass);
-  if (args.json) {
-    process.stdout.write(
-      `${JSON.stringify(
-        {
-          pass: allPass,
-          scenarios: results.map((r) => ({
-            name: r.scenario.name,
-            expect: r.scenario.expect,
-            verdict: r.record.oracle.verdict.status,
-            falseCompletion: r.record.falseCompletion,
-            pass: r.pass,
-            runDir: r.record.runDir,
-          })),
-        },
-        null,
-        2,
-      )}\n`,
-    );
-  } else {
-    process.stdout.write("Summary\n");
-    for (const r of results) {
-      process.stdout.write(
-        `  ${r.pass ? "PASS" : "FAIL"}  ${r.scenario.name.padEnd(16)} expected ${r.scenario.expect.padEnd(9)} got ${r.record.oracle.verdict.status}\n`,
-      );
-    }
-    process.stdout.write(
-      allPass
-        ? `\nall ${results.length} scenarios produced their expected verdict\n`
-        : `\nverdict mismatch: see FAIL rows above\n`,
-    );
-  }
-  return allPass ? 0 : 1;
 }
 
 process.exitCode = main(process.argv.slice(2));

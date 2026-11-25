@@ -11,9 +11,17 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { zipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { calcActuator, pythonUnoAvailable } from "../../src/linux/actuator.ts";
@@ -26,7 +34,13 @@ import {
   LINUX_CASES,
   runLinuxTask,
 } from "../../src/linux/run.ts";
-import { csvToXlsxBytes, sofficeVersion, xlsxToCsvBytes } from "../../src/linux/soffice.ts";
+import {
+  CSV_EXPORT_FILTER,
+  csvToXlsxBytes,
+  sofficeBinary,
+  sofficeVersion,
+  xlsxToCsvBytes,
+} from "../../src/linux/soffice.ts";
 import { intentFor } from "../../src/tasks/calc-record-edit.ts";
 import { groundTruth } from "../../src/tasks/intent.ts";
 
@@ -36,6 +50,40 @@ const optedIn = required || process.env.MYCO_LINUX_PATH === "1";
 const available = optedIn && sofficeVersion() !== null && pythonUnoAvailable();
 
 const RUN_TIMEOUT = 120_000;
+
+/**
+ * A raw headless conversion for test inputs and controls, outside the module
+ * under test: throwaway profile, fresh output dir, returns the produced file.
+ */
+function sofficeConvert(
+  source: string,
+  convertTo: string,
+  workRoot: string,
+  extraArgs: readonly string[],
+): string {
+  const work = mkdtempSync(join(workRoot, "conv-"));
+  const outDir = join(work, "out");
+  spawnSync(
+    sofficeBinary(),
+    [
+      "--headless",
+      "--norestore",
+      "--nologo",
+      `-env:UserInstallation=${pathToFileURL(join(work, "profile")).href}`,
+      ...extraArgs,
+      "--convert-to",
+      convertTo,
+      "--outdir",
+      outDir,
+      source,
+    ],
+    { encoding: "utf8", timeout: RUN_TIMEOUT },
+  );
+  const ext = convertTo.split(":")[0]!;
+  const out = join(outDir, `${basename(source).replace(/\.[^.]+$/, "")}.${ext}`);
+  if (!existsSync(out)) throw new Error(`test conversion produced no ${ext} for ${source}`);
+  return out;
+}
 
 describe("prerequisites", () => {
   it.runIf(required)("soffice and Python-UNO are installed (MYCO_LINUX_PATH_REQUIRED=1)", () => {
@@ -151,7 +199,7 @@ describe.skipIf(!available)("Linux path against real Calc", () => {
   );
 
   it(
-    "the readback's import filter alone refuses non-workbooks (behind the ZIP-header check)",
+    "inputs no readback can parse are refused: a renamed CSV and a ZIP holding a CSV",
     () => {
       const record = run("filter-guard");
       const renamed = join(record.runDir, "renamed.xlsx");
@@ -174,6 +222,37 @@ describe.skipIf(!available)("Linux path against real Calc", () => {
   );
 
   it(
+    "the forced import filter refuses an .ods renamed to .xlsx that soffice would otherwise read (fail closed)",
+    () => {
+      // The honest run's saved file holds the edited value. Re-save it as ODS and
+      // give it an .xlsx name: it is a ZIP, so it passes the header check.
+      const record = run("filter-ods");
+      const work = mkdtempSync(join(tmpdir(), "myco-linux-ods-"));
+      try {
+        const ods = sofficeConvert(join(record.runDir, "saved.xlsx"), "ods", work, []);
+        const disguised = join(record.runDir, "disguised.xlsx");
+        copyFileSync(ods, disguised);
+        expect(readFileSync(disguised).subarray(0, 2).toString("latin1")).toBe("PK");
+
+        // Control: with no import filter soffice auto-detects ODS and exports the
+        // edited data, so this input tells "filter forced" apart from "no filter".
+        const unfiltered = sofficeConvert(disguised, CSV_EXPORT_FILTER, work, []);
+        expect(readFileSync(unfiltered, "utf8")).toContain(`EMP-0007,${DEMO_TASK.newValue},`);
+
+        // With the forced Excel 2007 XML filter: nothing is produced...
+        expect(() => xlsxToCsvBytes(disguised)).toThrow(/produced no csv/);
+        // ...so the oracle could not look: uncertain, never verified from a non-xlsx.
+        const result = verifySavedWorkbook(disguised, intentFor({ ...DEMO_TASK }));
+        expect(result.verdict.status).toBe("uncertain");
+        expect(result.observed).toBeNull();
+      } finally {
+        rmSync(work, { recursive: true, force: true });
+      }
+    },
+    RUN_TIMEOUT,
+  );
+
+  it(
     "pnpm myco-linux --demo --json exits 0 with every scenario passing",
     () => {
       const result = spawnSync(
@@ -191,10 +270,83 @@ describe.skipIf(!available)("Linux path against real Calc", () => {
       expect(result.status, result.stderr).toBe(0);
       const summary = JSON.parse(result.stdout);
       expect(summary.pass).toBe(true);
-      expect(summary.scenarios).toHaveLength(DEMO_SCENARIOS.length);
+      expect(summary.scenarios.map((s: { name: string }) => s.name)).toEqual(
+        DEMO_SCENARIOS.map((s) => s.name),
+      );
+      for (const s of DEMO_SCENARIOS) {
+        expect(
+          summary.scenarios.find((row: { name: string }) => row.name === s.name),
+          s.name,
+        ).toMatchObject({ expect: s.expect, verdict: s.expect, pass: true });
+      }
       expect(
         summary.scenarios.find((s: { name: string }) => s.name === "skips-save"),
       ).toMatchObject({ verdict: "refuted", falseCompletion: true });
+    },
+    RUN_TIMEOUT,
+  );
+
+  it(
+    "pnpm myco-linux --demo exits 1 when a scenario gets the wrong verdict (actuator lands one row low)",
+    () => {
+      // A Python wrapper in front of the real actuator: it types into the cell one
+      // row below the one asked for, and still reports ok. Real Calc, real save,
+      // real oracle; only the honest scenario's verdict changes (verified -> refuted).
+      const bin = mkdtempSync(join(tmpdir(), "myco-linux-lowrow-"));
+      try {
+        const wrapper = join(bin, "python-one-row-low");
+        writeFileSync(
+          wrapper,
+          [
+            "#!/usr/bin/env python3",
+            "import os, re, sys",
+            `real = ${JSON.stringify(process.env.MYCO_PYTHON ?? "python3")}`,
+            "args = sys.argv[1:]",
+            'if "--cell" in args:',
+            '    i = args.index("--cell") + 1',
+            '    m = re.fullmatch(r"([A-Z]+)(\\d+)", args[i])',
+            "    args[i] = m.group(1) + str(int(m.group(2)) + 1)",
+            "os.execvp(real, [real] + args)",
+            "",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+        const result = spawnSync(
+          process.execPath,
+          [
+            join(ROOT, "node_modules", "tsx", "dist", "cli.mjs"),
+            join(ROOT, "scripts", "linux-run.ts"),
+            "--demo",
+            "--json",
+            "--out",
+            join(out, "cli-low-row"),
+          ],
+          {
+            encoding: "utf8",
+            timeout: RUN_TIMEOUT,
+            env: { ...process.env, MYCO_PYTHON: wrapper },
+          },
+        );
+        expect(result.status, result.stderr).toBe(1);
+        const summary = JSON.parse(result.stdout);
+        expect(summary.pass).toBe(false);
+        const rows = new Map(summary.scenarios.map((r: { name: string }) => [r.name, r] as const));
+        // The actuator ran (its report is ok), so only the verdict check can fail it.
+        const honestRecord = JSON.parse(
+          readFileSync(join(out, "cli-low-row", "honest", "record.json"), "utf8"),
+        );
+        expect(honestRecord.actuator.ok).toBe(true);
+        expect(rows.get("honest")).toMatchObject({
+          expect: "verified",
+          verdict: "refuted",
+          pass: false,
+        });
+        for (const s of DEMO_SCENARIOS.filter((x) => x.name !== "honest")) {
+          expect(rows.get(s.name), s.name).toMatchObject({ verdict: s.expect, pass: true });
+        }
+      } finally {
+        rmSync(bin, { recursive: true, force: true });
+      }
     },
     RUN_TIMEOUT,
   );

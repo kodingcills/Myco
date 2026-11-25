@@ -14,13 +14,16 @@ import { cellRef } from "../../src/core/filepersist.ts";
 import type { Actuator } from "../../src/linux/actuator.ts";
 import { claimFor, neighbourRow, planFor, SCRIPTED_AGENTS } from "../../src/linux/agent.ts";
 import { corruptSavedValue, truncateSaved } from "../../src/linux/corrupt.ts";
+import { runDemo, scenarioPasses } from "../../src/linux/demo.ts";
 import { verifySavedWorkbook } from "../../src/linux/oracle.ts";
 import {
   corruptedValueFor,
   DEMO_SCENARIOS,
   DEMO_TASK,
   LINUX_CASES,
+  type LinuxRunRecord,
   runLinuxTask,
+  type Scenario,
 } from "../../src/linux/run.ts";
 import { intentFor } from "../../src/tasks/calc-record-edit.ts";
 import { generateFixture } from "../../src/tasks/fixture.ts";
@@ -275,5 +278,105 @@ describe("runLinuxTask (doubles)", () => {
       new Set(["name", "qty", "joined", "salary"]),
     );
     for (const c of LINUX_CASES) expect(() => groundTruth(c)).not.toThrow();
+  });
+});
+
+// --- the demo's pass rule and exit code ------------------------------------------
+
+describe("runDemo: exit 0 only when every scenario gets its expected verdict", () => {
+  /** Runs each scenario with doubles; `actuatorFor` picks the actuator per scenario. */
+  const runWith =
+    (actuatorFor: (s: Scenario) => Actuator) =>
+    (s: Scenario): LinuxRunRecord =>
+      runLinuxTask({
+        name: s.name,
+        agent: s.agent,
+        params: DEMO_TASK,
+        outRoot: dir,
+        actuator: actuatorFor(s),
+        toXlsx: fakeToXlsx,
+        read: fakeReader,
+        ...(s.corrupt ? { corrupt: s.corrupt } : {}),
+      });
+
+  /** Reports ok, but lands the value one row low: the actuator "worked", the verdict is wrong. */
+  const oneRowLow: Actuator = {
+    act(doc, cell, value, save) {
+      const m = /^([A-Z]+)(\d+)$/.exec(cell)!;
+      return fakeActuator().act(doc, `${m[1]}${Number(m[2]) + 1}`, value, save);
+    },
+  };
+
+  const honest = DEMO_SCENARIOS.find((s) => s.name === "honest")!;
+
+  it("scenarioPasses: actuator ok and verdict === expect", () => {
+    const good = runWith(() => fakeActuator())(honest);
+    expect(good.actuator.ok).toBe(true);
+    expect(scenarioPasses(honest, good)).toBe(true);
+  });
+
+  it("scenarioPasses: false on a verdict mismatch even though the actuator reported ok", () => {
+    const record = runWith(() => oneRowLow)(honest);
+    expect(record.actuator.ok).toBe(true);
+    expect(record.oracle.verdict.status).toBe("refuted");
+    expect(scenarioPasses(honest, record)).toBe(false);
+    // The same record against a scenario that expects refuted passes: the rule
+    // compares with the scenario's expectation, not with a fixed verdict.
+    expect(scenarioPasses({ ...honest, expect: "refuted" }, record)).toBe(true);
+  });
+
+  it("scenarioPasses: false when the actuator failed, even with the expected verdict", () => {
+    const failed: Actuator = { act: () => ({ ok: false, error: "no soffice" }) };
+    const skipsSave = DEMO_SCENARIOS.find((s) => s.name === "skips-save")!;
+    const record = runWith(() => failed)(skipsSave);
+    expect(record.oracle.verdict.status).toBe(skipsSave.expect);
+    expect(scenarioPasses(skipsSave, record)).toBe(false);
+  });
+
+  it("all scenarios as expected: exit 0, summary pass, every verdict === expect", () => {
+    const out: string[] = [];
+    const code = runDemo({
+      scenarios: DEMO_SCENARIOS,
+      run: runWith(() => fakeActuator()),
+      json: true,
+      write: (t) => out.push(t),
+    });
+    expect(code).toBe(0);
+    const summary = JSON.parse(out.join(""));
+    expect(summary.pass).toBe(true);
+    for (const s of summary.scenarios) expect(s.verdict).toBe(s.expect);
+  });
+
+  it("one scenario with the wrong verdict: exit 1, that row FAIL, the rest PASS", () => {
+    const out: string[] = [];
+    const code = runDemo({
+      scenarios: DEMO_SCENARIOS,
+      run: runWith((s) => (s.name === "honest" ? oneRowLow : fakeActuator())),
+      json: false,
+      write: (t) => out.push(t),
+    });
+    expect(code).toBe(1);
+    const text = out.join("");
+    expect(text).toMatch(/FAIL {2}honest +expected verified +got refuted/);
+    expect(text.match(/^ {2}PASS /gm)).toHaveLength(DEMO_SCENARIOS.length - 1);
+    expect(text).toContain("verdict mismatch");
+  });
+
+  it("the JSON summary marks the mismatch too", () => {
+    const out: string[] = [];
+    const code = runDemo({
+      scenarios: DEMO_SCENARIOS,
+      run: runWith((s) => (s.name === "honest" ? oneRowLow : fakeActuator())),
+      json: true,
+      write: (t) => out.push(t),
+    });
+    expect(code).toBe(1);
+    const summary = JSON.parse(out.join(""));
+    expect(summary.pass).toBe(false);
+    expect(summary.scenarios.find((s: { name: string }) => s.name === "honest")).toMatchObject({
+      expect: "verified",
+      verdict: "refuted",
+      pass: false,
+    });
   });
 });

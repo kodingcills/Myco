@@ -75,7 +75,9 @@ holds, and the verdict. This is the false completion:
 
 The screen showed the new value, and the agent said it saved. The file on disk still
 holds the original name, so the verdict follows the file. The demo ends with a summary,
-and exits 0 only if every scenario produced its expected verdict:
+and exits 0 only if every scenario produced its expected verdict; one wrong verdict makes
+it exit 1, even when Calc was driven without error (the rule is `scenarioPasses` in
+`src/linux/demo.ts`, and both exit codes are tested):
 
 ```
 Summary
@@ -118,7 +120,9 @@ code.
 
 ## 4. What a run leaves on disk
 
-Each scenario writes `<out>/<scenario>/`:
+Each demo scenario writes `<out>/<scenario>/`. A single run writes `<out>/<agent>/`, or
+`<out>/<agent>-corrupt-<kind>/` with `--corrupt` (for example
+`<out>/honest-corrupt-content/`):
 
 | File | Contents |
 |---|---|
@@ -172,7 +176,9 @@ suite rather than skip it.
    a user's typing. It saves if told to, then closes.
 3. **Oracle.** `src/linux/oracle.ts` reads only the saved file and the task. It converts
    the saved workbook to CSV with a headless soffice, forcing the Excel 2007 XML import
-   filter so a file that is not a workbook is refused rather than read as text. It then
+   filter. Without it soffice auto-detects the format, so a CSV, or an `.ods` renamed to
+   `.xlsx`, could still be read; with it anything that is not an Office Open XML workbook
+   produces no CSV and the verdict is `uncertain`. It then
    applies the M1 family verifier (`calcRecordEditVerifier`) and CSV reader. The expected
    value comes from the seed and the task parameters, never from the agent. The oracle
    function has no parameter that could carry the agent's claim.
@@ -189,7 +195,7 @@ The oracle's comparison is the same code that check (c) of the Windows UNO verif
 | Who acts | Myco's guarded program through the UIA adapter, or a model-driven agent | A scripted, deterministic agent (no model) |
 | How the edit lands | Keystrokes through Windows UI Automation | Calc's input path over UNO (`.uno:EnterString`); no GUI |
 | Save | `ctrl+s` in the GUI | `store()` over UNO |
-| Oracle, saved file | Check (c): headless CSV readback, M1 family verifier | The same readback and family verifier, run locally |
+| Oracle, saved file | Check (c): headless CSV readback, M1 family verifier | The same CSV export options and family verifier, run locally; the readback also forces the Excel 2007 XML import filter, which the Windows readback does not |
 | Oracle, live document | Checks (a) live cell readback and (b) `isModified` | **Not covered.** The saved file is the only evidence |
 | Guarded program (per-step pre/postconditions, ADR-0004) | Yes | **Not covered** |
 | Runtime, guest agent, MCP | Yes | **Not covered** |

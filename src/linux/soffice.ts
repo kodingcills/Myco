@@ -12,7 +12,8 @@
  * - a fresh output directory per call, so a convert can never return an earlier
  *   run's output;
  * - for the readback, an explicit import filter, so a file that is not an
- *   Office Open XML workbook is refused instead of being imported as text.
+ *   Office Open XML workbook is refused instead of being auto-detected and
+ *   imported anyway (an `.ods` renamed to `.xlsx` would otherwise be read).
  *
  * soffice exits 0 even when it cannot load the source, so success is decided by
  * the output file existing, never by the exit code.
