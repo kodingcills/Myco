@@ -478,7 +478,9 @@ describe("s0-live.sh launcher", () => {
     }
     // `kill` is a builtin, but every pid the stray loop walks is first passed to the
     // external `pkill -P`, so this shim records exactly the pids --stop chose to signal.
-    const realPkill = spawnSync("bash", ["-c", "type -P pkill"], { encoding: "utf8" }).stdout.trim();
+    const realPkill = spawnSync("bash", ["-c", "type -P pkill"], {
+      encoding: "utf8",
+    }).stdout.trim();
     const walked = join(dir, "walked");
     writeFileSync(
       join(shims, "pkill"),
