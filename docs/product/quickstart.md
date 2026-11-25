@@ -166,12 +166,16 @@ the complete claim/state/verdict view for this task.
 
 ```sh
 pnpm typecheck
-pnpm exec vitest run
+pnpm test
 ```
 
-Measured: **~4 s** and **~12 s** (870 tests). Use the full run: `--changed HEAD`
-finds nothing on a clean tree and exits 0 having run zero tests, which reads as a
-pass. It is only useful mid-edit.
+Measured on a fresh clone of `a7d2cd2` (2026-11-25): **~4 s** and **~47 s**
+(1,128 tests plus the schema check), both exit 0. Use `pnpm test`, not a bare
+`pnpm exec vitest run`: the bare run puts
+`test/discovery/s0-live-launcher.test.ts` in parallel with the rest, and its lock
+test failed in 1 of 3 bare runs. `pnpm test` runs that file on its own. Use the
+full run: `--changed HEAD` finds nothing on a clean tree and exits 0 having run
+zero tests, which reads as a pass. It is only useful mid-edit.
 
 ## 6. Exit codes
 
