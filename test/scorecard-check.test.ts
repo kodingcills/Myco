@@ -40,7 +40,8 @@ describe("scorecard-check", () => {
     expect(result.stdout).toContain("SCORECARD CHECK OK");
     expect(result.stdout).toMatch(/\d+ ok, 0 mismatch, 0 unattributed, \d+ not machine-checked/);
     expect(result.stdout).toContain("unchecked");
-    expect(result.stdout).toMatch(/out of scope +## Open risk: guest-side fixture convert/);
+    expect(result.stdout).toMatch(/in scope +## Open risk: guest-side fixture convert/);
+    expect(result.stdout).toMatch(/in scope +## Second reason arm-002 is superseded/);
   }, 120_000);
 
   it("fails and names each row when one number changes in rows 3, 4 and 6", () => {
@@ -108,7 +109,99 @@ describe("scorecard-check", () => {
     expect(result.status).toBe(1);
     expect(result.unattributed).toEqual([expect.stringMatching(/^UNATTRIBUTED row 5: .*\['12'\]/)]);
     expect(result.mismatch).toEqual([
-      expect.stringMatching(/^MISMATCH sections: ## A new section: .*does not classify/),
+      expect.stringMatching(/^MISMATCH layout: ## A new section: .*does not classify/),
     ]);
+  }, 120_000);
+
+  // Round 2: each defect class the final review found, as a case that must exit 1.
+  const R3 = "re-verified tonight. **Note";
+  const inRow3 = (text: string): [string, string] => [R3, `re-verified tonight. ${text} **Note`];
+  const TABLE_END = "|\n\n## Open a trial";
+  const cases: [string, [string, string], RegExp][] = [
+    [
+      "a new reference (TIF-999)",
+      [
+        "**Derived from committed logs, not quoted** (TIF-139)",
+        "**Derived from committed logs, not quoted** (TIF-139) and TIF-999",
+      ],
+      /^UNATTRIBUTED row 6: .*'TIF-999'/,
+    ],
+    ["a sentence-final number", inRow3("A rerun verified 31."), /^UNATTRIBUTED row 3: .*\['31'\]/],
+    [
+      "a number with a unit suffix",
+      inRow3("It finished in 31s"),
+      /^UNATTRIBUTED row 3: .*\['31'\]/,
+    ],
+    [
+      "both ends of a range",
+      inRow3("It held over 31-40 trials"),
+      /^UNATTRIBUTED row 3: .*\['31', '40'\]/,
+    ],
+    [
+      "a mid-sentence (7)",
+      inRow3("A recheck refuted (7) of them."),
+      /^UNATTRIBUTED row 3: .*\['7'\]/,
+    ],
+    [
+      "an out-of-sequence enumerator",
+      ["(0 rows) |", "(0 rows). (7) More |"],
+      /^UNATTRIBUTED row 7: .*\['7'\]/,
+    ],
+    [
+      "a word-internal figure not on the identifier list",
+      inRow3("It took n31 retries"),
+      /^UNATTRIBUTED row 3: .*\['n31'\]/,
+    ],
+    [
+      "a new | 9 | row",
+      [TABLE_END, "|\n| 9 | Extra | **DONE** | nothing | — |\n\n## Open a trial"],
+      /^MISMATCH layout: criterion table: unexpected criterion row 9/,
+    ],
+    [
+      "a duplicate | 3 | row",
+      [TABLE_END, "|\n| 3 | Reliability | **DONE** | more | — |\n\n## Open a trial"],
+      /^MISMATCH layout: criterion table: duplicate criterion row 3/,
+    ],
+    [
+      "a paragraph between the table and the first ##",
+      [TABLE_END, "|\n\nAn extra paragraph.\n\n## Open a trial"],
+      /^MISMATCH layout: between table and sections: unclassified text: 'An extra paragraph\.'/,
+    ],
+    [
+      "a paragraph in the preamble",
+      ["\n\n| # |", "\n\nAn extra 31 trials passed.\n\n| # |"],
+      /^UNATTRIBUTED status: .*\['31'\]/,
+    ],
+    [
+      "a # Foo H1 section",
+      ["## Open risk:", "# Foo\n\nNothing.\n\n## Open risk:"],
+      /^MISMATCH layout: # Foo: .*does not classify/,
+    ],
+  ];
+  it.each(cases)(
+    "fails on %s",
+    (_name, [from, to], expected) => {
+      const result = checkMutated(mutate(readFileSync(SCORECARD, "utf8"), from, to));
+      expect(result.status).toBe(1);
+      expect([...result.mismatch, ...result.unattributed]).toContainEqual(
+        expect.stringMatching(expected),
+      );
+    },
+    120_000,
+  );
+
+  // The identifier list is exactly the word-internal digit runs of the committed doc:
+  // nothing in it is unused, and nothing the sweep skipped is missing from it.
+  it("skips exactly the listed identifier words in the committed scorecard", () => {
+    const result = run("--identifiers");
+    expect(result.status).toBe(0);
+    const { skipped, allowlist } = JSON.parse(result.stdout) as {
+      skipped: string[];
+      allowlist: string[];
+    };
+    expect(skipped).toEqual(allowlist);
+    for (const word of skipped) {
+      expect(word).toMatch(/[A-Za-z_-]\d/);
+    }
   }, 120_000);
 });
