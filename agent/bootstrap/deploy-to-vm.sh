@@ -11,6 +11,12 @@
 #        VM_SSH_HOST     (default myco-win11)
 #        MYCO_TOKEN_PATH guest token path (default C:\ProgramData\Myco\agent.token)
 #        MYCO_AGENT_PORT guest loopback port (default 8765)
+#        MYCO_TOKEN_OUT  host path that receives the fresh token once the deploy is
+#                        verified (default ~/.myco-token). A PATH, never a secret.
+#                        Written mode 600 via a same-directory temp file and mv;
+#                        left untouched when the deploy fails (row-8 H5). Every
+#                        operator on the host shares the default: set a private
+#                        path when several operators share the Mac (G25).
 
 set -euo pipefail
 
@@ -32,7 +38,22 @@ die() { echo "deploy-to-vm: $*" >&2; exit 1; }
 command -v nc >/dev/null || die "nc not found on PATH"
 command -v openssl >/dev/null || die "openssl not found on PATH"
 
-# Fresh token per deploy; lives only on the guest and in this script's memory.
+# Host token file, checked now so a bad path fails before a 100-420 s deploy.
+TOKEN_OUT="${MYCO_TOKEN_OUT:-$HOME/.myco-token}"
+TOKEN_OUT_DIR="$(dirname "$TOKEN_OUT")"
+[ -d "$TOKEN_OUT_DIR" ] || die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR does not exist"
+[ ! -d "$TOKEN_OUT" ] || die "MYCO_TOKEN_OUT $TOKEN_OUT is a directory, not a file path"
+# Writable now, or the deploy would rotate the guest token and only then fail to
+# leave a host copy. The temp file and mv need a writable directory; an existing
+# file we cannot write is someone else's (another operator's, G25), so refuse
+# rather than replace it.
+[ -w "$TOKEN_OUT_DIR" ] || die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR is not writable"
+[ ! -e "$TOKEN_OUT" ] || [ -w "$TOKEN_OUT" ] || die "MYCO_TOKEN_OUT $TOKEN_OUT exists and is not writable"
+HOST_TOKEN_TMP=""
+
+# Fresh token per deploy. It never reaches argv, env, logs or stdout: it goes to
+# the guest through a mode-600 temp file, and to the host token file (TOKEN_OUT)
+# only after the deploy is verified.
 TOKEN="$(openssl rand -hex 24)"
 TOKEN_FILE="$(mktemp)"
 printf '%s' "$TOKEN" > "$TOKEN_FILE"
@@ -129,7 +150,7 @@ echo "==> verifying ping over ssh -L $PORT:127.0.0.1:$PORT"
 TUNNEL_LOG="$(mktemp)"
 ssh -F "$VM_SSH_CONFIG" -N -L "$PORT:127.0.0.1:$PORT" "$VM_SSH_HOST" >"$TUNNEL_LOG" 2>&1 &
 TUNNEL_PID=$!
-trap 'rm -f "$TOKEN_FILE" "$TUNNEL_LOG"; kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
+trap 'rm -f "$TOKEN_FILE" "$TUNNEL_LOG" ${HOST_TOKEN_TMP:+"$HOST_TOKEN_TMP"}; kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
 OK=""
 for _ in $(seq 1 30); do
@@ -148,11 +169,29 @@ if [ -z "$OK" ]; then
   die "agent did not answer ping on 127.0.0.1:$PORT within 60s"
 fi
 
+# The deploy is verified: only now replace the host token file (row-8 H5). A
+# failed deploy exits above and leaves any existing file as it was. mktemp
+# creates the temp file mode 600, so it is never world-readable, even briefly;
+# the umask 077 and chmod 600 are defence in depth. mv in the same directory is
+# atomic, so a reader sees the old token or the new one, never a partial file,
+# and it replaces a symlink at TOKEN_OUT instead of writing through it. printf
+# is a builtin: the token is in no process's argv.
+write_host_token() {
+  HOST_TOKEN_TMP="$(umask 077 && mktemp "$TOKEN_OUT_DIR/.myco-token.XXXXXX")" || return 1
+  (umask 077 && printf '%s' "$TOKEN" > "$HOST_TOKEN_TMP") || return 1
+  chmod 600 "$HOST_TOKEN_TMP" || return 1
+  mv -f "$HOST_TOKEN_TMP" "$TOKEN_OUT" || return 1
+  HOST_TOKEN_TMP=""
+}
+write_host_token || die "deploy verified, but writing the token to $TOKEN_OUT failed: the guest token has rotated, so any older copy is stale (AUTH_FAILED)"
+chmod 600 "$TOKEN_OUT" || die "wrote the fresh token to $TOKEN_OUT, but chmod 600 on it failed: check its mode before use (the temp file it replaced it from was mode 600)"
+echo "==> wrote the fresh token to $TOKEN_OUT (mode 600)"
+
 echo "==> ping verified:"
 echo "$PONG"
 
 echo ""
 echo "DEPLOY OK"
-echo "  token   : per-deploy; it is in $GUEST_TOKEN_PATH on the guest"
+echo "  token   : per-deploy; in $TOKEN_OUT on this host and $GUEST_TOKEN_PATH on the guest"
 echo "  tunnel  : ssh -F $VM_SSH_CONFIG -N -L $PORT:127.0.0.1:$PORT $VM_SSH_HOST"
 echo "  ops     : printf '{\"id\":1,\"token\":\"<token>\",\"op\":\"ping\",\"params\":{}}\\n' | nc 127.0.0.1 $PORT"
