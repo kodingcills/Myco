@@ -61,7 +61,7 @@ export const armRegistry = [
     plannerName: discoveryPlanner,
     status: "not-run",
     blocker:
-      "Needs coordinated VM time, trusted live evidence ingestion, complete tool-call audits, and independently observed save snapshots",
+      "Built offline for the Calc task by TIF-268 with audited shell calls and an independent judge (docs/research/m2-hcu-shell-arm.md); needs an HCU GUI transport, coordinated VM time (M2-12) and trusted live evidence ingestion (TIF-125)",
     economics: {
       kind: "unmeasured",
       basis:
