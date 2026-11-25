@@ -18,8 +18,9 @@ except where a measured value is quoted with its log or date.
 row-8 operators have since re-run §3.1 (2026-11-24 and 2026-11-25) and §4 on post-TIF-220 code
 (2026-11-25: `verified 13 files on the guest against the source (sha256)`, `DEPLOY OK`), §5
 against the real guest (2026-11-25, exit 0, the expected stdout below), and the §7.3 sweep
-(28/30 verified, `docs/research/experiments/m1-row8-sweep2/`). §7.4 was launched by a fresh
-operator on 2026-11-25; its result is not recorded here. Take a step-level `UNVERIFIED` marker as
+(28/30 verified, `docs/research/experiments/m1-row8-sweep2/`). §7.4 was run by a fresh
+operator on 2026-11-25: 18/18 recorded and eligible, 0 false successes, every recovery trial
+verified (`docs/research/experiments/m1-row8-corrupt/`), and §8 was reproduced on both runs. Take a step-level `UNVERIFIED` marker as
 "not re-checked recently", not as "never run" — and where a section's own marker contradicts this
 paragraph, the section is the one to fix (F3, 2026-11-24).
 
@@ -895,10 +896,12 @@ change, or a re-taken snapshot; start a fresh `OUT` instead.
   the generator proof only. In the sweep, a refuted trial is recorded and counted as not
   verified, and the driver goes on to the next index. Stop at a trial boundary only for the
   conditions in this section (seed mismatch, a recurring fixture timeout, a host or harness
-  problem). Once the non-verified count makes the acceptance bar unreachable (`verified ≥ 27` of
-30, `docs/architecture/m1.md:202`),
-  finishing the sweep measures nothing new: the first row-8 sweep was abandoned at 4 non-verified
-  of 11 for that reason (lead ruling, 2026-11-25, operator report).
+  problem). **Abandoning a sweep is the lead's decision, never the operator's.** When the
+  non-verified count makes the acceptance bar unreachable (`verified ≥ 27` of 30,
+  `docs/architecture/m1.md:202`), report the count and keep going until the lead rules. The first
+  row-8 sweep was abandoned at 4 non-verified of 11 by a specific lead ruling (2026-11-25, because
+  its misses traced to a harness bug since fixed). That was a decision about that sweep, not a
+  general rule.
 - **Statuses in `trials.jsonl`:** `verified` / `refuted` / `uncertain` are verdicts. `seed-mismatch`
   aborts the sweep. `harness-error`, `reset-failed`, `deploy-failed`, `token-failed` and
   `param-error` mean no verdict was produced. Count them as not verified, and report them
@@ -1171,6 +1174,22 @@ $OUT/
   runs/<index>/<runId>/            the trial's trace.jsonl + result.json
 ```
 
+The corrupted suite (§7.4) writes a different `OUT` (G34): no `fingerprints.json`, and instead
+
+```
+$OUT/
+  params.json                      the 18 fault trials
+  ledger.jsonl, summary.json       written by `m1-corrupt-suite-record.py --final`
+  summary.txt                      the driver's printed table
+  trial-<i>.out / trial-<i>.err    per-trial stdout report and stderr
+  progress.log                     gates, resets, deploys
+  runs/<index>/<runId>/            the trial's trace.jsonl + result.json
+```
+
+The sweep has a single `trial.out` / `trial.err` instead of per-trial files. In both drivers a
+trial that never started (for example `deploy-failed`) has a ledger row but **no run ID and no
+`runs/<index>/` directory**, so expect one fewer run dir than rows.
+
 Directory names are bare UUIDs produced by the code; the reviewed sample evidence under
 `docs/research/experiments/m1-013-session1/` was renamed by hand (`normal-<short>/`), so do not
 infer the writer's layout from those directory names. Screenshots are **not** part of the
@@ -1220,6 +1239,12 @@ which is what CI proves. Use `validate-live.ts` for your run directory.
 
 ### 8.3 Ledger
 
+**The derived sweep ledger below is specific to sweep v3** (G35): it hard-codes index 3's refusal,
+the 88-row count and a `/tmp` path, and no script derives it. For any other sweep there is no
+mapping rule yet for `uncertain` or never-started rows, so do not invent one. The sweep's evidence
+is `trials.jsonl`, the seed check in `progress.log`, `scripts/m1-scorecard.py`, and the per-index
+schema validation in §8.2.
+
 For normal sweep v3, join each `trials.jsonl` row to
 `runs/<index>/<runId>/{result.json,trace.jsonl}`. Require indices 0–29,
 matching run IDs and verdicts, a passing seed check, and validated result
@@ -1242,7 +1267,11 @@ with `node --import tsx scripts/m1-corrupt-suite-ledger.ts <ledger-path>`.
 
 `runs/<evalId>/ledger.jsonl` — one row per (trial, corruption-class, action-kind) with an explicit
 oracle and refusal code. The corrupted-suite recorder writes its live conformance ledger to
-`OUT_DIR/ledger.jsonl` during `--final`. False successes carry the `ground-truth:false` or
+`OUT_DIR/ledger.jsonl` during `--final`. **`--final` rewrites `ledger.jsonl` and `summary.json`
+in place, and takes the ledger's eval ID from the directory name** (G36,
+`scripts/m1-corrupt-suite-record.py:269,281,329`). To re-check a finished run, copy the OUT to a
+scratch directory with the SAME basename and run it there. `summary.txt` is not rebuilt, so
+capture the script's printed summary and compare that. False successes carry the `ground-truth:false` or
 `recovery:missing-proof` oracle. `OUT_DIR/summary.json` and the driver's `summary.txt` include
 the per-trial recovery results, `falseSuccesses` total and `auditLedgerRows` accounting.
 
