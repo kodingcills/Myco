@@ -60,16 +60,17 @@ function worktree(): { dir: string; script: string; runDir: string; env: NodeJS.
   const bin = join(dir, "bin");
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "ps"), "#!/bin/sh\nprintf 'launchd\\n'\n");
-  // A plain `sleep 297` orphans itself when its parent stub dies and cannot be found by
-  // path (measured 2026-11-23: 29 orphans after a 30-round run). `exec -a` fixed that on
-  // macOS but broke on Ubuntu, where `/bin/sh` is dash and `exec` has no `-a`: the stub
-  // exited 127 and every watchdog was already dead. So the stub records the sleeper's own
-  // pid in the fixture and afterEach kills exactly those — `sh` is enough, and both
-  // shells fork the backgrounded `sleep` rather than exec'ing it, so `$!` is the process
-  // that must be signalled.
+  // TIF-233: the stub `exec`s the sleeper, so the sleeper IS the sequence child: same
+  // pid, and a direct child of the watchdog, which `--stop` reaches with `pkill -P`.
+  // A backgrounded `sleep 297 &` was a grandchild instead: `--stop` killed the stub and
+  // orphaned the sleeper, which inherited fd 9 and so kept the run's flock for 297 s —
+  // the next `--run` was refused whenever `--stop` landed after the child had started,
+  // which parallel load made likely. `exec` without `-a` is portable to dash. The stub
+  // records its own pid (`$$` survives the exec), so afterEach still kills exactly the
+  // sleepers this fixture started and nothing else on the host.
   writeFileSync(
     join(bin, "pnpm"),
-    `#!/bin/sh\nsleep 297 &\necho $! >> ${JSON.stringify(join(dir, "sleepers"))}\nwait\n`,
+    `#!/bin/sh\necho $$ >> ${JSON.stringify(join(dir, "sleepers"))}\nexec sleep 297\n`,
   );
   chmodSync(join(bin, "ps"), 0o755);
   chmodSync(join(bin, "pnpm"), 0o755);
@@ -82,7 +83,7 @@ function worktree(): { dir: string; script: string; runDir: string; env: NodeJS.
     dir,
     script: join(dir, "scripts", "s0-live.sh"),
     runDir,
-    env: { PATH: bin + ":" + process.env.PATH, MYCO_COORDINATOR_GO: "1", MYCO_HOST_LOCK: "1" },
+    env: { PATH: `${bin}:${process.env.PATH}`, MYCO_COORDINATOR_GO: "1", MYCO_HOST_LOCK: "1" },
   };
 }
 
@@ -103,7 +104,7 @@ function startDetached(argv: string): number {
   // explicitly, so `exec -a` is safe here; the fixture's `pnpm` stub cannot assume it.
   const out = spawnSync(
     "bash",
-    ["-c", "nohup bash -c \"exec -a '" + argv + "' sleep 297\" >/dev/null 2>&1 & echo $!"],
+    ["-c", `nohup bash -c "exec -a '${argv}' sleep 297" >/dev/null 2>&1 & echo $!`],
     {
       encoding: "utf8",
     },
@@ -113,6 +114,17 @@ function startDetached(argv: string): number {
 
 function alive(pid: number): boolean {
   return spawnSync("kill", ["-0", String(pid)]).status === 0;
+}
+
+/** Poll `done` every 50 ms for up to `ms`; true when it held before the deadline. */
+function waitFor(done: () => boolean, ms = 5_000): boolean {
+  for (let waited = 0; waited < ms; waited += 50) {
+    if (done()) {
+      return true;
+    }
+    spawnSync("bash", ["-c", "sleep 0.05"]);
+  }
+  return done();
 }
 
 // TIF-170 diagnostics. CI-only: MYCO_TIF170_DIAG=<dir> turns on a dump of everything a
@@ -255,11 +267,11 @@ describe("s0-live.sh launcher", () => {
 
   it("lets --stop reach a child whose pid file was lost, and spares another worktree", () => {
     const { dir, script, runDir } = worktree();
-    const mine = startDetached("node " + join(dir, "scripts", "s0-live.ts") + " --live");
+    const mine = startDetached(`node ${join(dir, "scripts", "s0-live.ts")} --live`);
     // A second, unrelated tree: the fallback is anchored on this one's $ROOT only.
     const other = realpathSync(mkdtempSync(join(tmpdir(), "myco-sibling-")));
     made.push(other);
-    const sibling = startDetached("node " + join(other, "scripts", "s0-live.ts") + " --live");
+    const sibling = startDetached(`node ${join(other, "scripts", "s0-live.ts")} --live`);
     try {
       launcher(script, runDir, ["--stop"], { MYCO_COORDINATOR_GO: "1", MYCO_HOST_LOCK: "1" });
       // The signal is asynchronous: give it a moment before asserting it landed.
@@ -284,7 +296,7 @@ describe("s0-live.sh launcher", () => {
       // rounds with two winners), so 30 rounds make the negative control dependable
       // without making a green run slow — ~10 s.
       for (let round = 0; round < ROUNDS; round += 1) {
-        spawnSync("bash", ["-c", 'rm -rf "' + runDir + '"; mkdir -p "' + runDir + '"']);
+        spawnSync("bash", ["-c", `rm -rf "${runDir}"; mkdir -p "${runDir}"`]);
         const racers = spawnSync(
           "bash",
           [
@@ -321,11 +333,11 @@ describe("s0-live.sh launcher", () => {
               DIAG,
               anomaly ? `round-${round}.failure.txt` : `round-${round}.baseline.txt`,
             );
-            writeFileSync(where, evidence + "\n");
+            writeFileSync(where, `${evidence}\n`);
             if (anomaly) {
               // Unbuffered: vitest prints it inside the failed assertion, so the job log
               // carries the evidence even when the artifact never uploads.
-              appendFileSync(2, evidence + "\n");
+              appendFileSync(2, `${evidence}\n`);
             }
             // Printed for every run, so a green CI round still shows what was captured.
             console.log(
@@ -359,7 +371,7 @@ describe("s0-live.sh launcher", () => {
         expect(recorded).toBe(live[0]);
         expect(alive(recorded)).toBe(true);
         launcher(script, runDir, ["--stop"], env);
-        spawnSync("bash", ["-c", 'pkill -9 -f "' + runDir + '" 2>/dev/null']);
+        spawnSync("bash", ["-c", `pkill -9 -f "${runDir}" 2>/dev/null`]);
       }
       // A CI hunt runs far more rounds than the 30 the local test does; 2 s a round is
       // ample on a healthy host and the cap only exists to stop a hung round running on.
@@ -368,14 +380,30 @@ describe("s0-live.sh launcher", () => {
   );
 
   it("releases the run lock on every exit that is not a signal", () => {
-    const { script, runDir, env } = worktree();
+    const { dir, script, runDir, env } = worktree();
     const lock = join(runDir, "s0.lock");
     expect(launcher(script, runDir, ["--watchdog"]).status).toBe(2);
     expect(existsSync(lock)).toBe(false);
     launcher(script, runDir, ["--run"], env);
     expect(existsSync(lock)).toBe(true);
+    // TIF-233: stop a run in one known state — its sequence child running, as recorded
+    // by the stub — not wherever the watchdog happened to be when this spawn was
+    // scheduled. Stopped mid-probe, the watchdog's `$(...)` grandchildren hold fd 9
+    // until they finish, so whether the next claim won depended on load.
+    const child = join(runDir, "s0.child");
+    const sleepers = join(dir, "sleepers");
+    expect(
+      waitFor(() => existsSync(child) && existsSync(sleepers) && statSync(sleepers).size > 0),
+    ).toBe(true);
+    const holders = [join(runDir, "s0.pid"), child].map((file) =>
+      Number(readFileSync(file, "utf8").trim()),
+    );
     launcher(script, runDir, ["--stop"], env);
     expect(existsSync(lock)).toBe(false);
+    // `kill` returns before the target exits, and the kernel frees the flock only when
+    // the last holder is gone. Wait for exactly the processes --stop signalled; a holder
+    // --stop failed to reach stays alive, and this fails instead of waiting it out.
+    expect(waitFor(() => !holders.some((pid) => alive(pid)))).toBe(true);
     // A leaked lock would make this refusal permanent.
     expect(launcher(script, runDir, ["--run"], env).status).toBe(0);
     expect(alive(Number(readFileSync(join(runDir, "s0.pid"), "utf8").trim()))).toBe(true);
