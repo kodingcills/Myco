@@ -1,0 +1,146 @@
+{
+  "runId": "24ec734b-d9a4-409f-8636-fe3bd6e14740",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-d",
+    "rowKey": "EMP-0058",
+    "column": "salary",
+    "newValue": "$24827.84"
+  },
+  "instruction": "Set the cell at record EMP-0058, column salary, to \"$24827.84\", and save the file.",
+  "startedAt": "2026-11-25T02:34:35.380Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-d\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-72484-1795574075584-888448319\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-72484-1795574075584-888448319\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "E59"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-d\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-72484-1795574075584-888448319\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell E59 located at record EMP-0058, column salary, holds fixture value \"$41926.58\"",
+          "passed": true,
+          "observed": "value=\"$41926.58\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "E59"
+        },
+        "value": "$24827.84"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-72484-1795574075584-888448319\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell E59 located at record EMP-0058, column salary, holds fixture value \"$41926.58\"",
+          "passed": true,
+          "observed": "value=\"$41926.58\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell E59 holds \"$24827.84\"",
+          "passed": true,
+          "observed": "value=\"$24827.84\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell E59 holds \"$24827.84\"",
+          "passed": true,
+          "observed": "value=\"$24827.84\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell E59 (record EMP-0058, column salary) persisted as \"$24827.84\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell E59 (record EMP-0058, column salary) persisted as \"$24827.84\""
+    ]
+  }
+}

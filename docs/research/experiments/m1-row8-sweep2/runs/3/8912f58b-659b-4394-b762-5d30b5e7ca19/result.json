@@ -1,0 +1,40 @@
+{
+  "runId": "8912f58b-659b-4394-b762-5d30b5e7ca19",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-d",
+    "rowKey": "EMP-0009",
+    "column": "salary",
+    "newValue": "$12458.13"
+  },
+  "instruction": "Set the cell at record EMP-0009, column salary, to \"$12458.13\", and save the file.",
+  "startedAt": "2026-11-25T01:20:28.575Z",
+  "steps": [],
+  "guardFailure": {
+    "step": -1,
+    "phase": "precondition",
+    "predicateName": "fixture-convert",
+    "observed": "fixture convert did not produce C:/myco/runs/myco-1503-1795569642679-668636562\\fixture.xlsx within 240000ms",
+    "reason": "fixture convert failed: fixture convert did not produce C:/myco/runs/myco-1503-1795569642679-668636562\\fixture.xlsx within 240000ms"
+  },
+  "verdict": {
+    "status": "uncertain",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": null,
+        "reason": "could not look: fixture convert failed — fixture convert did not produce C:/myco/runs/myco-1503-1795569642679-668636562\\fixture.xlsx within 240000ms",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "could not look: fixture convert failed — fixture convert did not produce C:/myco/runs/myco-1503-1795569642679-668636562\\fixture.xlsx within 240000ms"
+    ]
+  },
+  "unresolvedState": "could not look: fixture convert failed — fixture convert did not produce C:/myco/runs/myco-1503-1795569642679-668636562\\fixture.xlsx within 240000ms"
+}

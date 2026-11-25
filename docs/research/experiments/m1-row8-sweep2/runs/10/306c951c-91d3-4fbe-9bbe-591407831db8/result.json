@@ -1,0 +1,146 @@
+{
+  "runId": "306c951c-91d3-4fbe-9bbe-591407831db8",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-e",
+    "rowKey": "EMP-0034",
+    "column": "joined",
+    "newValue": "2024-06-29"
+  },
+  "instruction": "Set the cell at record EMP-0034, column joined, to \"2024-06-29\", and save the file.",
+  "startedAt": "2026-11-25T02:17:37.153Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-e\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-37056-1795573057365-139612877\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-37056-1795573057365-139612877\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "D35"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-e\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-37056-1795573057365-139612877\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell D35 located at record EMP-0034, column joined, holds fixture value \"2020-11-07\"",
+          "passed": true,
+          "observed": "value=\"2020-11-07\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "D35"
+        },
+        "value": "2024-06-29"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-37056-1795573057365-139612877\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell D35 located at record EMP-0034, column joined, holds fixture value \"2020-11-07\"",
+          "passed": true,
+          "observed": "value=\"2020-11-07\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell D35 holds \"2024-06-29\"",
+          "passed": true,
+          "observed": "value=\"2024-06-29\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell D35 holds \"2024-06-29\"",
+          "passed": true,
+          "observed": "value=\"2024-06-29\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell D35 (record EMP-0034, column joined) persisted as \"2024-06-29\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell D35 (record EMP-0034, column joined) persisted as \"2024-06-29\""
+    ]
+  }
+}

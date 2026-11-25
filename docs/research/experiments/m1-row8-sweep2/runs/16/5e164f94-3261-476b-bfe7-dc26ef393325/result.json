@@ -1,0 +1,146 @@
+{
+  "runId": "5e164f94-3261-476b-bfe7-dc26ef393325",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-e",
+    "rowKey": "EMP-0028",
+    "column": "name",
+    "newValue": "REVISED-723439"
+  },
+  "instruction": "Set the cell at record EMP-0028, column name, to \"REVISED-723439\", and save the file.",
+  "startedAt": "2026-11-25T02:40:39.345Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-e\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-89048-1795574441357-453055124\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-89048-1795574441357-453055124\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B29"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-e\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-89048-1795574441357-453055124\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B29 located at record EMP-0028, column name, holds fixture value \"Enzo Ortiz\"",
+          "passed": true,
+          "observed": "value=\"Enzo Ortiz\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B29"
+        },
+        "value": "REVISED-723439"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-89048-1795574441357-453055124\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B29 located at record EMP-0028, column name, holds fixture value \"Enzo Ortiz\"",
+          "passed": true,
+          "observed": "value=\"Enzo Ortiz\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B29 holds \"REVISED-723439\"",
+          "passed": true,
+          "observed": "value=\"REVISED-723439\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B29 holds \"REVISED-723439\"",
+          "passed": true,
+          "observed": "value=\"REVISED-723439\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B29 (record EMP-0028, column name) persisted as \"REVISED-723439\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B29 (record EMP-0028, column name) persisted as \"REVISED-723439\""
+    ]
+  }
+}
