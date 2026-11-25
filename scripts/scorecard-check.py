@@ -13,10 +13,15 @@ table header is the preamble (swept). The table's header and separator lines mus
 CRITERION_HEADER and CRITERION_SEPARATOR exactly, and the table must hold exactly one
 `| N |` line for each row 1-8, in any order; a duplicate, unexpected or non-row table
 line fails, and so does a `| N |` line anywhere else. Between the table and the first
-heading only blank lines are allowed. Every heading of any level and in every form
-Markdown renders (an ATX `#`...`######` heading indented 0-3 spaces, a setext heading
-underlined with `===` or `---`, an HTML `<h1>`-`<h6>`) starts a section that runs to the next heading, and must equal, character for
-character, exactly one key of IN_SCOPE or OUT_OF_SCOPE (the whole heading line, not a
+heading only blank lines are allowed. A heading is found on every line outside a code
+fence, after its container prefix is stripped: repeatedly, up to 3 spaces of indent and
+then a blockquote `>` or a list marker (`-`, `*`, `+`, `N.`, `N)`) with the spaces after
+it, so `> - ## x` is a heading. On what is left, a heading is an ATX `#`...`######`
+heading indented 0-3 spaces, an HTML `<h1>`-`<h6>`, or a setext heading: a non-blank
+line directly over a `===` or `---` underline, unless that line belongs to a GFM table
+(a header line whose next line is a delimiter row with the same cell count, then its
+rows up to a blank line or a thematic break). Every heading, of any level, starts a
+section that runs to the next heading, and must equal, character for character, exactly one key of IN_SCOPE or OUT_OF_SCOPE (the whole heading line, not a
 prefix: extra text after a known heading, numbers or not, makes it an unknown heading);
 an unknown heading or a second section under a known one fails. The classification is
 printed.
@@ -160,16 +165,64 @@ OUT_OF_SCOPE = {
 }
 TITLE = "# M1 scorecard"
 ROWS = [str(n) for n in range(1, 9)]
-# Every form Markdown renders as a heading (TIF-230 round 2: only a column-0 ATX heading
-# was seen, so an indented, setext or HTML heading inside an out-of-scope section showed
-# the reader a new section whose numbers inherited that section's exemption): an ATX
-# heading indented 0-3 spaces, an HTML <h1>-<h6> block, and a setext heading, which is a
-# paragraph line underlined with `===` or `---`. A `---` after a blank line, a table line
-# or a heading is a thematic break or table end, not an underline.
+# Heading detection (TIF-230 rounds 2-3: a heading the checker missed, placed inside an
+# out-of-scope section, showed the reader a new section whose numbers inherited that
+# section's exemption). Fails closed: when in doubt a line is a heading, and an unknown
+# heading fails the layout. CONTAINER is stripped repeatedly first (up to 3 spaces, then
+# `>` or a list marker), so headings in blockquotes, list items and nestings of them
+# count. Then a line is a heading when it is an ATX heading (0-3 spaces of indent), an
+# HTML <h1>-<h6>, or the non-blank line directly over a SETEXT `===`/`---` underline.
+# The one exception: a line of a real GFM table (header + matching DELIMITER row, then
+# its rows), under which `---` is a thematic break and `===` is another table row.
+# A pipe line with no delimiter row under it is a paragraph, so it can be a setext heading.
+CONTAINER = re.compile(r" {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))")
+DELIMITER = re.compile(r" {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$")
+THEMATIC = re.compile(r" {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
 HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t]|$)")
 HTML_HEADING = re.compile(r" {0,3}<h[1-6](?:[\s/>]|$)", re.I)
 SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
 FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def content(line: str) -> str:
+    """The line with every leading container marker stripped, newline removed."""
+    line = line.rstrip("\n")
+    while (m := CONTAINER.match(line)) and m.end() > 0:
+        line = line[m.end():]
+    return line
+
+
+def cells(line: str) -> int:
+    """The number of cells in a GFM table line (unescaped `|` separators)."""
+    s = line.strip()
+    s = s[1:] if s.startswith("|") else s
+    s = s[:-1] if s.endswith("|") and not s.endswith("\\|") else s
+    return len(re.split(r"(?<!\\)\|", s))
+
+
+def table_lines(lines: list[str], body: list[int]) -> set[int]:
+    """Lines of real GFM tables: a header line holding a `|` whose next line is a
+    delimiter row (with a `|`) of the same cell count, then each following non-blank line
+    that is not a thematic break or a heading. Anything else that holds a `|` is
+    paragraph text."""
+    out: set[int] = set()
+    k = 0
+    while k + 1 < len(body):
+        i, j = body[k], body[k + 1]
+        head, delim = content(lines[i]), content(lines[j])
+        if (j == i + 1 and "|" in head and "|" in delim and DELIMITER.match(delim)
+                and cells(head) == cells(delim)):
+            out.update((i, j))
+            k += 2
+            while k < len(body) and body[k] == body[k - 1] + 1:
+                row = content(lines[body[k]])
+                if not row.strip() or THEMATIC.match(row) or HEADING.match(row) or HTML_HEADING.match(row):
+                    break
+                out.add(body[k])
+                k += 1
+        else:
+            k += 1
+    return out
 # The criterion table's header and separator, matched exactly: neither is a row, so a
 # number added to either would otherwise sit in no segment at all.
 CRITERION_HEADER = "| # | Criterion | Status | Evidence | Gap to DONE |"
@@ -371,14 +424,17 @@ class Report:
                     fence = None  # a closing fence: the same character, at least as long, nothing after
             else:
                 body.append(i)
-                if HEADING.match(line) or HTML_HEADING.match(line):
+                c = content(line)
+                if HEADING.match(c) or HTML_HEADING.match(c):
                     heads.append(i)
-        # A setext underline makes the paragraph line above it a heading.
+        # A setext underline makes the non-blank line above it a heading, unless that line
+        # is part of a real GFM table (then `---` is a thematic break, `===` a table row).
+        tables = table_lines(lines, body)
         for k, i in enumerate(body[1:], 1):
             above = body[k - 1]
-            prev = lines[above].lstrip(" ")
-            if (above == i - 1 and SETEXT.match(lines[i].rstrip("\n")) and prev.strip() and not prev.startswith("|")
-                    and above not in heads):
+            underline = SETEXT.match(lines[i].rstrip("\n")) or SETEXT.match(content(lines[i]))
+            if (above == i - 1 and underline and content(lines[above]).strip()
+                    and above not in tables and above not in heads):
                 heads.append(above)
         heads.sort()
         if not lines or lines[0].rstrip("\n") != TITLE:
@@ -427,7 +483,8 @@ class Report:
         seen: set[str] = set()
         for k, i in enumerate(heads):
             heading = lines[i].rstrip("\n")
-            if i + 1 < len(lines) and SETEXT.match(lines[i + 1].rstrip("\n")) and not HEADING.match(lines[i]):
+            if (i + 1 < len(lines) and (SETEXT.match(lines[i + 1].rstrip("\n")) or SETEXT.match(content(lines[i + 1])))
+                    and not HEADING.match(content(lines[i])) and not HTML_HEADING.match(content(lines[i]))):
                 heading += " / " + lines[i + 1].strip()  # a setext heading never equals a key
             end = offs[heads[k + 1]] if k + 1 < len(heads) else len(self.text)
             key, kind = next(((heading, c) for table, c in ((IN_SCOPE, "in scope"), (OUT_OF_SCOPE, "out of scope"))

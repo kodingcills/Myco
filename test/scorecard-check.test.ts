@@ -429,6 +429,55 @@ describe("scorecard-check", () => {
       appendToRegenerate("<h2>Sweep v3 result</h2>\n\n31 of 30 verified."),
       /^MISMATCH layout: <h2>Sweep v3 result<\/h2>: .*does not classify/,
     ],
+    // TIF-230 round 3, D3: a pipe line with no delimiter row under it is a paragraph, so
+    // an underline makes it a setext heading.
+    [
+      "a pipe line underlined with === (no delimiter row, so not a table)",
+      appendToRegenerate("| Sweep v3 result |\n===\n\n31 of 30 verified."),
+      /^MISMATCH layout: \| Sweep v3 result \| \/ ===: .*does not classify/,
+    ],
+    [
+      "a pipe line underlined with --- (no delimiter row, so not a table)",
+      appendToRegenerate("| Sweep v3 result |\n---\n\n31 of 30 verified."),
+      /^MISMATCH layout: \| Sweep v3 result \| \/ ---: .*does not classify/,
+    ],
+    // TIF-230 round 3, D4: a heading inside a container (blockquote, list item, or a
+    // nesting of them) is still a heading.
+    [
+      "an ATX heading in a blockquote",
+      appendToRegenerate("> ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: > ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a - list item",
+      appendToRegenerate("- ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: - ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a * list item",
+      appendToRegenerate("* ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: \* ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a + list item",
+      appendToRegenerate("+ ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: \+ ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a 1. list item",
+      appendToRegenerate("1. ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: 1\. ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a 1) list item",
+      appendToRegenerate("1) ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: 1\) ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a list item inside a blockquote",
+      appendToRegenerate("> - ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: > - ## Sweep v3 result: .*does not classify/,
+    ],
   ];
   it.each(cases)(
     "fails on %s",
@@ -460,11 +509,14 @@ describe("scorecard-check", () => {
 
   // TIF-230 round 2, D2: a `---` that is a thematic break (after a blank line) or ends a
   // table is not a setext underline, so neither adds a heading.
+  // Round 3 (D3): only a real table (header + delimiter row) shields the line above an
+  // underline; under one, `---` is a thematic break and `===` is another table row.
   it("does not read a thematic break or a --- after a table as a setext heading", () => {
     const text = mutate(
       readFileSync(SCORECARD, "utf8"),
       REGENERATE_END,
-      "from the runbook.\n\n---\n\n| Step | Command |\n|---|---|\n| regenerate | the script |\n---\n\n## Open risk:",
+      "from the runbook.\n\n---\n\n| Step | Command |\n|---|---|\n| regenerate | the script |\n---\n\n" +
+        "| Step | Command |\n|---|---|\n| regenerate | the script |\n===\n\n## Open risk:",
     );
     const result = checkMutated(text);
     expect(result.mismatch).toEqual([]);
