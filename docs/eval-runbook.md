@@ -65,6 +65,22 @@ second run of `test/discovery/s0-live-launcher.test.ts` alone with `--pool=forks
 VM; do it before any VM work so a later failure is unambiguous. `schema-validate` prints its
 per-trial `ok …` lines with no newline between them, so expect one long line before the summary.
 
+**`Ignored build scripts: esbuild@…` is expected (row-8 J1).** `pnpm install` prints a warning
+box `Ignored build scripts: esbuild@<version>. Run "pnpm approve-builds" …`. pnpm 10 skips
+dependency build scripts unless the project allows them, and this repo allows none
+(`package.json` and `pnpm-workspace.yaml` list no `onlyBuiltDependencies`). It is harmless:
+`tsx` works without that script (check with `pnpm exec tsx --version`), and every step in this
+runbook passed with the script skipped. **Do not run `pnpm approve-builds`**: it writes the allow list
+into the repo's config files, which is a change to the repo, not a setup step.
+
+**Which of the two lines are required (row-8 J2).** `pnpm install --frozen-lockfile` is required
+before any VM step, always: every later step runs through `pnpm exec tsx`, and §8.4's check needs
+the dev dependencies. The second line (typecheck, lint, test, build) is the host-half proof. A
+full row-8 reproduction runs it, because every step is part of what is tested (the same rule as
+§6 F20). A bounded re-run whose scope says §1 already passed at the same HEAD may skip it; record
+the skip, and why, with your results, as §6 F20 asks for a skipped reset. If a later VM step then
+fails in a way that could be host-side, run the second line before blaming the VM.
+
 **Run `pnpm test` on a quiet host** (1-min load under 10, the same level as the §7.3 resume gate).
 Under load it fails on timeouts alone: on 2026-11-25, with the 1-min load at 12.9–15.4 while a
 sweep ran, 43 of 1080 tests failed, every one a 5 s timeout (vitest's default `testTimeout`, and
@@ -87,6 +103,14 @@ Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 (`myco-win11`), `MYCO_AGENT_PORT` (8765), `MYCO_TOKEN_PATH`
 (`C:\ProgramData\Myco\agent.token`), `MYCO_TOKEN_OUT` (`~/.myco-token`, the host file the deploy
 writes the token to; a path, never a secret).
+
+**The host secret guard still treats `MYCO_TOKEN_OUT` as a secret (row-8 J4).** Its value is a
+path, but the guard on this Mac (TIF-206) matches the `TOKEN` in the name: it blocks any command
+that prints or echoes the variable's value, and even a command that only quotes such a print as
+text (a report append, for example). Refer to it only as `"$MYCO_TOKEN_OUT"` inside the commands
+that use it, and do not echo it. To record the path, copy it from the deploy's own
+`==> wrote the fresh token to … (mode 600)` line (§4). A guard block is not a failure of the
+step: drop the blocked command and carry on. Do not rephrase it to get past the guard.
 
 **The readiness gate is repo-only, by design.** `scripts/wait-guest-ready.sh` is resolved
 from the checkout by `reset-trial-vm.sh` (`REPO_GATE`, line 42) and **no host script calls
@@ -332,6 +356,22 @@ DEPLOY OK
 (`agent/bootstrap/deploy-to-vm.sh`, its last lines). None of them carries the token: the `token`
 line names the host file the deploy wrote and the guest path, and `ops` prints a literal `<token>`.
 
+**Other output that is expected and harmless:**
+
+- **OpenSSH post-quantum warnings (row-8 J5).** The deploy's `ssh`/`scp` calls can print
+  `** WARNING: connection is not using a post-quantum key exchange algorithm` (with a
+  `See https://openssh.com/pq.html` line), several times per deploy. It is the host's OpenSSH
+  client commenting on the guest sshd's key exchange, not a deploy fault. The same warning can
+  appear on any `ssh`, `scp` or `vssh` call in this runbook. Judge the deploy by its own lines:
+  the sha256 copy check, `ping verified` and `DEPLOY OK`.
+- **No pip output (row-8 J6).** The dependency install is
+  `pip install --quiet --no-warn-script-location pywin32 comtypes uiautomation` in
+  `guest-deploy.ps1`'s `register` stage (run by the `==> registering MycoAgent task …` step), so
+  a successful install prints nothing. There is no separate pip log on the host or the guest. On
+  failure, pip's error comes back over ssh on the deploy's stderr, followed by
+  `pip install into LO python failed: <exit code>`, and the deploy exits non-zero before the ping
+  step. The evidence that the install worked is §5 passing.
+
 **The token rotates on every deploy, and the deploy leaves the fresh one on the host.** Once the
 ping check passes, `deploy-to-vm.sh` writes the token to `~/.myco-token` (or `$MYCO_TOKEN_OUT`) and
 prints only the path: `==> wrote the fresh token to … (mode 600)`. There is nothing to fetch back
@@ -350,8 +390,9 @@ fetch was refused by an agent session's permission system, and §5 and §6 then 
 - **Each deploy rotates the token**, including the deploy inside every §7.3/§7.4 trial. A copy from
   before your latest deploy fails `AUTH_FAILED`.
 - **`~/.myco-token` is one path shared by every operator on this Mac (G25).** Another operator's
-  deploy overwrites it, and their guest token replaces yours. When several operators share the Mac,
-  give each a private path, and pass the same path to §5 and §6:
+  deploy overwrites it, and their guest token replaces yours. Nothing in the repo tells you whether
+  someone else is using the Mac right now, so **always use a private path under your own clone**
+  (row-8 J3), and pass the same path to §5, §6 and §7:
 
   ```bash
   mkdir -p -m 700 runs/token-"$USER"                # under your own clone; runs/ is gitignored
@@ -362,7 +403,11 @@ fetch was refused by an agent session's permission system, and §5 and §6 then 
   Avoid a `mktemp -d` path under `$TMPDIR`: macOS cleans old files out of it, so the token can
   vanish between the deploy and a later trial.
 
-  Then pass `--token-file "$MYCO_TOKEN_OUT"` in §5, §6 and §7, from the same shell. The directory
+  Then pass `--token-file "$MYCO_TOKEN_OUT"` in §5, §6 and §7, from the same shell. An agent whose
+  tool calls do not share one shell loses the exported variable between calls: re-set it in each
+  call, to the same path (`export MYCO_TOKEN_OUT="$PWD/runs/token-$USER/agent-token"` from the same
+  clone root), before the command that uses it (row-8 J9). Do not print it to check it (§1.3,
+  J4). The directory
   must exist and be writable by you, and an existing file there must be writable; the deploy
   checks all three before it copies anything, and otherwise refuses (exit 1, guest untouched).
   Even with a private file, a later deploy by anyone rotates the guest token, so do not run
@@ -401,7 +446,7 @@ If it fails:
 | Symptom | Cause | Fix |
 |---|---|---|
 | `deploy-to-vm: missing ssh config …` / `nc not found` / `openssl not found` | host prerequisite | fix the host (§1) |
-| `ModuleNotFoundError` on `session_info`, or `uia`/`pywin32` import errors from the agent | deps missing from **LibreOffice's** Python | `guest-deploy.ps1` installs them; re-run the deploy and read its pip output |
+| `ModuleNotFoundError` on `session_info`, or `uia`/`pywin32` import errors from the agent | deps missing from **LibreOffice's** Python | `guest-deploy.ps1` installs them, silently on success (`pip --quiet`, J6 above); re-run the deploy and read its stderr: a failed install prints pip's error and `pip install into LO python failed: <exit code>`, and the deploy exits non-zero |
 | agent answers on the wrong interpreter, or `uno` fails to import | agent started under system Python instead of `C:\Program Files\LibreOffice\program\python.exe` | you are on old bootstrap code; the interpreter is fixed on `main` (log 18) |
 | `deploy-to-vm: copy attempt 1/3 failed; redoing the whole copy` | sshd dropped a connection while settling after a cold boot (TIF-220; 1 in 28 cycles) | nothing, if a later attempt prints `copy succeeded … verified`. The copy is redone in full and hash-checked, never resumed. A clean first attempt prints only `==> verified N files on the guest against the source (sha256)`: the `copy succeeded on attempt N/3` line appears only after a retry |
 | `scp: Connection closed` followed by `copy to guest failed on all 3 attempts` | guest or UTM unhealthy, not a settling blip | §2, then §3.3 |
@@ -422,7 +467,7 @@ verified the agent (§4). Only for a guest deployed by something else, use the �
 Pass the same path the deploy wrote:
 
 ```bash
-pnpm exec tsx src/integration/session-info.ts --token-file ~/.myco-token   # or your $MYCO_TOKEN_OUT
+pnpm exec tsx src/integration/session-info.ts --token-file "$MYCO_TOKEN_OUT"   # your private path (§4); ~/.myco-token only if you deployed without it
 ```
 
 The CLI opens its own ssh tunnel (`SshTunnel`), takes and releases the VM lock, prints the
@@ -635,13 +680,17 @@ Then the §6 run itself:
 
 ```bash
 pnpm exec tsx src/integration/run-live.ts --mode values --limit 20 --runs-dir runs/s6-final \
-  --token-file ~/.myco-token   # or your $MYCO_TOKEN_OUT (§4)
+  --token-file "$MYCO_TOKEN_OUT"   # your private path (§4); ~/.myco-token only if you deployed without it
 ```
 
 **Use an explicit `--runs-dir`.** Without it the run writes into `runs/`, which §1.2's `pnpm test`
 has already filled with schema-valid fixture directories — so §8.2's `validate-live` can report
 `ALL OK` on the *tests'* artifacts rather than on this run (F11/F14, 2026-11-24). A dedicated
 directory also makes the §6 evidence unambiguous.
+
+**Two runs-dir names, one for each kind of run (row-8 J7).** A full 20-row run uses
+`--runs-dir runs/s6-final`. Any `--limit N` subset uses `--runs-dir runs/s6-subset`. Never point
+a subset at `runs/s6-final`, so a subset can never be mistaken for the 20-row evidence dir.
 
 Expected: a JSON array of 20 rows, every one `"status": "verified"`, exit code 0 (non-zero if any
 row is not verified; exit 2 if the generator yields no sets — a broken generator must not look
@@ -652,10 +701,23 @@ the run 20 rows: without it `run-live` takes up to 40 sets (`src/integration/run
 `--mode values`). With `--limit N` the pass condition is the same shape at size N: **a JSON array
 of N rows, every one `"status": "verified"`, exit code 0.** Any non-verified row, or a non-zero
 exit, fails it. An N-row pass is evidence for the generator on those N sets only; it never
-replaces the 20/20. **Row 8's bounded re-check may use such a subset** (for example
-`--limit 4 --runs-dir runs/s6-subset`); the full 20/20 for row 8 stands from the recorded runs
-above (`S6-PASS.md`, and the fresh operator's 2026-11-24 11:42–11:59Z run). In the retry rule
-and decision table below, read "20/20" as "N/N" for a subset run.
+replaces the 20/20. **Row 8's bounded re-check may use such a subset**, always with
+`--runs-dir runs/s6-subset` (for example `--limit 4 --runs-dir runs/s6-subset`); the full 20/20
+for row 8 stands from the recorded runs above (`S6-PASS.md`, and the fresh operator's 2026-11-24
+11:42–11:59Z run). In the retry rule and decision table below, read "20/20" as "N/N" for a subset
+run.
+
+**After a passing run (full or subset), leave the guest as `run-live` left it (row-8 J11).**
+Each row is one trial, and every trial cleans up after itself in a `finally`
+(`cleanupAfterTrial` in `src/integration/trial.ts`, calling `cleanupTrialGuest` in
+`src/integration/guest-health.ts`): it kills every `soffice` and deletes its own run dir and UNO
+profile, then lists again to check. Before each trial, `probeGuestHealth` aborts the trial on a stray
+`soffice` or a leftover run dir (`guestContaminated`, the set §6.1 prints), so in a run where
+every row verified, every cleanup except the last one has already
+been checked by the next row's probe. You do not need to re-run §6.1 or the cleanup. The next
+operator's own §6.1 check is what protects them. If you do re-run the §6.1 check (it is
+read-only) and it prints a line, that is the last trial's cleanup residue: run the §6.1 cleanup,
+then the check again, and record it.
 
 Row shape, from the committed run
 (`docs/research/experiments/m1-013-generator-proof.json`):
@@ -722,7 +784,7 @@ explicit run directory, or clear `runs/` between §1 and §8.
 
 ```bash
 pnpm exec tsx src/integration/run-live.ts --mode normal --seed m1-013-trial-01 --runs-dir runs/row8-7.1 \
-  --token-file ~/.myco-token   # or your $MYCO_TOKEN_OUT (§4)
+  --token-file "$MYCO_TOKEN_OUT"   # your private path (§4); ~/.myco-token only if you deployed without it
 ```
 
 Give every hand-run trial its own `--runs-dir` (the same reason as §6: `runs/` already holds the
@@ -751,7 +813,7 @@ conversion from a failed process or an unreachable guest.
 
 ```bash
 pnpm exec tsx src/integration/run-live.ts --mode kill --kill-after-step 3 --runs-dir runs/row8-7.2 \
-  --token-file ~/.myco-token   # or your $MYCO_TOKEN_OUT (§4)
+  --token-file "$MYCO_TOKEN_OUT"   # your private path (§4); ~/.myco-token only if you deployed without it
 ```
 
 The kill is **step-triggered**, not a wall-clock timer: launching Calc and making it observable
@@ -1080,7 +1142,7 @@ from recorded evidence and print a `RECLASSIFIED` line when the stored false-suc
 | 10 | VM in use. `REFUSED_VM_LOCKED` names the lock holder or the legacy driver process. |
 
 To inspect an individual live trial, use `pnpm exec tsx src/integration/run-live.ts --mode MODE`
-with `--token-file ~/.myco-token` (or your `$MYCO_TOKEN_OUT`, §4), an explicit `--runs-dir`,
+with `--token-file "$MYCO_TOKEN_OUT"` (your private path, §4), an explicit `--runs-dir`,
 and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
 `kill` for suite-style evidence and `--recovery` to exercise the ladder. An audited mode exits 0
 for a verdict of refuted, uncertain or proven recovery, 1 for an unsupported verified claim or a
@@ -1388,6 +1450,37 @@ a failed reproduction.
 it on its `Reliability:` line. False successes carry the `ground-truth:false` or
 `recovery:missing-proof` oracle. `OUT_DIR/summary.json` and the driver's `summary.txt` include
 the per-trial recovery results, `falseSuccesses` total and `auditLedgerRows` accounting.
+
+### 8.4 Scorecard check
+
+`scripts/scorecard-check.py` recomputes every number in `docs/m1-scorecard.md`'s in-scope
+sections from committed artifacts (row 8 step 8; the script's docstring has the full scope).
+It needs no VM, only python3 and the dev dependencies from `pnpm install` (§1.2). Run it from the
+repo root with no arguments (row-8 J8):
+
+```bash
+python3 scripts/scorecard-check.py
+```
+
+It prints one line per claim, then the section classification, then two closing lines. The
+**summary line** is the second to last, the counts:
+
+```
+<n> ok, 0 mismatch, 0 unattributed, <n> not machine-checked, <n> artifact-consistency, <n> skipped, <n> sections swept clean, <n> identifier words skipped; <n> sections out of scope
+SCORECARD CHECK OK: every number in the in-scope sections matches its committed artifact or is listed as unchecked
+```
+
+**Pass: exit 0, the summary line shows `0 mismatch, 0 unattributed`, and the last line is
+`SCORECARD CHECK OK: …`.** The script also runs two sub-checks, `scripts/check-scorecard-links.py`
+and `scripts/scorecard-viewer-links.py --check`, unless you pass `--no-subchecks`; do not pass
+it. Any `MISMATCH` or `UNATTRIBUTED` claim exits 1 (a failed artifact check or sub-check is
+counted as a mismatch), and the failing claims are printed to stderr instead of the
+`SCORECARD CHECK OK` line. Without the dev dependencies the script stops with a Python traceback
+(`CalledProcessError` on `node --import tsx scripts/m1-corrupt-suite-ledger.ts …`) and exit 1;
+that is a setup failure, not a scorecard mismatch: run `pnpm install --frozen-lockfile` and re-run. The
+`not machine-checked` and `skipped` counts are not failures: each such claim prints its reason.
+The check reads the tree and writes nothing in it, so `git status --short` should be unchanged
+afterwards.
 
 ## 9. Troubleshooting
 
