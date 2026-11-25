@@ -14,8 +14,9 @@ Unless noted, a session uses the runbook's multi-step form,
      finishes, the next step runs, and the session exits 0.
   b. Ctrl-C ends the session: 130, no step left, the record cleared, the lock
      free, and the next step never runs.
-  c. A SIGTERM sent to the wrapper alone, with a step that is slow to stop:
-     143 only once the step has gone.
+  c. A SIGTERM sent to the wrapper alone, with a step whose EXIT trap is slow
+     (sleep 0.5, then a done marker): the trap finishes (one SIGTERM reaches the
+     step, not a stream of them), and 143 comes only once the step has gone.
   d. Ctrl-C with a step shaped like agent/bootstrap/deploy-to-vm.sh: a token
      temp file, a background child that ignores SIGINT and keeps FD 9 (the ssh
      tunnel), and an EXIT trap that removes the file, waits, kills the child and
@@ -32,7 +33,9 @@ Unless noted, a session uses the runbook's multi-step form,
   g. The wrapper started from a script running in the terminal (own process
      group for the command): a step that reads the terminal is stopped by
      SIGTTIN; the wrapper reports it within 5 s, and a SIGTERM to the wrapper,
-     forwarded with SIGCONT, ends the session (143, lock free).
+     forwarded with SIGCONT, ends the session (143, lock free). The step traps
+     TERM, so without the SIGCONT the signal would stay pending while it is
+     stopped (a default-action TERM kills even a stopped process).
 Prints "PTY-OK" and exits 0, or prints what failed and the terminal transcript
 and exits 1.
 """
@@ -86,11 +89,11 @@ def text():
     return transcript.decode(errors="replace")
 
 
-def wait_for(fd, pattern, seconds, what):
+def wait_for(fd, pattern, seconds, what, since=0):
     end = time.time() + seconds
     regex = re.compile(pattern)
     while time.time() < end:
-        found = regex.search(text())
+        found = regex.search(text(), since)
         if found:
             return found
         pump(fd, 0.05)
@@ -244,12 +247,15 @@ def scenario_b(fd, name):
 
 
 def scenario_c(fd, name):
-    session(fd, name, write_step(name, "trap 'sleep 0.5; exit 0' TERM"))
+    done = path(name, "done")
+    session(fd, name, write_step(name, f"trap 'sleep 0.5; touch \"{done}\"' EXIT", LONG_WAIT))
     s = step_pid(fd, name)
     os.kill(wrapper_pid(), signal.SIGTERM)
     rc = session_rc(fd, name, 15, "the session to end on SIGTERM")
     if alive(s):
         fail("the wrapper returned while a step was still stopping")
+    if not os.path.exists(done):
+        fail(f"session {name}: the step's EXIT trap was cut short (no done marker)")
     expect_rc(name, rc, 143)
     expect_released(name)
     expect_no_next_step(fd, name)
@@ -304,9 +310,10 @@ echo "$!" > "{bg}\""""
     with open(bg) as f:
         left = int(f.read().strip())
     known_pids.add(left)
+    mark = len(text())
     send(fd, "\x03")
     found = wait_for(fd, r"vm-session: still waiting after SIGINT[^\n]*", 8,
-                     "the wrapper to say what it is waiting for")
+                     "the wrapper to say what it is waiting for", mark)
     if str(left) not in found.group(0) or f"SIGTERM to {w}" not in found.group(0):
         fail(f"session {name}: the waiting message does not name {left} and the way out: {found.group(0)!r}")
     if alive(s) or not alive(left) or not alive(w):
@@ -322,16 +329,17 @@ echo "$!" > "{bg}\""""
 
 
 def scenario_g(fd, name):
-    step = write_step(name, body="read -r line")
+    step = write_step(name, "trap 'exit 0' TERM", body="read -r line")
     # Two commands, so the outer bash does not exec the wrapper: the wrapper is
     # then not a job of its own, and the command gets its own process group.
+    mark = len(text())
     send(fd, f'bash -c "{WRAPPER} -- bash {step}; echo RC\\"\\"-{name}=\\$?"\n')
     s = step_pid(fd, name)
     w = wrapper_pid()
     if ps_field(s, "pgid") == ps_field(w, "pgid"):
         fail(f"session {name}: the command shares the wrapper's group; expected its own")
     found = wait_for(fd, r"vm-session: session process\(es\) [^\n]* are stopped[^\n]*", 5,
-                     "the wrapper to report the stopped step")
+                     "the wrapper to report the stopped step", mark)
     if str(s) not in found.group(0) or f"kill {w}" not in found.group(0):
         fail(f"session {name}: the report does not name the step and the way out: {found.group(0)!r}")
     if "T" not in ps_field(s, "stat"):
