@@ -596,25 +596,28 @@ scripts/vm-session.sh -- bash -c '
   node --import tsx src/integration/session-info.ts --token-file "$MYCO_TOKEN_OUT"
   node --import tsx src/integration/run-live.ts --mode values ...   # §6, flags as in §6.2
 '
-lsof /tmp/myco-win11.vm.lock || echo free     # free again once the session exits
+lsof /tmp/myco-win11.vm.lock || echo free     # free again once the session and every child holding FD 9 exit
 ```
 
 The wrapper takes the lock once (record `<pid> vm-session.sh`), runs the command with the lock's
 descriptor (FD 9) inherited, and releases it when the command exits: normally, on a crash, or on
 Ctrl-C / `kill`. SIGINT, SIGTERM and SIGHUP sent to the wrapper are forwarded to the command's
 whole process group, so every step of a `bash -c '<step>; <step>'` gets it and later steps do
-not start; the wrapper waits until that group is empty, then exits `128+signal`. A signal that
+not start; the wrapper waits until every step in that group has gone, then exits `128+signal`. A signal that
 was ignored when the wrapper started stays ignored: under `nohup scripts/vm-session.sh -- …` a
-hangup does not end the session. In a terminal the command's group is made the foreground job,
-so Ctrl-C reaches it and a step can still prompt; Ctrl-Z is ignored inside the session.
+hangup does not end the session. Started from your terminal, the wrapper and its command are one
+job: Ctrl-C reaches every step and ends the session, a step can still prompt, Ctrl-Z stops the
+whole job (the lock stays held while it is stopped) and `fg` resumes it. A background descendant
+that kept FD 9 keeps the lock held after the wrapper exits, until it exits too.
 
 On those exits it clears its record, so the lock file is normally empty afterwards (unlike the
-other drivers, §2). `<pid> vm-session.sh` can still be left behind by a SIGKILLed wrapper, or by
-a signal in the few milliseconds while its python3 supervisor starts (no command has run then).
-That is safe: a step accepts the record only from a descendant of that pid that carries its
+other drivers, §2). Three cases leave `<pid> vm-session.sh` behind: (1) a SIGKILLed wrapper;
+(2) a signal in the few milliseconds while its python3 supervisor starts; (3) anything else that
+kills the wrapper between taking the lock and starting the supervisor without running its traps.
+No command has run in cases 2 and 3. That is safe: a step accepts the record only from a descendant of that pid that carries its
 FD 9, so an unrelated process, including one that later reuses the pid, is refused. It exits
-**10** with `REFUSED_VM_LOCKED` if the lock is held, **125** if the python3 supervisor could not
-be started (nothing ran), and otherwise with the command's own status. While it runs, `lsof` lists the wrapper and its
+**10** with `REFUSED_VM_LOCKED` if the lock is held, **125** if python3 is missing or the python3
+supervisor could not be started (nothing ran), and otherwise with the command's own status. While it runs, `lsof` lists the wrapper and its
 children, which is correct: the VM is in use.
 
 - A step accepts the session's lock only if it **inherited FD 9** from the wrapper: it must be a

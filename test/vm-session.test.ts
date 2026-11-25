@@ -594,3 +594,60 @@ it("never treats pid 1 as a session owner in the shell gate", () => {
   expect(result.stdout).not.toContain("ACCEPTED");
   expect(lockIsFree(lock)).toBe(true);
 });
+
+it("exits 125 without taking the lock when python3 is missing", () => {
+  // PATH holds bash and dirname only: no python3 anywhere.
+  const { dir, lock, env } = fixture();
+  const bin = join(dir, "nopython");
+  mkdirSync(bin);
+  for (const tool of ["bash", "dirname"]) {
+    const found = spawnSync("bash", ["-c", `command -v ${tool}`], {
+      encoding: "utf8",
+    }).stdout.trim();
+    symlinkSync(found, join(bin, tool));
+  }
+  const probe = spawnSync(join(bin, "bash"), ["-c", "command -v python3"], {
+    env: { ...env, PATH: bin },
+  });
+  expect(probe.status).not.toBe(0);
+  const result = spawnSync(join(bin, "bash"), [WRAPPER, "--", "echo", "SHOULD-NOT-RUN"], {
+    encoding: "utf8",
+    timeout: 20_000,
+    env: { ...env, PATH: bin },
+    cwd: REPO,
+  });
+  expect(result.status, result.stderr).toBe(125);
+  expect(result.stdout).not.toContain("SHOULD-NOT-RUN");
+  expect(result.stderr).toContain("python3 not found");
+  expect(readLock(lock)).toBe("");
+});
+
+/** Why the terminal test cannot run here, or null when it can. */
+function noPtyReason(): string | null {
+  const probe = spawnSync("python3", ["-I", "-c", "import os, pty; os.close(os.openpty()[0])"], {
+    encoding: "utf8",
+  });
+  if (probe.error) return `python3 cannot be started (${probe.error.message})`;
+  if (probe.status !== 0) return `no pseudo-terminal available: ${probe.stderr.trim()}`;
+  return null;
+}
+const ptyMissing = noPtyReason();
+if (ptyMissing) console.warn(`skipping the vm-session terminal test: ${ptyMissing}`);
+
+it.skipIf(ptyMissing !== null)(
+  "under a terminal: Ctrl-Z stops the whole job, fg resumes it, Ctrl-C and SIGTERM end it cleanly",
+  () => {
+    // test/fixtures/vm-session-pty.py runs an interactive bash on a pty and drives
+    // three multi-step sessions (`bash -c '<step>; <next step>'`) with real
+    // control characters; see its docstring for what each one asserts.
+    const { dir, env } = fixture();
+    const result = spawnSync(
+      "python3",
+      ["-I", join(REPO, "test", "fixtures", "vm-session-pty.py"), WRAPPER, dir],
+      { encoding: "utf8", timeout: 60_000, env, cwd: REPO },
+    );
+    expect(result.stdout + result.stderr).toContain("PTY-OK");
+    expect(result.status).toBe(0);
+  },
+  70_000,
+);

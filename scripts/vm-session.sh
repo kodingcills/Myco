@@ -7,10 +7,14 @@
 # runs <cmd> with FD 9 inherited, and releases on exit: normal exit, a crashing
 # child, and SIGTERM/SIGINT/SIGHUP. A signal to the wrapper is forwarded to the
 # command's whole process group (every step of a `bash -c '<step>; <step>'`),
-# the wrapper waits until that group is empty, then exits 128+signal. A signal
-# that was ignored when the wrapper started (SIGHUP under nohup, SIGINT for a
-# background job of a script) stays ignored: it is neither forwarded nor
-# un-ignored for the command.
+# the wrapper waits until the rest of that group is gone, then exits
+# 128+signal. A signal that was ignored when the wrapper started (SIGHUP under
+# nohup, SIGINT for a background job of a script) stays ignored: it is neither
+# forwarded nor un-ignored for the command.
+#
+# A background descendant that kept FD 9 keeps the lock held after the wrapper
+# exits, until it exits too: the flock belongs to the open file description, not
+# to the wrapper.
 #
 # A step script started under it (reset-trial-vm.sh, run-live.ts,
 # session-info.ts) accepts the lock through vm_lock_owned_by_parent /
@@ -20,27 +24,41 @@
 # the lock file on its own, is refused.
 #
 # On exit the wrapper clears its own record (under the flock) before closing
-# FD 9. Three cases leave `<pid> vm-session.sh` behind: a SIGKILL of the
-# wrapper, a signal in the few ms while the python3 supervisor starts (before it
-# blocks its signals), and anything that kills the wrapper between taking the
-# lock and starting the supervisor without running its traps. No command runs in
-# the last two. A stale record is still safe: the gate refuses a non-descendant
-# of the recorded pid, and a dead pid outright (vm_lock_fd_is_holders).
+# FD 9. Three cases leave `<pid> vm-session.sh` behind:
+#   1. a SIGKILL of the wrapper;
+#   2. a signal in the few ms while the python3 supervisor starts (before it
+#      blocks its signals);
+#   3. anything else that kills the wrapper between taking the lock and starting
+#      the supervisor without running its traps.
+# No command runs in cases 2 and 3. A stale record is still safe: the gate
+# refuses a non-descendant of the recorded pid, and a dead pid outright
+# (vm_lock_fd_is_holders).
 #
-# The terminal: the command runs in its own process group so a signal can reach
-# all of it. When the wrapper is the terminal's foreground job, that group is
-# made the foreground group for the session (so Ctrl-C reaches the command and
-# a step can read the terminal), and the terminal is handed back afterwards.
-# Ctrl-Z is ignored inside a terminal session: a stopped command would leave the
-# terminal with a group nobody resumes. Without a terminal on stdin nothing of
-# this applies; stdin is passed to the command unchanged either way.
+# Process groups and the terminal. The wrapper never hands the terminal to
+# another group. Which group the command runs in depends on how the wrapper was
+# started:
+#   - Started as a job by a shell with job control (the terminal case: the
+#     wrapper leads its own process group): the command stays in the wrapper's
+#     group. The group is exactly this job, so the terminal treats wrapper and
+#     command as one job: Ctrl-C reaches every step (and the wrapper, which then
+#     forwards it to the group as well), a step can read the terminal, Ctrl-Z
+#     stops the whole job including the wrapper, and the shell's `fg` resumes
+#     it. A signal the wrapper forwards reaches the wrapper too; it takes that
+#     copy back at once, and drains by waiting for the group's other members
+#     (listed with ps).
+#   - Started any other way (a script, a launcher, nohup without job control):
+#     the wrapper shares its group with whoever started it, which must not get
+#     forwarded signals, so the command gets its own process group and signals
+#     go there. Such a wrapper is not a terminal job of its own, so nothing
+#     above applies.
+# stdin is passed to the command unchanged either way.
 #
 # Run several steps as one session with a shell:
 #   scripts/vm-session.sh -- bash -c 'scripts/reset-trial-vm.sh && ...'
 #
 # Exit codes: 10 the lock is held (REFUSED_VM_LOCKED names the holder), 2 usage,
-# 125 the python3 supervisor could not be started (the command did not run),
-# otherwise <cmd>'s own status (127 if it cannot be run).
+# 125 python3 is missing or the python3 supervisor could not be started (the
+# command did not run), otherwise <cmd>'s own status (127 if it cannot be run).
 #
 # Note: a Node launcher (pnpm exec, npx, the tsx CLI) spawns its child with only
 # stdio, so FD 9 does not reach a TypeScript step started through one, and that
@@ -69,6 +87,13 @@ trap 'vm_session_abort 143' TERM
 trap 'vm_session_abort 130' INT
 trap 'vm_session_abort 129' HUP
 
+# vm_lock_acquire needs python3 too and would exit 127, which reads as "<cmd>
+# cannot be run". Nothing is taken or written yet.
+if ! command -v python3 > /dev/null 2>&1; then
+  echo "vm-session: python3 not found; the lock was not taken and the command did not run" >&2
+  exit 125
+fi
+
 vm_lock_acquire vm-session.sh || exit "$?"
 
 # The supervisor is python3 (already required by vm-lock.sh), exec'd so it keeps
@@ -84,14 +109,14 @@ vm_lock_acquire vm-session.sh || exit "$?"
 # still holds the flock, then close FD 9:
 #   - the command exits: its status, or 128+n if a signal killed it
 #   - SIGTERM / SIGINT / SIGHUP to the wrapper (unless ignored at entry): sent to
-#     the command's process group; once the group is empty, exit 128+n of the
-#     first one. A later signal is forwarded too, so a step that ignores TERM can
-#     still be stopped with INT or HUP.
+#     the command's process group; once no member other than the wrapper is
+#     left, exit 128+n of the first one. A later signal is forwarded too, so a
+#     step that ignores TERM can still be stopped with INT or HUP.
 #   - the command cannot be run: 127
 # "holding" is printed only once signals are blocked.
 shopt -s execfail
 exec python3 -c '
-import os, signal, sys
+import os, signal, subprocess, sys
 
 CANDIDATES = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 # Ignored at entry (nohup, a background job of a script) means ignored for the
@@ -104,28 +129,21 @@ TICK = signal.SIGALRM
 WAITED = set(FORWARD) | {signal.SIGCHLD, TICK}
 path, cmd = sys.argv[1], sys.argv[2:]
 me = f"{os.getpid()} vm-session.sh"
+# See "Process groups and the terminal" in the header. A wrapper that leads its
+# own group is a job of its own: the command shares that group, so the terminal
+# stops, resumes and interrupts them together. Otherwise the group belongs to
+# whoever started the wrapper, and the command gets a group of its own.
+shared = os.getpgrp() == os.getpid()
 
 # Block first, then install handlers: a blocked signal stays pending for sigwait,
-# and a handler (rather than SIG_DFL) keeps SIGCHLD from being discarded. SIGTTOU
-# is blocked so this process may hand the terminal back from the background.
-signal.pthread_sigmask(signal.SIG_BLOCK, WAITED | {signal.SIGTTOU})
+# and a handler (rather than SIG_DFL) keeps SIGCHLD from being discarded.
+# SIGTSTP is left alone, so Ctrl-Z stops this process with the rest of its job.
+signal.pthread_sigmask(signal.SIG_BLOCK, WAITED)
 for s in WAITED:
     signal.signal(s, lambda *_: None)
 print(f"vm-session: holding {path} as {me}", file=sys.stderr, flush=True)
 
-tty = None
-try:
-    if os.isatty(0) and os.tcgetpgrp(0) == os.getpgrp():
-        tty = 0
-except OSError:
-    tty = None
-
 def release():
-    if tty is not None:
-        try:
-            os.tcsetpgrp(tty, os.getpgrp())
-        except OSError:
-            pass
     try:
         with open(path) as f:
             if f.read().strip() == me:
@@ -145,38 +163,52 @@ def as_status(status):
 pid = os.fork()
 if pid == 0:
     try:
-        # Its own process group, so the whole command can be signalled. SIGTTOU
-        # is still blocked here, which lets it take the terminal from the
-        # background before anything of the command runs.
-        os.setpgid(0, 0)
-        if tty is not None:
-            os.tcsetpgrp(tty, os.getpgrp())
+        if not shared:
+            # Its own process group, so the whole command can be signalled.
+            os.setpgid(0, 0)
         # Python ignores SIGPIPE and SIGXFSZ; an ignored disposition survives
         # exec, so restore those and everything this process touched, except
         # what was ignored at entry.
-        for s in (WAITED | {signal.SIGQUIT, signal.SIGPIPE, signal.SIGXFSZ, signal.SIGTTOU}) - IGNORED:
+        for s in (WAITED | {signal.SIGQUIT, signal.SIGPIPE, signal.SIGXFSZ}) - IGNORED:
             signal.signal(s, signal.SIG_DFL)
-        if tty is not None:
-            signal.signal(signal.SIGTSTP, signal.SIG_IGN)
         signal.pthread_sigmask(signal.SIG_SETMASK, [])
         os.execvp(cmd[0], cmd)
     except OSError as error:
         print(f"vm-session: cannot run {cmd[0]}: {error.strerror}", file=sys.stderr)
     os._exit(127)
-# Both sides set the group, so neither can signal it before it exists.
-try:
-    os.setpgid(pid, pid)
-except OSError:
-    pass
+if shared:
+    group = os.getpgrp()
+else:
+    group = pid
+    # Both sides set the group, so neither can signal it before it exists.
+    try:
+        os.setpgid(pid, pid)
+    except OSError:
+        pass
 
 def group_alive():
+    if not shared:
+        try:
+            os.killpg(group, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    # The group holds this process too, so look for any other member. If ps
+    # cannot run, stop waiting: a step still alive keeps the flock through its
+    # own FD 9 anyway.
     try:
-        os.killpg(pid, 0)
-        return True
-    except ProcessLookupError:
+        ps = subprocess.Popen(["ps", "-A", "-o", "pid=,pgid="], stdout=subprocess.PIPE, text=True)
+        out = ps.communicate()[0]
+    except OSError:
         return False
-    except PermissionError:
-        return True
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == str(group):
+            if int(fields[0]) not in (os.getpid(), ps.pid):
+                return True
+    return False
 
 first = None
 status = None
@@ -186,9 +218,12 @@ try:
         if got in FORWARD:
             first = first or got
             try:
-                os.killpg(pid, got)
+                os.killpg(group, got)
             except ProcessLookupError:
                 pass
+            if shared and got in signal.sigpending():
+                # Our own copy of what we just sent; take it back.
+                signal.sigwait({got})
             # Poll the group while it drains; members other than the direct
             # child are not ours to wait for.
             signal.setitimer(signal.ITIMER_REAL, 0.05, 0.05)
@@ -196,7 +231,15 @@ try:
             done, raw = os.waitpid(pid, os.WNOHANG)
             if done == pid:
                 status = raw
-        if status is not None and (first is None or not group_alive()):
+        if status is None:
+            continue
+        if first is None:
+            break
+        # In a shared group every ps run ends with a SIGCHLD; check on the
+        # tick instead, or each check would trigger the next one at once.
+        if shared and got == signal.SIGCHLD:
+            continue
+        if not group_alive():
             break
 finally:
     signal.setitimer(signal.ITIMER_REAL, 0, 0)
