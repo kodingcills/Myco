@@ -38,7 +38,7 @@ describe("redact", () => {
       `key ${key}`,
       "Authorization: Bearer abcDEF0123456789abcDEF0123456789",
       '{"vnc_password":"hunter2hunter2","token":"eyJhbGciOi.payload.sig"}',
-      "https://www.orgo.ai/view?token=abcDEF0123456789abcDEF", // gitleaks:allow synthetic redaction fixture
+      "https://www.orgo.ai/view?token=orgo_test_fake_key_not_real", // synthetic redaction fixture
       "wss://host.example/ws/websockify",
       "Cookie: session=AbCdEf0123456789AbCdEf0123456789",
       testKey,
@@ -56,6 +56,7 @@ describe("redact", () => {
       "AbCdEf0123456789",
       "dGhpcyBpcyBh",
       "a1b2c3d4e5f6a7b8c9d0e1f2a3b4",
+      "orgo_test_fake_key_not_real",
     ]) {
       expect(out).not.toContain(secret);
     }
