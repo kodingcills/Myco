@@ -58,6 +58,60 @@ group keyed on `github.run_id`, so a `main` run is never cancelled or displaced 
 later one. A cancelled PR run shows as "cancelled", not failed; the newest run is
 the one that counts.
 
+## Job timeouts
+
+`check` has `timeout-minutes: 15` and `myco-agent tests` has 10. From 2026-11-23 to
+11-25, once a runner had the job, macOS `check` took at most 3.5 min (p50 1.8) and
+macOS `myco-agent tests` at most 0.9 min. A hang now ends as "timed out" in the
+step that hung, not as an unexplained cancel. `viewer-perf` keeps 20. A timeout
+counts from when a runner starts the job, so it never covers queue time.
+
+## macOS runner cancellations (TIF-256)
+
+**Symptom.** A `macos-latest` job shows "cancelled" after 15-30 min, with an empty
+step list and no log. The check run's annotations say *"The job was not acquired
+by Runner of type hosted even after multiple attempts"*, plus GitHub's notice
+*"Due to capacity constraints, jobs targeting macOS arm64 runners may experience
+longer queue times"*. The API shows `runner_id: 0` and zero steps.
+
+**Cause.** GitHub had no macOS arm64 runner free and gave up on the queued job.
+No step of ours ran, so it is not a test hang (pty, launcher, or otherwise), not
+`timeout-minutes`, and not the PR concurrency group. Concurrency cancels the
+whole superseded run, whose conclusion is then `cancelled`. Here the run's
+conclusion is `failure`. From 2026-11-23 to 11-25 this happened to 63 of 1,723
+macOS jobs (about 1 in 25, from 1,000 CI runs), each after 15.0 to 29.6 min in
+the queue. In the same window, macOS jobs that did get a runner waited up to 10
+min at p95 and about 23 min at the worst.
+
+**Recognise one.** On the run page the job has no steps and no log. From the
+command line:
+
+```sh
+gh api repos/kodingcills/Myco/actions/jobs/<job-id> --jq '{conclusion, runner_id, steps: (.steps | length)}'
+# cancelled, runner_id 0, steps 0
+gh api repos/kodingcills/Myco/check-runs/<job-id>/annotations --jq '.[].message'
+# includes "The job was not acquired by Runner of type hosted even after multiple attempts"
+```
+
+The run itself ends as `failure`. A run that ends as `cancelled` was superseded
+by a newer push to the PR (see [Concurrency](#concurrency)), and you do not need
+to re-run it.
+
+**Re-run it by hand.** The job ran nothing, so a re-run repeats no side effect.
+Maintainers (write access) can re-run it:
+
+```sh
+gh run rerun <run-id> --failed
+```
+
+Or use "Re-run failed jobs" on the run page. Contributors can push a new commit
+instead. Before re-running a PR run, check that it is still the PR's newest run.
+A re-run rejoins the PR's concurrency group, so re-running an older run cancels
+the newer one.
+
+An automatic retry is deferred to TIF-264. Until then, a no-runner cancellation
+costs one manual re-run.
+
 ## What needs a maintainer
 
 - **First-time contributors.** Depending on the repository's Actions setting, a fork
@@ -70,9 +124,14 @@ the one that counts.
 
 - Contributors: push a new commit to the PR branch.
 - Maintainers (write access): "Re-run jobs" or "Re-run failed jobs" on the run page.
+  A macOS job cancelled with no steps is a no-runner cancellation; see
+  [macOS runner cancellations](#macos-runner-cancellations-tif-256).
 - Locally, the `check` job is: `pnpm install --frozen-lockfile && pnpm typecheck &&
   pnpm lint && pnpm test && pnpm build`. The agent job: `cd agent && pip install -e .
   pytest && pytest -v`. The runtime job: `cd runtime && cargo test -p myco-rt-agent`
   (its confinement tests run only on Linux).
 - Lint workflows with [actionlint](https://github.com/rhysd/actionlint) before
-  pushing a workflow change.
+  pushing a workflow change, e.g. `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7`
+  and then `actionlint` from the repo root. With shellcheck on `PATH` it also checks `run:`
+  scripts. Its SC2016 info on `viewer-perf`'s "Report samples" step is expected:
+  that step is a single-quoted `node -e` program.
