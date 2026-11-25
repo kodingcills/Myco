@@ -31,6 +31,7 @@ import { afterEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   classifySessionInfo,
   DEFAULT_TOKEN_FILE,
+  main,
   productionDeps,
   readTokenFile,
   redactToken,
@@ -459,10 +460,25 @@ describe("CLI entry point (subprocess, no VM: usage errors return before the loc
     const link = join(dir, "repo");
     symlinkSync(REPO_ROOT, link, "dir");
     const tsx = join(REPO_ROOT, "node_modules", ".bin", "tsx");
+    // This runs the real production wiring. If argument parsing regressed and
+    // the bad `--token-file` were accepted, the CLI would go on to take the VM
+    // lock and read the default token file before failing. Point both at temp
+    // paths so a regression fails this test without touching the real lock or
+    // `~/.myco-token`: the lock via MYCO_VM_LOCK_PATH, the token file via HOME
+    // (DEFAULT_TOKEN_FILE is `${homedir()}/.myco-token`). A temp `--token-file`
+    // argument cannot do this job: adding a valid one would remove the very
+    // usage error under test.
+    const sandbox = mkdtempSync(join(tmpdir(), "myco-tif213-home-"));
+    const env = {
+      ...process.env,
+      HOME: sandbox,
+      MYCO_VM_LOCK_PATH: join(sandbox, "test.vm.lock"),
+    };
     for (const root of [REPO_ROOT, link]) {
       const run = spawnSync(tsx, [join(root, "src/integration/session-info.ts"), "--token-file"], {
         cwd: REPO_ROOT,
         encoding: "utf8",
+        env,
         timeout: 60_000,
       });
       expect({ root: root === link ? "symlink" : "direct", status: run.status }).toEqual({
@@ -731,5 +747,71 @@ describe("ok:true with no result — D5", () => {
     expect(out.stdout).toEqual([]);
     expect(record.stopped).toBe(1);
     expect(out.released).toBe(1);
+  });
+});
+
+describe("main(): the last-resort rejection handler never exits 0 — TIF-213", () => {
+  // `main` calls process.exit; intercept it (and the handler's stderr line) so
+  // nothing exits the test worker. `process.exitCode` is restored after each
+  // test because main() sets it and vitest's own exit depends on it.
+  let savedExitCode: typeof process.exitCode;
+  afterEach(() => {
+    process.exitCode = savedExitCode;
+    vi.restoreAllMocks();
+  });
+
+  function interceptExit(): { exit: MockInstance; stderrWrite: MockInstance } {
+    savedExitCode = process.exitCode;
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    return { exit, stderrWrite };
+  }
+
+  it("a passing proof whose lock.release() throws makes runSessionInfo reject: exit 3, not 0", async () => {
+    const { exit, stderrWrite } = interceptExit();
+    const { deps, agent } = harness();
+    agent.result = HAPPY; // the proof itself passes: verdict 0
+    deps.acquireLock = (): VmLock => ({
+      path: "/tmp/test-myco-win11.vm.lock",
+      holder: "12345 session-info.ts",
+      release: () => {
+        throw new Error(`release failed ${SENTINEL}`);
+      },
+    });
+    // Precondition: this really is the rejection path, not a returned code.
+    await expect(runSessionInfo([], deps)).rejects.toThrow("release failed");
+
+    main([], deps);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+    expect(exit.mock.calls).toEqual([[3]]);
+    const written = stderrWrite.mock.calls.map((call) => String(call[0])).join("");
+    expect(written).toBe("session-info: internal error\n");
+    expect(written).not.toContain(SENTINEL);
+  });
+
+  it("a stderr writer that throws inside a catch makes runSessionInfo reject: exit 3, not 0", async () => {
+    const { exit } = interceptExit();
+    const { deps, agent } = harness();
+    agent.connectError = new Error("tunnel never came up");
+    deps.stderr = (): void => {
+      throw new Error("stderr is gone");
+    };
+    await expect(runSessionInfo([], deps)).rejects.toThrow("stderr is gone");
+
+    main([], deps);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+    expect(exit.mock.calls).toEqual([[3]]);
+  });
+
+  it("process.exitCode is EXIT_BLOCKED while the proof is still pending, so a drained event loop is a failure", async () => {
+    const { exit } = interceptExit();
+    process.exitCode = 0;
+    const { deps } = harness();
+    // connect never settles: the only way out would be the loop draining.
+    deps.connect = (): Promise<SessionInfoConnection> => new Promise(() => {});
+    main([], deps);
+    await new Promise((resolveTick) => setTimeout(resolveTick, 10));
+    expect(exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(3);
   });
 });

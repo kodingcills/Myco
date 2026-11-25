@@ -338,9 +338,20 @@ export function productionDeps(seams: ProductionSeams = {}): SessionInfoDeps {
   };
 }
 
-/** The CLI body: run with the real wiring and exit with its code. */
-export function main(): void {
-  runSessionInfo(process.argv.slice(2), productionDeps()).then(
+/**
+ * The CLI body: run with the real wiring and exit with its code. `argv` and
+ * `deps` are test seams; production passes neither.
+ *
+ * `process.exitCode` is set to EXIT_BLOCKED first, so any way out other than
+ * the explicit `process.exit(code)` below — the event loop draining while
+ * `runSessionInfo` is still pending — is a failure, never a silent 0 (TIF-213).
+ */
+export function main(
+  argv: string[] = process.argv.slice(2),
+  deps: SessionInfoDeps = productionDeps(),
+): void {
+  process.exitCode = EXIT_BLOCKED;
+  runSessionInfo(argv, deps).then(
     (code) => process.exit(code),
     // runSessionInfo catches and redacts everything itself; this only guards
     // against a bug there, and prints no error text that could carry the token.
