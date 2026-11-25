@@ -32,6 +32,29 @@ integrity) builds on this split: it makes the evidence location unwritable from 
 tools. The gate is already a separate process from the actuator: the gate is `myco-gate`,
 and the actuator is `myco-rt-mcp` (server name `myco-rt`).
 
+## Requirement: the gate judges a host-side capture, taken after the agent stops
+
+On the gated path this is **required**, not advice (outer-loop ruling, 2026-11-25 20:48Z):
+
+- The evidence root (`--evidence-root`, or the `EvidenceReader` in the API) is an
+  **operator-configured host path**. The gate never reads the guest, the agent's workspace
+  or anything the agent names.
+- A **harness fills it per trial, after the agent has stopped**. It copies the app's saved
+  file out of the guest to `<root>/<runId>/<stateFile>`. The gate judges that copy, not
+  the live file.
+- **The agent must never be able to write to it**: no actuator tool, shell, shared mount
+  or symlink may reach the evidence root. The gate already refuses symlinks below the root
+  and paths outside it. Making the root unwritable from the agent's whole tool surface is
+  TIF-266's job.
+- TIF-266 (#470) builds this capture as seal → capture → read the sealed copies. Until #470
+  is wired in, `fileEvidenceReader` over a harness-filled directory is the stand-in, and it
+  is fit only for the mock path. **Wiring the gate's reader to #470's sealed per-trial
+  capture is a required follow-up before any M2-12 run.**
+
+The mock demo follows the same shape: the harness writes the mock app's saved store into
+the evidence root after the fake agent's session ends, and the agent has no write path
+there.
+
 ## Request
 
 ```jsonc
@@ -149,7 +172,7 @@ not in the registry. `readTimeoutMs` (default 30000) bounds the reader.
 
 `EvidenceReader` is an interface: `read(runId, stateFile)` returns the bytes, or
 `missing` / `unreadable`. A bound gate only ever calls it with the assigned run id.
-M2-12's live reader implements it over the runtime's `read_file`.
+For M2-12 it must be backed by #470's sealed per-trial host capture, never by a live read of the guest.
 
 ### How this lines up with TIF-266 (#470)
 
@@ -264,5 +287,9 @@ the exact task spec used, so a ledger row (R1) records which rule and spec decid
 - **Isolation.** The agent cannot pass oracle inputs through the gate or name another run.
   Stopping the agent from writing its own run's evidence by other routes (its actuator
   tools, a shell, a hard link) is TIF-266.
-- **Live reads.** The evidence reader here is file-based. A reader over the runtime's
-  `read_file` on the real guest comes with M2-12.
+- **Live capture.** The evidence reader here reads a harness-filled host directory. The
+  real per-trial capture (seal, capture after the agent stops, read the sealed copy) is
+  #470's vault, and wiring it in is required before M2-12 runs. The gate must not read the
+  live guest file directly.
+- **Whole-document checks.** The Calc family checks the target cell only. Checking that the
+  rest of the document is unchanged is TIF-270 (M2-07).

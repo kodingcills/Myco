@@ -119,9 +119,11 @@ export type ReadOutcome =
   | { readonly ok: false; readonly cause: "missing" | "unreadable"; readonly detail: string };
 
 /**
- * Where the gate reads persisted state from. Operator-bound: the agent names a run, the
- * reader decides what that means. M2-12's live reader implements this over the
- * runtime's `read_file`; TIF-266 makes the location unwritable from the agent's tools.
+ * Where the gate reads persisted state from: an operator-configured host location that a
+ * harness fills per trial after the agent stops (a capture of the saved file), never the
+ * live guest and never anything the agent can write. The agent names a run; the reader
+ * decides what that means. Before M2-12 this must be backed by TIF-266's (#470) sealed
+ * per-trial capture.
  */
 export interface EvidenceReader {
   /** A description of the location for logs (never agent-controlled). */
