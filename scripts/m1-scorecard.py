@@ -38,7 +38,9 @@ def wilson(k, n, z=1.96):
     d = 1 + z * z / n
     c = p + z * z / (2 * n)
     h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
-    return ((c - h) / d, (c + h) / d)
+    # Clamp to [0, 1]: at k == 0 the lower bound is 0 analytically, but c - h leaves
+    # floating-point noise (wilson(0, 30) gave -1.2e-17, which rounds to -0.0) (TIF-211).
+    return (max(0.0, (c - h) / d), min(1.0, (c + h) / d))
 
 
 def score(path):

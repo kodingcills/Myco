@@ -76,6 +76,9 @@ Recomputation reuses the existing tools rather than re-deriving them:
   - c1-arm-002/accounting.json and report.json: the two arm-002 sections and the
                                     slots' retraction; c1-arm-003/r2-void for r2's trials;
   - research/experiments/m1-013-convert-timeout.md: the open-risk timings;
+  - m1-row8-step1/operator-report-{3,4}.md: row 8's plan-step-1 cold-operator figures;
+  - c1-arm-001/spike-trial-0.json: the spike trial's committed spend;
+  - src/baseline/planner.ts and src/integration/validate-live.ts: code symbols a row names;
   - the committed schema-validation.log files: row 6 and row 8 sums.
 
 Sub-checks run as part of it unless --no-subchecks: scripts/check-scorecard-links.py
@@ -110,9 +113,11 @@ SAVE_NOTE = EXP / "c1-arm-003d/SAVE-DIALOG-LOOP.md"
 SWEEP2 = EXP / "m1-row8-sweep2"
 CORRUPT = EXP / "m1-row8-corrupt"
 ROW8 = EXP / "m1-row8"
+STEP1 = EXP / "m1-row8-step1"
 TOOLCHAIN = ROOT / "docs/env/vm-toolchain"
 RUNS = EXP / "m1-runs"
 ARM2 = EXP / "c1-arm-002"
+SPIKE = EXP / "c1-arm-001/spike-trial-0.json"
 VISION = ROOT / "docs/product/vision.md"
 
 WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"}
@@ -145,12 +150,12 @@ HEADING = re.compile(r"#{1,6} ")
 ROW_LINE = re.compile(r"\| *(\d+) *\|")
 IDENTIFIER_WORDS = (
     # names of arms, runs, sweeps, milestones, files, tools and the model
-    "ARM64", "Arm-002", "Arm-003", "C1", "C2", "DF-S01", "M1", "M1-013", "M1-014", "M1-016", "ROW7-BUDGET-DECIDED",
+    "ARM64", "Arm-002", "Arm-003", "C1", "C2", "c1-arm-001", "DF-S01", "M1", "M1-013", "M1-014", "M1-016", "ROW7-BUDGET-DECIDED",
     "S6-PASS", "WinSta0", "arm-002", "arm-003", "arm-003d", "c1-arm-002", "c1-arm-003", "c1-arm-003-design",
     "c1-arm-003d", "c1-baseline", "c1-parity", "c1-r6", "c1-trial", "c1ChargedMicros", "claude-sonnet-5-5",
     "cua-c1-base", "m1-013", "m1-013-convert-timeout", "m1-013-sweep-v3", "m1-014", "m1-014-combined-audit",
-    "m1-corrupt-suite-record", "m1-row8", "m1-row8-corrupt", "m1-row8-sweep2", "m1-runs", "m1-scorecard", "python3",
-    "r2", "r3", "r6", "row-7", "row-8", "row7-compare", "sha256", "trial-0", "v2", "v3",
+    "m1-corrupt-suite-record", "m1-row8", "m1-row8-corrupt", "m1-row8-step1", "m1-row8-sweep2", "m1-runs", "m1-scorecard", "python3",
+    "r2", "r3", "r6", "row-7", "row-8", "row7-compare", "sha256", "spike-trial-0", "trial-0", "v2", "v3",
 )
 
 
@@ -469,9 +474,12 @@ class Report:
 
 
 def check_status(r: Report) -> None:
-    r.unchecked("status", "As of 2026-11-25; rows 1–7 done; row 8 plan steps 2–7 have evidence, steps 1 and 8 not met",
-                "the doc's own date and a summary of the Status column and the test plan's step numbers, not figures from an artifact",
-                ("As of 2026-11-25", "Rows 1–7 are done", "Row 8 is partial", "every test-plan step 2–7", "plan steps 1 and 8"))
+    done = [n for n in ROWS if re.match(rf"\| {n} \|[^|]*\| \*\*DONE", r.segment(n))]
+    r.quote("status", "rows DONE", "All {} rows are DONE", len(done) if len(done) == len(ROWS) else f"{len(done)} of {len(ROWS)}",
+            source="the Status column of criterion rows 1-8, each starting **DONE")
+    r.check("status", "row 8 is DONE given the VM bundle", "DONE (given the VM bundle)" in r.segment("8"),
+            "row 8's Status column", doc="Row 8 is DONE given the VM bundle")
+    r.unchecked("status", "As of 2026-11-25", "the doc's own date, not a figure from an artifact", "As of 2026-11-25")
 
 
 def check_rows_1_to_3(r: Report, scorecard) -> dict:
@@ -745,7 +753,7 @@ def check_row_7(r: Report, doc: Path, scorecard, row7, v3: dict) -> None:
             myco_only, base_only, len(both), p_text, source="row7-compare sign_test_two_sided")
     lo, hi = scorecard.wilson(tally.get("verified", 0), len(rows))
     vlo, vhi = scorecard.wilson(v3["verified"], v3["recorded"])
-    r.quote("slots", "Wilson 95%", "**{}–{}** (Myco v3: {}–{})", f"{max(lo, 0):.3f}", f"{hi:.3f}", f"{vlo:.3f}", f"{vhi:.3f}",
+    r.quote("slots", "Wilson 95%", "**{}–{}** (Myco v3: {}–{})", f"{lo:.3f}", f"{hi:.3f}", f"{vlo:.3f}", f"{vhi:.3f}",
             source="m1-scorecard.wilson")
     r.quote("slots", "spend", "**${}** r6 + ${} prior = **${} of ${}**", f"{micros / 1e6:.4f}", f"{prior_micros / 1e6:.4f}",
             f"{(micros + prior_micros) / 1e6:.4f}", cap_s, source=bsrc)
@@ -821,9 +829,13 @@ def check_row_8(r: Report, scorecard) -> None:
     if quoted:
         r.check("8", "named toolchain files exist", not absent, "docs/env/vm-toolchain/", doc=tuple(f"`{n}" for n in quoted),
                 detail=f"absent {absent}" if absent else "")
-    r.unchecked("8", "lead ruling B date, plan steps 2–7, 1 and 8",
+    r.unchecked("8", "lead ruling B date; test-plan step numbers 1–8, 1, 8 and 2–7",
                 "a ruling's date and the test plan's own step numbers (this doc's table), not figures from an artifact",
-                doc=("every test-plan step 2–7", "plan steps 1 and 8", "2026-11-25", "**Plan step 1**", "**Plan step 8**", "outside row 8's test plan"))
+                doc=("test-plan steps 1–8 met", "2026-11-25", "**Plan step 1, a cold operator", "**Plan step 8, as re-scoped:**",
+                     "**Steps 2–7, earlier segmented runs:**", "outside row 8's test plan"))
+    r.unchecked("8", "plan step 8: scorecard-check.py exits 0",
+                "a statement about this script; this run's own exit status is the check", doc="from committed artifacts and exits 0")
+    check_row_8_step1(r, row)
 
     # Operator findings and sessions.
     report = (ROW8 / "OPERATOR-REPORT.md").read_text() if (ROW8 / "OPERATOR-REPORT.md").is_file() else ""
@@ -858,9 +870,6 @@ def check_row_8(r: Report, scorecard) -> None:
          "the operator's host-side test run, not committed", "failed 43 of 1,080 on 5 s timeouts under host load 13–15"),
     ):
         r.unchecked("8", claim, why, doc=doc)
-    r.unchecked("8", "validate-live falsely reports ALL OK on 0 files (TIF-223)",
-                "a statement about validate-live's behaviour, not a figure; stale since #433 fixed TIF-223 (the row still says it)",
-                doc="ALL OK on 0 files")
 
     # §6 generator proof: the fresh operator's run is host-only; the committed one is S6-PASS.
     r.unchecked("8", "§6 fresh operator: 2026-11-24 11:42–11:59Z, 20/20 verified, exit 0",
@@ -939,6 +948,62 @@ def check_row_8(r: Report, scorecard) -> None:
                 doc=("reset 250 s, deploy 201 s", "`session_id 1`, `WinSta0`, exit 0"))
 
 
+def check_row_8_step1(r: Report, row: str) -> None:
+    """Plan step 1: the two cold-operator reports committed in m1-row8-step1/."""
+    first = (STEP1 / "operator-report-3.md").read_text() if (STEP1 / "operator-report-3.md").is_file() else ""
+    rerun = (STEP1 / "operator-report-4.md").read_text() if (STEP1 / "operator-report-4.md").is_file() else ""
+    r.check("8", "the step-1 pack holds both operator reports", bool(first and rerun),
+            "m1-row8-step1/operator-report-3.md and operator-report-4.md", doc="(`docs/research/experiments/m1-row8-step1/`)")
+    steps = {m.group(1): m.group(2) for m in re.finditer(r"^### (Step \w+) — (.*?)(?=^### |^## )", rerun, re.M | re.S)}
+    reset, deploy, desk, gen, card = (steps.get(k, "") for k in ("Step 1a", "Step 1", "Step 2", "Step 3", "Step 4"))
+    src = "m1-row8-step1/operator-report-4.md"
+    r.quote("8", "re-run §3.1 reset", "§3.1 reset ({} s, `ready on '{}'`)", grab(r"wall (\d+) s", reset),
+            grab(r"Result: exit 0, `reset-trial-vm: ready on '([^']+)'`", reset), source=src + " Step 1a wall and result")
+    r.quote("8", "re-run §4 deploy", "§4 deploy ({} s, `verified {} files` + `DEPLOY OK`)", grab(r"wall (\d+) s", deploy),
+            grab(r"Result: exit 0\. `==> verified (\d+) files on the guest", deploy) if "`DEPLOY OK`" in deploy else "?",
+            source=src + " Step 1 wall, exit 0, the verified line and DEPLOY OK")
+    r.quote("8", "re-run §5 desktop proof", '§5 desktop proof (`"session_id":{}`, `"{}"`, exit {})',
+            grab(r'stdout `\{"session_id":(\d+),', desk), grab(r'"window_station":"(\w+)"', desk),
+            grab(r"Result: exit (\d+), stdout", desk), source=src + " Step 2 result")
+    rows_n = grab(r"stdout a JSON array of (\d+) rows, all `\"status\": \"verified\"`", gen)
+    listed = len(re.findall(r"^  - \w+ `[^`]+` — cell \w+ \(EMP-\d+\) persisted", gen, re.M))
+    r.quote("8", "re-run §6 subset", "a §6 subset (`--limit {}`: {}/{} verified, exit {}, {} s)",
+            grab(r"--limit (\d+) --runs-dir", gen), rows_n if rows_n == str(listed) else "?", listed,
+            grab(r"Result: exit (\d+); stdout", gen), grab(r"wall (\d+) s", gen),
+            source=src + " Step 3 command, result line, the rows listed, wall")
+    r.quote("8", "re-run scorecard check", "then ran `scripts/scorecard-check.py` (exit {})", grab(r"Result: exit (\d+)\. Last two lines", card),
+            source=src + " Step 4 result")
+    js = sorted(int(n) for n in re.findall(r"^- \*\*J(\d+) ", rerun, re.M))
+    ok_j = bool(js) and js == list(range(1, js[-1] + 1))
+    stale = [n for n in js if re.search(rf"^- \*\*J{n} .*validate-live.*TIF-223", rerun, re.M)]
+    r.quote("8", "re-run findings and the one ruled here",
+            "Its findings J{}–J{} were runbook gaps the operator decided from the repo, fixed in a separate runbook PR, "
+            "except J{} (this row's stale `validate-live` gap)",
+            js[0] if ok_j else "?", js[-1] if ok_j else "?", stale[0] if len(stale) == 1 else "?",
+            source=src + " J-findings (contiguous from J1); the one naming validate-live and TIF-223")
+    vl = (ROOT / "src/integration/validate-live.ts").read_text()
+    r.check("8", "J10 settled: the stale TIF-223 gap is gone and validate-live fails on zero run dirs",
+            "ALL OK on 0 files" not in row and "runDirs.length === 0" in vl,
+            "row 8 no longer says 'ALL OK on 0 files'; src/integration/validate-live.ts guards runDirs.length === 0 (#433)",
+            doc="removed here")
+    table = dict(re.findall(r"^\| ([^|]+?) \| ([A-Z]+(?: [A-Z]+)*)\b", first, re.M))
+    passed = [k for k in ("§1 preconditions + setup", "§2 sanity", "§3.1 cold reset", "§4 deploy") if table.get(k) == "PASS"]
+    eight = [k for k in table if k.startswith("§8") and table[k] == "PASS"]
+    blocked = table.get("token fetch") == "BLOCKED" and table.get("§5 desktop proof") == "FAIL" and table.get("§6 subset (--limit 4)") == "NOT RUN"
+    r.check("8", "first cold run: §1, §2, §3.1, §4, §8 passed; §5, §6 blocked by the token fetch",
+            len(passed) == 4 and len(eight) == 3 and blocked, "m1-row8-step1/operator-report-3.md final table",
+            doc="passed §1, §2, §3.1, §4 and §8 but was blocked at §5 and §6 by the token fetch",
+            detail=f"passed {passed + eight}, blocked {blocked}")
+    hs = sorted(int(n) for n in re.findall(r"^\*\*H(\d+) \(", first, re.M))
+    ok_h = bool(hs) and hs == list(range(1, hs[-1] + 1))
+    blocking = re.findall(r"^\*\*H(\d+) \(BLOCKING", first, re.M)
+    h5 = blocking[0] if len(blocking) == 1 else "?"
+    r.quote("8", "first run's blocking finding", "by the token fetch (H{}, fixed by TIF-228, #436)", h5,
+            source="m1-row8-step1/operator-report-3.md, the one BLOCKING H-finding")
+    r.quote("8", "first run's other findings", "its other findings, H{}–H{} except H{}, were fixed in #435 (TIF-227)",
+            hs[0] if ok_h else "?", hs[-1] if ok_h else "?", h5, source="m1-row8-step1/operator-report-3.md H-findings (contiguous from H1)")
+
+
 REF_WHY = "references to issues, PRs and runbook sections; pointers, not figures, and this script does not resolve them"
 
 
@@ -950,14 +1015,15 @@ def check_references(r: Report) -> None:
     r.refs("6", REF_WHY, ("**Derived from committed logs, not quoted** (TIF-139)", "mapping (runbook §8.3)"))
     r.refs("7", REF_WHY, ("never `mycoVerdict` (TIF-207)",))
     r.refs("8", REF_WHY, (
-        "given the VM bundle (§10)", "the deploy/§5/§7.4 run", "the §6 operator used a fresh git worktree",
-        "the §8 operator used the §7.4 operator's clone", "§5 was blocked by the secret guard until TIF-209 (#425)",
+        "on a fresh clone of main at #436", "on a fresh clone at #433", "By ruling, §7.3 and §7.4 were not re-run",
+        "`scripts/scorecard-check.py` (TIF-225, #434)", "live outside the repo (§10)",
+        "given the VM bundle (§10)", "the deploy/§5/§7.4 run", "§5 was blocked by the secret guard until TIF-209 (#425)",
         "the first §7.3 sweep was abandoned", "fixed by TIF-216 (#427)", "the §7.4 operator's §1.2 `pnpm test`",
         "**§3.1 reset → §4 deploy → §5 desktop proof:**", "the TIF-209 `session_info` CLI", "**§6 generator proof:**",
         "**§7.3 sweep:**", "(`docs/research/experiments/m1-row8-sweep2/`, #430)", "**§7.4 corrupted suite:**",
-        "**§8 evidence:**", "now on main: TIF-216 (#427), TIF-219 (#428), TIF-220 (#429), TIF-209 (#425)",
-        "the runbook fixes landed in #432 (TIF-217)", "§7.5 (the paid C1 baseline", "the §8.3 ledger for the §7.3 sweep",
-        "on 0 files (TIF-223)",
+        "**§8 evidence:**", "now on main: TIF-216 (#427), TIF-219 (#428), TIF-220 (#429), TIF-209 (#425), "
+        "TIF-223 (#433), TIF-228 (#436), and the runbook fixes in #432 (TIF-217) and #435 (TIF-227)",
+        "§7.5 (the paid C1 baseline", "the §8.3 ledger for the §7.3 sweep",
     ))
     r.refs("slots", REF_WHY, ("filled by arm-003 r6 (TIF-90)",))
     r.refs("arm002-truncation", REF_WHY, ("truncation defect (#340)", "run with the fix (#340)", "PR #340 (`fix(TIF-164):"))
@@ -985,25 +1051,29 @@ def check_arm002(r: Report) -> None:
     (mx, my), most = at.most_common(1)[0] if at else ((0, 0), 0)
     first = typed(min(cellref, key=lambda x: x["index"]))[0]["text"].strip() if cellref else "?"
     odd = exact[0] if len(exact) == 1 else None
-    odd_at = typed(odd)[0] if odd else {"x": "?", "y": "?"}
+    odd_at = next((a for a in typed(odd) if a["text"].strip() == odd["expected"]), {"x": "?", "y": "?"}) if odd else {"x": "?", "y": "?"}
+    rest = [f"`({x},{y})`" for (x, y), _ in sorted(at.items(), key=lambda kv: (-kv[1], -kv[0][0], kv[0][1])) if (x, y) != (mx, my)]
+    otherwise = ", ".join(rest[:-1]) + " or " + rest[-1] if len(rest) > 1 else (rest[0] if rest else "?")
 
     d = "arm002-decision"
     r.unchecked(d, "decision date; criterion 7", "the decision's date and a pointer to the criterion, not figures",
                 doc=("(2026-11-23)", "against\ncriterion 7"))
     planner = (ROOT / "src/baseline/planner.ts").read_text().splitlines()
-    now = next((i + 1 for i, line in enumerate(planner) if "Save and close it." in line), None)
-    r.unchecked(d, "`planner.ts:78`", "a line reference into src/baseline/planner.ts as it was for arm-002's run; the file "
-                f"has changed since and 'Save and close it.' is now at line {now}, so the old line number is not checked",
-                doc="(`planner.ts:78`)")
+    m_prompt = re.search(r"const PROMPT = \[(.*?)\];", "\n".join(planner), re.S)
+    prompt = m_prompt.group(1) if m_prompt else ""
+    r.check(d, "the system prompt symbol holds 'Save and close it.'", "Save and close it." in prompt,
+            "src/baseline/planner.ts: the PROMPT constant contains 'Save and close it.'",
+            doc='"Save and close it" (`PROMPT` in `src/baseline/planner.ts`)')
     r.quote(d, "actions by tool", "**{} `press_key` calls\nacross {} actions** (`click` {}, `type_text` {}), and `modified` was {} of {}\nrefutations",
             acts["press_key"], sum(acts.values()), acts["click"], acts["type_text"], len(modified), tally["refuted"],
             source=src + " transcript.actions[].tool, verdictReason")
     r.quote(d, "what the modified rows typed",
             "**Only {} of those {} typed the expected value** — the other {} typed a\ncell reference such as `'{}\\n'`, "
-            "mostly into the Name Box at `({},{})` but not\nuniversally (index {} acted at `({},{})`)",
-            len(exact), len(modified), len(cellref), first, mx, my, odd["index"] if odd else "?", odd_at["x"], odd_at["y"],
-            source=src + " type_text arguments on the modified rows (text == expected, or a cell reference; the most common "
-                   "cell-reference coordinates; the first such row's text)")
+            "mostly into the Name Box at `({},{})` and otherwise\nat {}. Index {} is the one row that typed the expected value,\n"
+            "at `({},{})`.",
+            len(exact), len(modified), len(cellref), first, mx, my, otherwise, odd["index"] if odd else "?", odd_at["x"], odd_at["y"],
+            source=src + " type_text arguments on the modified rows (text == expected, or a cell reference; the cell-reference "
+                   "coordinates, most common first; the first such row's text; where the one exact row typed it)")
     r.artifact(d, "'mostly' at the Name Box", most * 2 > sum(at.values()),
                src, f"{most} of {sum(at.values())} cell-reference type_text calls at ({mx},{my})")
     unclaimed = [x for x in modified if not x["transcript"]["claims"] and not x["budgetExhausted"]]
@@ -1035,20 +1105,26 @@ def check_arm002(r: Report) -> None:
     r.check(t, "the 28-step row's 256 is its final call", bool(long) and all(
         x["usage"][-1]["completion"] == ceiling and len(x["transcript"]["actions"]) == 28 for x in long),
         src + " the 28-step row: last usage completion and action count", doc="after 28 successful actions")
-    r13 = rows.get(13, {})
-    r.check(t, "row 13: 1 step, completions [221, 256]",
-            r13.get("steps") == 1 and [u["completion"] for u in r13.get("usage", [])] == [221, 256],
-            src + " row 13 steps and usage[].completion",
-            doc="row 13 has the pure truncation signature** (1 step, completions\n  `[221, 256]`)")
-    alike = sorted(i for i, x in hit_rows.items() if x["steps"] <= 1 and x["usage"][-1]["completion"] == ceiling)
-    r.unchecked(t, "'Only' row 13", "the doc does not define the signature; by 'at most one step, final completion at the "
-                f"ceiling' the artifact gives rows {alike}, so 'only' is not machine-checked (reported for review)",
-                doc="**Only row 13")
+    comps = {i: [u["completion"] for u in x["usage"]] for i, x in rows.items()}
+    sig = sorted(i for i, x in rows.items() if x["steps"] == 1 and comps[i][-1] == ceiling)
+    zero = sorted(i for i, x in rows.items() if x["steps"] == 0 and comps[i] == [ceiling])
+    r.quote(t, "rows with the truncation signature and the zero-step shape",
+            "- **Rows {} have the truncation signature** (1 step, final completion at the\n  ceiling: {}), and **rows {} have "
+            "the zero-step shape**\n  (no step, one completion `[{}]`)",
+            " and ".join(map(str, sig)), " and ".join(f"`{comps[i]}`" for i in sig), " and ".join(map(str, zero)), ceiling,
+            source=src + " steps and usage[].completion: 1 step ending at the ceiling, or 0 steps with the one completion at it")
+    short = sorted(i for i, x in rows.items() if x["steps"] <= 1)
+    r.artifact(t, "every row of at most one step is one of those four", short == sorted(sig + zero), src + " steps",
+               f"rows with steps <= 1: {short}")
     r2 = sorted(int(p.stem) for p in (EXP / "c1-arm-003/r2-void").glob("[0-9]*.json")
                 if (lambda x: x.get("steps") == 0 and x.get("usage") and x["usage"][-1]["completion"] == 256
                     and x.get("verdictReason") == "persisted-mismatch")(json.loads(p.read_text())))
     r.quote(t, "r2 trials stopped by truncation", "stopped arm-003d r2 at trials {}", " and ".join(map(str, r2)),
             source="c1-arm-003/r2-void/N.json: zero steps, one completion at 256, persisted-mismatch")
+    r2_shape = all([u["completion"] for u in json.loads((EXP / f"c1-arm-003/r2-void/{i}.json").read_text())["usage"]] == [ceiling]
+                   for i in r2)
+    r.artifact(t, "r2's stopped trials have the zero-step shape", bool(r2) and r2_shape,
+               "c1-arm-003/r2-void/N.json usage[].completion == [ceiling] on each stopped trial")
     r.quote(t, "headline figures", "headline figures — {} refuted, `modified` {} of {} —", tally["refuted"], len(modified), len(rows),
             source=src + " verdict, verdictReason")
     r.unchecked(t, "row 7 cross-references", "pointers to the criterion row, not figures",
@@ -1062,15 +1138,16 @@ def check_arm002(r: Report) -> None:
             source="c1-arm-003/r6/ledger-extract.json rows (verdict verified or refuted)")
     r.quote(t, "cap", "a **${} cap on total committed\nspend**", cap_s, source="ROW7-BUDGET-DECIDED.md approved ceiling")
     arm2 = f"{report['c1ChargedMicros'] / 1e6:.6f}"
-    r.quote(t, "arm-002 booked spend", "+ arm-002 ${})", arm2, source="c1-arm-002/report.json c1ChargedMicros")
-    spike = grab(r"spike \$(\d+\.\d{6})", r.segment(t))
-    r.unchecked(t, "spike $0.076800",
-                "the spike's booked figure; the booking ledger (c1-spike/0.json) is not committed, and the committed "
-                "c1-arm-001/spike-trial-0.json records cost 0.076808, which is spend, not the booked amount",
-                doc="spike $" + spike)
-    total = f"{float(spike) + report['c1ChargedMicros'] / 1e6:.6f}" if spike != "?" else "?"
-    r.quote(t, "total at arm-002's close", "(**${}** at arm-002's close", total,
-            source="the doc's spike figure (unchecked) + c1-arm-002/report.json c1ChargedMicros")
+    r.quote(t, "arm-002 booked spend", "arm-002 booked ${}", arm2, source="c1-arm-002/report.json c1ChargedMicros")
+    spike_cost = json.loads(SPIKE.read_text())["cost"] if SPIKE.is_file() else None
+    r.quote(t, "spike trial's committed spend", "spend is ${} (`docs/research/experiments/c1-arm-001/spike-trial-0.json`)",
+            f"{spike_cost:.6f}" if spike_cost is not None else "?", source="c1-arm-001/spike-trial-0.json cost")
+    r.unchecked(t, "spike booked $0.076800; total $1.632162 at arm-002's close",
+                "from the uncommitted booking ledger, unverifiable: the spike's booking ledger (c1-spike) was never committed "
+                "and is gone from the host, and the committed spike spend differs from the booked figure, so neither the "
+                "booked spike nor the total can be recomputed",
+                doc=("From the uncommitted booking\nledger, unverifiable: the spike booked $0.076800",
+                     "for **$1.632162** at arm-002's close"))
 
     # The slots section's retraction quotes the same rows.
     r.quote("slots", "arm-002 retraction", '{} rows "typed\nthe correct value and never saved" ({} of {} did)',

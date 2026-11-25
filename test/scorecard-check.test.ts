@@ -101,6 +101,104 @@ describe("scorecard-check", () => {
     );
   }, 120_000);
 
+  // TIF-211: row7-compare --check reads only the `| 7 |` row. These figures outside it
+  // (the slots table, the cap total, the unruled-row count) are guarded here instead.
+  it.each([
+    [
+      "slots pass rate",
+      "**0/30 verified** (30 refuted",
+      "**1/30 verified** (30 refuted",
+      /^MISMATCH slots: baseline pass rate/,
+    ],
+    [
+      "slots paired table",
+      "**b = 29** (Myco only)",
+      "**b = 28** (Myco only)",
+      /^MISMATCH slots: paired table/,
+    ],
+    ["slots Wilson interval", "**0.000–0.114**", "**0.000–0.115**", /^MISMATCH slots: Wilson 95%/],
+    [
+      "slots cap total",
+      "= **$7.8521 of $9.00**",
+      "= **$7.8522 of $9.00**",
+      /^MISMATCH slots: spend/,
+    ],
+    [
+      "row 7 cap total",
+      "= **$7.8521 of the $9.00 cap**",
+      "= **$7.8522 of the $9.00 cap**",
+      /^MISMATCH row 7: spend/,
+    ],
+    [
+      "row 7 unruled rows",
+      "the other 18 of the 27",
+      "the other 17 of the 27",
+      /^MISMATCH row 7: unruled rows with the pattern/,
+    ],
+  ])(
+    "fails when row 7's %s changes outside the `| 7 |` row check",
+    (_name, from, to, line) => {
+      const result = checkMutated(mutate(readFileSync(SCORECARD, "utf8"), from, to));
+      expect(result.status).toBe(1);
+      expect(result.mismatch).toHaveLength(1);
+      expect(result.mismatch[0]).toMatch(line);
+    },
+    120_000,
+  );
+
+  // The five 2026-11-25 doc fixes and row 8's step-1 figures are checked claims: changing
+  // any of them must fail, and the uncommitted booked spike figures must not print `ok`.
+  it.each([
+    [
+      "**rows 3 and 29 have the zero-step shape**",
+      "**rows 3 and 28 have the zero-step shape**",
+      /^MISMATCH arm002-truncation: rows with the truncation signature/,
+    ],
+    [
+      "spend is $0.076808 (",
+      "spend is $0.076800 (",
+      /^MISMATCH arm002-truncation: spike trial's committed spend/,
+    ],
+    [
+      "(`PROMPT` in `src/baseline/planner.ts`)",
+      "(`PROMPTS` in `src/baseline/planner.ts`)",
+      /^MISMATCH arm002-decision: the system prompt symbol/,
+    ],
+    [
+      "Index 6 is the one row",
+      "Index 7 is the one row",
+      /^MISMATCH arm002-decision: what the modified rows typed/,
+    ],
+    ["§3.1 reset (185 s,", "§3.1 reset (180 s,", /^MISMATCH row 8: re-run §3\.1 reset/],
+    [
+      "4/4 verified, exit 0, 182 s",
+      "4/4 verified, exit 0, 128 s",
+      /^MISMATCH row 8: re-run §6 subset/,
+    ],
+    [
+      "removed here.",
+      "removed here. `validate-live` reports ALL OK on 0 files.",
+      /^MISMATCH row 8: J10 settled/,
+    ],
+  ])(
+    "fails when %s changes",
+    (from, to, expected) => {
+      const result = checkMutated(mutate(readFileSync(SCORECARD, "utf8"), from, to));
+      expect(result.status).toBe(1);
+      expect([...result.mismatch, ...result.unattributed]).toContainEqual(
+        expect.stringMatching(expected),
+      );
+    },
+    120_000,
+  );
+
+  it("lists the booked spike and the $1.632162 total as unchecked, never ok", () => {
+    const result = run("--no-subchecks");
+    const lines = result.stdout.split("\n").filter((line) => line.includes("1.632162"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^unchecked +arm002-truncation .*unverifiable/);
+  }, 120_000);
+
   it("fails on a number no claim covers, and on a section it does not classify", () => {
     let text = readFileSync(SCORECARD, "utf8");
     text = mutate(text, "with trace evidence |", "with trace evidence in 12 traces |");
