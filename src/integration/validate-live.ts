@@ -36,6 +36,10 @@
  *     by the rules above. Node's `readdir` already does this fallback itself;
  *     the tool repeats it so the rule does not depend on Node internals. If the
  *     `lstat` fails, the entry is `UNREADABLE` (a failure).
+ *   - The walk's lines (AMBIGUOUS, REFUSED, UNREADABLE, SKIPPED) print in
+ *     pre-order, entries sorted by name: a directory's line comes before every
+ *     line from inside it, so nested AMBIGUOUS lines print outermost first.
+ *     Per-run lines (INCOMPLETE, MALFORMED, INVALID) follow, one run at a time.
  *
  * Output (unchanged on success):
  *   `validated N result.json + M trace events in <dir>: ALL OK` and exit 0.
@@ -100,8 +104,11 @@ function reason(err: unknown): string {
 
 type EntryKind = "symlink" | "dir" | "file" | "other";
 
+/** Reports one walk line: a failure, or (with `failure` false) a SKIPPED note. */
+type Report = (text: string, failure?: boolean) => void;
+
 /** The entry's type from the listing, or from `lstat` when the listing has none. */
-function kindOf(e: Dirent, path: string): EntryKind | undefined {
+function kindOf(e: Dirent, path: string, report: Report): EntryKind | undefined {
   let kind: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean } = e;
   const known =
     e.isSymbolicLink() ||
@@ -115,7 +122,7 @@ function kindOf(e: Dirent, path: string): EntryKind | undefined {
     try {
       kind = lstatSync(path);
     } catch (err) {
-      fail(`UNREADABLE ${path}: type unknown and lstat failed: ${reason(err)}`);
+      report(`UNREADABLE ${path}: type unknown and lstat failed: ${reason(err)}`);
       return undefined;
     }
   }
@@ -127,29 +134,37 @@ function kindOf(e: Dirent, path: string): EntryKind | undefined {
 
 /**
  * Every run directory under root (root included), sorted for stable output.
- * Walks the whole tree; reports AMBIGUOUS, REFUSED, UNREADABLE and SKIPPED
- * paths as it goes.
+ * Walks the whole tree and reports AMBIGUOUS, REFUSED, UNREADABLE and SKIPPED
+ * paths in pre-order: a directory's AMBIGUOUS line is known only after its
+ * subtree is walked, so its slot is reserved on entry and the lines are
+ * printed once the walk is done. Nested AMBIGUOUS lines print outermost first.
  */
 function findRunDirs(root: string): string[] {
   const found: string[] = [];
+  const lines: ({ text: string; failure: boolean } | undefined)[] = [];
+  const report: Report = (text, failure = true) => {
+    lines.push({ text, failure });
+  };
   /** Returns true when dir or anything below it holds run files. */
   const walk = (dir: string): boolean => {
     let entries: Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch (err) {
-      fail(`UNREADABLE dir ${dir}: ${reason(err)}`);
+      report(`UNREADABLE dir ${dir}: ${reason(err)}`);
       return false;
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const here = entries.filter((e) => (RUN_FILES as readonly string[]).includes(e.name));
     const foundBefore = found.length;
+    // This dir's AMBIGUOUS slot, ahead of every line from inside it.
+    const slot = here.length > 0 ? lines.push(undefined) - 1 : -1;
     let below = false;
     for (const e of entries) {
       const path = join(dir, e.name);
-      const kind = kindOf(e, path);
+      const kind = kindOf(e, path, report);
       if (kind === "symlink") {
-        fail(`REFUSED symlink ${path}: symlinks are not followed; pass the target directly`);
+        report(`REFUSED symlink ${path}: symlinks are not followed; pass the target directly`);
       } else if (kind === "dir") {
         // Walked even when named result.json / trace.jsonl, so runs inside it
         // are found and named. With nothing inside, it is reported once, as a
@@ -158,17 +173,19 @@ function findRunDirs(root: string): string[] {
       } else if (kind === "other" && !here.includes(e)) {
         // A FIFO etc. named result.json / trace.jsonl is reported once, when
         // its run dir is validated (or in the AMBIGUOUS line).
-        process.stderr.write(`SKIPPED ${path}: not a regular file or directory\n`);
+        report(`SKIPPED ${path}: not a regular file or directory`, false);
       }
     }
     if (here.length > 0) {
       if (below) {
         const nested = found.slice(foundBefore).map((d) => relative(dir, d));
-        fail(
-          `AMBIGUOUS run dir ${dir}: holds ${here.map((e) => e.name).join(" + ")} and run files below it` +
+        lines[slot] = {
+          text:
+            `AMBIGUOUS run dir ${dir}: holds ${here.map((e) => e.name).join(" + ")} and run files below it` +
             ` (${nested.join(", ")});` +
             " the nested run dirs are validated, the files at this level are not counted",
-        );
+          failure: true,
+        };
       } else {
         found.splice(foundBefore, 0, dir);
       }
@@ -176,6 +193,11 @@ function findRunDirs(root: string): string[] {
     return here.length > 0 || below;
   };
   walk(root);
+  for (const line of lines) {
+    if (line === undefined) continue;
+    if (line.failure) fail(line.text);
+    else process.stderr.write(`${line.text}\n`);
+  }
   return found;
 }
 
