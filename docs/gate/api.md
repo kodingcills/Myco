@@ -70,10 +70,14 @@ because the operator chose it. The reader:
    the path the kernel says the open file is at, must equal
    `realpath(root)/<runId>/<stateFile>` exactly. If `/proc/self/fd` cannot be read, or
    the root cannot be resolved at that point, the read fails. A path outside the root is
-   reported as "a path outside the evidence root", never as the host path.
+   reported as "a path outside the evidence root", never as the host path. The match is
+   exact: a run elsewhere that is also named `<runId>` (for example `<root>/x/<runId>`, or
+   `<root>-evil/<runId>` beside the root) does not match.
 
 The bytes come from the checked descriptor. Every failure is `uncertain`
-`STATE_UNREADABLE` (or `STATE_MISSING`).
+`STATE_UNREADABLE` (or `STATE_MISSING`). Reasons reach the agent, so the reader's reasons
+name paths only relative to the root and carry an errno code (for example
+`open failed: ENOENT`), never Node's error message, which contains the absolute host path.
 
 | Case | Linux | macOS and other non-Linux (no binding) |
 |---|---|---|
@@ -103,7 +107,8 @@ cannot write, wired to #470's sealed per-trial capture. They must never use
 `fileEvidenceReader` over a directory that anything else writes while the gate reads it.
 
 The tests pin both columns: `test/gate/gate.test.ts`, "an intermediate component swapped
-during a walk". This covers a borrowed run inside and outside the root, the unlinked file,
+during a walk". This covers a borrowed run inside and outside the root, a borrowed run that
+is also named `r` (inside at `x/r`, and in a sibling `<root>-evil`), the unlinked file,
 an unreadable `/proc/self/fd` and an unresolvable root. The Linux cases are skipped
 elsewhere. Tests that run everywhere show that, without the binding, the same
 interleavings still return `verified`. The unresolvable-root test forces the binding on,

@@ -210,6 +210,15 @@ function walk(
 }
 
 /**
+ * The errno code of a filesystem error, for reasons. Reasons reach the agent, and Node's
+ * error message embeds the absolute host path, so the message is never used.
+ */
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : "error";
+}
+
+/**
  * Linux: require the kernel's path for the open descriptor to be the expected path under
  * the real root. Fails closed if /proc cannot be read. Other platforms: no binding (see
  * `fileEvidenceReader`).
@@ -229,12 +238,10 @@ function bindDescriptorPath(
   try {
     realRoot = realpathSync(absoluteRoot);
   } catch (error) {
-    // The error text names the host root; reasons reach the agent, host paths need not.
-    const code = (error as { code?: unknown }).code;
     return {
       ok: false,
       cause: "unreadable",
-      detail: `${where}: cannot resolve the evidence root (realpath failed: ${String(code ?? "error")})`,
+      detail: `${where}: cannot resolve the evidence root (realpath failed: ${errorCode(error)})`,
     };
   }
   try {
@@ -243,7 +250,7 @@ function bindDescriptorPath(
     return {
       ok: false,
       cause: "unreadable",
-      detail: `${where}: cannot bind the descriptor to its path (/proc/self/fd: ${String((error as { code?: unknown }).code ?? "error")})`,
+      detail: `${where}: cannot bind the descriptor to its path (/proc/self/fd: ${errorCode(error)})`,
     };
   }
   if (actual !== join(realRoot, ...segments)) {
@@ -329,7 +336,7 @@ export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): E
           detail:
             code === "ELOOP"
               ? `${where} is a symlink (refused at open)`
-              : `open failed: ${String(error)}`,
+              : `${where}: open failed: ${errorCode(error)}`,
         };
       }
       try {
@@ -362,7 +369,11 @@ export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): E
         if (!bound.ok) return bound;
         return { ok: true, bytes: new Uint8Array(readFileSync(fd)) };
       } catch (error) {
-        return { ok: false, cause: "unreadable", detail: `read failed: ${String(error)}` };
+        return {
+          ok: false,
+          cause: "unreadable",
+          detail: `${where}: read failed: ${errorCode(error)}`,
+        };
       } finally {
         closeSync(fd);
       }

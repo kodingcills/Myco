@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import {
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   symlinkSync,
   unlinkSync,
@@ -885,6 +886,18 @@ describe("gate: round 1 nits", () => {
   });
 });
 
+/**
+ * Reasons reach the agent: none may name the evidence root, as given, resolved or real
+ * (macOS's tmpdir is a symlink, so all three can differ). Call before the root is moved.
+ */
+function hostPathsOf(root: string): string[] {
+  return [...new Set([root, resolve(root), realpathSync(root)])];
+}
+function expectNoHostPath(result: { reasons: readonly string[] }, paths: readonly string[]) {
+  const reasons = result.reasons.join(" ");
+  for (const path of paths) expect(reasons).not.toContain(path);
+}
+
 describe("reader: a run directory or final component swapped around the open, and FIFOs, fail closed on every platform (round 2 D-A, D-B; intermediate swaps during a walk are below)", () => {
   /** Run r refutes df-s01 on its own; run good passes. Every swap below borrows good. */
   function racedRoot() {
@@ -895,12 +908,39 @@ describe("reader: a run directory or final component swapped around the open, an
   }
 
   async function checkWithHooks(root: string, hooks: Parameters<typeof fileEvidenceReader>[1]) {
-    return createGate({
+    const paths = hostPathsOf(root);
+    const result = await createGate({
       tasks: buildRegistry(builtinTasks()),
       reader: fileEvidenceReader(root, hooks),
       assignment: { taskId: "df-s01", runId: "r" },
     }).check({ taskId: "df-s01", runId: "r" });
+    expectNoHostPath(result, paths);
+    return result;
   }
+
+  it("run directory moved away between the walk and the open → STATE_MISSING, reason carries the errno code, no host path", async () => {
+    const root = racedRoot();
+    const result = await checkWithHooks(root, {
+      beforeOpen: () => renameSync(join(root, "r"), join(root, "r-gone")),
+    });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_MISSING"] });
+    expect(result.reasons.join(" ")).toContain(`r/${STORE}: open failed: ENOENT`);
+  });
+
+  it("a read failure after the open → STATE_UNREADABLE with the errno code only, never the error message", async () => {
+    const root = racedRoot();
+    const result = await checkWithHooks(root, {
+      afterOpen: () => {
+        throw Object.assign(new Error(`EIO: i/o error, read '${resolve(root)}/r/${STORE}'`), {
+          code: "EIO",
+        });
+      },
+    });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+    expect(result.reasons.join(" ")).toContain(`r/${STORE}: read failed: EIO`);
+  });
 
   it("without a swap, run r is refuted (the baseline the races try to flip)", async () => {
     const result = await checkWithHooks(racedRoot(), {});
@@ -1033,12 +1073,16 @@ describe("reader: an intermediate component swapped during a walk (TIF-265 follo
     writeState(root, "good", STORE, todoStore(S01_ITEMS));
     writeState(root, "r", `sub/${STORE}`, todoStore(S02_PERSISTED));
     writeState(root, "good", `sub/${STORE}`, todoStore(S01_ITEMS));
-    const check = (taskId: string, hooks: Parameters<typeof fileEvidenceReader>[1]) =>
-      createGate({
+    const paths = hostPathsOf(root);
+    const check = async (taskId: string, hooks: Parameters<typeof fileEvidenceReader>[1]) => {
+      const result = await createGate({
         tasks: buildRegistry([...builtinTasks(), nestedEntry()]),
         reader: fileEvidenceReader(root, hooks),
         assignment: { taskId, runId: "r" },
       }).check({ taskId, runId: "r" });
+      expectNoHostPath(result, paths);
+      return result;
+    };
     return { root, check };
   }
 
@@ -1188,6 +1232,66 @@ describe("reader: an intermediate component swapped during a walk (TIF-265 follo
     }).check({ taskId: "df-s01", runId: "ok" });
     expect(result).toMatchObject({ verdict: "verified", reasonCodes: ["ORACLE_PASS"] });
   });
+
+  /** A passing run that is also named r: inside the root at x/r, or in a sibling <root>-evil. */
+  function borrowedR(root: string, where: "inside" | "sibling"): string {
+    const base = where === "inside" ? join(resolve(root), "x") : `${resolve(root)}-evil`;
+    writeState(base, "r", STORE, todoStore(S01_ITEMS));
+    return join(base, "r");
+  }
+
+  it.skipIf(!LINUX)(
+    "Linux: r swapped for a symlink to another run ALSO named r inside the root (x/r) → STATE_UNREADABLE: the path must match exactly, not by suffix (skipped off Linux: no /proc/self/fd)",
+    async () => {
+      const { root, check } = raced();
+      const swap = interleaved(root, "r", borrowedR(root, "inside"), STORE);
+      const result = await check("df-s01", swap.hooks);
+      swap.restore();
+      assertInvariant(result);
+      expect(swap.swaps()).toBeGreaterThanOrEqual(2);
+      expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+      expect(result.reasons.join(" ")).toContain(
+        `the opened file is at x/r/${STORE}, not at r/${STORE} (descriptor path check)`,
+      );
+    },
+  );
+
+  it.skipIf(!LINUX)(
+    "Linux: r swapped for a symlink to a run ALSO named r in a sibling <root>-evil → STATE_UNREADABLE, reported as outside the root, no host path (skipped off Linux: no /proc/self/fd)",
+    async () => {
+      const { root, check } = raced();
+      const borrowed = borrowedR(root, "sibling");
+      const swap = interleaved(root, "r", borrowed, STORE);
+      const result = await check("df-s01", swap.hooks);
+      swap.restore();
+      assertInvariant(result);
+      expect(swap.swaps()).toBeGreaterThanOrEqual(2);
+      expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+      const reasons = result.reasons.join(" ");
+      expect(reasons).toContain(
+        `the opened file is at a path outside the evidence root, not at r/${STORE} (descriptor path check)`,
+      );
+      expect(reasons).not.toContain("evil");
+    },
+  );
+
+  it.each(["inside", "sibling"] as const)(
+    "a borrowed run also named r (%s) without the binding (platform darwin) gives verified: the tests above reach the binding",
+    async (where) => {
+      const { root, check } = raced();
+      const borrowed = borrowedR(root, where);
+      const swap = interleaved(root, "r", borrowed, STORE);
+      const result = await check("df-s01", { ...swap.hooks, platform: "darwin" });
+      expect(swap.linkedAtOpen()).toBe(true);
+      swap.restore();
+      expect(result).toMatchObject({ verdict: "verified", reasonCodes: ["ORACLE_PASS"] });
+      expect(result.evidenceRefs[0]?.sha256).toBe(
+        createHash("sha256")
+          .update(readFileSync(join(borrowed, STORE)))
+          .digest("hex"),
+      );
+    },
+  );
 
   it.skipIf(!LINUX)(
     "Linux: if /proc/self/fd cannot be read, the read fails closed (skipped off Linux: no /proc/self/fd)",
