@@ -260,6 +260,12 @@ describe("scorecard-check", () => {
   const R3 = "re-verified tonight. **Note";
   const inRow3 = (text: string): [string, string] => [R3, `re-verified tonight. ${text} **Note`];
   const TABLE_END = "|\n\n## M1 sign-off";
+  const SEPARATOR = "|---|---|---|---|---|";
+  const REGENERATE_END = "from the runbook.\n\n## Open risk:";
+  const appendToRegenerate = (text: string): [string, string] => [
+    REGENERATE_END,
+    `from the runbook.\n\n${text}\n\n## Open risk:`,
+  ];
   const cases: [string, [string, string], RegExp][] = [
     [
       "a new reference (TIF-999)",
@@ -377,6 +383,50 @@ describe("scorecard-check", () => {
       ["(3) The transcripts", "The transcripts"],
       /^MISMATCH row 7: enumerators: 2 in-order/,
     ],
+    // TIF-230 round 2, D1: the criterion table's header and separator lines sat in no
+    // segment, so a number on either escaped the sweep.
+    [
+      "a figure in the criterion table's Status header",
+      ["| # | Criterion | Status |", "| # | Criterion | Status (8/8) |"],
+      /^MISMATCH layout: criterion table: the header line must be exactly/,
+    ],
+    [
+      "a figure in the criterion table's Criterion header",
+      ["| # | Criterion |", "| # | Criterion (31 of 30) |"],
+      /^MISMATCH layout: criterion table: the header line must be exactly/,
+    ],
+    [
+      "a trailing number on the criterion table's separator",
+      [`${SEPARATOR}\n| 1 |`, `${SEPARATOR} 31\n| 1 |`],
+      /^MISMATCH layout: criterion table: the separator line must be exactly/,
+    ],
+    [
+      "a trailing comment on the criterion table's separator",
+      [`${SEPARATOR}\n| 1 |`, `${SEPARATOR} <!-- 8 rows -->\n| 1 |`],
+      /^MISMATCH layout: criterion table: the separator line must be exactly/,
+    ],
+    // TIF-230 round 2, D2: every rendered heading form, placed at the end of an
+    // out-of-scope section, starts an unknown section instead of inheriting the exemption.
+    [
+      "an ATX heading indented by three spaces",
+      appendToRegenerate("   ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: {4}## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "a setext heading underlined with ---",
+      appendToRegenerate("Sweep v3 result\n---\n\n31 of 30 verified."),
+      /^MISMATCH layout: Sweep v3 result \/ ---: .*does not classify/,
+    ],
+    [
+      "a setext heading underlined with ===",
+      appendToRegenerate("Sweep v3 result\n===\n\n31 of 30 verified."),
+      /^MISMATCH layout: Sweep v3 result \/ ===: .*does not classify/,
+    ],
+    [
+      "an HTML <h2> heading",
+      appendToRegenerate("<h2>Sweep v3 result</h2>\n\n31 of 30 verified."),
+      /^MISMATCH layout: <h2>Sweep v3 result<\/h2>: .*does not classify/,
+    ],
   ];
   it.each(cases)(
     "fails on %s",
@@ -404,6 +454,20 @@ describe("scorecard-check", () => {
     expect(result.mismatch).toContainEqual(
       expect.stringMatching(/^MISMATCH status: rows DONE: expected 'All 8 rows are DONE'/),
     );
+  }, 120_000);
+
+  // TIF-230 round 2, D2: a `---` that is a thematic break (after a blank line) or ends a
+  // table is not a setext underline, so neither adds a heading.
+  it("does not read a thematic break or a --- after a table as a setext heading", () => {
+    const text = mutate(
+      readFileSync(SCORECARD, "utf8"),
+      REGENERATE_END,
+      "from the runbook.\n\n---\n\n| Step | Command |\n|---|---|\n| regenerate | the script |\n---\n\n## Open risk:",
+    );
+    const result = checkMutated(text);
+    expect(result.mismatch).toEqual([]);
+    expect(result.unattributed).toEqual([]);
+    expect(result.status).toBe(0);
   }, 120_000);
 
   it("sweeps Trial traces as an in-scope section", () => {

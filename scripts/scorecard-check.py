@@ -9,11 +9,13 @@ any mismatch. Prose byte-identity is not required; the numbers are.
 
 Scope. Every line of the doc is classified (code fences are skipped when looking for
 headings). Line 1 is the title `# M1 scorecard`; everything from there to the `| # |`
-table header is the preamble (swept). The criterion table must hold exactly one
+table header is the preamble (swept). The table's header and separator lines must equal
+CRITERION_HEADER and CRITERION_SEPARATOR exactly, and the table must hold exactly one
 `| N |` line for each row 1-8, in any order; a duplicate, unexpected or non-row table
 line fails, and so does a `| N |` line anywhere else. Between the table and the first
-heading only blank lines are allowed. Every heading of any level (`#`, `##`, `###`,
-...) starts a section that runs to the next heading, and must equal, character for
+heading only blank lines are allowed. Every heading of any level and in every form
+Markdown renders (an ATX `#`...`######` heading indented 0-3 spaces, a setext heading
+underlined with `===` or `---`, an HTML `<h1>`-`<h6>`) starts a section that runs to the next heading, and must equal, character for
 character, exactly one key of IN_SCOPE or OUT_OF_SCOPE (the whole heading line, not a
 prefix: extra text after a known heading, numbers or not, makes it an unknown heading);
 an unknown heading or a second section under a known one fails. The classification is
@@ -158,7 +160,20 @@ OUT_OF_SCOPE = {
 }
 TITLE = "# M1 scorecard"
 ROWS = [str(n) for n in range(1, 9)]
-HEADING = re.compile(r"#{1,6} ")
+# Every form Markdown renders as a heading (TIF-230 round 2: only a column-0 ATX heading
+# was seen, so an indented, setext or HTML heading inside an out-of-scope section showed
+# the reader a new section whose numbers inherited that section's exemption): an ATX
+# heading indented 0-3 spaces, an HTML <h1>-<h6> block, and a setext heading, which is a
+# paragraph line underlined with `===` or `---`. A `---` after a blank line, a table line
+# or a heading is a thematic break or table end, not an underline.
+HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t]|$)")
+HTML_HEADING = re.compile(r" {0,3}<h[1-6](?:[\s/>]|$)", re.I)
+SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)$")
+# The criterion table's header and separator, matched exactly: neither is a row, so a
+# number added to either would otherwise sit in no segment at all.
+CRITERION_HEADER = "| # | Criterion | Status | Evidence | Gap to DONE |"
+CRITERION_SEPARATOR = "|---|---|---|---|---|"
 ROW_LINE = re.compile(r"\| *(\d+) *\|")
 # Names of arms, runs, sweeps, milestones, files, tools and the model: every word with
 # a word-internal digit run that no claim covers, in doc order, per in-scope section
@@ -346,14 +361,26 @@ class Report:
         offs = [0]
         for line in lines:
             offs.append(offs[-1] + len(line))
-        fence, heads, body = False, [], []
+        fence, heads, body = None, [], []
         for i, line in enumerate(lines):
-            if line.startswith("```"):
-                fence = not fence
-            elif not fence:
+            m = FENCE.match(line.rstrip("\n"))
+            if fence is None and m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                fence = m.group(1)  # an opening fence: ``` or ~~~, three or more
+            elif fence is not None:
+                if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
+                    fence = None  # a closing fence: the same character, at least as long, nothing after
+            else:
                 body.append(i)
-                if HEADING.match(line):
+                if HEADING.match(line) or HTML_HEADING.match(line):
                     heads.append(i)
+        # A setext underline makes the paragraph line above it a heading.
+        for k, i in enumerate(body[1:], 1):
+            above = body[k - 1]
+            prev = lines[above].lstrip(" ")
+            if (above == i - 1 and SETEXT.match(lines[i].rstrip("\n")) and prev.strip() and not prev.startswith("|")
+                    and above not in heads):
+                heads.append(above)
+        heads.sort()
         if not lines or lines[0].rstrip("\n") != TITLE:
             self.layout.append(("title", f"the first line must be {TITLE!r}"))
         elif heads and heads[0] == 0:
@@ -365,9 +392,15 @@ class Report:
         if any(i < h for i in heads):
             self.layout.append(("criterion table", "a heading comes before the criterion table"))
         self.segs["status"] = self.text[: offs[h]]
+        if h < len(lines) and lines[h].startswith("| # |") and lines[h].rstrip("\n") != CRITERION_HEADER:
+            self.layout.append(("criterion table", f"the header line must be exactly {CRITERION_HEADER!r}"))
         t = h + 1 if h < len(lines) else h
         if t < len(lines) and lines[t].startswith("|---"):
+            if lines[t].rstrip("\n") != CRITERION_SEPARATOR:
+                self.layout.append(("criterion table", f"the separator line must be exactly {CRITERION_SEPARATOR!r}"))
             t += 1
+        elif h < len(lines):
+            self.layout.append(("criterion table", f"no {CRITERION_SEPARATOR!r} separator under the header"))
         while t < len(lines) and lines[t].startswith("|"):
             m = ROW_LINE.match(lines[t])
             n = m.group(1) if m else None
@@ -394,6 +427,8 @@ class Report:
         seen: set[str] = set()
         for k, i in enumerate(heads):
             heading = lines[i].rstrip("\n")
+            if i + 1 < len(lines) and SETEXT.match(lines[i + 1].rstrip("\n")) and not HEADING.match(lines[i]):
+                heading += " / " + lines[i + 1].strip()  # a setext heading never equals a key
             end = offs[heads[k + 1]] if k + 1 < len(heads) else len(self.text)
             key, kind = next(((heading, c) for table, c in ((IN_SCOPE, "in scope"), (OUT_OF_SCOPE, "out of scope"))
                               if heading in table), (None, "UNCLASSIFIED"))
