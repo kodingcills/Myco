@@ -15,6 +15,7 @@ import { createHash, createHmac } from "node:crypto";
 import {
   chmodSync,
   cpSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -27,9 +28,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readCsvSpreadsheet } from "../../src/core/filepersist.ts";
 import type { Verdict } from "../../src/core/verify.ts";
-import { gatedVerdict, type SealedOracle } from "../../src/integrity/gate.ts";
+import {
+  gatedVerdict,
+  gateForTrial,
+  integrityReasons,
+  type SealedOracle,
+} from "../../src/integrity/gate.ts";
 import { appendChainedRow, checkChainedLedger } from "../../src/integrity/ledger.ts";
 import {
+  AUDIT_WITHOUT_RECEIPT,
   canonical,
   newVaultKey,
   type SealReceipt,
@@ -134,13 +141,17 @@ function trial(opts: {
     if (!(e instanceof VaultError)) throw e;
   }
   opts.afterCapture?.(ctx);
-  const verdict = gatedVerdict(
-    vault,
-    runId,
-    opts.useReceipt === false ? undefined : receipt,
-    oracle,
-  );
+  const verdict =
+    opts.useReceipt === false ? auditVerdict(runId) : gatedVerdict(vault, runId, receipt, oracle);
   return { verdict, ctx };
+}
+
+/** The offline-audit path (no receipt): isolates the checks the receipt would also catch. */
+function auditVerdict(runId: string): Verdict {
+  const opened = vault.openVerdictInputs(runId, AUDIT_WITHOUT_RECEIPT);
+  return opened.ok
+    ? oracle(opened.inputs)
+    : { status: "uncertain", reasons: integrityReasons(opened.violations) };
 }
 
 function expectIntegrity(verdict: Verdict, code: string): void {
@@ -408,12 +419,44 @@ describe("tampering routes: the gate never returns verified", () => {
   });
 
   it("the harness refuses to capture before the agent stopped", () => {
-    seal("run-1");
+    const receipt = seal("run-1");
     expect(() => vault.capture("run-1", { "persisted/output.csv": Buffer.from("x") })).toThrow(
       /not-stopped/,
     );
-    expectIntegrity(gatedVerdict(vault, "run-1", undefined, oracle), "agent-not-stopped");
+    expectIntegrity(gatedVerdict(vault, "run-1", receipt, oracle), "agent-not-stopped");
   });
+
+  it("a hard link to a captured file held by the agent is refused", () => {
+    const { verdict } = trial({
+      agentValue: WRONG,
+      afterCapture: (c) =>
+        linkSync(join(c.runDir, "captured/persisted/output.csv"), join(agentWork, "held.csv")),
+    });
+    expectIntegrity(verdict, "captured-file-not-regular");
+  });
+
+  it("a hard link to the sealed ground truth held by the agent is refused", () => {
+    const { verdict } = trial({
+      agentValue: WRONG,
+      duringAgent: (c) =>
+        linkSync(join(c.runDir, "sealed/ground-truth.json"), join(agentWork, "gt.json")),
+    });
+    expectIntegrity(verdict, "sealed-file-not-regular");
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "a vault root differing from an agent root only in case is refused on macOS",
+    () => {
+      expect(
+        () =>
+          new VerdictVault({
+            root: join(agentWork.toUpperCase(), "vault"),
+            key,
+            agentRoots: [agentWork],
+          }),
+      ).toThrow(/reachable/);
+    },
+  );
 
   it("a vault inside an agent-reachable root is refused at construction", () => {
     expect(
@@ -422,6 +465,33 @@ describe("tampering routes: the gate never returns verified", () => {
     expect(() => new VerdictVault({ root: base, key, agentRoots: [agentWork] })).toThrow(
       /reachable/,
     );
+  });
+});
+
+describe("the gate binds the agent's run id to its own trial (V5)", () => {
+  it("an agent naming an earlier honest run gets uncertain, not that run's verified", () => {
+    const honest = trial({ agentValue: params.newValue, runId: "run-0" });
+    expect(honest.verdict.status).toBe("verified");
+    const { ctx } = trial({ agentValue: WRONG, runId: "run-1" });
+    // The gate holds run-1's binding (operator-pinned); the agent asks about run-0.
+    const binding = { runId: "run-1", receipt: ctx.receipt };
+    const v = gateForTrial(vault, binding, "run-0", oracle);
+    expectIntegrity(v, "run-not-bound");
+    expect(gateForTrial(vault, binding, "run-1", oracle).status).toBe("refuted");
+  });
+
+  it("run-1's receipt does not open run-0", () => {
+    trial({ agentValue: params.newValue, runId: "run-0" });
+    const { ctx } = trial({ agentValue: WRONG, runId: "run-1" });
+    expectIntegrity(gatedVerdict(vault, "run-0", ctx.receipt, oracle), "receipt-mismatch");
+  });
+
+  it("a missing receipt is refused at runtime, not treated as an audit", () => {
+    trial({ agentValue: params.newValue, runId: "run-0" });
+    const v = gatedVerdict(vault, "run-0", undefined as unknown as SealReceipt, oracle);
+    expectIntegrity(v, "receipt-missing");
+    // @ts-expect-error: the receipt is a required parameter.
+    expect(gatedVerdict(vault, "run-0", undefined, oracle).status).toBe("uncertain");
   });
 });
 
@@ -434,7 +504,7 @@ describe("ledger rows", () => {
       ["run-2", "refuted"],
       ["run-3", "uncertain"],
     ] as const)
-      head = appendChainedRow(path, key, { runId, gateVerdict: status });
+      head = appendChainedRow(path, key, "eval-a", { runId, gateVerdict: status });
     return { path, head };
   }
   const verifiedRuns = (rows: Record<string, unknown>[]) =>
@@ -442,7 +512,7 @@ describe("ledger rows", () => {
 
   it("an untouched ledger verifies", () => {
     const { path, head } = ledger();
-    const check = checkChainedLedger(path, key, head);
+    const check = checkChainedLedger(path, key, "eval-a", head);
     expect(check.ok).toBe(true);
     expect(verifiedRuns(check.rows)).toEqual(["run-1"]);
   });
@@ -453,7 +523,7 @@ describe("ledger rows", () => {
       path,
       readFileSync(path, "utf8").replace('"gateVerdict":"refuted"', '"gateVerdict":"verified"'),
     );
-    const check = checkChainedLedger(path, key, head);
+    const check = checkChainedLedger(path, key, "eval-a", head);
     expect(check.ok).toBe(false);
     expect(check.violations[0]?.detail).toMatch(/MAC/);
     expect(verifiedRuns(check.rows)).toEqual(["run-1"]);
@@ -463,7 +533,7 @@ describe("ledger rows", () => {
     const { path, head } = ledger();
     const lines = readFileSync(path, "utf8").split("\n");
     writeFileSync(path, [lines[0], lines[2], ""].join("\n"));
-    const check = checkChainedLedger(path, key, head);
+    const check = checkChainedLedger(path, key, "eval-a", head);
     expect(check.ok).toBe(false);
     expect(check.violations[0]?.detail).toMatch(/prev/);
   });
@@ -472,16 +542,25 @@ describe("ledger rows", () => {
     const { path, head } = ledger();
     const lines = readFileSync(path, "utf8").split("\n");
     writeFileSync(path, [lines[0], lines[1], ""].join("\n"));
-    expect(checkChainedLedger(path, key, head).ok).toBe(false);
+    expect(checkChainedLedger(path, key, "eval-a", head).ok).toBe(false);
   });
 
   it("a row re-signed without the key is caught", () => {
     const { path } = ledger();
     const other = newVaultKey();
     const forged = join(base, "forged.jsonl");
-    appendChainedRow(forged, other, { runId: "run-2", gateVerdict: "verified" });
-    expect(checkChainedLedger(forged, key).ok).toBe(false);
-    expect(checkChainedLedger(path, key).ok).toBe(true);
+    appendChainedRow(forged, other, "eval-a", { runId: "run-2", gateVerdict: "verified" });
+    expect(checkChainedLedger(forged, key, "eval-a").ok).toBe(false);
+    expect(checkChainedLedger(path, key, "eval-a").ok).toBe(true);
+  });
+
+  it("a whole ledger copied under another ledger id is caught", () => {
+    const { path } = ledger();
+    const copy = join(base, "eval-b.jsonl");
+    writeFileSync(copy, readFileSync(path));
+    const check = checkChainedLedger(copy, key, "eval-b");
+    expect(check.ok).toBe(false);
+    expect(check.rows).toEqual([]);
   });
 });
 

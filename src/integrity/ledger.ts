@@ -2,7 +2,9 @@
  * TIF-266 — a MAC-chained ledger, so an edited, deleted or reordered row is detected.
  *
  * Each line is `{ row, prev, mac }` where `mac = HMAC(key, prev || canonical(row))` and
- * `prev` is the previous line's `mac` (the genesis value for the first line). The head
+ * `prev` is the previous line's `mac`. The first line's `prev` is the ledger's genesis,
+ * `HMAC(key, "myco-ledger-genesis:" || ledgerId)`, so a whole ledger copied to a ledger with
+ * another id does not verify there. The head
  * (`mac` of the last line) is returned by `appendChainedRow`; a caller that keeps it can
  * also detect a truncated tail, which the chain alone cannot.
  *
@@ -14,7 +16,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { canonical } from "./vault.ts";
 
-export const LEDGER_GENESIS = "0".repeat(64);
+/** The chain's starting value for one ledger id (e.g. the eval id). */
+export function ledgerGenesis(key: Uint8Array, ledgerId: string): string {
+  return createHmac("sha256", key).update(`myco-ledger-genesis:${ledgerId}`).digest("hex");
+}
 
 export interface LedgerCheck {
   readonly ok: boolean;
@@ -36,9 +41,12 @@ function same(a: string, b: string): boolean {
 export function appendChainedRow(
   path: string,
   key: Uint8Array,
+  ledgerId: string,
   row: Record<string, unknown>,
 ): string {
-  const prev = existsSync(path) ? checkChainedLedger(path, key).head : LEDGER_GENESIS;
+  const prev = existsSync(path)
+    ? checkChainedLedger(path, key, ledgerId).head
+    : ledgerGenesis(key, ledgerId);
   const mac = macOf(key, prev, row);
   appendFileSync(path, `${JSON.stringify({ row, prev, mac })}\n`);
   return mac;
@@ -48,11 +56,12 @@ export function appendChainedRow(
 export function checkChainedLedger(
   path: string,
   key: Uint8Array,
+  ledgerId: string,
   expectedHead?: string,
 ): LedgerCheck {
   const violations: { line: number; detail: string }[] = [];
   const rows: Record<string, unknown>[] = [];
-  let head = LEDGER_GENESIS;
+  let head = ledgerGenesis(key, ledgerId);
   const lines = readFileSync(path, "utf8")
     .split("\n")
     .filter((l) => l !== "");

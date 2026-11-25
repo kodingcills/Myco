@@ -14,9 +14,15 @@
  *                  copied to the host after the agent stopped.
  * - `gate`         the TIF-265 verdict tool. Takes a run id; never an intent or an expected value.
  * - `agent-local`  touches only the agent's own context (e.g. a todo list).
- * - `host-write-fixed` writes host files at a path the agent does not choose, with content
- *                  the agent does not supply (myco-rt-mcp `evidence`). Denied in a gated run:
- *                  the harness exports evidence itself after the agent stops.
+ * - `host-dir-agent-named` makes a host directory whose name the agent chooses
+ *                  (myco-rt-mcp `create` makes `<workspace>/runs/<session_id>/`, and the
+ *                  agent supplies `session_id`). Allowed only when the server is started with
+ *                  `MYCO_RT_SESSION_ID` (the harness pins the id and `create` refuses any
+ *                  other); pass `mycoRtSessionPinned: true` to the audit to say so.
+ * - `host-write-fixed` writes host files under a run dir named by the session id, with
+ *                  content the agent does not supply (myco-rt-mcp `evidence`). The agent
+ *                  chooses when, and, unpinned, the dir name. Denied in a gated run: the
+ *                  harness exports evidence itself after the agent stops.
  * - `host-fs`      reads or writes host paths the agent chooses.
  * - `host-shell`   runs host commands (or spawns an agent that can).
  * - `network`      host-side network fetches (not a write path; denied to keep the surface
@@ -27,6 +33,7 @@ export type Reach =
   | "guest"
   | "gate"
   | "agent-local"
+  | "host-dir-agent-named"
   | "host-write-fixed"
   | "host-fs"
   | "host-shell"
@@ -39,7 +46,10 @@ export interface ToolClass {
 
 /** The Linux runtime MCP server (`myco-rt-mcp`), served to Claude Code as `mcp__myco-rt__<tool>`. */
 export const MYCO_RT_MCP_TOOLS: Readonly<Record<string, ToolClass>> = {
-  create: { reach: "guest", note: "boots a guest; read_root/allow_write are guest paths" },
+  create: {
+    reach: "host-dir-agent-named",
+    note: "boots a guest and makes host <workspace>/runs/<session_id>/; session_id is agent-supplied unless MYCO_RT_SESSION_ID pins it",
+  },
   observe: {
     reach: "guest",
     note: "a11y tree, windows, processes; screenshot path is a guest path",
@@ -47,7 +57,7 @@ export const MYCO_RT_MCP_TOOLS: Readonly<Record<string, ToolClass>> = {
   act: { reach: "guest", note: "launch/click/type in the guest; launch runs any guest command" },
   evidence: {
     reach: "host-write-fixed",
-    note: "exports the session's trace.jsonl/result.json into the host runs/<session>/ dir",
+    note: "writes the session's trace.jsonl/result.json into host <workspace>/runs/<session_id>/, at a time the agent picks",
   },
   read_file: { reach: "guest", note: "confined beneath the session's guest read_root" },
   write_file: { reach: "guest", note: "confined beneath the guest read_root, opt-in allow_write" },
@@ -55,7 +65,10 @@ export const MYCO_RT_MCP_TOOLS: Readonly<Record<string, ToolClass>> = {
   kill_process: { reach: "guest", note: "guest process by handle" },
   relaunch_process: { reach: "guest", note: "guest process by handle" },
   reset: { reach: "guest", note: "restores the guest to its clean base" },
-  destroy: { reach: "guest", note: "tears down the guest; deletes the host run dir" },
+  destroy: {
+    reach: "guest",
+    note: "deletes the guest overlay and releases the lock; leaves the host run dir in place",
+  },
 };
 
 /**
@@ -122,6 +135,22 @@ export interface AuditOptions {
    * `{ "myco-gate": { verdict: { reach: "gate", note: "..." } } }`.
    */
   readonly extraServers?: Readonly<Record<string, Readonly<Record<string, ToolClass>>>>;
+  /**
+   * True only when the harness starts `myco-rt-mcp` with `MYCO_RT_SESSION_ID` set (see
+   * `rtSessionIdFor`). Then `create` cannot name a host dir and counts as `guest`.
+   */
+  readonly mycoRtSessionPinned?: boolean;
+}
+
+/** The env var that pins `myco-rt-mcp`'s session id (`SESSION_ID_ENV` in its main.rs). */
+export const MYCO_RT_SESSION_ENV = "MYCO_RT_SESSION_ID";
+
+/**
+ * The pinned runtime session id for a harness run. Suffixed so the runtime's
+ * `runs/<session>/` can never be the harness's own `runs/<runId>/`.
+ */
+export function rtSessionIdFor(runId: string): string {
+  return `${runId}.rt`;
 }
 
 /** Classify a tool name in Claude Code's form: a built-in name, or `mcp__<server>__<tool>`. */
@@ -132,7 +161,10 @@ export function classifyTool(name: string, opts: AuditOptions = {}): ToolClass |
   const [, server = "", tool = ""] = mcp;
   const servers = { ...MCP_SERVERS, ...opts.extraServers };
   const tools = Object.hasOwn(servers, server) ? servers[server] : undefined;
-  return tools && Object.hasOwn(tools, tool) ? tools[tool] : undefined;
+  const cls = tools && Object.hasOwn(tools, tool) ? tools[tool] : undefined;
+  if (cls?.reach === "host-dir-agent-named" && opts.mycoRtSessionPinned)
+    return { reach: "guest", note: `${cls.note} (pinned: ${MYCO_RT_SESSION_ENV} set)` };
+  return cls;
 }
 
 /**

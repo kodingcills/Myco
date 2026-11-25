@@ -11,6 +11,8 @@ import {
   auditToolSurface,
   MYCO_AGENT_OPS,
   MYCO_RT_MCP_TOOLS,
+  MYCO_RT_SESSION_ENV,
+  rtSessionIdFor,
   type ToolClass,
 } from "../../src/integrity/surface.ts";
 import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
@@ -40,7 +42,7 @@ const GATED_ARM = [
 
 describe("tool-surface audit", () => {
   it("passes the gated arm's tool list, with no host roots", () => {
-    const audit = auditToolSurface(GATED_ARM, { extraServers: GATE });
+    const audit = auditToolSurface(GATED_ARM, { extraServers: GATE, mycoRtSessionPinned: true });
     expect(audit.violations).toEqual([]);
     expect(audit.ok).toBe(true);
     expect(audit.hostRoots).toEqual([]);
@@ -65,9 +67,24 @@ describe("tool-surface audit", () => {
     "mcp__myco-gate__verdict",
   ])("rejects %s", (tool) => {
     // Without the extraServers registration, even the gate tool is unknown: fail closed.
-    const audit = auditToolSurface([...GATED_ARM.filter((t) => !t.includes("gate")), tool]);
+    const audit = auditToolSurface([...GATED_ARM.filter((t) => !t.includes("gate")), tool], {
+      mycoRtSessionPinned: true,
+    });
     expect(audit.ok).toBe(false);
     expect(audit.violations.map((v) => v.tool)).toEqual([tool]);
+  });
+
+  it("rejects create when the harness has not pinned the runtime session id", () => {
+    const audit = auditToolSurface(GATED_ARM, { extraServers: GATE });
+    expect(audit.ok).toBe(false);
+    expect(audit.violations).toEqual([
+      expect.objectContaining({ tool: "mcp__myco-rt__create", reach: "host-dir-agent-named" }),
+    ]);
+  });
+
+  it("the pinned runtime session id never equals the harness run id", () => {
+    expect(rtSessionIdFor("run-1")).not.toBe("run-1");
+    expect(rtSessionIdFor("run-1")).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
   });
 
   it("a host-reaching surface makes the vault impossible to place", () => {
@@ -96,14 +113,21 @@ describe("catalog drift", () => {
     const end = src.indexOf("\nimpl Server", start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
-    const served = [...src.slice(start, end).matchAll(/"name":\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    const served = [...src.slice(start, end).matchAll(/"name":\s*"([^"]+)"/g)].map((m) => m[1]);
     expect(served.length).toBeGreaterThan(0);
     expect([...served].sort()).toEqual(Object.keys(MYCO_RT_MCP_TOOLS).sort());
   });
 
+  it("names the same session-pin env var as myco-rt-mcp, and create goes through the pin", () => {
+    const src = readFileSync(join(ROOT, "runtime/crates/myco-rt-mcp/src/main.rs"), "utf8");
+    expect(src).toContain(`const SESSION_ID_ENV: &str = "${MYCO_RT_SESSION_ENV}";`);
+    const create = src.slice(src.indexOf("    fn create(&mut self"));
+    expect(create.slice(0, 400)).toContain("resolve_session_id(");
+  });
+
   it("classifies exactly the ops the Windows guest agent registers", () => {
     const src = readFileSync(join(ROOT, "agent/myco_agent/ops.py"), "utf8");
-    const ops = [...src.matchAll(/@op\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    const ops = [...src.matchAll(/@op\(\s*"([^"]+)"/g)].map((m) => m[1]);
     expect(ops.length).toBeGreaterThan(0);
     expect([...ops].sort()).toEqual(Object.keys(MYCO_AGENT_OPS).sort());
   });

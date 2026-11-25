@@ -51,7 +51,9 @@ export type IntegrityViolationCode =
   | "seal-missing"
   | "seal-malformed"
   | "seal-signature"
+  | "receipt-missing"
   | "receipt-mismatch"
+  | "run-not-bound"
   | "sealed-file-missing"
   | "sealed-file-not-regular"
   | "sealed-file-writable"
@@ -99,6 +101,14 @@ export interface SealReceipt {
 }
 
 /**
+ * The one named opt-out from the receipt check, for an offline audit of a committed vault
+ * after the harness process (and its receipts) are gone, e.g. the M2-11 recomputation.
+ * `gatedVerdict` does not accept it: a gate always has the calling trial's receipt.
+ */
+export const AUDIT_WITHOUT_RECEIPT: unique symbol = Symbol("myco.integrity.audit-without-receipt");
+export type ReceiptOrAudit = SealReceipt | typeof AUDIT_WITHOUT_RECEIPT;
+
+/**
  * Captured after the agent stops. `persisted/` entries are the oracle's input; every other
  * entry (evidence artifacts: `result.json`, `trace.jsonl`, screenshots, ledger excerpts) is
  * hash-checked for audit but is never handed to the oracle.
@@ -108,6 +118,8 @@ export type CaptureInput = Readonly<Record<string, Uint8Array>>;
 /** The only inputs an oracle may read, all from the vault and all hash-verified. */
 export interface VerdictInputs {
   readonly runId: string;
+  /** sha256 of the `seal.json` these inputs were checked against. */
+  readonly sealDigest: string;
   readonly groundTruth: unknown;
   readonly fixtures: Readonly<Record<string, Uint8Array>>;
   /** Captured `persisted/<name>` entries, keyed by `<name>`. */
@@ -188,7 +200,10 @@ function safeName(name: string): void {
 
 /** True when `child` is `parent` or inside it (both already resolved). */
 function within(child: string, parent: string): boolean {
-  const rel = relative(parent, child);
+  // macOS and Windows volumes are case-insensitive by default: compare folded, so a root
+  // that differs only in case is still treated as the same place (refusing more, never less).
+  const fold = process.platform === "darwin" || process.platform === "win32";
+  const rel = fold ? relative(parent.toLowerCase(), child.toLowerCase()) : relative(parent, child);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
@@ -371,13 +386,13 @@ export class VerdictVault {
     this.writeSealed(dir, CAPTURE, `${canonical(this.sign(body))}\n`);
   }
 
-  /** `ok` or every violation found. The TIF-265 gate's yes/no call. */
-  checkIntegrity(runId: string, receipt?: SealReceipt): IntegrityResult {
+  /**
+   * `ok` or every violation found. The TIF-265 gate's yes/no call. `receipt` is required:
+   * pass the calling trial's receipt, or `AUDIT_WITHOUT_RECEIPT` for an offline audit.
+   */
+  checkIntegrity(runId: string, receipt: ReceiptOrAudit): IntegrityResult {
     const opened = this.openVerdictInputs(runId, receipt);
-    if (opened.ok) {
-      const seal = readFileSync(join(this.runDir(runId), SEAL), "utf8");
-      return { ok: true, runId, sealDigest: sha256(seal) };
-    }
+    if (opened.ok) return { ok: true, runId, sealDigest: opened.inputs.sealDigest };
     return { ok: false, runId, violations: opened.violations };
   }
 
@@ -385,8 +400,21 @@ export class VerdictVault {
    * Read every vault file once, check it, and return the checked bytes. The oracle must
    * use these bytes and nothing else.
    */
-  openVerdictInputs(runId: string, receipt?: SealReceipt): VerdictInputsResult {
+  openVerdictInputs(runId: string, receipt: ReceiptOrAudit): VerdictInputsResult {
     const violations: IntegrityViolation[] = [];
+    // A JS caller (or a cast) can still pass nothing: that is a refusal, not an audit.
+    const audit = receipt === AUDIT_WITHOUT_RECEIPT;
+    if (
+      !audit &&
+      (receipt === null ||
+        typeof receipt !== "object" ||
+        typeof receipt.runId !== "string" ||
+        typeof receipt.sealDigest !== "string")
+    )
+      violations.push({
+        code: "receipt-missing",
+        detail: "no seal receipt for this trial: pass the calling trial's receipt",
+      });
     let dir: string;
     try {
       dir = this.runDir(runId);
@@ -416,7 +444,12 @@ export class VerdictVault {
     if (seal.body.runId !== runId)
       violations.push({ code: "seal-malformed", detail: `seal names run ${seal.body.runId}` });
     const sealDigest = sha256(seal.text);
-    if (receipt && (receipt.runId !== runId || !sameHex(receipt.sealDigest, sealDigest)))
+    if (
+      !audit &&
+      violations.every((v) => v.code !== "receipt-missing") &&
+      typeof receipt === "object" &&
+      (receipt.runId !== runId || !sameHex(receipt.sealDigest, sealDigest))
+    )
       violations.push({
         code: "receipt-mismatch",
         detail: "seal manifest differs from the receipt held since seal time",
@@ -514,7 +547,13 @@ export class VerdictVault {
     }
     return {
       ok: true,
-      inputs: { runId, groundTruth: JSON.parse(gt.toString("utf8")), fixtures, persisted },
+      inputs: {
+        runId,
+        sealDigest,
+        groundTruth: JSON.parse(gt.toString("utf8")),
+        fixtures,
+        persisted,
+      },
     };
   }
 
