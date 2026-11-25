@@ -19,6 +19,11 @@
 #                        rewrites it. Left untouched when the deploy fails (row-8 H5). Every
 #                        operator on the host shares the default: set a private
 #                        path when several operators share the Mac (G25).
+#        MYCO_WHEEL_CACHE host cache for the guest's Python wheels (default
+#                        ~/.cache/myco/guest-wheels). Filled from PyPI on first
+#                        use, then reused offline.
+#        MYCO_GUEST_WHEELS a directory that already holds the wheels: skips the
+#                        fetch entirely (tests, or an offline host).
 
 set -euo pipefail
 
@@ -38,6 +43,8 @@ die() { echo "deploy-to-vm: $*" >&2; exit 1; }
 [ -f "$VM_SSH_CONFIG" ] || die "missing ssh config $VM_SSH_CONFIG (VM provisioned?)"
 
 command -v nc >/dev/null || die "nc not found on PATH"
+GUEST_REQS="$AGENT_SRC/bootstrap/guest-requirements.txt"
+[ -f "$GUEST_REQS" ] || die "missing $GUEST_REQS"
 command -v openssl >/dev/null || die "openssl not found on PATH"
 
 # Host token file, checked now so a bad path fails before a 100-420 s deploy.
@@ -77,6 +84,39 @@ TOKEN_FILE="$(mktemp)"
 printf '%s' "$TOKEN" > "$TOKEN_FILE"
 trap 'rm -f "$TOKEN_FILE"' EXIT
 chmod 600 "$TOKEN_FILE"
+
+# --- Guest Python wheels, fetched on the HOST (TIF-275) -----------------------
+# The guest has no internet (scripts/guest-egress.sh): its netdev is restricted
+# and it cannot reach PyPI. So the host fetches the pinned wheels and the tree
+# copy below carries them in; guest-deploy.ps1 installs them with --no-index
+# and --require-hashes, so pip itself checks every wheel against the pinned
+# sha256 and the guest never makes a network request. The cache is tried
+# offline first, so after the first deploy this needs no network on the host
+# either.
+WHEELS_STAGE="$(mktemp -d)"
+trap 'rm -f "$TOKEN_FILE"; rm -rf "$WHEELS_STAGE"' EXIT
+mkdir "$WHEELS_STAGE/wheels"
+stage_wheels() {
+  if [ -n "${MYCO_GUEST_WHEELS:-}" ]; then
+    [ -d "$MYCO_GUEST_WHEELS" ] || die "MYCO_GUEST_WHEELS=$MYCO_GUEST_WHEELS is not a directory"
+    cp "$MYCO_GUEST_WHEELS"/*.whl "$WHEELS_STAGE/wheels/" 2>/dev/null || die "no .whl files in MYCO_GUEST_WHEELS=$MYCO_GUEST_WHEELS"
+    return 0
+  fi
+  command -v python3 >/dev/null || die "python3 not found on PATH (needed to fetch the guest's wheels; or set MYCO_GUEST_WHEELS)"
+  local cache="${MYCO_WHEEL_CACHE:-$HOME/.cache/myco/guest-wheels}"
+  local target=(--only-binary=:all: --platform win_arm64 --python-version 3.13
+    --implementation cp --abi cp313 --abi none --require-hashes -r "$GUEST_REQS")
+  mkdir -p "$cache" || die "cannot create wheel cache $cache"
+  if python3 -m pip download --quiet --disable-pip-version-check --no-index --find-links "$cache" \
+      "${target[@]}" -d "$WHEELS_STAGE/wheels" >/dev/null 2>&1; then
+    return 0
+  fi
+  python3 -m pip download --quiet --disable-pip-version-check "${target[@]}" -d "$WHEELS_STAGE/wheels" \
+    || die "could not fetch the guest's wheels from PyPI on the host (pinned in $GUEST_REQS)"
+  cp "$WHEELS_STAGE/wheels/"*.whl "$cache/" || true
+}
+stage_wheels
+echo "==> staged $(find "$WHEELS_STAGE/wheels" -name '*.whl' | wc -l | tr -d ' ') wheels for the guest (installed offline, hash-pinned)"
 
 # ConnectTimeout bounds each connection attempt, so a dead sshd fails one copy
 # attempt in seconds rather than hanging until the sweep's 400s alarm.
@@ -139,7 +179,7 @@ copy_once() {
   SCP "$AGENT_SRC/bootstrap/guest-deploy.ps1" "$VM_SSH_HOST:C:/Users/myco/guest-deploy.ps1" || return 1
   SSH "$VM_SSH_HOST" 'powershell -ExecutionPolicy Bypass -File C:\Users\myco\guest-deploy.ps1 -Stage prepare' || return 1
   SCP -r "$AGENT_SRC/myco_agent" "$AGENT_SRC/bootstrap" "$AGENT_SRC/pyproject.toml" \
-      "$VM_SSH_HOST:$GUEST_AGENT_DIR/" || return 1
+      "$WHEELS_STAGE/wheels" "$VM_SSH_HOST:$GUEST_AGENT_DIR/" || return 1
   verify_tree || return 1
   echo "==> writing token file ($GUEST_TOKEN_PATH)"
   SCP "$TOKEN_FILE" "$VM_SSH_HOST:$GUEST_TOKEN_POSIX" || return 1
@@ -168,7 +208,7 @@ echo "==> verifying ping over ssh -L $PORT:127.0.0.1:$PORT"
 TUNNEL_LOG="$(mktemp)"
 ssh -F "$VM_SSH_CONFIG" -N -L "$PORT:127.0.0.1:$PORT" "$VM_SSH_HOST" >"$TUNNEL_LOG" 2>&1 &
 TUNNEL_PID=$!
-trap 'rm -f "$TOKEN_FILE" "$TUNNEL_LOG" ${HOST_TOKEN_TMP:+"$HOST_TOKEN_TMP"}; kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
+trap 'rm -f "$TOKEN_FILE" "$TUNNEL_LOG" ${HOST_TOKEN_TMP:+"$HOST_TOKEN_TMP"}; rm -rf "$WHEELS_STAGE"; kill "$TUNNEL_PID" 2>/dev/null || true' EXIT
 
 OK=""
 for _ in $(seq 1 30); do

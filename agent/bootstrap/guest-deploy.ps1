@@ -11,6 +11,10 @@ $tokenPath = 'C:\ProgramData\Myco\agent.token'
 
 if ($Stage -eq 'prepare') {
     New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+    # Start each copy from an empty wheel directory, so only this deploy's
+    # pinned wheels are offered to pip (TIF-275).
+    $wheelDir = Join-Path $agentDir 'wheels'
+    if (Test-Path -LiteralPath $wheelDir) { Remove-Item -LiteralPath $wheelDir -Recurse -Force }
     New-Item -ItemType Directory -Force -Path (Split-Path $tokenPath) | Out-Null
     Write-Output "prepared $agentDir and $(Split-Path $tokenPath)"
     exit 0
@@ -66,7 +70,14 @@ try { taskkill /IM python.exe /F 2>$null | Out-Null } catch { }  # no python.exe
 try { schtasks /End /TN 'MycoAgent' 2>$null | Out-Null } catch { }
 # pywin32/comtypes/uiautomation live in LO's Python site-packages: install once
 # per deploy (idempotent) or session_info/uia ops fail with ModuleNotFoundError.
-& $pyExe -m pip install --quiet --no-warn-script-location pywin32 comtypes uiautomation
+# OFFLINE (TIF-275): the guest has no internet. The wheels came in with the
+# tree copy (deploy-to-vm.sh fetched them on the host); --no-index forbids any
+# network lookup and --require-hashes makes pip check each wheel against the
+# sha256 pinned in guest-requirements.txt, refusing anything else.
+$wheelDir = Join-Path $agentDir 'wheels'
+$reqs = Join-Path $agentDir 'bootstrap\guest-requirements.txt'
+& $pyExe -m pip install --quiet --no-warn-script-location --disable-pip-version-check `
+    --no-index --find-links $wheelDir --require-hashes -r $reqs
 if ($LASTEXITCODE -ne 0) { throw "pip install into LO python failed: $LASTEXITCODE" }
 schtasks /Create /TN 'MycoAgent' /XML $xmlPath /F | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "schtasks create failed: $LASTEXITCODE" }
