@@ -99,8 +99,8 @@ column's declared type (`key`, `text`, `integer`, `date`, `currency`).
   - a header column has no declared type;
   - the fixture is ambiguous for the intent.
 
-  Any unexpected exception from the reader is also `ungradable`, so one bad document costs
-  one trial, never the rest of a grading batch.
+  Any exception past the fixture-hash check, whether in the reader or in the comparison, is
+  also `ungradable`. One bad document costs one trial, never the rest of a grading batch.
 
 Cell comparison is strict on value and on kind:
 
@@ -108,7 +108,9 @@ Cell comparison is strict on value and on kind:
 - A number cell must hold the value in the column's own domain:
   - an integer column needs that integer;
   - a date column needs a date-formatted serial for that day (1900 or 1904 system), so a
-    bare 43831 typed into a date column fails;
+    bare 43831 typed into a date column fails. A serial past 9999-12-31 (2958465 in the 1900
+    system, 2957003 in 1904) is no day at all. It matches no expected date, so a document
+    holding one fails;
   - a currency column needs that amount.
 - A formula is never a literal, even when its cached value is right.
 - An expected empty cell must be empty.

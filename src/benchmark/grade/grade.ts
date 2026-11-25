@@ -158,6 +158,18 @@ export function grade(input: GradeInput): GradeResult {
   if (sha256(input.fixtureCsv) !== input.fixtureSha256) {
     return ungradable(input, "fixture bytes do not match the declared SHA-256", persistedSha256);
   }
+  // Fail closed: any exception past this point, in the reader or in the comparison, is
+  // "could not look" for this one trial. It must never abort a grading batch.
+  try {
+    return gradeChecked(input, persistedSha256);
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "non-Error throw";
+    const message = error instanceof Error ? error.message : String(error);
+    return ungradable(input, `grader error (${name}): ${message}`, persistedSha256);
+  }
+}
+
+function gradeChecked(input: GradeInput, persistedSha256: string | null): GradeResult {
   let pristine: string[][];
   try {
     const grid = readCsvGrid(input.fixtureCsv);
