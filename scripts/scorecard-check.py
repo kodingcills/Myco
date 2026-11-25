@@ -16,8 +16,8 @@ heading only blank lines are allowed. Every heading of any level (`#`, `##`, `##
 ...) starts a section that runs to the next heading, and must match exactly one entry
 below; an unknown heading or a second section under a known one fails. The
 classification is printed.
-  in scope     the preamble and status line, criterion rows 1-8, "Open a trial in the
-               viewer", "Evidence durability", "Row 7 slots", "Decision: arm-002 is not
+  in scope     the preamble and status line, criterion rows 1-8, "M1 sign-off", "Open a
+               trial in the viewer", "Evidence durability", "Row 7 slots", "Decision: arm-002 is not
                the baseline", "Second reason arm-002 is superseded", "The C1
                baseline's characteristic failure mode" (with its resume command) and
                "Open risk: guest-side fixture convert";
@@ -125,6 +125,7 @@ WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "sev
 # Sections, keyed by a prefix of their heading. In-scope sections are swept; the rest
 # are listed in the output with the reason they are not.
 IN_SCOPE = {
+    "## M1 sign-off": "signoff",
     "## Open a trial in the viewer": "viewer",
     "## Evidence durability": "durability",
     "## Row 7 slots": "slots",
@@ -1171,6 +1172,71 @@ def check_open_risk(r: Report, v3: dict) -> None:
             source="m1-scorecard.score(m1-013-sweep-v3/trials.jsonl) failures whose reason names convert")
 
 
+def check_signoff(r: Report, doc: Path, scorecard, row7, v3: dict) -> None:
+    """The M1 sign-off record: each re-check figure recomputed with the same tools rows
+    3-8 use; the run's own provenance (SHA, CI runs, dates, this script's count) is unchecked."""
+    s = "signoff"
+    r.unchecked(s, "sign-off and delegation dates",
+                "the sign-off's own dates (the lead's record of the sign-off and of the delegation), not figures from an artifact",
+                doc=("M1 signed off 2026-11-25", "delegation of 2026-11-23"))
+    r.unchecked(s, "re-check commit and CI runs",
+                "the main SHA the lead re-checked and the GitHub Actions run ids for it; true by construction of that run, "
+                "and no committed artifact records them",
+                doc=("at main `8fd92e0d`", "runs 45618797722 for `1c519bca`", "45619706264 for `8fd92e0d`"))
+    r.unchecked(s, "scorecard-check.py: 134 ok, 0 mismatch, 0 unattributed",
+                "this script's own summary, self-referential: 134 is the count at sign-off, before this record was added "
+                "(the record adds claims, so the live ok count is higher); this run's own exit status is the check",
+                doc="`scripts/scorecard-check.py`: 134 ok, 0 mismatch, 0 unattributed.")
+
+    src = "m1-scorecard.score(m1-013-sweep-v3/trials.jsonl)"
+    lo, hi = v3["wilson95"]
+    r.quote(s, "v3 verified and Wilson", "`m1-013-sweep-v3/trials.jsonl`: {}/{} verified, Wilson {}–{}",
+            v3["verified"], v3["denominator"], f"{lo:.3f}", f"{hi:.3f}", source=src + " verified, denominator, wilson95")
+    v3_json = json.dumps(v3, indent=2) + "\n"
+    r.check(s, "v3 output byte-identical to final-scorecard.json", v3_json.encode() == (V3 / "final-scorecard.json").read_bytes(),
+            "json.dumps(" + src + ", indent=2) vs m1-013-sweep-v3/final-scorecard.json bytes",
+            doc="verified, Wilson 0.833–0.994, byte-identical to `final-scorecard.json`")
+    s2 = scorecard.score(SWEEP2 / "trials.jsonl")
+    src2 = "m1-scorecard.score(m1-row8-sweep2/trials.jsonl)"
+    r.quote(s, "sweep2 verified", "`m1-row8-sweep2/trials.jsonl`: {}/{}, byte-identical", s2["verified"], s2["denominator"], source=src2)
+    r.check(s, "sweep2 output byte-identical to final-scorecard.md",
+            (scorecard.markdown(s2) + "\n").encode() == (SWEEP2 / "final-scorecard.md").read_bytes(),
+            "m1-scorecard.markdown(" + src2 + ") vs m1-row8-sweep2/final-scorecard.md bytes",
+            doc="byte-identical to `final-scorecard.md`")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        rc = row7.compare(True, doc)
+    text = out.getvalue()
+    myco_only = grab(r"Myco-only (\d+), baseline-only \d+", text)
+    base_only = grab(r"Myco-only \d+, baseline-only (\d+)", text)
+    p = row7.sign_test_two_sided(int(myco_only), int(base_only)) if myco_only.isdigit() and base_only.isdigit() else None
+    figures = grab(r"CHECK OK: row 7 quotes all (\d+) computed figures", text) if rc == 0 else "?"
+    r.quote(s, "row7-compare: discordant pairs, p, figures",
+            "Myco-only {} vs baseline-only {}, p = {}, all {} figures OK", myco_only, base_only,
+            f"{p:.2e}".replace("e-0", "e-") if p is not None else "?", figures,
+            source="row7-compare.compare(check=True) on --doc: its discordant line, sign_test_two_sided, its CHECK OK figure count")
+
+    summary = json.loads((AUDIT / "summary.json").read_text())
+    counted = [x for x in summary["recoveryResults"] if x["countsTowardCoverage"]]
+    rec = {c: [x for x in counted if x["class"] == c] for c in ("kill", "invalid-target")}
+    ver = {c: sum(x["verdict"] == "verified" for x in xs) for c, xs in rec.items()}
+    r.quote(s, "m1-014 summary and recovery",
+            "{} recorded, {} with a verdict ({} verified / {} refuted / {} uncertain), falseSuccesses {}, unprovenVerified {}; "
+            "recovery verified {}/{} after a kill and {}/{} after an invalid target",
+            summary["total"], summary["withVerdict"], summary["verified"], summary["refuted"], summary["uncertain"],
+            summary["falseSuccesses"], summary["unprovenVerified"], ver["kill"], len(rec["kill"]),
+            ver["invalid-target"], len(rec["invalid-target"]),
+            source="m1-014-combined-audit/summary.json (held to ledger.jsonl under row 4) and its recoveryResults (countsTowardCoverage)")
+
+    logs = [V3, AUDIT, CORRUPT, SWEEP2]
+    lines = [sum(1 for line in (d / "schema-validation.log").read_text().splitlines() if line.strip()) for d in logs]
+    bad = sum(schema_log(d / "schema-validation.log")[2] for d in logs)
+    r.quote(s, "schema-validation logs", "schema-validation logs: {} ({} lines)", "ALL OK" if bad == 0 else f"{bad} lines not ALL OK",
+            ", ".join(map(str, lines)), source="non-empty lines of the m1-013, m1-014, m1-row8-corrupt and m1-row8-sweep2 "
+                                               "schema-validation.log files, each a validate-live line ending ALL OK")
+
+
 def subchecks(r: Report, doc: Path) -> None:
     for name, cmd in (
         ("check-scorecard-links.py", [sys.executable, "scripts/check-scorecard-links.py", str(doc)]),
@@ -1209,6 +1275,7 @@ def main(argv: list[str]) -> int:
     check_row_8(r, scorecard)
     check_arm002(r)
     check_open_risk(r, v3)
+    check_signoff(r, doc, scorecard, row7, v3)
     check_references(r)
     if not args.no_subchecks:
         subchecks(r, doc)

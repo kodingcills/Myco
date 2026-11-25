@@ -192,6 +192,31 @@ describe("scorecard-check", () => {
     120_000,
   );
 
+  it("checks the M1 sign-off figures and fails when one changes", () => {
+    const ok = run("--no-subchecks");
+    expect(ok.stdout).toMatch(/in scope +## M1 sign-off/);
+    expect(ok.stdout).toMatch(
+      /^ok +signoff +v3 verified and Wilson .*29\/30 verified, Wilson 0\.833–0\.994/m,
+    );
+    expect(ok.stdout).toMatch(
+      /^unchecked +signoff +scorecard-check\.py: 134 ok.*before this record was added/m,
+    );
+
+    const result = checkMutated(
+      mutate(
+        readFileSync(SCORECARD, "utf8"),
+        "`m1-013-sweep-v3/trials.jsonl`: 29/30 verified",
+        "`m1-013-sweep-v3/trials.jsonl`: 28/30 verified",
+      ),
+    );
+    expect(result.status).toBe(1);
+    expect(result.mismatch).toContainEqual(
+      expect.stringMatching(
+        /^MISMATCH signoff: v3 verified and Wilson: expected .*29\/30 verified.*found .*28\/30/,
+      ),
+    );
+  }, 120_000);
+
   it("lists the booked spike and the $1.632162 total as unchecked, never ok", () => {
     const result = run("--no-subchecks");
     const lines = result.stdout.split("\n").filter((line) => line.includes("1.632162"));
@@ -214,7 +239,7 @@ describe("scorecard-check", () => {
   // Round 2: each defect class the final review found, as a case that must exit 1.
   const R3 = "re-verified tonight. **Note";
   const inRow3 = (text: string): [string, string] => [R3, `re-verified tonight. ${text} **Note`];
-  const TABLE_END = "|\n\n## Open a trial";
+  const TABLE_END = "|\n\n## M1 sign-off";
   const cases: [string, [string, string], RegExp][] = [
     [
       "a new reference (TIF-999)",
@@ -252,17 +277,17 @@ describe("scorecard-check", () => {
     ],
     [
       "a new | 9 | row",
-      [TABLE_END, "|\n| 9 | Extra | **DONE** | nothing | — |\n\n## Open a trial"],
+      [TABLE_END, "|\n| 9 | Extra | **DONE** | nothing | — |\n\n## M1 sign-off"],
       /^MISMATCH layout: criterion table: unexpected criterion row 9/,
     ],
     [
       "a duplicate | 3 | row",
-      [TABLE_END, "|\n| 3 | Reliability | **DONE** | more | — |\n\n## Open a trial"],
+      [TABLE_END, "|\n| 3 | Reliability | **DONE** | more | — |\n\n## M1 sign-off"],
       /^MISMATCH layout: criterion table: duplicate criterion row 3/,
     ],
     [
       "a paragraph between the table and the first ##",
-      [TABLE_END, "|\n\nAn extra paragraph.\n\n## Open a trial"],
+      [TABLE_END, "|\n\nAn extra paragraph.\n\n## M1 sign-off"],
       /^MISMATCH layout: between table and sections: unclassified text: 'An extra paragraph\.'/,
     ],
     [
