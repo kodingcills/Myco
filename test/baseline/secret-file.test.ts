@@ -11,12 +11,183 @@ const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const EXPECTED_LAUNCHERS = ["c1-baseline.sh", "c1-spike.sh"];
 
 /**
- * Strip shell comments, quote-aware: a `#` starts a comment only outside single and
- * double quotes and only at the start of a word (line start or after whitespace or an
- * operator), so `echo "step #2"` and `${#arr[@]}` keep their text. CRLF and LF line
- * continuations are joined first, so a split statement is one line.
+ * Strip shell comments with a small quoting lexer over the whole file, matching bash:
+ *  - A `#` starts a comment only in code context and only at the start of a word: at the
+ *    start of the text, or after whitespace, `;&|()`, or the OPENING backtick of a
+ *    command substitution. So `echo "step #2"`, `${#arr[@]}` and `` `true`#x `` keep their
+ *    text. A comment ends at the newline, or, inside backticks, at the closing backtick
+ *    (`` echo `# c`; export … `` runs the export).
+ *  - A stack of contexts follows `'…'`, `"…"` (with `\` escapes), ANSI-C `$'…'` (with `\`
+ *    escapes, so `$'a\' #'` is one string), and nested `$(…)`, bare `(…)` and backticks,
+ *    whose insides are code again even within double quotes (`"$(printf "%s #" y)"` and
+ *    `` "`printf "%s #" y`" `` are one word each). Quoted strings may span lines.
+ *  - Line continuation is lexed, not pre-joined: an unescaped `\` before a newline, in
+ *    code or `"…"` context only, is deleted with nothing in its place, so `a\⏎#b` is the
+ *    word `a#b`. It is NOT a continuation inside a comment (the next line is code), inside
+ *    `'…'` (literal), or after an escaped backslash (`\\⏎` ends the line). CRLF is read
+ *    as LF.
+ *  - Heredoc bodies (`<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"`, `<<\WORD`) are copied
+ *    verbatim up to the terminator line: bash never treats `#` or quotes in a body as
+ *    syntax, so an apostrophe in a body cannot shift the quote state of later lines, and
+ *    every body line still goes through the per-line rules. Several heredocs on one line
+ *    are read in order. The terminator matches like bash: `<<-` strips leading tabs
+ *    (plain `<<` does not); with an unquoted delimiter a body line ending in an odd run
+ *    of backslashes joins the next before matching (D3); a `WORD\r` line (CRLF file)
+ *    never terminates (D4). An unterminated body runs to the end of the text, verbatim.
+ *    `opts.heredocs: false` turns detection off (strategy (b) in launcherKeyViolations).
+ * Newlines outside continuations are kept, so each output line is one source line or one
+ * continued statement.
  */
-function stripShellComments(text: string): string {
+function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): string {
+  const heredocs = opts.heredocs ?? true;
+  // CRLF is read as LF, but remember which LFs had a CR before them: bash does not end a
+  // heredoc at a `WORD\r` line (D4).
+  const crBefore = new Set<number>();
+  let src = "";
+  for (let k = 0; k < text.length; k++) {
+    if (text[k] === "\r" && text[k + 1] === "\n") {
+      crBefore.add(src.length);
+      continue;
+    }
+    src += text[k];
+  }
+  type Ctx = "sq" | "dq" | "ansi" | "paren" | "bt";
+  const stack: Ctx[] = [];
+  const pendingHeredocs: { delim: string; stripTabs: boolean; quoted: boolean }[] = [];
+  let out = "";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i] ?? "";
+    const next = src[i + 1] ?? "";
+    const top = stack[stack.length - 1];
+    if (top === "sq") {
+      if (c === "'") stack.pop();
+    } else if (top === "ansi") {
+      if (c === "\\") {
+        out += c + next;
+        i++;
+        continue;
+      }
+      if (c === "'") stack.pop();
+    } else if (top === "dq") {
+      if (c === "\\") {
+        if (next !== "\n") out += c + next;
+        i++;
+        continue;
+      }
+      if (c === '"') stack.pop();
+      else if (c === "$" && next === "(") {
+        stack.push("paren");
+        out += c + next;
+        i++;
+        continue;
+      } else if (c === "`") stack.push("bt");
+    } else {
+      // Code context: top level, inside `$(…)`/`(…)`, or inside backticks.
+      if (c === "\\") {
+        if (next !== "\n") out += c + next;
+        i++;
+        continue;
+      }
+      const prev = out[out.length - 1];
+      if (
+        c === "#" &&
+        (prev === undefined || /[\s;&|()]/.test(prev) || (prev === "`" && top === "bt"))
+      ) {
+        const stop = top === "bt" ? /[\n`]/ : /\n/;
+        while (i + 1 < src.length && !stop.test(src[i + 1] ?? "")) i++;
+        continue;
+      }
+      if (c === "$" && next === "'") {
+        stack.push("ansi");
+        out += c + next;
+        i++;
+        continue;
+      }
+      if (heredocs && c === "<" && next === "<" && src[i + 2] !== "<" && src[i - 1] !== "<") {
+        // Heredoc operator: read the delimiter word, removing its quotes and escapes.
+        let j = i + 2;
+        const stripTabs = src[j] === "-";
+        if (stripTabs) j++;
+        while (src[j] === " " || src[j] === "\t") j++;
+        let delim = "";
+        let quoted = false;
+        while (j < src.length && !/[\s;&|<>()]/.test(src[j] ?? "")) {
+          const d = src[j] ?? "";
+          if (d === "'" || d === '"') {
+            quoted = true;
+            const close = src.indexOf(d, j + 1);
+            if (close === -1) break;
+            delim += src.slice(j + 1, close);
+            j = close + 1;
+          } else if (d === "\\") {
+            quoted = true;
+            delim += src[j + 1] ?? "";
+            j += 2;
+          } else {
+            delim += d;
+            j++;
+          }
+        }
+        if (delim !== "") {
+          pendingHeredocs.push({ delim, stripTabs, quoted });
+          out += src.slice(i, j);
+          i = j - 1;
+          continue;
+        }
+      }
+      if (c === "\n" && pendingHeredocs.length > 0) {
+        // Copy each pending heredoc body verbatim through its terminator line.
+        out += c;
+        let j = i + 1;
+        for (const { delim, stripTabs, quoted } of pendingHeredocs.splice(0)) {
+          while (j < src.length) {
+            // One logical body line. With an unquoted delimiter bash removes `\⏎` from
+            // the body BEFORE it looks for the terminator, so a line ending in an odd
+            // run of backslashes swallows the next one (D3).
+            let line = "";
+            let crEnd = false;
+            for (;;) {
+              const eol = src.indexOf("\n", j);
+              const end = eol === -1 ? src.length : eol;
+              const phys = src.slice(j, end);
+              out += src.slice(j, eol === -1 ? end : end + 1);
+              j = end + 1;
+              crEnd = crBefore.has(end);
+              const trailing = /\\*$/.exec(phys)?.[0].length ?? 0;
+              if (!quoted && !crEnd && trailing % 2 === 1 && eol !== -1) {
+                line += phys.slice(0, -1);
+                continue;
+              }
+              line += phys;
+              break;
+            }
+            if (!crEnd && (stripTabs ? line.replace(/^\t+/, "") : line) === delim) break;
+          }
+        }
+        i = j - 1;
+        continue;
+      }
+      if (c === "'") stack.push("sq");
+      else if (c === '"') stack.push("dq");
+      else if (c === "(") stack.push("paren");
+      else if (c === ")" && top === "paren") stack.pop();
+      else if (c === "`") {
+        if (top === "bt") stack.pop();
+        else stack.push("bt");
+      }
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * Strategy (c): origin/main b5d9dd78's per-line stripper, kept verbatim. It is quote-aware
+ * for flat quotes on ONE line only, and joins continuations with a space first. It is
+ * weaker on its own, but it resets its quote state at every line, so no construct can
+ * carry a misread quote from one line into the next (the round-2 D3/D4 heredoc hides).
+ */
+function stripShellCommentsPerLine(text: string): string {
   const joined = text.replace(/\r\n/g, "\n").replace(/\\\n/g, " ");
   return joined
     .split("\n")
@@ -40,6 +211,17 @@ function stripShellComments(text: string): string {
       return line;
     })
     .join("\n");
+}
+
+/**
+ * The lexing strategies launcherKeyViolations runs; a line is a violation if ANY of them
+ * reports it (fail closed). See launcherKeyViolations.
+ */
+type Strategy = "whole-file" | "no-heredoc" | "per-line";
+const STRATEGIES: Strategy[] = ["whole-file", "no-heredoc", "per-line"];
+function stripBy(text: string, strategy: Strategy): string {
+  if (strategy === "per-line") return stripShellCommentsPerLine(text);
+  return stripShellComments(text, { heredocs: strategy === "whole-file" });
 }
 
 /**
@@ -69,23 +251,43 @@ const SECRETS_FILE_ALLOWED_LINES: [RegExp, string][] = [
   ],
 ];
 const SECRETS_FILE_MENTION =
-  /\bSECRETS\b|\bMYCO_ANTHROPIC_KEY_FILE\b|anthropic\.env|\.myco\/secrets/;
+  /\bSECRETS\b|\bMYCO_ANTHROPIC_KEY_FILE\b|anthropic\.env|\.myco\/secrets|\.myco\b|\bsecrets\//;
 
 /**
  * Whole-file static check of a shell script for leaks of the Anthropic key (TIF-212).
  * Returns one entry per offending line; an empty list means the file passes. With
- * `launcher: false` (every scripts/*.sh that is not a marker-carrying launcher), the
- * secrets-file allow-list and the source/eval rule apply, but not the allexport rule:
- * scripts/deploy-verify-myco-todo.sh runs `set -a; source /run/myco/gui.env` inside a
- * guest heredoc, a GUI environment file that holds no key.
+ * `launcher: false` (every scripts/*.sh that is not a marker-carrying launcher), EVERY
+ * rule below applies except rule 4, allexport: scripts/deploy-verify-myco-todo.sh runs
+ * `set -a; source /run/myco/gui.env` inside a guest heredoc, a GUI environment file that
+ * holds no key.
  *
- * COVERED, anywhere in the file once comments are stripped (quote-aware) and line
- * continuations (LF or CRLF) are joined:
+ * FAIL CLOSED (TIF-236 round 3). The file is stripped of comments three ways, every rule
+ * is applied to each result, and the violations are UNIONED, so a line is flagged if ANY
+ * strategy flags it. A line hidden from one strategy by a lexing quirk has to fool all
+ * three at once:
+ *  (a) "whole-file": stripShellComments, the quoting lexer with heredoc bodies opaque.
+ *  (b) "no-heredoc": the same lexer with heredoc detection off, so heredoc bodies and
+ *      anything a stray `<<` swallows (`$((1<<EOF))`) are lexed as code. This is the
+ *      d06ca02a behaviour; it catches the arithmetic-`<<` hide (round-2 D5).
+ *  (c) "per-line": origin/main's per-line stripper (stripShellCommentsPerLine). No quote
+ *      state crosses a newline, so it catches any hide that relies on carrying a misread
+ *      quote into a later line (round-2 D3/D4, a case-pattern `)` that leaves a quote
+ *      open on the next line).
+ * The cost is false positives: each strategy's mistakes add flags, none removes one.
+ *
+ * COVERED, anywhere in the file, after comments are stripped by each strategy above
+ * (strategies (a) and (b) lex continuations; (c) joins them with a space):
  *  1. Any reference to the secrets file outside the allow-list above. This catches, with
  *     no idiom list, `export $(grep -v '^#' "$SECRETS" | xargs)`, `env $(cat "$SECRETS")
  *     node …`, `source`/`.`/`eval` of `$MYCO_ANTHROPIC_KEY_FILE`, `while … read … done <
  *     "$SECRETS"`, and `export OTHER="$(cut -d= -f2- "$SECRETS")"` (the key's VALUE under
- *     another name), because each has to name the file to read it.
+ *     another name), because each has to name the file to read it. A mention is any of
+ *     `SECRETS`, `MYCO_ANTHROPIC_KEY_FILE`, `anthropic.env`, `.myco` or `secrets/`, so a
+ *     path assembled from those pieces (`cd "$HOME/.myco" && cat secrets/*.env`,
+ *     `"$HOME"/.myco//secrets/*.env`, `"$HOME/.myco/"secrets/*.env`) counts too (TIF-236).
+ *     Deliberate trade-off: ANY `.myco` path (`mkdir -p "$HOME/.myco/logs"`) and ANY
+ *     `secrets/` directory (`ls k8s/secrets/`) is flagged, whatever it points at. No
+ *     committed script trips this today; a new benign one needs an allow-list entry.
  *  2. Exporting the literal name: `export`, `declare`, `typeset`, `readonly` or `local` in
  *     command position with ANTHROPIC_API_KEY later in the same statement, including
  *     `export OTHER=$ANTHROPIC_API_KEY`.
@@ -108,14 +310,35 @@ const SECRETS_FILE_MENTION =
  * NOT COVERED. This is a textual lint over one file, like the TIF-202 guard. It does not
  * follow sourced helpers, so a helper that reads the file is checked only as its own
  * scripts/*.sh. It cannot see indirection: `n=ANTHROPIC_API_KEY; export "$n"`, a path
- * built from pieces (`d=.myco; f="$HOME/$d/secr""ets/…"`), or a value copied out of an
- * already-exported ambient key into another name without naming it (`export
- * OTHER="$(printenv | grep …)"`). Exporting the value under another name IS caught when
- * the line names the secrets file or the literal key name; it is not caught otherwise.
+ * built from pieces that split every token (`d=.my""co; f="$HOME/$d/secr""ets/…"`), or a
+ * value copied out of an already-exported ambient key into another name without naming
+ * it (`export OTHER="$(printenv | grep …)"`). Exporting the value under another name IS
+ * caught when the line names the secrets file or the literal key name; it is not caught
+ * otherwise. None of the three strippers is a full shell parser. A line is missed only
+ * when ALL THREE misread it; known cases, each pinned by a "known limitation" test:
+ *  - `)` in a `case` pattern inside `$(…)` closes the substitution early in (a) and (b),
+ *    and (c) misreads the same line, so `x="$(case a in a) echo " #";; esac)"; export …`
+ *    hides the export (a false negative of the union).
+ *  - `<<` in arithmetic (`$((1<<EOF))`) is read as a heredoc by (a), so (a) ALONE can
+ *    hide a later line (round-2 D5: `X='`, `EOF`, `#'; export …`). The union catches
+ *    that case through (b); no proof covers every arithmetic form.
+ *  - Comments in a heredoc body are kept by (a) and stripped by (b) and (c), so a key
+ *    export written in a body (which bash never runs) is flagged: a false positive.
  */
-function launcherKeyViolations(text: string, opts: { launcher?: boolean } = {}): string[] {
+function launcherKeyViolations(
+  text: string,
+  opts: { launcher?: boolean; strategies?: Strategy[] } = {},
+): string[] {
   const launcher = opts.launcher ?? true;
-  const code = stripShellComments(text);
+  const found = new Set<string>();
+  for (const strategy of opts.strategies ?? STRATEGIES) {
+    for (const v of violationsInStripped(stripBy(text, strategy), launcher)) found.add(v);
+  }
+  return [...found];
+}
+
+/** Apply every rule to each line of already-stripped text. */
+function violationsInStripped(code: string, launcher: boolean): string[] {
   const cmd = String.raw`(?:^|[;&|({!\x60]|\b(?:then|do|else|exec|command|builtin|env|nohup)\b)\s*`;
   // Zero or more prefix assignments (`IFS='=' `, `LC_ALL=C `) before a command word.
   const prefix = String.raw`(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|[^\s;&|]*)\s+)*`;
@@ -314,6 +537,9 @@ describe("launchers pass the key file path, not the key (TIF-206)", () => {
 
 describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () => {
   // Synthetic launcher text only; nothing here reads or runs a real launcher.
+  // Exact-output assertions about lexer (a) alone; the union adds the other strategies'
+  // false positives on top (e.g. (c) has no backtick word start).
+  const wholeFile = (t: string) => launcherKeyViolations(t, { strategies: ["whole-file"] });
   const allowed = [
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
     'if [ -z "${ANTHROPIC_API_KEY:-}" ] && ! { [ -f "$SECRETS" ] && grep -Eq \'^[[:space:]]*(export[[:space:]]+)?ANTHROPIC_API_KEY=.+\' "$SECRETS"; }; then',
@@ -363,6 +589,49 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     'while IFS=\'=\' read -r k v; do export "$k=$v"; done < "$SECRETS"',
     "IFS='=' read -r _ ANTHROPIC_API_KEY < f",
     'echo "step #2"; export ANTHROPIC_API_KEY=x',
+    // TIF-236 (#439 round-2 verifier): each passed the TIF-212 check.
+    'export $(cd "$HOME/.myco" && cat secrets/*.env | xargs)',
+    'export $(cat "$HOME"/.myco//secrets/*.env | xargs)',
+    'export $(cat "$HOME/.myco/"secrets/*.env | xargs)',
+    'X="$(printf "%s #" y)"; export ANTHROPIC_API_KEY=x',
+    "echo $'a\\' #'; export ANTHROPIC_API_KEY=x",
+    'echo "line one\n #still quoted"; export ANTHROPIC_API_KEY=x',
+    // TIF-236 round 2, D1 (#447 verifier item 6): backslash-newline is lexed like bash.
+    "# path note \\\nexport ANTHROPIC_API_KEY=x", // no continuation inside a comment
+    'true # see C:\\\nexport $(cat "$HOME/.myco/secrets/anthropic.env" | xargs)',
+    "echo a\\\n#b; export ANTHROPIC_API_KEY=x", // joins to the word a#b, not a comment
+    'echo a\\\\\nprintf -v ANTHROPIC_API_KEY %s "$v"', // `\\` then a newline ends the line
+    // TIF-236 round 2, D2: each documented lexer behaviour, as a row that fails if broken.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    "n=${#arr[@]}; export ANTHROPIC_API_KEY=x", // `${#` is not a comment
+    "echo `# c`; export ANTHROPIC_API_KEY=x", // a comment in backticks ends at the backtick
+    "echo `true`#x; export ANTHROPIC_API_KEY=x", // a CLOSING backtick is not a word start
+    'X="`printf "%s #" y`"; export ANTHROPIC_API_KEY=x', // backticks in "…" are code
+    'X="$( (true) ; printf "%s #" y)"; export ANTHROPIC_API_KEY=x', // bare (…) nests
+    // N2: heredoc bodies are opaque, so a quote in one cannot hide a later line.
+    "cat <<EOF\nit's\nEOF\necho 'q #'; export ANTHROPIC_API_KEY=x",
+    'cat <<EOF\nsay "hi\nEOF\necho "q #"; export ANTHROPIC_API_KEY=x',
+    "cat <<-'EOF'\n\tit's\n\tEOF\necho 'q #'; export ANTHROPIC_API_KEY=x",
+    'node x.js <<EOF\n$(cat "$HOME/.myco/secrets/k.env")\nEOF', // body lines are still checked
+    // TIF-236 round 3 (#447 round-2 verifier). D3: `foo\` swallows the next line, so the
+    // first `EOF` is body text and the second ends the heredoc.
+    "cat <<EOF\nfoo\\\nEOF\nit's\nEOF\necho 'q #'; export ANTHROPIC_API_KEY=x",
+    // D4: `EOF\r` is not a terminator in bash.
+    "cat <<EOF\nEOF\r\nit's\nEOF\necho 'q #'; export ANTHROPIC_API_KEY=x",
+    // D5: `<<` in arithmetic; bash assigns X the three lines and runs the export.
+    "echo $((1<<EOF))\nX='\nEOF\n#'; export ANTHROPIC_API_KEY=x",
+    "echo $((1 << 2))\nX='\n2\n#'; export ANTHROPIC_API_KEY=x",
+    // D6, each built so the per-line strategy (c) misses it too, so the row fails if the
+    // named lexer behaviour is mutated. M14: `\⏎` inside "…" is deleted.
+    'export "ANTHROPIC_\\\nAPI_KEY=x"',
+    // M16: `\` is literal inside '…', so 'C:\' ends at the second quote.
+    "echo 'C:\\'; X=\"it's\n #\"; export ANTHROPIC_API_KEY=x",
+    // M17: `<<-` strips the tab, so `\tEOF` ends the body, not the later `EOF`.
+    "cat <<-EOF\n\tit's\n\tEOF\nX=\"a'\nEOF\n#\"; export ANTHROPIC_API_KEY=x",
+    // M17b: plain `<<` does NOT strip tabs, so `\tEOF` is body text.
+    "cat <<EOF\nit's 'x\n\tEOF\nX=\"a'\nEOF\nY=\"b\n #\"; export ANTHROPIC_API_KEY=x",
+    // M22b: both heredocs on one line are read, in order.
+    "cat <<A <<B\na\nA\nit's\nB\nX=\"b'\n #\"; export ANTHROPIC_API_KEY=x",
   ];
   for (const line of forbidden) {
     it(`flags ${JSON.stringify(line)}`, () => {
@@ -374,9 +643,114 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
     expect(launcherKeyViolations("n=${#arr[@]} # export ANTHROPIC_API_KEY=x")).toEqual([]);
     expect(launcherKeyViolations('echo "a \\" # b"; export ANTHROPIC_API_KEY=x')).not.toEqual([]);
+    // TIF-236: nested, ANSI-C and multi-line strings; real comments after them still strip.
+    expect(launcherKeyViolations('X="$(printf "%s" y)" # export ANTHROPIC_API_KEY=x')).toEqual([]);
+    expect(wholeFile("echo $'a\\'' # export ANTHROPIC_API_KEY=x")).toEqual([]);
+    // TIF-236 round 2: an OPENING backtick is a word start, so this comment is stripped.
+    expect(wholeFile("echo `# export ANTHROPIC_API_KEY=x`")).toEqual([]);
+    // A continuation inside "…" joins with nothing; the comment after the string strips.
+    expect(launcherKeyViolations('echo "a\\\nb" # export ANTHROPIC_API_KEY=x')).toEqual([]);
+    // A heredoc body is data: a `#` line in it is kept, and the line after the
+    // terminator is code again.
+    expect(launcherKeyViolations("cat <<EOF\n# header line\nvalue=1\nEOF\n# c")).toEqual([]);
+    expect(
+      launcherKeyViolations("cat <<EOF\n# export ANTHROPIC_API_KEY=x\nEOF").length,
+    ).toBeGreaterThan(0);
+    expect(
+      wholeFile('echo "one\ntwo" # export ANTHROPIC_API_KEY=x\nexport ANTHROPIC_API_KEY=y'),
+    ).toEqual([
+      "exports the key: export ANTHROPIC_API_KEY=y",
+      "assigns the key: export ANTHROPIC_API_KEY=y",
+    ]);
   });
-  it("non-launcher mode skips only the allexport rule", () => {
+  // Known limitations, pinned at today's output (see NOT COVERED). If one of these starts
+  // failing, the checker changed: update the doc comment along with the assertion.
+  it("known limitation: a case-pattern `)` inside $(…) closes it early (false negative)", () => {
+    expect(
+      launcherKeyViolations('x="$(case a in a) echo " #";; esac)"; export ANTHROPIC_API_KEY=x'),
+    ).toEqual([]);
+  });
+  it("known limitation: `<<` in arithmetic opens a heredoc in (a); the union still flags", () => {
+    const d5 = "echo $((1<<EOF))\nX='\nEOF\n#'; export ANTHROPIC_API_KEY=x";
+    expect(wholeFile(d5)).toEqual([]); // (a) alone is fooled (round-2 D5)
+    expect(launcherKeyViolations(d5).length).toBeGreaterThan(0); // (b) catches it
+    // And the lines (a) wrongly copies verbatim keep their comments: a false positive.
+    expect(wholeFile("echo $((1 << 2))\necho hi # export ANTHROPIC_API_KEY=x").length).toBe(1);
+  });
+  it("known limitation: comments in a heredoc body are flagged (false positive)", () => {
+    expect(launcherKeyViolations("cat <<EOF\n# export ANTHROPIC_API_KEY=x\nEOF").length).toBe(1);
+  });
+  it("fails closed: a line hidden from one strategy is still flagged by the union", () => {
+    // Only (c) catches this: a case-pattern `)` closes `$(` early in (a) and (b), whose
+    // quote state then spills into line 2 and hides its export. bash 4+ runs the export
+    // (bash 3.2 cannot parse `case` inside `$(…)`).
+    const onlyPerLine =
+      'x="$(case a in a) echo "it\'s";; esac)"\necho \'q #\'; export ANTHROPIC_API_KEY=x';
+    expect(
+      launcherKeyViolations(onlyPerLine, { strategies: ["whole-file", "no-heredoc"] }),
+    ).toEqual([]);
+    expect(launcherKeyViolations(onlyPerLine, { strategies: ["per-line"] }).length).toBe(2);
+    expect(launcherKeyViolations(onlyPerLine).length).toBeGreaterThan(0);
+    // Only (b) catches round-2 D5 (see the arithmetic limitation above).
+    const onlyNoHeredoc = "echo $((1<<EOF))\nX='\nEOF\n#'; export ANTHROPIC_API_KEY=x";
+    expect(
+      launcherKeyViolations(onlyNoHeredoc, { strategies: ["whole-file", "per-line"] }),
+    ).toEqual([]);
+    expect(launcherKeyViolations(onlyNoHeredoc, { strategies: ["no-heredoc"] }).length).toBe(2);
+    expect(launcherKeyViolations(onlyNoHeredoc).length).toBeGreaterThan(0);
+  });
+  it("strategy (a) alone handles round-2 D3 and D4", () => {
+    expect(
+      wholeFile("cat <<EOF\nfoo\\\nEOF\nit's\nEOF\necho 'q #'; export ANTHROPIC_API_KEY=x").length,
+    ).toBe(2);
+    expect(
+      wholeFile("cat <<EOF\nEOF\r\nit's\nEOF\necho 'q #'; export ANTHROPIC_API_KEY=x").length,
+    ).toBe(2);
+    // A quoted delimiter keeps `\` literal: `foo\` does not swallow the terminator.
+    expect(wholeFile("cat <<'EOF'\nfoo\\\nEOF\n# export ANTHROPIC_API_KEY=x")).toEqual([]);
+  });
+  it("heredoc delimiters are unquoted before matching (false positives only if broken)", () => {
+    // The body line is kept (flagged); the line after the terminator is code again and
+    // its comment strips. A delimiter left quoted would never match, keeping both.
+    for (const op of ["<<'EOF'", '<<"EOF"', "<<\\EOF", '<<E"O"F', "<<EOF"]) {
+      expect(
+        launcherKeyViolations(
+          `cat ${op}\n# export ANTHROPIC_API_KEY=x\nEOF\n# export ANTHROPIC_API_KEY=y`,
+        ),
+      ).toEqual(["assigns the key: # export ANTHROPIC_API_KEY=x"]);
+    }
+  });
+  it("a comment starts at text start and after ; & | ( ) (false positives only if broken)", () => {
+    for (const t of [
+      "#export ANTHROPIC_API_KEY=x",
+      "true;#export ANTHROPIC_API_KEY=x",
+      "true&#export ANTHROPIC_API_KEY=x",
+      "true|#export ANTHROPIC_API_KEY=x",
+      "(#export ANTHROPIC_API_KEY=x\ntrue)",
+      "(true)#export ANTHROPIC_API_KEY=x",
+    ]) {
+      expect(launcherKeyViolations(t), t).toEqual([]);
+    }
+  });
+  it("known limitation: indirection that splits every token is not seen", () => {
+    expect(
+      launcherKeyViolations('d=.my""co; f="$HOME/$d/secr""ets/k.env"; export $(cat "$f" | xargs)'),
+    ).toEqual([]);
+    expect(launcherKeyViolations('n=ANTHROPIC_API_KEY; export "$n"')).toEqual([]);
+  });
+  it("non-launcher mode applies every rule except allexport (TIF-236)", () => {
     expect(launcherKeyViolations("set -a", { launcher: false })).toEqual([]);
     expect(launcherKeyViolations('source "$SECRETS"', { launcher: false }).length).toBe(2);
+    expect(launcherKeyViolations("export ANTHROPIC_API_KEY=x", { launcher: false }).length).toBe(2);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(launcherKeyViolations(': "${ANTHROPIC_API_KEY:=x}"', { launcher: false })).not.toEqual(
+      [],
+    );
+    expect(launcherKeyViolations("read -r ANTHROPIC_API_KEY < f", { launcher: false })).not.toEqual(
+      [],
+    );
+    expect(
+      launcherKeyViolations('cd "$HOME/.myco" && cat secrets/*.env', { launcher: false }),
+    ).not.toEqual([]);
   });
 });
