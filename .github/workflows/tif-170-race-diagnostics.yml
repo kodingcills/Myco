@@ -38,6 +38,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR cancels its superseded run; each manual dispatch gets
+# its own group (github.run_id) and is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   race:
     name: race x${{ inputs.runs || 1 }}
@@ -49,9 +55,14 @@ jobs:
       # Which launcher the fixture copies. The default is the shipped one; the variant
       # differs only in whether `--stop` removes the lock unconditionally.
       MYCO_TIF170_LAUNCHER: ${{ inputs.launcher || 's0-live.sh' }}
+      # Read by the Race step from env, not interpolated into the script (TIF-241:
+      # no `${{ inputs.* }}` inside `run:`).
+      TIF170_RUNS: ${{ inputs.runs || 1 }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Install pnpm
@@ -93,7 +104,7 @@ jobs:
           mkdir -p .tif-170
           : > .tif-170/summary.tsv
           failures=0
-          for run in $(seq 1 "${{ inputs.runs || 1 }}"); do
+          for run in $(seq 1 "$TIF170_RUNS"); do
             echo "::group::run $run"
             set +e
             npx vitest run --pool=forks --no-file-parallelism \
@@ -128,7 +139,7 @@ jobs:
           else
             echo "no failing round in this job"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: tif-170-race-${{ github.run_id }}-${{ github.run_attempt }}

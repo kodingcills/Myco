@@ -13,8 +13,10 @@
 #        MYCO_AGENT_PORT guest loopback port (default 8765)
 #        MYCO_TOKEN_OUT  host path that receives the fresh token once the deploy is
 #                        verified (default ~/.myco-token). A PATH, never a secret.
-#                        Written mode 600 via a same-directory temp file and mv;
-#                        left untouched when the deploy fails (row-8 H5). Every
+#                        Written mode 600 via a same-directory temp file and mv,
+#                        so its directory must be writable (an existing file
+#                        need not be, but must be yours); every sweep deploy
+#                        rewrites it. Left untouched when the deploy fails (row-8 H5). Every
 #                        operator on the host shares the default: set a private
 #                        path when several operators share the Mac (G25).
 
@@ -41,14 +43,30 @@ command -v openssl >/dev/null || die "openssl not found on PATH"
 # Host token file, checked now so a bad path fails before a 100-420 s deploy.
 TOKEN_OUT="${MYCO_TOKEN_OUT:-$HOME/.myco-token}"
 TOKEN_OUT_DIR="$(dirname "$TOKEN_OUT")"
-[ -d "$TOKEN_OUT_DIR" ] || die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR does not exist"
-[ ! -d "$TOKEN_OUT" ] || die "MYCO_TOKEN_OUT $TOKEN_OUT is a directory, not a file path"
-# Writable now, or the deploy would rotate the guest token and only then fail to
-# leave a host copy. The temp file and mv need a writable directory; an existing
-# file we cannot write is someone else's (another operator's, G25), so refuse
-# rather than replace it.
-[ -w "$TOKEN_OUT_DIR" ] || die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR is not writable"
-[ ! -e "$TOKEN_OUT" ] || [ -w "$TOKEN_OUT" ] || die "MYCO_TOKEN_OUT $TOKEN_OUT exists and is not writable"
+# The rule (TIF-229) matches what write_host_token below does: it never writes
+# into an existing file. It creates a temp file in TOKEN_OUT_DIR and renames it
+# over TOKEN_OUT. So what must be writable is the DIRECTORY (write + search);
+# the mode of an existing file, or of a symlink's target, does not matter: the
+# rename replaces the directory entry and never opens the old file. The one
+# existing entry refused is one owned by another user (lstat, so a symlink's own
+# owner): that is another operator's token (G25), and in a sticky directory the
+# rename would fail anyway. Checked now, or the deploy would rotate the guest
+# token and only then fail to leave a host copy.
+if [ ! -e "$TOKEN_OUT_DIR" ]; then
+  die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR does not exist: create it (mkdir -p -m 700 '$TOKEN_OUT_DIR') or point MYCO_TOKEN_OUT into an existing directory you own"
+fi
+[ -d "$TOKEN_OUT_DIR" ] || die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR exists but is not a directory: point MYCO_TOKEN_OUT into a directory you own"
+# -d follows a symlink: mv onto a link to a directory would move the token INTO it.
+[ ! -d "$TOKEN_OUT" ] || die "MYCO_TOKEN_OUT $TOKEN_OUT is a directory, not a file path: set MYCO_TOKEN_OUT to a file inside it, e.g. $TOKEN_OUT/agent-token"
+if [ ! -w "$TOKEN_OUT_DIR" ] || [ ! -x "$TOKEN_OUT_DIR" ]; then
+  die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR is not writable: the token is written to a temp file there and renamed over $TOKEN_OUT, so you need write and search permission on the directory. Fix: chmod u+wx '$TOKEN_OUT_DIR' if you own it, or point MYCO_TOKEN_OUT into a directory you own"
+fi
+if [ -e "$TOKEN_OUT" ] || [ -L "$TOKEN_OUT" ]; then
+  # find -P (the default) tests the entry itself, never a symlink's target.
+  if [ -z "$(find "$TOKEN_OUT" -maxdepth 0 -user "$(id -u)" -print 2>/dev/null)" ]; then
+    die "MYCO_TOKEN_OUT $TOKEN_OUT exists and is owned by another user (another operator's token, G25); the deploy replaces this file and will not replace someone else's. Fix: set MYCO_TOKEN_OUT to a private path (docs/eval-runbook.md section 4), or have its owner remove it"
+  fi
+fi
 HOST_TOKEN_TMP=""
 
 # Fresh token per deploy. It never reaches argv, env, logs or stdout: it goes to
