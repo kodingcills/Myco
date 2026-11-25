@@ -9,7 +9,11 @@
 # command's whole process group (every step of a `bash -c '<step>; <step>'`)
 # exactly once (see "Process groups and the terminal" for who sends it). The
 # wrapper then waits until the command has exited and the rest of its group is
-# gone, and exits 128+signal. A signal that was ignored when the wrapper started
+# gone, and exits 128+signal. That holds for a signal that reaches the wrapper
+# at any point while the command runs, also one that lands just as the command
+# exits; only one that comes after the wrapper has collected the command's exit
+# and started to leave is dropped (the exit status is then the command's own).
+# A signal that was ignored when the wrapper started
 # (SIGHUP under nohup, SIGINT for a background job of a script) stays ignored:
 # it is neither forwarded nor un-ignored for the command.
 #
@@ -180,12 +184,49 @@ if not shared:
     except OSError:
         pass
 
-# Block first, then install handlers: a blocked signal stays pending for sigwait,
-# and a handler (rather than SIG_DFL) keeps SIGCHLD from being discarded.
+# Every signal in WAITED reaches the loop below as one byte (its number) on a
+# self-pipe, written by the C-level handler the moment the signal is delivered
+# (signal.set_wakeup_fd). Not sigwait: macOS libc turns an interrupted
+# __sigwait into success without setting the signal number, so sigwait returns
+# garbage, and the signal itself is taken by the handler instead (measured under
+# load: 53 of 200 test runs lost a SIGTERM sent while the command ran, and the
+# wrapper exited with the command status). A pipe byte is not lost.
+#
+# Block first, then install handlers; unblock (in the parent) only after the
+# fork, so a signal in between stays pending and is delivered, and written,
+# then. A handler (rather than SIG_DFL) keeps SIGCHLD from being discarded.
 # SIGTSTP is left alone, so Ctrl-Z stops this process with the rest of its job.
 signal.pthread_sigmask(signal.SIG_BLOCK, WAITED)
+wake_r, wake_w = os.pipe()
+os.set_blocking(wake_w, False)
+signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)
+def on_signal(*_):
+    pass
 for s in WAITED:
-    signal.signal(s, lambda *_: None)
+    signal.signal(s, on_signal)
+queued = []
+
+def next_signal():
+    """The next delivered signal, in delivery order; blocks until there is one."""
+    while not queued:
+        queued.extend(os.read(wake_r, 64))
+    return signal.Signals(queued.pop(0))
+
+def take_delivered():
+    """Queue every signal delivered so far without blocking; True if any."""
+    os.set_blocking(wake_r, False)
+    try:
+        while True:
+            data = os.read(wake_r, 64)
+            if not data:
+                break
+            queued.extend(data)
+    except BlockingIOError:
+        pass
+    finally:
+        os.set_blocking(wake_r, True)
+    return bool(queued)
+
 print(f"vm-session: holding {path} as {me}", file=sys.stderr, flush=True)
 
 def say(text):
@@ -233,6 +274,9 @@ else:
         os.setpgid(pid, pid)
     except OSError:
         pass
+# From here a signal runs on_signal at once, which writes its byte; one that
+# arrived since the block above is delivered now.
+signal.pthread_sigmask(signal.SIG_UNBLOCK, WAITED)
 
 def members():
     """The processes of the session group other than this one, as (pid, stat, command),
@@ -269,15 +313,21 @@ def group_alive():
     return bool(members())
 
 def send(sig):
-    # macOS answers EPERM, not ESRCH, for a group that holds only a zombie (the
-    # command died and is not reaped yet): nothing is left to signal either way.
+    # In a shared group this process gets a copy of what it sends. Keep it
+    # blocked, then drop it: setting SIG_IGN discards a pending signal.
+    if shared:
+        signal.pthread_sigmask(signal.SIG_BLOCK, {sig})
     try:
         os.killpg(group, sig)
     except (ProcessLookupError, PermissionError):
+        # macOS answers EPERM, not ESRCH, for a group that holds only a zombie
+        # (the command died and is not reaped yet): nothing is left to signal.
         return
-    if shared and sig in signal.sigpending():
-        # Our own copy of what we just sent; take it back.
-        signal.sigwait({sig})
+    finally:
+        if shared:
+            signal.signal(sig, signal.SIG_IGN)
+            signal.signal(sig, on_signal)
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {sig})
     # A stopped process only acts on a signal once it continues.
     try:
         os.killpg(group, signal.SIGCONT)
@@ -294,7 +344,7 @@ if watch_stops:
     signal.setitimer(signal.ITIMER_REAL, 1.0, 1.0)
 try:
     while True:
-        got = signal.sigwait(WAITED)
+        got = next_signal()
         now = time.monotonic()
         if got in FORWARD:
             if first is None:
@@ -310,7 +360,16 @@ try:
             if done == pid:
                 status = raw
         if status is not None and first is None:
-            break
+            # The command exited with no signal handled yet. Block the signals,
+            # then look at what was delivered before that: a signal that reached
+            # the wrapper by now (even just as the command exited, its byte
+            # still behind the SIGCHLD) is handled as above. One that comes
+            # after the block is discarded at exit.
+            signal.pthread_sigmask(signal.SIG_BLOCK, WAITED)
+            if not take_delivered():
+                break
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, WAITED)
+            continue
         # ps runs only on the tick: in a shared group every ps run ends with a
         # SIGCHLD, which would otherwise trigger the next check at once.
         if got != TICK:
