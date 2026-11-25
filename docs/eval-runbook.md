@@ -665,7 +665,10 @@ descriptor (FD 9) inherited, and releases it when the command exits: normally, o
 Ctrl-C / `kill`. A SIGINT, SIGTERM or SIGHUP reaches every process of the command's process group
 **once**, so every step of a `bash -c '<step>; <step>'` gets it, a step's `EXIT` trap can finish
 its cleanup, and later steps do not start. The wrapper then waits until the command and every
-other process of that group have gone, and exits `128+signal`. Every signal it forwards is
+other process of that group have gone, and exits `128+signal`. That holds for a signal that
+reaches the wrapper at any point while the command runs, also one that lands just as the
+command exits; only a signal that comes after the wrapper has collected the command's exit and
+started to leave is dropped, and the exit status is then the command's own. Every signal it forwards is
 followed by a `SIGCONT`, so a stopped step still gets it. A signal that was ignored when the
 wrapper started stays ignored: under `nohup scripts/vm-session.sh -- …` a hangup does not end
 the session.
