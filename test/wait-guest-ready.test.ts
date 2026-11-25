@@ -73,6 +73,12 @@ function runGate(opts: {
    * after a cold boot (TIF-220).
    */
   sshTrace?: string[];
+  /** Seconds each ssh probe takes (the stub sleeps), to model a slow guest. */
+  sshDelay?: number;
+  /** MYCO_READY_STABLE_SPACING; default 0 so the stability probes add no time. */
+  stableSpacing?: number;
+  /** MYCO_READY_STALL_SECONDS; default 3, i.e. three 1s samples, as before TIF-98. */
+  stallSeconds?: number;
 }): Promise<GateRun> {
   if (opts.noProcess) {
     stub("ps", "exit 1");
@@ -111,12 +117,19 @@ echo "PID TTY TIME CMD"`,
 n=${opts.sshTrace.length}
 v=$(sed -n "$((i<n?i+1:n))p" "${sshTracePath}")
 echo $((i+1)) > "${sshCursor}"
+date +%s >> "${join(dir, "ssh.starts")}"
+sleep ${opts.sshDelay ?? 0}
 if [ "$v" = ok ]; then printf "ok\\r\\n"; exit 0; fi
 echo "Connection to 127.0.0.1 closed by remote host." >&2
 exit 255`,
       );
     } else {
-      stub("ssh", opts.sshAnswers ? 'printf "ok\\r\\n"\nexit 0' : "exit 255");
+      stub(
+        "ssh",
+        `date +%s >> "${join(dir, "ssh.starts")}"\nsleep ${opts.sshDelay ?? 0}\n${
+          opts.sshAnswers ? 'printf "ok\\r\\n"\nexit 0' : "exit 255"
+        }`,
+      );
     }
   }
 
@@ -134,7 +147,8 @@ exit 255`,
         PATH: `${stubDir}:/usr/bin:/bin`,
         HOME: dir,
         MYCO_READY_INTERVAL: "1",
-        MYCO_READY_STABLE_SPACING: "0",
+        MYCO_READY_STABLE_SPACING: String(opts.stableSpacing ?? 0),
+        MYCO_READY_STALL_SECONDS: String(opts.stallSeconds ?? 3),
       },
     });
     let stdout = "";
@@ -293,6 +307,83 @@ describe("wait-guest-ready", () => {
       expect(r.stderr).toContain("dropped 3 times");
       expect(r.stderr).toContain("guest or UTM unhealthy");
       expect(r.stdout).not.toContain("ssh up");
+    });
+
+    // TIF-98: spacing is start to start. These two together pin the property
+    // (answers at least STABLE_SPACING apart) AND the speedup (no sleep stacked
+    // on a probe that already took longer than the spacing).
+    function probeStarts(): number[] {
+      return readFileSync(join(dir, "ssh.starts"), "utf8").trim().split("\n").map(Number);
+    }
+
+    it("keeps stability probes at least STABLE_SPACING apart when probes are fast", {
+      timeout: SLOW,
+    }, async () => {
+      const r = await runGate({ cpuTrace: booting, sshAnswers: true, stableSpacing: 2, timeout: 45 });
+      expect(r.status).toBe(0);
+      const starts = probeStarts();
+      expect(starts).toHaveLength(3);
+      for (let i = 1; i < starts.length; i++) {
+        // Whole-second clock: a real gap of >= 2s shows as >= 2 (the gate waits
+        // an extra second when the integer gap is exactly the spacing).
+        expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(2);
+      }
+    });
+
+    it("adds no sleep after a probe that already took longer than the spacing", {
+      timeout: SLOW,
+    }, async () => {
+      // Each probe takes 3s and the spacing is 2s. The old fixed sleep made the
+      // gap 2 + 3 = 5s; start to start it is the probe's own 3s (4 at most,
+      // allowing for the whole-second clock).
+      const r = await runGate({
+        cpuTrace: booting,
+        sshAnswers: true,
+        stableSpacing: 2,
+        sshDelay: 3,
+        timeout: 45,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("apart start to start");
+      const starts = probeStarts();
+      expect(starts).toHaveLength(3);
+      for (let i = 1; i < starts.length; i++) {
+        expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(3);
+        expect(starts[i] - starts[i - 1]).toBeLessThanOrEqual(4);
+      }
+    });
+  });
+
+  // TIF-98: the stall verdict is a wall-clock window (STALL_SECONDS), not a fixed
+  // count of samples, so sampling faster cannot make the gate quicker to call a
+  // slow boot a stall.
+  describe("stall window in seconds (TIF-98)", () => {
+    it("tolerates a flat run shorter than the stall window, then passes", {
+      timeout: SLOW,
+    }, async () => {
+      // Four flat 1s samples, then progress. A fixed 3-sample rule (the old
+      // behaviour) calls this a stall; a 6s window does not.
+      const r = await runGate({
+        cpuTrace: ["00:01", "00:01", "00:01", "00:01", "00:01", "00:11", "00:21", "00:31"],
+        sshAnswers: true,
+        stallSeconds: 6,
+        timeout: 45,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("ssh up");
+    });
+
+    it("still fails a flat guest once the window has passed", { timeout: SLOW }, async () => {
+      const r = await runGate({ cpuTrace: ["00:01"], sshAnswers: true, stallSeconds: 6, timeout: 45 });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("CPU flat for 6 intervals of 1s");
+      expect(r.markers).not.toContain("ssh");
+    });
+
+    it("never decides a stall on fewer than 3 samples", { timeout: SLOW }, async () => {
+      const r = await runGate({ cpuTrace: ["00:01"], sshAnswers: true, stallSeconds: 1, timeout: 45 });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("CPU flat for 3 intervals of 1s");
     });
   });
 });

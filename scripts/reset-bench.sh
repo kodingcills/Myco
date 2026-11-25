@@ -38,6 +38,13 @@ if [ "$MODE" = cycle ] && [ -z "${MYCO_TOKEN_OUT:-}" ]; then
   exit 2
 fi
 
+# Host memory pressure is the measured driver of slow guest boots (TIF-98:
+# QEMU resident far below the guest's RAM while host swap is nearly full), so
+# each row records swap in use at the start and the host's pageins over the
+# reset. Both are host-wide counters, not per-process.
+swap_used_mb() { sysctl -n vm.swapusage 2>/dev/null | sed -E 's/.*used = ([0-9.]+)M.*/\1/'; }
+pageins() { vm_stat 2>/dev/null | awk '/^Pageins:/ { gsub(/\./, "", $2); print $2 }'; }
+
 load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'; }
 over() { awk -v l="$1" -v m="$LOAD_LIMIT" 'BEGIN { exit !(l >= m) }'; }
 
@@ -80,9 +87,12 @@ step() {
 for i in $(seq 1 "$COUNT"); do
   gate || exit 3
   L0=$(load1)
+  SW0=$(swap_used_mb)
+  PI0=$(pageins)
   STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   step reset "$LOGS/$i-reset.log" bash "$REPO/scripts/reset-trial-vm.sh" clean-base
   R_RC=$STEP_RC R_S=$STEP_S
+  PI1=$(pageins)
   TIMING=$(grep -m1 '^reset-trial-vm: timing' "$LOGS/$i-reset.log" | sed 's/^reset-trial-vm: timing //' || true)
   FIRST=$(grep -m1 'first ssh answer after' "$LOGS/$i-reset.log" | sed -E 's/.*after ([0-9]+)s.*/\1/' || true)
   D_RC=null D_S=null S_RC=null S_S=null C_RC=null
@@ -111,7 +121,7 @@ for i in $(seq 1 "$COUNT"); do
   # Values pass through the environment, never interpolated into the program.
   B_LABEL=$LABEL B_MODE=$MODE B_RUN=$i B_STARTED=$STARTED B_L0=$L0 B_TIMING=$TIMING \
   B_FIRST=$FIRST B_R_RC=$R_RC B_R_S=$R_S B_C_RC=$C_RC B_D_RC=$D_RC B_D_S=$D_S \
-  B_S_RC=$S_RC B_S_S=$S_S B_SESSION=$SESSION B_HEAD=$(git -C "$REPO" rev-parse --short HEAD) python3 - "$OUT" <<'PY'
+  B_SW0=$SW0 B_PI0=$PI0 B_PI1=$PI1 B_S_RC=$S_RC B_S_S=$S_S B_SESSION=$SESSION B_HEAD=$(git -C "$REPO" rev-parse --short HEAD) python3 - "$OUT" <<'PY'
 import json, os, sys
 e = os.environ
 num = lambda k: None if e[k] in ("", "null") else int(e[k])
@@ -124,6 +134,8 @@ row = {
     "started_utc": e["B_STARTED"], "load1_at_start": float(e["B_L0"]),
     "reset_rc": num("B_R_RC"), "reset_s": num("B_R_S"), "phases_s": timing,
     "first_ssh_answer_s": num("B_FIRST"),
+    "host_swap_used_mb_at_start": round(float(e["B_SW0"])) if e["B_SW0"] else None,
+    "host_pageins_during_reset": (int(e["B_PI1"]) - int(e["B_PI0"])) if e["B_PI0"] and e["B_PI1"] else None,
     "ready_check_rc": num("B_C_RC"),
     "deploy_rc": num("B_D_RC"), "deploy_s": num("B_D_S"),
     "session_info_rc": num("B_S_RC"), "session_info_s": num("B_S_S"),
