@@ -1,11 +1,11 @@
 # Evidence Schema (M1-012 / TIF-16, ADR-0007)
 
 This document defines every field of the machine-readable evidence Myco emits.
-Schemas live in [schemas/](/Users/tofuinparis/.t3/worktrees/Myco/t3-3af56167-94e7d88ce3d06b8c/schemas/):
-[trace-events.ts](/Users/tofuinparis/.t3/worktrees/Myco/t3-3af56167-94e7d88ce3d06b8c/schemas/trace-events.ts),
-[result-record.ts](/Users/tofuinparis/.t3/worktrees/Myco/t3-3af56167-94e7d88ce3d06b8c/schemas/result-record.ts),
-[ledger-row.ts](/Users/tofuinparis/.t3/worktrees/Myco/t3-3af56167-94e7d88ce3d06b8c/schemas/ledger-row.ts).
-Validation is hand-rolled ([validate.ts](/Users/tofuinparis/.t3/worktrees/Myco/t3-3af56167-94e7d88ce3d06b8c/schemas/validate.ts), draft-07 subset; no new runtime dependency) and wired into the evidence writer: an invalid artifact throws `InvalidEvidenceError` and fails the run. CI validates a sample eval's artifacts via [validate-artifacts.ts](/Users/tofuinparis/.t3/worktrees/Myco/t3-3af56167-94e7d88ce3d06b8c/schemas/validate-artifacts.ts).
+Schemas live in [schemas/](../../schemas/):
+[trace-events.ts](../../schemas/trace-events.ts),
+[result-record.ts](../../schemas/result-record.ts),
+[ledger-row.ts](../../schemas/ledger-row.ts).
+Validation is hand-rolled ([validate.ts](../../schemas/validate.ts), draft-07 subset; no new runtime dependency) and wired into the evidence writer: an invalid artifact throws `InvalidEvidenceError` and fails the run. CI validates a sample eval's artifacts via [validate-artifacts.ts](../../schemas/validate-artifacts.ts).
 
 ## Directory layout
 
@@ -139,4 +139,4 @@ One row per `(evalId, runId, trialIndex, corruptionClass, actionKind)`:
 
 ## Validator
 
-[validate.ts](/Users/tofuinparis/.t3/worktrees/Myco/t3-3af56167-94e7d88ce3d06b8c/schemas/validate.ts) implements a draft-07 subset: `$ref` (local `$defs`), `type`, `enum`, `const`, `properties`, `required`, `additionalProperties: false`, `items`, `minItems`/`maxItems`, `minimum`/`maximum`, `pattern`, `minLength`/`maxLength`, `anyOf`, `oneOf`. Issues are `{ path, keyword, message }` with JSON-path locations. `undefined`-valued properties are treated as absent, matching JSON semantics.
+[validate.ts](../../schemas/validate.ts) implements a draft-07 subset: `$ref` (local `$defs`), `type`, `enum`, `const`, `properties`, `required`, `additionalProperties: false`, `items`, `minItems`/`maxItems`, `minimum`/`maximum`, `pattern`, `minLength`/`maxLength`, `anyOf`, `oneOf`. Issues are `{ path, keyword, message }` with JSON-path locations. `undefined`-valued properties are treated as absent, matching JSON semantics.

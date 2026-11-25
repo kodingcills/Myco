@@ -204,3 +204,5 @@ which is why the remaining rows cost 0–1 ms each.
 and none was refuted. **It is also not yet passed:** `20/20` has not been observed on a quiet
 host, because both attempts were cut short by infrastructure. The gate stays open, and §7 stays
 blocked behind it, until one uninterrupted 20-row run exists.
+
+Redaction note (2026-11-25, TIF-241): absolute macOS home paths (and the account name) in this pack's files were replaced after the fact with `~/` or a `<account>` placeholder; nothing else changed.
