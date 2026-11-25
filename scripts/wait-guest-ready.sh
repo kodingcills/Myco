@@ -39,6 +39,26 @@ CFG=~/VMs/myco-win11/ssh_config
 # an unhandled error even when every test passes. The production value stays 10.
 INTERVAL=${MYCO_READY_INTERVAL:-10}
 
+# Stable-readiness phase (TIF-220). One answered probe is not "up": in the live
+# row-8 sweep, trial 14's reset passed this gate, printed `ready on
+# 'clean-base'`, and the deploy's first scp seconds later died with "Connection
+# to 127.0.0.1 closed by remote host" - sshd was still settling after the cold
+# boot. 1 such drop in 28 cold-reset + deploy cycles on this host.
+#
+# So after the first answer we require STABLE_PROBES consecutive answers,
+# STABLE_SPACING seconds apart. Defaults 3 and 5s: 10s added to a healthy reset
+# (versus a 21-165s cold boot), and a window a few times longer than the
+# observed gap between this gate's answer and the scp that was dropped (the
+# clock resync, ~1-3s). One drop in 28 does not tell us how long sshd settles,
+# so this window is a cheap first line, not a guarantee; deploy-to-vm.sh's
+# verified, bounded copy retry is the backstop for a drop after it.
+#
+# A drop resets the count. MAX_DROPS drops fail the gate loudly instead of
+# spending the whole budget on a guest whose sshd keeps flapping.
+STABLE_PROBES=${MYCO_READY_STABLE_PROBES:-3}
+STABLE_SPACING=${MYCO_READY_STABLE_SPACING:-5}
+MAX_DROPS=${MYCO_READY_MAX_DROPS:-3}
+
 # The real binary is qemu-aarch64-softmmu. `pgrep -f qemu-system-aarch64`
 # returns 0 on a perfectly running guest, which is its own way to mislead: an
 # earlier check read the guest as absent for that reason. Match either name.
@@ -58,6 +78,38 @@ cpu_seconds() {
     else if (NF==2) print int(($1*60)+$2);
     else print int($1+0)
   }'
+}
+
+# One SSH round trip. `echo ok`, never `true`: the guest's shell is PowerShell,
+# which has no `true`. `tr -d '\r'` for the CRLF reason given at the probe below.
+ssh_answers() {
+  [ "$(ssh -F "$CFG" -o BatchMode=yes -o ConnectTimeout=10 myco-win11 'echo ok' 2>/dev/null | tr -d '\r' || true)" = "ok" ]
+}
+
+# Called after the first answer. Exits 0 once STABLE_PROBES consecutive probes
+# answer; exits 1, naming the drops, if sshd keeps dropping or time runs out.
+wait_stable() {
+  local oks=1 drops=0
+  while [ "$oks" -lt "$STABLE_PROBES" ]; do
+    if [ $(( $(date +%s) - START )) -gt "$T" ]; then
+      echo "wait-guest-ready: timeout after ${T}s: ssh answered but never held for ${STABLE_PROBES} consecutive probes (${drops} drop(s)); sshd unstable - guest or UTM unhealthy (TIF-220)" >&2
+      exit 1
+    fi
+    sleep "$STABLE_SPACING"
+    if ssh_answers; then
+      oks=$(( oks + 1 ))
+    else
+      drops=$(( drops + 1 ))
+      oks=0
+      if [ "$drops" -ge "$MAX_DROPS" ]; then
+        echo "wait-guest-ready: ssh answered, then dropped ${drops} times; sshd is not settling - guest or UTM unhealthy, not a boot blip (TIF-220)" >&2
+        exit 1
+      fi
+      echo "wait-guest-ready: ssh dropped after answering (drop ${drops}/${MAX_DROPS}); sshd still settling after boot, re-probing (TIF-220)" >&2
+    fi
+  done
+  echo "wait-guest-ready: ssh up after $(( $(date +%s) - START ))s, stable for ${STABLE_PROBES} consecutive probes ${STABLE_SPACING}s apart (guest CPU ${CUR}s)"
+  exit 0
 }
 
 START=$(date +%s)
@@ -124,8 +176,12 @@ while :; do
   #
   # The repo already strips CR this way at reset-trial-vm.sh:49, so this is the
   # house idiom rather than a new one.
-  if [ "$SEEN_PROGRESS" = "1" ] && [ "$(ssh -F "$CFG" -o BatchMode=yes -o ConnectTimeout=10 myco-win11 'echo ok' 2>/dev/null | tr -d '\r' || true)" = "ok" ]; then
-    echo "wait-guest-ready: ssh up after $(( $(date +%s) - START ))s (guest CPU ${CUR}s)"
-    exit 0
+  #
+  # The first answer is not the end: wait_stable (TIF-220) then requires the
+  # answer to hold. It runs outside this CPU loop on purpose - an idle, fully
+  # booted guest can gain under 1s of CPU per interval, and the flat-CPU check
+  # must not misread that as a stall while we are only checking sshd.
+  if [ "$SEEN_PROGRESS" = "1" ] && ssh_answers; then
+    wait_stable
   fi
 done
