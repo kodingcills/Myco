@@ -1,0 +1,92 @@
+{
+  "runId": "1a23db82-85a6-4131-b8d3-e2e6edbf5d9a",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "cell B28 expected \"REVISED-3892\" but live document has \"Gil Kaur\""
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "cell B28 holds \"REVISED-3892\"",
+    "observed": "value=\"Gil Kaur\"",
+    "reason": "postcondition \"cell B28 holds \"REVISED-3892\"\" not met after step 2"
+  },
+  "completed": false,
+  "elapsedMs": 86028,
+  "xlsxPath": "C:/myco/runs/myco-47681-1795591218684-874368603\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      6128
+    ],
+    "removed": [
+      "myco-47681-1795591218684-874368603",
+      "myco-47681-1795591218684-141824771"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 46821,
+    "outcome": "arrived",
+    "hostLoadStart": 6.58,
+    "hostLoadEnd": 7.78
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 6118,
+        "durationMs": 6991,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4384,
+        "durationMs": 4819,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3402,
+        "durationMs": 3938,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 6816,
+        "durationMs": 7776,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 2849,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-focus-change-15",
+    "dataRows": 38,
+    "csvSha256": "3712101b193b0ca603d0fdcf3dba954e8a6652f6be8002c3b58569d6aa7bd3ca"
+  },
+  "corruption": {
+    "mode": "focus-change",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Gil Kaur",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click",
+      "setValue"
+    ]
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "runId": "391ef508-e30c-4c89-9ac0-e271657f96d7",
+  "verdict": {
+    "status": "verified",
+    "reasons": [
+      "cell B6 (record EMP-0005, column name) persisted as \"REVISED-403986\""
+    ]
+  },
+  "completed": true,
+  "elapsedMs": 70946,
+  "xlsxPath": "C:/myco/runs/myco-81360-1795592087016-420777770\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      6712,
+      7740
+    ],
+    "removed": [
+      "myco-81360-1795592087016-420777770",
+      "myco-81360-1795592087016-296897092"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=128 survivors=[] ERROR: The process with PID 7740 (child process of PID 6804) could not be terminated.\nReason: There is no running instance of the task."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 13549,
+    "outcome": "arrived",
+    "hostLoadStart": 7,
+    "hostLoadEnd": 6.38
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 7452,
+        "durationMs": 8435,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3962,
+        "durationMs": 4485,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3658,
+        "durationMs": 4566,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5569,
+        "durationMs": 6036,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "save",
+        "elapsedMs": 4573,
+        "durationMs": 5086,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 2941,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-invalid-target-17",
+    "dataRows": 28,
+    "csvSha256": "7de57617ec67eaf44f5ab7d6265daa0099f599255620d186e5e6167339ea6dce"
+  },
+  "corruption": {
+    "mode": "invalid-target",
+    "applied": true,
+    "recovery": true,
+    "persistedValue": "REVISED-403986",
+    "recoveryEvents": [
+      "retry:1-completed"
+    ],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "runId": "d4175f88-9531-427f-b5e2-c7cd96475ca4",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-invalid-target-1",
+    "rowKey": "EMP-0004",
+    "column": "name",
+    "newValue": "REVISED-777510"
+  },
+  "instruction": "Set the cell at record EMP-0004, column name, to \"REVISED-777510\", and save the file.",
+  "startedAt": "2026-11-25T05:35:31.872Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-invalid-target-1\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-99266-1795584934080-502914037\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-99266-1795584934080-502914037\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B5"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-invalid-target-1\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-99266-1795584934080-502914037\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B5 located at record EMP-0004, column name, holds fixture value \"Hana Ito\"",
+          "passed": true,
+          "observed": "value=\"Hana Ito\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    }
+  ],
+  "guardFailure": {
+    "step": 2,
+    "phase": "precondition",
+    "predicateName": "act:setValue",
+    "observed": "stale ref winref:5:B5: issued for stateVersion 5, app is at 6",
+    "reason": "action dispatch failed on step 2: stale ref winref:5:B5: issued for stateVersion 5, app is at 6"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "cell B5 expected \"REVISED-777510\" but live document has \"Hana Ito\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "cell B5 expected \"REVISED-777510\" but live document has \"Hana Ito\""
+    ]
+  }
+}

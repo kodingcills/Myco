@@ -1,0 +1,146 @@
+{
+  "runId": "cc010ae9-db55-4ce9-9bb9-d62d9730bc46",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-kill-16",
+    "rowKey": "EMP-0037",
+    "column": "name",
+    "newValue": "REVISED-318607"
+  },
+  "instruction": "Set the cell at record EMP-0037, column name, to \"REVISED-318607\", and save the file.",
+  "startedAt": "2026-11-25T07:27:25.148Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-kill-16\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-62053-1795591647021-266329774\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-62053-1795591647021-266329774\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B38"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-kill-16\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-62053-1795591647021-266329774\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B38 located at record EMP-0037, column name, holds fixture value \"Cleo Ito\"",
+          "passed": true,
+          "observed": "value=\"Cleo Ito\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B38"
+        },
+        "value": "REVISED-318607"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-62053-1795591647021-266329774\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B38 located at record EMP-0037, column name, holds fixture value \"Cleo Ito\"",
+          "passed": true,
+          "observed": "value=\"Cleo Ito\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B38 holds \"REVISED-318607\"",
+          "passed": true,
+          "observed": "value=\"REVISED-318607\""
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B38 holds \"REVISED-318607\"",
+          "passed": true,
+          "observed": "value=\"REVISED-318607\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 9,
+      "stateVersionAfter": 10
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B38 (record EMP-0037, column name) persisted as \"REVISED-318607\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B38 (record EMP-0037, column name) persisted as \"REVISED-318607\""
+    ]
+  }
+}
