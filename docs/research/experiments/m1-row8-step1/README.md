@@ -58,7 +58,7 @@ evidence is `../m1-row8-sweep2/` (28/30) and `../m1-row8-corrupt/` (18/18, 0 fal
 | H5: token fetch refused, which blocked §5 and §6 | 3 | Fixed by #436 (TIF-228): the deploy leaves the fresh token in a host file and drops the guest fetch |
 | H1–H4, H6–H13: runbook contradictions and gaps | 3 | Fixed by #435 (TIF-227) |
 | J10: row 8 still carried the stale `validate-live … ALL OK on 0 files (TIF-223)` gap, which #433 had fixed | 4 | Removed from row 8 in the PR that adds this pack. `scorecard-check.py` now fails if the row says it again |
-| J1–J9, J11: runbook gaps the operator decided from the repo without a ruling (pnpm build-script warning, §1.2 scope, shared-Mac token path, guard vs `MYCO_TOKEN_OUT`, OpenSSH warnings, missing pip output, §6 runs-dir, no scorecard-check entry, "same shell", post-run cleanup) | 4 | A separate Tier-0 runbook PR |
+| J1–J9, J11: runbook gaps the operator decided from the repo without a ruling (pnpm build-script warning, §1.2 scope, shared-Mac token path, guard vs `MYCO_TOKEN_OUT`, OpenSSH warnings, missing pip output, §6 runs-dir, no scorecard-check entry, "same shell", post-run cleanup) | 4 | Fixed by the Tier-0 runbook PR #437 |
 
 **J4 is recorded as a guard over-block, not a runbook defect.** The host secret guard blocked
 commands, and even report text, that print or name the value of the token-file path variable,
@@ -67,5 +67,5 @@ step still passed. The guard is deliberately **not** loosened for M1; tightening
 separate post-M1 issue, TIF-232 (lead ruling, 2026-11-25 09:10Z).
 
 
-The report-4 operator states that only J10 needed a ruling. The lead confirms that
-disposition before row 8's DONE is merged.
+Only J10 is recorded as needing someone to settle it. The lead ruled on that disposition on
+2026-11-25 at 09:10Z, before row 8's DONE was merged.
