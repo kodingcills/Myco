@@ -1,0 +1,9 @@
+# Blank issues are off: every issue should say what happened, how to reproduce it, and
+# whether it touches evidence or the scorecard, which the two templates ask for. Work here
+# is issue-first and mirrored into the maintainers' tracker, so a structured issue is
+# what makes it triageable.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/kodingcills/Myco/security/advisories/new
+    about: Report security problems privately through a GitHub Security Advisory, never in a public issue. Do not paste secrets.
