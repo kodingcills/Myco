@@ -190,7 +190,8 @@ Expected: `started`. Other values: `stopped` → start it; `resuming` → wedge,
 snapshot.
 
 **Ownership is the flock, never the lock file.** `/tmp/myco-win11.vm.lock` keeps
-the last writer's `<pid> <driver>` after release, so its contents name a dead pid
+the last writer's `<pid> <driver>` after release (every driver except `vm-session.sh`, which
+clears its own record on exit, §6, so an empty file is normal too), so its contents name a dead pid
 routinely — two different stale contents were read on the morning of 2026-11-23
 while the flock was free both times. Check whether the host is in use with `lsof`,
 read-only:
@@ -581,13 +582,14 @@ guest deployed by something else, you ran the §4 fallback after it), and §6.1 
 cleanup.
 Record the skip, and why, next to the §6 result. A skip that is not recorded reads as a full run.
 
-**The M1 lock procedure: each step takes and releases the lock itself (F20; lead ruling 2026-11-24).**
-Do not hold the VM flock by hand across steps, and the lock code is not changed for M1. A child
-accepts an ancestor's lock only when the ancestor is one of the named drivers (`m1-sweep.sh`,
-`m1-corrupt-suite.sh`, `c1-baseline.sh`, `c1-sweep.sh`, `c1-spike.sh`, per `vm_lock_owned_by_parent`
-in `scripts/vm-lock.sh` and `PARENT_DRIVERS` in `src/integration/vm-lock.ts`). Under an
-operator-held lock, §3.1 and §6 would refuse with exit 10. So run each step through its own
-script, and **before every step** run the gate check, read-only:
+**The lock procedure: each step takes and releases the lock itself, or one `vm-session.sh` holds
+it for the whole session (F20; TIF-210).** Never hold the VM flock by hand across steps (an
+interactive `exec 9>>`, a python `flock` left open): a child accepts an ancestor's lock only when
+the ancestor is one of the named drivers (`m1-sweep.sh`, `m1-corrupt-suite.sh`, `c1-baseline.sh`,
+`c1-sweep.sh`, `c1-spike.sh`, or the session wrapper `vm-session.sh`, per `vm_lock_owned_by_parent`
+in `scripts/vm-lock.sh` and `PARENT_DRIVERS`/`FD_PROVEN_PARENT_DRIVERS` in
+`src/integration/vm-lock.ts`). Under a hand-held lock, §3.1 and §6 refuse with exit 10. **Before
+every step, or before starting a session,** run the gate check, read-only:
 
 ```bash
 lsof /tmp/myco-win11.vm.lock || echo free     # a table = someone owns the VM: wait
@@ -607,7 +609,84 @@ starting in that instant refuses with exit 10 (F5).
 
 Between steps the VM is unlocked, so another driver can take it. If a step exits 10, wait for the
 named holder and re-run the step. If the gate check shows an owner you did not expect, stop and
-report it. Do not break the lock. An operator-session lock wrapper is a post-M1 change. Do **not**
+report it. Do not break the lock.
+
+**To keep the VM yours across several steps, use the session wrapper (TIF-210).** When the
+steps must run back to back with nothing in between (reset → deploy → `session_info` → §6.1 → §6,
+or a §7.1/§7.2 trial right after a reset), run them under one `scripts/vm-session.sh`, straight
+after the gate check prints `free`:
+
+```bash
+lsof /tmp/myco-win11.vm.lock || echo free     # must print free
+scripts/vm-session.sh -- bash -c '
+  set -e
+  scripts/reset-trial-vm.sh
+  agent/bootstrap/deploy-to-vm.sh
+  node --import tsx src/integration/session-info.ts --token-file "$MYCO_TOKEN_OUT"
+  node --import tsx src/integration/run-live.ts --mode values ...   # §6, flags as in §6.2
+'
+lsof /tmp/myco-win11.vm.lock || echo free     # free again once the session and every child holding FD 9 exit
+```
+
+The wrapper takes the lock once (record `<pid> vm-session.sh`), runs the command with the lock's
+descriptor (FD 9) inherited, and releases it when the command exits: normally, on a crash, or on
+Ctrl-C / `kill`. A SIGINT, SIGTERM or SIGHUP reaches every process of the command's process group
+**once**, so every step of a `bash -c '<step>; <step>'` gets it, a step's `EXIT` trap can finish
+its cleanup, and later steps do not start. The wrapper then waits until the command and every
+other process of that group have gone, and exits `128+signal`. Every signal it forwards is
+followed by a `SIGCONT`, so a stopped step still gets it. A signal that was ignored when the
+wrapper started stays ignored: under `nohup scripts/vm-session.sh -- …` a hangup does not end
+the session.
+
+- **Started straight from your terminal** (the form above), the wrapper and its command are one
+  job. Ctrl-C reaches every step and ends the session, a step can still prompt, Ctrl-Z stops the
+  whole job (the lock stays held while it is stopped) and `fg` resumes it. The terminal already
+  sends Ctrl-C and a hangup to every step, so the wrapper does not send SIGINT or SIGHUP again: a
+  second copy would cut a step's `EXIT` trap short (§4's deploy leaves its token file and tunnel
+  behind). To end such a session from another terminal, send **SIGTERM** to the wrapper (`kill
+  <pid>`, pid from the lock file); a `kill -INT` or `kill -HUP` aimed at the wrapper alone does not
+  reach the steps.
+- **Started from a script** (or any way that does not make it a job of its own), the command gets
+  its own process group and every signal is forwarded to it. If that script runs in your terminal,
+  a step that reads the terminal is stopped (SIGTTIN) and Ctrl-Z stops only the script and the
+  wrapper, not the steps. The wrapper reports a stopped step within a second or two; end the
+  session with `kill <wrapper pid>`. To use the terminal inside a session, start the wrapper
+  straight from your shell.
+- **If something is still running 5 s after a signal**, the wrapper keeps the lock and its record,
+  prints which processes it is waiting for (again every 30 s), and keeps waiting; it never gives
+  up on its own. A SIGTERM to the wrapper is forwarded to them. Two cases look like this: a
+  background child that ignores SIGINT and was not stopped by its step (below), and a step whose
+  `bash` took the Ctrl-C as handled because its foreground command exited normally at that
+  instant (bash's own rule). Press Ctrl-C again or send SIGTERM.
+- A background descendant that kept FD 9 keeps the lock held after the wrapper exits, until it
+  exits too. After a normal exit the wrapper does not wait for it; after a signal it does (as
+  above) while it is still in the command's process group.
+
+On those exits it clears its record, so the lock file is normally empty afterwards (unlike the
+other drivers, §2). Three cases leave `<pid> vm-session.sh` behind: (1) a SIGKILLed wrapper;
+(2) a signal in the few milliseconds while its python3 supervisor starts; (3) anything else that
+kills the wrapper between taking the lock and starting the supervisor without running its traps.
+No command has run in cases 2 and 3. That is safe: a step accepts the record only from a descendant of that pid that carries its
+FD 9, so an unrelated process, including one that later reuses the pid, is refused. It exits
+**10** with `REFUSED_VM_LOCKED` if the lock is held, **125** if python3 is missing or the python3
+supervisor could not be started (nothing ran), and otherwise with the command's own status. While it runs, `lsof` lists the wrapper and its
+children, which is correct: the VM is in use.
+
+- A step accepts the session's lock only if it **inherited FD 9** from the wrapper: it must be a
+  descendant of the recorded wrapper, *and* its FD 9 must be the lock file *and* the open file
+  description that holds the flock. Being a descendant alone, or setting `MYCO_VM_LOCK_OWNER` to
+  the wrapper's pid, is not enough, and a
+  second wrapper, a sweep or any other driver started elsewhere still refuses with exit 10.
+- **Start TypeScript steps with `node --import tsx`, not `pnpm exec tsx`, under the wrapper.**
+  `pnpm exec`, `npx` and the `tsx` CLI start their child with stdio only, so FD 9 does not reach
+  it and `run-live`/`session_info` refuse with exit 10 (fail closed, nothing touched). Outside a
+  session `pnpm exec tsx` stays fine.
+- Do **not** run `m1-sweep.sh`, `m1-corrupt-suite.sh` or the c1 drivers under it: they take the
+  lock for themselves and refuse (exit 10). They hold it for their whole run anyway.
+- Do not use the wrapper to "reserve" the VM with an idle command (`sleep`): that is the
+  hand-held lock this section forbids, with the same effect on everyone else.
+
+Do **not**
 interleave with other work on the guest. `--mode values` runs its parameter sets back to back
 without resets, so running it on a contaminated guest (leftover `soffice`, leftover run dirs)
 measures the contamination, not the generator (log 27).
