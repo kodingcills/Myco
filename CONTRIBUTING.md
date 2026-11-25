@@ -8,8 +8,7 @@ rules, written for the coding agents that do most of the work here, are in
 By taking part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). Report security problems
 privately, as described in [SECURITY.md](SECURITY.md), never in a public issue.
 
-License: not yet chosen (see `docs/product/m2-plan-draft.md`,
-[PR #449](https://github.com/kodingcills/Myco/pull/449)).
+License: [Apache-2.0](LICENSE). By contributing you agree that your contributions are licensed under it.
 
 ## Setup
 
