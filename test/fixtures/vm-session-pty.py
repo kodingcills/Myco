@@ -31,6 +31,7 @@ WRAPPER, WORK = sys.argv[1], sys.argv[2]
 LOCK = os.environ["MYCO_VM_LOCK_PATH"]
 transcript = b""
 known_pids = set()
+known_groups = set()
 
 
 def fail(message):
@@ -132,6 +133,7 @@ def step_pid(fd, name):
     with open(os.path.join(WORK, f"{name}.pid")) as f:
         pid = int(f.read().strip())
     known_pids.add(pid)
+    known_groups.add(os.getpgid(pid))
     return pid
 
 
@@ -148,7 +150,12 @@ def check_done(name, rc, code):
         fail(f"session {name}: exit {rc}, expected {code}")
 
 
+def terminate(*_):
+    raise SystemExit(f"FAIL: stopped by signal\n{transcript.decode(errors='replace')}")
+
+
 def main():
+    signal.signal(signal.SIGTERM, terminate)
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp("bash", ["bash", "--norc", "--noprofile", "-i"])
@@ -219,8 +226,15 @@ def main():
         pump(fd, 1.0)
         print("PTY-OK")
         known_pids.clear()
+        known_groups.clear()
     finally:
-        # Only after a failure: whatever is left of the shell and the session.
+        # Only after a failure: whatever is left of the shell and the sessions,
+        # including a `bash -c` whose pid the driver never learned.
+        for g in known_groups - {os.getpgrp()}:
+            try:
+                os.killpg(g, signal.SIGKILL)
+            except OSError:
+                pass
         for p in known_pids:
             for sig in (signal.SIGKILL, signal.SIGCONT):
                 try:
