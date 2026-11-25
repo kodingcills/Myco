@@ -28,11 +28,11 @@ relaunch completed; invalid-target: the first retry completed).
 directory (`runs/<index>/`). Pointed at `runs/` itself, `validate-live` validates 0 files and still
 prints `ALL OK` (TIF-223), so it must not be used that way.
 
-## §8 reproduction (a separate fresh operator, host-only)
+## §8 reproduction (a new operator session on the same clone, host-only)
 
 - **§8.2:** per-index `validate-live` gives 18 result.json + 321 trace events here, and 29 + 516 for
   the §7.3 sweep, all OK. Every ledger run ID and verdict matches its result.json and trace.
-- **§8.3:** `scripts/m1-corrupt-suite-record.py --final`, run on a copy (it rewrites the ledger and
+- **§8.3:** `scripts/m1-corrupt-suite-record.py --final <copy>/params.json <copy>/trials.jsonl`, run on a copy (it rewrites the ledger and
   summary in place and takes the eval ID from the directory name), rebuilt `ledger.jsonl` and
   `summary.json` **byte-identical** to the originals, and its printed summary matches `summary.txt`.
   `m1-corrupt-suite-ledger.ts` also passes.
@@ -63,7 +63,8 @@ prints `ALL OK` (TIF-223), so it must not be used that way.
 
 ## Files
 
-`ledger.jsonl`, `params.json`, `progress.log`, `summary.json`, `summary.txt`, `trial-<i>.out` /
+`trials.jsonl` (the recorder's input: one record per trial), `ledger.jsonl`, `params.json`,
+`progress.log`, `summary.json`, `summary.txt`, `trial-<i>.out` /
 `trial-<i>.err` (per-trial stdout report and stderr), `supervise.log`, `deploy-check.log`,
 `schema-validation.log`, and `runs/<index>/<runId>/{result.json,trace.jsonl}` for all 18 trials.
 `.gitignore` excludes `runs/` and `*.log`, so these are force-added. Every `"token"` field in the
