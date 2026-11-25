@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,6 +43,13 @@ import {
 } from "../src/verify/writer-oracle.ts";
 import { parseWriterDocument, readWriterDocument } from "../src/verify/writer-reader.ts";
 import { parseXml, XmlSyntaxError } from "../src/verify/writer-xml.ts";
+import {
+  deflatedZeros,
+  HOSTILE_SEED,
+  hostileEntries,
+  odtRepeatBomb,
+  zipBomb,
+} from "./writer-hostile.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const DIR = mkdtempSync(join(tmpdir(), "myco-writer-oracle-"));
@@ -653,5 +661,407 @@ describe("writer oracle: verdict integrity (M2 plan R4)", () => {
       ],
     };
     expect(verifyBytes(writeWriterDocument(spec, "odt"), "odt", intent).status).toBe("refuted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-1 verifier findings (TIF-99 PR #472): bounded reads and the ZIP/XML guards.
+// ---------------------------------------------------------------------------
+
+const CHILD = join(import.meta.dirname, "writer-hostile-child.ts");
+
+interface ProbeResult {
+  status: string;
+  code: string;
+  reason: string;
+  ms: number;
+  maxRssMb: number;
+}
+
+/**
+ * Verifies `bytes` in a fresh child process (heap capped at 512 MB) and returns the
+ * verdict with the child's peak RSS. A plain `node --import tsx` child peaks near 55 MB;
+ * before the round-2 fixes these fixtures peaked at 1.1 GB, 1.6 GB, 5.2 GB and an 8 GB
+ * heap abort.
+ */
+function probe(bytes: Uint8Array, ext: WriterFormat, kind: WriterPostconditionKind): ProbeResult {
+  const file = save(bytes, ext);
+  const child = spawnSync(
+    process.execPath,
+    ["--max-old-space-size=512", "--import", "tsx", CHILD, file, HOSTILE_SEED, kind],
+    { cwd: ROOT, encoding: "utf8", timeout: 30_000 },
+  );
+  expect(child.signal, `child killed: ${child.stderr.slice(-500)}`).toBeNull();
+  expect(child.status, `child failed: ${child.stderr.slice(-500)}`).toBe(0);
+  return JSON.parse(child.stdout.trim()) as ProbeResult;
+}
+
+/** Peak RSS a bounded read may reach in the child (node + tsx alone is about 55 MB). */
+const RSS_BOUND_MB = 200;
+
+function expectBoundedUncertain(r: ProbeResult, code: WriterReasonCode, reason: RegExp): void {
+  expect(r).toMatchObject({ status: "uncertain", code });
+  expect(r.reason).toMatch(reason);
+  expect(r.maxRssMb).toBeLessThan(RSS_BOUND_MB);
+  expect(r.ms).toBeLessThan(2_000);
+}
+
+function intentFor(kind: WriterPostconditionKind): TaskIntent {
+  return writerIntentFor(writerTaskFor(HOSTILE_SEED, kind));
+}
+
+function withEntry(
+  entries: ZipEntryInput[],
+  name: string,
+  data: (old: Uint8Array) => Uint8Array,
+): ZipEntryInput[] {
+  return entries.map((e) => (e.name === name ? { ...e, data: data(e.data) } : e));
+}
+
+const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
+const dec = (b: Uint8Array): string => new TextDecoder().decode(b);
+
+/** Text that deflates at roughly 3:1, `bytes` long: honest content, not a bomb. */
+function honestPadding(bytes: number): string {
+  let out = "";
+  for (let i = 0; out.length < bytes; i++) out += `${(i * 2654435761) % 1000003} `;
+  return out.slice(0, bytes);
+}
+
+describe("writer reader D1: ODF repeat expansion is bounded", () => {
+  it.each([200, 20])(
+    "repeat bomb with n=%i cells x 1024 columns x 1024 rows: fast, bounded memory, never verified",
+    (n) => {
+      const bytes = odtRepeatBomb(n);
+      expect(bytes.length).toBeLessThan(2_000);
+      expectBoundedUncertain(
+        probe(bytes, "odt", "table-cell"),
+        "read-unreadable",
+        /a table expands to more than 50000 cells/,
+      );
+    },
+    40_000,
+  );
+
+  function withTables(xml: string): Uint8Array {
+    return writeZip(
+      withEntry(hostileEntries("odt", "table-cell"), ODT_MAIN_PART, (d) =>
+        enc(dec(d).replace("</office:text>", `${xml}</office:text>`)),
+      ),
+    );
+  }
+  const table = (rows: number, cols: number): string =>
+    `<table:table><table:table-row table:number-rows-repeated="${rows}"><table:table-cell table:number-columns-repeated="${cols}"/></table:table-row></table:table>`;
+
+  it("one table over the per-table cell limit is refused before any cell is built", () => {
+    const v = verifyBytes(withTables(table(60, 1000)), "odt", intentFor("table-cell"));
+    expect(v).toMatchObject({ status: "uncertain", code: "read-unreadable" });
+    expect(v.reasons[0]).toMatch(/a table expands to more than 50000 cells/);
+  });
+
+  it("tables each under the table limit but over the document limit together are refused", () => {
+    const v = verifyBytes(withTables(table(49, 1000).repeat(5)), "odt", intentFor("table-cell"));
+    expect(v).toMatchObject({ status: "uncertain", code: "read-unreadable" });
+    expect(v.reasons[0]).toMatch(/document's tables expand to more than 200000 cells/);
+  });
+
+  it("text:s spaces past the document limit are refused", () => {
+    const xml = `<text:p>${'<text:s text:c="1024"/>'.repeat(1000)}</text:p>`;
+    const v = verifyBytes(withTables(xml), "odt", intentFor("table-cell"));
+    expect(v).toMatchObject({ status: "uncertain", code: "read-unreadable" });
+    expect(v.reasons[0]).toMatch(/text:s expands to more than 1000000 spaces/);
+  });
+
+  it("a large but legal repeated table still reads, sharing its repeated rows", () => {
+    const bytes = withTables(table(1024, 40));
+    expect(verifyBytes(bytes, "odt", intentFor("table-cell")).status).toBe("verified");
+    const bomb = parseWriterDocument(bytes, "x.odt").blocks.at(-1);
+    expect(bomb?.kind).toBe("table");
+    if (bomb?.kind !== "table") return;
+    expect(bomb.rows).toHaveLength(1024);
+    expect(bomb.rows[0]).toHaveLength(40);
+    expect(bomb.rows[1023]).toBe(bomb.rows[0]);
+  });
+});
+
+describe("writer reader D2: ZIP decompression is bounded", () => {
+  it.each([
+    ["docx", 8],
+    ["odt", 8],
+    ["docx", 1],
+  ] as const)(
+    "%s with %i extra 512 MiB entries of zeros: refused as a bomb, bounded memory and time",
+    (format, count) => {
+      const bytes = zipBomb(format, count);
+      expect(bytes.length).toBeLessThan(5_000_000);
+      expectBoundedUncertain(
+        probe(bytes, format, "table-cell"),
+        "read-unreadable",
+        /declares 536870912 bytes .* a decompression bomb/,
+      );
+    },
+    40_000,
+  );
+
+  it("a used part whose header understates its size never inflates past the declared size", () => {
+    // The main part's real stream is 512 MiB of zeros; its headers declare 1000 bytes,
+    // so the ratio check passes and only maxOutputLength stops the inflate.
+    const zeros = deflatedZeros(512);
+    const entries = withEntry(hostileEntries("docx", "table-cell"), DOCX_MAIN_PART, (d) => d).map(
+      (e) => (e.name === DOCX_MAIN_PART ? { ...e, deflated: { ...zeros, crc: 0, size: 1000 } } : e),
+    );
+    expectBoundedUncertain(
+      probe(writeZip(entries), "docx", "table-cell"),
+      "read-corrupt",
+      /does not inflate to its declared 1000 bytes/,
+    );
+  }, 40_000);
+
+  it("a used part declaring more than the part limit is refused without inflating it", () => {
+    // 20 MiB declared from 400 KB of noise: under the bomb ratio, over the 16 MiB part limit.
+    const noise = new Uint8Array(400_000).map((_, i) => (i * 7919) % 251);
+    const entries = hostileEntries("docx", "table-cell").map((e) =>
+      e.name === DOCX_MAIN_PART
+        ? { ...e, deflated: { body: noise, crc: 0, size: 20 * 1024 * 1024 } }
+        : e,
+    );
+    const v = verifyBytes(writeZip(entries), "docx", intentFor("table-cell"));
+    expect(v).toMatchObject({ status: "uncertain", code: "read-unreadable" });
+    expect(v.reasons[0]).toMatch(/over the 16777216-byte part limit/);
+  });
+
+  it("parts that are each legal but together exceed the total inflate limit are refused", () => {
+    const pad = `<!--${honestPadding(12 * 1024 * 1024)}-->`;
+    const padded = (d: Uint8Array): Uint8Array => enc(dec(d).replace("?>", `?>${pad}`));
+    let entries = hostileEntries("docx", "table-cell");
+    for (const name of [DOCX_MAIN_PART, "word/_rels/document.xml.rels", "word/styles.xml"])
+      entries = withEntry(entries, name, padded);
+    const v = verifyBytes(writeZip(entries), "docx", intentFor("table-cell"));
+    expect(v).toMatchObject({ status: "uncertain", code: "read-unreadable" });
+    expect(v.reasons[0]).toMatch(/would inflate over 33554432 bytes in total/);
+  });
+
+  it.each(FORMATS)(
+    "%s: an entry the reader never uses is not inflated (a bad CRC there is ignored)",
+    (format) => {
+      const entries: ZipEntryInput[] = [
+        ...hostileEntries(format, "table-cell"),
+        {
+          name: "Thumbnails/unused.bin",
+          data: enc("x"),
+          deflated: { body: enc("junk"), crc: 1, size: 9 },
+        },
+      ];
+      expect(verifyBytes(writeZip(entries), format, intentFor("table-cell")).status).toBe(
+        "verified",
+      );
+    },
+  );
+});
+
+/** Rewrites every structure with signature `sig` in a ZIP image. */
+function patchZip(
+  bytes: Uint8Array,
+  sig: number,
+  fn: (buf: Buffer, at: number) => void,
+): Uint8Array {
+  const buf = Buffer.from(bytes);
+  for (let i = 0; i + 4 <= buf.length; i++) if (buf.readUInt32LE(i) === sig) fn(buf, i);
+  return new Uint8Array(buf);
+}
+
+describe("writer reader: ZIP and XML guards (round-1 surviving mutants)", () => {
+  const intent = intentFor("table-cell");
+  const good = (format: WriterFormat): Uint8Array => writeZip(hostileEntries(format, "table-cell"));
+
+  it("the unpatched archives verify, so each refusal below is the guard's", () => {
+    for (const f of FORMATS) expect(verifyBytes(good(f), f, intent).status).toBe("verified");
+  });
+
+  it.each(FORMATS)("C: a duplicate main part is corrupt in either order (%s)", (format) => {
+    const main = format === "docx" ? DOCX_MAIN_PART : ODT_MAIN_PART;
+    const edited = hostileEntries(format, "table-cell");
+    const params = writerTaskFor(HOSTILE_SEED, "table-cell");
+    const pristine = (format === "docx" ? docxEntries : odtEntries)(
+      writerFixture(params.fixtureSeed),
+    ).find((e) => e.name === main) as ZipEntryInput;
+    const editedMain = edited.find((e) => e.name === main) as ZipEntryInput;
+    for (const order of [
+      [pristine, editedMain],
+      [editedMain, pristine],
+    ]) {
+      const entries = [...edited.filter((e) => e.name !== main), ...order];
+      const v = verifyBytes(writeZip(entries), format, intent);
+      expect(v).toMatchObject({ status: "uncertain", code: "read-corrupt" });
+      expect(v.reasons[0]).toMatch(/duplicate ZIP entry/);
+    }
+  });
+
+  it.each(FORMATS)(
+    "B: a local header that names another entry than the directory is corrupt (%s)",
+    (format) => {
+      const bytes = Buffer.from(good(format));
+      bytes[30] = "{".charCodeAt(0); // first local header's first name byte
+      const v = verifyBytes(new Uint8Array(bytes), format, intent);
+      expect(v).toMatchObject({ status: "uncertain", code: "read-corrupt" });
+      expect(v.reasons[0]).toMatch(/local header names/);
+    },
+  );
+
+  it.each(FORMATS)("D: an entry flagged encrypted is unreadable (%s)", (format) => {
+    const bytes = patchZip(good(format), 0x02014b50, (b, at) =>
+      b.writeUInt16LE(b.readUInt16LE(at + 8) | 1, at + 8),
+    );
+    const v = verifyBytes(bytes, format, intent);
+    expect(v).toMatchObject({ status: "uncertain", code: "read-unreadable" });
+    expect(v.reasons[0]).toMatch(/is encrypted/);
+  });
+
+  it.each(FORMATS)(
+    "E: a ZIP64 end record (0xffff entries or 0xffffffff offset) is unreadable (%s)",
+    (format) => {
+      const count = patchZip(good(format), 0x06054b50, (b, at) => {
+        b.writeUInt16LE(0xffff, at + 8);
+        b.writeUInt16LE(0xffff, at + 10);
+      });
+      const offset = patchZip(good(format), 0x06054b50, (b, at) =>
+        b.writeUInt32LE(0xffffffff, at + 16),
+      );
+      for (const bytes of [count, offset]) {
+        const v = verifyBytes(bytes, format, intent);
+        expect(v).toMatchObject({ status: "uncertain", code: "read-unreadable" });
+        expect(v.reasons[0]).toMatch(/ZIP64/);
+      }
+    },
+  );
+
+  it.each(FORMATS)(
+    "A: bytes between the central directory and the end record are corrupt (%s)",
+    (format) => {
+      const bytes = good(format);
+      const eocd = bytes.length - 22;
+      const spliced = Buffer.concat([
+        bytes.subarray(0, eocd),
+        Buffer.from("JUNK"),
+        bytes.subarray(eocd),
+      ]);
+      const v = verifyBytes(new Uint8Array(spliced), format, intent);
+      expect(v).toMatchObject({ status: "uncertain", code: "read-corrupt" });
+      expect(v.reasons[0]).toMatch(/does not end at the end record/);
+    },
+  );
+
+  it.each(FORMATS)("J: a main part that is not valid UTF-8 is corrupt (%s)", (format) => {
+    const main = format === "docx" ? DOCX_MAIN_PART : ODT_MAIN_PART;
+    const entries = withEntry(hostileEntries(format, "table-cell"), main, (d) =>
+      Buffer.concat([d, Buffer.from([0x3c, 0x21, 0x2d, 0x2d, 0xff, 0x2d, 0x2d, 0x3e])]),
+    );
+    const v = verifyBytes(writeZip(entries), format, intent);
+    expect(v).toMatchObject({ status: "uncertain", code: "read-corrupt" });
+    expect(v.reasons[0]).toMatch(/not valid UTF-8/);
+  });
+
+  it("K: an External relationship is never taken as the styles part", () => {
+    const styleIntent = intentFor("paragraph-style");
+    const entries = withEntry(
+      hostileEntries("docx", "paragraph-style"),
+      "word/_rels/document.xml.rels",
+      (d) =>
+        enc(
+          dec(d).replace(
+            "<Relationship ",
+            '<Relationship Id="rX" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="https://example.invalid/evil.xml" TargetMode="External"/><Relationship ',
+          ),
+        ),
+    );
+    expect(verifyBytes(writeZip(entries), "docx", styleIntent).status).toBe("verified");
+  });
+
+  it("F: a DOCTYPE with an internal subset is refused for that reason", () => {
+    expect(() => parseXml('<!DOCTYPE r [<!ENTITY a "b">]><r/>')).toThrow(/internal subsets/);
+  });
+
+  it("N4: nesting past MAX_XML_DEPTH is a syntax error, and a deep main part is read-corrupt", () => {
+    expect(() => parseXml(`${"<a>".repeat(300)}${"</a>".repeat(300)}`)).toThrow(
+      /nested deeper than 256/,
+    );
+    expect(() => parseXml(`${"<a>".repeat(200)}${"</a>".repeat(200)}`)).not.toThrow();
+    const deep = withEntry(hostileEntries("docx", "table-cell"), DOCX_MAIN_PART, (d) =>
+      enc(
+        dec(d).replace(
+          "<w:body>",
+          `<w:body><w:p>${"<w:r>".repeat(200_000)}${"</w:r>".repeat(200_000)}</w:p>`,
+        ),
+      ),
+    );
+    const v = verifyBytes(writeZip(deep), "docx", intent);
+    expect(v).toMatchObject({ status: "uncertain", code: "read-corrupt" });
+    expect(v.reasons[0]).toMatch(/nested deeper/);
+  });
+});
+
+describe("writer reader: package and table details (round-1 nits)", () => {
+  const intent = intentFor("table-cell");
+  const CT = "[Content_Types].xml";
+
+  it("N1: a garbled [Content_Types].xml is corrupt", () => {
+    const entries = withEntry(hostileEntries("docx", "table-cell"), CT, () => enc("not xml <"));
+    expect(verifyBytes(writeZip(entries), "docx", intent)).toMatchObject({
+      status: "uncertain",
+      code: "read-corrupt",
+    });
+  });
+
+  it("N1: a main part declared as another content type is unreadable", () => {
+    const entries = withEntry(hostileEntries("docx", "table-cell"), CT, (d) =>
+      enc(dec(d).replace("wordprocessingml.document.main+xml", "spreadsheetml.sheet.main+xml")),
+    );
+    const v = verifyBytes(writeZip(entries), "docx", intent);
+    expect(v).toMatchObject({ status: "uncertain", code: "read-unreadable" });
+    expect(v.reasons[0]).toMatch(/not a WordprocessingML document/);
+  });
+
+  it("N1: the main part's type may come from the Default for its extension", () => {
+    const entries = withEntry(hostileEntries("docx", "table-cell"), CT, (d) =>
+      enc(
+        dec(d)
+          .replace(/<Override PartName="\/word\/document.xml"[^>]*\/>/, "")
+          .replace(
+            '<Default Extension="xml" ContentType="application/xml"/>',
+            '<Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>',
+          ),
+      ),
+    );
+    expect(verifyBytes(writeZip(entries), "docx", intent).status).toBe("verified");
+  });
+
+  it.each([
+    [
+      "w:gridBefore",
+      (xml: string) => xml.replace("<w:tr>", '<w:tr><w:trPr><w:gridBefore w:val="1"/></w:trPr>'),
+    ],
+    [
+      "w:gridAfter",
+      (xml: string) => xml.replace("<w:tr>", '<w:tr><w:trPr><w:gridAfter w:val="1"/></w:trPr>'),
+    ],
+    ["w:hMerge", (xml: string) => xml.replace("<w:tcPr>", '<w:tcPr><w:hMerge w:val="continue"/>')],
+  ])("N3: %s shifts or merges cell names, so a table-cell check is uncertain", (_, edit) => {
+    const bytes = mutateEntries(hostileEntries("docx", "table-cell"), DOCX_MAIN_PART, edit);
+    expect(verifyBytes(bytes, "docx", intent)).toMatchObject({
+      status: "uncertain",
+      code: "merged-cell",
+    });
+  });
+
+  it("M: a paragraph-text task whose newText duplicates another fixture paragraph has no ground truth", () => {
+    const params = writerTaskFor("w-001", "paragraph-text");
+    if (params.kind !== "paragraph-text") throw new Error("unexpected kind");
+    const other = writerFixture(params.fixtureSeed).blocks.filter((b) => b.kind === "paragraph")[
+      params.paragraph === 0 ? 1 : 0
+    ];
+    if (other?.kind !== "paragraph") throw new Error("fixture has one paragraph");
+    expect(() => groundTruth({ ...params, newText: other.text })).toThrow(
+      /duplicates another fixture paragraph/,
+    );
   });
 });

@@ -30,6 +30,13 @@ export class XmlSyntaxError extends Error {
 }
 
 const NAME = /[A-Za-z_:][-A-Za-z0-9_:.]*/y;
+
+/**
+ * Deepest element nesting accepted. Real Writer XML nests a few dozen levels (lists in
+ * tables in sections); a deeper file is refused as malformed instead of overflowing the
+ * stack of this recursive parser or of the readers that walk its tree.
+ */
+export const MAX_XML_DEPTH = 256;
 const SPACE = /[ \t\r\n]*/y;
 
 function decodeEntities(raw: string, at: number): string {
@@ -98,7 +105,8 @@ export function parseXml(source: string): XmlElement {
     }
   };
 
-  const readElement = (): XmlElement => {
+  const readElement = (depth: number): XmlElement => {
+    if (depth > MAX_XML_DEPTH) fail(`elements nested deeper than ${MAX_XML_DEPTH}`);
     if (text[pos] !== "<") fail("expected '<'");
     pos++;
     const name = readName();
@@ -151,7 +159,7 @@ export function parseXml(source: string): XmlElement {
       } else if (text.startsWith("<?", pos)) {
         skipUntil("?>", "processing instruction");
       } else if (text[pos] === "<") {
-        children.push(readElement());
+        children.push(readElement(depth + 1));
       } else {
         const next = text.indexOf("<", pos);
         const end = next < 0 ? text.length : next;
@@ -165,7 +173,7 @@ export function parseXml(source: string): XmlElement {
 
   skipMisc(true);
   if (pos >= text.length) fail("no root element");
-  const root = readElement();
+  const root = readElement(1);
   skipMisc(false);
   if (pos !== text.length) fail("content after the root element");
   return root;

@@ -31,6 +31,12 @@ export interface ZipEntryInput {
   readonly data: Uint8Array;
   /** Store uncompressed (ODF requires this for `mimetype`). */
   readonly store?: boolean;
+  /**
+   * Already-deflated body with its true CRC-32 and inflated size; `data` is then ignored.
+   * Lets a test build an honest archive whose entries inflate far beyond the file size
+   * (a ZIP bomb) without ever holding the inflated bytes.
+   */
+  readonly deflated?: { readonly body: Uint8Array; readonly crc: number; readonly size: number };
 }
 
 /** Fixed DOS timestamp (1980-01-01 00:00) so output is byte-stable. */
@@ -43,10 +49,13 @@ export function writeZip(entries: readonly ZipEntryInput[]): Uint8Array {
   let offset = 0;
   for (const entry of entries) {
     const name = Buffer.from(entry.name, "utf8");
+    const pre = entry.deflated;
     const data = Buffer.from(entry.data);
-    const body = entry.store ? data : deflateRawSync(data);
-    const method = entry.store ? 0 : 8;
-    const crc = crc32(data) >>> 0;
+    const body =
+      pre !== undefined ? Buffer.from(pre.body) : entry.store ? data : deflateRawSync(data);
+    const method = pre === undefined && entry.store ? 0 : 8;
+    const crc = pre !== undefined ? pre.crc >>> 0 : crc32(data) >>> 0;
+    const size = pre !== undefined ? pre.size : data.length;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
@@ -56,7 +65,7 @@ export function writeZip(entries: readonly ZipEntryInput[]): Uint8Array {
     local.writeUInt16LE(DOS_DATE, 12);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(body.length, 18);
-    local.writeUInt32LE(data.length, 22);
+    local.writeUInt32LE(size, 22);
     local.writeUInt16LE(name.length, 26);
     local.writeUInt16LE(0, 28);
     const central = Buffer.alloc(46);
@@ -69,7 +78,7 @@ export function writeZip(entries: readonly ZipEntryInput[]): Uint8Array {
     central.writeUInt16LE(DOS_DATE, 14);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(body.length, 20);
-    central.writeUInt32LE(data.length, 24);
+    central.writeUInt32LE(size, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt32LE(offset, 42);
     locals.push(local, name, body);
