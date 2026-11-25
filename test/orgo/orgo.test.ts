@@ -38,7 +38,7 @@ describe("redact", () => {
       `key ${key}`,
       "Authorization: Bearer abcDEF0123456789abcDEF0123456789",
       '{"vnc_password":"hunter2hunter2","token":"eyJhbGciOi.payload.sig"}',
-      "https://www.orgo.ai/view?token=abcDEF0123456789abcDEF", // gitleaks:allow synthetic redaction fixture
+      "https://www.orgo.ai/view?token=orgo_test_fake_key_not_real", // synthetic redaction fixture
       "wss://host.example/ws/websockify",
       "Cookie: session=AbCdEf0123456789AbCdEf0123456789",
       testKey,
