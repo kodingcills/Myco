@@ -155,6 +155,7 @@ jobs:
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
       MYCO_VIEWER_BUDGET_REPORT: ${{ github.workspace }}/verdict-budget.ndjson
+      MYCO_VIEWER_BUDGET_INJECT_MS: "170" # TEMP regression proof, removed before merge
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
