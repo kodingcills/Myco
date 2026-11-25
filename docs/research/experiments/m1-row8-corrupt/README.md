@@ -75,3 +75,5 @@ which is why the log was produced per index directory.
 logs is the deploy script's literal `<token>` placeholder; the pack contains no key-shaped string.
 The per-start ping `session_id` GUIDs in the logs are not credentials (runbook §5). Screenshots
 are not committed.
+
+Redaction note (2026-11-25, TIF-241): absolute macOS home paths (and the account name) in this pack's files were replaced after the fact with `~/` or a `<account>` placeholder; nothing else changed.

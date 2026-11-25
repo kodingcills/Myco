@@ -2,14 +2,14 @@
 
 ## Main is protected (2026-11-21)
 
-`main` is protected via GitHub branch protection (classic). Direct pushes, force pushes, and branch deletion are blocked for everyone, including admins. Every change — code or docs — reaches `main` only through a merged pull request.
+`main` is protected via GitHub branch protection (classic). Direct pushes, force pushes, and branch deletion on `main` are blocked (the rule is not enforced for admins since the 2026-11-25 restore, TIF-245; agents must never use an admin bypass). Every change — code or docs — reaches `main` only through a merged pull request.
 
 Settings on `main`:
 
 - Pull request required before merging; **0 approving reviews** required (agents self-merge after an independent verifier PASS).
-- Required status checks (exact names): `check (macos-latest)`, `check (ubuntu-latest)`, `myco-agent tests (macos-latest)`, `myco-agent tests (ubuntu-latest)`.
-- Branch must be up to date with `main` before merging (rebase/merge-base push before merge).
-- Force pushes and deletions blocked; enforced for admins (no bypass).
+- Required status checks (exact names, restored 2026-11-25, TIF-245): `check (macos-latest)`, `check (ubuntu-latest)`, `myco-agent tests (ubuntu-latest)`, `runtime guest agent tests (ubuntu-latest)`, `secret scan (gitleaks)`.
+- Branch must be up to date with `main` before merging: merge `origin/main` into the branch (or `gh pr update-branch`), then push normally.
+- Force pushes and deletions of `main` blocked. **Agents never force push any Myco branch, PR branches included (TIF-262; lead rule 2026-11-25 15:15Z).**
 
 The historical exception ("coordinator may push docs/coordination state-log commits directly to main") is **revoked**. It was the mechanism behind merge-rule breaches #24/#25/#27/#28 (a `git push origin HEAD:main` from a worktree sitting on a feature branch carried code to main). The protection makes it impossible anyway; do not try.
 
@@ -27,7 +27,7 @@ gh pr merge --squash --auto   # merges itself once CI is green and branch is cur
 ```
 
 - No verifier needed for docs-only diffs, but the PR diff must contain **only** `docs/**` — if it touches anything else, the full code rules (verifier PASS + CI at the exact head) apply.
-- `--auto` lets GitHub merge when the 4 required checks pass; if the branch falls behind, `git fetch origin && git rebase origin/main && git push --force-with-lease` (allowed on your own feature branch; force is only blocked on `main`).
+- `--auto` lets GitHub merge when the required checks pass; if the branch falls behind, sync it without rewriting it: `gh pr update-branch <PR>`, or `git fetch origin && git merge origin/main && git push` (a normal push). **Never `--force` or `--force-with-lease`, on any branch (TIF-262).**
 - Never check out a feature branch in a worktree and then push `HEAD:main` — that path is now closed and was the source of past breaches.
 
 ## Code changes (unchanged)
@@ -332,8 +332,8 @@ just a merge conflict — it is a PR that cannot land and a verification that do
 not apply to the head that ships.
 
 1. **Before resuming or picking up ANY existing branch or worktree:** `git fetch
-   origin`, rebase onto the latest `origin/main` (merge it in if the branch is
-   already shared), resolve conflicts, and **re-run the tests before doing new
+   origin`, then merge the latest `origin/main` into it (rebase only commits you
+   have never pushed; once pushed, merge — never force push, TIF-262), resolve conflicts, and **re-run the tests before doing new
    work**. Do not build on top of a head you have not synced.
 2. **Right before opening a PR or pushing for review:** fetch and sync again,
    then confirm `git status` shows nothing behind and CI is running on the synced
@@ -361,4 +361,4 @@ paths.** If you need a broad add, `git status` first and name what you intend.
 **Never `git cherry-pick` a commit that ADDS a new file onto a diverged `main`.**
 It reads as a modify/delete conflict against a file that is simply absent from
 the base, and it wasted several cycles diagnosing a deletion that never happened.
-Rebase the whole branch instead.
+Merge `origin/main` into the branch instead.
