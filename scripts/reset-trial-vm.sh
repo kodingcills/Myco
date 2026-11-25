@@ -9,8 +9,10 @@
 # and PR #28's rejection). The disk-only path uses a plain qemu-img restore and
 # has not exhibited it.
 #
-# Known tradeoff: cold boot costs ~21s warm / ~165s from a fresh UTM start,
-# versus the live path's ~7s. We pay it for a reset that cannot wedge.
+# Known tradeoff: a cold reset costs ~190-260 s on this Mac (TIF-98, measured
+# 2026-11-25; earlier notes said ~21 s warm / ~165 s fresh), versus the live
+# path's ~7 s. We pay it for a reset that cannot wedge. Where the time goes:
+# docs/eval-runbook.md §3.1.
 #
 # usage: reset-trial-vm.sh [snapshot]   (default clean-base)
 set -euo pipefail
@@ -127,19 +129,16 @@ fi
 phase clock
 echo "reset-trial-vm: timing${TIMING} total=$(( $(date +%s) - T0 ))" >&2
 
-# Host memory, on every reset (TIF-98). The measured driver of slow resets is
-# host swap pressure, not this script: at ~9.9 GB of 11.2 GB swap used, QEMU
-# held 1.8 GB resident for a 6 GB guest and a cold boot took ~145 s to its
-# first ssh answer; M1 log 44 saw the same reset take 25.8 s once the host
-# recovered. So the line that explains a slow reset is printed beside it.
-# Informational only: memory never changes what the reset does or decides.
+# Host swap, on every reset (TIF-98), so a slow reset carries the host state
+# it ran under. Informational only: it never changes what the reset does. No
+# threshold warning: macOS resizes swap dynamically, so used/total is not a
+# stable signal, and the TIF-98 measurements found swap pressure a secondary
+# cost (resets took 213-254 s with swap freed to ~4.5 GB; the main cost is the
+# guest's own boot work, runbook §3.1).
 SWAP=$(sysctl -n vm.swapusage 2>/dev/null || true)
 SWAP_USED=$(printf '%s' "$SWAP" | sed -nE 's/.*used = ([0-9]+)[.0-9]*M.*/\1/p')
 SWAP_TOTAL=$(printf '%s' "$SWAP" | sed -nE 's/.*total = ([0-9]+)[.0-9]*M.*/\1/p')
 if [ -n "$SWAP_USED" ] && [ -n "$SWAP_TOTAL" ] && [ "$SWAP_TOTAL" -gt 0 ]; then
   echo "reset-trial-vm: host swap used ${SWAP_USED} of ${SWAP_TOTAL} MB" >&2
-  if [ $(( SWAP_USED * 100 / SWAP_TOTAL )) -ge 75 ]; then
-    echo "reset-trial-vm: WARNING host swap is ${SWAP_USED}/${SWAP_TOTAL} MB (>= 75%); expect slow boots and slow ssh (runbook §3.1). This measures the host, not the repo." >&2
-  fi
 fi
 echo "reset-trial-vm: ready on '$SNAPSHOT'"

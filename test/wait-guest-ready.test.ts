@@ -315,19 +315,25 @@ describe("wait-guest-ready", () => {
     function probeStarts(): number[] {
       return readFileSync(join(dir, "ssh.starts"), "utf8").trim().split("\n").map(Number);
     }
+    function gaps(xs: number[]): number[] {
+      return xs.slice(1).map((x, i) => x - (xs[i] ?? x));
+    }
 
     it("keeps stability probes at least STABLE_SPACING apart when probes are fast", {
       timeout: SLOW,
     }, async () => {
-      const r = await runGate({ cpuTrace: booting, sshAnswers: true, stableSpacing: 2, timeout: 45 });
+      const r = await runGate({
+        cpuTrace: booting,
+        sshAnswers: true,
+        stableSpacing: 2,
+        timeout: 45,
+      });
       expect(r.status).toBe(0);
       const starts = probeStarts();
       expect(starts).toHaveLength(3);
-      for (let i = 1; i < starts.length; i++) {
-        // Whole-second clock: a real gap of >= 2s shows as >= 2 (the gate waits
-        // an extra second when the integer gap is exactly the spacing).
-        expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(2);
-      }
+      // Whole-second clock: a real gap of >= 2s shows as >= 2 (the gate waits
+      // an extra second when the integer gap is exactly the spacing).
+      for (const gap of gaps(starts)) expect(gap).toBeGreaterThanOrEqual(2);
     });
 
     it("adds no sleep after a probe that already took longer than the spacing", {
@@ -347,9 +353,9 @@ describe("wait-guest-ready", () => {
       expect(r.stdout).toContain("apart start to start");
       const starts = probeStarts();
       expect(starts).toHaveLength(3);
-      for (let i = 1; i < starts.length; i++) {
-        expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(3);
-        expect(starts[i] - starts[i - 1]).toBeLessThanOrEqual(4);
+      for (const gap of gaps(starts)) {
+        expect(gap).toBeGreaterThanOrEqual(3);
+        expect(gap).toBeLessThanOrEqual(4);
       }
     });
   });
@@ -374,14 +380,24 @@ describe("wait-guest-ready", () => {
     });
 
     it("still fails a flat guest once the window has passed", { timeout: SLOW }, async () => {
-      const r = await runGate({ cpuTrace: ["00:01"], sshAnswers: true, stallSeconds: 6, timeout: 45 });
+      const r = await runGate({
+        cpuTrace: ["00:01"],
+        sshAnswers: true,
+        stallSeconds: 6,
+        timeout: 45,
+      });
       expect(r.status).toBe(1);
       expect(r.stderr).toContain("CPU flat for 6 intervals of 1s");
       expect(r.markers).not.toContain("ssh");
     });
 
     it("never decides a stall on fewer than 3 samples", { timeout: SLOW }, async () => {
-      const r = await runGate({ cpuTrace: ["00:01"], sshAnswers: true, stallSeconds: 1, timeout: 45 });
+      const r = await runGate({
+        cpuTrace: ["00:01"],
+        sshAnswers: true,
+        stallSeconds: 1,
+        timeout: 45,
+      });
       expect(r.status).toBe(1);
       expect(r.stderr).toContain("CPU flat for 3 intervals of 1s");
     });
