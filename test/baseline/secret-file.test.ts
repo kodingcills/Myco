@@ -23,6 +23,11 @@ const EXPECTED_LAUNCHERS = ["c1-baseline.sh", "c1-spike.sh"];
  *    backtick substitution, whatever was opened inside it (`"`, `'`, `${`, `$(`, a bare
  *    `(`), because bash finds it with a flat scan before parsing the inside (TIF-248
  *    round 2: `` `${x:- #`# `` and `` `( #` `` end at their second backtick).
+ *  - A `(` glued to the word before it (`<(`, `>(`, `=(`, `+=(`, extglob `@( !( *( +( ?(`)
+ *    closes with a `)` that does not end the word, like `$(…)` (TIF-248 round 3, P1/P2).
+ *    A simple one-line arithmetic command `(( … ))` is copied verbatim, so a `#` in its
+ *    body is kept, and a `#` right after its `))` is a comment, as in bash (P3; see NOT
+ *    COVERED in launcherKeyViolations for the bodies this does not handle).
  *  - A stack of contexts follows `'…'`, `"…"` (with `\` escapes), ANSI-C `$'…'` (with `\`
  *    escapes, so `$'a\' #'` is one string), and nested `$(…)`, bare `(…)` and backticks,
  *    whose insides are code again even within double quotes (`"$(printf "%s #" y)"` and
@@ -64,8 +69,10 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
     }
     src += text[k];
   }
-  // "paren" is `$(…)`, "sub" a bare `(…)` subshell: bash ends a word after the `)` of a
-  // subshell, not after the `)` of a command substitution (`$(true)#x` is one word).
+  // "paren" is a `(…)` glued INTO a word: `$(…)`, process substitution `<(…)`/`>(…)`,
+  // an array assignment `name=(…)` and extglob `@(…)` (also `!*+?`). "sub" is a bare
+  // `(…)` subshell. bash ends a word after the `)` of a subshell, not after the `)` of a
+  // "paren" (`$(true)#x`, `<(true)#x` and `a=(1)#x` are one word each; TIF-248 round 3).
   type Ctx = "sq" | "dq" | "ansi" | "paren" | "sub" | "bt" | "brace";
   const stack: Ctx[] = [];
   const pendingHeredocs: { delim: string; stripTabs: boolean; quoted: boolean }[] = [];
@@ -164,6 +171,41 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
         while (i + 1 < src.length && !stop.test(src[i + 1] ?? "")) i++;
         continue;
       }
+      // A `(` glued to the word before it (round 3, P1/P2): `<(`, `>(`, `=(` (array
+      // assignment, also `+=(`) or an extglob `@( !( *( +( ?(`. Its `)` does not end the
+      // word. An ESCAPED `\<(` or `\=(` is a bash syntax error, so it is not told apart:
+      // treating it as glued only keeps more text.
+      const glued = c === "(" && /[<>=@!*+?]/.test(out[out.length - 1] ?? "");
+      if (c === "(" && next === "(" && !glued) {
+        // Arithmetic command `(( … ))`, also `for (( … ))` (round 3, P3): bash reads the
+        // whole body as arithmetic text, so a `#` in it is never a comment. The body is
+        // copied verbatim through the matching `)`, but ONLY when it is simple: one line
+        // with no quote, backtick, backslash, `$(`, `${`, `$'` or `$"`. Anything else
+        // falls back to the ordinary lexer below, so this can only keep more text (add
+        // flags), never change how quotes or substitutions are read.
+        let depth = 0;
+        let j = i;
+        let close = -1;
+        for (; j < src.length; j++) {
+          const d = src[j] ?? "";
+          if (d === "(") depth++;
+          else if (d === ")") {
+            depth--;
+            if (depth === 0) {
+              close = j;
+              break;
+            }
+          } else if (/[\n'"`\\]/.test(d) || (d === "$" && /[({'"]/.test(src[j + 1] ?? ""))) {
+            break;
+          }
+        }
+        if (close !== -1) {
+          out += src.slice(i, close + 1);
+          i = close;
+          wordStartAt = out.length; // bash: `(( 1 ))#c` IS a comment after the `))`
+          continue;
+        }
+      }
       if (c === "$" && (next === "'" || next === "{" || next === "(")) {
         stack.push(next === "'" ? "ansi" : next === "{" ? "brace" : "paren");
         out += c + next;
@@ -247,7 +289,7 @@ function stripShellComments(text: string, opts: { heredocs?: boolean } = {}): st
       if (c === "'") stack.push("sq");
       else if (c === '"') stack.push("dq");
       else if (c === "(") {
-        stack.push("sub");
+        stack.push(glued ? "paren" : "sub");
         brk = true;
       } else if (c === ")") {
         if (top === "paren") stack.pop();
@@ -426,6 +468,22 @@ const SECRETS_FILE_MENTION =
  *    that case through (b); no proof covers every arithmetic form.
  *  - Comments in a heredoc body are kept by (a) and stripped by (b) and (c), so a key
  *    export written in a body (which bash never runs) is flagged: a false positive.
+ *  - P4 (#460 round 2): a word in command position that starts `name[`. bash scans it to
+ *    the matching `]`, so a `#` inside (`a[ #]`, `a[1 #1]`, `a[;#]`) is word text. The
+ *    word runs as a command (command not found), and a key export later on the same line
+ *    runs. All three strategies read the `#` as a comment (it follows a blank, `;` or
+ *    `(`) and drop the rest of the line, so the union misses it. With `=` after the `]`
+ *    (an assignment), bash exits on the arithmetic error before the export, and as an
+ *    argument (`echo a[ #]`) the `#` IS a comment, so only the command-position,
+ *    non-assignment form hides an export. Not fixed: telling command position apart
+ *    needs a parser, and any word-start rule would add false positives.
+ *  - P3, partly (#460 round 2): an arithmetic command `(( … ))` / `for (( … ))` is
+ *    copied verbatim by (a) and (b) only when its text, from `((` to the matching `)`,
+ *    is one line with no quote, backtick, backslash, `$(`, `${`, `$'` or `$"`. Otherwise
+ *    it is lexed as ordinary code, so a `#` after a blank in it (`(( "1" #))`,
+ *    `(( $(echo 1) #))`, `(( 1⏎ #))`) is read as a comment and drops the closing `))` and
+ *    the rest of the line. bash reads the body as arithmetic and runs a later export, so
+ *    the union misses those forms. (c) misses every `(( … #))` form.
  */
 function launcherKeyViolations(
   text: string,
@@ -791,6 +849,22 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     "echo `(true; ( #`; export ANTHROPIC_API_KEY=x",
     "echo `( #`#; export ANTHROPIC_API_KEY=x",
     "echo `(true; ( #`#; export ANTHROPIC_API_KEY=x",
+    // TIF-248 round 3 (#460 round-2 verifier). Each was checked against GNU bash 5.3.20,
+    // which runs the export. Each was clean under the union at 9b11dc25 and 698da363, and
+    // (c) misses each, so each row fails if (a)/(b) regress.
+    // P1: the `)` of a process substitution or an extglob does not end the word.
+    "cat <(true)#; export ANTHROPIC_API_KEY=x",
+    "echo >(true)#; export ANTHROPIC_API_KEY=x",
+    "cat <()#; export ANTHROPIC_API_KEY=x",
+    "shopt -s extglob\necho @(x)#; export ANTHROPIC_API_KEY=x",
+    // P2: an array assignment `name=(…)`/`name+=(…)` is one word; its `)` is not a break.
+    "a=(1)#; export ANTHROPIC_API_KEY=x",
+    "a+=(1 2)#; export ANTHROPIC_API_KEY=x",
+    // P3: the body of an arithmetic command is arithmetic text; a `#` in it is no comment.
+    "(( 1 #)); export ANTHROPIC_API_KEY=x",
+    "(( #)); export ANTHROPIC_API_KEY=x",
+    "for (( #;;)); do break; done; export ANTHROPIC_API_KEY=x",
+    "x=1; (( x > 0 #)) && true; export ANTHROPIC_API_KEY=x",
   ];
   for (const line of forbidden) {
     it(`flags ${JSON.stringify(line)}`, () => {
@@ -839,6 +913,32 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     expect(launcherKeyViolations(d5).length).toBeGreaterThan(0); // (b) catches it
     // And the lines (a) wrongly copies verbatim keep their comments: a false positive.
     expect(wholeFile("echo $((1 << 2))\necho hi # export ANTHROPIC_API_KEY=x").length).toBe(1);
+  });
+  it("known limitation: P4, a `#` in a command-position `name[…]` word (false negative)", () => {
+    // bash 5.3 runs each export (`a[ #]: command not found`); every strategy misses it.
+    for (const t of [
+      "a[ #]; export ANTHROPIC_API_KEY=x",
+      "a[1 #1]; export ANTHROPIC_API_KEY=x",
+      "a[;#]; export ANTHROPIC_API_KEY=x",
+    ]) {
+      expect(launcherKeyViolations(t), t).toEqual([]);
+    }
+  });
+  it("known limitation: P3, a non-simple `(( … ))` body falls back to code (false negative)", () => {
+    // bash 5.3 runs each export. The body has a quote, a `$(`, or a newline, so (a)/(b)
+    // do not copy it verbatim and read the `#` as a comment; (c) misses every form.
+    for (const t of [
+      '(( "1" #)); export ANTHROPIC_API_KEY=x',
+      "(( $(echo 1) #)); export ANTHROPIC_API_KEY=x",
+      "(( 1\n #)); export ANTHROPIC_API_KEY=x",
+    ]) {
+      expect(launcherKeyViolations(t), t).toEqual([]);
+    }
+    // The simple-body rule is bash-accurate on the other side too: after `))`, a `#` IS a
+    // comment (`(( 1 ))#c` runs nothing after it).
+    expect(launcherKeyViolations("(( 1 ))# export ANTHROPIC_API_KEY=x")).toEqual([]);
+    expect(launcherKeyViolations("a=(1) # export ANTHROPIC_API_KEY=x")).toEqual([]);
+    expect(launcherKeyViolations("cat <(true) # export ANTHROPIC_API_KEY=x")).toEqual([]);
   });
   it("known limitation: comments in a heredoc body are flagged (false positive)", () => {
     expect(launcherKeyViolations("cat <<EOF\n# export ANTHROPIC_API_KEY=x\nEOF").length).toBe(1);
@@ -908,6 +1008,10 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
       "echo \\ #; export ANTHROPIC_API_KEY=x",
       "echo $(true)#; export ANTHROPIC_API_KEY=x",
       "echo `( #`; export ANTHROPIC_API_KEY=x",
+      // Round 3: P1, P2 and P3.
+      "cat <(true)#; export ANTHROPIC_API_KEY=x",
+      "a=(1)#; export ANTHROPIC_API_KEY=x",
+      "(( 1 #)); export ANTHROPIC_API_KEY=x",
     ]) {
       expect(wholeFile(t).length, t).toBe(2);
       expect(noHeredoc(t).length, t).toBe(2);
