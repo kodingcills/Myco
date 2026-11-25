@@ -97,7 +97,7 @@ const MAX_INPUT = 5_000;
 export const MAX_OUTPUT = 1024;
 // Integer microdollars at the frozen short-context input and output rates.
 export const MAX_CALL_MICROS = MAX_INPUT * 2 + MAX_OUTPUT * 10;
-const PROMPT = [
+export const PROMPT = [
   "Edit the open LibreOffice Calc document using the screenshot only. Save and close it.",
   "Find the row by its record key and the column by its header.",
   'Return a single JSON object, with no Markdown: {"claim":"done"} or {"claim":"failure"},',
