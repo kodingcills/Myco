@@ -181,7 +181,7 @@ jobs:
           echo '### Verdict budget samples (${{ matrix.os }})' >> "$GITHUB_STEP_SUMMARY"
           if [ -f "$MYCO_VIEWER_BUDGET_REPORT" ]; then
             node -e 'for (const l of require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n")) { const r = JSON.parse(l); console.log(`- ${r.steps} steps, attempt ${r.attempt ?? 1}, N=${r.samples.length}: median ${r.median.toFixed(1)}, p95 ${r.p95.toFixed(1)}, max ${r.max.toFixed(1)} ms`); }' "$MYCO_VIEWER_BUDGET_REPORT" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "raw samples (ms), one JSON line per size:"
+            echo "raw samples (ms), one JSON line per size and attempt (a retry line carries its note):"
             cat "$MYCO_VIEWER_BUDGET_REPORT"
           fi
       - uses: actions/upload-artifact@v4
