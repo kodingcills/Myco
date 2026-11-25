@@ -661,6 +661,10 @@ it("ends with 128+n when the signal comes just as the command exits", () => {
   // The command signals the wrapper and exits at once, so the wrapper forwards to
   // a group that holds only an unreaped zombie. macOS answers that killpg with
   // EPERM (not ESRCH); the wrapper must still exit 143, with the lock released.
+  // `kill` returns before the command exits, so the SIGTERM always reaches the
+  // wrapper while the command runs: the contract (header, runbook §6) says 143,
+  // never the command's 0. That used to fail on loaded macOS runners, when
+  // sigwait lost the signal (see the self-pipe comment in the wrapper).
   const { lock, env } = fixture();
   for (let round = 0; round < 5; round += 1) {
     const result = runSync([WRAPPER, "--", "bash", "-c", 'kill -TERM "$PPID"'], env);
