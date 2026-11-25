@@ -183,6 +183,25 @@ def step_pid(fd, name):
     return pid
 
 
+def background_pid(name):
+    """The pid of the step's background child, once that child has ignored SIGINT.
+
+    The step writes `$!` right after forking it, but the child may not have run
+    yet: on a loaded runner a Ctrl-C sent then reaches it before it ignores
+    SIGINT and kills it, and the scenario no longer tests what it says. So the
+    child marks itself ready after its `trap '' INT`, and this waits for that."""
+    ready = path(name, "ready")
+    end = time.time() + 15
+    while not os.path.exists(ready):
+        if time.time() > end:
+            fail(f"session {name}: the background child never got ready (no {ready})")
+        time.sleep(0.02)
+    with open(path(name, "bg")) as f:
+        pid = int(f.read().strip())
+    known_pids.add(pid)
+    return pid
+
+
 def wrapper_pid():
     fields = record().split()
     if len(fields) != 2 or fields[1] != "vm-session.sh":
@@ -264,7 +283,7 @@ def scenario_c(fd, name):
 def deploy_like(fd, name, fast):
     token, done, bg = path(name, "token"), path(name, "done"), path(name, "bg")
     extra = f"""tmp="{token}"; : > "$tmp"
-( trap '' INT; exec sleep 300 ) &
+( trap '' INT; : > "{path(name, "ready")}"; exec sleep 300 ) &
 tunnel=$!
 echo "$tunnel" > "{bg}"
 trap 'rm -f "$tmp"; sleep 0.2; kill "$tunnel" 2>/dev/null; touch "{done}"' EXIT"""
@@ -272,13 +291,11 @@ trap 'rm -f "$tmp"; sleep 0.2; kill "$tunnel" 2>/dev/null; touch "{done}"' EXIT"
     if fast:
         fifo = path(name, "fifo")
         os.mkfifo(fifo)
-        body = f'exec 3<>"{fifo}"\nwhile [ ! -e "{path(name, "go")}" ]; do read -r -t 0.1 -u 3; done'
+        body = f'exec 3<>"{fifo}"\nwhile [ ! -e "{path(name, "go")}" ]; do read -r -t 1 -u 3; done'
     session(fd, name, write_step(name, extra, body))
     step_pid(fd, name)
     wrapper_pid()
-    with open(bg) as f:
-        tunnel = int(f.read().strip())
-    known_pids.add(tunnel)
+    tunnel = background_pid(name)
     send(fd, "\x03")
     rc = session_rc(fd, name, 15, "the session to end on Ctrl-C")
     if not os.path.exists(done):
@@ -302,14 +319,12 @@ def scenario_e(fd, name):
 
 def scenario_f(fd, name):
     bg = path(name, "bg")
-    extra = f"""( trap '' INT; exec sleep 300 ) &
+    extra = f"""( trap '' INT; : > "{path(name, "ready")}"; exec sleep 300 ) &
 echo "$!" > "{bg}\""""
     session(fd, name, write_step(name, extra, LONG_WAIT))
     s = step_pid(fd, name)
     w = wrapper_pid()
-    with open(bg) as f:
-        left = int(f.read().strip())
-    known_pids.add(left)
+    left = background_pid(name)
     mark = len(text())
     send(fd, "\x03")
     found = wait_for(fd, r"vm-session: still waiting after SIGINT[^\n]*", 8,
