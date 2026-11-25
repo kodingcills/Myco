@@ -57,6 +57,11 @@ export const REASON_CODES = [
    * countable (M2-10's tamper class).
    */
   "ORACLE_INPUT_REJECTED",
+  /**
+   * The request named a task or run other than the one this gate was assigned by the
+   * operator. Nothing is read. Counted like ORACLE_INPUT_REJECTED: a substitution attempt.
+   */
+  "ASSIGNMENT_MISMATCH",
   /** `taskId` is not in the operator's registry. */
   "UNKNOWN_TASK",
   /**
@@ -172,7 +177,7 @@ function partialOf(raw: Record<string, unknown>): GateResult["request"] {
   const out: { taskId?: string; runId?: string; claim?: string } = {};
   if (typeof raw.taskId === "string" && isSafeId(raw.taskId)) out.taskId = raw.taskId;
   if (typeof raw.runId === "string" && isSafeId(raw.runId)) out.runId = raw.runId;
-  if (typeof raw.claim === "string") out.claim = raw.claim.slice(0, CLAIM_LIMIT);
+  if (typeof raw.claim === "string" && raw.claim.length <= CLAIM_LIMIT) out.claim = raw.claim;
   return out;
 }
 
@@ -224,11 +229,19 @@ export function parseGateRequest(raw: unknown): ParsedRequest {
   if (record.claim !== undefined && typeof record.claim !== "string") {
     return { ok: false, code: "INVALID_REQUEST", reason: "claim must be a string", partial };
   }
+  if (typeof record.claim === "string" && record.claim.length > CLAIM_LIMIT) {
+    return {
+      ok: false,
+      code: "INVALID_REQUEST",
+      reason: `claim is longer than ${CLAIM_LIMIT} characters`,
+      partial,
+    };
+  }
   const request: GateRequest = {
     ...(record.apiVersion === undefined ? {} : { apiVersion: GATE_API_VERSION }),
     taskId: record.taskId as string,
     runId: record.runId as string,
-    ...(typeof record.claim === "string" ? { claim: record.claim.slice(0, CLAIM_LIMIT) } : {}),
+    ...(typeof record.claim === "string" ? { claim: record.claim } : {}),
   };
   return { ok: true, request };
 }

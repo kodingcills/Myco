@@ -32,8 +32,16 @@ function fixtureRoot(): string {
   return root;
 }
 
-function gate(root = fixtureRoot()) {
-  return createGate({ tasks: buildRegistry(builtinTasks()), reader: fileEvidenceReader(root) });
+type Assigned = { taskId: string; runId: string };
+const S01_TRIAL: Assigned = { taskId: "df-s01", runId: "run-ok" };
+const S02_TRIAL: Assigned = { taskId: "df-s02", runId: "run-dropped" };
+
+function gate(root = fixtureRoot(), assignment: Assigned = S01_TRIAL) {
+  return createGate({
+    tasks: buildRegistry(builtinTasks()),
+    reader: fileEvidenceReader(root),
+    assignment,
+  });
 }
 
 async function rpc(line: string, g = gate()): Promise<Record<string, unknown> | undefined> {
@@ -42,10 +50,10 @@ async function rpc(line: string, g = gate()): Promise<Record<string, unknown> | 
 }
 
 /** In-process client over a pair of streams: the same client code the demo uses. */
-function connect(root: string) {
+function connect(root: string, assignment: Assigned) {
   const toServer = new PassThrough();
   const fromServer = new PassThrough();
-  const served = serveStdio(gate(root), toServer, fromServer);
+  const served = serveStdio(gate(root, assignment), toServer, fromServer);
   const client = mcpStdio(toServer, fromServer);
   return {
     client,
@@ -60,8 +68,25 @@ function connect(root: string) {
 type CallResult = { structuredContent: GateResult; content: { text: string }[]; isError: boolean };
 
 describe("myco-gate MCP server, driven like a client", () => {
-  it("initialize → tools/list → tools/call for verified, refuted and a tamper attempt", async () => {
-    const { client, close } = connect(fixtureRoot());
+  it("a df-s01 trial's own passing run is verified and accepted", async () => {
+    const { client, close } = connect(fixtureRoot(), S01_TRIAL);
+    try {
+      await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
+      await client.notify("notifications/initialized");
+      const ok = (await client.request("tools/call", {
+        name: GATE_TOOL,
+        arguments: { taskId: "df-s01", runId: "run-ok", claim: "done" },
+      })) as CallResult;
+      expect(ok.isError).toBe(false);
+      expect(ok.structuredContent).toMatchObject({ verdict: "verified", accepted: true });
+      expect(JSON.parse(ok.content[0]?.text ?? "")).toEqual(ok.structuredContent);
+    } finally {
+      await close();
+    }
+  });
+
+  it("initialize → tools/list → tools/call: refuted, tamper, and run substitution (df-s02 trial)", async () => {
+    const { client, close } = connect(fixtureRoot(), S02_TRIAL);
     try {
       const init = (await client.request("initialize", {
         protocolVersion: "2025-06-18",
@@ -85,13 +110,17 @@ describe("myco-gate MCP server, driven like a client", () => {
         annotations: { readOnlyHint: true, destructiveHint: false },
       });
 
-      const ok = (await client.request("tools/call", {
+      // The df-s02 agent names df-s01's passing run: the bound gate refuses to look.
+      const substituted = (await client.request("tools/call", {
         name: GATE_TOOL,
         arguments: { taskId: "df-s01", runId: "run-ok", claim: "done" },
       })) as CallResult;
-      expect(ok.isError).toBe(false);
-      expect(ok.structuredContent).toMatchObject({ verdict: "verified", accepted: true });
-      expect(JSON.parse(ok.content[0]?.text ?? "")).toEqual(ok.structuredContent);
+      expect(substituted.isError).toBe(true);
+      expect(substituted.structuredContent).toMatchObject({
+        verdict: "uncertain",
+        accepted: false,
+        reasonCodes: ["ASSIGNMENT_MISMATCH", "CLAIM_RECORDED"],
+      });
 
       const refuted = (await client.request("tools/call", {
         name: GATE_TOOL,
@@ -147,7 +176,7 @@ describe("myco-gate MCP server, driven like a client", () => {
 
 describe("myco-gate MCP server: JSON-RPC edge cases (mirrors myco-rt-mcp)", () => {
   it("malformed JSON is -32700 and the server keeps serving", async () => {
-    const { client, close } = connect(fixtureRoot());
+    const { client, close } = connect(fixtureRoot(), S01_TRIAL);
     const g = gate();
     expect(await rpc("{nope", g)).toMatchObject({ id: null, error: { code: -32700 } });
     try {
@@ -225,7 +254,18 @@ describe("myco-gate as a subprocess (how Claude Code starts it)", () => {
     const root = fixtureRoot();
     const child = spawn(
       process.execPath,
-      ["--import", "tsx", join(ROOT, "scripts/myco-gate.ts"), "mcp", "--evidence-root", root],
+      [
+        "--import",
+        "tsx",
+        join(ROOT, "scripts/myco-gate.ts"),
+        "mcp",
+        "--evidence-root",
+        root,
+        "--task",
+        "df-s02",
+        "--run",
+        "run-dropped",
+      ],
       { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"] },
     );
     const client = mcpStdio(child.stdin, child.stdout);

@@ -4,7 +4,8 @@
  *  - it never returns `verified` (or `accepted`) without an oracle pass;
  *  - the agent cannot supply or alter the oracle's inputs through a request.
  */
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runTask } from "../../src/discovery/run-tasks.ts";
@@ -17,6 +18,7 @@ import {
 } from "../../src/gate/api.ts";
 import { FAMILIES, type OracleFamily, StateCorruptError } from "../../src/gate/families.ts";
 import {
+  type Assignment,
   buildRegistry,
   createGate,
   type EvidenceReader,
@@ -39,8 +41,14 @@ import {
 const STORE = ".myco-todo.json";
 const FIXED = new Date("2026-11-25T12:00:00Z");
 
-function gateOver(root: string, extra: Partial<GateConfig> = {}, entries?: TaskEntry[]) {
+function gateOver(
+  root: string,
+  assignment: Assignment,
+  extra: Partial<GateConfig> = {},
+  entries?: TaskEntry[],
+) {
   return createGate({
+    assignment,
     tasks: buildRegistry(
       entries ?? [
         ...builtinTasks(),
@@ -69,7 +77,10 @@ describe("gate: verdict paths over the todo family (myco-run's oracle)", () => {
   it("verified: every requested item persisted", async () => {
     const root = tempRoot();
     writeState(root, "r1", STORE, todoStore(S01_ITEMS));
-    const result = await gateOver(root).check({ taskId: "df-s01", runId: "r1" });
+    const result = await gateOver(root, { taskId: "df-s01", runId: "r1" }).check({
+      taskId: "df-s01",
+      runId: "r1",
+    });
     assertInvariant(result);
     expect(result).toMatchObject({
       verdict: "verified",
@@ -88,7 +99,7 @@ describe("gate: verdict paths over the todo family (myco-run's oracle)", () => {
   it("refuted: the app dropped items while its status line claimed success (df-s02)", async () => {
     const root = tempRoot();
     writeState(root, "r2", STORE, todoStore(S02_PERSISTED));
-    const result = await gateOver(root).check({
+    const result = await gateOver(root, { taskId: "df-s02", runId: "r2" }).check({
       taskId: "df-s02",
       runId: "r2",
       claim: "All 4 items added and saved.",
@@ -101,7 +112,10 @@ describe("gate: verdict paths over the todo family (myco-run's oracle)", () => {
   });
 
   it("uncertain STATE_MISSING: no persisted state at the evidence location", async () => {
-    const result = await gateOver(tempRoot()).check({ taskId: "df-s01", runId: "never-ran" });
+    const result = await gateOver(tempRoot(), { taskId: "df-s01", runId: "never-ran" }).check({
+      taskId: "df-s01",
+      runId: "never-ran",
+    });
     assertInvariant(result);
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_MISSING"] });
     expect(result.oracle).toBeUndefined();
@@ -114,7 +128,10 @@ describe("gate: verdict paths over the todo family (myco-run's oracle)", () => {
   ])("uncertain STATE_CORRUPT: %s", async (_name, content) => {
     const root = tempRoot();
     writeState(root, "r", STORE, content);
-    const result = await gateOver(root).check({ taskId: "df-s01", runId: "r" });
+    const result = await gateOver(root, { taskId: "df-s01", runId: "r" }).check({
+      taskId: "df-s01",
+      runId: "r",
+    });
     assertInvariant(result);
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_CORRUPT"] });
   });
@@ -125,7 +142,10 @@ describe("gate: verdict paths over the todo family (myco-run's oracle)", () => {
     writeFileSync(join(outside, "forged.json"), todoStore(S02_ITEMS));
     mkdirSync(join(root, "r"), { recursive: true });
     symlinkSync(join(outside, "forged.json"), join(root, "r", STORE));
-    const result = await gateOver(root).check({ taskId: "df-s02", runId: "r" });
+    const result = await gateOver(root, { taskId: "df-s02", runId: "r" }).check({
+      taskId: "df-s02",
+      runId: "r",
+    });
     assertInvariant(result);
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
   });
@@ -133,7 +153,10 @@ describe("gate: verdict paths over the todo family (myco-run's oracle)", () => {
   it("uncertain STATE_UNREADABLE: the state path is a directory", async () => {
     const root = tempRoot();
     mkdirSync(join(root, "r", STORE), { recursive: true });
-    const result = await gateOver(root).check({ taskId: "df-s01", runId: "r" });
+    const result = await gateOver(root, { taskId: "df-s01", runId: "r" }).check({
+      taskId: "df-s01",
+      runId: "r",
+    });
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
   });
 
@@ -144,15 +167,21 @@ describe("gate: verdict paths over the todo family (myco-run's oracle)", () => {
         throw new Error("disk on fire");
       },
     };
-    const result = await gateOver(tempRoot(), { reader }).check({ taskId: "df-s01", runId: "r" });
+    const result = await gateOver(tempRoot(), { taskId: "df-s01", runId: "r" }, { reader }).check({
+      taskId: "df-s01",
+      runId: "r",
+    });
     assertInvariant(result);
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
   });
 
-  it("uncertain UNKNOWN_TASK", async () => {
-    const result = await gateOver(tempRoot()).check({ taskId: "nope", runId: "r" });
+  it("a task outside the registry is ASSIGNMENT_MISMATCH (the assignment must be registered)", async () => {
+    const result = await gateOver(tempRoot(), { taskId: "df-s01", runId: "r" }).check({
+      taskId: "nope",
+      runId: "r",
+    });
     assertInvariant(result);
-    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["UNKNOWN_TASK"] });
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["ASSIGNMENT_MISMATCH"] });
   });
 });
 
@@ -160,7 +189,10 @@ describe("gate: verdict paths over the calc-record-edit family (M1's Calc oracle
   it("verified when the target cell holds the new value", async () => {
     const root = tempRoot();
     writeState(root, "c", "out/sheet.csv", calcCsv(true));
-    const result = await gateOver(root).check({ taskId: "calc-1", runId: "c" });
+    const result = await gateOver(root, { taskId: "calc-1", runId: "c" }).check({
+      taskId: "calc-1",
+      runId: "c",
+    });
     assertInvariant(result);
     expect(result).toMatchObject({ verdict: "verified", reasonCodes: ["ORACLE_PASS"] });
   });
@@ -168,7 +200,10 @@ describe("gate: verdict paths over the calc-record-edit family (M1's Calc oracle
   it("refuted when the sheet was saved without the edit", async () => {
     const root = tempRoot();
     writeState(root, "c", "out/sheet.csv", calcCsv(false));
-    const result = await gateOver(root).check({ taskId: "calc-1", runId: "c" });
+    const result = await gateOver(root, { taskId: "calc-1", runId: "c" }).check({
+      taskId: "calc-1",
+      runId: "c",
+    });
     assertInvariant(result);
     expect(result).toMatchObject({ verdict: "refuted", reasonCodes: ["ORACLE_FAIL"] });
   });
@@ -176,7 +211,10 @@ describe("gate: verdict paths over the calc-record-edit family (M1's Calc oracle
   it("uncertain ORACLE_UNCERTAIN when the sheet is truncated before the target row", async () => {
     const root = tempRoot();
     writeState(root, "c", "out/sheet.csv", "id,name\n");
-    const result = await gateOver(root).check({ taskId: "calc-1", runId: "c" });
+    const result = await gateOver(root, { taskId: "calc-1", runId: "c" }).check({
+      taskId: "calc-1",
+      runId: "c",
+    });
     assertInvariant(result);
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["ORACLE_UNCERTAIN"] });
   });
@@ -223,6 +261,7 @@ describe("gate: malformed requests never reach the oracle", () => {
     const gate = createGate({
       tasks: buildRegistry(builtinTasks(), new Map([["todo-items", spy]])),
       reader: fileEvidenceReader(root),
+      assignment: { taskId: "df-s01", runId: "r" },
     });
     const result = await gate.check(request);
     assertInvariant(result);
@@ -235,7 +274,7 @@ describe("gate: malformed requests never reach the oracle", () => {
   it("accepts an explicit matching apiVersion", async () => {
     const root = tempRoot();
     writeState(root, "r", STORE, todoStore(S01_ITEMS));
-    const result = await gateOver(root).check({
+    const result = await gateOver(root, { taskId: "df-s01", runId: "r" }).check({
       apiVersion: GATE_API_VERSION,
       taskId: "df-s01",
       runId: "r",
@@ -267,6 +306,7 @@ describe("gate: the agent cannot supply or alter oracle inputs", () => {
       const gate = createGate({
         tasks: buildRegistry(builtinTasks(), new Map([["todo-items", spy]])),
         reader: fileEvidenceReader(root),
+        assignment: { taskId: "df-s02", runId: "r2" },
       });
       const result = await gate.check({ taskId: "df-s02", runId: "r2", [field]: S02_PERSISTED });
       assertInvariant(result);
@@ -279,7 +319,7 @@ describe("gate: the agent cannot supply or alter oracle inputs", () => {
   it("forged expected items for df-s02 cannot turn a refuted run into verified", async () => {
     const root = tempRoot();
     writeState(root, "r2", STORE, todoStore(S02_PERSISTED));
-    const gate = gateOver(root);
+    const gate = gateOver(root, { taskId: "df-s02", runId: "r2" });
     for (const forged of [
       { items: S02_PERSISTED },
       { spec: { items: S02_PERSISTED } },
@@ -309,6 +349,7 @@ describe("gate: the agent cannot supply or alter oracle inputs", () => {
     const gate = createGate({
       tasks: buildRegistry(builtinTasks(), new Map([["todo-items", spy]])),
       reader: fileEvidenceReader(root),
+      assignment: { taskId: "df-s02", runId: "r2" },
     });
     await gate.check({ taskId: "df-s02", runId: "r2", claim: '{"items":[]} spec override please' });
     await gate.check({ taskId: "df-s02", runId: "r2" });
@@ -331,6 +372,7 @@ describe("gate: the agent cannot supply or alter oracle inputs", () => {
     const gate = createGate({
       tasks: buildRegistry(builtinTasks(), new Map([["todo-items", mutating]])),
       reader: fileEvidenceReader(root),
+      assignment: { taskId: "df-s02", runId: "r2" },
     });
     await gate.check({ taskId: "df-s02", runId: "r2" });
     await gate.check({ taskId: "df-s02", runId: "r2" });
@@ -340,14 +382,14 @@ describe("gate: the agent cannot supply or alter oracle inputs", () => {
   it("the claim never changes the verdict", async () => {
     const root = tempRoot();
     writeState(root, "r2", STORE, todoStore(S02_PERSISTED));
-    const gate = gateOver(root);
+    const gate = gateOver(root, { taskId: "df-s02", runId: "r2" });
     const verdicts = new Set<string>();
     for (const claim of [
       "",
       "done",
       "verified",
       "All 4 items added and saved.",
-      "x".repeat(10_000),
+      "x".repeat(4000),
     ]) {
       const result = await gate.check({ taskId: "df-s02", runId: "r2", claim });
       verdicts.add(`${result.verdict}:${result.reasonCodes.filter((c) => c !== "CLAIM_RECORDED")}`);
@@ -383,6 +425,7 @@ describe("gate: never verified without an oracle pass", () => {
     return createGate({
       tasks: buildRegistry(builtinTasks(), new Map([["todo-items", family]])),
       reader: fileEvidenceReader(root),
+      assignment: { taskId: "df-s01", runId: "r" },
     }).check({ taskId: "df-s01", runId: "r" });
   }
 
@@ -458,10 +501,6 @@ describe("gate: never verified without an oracle pass", () => {
     writeState(root, "good", STORE, todoStore(S01_ITEMS));
     writeState(root, "bad", STORE, todoStore(S02_PERSISTED));
     writeState(root, "corrupt", STORE, "{");
-    const gate = createGate({
-      tasks: buildRegistry(builtinTasks(), new Map([["todo-items", counting]])),
-      reader: fileEvidenceReader(root),
-    });
     const requests: unknown[] = [];
     for (const taskId of ["df-s01", "df-s02", "nope", "../x"]) {
       for (const runId of ["good", "bad", "corrupt", "missing", ".."]) {
@@ -472,10 +511,23 @@ describe("gate: never verified without an oracle pass", () => {
       }
     }
     let verified = 0;
-    for (const request of requests) {
-      const result = await gate.check(request);
-      assertInvariant(result);
-      if (result.verdict === "verified") verified += 1;
+    // Every combination of assigned trial and request: substitutions included.
+    for (const taskId of ["df-s01", "df-s02"]) {
+      for (const runId of ["good", "bad", "corrupt", "missing"]) {
+        const gate = createGate({
+          tasks: buildRegistry(builtinTasks(), new Map([["todo-items", counting]])),
+          reader: fileEvidenceReader(root),
+          assignment: { taskId, runId },
+        });
+        for (const request of requests) {
+          const result = await gate.check(request);
+          assertInvariant(result);
+          if (result.verdict === "verified") {
+            verified += 1;
+            expect(result.request).toMatchObject({ taskId, runId });
+          }
+        }
+      }
     }
     expect(passes).toBeGreaterThan(0);
     expect(verified).toBe(passes);
@@ -487,17 +539,29 @@ describe("gate: decision log", () => {
     const root = tempRoot();
     writeState(root, "r1", STORE, todoStore(S01_ITEMS));
     const logged: GateResult[] = [];
-    const ok = await gateOver(root, { onDecision: (r) => logged.push(r) }).check({
+    const ok = await gateOver(
+      root,
+      { taskId: "df-s01", runId: "r1" },
+      {
+        onDecision: (r) => {
+          logged.push(r);
+        },
+      },
+    ).check({
       taskId: "df-s01",
       runId: "r1",
     });
     expect(logged).toEqual([ok]);
 
-    const failing = await gateOver(root, {
-      onDecision: () => {
-        throw new Error("disk full");
+    const failing = await gateOver(
+      root,
+      { taskId: "df-s01", runId: "r1" },
+      {
+        onDecision: () => {
+          throw new Error("disk full");
+        },
       },
-    }).check({ taskId: "df-s01", runId: "r1" });
+    ).check({ taskId: "df-s01", runId: "r1" });
     assertInvariant(failing);
     expect(failing.verdict).toBe("uncertain");
     expect(failing.accepted).toBe(false);
@@ -567,5 +631,247 @@ describe("gate: operator registry", () => {
       { id: "a", family: "calc-record-edit", stateFile: "s.csv", spec: reordered },
     ]);
     expect(a.get("a")?.specSha256).toBe(b.get("a")?.specSha256);
+  });
+});
+
+describe("gate: the assignment binds the gate to one trial (round 1 D1)", () => {
+  function spyReader(root: string) {
+    const reads: string[] = [];
+    const inner = fileEvidenceReader(root);
+    const reader: EvidenceReader = {
+      describe: inner.describe,
+      read(runId, stateFile) {
+        reads.push(`${runId}/${stateFile}`);
+        return inner.read(runId, stateFile);
+      },
+    };
+    return { reader, reads };
+  }
+
+  function twoRuns() {
+    const root = tempRoot();
+    writeState(root, "run-s01", STORE, todoStore(S01_ITEMS)); // passes df-s01
+    writeState(root, "run-s02", STORE, todoStore(S02_PERSISTED)); // refutes df-s02
+    return root;
+  }
+
+  it("cross-run and cross-task: an agent assigned df-s02 cannot name df-s01's passing run", async () => {
+    const root = twoRuns();
+    const { reader, reads } = spyReader(root);
+    const gate = gateOver(root, { taskId: "df-s02", runId: "run-s02" }, { reader });
+    const result = await gate.check({ taskId: "df-s01", runId: "run-s01", claim: "df-s02 done" });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", accepted: false });
+    expect(result.reasonCodes[0]).toBe("ASSIGNMENT_MISMATCH");
+    expect(reads).toEqual([]);
+    // Its own run is still checked, and refuted.
+    expect((await gate.check({ taskId: "df-s02", runId: "run-s02" })).verdict).toBe("refuted");
+  });
+
+  it("same task, other run: an agent cannot name another passing run of its own task", async () => {
+    const root = twoRuns();
+    const gate = gateOver(root, { taskId: "df-s01", runId: "mine" });
+    const result = await gate.check({ taskId: "df-s01", runId: "run-s01" });
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["ASSIGNMENT_MISMATCH"] });
+  });
+
+  it("same run, other task: the run's state is not checked against a different task", async () => {
+    const root = twoRuns();
+    const gate = gateOver(root, { taskId: "df-s02", runId: "run-s01" });
+    const result = await gate.check({ taskId: "df-s01", runId: "run-s01" });
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["ASSIGNMENT_MISMATCH"] });
+  });
+
+  it("a state file symlinked to another run inside the root is STATE_UNREADABLE", async () => {
+    const root = twoRuns();
+    mkdirSync(join(root, "symin"));
+    symlinkSync(join(root, "run-s01", STORE), join(root, "symin", STORE));
+    const result = await gateOver(root, { taskId: "df-s01", runId: "symin" }).check({
+      taskId: "df-s01",
+      runId: "symin",
+    });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+  });
+
+  it("a run directory symlinked to another run is STATE_UNREADABLE", async () => {
+    const root = twoRuns();
+    symlinkSync(join(root, "run-s01"), join(root, "symdir"));
+    const result = await gateOver(root, { taskId: "df-s01", runId: "symdir" }).check({
+      taskId: "df-s01",
+      runId: "symdir",
+    });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+  });
+
+  it("an evidence root that is itself a symlink is allowed (the operator chose it)", async () => {
+    const real = twoRuns();
+    const linkParent = tempRoot();
+    symlinkSync(real, join(linkParent, "root"));
+    const result = await gateOver(join(linkParent, "root"), {
+      taskId: "df-s01",
+      runId: "run-s01",
+    }).check({ taskId: "df-s01", runId: "run-s01" });
+    expect(result.verdict).toBe("verified");
+  });
+
+  it.each([
+    ["an unregistered task", { taskId: "nope", runId: "r" }],
+    ["an unsafe run id", { taskId: "df-s01", runId: "../r" }],
+    ["a missing assignment", undefined],
+  ])("createGate refuses %s", (_name, assignment) => {
+    expect(() =>
+      createGate({
+        tasks: buildRegistry(builtinTasks()),
+        reader: fileEvidenceReader(tempRoot()),
+        assignment: assignment as Assignment,
+      }),
+    ).toThrow(/invalid gate assignment/);
+  });
+});
+
+describe("gate: an async decision log is awaited and fails closed (round 1 D2)", () => {
+  it("a rejecting async logger gives uncertain AUDIT_FAILED, never verified", async () => {
+    const root = tempRoot();
+    writeState(root, "r1", STORE, todoStore(S01_ITEMS));
+    const result = await gateOver(
+      root,
+      { taskId: "df-s01", runId: "r1" },
+      {
+        onDecision: async () => {
+          await new Promise((done) => setTimeout(done, 5));
+          throw new Error("ledger unavailable");
+        },
+      },
+    ).check({ taskId: "df-s01", runId: "r1" });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", accepted: false });
+    expect(result.reasonCodes).toEqual(["ORACLE_PASS", "AUDIT_FAILED"]);
+  });
+
+  it("the result is returned only after an async logger has finished", async () => {
+    const root = tempRoot();
+    writeState(root, "r1", STORE, todoStore(S01_ITEMS));
+    const logged: GateResult[] = [];
+    const result = await gateOver(
+      root,
+      { taskId: "df-s01", runId: "r1" },
+      {
+        onDecision: async (r) => {
+          await new Promise((done) => setTimeout(done, 5));
+          logged.push(r);
+        },
+      },
+    ).check({ taskId: "df-s01", runId: "r1" });
+    expect(logged).toEqual([result]);
+    expect(result.accepted).toBe(true);
+  });
+});
+
+describe("gate: evidence refs and the rejection list are pinned (round 1 D3)", () => {
+  it("the evidence ref's digest and size are those of the file actually read", async () => {
+    const root = tempRoot();
+    const path = writeState(root, "r1", STORE, todoStore(S01_ITEMS));
+    const bytes = readFileSync(path);
+    const result = await gateOver(root, { taskId: "df-s01", runId: "r1" }).check({
+      taskId: "df-s01",
+      runId: "r1",
+    });
+    expect(result.evidenceRefs).toEqual([
+      {
+        kind: "persisted-state",
+        runId: "r1",
+        path: STORE,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        bytes: bytes.length,
+      },
+    ]);
+  });
+
+  it("the oracle-input field list is exactly the documented one", () => {
+    // A literal copy on purpose: removing a name from the source must fail here.
+    expect([...ORACLE_INPUT_FIELDS].sort()).toEqual(
+      [
+        "accepted",
+        "cells",
+        "evidence",
+        "evidenceDir",
+        "evidenceRoot",
+        "expected",
+        "expectedValue",
+        "family",
+        "fixture",
+        "groundTruth",
+        "intent",
+        "items",
+        "oracle",
+        "params",
+        "path",
+        "persisted",
+        "spec",
+        "state",
+        "stateFile",
+        "status",
+        "store",
+        "storePath",
+        "verdict",
+      ].sort(),
+    );
+    for (const field of ["verdict", "items", "evidenceRoot"]) {
+      const parsed = parseGateRequest({ taskId: "df-s01", runId: "r", [field]: 1 });
+      expect(parsed.ok ? "accepted" : parsed.code).toBe("ORACLE_INPUT_REJECTED");
+    }
+  });
+});
+
+describe("gate: round 1 nits", () => {
+  it("a reader that never answers times out as STATE_UNREADABLE", async () => {
+    const reader: EvidenceReader = { describe: "hangs", read: () => new Promise(() => {}) };
+    const result = await gateOver(
+      tempRoot(),
+      { taskId: "df-s01", runId: "r" },
+      { reader, readTimeoutMs: 20 },
+    ).check({ taskId: "df-s01", runId: "r" });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+    expect(result.reasons.join(" ")).toContain("timed out");
+  });
+
+  it("an oracle output with a throwing getter keeps its request and evidence refs", async () => {
+    const root = tempRoot();
+    writeState(root, "r", STORE, todoStore(S01_ITEMS));
+    const family: OracleFamily = {
+      id: "todo-items",
+      version: "test",
+      checkSpec: () => undefined,
+      decide: () =>
+        ({
+          get status(): string {
+            throw new Error("trap");
+          },
+        }) as never,
+    };
+    const result = await createGate({
+      tasks: buildRegistry(builtinTasks(), new Map([["todo-items", family]])),
+      reader: fileEvidenceReader(root),
+      assignment: { taskId: "df-s01", runId: "r" },
+    }).check({ taskId: "df-s01", runId: "r" });
+    assertInvariant(result);
+    expect(result).toMatchObject({
+      verdict: "uncertain",
+      reasonCodes: ["ORACLE_ERROR"],
+      request: { taskId: "df-s01", runId: "r" },
+    });
+    expect(result.evidenceRefs).toHaveLength(1);
+  });
+
+  it("a claim longer than 4000 characters is rejected, not truncated", async () => {
+    const result = await gateOver(tempRoot(), { taskId: "df-s01", runId: "r" }).check({
+      taskId: "df-s01",
+      runId: "r",
+      claim: "x".repeat(4001),
+    });
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["INVALID_REQUEST"] });
   });
 });

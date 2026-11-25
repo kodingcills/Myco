@@ -48,7 +48,8 @@ describe("myco-gate check", () => {
     expect((await run([...base, "--task", "df-s01", "--run", "missing"])).code).toBe(
       EXIT_UNCERTAIN,
     );
-    expect((await run([...base, "--task", "df-s01", "--run", "../ok"])).code).toBe(EXIT_UNCERTAIN);
+    // An unsafe run id is the operator's mistake here, so it is a usage error.
+    expect((await run([...base, "--task", "df-s01", "--run", "../ok"])).code).toBe(EXIT_USAGE);
   });
 
   it("--json prints the GateResult; --audit appends one line per decision", async () => {
@@ -111,6 +112,9 @@ describe("myco-gate check", () => {
     [["check", "--evidence-root"]],
     [["check", "--evidence-root", "/x", "--bogus"]],
     [["check", "--evidence-root", "/x", "--no-builtin", "--task", "a", "--run", "b"]],
+    [["mcp", "--evidence-root", "/x"]],
+    [["mcp", "--evidence-root", "/x", "--task", "df-s01"]],
+    [["mcp", "--evidence-root", "/x", "--task", "nope", "--run", "r"]],
     [["frobnicate"]],
     [["demo", "--transport", "live"]],
     [[]],
@@ -144,18 +148,20 @@ describe("myco-gate check", () => {
 });
 
 describe("myco-gate demo --transport mock (end to end, no VM, no model)", () => {
-  it("accepts df-s01, rejects df-s02 as refuted, rejects the tamper attempt", async () => {
+  it("accepts df-s01; rejects df-s02 (refuted), the tamper attempt and the run substitution", async () => {
     const report = await runMockDemo({ outDir: tempRoot() });
     expect(report.tools).toEqual(["myco_gate_check"]);
     expect(report.rows.map((r) => [r.scenario, r.verdict, r.harness, r.asExpected])).toEqual([
       ["df-s01 clean save", "verified", "DONE accepted", true],
       ["df-s02 silent drop", "refuted", "DONE rejected", true],
       ["df-s02 agent tampers", "uncertain", "DONE rejected", true],
+      ["df-s02 agent names df-s01's run", "uncertain", "DONE rejected", true],
     ]);
+    expect(report.rows[3]?.reasonCodes).toContain("ASSIGNMENT_MISMATCH");
     // The UI said "saved 4" in both runs; only the gate tells them apart.
     expect(new Set(report.rows.map((r) => r.uiStatus))).toEqual(new Set(["saved 4 item(s)"]));
     expect(report.ok).toBe(true);
     const logged = readFileSync(report.auditLog, "utf8").trim().split("\n");
-    expect(logged).toHaveLength(3);
+    expect(logged).toHaveLength(4);
   }, 30_000);
 });

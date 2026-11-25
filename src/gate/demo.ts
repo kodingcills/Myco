@@ -30,8 +30,11 @@ export const GATE_SCRIPT = join(ROOT, "scripts", "myco-gate.ts");
 
 export interface DemoScenario {
   readonly name: string;
+  /** The trial the operator assigned; the gate process is bound to it (`--task`, `--run`). */
   readonly taskId: string;
   readonly runId: string;
+  /** What the agent names in its request, when it differs from the assignment. */
+  readonly names?: { readonly taskId: string; readonly runId: string };
   /** Extra arguments the agent tries to send (the tamper scenario). */
   readonly tamper?: Record<string, unknown>;
   readonly expectAccepted: boolean;
@@ -81,6 +84,14 @@ export const SCENARIOS: readonly DemoScenario[] = [
     expectAccepted: false,
     expectCode: "ORACLE_INPUT_REJECTED",
   },
+  {
+    name: "df-s02 agent names df-s01's run",
+    taskId: "df-s02",
+    runId: "demo-df-s02",
+    names: { taskId: "df-s01", runId: "demo-df-s01" },
+    expectAccepted: false,
+    expectCode: "ASSIGNMENT_MISMATCH",
+  },
 ];
 
 /** The fake agent: drive the mock app through the task, then report what the UI said. */
@@ -107,6 +118,57 @@ async function fakeAgentRun(taskId: string, evidenceRoot: string, runId: string)
   return status;
 }
 
+/**
+ * Start one gate process bound to one trial, the way Claude Code starts an MCP server for
+ * one agent session, make one tool call, and stop it.
+ */
+async function callBoundGate(
+  evidenceRoot: string,
+  auditLog: string,
+  assignment: { readonly taskId: string; readonly runId: string },
+  args: Record<string, unknown>,
+): Promise<{ result: GateResult; toolNames: string[] }> {
+  const child = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      GATE_SCRIPT,
+      "mcp",
+      "--evidence-root",
+      evidenceRoot,
+      "--task",
+      assignment.taskId,
+      "--run",
+      assignment.runId,
+      "--audit",
+      auditLog,
+    ],
+    { cwd: ROOT, stdio: ["pipe", "pipe", "inherit"] },
+  );
+  const client = mcpStdio(child.stdin, child.stdout);
+  try {
+    await client.request("initialize", {
+      protocolVersion: PROTOCOL_VERSIONS[0],
+      capabilities: {},
+      clientInfo: { name: "myco-gate-demo", version: "0" },
+    });
+    await client.notify("notifications/initialized");
+    const listed = (await client.request("tools/list", {})) as { tools: { name: string }[] };
+    const called = (await client.request("tools/call", { name: GATE_TOOL, arguments: args })) as {
+      structuredContent: GateResult;
+    };
+    return { result: called.structuredContent, toolNames: listed.tools.map((tool) => tool.name) };
+  } finally {
+    client.close();
+    child.stdin.end();
+    await new Promise<void>((done) => {
+      if (child.exitCode !== null) done();
+      else child.once("exit", () => done());
+    });
+  }
+}
+
 export async function runMockDemo(options: { readonly outDir?: string } = {}): Promise<DemoReport> {
   const outDir = options.outDir ?? mkdtempSync(join(tmpdir(), "myco-gate-demo-"));
   const evidenceRoot = join(outDir, "evidence");
@@ -123,65 +185,39 @@ export async function runMockDemo(options: { readonly outDir?: string } = {}): P
     }
   }
 
-  // The gate runs as its own process, started the way Claude Code starts an MCP server.
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", GATE_SCRIPT, "mcp", "--evidence-root", evidenceRoot, "--audit", auditLog],
-    { cwd: ROOT, stdio: ["pipe", "pipe", "inherit"] },
-  );
-  const client = mcpStdio(child.stdin, child.stdout);
   const rows: DemoRow[] = [];
-  let tools: string[] = [];
-  try {
-    await client.request("initialize", {
-      protocolVersion: PROTOCOL_VERSIONS[0],
-      capabilities: {},
-      clientInfo: { name: "myco-gate-demo", version: "0" },
-    });
-    await client.notify("notifications/initialized");
-    const listed = (await client.request("tools/list", {})) as { tools: { name: string }[] };
-    tools = listed.tools.map((tool) => tool.name);
-    for (const scenario of SCENARIOS) {
-      const task = runTask(scenario.taskId);
-      const agentClaim = task.agentClaim;
-      const called = (await client.request("tools/call", {
-        name: GATE_TOOL,
-        arguments: {
-          taskId: scenario.taskId,
-          runId: scenario.runId,
-          claim: agentClaim,
-          ...scenario.tamper,
-        },
-      })) as { structuredContent: GateResult };
-      const result = called.structuredContent;
-      rows.push({
-        scenario: scenario.name,
-        provenance: "mock",
-        uiStatus: uiStatus.get(scenario.runId) ?? "",
-        agentClaim,
-        verdict: result.verdict,
-        accepted: result.accepted,
-        reasonCodes: result.reasonCodes,
-        harness: result.accepted ? "DONE accepted" : "DONE rejected",
-        asExpected:
-          result.accepted === scenario.expectAccepted &&
-          result.reasonCodes.includes(scenario.expectCode),
-      });
-    }
-  } finally {
-    client.close();
-    child.stdin.end();
-    await new Promise<void>((done) => {
-      if (child.exitCode !== null) done();
-      else child.once("exit", () => done());
+  const tools = new Set<string>();
+  for (const scenario of SCENARIOS) {
+    const task = runTask(scenario.taskId);
+    const agentClaim = task.agentClaim;
+    const named = scenario.names ?? { taskId: scenario.taskId, runId: scenario.runId };
+    const { result, toolNames } = await callBoundGate(
+      evidenceRoot,
+      auditLog,
+      { taskId: scenario.taskId, runId: scenario.runId },
+      { ...named, claim: agentClaim, ...scenario.tamper },
+    );
+    for (const name of toolNames) tools.add(name);
+    rows.push({
+      scenario: scenario.name,
+      provenance: "mock",
+      uiStatus: uiStatus.get(scenario.runId) ?? "",
+      agentClaim,
+      verdict: result.verdict,
+      accepted: result.accepted,
+      reasonCodes: result.reasonCodes,
+      // The gate is bound to this trial, so `accepted` alone is the harness's decision.
+      harness: result.accepted ? "DONE accepted" : "DONE rejected",
+      asExpected:
+        result.accepted === scenario.expectAccepted &&
+        result.reasonCodes.includes(scenario.expectCode),
     });
   }
   return {
-    ok:
-      rows.length === SCENARIOS.length && rows.every((row) => row.asExpected) && tools.length === 1,
+    ok: rows.length === SCENARIOS.length && rows.every((row) => row.asExpected) && tools.size === 1,
     evidenceRoot,
     auditLog,
-    tools,
+    tools: [...tools],
     rows,
   };
 }

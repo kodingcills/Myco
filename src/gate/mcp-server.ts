@@ -25,7 +25,8 @@ export const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"] as c
 
 const INSTRUCTIONS =
   "Myco's completion gate. When you believe the task is done, call myco_gate_check with the " +
-  "taskId and runId you were given. The task counts as done only if the result has " +
+  "taskId and runId you were given. This gate serves only that task and run; naming any " +
+  "other gives ASSIGNMENT_MISMATCH. The task counts as done only if the result has " +
   'verdict "verified" (accepted: true). On "refuted", the persisted state contradicts the ' +
   'task: fix it and call again. On "uncertain", the gate could not look: report the reason ' +
   "codes; do not claim done. You cannot supply evidence or expected values; the gate reads " +
@@ -70,6 +71,7 @@ async function callTool(gate: Gate, params: Record<string, unknown>): Promise<Rp
       "UNKNOWN_FIELD",
       "ORACLE_INPUT_REJECTED",
       "UNSUPPORTED_API_VERSION",
+      "ASSIGNMENT_MISMATCH",
     ].includes(code),
   );
   return {

@@ -9,8 +9,8 @@
  * `ORACLE_PASS` code together, never set independently.
  */
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import {
   type EvidenceRef,
   GATE_API_VERSION,
@@ -131,7 +131,13 @@ export interface EvidenceReader {
 
 export const STATE_FILE_LIMIT = 16 * 1024 * 1024;
 
-/** Reads `<root>/<runId>/<stateFile>`, refusing anything that resolves outside `root`. */
+/**
+ * Reads `<root>/<runId>/<stateFile>`. Every path component below `root` must be a real
+ * directory or file: a symlink anywhere below the root is refused (STATE_UNREADABLE), so a
+ * run cannot borrow another run's state, inside or outside the root. The final file is
+ * opened with O_NOFOLLOW and checked through its descriptor, so it cannot be swapped for a
+ * link between the check and the read. `root` itself may be a symlink: the operator chose it.
+ */
 export function fileEvidenceReader(root: string): EvidenceReader {
   const absoluteRoot = resolve(root);
   return {
@@ -140,32 +146,46 @@ export function fileEvidenceReader(root: string): EvidenceReader {
       if (!isSafeId(runId) || !isSafeRelativePath(stateFile)) {
         return { ok: false, cause: "unreadable", detail: "path is not a safe relative path" };
       }
-      const target = join(absoluteRoot, runId, stateFile);
-      try {
-        lstatSync(target);
-      } catch {
-        return { ok: false, cause: "missing", detail: `${runId}/${stateFile} does not exist` };
-      }
-      try {
-        const realRoot = realpathSync(absoluteRoot);
-        const realTarget = realpathSync(target);
-        if (!realTarget.startsWith(`${realRoot}${sep}`)) {
+      const where = `${runId}/${stateFile}`;
+      const segments = [runId, ...stateFile.split("/")];
+      let path = absoluteRoot;
+      for (const [index, segment] of segments.entries()) {
+        path = join(path, segment);
+        let stat: ReturnType<typeof lstatSync>;
+        try {
+          stat = lstatSync(path);
+        } catch {
+          return { ok: false, cause: "missing", detail: `${where} does not exist` };
+        }
+        if (stat.isSymbolicLink()) {
+          return { ok: false, cause: "unreadable", detail: `${where} passes through a symlink` };
+        }
+        if (index < segments.length - 1 && !stat.isDirectory()) {
           return {
             ok: false,
             cause: "unreadable",
-            detail: `${runId}/${stateFile} resolves outside the evidence root`,
+            detail: `${where}: ${segment} is not a directory`,
           };
         }
-        const stat = lstatSync(realTarget);
-        if (!stat.isFile()) {
-          return { ok: false, cause: "unreadable", detail: `${runId}/${stateFile} is not a file` };
-        }
+      }
+      let fd: number;
+      try {
+        fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      } catch (error) {
+        return { ok: false, cause: "unreadable", detail: `open failed: ${String(error)}` };
+      }
+      try {
+        const stat = fstatSync(fd);
+        if (!stat.isFile())
+          return { ok: false, cause: "unreadable", detail: `${where} is not a file` };
         if (stat.size > STATE_FILE_LIMIT) {
-          return { ok: false, cause: "unreadable", detail: `${runId}/${stateFile} is too large` };
+          return { ok: false, cause: "unreadable", detail: `${where} is too large` };
         }
-        return { ok: true, bytes: new Uint8Array(readFileSync(realTarget)) };
+        return { ok: true, bytes: new Uint8Array(readFileSync(fd)) };
       } catch (error) {
         return { ok: false, cause: "unreadable", detail: `read failed: ${String(error)}` };
+      } finally {
+        closeSync(fd);
       }
     },
   };
@@ -175,16 +195,35 @@ export function fileEvidenceReader(root: string): EvidenceReader {
 // The gate
 // ---------------------------------------------------------------------------
 
+/**
+ * The trial this gate serves: the one task and run the agent was assigned. Operator-only.
+ * A request naming any other task or run is `uncertain` with ASSIGNMENT_MISMATCH and
+ * nothing is read, so an agent cannot borrow another run's passing state. This is the
+ * trial identity TIF-266's vault keys its receipt on: the reader for a bound gate only
+ * ever sees `assignment.runId`.
+ */
+export interface Assignment {
+  readonly taskId: string;
+  readonly runId: string;
+}
+
 export interface GateConfig {
   readonly tasks: TaskRegistry;
   readonly reader: EvidenceReader;
+  /** Required: one gate per trial. Build another gate for another trial. */
+  readonly assignment: Assignment;
   readonly now?: () => Date;
+  /** How long the reader may take before the result is `uncertain` STATE_UNREADABLE. */
+  readonly readTimeoutMs?: number;
   /**
-   * Called with every result before it is returned (the decision log for R1). If it
-   * throws, the gate fails closed: the result becomes `uncertain` with AUDIT_FAILED.
+   * Called with every result before it is returned (the decision log for R1), and awaited.
+   * If it throws or its promise rejects, the gate fails closed: the result becomes
+   * `uncertain` with AUDIT_FAILED.
    */
-  readonly onDecision?: (result: GateResult) => void;
+  readonly onDecision?: (result: GateResult) => void | Promise<void>;
 }
+
+export const DEFAULT_READ_TIMEOUT_MS = 30_000;
 
 export interface Gate {
   readonly apiVersion: typeof GATE_API_VERSION;
@@ -214,17 +253,69 @@ function verdictFromOracle(output: OracleOutput): { verdict: GateVerdict; code: 
   }
 }
 
-export function createGate(config: GateConfig): Gate {
-  const now = config.now ?? (() => new Date());
+/** Read with a deadline; a hung reader becomes `unreadable`, never a pending call. */
+async function readWithin(
+  reader: EvidenceReader,
+  runId: string,
+  stateFile: string,
+  timeoutMs: number,
+): Promise<ReadOutcome> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<ReadOutcome>((done) => {
+    timer = setTimeout(
+      () =>
+        done({ ok: false, cause: "unreadable", detail: `reader timed out after ${timeoutMs} ms` }),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([
+      reader.read(runId, stateFile).catch(
+        (error): ReadOutcome => ({
+          ok: false,
+          cause: "unreadable",
+          detail: `reader threw: ${String(error)}`,
+        }),
+      ),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-  function finish(parts: {
+/** Throws when the assignment is unusable, so a misconfigured gate never starts. */
+function checkAssignment(config: GateConfig): void {
+  const { taskId, runId } = config.assignment ?? {};
+  if (
+    typeof taskId !== "string" ||
+    !isSafeId(taskId) ||
+    typeof runId !== "string" ||
+    !isSafeId(runId)
+  ) {
+    throw new Error("invalid gate assignment: taskId and runId must be safe ids");
+  }
+  if (!config.tasks.has(taskId)) {
+    throw new Error(
+      `invalid gate assignment: task ${JSON.stringify(taskId)} is not in the registry`,
+    );
+  }
+}
+
+export function createGate(config: GateConfig): Gate {
+  checkAssignment(config);
+  const assignment = { ...config.assignment };
+  const now = config.now ?? (() => new Date());
+  const readTimeoutMs = config.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS;
+
+  async function finish(parts: {
     verdict: GateVerdict;
     codes: ReasonCode[];
     reasons: string[];
     request: GateResult["request"];
     refs?: EvidenceRef[];
     oracle?: GateResult["oracle"];
-  }): GateResult {
+  }): Promise<GateResult> {
     const codes = [...parts.codes];
     if (parts.request.claim !== undefined) codes.push("CLAIM_RECORDED");
     const accepted =
@@ -242,7 +333,7 @@ export function createGate(config: GateConfig): Gate {
     };
     if (!config.onDecision) return result;
     try {
-      config.onDecision(result);
+      await config.onDecision(result);
       return result;
     } catch (error) {
       return {
@@ -271,6 +362,16 @@ export function createGate(config: GateConfig): Gate {
       runId,
       ...(parsed.request.claim === undefined ? {} : { claim: parsed.request.claim }),
     };
+    if (taskId !== assignment.taskId || runId !== assignment.runId) {
+      return finish({
+        verdict: "uncertain",
+        codes: ["ASSIGNMENT_MISMATCH"],
+        reasons: [
+          `this gate serves task ${JSON.stringify(assignment.taskId)}, run ${JSON.stringify(assignment.runId)}; the request named task ${JSON.stringify(taskId)}, run ${JSON.stringify(runId)}`,
+        ],
+        request,
+      });
+    }
     const task = config.tasks.get(taskId);
     if (!task) {
       return finish({
@@ -281,12 +382,7 @@ export function createGate(config: GateConfig): Gate {
       });
     }
 
-    let read: ReadOutcome;
-    try {
-      read = await config.reader.read(runId, task.stateFile);
-    } catch (error) {
-      read = { ok: false, cause: "unreadable", detail: `reader threw: ${String(error)}` };
-    }
+    const read = await readWithin(config.reader, runId, task.stateFile, readTimeoutMs);
     if (!read.ok) {
       return finish({
         verdict: "uncertain",
@@ -310,15 +406,18 @@ export function createGate(config: GateConfig): Gate {
       specSha256: task.specSha256,
     };
 
-    let output: unknown;
+    let valid: OracleOutput | undefined;
     try {
       // A fresh copy of the spec per call: an oracle that mutates its input cannot
       // change what the next call checks.
-      output = task.family.decide(
+      const output: unknown = task.family.decide(
         read.bytes,
         structuredClone(task.spec),
         `${runId}/${task.stateFile}`,
       );
+      // Inside the try: a throwing getter on the output is an oracle error, and the
+      // result keeps its request and evidence refs.
+      valid = validOracleOutput(output);
     } catch (error) {
       const corrupt = error instanceof StateCorruptError;
       return finish({
@@ -329,7 +428,6 @@ export function createGate(config: GateConfig): Gate {
         refs,
       });
     }
-    const valid = validOracleOutput(output);
     if (!valid) {
       return finish({
         verdict: "uncertain",

@@ -20,11 +20,13 @@ export const EXIT_USAGE = 3;
 
 export const USAGE = `usage:
   myco-gate check --evidence-root <dir> --task <id> --run <id> [--claim <text>] [options]
-  myco-gate mcp   --evidence-root <dir> [options]
+  myco-gate mcp   --evidence-root <dir> --task <id> --run <id> [options]
   myco-gate demo  --transport mock [--out <dir>] [--json]
 
 operator options (check, mcp):
   --evidence-root <dir>  persisted state is read from <dir>/<runId>/<task stateFile>
+  --task <id> --run <id> the assignment: the one task and run this gate serves (mcp: the
+                         agent's trial; any other task or run is ASSIGNMENT_MISMATCH)
   --tasks <file>         extra tasks: { "tasks": [ { id, family, stateFile, spec } ] }
   --no-builtin           do not register the built-in myco-run tasks (df-s01, df-s02)
   --audit <file>         append every decision as one JSON line (fails closed if unwritable)
@@ -76,6 +78,10 @@ function str(flags: Flags, name: string): string | undefined {
 }
 
 function operatorGate(flags: Flags) {
+  const task = str(flags, "--task");
+  const run = str(flags, "--run");
+  if (task === undefined || run === undefined)
+    throw new UsageError("--task and --run are required (the gate serves one assigned run)");
   const root = str(flags, "--evidence-root");
   if (root === undefined) throw new UsageError("--evidence-root is required");
   const entries: TaskEntry[] = flags.has("--no-builtin") ? [] : builtinTasks();
@@ -87,6 +93,7 @@ function operatorGate(flags: Flags) {
   return createGate({
     tasks: buildRegistry(entries),
     reader: fileEvidenceReader(root),
+    assignment: { taskId: task, runId: run },
     ...(audit === undefined
       ? {}
       : {
@@ -124,11 +131,10 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
   try {
     switch (command) {
       case "check": {
+        // The operator's own call: the request is the assignment.
         const gate = operatorGate(flags);
-        const task = str(flags, "--task");
-        const run = str(flags, "--run");
-        if (task === undefined || run === undefined)
-          throw new UsageError("--task and --run are required");
+        const task = str(flags, "--task") as string;
+        const run = str(flags, "--run") as string;
         const claim = str(flags, "--claim");
         const result = await gate.check({
           taskId: task,
@@ -164,7 +170,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
   } catch (error) {
     if (
       error instanceof UsageError ||
-      (error instanceof Error && error.message.startsWith("invalid gate task registry"))
+      (error instanceof Error && /^invalid gate (task registry|assignment)/.test(error.message))
     ) {
       io.stderr.write(`myco-gate: ${error.message}\n`);
       return EXIT_USAGE;
