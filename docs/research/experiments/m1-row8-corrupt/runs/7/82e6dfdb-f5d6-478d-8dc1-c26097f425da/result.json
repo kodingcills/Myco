@@ -1,0 +1,99 @@
+{
+  "runId": "82e6dfdb-f5d6-478d-8dc1-c26097f425da",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-invalid-target-7",
+    "rowKey": "EMP-0011",
+    "column": "name",
+    "newValue": "REVISED-32480"
+  },
+  "instruction": "Set the cell at record EMP-0011, column name, to \"REVISED-32480\", and save the file.",
+  "startedAt": "2026-11-25T06:21:22.505Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-invalid-target-7\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-4583-1795587684130-150821139\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-4583-1795587684130-150821139\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B12"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-invalid-target-7\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-4583-1795587684130-150821139\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B12 located at record EMP-0011, column name, holds fixture value \"Enzo Nakamura\"",
+          "passed": true,
+          "observed": "value=\"Enzo Nakamura\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    }
+  ],
+  "guardFailure": {
+    "step": 2,
+    "phase": "precondition",
+    "predicateName": "act:setValue",
+    "observed": "stale ref winref:5:B12: issued for stateVersion 5, app is at 6",
+    "reason": "action dispatch failed on step 2: stale ref winref:5:B12: issued for stateVersion 5, app is at 6"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "cell B12 expected \"REVISED-32480\" but live document has \"Enzo Nakamura\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "cell B12 expected \"REVISED-32480\" but live document has \"Enzo Nakamura\""
+    ]
+  }
+}

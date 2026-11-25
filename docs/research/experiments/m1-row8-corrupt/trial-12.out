@@ -1,0 +1,93 @@
+{
+  "runId": "6e620dcf-e519-41eb-b2f5-d40c80fd015e",
+  "verdict": {
+    "status": "uncertain",
+    "reasons": [
+      "could not look: UNO readback of B88 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "observe-after-action",
+    "observed": "agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)",
+    "reason": "app became unobservable after step 2: agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+  },
+  "completed": false,
+  "elapsedMs": 52198,
+  "xlsxPath": "C:/myco/runs/myco-3028-1795590075766-887229994\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      2748
+    ],
+    "removed": [
+      "myco-3028-1795590075766-887229994",
+      "myco-3028-1795590075766-187946837"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=255 survivors=[] ERROR: The process with PID 2748 (child process of PID 7088) could not be terminated.\nReason: There is no running instance of the task."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 12385,
+    "outcome": "arrived",
+    "hostLoadStart": 7.25,
+    "hostLoadEnd": 6.9
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 6046,
+        "durationMs": 6939,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4296,
+        "durationMs": 4757,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3623,
+        "durationMs": 4147,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5578,
+        "durationMs": 6310,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 2600,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-kill-12",
+    "dataRows": 138,
+    "csvSha256": "a18274ef1e2af7ae693c550babcee6b17eadc9eb46e80026bd0463d3e9167fb3"
+  },
+  "corruption": {
+    "mode": "kill",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Gil Petrov",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click"
+    ]
+  }
+}

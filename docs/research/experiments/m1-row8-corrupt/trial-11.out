@@ -1,0 +1,96 @@
+{
+  "runId": "5699ba3d-4110-4a6c-95fb-ab91f6a7cc74",
+  "verdict": {
+    "status": "verified",
+    "reasons": [
+      "cell B112 (record EMP-0111, column name) persisted as \"REVISED-267949\""
+    ]
+  },
+  "completed": true,
+  "elapsedMs": 134017,
+  "xlsxPath": "C:/myco/runs/myco-88204-1795589610108-347191121\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      8048,
+      8140
+    ],
+    "removed": [
+      "myco-88204-1795589610108-347191121",
+      "myco-88204-1795589610108-6810307"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 65099,
+    "outcome": "arrived",
+    "hostLoadStart": 9.5,
+    "hostLoadEnd": 8.47
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 10101,
+        "durationMs": 11150,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4193,
+        "durationMs": 4809,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4035,
+        "durationMs": 4774,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5470,
+        "durationMs": 6064,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "save",
+        "elapsedMs": 4793,
+        "durationMs": 5574,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 7277,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-invalid-target-11",
+    "dataRows": 142,
+    "csvSha256": "7cc8908fdc4400b0a4f9e1aa69ff8b9706f57e202426c8b4834b28d683fb9acc"
+  },
+  "corruption": {
+    "mode": "invalid-target",
+    "applied": true,
+    "recovery": true,
+    "persistedValue": "REVISED-267949",
+    "recoveryEvents": [
+      "retry:1-completed"
+    ],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}

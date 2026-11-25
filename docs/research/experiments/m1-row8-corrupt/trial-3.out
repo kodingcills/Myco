@@ -1,0 +1,95 @@
+{
+  "runId": "83893437-0298-4784-ab80-4ae3665f594d",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "cell B5 expected \"REVISED-426713\" but live document has \"Faye Jovic\""
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "cell B5 holds \"REVISED-426713\"",
+    "observed": "value=\"Faye Jovic\"",
+    "reason": "postcondition \"cell B5 holds \"REVISED-426713\"\" not met after step 2"
+  },
+  "completed": false,
+  "elapsedMs": 81813,
+  "xlsxPath": "C:/myco/runs/myco-27479-1795585811124-490563896\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      6108,
+      6460
+    ],
+    "removed": [
+      "myco-27479-1795585811124-490563896",
+      "myco-27479-1795585811124-513432009"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=128 survivors=[] ERROR: The process with PID 6108 (child process of PID 7824) could not be terminated.\nReason: There is no running instance of the task."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 19950,
+    "outcome": "arrived",
+    "hostLoadStart": 8.67,
+    "hostLoadEnd": 8.38
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 11629,
+        "durationMs": 13173,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5778,
+        "durationMs": 6926,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5442,
+        "durationMs": 7181,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 6550,
+        "durationMs": 8069,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 5545,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-focus-change-3",
+    "dataRows": 81,
+    "csvSha256": "75247dcde4ea5fa6cea3b7c8296978eb97353317a1c6795504d415f26e60cd1e"
+  },
+  "corruption": {
+    "mode": "focus-change",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Faye Jovic",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click",
+      "setValue"
+    ]
+  }
+}

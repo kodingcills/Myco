@@ -1,0 +1,85 @@
+{
+  "runId": "d4175f88-9531-427f-b5e2-c7cd96475ca4",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "cell B5 expected \"REVISED-777510\" but live document has \"Hana Ito\""
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "precondition",
+    "predicateName": "act:setValue",
+    "observed": "stale ref winref:5:B5: issued for stateVersion 5, app is at 6",
+    "reason": "action dispatch failed on step 2: stale ref winref:5:B5: issued for stateVersion 5, app is at 6"
+  },
+  "completed": false,
+  "elapsedMs": 51841,
+  "xlsxPath": "C:/myco/runs/myco-99266-1795584934080-502914037\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      5268,
+      7456
+    ],
+    "removed": [
+      "myco-99266-1795584934080-502914037",
+      "myco-99266-1795584934080-850507395"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 21295,
+    "outcome": "arrived",
+    "hostLoadStart": 8.93,
+    "hostLoadEnd": 8.33
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 5766,
+        "durationMs": 6602,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3914,
+        "durationMs": 4415,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3182,
+        "durationMs": 3865,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 4270,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-invalid-target-1",
+    "dataRows": 11,
+    "csvSha256": "a0749d613a4d9b4997b9dd9d65885e6b51151eed785b5891a48570663a9caab5"
+  },
+  "corruption": {
+    "mode": "invalid-target",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Hana Ito",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click"
+    ]
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "runId": "cc010ae9-db55-4ce9-9bb9-d62d9730bc46",
+  "verdict": {
+    "status": "verified",
+    "reasons": [
+      "cell B38 (record EMP-0037, column name) persisted as \"REVISED-318607\""
+    ]
+  },
+  "completed": true,
+  "elapsedMs": 93346,
+  "xlsxPath": "C:/myco/runs/myco-62053-1795591647021-266329774\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      4500,
+      5540
+    ],
+    "removed": [
+      "myco-62053-1795591647021-266329774",
+      "myco-62053-1795591647021-827489514"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=128 survivors=[] ERROR: The process with PID 5540 (child process of PID 7848) could not be terminated.\nReason: The operation attempted is not supported."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 13459,
+    "outcome": "arrived",
+    "hostLoadStart": 7.69,
+    "hostLoadEnd": 6.96
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 6683,
+        "durationMs": 7610,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4113,
+        "durationMs": 4750,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3324,
+        "durationMs": 3899,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5056,
+        "durationMs": 5712,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "focus",
+        "elapsedMs": 3192,
+        "durationMs": 3912,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4503,
+        "durationMs": 5174,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "save",
+        "elapsedMs": 4582,
+        "durationMs": 5533,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 4090,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      },
+      {
+        "durationMs": 152,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-kill-16",
+    "dataRows": 62,
+    "csvSha256": "4ebe5a7c18ba2b1e84f0d8c430d644f51770072fabb38487cc6d0826b9a1a622"
+  },
+  "corruption": {
+    "mode": "kill",
+    "applied": true,
+    "recovery": true,
+    "persistedValue": "REVISED-318607",
+    "recoveryEvents": [
+      "retry:1-failed",
+      "retry:2-failed",
+      "relaunch:resumed",
+      "relaunch:completed"
+    ],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}
