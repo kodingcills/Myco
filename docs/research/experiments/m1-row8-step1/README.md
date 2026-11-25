@@ -64,7 +64,7 @@ evidence is `../m1-row8-sweep2/` (28/30) and `../m1-row8-corrupt/` (18/18, 0 fal
 commands, and even report text, that print or name the value of the token-file path variable,
 although that value is a file path and not a secret. The operator did not work around it, and the
 step still passed. The guard is deliberately **not** loosened for M1; tightening its match is a
-separate post-M1 issue (lead ruling, 2026-11-25 09:10Z).
+separate post-M1 issue, TIF-232 (lead ruling, 2026-11-25 09:10Z).
 
 
 The report-4 operator states that only J10 needed a ruling. The lead confirms that
