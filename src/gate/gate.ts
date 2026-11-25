@@ -133,14 +133,73 @@ export interface EvidenceReader {
 
 export const STATE_FILE_LIMIT = 16 * 1024 * 1024;
 
+/** Test seams around the open, used to swap path components deterministically. */
+export interface FileReaderHooks {
+  /** Runs after the first walk and before `open`. */
+  readonly beforeOpen?: () => void;
+  /** Runs after `open` and the descriptor checks, before the second walk. */
+  readonly afterOpen?: () => void;
+}
+
+type Walk =
+  | { readonly ok: true; readonly final: { readonly dev: number; readonly ino: number } }
+  | { readonly ok: false; readonly cause: "missing" | "unreadable"; readonly detail: string };
+
 /**
- * Reads `<root>/<runId>/<stateFile>`. Every path component below `root` must be a real
- * directory or file: a symlink anywhere below the root is refused (STATE_UNREADABLE), so a
- * run cannot borrow another run's state, inside or outside the root. The final file is
- * opened with O_NOFOLLOW and checked through its descriptor, so it cannot be swapped for a
- * link between the check and the read. `root` itself may be a symlink: the operator chose it.
+ * lstat every component of `<root>/<segments...>`: no symlink anywhere, every intermediate
+ * a directory, the final component a regular file (so a FIFO or device is refused before
+ * any `open` could block).
  */
-export function fileEvidenceReader(root: string): EvidenceReader {
+function walk(root: string, segments: readonly string[], where: string): Walk {
+  let path = root;
+  let final = { dev: -1, ino: -1 };
+  for (const [index, segment] of segments.entries()) {
+    path = join(path, segment);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(path);
+    } catch {
+      return { ok: false, cause: "missing", detail: `${where} does not exist` };
+    }
+    if (stat.isSymbolicLink()) {
+      return {
+        ok: false,
+        cause: "unreadable",
+        detail: `${where} passes through a symlink at ${segment}`,
+      };
+    }
+    const last = index === segments.length - 1;
+    if (!last && !stat.isDirectory()) {
+      return { ok: false, cause: "unreadable", detail: `${where}: ${segment} is not a directory` };
+    }
+    if (last && !stat.isFile()) {
+      return { ok: false, cause: "unreadable", detail: `${where} is not a regular file` };
+    }
+    if (last) final = { dev: stat.dev, ino: stat.ino };
+  }
+  return { ok: true, final };
+}
+
+/**
+ * Reads `<root>/<runId>/<stateFile>`, refusing a symlink anywhere below `root` even when a
+ * component is swapped concurrently. `root` itself may be a symlink: the operator chose it.
+ *
+ * Node has no `openat`, so the reader cannot descend from directory descriptors. Instead:
+ *  1. walk: lstat every component (no symlink, directories, then a regular file);
+ *  2. open the path with O_NOFOLLOW (a final-component symlink fails) and O_NONBLOCK (a FIFO
+ *     swapped in after the walk returns at once instead of blocking), then fstat the
+ *     descriptor: it must be a regular file within the size limit;
+ *  3. walk again, and require the final component's dev/ino to equal the descriptor's.
+ * If any component was a symlink at open time, either the second walk sees it or the file
+ * the descriptor holds is not the one at the real path, so the dev/ino check fails. The
+ * bytes are read from the verified descriptor. What this does not stop is a hard link to
+ * another run's file placed inside this run: making the root unwritable to the agent is
+ * TIF-266's job (and the host-capture requirement in docs/gate/api.md).
+ *
+ * All I/O here is synchronous and bounded by refusing non-regular files; `readTimeoutMs`
+ * guards readers that return a pending promise, not a filesystem that blocks a syscall.
+ */
+export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): EvidenceReader {
   const absoluteRoot = resolve(root);
   return {
     describe: absoluteRoot,
@@ -150,38 +209,50 @@ export function fileEvidenceReader(root: string): EvidenceReader {
       }
       const where = `${runId}/${stateFile}`;
       const segments = [runId, ...stateFile.split("/")];
-      let path = absoluteRoot;
-      for (const [index, segment] of segments.entries()) {
-        path = join(path, segment);
-        let stat: ReturnType<typeof lstatSync>;
-        try {
-          stat = lstatSync(path);
-        } catch {
-          return { ok: false, cause: "missing", detail: `${where} does not exist` };
+      const first = walk(absoluteRoot, segments, where);
+      if (!first.ok) return first;
+      hooks.beforeOpen?.();
+      let fd: number;
+      try {
+        fd = openSync(
+          join(absoluteRoot, ...segments),
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        );
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        return {
+          ok: false,
+          cause: code === "ENOENT" ? "missing" : "unreadable",
+          detail:
+            code === "ELOOP"
+              ? `${where} is a symlink (refused at open)`
+              : `open failed: ${String(error)}`,
+        };
+      }
+      try {
+        const opened = fstatSync(fd);
+        if (!opened.isFile()) {
+          return { ok: false, cause: "unreadable", detail: `${where}: opened a non-regular file` };
         }
-        if (stat.isSymbolicLink()) {
-          return { ok: false, cause: "unreadable", detail: `${where} passes through a symlink` };
+        if (opened.size > STATE_FILE_LIMIT) {
+          return { ok: false, cause: "unreadable", detail: `${where} is too large` };
         }
-        if (index < segments.length - 1 && !stat.isDirectory()) {
+        hooks.afterOpen?.();
+        const second = walk(absoluteRoot, segments, where);
+        if (!second.ok) {
+          return { ok: false, cause: "unreadable", detail: `${second.detail} (after open)` };
+        }
+        if (
+          second.final.dev !== opened.dev ||
+          second.final.ino !== opened.ino ||
+          first.final.dev !== opened.dev ||
+          first.final.ino !== opened.ino
+        ) {
           return {
             ok: false,
             cause: "unreadable",
-            detail: `${where}: ${segment} is not a directory`,
+            detail: `${where} changed between the check and the open`,
           };
-        }
-      }
-      let fd: number;
-      try {
-        fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      } catch (error) {
-        return { ok: false, cause: "unreadable", detail: `open failed: ${String(error)}` };
-      }
-      try {
-        const stat = fstatSync(fd);
-        if (!stat.isFile())
-          return { ok: false, cause: "unreadable", detail: `${where} is not a file` };
-        if (stat.size > STATE_FILE_LIMIT) {
-          return { ok: false, cause: "unreadable", detail: `${where} is too large` };
         }
         return { ok: true, bytes: new Uint8Array(readFileSync(fd)) };
       } catch (error) {

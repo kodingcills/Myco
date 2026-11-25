@@ -4,8 +4,9 @@
  *  - it never returns `verified` (or `accepted`) without an oracle pass;
  *  - the agent cannot supply or alter the oracle's inputs through a request.
  */
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runTask } from "../../src/discovery/run-tasks.ts";
@@ -703,6 +704,7 @@ describe("gate: the assignment binds the gate to one trial (round 1 D1)", () => 
     });
     assertInvariant(result);
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+    expect(result.reasons.join(" ")).toContain("passes through a symlink at symdir");
   });
 
   it("an evidence root that is itself a symlink is allowed (the operator chose it)", async () => {
@@ -874,4 +876,96 @@ describe("gate: round 1 nits", () => {
     });
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["INVALID_REQUEST"] });
   });
+});
+
+describe("reader: concurrent swaps and FIFOs fail closed (round 2 D-A, D-B)", () => {
+  /** Run r refutes df-s01 on its own; run good passes. Every swap below borrows good. */
+  function racedRoot() {
+    const root = tempRoot();
+    writeState(root, "r", STORE, todoStore(S02_PERSISTED));
+    writeState(root, "good", STORE, todoStore(S01_ITEMS));
+    return root;
+  }
+
+  async function checkWithHooks(root: string, hooks: Parameters<typeof fileEvidenceReader>[1]) {
+    return createGate({
+      tasks: buildRegistry(builtinTasks()),
+      reader: fileEvidenceReader(root, hooks),
+      assignment: { taskId: "df-s01", runId: "r" },
+    }).check({ taskId: "df-s01", runId: "r" });
+  }
+
+  it("without a swap, run r is refuted (the baseline the races try to flip)", async () => {
+    const result = await checkWithHooks(racedRoot(), {});
+    expect(result.verdict).toBe("refuted");
+  });
+
+  it("run directory swapped to a symlink between the walk and the open → STATE_UNREADABLE", async () => {
+    const root = racedRoot();
+    const result = await checkWithHooks(root, {
+      beforeOpen: () => {
+        renameSync(join(root, "r"), join(root, "r-real"));
+        symlinkSync(join(root, "good"), join(root, "r"));
+      },
+    });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+    expect(result.reasons.join(" ")).toContain("passes through a symlink at r (after open)");
+  });
+
+  it("state file swapped to a symlink for the open only → refused at open (O_NOFOLLOW)", async () => {
+    const root = racedRoot();
+    const file = join(root, "r", STORE);
+    const result = await checkWithHooks(root, {
+      beforeOpen: () => {
+        renameSync(file, join(root, "r-store.json"));
+        symlinkSync(join(root, "good", STORE), file);
+      },
+      afterOpen: () => {
+        renameSync(join(root, "r-store.json"), file);
+      },
+    });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+    expect(result.reasons.join(" ")).toContain("is a symlink (refused at open)");
+  });
+
+  it("run directory swapped for another run (no symlink) around the open → dev/ino mismatch", async () => {
+    const root = racedRoot();
+    const result = await checkWithHooks(root, {
+      beforeOpen: () => {
+        renameSync(join(root, "r"), join(root, "r-own"));
+        renameSync(join(root, "good"), join(root, "r"));
+      },
+      afterOpen: () => {
+        renameSync(join(root, "r"), join(root, "good"));
+        renameSync(join(root, "r-own"), join(root, "r"));
+      },
+    });
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+    expect(result.reasons.join(" ")).toContain("changed between the check and the open");
+  });
+
+  it.each(["static", "swap"])(
+    "a FIFO as the state file (%s) returns STATE_UNREADABLE at once, never blocks",
+    (mode) => {
+      const started = Date.now();
+      const child = spawnSync(
+        process.execPath,
+        ["--import", "tsx", join(import.meta.dirname, "fifo-child.ts"), mode],
+        { cwd: join(import.meta.dirname, "..", ".."), encoding: "utf8", timeout: 8_000 },
+      );
+      expect(child.signal, "the reader blocked on the FIFO and was killed").toBeNull();
+      const outcome = JSON.parse(child.stdout.trim());
+      expect(outcome).toMatchObject({ ok: false, cause: "unreadable" });
+      // static: refused by the walk before any open; swap: the walk saw a regular file,
+      // so the O_NONBLOCK open returns and the descriptor check refuses the FIFO.
+      expect(outcome.detail).toContain(
+        mode === "static" ? "is not a regular file" : "opened a non-regular file",
+      );
+      expect(Date.now() - started).toBeLessThan(8_000);
+    },
+    15_000,
+  );
 });

@@ -43,9 +43,12 @@ On the gated path this is **required**, not advice (outer-loop ruling, 2026-11-2
   file out of the guest to `<root>/<runId>/<stateFile>`. The gate judges that copy, not
   the live file.
 - **The agent must never be able to write to it**: no actuator tool, shell, shared mount
-  or symlink may reach the evidence root. The gate already refuses symlinks below the root
-  and paths outside it. Making the root unwritable from the agent's whole tool surface is
-  TIF-266's job.
+  or symlink may reach the evidence root. The file reader refuses a symlink anywhere below
+  the root, including one swapped in while it reads: it checks every component, opens with
+  `O_NOFOLLOW`, checks the opened descriptor, checks every component again and requires the
+  file at the real path to be the inode it opened. It does not stop a hard link to another
+  run's file placed inside this run. Making the root unwritable from the agent's whole tool
+  surface is TIF-266's job.
 - TIF-266 (#470) builds this capture as seal → capture → read the sealed copies. Until #470
   is wired in, `fileEvidenceReader` over a harness-filled directory is the stand-in, and it
   is fit only for the mock path. **Wiring the gate's reader to #470's sealed per-trial
@@ -110,7 +113,7 @@ machine-readable explanation.
 | `ORACLE_ERROR` | uncertain | The oracle threw. |
 | `ORACLE_INVALID_OUTPUT` | uncertain | The oracle returned something that is not a well-formed verdict. |
 | `STATE_MISSING` | uncertain | No persisted state at `<root>/<runId>/<stateFile>`. |
-| `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink anywhere below the evidence root (so a run cannot borrow another run's state), or the reader did not answer within its deadline (30 s by default). |
+| `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink anywhere below the evidence root, changed between the reader's check and its open (a concurrent swap), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
 | `STATE_CORRUPT` | uncertain | The file does not parse as the family's format. |
 | `INVALID_REQUEST` | uncertain | The request is not an object, lacks `taskId`/`runId`, or a field has the wrong form. |
 | `UNSUPPORTED_API_VERSION` | uncertain | `apiVersion` is present and is not `myco.gate/v1`. |
@@ -168,7 +171,7 @@ if (result.accepted) { /* done */ }
 ```
 
 `createGate` throws if the assignment is missing, not a safe id, or names a task that is
-not in the registry. `readTimeoutMs` (default 30000) bounds the reader.
+not in the registry. `readTimeoutMs` (default 30000) bounds a reader that returns a pending promise; it cannot interrupt synchronous I/O, which is why the file reader refuses non-regular files and opens with `O_NONBLOCK`.
 
 `EvidenceReader` is an interface: `read(runId, stateFile)` returns the bytes, or
 `missing` / `unreadable`. A bound gate only ever calls it with the assigned run id.

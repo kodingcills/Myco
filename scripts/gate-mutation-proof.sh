@@ -12,6 +12,12 @@
 #   m7: "verdict" is dropped from the oracle-input rejection list (round 1 D3b).
 #   m8: the reader has no deadline (round 1 nit).
 #   m9: an over-long claim is accepted (round 1 nit).
+#   mE: the walk checks for a symlink on the final component only (round 2 D-A).
+#   mG: the open drops O_NOFOLLOW (round 2 D-A).
+#   mH: the open drops O_NONBLOCK, so a FIFO swapped in blocks (round 2 D-B).
+#   mI: no dev/ino comparison between the walk and the descriptor (round 2 D-A).
+#   mJ: no second walk after the open (round 2 D-A).
+#   mK: the walk does not require a regular file (round 2 D-B).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -54,11 +60,26 @@ elif which == "m8":
     edit("src/gate/gate.ts", "await readWithin(config.reader, runId, task.stateFile, readTimeoutMs)", "await config.reader.read(runId, task.stateFile)")
 elif which == "m9":
     edit("src/gate/api.ts", "record.claim.length > CLAIM_LIMIT", "false")
+elif which == "mE":
+    edit("src/gate/gate.ts", "if (stat.isSymbolicLink()) {", "if (index === segments.length - 1 && stat.isSymbolicLink()) {")
+elif which == "mG":
+    edit("src/gate/gate.ts", "constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK", "constants.O_RDONLY | constants.O_NONBLOCK")
+elif which == "mH":
+    edit("src/gate/gate.ts", "constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK", "constants.O_RDONLY | constants.O_NOFOLLOW")
+elif which == "mI":
+    edit("src/gate/gate.ts", """          second.final.dev !== opened.dev ||
+          second.final.ino !== opened.ino ||
+          first.final.dev !== opened.dev ||
+          first.final.ino !== opened.ino""", "          false")
+elif which == "mJ":
+    edit("src/gate/gate.ts", "const second = walk(absoluteRoot, segments, where);", "const second = first;")
+elif which == "mK":
+    edit("src/gate/gate.ts", "if (last && !stat.isFile()) {", "if (false) {")
 EOF
 }
 
 status=0
-for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9; do
+for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK; do
   mutate "$mutant"
   if npx vitest run test/gate --testTimeout=10000 >/dev/null 2>&1; then
     echo "$mutant: SURVIVED (no test failed)"
