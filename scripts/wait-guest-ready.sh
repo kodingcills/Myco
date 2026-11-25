@@ -90,6 +90,8 @@ ssh_answers() {
 # answer; exits 1, naming the drops, if sshd keeps dropping or time runs out.
 wait_stable() {
   local oks=1 drops=0
+  # Phase marker (TIF-98): where boot ends and the stability wait begins.
+  echo "wait-guest-ready: first ssh answer after $(( $(date +%s) - START ))s (guest CPU ${CUR}s)" >&2
   while [ "$oks" -lt "$STABLE_PROBES" ]; do
     if [ $(( $(date +%s) - START )) -gt "$T" ]; then
       echo "wait-guest-ready: timeout after ${T}s: ssh answered but never held for ${STABLE_PROBES} consecutive probes (${drops} drop(s)); sshd unstable - guest or UTM unhealthy (TIF-220)" >&2
