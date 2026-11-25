@@ -1,0 +1,4 @@
+{"type":"run-start","runId":"8912f58b-659b-4394-b762-5d30b5e7ca19","taskId":"calc-record-edit","startedAt":"2026-11-25T01:20:28.575Z"}
+{"type":"fault-injection","timestamp":"2026-11-25T01:24:53.297Z","fault":"cleanup","detail":"killed=[3304] removed=[myco-1503-1795569642679-668636562,myco-1503-1795569642679-916125862] residue=[]"}
+{"type":"guard-failure","timestamp":"2026-11-25T01:24:53.303Z","step":-1,"phase":"precondition","guard":{"step":-1,"phase":"precondition","predicateName":"fixture-convert","observed":"fixture convert did not produce C:/myco/runs/myco-1503-1795569642679-668636562\\fixture.xlsx within 240000ms","reason":"fixture convert failed: fixture convert did not produce C:/myco/runs/myco-1503-1795569642679-668636562\\fixture.xlsx within 240000ms"}}
+{"type":"recovery","timestamp":"2026-11-25T01:24:53.303Z","event":"aborted-uncertain","stateVersion":0}

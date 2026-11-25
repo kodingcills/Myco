@@ -1,0 +1,146 @@
+{
+  "runId": "8f939826-0747-4dbf-8c8f-287c6b3694e1",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-d",
+    "rowKey": "EMP-0004",
+    "column": "qty",
+    "newValue": "7897"
+  },
+  "instruction": "Set the cell at record EMP-0004, column qty, to \"7897\", and save the file.",
+  "startedAt": "2026-11-25T02:16:06.996Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-d\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-36215-1795572967217-854230942\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-36215-1795572967217-854230942\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "C5"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-d\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-36215-1795572967217-854230942\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell C5 located at record EMP-0004, column qty, holds fixture value \"370\"",
+          "passed": true,
+          "observed": "value=\"370\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "C5"
+        },
+        "value": "7897"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-36215-1795572967217-854230942\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell C5 located at record EMP-0004, column qty, holds fixture value \"370\"",
+          "passed": true,
+          "observed": "value=\"370\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell C5 holds \"7897\"",
+          "passed": true,
+          "observed": "value=\"7897\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell C5 holds \"7897\"",
+          "passed": true,
+          "observed": "value=\"7897\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell C5 (record EMP-0004, column qty) persisted as \"7897\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell C5 (record EMP-0004, column qty) persisted as \"7897\""
+    ]
+  }
+}

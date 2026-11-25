@@ -1,0 +1,146 @@
+{
+  "runId": "3c59b45a-10f7-4945-8d37-9f31c116c2f2",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "seed-f",
+    "rowKey": "EMP-0003",
+    "column": "salary",
+    "newValue": "$37683.00"
+  },
+  "instruction": "Set the cell at record EMP-0003, column salary, to \"$37683.00\", and save the file.",
+  "startedAt": "2026-11-25T03:50:50.969Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-f\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-41853-1795578654347-167678074\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-41853-1795578654347-167678074\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "E4"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"seed-f\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-41853-1795578654347-167678074\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell E4 located at record EMP-0003, column salary, holds fixture value \"$47090.81\"",
+          "passed": true,
+          "observed": "value=\"$47090.81\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "E4"
+        },
+        "value": "$37683.00"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-41853-1795578654347-167678074\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell E4 located at record EMP-0003, column salary, holds fixture value \"$47090.81\"",
+          "passed": true,
+          "observed": "value=\"$47090.81\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell E4 holds \"$37683.00\"",
+          "passed": true,
+          "observed": "value=\"$37683.00\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell E4 holds \"$37683.00\"",
+          "passed": true,
+          "observed": "value=\"$37683.00\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell E4 (record EMP-0003, column salary) persisted as \"$37683.00\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell E4 (record EMP-0003, column salary) persisted as \"$37683.00\""
+    ]
+  }
+}
