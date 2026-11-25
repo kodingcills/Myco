@@ -76,7 +76,7 @@ elif which == "mI":
           first.final.dev !== opened.dev ||
           first.final.ino !== opened.ino""", "          false")
 elif which == "mJ":
-    edit("src/gate/gate.ts", "const second = walk(absoluteRoot, segments, where);", "const second = first;")
+    edit("src/gate/gate.ts", "const second = walk(absoluteRoot, segments, where, hooks.beforeLstat);", "const second = first;")
 elif which == "mK":
     edit("src/gate/gate.ts", "if (last && !stat.isFile()) {", "if (false) {")
 elif which == "mL":
