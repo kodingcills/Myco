@@ -58,6 +58,11 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # TIF-256: from 2026-11-23 to 11-25, macOS runs of this job took at most 3.5 min
+    # once a runner had it (p50 1.8). 15 min fails a hang loudly, as "timed out" in
+    # the step that hung. It does not cover queue time: a job no runner picks up is
+    # cancelled by GitHub; re-run it by hand (docs/ci.md, TIF-256).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -85,6 +90,8 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # TIF-256: macOS runs took at most 0.9 min once a runner had them; see `check`.
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: agent
