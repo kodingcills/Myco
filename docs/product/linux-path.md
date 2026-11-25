@@ -16,7 +16,7 @@ job in `.github/workflows/ci.yml` (TIF-269, M2-06).
 
 ## 1. Prerequisites
 
-- Linux (tested on Ubuntu 24.04 and the GitHub `ubuntu-latest` runner).
+- Linux (tested on Ubuntu 24.04 with LibreOffice 24.2, and on the GitHub `ubuntu-latest` runner with LibreOffice 26.2).
 - `git`, Node 24 or later, pnpm 10.
 - LibreOffice Calc and its Python-UNO bridge. On Debian or Ubuntu:
 
@@ -184,7 +184,7 @@ The oracle's comparison is the same code that check (c) of the Windows UNO verif
 
 | | Windows path (our VM) | Linux path (this page) |
 |---|---|---|
-| App | LibreOffice Calc 26.8 on Windows 11, interactive | LibreOffice Calc from your distribution (24.2 on Ubuntu 24.04), headless |
+| App | LibreOffice Calc 26.8 on Windows 11, interactive | LibreOffice Calc from your distribution (24.2 on Ubuntu 24.04; 26.2 on the CI runner), headless |
 | Fixture | Same seed → same CSV bytes, converted to `.xlsx` in the guest | Same seed → same CSV bytes, converted to `.xlsx` on the host |
 | Who acts | Myco's guarded program through the UIA adapter, or a model-driven agent | A scripted, deterministic agent (no model) |
 | How the edit lands | Keystrokes through Windows UI Automation | Calc's input path over UNO (`.uno:EnterString`); no GUI |
