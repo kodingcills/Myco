@@ -1,0 +1,96 @@
+{
+  "runId": "0ee4fbc8-59d6-4a64-b5ec-a74c5f6c42e8",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "document still modified (isModified=true): the edit was never saved"
+    ]
+  },
+  "guardFailure": {
+    "step": 3,
+    "phase": "postcondition",
+    "predicateName": "document not dirty after save",
+    "observed": "dirty=true",
+    "reason": "postcondition \"document not dirty after save\" not met after step 3"
+  },
+  "completed": false,
+  "elapsedMs": 79558,
+  "xlsxPath": "C:/myco/runs/myco-16646-1795588087236-613681567\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      2792,
+      4988
+    ],
+    "removed": [
+      "myco-16646-1795588087236-613681567",
+      "myco-16646-1795588087237-682880555"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=128 survivors=[] ERROR: The process with PID 4988 (child process of PID 716) could not be terminated.\nReason: The operation attempted is not supported."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 25123,
+    "outcome": "arrived",
+    "hostLoadStart": 8.24,
+    "hostLoadEnd": 7.79
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 8131,
+        "durationMs": 9318,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5212,
+        "durationMs": 5961,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3933,
+        "durationMs": 4746,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5278,
+        "durationMs": 6206,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 3303,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-dropped-save-8",
+    "dataRows": 179,
+    "csvSha256": "685d51ede03c75bdaee4473c041c3fc6d0949dbd9cc157d0cb23185d2fc35c56"
+  },
+  "corruption": {
+    "mode": "dropped-save",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Enzo Larsen",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}

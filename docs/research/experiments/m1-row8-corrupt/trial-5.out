@@ -1,0 +1,96 @@
+{
+  "runId": "7a7afb88-3784-4652-ad57-c4757fdc3e76",
+  "verdict": {
+    "status": "verified",
+    "reasons": [
+      "cell B15 (record EMP-0014, column name) persisted as \"REVISED-880450\""
+    ]
+  },
+  "completed": true,
+  "elapsedMs": 89002,
+  "xlsxPath": "C:/myco/runs/myco-70479-1795586770778-320244343\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      6196,
+      7220
+    ],
+    "removed": [
+      "myco-70479-1795586770778-320244343",
+      "myco-70479-1795586770778-258149786"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 23930,
+    "outcome": "arrived",
+    "hostLoadStart": 8.47,
+    "hostLoadEnd": 7.95
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 6309,
+        "durationMs": 7254,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 6191,
+        "durationMs": 7753,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4966,
+        "durationMs": 5943,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4378,
+        "durationMs": 5039,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "save",
+        "elapsedMs": 5049,
+        "durationMs": 5987,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 3548,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-invalid-target-5",
+    "dataRows": 87,
+    "csvSha256": "c8818d811838a5956d75bc35d0ae9fdbb595d503df432d6bc71404da922b025c"
+  },
+  "corruption": {
+    "mode": "invalid-target",
+    "applied": true,
+    "recovery": true,
+    "persistedValue": "REVISED-880450",
+    "recoveryEvents": [
+      "retry:1-completed"
+    ],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}

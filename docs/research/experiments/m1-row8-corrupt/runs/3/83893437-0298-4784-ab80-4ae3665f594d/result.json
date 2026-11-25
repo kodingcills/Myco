@@ -1,0 +1,130 @@
+{
+  "runId": "83893437-0298-4784-ab80-4ae3665f594d",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-focus-change-3",
+    "rowKey": "EMP-0004",
+    "column": "name",
+    "newValue": "REVISED-426713"
+  },
+  "instruction": "Set the cell at record EMP-0004, column name, to \"REVISED-426713\", and save the file.",
+  "startedAt": "2026-11-25T05:50:09.092Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-focus-change-3\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-27479-1795585811124-490563896\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-27479-1795585811124-490563896\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B5"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-focus-change-3\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-27479-1795585811124-490563896\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B5 located at record EMP-0004, column name, holds fixture value \"Faye Jovic\"",
+          "passed": true,
+          "observed": "value=\"Faye Jovic\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B5"
+        },
+        "value": "REVISED-426713"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-27479-1795585811124-490563896\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B5 located at record EMP-0004, column name, holds fixture value \"Faye Jovic\"",
+          "passed": true,
+          "observed": "value=\"Faye Jovic\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B5 holds \"REVISED-426713\"",
+          "passed": false,
+          "observed": "value=\"Faye Jovic\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    }
+  ],
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "cell B5 holds \"REVISED-426713\"",
+    "observed": "value=\"Faye Jovic\"",
+    "reason": "postcondition \"cell B5 holds \"REVISED-426713\"\" not met after step 2"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "cell B5 expected \"REVISED-426713\" but live document has \"Faye Jovic\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "cell B5 expected \"REVISED-426713\" but live document has \"Faye Jovic\""
+    ]
+  }
+}

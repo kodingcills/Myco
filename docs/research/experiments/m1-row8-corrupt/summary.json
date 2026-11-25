@@ -1,0 +1,660 @@
+{
+  "total": 18,
+  "withVerdict": 18,
+  "verified": 6,
+  "refuted": 9,
+  "uncertain": 3,
+  "falseSuccesses": 0,
+  "unprovenVerified": 0,
+  "unprovenRecovery": 0,
+  "unprovenRecoveryResults": [],
+  "groups": [
+    {
+      "class": "kill",
+      "recovery": false,
+      "eligible": 3,
+      "recorded": 3,
+      "verified": 0,
+      "refuted": 0,
+      "uncertain": 3,
+      "falseSuccesses": 0,
+      "unprovenVerified": 0,
+      "unprovenRecovery": 0
+    },
+    {
+      "class": "invalid-target",
+      "recovery": false,
+      "eligible": 3,
+      "recorded": 3,
+      "verified": 0,
+      "refuted": 3,
+      "uncertain": 0,
+      "falseSuccesses": 0,
+      "unprovenVerified": 0,
+      "unprovenRecovery": 0
+    },
+    {
+      "class": "dropped-save",
+      "recovery": false,
+      "eligible": 3,
+      "recorded": 3,
+      "verified": 0,
+      "refuted": 3,
+      "uncertain": 0,
+      "falseSuccesses": 0,
+      "unprovenVerified": 0,
+      "unprovenRecovery": 0
+    },
+    {
+      "class": "focus-change",
+      "recovery": false,
+      "eligible": 3,
+      "recorded": 3,
+      "verified": 0,
+      "refuted": 3,
+      "uncertain": 0,
+      "falseSuccesses": 0,
+      "unprovenVerified": 0,
+      "unprovenRecovery": 0
+    },
+    {
+      "class": "kill",
+      "recovery": true,
+      "eligible": 3,
+      "recorded": 3,
+      "verified": 3,
+      "refuted": 0,
+      "uncertain": 0,
+      "falseSuccesses": 0,
+      "unprovenVerified": 0,
+      "unprovenRecovery": 0
+    },
+    {
+      "class": "invalid-target",
+      "recovery": true,
+      "eligible": 3,
+      "recorded": 3,
+      "verified": 3,
+      "refuted": 0,
+      "uncertain": 0,
+      "falseSuccesses": 0,
+      "unprovenVerified": 0,
+      "unprovenRecovery": 0
+    }
+  ],
+  "ineligible": [],
+  "recoveryResults": [
+    {
+      "index": 4,
+      "class": "kill",
+      "recovery": true,
+      "fixtureSeed": "m1-014-kill-4",
+      "rowKey": "EMP-0004",
+      "column": "name",
+      "expectedValue": "REVISED-419474",
+      "status": "verified",
+      "verdict": "verified",
+      "persistedValue": "REVISED-419474",
+      "falseSuccess": false,
+      "reason": "cell B5 (record EMP-0004, column name) persisted as \"REVISED-419474\"",
+      "runId": "853088d5-f49d-49b0-95db-ebd2ead07968",
+      "fixtureSha256": "313721dda4c9855b638dfa8cb0c04d6c67d60348edb0d06e998464d055c2b016",
+      "elapsedMs": 111082,
+      "timings": {
+        "helpers": [
+          {
+            "op": "focus",
+            "elapsedMs": 7994,
+            "durationMs": 8952,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4470,
+            "durationMs": 5122,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 3042,
+            "durationMs": 3538,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4460,
+            "durationMs": 5089,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "focus",
+            "elapsedMs": 5684,
+            "durationMs": 7253,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4730,
+            "durationMs": 5513,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "save",
+            "elapsedMs": 4509,
+            "durationMs": 5545,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          }
+        ],
+        "unoReady": [
+          {
+            "durationMs": 3124,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          },
+          {
+            "durationMs": 224,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          }
+        ]
+      },
+      "guardPredicate": null,
+      "persistedReadError": null,
+      "actionKinds": [
+        "click",
+        "setValue",
+        "keyPress"
+      ],
+      "faultApplied": true,
+      "recoveryEvents": [
+        "retry:1-failed",
+        "retry:2-failed",
+        "relaunch:resumed",
+        "relaunch:completed"
+      ],
+      "unprovenVerified": false,
+      "unprovenRecovery": false,
+      "storedFalseSuccess": false,
+      "storedRecoveryEvents": [
+        "retry:1-failed",
+        "retry:2-failed",
+        "relaunch:resumed",
+        "relaunch:completed"
+      ],
+      "countsTowardCoverage": true
+    },
+    {
+      "index": 5,
+      "class": "invalid-target",
+      "recovery": true,
+      "fixtureSeed": "m1-014-invalid-target-5",
+      "rowKey": "EMP-0014",
+      "column": "name",
+      "expectedValue": "REVISED-880450",
+      "status": "verified",
+      "verdict": "verified",
+      "persistedValue": "REVISED-880450",
+      "falseSuccess": false,
+      "reason": "cell B15 (record EMP-0014, column name) persisted as \"REVISED-880450\"",
+      "runId": "7a7afb88-3784-4652-ad57-c4757fdc3e76",
+      "fixtureSha256": "c8818d811838a5956d75bc35d0ae9fdbb595d503df432d6bc71404da922b025c",
+      "elapsedMs": 89002,
+      "timings": {
+        "helpers": [
+          {
+            "op": "focus",
+            "elapsedMs": 6309,
+            "durationMs": 7254,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 6191,
+            "durationMs": 7753,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4966,
+            "durationMs": 5943,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4378,
+            "durationMs": 5039,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "save",
+            "elapsedMs": 5049,
+            "durationMs": 5987,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          }
+        ],
+        "unoReady": [
+          {
+            "durationMs": 3548,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          }
+        ]
+      },
+      "guardPredicate": null,
+      "persistedReadError": null,
+      "actionKinds": [
+        "click",
+        "setValue",
+        "keyPress"
+      ],
+      "faultApplied": true,
+      "recoveryEvents": [
+        "retry:1-completed"
+      ],
+      "unprovenVerified": false,
+      "unprovenRecovery": false,
+      "storedFalseSuccess": false,
+      "storedRecoveryEvents": [
+        "retry:1-completed"
+      ],
+      "countsTowardCoverage": true
+    },
+    {
+      "index": 10,
+      "class": "kill",
+      "recovery": true,
+      "fixtureSeed": "m1-014-kill-10",
+      "rowKey": "EMP-0061",
+      "column": "name",
+      "expectedValue": "REVISED-25483",
+      "status": "verified",
+      "verdict": "verified",
+      "persistedValue": "REVISED-25483",
+      "falseSuccess": false,
+      "reason": "cell B62 (record EMP-0061, column name) persisted as \"REVISED-25483\"",
+      "runId": "f8d213b5-aa5a-4b04-917b-c99cbe22ce16",
+      "fixtureSha256": "3b280eb39fddcd1d5241f92017b9003bc0a80caa53aad60756d12f7e5ccb7046",
+      "elapsedMs": 99839,
+      "timings": {
+        "helpers": [
+          {
+            "op": "focus",
+            "elapsedMs": 10028,
+            "durationMs": 10929,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 3549,
+            "durationMs": 4146,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 3371,
+            "durationMs": 3809,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4620,
+            "durationMs": 5126,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "focus",
+            "elapsedMs": 3124,
+            "durationMs": 3911,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4545,
+            "durationMs": 5153,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "save",
+            "elapsedMs": 4391,
+            "durationMs": 5047,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          }
+        ],
+        "unoReady": [
+          {
+            "durationMs": 3804,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          },
+          {
+            "durationMs": 282,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          }
+        ]
+      },
+      "guardPredicate": null,
+      "persistedReadError": null,
+      "actionKinds": [
+        "click",
+        "setValue",
+        "keyPress"
+      ],
+      "faultApplied": true,
+      "recoveryEvents": [
+        "retry:1-failed",
+        "retry:2-failed",
+        "relaunch:resumed",
+        "relaunch:completed"
+      ],
+      "unprovenVerified": false,
+      "unprovenRecovery": false,
+      "storedFalseSuccess": false,
+      "storedRecoveryEvents": [
+        "retry:1-failed",
+        "retry:2-failed",
+        "relaunch:resumed",
+        "relaunch:completed"
+      ],
+      "countsTowardCoverage": true
+    },
+    {
+      "index": 11,
+      "class": "invalid-target",
+      "recovery": true,
+      "fixtureSeed": "m1-014-invalid-target-11",
+      "rowKey": "EMP-0111",
+      "column": "name",
+      "expectedValue": "REVISED-267949",
+      "status": "verified",
+      "verdict": "verified",
+      "persistedValue": "REVISED-267949",
+      "falseSuccess": false,
+      "reason": "cell B112 (record EMP-0111, column name) persisted as \"REVISED-267949\"",
+      "runId": "5699ba3d-4110-4a6c-95fb-ab91f6a7cc74",
+      "fixtureSha256": "7cc8908fdc4400b0a4f9e1aa69ff8b9706f57e202426c8b4834b28d683fb9acc",
+      "elapsedMs": 134017,
+      "timings": {
+        "helpers": [
+          {
+            "op": "focus",
+            "elapsedMs": 10101,
+            "durationMs": 11150,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4193,
+            "durationMs": 4809,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4035,
+            "durationMs": 4774,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 5470,
+            "durationMs": 6064,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "save",
+            "elapsedMs": 4793,
+            "durationMs": 5574,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          }
+        ],
+        "unoReady": [
+          {
+            "durationMs": 7277,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          }
+        ]
+      },
+      "guardPredicate": null,
+      "persistedReadError": null,
+      "actionKinds": [
+        "click",
+        "setValue",
+        "keyPress"
+      ],
+      "faultApplied": true,
+      "recoveryEvents": [
+        "retry:1-completed"
+      ],
+      "unprovenVerified": false,
+      "unprovenRecovery": false,
+      "storedFalseSuccess": false,
+      "storedRecoveryEvents": [
+        "retry:1-completed"
+      ],
+      "countsTowardCoverage": true
+    },
+    {
+      "index": 16,
+      "class": "kill",
+      "recovery": true,
+      "fixtureSeed": "m1-014-kill-16",
+      "rowKey": "EMP-0037",
+      "column": "name",
+      "expectedValue": "REVISED-318607",
+      "status": "verified",
+      "verdict": "verified",
+      "persistedValue": "REVISED-318607",
+      "falseSuccess": false,
+      "reason": "cell B38 (record EMP-0037, column name) persisted as \"REVISED-318607\"",
+      "runId": "cc010ae9-db55-4ce9-9bb9-d62d9730bc46",
+      "fixtureSha256": "4ebe5a7c18ba2b1e84f0d8c430d644f51770072fabb38487cc6d0826b9a1a622",
+      "elapsedMs": 93346,
+      "timings": {
+        "helpers": [
+          {
+            "op": "focus",
+            "elapsedMs": 6683,
+            "durationMs": 7610,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4113,
+            "durationMs": 4750,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 3324,
+            "durationMs": 3899,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 5056,
+            "durationMs": 5712,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "focus",
+            "elapsedMs": 3192,
+            "durationMs": 3912,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 4503,
+            "durationMs": 5174,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "save",
+            "elapsedMs": 4582,
+            "durationMs": 5533,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          }
+        ],
+        "unoReady": [
+          {
+            "durationMs": 4090,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          },
+          {
+            "durationMs": 152,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          }
+        ]
+      },
+      "guardPredicate": null,
+      "persistedReadError": null,
+      "actionKinds": [
+        "click",
+        "setValue",
+        "keyPress"
+      ],
+      "faultApplied": true,
+      "recoveryEvents": [
+        "retry:1-failed",
+        "retry:2-failed",
+        "relaunch:resumed",
+        "relaunch:completed"
+      ],
+      "unprovenVerified": false,
+      "unprovenRecovery": false,
+      "storedFalseSuccess": false,
+      "storedRecoveryEvents": [
+        "retry:1-failed",
+        "retry:2-failed",
+        "relaunch:resumed",
+        "relaunch:completed"
+      ],
+      "countsTowardCoverage": true
+    },
+    {
+      "index": 17,
+      "class": "invalid-target",
+      "recovery": true,
+      "fixtureSeed": "m1-014-invalid-target-17",
+      "rowKey": "EMP-0005",
+      "column": "name",
+      "expectedValue": "REVISED-403986",
+      "status": "verified",
+      "verdict": "verified",
+      "persistedValue": "REVISED-403986",
+      "falseSuccess": false,
+      "reason": "cell B6 (record EMP-0005, column name) persisted as \"REVISED-403986\"",
+      "runId": "391ef508-e30c-4c89-9ac0-e271657f96d7",
+      "fixtureSha256": "7de57617ec67eaf44f5ab7d6265daa0099f599255620d186e5e6167339ea6dce",
+      "elapsedMs": 70946,
+      "timings": {
+        "helpers": [
+          {
+            "op": "focus",
+            "elapsedMs": 7452,
+            "durationMs": 8435,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 3962,
+            "durationMs": 4485,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 3658,
+            "durationMs": 4566,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "nametype",
+            "elapsedMs": 5569,
+            "durationMs": 6036,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          },
+          {
+            "op": "save",
+            "elapsedMs": 4573,
+            "durationMs": 5086,
+            "deadlineMs": 90000,
+            "outcome": "ok"
+          }
+        ],
+        "unoReady": [
+          {
+            "durationMs": 2941,
+            "deadlineMs": 90000,
+            "outcome": "ready"
+          }
+        ]
+      },
+      "guardPredicate": null,
+      "persistedReadError": null,
+      "actionKinds": [
+        "click",
+        "setValue",
+        "keyPress"
+      ],
+      "faultApplied": true,
+      "recoveryEvents": [
+        "retry:1-completed"
+      ],
+      "unprovenVerified": false,
+      "unprovenRecovery": false,
+      "storedFalseSuccess": false,
+      "storedRecoveryEvents": [
+        "retry:1-completed"
+      ],
+      "countsTowardCoverage": true
+    }
+  ],
+  "ledger": {
+    "rows": 39,
+    "pass": 18,
+    "refusal": 18,
+    "failure": 0,
+    "gap": 0,
+    "uncertain": 3,
+    "unaccounted": 0
+  },
+  "passed": true,
+  "problems": []
+}

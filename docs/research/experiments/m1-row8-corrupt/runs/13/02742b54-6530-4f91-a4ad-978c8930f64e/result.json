@@ -1,0 +1,99 @@
+{
+  "runId": "02742b54-6530-4f91-a4ad-978c8930f64e",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-invalid-target-13",
+    "rowKey": "EMP-0065",
+    "column": "name",
+    "newValue": "REVISED-93529"
+  },
+  "instruction": "Set the cell at record EMP-0065, column name, to \"REVISED-93529\", and save the file.",
+  "startedAt": "2026-11-25T07:07:32.249Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-invalid-target-13\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-16933-1795590454200-324072037\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-16933-1795590454200-324072037\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B66"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-invalid-target-13\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-16933-1795590454200-324072037\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B66 located at record EMP-0065, column name, holds fixture value \"Hana Ortiz\"",
+          "passed": true,
+          "observed": "value=\"Hana Ortiz\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    }
+  ],
+  "guardFailure": {
+    "step": 2,
+    "phase": "precondition",
+    "predicateName": "act:setValue",
+    "observed": "stale ref winref:5:B66: issued for stateVersion 5, app is at 6",
+    "reason": "action dispatch failed on step 2: stale ref winref:5:B66: issued for stateVersion 5, app is at 6"
+  },
+  "verdict": {
+    "status": "refuted",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": false,
+        "reason": "cell B66 expected \"REVISED-93529\" but live document has \"Hana Ortiz\"",
+        "partial_score": {
+          "score": 0,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 0,
+    "reasons": [
+      "cell B66 expected \"REVISED-93529\" but live document has \"Hana Ortiz\""
+    ]
+  }
+}
