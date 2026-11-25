@@ -46,9 +46,12 @@ None of its rows are in this ledger.
 `schema-validation.log`: **29 result.json + 516 trace events, all OK** (trial 14 has no run
 directory, because its deploy failed before the trial started).
 
-`validate-live` must be run **per index directory** (`runs/<index>/`). Run on `runs/` itself it
-scans one level too shallow, validates 0 files and still prints `ALL OK`, a false pass. This
-is a runbook finding for §8.2.
+Since #433 (TIF-223), `validate-live` walks nested layouts and fails on zero, incomplete or
+miscounted runs, so the top level validates every run: `pnpm exec tsx
+src/integration/validate-live.ts docs/research/experiments/m1-row8-sweep2/runs --expect 29`
+prints `validated 29 result.json + 516 trace events … ALL OK` and exits 0 (runbook §8.2). When
+this pack was recorded, `validate-live` read one level only and reported `ALL OK` on 0 files at
+the top level, which is why `schema-validation.log` was produced per index directory.
 
 ## Files
 

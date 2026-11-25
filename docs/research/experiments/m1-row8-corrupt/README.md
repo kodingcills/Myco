@@ -25,8 +25,11 @@ relaunch completed; invalid-target: the first retry completed).
 ## Schema validation
 
 `schema-validation.log`: **18 result.json + 321 trace events, all OK**, validated per index
-directory (`runs/<index>/`). Pointed at `runs/` itself, `validate-live` validates 0 files and still
-prints `ALL OK` (TIF-223), so it must not be used that way.
+directory (`runs/<index>/`). Since #433 (TIF-223) the top level validates every run and fails on 0:
+`pnpm exec tsx src/integration/validate-live.ts docs/research/experiments/m1-row8-corrupt/runs
+--expect 18` prints `validated 18 result.json + 321 trace events … ALL OK` and exits 0 (runbook
+§8.2). When this pack was recorded, the top level validated 0 files and still printed `ALL OK`,
+which is why the log was produced per index directory.
 
 ## §8 reproduction (a new operator session on the same clone, host-only)
 
@@ -36,10 +39,11 @@ prints `ALL OK` (TIF-223), so it must not be used that way.
   summary in place and takes the eval ID from the directory name), rebuilt `ledger.jsonl` and
   `summary.json` **byte-identical** to the originals, and its printed summary matches `summary.txt`.
   `m1-corrupt-suite-ledger.ts` also passes.
-- **TIF-223 confirmed:** `validate-live` on any OUT, on `runs/`, or on an empty directory prints
-  `validated 0 … ALL OK` and exits 0. Cause: `src/integration/validate-live.ts:15-18` scans one level
-  and skips dirs without `trace.jsonl`; `:38-41` reports OK whenever there are no failures, with no
-  minimum count.
+  Replay it under the original OUT basename, `corrupt-20261125T052233Z` (the first `ledger.jsonl`
+  row's `evalId`), not `m1-row8-corrupt`; runbook §8.3 has the exact commands.
+- **TIF-223 (fixed since by #433):** at the time, `validate-live` on any OUT, on `runs/`, or on an
+  empty directory printed `validated 0 … ALL OK` and exited 0, because it scanned one level only
+  and had no minimum count.
 
 ## Deploy check and §5 (same operator, same clone, before the suite)
 
