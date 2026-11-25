@@ -61,3 +61,5 @@ for the 29 trials that ran. The repo's `.gitignore` excludes `runs/` and `*.log`
 force-added (`git add -f`), as other experiment packs do. `progress.log` contains the agent's ping
 `session_id` values: random per-agent-start GUIDs (runbook §5), not credentials. Every `"token"`
 field in it is the deploy script's literal `<token>` placeholder. Screenshots are not committed, as for the other experiment packs.
+
+Redaction note (2026-11-25, TIF-241): absolute macOS home paths (and the account name) in this pack's files were replaced after the fact with `~/` or a `<account>` placeholder; nothing else changed.

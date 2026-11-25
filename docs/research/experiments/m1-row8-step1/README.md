@@ -69,3 +69,5 @@ separate post-M1 issue, TIF-232 (lead ruling, 2026-11-25 09:10Z).
 
 Only J10 is recorded as needing someone to settle it. The lead ruled on that disposition on
 2026-11-25 at 09:10Z, before row 8's DONE was merged.
+
+Redaction note (2026-11-25, TIF-241): absolute macOS home paths (and the account name) in this pack's files were replaced after the fact with `~/` or a `<account>` placeholder; nothing else changed.

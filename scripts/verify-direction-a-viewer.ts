@@ -3,23 +3,26 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium, expect } from "@playwright/test";
 
-const artifactBrainDir =
-  "/Users/tofuinparis/.gemini/antigravity-cli/brain/a81f8279-f496-4183-bd8e-ae71891d1e4e";
+// Paths resolve from the repo root (this file's parent directory), so the script
+// works from any cwd. Copying the screenshots to an extra directory (an agent's
+// artifact folder, say) is opt-in: set MYCO_VIEWER_PROOF_COPY_DIR to enable it.
+const REPO_ROOT = resolve(import.meta.dirname, "..");
+const copyDir = process.env.MYCO_VIEWER_PROOF_COPY_DIR?.trim() || undefined;
 
 async function runViewerVerification() {
-  const viewerHtmlPath = resolve(process.cwd(), "viewer/dist/myco-viewer.html");
+  const viewerHtmlPath = resolve(REPO_ROOT, "viewer/dist/myco-viewer.html");
   if (!existsSync(viewerHtmlPath)) {
     throw new Error(`myco-viewer.html not found at ${viewerHtmlPath}`);
   }
 
-  const archivePath = resolve(process.cwd(), "runs/direction-a-todo-save.mycotrace");
+  const archivePath = resolve(REPO_ROOT, "runs/direction-a-todo-save.mycotrace");
   if (!existsSync(archivePath)) {
     throw new Error(`Run archive not found at ${archivePath}`);
   }
 
-  const screenshotsDir = resolve(process.cwd(), "viewer/screenshots");
+  const screenshotsDir = resolve(REPO_ROOT, "viewer/screenshots");
   mkdirSync(screenshotsDir, { recursive: true });
-  mkdirSync(artifactBrainDir, { recursive: true });
+  if (copyDir) mkdirSync(copyDir, { recursive: true });
 
   process.stdout.write("[verifier] Launching headless Chromium (1440x900)...\n");
   const browser = await chromium.launch({ headless: true });
@@ -184,14 +187,19 @@ async function runViewerVerification() {
   await page.screenshot({ path: rawShotPath, animations: "disabled" });
   process.stdout.write(`[verifier] Captured Raw screenshot: ${rawShotPath}\n`);
 
-  // Copy all 3 screenshots to the conversation brain artifact dir for embedding
-  const brainProof = join(artifactBrainDir, "direction-a-proof-1440.png");
-  const brainWhy = join(artifactBrainDir, "direction-a-why-1440.png");
-  const brainRaw = join(artifactBrainDir, "direction-a-raw-1440.png");
-  copyFileSync(proofShotPath, brainProof);
-  copyFileSync(whyShotPath, brainWhy);
-  copyFileSync(rawShotPath, brainRaw);
-  process.stdout.write("[verifier] Copied screenshots to brain artifact directory.\n");
+  // Optionally copy all 3 screenshots to MYCO_VIEWER_PROOF_COPY_DIR for embedding elsewhere
+  let copies: { proof: string; why: string; raw: string } | undefined;
+  if (copyDir) {
+    copies = {
+      proof: join(copyDir, "direction-a-proof-1440.png"),
+      why: join(copyDir, "direction-a-why-1440.png"),
+      raw: join(copyDir, "direction-a-raw-1440.png"),
+    };
+    copyFileSync(proofShotPath, copies.proof);
+    copyFileSync(whyShotPath, copies.why);
+    copyFileSync(rawShotPath, copies.raw);
+    process.stdout.write(`[verifier] Copied screenshots to ${copyDir}.\n`);
+  }
 
   await browser.close();
 
@@ -201,9 +209,7 @@ async function runViewerVerification() {
     proofShotPath,
     whyShotPath,
     rawShotPath,
-    brainProof,
-    brainWhy,
-    brainRaw,
+    copies,
   };
 }
 

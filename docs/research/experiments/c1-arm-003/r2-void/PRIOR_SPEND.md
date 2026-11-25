@@ -29,4 +29,4 @@ it - which is exactly what this PR (#334, merged 20:21:59Z) fixed.
 ## Provenance
 
 - committed figure: `docs/research/experiments/c1-arm-003-run-plan.md`, the rebuilt ledger
-- aborted reservation: `/Users/tofuinparis/Projects/myco-runs/c1-arm003d/accounting.json`
+- aborted reservation: `~/Projects/myco-runs/c1-arm003d/accounting.json`
