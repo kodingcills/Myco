@@ -21,6 +21,8 @@ export interface TestWorkbook {
   /** Use a custom date numFmt (LibreOffice writes YYYY-MM-DD as id 164) instead of builtin 14. */
   readonly customDateFormat?: boolean;
   readonly deflate?: boolean;
+  /** Replace the first sheet's XML verbatim (for malformed-sheet tests). */
+  readonly rawSheetXml?: string;
 }
 
 const esc = (s: string) =>
@@ -119,7 +121,7 @@ export function buildXlsx(book: TestWorkbook): Buffer {
       .join("");
     return `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="5" width="12"/></cols><sheetData>${rows}</sheetData></worksheet>`;
   };
-  const sheet1 = sheetXml(book.cells);
+  const sheet1 = book.rawSheetXml ?? sheetXml(book.cells);
   const sheet2 = book.extraSheet ? sheetXml(book.extraSheet) : undefined;
   const sheets = `<sheet name="Sheet1" sheetId="1" r:id="rId2"/>${sheet2 ? '<sheet name="Sheet2" sheetId="2" r:id="rId3"/>' : ""}`;
   const dateFmtId = book.customDateFormat ? 164 : 14;

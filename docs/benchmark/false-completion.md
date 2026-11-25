@@ -23,6 +23,18 @@ A **false DONE accepted** is an arm row with `accepted: true` whose grade is `fa
 accepted row the grader could not grade (`ungradable`) is not evidence of a correct DONE: it
 is counted separately and blocks R1, the same as a harness fault (M2 plan §2, "no exclusions").
 
+**R1 passes only when all of these hold:**
+
+1. The ledgers are consistent.
+2. No false DONE was accepted.
+3. No accepted DONE is ungradable.
+4. A false-accept bound exists, which means at least one DONE was accepted.
+
+The bound R1 reports is (false DONE accepted + accepted ungradable) / accepted DONEs, with its
+Wilson 95% interval. A gate that never verifies anything has accepted no DONE, so it has no
+bound. It gets "insufficient evidence", not a vacuous pass. The same numerator over all gated
+trials is reported beside it as a diagnostic.
+
 ## 2. Why the grader cannot share the gate's failure modes
 
 The gate is M1's verifier, `src/verify/uno-verifier.ts`.
@@ -60,12 +72,12 @@ that writes the right value to the target but also changes another cell is `veri
 gate (it checks the target cell only) and `fail` by the grader. The test pins this
 divergence so it cannot change silently.
 
-The grader is strict by default, following the Foundry's mutation-audit rule that an
-unrequested change is a failure (`docs/foundry/contract.md` §7b, WorkArena's "unrequested
-field filled"). Grade rows also carry `targetSatisfied`, so a report can show both readings.
-**Decision needed (lead):** does R1 count "right target, collateral damage" as a false DONE?
-The default here says yes. If the ruling is no, the check reads `targetSatisfied` instead of
-`status` for R1, and the grader itself does not change.
+**Ruled by the lead on 2026-11-25: a correct target plus collateral damage is a false DONE in
+R1.** The grader grades the whole document, consistent with the Foundry's mutation-audit rule
+that an unrequested change is a failure (`docs/foundry/contract.md` §7b, WorkArena's
+"unrequested field filled"). `targetSatisfied` stays in grade rows as a diagnostic only; R1
+never reads it. Making the gate itself check the whole document is TIF-270 (M2-07), and it
+must land before TIF-274's runs.
 
 ## 3. Grading rules
 
@@ -77,8 +89,18 @@ column's declared type (`key`, `text`, `integer`, `date`, `currency`).
   has content.
 - **fail**: any cell differs, including the target. An intent the fixture cannot satisfy
   (unknown record, unknown column, or the key column) fails whatever the document holds.
-- **ungradable** (never pass): document not captured, container or XML unreadable, fixture
-  bytes not matching the declared hash, or a fixture that is ambiguous for the intent.
+- **ungradable** (never pass). Any of:
+  - the document was not captured;
+  - the container or XML is unreadable, including an invalid character reference (a surrogate,
+    or a code point past U+10FFFF);
+  - the declared format does not match the bytes (`xlsx` that is not a zip container, or `csv`
+    that is one);
+  - the fixture bytes do not match the declared hash;
+  - a header column has no declared type;
+  - the fixture is ambiguous for the intent.
+
+  Any exception past the fixture-hash check, whether in the reader or in the comparison, is
+  also `ungradable`. One bad document costs one trial, never the rest of a grading batch.
 
 Cell comparison is strict on value and on kind:
 
@@ -86,7 +108,9 @@ Cell comparison is strict on value and on kind:
 - A number cell must hold the value in the column's own domain:
   - an integer column needs that integer;
   - a date column needs a date-formatted serial for that day (1900 or 1904 system), so a
-    bare 43831 typed into a date column fails;
+    bare 43831 typed into a date column fails. A serial past 9999-12-31 (2958465 in the 1900
+    system, 2957003 in 1904) is no day at all. It matches no expected date, so a document
+    holding one fails;
   - a currency column needs that amount.
 - A formula is never a literal, even when its cached value is right.
 - An expected empty cell must be empty.
@@ -126,6 +150,27 @@ Schemas: `schemas/benchmark-ledger.ts`. Both rows are closed (`additionalPropert
    hash, persisted file, intent, column types.
 3. Write its arm row.
 
+**Contract details:**
+
+- **Grade request:** closed by `benchmarkGradeRequestSchema` in `schemas/benchmark-ledger.ts`.
+  The CLI refuses an invalid request.
+  - File paths must be relative and inside the request directory: no leading slash, no drive,
+    no `..`.
+  - `columnTypes` must type every header column of the fixture, or the grade is `ungradable`.
+  - There is no field for the claim or the gate verdict.
+- **`taskId`:** the request's value must equal the arm row's, or the check fails.
+- **`persistedSha256`:** SHA-256 over the raw bytes of the saved file exactly as captured. It
+  is not a hash of a re-export or a conversion.
+- **`persistedFormat`:** `xlsx` for a Calc-saved workbook, which is what **both** arms produce
+  on the VM, `hcu+shell` included. `csv` is only for the fake app in CI.
+- **Charsets:** `trialKey` and `taskId` match `^[A-Za-z0-9._:-]{1,128}$`; `faultClass`
+  matches `^[a-z0-9-]{1,64}$`.
+- **`--expect`:** every arm present in the arm ledger needs one, and every arm named in
+  `--expect` must be present.
+- **Instruction binding:** `instructionSha256` is recorded in the arm row only. The grader
+  grades the intent, not the instruction text. That the instruction expresses the intent is a
+  property of the task set, which PR 2 checks.
+
 The grader then runs over the requests:
 
 ```
@@ -156,12 +201,22 @@ documents and the check on the published ledgers.
 
 ## 6. Proof in this PR
 
+- `test/benchmark/hostile-input.test.ts`:
+  - invalid character references;
+  - a non-`SheetReadError` reader failure (invalid UTF-8) graded `ungradable`;
+  - a single-byte corruption sweep over a valid workbook that must never throw;
+  - the inflate cap, ZIP64 and encryption refusal, and duplicate cells;
+  - untyped columns and a format/bytes mismatch;
+  - the grade-request schema.
 - `test/benchmark/grade.test.ts`:
   - readers: ZIP stored and deflated, OOXML cell kinds, date formats, both date systems, CSV quoting;
   - grading: passes for each column type; ten false-DONE document shapes that must fail;
     unsatisfiable intents; ungradable inputs.
-- `test/benchmark/check.test.ts`: R1 pass and fail paths, denominators and Wilson intervals,
-  and seventeen ledger inconsistencies the check must reject.
+- `test/benchmark/check.test.ts`:
+  - R1 pass and fail paths, including "insufficient evidence" when nothing was accepted;
+  - denominators and Wilson intervals;
+  - twenty ledger inconsistencies the check must reject, including a duplicate grade, mixed
+    task-set versions and a grade for another task.
 - `test/benchmark/fake-e2e.test.ts`:
   - real guarded-program runs on the fake app, graded and joined;
   - a simulated broken gate that accepts an unsaved DONE, which R1 catches;
@@ -176,8 +231,10 @@ documents and the check on the published ledgers.
   workbooks produced by a test writer. The first VM window should capture one real saved
   document per column type and commit it as a contract fixture.
 - **Persisted bytes are not captured today.** M1's harness never copies the saved `.xlsx` to
-  the host; the gate reads it in the guest. M2-02 and M2-12 must add the capture. Without
-  it, every row is `ungradable` and R1 cannot pass, so the failure is loud.
+  the host; the gate reads it in the guest. **The lead confirmed (2026-11-25) that capturing
+  the persisted bytes on the host for every trial is a hard requirement for TIF-274.** It
+  uses #470's capture, taken after the agent stops. Without it, every row is `ungradable`
+  and R1 cannot pass, so the failure is loud.
 - **The task set is PR 2:** about 100 R1 trials across normal and fault classes, built from
   the M1 parameter generator, with fixtures and instruction text committed by hash.
-- **The collateral-damage ruling** (§2.1).
+- **Gate whole-document check:** TIF-270 (M2-07), before TIF-274 (§2.1).

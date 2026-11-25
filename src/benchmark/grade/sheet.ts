@@ -137,6 +137,15 @@ function decodeXml(text: string): string {
     const code = entity.startsWith("#x")
       ? Number.parseInt(entity.slice(2), 16)
       : Number.parseInt(entity.slice(1), 10);
+    // XML 1.0 allows only scalar values: no surrogates, nothing past U+10FFFF.
+    if (
+      !Number.isInteger(code) ||
+      code < 0 ||
+      code > 0x10ffff ||
+      (code >= 0xd800 && code <= 0xdfff)
+    ) {
+      throw new SheetReadError(`invalid character reference &${entity};`);
+    }
     return String.fromCodePoint(code);
   });
 }
@@ -310,8 +319,14 @@ export function readXlsxGrid(bytes: Uint8Array): Grid {
 }
 
 /** Spreadsheet serial day number -> ISO date (whole days only; time part rejected). */
+/** Largest serial a spreadsheet date can hold: 9999-12-31 in each date system. */
+export const MAX_DATE_SERIAL: Readonly<Record<1900 | 1904, number>> = {
+  1900: 2958465,
+  1904: 2957003,
+};
+
 export function serialToIsoDate(serial: number, system: 1900 | 1904): string | null {
-  if (!Number.isInteger(serial) || serial < 1) return null;
+  if (!Number.isInteger(serial) || serial < 1 || serial > MAX_DATE_SERIAL[system]) return null;
   // 1900 system: serial 60 is the nonexistent 1900-02-29; serials after it are offset by one.
   if (system === 1900 && serial === 60) return null;
   const baseMs =
@@ -320,5 +335,6 @@ export function serialToIsoDate(serial: number, system: 1900 | 1904): string | n
       : serial < 60
         ? Date.UTC(1899, 11, 31)
         : Date.UTC(1899, 11, 30);
-  return new Date(baseMs + serial * 86_400_000).toISOString().slice(0, 10);
+  const date = new Date(baseMs + serial * 86_400_000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
 }
