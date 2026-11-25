@@ -43,11 +43,13 @@ On the gated path this is **required**, not advice (outer-loop ruling, 2026-11-2
   file out of the guest to `<root>/<runId>/<stateFile>`. The gate judges that copy, not
   the live file.
 - **The agent must never be able to write to it**: no actuator tool, shell, shared mount
-  or symlink may reach the evidence root. The file reader's own checks, and what they do
-  and do not cover on each platform, are in
-  [What the file reader guarantees](#what-the-file-reader-guarantees). On macOS they do
-  not cover a concurrent writer at all, so this requirement is what the guarantee rests
-  on. Making the root unwritable from the agent's whole tool surface is TIF-266's job.
+  or symlink may reach the evidence root. **The file reader is not a defence against a
+  concurrent writer**, and this requirement is what the gated path relies on. On Linux the
+  reader also refuses a concurrent swap of an intermediate directory; on macOS and other
+  platforms without `/proc/self/fd` it does not. On no platform does it stop a hard link
+  to another run's file placed inside this run. The per-platform detail is in
+  [What the file reader guarantees](#what-the-file-reader-guarantees). Making the root
+  unwritable from the agent's whole tool surface is TIF-266's job.
 - TIF-266 (#470) builds this capture as seal → capture → read the sealed copies. Until #470
   is wired in, `fileEvidenceReader` over a harness-filled directory is the stand-in, and it
   is fit only for the mock path. **Wiring the gate's reader to #470's sealed per-trial
@@ -160,7 +162,7 @@ machine-readable explanation.
 | `ORACLE_ERROR` | uncertain | The oracle threw. |
 | `ORACLE_INVALID_OUTPUT` | uncertain | The oracle returned something that is not a well-formed verdict. |
 | `STATE_MISSING` | uncertain | No persisted state at `<root>/<runId>/<stateFile>`. |
-| `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink below the evidence root, changed between the reader's check and its open (a concurrent swap), is not at the expected path according to the kernel (Linux; see [What the file reader guarantees](#what-the-file-reader-guarantees)), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
+| `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink below the evidence root, has a final component that changed between the reader's check and its open, is not at the expected path according to the kernel (Linux only; this is how an intermediate-directory swap is caught there, and on other platforms that swap is not detected; see [What the file reader guarantees](#what-the-file-reader-guarantees)), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
 | `STATE_CORRUPT` | uncertain | The file does not parse as the family's format. |
 | `INVALID_REQUEST` | uncertain | The request is not an object, lacks `taskId`/`runId`, or a field has the wrong form. |
 | `UNSUPPORTED_API_VERSION` | uncertain | `apiVersion` is present and is not `myco.gate/v1`. |

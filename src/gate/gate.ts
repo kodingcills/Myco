@@ -234,11 +234,15 @@ function walk(
  *    other run and step 4 fails.
  *  - macOS and other platforms without /proc/self/fd: that intermediate race is NOT
  *    refused. A concurrent writer on the evidence root can make the reader return another
- *    run's bytes. The guarantee there rests on the host-capture requirement (the agent
- *    cannot write the root) and, for M2-12, on #470's sealed per-trial capture.
+ *    run's bytes. Closing that race there needs fd-relative opens (or F_GETPATH), which
+ *    Node lacks, so on these platforms the reader is not a defence against a concurrent
+ *    writer.
  *  - Neither: a writer that puts a hard link, or another run's real directory or file,
  *    at the run's own path. At read time that IS the run's evidence; keeping writers off
  *    the root is TIF-266's job (and the host-capture requirement).
+ * On every platform the gated path relies on host capture: the agent has no write access
+ * to the evidence root, so nothing can swap components while the gate reads. Before M2-12
+ * the reader must be backed by TIF-266's (#470) sealed per-trial capture.
  *
  * All I/O here is synchronous and bounded by refusing non-regular files; `readTimeoutMs`
  * guards readers that return a pending promise, not a filesystem that blocks a syscall.
