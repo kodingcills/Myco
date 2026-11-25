@@ -218,7 +218,7 @@ describe("scorecard-check", () => {
     );
   }, 120_000);
 
-  it("pins who signed M1 off and on whose delegation, and fails when either changes", () => {
+  it("pins who signed M1 off, on whose delegation and when, and fails when any of them changes", () => {
     const ok = run("--no-subchecks");
     expect(ok.stdout).toMatch(/^unchecked +signoff +sign-off signer, delegator and dates/m);
     const original = readFileSync(SCORECARD, "utf8");
@@ -226,6 +226,8 @@ describe("scorecard-check", () => {
       ["by Grok Bot (outer-loop engineering lead)", "by Someone (outer-loop engineering lead)"],
       ["Grok Bot (outer-loop engineering lead)", "Grok Bot (contributor)"],
       ["Tiffany McCormick's delegation", "Someone's delegation"],
+      ["signed off 2026-11-25", "signed off 2026-11-26"],
+      ["delegation of 2026-11-23", "delegation of 2026-11-22"],
     ] as const) {
       const result = checkMutated(mutate(original, from, to));
       expect(result.status, `${from} -> ${to}`).toBe(1);

@@ -23,7 +23,15 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,7 +66,8 @@ const SENTINEL = "tok-SENTINEL-a1b2c3d4e5f6";
 
 /** Every temp dir this file creates, removed once the file's tests finish
  * (TIF-237). `rmSync` unlinks the symlink in the `-link-` dir; it does not
- * follow it into the repo. */
+ * follow it into the repo, and `afterAll` asserts the repo is still there
+ * (TIF-243). */
 const tempDirs: string[] = [];
 function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -67,6 +76,7 @@ function makeTempDir(prefix: string): string {
 }
 afterAll(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  expect(existsSync(join(REPO_ROOT, "package.json")), "cleanup must not reach the repo").toBe(true);
 });
 
 interface Captured {
@@ -811,6 +821,8 @@ describe("main(): the last-resort rejection handler never exits 0 — TIF-213", 
     // to process.exitCode (EXIT_BLOCKED) and this call would never happen.
     await vi.waitFor(() => expect(exit).toHaveBeenCalled());
     expect(exit.mock.calls).toEqual([[0]]);
+    // The default was still in force when exit(0) ran, so exit(0) is what overrode it.
+    expect(process.exitCode).toBe(3);
     expect(stderrWrite).not.toHaveBeenCalled();
   });
 
