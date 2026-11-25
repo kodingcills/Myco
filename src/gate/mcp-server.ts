@@ -155,7 +155,13 @@ export function serveStdio(gate: Gate, input: Readable, output: Writable): Promi
     lines.on("line", (line) => {
       if (line.trim().length === 0) return;
       chain = chain.then(async () => {
-        const out = await handleLine(gate, line);
+        let out: string | undefined;
+        try {
+          out = await handleLine(gate, line);
+        } catch {
+          // Unreachable while the gate is total; a failure must not stall later requests.
+          out = reply(null, { ok: false, code: -32603, message: "internal error" });
+        }
         if (out !== undefined) output.write(`${out}\n`);
       });
     });

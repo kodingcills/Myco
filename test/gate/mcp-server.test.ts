@@ -131,7 +131,7 @@ describe("myco-gate MCP server, driven like a client", () => {
           params: { protocolVersion: version },
         }),
       );
-      expect((reply?.result as { protocolVersion: string }).protocolVersion).toBe(version);
+      expect(reply?.result).toMatchObject({ protocolVersion: version });
     }
     const reply = await rpc(
       JSON.stringify({
@@ -141,9 +141,7 @@ describe("myco-gate MCP server, driven like a client", () => {
         params: { protocolVersion: "1999-01-01" },
       }),
     );
-    expect((reply?.result as { protocolVersion: string }).protocolVersion).toBe(
-      PROTOCOL_VERSIONS[0],
-    );
+    expect(reply?.result).toMatchObject({ protocolVersion: PROTOCOL_VERSIONS[0] });
   });
 });
 
