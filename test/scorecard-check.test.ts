@@ -205,8 +205,9 @@ describe("scorecard-check", () => {
     const result = checkMutated(
       mutate(
         readFileSync(SCORECARD, "utf8"),
-        "`m1-013-sweep-v3/trials.jsonl`: 29/30 verified",
-        "`m1-013-sweep-v3/trials.jsonl`: 28/30 verified",
+        // Anchored without the run path: probe-directory.test.ts forbids tests naming a live run dir.
+        "29/30 verified, Wilson 0.833",
+        "28/30 verified, Wilson 0.833",
       ),
     );
     expect(result.status).toBe(1);
