@@ -86,10 +86,14 @@ fetched, and r6 installed its own. A stale one gives `AUTH_FAILED` after the gue
 been touched. Fetch it first:
 
 ```bash
-~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > /tmp/s6-token
+(umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > /tmp/s6-token)
 ```
 
 Both were hit on 2026-11-24 immediately after r6 released the guest.
+
+**Today, fetch into `~/.myco-token` instead (runbook §4).** `run-live` and the §5 CLI read that
+file (with `MYCO_AGENT_TOKEN` unset); nothing reads `/tmp/s6-token`. The path is shared by every
+operator on this Mac, and any deploy rotates the token, so re-fetch straight after your own deploy.
 
 ## Handoff: r6 resume (Shot) — the flock is FREE as of 2026-11-24 08:5xZ
 
@@ -150,7 +154,7 @@ row-8 §6 goes **after** it releases, on the corrected runbook (#405 merged `283
 3. **Fetch a fresh token.** The cached `~/.myco-token` belongs to the last deploy and gives
    `AUTH_FAILED` *after* the guest has been touched:
    ```bash
-   ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > /tmp/s6-token
+   (umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > /tmp/s6-token)
    ```
 
 4. **Launch, detached, with an explicit runs dir.** `nohup` + `caffeinate`; **macOS has no

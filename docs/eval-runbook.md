@@ -14,8 +14,12 @@ except where a measured value is quoted with its log or date.
 
 **It has since been executed end to end, and the markers are no longer uniform.** As of
 2026-11-24: §1, §2, §3.2, §4 and §5 have each been run and their outputs matched
-(`docs/research/experiments/m1-row8/`), and **§6 has since PASSED 20/20** (`S6-PASS.md`). §3.1 and
-§7.3/§7.4 have not been re-run by a fresh operator. Take a step-level `UNVERIFIED` marker as
+(`docs/research/experiments/m1-row8/`), and **§6 has since PASSED 20/20** (`S6-PASS.md`). Fresh
+row-8 operators have since re-run §3.1 (2026-11-24 and 2026-11-25) and §4 on post-TIF-220 code
+(2026-11-25: `verified 13 files on the guest against the source (sha256)`, `DEPLOY OK`), §5
+against the real guest (2026-11-25, exit 0, the expected stdout below), and the §7.3 sweep
+(28/30 verified, `docs/research/experiments/m1-row8-sweep2/`). §7.4 was launched by a fresh
+operator on 2026-11-25; its result is not recorded here. Take a step-level `UNVERIFIED` marker as
 "not re-checked recently", not as "never run" — and where a section's own marker contradicts this
 paragraph, the section is the one to fix (F3, 2026-11-24).
 
@@ -53,7 +57,15 @@ pnpm typecheck && pnpm lint && pnpm test && pnpm build
 
 Expected: four green commands. `pnpm test` runs vitest and then `schema-validate` (the pnpm alias; the file is `schemas/validate-artifacts.ts`)
 (→ `validated artifacts for N trials (all ok)`). This proves the host half without touching the
-VM; do it before any VM work so a later failure is unambiguous.
+VM; do it before any VM work so a later failure is unambiguous. `schema-validate` prints its
+per-trial `ok …` lines with no newline between them, so expect one long line before the summary.
+
+**Run `pnpm test` on a quiet host** (1-min load under 10, the same level as the §7.3 resume gate).
+Under load it fails on timeouts alone: on 2026-11-25, with the 1-min load at 12.9–15.4 while a
+sweep ran, 43 of 1080 tests failed, every one a 5 s timeout (vitest's default `testTimeout`, and
+`spawnSync(..., {timeout: 5000})` at `test/vm-lock.test.ts:27`), with no logic failure. If every
+failure is a timeout, wait for the load to drop and re-run before blaming the repo. A running VM
+guest alone can hold the load at 12–15 (row-8 operator report, S8).
 
 ### 1.3 What a fresh operator cannot improvise
 
@@ -97,7 +109,8 @@ it unset is how a normal run uses the repo's copy.
 
 ## 2. Sanity: the VM is reachable and healthy
 
-**UNVERIFIED** (no VM at writing time).
+(measured) Run by a fresh row-8 operator on 2026-11-24 with the expected outputs below (operator
+report S2). Only the optional `smoke.ps1` check was not re-run.
 
 ### 2.0 Is a guest running at all? (do this first)
 
@@ -241,6 +254,11 @@ Expected: `reset-trial-vm: ready on 'clean-base'`. Cold boot costs ~21 s once UT
 the script header's ~165 s figure is a single earlier sample. That is the price of a reset that
 cannot wedge, versus the live path's ~7 s when healthy.
 
+**Plan for 180–280 s, the same range as §3.2.** The two fresh row-8 runs fell outside the quiet
+figures above without a UTM restart: **195 s** at load 5.65 (2026-11-24) and **250 s** at load
+10–14 (2026-11-25), both ending in the expected line (operator report S3 and operator 4 step 2).
+The ~21 s figure needs a warm UTM and a quiet host; do not plan on it.
+
 ### 3.2 Fallback — `reset.sh cold`
 
 **UNVERIFIED**, but this one is already exercised: `reset.sh cold` restore `clean-base` → cold
@@ -292,7 +310,9 @@ load ~9.7). The 100–180 s figure is the quiet case only. It copies the agent t
 `C:\Program Files\Myco\agent`, writes a **fresh token** to `C:\ProgramData\Myco\agent.token`,
 installs pywin32/comtypes/uiautomation into LibreOffice's own Python, registers the `MycoAgent`
 task, launches it through `run-interactive.ps1` (interactive session), and pings it through
-`ssh -L 8765:127.0.0.1:8765`.
+`ssh -L 8765:127.0.0.1:8765`. (The script's header comment, lines 6–7, still says it starts the
+agent "via schtasks /run". That comment is stale; the launch is `run-interactive.ps1`, as the
+script's own output says.)
 
 Expected tail:
 
@@ -315,6 +335,25 @@ a shell variable (the host's secret guard refuses commands that carry the token,
 if an earlier shell exported a stale one: a set variable wins over the file). The §5 CLI reads only
 the file.
 
+- **No `chmod` needed.** `umask 077` already creates the file as mode 600.
+- **The trailing CRLF is fine.** PowerShell ends the line with CRLF (a 48-character token gives a
+  50-byte file). Both readers trim it (`src/integration/run-live.ts:56`,
+  `src/integration/session-info-core.ts:136`).
+- **`~/.myco-token` is one path shared by every operator on this Mac.** Any deploy, including the
+  one inside every §7.3/§7.4 trial, rotates the guest token, so another operator's deploy makes
+  your file stale (`AUTH_FAILED`). Re-fetch straight after *your* deploy and do not run single
+  trials while a sweep is deploying.
+- **The `ops` line in the deploy output holds no token.** It prints a literal `<token>`
+  placeholder (`agent/bootstrap/deploy-to-vm.sh:158`), but the host secret guard redacts it, so on
+  screen the tail can *look* as if it printed one.
+
+**Known gap: the drivers do not follow the token-file rule (G28, not fixed here).**
+`scripts/m1-sweep.sh:89,94` and `scripts/m1-corrupt-suite.sh:80,94` read the token into a shell
+variable (`TOK=$(vssh … Get-Content …)`) and pass it to `run-live` as `MYCO_AGENT_TOKEN`, so it
+sits in a long-lived process's environment for the whole trial. This is a known exception to the
+rule above, tracked separately; it is not something an operator should copy. By hand, use the
+file.
+
 If it fails:
 
 | Symptom | Cause | Fix |
@@ -322,7 +361,7 @@ If it fails:
 | `deploy-to-vm: missing ssh config …` / `nc not found` / `openssl not found` | host prerequisite | fix the host (§1) |
 | `ModuleNotFoundError` on `session_info`, or `uia`/`pywin32` import errors from the agent | deps missing from **LibreOffice's** Python | `guest-deploy.ps1` installs them; re-run the deploy and read its pip output |
 | agent answers on the wrong interpreter, or `uno` fails to import | agent started under system Python instead of `C:\Program Files\LibreOffice\program\python.exe` | you are on old bootstrap code; the interpreter is fixed on `main` (log 18) |
-| `deploy-to-vm: copy attempt 1/3 failed; redoing the whole copy` | sshd dropped a connection while settling after a cold boot (TIF-220; 1 in 28 cycles) | nothing, if a later attempt prints `copy succeeded … verified`. The copy is redone in full and hash-checked, never resumed |
+| `deploy-to-vm: copy attempt 1/3 failed; redoing the whole copy` | sshd dropped a connection while settling after a cold boot (TIF-220; 1 in 28 cycles) | nothing, if a later attempt prints `copy succeeded … verified`. The copy is redone in full and hash-checked, never resumed. A clean first attempt prints only `==> verified N files on the guest against the source (sha256)`: the `copy succeeded on attempt N/3` line appears only after a retry |
 | `scp: Connection closed` followed by `copy to guest failed on all 3 attempts` | guest or UTM unhealthy, not a settling blip | §2, then §3.3 |
 | ping never answers, no error | agent started in session 0 | §5 — this is the failure that matters |
 
@@ -331,9 +370,10 @@ If it fails:
 The agent's `ping` reports its session; `session_info` reports the window station and desktop
 (both ops, `agent/README.md`). The old inline recipe printed the token into the command line,
 which the host's enforced secret guard refuses (TIF-206, F16), so no agent could run it; it is
-replaced by a repo CLI that reads the token from a file. **UNVERIFIED live:** the CLI below has
-not yet been run against the VM. Its exit codes and token handling are covered by unit tests
-(`test/session-info.test.ts`) only.
+replaced by a repo CLI that reads the token from a file. (measured) **Passed against the real
+guest on 2026-11-25** (fresh row-8 operator, HEAD `bfbe277`): exit 0 in 7 s, stdout identical to
+the expected JSON below. Its other exit codes are covered by unit tests
+(`test/session-info.test.ts`).
 
 Fetch a fresh token (the deploy rotates it, §4) the way `docs/research/experiments/m1-row8/NEXT-RUN.md`
 does — from the guest, redirected to a file, never through a shell variable, with `umask 077` so
@@ -452,13 +492,18 @@ Get-Process soffice* -ErrorAction SilentlyContinue | ForEach-Object { "soffice $
 # Everything that is not ours, minus the two names the agent owns. NOT a 'myco-*' filter:
 # a C1 run leaves C:\myco\runs\20, which 'myco-*' does not match, so that filter prints
 # nothing (a false clean) and every row then fails 'leftover run dirs: 20' (F13).
-Get-ChildItem C:\myco\runs -Directory |
+Get-ChildItem C:\myco\runs -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -notin @('myco-admin','profiles') } |
   ForEach-Object { "run-dir $($_.Name)" }
 EOF
 scp -q -F ~/VMs/myco-win11/ssh_config /tmp/guest-clean.ps1 myco-win11:'C:/myco/guest-clean.ps1'
 ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-clean.ps1'
 ```
+
+On a guest just restored from `clean-base`, `C:\myco\runs` does not exist yet, and that is a
+clean guest. The `-ErrorAction SilentlyContinue` keeps the check silent in that case. An older
+copy of this check without it prints `Cannot find path 'C:\myco\runs' because it does not exist`
+instead, which also means clean (operator report S5).
 
 **If a previous §6 attempt was aborted** — killed, Ctrl-C'd, or interrupted by a guest reset —
 it leaves one `run-dir myco-<hostpid>-<nonce>-<nonce>` and possibly one `soffice` behind. A run
@@ -484,7 +529,7 @@ Record the copied path in your report so the C1 owner can find it. Then run the 
 cat > /tmp/guest-cleanup.ps1 <<'EOF'
 Get-Process soffice* -ErrorAction SilentlyContinue | Stop-Process -Force
 # Same reason as the check above: remove everything except the agent's own names.
-Get-ChildItem C:\myco\runs -Directory |
+Get-ChildItem C:\myco\runs -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -notin @('myco-admin','profiles') } |
   Remove-Item -Recurse -Force
 Get-ChildItem C:\myco\profiles -Directory -ErrorAction SilentlyContinue | Where-Object Name -like 'myco-*' | Remove-Item -Recurse -Force
@@ -591,38 +636,51 @@ step, and say plainly that attribution was impossible.
 
 All live trials run through one entrypoint: `src/integration/run-live.ts`, modes `normal`,
 `kill`, `values`. It takes the VM lock (§6.2) and refuses with exit **10** rather than drive a
-guest another driver owns; it starts its own SSH tunnel (8765) and needs `MYCO_AGENT_TOKEN`
-(§4). Each run writes `runs/<runId>/{trace.jsonl,result.json}` (§8) and prints the trial report
-as JSON.
+guest another driver owns; it starts its own SSH tunnel (8765) and needs the agent token, read
+from `~/.myco-token` when `MYCO_AGENT_TOKEN` is unset (§4). Each run writes
+`<runs-dir>/<runId>/{trace.jsonl,result.json}` (§8; `runs/` by default) and prints the trial
+report as JSON.
 
 **`runs/` is gitignored and EMPTY on a fresh clone — but `pnpm test` (§1.2) populates it with
 fixture dirs** (`direction-a-todo-save`, `direction-a-todo-save.mycotrace`, `test-dir-b-clean`,
 `test-dir-b-interrupted`, `test-dir-c-comparison` — **five**, re-measured 2026-11-24; an earlier
-revision said six and listed `run-df-s01-1`, which that commit does not create)
-2026-11-24). **`validate-live` (§8.2) will then report `ALL OK` on those fixtures**, which are
+revision said six and listed `run-df-s01-1`, which that commit does not create).
+**`validate-live` (§8.2) will then report `ALL OK` on those fixtures**, which are
 schema-valid, without validating anything the operator ran. **That is a false PASS.** Validate an
 explicit run directory, or clear `runs/` between §1 and §8.
 
 ### 7.1 Normal trial
 
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode normal --seed m1-013-trial-01
+pnpm exec tsx src/integration/run-live.ts --mode normal --seed m1-013-trial-01 --runs-dir runs/row8-7.1
 ```
+
+Give every hand-run trial its own `--runs-dir` (the same reason as §6: `runs/` already holds the
+§1.2 test fixtures, and §8.2 must validate only your run).
 
 Expected: `"verdict": {"status": "verified", "reasons": ["cell … persisted as \"…\""]}`,
 `"completed": true`, **exit 0** (non-verified exits 1; exit 10 is the lock refusal of §6.2 and
 means the trial never ran). Recorded wall times: 34.3 s, 40.2 s,
-55.1 s. Report fields: `runId, verdict, completed, elapsedMs, xlsxPath, guardFailure?, cleanup`.
+55.1 s on a quiet host; 106 s at load ~9 (fresh row-8 operator, 2026-11-24). Report fields:
+`runId, verdict, completed, elapsedMs, xlsxPath, guardFailure?, cleanup`.
+
+**`cleanup.errors` is not a failure by itself.** The always-on cleanup kills every `soffice` image
+first, so a `taskkill … no running instance` error is normal when Calc had already exited. What
+matters is `cleanup.residue`: an empty `residue` means the trial's run dir and profile were
+removed and the guest is clean for the next trial. A non-empty `residue`, or a `delete:` error,
+means the next guest-health check will abort (`src/integration/guest-health.ts:121-174`,
+`src/integration/trial.ts:589-594`).
 
 For a non-`verified` normal trial, read `verdict.reasons[0]` and find the failing stage.
-`fixture convert did not produce … within 60000ms` is a setup timeout before Calc opens the
-document. Record it as `uncertain`. The timeout message alone cannot distinguish a slow
+`fixture convert did not produce … within 360000ms` is a setup timeout before Calc opens the
+document (deadline `FIXTURE_CONVERT_DEADLINE_MS = 360_000`, `src/integration/trial.ts:133`, since
+TIF-219; it was 60000 ms before). Record it as `uncertain`. The timeout message alone cannot distinguish a slow
 conversion from a failed process or an unreachable guest.
 
 ### 7.2 Corrupted trial (kill Calc mid-program)
 
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode kill --kill-after-step 3
+pnpm exec tsx src/integration/run-live.ts --mode kill --kill-after-step 3 --runs-dir runs/row8-7.2
 ```
 
 The kill is **step-triggered**, not a wall-clock timer: launching Calc and making it observable
@@ -631,7 +689,15 @@ log 22). `--kill-after-step 3` kills `soffice.bin` after the third dispatched ac
 
 Expected: `"status": "uncertain"` — e.g. "could not look: UNO readback … NoConnectException
 (WSAECONNREFUSED)", or a guard failure at the `setValue` step with `observe-after-action` —
-in 15–28 s, no hang. Artifacts still validate.
+in 15–28 s on a quiet host (68 s at load ~12, 2026-11-24), no hang. Artifacts still validate.
+**Exit 0** for `refuted` or `uncertain` (`src/integration/run-live.ts:118`).
+
+**An unconfirmed kill is still a §7.2 pass, but the fault did not land.** If `taskkill` reports a
+survivor, the trial marks the action failed (`kill after action 3 unconfirmed: …`,
+`src/integration/trial.ts:633-640`) and the guard fails at the next step's `precondition` phase
+instead of `observe-after-action`. The verdict is then `uncertain` and there is no false success,
+so the §7.2 rule below is satisfied. It does not count as an injected fault, though: with
+`--audit-corruption` (the §7.4 form) the same trial exits **2**, "requested fault did not land".
 
 **The rule.** Ground truth is computed host-side (ADR-0005/0008). A kill before the save cannot
 satisfy the intent, so:
@@ -655,13 +721,143 @@ cold reset (§3.1) → deploy (§4) → token fetch → one `run-live --mode nor
 record. Per-trial reset is mandatory, because a failed trial can leak `soffice` and run dirs
 that contaminate the next verdict (log 27). The driver does it for you.
 
+**Fresh launch** (from the repo root of a pinned checkout, see "Pin the code" below). Launch only
+when the resume gate below holds (lock free, 1-min load under 10 for 3 minutes); both row-8
+operators gated the first launch that way too:
+
 ```bash
-OUT="/tmp/m1-013/sweep-$(date -u +%Y%m%dT%H%M%SZ)"   # keep this path for a same-protocol resume
+OUT="/tmp/m1-013/sweep-$(date -u +%Y%m%dT%H%M%SZ)"   # a NEW dir. Write the path down: a resume needs it
 mkdir -p "$OUT"                        # the shell opens $OUT.runner.out before the driver runs
+git rev-parse HEAD > "$OUT.commit"     # what the resume check compares against
 nohup caffeinate -dimsu scripts/m1-sweep.sh "$OUT" > "$OUT.runner.out" 2>&1 < /dev/null &
+echo $! > "$OUT.pid"                   # the driver's pid: the one to watch
 tail -F "$OUT/progress.log"            # what it is doing (-F: the file appears a few seconds in)
 cat "$OUT/trials.jsonl"                # one record per finished index
 ```
+
+`OUT` can be any new directory; `/tmp/m1-013/` is only the convention. A path under a clone's
+`runs/` also works, but then §8.2 must name `$OUT/runs/<i>` exactly (never `runs/`), because
+`runs/` also holds the §1.2 test fixtures. `$OUT.runner.out` stays almost empty: the driver sends
+its children's output to `$OUT/progress.log`, so `runner.out` only catches nohup and shell errors.
+
+**Which pid is the sweep.** With `nohup caffeinate -dimsu <utility> &`, the pid in `$!` is the
+utility (`m1-sweep.sh`), and `caffeinate` runs as its *child*, asserting "on behalf of" that pid.
+Three row-8 launches showed this: sweep #1's resume, where `pmset -g assertions` named the driver
+pid, plus sweep #2 and the §7.4 suite, where `caffeinate` was the supervisor's child (operator
+report G19).
+So watch `$OUT.pid`, and confirm it with `ps -o pid,ppid,command -p "$(cat "$OUT.pid")"`. Do not
+use `pgrep -f "m1-sweep.sh $OUT"`: it matches the caffeinate child too. `lsof
+/tmp/myco-win11.vm.lock` shows the same driver pid and its children holding the lock.
+
+**Detached liveness, no live session needed.** Check `kill -0 "$(cat "$OUT.pid")" && echo alive`,
+the line count of `$OUT/trials.jsonl`, and the last line of `$OUT/progress.log`. Never probe the
+lock with `flock` to check on a sweep (§2, F5); `lsof` is read-only.
+
+**Supervised launch (recommended for an unattended run).** Both 2026-11-25 row-8 launches (§7.3
+sweep #2, which completed, and the §7.4 suite) ran under a supervisor that applies the resume gate below,
+resumes the same `OUT` only after exit 4, and writes a watch line every 60 s. Save this as
+`$OUT.supervise.sh` (it is the operators' script, generalised to take the driver as an argument,
+with its two first-minute logging glitches fixed, G20/G31):
+
+```bash
+#!/bin/bash
+# Usage: bash supervise.sh <repo-root> <driver: scripts/m1-sweep.sh | scripts/m1-corrupt-suite.sh> <OUT>
+# Waits for the gate (lock free AND 1-min load < 10 on 7 consecutive 30 s samples = 3 min), runs
+# the driver, and resumes the SAME OUT only after exit 4 (PAUSED_LOAD), at most 12 times. Any
+# other exit stops it. Read-only on the VM lock (lsof); never kills, deletes or rewrites anything.
+set -u
+REPO=$1 DRIVER=$2 OUT=$3
+cd "$REPO" || exit 1
+echo $$ > "$OUT.supervise.pid"
+ts()        { date -u +%FT%TZ; }
+load()      { sysctl -n vm.loadavg | awk '{print $2}'; }
+lock_free() { ! lsof /tmp/myco-win11.vm.lock >/dev/null 2>&1; }
+wait_gate() {
+  local ok=0 l
+  while [ "$ok" -lt 7 ]; do
+    l=$(load)
+    if lock_free && awk -v l="$l" 'BEGIN{exit !(l<10)}'; then ok=$((ok+1)); else ok=0; fi
+    echo "$(ts) gate load1=$l ok=$ok/7"
+    [ "$ok" -lt 7 ] && sleep 30
+  done
+}
+watch_loop() {   # one line a minute until $OUT.done exists
+  while [ ! -e "$OUT.done" ]; do
+    pid=$(cat "$OUT.pid" 2>/dev/null); alive=no
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=yes
+    n=$(cat "$OUT/trials.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+    echo "$(ts) alive=$alive pid=${pid:-none} trials=$n load1=$(load) last=$(tail -1 "$OUT/progress.log" 2>/dev/null | cut -c1-160)" >> "$OUT.watch.log"
+    sleep 60
+  done
+}
+resumes=0; watching=0
+while :; do
+  wait_gate
+  echo "$(ts) START $DRIVER (resume #$resumes)"
+  bash "$DRIVER" "$OUT" >> "$OUT.runner.out" 2>&1 &
+  dpid=$!; echo "$dpid" > "$OUT.pid"
+  if [ "$watching" -eq 0 ]; then watch_loop & watching=1; fi   # only after $OUT.pid exists
+  wait "$dpid"; rc=$?
+  echo "$(ts) EXIT rc=$rc"
+  [ "$rc" -ne 4 ] && break
+  [ "$resumes" -ge 12 ] && { echo "$(ts) GIVING_UP after $resumes resumes"; break; }
+  resumes=$((resumes+1))
+done
+echo "$rc" > "$OUT.done"
+echo "$(ts) DONE rc=$rc"
+```
+
+Launch it detached instead of the driver (after the `OUT=`, `mkdir` and `git rev-parse` lines
+above):
+
+```bash
+nohup caffeinate -dimsu bash "$OUT.supervise.sh" "$PWD" scripts/m1-sweep.sh "$OUT" \
+  >> "$OUT.supervise.log" 2>&1 < /dev/null &
+```
+
+Files: `$OUT.supervise.pid` (the supervisor, ppid 1), `$OUT.pid` (the current driver, which holds
+the lock), `$OUT.supervise.log` (gate samples, `START`/`EXIT rc=`/`DONE`), `$OUT.watch.log`
+(60 s), `$OUT.done` (the final exit code, written once). The sweep is finished when `$OUT.done`
+exists.
+
+**Resume after a load pause (exit 4).** Wait until the **1-min load is under 10 and stays under 10
+for 3 minutes** (lead ruling, 2026-11-25; the supervisor above checks 7 samples 30 s apart). The
+driver itself pauses only above 14 (`scripts/m1-sweep.sh:73-74`) and checks only before each
+trial, so resuming at 13.9 passes and can pause again one trial later. A running guest alone can
+hold the load at 12–15 (operator report S8), so expect to wait. Then re-run the driver with the
+**same** `OUT`. There is no `--resume` flag for `m1-sweep.sh`: re-running on the same `OUT` *is*
+the resume, and it skips every index already in `trials.jsonl`. **Do not re-run the fresh-launch
+block above.** Its dated `OUT=` line makes a new directory and starts again at index 0, and its
+`>` truncates the old `runner.out`. Use this block:
+
+```bash
+OUT=/tmp/m1-013/sweep-<the stamp you wrote down>    # the EXISTING dir
+lsof /tmp/myco-win11.vm.lock || echo free           # must print free
+nohup caffeinate -dimsu scripts/m1-sweep.sh "$OUT" >> "$OUT.runner.out" 2>&1 < /dev/null &
+echo $! > "$OUT.pid"
+```
+
+The lock record will still name the paused driver's dead pid. That is expected (§2): the
+relaunch takes the lock with no clearing needed, as it did on 2026-11-24 (operator report G15).
+Check that `progress.log` gets `=== trial <first missing index>`.
+
+**Check the resume preconditions first.** The driver checks none of them: it writes
+`params.json` and `fingerprints.json` only when they are missing and never compares them
+(`scripts/m1-sweep.sh:50-55`).
+
+```bash
+test "$(git rev-parse HEAD)" = "$(cat "$OUT.commit")" && echo "commit same" || echo "commit DIFFERENT: do not resume"
+for k in params fingerprints; do
+  pnpm exec tsx scripts/m1-sweep-params.ts "$k" > "$OUT.$k.now"
+  python3 -c 'import json,sys; a,b=(json.load(open(p)) for p in sys.argv[1:]); sys.exit(a!=b)' \
+    "$OUT/$k.json" "$OUT.$k.now" && echo "$k same" || echo "$k DIFFERENT: do not resume"
+done
+```
+
+If the sweep was launched without `$OUT.commit`, compare against the commit the pinned
+worktree or clone was created at. **Guest configuration** (RAM, vCPUs, the `clean-base` snapshot)
+has no check: no command in the repo records it. Do not resume across a VM rebuild, a RAM or CPU
+change, or a re-taken snapshot; start a fresh `OUT` instead.
 
 - **Parameters.** On first run it writes `$OUT/params.json` (the 30 sets from
   `scripts/m1-sweep-params.ts params`: 6 fixture seeds × 5; varies seed, fixture size 33–128
@@ -674,28 +870,43 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   pilot driver dropped the seed, and every trial ran on one sheet (log 47).
 - **Gates and exit codes.** Checked before every trial; the driver exits rather than running
   through them: 4 = 1-min load > 14, 6 = swap free < 300 MB. Power is NOT a gate (Tiffany:
-  never pause or gate VM work on charger state); `acPower` is recorded per row. Re-running the
-  same command resumes: indices already in `trials.jsonl` are skipped, never re-run, whatever
-  their status.
+  never pause or gate VM work on charger state); `acPower` is recorded per row. There is **no
+  exit 3** (the old on-battery gate is gone). Re-running the driver on the same `OUT` resumes
+  (the resume block above, not the fresh-launch block): indices already in `trials.jsonl` are
+  skipped, never re-run, whatever their status. After exit 4, resume once the resume gate above
+  passes. After exit 6, find out what is using the memory before resuming by hand; the
+  supervisor does not resume it.
 - **Fresh `OUT` per sweep.** Resume-skip means a stale `trials.jsonl` in a reused directory
   silently counts old records. Resume after a host gate only with the same commit, guest
-  configuration, parameters and fingerprints. Preserve the old output and start at index 0
-  in a fresh directory after a harness or protocol change.
+  configuration, parameters and fingerprints (the precondition check above). Preserve the old
+  output and start at index 0 in a fresh directory after a harness or protocol change.
 - **Pin the code.** Run the driver from a dedicated worktree at a fixed commit
   (`git worktree add --detach /tmp/m1-013/ws <sha>`), so a checkout in your working tree cannot
-  change the code mid-sweep.
+  change the code mid-sweep. A dedicated full clone left at a fixed sha is equivalent (both
+  row-8 sweeps ran that way): the driver runs the code next to itself
+  (`WS=$(cd "$(dirname "$0")/.." && pwd)`, `scripts/m1-sweep.sh:31`). Do not fetch, check out
+  or rebase in that checkout until the sweep is done.
 - **A `seed-mismatch` disqualifies the whole output directory.** Never resume over it: the
   driver refuses to start on a `trials.jsonl` that contains one, and both `m1-sweep-record.py
   --final` and `scripts/m1-scorecard.py` reject it. Start a fresh `OUT`. Resume is only for
-  the gate pauses (exit 3, 4, 6) and for an operator stop at a trial boundary, and only on the
-  same pinned commit.
+  the gate pauses (exit 4 load, exit 6 swap) and for an operator stop at a trial boundary, and
+  only on the same pinned commit.
+- **A `refuted` sweep trial is a result, not a stop.** §6's "a refutation means: stop" is for
+  the generator proof only. In the sweep, a refuted trial is recorded and counted as not
+  verified, and the driver goes on to the next index. Stop at a trial boundary only for the
+  conditions in this section (seed mismatch, a recurring fixture timeout, a host or harness
+  problem). Once the non-verified count makes the acceptance bar unreachable (`verified ≥ 27` of
+30, `docs/architecture/m1.md:202`),
+  finishing the sweep measures nothing new: the first row-8 sweep was abandoned at 4 non-verified
+  of 11 for that reason (lead ruling, 2026-11-25, operator report).
 - **Statuses in `trials.jsonl`:** `verified` / `refuted` / `uncertain` are verdicts. `seed-mismatch`
   aborts the sweep. `harness-error`, `reset-failed`, `deploy-failed`, `token-failed` and
   `param-error` mean no verdict was produced. Count them as not verified, and report them
   separately.
 
 The driver applies the host and seed gates. The operator also watches conversion failures
-in `trials.jsonl`. The normal trial watchdog is 1,500 seconds. If the fixture timeout recurs,
+in `trials.jsonl`. The normal trial watchdog is 1,500 seconds (`alarm 1500`,
+`scripts/m1-sweep.sh:94`); §7.4's suite uses 1,800 s. If the fixture timeout recurs,
 stop at a trial boundary, retain the run
 directory, and report the failure before resuming. The sweep v2 stop was recorded by the
 operator in `progress.log`.
@@ -712,16 +923,41 @@ also covers three kill and three invalid-target trials with ADR-0006 recovery en
 normal sweep and this suite share `/tmp/myco-win11.vm.lock`. The guard also checks for older
 sweep processes that started before the lock was introduced.
 
+The suite runs for hours, so launch it the way §7.3 launches the sweep: **detached, into a fresh
+`OUT`, from a pinned checkout.** The driver's default `OUT`, `/tmp/m1-014/corrupted`
+(`scripts/m1-corrupt-suite.sh:6`), may already hold another run's `trials.jsonl`, and resume-skip
+would then silently count those records, so always pass a new directory:
+
 ```bash
-scripts/m1-corrupt-suite.sh /tmp/m1-014/corrupted
-python3 scripts/m1-corrupt-suite-record.py --final \
-  /tmp/m1-014/corrupted/params.json /tmp/m1-014/corrupted/trials.jsonl
+OUT="/tmp/m1-014/corrupt-$(date -u +%Y%m%dT%H%M%SZ)"   # a NEW dir. Write the path down
+mkdir -p "$OUT"
+git rev-parse HEAD > "$OUT.commit"
+nohup caffeinate -dimsu scripts/m1-corrupt-suite.sh "$OUT" > "$OUT.runner.out" 2>&1 < /dev/null &
+echo $! > "$OUT.pid"                   # the driver's pid (caffeinate is its child, §7.3)
 ```
 
-Reissue the driver command to skip recorded indices. Recorded failures stay in the audit. The
-driver runs `--final` automatically and saves its output to `summary.txt`. The second command
-rebuilds the summary and ledger from existing artifacts. Keep the output directory and its
-`runs/` tree together for replay. Each live trial has a 1,500-second watchdog.
+Or, unattended, the §7.3 supervisor with this driver (how the 2026-11-25 row-8 suite ran):
+
+```bash
+nohup caffeinate -dimsu bash "$OUT.supervise.sh" "$PWD" scripts/m1-corrupt-suite.sh "$OUT" \
+  >> "$OUT.supervise.log" 2>&1 < /dev/null &
+```
+
+Liveness, which pid to watch, the exit-4 resume gate (1-min load under 10 for 3 minutes), and
+the resume block (same `OUT`, `>>`, no new dated line) are as in §7.3; `m1-corrupt-suite.sh` has
+no `--resume` flag either. Unlike the sweep, this driver compares its parameters itself and exits
+1 with `FATAL: suite parameters changed` on a mismatch (`scripts/m1-corrupt-suite.sh:39-43`); the
+commit check from §7.3 still applies. To rebuild the summary afterwards:
+
+```bash
+python3 scripts/m1-corrupt-suite-record.py --final "$OUT/params.json" "$OUT/trials.jsonl"
+```
+
+Reissue the driver command on the same `OUT` to skip recorded indices. Recorded failures stay in
+the audit. The driver runs `--final` automatically and saves its output to `summary.txt`. The
+`--final` command above rebuilds the summary and ledger from existing artifacts. Keep the output
+directory and its `runs/` tree together for replay. Each live trial has a **1,800-second**
+watchdog (`alarm 1800`, `scripts/m1-corrupt-suite.sh:94`), longer than the normal sweep's 1,500 s.
 
 Use a supplemental batch when a group needs more eligible trials. Give each batch a distinct
 output directory basename using letters, digits, hyphens or underscores. The basename names
@@ -771,7 +1007,8 @@ from recorded evidence and print a `RECLASSIFIED` line when the stored false-suc
 | 10 | VM in use. `REFUSED_VM_LOCKED` names the lock holder or the legacy driver process. |
 
 To inspect an individual live trial, use `pnpm exec tsx src/integration/run-live.ts --mode MODE`
-with `MYCO_AGENT_TOKEN` set and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
+with the token in `~/.myco-token` and `MYCO_AGENT_TOKEN` unset (§4), an explicit `--runs-dir`,
+and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
 `kill` for suite-style evidence and `--recovery` to exercise the ladder. An audited mode exits 0
 for a verdict of refuted, uncertain or proven recovery, 1 for an unsupported verified claim or a
 harness error, and 2 if the requested fault did not land.
@@ -943,15 +1180,40 @@ deleted. Use the agent's `screenshot` op if you need one.
 ### 8.2 Validate
 
 ```bash
-pnpm exec tsx src/integration/validate-live.ts runs
+pnpm exec tsx src/integration/validate-live.ts runs/row8-7.1     # the --runs-dir you passed
 ```
 
-For a sweep, validate each trial index directory that has artifacts, for example
-`pnpm exec tsx src/integration/validate-live.ts "$OUT/runs/0"`. The validator reads one directory
-level below its argument. Check the result count against the recorded run IDs.
+**Point it at the directory that directly holds the `<runId>/` dirs, and check the count.** The
+validator reads only one directory level below its argument (`readdirSync(runsDir)`,
+`src/integration/validate-live.ts:15`), and it prints `ALL OK` with exit 0 even when it validated
+**0** files. So a nested layout passes without being checked: on 2026-11-25,
+`validate-live.ts $S/nested/runs` printed `validated 0 result.json + 0 trace events … ALL OK`
+while `$S/nested/runs/0` validated 1 + 26 (operator report G30). An empty directory also prints
+`ALL OK`. A code fix is tracked separately (TIF-223); until it lands, a `0 result.json` line is a
+failure, not a pass. The same trap applies to `--mode values` (§6), which nests its trials one
+level down (§8.1): validate `runs/s6-final/values`, not `runs/s6-final`.
 
-Expected: `validated N result.json + M trace events in runs: ALL OK` (recorded: 4 + 51 at PR #18;
-11 + 77 at PR #11). Non-zero exit and `INVALID …` lines name the offending file and JSON path.
+**For a sweep (§7.3) or the suite (§7.4), never validate `$OUT`, `$OUT/runs` or `runs/`.** Their
+layout is `$OUT/runs/<index>/<runId>/`, one level too deep. Validate each index directory and
+compare the total with the ledger:
+
+```bash
+total=0
+for d in "$OUT"/runs/*/; do
+  line=$(pnpm exec tsx src/integration/validate-live.ts "$d") || echo "FAILED: $d"
+  echo "$line"
+  total=$((total + $(echo "$line" | awk '/^validated/{print $2}')))
+done
+echo "result.json validated: $total"
+grep -c '"runId": "' "$OUT/trials.jsonl"    # the ledger's run count: the two must match
+```
+
+A ledger row with no run (`reset-failed`, `deploy-failed`, `token-failed`) has no `runId` string
+and no artifacts, so it is in neither number. The 2026-11-25 sweep validated 29 results + 516 trace
+events this way, for 29 runs in its 30-row ledger (`docs/research/experiments/m1-row8-sweep2/`).
+
+Expected per directory: `validated N result.json + M trace events in <dir>: ALL OK` with N ≥ 1
+(recorded: 4 + 51 at PR #18; 11 + 77 at PR #11). Non-zero exit and `INVALID …` lines name the offending file and JSON path.
 
 `pnpm schema-validate` is **not** this check: it validates a freshly generated fake-app sample,
 which is what CI proves. Use `validate-live.ts` for your run directory.
