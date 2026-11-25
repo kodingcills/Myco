@@ -22,6 +22,12 @@ export interface FakeAgentScript {
   helperResult?: Record<string, unknown>;
   /** When set, read_file fails (persisted file unreadable). */
   readFileError?: boolean;
+  /**
+   * TIF-219 fault injection: the converted `fixture.xlsx` only becomes readable this
+   * many ms (by `Date.now()`, so fake timers drive it) after the headless
+   * `soffice.com --convert-to` launch. Models a slow guest convert.
+   */
+  xlsxArrivesAfterMs?: number;
   /** When set, this op fails with OP_FAILED (fault injection). */
   failOps?: string[];
   /** Guest files written via write_file, by path. */
@@ -65,6 +71,8 @@ export class FakeAgent {
   private modified = false;
   private saved = false;
   private calcOpen = false;
+  /** When the headless fixture convert was launched (for `xlsxArrivesAfterMs`). */
+  private convertLaunchedAt: number | null = null;
   /** Guest filesystem: scripts/reports written via write_file, then read. */
   private readonly files: Map<string, Buffer>;
   private readonly strays: Map<string, number[]>;
@@ -152,6 +160,9 @@ export class FakeAgent {
       case "launch": {
         const argv = (request.params.argv ?? []) as string[];
         if (argv.some((arg) => arg.startsWith("--accept="))) this.calcOpen = true;
+        if (argv[0] === "soffice.com" && argv.includes("--convert-to")) {
+          this.convertLaunchedAt = Date.now();
+        }
         // Guest hygiene batches (M1-019): the host writes a .cmd, then
         // launches cmd.exe /c on it; emulate the batch's report output.
         if (argv[0] === "cmd.exe" && argv[1] === "/c") {
@@ -236,6 +247,18 @@ export class FakeAgent {
             ok: true,
             id: request.id,
             result: { data_b64: Buffer.from(result, "utf8").toString("base64") },
+          };
+        }
+        if (
+          path.endsWith("fixture.xlsx") &&
+          this.script.xlsxArrivesAfterMs !== undefined &&
+          (this.convertLaunchedAt === null ||
+            Date.now() - this.convertLaunchedAt < this.script.xlsxArrivesAfterMs)
+        ) {
+          return {
+            ok: false,
+            id: request.id,
+            error: { code: "OP_FAILED", message: "file not found" },
           };
         }
         const stored = this.files.get(path);
