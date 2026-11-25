@@ -1,0 +1,182 @@
+# M2-05: the `hcu+shell` head-to-head arm (TIF-268, scorecard row R2)
+
+**Status: built and tested offline. Not run.** The arm runs end to end against fakes, with no VM
+and no paid model. The live runs belong to M2-12 (TIF-274).
+
+R2 compares Myco's gate with this arm: a coding agent that drives the same Calc task through
+a GUI channel and can also check its own work with a shell
+(`docs/product/m2-plan-draft.md` §2.1). It is the question MVP Discovery left open: "a competent
+coding agent with HCU and shell access can read [the store] itself"
+(`docs/product/mvd-preregistration.md` §4.1).
+
+| Piece | Where |
+|---|---|
+| Trial loop, row type, grader rule, row validator | `src/baseline/hcu-shell/trial.ts` |
+| Shell tool and its boundary | `src/baseline/hcu-shell/shell-tool.ts` |
+| Planner prompt and reply parser | `src/baseline/hcu-shell/decision.ts` |
+| Cost estimate (arithmetic only) | `scripts/m2-hcu-shell-cost.ts` |
+| Tests: boundary, loop, prompt parity, import boundary, fake end-to-end | `test/baseline/hcu-shell/` |
+
+## How a trial runs
+
+`runHcuShellTrial` is the C1 trial loop (`src/baseline/c1-trial.ts`) with one more kind of
+decision. On each turn the planner gets the prompt, the task sentence, the current
+screenshot and its last three shell results. It returns one of three things: a claim
+(`done` / `failure`), a pixel action (the C1 vocabulary: `click`, `type_text`, `press_key`),
+or a shell request. GUI actions go to the GUI channel. Shell requests are checked against
+the boundary, run in the guest, and then checked again against the paths the guest says the
+call resolved to. When the loop ends, the independent judge reads the persisted document,
+and the row records that observation. The verdict is `judge(observation)` and never the
+agent's claim.
+
+The row is the M1 C1 ledger row (`BaselineRow`) with `subArm: "hcu+shell"` and these extra fields:
+
+| Field | Why |
+|---|---|
+| `observation` | The judge's raw observation, so a grader re-derives the verdict (`gradeHcuShellRow`) instead of trusting it |
+| `claimedDone`, `falseDone` | R2's false-done rate: the agent said done and the grader refuted it (`null` when the grader was uncertain) |
+| `fixtureSha256`, `instruction`, `outputCeiling` | R2's per-row parity evidence (L5: arm-002 instruction text, #340 truncation) |
+| `snapshot`, `resetMs` | Which reset preceded the trial |
+| `timeBudgetMs: null` | C1 has no wall-clock budget either; recorded so a later difference is a field diff |
+| `shell.calls[]` | Every shell request as emitted, with status `complete` / `denied` / `incomplete` / `violation`, the code, and the resolved accesses |
+| `shell.integrity` | `clean`, `violated` (a call escaped its boundary) or `unaudited` (the guest could not say what a call touched). Both of the last two make the row `uncertain` |
+| `shell.storeChecked` | A complete call read the task document: the pre-registration's "checks every trial" measure |
+| `shell.policy` | The boundary the trial ran under, so a grader can re-check every access |
+
+`isHcuShellRow` is what a grader runs before scoring. It re-derives the verdict, `falseDone`,
+`integrity` and `storeChecked` from the recorded calls, and it rebuilds the boundary from
+`shell.policy` and re-checks every access. A row that says `clean` while one of its calls
+read outside the boundary fails. `isBaselineRow` accepts these rows too, so existing C1
+tooling can read them.
+
+## The shell tool
+
+**What it is.** A read-only shell in the guest, given as structured requests
+`{"shell": OP, "path": ABSOLUTE_PATH}`, not as a command string:
+
+| Op | Shell equivalent | What the agent learns |
+|---|---|---|
+| `ls` | `ls -l DIR` / `Get-ChildItem DIR` | whether a save landed |
+| `cat` | `cat FILE` / `Get-Content FILE` (output capped at 4,096 chars) | the contents of a text artifact |
+| `sha256` | `sha256sum FILE` / `Get-FileHash FILE` | whether the bytes changed |
+| `convert-csv` | `soffice --headless --convert-to csv --outdir SCRATCH DOC` | the persisted cell values |
+
+**Why this matches "a coding agent that self-checks with a shell".** After a GUI edit, a
+coding agent checks its work by reading the saved file out of band. For an `.xlsx`, that
+means converting it headlessly and reading the cells, which is exactly what `convert-csv`
+does, and it reads the same persisted state the independent judge reads. The other three ops
+are the ordinary inspection commands around it. The pre-registration counts reads and
+forbids shell writes to the store: a shell "fix" counts as refuted (§4.1, item 2). A
+read-only self-checker is therefore the strongest version of this arm that can still
+succeed.
+
+**Where it runs.** In the guest. It can read the task's document directory and a scratch
+directory the arm owns (`convert-csv` writes its output there). Nothing runs on the host.
+
+**What it cannot reach.** Ground truth is the grader's side: the expected value
+(`src/tasks/intent.ts` `groundTruth`), the oracle, the judge's own conversion output, the run
+directory, ledgers and the pinned manifest (which carries Myco's verdicts). The arm is kept
+away from all of these in four ways:
+
+1. **By location.** Ground truth lives on the host or in directories the policy denies.
+   `createShellPolicy` refuses a policy in which a denied directory overlaps a read root, in
+   either direction, or in which a read root is itself named like grader material.
+2. **Before the call.** `checkShellRequest` takes only absolute paths inside the two roots.
+   It refuses ambiguous paths rather than resolving them: `..` and `.` segments, UNC and
+   device paths, NTFS alternate data streams, trailing dots and spaces, 8.3 short names,
+   wildcards, variables, and every character a shell would interpret. It also refuses any
+   path that names grader material (`oracles`, `expected`, `judge`, `runs`, `.myco`,
+   `ledger.jsonl`, `sweep-v3.json`, and the rest of the list), even inside a root. Windows
+   paths are compared case-insensitively. The guest receives the canonical path that was
+   checked, not the planner's spelling of it.
+3. **After the call.** The guest must report the resolved path of everything a call touched.
+   A guest that cannot report this must throw, and the row then becomes `unaudited`.
+   `checkResolvedAccesses` holds those paths to the same boundary, which is how a symlink in
+   the document directory that points at the judge's output gets caught. On a violation, the
+   trial stops, the output is never shown to the planner, and the row is `uncertain`, even if
+   the document is correct.
+4. **In the code.** `test/baseline/hcu-shell/import-boundary.test.ts` proves that no module
+   under `src/baseline/hcu-shell/` imports, even transitively, `intent.ts`, the fixture
+   generator, the manifest, the Foundry oracles or grader, the guest verifier, or `c1-judge.ts`.
+
+A denied request is evidence, not an integrity failure. It is recorded, the agent is told
+"denied", and the trial goes on.
+
+## Gaps for a fair comparison
+
+The first four rows are the gaps `docs/foundry/baseline-status.md` listed for `hcu+shell`. The
+rest are R2's parity requirements.
+
+| Gap | Status | How, or what remains |
+|---|---|---|
+| Complete tool-call audits | **Closed** | Every shell call is recorded with its status and resolved accesses. A call the guest cannot audit makes the row `uncertain`. GUI actions keep C1's per-action delivery records |
+| Independently observed save snapshots | **Closed (offline)** | The verdict comes from the judge's own read of the persisted document, and that observation is on the row. The live judge for the HCU guest (`independentC1Judge`, the C1 one) gets wired in M2-12 |
+| Trusted live evidence ingestion | **Remaining** | TIF-125 (attestation binding). Until it lands, rows are descriptive |
+| Coordinated VM time | **Remaining** | M2-12 |
+| Same task set | **Closed** | The arm runs the 30 pinned rows in `src/baseline/sweep-v3.json`, the set row 7 used. The fake end-to-end test pins index and params against it |
+| Same fixtures | **Closed** | `fixtureSha256` on every row (r6 had none; `docs/m1-scorecard.md` row 7, limit 2) |
+| Same instruction | **Closed** | `taskText(params)`, the same text C1 used, recorded per row. The prompt is C1's with one phrase swapped ("screenshot only" becomes "screenshot and a read-only shell") and one sentence added. `decision.test.ts` pins both |
+| Same output ceiling | **Closed** | 1024 (#340), recorded per row |
+| Same step budget | **Closed against C1** | 30 steps, and shell calls spend the same budget as GUI actions, so the shell buys no extra turns. The gate arm's budget is not defined until M2-02 |
+| Same time budget | **Closed against C1** | Neither arm has one (`timeBudgetMs: null`). The gate arm's is undefined |
+| Same app state reset | **Closed in the interface; remaining in practice** | `prepare` restores a named snapshot, and the row records `snapshot` and `resetMs`. No snapshot with HCU installed exists yet (C1 used `cua-c1-base`) |
+| Same evidence and ledger format | **Closed against M1** | Rows are a superset of the C1 `BaselineRow`, and `isBaselineRow` accepts them. **Seam:** TIF-267's ledger format is not on main, so an adapter is a follow-up |
+| One independent grader | **Closed against M1, seam to TIF-267** | `gradeHcuShellRow` is a pure function of recorded evidence, and the fake run re-grades every row with it. The TIF-267 grader plugs in at the same place |
+| Verdict integrity (TIF-266) | **Closed for this arm** | The four layers above. M2-03 owns the general CI isolation test |
+| HCU GUI transport | **Remaining** | `HcuGui` is the C1 Cua connection's shape. The HCU implementation needs the guest (`baseline-status.md`, item 2) |
+| Paid planner | **Remaining** | The interface (`HcuShellPlanner`), prompt and parser are built. The Messages-API adapter is a follow-up, since it is only needed for M2-12 |
+
+### Asymmetries that remain, stated
+
+1. **GUI layer.** HCU here, Cua in C1, and whatever Claude Code drives in the gate arm.
+2. **Harness.** This arm is a raw Messages-API loop like C1. The gate arm is Claude Code.
+   "Same model settings" can hold for the model, but not for the harness.
+3. **Planner memory.** The C1 planner is stateless per step. This arm sees its last three
+   shell results, without which a shell is useless. Claude Code keeps the full conversation.
+4. **Input bound.** With three full shell results, the per-call input can reach 9,198 tokens,
+   while C1's planner refuses anything over 4,000 at its `count_tokens` gate. The live
+   adapter must raise that bound for this arm. The estimate below uses the raised bound.
+5. **Read-only, structured shell.** No writes and no arbitrary programs (see above). A real
+   agent's shell can do more, but nothing more it could do would count as a success.
+6. **Shared budget.** Every check costs a GUI step. This is deliberate (same budget), but it
+   means the arm trades actions for checks.
+7. **One task family.** This is the M1 single-cell Calc edit. Multi-step Calc (M2-07) is
+   not covered.
+
+## Cost estimate for the M2-12 runs
+
+This is arithmetic only, and nothing was run. The base is C1 arm-003 r6, which used the same
+task, model (`claude-sonnet-5-5`), output ceiling and budget. Rates are $2 / $10 per MTok, the
+repo's frozen rates, which match the published Sonnet 5.5 price. The "expected" row adds one
+shell result (about 1,366 tokens at 3 characters per token) plus the extra prompt sentence to
+every call. The "ceiling" row is every call at the raised input bound with full output. Run
+`pnpm tsx scripts/m2-hcu-shell-cost.ts` to recompute. `--check` fails if this block goes stale.
+
+<!-- generated by scripts/m2-hcu-shell-cost.ts; do not edit by hand -->
+| | Per trial | 30 trials (R2) |
+|---|---|---|
+| Measured base: C1 r6, 30 trials, 874 planner calls, $3.3714 | $0.1124 | $3.37 |
+| hcu+shell expected (r6 per-call $0.0039 + 1466 input tokens per call) | $0.1978 | **$5.93** |
+| hcu+shell ceiling (31 calls x (9198 in + 1024 out tokens)) | $0.8877 | **$26.63** |
+
+**Not included:**
+
+- **The gate arm.** Claude Code's token use per gated trial is unmeasured until M2-02 lands,
+  so M2-12 must add it before asking for approval.
+- **Reruns.** Omitted or harness-faulted trials are re-run, so budget for some above 30.
+- **The spend cap.** It is still open (plan §4, Q4).
+
+## Follow-ups (to file)
+
+- HCU `HcuGui` implementation over the guest (`baseline-status.md`, guest item 2), for M2-12.
+- `GuestShell` over the guest agent (`read_file`, `soffice --convert-to csv`), reporting
+  realpath-resolved accesses. Its prepare must list the judge's conversion directory and the
+  run directory in `groundTruthDirs`.
+- A paid planner adapter for this arm: Messages API, an input gate raised to the ceiling
+  above, and the same truncation handling as #340. Also a sweep runner with the C1 spend
+  ceiling and resume rules.
+- An adapter from `HcuShellRow` to TIF-267's ledger row once it merges, and an R2 compare script
+  in the style of `row7-compare.py` (M2-11 / M2-12).
+- A reset snapshot with HCU installed, plus its reset timing (M2-01).
+- A defined step and time budget for the gate arm (M2-02), so the parity rows above can be
+  closed against it.
