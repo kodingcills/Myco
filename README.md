@@ -27,8 +27,9 @@ Core invariant: **`ActResult` never claims goal success, and the runner never de
 
 ## Setup
 
-Node 24 required. **This is a pnpm workspace, and `npm install` does not install it correctly** —
-use `pnpm`.
+Prerequisites: Node ≥ 24 (`engines` in `package.json`) and pnpm 10 on your `PATH`; the repo does
+not install pnpm for you. **This is a pnpm workspace, and `npm install` does not install it
+correctly** — use `pnpm`.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -38,9 +39,15 @@ pnpm test
 pnpm build
 ```
 
-All five are run on a clean checkout before merge, and each of them was re-run by hand on a fresh
-worktree on 2026-11-24. `pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test`
-is the CI path, and it is the path that actually works.
+All five exit 0. Every command on this page was re-run, in order, on a fresh `git clone` of `a7d2cd2`
+on 2026-11-25 (macOS arm64, Node 24.4.1, pnpm 10.34.9): install ~1 s from a warm pnpm store,
+`typecheck` ~4 s, `lint` ~2 s, `test` ~47 s (1,128 tests), `build` ~1 s. `pnpm install` warns
+`Ignored build scripts: esbuild`; nothing on this page needs it approved.
+`pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test` is the CI path.
+
+Run the suite with `pnpm test`, not a bare `pnpm exec vitest run`. The bare run puts
+`test/discovery/s0-live-launcher.test.ts` in parallel with everything else, and its lock test is
+flaky there (1 failure in 3 bare runs on 2026-11-25). `pnpm test` runs that file on its own.
 
 > **`npm install` exits 0 and leaves the repo broken.** npm does not understand the `viewer/`
 > workspace, so it installs the root package, leaves `viewer/node_modules` **empty**, and reports
@@ -71,15 +78,15 @@ is the CI path, and it is the path that actually works.
 pnpm test:task
 ```
 
-`test:task` **exits 1 on purpose.** It runs the `todo-save` trap: the UI claims `"saved 7 item(s)"` while two `BUG:`-prefixed items never reach the store. That is the false-success case Myco exists to catch, so a non-zero exit is the pass condition — the output prints `Final Verdict: REFUTED` and `False Success Caught: YES`. A `0` here would mean the harness missed it. **Observed 2026-11-24: exit 1, with both those lines**
-— taken under a `pnpm`-populated `node_modules`, which is the state this page tells you to create.
+`test:task` **exits 1 on purpose.** It runs the `todo-save` trap: the UI claims `"saved 7 item(s)"` while two `BUG:`-prefixed items never reach the store. That is the false-success case Myco exists to catch, so a non-zero exit is the pass condition — the output prints `Final Verdict: REFUTED` and `False Success Caught: YES`. A `0` here would mean the harness missed it. **Observed 2026-11-25: exit 1, with both those lines.**
 
 ```sh
-# A full mock run with evidence, then validate what it wrote.
+# A full mock run with evidence, then re-check what it wrote without re-running.
 pnpm myco-run --transport mock --task df-s01 --out /tmp/myco-run
+pnpm myco-run --task df-s01 --out /tmp/myco-run --validate-only
 ```
 
-`myco-run` prints the claim, the persisted state read back from the store, and the verdict; `df-s02` prints `REFUTED` and names the dropped items. It re-reads `result.json` and every trace line against the schema, so **a tampered run exits 2** rather than reporting success.
+Both exit 0. The run prints the claim, the persisted state read back from the store, and `VERIFIED`; with `--task df-s02` it prints `REFUTED`, names the two dropped items, and **still exits 0**, because a refutation is a verdict, not an error. The run's `result.json` and every trace line are validated against the schema, so **a tampered run exits 2**: edit `verdict.status` in `/tmp/myco-run/df-s01/result.json` to any other string and `--validate-only` prints `ARTIFACTS: INVALID` and exits 2. Exit codes and the full walkthrough are in [docs/product/quickstart.md](docs/product/quickstart.md) §4–§6.
 
 The live path — a real guest, real Calc — is documented in [docs/product/quickstart.md](docs/product/quickstart.md), which states exactly where it stops and why. **It requires a Windows VM and is not runnable on a bare checkout.**
 
@@ -87,7 +94,7 @@ The live path — a real guest, real Calc — is documented in [docs/product/qui
 
 ## Reproduce M1
 
-[docs/eval-runbook.md](docs/eval-runbook.md) is the procedure: from a clean snapshot to a full report, with every command checked against the repo. Read [§10](docs/eval-runbook.md) first — it lists precisely what a fresh operator **cannot** improvise, including that `build-all.sh` has never run end to end and that the ISO, offline payload and `clean-base` snapshots live outside the repo.
+[docs/eval-runbook.md](docs/eval-runbook.md) is the procedure: from a clean snapshot to a full report, with every command checked against the repo. Read [§10](docs/eval-runbook.md#10-what-is-not-reproducible-from-scratch) first — it lists precisely what a fresh operator **cannot** improvise, including that `build-all.sh` has never run end to end and that the ISO, offline payload and `clean-base` snapshots live outside the repo.
 
 Retained evidence is committed so a number can be re-checked without a VM:
 
@@ -96,7 +103,16 @@ Retained evidence is committed so a number can be re-checked without a VM:
 python3 scripts/m1-scorecard.py docs/research/experiments/m1-013-sweep-v3/trials.jsonl
 ```
 
-That is the check that matters: the claim in the scorecard can be regenerated from committed data in one command. **Observed 2026-11-24: `29/30 verified, MEETS NUMERIC THRESHOLD`, Wilson 95% 0.83–0.99 — the scorecard's headline number, regenerated from the committed `trials.jsonl` with no VM.**
+That is the check that matters: the claim in the scorecard can be regenerated from committed data in one command. **Observed 2026-11-25: exit 0, `29/30 verified, MEETS NUMERIC THRESHOLD`, Wilson 95% 0.83–0.99 — the scorecard's headline number, regenerated from the committed `trials.jsonl` with no VM.**
+
+The rest of the scorecard is held the same way:
+
+```sh
+# Recompute every number in docs/m1-scorecard.md's in-scope sections from committed artifacts.
+python3 scripts/scorecard-check.py
+```
+
+It exits 1 on any mismatch and lists, by name, each number it cannot recompute and each section it leaves out of scope. **Observed 2026-11-25: exit 0, `SCORECARD CHECK OK`.** Validating a *new* live run's artifacts (`validate-live --expect N`) needs the VM; see [docs/eval-runbook.md](docs/eval-runbook.md) §8.
 
 ---
 
