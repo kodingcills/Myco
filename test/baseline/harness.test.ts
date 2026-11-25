@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { isHcuShellRow } from "../../src/baseline/hcu-shell/trial.ts";
 import {
   auditFalseSuccess,
   type BaselineRow,
@@ -99,7 +100,11 @@ describe("baseline", () => {
     };
     expect(isBaselineRow(evidence)).toBe(true);
     expect(rowKey(evidence)).toBe("hcu/0");
-    expect(isBaselineRow({ ...evidence, subArm: "hcu+shell" })).toBe(false);
+    // An unknown arm is still rejected. `hcu+shell` became a known arm in TIF-268, but an
+    // HCU row relabelled as one carries none of its shell evidence, so the arm's own
+    // validator rejects it.
+    expect(isBaselineRow({ ...evidence, subArm: "gui+shell" })).toBe(false);
+    expect(isHcuShellRow({ ...evidence, subArm: "hcu+shell" })).toBe(false);
   });
 
   // Guards against ignoring persisted evidence, driver preconditions, or budget attribution.
