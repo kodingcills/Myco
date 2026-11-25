@@ -69,9 +69,12 @@ on 2026-11-25 (macOS arm64, Node 24.4.1, pnpm 10.34.9): install ~1 s from a warm
 `Ignored build scripts: esbuild`; nothing on this page needs it approved.
 `pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test` is the CI path.
 
-Run the suite with `pnpm test`, not a bare `pnpm exec vitest run`. The bare run puts
-`test/discovery/s0-live-launcher.test.ts` in parallel with everything else, and its lock test is
-flaky there (1 failure in 3 bare runs on 2026-11-25). `pnpm test` runs that file on its own.
+Run the suite with `pnpm test`, not a bare `pnpm exec vitest run`. `pnpm test` runs
+`test/discovery/s0-live-launcher.test.ts` on its own, in one forked process, because that file
+spawns and signals real processes; it also runs `pnpm schema-validate`. The launcher's lock test
+used to flake when the bare run put it in parallel with everything else. #454 (TIF-233) fixed the
+cause, and 3 of 3 bare runs passed after that fix on 2026-11-25, so the isolation is now kept as a
+precaution.
 
 Run `pnpm test` as a **non-root user**, in an environment whose PID 1 reaps orphaned processes. In a
 container, that means a non-root user and `docker run --init` (or an equivalent init). Otherwise
