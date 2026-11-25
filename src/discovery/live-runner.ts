@@ -95,7 +95,7 @@ export interface LiveRunResult {
   readonly reasons: readonly string[];
 }
 
-function parseStore(text: string): PersistedStore {
+export function parseStore(text: string): PersistedStore {
   const value: unknown = JSON.parse(text);
   if (
     typeof value !== "object" ||
