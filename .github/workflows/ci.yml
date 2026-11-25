@@ -159,6 +159,45 @@ jobs:
             grep -qE "^test tests::$t \.\.\. ok$" /tmp/host-test.log || { echo "::error::$t did not run and pass on Linux"; exit 1; }
           done
 
+  # TIF-269 (M2-06): the Linux path an outsider can run. A real headless
+  # LibreOffice Calc is driven by a scripted agent; Myco's oracle reads the saved
+  # workbook and must return verified / refuted / uncertain as each scenario
+  # expects, including the false completion (agent says done, file disagrees).
+  # No VM, no model, no secrets. MYCO_LINUX_PATH_REQUIRED=1 makes the real-Calc
+  # suite fail instead of skip if LibreOffice or Python-UNO is missing.
+  linux-path:
+    name: linux path (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MYCO_PYTHON: /usr/bin/python3
+      MYCO_LINUX_PATH_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install LibreOffice Calc and Python-UNO
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno
+      - name: Prerequisites
+        run: pnpm myco-linux --check
+      - name: Linux path tests (real Calc; must not skip)
+        run: pnpm exec vitest run test/linux
+      - name: Demo (every scenario must produce its expected verdict)
+        run: pnpm myco-linux --demo --out "$RUNNER_TEMP/myco-linux"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: linux-path-runs
+          path: ${{ runner.temp }}/myco-linux
+          if-no-files-found: ignore
+
   # Runs both verdict fixture sizes on main pushes and PRs labelled `perf`.
   # The hosted 10k check compares the median against calibrated runner caps.
   # The strict local gate enforces a 150 ms maximum at both sizes
