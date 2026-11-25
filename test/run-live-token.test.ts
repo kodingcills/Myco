@@ -3,15 +3,24 @@
  * through, then MYCO_AGENT_TOKEN, then ~/.myco-token. Every file is in a temp
  * dir; no test reads a real token file.
  */
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveRunLiveToken } from "../src/integration/run-live-token.ts";
 
+/** Every temp home a test made, removed after it so none is left in $TMPDIR (TIF-229). */
+const homes: string[] = [];
+
 function tempHome(): string {
-  return mkdtempSync(join(tmpdir(), "myco-run-live-token-"));
+  const home = mkdtempSync(join(tmpdir(), "myco-run-live-token-"));
+  homes.push(home);
+  return home;
 }
+
+afterEach(() => {
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+});
 
 function put(path: string, text: string): string {
   writeFileSync(path, text);
