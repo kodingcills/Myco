@@ -630,14 +630,37 @@ lsof /tmp/myco-win11.vm.lock || echo free     # free again once the session and 
 
 The wrapper takes the lock once (record `<pid> vm-session.sh`), runs the command with the lock's
 descriptor (FD 9) inherited, and releases it when the command exits: normally, on a crash, or on
-Ctrl-C / `kill`. SIGINT, SIGTERM and SIGHUP sent to the wrapper are forwarded to the command's
-whole process group, so every step of a `bash -c '<step>; <step>'` gets it and later steps do
-not start; the wrapper waits until every step in that group has gone, then exits `128+signal`. A signal that
-was ignored when the wrapper started stays ignored: under `nohup scripts/vm-session.sh -- …` a
-hangup does not end the session. Started from your terminal, the wrapper and its command are one
-job: Ctrl-C reaches every step and ends the session, a step can still prompt, Ctrl-Z stops the
-whole job (the lock stays held while it is stopped) and `fg` resumes it. A background descendant
-that kept FD 9 keeps the lock held after the wrapper exits, until it exits too.
+Ctrl-C / `kill`. A SIGINT, SIGTERM or SIGHUP reaches every process of the command's process group
+**once**, so every step of a `bash -c '<step>; <step>'` gets it, a step's `EXIT` trap can finish
+its cleanup, and later steps do not start. The wrapper then waits until the command and every
+other process of that group have gone, and exits `128+signal`. Every signal it forwards is
+followed by a `SIGCONT`, so a stopped step still gets it. A signal that was ignored when the
+wrapper started stays ignored: under `nohup scripts/vm-session.sh -- …` a hangup does not end
+the session.
+
+- **Started straight from your terminal** (the form above), the wrapper and its command are one
+  job. Ctrl-C reaches every step and ends the session, a step can still prompt, Ctrl-Z stops the
+  whole job (the lock stays held while it is stopped) and `fg` resumes it. The terminal already
+  sends Ctrl-C and a hangup to every step, so the wrapper does not send SIGINT or SIGHUP again: a
+  second copy would cut a step's `EXIT` trap short (§4's deploy leaves its token file and tunnel
+  behind). To end such a session from another terminal, send **SIGTERM** to the wrapper (`kill
+  <pid>`, pid from the lock file); a `kill -INT` or `kill -HUP` aimed at the wrapper alone does not
+  reach the steps.
+- **Started from a script** (or any way that does not make it a job of its own), the command gets
+  its own process group and every signal is forwarded to it. If that script runs in your terminal,
+  a step that reads the terminal is stopped (SIGTTIN) and Ctrl-Z stops only the script and the
+  wrapper, not the steps. The wrapper reports a stopped step within a second or two; end the
+  session with `kill <wrapper pid>`. To use the terminal inside a session, start the wrapper
+  straight from your shell.
+- **If something is still running 5 s after a signal**, the wrapper keeps the lock and its record,
+  prints which processes it is waiting for (again every 30 s), and keeps waiting; it never gives
+  up on its own. A SIGTERM to the wrapper is forwarded to them. Two cases look like this: a
+  background child that ignores SIGINT and was not stopped by its step (below), and a step whose
+  `bash` took the Ctrl-C as handled because its foreground command exited normally at that
+  instant (bash's own rule). Press Ctrl-C again or send SIGTERM.
+- A background descendant that kept FD 9 keeps the lock held after the wrapper exits, until it
+  exits too. After a normal exit the wrapper does not wait for it; after a signal it does (as
+  above) while it is still in the command's process group.
 
 On those exits it clears its record, so the lock file is normally empty afterwards (unlike the
 other drivers, §2). Three cases leave `<pid> vm-session.sh` behind: (1) a SIGKILLed wrapper;

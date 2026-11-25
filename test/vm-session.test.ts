@@ -635,21 +635,24 @@ const ptyMissing = noPtyReason();
 
 // When skipped, the reason is part of the title, so the run shows it.
 it.skipIf(ptyMissing !== null)(
-  `under a terminal: Ctrl-Z stops the whole job, fg resumes it, Ctrl-C and SIGTERM end it cleanly${
+  `under a terminal: Ctrl-Z/fg, one Ctrl-C lets EXIT traps finish, SIGTERM, and no silent wait${
     ptyMissing ? ` (skipped: ${ptyMissing})` : ""
   }`,
   () => {
     // test/fixtures/vm-session-pty.py runs an interactive bash on a pty and drives
-    // three multi-step sessions (`bash -c '<step>; <next step>'`) with real
-    // control characters; see its docstring for what each one asserts.
+    // seven sessions (a-g, mostly the runbook's `bash -c '<step>; <next step>'`)
+    // with real control characters; see its docstring for what each one asserts.
+    // Among them: one Ctrl-C reaches a deploy-like step once, so its EXIT trap
+    // finishes (d, e); a background child left holding FD 9 gets a waiting report
+    // (f); a step stopped by SIGTTIN gets a stopped report (g).
     const { dir, env } = fixture();
     const result = spawnSync(
       "python3",
       ["-I", join(REPO, "test", "fixtures", "vm-session-pty.py"), WRAPPER, dir],
-      { encoding: "utf8", timeout: 60_000, env, cwd: REPO },
+      { encoding: "utf8", timeout: 90_000, env, cwd: REPO },
     );
     expect(result.stdout + result.stderr).toContain("PTY-OK");
     expect(result.status).toBe(0);
   },
-  70_000,
+  100_000,
 );

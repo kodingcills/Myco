@@ -19,7 +19,11 @@
 # While it waits after a signal, the wrapper keeps the lock and its record. If
 # any process of the session is still there 5 s after the signal, it prints
 # which ones to stderr (and again every 30 s) and says that a SIGTERM to the
-# wrapper is forwarded to them. It never gives up on its own.
+# wrapper is forwarded to them. It never gives up on its own. Two cases end up
+# here after a terminal Ctrl-C: a background child that ignores SIGINT and that
+# its step did not stop, and a step whose bash took the SIGINT as handled because
+# its foreground command exited normally at that instant (bash's
+# wait-and-cooperative-exit rule). Ctrl-C again, or a SIGTERM, ends either.
 #
 # A background descendant that kept FD 9 keeps the lock held after the wrapper
 # exits, until it exits too: the flock belongs to the open file description, not
