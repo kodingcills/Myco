@@ -184,7 +184,7 @@ exit $rc`,
   expect(sweep.status, sweep.stderr).not.toBe(REFUSED);
   expect(sweep.status, sweep.stderr).toBe(1);
   expect(sweep.stdout).toContain("sweep-still-alive rc=1");
-  expect(sweep.stderr).toContain("MYCO_AGENT_TOKEN is required");
+  expect(sweep.stderr).toContain("no agent token");
 });
 
 it("does not accept a lock record naming a pid that is not an ancestor", async () => {
