@@ -21,7 +21,56 @@ struct Server {
     next_id: u64,
     /// Where progress notifications go. `None` in tests.
     progress: Option<ProgressSink>,
+    /// TIF-266: the harness-assigned session id (`MYCO_RT_SESSION_ID`). When set,
+    /// `create` uses it and refuses any other `session_id`, so the agent cannot
+    /// choose the host `runs/<session>/` directory name.
+    pinned_session: Option<String>,
 }
+
+/// Env var a harness sets to pin the one session id `create` may use (TIF-266).
+const SESSION_ID_ENV: &str = "MYCO_RT_SESSION_ID";
+
+/// Parse the pinned session id. Unset or empty means "not pinned". A set value
+/// must be one plain path segment, because it names a host directory.
+fn pinned_session_from(value: Option<String>) -> Result<Option<String>, String> {
+    let Some(v) = value.filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    let ok = v.len() <= 128
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && v.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && !v.contains("..");
+    if ok {
+        Ok(Some(v))
+    } else {
+        Err(format!(
+            "{SESSION_ID_ENV} must be one path segment of [A-Za-z0-9._-]"
+        ))
+    }
+}
+
+/// The id `create` uses. A pinned id wins; a caller-supplied id that differs is
+/// refused rather than silently replaced, so the caller learns it was not honoured.
+fn resolve_session_id(
+    pinned: Option<&str>,
+    requested: Option<&str>,
+    next_id: &mut u64,
+) -> Result<String, (i64, String)> {
+    match (pinned, requested) {
+        (Some(p), Some(r)) if r != p => Err((
+            -32602,
+            format!("session_id is assigned by the harness ({SESSION_ID_ENV}); omit session_id"),
+        )),
+        (Some(p), _) => Ok(p.to_string()),
+        (None, Some(r)) => Ok(r.to_string()),
+        (None, None) => {
+            *next_id += 1;
+            Ok(format!("session-{next_id}"))
+        }
+    }
+}
+
 
 /// The client's progress token, if it supplied one.
 ///
@@ -79,12 +128,22 @@ fn main() {
         // Don't die: tools/list must still work; `create` returns this to the agent.
         eprintln!("myco-rt-mcp: {e}");
     }
+    let pinned_session = match pinned_session_from(std::env::var(SESSION_ID_ENV).ok()) {
+        Ok(p) => p,
+        Err(e) => {
+            // A malformed pin is a harness bug; serving unpinned would hand the
+            // agent the directory name the harness meant to fix.
+            eprintln!("myco-rt-mcp: {e}");
+            std::process::exit(2);
+        }
+    };
     let sink = ProgressSink::new(Box::new(std::io::stdout()));
     let mut srv = Server {
         sessions: HashMap::new(),
         workspace,
         next_id: 1,
         progress: Some(sink),
+        pinned_session,
     };
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
@@ -330,13 +389,11 @@ impl Server {
     }
 
     fn create(&mut self, args: &Value, params: &Value) -> Result<Value, (i64, String)> {
-        let id = args["session_id"]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                self.next_id += 1;
-                format!("session-{}", self.next_id)
-            });
+        let id = resolve_session_id(
+            self.pinned_session.as_deref(),
+            args["session_id"].as_str(),
+            &mut self.next_id,
+        )?;
         if self.sessions.contains_key(&id) {
             return Err((-32602, format!("session {id} already exists")));
         }
@@ -620,7 +677,7 @@ mod tests {
     use super::*;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None, pinned_session: None }
     }
 
     #[test]
@@ -630,6 +687,7 @@ mod tests {
             workspace: Err("no Myco workspace found. Fix: set MYCO_HOME=/path/to/Myco".into()),
             next_id: 1,
             progress: None,
+            pinned_session: None,
         };
         let r = reply(
             &mut s,
@@ -829,7 +887,7 @@ mod process_tool_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None, pinned_session: None }
     }
 
     fn call(s: &mut Server, body: &str) -> Value {
@@ -891,7 +949,7 @@ mod protocol_edge_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None, pinned_session: None }
     }
 
     #[test]
@@ -1069,7 +1127,7 @@ mod read_file_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None, pinned_session: None }
     }
 
     fn call(s: &mut Server, body: &str) -> Value {
@@ -1256,7 +1314,7 @@ mod introspection_file_tests {
     /// Refused before provisioning: a bad path never costs a VM boot.
     #[test]
     fn create_refuses_a_bad_path_before_booting() {
-        let mut s = Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None };
+        let mut s = Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None, pinned_session: None };
         let r: Value = serde_json::from_str(
             &handle_line(
                 &mut s,
@@ -1277,7 +1335,7 @@ mod read_root_validation_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None, pinned_session: None }
     }
 
     fn call(s: &mut Server, body: &str) -> Value {
@@ -1293,6 +1351,7 @@ mod read_root_validation_tests {
             workspace: Ok(tmp.to_path_buf()),
             next_id: 1,
             progress: None,
+            pinned_session: None,
         }
     }
 
@@ -1338,6 +1397,64 @@ mod read_root_validation_tests {
         assert!(!lock_taken(&tmp), "provisioning was reached before the guard fired");
         assert!(s.sessions.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// TIF-266: with a harness-pinned session id, an agent-chosen `session_id`
+    /// is refused before provisioning, so no host `runs/<name>/` dir is made.
+    #[test]
+    fn pinned_session_refuses_an_agent_chosen_id_without_booting() {
+        let tmp = std::env::temp_dir().join(format!("myco-rt-pin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mut s = srv_in(&tmp);
+        s.pinned_session = Some("trial-7.rt".to_string());
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create","arguments":{"session_id":"run-1"}}}"#,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("assigned by the harness"), "{text}");
+        assert!(
+            !lock_taken(&tmp),
+            "provisioning was reached before the guard fired"
+        );
+        assert!(
+            !tmp.join("runs").join("run-1").exists(),
+            "agent-named run dir was created"
+        );
+        assert!(s.sessions.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn session_id_resolution_honours_the_pin() {
+        let mut n = 1;
+        assert_eq!(resolve_session_id(Some("p"), None, &mut n).unwrap(), "p");
+        assert_eq!(
+            resolve_session_id(Some("p"), Some("p"), &mut n).unwrap(),
+            "p"
+        );
+        assert!(resolve_session_id(Some("p"), Some("run-1"), &mut n).is_err());
+        assert_eq!(
+            resolve_session_id(None, Some("run-1"), &mut n).unwrap(),
+            "run-1"
+        );
+        assert_eq!(resolve_session_id(None, None, &mut n).unwrap(), "session-2");
+    }
+
+    #[test]
+    fn pinned_session_value_must_be_one_safe_segment() {
+        assert_eq!(pinned_session_from(None).unwrap(), None);
+        assert_eq!(pinned_session_from(Some(String::new())).unwrap(), None);
+        assert_eq!(
+            pinned_session_from(Some("run-1.rt".into()))
+                .unwrap()
+                .as_deref(),
+            Some("run-1.rt")
+        );
+        for bad in ["../x", "a/b", ".hidden", "a..b", "a b", "a\\b"] {
+            assert!(pinned_session_from(Some(bad.into())).is_err(), "{bad}");
+        }
     }
 
     /// The sentinel the tests above rely on must be real: if provisioning were
@@ -1582,7 +1699,7 @@ mod act_boundary_tests {
     use super::*;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None, pinned_session: None }
     }
 
     /// Returns `(is_error, message)`. MCP convention: an EXECUTION failure is a
@@ -1677,6 +1794,7 @@ mod act_boundary_tests {
                 workspace: Ok(PathBuf::from(".")),
                 next_id: 1,
                 progress: None,
+                pinned_session: None,
             };
             // Register a fake session so the rewrite path is reachable.
             let mut cfg = QemuConfig::for_repo(std::path::Path::new("."), "t");
@@ -1720,7 +1838,7 @@ mod write_file_tests {
     use std::collections::HashMap;
 
     fn srv() -> Server {
-        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None }
+        Server { sessions: HashMap::new(), workspace: Ok(PathBuf::from(".")), next_id: 1, progress: None, pinned_session: None }
     }
 
     fn call(s: &mut Server, body: &str) -> Value {
