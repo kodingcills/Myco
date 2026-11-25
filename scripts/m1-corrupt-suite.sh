@@ -87,7 +87,11 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   # nonzero. The Node process receives the watchdog signal directly.
   ARGS=(--mode "$MODE" --audit-corruption)
   if [ "$RECOVERY" = True ]; then ARGS+=(--recovery); fi
-  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 1500; exec @ARGV' node --import tsx src/integration/run-live.ts \
+  # Watchdog 1800 s (TIF-219): the kill-recovery path's configured polls are 1290 s
+  # with the 360 s convert deadline (360 conversion + 360 two launches + 450 helpers
+  # + 120 verify/audit), plus ~110 s tunnel/health and ~160 s cleanup = ~1560 s.
+  # 1500 s would cut that path off before it can report; 1800 leaves ~240 s headroom.
+  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 1800; exec @ARGV' node --import tsx src/integration/run-live.ts \
     "${ARGS[@]}" --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial-$i.out" 2> "$OUT/trial-$i.err" 3<&-
   unset TOK

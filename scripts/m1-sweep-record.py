@@ -58,7 +58,14 @@ def record(argv):
             convertMs=conv.get("durationMs"),
             convertDeadlineMs=conv.get("deadlineMs"),
             convertOutcome=conv.get("outcome"),
+            convertLoadStart=conv.get("hostLoadStart"),
+            convertLoadEnd=conv.get("hostLoadEnd"),
         )
+        # TIF-219: a convert deadline is a harness fault (the guest never produced the
+        # workbook; Myco never acted). Tagged so it is listed apart from Myco failures.
+        # The status is untouched: it stays a non-verified row.
+        if conv.get("outcome") == "deadline":
+            rec["harnessFault"] = "fixture-convert-deadline"
     if isinstance(d.get("timings"), dict):
         rec["timings"] = d["timings"]
     problems = []
