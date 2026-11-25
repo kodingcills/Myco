@@ -18,6 +18,10 @@
 #   mI: no dev/ino comparison between the walk and the descriptor (round 2 D-A).
 #   mJ: no second walk after the open (round 2 D-A).
 #   mK: the walk does not require a regular file (round 2 D-B).
+#   mL: no descriptor-path binding (/proc/self/fd) after the checks (TIF-265 follow-up,
+#       round-3 D-A'): the intermediate-swap pin tests fail on Linux.
+#   mM: the binding fails open when /proc/self/fd cannot be read (TIF-265 follow-up).
+# mL and mM are caught only on Linux, where the binding applies; elsewhere their tests skip.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -75,11 +79,19 @@ elif which == "mJ":
     edit("src/gate/gate.ts", "const second = walk(absoluteRoot, segments, where);", "const second = first;")
 elif which == "mK":
     edit("src/gate/gate.ts", "if (last && !stat.isFile()) {", "if (false) {")
+elif which == "mL":
+    edit("src/gate/gate.ts", "        if (!bound.ok) return bound;\n", "")
+elif which == "mM":
+    edit("src/gate/gate.ts", "    actual = readlinkSync(join(hooks.procFdDir ?? \"/proc/self/fd\", String(fd)));\n  } catch (error) {\n", "    actual = readlinkSync(join(hooks.procFdDir ?? \"/proc/self/fd\", String(fd)));\n  } catch (error) {\n    if (error) return { ok: true };\n")
 EOF
 }
 
 status=0
-for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK; do
+for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM; do
+  if [[ "$mutant" == mL || "$mutant" == mM ]] && [[ "$(uname -s)" != Linux ]]; then
+    echo "$mutant: skipped (the /proc/self/fd binding applies on Linux only)"
+    continue
+  fi
   mutate "$mutant"
   if npx vitest run test/gate --testTimeout=10000 >/dev/null 2>&1; then
     echo "$mutant: SURVIVED (no test failed)"

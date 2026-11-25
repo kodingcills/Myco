@@ -9,7 +9,16 @@
  * `ORACLE_PASS` code together, never set independently.
  */
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+} from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   type EvidenceRef,
@@ -133,12 +142,24 @@ export interface EvidenceReader {
 
 export const STATE_FILE_LIMIT = 16 * 1024 * 1024;
 
-/** Test seams around the open, used to swap path components deterministically. */
+/**
+ * Test seams, used to swap path components deterministically. Operator code never needs
+ * them; the agent cannot reach them (it only sends a request).
+ */
 export interface FileReaderHooks {
+  /** Runs before each `lstat` of a walk, with the path about to be checked. */
+  readonly beforeLstat?: (path: string) => void;
   /** Runs after the first walk and before `open`. */
   readonly beforeOpen?: () => void;
   /** Runs after `open` and the descriptor checks, before the second walk. */
   readonly afterOpen?: () => void;
+  /**
+   * The platform whose descriptor-path binding applies (default `process.platform`). Tests
+   * set "darwin" on Linux to show the gap the binding closes.
+   */
+  readonly platform?: NodeJS.Platform;
+  /** Where descriptor paths are read on Linux (default `/proc/self/fd`). */
+  readonly procFdDir?: string;
 }
 
 type Walk =
@@ -150,12 +171,18 @@ type Walk =
  * a directory, the final component a regular file (so a FIFO or device is refused before
  * any `open` could block).
  */
-function walk(root: string, segments: readonly string[], where: string): Walk {
+function walk(
+  root: string,
+  segments: readonly string[],
+  where: string,
+  beforeLstat?: (path: string) => void,
+): Walk {
   let path = root;
   let final = { dev: -1, ino: -1 };
   for (const [index, segment] of segments.entries()) {
     path = join(path, segment);
     let stat: ReturnType<typeof lstatSync>;
+    beforeLstat?.(path);
     try {
       stat = lstatSync(path);
     } catch {
@@ -181,24 +208,90 @@ function walk(root: string, segments: readonly string[], where: string): Walk {
 }
 
 /**
- * Reads `<root>/<runId>/<stateFile>`, refusing a symlink anywhere below `root` even when a
- * component is swapped concurrently. `root` itself may be a symlink: the operator chose it.
+ * Reads `<root>/<runId>/<stateFile>`, refusing a symlink below `root`. `root` itself may be
+ * a symlink: the operator chose it.
  *
  * Node has no `openat`, so the reader cannot descend from directory descriptors. Instead:
  *  1. walk: lstat every component (no symlink, directories, then a regular file);
  *  2. open the path with O_NOFOLLOW (a final-component symlink fails) and O_NONBLOCK (a FIFO
  *     swapped in after the walk returns at once instead of blocking), then fstat the
  *     descriptor: it must be a regular file within the size limit;
- *  3. walk again, and require the final component's dev/ino to equal the descriptor's.
- * If any component was a symlink at open time, either the second walk sees it or the file
- * the descriptor holds is not the one at the real path, so the dev/ino check fails. The
- * bytes are read from the verified descriptor. What this does not stop is a hard link to
- * another run's file placed inside this run: making the root unwritable to the agent is
- * TIF-266's job (and the host-capture requirement in docs/gate/api.md).
+ *  3. walk again, and require the final component's dev/ino (from both walks) to equal the
+ *     descriptor's;
+ *  4. Linux only: bind the descriptor to its path. `readlink("/proc/self/fd/<fd>")` (the
+ *     path the kernel says the open file is at) must equal
+ *     `realpath(root)/<runId>/<stateFile>` exactly. If /proc cannot be read, the read fails.
+ * The bytes are read from the verified descriptor.
+ *
+ * What each platform guarantees (see docs/gate/api.md, "What the file reader guarantees"):
+ *  - Both: a symlink present below the root when the reader looks is refused; a final
+ *    component swapped for a symlink or FIFO during the read is refused; a run directory
+ *    swapped for a symlink between steps is refused.
+ *  - Linux: an INTERMEDIATE component (the run directory or a parent of the state file)
+ *    swapped for a symlink to another run while a walk is in progress is refused too: the
+ *    walks' lstat calls resolve intermediate components, so they and the dev/ino check can
+ *    all agree on another run's file, but the descriptor's kernel path then names that
+ *    other run and step 4 fails.
+ *  - macOS and other platforms without /proc/self/fd: that intermediate race is NOT
+ *    refused. A concurrent writer on the evidence root can make the reader return another
+ *    run's bytes. The guarantee there rests on the host-capture requirement (the agent
+ *    cannot write the root) and, for M2-12, on #470's sealed per-trial capture.
+ *  - Neither: a writer that puts a hard link, or another run's real directory or file,
+ *    at the run's own path. At read time that IS the run's evidence; keeping writers off
+ *    the root is TIF-266's job (and the host-capture requirement).
  *
  * All I/O here is synchronous and bounded by refusing non-regular files; `readTimeoutMs`
  * guards readers that return a pending promise, not a filesystem that blocks a syscall.
  */
+/**
+ * Linux: require the kernel's path for the open descriptor to be the expected path under
+ * the real root. Fails closed if /proc cannot be read. Other platforms: no binding (see
+ * `fileEvidenceReader`).
+ */
+function bindDescriptorPath(
+  fd: number,
+  absoluteRoot: string,
+  segments: readonly string[],
+  where: string,
+  hooks: FileReaderHooks,
+):
+  | { readonly ok: true }
+  | { readonly ok: false; readonly cause: "unreadable"; readonly detail: string } {
+  if ((hooks.platform ?? process.platform) !== "linux") return { ok: true };
+  let realRoot: string;
+  let actual: string;
+  try {
+    realRoot = realpathSync(absoluteRoot);
+  } catch (error) {
+    return {
+      ok: false,
+      cause: "unreadable",
+      detail: `evidence root realpath failed: ${String(error)}`,
+    };
+  }
+  try {
+    actual = readlinkSync(join(hooks.procFdDir ?? "/proc/self/fd", String(fd)));
+  } catch (error) {
+    return {
+      ok: false,
+      cause: "unreadable",
+      detail: `${where}: cannot bind the descriptor to its path (/proc/self/fd): ${String(error)}`,
+    };
+  }
+  if (actual !== join(realRoot, ...segments)) {
+    // Report the path relative to the root: reasons reach the agent, host paths need not.
+    const shown = actual.startsWith(`${realRoot}/`)
+      ? actual.slice(realRoot.length + 1)
+      : "a path outside the evidence root";
+    return {
+      ok: false,
+      cause: "unreadable",
+      detail: `${where}: the opened file is at ${shown}, not at ${where} (descriptor path check)`,
+    };
+  }
+  return { ok: true };
+}
+
 export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): EvidenceReader {
   const absoluteRoot = resolve(root);
   return {
@@ -209,7 +302,7 @@ export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): E
       }
       const where = `${runId}/${stateFile}`;
       const segments = [runId, ...stateFile.split("/")];
-      const first = walk(absoluteRoot, segments, where);
+      const first = walk(absoluteRoot, segments, where, hooks.beforeLstat);
       if (!first.ok) return first;
       hooks.beforeOpen?.();
       let fd: number;
@@ -238,7 +331,7 @@ export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): E
           return { ok: false, cause: "unreadable", detail: `${where} is too large` };
         }
         hooks.afterOpen?.();
-        const second = walk(absoluteRoot, segments, where);
+        const second = walk(absoluteRoot, segments, where, hooks.beforeLstat);
         if (!second.ok) {
           return { ok: false, cause: "unreadable", detail: `${second.detail} (after open)` };
         }
@@ -254,6 +347,8 @@ export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): E
             detail: `${where} changed between the check and the open`,
           };
         }
+        const bound = bindDescriptorPath(fd, absoluteRoot, segments, where, hooks);
+        if (!bound.ok) return bound;
         return { ok: true, bytes: new Uint8Array(readFileSync(fd)) };
       } catch (error) {
         return { ok: false, cause: "unreadable", detail: `read failed: ${String(error)}` };

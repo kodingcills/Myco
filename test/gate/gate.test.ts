@@ -6,8 +6,15 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runTask } from "../../src/discovery/run-tasks.ts";
 import {
@@ -967,5 +974,165 @@ describe("reader: concurrent swaps and FIFOs fail closed (round 2 D-A, D-B)", ()
       expect(Date.now() - started).toBeLessThan(8_000);
     },
     15_000,
+  );
+});
+
+describe("reader: an intermediate component swapped during a walk (TIF-265 follow-up, #471 round-3 D-A')", () => {
+  const LINUX = process.platform === "linux";
+  /** df-s01's spec with the state file one directory down, for the parent-directory case. */
+  const nestedEntry = (): TaskEntry => {
+    const s01 = builtinTasks().find((entry) => entry.id === "df-s01");
+    if (!s01) throw new Error("df-s01 missing");
+    return { ...s01, id: "df-nested", stateFile: `sub/${STORE}` };
+  };
+
+  /**
+   * The verifier's determ.mts interleaving, through the reader's lstat hook: right before
+   * each walk lstats the intermediate directory `swapped`, it is the run's real directory;
+   * right before the walk lstats the state file under it, it is a symlink to `borrowed`
+   * (a passing run). The open (between the walks) therefore goes through the symlink, and
+   * both walks' final lstat resolve it, so every dev/ino agrees on the borrowed file.
+   */
+  function interleaved(root: string, swapped: string, borrowed: string, stateFile: string) {
+    const abs = resolve(root);
+    const dir = join(abs, swapped);
+    const aside = `${dir}-own`;
+    let linked = false;
+    let swaps = 0;
+    const makeReal = () => {
+      if (!linked) return;
+      unlinkSync(dir);
+      renameSync(aside, dir);
+      linked = false;
+    };
+    const makeLink = () => {
+      if (linked) return;
+      renameSync(dir, aside);
+      symlinkSync(join(abs, borrowed), dir);
+      linked = true;
+      swaps += 1;
+    };
+    const finalPath = join(abs, "r", stateFile);
+    return {
+      hooks: {
+        beforeLstat: (path: string) => {
+          if (path === dir) makeReal();
+          else if (path === finalPath) makeLink();
+        },
+        beforeOpen: makeLink,
+      },
+      linkedAtOpen: () => linked,
+      swaps: () => swaps,
+      restore: makeReal,
+    };
+  }
+
+  function raced() {
+    const root = tempRoot();
+    writeState(root, "r", STORE, todoStore(S02_PERSISTED));
+    writeState(root, "good", STORE, todoStore(S01_ITEMS));
+    writeState(root, "r", `sub/${STORE}`, todoStore(S02_PERSISTED));
+    writeState(root, "good", `sub/${STORE}`, todoStore(S01_ITEMS));
+    const check = (taskId: string, hooks: Parameters<typeof fileEvidenceReader>[1]) =>
+      createGate({
+        tasks: buildRegistry([...builtinTasks(), nestedEntry()]),
+        reader: fileEvidenceReader(root, hooks),
+        assignment: { taskId, runId: "r" },
+      }).check({ taskId, runId: "r" });
+    return { root, check };
+  }
+
+  it.each(["df-s01", "df-nested"])(
+    "%s: without a swap run r is refuted (the baseline the interleaving tries to flip)",
+    async (taskId) => {
+      const { check } = raced();
+      expect((await check(taskId, {})).verdict).toBe("refuted");
+    },
+  );
+
+  it.skipIf(!LINUX)(
+    "Linux: run directory r swapped for a symlink to a passing run inside each walk → STATE_UNREADABLE (skipped off Linux: no /proc/self/fd)",
+    async () => {
+      const { root, check } = raced();
+      const swap = interleaved(root, "r", "good", STORE);
+      const result = await check("df-s01", swap.hooks);
+      swap.restore();
+      assertInvariant(result);
+      expect(swap.swaps()).toBeGreaterThanOrEqual(2);
+      expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+      expect(result.reasons.join(" ")).toContain(
+        `the opened file is at good/${STORE}, not at r/${STORE} (descriptor path check)`,
+      );
+    },
+  );
+
+  it.skipIf(!LINUX)(
+    "Linux: parent directory r/sub swapped for a symlink to good/sub inside each walk → STATE_UNREADABLE (skipped off Linux: no /proc/self/fd)",
+    async () => {
+      const { root, check } = raced();
+      const swap = interleaved(root, "r/sub", "good/sub", `sub/${STORE}`);
+      const result = await check("df-nested", swap.hooks);
+      swap.restore();
+      assertInvariant(result);
+      expect(swap.swaps()).toBeGreaterThanOrEqual(2);
+      expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+      expect(result.reasons.join(" ")).toContain("(descriptor path check)");
+    },
+  );
+
+  // Pins the documented per-platform gap, and proves the interleaving above really reaches
+  // the window (it is not refused by the walks or the dev/ino check): without the
+  // descriptor-path binding, as on macOS, the same interleaving returns another run's bytes.
+  it.each([
+    ["df-s01", "r", "good", STORE],
+    ["df-nested", "r/sub", "good/sub", `sub/${STORE}`],
+  ])(
+    "%s: without the binding (platform darwin, the macOS behaviour) the same interleaving gives verified: the documented gap",
+    async (taskId, swapped, borrowed, stateFile) => {
+      const { root, check } = raced();
+      const swap = interleaved(root, swapped, borrowed, stateFile);
+      const result = await check(taskId, { ...swap.hooks, platform: "darwin" });
+      expect(swap.linkedAtOpen()).toBe(true);
+      swap.restore();
+      expect(result).toMatchObject({ verdict: "verified", reasonCodes: ["ORACLE_PASS"] });
+      const goodBytes = readFileSync(join(root, "good", stateFile));
+      expect(result.evidenceRefs[0]?.sha256).toBe(
+        createHash("sha256").update(goodBytes).digest("hex"),
+      );
+    },
+  );
+
+  it.skipIf(!LINUX)(
+    "Linux: if /proc/self/fd cannot be read, the read fails closed (skipped off Linux: no /proc/self/fd)",
+    async () => {
+      const { root } = raced();
+      writeState(root, "ok", STORE, todoStore(S01_ITEMS));
+      const result = await createGate({
+        tasks: buildRegistry(builtinTasks()),
+        reader: fileEvidenceReader(root, { procFdDir: join(root, "no-such-proc") }),
+        assignment: { taskId: "df-s01", runId: "ok" },
+      }).check({ taskId: "df-s01", runId: "ok" });
+      assertInvariant(result);
+      expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+      expect(result.reasons.join(" ")).toContain("cannot bind the descriptor to its path");
+    },
+  );
+
+  it.skipIf(!LINUX)(
+    "Linux: the binding accepts an untouched passing run, including under a symlinked root (skipped off Linux: no /proc/self/fd)",
+    async () => {
+      const { root } = raced();
+      writeState(root, "ok", STORE, todoStore(S01_ITEMS));
+      const link = `${root}-link`;
+      symlinkSync(root, link);
+      for (const where of [root, link]) {
+        const result = await createGate({
+          tasks: buildRegistry(builtinTasks()),
+          reader: fileEvidenceReader(where),
+          assignment: { taskId: "df-s01", runId: "ok" },
+        }).check({ taskId: "df-s01", runId: "ok" });
+        expect(result).toMatchObject({ verdict: "verified", reasonCodes: ["ORACLE_PASS"] });
+      }
+    },
   );
 });
