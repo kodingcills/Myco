@@ -601,11 +601,20 @@ lsof /tmp/myco-win11.vm.lock || echo free     # free again once the session exit
 
 The wrapper takes the lock once (record `<pid> vm-session.sh`), runs the command with the lock's
 descriptor (FD 9) inherited, and releases it when the command exits: normally, on a crash, or on
-Ctrl-C / `kill` (SIGINT, SIGTERM and SIGHUP are forwarded to the command, the wrapper waits for it,
-then exits `128+signal`). On every one of those exits it clears its record, so the lock file
-is empty afterwards (unlike the other drivers, §2); only a SIGKILLed wrapper leaves
-`<pid> vm-session.sh` behind. It exits **10** with `REFUSED_VM_LOCKED` if the lock is held, and
-otherwise with the command's own status. While it runs, `lsof` lists the wrapper and its
+Ctrl-C / `kill`. SIGINT, SIGTERM and SIGHUP sent to the wrapper are forwarded to the command's
+whole process group, so every step of a `bash -c '<step>; <step>'` gets it and later steps do
+not start; the wrapper waits until that group is empty, then exits `128+signal`. A signal that
+was ignored when the wrapper started stays ignored: under `nohup scripts/vm-session.sh -- …` a
+hangup does not end the session. In a terminal the command's group is made the foreground job,
+so Ctrl-C reaches it and a step can still prompt; Ctrl-Z is ignored inside the session.
+
+On those exits it clears its record, so the lock file is normally empty afterwards (unlike the
+other drivers, §2). `<pid> vm-session.sh` can still be left behind by a SIGKILLed wrapper, or by
+a signal in the few milliseconds while its python3 supervisor starts (no command has run then).
+That is safe: a step accepts the record only from a descendant of that pid that carries its
+FD 9, so an unrelated process, including one that later reuses the pid, is refused. It exits
+**10** with `REFUSED_VM_LOCKED` if the lock is held, **125** if the python3 supervisor could not
+be started (nothing ran), and otherwise with the command's own status. While it runs, `lsof` lists the wrapper and its
 children, which is correct: the VM is in use.
 
 - A step accepts the session's lock only if it **inherited FD 9** from the wrapper: it must be a

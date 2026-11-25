@@ -8,7 +8,16 @@
  * refused by, a real sweep running on the same host.
  */
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import process from "node:process";
@@ -62,8 +71,11 @@ function runSync(args: string[], env: Env) {
 }
 
 /** Start the wrapper in the background and resolve once it has written its record. */
-async function startWrapper(cmd: string[], env: Env, lock: string) {
-  const child = spawn("bash", [WRAPPER, "--", ...cmd], { env, cwd: REPO });
+async function startWrapper(cmd: string[], env: Env, lock: string, launcher = ["bash"]) {
+  // `launcher` must exec the wrapper in place (nohup, `trap "" INT; exec bash`),
+  // so the spawned pid is the wrapper's pid.
+  const [program, ...pre] = launcher;
+  const child = spawn(program as string, [...pre, WRAPPER, "--", ...cmd], { env, cwd: REPO });
   running.push(child);
   let stderr = "";
   child.stderr?.on("data", (chunk) => {
@@ -98,6 +110,11 @@ async function eventually(check: () => boolean): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 30));
   }
   return check();
+}
+
+/** The lock file's text, or "" before anything has created it. */
+function readLock(lock: string): string {
+  return existsSync(lock) ? readFileSync(lock, "utf8") : "";
 }
 
 function alive(pid: number): boolean {
@@ -378,4 +395,202 @@ it("refuses a second wrapper while the first holds the lock", async () => {
   expect(second.stderr).toContain(`REFUSED_VM_LOCKED: holder ${child.pid} vm-session.sh`);
   // The refusal did not disturb the holder's record.
   expect(readFileSync(lock, "utf8").trim()).toBe(`${child.pid} vm-session.sh`);
+});
+
+// ---- Round 3 (verifier round 2): ignored-at-entry signals, process groups ----
+
+it("leaves SIGHUP ignored under nohup: a HUP does not end the session", async () => {
+  const { lock, env } = fixture();
+  let stdout = "";
+  const { child, exited } = await startWrapper(
+    ["bash", "-c", "sleep 1; echo survived"],
+    env,
+    lock,
+    ["nohup", "bash"],
+  );
+  child.stdout?.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  child.kill("SIGHUP");
+  expect(await exited).toEqual({ code: 0, signal: null });
+  expect(stdout).toContain("survived");
+  expect(readFileSync(lock, "utf8")).toBe("");
+  expect(lockIsFree(lock)).toBe(true);
+}, 15_000);
+
+it("leaves SIGINT ignored when it was ignored at entry, early or late", async () => {
+  // A background job of a non-interactive shell starts with SIGINT ignored. A
+  // signal sent then must neither be lost-then-unignored nor reach the command.
+  const { dir, lock, env } = fixture();
+  const launcher = ["bash", "-c", 'trap "" INT; exec bash "$0" "$@"'];
+  const [program, ...pre] = launcher;
+  const command = ["bash", "-c", "sleep 1; echo survived"];
+
+  // Early: inside the window before the supervisor exists, held open by a slow
+  // legacy-driver scan that runs after the record is written.
+  const marker = join(dir, "in-window");
+  writeFileSync(join(dir, "bin", "pgrep"), `#!/bin/bash\n: > "${marker}"\nsleep 1\nexit 1\n`, {
+    mode: 0o755,
+  });
+  const early = spawn(program as string, [...pre, WRAPPER, "--", ...command], { env, cwd: REPO });
+  running.push(early);
+  let out = "";
+  early.stdout?.on("data", (chunk) => {
+    out += String(chunk);
+  });
+  const earlyExit = new Promise((resolve) =>
+    early.on("exit", (code, signal) => resolve({ code, signal })),
+  );
+  expect(await eventually(() => existsSync(marker))).toBe(true);
+  early.kill("SIGINT");
+  expect(await earlyExit).toEqual({ code: 0, signal: null });
+  expect(out).toContain("survived");
+
+  // Late: after the supervisor is up.
+  writeFileSync(join(dir, "bin", "pgrep"), "#!/bin/bash\nexit 1\n", { mode: 0o755 });
+  let lateOut = "";
+  const { child, exited } = await startWrapper(command, env, lock, launcher);
+  child.stdout?.on("data", (chunk) => {
+    lateOut += String(chunk);
+  });
+  child.kill("SIGINT");
+  expect(await exited).toEqual({ code: 0, signal: null });
+  expect(lateOut).toContain("survived");
+  expect(lockIsFree(lock)).toBe(true);
+}, 20_000);
+
+for (const [signal, number] of [
+  ["SIGTERM", 15],
+  ["SIGINT", 2],
+] as const) {
+  it(`on ${signal} stops every step of a multi-step session, then frees the lock`, async () => {
+    // The runbook's form: `bash -c '<step>; <next step>'`. The running step holds
+    // the session lock and keeps going; the signal must reach it, not just the
+    // `bash -c` that started it, and the next step must not start.
+    const { dir, lock, env } = fixture();
+    const pidFile = join(dir, "step.pid");
+    const step = join(dir, "step.sh");
+    writeFileSync(
+      step,
+      `source "$GUARD"
+vm_lock_owned_by_parent || exit 9
+# Slow to stop on TERM, as a step tidying up would be: the wrapper must wait
+# for it rather than return while it still holds FD 9.
+trap 'sleep 0.5; exit 0' TERM
+echo $$ > "${pidFile}"
+while true; do sleep 0.2; done
+`,
+    );
+    let stdout = "";
+    const { child, exited } = await startWrapper(
+      ["bash", "-c", `bash "${step}"; echo NEXT-STEP-RAN`],
+      env,
+      lock,
+    );
+    child.stdout?.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    expect(await eventually(() => readFileSync(pidFile, { flag: "a+" }).length > 0)).toBe(true);
+    const stepPid = Number(readFileSync(pidFile, "utf8").trim());
+
+    child.kill(signal);
+    expect(await exited).toEqual({ code: 128 + number, signal: null });
+    // At the moment the wrapper returns: no step left, lock free, record cleared.
+    expect(alive(stepPid)).toBe(false);
+    expect(readFileSync(lock, "utf8")).toBe("");
+    expect(lockIsFree(lock)).toBe(true);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stdout).not.toContain("NEXT-STEP-RAN");
+  }, 15_000);
+}
+
+it("keeps a record that is not its own when the session ends", async () => {
+  const { lock, env } = fixture();
+  const foreign = 'printf "4242 m1-sweep.sh\\n" > "$MYCO_VM_LOCK_PATH"';
+  expect(runSync([WRAPPER, "--", "bash", "-c", foreign], env).status).toBe(0);
+  expect(readFileSync(lock, "utf8")).toBe("4242 m1-sweep.sh\n");
+
+  writeFileSync(lock, "");
+  const wrapper = spawn("bash", [WRAPPER, "--", "bash", "-c", `${foreign}; exec sleep 30`], {
+    env,
+    cwd: REPO,
+  });
+  running.push(wrapper);
+  const exited = new Promise<number | null>((resolve) =>
+    wrapper.on("exit", (code) => resolve(code)),
+  );
+  expect(await eventually(() => readLock(lock).startsWith("4242"))).toBe(true);
+  wrapper.kill("SIGTERM");
+  expect(await exited).toBe(143);
+  expect(readFileSync(lock, "utf8")).toBe("4242 m1-sweep.sh\n");
+});
+
+it("clears its record on a signal that arrives before the supervisor starts", async () => {
+  // The legacy-driver scan (pgrep) runs after the record is written and before
+  // the supervisor; a slow stub holds the wrapper in that window.
+  const { dir, lock, env } = fixture();
+  const marker = join(dir, "in-window");
+  writeFileSync(join(dir, "bin", "pgrep"), `#!/bin/bash\n: > "${marker}"\nsleep 1\nexit 1\n`, {
+    mode: 0o755,
+  });
+  const wrapper = spawn("bash", [WRAPPER, "--", "echo", "SHOULD-NOT-RUN"], { env, cwd: REPO });
+  running.push(wrapper);
+  let stdout = "";
+  wrapper.stdout?.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  const exited = new Promise((resolve) =>
+    wrapper.on("exit", (code, signal) => resolve({ code, signal })),
+  );
+  expect(
+    await eventually(() => existsSync(marker) && readLock(lock).includes("vm-session.sh")),
+  ).toBe(true);
+  wrapper.kill("SIGTERM");
+  expect(await exited).toEqual({ code: 143, signal: null });
+  expect(stdout).not.toContain("SHOULD-NOT-RUN");
+  expect(readFileSync(lock, "utf8")).toBe("");
+  expect(lockIsFree(lock)).toBe(true);
+});
+
+it("exits 125, runs nothing and clears its record when the supervisor cannot start", () => {
+  // PATH holds only what the wrapper needs, and a python3 that works once (the
+  // lock helper) and then makes itself non-executable, so `exec python3` fails.
+  const { dir, lock, env } = fixture();
+  const bin = join(dir, "bin");
+  const real = spawnSync("bash", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
+  for (const tool of ["bash", "dirname", "ps", "chmod", "sleep"]) {
+    const found = spawnSync("bash", ["-c", `command -v ${tool}`], {
+      encoding: "utf8",
+    }).stdout.trim();
+    symlinkSync(found, join(bin, tool));
+  }
+  writeFileSync(join(bin, "python3"), `#!/bin/bash\nchmod -x "$0"\nexec "${real}" "$@"\n`, {
+    mode: 0o755,
+  });
+  const result = spawnSync(join(bin, "bash"), [WRAPPER, "--", "echo", "SHOULD-NOT-RUN"], {
+    encoding: "utf8",
+    timeout: 20_000,
+    env: { ...env, PATH: bin },
+    cwd: REPO,
+  });
+  expect(result.status, result.stderr).toBe(125);
+  expect(result.stdout).not.toContain("SHOULD-NOT-RUN");
+  expect(result.stderr).toContain("cannot start the python3 supervisor");
+  expect(readFileSync(lock, "utf8")).toBe("");
+  expect(lockIsFree(lock)).toBe(true);
+});
+
+it("never treats pid 1 as a session owner in the shell gate", () => {
+  // pid 1 is an ancestor of everything, so the ancestry step alone would pass it.
+  const { lock, env } = fixture();
+  writeFileSync(lock, "1 vm-session.sh\n");
+  const result = runSync(
+    [
+      "-c",
+      'exec 9>>"$MYCO_VM_LOCK_PATH"; source "$GUARD"; vm_lock_fd_is_holders 1 && echo ACCEPTED',
+    ],
+    env,
+  );
+  expect(result.stdout).not.toContain("ACCEPTED");
+  expect(lockIsFree(lock)).toBe(true);
 });

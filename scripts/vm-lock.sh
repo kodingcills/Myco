@@ -93,8 +93,9 @@ PY
 #      It is NOT side-effect-free when the lock is free: then it takes the lock
 #      on this process's descriptor. Steps 1-2 limit that case to a descendant
 #      of the recorded owner whose family has already let the lock go, and the
-#      wrapper clears its record on exit (scripts/vm-session.sh), so a session
-#      that was not SIGKILLed leaves no record for the check to match at all.
+#      wrapper clears its record on exit (scripts/vm-session.sh); the few cases
+#      that leave one (SIGKILL, a signal while its supervisor starts) are
+#      covered by step 1 refusing every non-descendant.
 vm_lock_fd_is_holders() {
   python3 - "$VM_LOCK_PATH" "$1" <<'PY'
 import fcntl
@@ -103,6 +104,10 @@ import subprocess
 import sys
 
 path, owner = sys.argv[1], int(sys.argv[2])
+# pid 1 is everyone's ancestor; it can never be a session owner (same rule as
+# lockOwnedByAncestor's `owner <= 1` in src/integration/vm-lock.ts).
+if owner <= 1:
+    sys.exit(1)
 
 curr = os.getppid()
 for _ in range(64):
