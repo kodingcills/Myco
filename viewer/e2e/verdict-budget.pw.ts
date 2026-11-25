@@ -9,6 +9,11 @@
 // MYCO_VIEWER_BUDGET_INJECT_MS=<ms> -> test-only: block the page's main thread for <ms> inside
 //                                      the timed window of every drop, to prove the check
 //                                      catches a regression. Never set in normal CI.
+// MYCO_VIEWER_BUDGET_INJECT_ATTEMPT=<n> -> test-only: apply the injection to attempt <n> only
+//                                      (1 or 2), to prove a passing retry is visible in CI.
+// A CI retry prints "verdict budget retry: attempt 1 missed; re-measuring once." to the test's
+// stdout, which the default dot reporter echoes into the job log, and adds the same note to
+// the attempt 2 report line.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +26,9 @@ const strict = process.env.MYCO_VIEWER_STRICT_BUDGET === "1";
 const ci = process.env.CI === "true";
 const samples = ci ? 20 : Number(process.env.MYCO_VIEWER_BUDGET_SAMPLES ?? 20);
 const injectMs = Number(process.env.MYCO_VIEWER_BUDGET_INJECT_MS ?? 0);
+const injectAttempt = Number(process.env.MYCO_VIEWER_BUDGET_INJECT_ATTEMPT ?? 0);
+const injectFor = (attempt: number) =>
+  injectAttempt === 0 || injectAttempt === attempt ? injectMs : 0;
 
 type Thresholds = { baselineMedian: number | null; hardMedian: number };
 type Baseline = {
@@ -65,7 +73,7 @@ function perfDir() {
 }
 
 // One warmup drop, then `samples` timed drops, each on a fresh page. Returns sorted timings.
-async function measure(context: BrowserContext, dir: string) {
+async function measure(context: BrowserContext, dir: string, injectMs: number) {
   const timings: number[] = [];
   for (let i = 0; i <= samples; i++) {
     const page = await context.newPage();
@@ -159,22 +167,23 @@ for (const steps of [1000, 10000] as const) {
   test(`final verdict after drop stays within budget at ${steps} steps`, async ({ context }) => {
     test.setTimeout(300_000);
     const dir = join(perfDir(), `perf-${steps}`);
-    const record = (attempt: number, timings: number[]) => {
+    const record = (attempt: number, timings: number[], note?: string) => {
       const { median, p95, max } = summarize(timings);
+      const injected = injectFor(attempt);
       test.info().annotations.push({
         type: "final verdict ms",
-        description: `${steps} steps, attempt ${attempt}, N=${timings.length}: median ${median.toFixed(1)}, p95 ${p95.toFixed(1)}, max ${max.toFixed(1)}${injectMs > 0 ? `, injected ${injectMs} ms` : ""}`,
+        description: `${steps} steps, attempt ${attempt}, N=${timings.length}: median ${median.toFixed(1)}, p95 ${p95.toFixed(1)}, max ${max.toFixed(1)}${injected > 0 ? `, injected ${injected} ms` : ""}`,
       });
       const report = process.env.MYCO_VIEWER_BUDGET_REPORT;
       if (report) {
         appendFileSync(
           report,
-          `${JSON.stringify({ platform: process.platform, steps, attempt, injectMs, median, p95, max, samples: timings })}\n`,
+          `${JSON.stringify({ platform: process.platform, steps, attempt, injectMs: injected, median, p95, max, ...(note ? { note } : {}), samples: timings })}\n`,
         );
       }
     };
 
-    const timings = await measure(context, dir);
+    const timings = await measure(context, dir, injectFor(1));
     record(1, timings);
     if (strict || !ci) {
       const { max } = summarize(timings);
@@ -190,12 +199,13 @@ for (const steps of [1000, 10000] as const) {
     if (first.length === 0) return;
     // Hosted-runner speed varies from job to job; one fresh re-measurement separates a
     // borderline runner from a slowdown that misses twice. Both attempts are reported.
-    test.info().annotations.push({
-      type: "verdict budget retry",
-      description: `attempt 1 missed; re-measuring once.\n${first.join("\n")}`,
-    });
-    const retry = await measure(context, dir);
-    record(2, retry);
+    // The CI dot reporter hides passing tests' annotations, so the note also goes to stdout
+    // (echoed into the job log) and into the attempt 2 report line (job summary input).
+    const note = `attempt 1 missed; re-measuring once.\n${first.join("\n")}`;
+    test.info().annotations.push({ type: "verdict budget retry", description: note });
+    process.stdout.write(`verdict budget retry (${steps} steps): ${note}\n`);
+    const retry = await measure(context, dir, injectFor(2));
+    record(2, retry, note);
     const second = ciMisses(steps, retry);
     expect(
       second,
