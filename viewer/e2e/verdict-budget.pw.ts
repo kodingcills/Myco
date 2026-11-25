@@ -190,7 +190,10 @@ for (const steps of [1000, 10000] as const) {
     if (first.length === 0) return;
     // Hosted-runner speed varies from job to job; one fresh re-measurement separates a
     // borderline runner from a slowdown that misses twice. Both attempts are reported.
-    console.log(`verdict budget attempt 1 missed; re-measuring once.\n${first.join("\n")}`);
+    test.info().annotations.push({
+      type: "verdict budget retry",
+      description: `attempt 1 missed; re-measuring once.\n${first.join("\n")}`,
+    });
     const retry = await measure(context, dir);
     record(2, retry);
     const second = ciMisses(steps, retry);
