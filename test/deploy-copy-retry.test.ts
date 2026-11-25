@@ -18,12 +18,14 @@ import { spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -73,6 +75,8 @@ function installStubs(opts: {
   treeDrops?: number;
   silentTruncate?: boolean;
   registerFails?: boolean;
+  /** The agent never answers the ping: every nc returns a non-ok reply. */
+  pingFails?: boolean;
 }): void {
   const counter = join(dir, "scp.count");
   writeFileSync(counter, "0");
@@ -147,7 +151,12 @@ case "$cmd" in
   *) echo "stub ssh: unexpected command: $cmd" >&2; exit 98 ;;
 esac`,
   );
-  writeStub("nc", `cat >/dev/null; echo '{"ok": true, "id": 1, "result": {}}'`);
+  writeStub(
+    "nc",
+    opts.pingFails
+      ? `cat >/dev/null; echo '{"ok": false, "id": 1, "error": {"code": "AUTH_FAILED"}}'`
+      : `cat >/dev/null; echo '{"ok": true, "id": 1, "result": {}}'`,
+  );
 }
 
 interface DeployRun {
@@ -414,5 +423,99 @@ describe("deploy-to-vm host token file (row-8 H5)", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("MYCO_TOKEN_OUT directory");
     expect(r.scpCalls).toBe(0);
+  });
+
+  it("leaves it untouched when the agent never answers the ping", {
+    timeout: SLOW,
+  }, async () => {
+    // Copy and register succeed, so the guest token has rotated; only the
+    // ping check fails. The file must be written after that check, not before.
+    installStubs({ scpDrops: 0, pingFails: true });
+    // The ping loop sleeps 2 s between 30 tries; a no-op sleep keeps this fast.
+    writeFileSync(join(stubDir, "sleep"), `#!/bin/bash\necho ran >> "${dir}/sleep.marker"\n`, {
+      mode: 0o755,
+    });
+    const outDir = join(dir, "private");
+    mkdirSync(outDir);
+    const out = join(outDir, "agent-token");
+    writeFileSync(out, "previous-working-value\n");
+    chmodSync(out, 0o600);
+    const before = readFileSync(out);
+    const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("agent did not answer ping");
+    expect(r.stdout).not.toContain("DEPLOY OK");
+    expect(stubLog("register.log")).toEqual(["core_ok=yes"]);
+    expect(stubLog("nc.marker").length).toBe(30);
+    expect(existsSync(join(dir, "sleep.marker"))).toBe(true);
+    const sent = guestToken();
+    expect(sent.length).toBeGreaterThan(0);
+    expect(readFileSync(out).equals(before)).toBe(true);
+    expect(mode(out).toString(8)).toBe("600");
+    expect(readdirSync(outDir)).toEqual(["agent-token"]);
+    expect(leaksToken(r, sent.toString("utf8"))).toBe(false);
+  });
+
+  it("refuses an unwritable MYCO_TOKEN_OUT directory before copying anything", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const outDir = join(dir, "readonly");
+    mkdirSync(outDir);
+    chmodSync(outDir, 0o500);
+    try {
+      const r = await runDeploy({ MYCO_TOKEN_OUT: join(outDir, "agent-token") });
+      // Zero copies first: a late failure (at mktemp, after the guest token
+      // rotated) also exits 1, so the exit code alone cannot tell them apart.
+      expect(r.scpCalls).toBe(0);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(`MYCO_TOKEN_OUT directory ${outDir} is not writable`);
+      expect(existsSync(join(dir, "scp.marker"))).toBe(false);
+      expect(readdirSync(outDir)).toEqual([]);
+    } finally {
+      chmodSync(outDir, 0o700);
+    }
+  });
+
+  it("refuses an existing MYCO_TOKEN_OUT file it cannot write, before copying anything", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const out = join(dir, "someone-elses-token");
+    writeFileSync(out, "another-operators-value\n");
+    chmodSync(out, 0o400);
+    const before = readFileSync(out);
+    const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`MYCO_TOKEN_OUT ${out} exists and is not writable`);
+    expect(r.scpCalls).toBe(0);
+    expect(readFileSync(out).equals(before)).toBe(true);
+  });
+
+  it("replaces a symlink at MYCO_TOKEN_OUT with a regular file, leaving its target alone", {
+    timeout: SLOW,
+  }, async () => {
+    // Pins the temp-file-plus-mv write: writing straight to the path would
+    // follow the link and overwrite whatever it points at.
+    installStubs({ scpDrops: 0 });
+    const target = join(dir, "link-target");
+    writeFileSync(target, "not-a-token-file\n", { mode: 0o644 });
+    const before = readFileSync(target);
+    const outDir = join(dir, "private");
+    mkdirSync(outDir);
+    const out = join(outDir, "agent-token");
+    symlinkSync(target, out);
+    const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+    expect(r.status).toBe(0);
+    expect(readFileSync(target).equals(before)).toBe(true);
+    expect(mode(target).toString(8)).toBe("644");
+    const st = lstatSync(out);
+    expect(st.isSymbolicLink()).toBe(false);
+    expect(st.isFile()).toBe(true);
+    expect((st.mode & 0o777).toString(8)).toBe("600");
+    const sent = guestToken();
+    expect(readFileSync(out).equals(sent)).toBe(true);
+    expect(readdirSync(outDir)).toEqual(["agent-token"]);
+    expect(leaksToken(r, sent.toString("utf8"))).toBe(false);
   });
 });

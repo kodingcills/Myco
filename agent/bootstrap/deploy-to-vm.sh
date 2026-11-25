@@ -43,6 +43,12 @@ TOKEN_OUT="${MYCO_TOKEN_OUT:-$HOME/.myco-token}"
 TOKEN_OUT_DIR="$(dirname "$TOKEN_OUT")"
 [ -d "$TOKEN_OUT_DIR" ] || die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR does not exist"
 [ ! -d "$TOKEN_OUT" ] || die "MYCO_TOKEN_OUT $TOKEN_OUT is a directory, not a file path"
+# Writable now, or the deploy would rotate the guest token and only then fail to
+# leave a host copy. The temp file and mv need a writable directory; an existing
+# file we cannot write is someone else's (another operator's, G25), so refuse
+# rather than replace it.
+[ -w "$TOKEN_OUT_DIR" ] || die "MYCO_TOKEN_OUT directory $TOKEN_OUT_DIR is not writable"
+[ ! -e "$TOKEN_OUT" ] || [ -w "$TOKEN_OUT" ] || die "MYCO_TOKEN_OUT $TOKEN_OUT exists and is not writable"
 HOST_TOKEN_TMP=""
 
 # Fresh token per deploy. It never reaches argv, env, logs or stdout: it goes to
@@ -164,19 +170,21 @@ if [ -z "$OK" ]; then
 fi
 
 # The deploy is verified: only now replace the host token file (row-8 H5). A
-# failed deploy exits above and leaves any existing file as it was. umask 077 so
-# the temp file is never world-readable, even briefly; mv in the same directory
-# is atomic, so a reader sees the old token or the new one, never a partial
-# file. printf is a builtin: the token is in no process's argv.
+# failed deploy exits above and leaves any existing file as it was. mktemp
+# creates the temp file mode 600, so it is never world-readable, even briefly;
+# the umask 077 and chmod 600 are defence in depth. mv in the same directory is
+# atomic, so a reader sees the old token or the new one, never a partial file,
+# and it replaces a symlink at TOKEN_OUT instead of writing through it. printf
+# is a builtin: the token is in no process's argv.
 write_host_token() {
   HOST_TOKEN_TMP="$(umask 077 && mktemp "$TOKEN_OUT_DIR/.myco-token.XXXXXX")" || return 1
   (umask 077 && printf '%s' "$TOKEN" > "$HOST_TOKEN_TMP") || return 1
   chmod 600 "$HOST_TOKEN_TMP" || return 1
   mv -f "$HOST_TOKEN_TMP" "$TOKEN_OUT" || return 1
   HOST_TOKEN_TMP=""
-  chmod 600 "$TOKEN_OUT"
 }
 write_host_token || die "deploy verified, but writing the token to $TOKEN_OUT failed: the guest token has rotated, so any older copy is stale (AUTH_FAILED)"
+chmod 600 "$TOKEN_OUT" || die "wrote the fresh token to $TOKEN_OUT, but chmod 600 on it failed: check its mode before use (the temp file it replaced it from was mode 600)"
 echo "==> wrote the fresh token to $TOKEN_OUT (mode 600)"
 
 echo "==> ping verified:"
