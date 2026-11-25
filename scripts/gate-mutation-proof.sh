@@ -21,7 +21,11 @@
 #   mL: no descriptor-path binding (/proc/self/fd) after the checks (TIF-265 follow-up,
 #       round-3 D-A'): the intermediate-swap pin tests fail on Linux.
 #   mM: the binding fails open when /proc/self/fd cannot be read (TIF-265 follow-up).
-# mL and mM are caught only on Linux, where the binding applies; elsewhere their tests skip.
+#   mN: a descriptor path outside the evidence root fails open (TIF-265 follow-up round 2 D3).
+#   mO: the binding fails open when realpath(root) fails (round 2 D3).
+#   mP: a "(deleted)" suffix is stripped before the path compare (round 2 D3).
+# mL, mM, mN and mP are caught only on Linux, where the binding applies; elsewhere their
+# tests skip. mO's test forces the binding on, so it is caught on every platform.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -83,12 +87,18 @@ elif which == "mL":
     edit("src/gate/gate.ts", "        if (!bound.ok) return bound;\n", "")
 elif which == "mM":
     edit("src/gate/gate.ts", "    actual = readlinkSync(join(hooks.procFdDir ?? \"/proc/self/fd\", String(fd)));\n  } catch (error) {\n", "    actual = readlinkSync(join(hooks.procFdDir ?? \"/proc/self/fd\", String(fd)));\n  } catch (error) {\n    if (error) return { ok: true };\n")
+elif which == "mN":
+    edit("src/gate/gate.ts", "  if (actual !== join(realRoot, ...segments)) {", "  if (actual !== join(realRoot, ...segments) && actual.startsWith(`${realRoot}/`)) {")
+elif which == "mO":
+    edit("src/gate/gate.ts", "    realRoot = realpathSync(absoluteRoot);\n  } catch (error) {\n", "    realRoot = realpathSync(absoluteRoot);\n  } catch (error) {\n    if (error) return { ok: true };\n")
+elif which == "mP":
+    edit("src/gate/gate.ts", "  if (actual !== join(realRoot, ...segments)) {", "  actual = actual.replace(/ \\(deleted\\)$/, \"\");\n  if (actual !== join(realRoot, ...segments)) {")
 EOF
 }
 
 status=0
-for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM; do
-  if [[ "$mutant" == mL || "$mutant" == mM ]] && [[ "$(uname -s)" != Linux ]]; then
+for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM mN mO mP; do
+  if [[ "$mutant" =~ ^m[LMNP]$ ]] && [[ "$(uname -s)" != Linux ]]; then
     echo "$mutant: skipped (the /proc/self/fd binding applies on Linux only)"
     continue
   fi

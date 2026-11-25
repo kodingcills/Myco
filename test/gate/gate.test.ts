@@ -885,7 +885,7 @@ describe("gate: round 1 nits", () => {
   });
 });
 
-describe("reader: concurrent swaps and FIFOs fail closed (round 2 D-A, D-B)", () => {
+describe("reader: a run directory or final component swapped around the open, and FIFOs, fail closed on every platform (round 2 D-A, D-B; intermediate swaps during a walk are below)", () => {
   /** Run r refutes df-s01 on its own; run good passes. Every swap below borrows good. */
   function racedRoot() {
     const root = tempRoot();
@@ -990,7 +990,7 @@ describe("reader: an intermediate component swapped during a walk (TIF-265 follo
    * The verifier's determ.mts interleaving, through the reader's lstat hook: right before
    * each walk lstats the intermediate directory `swapped`, it is the run's real directory;
    * right before the walk lstats the state file under it, it is a symlink to `borrowed`
-   * (a passing run). The open (between the walks) therefore goes through the symlink, and
+   * (a passing run; relative to the root, or absolute for a target outside it). The open (between the walks) therefore goes through the symlink, and
    * both walks' final lstat resolve it, so every dev/ino agrees on the borrowed file.
    */
   function interleaved(root: string, swapped: string, borrowed: string, stateFile: string) {
@@ -1008,7 +1008,7 @@ describe("reader: an intermediate component swapped during a walk (TIF-265 follo
     const makeLink = () => {
       if (linked) return;
       renameSync(dir, aside);
-      symlinkSync(join(abs, borrowed), dir);
+      symlinkSync(resolve(abs, borrowed), dir);
       linked = true;
       swaps += 1;
     };
@@ -1101,6 +1101,93 @@ describe("reader: an intermediate component swapped during a walk (TIF-265 follo
       );
     },
   );
+
+  it.skipIf(!LINUX)(
+    "Linux: run directory r swapped for a symlink to a passing run OUTSIDE the evidence root inside each walk → STATE_UNREADABLE, reason names no host path (skipped off Linux: no /proc/self/fd)",
+    async () => {
+      const { root, check } = raced();
+      const elsewhere = tempRoot();
+      writeState(elsewhere, "good", STORE, todoStore(S01_ITEMS));
+      const swap = interleaved(root, "r", join(resolve(elsewhere), "good"), STORE);
+      const result = await check("df-s01", swap.hooks);
+      swap.restore();
+      assertInvariant(result);
+      expect(swap.swaps()).toBeGreaterThanOrEqual(2);
+      expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+      const reasons = result.reasons.join(" ");
+      expect(reasons).toContain(
+        `the opened file is at a path outside the evidence root, not at r/${STORE} (descriptor path check)`,
+      );
+      expect(reasons).not.toContain(resolve(elsewhere));
+    },
+  );
+
+  it("the same outside-root interleaving without the binding (platform darwin) gives verified: the test above reaches the binding", async () => {
+    const { root, check } = raced();
+    const elsewhere = tempRoot();
+    writeState(elsewhere, "good", STORE, todoStore(S01_ITEMS));
+    const swap = interleaved(root, "r", join(resolve(elsewhere), "good"), STORE);
+    const result = await check("df-s01", { ...swap.hooks, platform: "darwin" });
+    expect(swap.linkedAtOpen()).toBe(true);
+    swap.restore();
+    expect(result).toMatchObject({ verdict: "verified", reasonCodes: ["ORACLE_PASS"] });
+  });
+
+  // Runs on every platform: the binding is forced on (platform "linux"), and realpath runs
+  // before /proc is read, so this branch is reached even where /proc does not exist.
+  it("binding: the evidence root cannot be resolved after the open → fails closed, reason names no host path", async () => {
+    const { root } = raced();
+    writeState(root, "ok", STORE, todoStore(S01_ITEMS));
+    const gone = `${resolve(root)}-gone`;
+    const result = await createGate({
+      tasks: buildRegistry(builtinTasks()),
+      reader: fileEvidenceReader(root, {
+        platform: "linux",
+        beforeBind: () => renameSync(resolve(root), gone),
+      }),
+      assignment: { taskId: "df-s01", runId: "ok" },
+    }).check({ taskId: "df-s01", runId: "ok" });
+    renameSync(gone, resolve(root));
+    assertInvariant(result);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+    const reasons = result.reasons.join(" ");
+    expect(reasons).toContain("cannot resolve the evidence root (realpath failed: ENOENT)");
+    expect(reasons).not.toContain(resolve(root));
+  });
+
+  it.skipIf(!LINUX)(
+    "Linux: a state file unlinked after the checks reads back as '(deleted)' → STATE_UNREADABLE (skipped off Linux: no /proc/self/fd)",
+    async () => {
+      const { root } = raced();
+      writeState(root, "ok", STORE, todoStore(S01_ITEMS));
+      const result = await createGate({
+        tasks: buildRegistry(builtinTasks()),
+        reader: fileEvidenceReader(root, {
+          beforeBind: () => unlinkSync(join(root, "ok", STORE)),
+        }),
+        assignment: { taskId: "df-s01", runId: "ok" },
+      }).check({ taskId: "df-s01", runId: "ok" });
+      assertInvariant(result);
+      expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_UNREADABLE"] });
+      expect(result.reasons.join(" ")).toContain(
+        `the opened file is at ok/${STORE} (deleted), not at ok/${STORE} (descriptor path check)`,
+      );
+    },
+  );
+
+  it("without the binding (platform darwin) the same unlink still gives verified: the bytes are the ones opened", async () => {
+    const { root } = raced();
+    writeState(root, "ok", STORE, todoStore(S01_ITEMS));
+    const result = await createGate({
+      tasks: buildRegistry(builtinTasks()),
+      reader: fileEvidenceReader(root, {
+        platform: "darwin",
+        beforeBind: () => unlinkSync(join(root, "ok", STORE)),
+      }),
+      assignment: { taskId: "df-s01", runId: "ok" },
+    }).check({ taskId: "df-s01", runId: "ok" });
+    expect(result).toMatchObject({ verdict: "verified", reasonCodes: ["ORACLE_PASS"] });
+  });
 
   it.skipIf(!LINUX)(
     "Linux: if /proc/self/fd cannot be read, the read fails closed (skipped off Linux: no /proc/self/fd)",

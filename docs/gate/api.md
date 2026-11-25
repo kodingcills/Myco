@@ -46,7 +46,7 @@ On the gated path this is **required**, not advice (outer-loop ruling, 2026-11-2
   or symlink may reach the evidence root. **The file reader is not a defence against a
   concurrent writer**, and this requirement is what the gated path relies on. On Linux the
   reader also refuses a concurrent swap of an intermediate directory; on macOS and other
-  platforms without `/proc/self/fd` it does not. On no platform does it stop a hard link
+  non-Linux platforms it does not. On no platform does it stop a hard link
   to another run's file placed inside this run. The per-platform detail is in
   [What the file reader guarantees](#what-the-file-reader-guarantees). Making the root
   unwritable from the agent's whole tool surface is TIF-266's job.
@@ -68,19 +68,21 @@ because the operator chose it. The reader:
    walks, to equal the descriptor's;
 4. **on Linux only**, binds the descriptor to its path: `readlink("/proc/self/fd/<fd>")`,
    the path the kernel says the open file is at, must equal
-   `realpath(root)/<runId>/<stateFile>` exactly. If `/proc/self/fd` cannot be read, the
-   read fails.
+   `realpath(root)/<runId>/<stateFile>` exactly. If `/proc/self/fd` cannot be read, or
+   the root cannot be resolved at that point, the read fails. A path outside the root is
+   reported as "a path outside the evidence root", never as the host path.
 
 The bytes come from the checked descriptor. Every failure is `uncertain`
 `STATE_UNREADABLE` (or `STATE_MISSING`).
 
-| Case | Linux | macOS (no `/proc/self/fd`) |
+| Case | Linux | macOS and other non-Linux (no binding) |
 |---|---|---|
 | A symlink below the root that is there when the reader looks | refused | refused |
 | A FIFO or device as the state file, static or swapped in during the read | refused, never blocks | refused, never blocks |
 | The final component swapped for a symlink during the read | refused (`O_NOFOLLOW`, `dev`/`ino`) | refused |
 | The run directory swapped for a symlink between the reader's steps | refused | refused |
-| An **intermediate** component (the run directory, or a parent of the state file) swapped for a symlink to another run *while a walk is in progress* | **refused** (step 4) | **not refused**: the reader can return another run's bytes |
+| An **intermediate** component (the run directory, or a parent of the state file) swapped for a symlink to another run *while a walk is in progress*, whether that run is inside or outside the root | **refused** (step 4) | **not refused**: the reader can return another run's bytes |
+| The state file unlinked after the checks (the kernel path reads `<path> (deleted)`) | refused (step 4) | not refused: the bytes are the ones the reader opened |
 | A writer puts a hard link, or another run's real file or directory, at the run's own path | not refused | not refused |
 
 Why the intermediate case needs step 4: `lstat` refuses to follow only the **last**
@@ -89,7 +91,8 @@ it, and a symlink to run `good` when the walk checks `<root>/r/<stateFile>`, tha
 `lstat` returns `good`'s file. With the same timing for the open and the second walk, every
 `dev`/`ino` agrees on `good`'s file. On Linux the kernel's path for the descriptor then
 names `good`, not `r`, so the read is refused. Node has no `openat` and no equivalent of
-macOS's `F_GETPATH`, so the reader has no race-free way to do this on macOS.
+macOS's `F_GETPATH`, so the reader has no race-free way to do this on macOS or any other
+non-Linux platform: the binding is skipped there.
 
 The last row is not a reader defect: at read time that file *is* the run's evidence, and
 any writer with that access could simply write passing bytes.
@@ -100,8 +103,11 @@ cannot write, wired to #470's sealed per-trial capture. They must never use
 `fileEvidenceReader` over a directory that anything else writes while the gate reads it.
 
 The tests pin both columns: `test/gate/gate.test.ts`, "an intermediate component swapped
-during a walk". The Linux cases are skipped elsewhere, and a test that runs everywhere
-shows the macOS behaviour still returns `verified` for the same interleaving.
+during a walk". This covers a borrowed run inside and outside the root, the unlinked file,
+an unreadable `/proc/self/fd` and an unresolvable root. The Linux cases are skipped
+elsewhere. Tests that run everywhere show that, without the binding, the same
+interleavings still return `verified`. The unresolvable-root test forces the binding on,
+so it runs on every platform.
 
 The mock demo follows the same shape: the harness writes the mock app's saved store into
 the evidence root after the fake agent's session ends, and the agent has no write path
