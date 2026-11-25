@@ -241,7 +241,7 @@ describe("benchmark check: ledger consistency", () => {
     ],
     [
       "a host path in a cause",
-      [{ ...ok[0], cause: { kind: "harness", detail: "copy failed: /Users/someone/run" } }],
+      [{ ...ok[0], cause: { kind: "harness", detail: "copy failed: /home/runner/run" } }],
       okGrades,
       expect1,
       /host path/,
