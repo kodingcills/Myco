@@ -38,6 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 EXTRACT = ROOT / "docs/research/experiments/c1-arm-003/r6/ledger-extract.json"
 V3_TRIALS = ROOT / "docs/research/experiments/m1-013-sweep-v3/trials.jsonl"
+SCORECARD = ROOT / "docs/m1-scorecard.md"
 
 ROW_FIELDS = (
     "index",
@@ -105,7 +106,7 @@ def sign_test_two_sided(a: int, b: int) -> float:
     return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2**n)
 
 
-def compare(check: bool) -> int:
+def compare(check: bool, scorecard: Path = SCORECARD) -> int:
     doc = json.loads(EXTRACT.read_text())
     r6 = {r["index"]: r for r in doc["rows"]}
     v3 = {}
@@ -163,7 +164,7 @@ def compare(check: bool) -> int:
 
     if check:
         row7 = next(
-            (l for l in (ROOT / "docs/m1-scorecard.md").read_text().splitlines() if l.startswith("| 7 |")),
+            (l for l in scorecard.read_text().splitlines() if l.startswith("| 7 |")),
             "",
         )
         want = [
@@ -181,7 +182,7 @@ def compare(check: bool) -> int:
         ]
         missing = [w for w in want if w not in row7]
         if missing:
-            print(f"CHECK FAILED: row 7 of docs/m1-scorecard.md does not quote {missing}", file=sys.stderr)
+            print(f"CHECK FAILED: row 7 of {scorecard.name} does not quote {missing}", file=sys.stderr)
             return 1
         print(f"CHECK OK: row 7 quotes all {len(want)} computed figures")
     return 0
