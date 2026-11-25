@@ -25,7 +25,11 @@ const CLI = resolve("src/integration/validate-live.ts");
 const SWEEP2 = resolve("docs/research/experiments/m1-row8-sweep2/runs");
 
 function run(...args: string[]) {
-  const r = spawnSync(process.execPath, ["--import", "tsx", CLI, ...args], { encoding: "utf8" });
+  // The timeout turns a hang (e.g. a blocking read of a FIFO) into a failure.
+  const r = spawnSync(process.execPath, ["--import", "tsx", CLI, ...args], {
+    encoding: "utf8",
+    timeout: 30_000,
+  });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -153,8 +157,10 @@ function invalidRunAt(dest: string, index: number): void {
 }
 
 /** Every failure must still end in the summary line and exit 1, never a crash. */
-function expectFailedSummary(r: ReturnType<typeof run>): void {
+function expectFailedSummary(r: ReturnType<typeof run>, failures?: number): void {
   expect(r.status, r.stderr).toBe(1);
+  if (failures !== undefined)
+    expect(r.stdout, r.stderr).toMatch(new RegExp(`: ${failures} FAILURES\\n$`));
   expect(r.stdout).toMatch(
     /^validated \d+ result\.json \+ \d+ trace events in .*: \d+ FAILURES\n$/,
   );
@@ -170,7 +176,7 @@ describe("validate-live walk (TIF-226)", () => {
     invalidRunAt(join(root, "runs", "2", "run-bad"), 2);
     cpSync(join(sweep2RunDir(3), "result.json"), join(root, "result.json"));
     const r = run(root);
-    expectFailedSummary(r);
+    expectFailedSummary(r, 2); // AMBIGUOUS + INVALID
     expect(r.stderr).toContain(`AMBIGUOUS run dir ${root}: holds result.json`);
     expect(r.stderr).toContain("INVALID result runs/2/run-bad");
     expect(r.stdout).toMatch(/^validated 3 result\.json/);
@@ -182,9 +188,92 @@ describe("validate-live walk (TIF-226)", () => {
     runAt(parent, 0);
     invalidRunAt(join(parent, "child"), 1);
     const r = run(root);
-    expectFailedSummary(r);
+    expectFailedSummary(r, 2); // AMBIGUOUS + INVALID
     expect(r.stderr).toContain("INVALID result runs/0/run-parent/child");
     expect(r.stderr).toContain(`AMBIGUOUS run dir ${parent}`);
+  });
+
+  // AMBIGUOUS alone must fail: every run here is schema-valid.
+  it("D1: a valid run nested in a valid run fails as AMBIGUOUS alone (1 FAILURES)", () => {
+    const root = tempDir();
+    const parent = join(root, "run-parent");
+    runAt(parent, 0);
+    runAt(join(parent, "child"), 1);
+    const r = run(root);
+    expectFailedSummary(r, 1);
+    expect(r.stderr).toBe(
+      `AMBIGUOUS run dir ${parent}: holds result.json + trace.jsonl and run files below it (child);` +
+        " the nested run dirs are validated, the files at this level are not counted\n",
+    );
+    expect(r.stdout).toMatch(/^validated 1 result\.json/);
+  });
+
+  it("D1: a stray top-level result.json over valid runs fails as AMBIGUOUS alone (1 FAILURES)", () => {
+    const root = tempDir();
+    nestedRuns(join(root, "runs"), [0, 1]);
+    cpSync(join(sweep2RunDir(3), "result.json"), join(root, "result.json"));
+    const r = run(root, "--expect", "2");
+    expectFailedSummary(r, 1);
+    expect(r.stderr).toMatch(
+      new RegExp(
+        `^AMBIGUOUS run dir ${root}: holds result\\.json and run files below it \\(runs/0/[^,]+, runs/1/[^)]+\\);`,
+      ),
+    );
+    expect(r.stderr.trim().split("\n")).toHaveLength(1);
+    expect(r.stdout).toMatch(/^validated 2 result\.json/);
+  });
+
+  it("D1: runs inside a directory named result.json are found and named", () => {
+    const root = tempDir();
+    const outer = join(root, "run-a");
+    mkdirSync(outer);
+    cpSync(join(sweep2RunDir(0), "trace.jsonl"), join(outer, "trace.jsonl"));
+    runAt(join(outer, "result.json", "run-inner"), 1);
+    const r = run(root);
+    expectFailedSummary(r, 1);
+    expect(r.stderr).toContain(`AMBIGUOUS run dir ${outer}: holds result.json + trace.jsonl`);
+    expect(r.stderr).toContain("(result.json/run-inner)");
+    expect(r.stdout).toMatch(/^validated 1 result\.json/);
+  });
+
+  it("D1: a FIFO named result.json is reported once", () => {
+    const root = tempDir();
+    runAt(join(root, "run-a"), 0);
+    const fifo = join(root, "run-a", "result.json");
+    rmSync(fifo);
+    const mk = spawnSync("mkfifo", [fifo]);
+    expect(mk.status, String(mk.stderr)).toBe(0);
+    const r = run(root);
+    expectFailedSummary(r, 1);
+    expect(r.stderr).toBe(`UNREADABLE ${fifo}: not a regular file\n`);
+  });
+
+  it("a schema-invalid trace event is INVALID and counts as one failure", () => {
+    const root = tempDir();
+    runAt(join(root, "run-a"), 0);
+    const tracePath = join(root, "run-a", "trace.jsonl");
+    const lines = readFileSync(tracePath, "utf8")
+      .split("\n")
+      .filter((l) => l !== "");
+    const event = JSON.parse(lines[0] as string);
+    event.type = "not-an-event-type";
+    lines[0] = JSON.stringify(event);
+    writeFileSync(tracePath, `${lines.join("\n")}\n`);
+    const r = run(root);
+    expectFailedSummary(r, 1);
+    expect(r.stderr).toMatch(/^INVALID trace run-a\[0\]: /);
+  });
+
+  it("a root that is not a directory exits 2", () => {
+    const root = tempDir();
+    const file = join(root, "file.txt");
+    writeFileSync(file, "x");
+    for (const target of [file, join(root, "missing")]) {
+      const r = run(target);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain(`validate-live: not a directory: ${target}`);
+      expect(r.stdout).toBe("");
+    }
   });
 
   // D2: never skip silently.

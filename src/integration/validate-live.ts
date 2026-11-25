@@ -22,6 +22,10 @@
  *     or loop). Each one is reported as `REFUSED symlink <path>: ...` and is a
  *     failure; pass the link target directly to validate it. The root argument
  *     itself may be a symlink.
+ *   - A directory named `result.json` / `trace.jsonl` is walked too, so runs
+ *     inside it are found and named (its parent is then AMBIGUOUS). With no
+ *     runs inside, it is a broken run file (`UNREADABLE ...: not a regular
+ *     file`), reported once.
  *   - Hidden directories are walked like any other, so a run under `.old/` is
  *     validated (and counted) instead of skipped.
  *   - Any other entry type (socket, FIFO, device) is reported as
@@ -147,10 +151,13 @@ function findRunDirs(root: string): string[] {
       if (kind === "symlink") {
         fail(`REFUSED symlink ${path}: symlinks are not followed; pass the target directly`);
       } else if (kind === "dir") {
-        // A directory named result.json / trace.jsonl is a broken run file,
-        // reported when the run is validated; do not walk into it.
-        if (!here.includes(e)) below = walk(path) || below;
-      } else if (kind === "other") {
+        // Walked even when named result.json / trace.jsonl, so runs inside it
+        // are found and named. With nothing inside, it is reported once, as a
+        // broken run file, when its run dir is validated.
+        below = walk(path) || below;
+      } else if (kind === "other" && !here.includes(e)) {
+        // A FIFO etc. named result.json / trace.jsonl is reported once, when
+        // its run dir is validated (or in the AMBIGUOUS line).
         process.stderr.write(`SKIPPED ${path}: not a regular file or directory\n`);
       }
     }
@@ -159,7 +166,7 @@ function findRunDirs(root: string): string[] {
         const nested = found.slice(foundBefore).map((d) => relative(dir, d));
         fail(
           `AMBIGUOUS run dir ${dir}: holds ${here.map((e) => e.name).join(" + ")} and run files below it` +
-            ` (${nested.length > 0 ? nested.join(", ") : "see errors above"});` +
+            ` (${nested.join(", ")});` +
             " the nested run dirs are validated, the files at this level are not counted",
         );
       } else {
