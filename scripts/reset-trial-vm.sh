@@ -126,4 +126,20 @@ fi
 
 phase clock
 echo "reset-trial-vm: timing${TIMING} total=$(( $(date +%s) - T0 ))" >&2
+
+# Host memory, on every reset (TIF-98). The measured driver of slow resets is
+# host swap pressure, not this script: at ~9.9 GB of 11.2 GB swap used, QEMU
+# held 1.8 GB resident for a 6 GB guest and a cold boot took ~145 s to its
+# first ssh answer; M1 log 44 saw the same reset take 25.8 s once the host
+# recovered. So the line that explains a slow reset is printed beside it.
+# Informational only: memory never changes what the reset does or decides.
+SWAP=$(sysctl -n vm.swapusage 2>/dev/null || true)
+SWAP_USED=$(printf '%s' "$SWAP" | sed -nE 's/.*used = ([0-9]+)[.0-9]*M.*/\1/p')
+SWAP_TOTAL=$(printf '%s' "$SWAP" | sed -nE 's/.*total = ([0-9]+)[.0-9]*M.*/\1/p')
+if [ -n "$SWAP_USED" ] && [ -n "$SWAP_TOTAL" ] && [ "$SWAP_TOTAL" -gt 0 ]; then
+  echo "reset-trial-vm: host swap used ${SWAP_USED} of ${SWAP_TOTAL} MB" >&2
+  if [ $(( SWAP_USED * 100 / SWAP_TOTAL )) -ge 75 ]; then
+    echo "reset-trial-vm: WARNING host swap is ${SWAP_USED}/${SWAP_TOTAL} MB (>= 75%); expect slow boots and slow ssh (runbook §3.1). This measures the host, not the repo." >&2
+  fi
+fi
 echo "reset-trial-vm: ready on '$SNAPSHOT'"
