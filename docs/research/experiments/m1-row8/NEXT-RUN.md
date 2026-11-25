@@ -119,7 +119,7 @@ which predates the Cua install.
   The 11:4xZ row-8 operator did this for `runs\29` (`/private/tmp/row8-guest-residue/29`, 53 files).
 - `C:\myco\profiles\myco-*` throwaway UNO profiles.
 
-**Mac — untouched.** `/Users/tofuinparis/Projects/myco-runs/c1-r6/` is intact (644K:
+**Mac — untouched.** `~/Projects/myco-runs/c1-r6/` is intact (644K:
 `accounting.json`, `report.json`, `progress.log`, `run.pid`, `trials*`, `watch.*`). **Nothing on the
 host side was read, moved, or deleted by me** — my cleanup used `vssh` + PowerShell against the
 guest only, and my file operations were confined to this worktree and `/tmp`.

@@ -79,3 +79,5 @@ cash**, the same split as arm-002's $1.178562/$1.555362.
 - **TIF-173** — the follow-up that corrects the arm-002 evidence claims
 - **PR #340** — the truncation fix
 - `../ANNOTATION-TIF-167.md` — the delivery-mode annotation for this arm
+
+Redaction note (2026-11-25, TIF-241): absolute macOS home paths (and the account name) in this pack's files were replaced after the fact with `~/` or a `<account>` placeholder; nothing else changed.
