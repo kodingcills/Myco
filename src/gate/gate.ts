@@ -181,8 +181,19 @@ function walk(root: string, segments: readonly string[], where: string): Walk {
 }
 
 /**
- * Reads `<root>/<runId>/<stateFile>`, refusing a symlink anywhere below `root` even when a
- * component is swapped concurrently. `root` itself may be a symlink: the operator chose it.
+ * Reads `<root>/<runId>/<stateFile>`. `root` itself may be a symlink: the operator chose it.
+ *
+ * What this guarantees (and what it does not):
+ *  - a symlink that exists anywhere below `root` when the reader walks is refused;
+ *  - a final component swapped around the open (for a symlink, a FIFO or another file) is
+ *    refused, by O_NOFOLLOW plus the dev/ino recheck below;
+ *  - a concurrent swap of an INTERMEDIATE directory (for example `<root>/<runId>` replaced
+ *    by a symlink and back between the two walks) is NOT caught: `open` and `lstat` resolve
+ *    intermediate components, so the swapped-in target can be read and the recheck can still
+ *    match. Closing that needs fd-relative opens, which Node lacks.
+ * The gated path relies on host capture for that case: the agent has no write access to the
+ * evidence root, so nothing can swap components while the gate reads. Before M2-12 the
+ * reader must be backed by TIF-266's (#470) sealed per-trial capture.
  *
  * Node has no `openat`, so the reader cannot descend from directory descriptors. Instead:
  *  1. walk: lstat every component (no symlink, directories, then a regular file);
@@ -190,11 +201,12 @@ function walk(root: string, segments: readonly string[], where: string): Walk {
  *     swapped in after the walk returns at once instead of blocking), then fstat the
  *     descriptor: it must be a regular file within the size limit;
  *  3. walk again, and require the final component's dev/ino to equal the descriptor's.
- * If any component was a symlink at open time, either the second walk sees it or the file
- * the descriptor holds is not the one at the real path, so the dev/ino check fails. The
- * bytes are read from the verified descriptor. What this does not stop is a hard link to
- * another run's file placed inside this run: making the root unwritable to the agent is
- * TIF-266's job (and the host-capture requirement in docs/gate/api.md).
+ * The bytes are read from the checked descriptor. The second walk catches a symlink that is
+ * still in place after the open; the dev/ino check catches a final file that changed between
+ * the walk and the open. Neither stops an intermediate directory swapped and swapped back
+ * between them (see above), nor a hard link to another run's file placed inside this run.
+ * Both need write access to the evidence root, which the host-capture requirement in
+ * docs/gate/api.md forbids; making the root unwritable to the agent is TIF-266's job.
  *
  * All I/O here is synchronous and bounded by refusing non-regular files; `readTimeoutMs`
  * guards readers that return a pending promise, not a filesystem that blocks a syscall.

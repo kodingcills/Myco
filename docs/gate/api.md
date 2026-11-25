@@ -43,12 +43,21 @@ On the gated path this is **required**, not advice (outer-loop ruling, 2026-11-2
   file out of the guest to `<root>/<runId>/<stateFile>`. The gate judges that copy, not
   the live file.
 - **The agent must never be able to write to it**: no actuator tool, shell, shared mount
-  or symlink may reach the evidence root. The file reader refuses a symlink anywhere below
-  the root, including one swapped in while it reads: it checks every component, opens with
-  `O_NOFOLLOW`, checks the opened descriptor, checks every component again and requires the
-  file at the real path to be the inode it opened. It does not stop a hard link to another
-  run's file placed inside this run. Making the root unwritable from the agent's whole tool
-  surface is TIF-266's job.
+  or symlink may reach the evidence root. **The file reader is not a defence against a
+  concurrent writer**, and this requirement is what the gated path relies on. What the
+  reader does guarantee:
+  - a symlink that exists anywhere below the root when it reads is refused;
+  - a final component (the state file) swapped around the open is refused, by `O_NOFOLLOW`
+    plus a check that the file at the real path is the inode it opened.
+
+  What it does **not** catch: a concurrent swap of an **intermediate** directory (for
+  example `<root>/<runId>` replaced by a symlink to another run and swapped back while the
+  gate reads). Path resolution follows intermediate components, so that swap can make the
+  gate judge another run's state. It also does not stop a hard link to another run's file
+  placed inside this run. Both need write access to the evidence root. That is why host
+  capture (the agent cannot write the root) is a hard requirement. TIF-266's job is making
+  the root unwritable from the agent's whole tool surface, and #470's sealed capture must
+  be wired in before M2-12.
 - TIF-266 (#470) builds this capture as seal → capture → read the sealed copies. Until #470
   is wired in, `fileEvidenceReader` over a harness-filled directory is the stand-in, and it
   is fit only for the mock path. **Wiring the gate's reader to #470's sealed per-trial
@@ -113,7 +122,7 @@ machine-readable explanation.
 | `ORACLE_ERROR` | uncertain | The oracle threw. |
 | `ORACLE_INVALID_OUTPUT` | uncertain | The oracle returned something that is not a well-formed verdict. |
 | `STATE_MISSING` | uncertain | No persisted state at `<root>/<runId>/<stateFile>`. |
-| `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink anywhere below the evidence root, changed between the reader's check and its open (a concurrent swap), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
+| `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink anywhere below the evidence root, has a final component that changed between the reader's check and its open (an intermediate-directory swap is not detected; see the host-capture requirement), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
 | `STATE_CORRUPT` | uncertain | The file does not parse as the family's format. |
 | `INVALID_REQUEST` | uncertain | The request is not an object, lacks `taskId`/`runId`, or a field has the wrong form. |
 | `UNSUPPORTED_API_VERSION` | uncertain | `apiVersion` is present and is not `myco.gate/v1`. |
