@@ -1,7 +1,9 @@
 /**
  * TIF-223: validate-live must walk nested run layouts and must never report
- * ALL OK when it validated nothing. Every case runs the real CLI so the exit
- * code and the summary line are what an operator sees.
+ * ALL OK when it validated nothing. TIF-226: it walks the whole tree with no
+ * silent skips (AMBIGUOUS run dirs, REFUSED symlinks, hidden dirs, FIFOs) and
+ * names every bad path. Every case runs the real CLI so the exit code and the
+ * summary line are what an operator sees.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -70,6 +72,13 @@ describe("validate-live (TIF-223)", () => {
       expect(r.status, r.stderr).toBe(0);
       expect(r.stdout).toMatch(/^validated 3 result\.json \+ \d+ trace events in .*: ALL OK\n$/);
     }
+  });
+
+  it("validates a single run dir passed as the root", () => {
+    const r = run(sweep2RunDir(0), "--expect", "1");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toMatch(/^validated 1 result\.json \+ \d+ trace events in .*: ALL OK\n$/);
   });
 
   it("validates a values/<runId>/ tree", () => {
@@ -236,6 +245,26 @@ describe("validate-live walk (TIF-226)", () => {
     expect(r.stdout).toMatch(/^validated 1 result\.json/);
   });
 
+  it("D1: nested AMBIGUOUS lines print outermost first", () => {
+    const root = tempDir();
+    const outer = join(root, "a");
+    const inner = join(outer, "result.json", "b");
+    mkdirSync(outer);
+    cpSync(join(sweep2RunDir(0), "trace.jsonl"), join(outer, "trace.jsonl"));
+    mkdirSync(inner, { recursive: true });
+    cpSync(join(sweep2RunDir(1), "trace.jsonl"), join(inner, "trace.jsonl"));
+    runAt(join(inner, "result.json", "c"), 2);
+    const r = run(root, "--expect", "1");
+    expectFailedSummary(r, 2);
+    const lines = r.stderr.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(
+      new RegExp(`^AMBIGUOUS run dir ${outer}: .* \\(result\\.json/b/result\\.json/c\\);`),
+    );
+    expect(lines[1]).toMatch(new RegExp(`^AMBIGUOUS run dir ${inner}: .* \\(result\\.json/c\\);`));
+    expect(r.stdout).toMatch(/^validated 1 result\.json/);
+  });
+
   it("D1: a FIFO named result.json is reported once", () => {
     const root = tempDir();
     runAt(join(root, "run-a"), 0);
@@ -332,7 +361,8 @@ describe("validate-live walk (TIF-226)", () => {
     rmSync(join(root, "run-a", "result.json"));
     mkdirSync(join(root, "run-a", "result.json"));
     const r = run(root);
-    expectFailedSummary(r);
+    // Reported once: as a broken run file, not also by the walk.
+    expectFailedSummary(r, 1);
     expect(r.stderr).toContain(
       `UNREADABLE ${join(root, "run-a", "result.json")}: not a regular file`,
     );
