@@ -20,6 +20,12 @@ Two subcommands.
                    The prior spend ($4.4807) and the cap total are NOT computed here; they
                    come from c1-arm-003d/ROW7-BUDGET-DECIDED.md.
 
+                   --check reads only the `| 7 |` row, on purpose. The rest of row 7's
+                   evidence (the "Row 7 slots" table, the $7.8521 total, "the other 18 of
+                   the 27", the Wilson interval) is guarded by scripts/scorecard-check.py,
+                   which recomputes each of those figures and also runs this --check in
+                   process (TIF-225). Do not duplicate those claims here (TIF-211).
+
 The graded field is `row.verdict` / `row.verdictReason`, set by judge()
 (src/baseline/index.ts) and written by c1-trial.ts. It is NOT `mycoVerdict`, which
 sweep.ts copies from the pinned sweep-v3.json (TIF-207); the extract never carries it.
@@ -56,6 +62,21 @@ ROW_FIELDS = (
 )
 
 
+ESCAPE_KEYS = ("esc", "escape")
+
+
+def key_counts(actions: list[dict]) -> dict:
+    """press_key totals for the extract. Key names compare case-insensitively, and the
+    Escape key counts under either name xdotool-style agents send, `Escape` or `Esc`
+    (TIF-211). r6's ledger only ever sends `Escape`, so its extract is unchanged."""
+    keys = [str(a["arguments"].get("key", "")).strip().lower() for a in actions if a["tool"] == "press_key"]
+    return {
+        "pressKey": len(keys),
+        "ctrlS": keys.count("ctrl+s"),
+        "escape": sum(k in ESCAPE_KEYS for k in keys),
+    }
+
+
 def extract(ledger_path: Path) -> None:
     raw = ledger_path.read_bytes()
     ledger = json.loads(raw)
@@ -71,15 +92,12 @@ def extract(ledger_path: Path) -> None:
         # type_text enter the row's expected value, and how many Ctrl+S / Escape
         # presses. This is what the save-dialog mechanism claim is checked against.
         actions = row["transcript"]["actions"]
-        keys = [str(a["arguments"].get("key", "")).lower() for a in actions if a["tool"] == "press_key"]
         out["typedExpected"] = any(
             a["tool"] == "type_text" and str(a["arguments"].get("text", "")).strip() == row["expected"]
             for a in actions
         )
         out["actions"] = len(actions)
-        out["pressKey"] = len(keys)
-        out["ctrlS"] = keys.count("ctrl+s")
-        out["escape"] = keys.count("escape")
+        out.update(key_counts(actions))
         out["claims"] = row["transcript"]["claims"]
         out["deviations"] = [d for d in row["deviations"] if not d.startswith("cua-action-")]
         out["ledgerStatus"] = entry["status"]

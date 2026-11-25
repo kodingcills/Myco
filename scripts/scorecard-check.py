@@ -745,7 +745,7 @@ def check_row_7(r: Report, doc: Path, scorecard, row7, v3: dict) -> None:
             myco_only, base_only, len(both), p_text, source="row7-compare sign_test_two_sided")
     lo, hi = scorecard.wilson(tally.get("verified", 0), len(rows))
     vlo, vhi = scorecard.wilson(v3["verified"], v3["recorded"])
-    r.quote("slots", "Wilson 95%", "**{}–{}** (Myco v3: {}–{})", f"{max(lo, 0):.3f}", f"{hi:.3f}", f"{vlo:.3f}", f"{vhi:.3f}",
+    r.quote("slots", "Wilson 95%", "**{}–{}** (Myco v3: {}–{})", f"{lo:.3f}", f"{hi:.3f}", f"{vlo:.3f}", f"{vhi:.3f}",
             source="m1-scorecard.wilson")
     r.quote("slots", "spend", "**${}** r6 + ${} prior = **${} of ${}**", f"{micros / 1e6:.4f}", f"{prior_micros / 1e6:.4f}",
             f"{(micros + prior_micros) / 1e6:.4f}", cap_s, source=bsrc)
