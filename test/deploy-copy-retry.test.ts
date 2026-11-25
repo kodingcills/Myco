@@ -15,7 +15,17 @@
  * reaching the guest (the negative-control lesson in wait-guest-ready.test.ts).
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -62,6 +72,7 @@ function installStubs(opts: {
   scpDrops: number;
   treeDrops?: number;
   silentTruncate?: boolean;
+  registerFails?: boolean;
 }): void {
   const counter = join(dir, "scp.count");
   writeFileSync(counter, "0");
@@ -131,6 +142,7 @@ case "$cmd" in
     # Record whether the tree on the guest was complete when the agent was registered.
     if cmp -s "${src}/myco_agent/core.py" "${guest}/${AGENT_DIR_REL}/myco_agent/core.py"; then
       echo core_ok=yes; else echo core_ok=no; fi >> "${dir}/register.log"
+    if [ "${opts.registerFails ? 1 : 0}" = 1 ]; then echo "register failed" >&2; exit 1; fi
     echo registered ;;
   *) echo "stub ssh: unexpected command: $cmd" >&2; exit 98 ;;
 esac`,
@@ -295,5 +307,112 @@ describe("deploy-to-vm copy phase (TIF-220)", () => {
     expect(guestFile("myco_agent/__init__.py").length).toBe(3);
     expect(stubLog("register.log")).toEqual([]);
     expect(stubLog("token.log")).toEqual([]);
+  });
+});
+
+/**
+ * Row-8 H5: the deploy leaves the fresh token in a host file, so §5 and §6 never
+ * fetch it back from the guest. Values are compared, never printed: every
+ * assertion on a token is a boolean, so a failure message cannot carry one.
+ */
+describe("deploy-to-vm host token file (row-8 H5)", () => {
+  /** The token the scp stub delivered to the fake guest (its only ProgramData file). */
+  function guestToken(): Buffer {
+    const root = join(guest, "C", "ProgramData");
+    const files = readdirSync(root, { recursive: true, withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => join(e.parentPath, e.name));
+    expect(files.length).toBe(1);
+    return readFileSync(files[0] as string);
+  }
+
+  function mode(path: string): number {
+    return statSync(path).mode & 0o777;
+  }
+
+  function leaksToken(r: DeployRun, token: string): boolean {
+    return token.length === 0 || r.stdout.includes(token) || r.stderr.includes(token);
+  }
+
+  it("writes the verified token to MYCO_TOKEN_OUT, mode 600, never printing it", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const outDir = join(dir, "private");
+    mkdirSync(outDir);
+    const out = join(outDir, "agent-token");
+    const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("DEPLOY OK");
+    expect(r.stdout).toContain(`wrote the fresh token to ${out} (mode 600)`);
+    expect(existsSync(out)).toBe(true);
+    expect(mode(out).toString(8)).toBe("600");
+    const host = readFileSync(out);
+    const sent = guestToken();
+    expect(host.length).toBeGreaterThan(0);
+    expect(host.equals(sent)).toBe(true);
+    expect(leaksToken(r, sent.toString("utf8"))).toBe(false);
+    // The same-directory temp file was renamed, not left behind.
+    expect(readdirSync(outDir)).toEqual(["agent-token"]);
+    // Only the explicit path was written: the default under HOME was not.
+    expect(existsSync(join(dir, ".myco-token"))).toBe(false);
+  });
+
+  it("replaces an existing token file and defaults to ~/.myco-token", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const def = join(dir, ".myco-token");
+    writeFileSync(def, "stale-previous-deploy\n", { mode: 0o644 });
+    const r = await runDeploy();
+    expect(r.status).toBe(0);
+    expect(mode(def).toString(8)).toBe("600");
+    const sent = guestToken();
+    expect(readFileSync(def).equals(sent)).toBe(true);
+    expect(leaksToken(r, sent.toString("utf8"))).toBe(false);
+  });
+
+  it("leaves an existing token file byte-identical when the copy keeps dropping", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 999 });
+    const out = join(dir, "kept-token");
+    writeFileSync(out, "previous-working-value\r\n");
+    chmodSync(out, 0o600);
+    const before = readFileSync(out);
+    const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("copy to guest failed on all 3 attempts");
+    expect(readFileSync(out).equals(before)).toBe(true);
+    expect(mode(out).toString(8)).toBe("600");
+    expect(readdirSync(dir).filter((n) => n.startsWith(".myco-token."))).toEqual([]);
+  });
+
+  it("leaves it untouched when the guest got the new token but the deploy then failed", {
+    timeout: SLOW,
+  }, async () => {
+    // The worst case: the guest token already rotated, the deploy is unverified.
+    installStubs({ scpDrops: 0, registerFails: true });
+    const out = join(dir, "kept-token");
+    writeFileSync(out, "previous-working-value\n");
+    chmodSync(out, 0o600);
+    const before = readFileSync(out);
+    const r = await runDeploy({ MYCO_TOKEN_OUT: out });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).not.toContain("DEPLOY OK");
+    const sent = guestToken();
+    expect(sent.length).toBeGreaterThan(0);
+    expect(readFileSync(out).equals(before)).toBe(true);
+    expect(leaksToken(r, sent.toString("utf8"))).toBe(false);
+  });
+
+  it("refuses a MYCO_TOKEN_OUT in a missing directory before copying anything", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const r = await runDeploy({ MYCO_TOKEN_OUT: join(dir, "no-such-dir", "tok") });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("MYCO_TOKEN_OUT directory");
+    expect(r.scpCalls).toBe(0);
   });
 });

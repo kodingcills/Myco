@@ -75,13 +75,14 @@ guest alone can hold the load at 12–15 (row-8 operator report, S8).
 | The VM and its snapshots | environment owner | The image is built by `build-all.sh` (in the repo at `docs/env/vm-toolchain/`) from a Windows ISO, an offline installer payload and a uupdump-built ISO — none of those inputs are in the repo, and the script has never been run end to end from the repo (§10) |
 | `~/VMs/myco-win11/ssh_config`, `id_ed25519` | environment owner | Hosts the port, user, key path; `AgentClient`/`SshTunnel` default to these paths (`src/win/agent-client.ts:202-208`) |
 | `~/VMs/myco-win11/scripts/*` | environment owner | The reset/sanity primitives live outside the repo on purpose (PR #28's in-repo reset was reverted, PR #31) |
-| The agent token | produced by the deploy | Rotated on every deploy (§4); read it from the guest, never from a file committed or cached |
+| The agent token | produced by the deploy | Rotated on every deploy (§4); the verified deploy writes it to `~/.myco-token` (or `$MYCO_TOKEN_OUT`) on the host. Never commit it or reuse a copy from before your deploy |
 | LibreOffice MSI SHA-256 | `8ee2ef81ca4103d3eeb06ca9f4ef0b5cbb83357d21d14a449f767bfb29183158` | SHA-256 of the retained `LibreOffice_26.8.3_Win_aarch64.msi` in the environment owner’s offline payload |
 
 Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 (`~/VMs/myco-win11/scripts`), `VM_SSH_CONFIG` (`~/VMs/myco-win11/ssh_config`), `VM_SSH_HOST`
 (`myco-win11`), `MYCO_AGENT_PORT` (8765), `MYCO_TOKEN_PATH`
-(`C:\ProgramData\Myco\agent.token`).
+(`C:\ProgramData\Myco\agent.token`), `MYCO_TOKEN_OUT` (`~/.myco-token`, the host file the deploy
+writes the token to; a path, never a secret).
 
 **The readiness gate is repo-only, by design.** `scripts/wait-guest-ready.sh` is resolved
 from the checkout by `reset-trial-vm.sh` (`REPO_GATE`, line 42) and **no host script calls
@@ -323,30 +324,54 @@ Expected tail:
 DEPLOY OK
 ```
 
-**The token rotates on every deploy.** Re-fetch it after every deploy, into a file, never through
-a shell variable (the host's secret guard refuses commands that carry the token, TIF-206; §5).
-`umask 077` first, so the file is never world-readable, even briefly:
+**The token rotates on every deploy, and the deploy leaves the fresh one on the host.** Once the
+ping check passes, `deploy-to-vm.sh` writes the token to `~/.myco-token` (or `$MYCO_TOKEN_OUT`) and
+prints only the path: `==> wrote the fresh token to … (mode 600)`. There is nothing to fetch back
+from the guest. The token never passes through argv, a shell variable or the output (the host's
+secret guard refuses commands that carry it, TIF-206; §5). (row-8 H5: on 2026-11-25 the old guest
+fetch was refused by an agent session's permission system, and §5 and §6 then failed
+`AUTH_FAILED` on a stale file.)
+
+- **Written only after a verified deploy.** The file is written mode 600, under `umask 077`, to a
+  temp file in the same directory, then `mv`ed into place, so it is never world-readable and never
+  half-written. A deploy that fails (copy, register or ping) leaves any existing file byte-identical.
+  The guest token may already have rotated by then, so after a failed deploy that file can be stale:
+  fix the deploy and re-run it, do not run trials on the old file.
+- **Each deploy rotates the token**, including the deploy inside every §7.3/§7.4 trial. A copy from
+  before your latest deploy fails `AUTH_FAILED`.
+- **`~/.myco-token` is one path shared by every operator on this Mac (G25).** Another operator's
+  deploy overwrites it, and their guest token replaces yours. When several operators share the Mac,
+  give each a private path, and pass the same path to §5 and §6:
+
+  ```bash
+  export MYCO_TOKEN_OUT="$(mktemp -d)/agent-token"   # a fresh private directory (mode 700)
+  agent/bootstrap/deploy-to-vm.sh
+  ```
+
+  Then pass `--token-file "$MYCO_TOKEN_OUT"` in §5, §6 and §7, from the same shell. The directory
+  must exist; the deploy checks that before it copies anything. Even with a private file, a later
+  deploy by anyone rotates the guest token, so do not run single trials while a sweep is deploying.
+- **`run-live.ts` reads `--token-file PATH`, else `MYCO_AGENT_TOKEN`, else `~/.myco-token`**
+  (`src/integration/run-live-token.ts`). With the default path, leave `MYCO_AGENT_TOKEN` unset
+  (`unset MYCO_AGENT_TOKEN` if an earlier shell exported a stale one: a set variable wins over the
+  default file). `--token-file` wins over the variable and never falls back. The §5 CLI reads only
+  a file (`--token-file`, default `~/.myco-token`).
+- **The `ops` line in the deploy output holds no token.** It prints a literal `<token>`
+  placeholder, but the host secret guard redacts it, so on screen the tail can *look* as if it
+  printed one.
+
+**Fallback, only for a guest deployed by something else** (an older checkout's deploy, a
+pre-deployed snapshot, or another tool): then no host file was written for you, and the token
+exists only on the guest. Fetch it into a file, never through a shell variable, with `umask 077`
+first. Do **not** do this after a `deploy-to-vm.sh` from this checkout: it is redundant, and an
+agent's permission system may refuse it.
 
 ```bash
 (umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token)
 ```
 
-`run-live.ts` reads `~/.myco-token` when `MYCO_AGENT_TOKEN` is unset
-(`src/integration/run-live.ts:53-62`), so leave `MYCO_AGENT_TOKEN` unset (`unset MYCO_AGENT_TOKEN`
-if an earlier shell exported a stale one: a set variable wins over the file). The §5 CLI reads only
-the file.
-
-- **No `chmod` needed.** `umask 077` already creates the file as mode 600.
-- **The trailing CRLF is fine.** PowerShell ends the line with CRLF (a 48-character token gives a
-  50-byte file). Both readers trim it (`src/integration/run-live.ts:56`,
-  `src/integration/session-info-core.ts:136`).
-- **`~/.myco-token` is one path shared by every operator on this Mac.** Any deploy, including the
-  one inside every §7.3/§7.4 trial, rotates the guest token, so another operator's deploy makes
-  your file stale (`AUTH_FAILED`). Re-fetch straight after *your* deploy and do not run single
-  trials while a sweep is deploying.
-- **The `ops` line in the deploy output holds no token.** It prints a literal `<token>`
-  placeholder (`agent/bootstrap/deploy-to-vm.sh:158`), but the host secret guard redacts it, so on
-  screen the tail can *look* as if it printed one.
+PowerShell ends the line with CRLF; both readers trim it (`src/integration/session-info-core.ts`
+`readTokenFile`, used by `run-live` too).
 
 **Known gap: the drivers do not follow the token-file rule (G28, not fixed here).**
 `scripts/m1-sweep.sh:89,94` and `scripts/m1-corrupt-suite.sh:80,94` read the token into a shell
@@ -376,18 +401,12 @@ guest on 2026-11-25** (fresh row-8 operator, HEAD `bfbe277`): exit 0 in 7 s, std
 the expected JSON below. Its other exit codes are covered by unit tests
 (`test/session-info.test.ts`).
 
-Fetch a fresh token (the deploy rotates it, §4) the way `docs/research/experiments/m1-row8/NEXT-RUN.md`
-does — from the guest, redirected to a file, never through a shell variable, with `umask 077` so
-the file is never world-readable, even briefly:
+No token fetch: the deploy wrote the fresh token to `~/.myco-token` (or `$MYCO_TOKEN_OUT`) after it
+verified the agent (§4). Only for a guest deployed by something else, use the §4 fallback first.
+Pass the same path the deploy wrote:
 
 ```bash
-(umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token)
-```
-
-Then run the §5 proof:
-
-```bash
-pnpm exec tsx src/integration/session-info.ts            # or: --token-file PATH (default ~/.myco-token)
+pnpm exec tsx src/integration/session-info.ts --token-file ~/.myco-token   # or your $MYCO_TOKEN_OUT
 ```
 
 The CLI opens its own ssh tunnel (`SshTunnel`), takes and releases the VM lock, prints the
@@ -410,7 +429,7 @@ Expected stdout on the passing path:
 ```
 
 **`run-live`'s per-trial line is NOT this proof, and cannot be.** It prints
-`agent ping ok: 0.1.0 session <id>` on stderr (`src/integration/run-live.ts:69`), and that id is
+`agent ping ok: 0.1.0 session <id>` on stderr (`src/integration/run-live.ts:68`), and that id is
 `ping`'s `session_id`, which is a **random hex GUID generated per agent start**
 (`agent/myco_agent/__init__.py:4`, `uuid.uuid4().hex`; returned by `agent/myco_agent/ops.py:8`).
 It is **not the Windows session number**, so no value of that line can distinguish session 1 from
@@ -445,7 +464,9 @@ a `refuted` verdict may be a generator defect rather than an execution defect.
 run is that a fresh operator can do every step, so reset, deploy and §5 are part of what is being
 tested. Outside row 8, for example re-measuring the generator on a guest that another driver
 has just released, skipping is acceptable only when all three hold: §5 passes on the guest as it
-stands, a fresh token was fetched after the last deploy, and §6.1 prints nothing after cleanup.
+stands, your token file holds the token from the last deploy (that deploy wrote it, or, for a
+guest deployed by something else, you ran the §4 fallback after it), and §6.1 prints nothing after
+cleanup.
 Record the skip, and why, next to the §6 result. A skip that is not recorded reads as a full run.
 
 **The M1 lock procedure: each step takes and releases the lock itself (F20; lead ruling 2026-11-24).**
@@ -579,7 +600,8 @@ Before §6 you still want to know *why* nobody holds it — a free flock plus a 
 the good state, and a §2 flock that reads `HELD` means wait:
 
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode values --limit 20 --runs-dir runs/s6-final
+pnpm exec tsx src/integration/run-live.ts --mode values --limit 20 --runs-dir runs/s6-final \
+  --token-file ~/.myco-token   # or your $MYCO_TOKEN_OUT (§4)
 ```
 
 **Use an explicit `--runs-dir`.** Without it the run writes into `runs/`, which §1.2's `pnpm test`
@@ -637,8 +659,9 @@ step, and say plainly that attribution was impossible.
 
 All live trials run through one entrypoint: `src/integration/run-live.ts`, modes `normal`,
 `kill`, `values`. It takes the VM lock (§6.2) and refuses with exit **10** rather than drive a
-guest another driver owns; it starts its own SSH tunnel (8765) and needs the agent token, read
-from `~/.myco-token` when `MYCO_AGENT_TOKEN` is unset (§4). Each run writes
+guest another driver owns; it starts its own SSH tunnel (8765) and needs the agent token: pass
+`--token-file PATH`, the path your deploy wrote (§4), as the commands below do. Without the flag it
+reads `MYCO_AGENT_TOKEN`, else `~/.myco-token`. Each run writes
 `<runs-dir>/<runId>/{trace.jsonl,result.json}` (§8; `runs/` by default) and prints the trial
 report as JSON.
 
@@ -653,7 +676,8 @@ explicit run directory, or clear `runs/` between §1 and §8.
 ### 7.1 Normal trial
 
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode normal --seed m1-013-trial-01 --runs-dir runs/row8-7.1
+pnpm exec tsx src/integration/run-live.ts --mode normal --seed m1-013-trial-01 --runs-dir runs/row8-7.1 \
+  --token-file ~/.myco-token   # or your $MYCO_TOKEN_OUT (§4)
 ```
 
 Give every hand-run trial its own `--runs-dir` (the same reason as §6: `runs/` already holds the
@@ -681,7 +705,8 @@ conversion from a failed process or an unreachable guest.
 ### 7.2 Corrupted trial (kill Calc mid-program)
 
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode kill --kill-after-step 3 --runs-dir runs/row8-7.2
+pnpm exec tsx src/integration/run-live.ts --mode kill --kill-after-step 3 --runs-dir runs/row8-7.2 \
+  --token-file ~/.myco-token   # or your $MYCO_TOKEN_OUT (§4)
 ```
 
 The kill is **step-triggered**, not a wall-clock timer: launching Calc and making it observable
@@ -691,7 +716,7 @@ log 22). `--kill-after-step 3` kills `soffice.bin` after the third dispatched ac
 Expected: `"status": "uncertain"` — e.g. "could not look: UNO readback … NoConnectException
 (WSAECONNREFUSED)", or a guard failure at the `setValue` step with `observe-after-action` —
 in 15–28 s on a quiet host (68 s at load ~12, 2026-11-24), no hang. Artifacts still validate.
-**Exit 0** for `refuted` or `uncertain` (`src/integration/run-live.ts:118`).
+**Exit 0** for `refuted` or `uncertain` (`src/integration/run-live.ts:117`).
 
 **An unconfirmed kill is still a §7.2 pass, but the fault did not land.** If `taskkill` reports a
 survivor, the trial marks the action failed (`kill after action 3 unconfirmed: …`,
@@ -1010,7 +1035,7 @@ from recorded evidence and print a `RECLASSIFIED` line when the stored false-suc
 | 10 | VM in use. `REFUSED_VM_LOCKED` names the lock holder or the legacy driver process. |
 
 To inspect an individual live trial, use `pnpm exec tsx src/integration/run-live.ts --mode MODE`
-with the token in `~/.myco-token` and `MYCO_AGENT_TOKEN` unset (§4), an explicit `--runs-dir`,
+with `--token-file ~/.myco-token` (or your `$MYCO_TOKEN_OUT`, §4), an explicit `--runs-dir`,
 and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
 `kill` for suite-style evidence and `--recovery` to exercise the ladder. An audited mode exits 0
 for a verdict of refuted, uncertain or proven recovery, 1 for an unsupported verified claim or a
@@ -1291,7 +1316,7 @@ Every row is a failure we actually hit.
 | Text value `refuted`; persisted value is sentence-cased (`revised-908578` → `Revised-908578`) | Calc AutoCorrect rewrote a lowercase-leading value | Correct behaviour of the verifier. Use the generator's values (`REVISED-######`, numerics) or `--new-value` with an AutoCorrect-immune string. A case-insensitive check here would be a false success (log 21; `src/tasks/intent.ts`) |
 | Cell holds **another record's** value; several `soffice` alive; hundreds of `C:\myco\runs\myco-*` dirs | Cross-trial contamination: a failed trial leaked state and a later trial read a foreign document | Reset + redeploy, then re-run the same intent — it should flip to `verified`. Reset per trial, always. M1-019's host-side always-cleanup + `guest-contaminated` guard now aborts `uncertain` instead of guessing; its real-Windows behaviour is still unvalidated (log 27, 29, 36) |
 | Agent behaves like an older build right after a reset | Stale pre-deployed snapshot: `m1-agent-live` contains whatever agent existed when it was taken. `ping` cannot reveal this — `agent_version` is the constant `0.1.0` | Prefer cold reset + deploy (§3.1/§4). Trust a pre-deployed snapshot only if you know its commit; re-take it after any agent change (PR #28, reverted; PR #31) |
-| `agent ping ok …` never printed; `MYCO_AGENT_TOKEN is required (or ~/.myco-token from vssh)` | Missing/stale token | Re-fetch from the guest after every deploy (§4) |
+| `agent ping ok …` never printed; `no agent token: …` or `cannot read token file …`; or `AUTH_FAILED` | Missing token file, or stale (a later deploy rotated the guest token) | Re-run the deploy (§4); it writes the fresh token to `~/.myco-token` or `$MYCO_TOKEN_OUT`. Pass that path as `--token-file`. Guest deployed by something else: the §4 fallback |
 | Port 8765 already in use / two tunnels | A manual tunnel from an earlier step; `run-live` cannot bind its own and silently reuses the stale one | Close any manual tunnel first (`lsof -nP -iTCP:8765 -sTCP:LISTEN`); let `run-live` own the tunnel |
 
 ## 10. What is NOT reproducible from scratch
