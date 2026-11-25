@@ -1,0 +1,94 @@
+{
+  "runId": "f1221f05-9689-423c-b000-daf418fe3f45",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "document still modified (isModified=true): the edit was never saved"
+    ]
+  },
+  "guardFailure": {
+    "step": 3,
+    "phase": "postcondition",
+    "predicateName": "document not dirty after save",
+    "observed": "dirty=true",
+    "reason": "postcondition \"document not dirty after save\" not met after step 3"
+  },
+  "completed": false,
+  "elapsedMs": 101131,
+  "xlsxPath": "C:/myco/runs/myco-13006-1795585313553-715172659\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      2000,
+      5292
+    ],
+    "removed": [
+      "myco-13006-1795585313553-715172659",
+      "myco-13006-1795585313553-623082409"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 46927,
+    "outcome": "arrived",
+    "hostLoadStart": 10.44,
+    "hostLoadEnd": 9.46
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 9894,
+        "durationMs": 12496,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4225,
+        "durationMs": 4690,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3699,
+        "durationMs": 4185,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5023,
+        "durationMs": 5662,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 2379,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-dropped-save-2",
+    "dataRows": 97,
+    "csvSha256": "2ddc3ec9d9f6418e83ded017f370070976dbaf58b5275347aebc1d66bd00bf11"
+  },
+  "corruption": {
+    "mode": "dropped-save",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Ada Nakamura",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}

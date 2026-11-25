@@ -1,0 +1,93 @@
+{
+  "runId": "af6e1870-b809-4b96-92cf-d0dbee485a5f",
+  "verdict": {
+    "status": "uncertain",
+    "reasons": [
+      "could not look: UNO readback of B18 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "observe-after-action",
+    "observed": "agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)",
+    "reason": "app became unobservable after step 2: agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+  },
+  "completed": false,
+  "elapsedMs": 54296,
+  "xlsxPath": "C:/myco/runs/myco-84378-1795584522281-644511596\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      5056
+    ],
+    "removed": [
+      "myco-84378-1795584522281-644511596",
+      "myco-84378-1795584522281-942849558"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=255 survivors=[] ERROR: The process with PID 5056 (child process of PID 2220) could not be terminated.\nReason: There is no running instance of the task."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 12672,
+    "outcome": "arrived",
+    "hostLoadStart": 9.28,
+    "hostLoadEnd": 8.1
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 6236,
+        "durationMs": 6942,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3603,
+        "durationMs": 4106,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 2977,
+        "durationMs": 3488,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4267,
+        "durationMs": 5078,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 3479,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-kill-0",
+    "dataRows": 123,
+    "csvSha256": "428588b3f7c5d17ac80bbe109663a776d5af3ac891fbed9a12419783e78fd7df"
+  },
+  "corruption": {
+    "mode": "kill",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Gil Mora",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click"
+    ]
+  }
+}

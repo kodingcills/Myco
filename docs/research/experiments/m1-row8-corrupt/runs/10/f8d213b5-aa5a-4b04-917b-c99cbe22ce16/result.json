@@ -1,0 +1,146 @@
+{
+  "runId": "f8d213b5-aa5a-4b04-917b-c99cbe22ce16",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-014-kill-10",
+    "rowKey": "EMP-0061",
+    "column": "name",
+    "newValue": "REVISED-25483"
+  },
+  "instruction": "Set the cell at record EMP-0061, column name, to \"REVISED-25483\", and save the file.",
+  "startedAt": "2026-11-25T06:43:55.471Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-kill-10\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-52625-1795589037475-53253913\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-52625-1795589037475-53253913\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B62"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-014-kill-10\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-52625-1795589037475-53253913\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B62 located at record EMP-0061, column name, holds fixture value \"Dara Petrov\"",
+          "passed": true,
+          "observed": "value=\"Dara Petrov\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B62"
+        },
+        "value": "REVISED-25483"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-52625-1795589037475-53253913\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B62 located at record EMP-0061, column name, holds fixture value \"Dara Petrov\"",
+          "passed": true,
+          "observed": "value=\"Dara Petrov\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B62 holds \"REVISED-25483\"",
+          "passed": true,
+          "observed": "value=\"REVISED-25483\""
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B62 holds \"REVISED-25483\"",
+          "passed": true,
+          "observed": "value=\"REVISED-25483\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 9,
+      "stateVersionAfter": 10
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B62 (record EMP-0061, column name) persisted as \"REVISED-25483\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B62 (record EMP-0061, column name) persisted as \"REVISED-25483\""
+    ]
+  }
+}

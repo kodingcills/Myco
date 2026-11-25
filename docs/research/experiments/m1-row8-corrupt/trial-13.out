@@ -1,0 +1,84 @@
+{
+  "runId": "02742b54-6530-4f91-a4ad-978c8930f64e",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "cell B66 expected \"REVISED-93529\" but live document has \"Hana Ortiz\""
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "precondition",
+    "predicateName": "act:setValue",
+    "observed": "stale ref winref:5:B66: issued for stateVersion 5, app is at 6",
+    "reason": "action dispatch failed on step 2: stale ref winref:5:B66: issued for stateVersion 5, app is at 6"
+  },
+  "completed": false,
+  "elapsedMs": 49486,
+  "xlsxPath": "C:/myco/runs/myco-16933-1795590454200-324072037\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      1264
+    ],
+    "removed": [
+      "myco-16933-1795590454200-324072037",
+      "myco-16933-1795590454200-570543332"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 19767,
+    "outcome": "arrived",
+    "hostLoadStart": 7.86,
+    "hostLoadEnd": 7.53
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 5577,
+        "durationMs": 6679,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3633,
+        "durationMs": 4136,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3739,
+        "durationMs": 4476,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 3022,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-invalid-target-13",
+    "dataRows": 104,
+    "csvSha256": "385d579c1b7fa4e6fd659a921887777be163e105dd5a74dce4f04b535ec19b4f"
+  },
+  "corruption": {
+    "mode": "invalid-target",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Hana Ortiz",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click"
+    ]
+  }
+}
