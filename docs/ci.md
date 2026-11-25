@@ -14,6 +14,7 @@ nothing is skipped or fails for lack of one.
 | Workflow | Job (check name) | Runs on fork PRs | Required on `main` |
 | --- | --- | --- | --- |
 | `ci.yml` | `secret scan (gitleaks)` | yes | yes |
+| `ci.yml` | `ci hygiene (workflows)` | yes | no |
 | `ci.yml` | `check (ubuntu-latest)`, `check (macos-latest)` | yes | yes |
 | `ci.yml` | `myco-agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `myco-agent tests (macos-latest)` | yes | no |
@@ -31,6 +32,10 @@ nothing is skipped or fails for lack of one.
   `pull_request`: same read-only token, no secrets.
 
 ## Security posture
+
+The `ci hygiene (workflows)` job enforces these rules with `scripts/ci-hygiene-check.py`;
+a workflow change that breaks one fails CI. Rule list and rationale:
+[docs/security/public-release-safety.md](security/public-release-safety.md) (M2-14).
 
 - **Least privilege.** Each workflow sets `permissions: contents: read` at the top
   level and no job widens it. Caching and artifact upload use the runner's Actions
@@ -116,6 +121,7 @@ costs one manual re-run.
 
 - **First-time contributors.** Depending on the repository's Actions setting, a fork
   PR from a first-time contributor waits for a maintainer to click "Approve and run".
+  Which setting to choose: [public-release-safety.md](security/public-release-safety.md#admin-action-for-tiffany-first-time-contributor-approval).
 - **`perf` label.** Add it to run the viewer verdict budget on a PR.
 - **TIF-170 race diagnostics.** Manual runs (`workflow_dispatch`, with `runs`,
   `rounds`, `launcher` inputs) need write access.
