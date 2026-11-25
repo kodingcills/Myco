@@ -23,11 +23,11 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   classifySessionInfo,
   DEFAULT_TOKEN_FILE,
@@ -55,6 +55,19 @@ import {
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const SENTINEL = "tok-SENTINEL-a1b2c3d4e5f6";
+
+/** Every temp dir this file creates, removed once the file's tests finish
+ * (TIF-237). `rmSync` unlinks the symlink in the `-link-` dir; it does not
+ * follow it into the repo. */
+const tempDirs: string[] = [];
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+afterAll(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 interface Captured {
   stdout: string[];
@@ -432,7 +445,7 @@ describe("tunnelOptionsFor", () => {
 describe("readTokenFile (real fs, synthetic token)", () => {
   it("reads and trims; refuses missing and empty with the path in the message", () => {
     expect(DEFAULT_TOKEN_FILE).toContain(".myco-token");
-    const dir = mkdtempSync(join(tmpdir(), "myco-tif209-"));
+    const dir = makeTempDir("myco-tif209-");
     const path = join(dir, "token");
     writeFileSync(path, `  ${SENTINEL}\n`);
     expect(readTokenFile(path)).toBe(SENTINEL);
@@ -456,7 +469,7 @@ const QUOTED_TOKEN = 'tok"quoted\\SENTINEL-0123456789';
 
 describe("CLI entry point (subprocess, no VM: usage errors return before the lock) — D1", () => {
   it("a bad argument exits 3 with usage, both directly and through a symlinked path — never a silent 0", () => {
-    const dir = mkdtempSync(join(tmpdir(), "myco-tif209-link-"));
+    const dir = makeTempDir("myco-tif209-link-");
     const link = join(dir, "repo");
     symlinkSync(REPO_ROOT, link, "dir");
     const tsx = join(REPO_ROOT, "node_modules", ".bin", "tsx");
@@ -468,7 +481,7 @@ describe("CLI entry point (subprocess, no VM: usage errors return before the loc
     // (DEFAULT_TOKEN_FILE is `${homedir()}/.myco-token`). A temp `--token-file`
     // argument cannot do this job: adding a valid one would remove the very
     // usage error under test.
-    const sandbox = mkdtempSync(join(tmpdir(), "myco-tif213-home-"));
+    const sandbox = makeTempDir("myco-tif213-home-");
     const env = {
       ...process.env,
       HOME: sandbox,
@@ -580,7 +593,7 @@ function productionHarness(
   makeTunnel: (options: SshTunnelOptions) => SessionInfoTunnel,
   token = SENTINEL,
 ) {
-  const dir = mkdtempSync(join(tmpdir(), "myco-tif209-prod-"));
+  const dir = makeTempDir("myco-tif209-prod-");
   const tokenPath = join(dir, "token");
   writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
   const out = { stdout: [] as string[], stderr: [] as string[], released: 0 };
@@ -642,7 +655,7 @@ describe("productionDeps: the token comes only from the file; the ssh child gets
 
   it("SshTunnel hands options.env to the spawned process (real spawn of a stand-in ssh)", async () => {
     vi.stubEnv("MYCO_AGENT_TOKEN", ENV_TOKEN);
-    const dir = mkdtempSync(join(tmpdir(), "myco-tif209-spawn-"));
+    const dir = makeTempDir("myco-tif209-spawn-");
     const namesOut = join(dir, "names");
     const script = join(dir, "fake-ssh");
     // Writes only variable NAMES (never values) plus one marker value, to a
@@ -789,8 +802,20 @@ describe("main(): the last-resort rejection handler never exits 0 — TIF-213", 
     expect(written).not.toContain(SENTINEL);
   });
 
+  it("a passing proof exits 0 explicitly, overriding the EXIT_BLOCKED default — TIF-237", async () => {
+    const { exit, stderrWrite } = interceptExit();
+    const { deps, agent } = harness();
+    agent.result = HAPPY;
+    main([], deps);
+    // Without the explicit process.exit(0), the success path would fall back
+    // to process.exitCode (EXIT_BLOCKED) and this call would never happen.
+    await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+    expect(exit.mock.calls).toEqual([[0]]);
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
   it("a stderr writer that throws inside a catch makes runSessionInfo reject: exit 3, not 0", async () => {
-    const { exit } = interceptExit();
+    const { exit, stderrWrite } = interceptExit();
     const { deps, agent } = harness();
     agent.connectError = new Error("tunnel never came up");
     deps.stderr = (): void => {
@@ -801,6 +826,8 @@ describe("main(): the last-resort rejection handler never exits 0 — TIF-213", 
     main([], deps);
     await vi.waitFor(() => expect(exit).toHaveBeenCalled());
     expect(exit.mock.calls).toEqual([[3]]);
+    const written = stderrWrite.mock.calls.map((call) => String(call[0])).join("");
+    expect(written).toBe("session-info: internal error\n");
   });
 
   it("process.exitCode is EXIT_BLOCKED while the proof is still pending, so a drained event loop is a failure", async () => {
