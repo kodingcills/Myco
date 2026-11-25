@@ -1202,19 +1202,22 @@ deleted. Use the agent's `screenshot` op if you need one.
 pnpm exec tsx src/integration/validate-live.ts runs/row8-7.1     # the --runs-dir you passed
 ```
 
-**Point it at the directory that directly holds the `<runId>/` dirs, and check the count.** The
-validator reads only one directory level below its argument (`readdirSync(runsDir)`,
-`src/integration/validate-live.ts:15`), and it prints `ALL OK` with exit 0 even when it validated
-**0** files. So a nested layout passes without being checked: on 2026-11-25,
-`validate-live.ts $S/nested/runs` printed `validated 0 result.json + 0 trace events … ALL OK`
-while `$S/nested/runs/0` validated 1 + 26 (operator report G30). An empty directory also prints
-`ALL OK`. A code fix is tracked separately (TIF-223); until it lands, a `0 result.json` line is a
-failure, not a pass. The same trap applies to `--mode values` (§6), which nests its trials one
-level down (§8.1): validate `runs/s6-final/values`, not `runs/s6-final`.
+The validator walks its argument recursively (TIF-223), so a nested layout is checked, not
+skipped. Any directory holding `result.json` or `trace.jsonl` is a run directory: `runs/`, `$OUT`,
+`$OUT/runs` (`runs/<index>/<runId>/`) and a `--mode values` tree (§6, `values/<runId>/`) all work.
+It exits non-zero when it finds no run directory (`NO RUN DIRS …`), and when a run directory has
+only one of the two files (`INCOMPLETE run dir <path>: missing …`). Before TIF-223 it read one
+level only and printed `ALL OK` with exit 0 on **0** files (operator report G30); if you run an
+older checkout, a `0 result.json` line is a failure, not a pass.
 
-**For a sweep (§7.3) or the suite (§7.4), never validate `$OUT`, `$OUT/runs` or `runs/`.** Their
-layout is `$OUT/runs/<index>/<runId>/`, one level too deep. Validate each index directory and
-compare the total with the ledger:
+**For a sweep (§7.3) or the suite (§7.4), check the count against the ledger.** Pass the ledger's
+run count as `--expect`; any other count exits non-zero:
+
+```bash
+pnpm exec tsx src/integration/validate-live.ts "$OUT/runs" --expect "$(grep -c '"runId": "' "$OUT/trials.jsonl")"
+```
+
+The per-index loop below stays valid as a cross-check, one directory per ledger row:
 
 ```bash
 total=0
@@ -1231,7 +1234,7 @@ A ledger row with no run (`reset-failed`, `deploy-failed`, `token-failed`) has n
 and no artifacts, so it is in neither number. The 2026-11-25 sweep validated 29 results + 516 trace
 events this way, for 29 runs in its 30-row ledger (`docs/research/experiments/m1-row8-sweep2/`).
 
-Expected per directory: `validated N result.json + M trace events in <dir>: ALL OK` with N ≥ 1
+Expected: `validated N result.json + M trace events in <dir>: ALL OK` with N ≥ 1
 (recorded: 4 + 51 at PR #18; 11 + 77 at PR #11). Non-zero exit and `INVALID …` lines name the offending file and JSON path.
 
 `pnpm schema-validate` is **not** this check: it validates a freshly generated fake-app sample,
