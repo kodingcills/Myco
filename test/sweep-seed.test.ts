@@ -161,5 +161,38 @@ describe("m1-sweep-record.py", () => {
       convertDeadlineMs: 240000,
       convertOutcome: "arrived",
     });
+    expect(rec.harnessFault).toBeUndefined();
+  });
+
+  it("tags a convert deadline as a harness fault and copies host load, status unchanged (TIF-219)", () => {
+    const out = join(dir, "with-deadline.json");
+    writeFileSync(
+      out,
+      JSON.stringify({
+        runId: "r",
+        verdict: {
+          status: "uncertain",
+          reasons: ["could not look: harness fault, fixture convert deadline — x"],
+        },
+        completed: false,
+        elapsedMs: 1,
+        fixture: { seed: "seed-b", dataRows: 10, csvSha256: map["seed-b"] },
+        fixtureConvert: {
+          deadlineMs: 360000,
+          durationMs: 360483,
+          outcome: "deadline",
+          hostLoadStart: 12.4,
+          hostLoadEnd: 15.9,
+        },
+      }),
+    );
+    const rec = JSON.parse(runRecord(["3", "seed-b", "EMP-0001", "qty", "1", out, fp]).stdout);
+    expect(rec).toMatchObject({
+      status: "uncertain",
+      convertOutcome: "deadline",
+      convertLoadStart: 12.4,
+      convertLoadEnd: 15.9,
+      harnessFault: "fixture-convert-deadline",
+    });
   });
 });
