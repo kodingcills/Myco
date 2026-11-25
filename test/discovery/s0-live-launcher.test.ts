@@ -284,10 +284,10 @@ describe("s0-live.sh launcher", () => {
     const sibling = startDetached(`node ${join(other, "scripts", "s0-live.ts")} --live`);
     try {
       launcher(script, runDir, ["--stop"], { MYCO_COORDINATOR_GO: "1", MYCO_HOST_LOCK: "1" });
-      // The signal is asynchronous: give it a moment before asserting it landed.
-      spawnSync("bash", ["-c", "sleep 0.3"]);
-      expect(alive(mine)).toBe(false);
-      expect(alive(sibling)).toBe(true);
+      // The signal is asynchronous, and the reaper may be slow: `running` counts the
+      // killed child as gone once it is a zombie, where `kill -0` would still reach it.
+      expect(waitFor(() => !running(mine))).toBe(true);
+      expect(running(sibling)).toBe(true);
     } finally {
       spawnSync("kill", ["-9", String(sibling)]);
     }
@@ -465,18 +465,29 @@ describe("s0-live.sh launcher", () => {
   it("--stop never signals its own shell, even when its argv matches the stray pattern", () => {
     const { dir, script, runDir } = worktree();
     // Extra arguments are ignored, but they are in this shell's argv, so the scoped pgrep
-    // for a stray `s0-live.ts --live` matches the --stop process itself. Linux's procps
-    // pgrep excludes only itself; BSD pgrep on macOS also excludes its ancestors unless
-    // given `-a`. The shim makes macOS match the way Linux does, so the guard is tested
-    // on both.
-    const env: NodeJS.ProcessEnv = {};
+    // for a stray `s0-live.ts --live` matches the --stop process itself, and any forked
+    // copy of it, such as a command-substitution subshell that is still alive while pgrep
+    // scans. Linux's procps pgrep excludes only itself; BSD pgrep on macOS also excludes
+    // its ancestors unless given `-a`. The pgrep shim makes macOS match the way Linux
+    // does, so the guard is tested on both.
+    const shims = join(dir, "shims");
+    mkdirSync(shims);
     if (process.platform === "darwin") {
-      const shims = join(dir, "pgrep-shim");
-      mkdirSync(shims);
       writeFileSync(join(shims, "pgrep"), '#!/bin/sh\nexec /usr/bin/pgrep -a "$@"\n');
       chmodSync(join(shims, "pgrep"), 0o755);
-      env.PATH = `${shims}:${process.env.PATH}`;
     }
+    // `kill` is a builtin, but every pid the stray loop walks is first passed to the
+    // external `pkill -P`, so this shim records exactly the pids --stop chose to signal.
+    const realPkill = spawnSync("bash", ["-c", "type -P pkill"], { encoding: "utf8" }).stdout.trim();
+    const walked = join(dir, "walked");
+    writeFileSync(
+      join(shims, "pkill"),
+      `#!/bin/sh\necho "$*" >> ${JSON.stringify(walked)}\nexec ${realPkill} "$@"\n`,
+    );
+    chmodSync(join(shims, "pkill"), 0o755);
+    const env: NodeJS.ProcessEnv = { PATH: `${shims}:${process.env.PATH}` };
+    // A real stray in this worktree: the guard must not stop --stop from reaching it.
+    const stray = startDetached(`node ${join(dir, "scripts", "s0-live.ts")} --live`);
     const result = launcher(
       script,
       runDir,
@@ -486,6 +497,11 @@ describe("s0-live.sh launcher", () => {
     expect(result.signal).toBeNull();
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("not running");
+    expect(result.stderr).toBe("");
+    expect(waitFor(() => !running(stray))).toBe(true);
+    // Only the stray was walked: not this shell, and not a subshell that had already
+    // exited by the time it would have been signalled.
+    expect(readFileSync(walked, "utf8").trim().split("\n")).toEqual([`-P ${stray}`]);
   });
 
   it("keeps --probe, --status and --stop on the terminal", () => {
