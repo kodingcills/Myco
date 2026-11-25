@@ -9,22 +9,33 @@ any mismatch. Prose byte-identity is not required; the numbers are.
 
 Scope. Every line of the doc is classified (code fences are skipped when looking for
 headings). Line 1 is the title `# M1 scorecard`; everything from there to the `| # |`
-table header is the preamble (swept). The criterion table must hold exactly one
+table header is the preamble (swept). The table's header and separator lines must equal
+CRITERION_HEADER and CRITERION_SEPARATOR exactly, and the table must hold exactly one
 `| N |` line for each row 1-8, in any order; a duplicate, unexpected or non-row table
 line fails, and so does a `| N |` line anywhere else. Between the table and the first
-heading only blank lines are allowed. Every heading of any level (`#`, `##`, `###`,
-...) starts a section that runs to the next heading, and must match exactly one entry
-below; an unknown heading or a second section under a known one fails. The
-classification is printed.
+heading only blank lines are allowed. A heading is found on every line outside a code
+fence, after its container prefix is stripped: repeatedly, up to 3 spaces of indent and
+then a blockquote `>` or a list marker (`-`, `*`, `+`, `N.`, `N)`) with the spaces after
+it, so `> - ## x` is a heading. On what is left, a heading is an ATX `#`...`######`
+heading indented 0-3 spaces, an HTML `<h1>`-`<h6>`, or a setext heading: a non-blank
+line directly over a `===` or `---` underline, unless that line belongs to a GFM table
+(a header line whose next line is a delimiter row with the same cell count, then its
+rows up to a blank line or a thematic break). Every heading, of any level, starts a
+section that runs to the next heading, and must equal, character for character, exactly one key of IN_SCOPE or OUT_OF_SCOPE (the whole heading line, not a
+prefix: extra text after a known heading, numbers or not, makes it an unknown heading);
+an unknown heading or a second section under a known one fails. The classification is
+printed.
   in scope     the preamble and status line, criterion rows 1-8, "M1 sign-off", "Open a
-               trial in the viewer", "Evidence durability", "Row 7 slots", "Decision: arm-002 is not
-               the baseline", "Second reason arm-002 is superseded", "The C1
-               baseline's characteristic failure mode" (with its resume command) and
-               "Open risk: guest-side fixture convert";
-  sub-checks   "Trial traces": its links and run ids are held by the two link checkers
-               below, not by the number sweep;
+               trial in the viewer", "Trial traces", "Evidence durability", "Row 7 slots",
+               "Decision: arm-002 is not the baseline", "Second reason arm-002 is
+               superseded", "The C1 baseline's characteristic failure mode" (with its
+               resume command) and "Open risk: guest-side fixture convert";
   out of scope the reproducibility test plan and "Reliability row, regenerate".
                OUT_OF_SCOPE names each with its reason, and the output lists them.
+"Trial traces" is swept like any other section: each of its table lines is recomputed
+from the committed m1-runs/<set>/trial-<n>/result.json (label, directory and runId), the
+table must hold exactly those lines, and any other number in it is UNATTRIBUTED. The two
+link checkers below still run as sub-checks.
 
 Claims. Every claim in scope is one of these kinds, and every kind is printed:
 
@@ -53,15 +64,22 @@ no claim covers is printed as UNATTRIBUTED and exits 1. Tokens:
     `-` the digits count when everything before them in the word is digits and
     hyphens, so both ends of `31-40` count;
   - a word whose digits are preceded inside it by a letter, `-` or `_` (`m1-013`,
-    `ARM64`, `r6`, `trial-0`, `n31`, `rerun-31`) is an identifier only if it is in
-    IDENTIFIERS, the exhaustive list of such words in the committed doc; any other
-    such word is itself a token, so `n31` or `rerun-31` cannot carry a figure past
-    the sweep. `--identifiers` prints the words skipped and the list.
-Not swept, by design: an enumerator `(N) ` at a clause start (line start, or after
-`. `, `: `, `; `, `| `) numbered 1, 2, 3, ... in order within its segment (row 7's
-gap list); any other `(7)` is a number. Also not swept: the `| N |` row number, and
-spelled-out numbers (`seven`, `nine`), which appear too often in plain prose to sweep
-without noise. Spelled-out figures are still checked wherever a claim quotes them
+    `ARM64`, `r6`, `trial-0`, `n31`, `rerun-31`) and that no claim covers is an
+    identifier, and identifiers are pinned: IDENTIFIER_PINS holds, per in-scope
+    section, the exact ordered sequence of such words outside every claim's doc text.
+    A word not in any pin is itself a token (UNATTRIBUTED), so `n31` or `rerun-31`
+    cannot carry a figure past the sweep; and a section whose sequence differs from its
+    pin (`Sweep v3` edited to `Sweep v2`, `trial-0` to `spike-trial-0`, `r6` to `r3`)
+    is a MISMATCH naming the first difference. `--identifiers` prints the words
+    skipped, the allowlist (the union of the pins) and each section's sequence.
+Not swept, by design: row 7's gap-list enumerators `(1) `-`(4) `, each at a clause start
+(line start, or after `. `, `: `, `; `, `| `) and in order. ENUMERATORS pins how many
+each section has (only row 7 has any); a section with a different count is a MISMATCH,
+and every other `(N)` -- a `(1)` in another section, a `(5)` after row 7's `(4)` -- is a
+number. Also not swept: the row number itself in a criterion row's first cell (`| 2 |`,
+or `|2|`: only the digits of that cell are skipped, so in `|2|31` the `31` is a token),
+and spelled-out numbers (`seven`, `nine`), which appear too often in plain prose to
+sweep without noise. Spelled-out figures are still checked wherever a claim quotes them
 (e.g. row 5's "Four", "three", "seven").
 
 Recomputation reuses the existing tools rather than re-deriving them:
@@ -79,7 +97,8 @@ Recomputation reuses the existing tools rather than re-deriving them:
   - m1-row8-step1/operator-report-{3,4}.md: row 8's plan-step-1 cold-operator figures;
   - c1-arm-001/spike-trial-0.json: the spike trial's committed spend;
   - src/baseline/planner.ts and src/integration/validate-live.ts: code symbols a row names;
-  - the committed schema-validation.log files: row 6 and row 8 sums.
+  - the committed schema-validation.log files: row 6 and row 8 sums;
+  - m1-runs/<set>/trial-<n>/result.json runId: the "Trial traces" table.
 
 Sub-checks run as part of it unless --no-subchecks: scripts/check-scorecard-links.py
 (on --doc) and scripts/scorecard-viewer-links.py --check (on the repo's scorecard; it
@@ -122,42 +141,121 @@ VISION = ROOT / "docs/product/vision.md"
 
 WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"}
 
-# Sections, keyed by a prefix of their heading. In-scope sections are swept; the rest
-# are listed in the output with the reason they are not.
+# Sections, keyed by their whole heading line, matched exactly (TIF-230: a prefix match
+# let `## Reliability row, regenerate: 31 of 40` pass as out of scope with its numbers
+# unswept). In-scope sections are swept; the rest are listed in the output with the
+# reason they are not.
 IN_SCOPE = {
     "## M1 sign-off": "signoff",
     "## Open a trial in the viewer": "viewer",
-    "## Evidence durability": "durability",
-    "## Row 7 slots": "slots",
-    "## Decision: arm-002 is not the baseline": "arm002-decision",
-    "## Second reason arm-002 is superseded": "arm002-truncation",
-    "### The C1 baseline's characteristic failure mode": "save-dialog",
+    "## Trial traces": "traces",
+    "## Evidence durability (M1-016, 2026-11-23)": "durability",
+    "## Row 7 slots — filled by arm-003 r6 (TIF-90), not by arm-002": "slots",
+    "## Decision: arm-002 is not the baseline (2026-11-23)": "arm002-decision",
+    "## Second reason arm-002 is superseded: the 256-token truncation defect (#340)": "arm002-truncation",
+    "### The C1 baseline's characteristic failure mode: the save dialog": "save-dialog",
     "## Open risk: guest-side fixture convert": "open-risk",
 }
-SUBCHECKED = {
-    "## Trial traces": "per-trial links and run ids; held by check-scorecard-links.py and "
-                       "scorecard-viewer-links.py --check, not by the number sweep",
-}
 OUT_OF_SCOPE = {
-    "## Reproducibility test plan": "the plan's pass conditions (20/20, 30 rows, step numbers, the 3–4 h estimate) "
-                                    "are specifications, not results from an artifact",
+    "## Reproducibility test plan (row 8)": "the plan's pass conditions (20/20, 30 rows, step numbers, the 3–4 h estimate) "
+                                            "are specifications, not results from an artifact",
     "## Reliability row, regenerate": "how to run m1-scorecard.py and its counting rules (the denominator 30, Wilson 95%), "
                                       "restated from the script's header; the regenerated numbers themselves are checked "
                                       "in rows 1 and 3 and under durability",
 }
 TITLE = "# M1 scorecard"
 ROWS = [str(n) for n in range(1, 9)]
-HEADING = re.compile(r"#{1,6} ")
+# Heading detection (TIF-230 rounds 2-3: a heading the checker missed, placed inside an
+# out-of-scope section, showed the reader a new section whose numbers inherited that
+# section's exemption). Fails closed: when in doubt a line is a heading, and an unknown
+# heading fails the layout. CONTAINER is stripped repeatedly first (up to 3 spaces, then
+# `>` or a list marker), so headings in blockquotes, list items and nestings of them
+# count. Then a line is a heading when it is an ATX heading (0-3 spaces of indent), an
+# HTML <h1>-<h6>, or the non-blank line directly over a SETEXT `===`/`---` underline.
+# The one exception: a line of a real GFM table (header + matching DELIMITER row, then
+# its rows), under which `---` is a thematic break and `===` is another table row.
+# A pipe line with no delimiter row under it is a paragraph, so it can be a setext heading.
+CONTAINER = re.compile(r" {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))")
+DELIMITER = re.compile(r" {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$")
+THEMATIC = re.compile(r" {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
+HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t]|$)")
+HTML_HEADING = re.compile(r" {0,3}<h[1-6](?:[\s/>]|$)", re.I)
+SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def content(line: str) -> str:
+    """The line with every leading container marker stripped, newline removed."""
+    line = line.rstrip("\n")
+    while (m := CONTAINER.match(line)) and m.end() > 0:
+        line = line[m.end():]
+    return line
+
+
+def cells(line: str) -> int:
+    """The number of cells in a GFM table line (unescaped `|` separators)."""
+    s = line.strip()
+    s = s[1:] if s.startswith("|") else s
+    s = s[:-1] if s.endswith("|") and not s.endswith("\\|") else s
+    return len(re.split(r"(?<!\\)\|", s))
+
+
+def table_lines(lines: list[str], body: list[int]) -> set[int]:
+    """Lines of real GFM tables: a header line holding a `|` whose next line is a
+    delimiter row (with a `|`) of the same cell count, then each following non-blank line
+    that is not a thematic break or a heading. Anything else that holds a `|` is
+    paragraph text."""
+    out: set[int] = set()
+    k = 0
+    while k + 1 < len(body):
+        i, j = body[k], body[k + 1]
+        head, delim = content(lines[i]), content(lines[j])
+        if (j == i + 1 and "|" in head and "|" in delim and DELIMITER.match(delim)
+                and cells(head) == cells(delim)):
+            out.update((i, j))
+            k += 2
+            while k < len(body) and body[k] == body[k - 1] + 1:
+                row = content(lines[body[k]])
+                if not row.strip() or THEMATIC.match(row) or HEADING.match(row) or HTML_HEADING.match(row):
+                    break
+                out.add(body[k])
+                k += 1
+        else:
+            k += 1
+    return out
+# The criterion table's header and separator, matched exactly: neither is a row, so a
+# number added to either would otherwise sit in no segment at all.
+CRITERION_HEADER = "| # | Criterion | Status | Evidence | Gap to DONE |"
+CRITERION_SEPARATOR = "|---|---|---|---|---|"
 ROW_LINE = re.compile(r"\| *(\d+) *\|")
-IDENTIFIER_WORDS = (
-    # names of arms, runs, sweeps, milestones, files, tools and the model
-    "ARM64", "Arm-002", "Arm-003", "C1", "C2", "c1-arm-001", "DF-S01", "M1", "M1-013", "M1-014", "M1-016", "ROW7-BUDGET-DECIDED",
-    "S6-PASS", "WinSta0", "arm-002", "arm-003", "arm-003d", "c1-arm-002", "c1-arm-003", "c1-arm-003-design",
-    "c1-arm-003d", "c1-baseline", "c1-parity", "c1-r6", "c1-trial", "c1ChargedMicros", "claude-sonnet-5-5",
-    "cua-c1-base", "m1-013", "m1-013-convert-timeout", "m1-013-sweep-v3", "m1-014", "m1-014-combined-audit",
-    "m1-corrupt-suite-record", "m1-row8", "m1-row8-corrupt", "m1-row8-step1", "m1-row8-sweep2", "m1-runs", "m1-scorecard", "python3",
-    "r2", "r3", "r6", "row-7", "row-8", "row7-compare", "sha256", "spike-trial-0", "trial-0", "v2", "v3",
-)
+# Names of arms, runs, sweeps, milestones, files, tools and the model: every word with
+# a word-internal digit run that no claim covers, in doc order, per in-scope section
+# (TIF-230: a flat allowlist let `Sweep v3` become `Sweep v2`, or `r6` become `r3`,
+# unnoticed). Regenerate with --identifiers after a deliberate doc edit, and check the
+# diff: each changed word is a changed name in the doc.
+IDENTIFIER_PINS: dict[str, tuple[str, ...]] = {
+    "status": ("M1", "m1-scorecard"),
+    "1": ("v3",),
+    "3": ("m1-013-sweep-v3", "python3", "m1-scorecard", "v3"),
+    "4": ("m1-014-combined-audit",),
+    "5": ("m1-014-combined-audit",),
+    "6": ("v3",),
+    "7": ("C1", "arm-003", "r6", "v3", "m1-013-sweep-v3", "c1-r6", "c1-arm-003", "r6", "python3", "row7-compare", "r6",
+          "arm-002", "c1-parity"),
+    "8": ("m1-row8-corrupt", "row-8", "m1-row8", "S6-PASS", "m1-scorecard", "m1-row8-corrupt", "row-8", "v3"),
+    "signoff": ("M1", "m1-scorecard", "m1-scorecard", "row7-compare", "m1-014"),
+    "viewer": ("m1-runs", "m1-runs", "m1-013", "trial-0", "python3", "python3", "trial-0", "python3"),
+    "durability": ("M1-016", "M1-013", "v3", "M1-014", "python3", "m1-scorecard", "m1-013-sweep-v3"),
+    "slots": ("arm-002", "Arm-002", "c1-arm-002", "arm-003", "r6", "c1-arm-003", "r6", "python3", "row7-compare",
+              "m1-scorecard", "r6", "c1ChargedMicros", "c1-arm-003d", "ROW7-BUDGET-DECIDED", "arm-002", "DF-S01"),
+    "arm002-decision": ("arm-002", "Arm-002", "c1-arm-002", "arm-002", "c1-trial"),
+    "arm002-truncation": ("arm-002", "arm-002", "C1", "arm-002", "arm-002", "arm-002", "arm-002", "arm-002", "arm-002",
+                          "C1", "arm-003d", "c1-arm-003", "r6", "Arm-003", "c1ChargedMicros", "c1-arm-003-design"),
+    "save-dialog": ("C1", "c1-arm-003d", "c1-arm-003d", "row-7", "r3", "r6", "c1-baseline", "c1-r6", "arm-003d", "r2", "r6"),
+    "open-risk": ("v3", "m1-013-convert-timeout"),
+}
+# How many in-order `(N) ` enumerators each section has; any other `(N)` is a number.
+ENUMERATORS = {"7": 4}
 
 
 def load_module(name: str, path: Path):
@@ -231,25 +329,28 @@ NUMBER = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)*(?:e-\d+)?")
 WORD_CHAR = re.compile(r"[A-Za-z0-9_\-]")
 RANGE_PREFIX = re.compile(r"(?:\d+-)+")
 # A genuine enumerator: `(N) ` at a clause start (line start, or after `. `, `: `, `; `,
-# `| `), numbered 1, 2, 3, ... in order within its segment.
+# `| `), numbered 1, 2, 3, ... in order within its segment, up to the count ENUMERATORS
+# pins for that segment.
 ENUMERATOR = re.compile(r"(?:^|(?<=[.:;|] ))\((\d{1,2})\)(?= )", re.M)
-# Every word in the swept segments whose digits are preceded, inside the word, by a
-# letter or `-` (or `_`). These are names, not figures, and are skipped; any other such
-# word (say `n31` or `rerun-31`) is a token the sweep requires a claim for. Exhaustive
-# for the committed doc: test/scorecard-check.test.ts holds it to the doc both ways.
-IDENTIFIERS = frozenset(IDENTIFIER_WORDS)
+# The allowlist: a word-internal digit word outside every claim is skipped only if some
+# pin holds it (and must then sit where its section's pin says); any other such word
+# (say `n31` or `rerun-31`) is a token the sweep requires a claim for.
+# test/scorecard-check.test.ts holds the pins to the committed doc both ways.
+IDENTIFIERS = frozenset(w for pin in IDENTIFIER_PINS.values() for w in pin)
 
 
-def number_tokens(seg: str, skip: int = 0) -> tuple[list[tuple[int, int, str]], set[str]]:
-    """(tokens, identifier words skipped) for one segment of the doc.
+def number_tokens(seg: str, skip: int = 0, enumerators: int = 0
+                  ) -> tuple[list[tuple[int, int, str]], list[tuple[int, int, str]], int]:
+    """(number tokens, word-internal digit words, enumerators masked) for one segment.
 
     A digit run counts as a number when the character before it (ignoring a `$`) is not
     a letter, digit, `_` or `-`; what follows does not matter, so `31.` at a sentence end,
     `31.5`, `31s`, `31x`, `31KiB` and `31st` all count. After a `-` it counts only when
     everything before it in the word is digits and hyphens, so both ends of `31-40`
-    count. Otherwise it is inside a word (`m1-013`, `ARM64`, `r6`, `trial-0`): the word
-    is skipped if it is in IDENTIFIERS and is itself a token if not. Enumerators (above)
-    and anything before `skip` (a criterion row's `| N |`) are not tokens.
+    count. Otherwise it is inside a word (`m1-013`, `ARM64`, `r6`, `trial-0`), and the
+    whole word is returned in the second list; the sweep decides whether it is a pinned
+    identifier or a token. The first `enumerators` in-order enumerators (above) and
+    anything before `skip` (the digits of a criterion row's first cell) are not tokens.
     """
     chars = list(seg)
 
@@ -258,7 +359,7 @@ def number_tokens(seg: str, skip: int = 0) -> tuple[list[tuple[int, int, str]], 
 
     expected = 1
     for m in ENUMERATOR.finditer(seg):
-        if int(m.group(1)) == expected:
+        if expected <= enumerators and int(m.group(1)) == expected:
             mask(m.start(), m.end())
             expected += 1
     out: list[tuple[int, int, str]] = []
@@ -266,7 +367,7 @@ def number_tokens(seg: str, skip: int = 0) -> tuple[list[tuple[int, int, str]], 
         out.append((m.start(), m.end(), m.group(0)))
         mask(m.start(), m.end())
     text = "".join(chars)
-    idents: set[str] = set()
+    idents: list[tuple[int, int, str]] = []
     words: set[int] = set()
     for m in NUMBER.finditer(text):
         s = m.start()
@@ -285,11 +386,8 @@ def number_tokens(seg: str, skip: int = 0) -> tuple[list[tuple[int, int, str]], 
         if w0 in words:
             continue
         words.add(w0)
-        if text[w0:w1] in IDENTIFIERS:
-            idents.add(text[w0:w1])
-        else:
-            out.append((w0, w1, text[w0:w1]))
-    return sorted(t for t in out if t[0] >= skip), idents
+        idents.append((w0, w1, text[w0:w1]))
+    return sorted(t for t in out if t[0] >= skip), sorted(t for t in idents if t[0] >= skip), expected - 1
 
 
 class Report:
@@ -301,6 +399,8 @@ class Report:
         self.sections: list[tuple[str, str]] = []  # (heading, class)
         self.layout: list[tuple[str, str]] = []  # (what, detail): each one is a MISMATCH
         self.identifiers: set[str] = set()
+        self.sequences: dict[str, list[str]] = {}
+        self.failed: dict[str, list[tuple[int, int]]] = {}  # the doc text a MISMATCHed quote found instead
         self._parse()
 
     # -- where claims live -------------------------------------------------------------
@@ -314,14 +414,29 @@ class Report:
         offs = [0]
         for line in lines:
             offs.append(offs[-1] + len(line))
-        fence, heads, body = False, [], []
+        fence, heads, body = None, [], []
         for i, line in enumerate(lines):
-            if line.startswith("```"):
-                fence = not fence
-            elif not fence:
+            m = FENCE.match(line.rstrip("\n"))
+            if fence is None and m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                fence = m.group(1)  # an opening fence: ``` or ~~~, three or more
+            elif fence is not None:
+                if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
+                    fence = None  # a closing fence: the same character, at least as long, nothing after
+            else:
                 body.append(i)
-                if HEADING.match(line):
+                c = content(line)
+                if HEADING.match(c) or HTML_HEADING.match(c):
                     heads.append(i)
+        # A setext underline makes the non-blank line above it a heading, unless that line
+        # is part of a real GFM table (then `---` is a thematic break, `===` a table row).
+        tables = table_lines(lines, body)
+        for k, i in enumerate(body[1:], 1):
+            above = body[k - 1]
+            underline = SETEXT.match(lines[i].rstrip("\n")) or SETEXT.match(content(lines[i]))
+            if (above == i - 1 and underline and content(lines[above]).strip()
+                    and above not in tables and above not in heads):
+                heads.append(above)
+        heads.sort()
         if not lines or lines[0].rstrip("\n") != TITLE:
             self.layout.append(("title", f"the first line must be {TITLE!r}"))
         elif heads and heads[0] == 0:
@@ -333,9 +448,15 @@ class Report:
         if any(i < h for i in heads):
             self.layout.append(("criterion table", "a heading comes before the criterion table"))
         self.segs["status"] = self.text[: offs[h]]
+        if h < len(lines) and lines[h].startswith("| # |") and lines[h].rstrip("\n") != CRITERION_HEADER:
+            self.layout.append(("criterion table", f"the header line must be exactly {CRITERION_HEADER!r}"))
         t = h + 1 if h < len(lines) else h
         if t < len(lines) and lines[t].startswith("|---"):
+            if lines[t].rstrip("\n") != CRITERION_SEPARATOR:
+                self.layout.append(("criterion table", f"the separator line must be exactly {CRITERION_SEPARATOR!r}"))
             t += 1
+        elif h < len(lines):
+            self.layout.append(("criterion table", f"no {CRITERION_SEPARATOR!r} separator under the header"))
         while t < len(lines) and lines[t].startswith("|"):
             m = ROW_LINE.match(lines[t])
             n = m.group(1) if m else None
@@ -362,12 +483,15 @@ class Report:
         seen: set[str] = set()
         for k, i in enumerate(heads):
             heading = lines[i].rstrip("\n")
+            if (i + 1 < len(lines) and (SETEXT.match(lines[i + 1].rstrip("\n")) or SETEXT.match(content(lines[i + 1])))
+                    and not HEADING.match(content(lines[i])) and not HTML_HEADING.match(content(lines[i]))):
+                heading += " / " + lines[i + 1].strip()  # a setext heading never equals a key
             end = offs[heads[k + 1]] if k + 1 < len(heads) else len(self.text)
-            key, kind = next(((key, c) for table, c in ((IN_SCOPE, "in scope"), (SUBCHECKED, "sub-checks"),
-                                                        (OUT_OF_SCOPE, "out of scope"))
-                              for key in table if heading.startswith(key)), (None, "UNCLASSIFIED"))
+            key, kind = next(((heading, c) for table, c in ((IN_SCOPE, "in scope"), (OUT_OF_SCOPE, "out of scope"))
+                              if heading in table), (None, "UNCLASSIFIED"))
             if key is None:
-                self.layout.append((heading, "a heading this script does not classify; add it to IN_SCOPE, SUBCHECKED or OUT_OF_SCOPE"))
+                self.layout.append((heading, "a heading this script does not classify (headings match IN_SCOPE or "
+                                             "OUT_OF_SCOPE exactly, the whole line); add it to one of them"))
             elif key in seen:
                 self.layout.append((heading, "a second section under a heading already classified"))
                 kind = "DUPLICATE"
@@ -410,6 +534,10 @@ class Report:
             pattern = pattern[: -len(r"(\S+?)")] + r"(\S+)" if pattern.endswith(r"(\S+?)") else pattern
         found = re.search(pattern, seg) if "{}" in template else None
         found_text = repr(found.group(0)) if found else "the phrase is not present"
+        if found:
+            # The words of the failing claim's own phrase are reported by this MISMATCH,
+            # not again by the identifier pin; its numbers still go to the sweep.
+            self.failed.setdefault(where, []).append(found.span())
         self.rows.append((where, claim, "MISMATCH", f"expected {expected!r} ({source}); found {found_text}"))
 
     def check(self, where: str, claim: str, ok: bool, source: str, doc: str | tuple[str, ...], detail: str = "") -> None:
@@ -449,23 +577,52 @@ class Report:
         return [r for r in self.rows if r[2] in ("MISMATCH", "UNATTRIBUTED")]
 
     # -- coverage ----------------------------------------------------------------------
-    def tokens(self, where: str) -> list[tuple[int, int, str]]:
-        toks, idents = number_tokens(self.segment(where), len(f"| {where} |") if where.isdigit() else 0)
-        self.identifiers |= idents
-        return toks
+    def tokens(self, where: str) -> tuple[list[tuple[int, int, str]], list[str], int]:
+        """(tokens no claim covers may not hold, the section's identifier sequence,
+        enumerators masked). Word-internal digit words that a claim covers are checked
+        by that claim; of the rest, a word some pin holds is an identifier (in order, for
+        the pin comparison) and any other is a token like a number."""
+        seg = self.segment(where)
+        row = ROW_LINE.match(seg) if where.isdigit() else None
+        nums, words, enums = number_tokens(seg, row.end(1) if row else 0, ENUMERATORS.get(where, 0))
+        toks, seq = list(nums), []
+        for s, e, w in words:
+            if self.covered(where, s, e):
+                toks.append((s, e, w))
+            elif any(fs <= s and e <= fe for fs, fe in self.failed.get(where, [])):
+                continue
+            elif w in IDENTIFIERS:
+                seq.append(w)
+                self.identifiers.add(w)
+            else:
+                toks.append((s, e, w))
+        return sorted(toks), seq, enums
 
     def covered(self, where: str, start: int, end: int) -> bool:
         return any(s <= start and end <= e for s, e in self.spans.get(where, []))
 
     def sweep_numbers(self) -> None:
         for where in self.in_scope():
-            toks = self.tokens(where)
+            toks, seq, enums = self.tokens(where)
+            self.sequences[where] = seq
+            pin = list(IDENTIFIER_PINS.get(where, ()))
+            if seq != pin:
+                k = next((i for i, (a, b) in enumerate(zip(seq, pin)) if a != b), min(len(seq), len(pin)))
+                self.rows.append((where, "identifier words", "MISMATCH",
+                                  f"word {k + 1}: the doc has {seq[k] if k < len(seq) else 'nothing'!r} where IDENTIFIER_PINS "
+                                  f"has {pin[k] if k < len(pin) else 'nothing'!r} (doc {len(seq)} words, pin {len(pin)}); a "
+                                  "renamed arm, run, sweep or file is a changed claim -- fix the doc, or the pin if intended"))
+            want = ENUMERATORS.get(where, 0)
+            if enums != want:
+                self.rows.append((where, "enumerators", "MISMATCH",
+                                  f"{enums} in-order `(N)` enumerators where ENUMERATORS pins {want}"))
             loose = [t for s, e, t in toks if not self.covered(where, s, e)]
             if loose:
                 self.rows.append((where, "number sweep", "UNATTRIBUTED",
                                   f"no checked or unchecked claim covers {loose}; add one to the inventory"))
             else:
-                self.rows.append((where, "number sweep", "swept", f"all {len(toks)} number-like tokens attributed"))
+                self.rows.append((where, "number sweep", "swept",
+                                  f"all {len(toks)} number-like tokens attributed, {len(seq)} pinned identifier words"))
 
     def classify_sections(self) -> list[tuple[str, str]]:
         """(heading, class) for every section; every layout problem is a MISMATCH."""
@@ -475,7 +632,7 @@ class Report:
 
 
 def check_status(r: Report) -> None:
-    done = [n for n in ROWS if re.match(rf"\| {n} \|[^|]*\| \*\*DONE", r.segment(n))]
+    done = [n for n in ROWS if re.match(rf"\| *{n} *\|[^|]*\| \*\*DONE", r.segment(n))]
     r.quote("status", "rows DONE", "All {} rows are DONE", len(done) if len(done) == len(ROWS) else f"{len(done)} of {len(ROWS)}",
             source="the Status column of criterion rows 1-8, each starting **DONE")
     r.check("status", "row 8 is DONE given the VM bundle", "DONE (given the VM bundle)" in r.segment("8"),
@@ -814,6 +971,34 @@ def check_durability(r: Report, v3: dict, scorecard) -> None:
     r.unchecked("viewer", "~8 MB of PNGs, ~8 KB per result + trace",
                 f"approximations ('~'); screenshots are not committed, and the committed pairs average {mean:.1f} KiB",
                 doc=("~8 MB", "~8 KB"))
+
+
+def check_traces(r: Report) -> None:
+    """The "Trial traces" table: one line per committed m1-runs/<set>/trial-<n>/, each
+    recomputed from the directory name and its result.json runId, and nothing else."""
+    t = "traces"
+    seg = r.segment(t)
+    expected: dict[str, list[str]] = {}
+    for d in sorted(RUNS.glob("*/trial-*"), key=lambda p: (p.parent.name, int(p.name.split("-")[1]))):
+        if not (d / "result.json").is_file():
+            continue
+        group = d.parent.name
+        parts = group.split("-")
+        label = "-".join(parts[:2]).upper() + "".join(" " + p for p in parts[2:])
+        path = f"docs/research/experiments/m1-runs/{group}/{d.name}/"
+        run_id = json.loads((d / "result.json").read_text()).get("runId", "?")
+        expected.setdefault(group, []).append(
+            f"| {label} #{int(d.name.split('-')[1]):02d} | [`{path}`]({path}) | [View](viewer/dist/myco-viewer.html#?run={run_id}) |")
+    for group, lines in expected.items():
+        r.check(t, f"{group}: {len(lines)} rows (label, run directory, viewer runId)", True,
+                f"m1-runs/{group}/trial-<n>/result.json runId, one line per committed trial", doc=tuple(lines))
+    table = [line for line in seg.splitlines() if line.startswith("|")]
+    header = ["| Trial | Run directory | Viewer |", "|---|---|---|"]
+    want = header + [line for lines in expected.values() for line in lines]
+    extra = [line[:60] for line in table if line not in want]
+    r.check(t, "the table is the header and exactly the committed trials, in order", table == want,
+            "the section's table lines vs m1-runs/*/trial-*/", doc=tuple(header),
+            detail="" if table == want else f"{len(table) - 2} rows, {len(want) - 2} trials; not a committed trial: {extra}")
 
 
 def check_row_8(r: Report, scorecard) -> None:
@@ -1262,22 +1447,24 @@ def main(argv: list[str]) -> int:
     scorecard = load_module("m1_scorecard", ROOT / "scripts/m1-scorecard.py")
     row7 = load_module("row7_compare", ROOT / "scripts/row7-compare.py")
     r = Report(doc.read_text(encoding="utf-8"))
-    if args.identifiers:
-        for where in r.in_scope():
-            r.tokens(where)
-        print(json.dumps({"skipped": sorted(r.identifiers), "allowlist": sorted(IDENTIFIERS)}))
-        return 0
     sections = r.classify_sections()
     check_status(r)
     v3 = check_rows_1_to_3(r, scorecard)
     check_rows_4_to_6(r)
     check_row_7(r, doc, scorecard, row7, v3)
     check_durability(r, v3, scorecard)
+    check_traces(r)
     check_row_8(r, scorecard)
     check_arm002(r)
     check_open_risk(r, v3)
     check_signoff(r, doc, scorecard, row7, v3)
     check_references(r)
+    if args.identifiers:
+        # Identifiers are the words outside every claim, so the claims run first.
+        r.sweep_numbers()
+        print(json.dumps({"skipped": sorted(r.identifiers), "allowlist": sorted(IDENTIFIERS),
+                          "sequences": {w: r.sequences[w] for w in r.in_scope() if r.sequences.get(w)}}))
+        return 0
     if not args.no_subchecks:
         subchecks(r, doc)
     r.sweep_numbers()
@@ -1295,7 +1482,7 @@ def main(argv: list[str]) -> int:
             print(f"{status:<12}  {label(where):<12} {claim} — {detail}")
     print("\nSections:")
     for heading, kind in sections:
-        reason = next((v for k, v in {**SUBCHECKED, **OUT_OF_SCOPE}.items() if heading.startswith(k)), "")
+        reason = OUT_OF_SCOPE.get(heading, "")
         print(f"  {kind:<13} {heading}" + (f" — {reason}" if reason else ""))
     print("  in scope      (preamble, status line and criterion rows 1–8)")
     counts = Counter(status for _, _, status, _ in r.rows)
