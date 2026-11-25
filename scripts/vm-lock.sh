@@ -79,12 +79,75 @@ PY
   export MYCO_VM_LOCK_OWNER=$$
 }
 
+# The fd-proven parent check (TIF-210), for the operator-session wrapper.
+# True only when ALL hold, checked in this order:
+#   1. $1 (the recorded, live owner) is an ancestor of this process. A child
+#      that inherited the wrapper's FD 9 always is, so this costs a genuine
+#      child nothing; it refuses a non-descendant before step 3 can run, which
+#      is what closes the stale-record / reused-pid forgery (verifier D1).
+#   2. FD 9 is the same file as $VM_LOCK_PATH (samestat), so step 3 never
+#      touches any other file.
+#   3. LOCK_EX|LOCK_NB on FD 9 succeeds. On the holder's own open file
+#      description this is a no-op (the exclusive lock is already on it). On a
+#      description this process opened itself it fails while the holder lives.
+#      It is NOT side-effect-free when the lock is free: then it takes the lock
+#      on this process's descriptor. Steps 1-2 limit that case to a descendant
+#      of the recorded owner whose family has already let the lock go, and the
+#      wrapper clears its record on exit (scripts/vm-session.sh); the few cases
+#      that leave one (SIGKILL, a signal while its supervisor starts) are
+#      covered by step 1 refusing every non-descendant.
+vm_lock_fd_is_holders() {
+  python3 - "$VM_LOCK_PATH" "$1" <<'PY'
+import fcntl
+import os
+import subprocess
+import sys
+
+path, owner = sys.argv[1], int(sys.argv[2])
+# pid 1 is everyone's ancestor; it can never be a session owner (same rule as
+# lockOwnedByAncestor's `owner <= 1` in src/integration/vm-lock.ts).
+if owner <= 1:
+    sys.exit(1)
+
+curr = os.getppid()
+for _ in range(64):
+    if curr == owner:
+        break
+    if curr <= 1:
+        sys.exit(1)
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(curr)],
+                             capture_output=True, text=True, timeout=5).stdout
+        nxt = int(out.strip())
+    except Exception:
+        sys.exit(1)
+    if nxt == curr:
+        sys.exit(1)
+    curr = nxt
+else:
+    sys.exit(1)
+
+try:
+    if not os.path.samestat(os.fstat(9), os.stat(path)):
+        sys.exit(1)
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(1)
+PY
+}
+
 vm_lock_owned_by_parent() {
   local pid driver owner="${MYCO_VM_LOCK_OWNER:-}"
   [ -n "$owner" ] &&
     read -r pid driver < "$VM_LOCK_PATH" &&
     [ "$pid" = "$owner" ] &&
     case "$driver" in
+      # The operator-session wrapper (TIF-210). Descent is necessary but never
+      # sufficient: the child must also carry the wrapper's FD 9. There is no
+      # "fd OR ppid" fallback as for the drivers below.
+      vm-session.sh)
+        kill -0 "$pid" 2>/dev/null && vm_lock_fd_is_holders "$pid"
+        ;;
       m1-sweep.sh|m1-corrupt-suite.sh|c1-baseline.sh|c1-sweep.sh|c1-spike.sh)
         kill -0 "$pid" 2>/dev/null &&
           python3 - "$VM_LOCK_PATH" "$owner" <<'PY'
