@@ -20,7 +20,8 @@
     "schema-validate": "tsx schemas/validate-artifacts.ts",
     "test": "vitest run --exclude test/discovery/s0-live-launcher.test.ts && vitest run --pool=forks --no-file-parallelism test/discovery/s0-live-launcher.test.ts && pnpm schema-validate",
     "test:task": "tsx scripts/myco-test.ts",
-    "myco-run": "tsx scripts/myco-run.ts"
+    "myco-run": "tsx scripts/myco-run.ts",
+    "myco-gate": "tsx scripts/myco-gate.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
