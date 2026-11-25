@@ -11,35 +11,76 @@ const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const EXPECTED_LAUNCHERS = ["c1-baseline.sh", "c1-spike.sh"];
 
 /**
- * Strip shell comments, quote-aware: a `#` starts a comment only outside single and
- * double quotes and only at the start of a word (line start or after whitespace or an
- * operator), so `echo "step #2"` and `${#arr[@]}` keep their text. CRLF and LF line
- * continuations are joined first, so a split statement is one line.
+ * Strip shell comments with a small quoting lexer over the whole file: a `#` starts a
+ * comment only in code context and only at the start of a word (line start or after
+ * whitespace, an operator or a backtick), so `echo "step #2"` and `${#arr[@]}` keep their
+ * text. The lexer keeps a stack of contexts, so it follows `'…'`, `"…"` (with `\`
+ * escapes), ANSI-C `$'…'` (with `\` escapes, so `$'a\' #'` is one string), and nested
+ * `$(…)`, `(…)` and backticks, whose insides are code again even within double quotes
+ * (`"$(printf "%s #" y)"` is one word). Quoted strings may span lines; a comment ends at
+ * the newline. CRLF and LF line continuations are joined first, so a split statement is
+ * one line, and newlines are kept, so line numbers and per-line rules are unchanged.
  */
 function stripShellComments(text: string): string {
-  const joined = text.replace(/\r\n/g, "\n").replace(/\\\n/g, " ");
-  return joined
-    .split("\n")
-    .map((line) => {
-      let quote: '"' | "'" | null = null;
-      for (let i = 0; i < line.length; i++) {
-        const c = line[i];
-        if (quote === "'") {
-          if (c === "'") quote = null;
-        } else if (quote === '"') {
-          if (c === "\\") i++;
-          else if (c === '"') quote = null;
-        } else if (c === "\\") {
-          i++;
-        } else if (c === "'" || c === '"') {
-          quote = c;
-        } else if (c === "#" && (i === 0 || /[\s;&|()]/.test(line[i - 1] ?? ""))) {
-          return line.slice(0, i);
-        }
+  const src = text.replace(/\r\n/g, "\n").replace(/\\\n/g, " ");
+  type Ctx = "sq" | "dq" | "ansi" | "paren" | "bt";
+  const stack: Ctx[] = [];
+  let out = "";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i] ?? "";
+    const next = src[i + 1] ?? "";
+    const top = stack[stack.length - 1];
+    if (top === "sq") {
+      if (c === "'") stack.pop();
+    } else if (top === "ansi") {
+      if (c === "\\") {
+        out += c + next;
+        i++;
+        continue;
       }
-      return line;
-    })
-    .join("\n");
+      if (c === "'") stack.pop();
+    } else if (top === "dq") {
+      if (c === "\\") {
+        out += c + next;
+        i++;
+        continue;
+      }
+      if (c === '"') stack.pop();
+      else if (c === "$" && next === "(") {
+        stack.push("paren");
+        out += c + next;
+        i++;
+        continue;
+      } else if (c === "`") stack.push("bt");
+    } else {
+      // Code context: top level, inside `$(…)`/`(…)`, or inside backticks.
+      if (c === "\\") {
+        out += c + next;
+        i++;
+        continue;
+      }
+      if (c === "#" && (i === 0 || /[\s;&|()`]/.test(src[i - 1] ?? ""))) {
+        while (i + 1 < src.length && src[i + 1] !== "\n") i++;
+        continue;
+      }
+      if (c === "$" && next === "'") {
+        stack.push("ansi");
+        out += c + next;
+        i++;
+        continue;
+      }
+      if (c === "'") stack.push("sq");
+      else if (c === '"') stack.push("dq");
+      else if (c === "(") stack.push("paren");
+      else if (c === ")" && top === "paren") stack.pop();
+      else if (c === "`") {
+        if (top === "bt") stack.pop();
+        else stack.push("bt");
+      }
+    }
+    out += c;
+  }
+  return out;
 }
 
 /**
@@ -69,23 +110,26 @@ const SECRETS_FILE_ALLOWED_LINES: [RegExp, string][] = [
   ],
 ];
 const SECRETS_FILE_MENTION =
-  /\bSECRETS\b|\bMYCO_ANTHROPIC_KEY_FILE\b|anthropic\.env|\.myco\/secrets/;
+  /\bSECRETS\b|\bMYCO_ANTHROPIC_KEY_FILE\b|anthropic\.env|\.myco\/secrets|\.myco\b|\bsecrets\//;
 
 /**
  * Whole-file static check of a shell script for leaks of the Anthropic key (TIF-212).
  * Returns one entry per offending line; an empty list means the file passes. With
- * `launcher: false` (every scripts/*.sh that is not a marker-carrying launcher), the
- * secrets-file allow-list and the source/eval rule apply, but not the allexport rule:
- * scripts/deploy-verify-myco-todo.sh runs `set -a; source /run/myco/gui.env` inside a
- * guest heredoc, a GUI environment file that holds no key.
+ * `launcher: false` (every scripts/*.sh that is not a marker-carrying launcher), EVERY
+ * rule below applies except rule 4, allexport: scripts/deploy-verify-myco-todo.sh runs
+ * `set -a; source /run/myco/gui.env` inside a guest heredoc, a GUI environment file that
+ * holds no key.
  *
- * COVERED, anywhere in the file once comments are stripped (quote-aware) and line
- * continuations (LF or CRLF) are joined:
+ * COVERED, anywhere in the file once comments are stripped (by the quoting lexer in
+ * stripShellComments) and line continuations (LF or CRLF) are joined:
  *  1. Any reference to the secrets file outside the allow-list above. This catches, with
  *     no idiom list, `export $(grep -v '^#' "$SECRETS" | xargs)`, `env $(cat "$SECRETS")
  *     node …`, `source`/`.`/`eval` of `$MYCO_ANTHROPIC_KEY_FILE`, `while … read … done <
  *     "$SECRETS"`, and `export OTHER="$(cut -d= -f2- "$SECRETS")"` (the key's VALUE under
- *     another name), because each has to name the file to read it.
+ *     another name), because each has to name the file to read it. A mention is any of
+ *     `SECRETS`, `MYCO_ANTHROPIC_KEY_FILE`, `anthropic.env`, `.myco` or `secrets/`, so a
+ *     path assembled from those pieces (`cd "$HOME/.myco" && cat secrets/*.env`,
+ *     `"$HOME"/.myco//secrets/*.env`, `"$HOME/.myco/"secrets/*.env`) counts too (TIF-236).
  *  2. Exporting the literal name: `export`, `declare`, `typeset`, `readonly` or `local` in
  *     command position with ANTHROPIC_API_KEY later in the same statement, including
  *     `export OTHER=$ANTHROPIC_API_KEY`.
@@ -108,10 +152,15 @@ const SECRETS_FILE_MENTION =
  * NOT COVERED. This is a textual lint over one file, like the TIF-202 guard. It does not
  * follow sourced helpers, so a helper that reads the file is checked only as its own
  * scripts/*.sh. It cannot see indirection: `n=ANTHROPIC_API_KEY; export "$n"`, a path
- * built from pieces (`d=.myco; f="$HOME/$d/secr""ets/…"`), or a value copied out of an
+ * built from pieces that split every token (`d=.my""co; f="$HOME/$d/secr""ets/…"`), or a
+ * value copied out of an
  * already-exported ambient key into another name without naming it (`export
  * OTHER="$(printenv | grep …)"`). Exporting the value under another name IS caught when
  * the line names the secrets file or the literal key name; it is not caught otherwise.
+ * The comment lexer is not a full shell parser: heredoc bodies are lexed as code (an
+ * apostrophe in one opens a quote, so later `#` comments may be kept, a false positive,
+ * or a later quoted `#` may be read as a comment, hiding the rest of THAT line only),
+ * and `)` in a `case` pattern inside `$(…)` closes the substitution early.
  */
 function launcherKeyViolations(text: string, opts: { launcher?: boolean } = {}): string[] {
   const launcher = opts.launcher ?? true;
@@ -363,6 +412,13 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     'while IFS=\'=\' read -r k v; do export "$k=$v"; done < "$SECRETS"',
     "IFS='=' read -r _ ANTHROPIC_API_KEY < f",
     'echo "step #2"; export ANTHROPIC_API_KEY=x',
+    // TIF-236 (#439 round-2 verifier): each passed the TIF-212 check.
+    'export $(cd "$HOME/.myco" && cat secrets/*.env | xargs)',
+    'export $(cat "$HOME"/.myco//secrets/*.env | xargs)',
+    'export $(cat "$HOME/.myco/"secrets/*.env | xargs)',
+    'X="$(printf "%s #" y)"; export ANTHROPIC_API_KEY=x',
+    "echo $'a\\' #'; export ANTHROPIC_API_KEY=x",
+    'echo "line one\n #still quoted"; export ANTHROPIC_API_KEY=x',
   ];
   for (const line of forbidden) {
     it(`flags ${JSON.stringify(line)}`, () => {
@@ -374,9 +430,31 @@ describe("launcherKeyViolations, the whole-file launcher check (TIF-212)", () =>
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
     expect(launcherKeyViolations("n=${#arr[@]} # export ANTHROPIC_API_KEY=x")).toEqual([]);
     expect(launcherKeyViolations('echo "a \\" # b"; export ANTHROPIC_API_KEY=x')).not.toEqual([]);
+    // TIF-236: nested, ANSI-C and multi-line strings; real comments after them still strip.
+    expect(launcherKeyViolations('X="$(printf "%s" y)" # export ANTHROPIC_API_KEY=x')).toEqual([]);
+    expect(launcherKeyViolations("echo $'a\\'' # export ANTHROPIC_API_KEY=x")).toEqual([]);
+    expect(
+      launcherKeyViolations(
+        'echo "one\ntwo" # export ANTHROPIC_API_KEY=x\nexport ANTHROPIC_API_KEY=y',
+      ),
+    ).toEqual([
+      "exports the key: export ANTHROPIC_API_KEY=y",
+      "assigns the key: export ANTHROPIC_API_KEY=y",
+    ]);
   });
-  it("non-launcher mode skips only the allexport rule", () => {
+  it("non-launcher mode applies every rule except allexport (TIF-236)", () => {
     expect(launcherKeyViolations("set -a", { launcher: false })).toEqual([]);
     expect(launcherKeyViolations('source "$SECRETS"', { launcher: false }).length).toBe(2);
+    expect(launcherKeyViolations("export ANTHROPIC_API_KEY=x", { launcher: false }).length).toBe(2);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
+    expect(launcherKeyViolations(': "${ANTHROPIC_API_KEY:=x}"', { launcher: false })).not.toEqual(
+      [],
+    );
+    expect(launcherKeyViolations("read -r ANTHROPIC_API_KEY < f", { launcher: false })).not.toEqual(
+      [],
+    );
+    expect(
+      launcherKeyViolations('cd "$HOME/.myco" && cat secrets/*.env', { launcher: false }),
+    ).not.toEqual([]);
   });
 });
