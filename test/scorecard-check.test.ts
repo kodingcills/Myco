@@ -101,6 +101,51 @@ describe("scorecard-check", () => {
     );
   }, 120_000);
 
+  // TIF-211: row7-compare --check reads only the `| 7 |` row. These figures outside it
+  // (the slots table, the cap total, the unruled-row count) are guarded here instead.
+  it.each([
+    [
+      "slots pass rate",
+      "**0/30 verified** (30 refuted",
+      "**1/30 verified** (30 refuted",
+      /^MISMATCH slots: baseline pass rate/,
+    ],
+    [
+      "slots paired table",
+      "**b = 29** (Myco only)",
+      "**b = 28** (Myco only)",
+      /^MISMATCH slots: paired table/,
+    ],
+    ["slots Wilson interval", "**0.000–0.114**", "**0.000–0.115**", /^MISMATCH slots: Wilson 95%/],
+    [
+      "slots cap total",
+      "= **$7.8521 of $9.00**",
+      "= **$7.8522 of $9.00**",
+      /^MISMATCH slots: spend/,
+    ],
+    [
+      "row 7 cap total",
+      "= **$7.8521 of the $9.00 cap**",
+      "= **$7.8522 of the $9.00 cap**",
+      /^MISMATCH row 7: spend/,
+    ],
+    [
+      "row 7 unruled rows",
+      "the other 18 of the 27",
+      "the other 17 of the 27",
+      /^MISMATCH row 7: unruled rows with the pattern/,
+    ],
+  ])(
+    "fails when row 7's %s changes outside the `| 7 |` row check",
+    (_name, from, to, line) => {
+      const result = checkMutated(mutate(readFileSync(SCORECARD, "utf8"), from, to));
+      expect(result.status).toBe(1);
+      expect(result.mismatch).toHaveLength(1);
+      expect(result.mismatch[0]).toMatch(line);
+    },
+    120_000,
+  );
+
   // The five 2026-11-25 doc fixes and row 8's step-1 figures are checked claims: changing
   // any of them must fail, and the uncommitted booked spike figures must not print `ok`.
   it.each([
