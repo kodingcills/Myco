@@ -419,7 +419,21 @@ def check_row_8(r: Report, scorecard) -> None:
              "reset.sh", "wait-ssh.sh", "vssh", "shutdown.sh", "set-cd.sh", "guest", "seed"]
     absent = [n for n in named if f"`{n}" in row and not (TOOLCHAIN / n).exists()]
     r.fact("8", "named toolchain files exist", not absent, "docs/env/vm-toolchain/", f"absent {absent}" if absent else "")
-    r.unchecked("8", "PR #33, PR #53, §10", "references")
+    refs = sorted(set(re.findall(r"(?:PR )?#\d+|TIF-\d+|§\d+(?:\.\d+)?", row)))
+    if refs:
+        r.unchecked("8", ", ".join(refs), "references to PRs, issues and runbook sections, not counts from an artifact")
+    # Figures row 8 states about operator sessions; listed only when the row states them.
+    for trigger, claim, why in (
+        ("F1–F21", "findings F1–F21 and G-findings up to G38", "host-only operator reports, not committed"),
+        ("of the six operator sessions", "three of the six operator sessions used a fresh clone",
+         "operator-session provenance from the host-only reports; no committed artifact records it"),
+        ("abandoned at 11 rows", "first §7.3 sweep: 11 rows (7 verified, 3 refuted, 1 uncertain), at most 26/30 reachable, 3 of 4 misses from the 15 s bug",
+         "the abandoned sweep's ledger is deliberately not committed (m1-row8-sweep2/README.md says none of its rows are in that ledger)"),
+        ("43 of 1,", "§1.2 `pnpm test` failed 43 of 1,080 on 5 s timeouts under host load 13–15 (G23)",
+         "the operator's host-side test run, not committed"),
+    ):
+        if trigger in row:
+            r.unchecked("8", claim, why)
 
     if "m1-row8-sweep2" not in row:
         r.skipped("8", "§7.3 sweep figures", "row 8 does not cite m1-row8-sweep2, so it quotes none of its numbers")
@@ -480,8 +494,7 @@ def check_row_8(r: Report, scorecard) -> None:
     r.fact("8", "`DEPLOY OK`", "DEPLOY OK" in log, "m1-row8-corrupt/deploy-check.log")
     r.unchecked("8", "reset 250 s, deploy 201 s; session_info session_id 1 / WinSta0 / exit 0",
                 "stated in the pack README from the operator's session; no committed log records the timings or the session_info output")
-    r.unchecked("8", "§6 20/20, 11:42–11:59Z; findings G1–G38", "the row itself says these are in the host-only operator report, not committed")
-    r.unchecked("8", "TIF/PR references (#427, #428, #429, #425, #430, TIF-217, TIF-223)", "references")
+    r.unchecked("8", "§6 20/20, exit 0, 2026-11-24 11:42–11:59Z", "the row itself says this is in the host-only operator report, not committed")
 
 
 def subchecks(r: Report, doc: Path) -> None:
