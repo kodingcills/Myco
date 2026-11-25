@@ -65,6 +65,11 @@ SCP() { scp -q -F "$VM_SSH_CONFIG" -o ConnectTimeout=10 "$@"; }
 # naming that, after at most 30s of backoff on top of the failed attempts.
 COPY_ATTEMPTS=${MYCO_DEPLOY_COPY_ATTEMPTS:-3}
 COPY_BACKOFF=${MYCO_DEPLOY_COPY_BACKOFF:-10}
+# Both must be plain non-negative integers: a non-numeric attempts value would make
+# the bound check below error out as false and the retry loop would never end.
+case "$COPY_ATTEMPTS" in ''|*[!0-9]*) die "MYCO_DEPLOY_COPY_ATTEMPTS must be a positive integer, got '$COPY_ATTEMPTS'" ;; esac
+[ "$COPY_ATTEMPTS" -ge 1 ] || die "MYCO_DEPLOY_COPY_ATTEMPTS must be at least 1"
+case "$COPY_BACKOFF" in ''|*[!0-9]*) die "MYCO_DEPLOY_COPY_BACKOFF must be a non-negative integer, got '$COPY_BACKOFF'" ;; esac
 COPY_ROOTS=(myco_agent bootstrap pyproject.toml)
 
 # "<sha256>  <relative/path>" per source file, byte-sorted.

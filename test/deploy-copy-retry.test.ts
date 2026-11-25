@@ -105,6 +105,12 @@ if [ "$recursive" = 1 ]; then
     : > "$path/myco_agent/core.py"
   fi
 else
+  case "$path" in
+    *ProgramData*)
+      # Token write: record whether the tree on the guest was complete at this moment.
+      if cmp -s "${src}/myco_agent/core.py" "${guest}/${AGENT_DIR_REL}/myco_agent/core.py"; then
+        echo core_ok=yes; else echo core_ok=no; fi >> "${dir}/token.log" ;;
+  esac
   mkdir -p "$(dirname "$path")"
   cp "\${args[@]}" "$path"
 fi
@@ -121,7 +127,11 @@ case "$cmd" in
     cd "${guest}/${AGENT_DIR_REL}" 2>/dev/null || exit 0
     for r in myco_agent bootstrap pyproject.toml; do [ -e "$r" ] && find "$r" -type f; done \\
       | while IFS= read -r f; do shasum -a 256 "$f"; done | sed 's/$/\\r/' ;;
-  *"-Stage register"*) echo registered ;;
+  *"-Stage register"*)
+    # Record whether the tree on the guest was complete when the agent was registered.
+    if cmp -s "${src}/myco_agent/core.py" "${guest}/${AGENT_DIR_REL}/myco_agent/core.py"; then
+      echo core_ok=yes; else echo core_ok=no; fi >> "${dir}/register.log"
+    echo registered ;;
   *) echo "stub ssh: unexpected command: $cmd" >&2; exit 98 ;;
 esac`,
   );
@@ -135,7 +145,7 @@ interface DeployRun {
   scpCalls: number;
 }
 
-function runDeploy(): Promise<DeployRun> {
+function runDeploy(extra: Record<string, string> = {}): Promise<DeployRun> {
   return new Promise((resolve) => {
     // A minimal environment, never an inherited one: an inherited PATH could
     // put the host's real ssh ahead of the stubs.
@@ -147,6 +157,7 @@ function runDeploy(): Promise<DeployRun> {
         VM_SSH_HOST: "myco-win11-stub",
         MYCO_AGENT_PORT: "65531",
         MYCO_DEPLOY_COPY_BACKOFF: "0",
+        ...extra,
       },
     });
     let stdout = "";
@@ -163,6 +174,12 @@ function runDeploy(): Promise<DeployRun> {
       resolve({ status, stdout, stderr, scpCalls });
     });
   });
+}
+
+/** Lines a stub appended (register.log / token.log), or [] if it never ran. */
+function stubLog(name: string): string[] {
+  const f = join(dir, name);
+  return existsSync(f) ? readFileSync(f, "utf8").trim().split("\n").filter(Boolean) : [];
 }
 
 function guestFile(rel: string): string {
@@ -194,6 +211,16 @@ afterEach(() => {
 const SLOW = 30_000;
 
 describe("deploy-to-vm copy phase (TIF-220)", () => {
+  it("refuses a non-numeric attempts bound instead of looping forever", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 999 });
+    const r = await runDeploy({ MYCO_DEPLOY_COPY_ATTEMPTS: "three" });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("MYCO_DEPLOY_COPY_ATTEMPTS must be a positive integer");
+    expect(r.scpCalls).toBe(0);
+  });
+
   it("deploys cleanly with no drops, verifying the tree", { timeout: SLOW }, async () => {
     installStubs({ scpDrops: 0 });
     const r = await runDeploy();
@@ -204,6 +231,8 @@ describe("deploy-to-vm copy phase (TIF-220)", () => {
     expect(r.stderr).not.toContain("copy attempt");
     // ps1, tree, token: one pass, no retries.
     expect(r.scpCalls).toBe(3);
+    expect(stubLog("register.log")).toEqual(["core_ok=yes"]);
+    expect(stubLog("token.log")).toEqual(["core_ok=yes"]);
   });
 
   it("survives the trial-14 drop on the first scp after ready", { timeout: SLOW }, async () => {
@@ -236,6 +265,10 @@ describe("deploy-to-vm copy phase (TIF-220)", () => {
     expect(r.stderr).toContain("myco_agent/core.py");
     expect(r.stderr).toContain("copy succeeded on attempt 2/3");
     expect(guestFile("myco_agent/core.py")).toBe("def main():\n    return 42\n");
+    // The truncated first copy must never reach register or the token write:
+    // both happen once, and only after the verified second copy.
+    expect(stubLog("register.log")).toEqual(["core_ok=yes"]);
+    expect(stubLog("token.log")).toEqual(["core_ok=yes"]);
   });
 
   it("fails loudly after 3 attempts when the drops persist", { timeout: SLOW }, async () => {
@@ -260,5 +293,7 @@ describe("deploy-to-vm copy phase (TIF-220)", () => {
     expect(r.stdout).not.toContain("registering MycoAgent");
     // The partial tree is on the guest, and it was not trusted.
     expect(guestFile("myco_agent/__init__.py").length).toBe(3);
+    expect(stubLog("register.log")).toEqual([]);
+    expect(stubLog("token.log")).toEqual([]);
   });
 });
