@@ -25,12 +25,12 @@
 - Gate: `lsof … || echo free` → `free`
 - Command: `agent/bootstrap/deploy-to-vm.sh` (output to `runs/deploy.log`)
 - Start 2026-11-25T08:57:21Z, end 08:59:41Z, wall 140 s, 1-min load at start 7.33
-- Result: exit 0. `==> verified 13 files on the guest against the source (sha256)` (clean first attempt, no retry line), `==> wrote the fresh token to /private/tmp/row8-step1b/runs/token-tofuinparis/agent-token (mode 600)`, `==> ping verified:` `{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "[REDACTED]", "backend": "windows"}}`, `DEPLOY OK`, then the token/tunnel/ops hint lines.
+- Result: exit 0. `==> verified 13 files on the guest against the source (sha256)` (clean first attempt, no retry line), `==> wrote the fresh token to /private/tmp/row8-step1b/runs/token-<account>/agent-token (mode 600)`, `==> ping verified:` `{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "[REDACTED]", "backend": "windows"}}`, `DEPLOY OK`, then the token/tunnel/ops hint lines.
 - Expected vs actual: matches the expected tail, in the 100–420 s range. Extra, unmentioned output: three OpenSSH post-quantum warnings (J5); no pip output visible although §4 says the deploy installs pywin32/comtypes/uiautomation (J6). PASS.
 
 ### Step 2 — §5 desktop proof
 - Gate: `lsof … || echo free` → `free`; `unset MYCO_AGENT_TOKEN` (§4)
-- Command: `pnpm exec tsx src/integration/session-info.ts --token-file /private/tmp/row8-step1b/runs/token-tofuinparis/agent-token` (the deploy's private path, via a shell variable)
+- Command: `pnpm exec tsx src/integration/session-info.ts --token-file /private/tmp/row8-step1b/runs/token-<account>/agent-token` (the deploy's private path, via a shell variable)
 - Start 2026-11-25T09:00:07Z, end 09:00:12Z, wall 5 s, 1-min load at start 5.90
 - Result: exit 0, stdout `{"session_id":1,"window_station":"WinSta0","desktop":"Default","user":"MYCO-WIN11\\myco"}`, stderr empty; afterwards `lsof -iTCP:8765 -sTCP:LISTEN` → nothing listening.
 - Expected vs actual: identical to the expected JSON, exit 0. PASS.
@@ -38,7 +38,7 @@
 ### Step 3 — §6.1 clean check, then §6 generator proof (`--limit 4`)
 - §6.1: wrote `runs/row8-host/guest-clean.ps1` verbatim from the runbook, gate `free`, `scp -q -F ~/VMs/myco-win11/ssh_config runs/row8-host/guest-clean.ps1 myco-win11:'C:/myco/guest-clean.ps1'` (exit 0), `vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-clean.ps1'` (exit 0) → printed nothing. 09:00:20–09:00:33Z, load 4.97. Clean guest (fresh from clean-base), no cleanup needed.
 - Gate (§6.2): `free`; `unset MYCO_AGENT_TOKEN`
-- Command: `pnpm exec tsx src/integration/run-live.ts --mode values --limit 4 --runs-dir runs/s6-subset --token-file /private/tmp/row8-step1b/runs/token-tofuinparis/agent-token` (runbook's own subset example, J7)
+- Command: `pnpm exec tsx src/integration/run-live.ts --mode values --limit 4 --runs-dir runs/s6-subset --token-file /private/tmp/row8-step1b/runs/token-<account>/agent-token` (runbook's own subset example, J7)
 - Start 2026-11-25T09:00:40Z, end 09:03:42Z, wall 182 s, 1-min load at start 5.21
 - Result: exit 0; stdout a JSON array of 4 rows, all `"status": "verified"`:
   - name `REVISED-908578` — cell B39 (EMP-0038) persisted, 68.2 s

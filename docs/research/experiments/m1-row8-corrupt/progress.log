@@ -23,7 +23,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 1 (invalid-target) 2026-11-25T05:29:55Z
 ac_power=yes trial=1
@@ -50,7 +50,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 2 (dropped-save) 2026-11-25T05:36:44Z
 ac_power=yes trial=2
@@ -77,7 +77,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 3 (focus-change) 2026-11-25T05:43:53Z
 ac_power=yes trial=3
@@ -104,7 +104,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 4 (kill) 2026-11-25T05:51:51Z
 ac_power=yes trial=4
@@ -131,7 +131,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 5 (invalid-target) 2026-11-25T06:00:11Z
 ac_power=yes trial=5
@@ -158,7 +158,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 6 (kill) 2026-11-25T06:07:57Z
 ac_power=yes trial=6
@@ -185,7 +185,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 7 (invalid-target) 2026-11-25T06:15:22Z
 ac_power=yes trial=7
@@ -212,7 +212,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 8 (dropped-save) 2026-11-25T06:22:28Z
 ac_power=yes trial=8
@@ -239,7 +239,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 9 (focus-change) 2026-11-25T06:29:44Z
 ac_power=yes trial=9
@@ -266,7 +266,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 10 (kill) 2026-11-25T06:36:48Z
 ac_power=yes trial=10
@@ -293,7 +293,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 11 (invalid-target) 2026-11-25T06:45:55Z
 ac_power=yes trial=11
@@ -320,7 +320,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 12 (kill) 2026-11-25T06:55:59Z
 ac_power=yes trial=12
@@ -347,7 +347,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 13 (invalid-target) 2026-11-25T07:02:27Z
 ac_power=yes trial=13
@@ -374,7 +374,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 14 (dropped-save) 2026-11-25T07:08:41Z
 ac_power=yes trial=14
@@ -401,7 +401,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 15 (focus-change) 2026-11-25T07:15:05Z
 ac_power=yes trial=15
@@ -428,7 +428,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 16 (kill) 2026-11-25T07:22:03Z
 ac_power=yes trial=16
@@ -455,7 +455,7 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 === trial 17 (invalid-target) 2026-11-25T07:29:18Z
 ac_power=yes trial=17
@@ -482,6 +482,6 @@ MycoAgent task registered; agent launched in the interactive session
 
 DEPLOY OK
   token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
-  tunnel  : ssh -F /Users/tofuinparis/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
   ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 SUITE_DONE 2026-11-25T07:36:16Z

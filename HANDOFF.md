@@ -213,7 +213,7 @@ Written 2026-11-23 10:0x ET by the MVP Discovery thread, at the outer loop's req
 so this thread can be restarted with fresh context and the host freed for the M1 VM
 queue. Read this first; it is the entry point, not the archive.
 
-Durable worktree for launcher work: `/Users/tofuinparis/Projects/myco-launcher-claim`
+Durable worktree for launcher work: `~/Projects/myco-launcher-claim`
 (created for TIF-138 because the outer loop asked for a path outside `/tmp`).
 Discovery's own worktree: `myco-mvp-discovery-4b5ff1cd3a7126c4`.
 
