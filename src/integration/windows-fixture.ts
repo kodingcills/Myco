@@ -22,6 +22,8 @@ export interface WindowsFixtureConverterOptions {
   profileDir?: string;
   /** Timeout for the convert round-trip, ms. */
   timeoutMs?: number;
+  /** Host load-average reader (TESTS ONLY seam; defaults to `os.loadavg`). */
+  loadAverage?: () => number[];
 }
 
 /**
@@ -41,13 +43,26 @@ export interface ConvertTiming {
   deadlineMs: number;
   durationMs: number;
   outcome: "arrived" | "deadline" | "error";
-  hostLoadStart: number;
-  hostLoadEnd: number;
+  /** Host 1-minute load at convert start; `null` if it could not be read. */
+  hostLoadStart: number | null;
+  /** Host 1-minute load at the last timing update; `null` if it could not be read. */
+  hostLoadEnd: number | null;
 }
 
-/** Host 1-minute load average, two decimals. `os.loadavg()` is a cheap syscall. */
-function hostLoad1m(): number {
-  return Math.round((loadavg()[0] ?? 0) * 100) / 100;
+/**
+ * Host 1-minute load average, two decimals, or `null`. Diagnostic only: it never
+ * feeds a verdict, so a failed or nonsensical read must never fail a convert
+ * (TIF-219 round-1 finding D1).
+ */
+function hostLoad1m(read: () => number[]): number | null {
+  try {
+    const value = read()[0];
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.round(value * 100) / 100
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 interface ConvertResult {
@@ -66,6 +81,7 @@ export class WindowsFixtureConverter implements FixtureConverter {
   readonly #guestDir: string;
   readonly #profileDir: string;
   readonly #timeoutMs: number;
+  readonly #loadAverage: () => number[];
   #lastConvert: ConvertResult | null = null;
   #lastTiming: ConvertTiming | null = null;
   /** Set before the first await so a half-failed convert can still be cleaned. */
@@ -76,6 +92,7 @@ export class WindowsFixtureConverter implements FixtureConverter {
     this.#guestDir = options.guestDir.replaceAll("\\", "/").replace(/\/$/, "");
     this.#profileDir = options.profileDir ?? `${this.#guestDir}/profiles`;
     this.#timeoutMs = options.timeoutMs ?? 60_000;
+    this.#loadAverage = options.loadAverage ?? loadavg;
   }
 
   /**
@@ -90,14 +107,14 @@ export class WindowsFixtureConverter implements FixtureConverter {
     const profile = `${this.#profileDir}/${nonce()}`;
     this.#lastDirs = { runDir: dir, profile };
     const started = Date.now();
-    const hostLoadStart = hostLoad1m();
+    const hostLoadStart = hostLoad1m(this.#loadAverage);
     const timing = (outcome: ConvertTiming["outcome"]): ConvertTiming => {
       this.#lastTiming = {
         deadlineMs: this.#timeoutMs,
         durationMs: Date.now() - started,
         outcome,
         hostLoadStart,
-        hostLoadEnd: hostLoad1m(),
+        hostLoadEnd: hostLoad1m(this.#loadAverage),
       };
       return this.#lastTiming;
     };

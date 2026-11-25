@@ -116,15 +116,17 @@ export interface TrialOptions {
  * Deadline for the guest-side fixture `.xlsx` to appear. Each agent RPC keeps its own
  * timeout; this bounds only the arrival poll.
  *
- * M1-013 (2026-11-21) set 240 s = 1.4168 x the slowest sample then (169.4 s).
- * TIF-219 (2026-11-24) reapplies that same margin to the slowest convert since
- * measured: row-8 sweep op3 trial 3 (`seed-d`, host 1-min load 12-16) was still
+ * M1-013 (2026-11-21) set 240 s, about 70 s beyond the slowest sample then (169.4 s);
+ * expressed after the fact as a ratio, that is 1.4168x. TIF-219 (2026-11-24) applies
+ * that ratio to the slowest convert since measured: row-8 sweep op3 trial 3 (`seed-d`, host 1-min load 12-16) was still
  * converting at 240 483 ms. Treating that censored value as if it had just arrived:
  * 240 483 x 1.4168 = 340 708 ms, rounded up to the next whole minute = 360 s. It
  * covers every arrived sample (max 221 207 ms, 61% of the deadline) and the censored
  * one only if it would have finished by 360 s, which is unknown. Trial budget: the
  * pessimistic slow-but-passing path (m1-014-calc-cold-start.md) grows from 1 170 s
- * to 1 290 s, inside the 1 500 s sweep alarm. A miss is still `uncertain` and is
+ * to 1 290 s, inside the 1 500 s sweep alarm. The corrupted suite's kill-recovery path
+ * reaches ~1 560 s with tunnel/health and cleanup, so its alarm moves to 1 800 s
+ * (scripts/m1-corrupt-suite.sh). A miss is still `uncertain` and is
  * tagged as a harness fault (`fixture-convert-deadline`). See
  * docs/research/experiments/m1-013-convert-timeout.md, "TIF-219".
  */

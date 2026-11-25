@@ -93,7 +93,14 @@ deadline), at the loads those sweeps saw. It covers the censored trial only if t
 trial would have finished by 360 s, which is unknown. It does not cover a heavier load.
 
 **Budget.** The pessimistic slow-but-passing path in `m1-014-calc-cold-start.md`
-grows from 1170 s to 1290 s, inside the 1500 s sweep and corrupted-suite alarms.
+grows from 1170 s to 1290 s all-in, inside the 1500 s sweep alarm. The corrupted
+suite's kill-recovery path is different: its 1170 s figure was configured polls alone,
+so with the 360 s deadline it reaches 1290 s of polls plus ~110 s tunnel/health and
+~160 s cleanup, about 1560 s. That would exceed a 1500 s watchdog, so the corrupted
+suite's alarm moves to 1800 s (`scripts/m1-corrupt-suite.sh`), about 240 s headroom.
+The 1.4168 ratio is M1-013's margin expressed after the fact: M1-013 approved 240 s as
+"roughly 70 seconds beyond" the 169.4 s sample, never as a ratio; the same additive
+margin would give about 311 s.
 A hung `soffice` now costs at most 120 s more per trial and still ends `uncertain`.
 
 **Recording.** A deadline miss now records `guardFailure.predicateName =

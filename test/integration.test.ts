@@ -211,6 +211,34 @@ describe("WindowsFixtureConverter", () => {
     expect(typeof timing?.hostLoadEnd).toBe("number");
     expect(timing?.hostLoadStart ?? -1).toBeGreaterThanOrEqual(0);
   });
+
+  it("a load read that throws never fails the convert; the load is recorded as null (TIF-219 D1)", async () => {
+    const { client } = clientWith({ unoEval: [], csvBytes: Buffer.from("zz") });
+    const converter = new WindowsFixtureConverter({
+      client,
+      guestDir: "C:\\myco\\runs",
+      loadAverage: () => {
+        throw new Error("loadavg unavailable");
+      },
+    });
+    await converter.convert(Buffer.from("a,b\n1,2\n", "utf8"));
+    expect(converter.lastTiming).toMatchObject({
+      outcome: "arrived",
+      hostLoadStart: null,
+      hostLoadEnd: null,
+    });
+  });
+
+  it("records the injected load reading, not a constant (TIF-219 D1)", async () => {
+    const { client } = clientWith({ unoEval: [], csvBytes: Buffer.from("zz") });
+    const converter = new WindowsFixtureConverter({
+      client,
+      guestDir: "C:\\myco\\runs",
+      loadAverage: () => [12.345, 0, 0],
+    });
+    await converter.convert(Buffer.from("a,b\n1,2\n", "utf8"));
+    expect(converter.lastTiming).toMatchObject({ hostLoadStart: 12.35, hostLoadEnd: 12.35 });
+  });
 });
 
 describe("windowsProgramFor guards", () => {
