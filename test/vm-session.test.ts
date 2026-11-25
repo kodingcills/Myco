@@ -632,10 +632,12 @@ function noPtyReason(): string | null {
   return null;
 }
 const ptyMissing = noPtyReason();
-if (ptyMissing) console.warn(`skipping the vm-session terminal test: ${ptyMissing}`);
 
+// When skipped, the reason is part of the title, so the run shows it.
 it.skipIf(ptyMissing !== null)(
-  "under a terminal: Ctrl-Z stops the whole job, fg resumes it, Ctrl-C and SIGTERM end it cleanly",
+  `under a terminal: Ctrl-Z stops the whole job, fg resumes it, Ctrl-C and SIGTERM end it cleanly${
+    ptyMissing ? ` (skipped: ${ptyMissing})` : ""
+  }`,
   () => {
     // test/fixtures/vm-session-pty.py runs an interactive bash on a pty and drives
     // three multi-step sessions (`bash -c '<step>; <next step>'`) with real
