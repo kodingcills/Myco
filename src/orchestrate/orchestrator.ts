@@ -673,7 +673,6 @@ export class Orchestrator {
   }): Promise<Report> {
     let trial: IsolatedTrial | undefined;
     let usage: TokenUsage | null = null;
-    let metered = false;
     let result: {
       status: ReportStatus;
       verdict?: GateVerdict;
@@ -724,7 +723,6 @@ export class Orchestrator {
         this.#diag("meter", error);
         usage = null;
       }
-      metered = true;
       if (result.status === "done" && this.#config.grader) {
         let graded: GradeOutcome;
         try {
@@ -755,8 +753,9 @@ export class Orchestrator {
         this.#diag("isolation-release", error);
       }
     }
-    // A trial that never reached the meter used an unknown amount: unmetered, never 0.
-    this.#charge(metered ? usage : null);
+    // `usage` stays null unless the meter was read: a trial that never reached the meter
+    // (isolation failed, factory threw) is unmetered, never free.
+    this.#charge(usage);
     w.release();
     // Stopped by the kill switch (or wall budget) while in flight: never handed over as done.
     if (this.#halt && w.controller.signal.aborted) {
