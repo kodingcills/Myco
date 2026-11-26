@@ -388,7 +388,7 @@ DEVICE_DRIVERS = {
     "nec-usb-xhci", "qemu-xhci", "usb-tablet", "usb-mouse", "usb-kbd",
     "usb-redir", "usb-storage", "nvme", "virtio-blk-pci",
     "virtio-serial", "virtio-serial-pci", "virtserialport",
-    "tpm-tis-device", "virtio-rng-pci", "virtio-balloon-pci",
+    "tpm-crb-device", "virtio-rng-pci", "virtio-balloon-pci",
     "virtio-keyboard-pci", "virtio-mouse-pci", "virtio-tablet-pci",
 }  # fmt: skip
 
@@ -399,7 +399,14 @@ REFUSED_DRIVERS = {
     "vhost-vsock-pci", "vhost-vsock-device", "vhost-user-fs-pci", "vhost-user-vsock-pci",
     "virtio-9p-pci", "virtio-9p-device", "usb-host", "vfio-pci", "vfio-platform",
     "ivshmem", "ivshmem-plain", "ivshmem-doorbell", "usb-serial", "pci-serial",
+    "tpm-tis-device", "tpm-tis", "tpm-spapr",
 }  # fmt: skip
+
+# The TPM front end (round 4, live verify-all at edc9befc refused argv[103]).
+# UTM 5.0.9's tpmArguments writes exactly this for a `virt*` machine
+# (tpm-tis / tpm-spapr are other targets), bound to its `-tpmdev ...,id=tpm0`.
+# Exact value, at most once, and only beside that -tpmdev (see refusals()).
+TPM_DEVICE = "tpm-crb-device,tpmdev=tpm0"
 
 
 def device_rule(value: str) -> None:
@@ -407,6 +414,10 @@ def device_rule(value: str) -> None:
     if "=" in fields[0] or fields[0] not in DEVICE_DRIVERS:
         drv = said(fields[0], REFUSED_DRIVERS, "driver")
         raise Refused(f"-device {drv} is not in the allowlist")
+    if fields[0] == "tpm-crb-device":
+        if value != TPM_DEVICE:
+            raise Refused(f"-device tpm-crb-device other than UTM's {TPM_DEVICE} is refused")
+        return
     seen = set()
     for k, v in keyvals(fields[1:], "-device"):
         if not re.fullmatch(WORD, k) or not re.fullmatch(SAFE, v):
@@ -731,6 +742,11 @@ def refusals(argv: list[str]) -> tuple[list[str], str | None]:
         out.append("-serial chardev:term0 without UTM's pty term0")
     if values.get("-tpmdev") and "chrtpm0" not in chardevs:
         out.append("-tpmdev without UTM's swtpm socket chrtpm0")
+    tpms = [d for d in values.get("-device", []) if d == TPM_DEVICE]
+    if len(tpms) > 1:
+        out.append("-device tpm-crb-device given more than once (UTM writes it once)")
+    if tpms and not values.get("-tpmdev"):
+        out.append("-device tpm-crb-device without UTM's -tpmdev tpm0")
 
     # D5: nothing may attach to the netdev but the one NIC; device chardevs are SPICE only.
     refs = []

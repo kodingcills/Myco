@@ -117,8 +117,12 @@ allowlist (argv[38])`. `names` marked `-audio` and `-audiodev` NOT ALLOWED; the 
 options were allowed, and `-boot` was not present. Round 4 adds `-audio none` and `-audiodev
 spice,id=audio0` (values from UTM 5.0.9's `soundArguments`, not yet read from the guest),
 removes `-boot`, and adds the read-only `scripts/guest-egress.sh verify-all`, which lists
-every refusal by argv index. A `verify-all` run on the live guest is owed before merge, and
-so is committing its output and the `names` output as `11-allowlist-live-names.txt`.
+every refusal by argv index. The VM owner's `verify-all` at `edc9befc` (relayed) had exactly one
+refusal: `-device driver is not in the allowlist (argv[103])`, the TPM front end. Audio was
+accepted and the UTM config matched. UTM 5.0.9's `tpmArguments` writes
+`tpm-crb-device,tpmdev=tpm0` for a `virt` machine, and the follow-up commit allows exactly that.
+A clean `verify-all` on the live guest is still owed before merge, and so is committing its
+output and the `names` output as `11-allowlist-live-names.txt`.
 
 ## Reproduce
 

@@ -164,7 +164,7 @@ This choice over the alternatives:
     | `-nodefaults` | none (required) | live |
     | `-S` | none | builder (UTM starts paused, resumes over QMP) |
     | `-netdev` | one, as above | live |
-    | `-device` | a driver from `DEVICE_DRIVERS` (one NIC `virtio-net-pci`; display, sound, USB, `usb-redir`, `nvme`/`virtio-blk-pci`, `virtio-serial`, `virtserialport`, `tpm-tis-device`, `virtio-rng-pci`, …), then `key=value` with no `,` `{` or whitespace in values; `netdev=` only on the NIC; `chardev=` only to a SPICE chardev | live (NIC), builder (rest) |
+    | `-device` | a driver from `DEVICE_DRIVERS` (one NIC `virtio-net-pci`; display, sound, USB, `usb-redir`, `nvme`/`virtio-blk-pci`, `virtio-serial`, `virtserialport`, `virtio-rng-pci`, …), then `key=value` with no `,` `{` or whitespace in values; `netdev=` only on the NIC; `chardev=` only to a SPICE chardev. The TPM front end is exactly `tpm-crb-device,tpmdev=tpm0` (no other key), at most once, and only beside UTM's `-tpmdev`; `tpm-tis-device`, `tpm-tis` and `tpm-spapr` are refused | live (NIC, TPM), builder (rest) |
     | `-chardev` | `spiceport,name=…,id=…`; `spicevmc,name=…,id=…[,debug=N]`; exactly `pty,id=term0`; exactly the swtpm socket | live |
     | `-mon` | exactly `chardev=org.qemu.monitor.qmp,mode=control`, on the spiceport | live |
     | `-serial` | exactly `chardev:term0` | live |
@@ -176,6 +176,11 @@ This choice over the alternatives:
     | `-name`, `-uuid` | a word; a UUID | builder |
     | `-audio` | exactly `none` | live name; value from the builder (`soundArguments`, a VM with no sound card) |
     | `-audiodev` | exactly `spice,id=audio0`: SPICE audio, which rides the SPICE unix socket. Refused: every other backend, including network ones (`pa,server=tcp:…`), file ones (`wav,path=…`), host CoreAudio (`coreaudio,id=audio1`, which UTM writes only when the host's UTM sound setting is CoreAudio), another id, and extra options | live name; value from the builder |
+
+    The TPM front end was `tpm-tis-device` in rounds 1–3, modelled by hand. The live
+    `verify-all` run at `edc9befc` refused it (argv[103], the `-device` right after
+    `-tpmdev`). UTM 5.0.9's `tpmArguments` writes `tpm-crb-device,tpmdev=tpm0` for every
+    `virt*` machine, so that exact value replaced it, and `tpm-tis-device` is off the list.
 
     `-boot` is **not on the list**. Rounds 1–3 modelled it from the builder, but UTM 5.0.9's
     builder never writes it (only `bootindex=` on a device), and the live `names` run does not
@@ -222,7 +227,7 @@ This choice over the alternatives:
   `scripts/guest_egress_check.py`, and every refusal `append` in `scan()` and `refusals()`
   (where `verify-all` collects refusals instead of raising), was replaced with `pass`, one at
   a time, and the suite run. The whitespace refusal list was replaced with an empty list.
-  That is 62 sites. Every replacement fails at least one test, except these six, which are
+  That is 65 sites. Every replacement fails at least one test, except these six, which are
   not counted as tested rules:
   - the two real-host `sysctl` failures (`KERN_ARGMAX`, `KERN_PROCARGS2`): tests serve
     fixed buffers, so no test reaches them;

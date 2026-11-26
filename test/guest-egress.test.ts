@@ -159,7 +159,7 @@ function utmDefaultArgv(): string[] {
     "-tpmdev",
     "emulator,id=tpm0,chardev=chrtpm0",
     "-device",
-    "tpm-tis-device,tpmdev=tpm0",
+    "tpm-crb-device,tpmdev=tpm0",
     "-name",
     "myco-win11",
     "-uuid",
@@ -1217,6 +1217,56 @@ describe("round 4: sound is exactly UTM's -audio none and -audiodev spice,id=aud
   it("-boot is not modelled: UTM never writes it, so it is refused", () => {
     const a = utmDefaultArgv();
     refuse([...a, "-boot", "menu=on"], `-boot is not in the launch allowlist (argv[${a.length}])`);
+  });
+});
+
+describe("round 4: the TPM front end is exactly UTM's tpm-crb-device,tpmdev=tpm0", () => {
+  const TPM = "tpm-crb-device,tpmdev=tpm0";
+  const refuse = (argv: string[], why: string) => {
+    const r = run([argv]);
+    expect(r.stderr).toContain(why);
+    expect(r.status).toBe(1);
+  };
+  const withTpm = (value: string) => {
+    const a = utmDefaultArgv();
+    const i = a.indexOf(TPM);
+    expect(i).toBeGreaterThan(1);
+    a[i] = value;
+    return a;
+  };
+  const OTHER = `-device tpm-crb-device other than UTM's ${TPM} is refused`;
+  it("UTM's launch carries it once, after -tpmdev, and passes", () => {
+    const a = utmDefaultArgv();
+    expect(a.filter((t) => t === TPM).length).toBe(1);
+    expect(a[a.indexOf(TPM) - 1]).toBe("-device");
+    expect(run([a, SWTPM]).status).toBe(0);
+  });
+  it("another TPM driver (tpm-tis-device)", () => {
+    refuse(withTpm("tpm-tis-device,tpmdev=tpm0"), "-device tpm-tis-device is not in the allowlist");
+  });
+  it("another TPM driver (tpm-tis)", () => {
+    refuse(withTpm("tpm-tis,tpmdev=tpm0"), "-device tpm-tis is not in the allowlist");
+  });
+  it("a wrong tpmdev id", () => {
+    refuse(withTpm("tpm-crb-device,tpmdev=tpm1"), OTHER);
+  });
+  it("a missing tpmdev", () => {
+    refuse(withTpm("tpm-crb-device"), OTHER);
+  });
+  it("an extra key", () => {
+    refuse(withTpm(`${TPM},id=tpm-front`), OTHER);
+  });
+  it("a repeat", () => {
+    refuse(
+      [...utmDefaultArgv(), "-device", TPM],
+      "-device tpm-crb-device given more than once (UTM writes it once)",
+    );
+  });
+  it("the device without any -tpmdev", () => {
+    const a = utmDefaultArgv();
+    const i = a.indexOf("-tpmdev");
+    a.splice(i, 2);
+    refuse(a, "-device tpm-crb-device without UTM's -tpmdev tpm0");
   });
 });
 
