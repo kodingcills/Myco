@@ -80,7 +80,7 @@ function setAllowed(m: { argv: string[] }, tools: readonly string[]) {
 
 describe("arm launch plans", () => {
   it.each(CAPABILITY_ARMS)("%s passes the extended launch audit", (arm) => {
-    const audit = auditCapabilityArmLaunch(plan(arm), { arm, runId: RUN });
+    const audit = auditCapabilityArmLaunch(plan(arm), { arm, runId: RUN, trialDir: CONFIG });
     expect(audit.violations).toEqual([]);
     expect(audit.ok).toBe(true);
     expect(audit.launch.hostRoots).toEqual([]);
@@ -253,7 +253,11 @@ describe("the audit refuses each mutation (mutation table)", () => {
     ],
   ];
   it.each(cases)("%s", (_name, arm, change) => {
-    const audit = auditCapabilityArmLaunch(mutate(plan(arm), change), { arm, runId: RUN });
+    const audit = auditCapabilityArmLaunch(mutate(plan(arm), change), {
+      arm,
+      runId: RUN,
+      trialDir: CONFIG,
+    });
     expect(audit.ok).toBe(false);
     expect(audit.violations.length).toBeGreaterThan(0);
   });
@@ -286,9 +290,11 @@ describe("the audit refuses each mutation (mutation table)", () => {
       const server = m.mcpServers[STATE_SERVER_NAME];
       server.args = change(server.env, server.args);
     });
-    const audit = auditCapabilityArmLaunch(p, { arm: ss, runId: RUN });
+    const audit = auditCapabilityArmLaunch(p, { arm: ss, runId: RUN, trialDir: CONFIG });
     expect(audit.ok).toBe(false);
-    expect(audit.violations.map((v) => v.detail)).toEqual([expect.stringMatching(detail)]);
+    // The launch audit's binding rule alone (the arm audit's coverage rule, tested below,
+    // also fires when the list is missing or empty).
+    expect(audit.launch.violations.map((v) => v.detail)).toEqual([expect.stringMatching(detail)]);
   });
 
   it("the plan builder refuses a structured-state plan with no withheld paths", () => {
@@ -374,7 +380,7 @@ describe("surface classification matches the server", () => {
       mutate(plan("structured-state"), (m) => {
         m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_UNO_PIPE = "myco-state-short";
       }),
-      { arm: "structured-state", runId: RUN },
+      { arm: "structured-state", runId: RUN, trialDir: CONFIG },
     );
     expect(UNO_PIPE_NAME.test("myco-state-short")).toBe(false);
     expect(audit.ok).toBe(false);
@@ -426,5 +432,50 @@ describe("capability arm rows are never R1 evidence", () => {
       expect(result.errors).toContain(`arm row ${i}: $ unexpected property "r1Evidence"`);
     });
     expect(result.provenance === "evidence").toBe(false);
+  });
+});
+
+describe("the withheld list must cover this trial's dir (round-2 verifier nit)", () => {
+  const ss = "structured-state" as const;
+  const withList = (list: unknown) =>
+    mutate(plan(ss), (m) => {
+      m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_WITHHELD = JSON.stringify(list);
+    });
+  const audit = (p: AgentLaunchPlan, trialDir: string) =>
+    auditCapabilityArmLaunch(p, { arm: ss, runId: RUN, trialDir });
+  const rule = "the withheld list does not cover this trial's dir";
+
+  it("the trial dir itself, or an ancestor of it, covers it", () => {
+    expect(audit(withList([CONFIG]), CONFIG).violations).toEqual([]);
+    expect(audit(withList(["/srv/myco/trials/"]), CONFIG).violations).toEqual([]);
+    expect(audit(withList(["/srv/myco/vault", CONFIG]), `${CONFIG}/`).violations).toEqual([]);
+  });
+
+  it.each([
+    ["a well-formed list naming only other paths", ["/nope"], CONFIG],
+    ["a sibling whose name is a prefix", ["/srv/myco/trials/run-cap-i-00"], CONFIG],
+    ["a child of the trial dir only", [`${CONFIG}/agent`], CONFIG],
+    ["a relative trial dir", [CONFIG], "srv/myco/trials/run-cap-i-001"],
+    ["a non-normalized trial dir", [CONFIG], "/srv/myco/trials/x/../run-cap-i-001"],
+  ])("%s: refused by exactly this rule", (_name, list, trialDir) => {
+    const details = audit(withList(list), trialDir).violations.map((v) => v.detail);
+    expect(details).toEqual([rule]);
+  });
+
+  it("a plan without myco-state's withheld env is refused by this rule too", () => {
+    const p = mutate(plan(ss), (m) => {
+      delete m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_WITHHELD;
+    });
+    expect(audit(p, CONFIG).violations.map((v) => v.detail)).toContain(rule);
+  });
+
+  it("other arms do not carry the rule", () => {
+    expect(
+      auditCapabilityArmLaunch(plan("screenshot-only"), {
+        arm: "screenshot-only",
+        runId: RUN,
+        trialDir: CONFIG,
+      }).violations,
+    ).toEqual([]);
   });
 });

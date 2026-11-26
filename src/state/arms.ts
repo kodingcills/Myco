@@ -21,7 +21,7 @@
  * `myco.capability.arm-row/1`, not the benchmark ledger's, they carry `r1Evidence: false`,
  * and the benchmark check refuses them (test/state/state-arms.test.ts).
  */
-import { join } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 import {
   type AgentLaunchPlan,
   auditAgentLaunch,
@@ -162,7 +162,16 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 /** The TIF-274 launch audit plus the arm's exact tool and server allowlist. */
 export function auditCapabilityArmLaunch(
   plan: AgentLaunchPlan,
-  opts: { readonly arm: CapabilityArm; readonly runId: string },
+  opts: {
+    readonly arm: CapabilityArm;
+    readonly runId: string;
+    /**
+     * The trial's own host dir. For the structured-state arm, `myco-state`'s withheld list
+     * must cover it (the dir itself or an ancestor), so the list protects this trial and
+     * not some other path (round-2 verifier nit).
+     */
+    readonly trialDir: string;
+  },
 ): CapabilityArmAudit {
   const extraServers =
     opts.arm === "structured-state" ? { ...GATE_CLASS, ...STATE_SERVER_CLASS } : { ...GATE_CLASS };
@@ -187,7 +196,33 @@ export function auditCapabilityArmLaunch(
       reach: "unknown",
       detail: `MCP servers are not exactly the ${opts.arm} arm's`,
     });
+  if (opts.arm === "structured-state" && !withheldCoversTrial(plan, opts.trialDir))
+    violations.push({
+      tool: STATE_SERVER_NAME,
+      reach: "app-state",
+      detail: "the withheld list does not cover this trial's dir",
+    });
   return { ok: violations.length === 0, arm: opts.arm, launch, violations };
+}
+
+/** `myco-state`'s withheld list names `trialDir` or an ancestor of it; fails closed. */
+function withheldCoversTrial(plan: AgentLaunchPlan, trialDir: string): boolean {
+  if (!isAbsolute(trialDir) || trialDir !== normalize(trialDir)) return false;
+  const raw = plan.mcpServers[STATE_SERVER_NAME]?.env?.[MYCO_STATE_WITHHELD_ENV];
+  if (typeof raw !== "string") return false;
+  let list: unknown;
+  try {
+    list = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(list)) return false;
+  const trial = trialDir.replace(/[\\/]+$/, "");
+  return list.some((entry) => {
+    if (typeof entry !== "string" || entry.length === 0) return false;
+    const dir = entry.replace(/[\\/]+$/, "");
+    return dir.length > 0 && (trial === dir || trial.startsWith(`${dir}/`));
+  });
 }
 
 /** The cost basis string the benchmark uses (`COST_BASIS`, src/benchmark/check.ts). */

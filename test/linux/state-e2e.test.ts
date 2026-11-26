@@ -178,7 +178,7 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
       statePipe: live.pipe,
       withheld,
     });
-    const audit = auditCapabilityArmLaunch(plan, { arm: "structured-state", runId });
+    const audit = auditCapabilityArmLaunch(plan, { arm: "structured-state", runId, trialDir });
     expect(audit.violations).toEqual([]);
 
     const server = plan.mcpServers["myco-state"];
@@ -244,13 +244,35 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
       ).toMatch(/^(ok|UI_TREE_UNAVAILABLE)$/);
       if (tree.ok) expect(tree.data.nodes).toBeLessThanOrEqual(20);
 
-      // A formula that surfaces the document's host path (round-1 D2): the reply never
-      // carries it. The trial dir is on the mandatory withheld list, so the raw read is
-      // refused before any scrubbing; the bytes on the wire are checked below as well.
+      // The document's host path, re-spelled and pasted as a plain value (no formula):
+      // separators swapped and the leading `/` cut (round-2 D5). Withheld by the
+      // separator-insensitive match against the withheld list.
+      const respelled = `${trialDir.slice(1).replace(/\//g, "|")}|saved.xlsx`;
+      expect(live.type("H4", respelled).ok).toBe(true);
+      const pasted = await client.tool("state_read_range", { range: "H4" });
+      trace.pastedPath = pasted.ok ? pasted.data.rows[0][0] : pasted.code;
+      expect(trace.pastedPath, JSON.stringify(trace.pastedPath)).toBe("OUTPUT_WITHHELD");
+      expect((await client.tool("state_read_range", { range: "A1" })).ok).toBe(true);
+
+      // A formula that surfaces the document's host path (round-1 D2), and a second formula
+      // that re-spells it (round-2 D5, the verifier's probe). While any CELL/INFO formula is
+      // in the document, every cell read is withheld, including cells that never touch it.
       expect(live.type("H2", '=CELL("filename")').ok).toBe(true);
       const probe = await client.tool("state_read_range", { range: "H2" });
       trace.cellFilename = probe.ok ? probe.data.rows[0][0] : probe.code;
       expect(trace.cellFilename, JSON.stringify(trace.cellFilename)).toBe("OUTPUT_WITHHELD");
+      expect(live.type("H3", "=MID(H2;10;300)").ok).toBe(true);
+      const mid = await client.tool("state_read_range", { range: "H3" });
+      trace.midFilename = mid.ok ? mid.data.rows[0][0] : mid.code;
+      expect(trace.midFilename, JSON.stringify(trace.midFilename)).toBe("OUTPUT_WITHHELD");
+      const innocuous = await client.tool("state_read_range", { range: "A1" });
+      expect(innocuous.ok ? "ok" : innocuous.code).toBe("OUTPUT_WITHHELD");
+      const treeTainted = await client.tool("state_ui_tree", { maxDepth: 2, maxNodes: 20 });
+      expect(treeTainted.ok ? "ok" : treeTainted.code).toMatch(
+        /^(OUTPUT_WITHHELD|UI_TREE_UNAVAILABLE)$/,
+      );
+      // The sheet list and save state stay readable (no cell text in them).
+      expect((await client.tool("state_document_status")).ok).toBe(true);
       // A hostile call: the server answers with a code, nothing else.
       expect(
         await client.tool("state_read_range", { range: "A1", path: join(vaultRoot, "x") }),

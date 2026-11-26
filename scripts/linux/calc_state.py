@@ -22,6 +22,7 @@ Usage (the request is one JSON object on stdin):
 
 import argparse
 import json
+import re
 import sys
 import time
 
@@ -36,6 +37,15 @@ ROLE_NAMES = (
     "SEPARATOR", "SPLIT_PANE", "STATUS_BAR", "TABLE", "TABLE_CELL", "TEXT", "TOOL_BAR",
     "TOGGLE_BUTTON", "WINDOW", "UNKNOWN",
 )
+
+
+# Spreadsheet functions that return the document's own location (CELL("filename"), and
+# INFO for spreadsheets that support a "directory" type). Any formula ANYWHERE in the
+# document (any sheet, any named expression) that calls one taints the document: a second
+# formula can transform its result (MID, SUBSTITUTE, REGEX, ...) into a spelling no text
+# check can recognise, so the server withholds every cell read and UI tree while it holds
+# one (docs/state/security.md, "Host paths"). getFormula/getContent give English names.
+PATH_FUNCTION = re.compile(r"(?:CELL|INFO)\s*\(", re.IGNORECASE)
 
 
 class Refusal(Exception):
@@ -202,6 +212,23 @@ def cell_state(cell, ref, text_cap):
     return state
 
 
+def document_path_functions(doc):
+    """True if any formula cell or named expression in the document calls a path function."""
+    sheets = doc.getSheets()
+    for index in range(sheets.getCount()):
+        sheet = sheets.getByIndex(index)
+        ranges = sheet.queryContentCells(16)  # com.sun.star.sheet.CellFlags.FORMULA
+        enum = ranges.getCells().createEnumeration()
+        while enum.hasMoreElements():
+            if PATH_FUNCTION.search(enum.nextElement().getFormula() or ""):
+                return True
+    named = doc.NamedRanges
+    for name in named.getElementNames():
+        if PATH_FUNCTION.search(named.getByName(name).getContent() or ""):
+            return True
+    return False
+
+
 def op_read_range(doc, req):
     sheet, index, name = sheet_of(doc, req.get("sheet"))
     c0, r0, c1, r1 = req["range"]  # validated and capped by the TS server
@@ -213,7 +240,8 @@ def op_read_range(doc, req):
         rows.append([cell_state(sheet.getCellByPosition(col, row), a1(col, row), text_cap)
                      for col in range(c0, c1 + 1)])
     return {"sheet": {"index": index, "name": clip(name, req["caps"]["maxNameChars"])[0]},
-            "range": "%s:%s" % (a1(c0, r0), a1(c1, r1)), "rows": rows}
+            "range": "%s:%s" % (a1(c0, r0), a1(c1, r1)), "rows": rows,
+            "documentPathFunctions": document_path_functions(doc)}
 
 
 def op_document_status(doc, req):
@@ -310,7 +338,8 @@ def op_ui_tree(doc, req):
             out["childrenOmitted"] = "width"
             truncated = True
         out["children"] = kids
-    return {"tree": tree, "nodes": count, "truncated": truncated}
+    return {"tree": tree, "nodes": count, "truncated": truncated,
+            "documentPathFunctions": document_path_functions(doc)}
 
 
 def main(argv):

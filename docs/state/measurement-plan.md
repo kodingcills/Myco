@@ -33,10 +33,14 @@ before any trial runs.
      `structured-state` / `screenshot-only` must be below 1.0 (10,000 resamples,
      pre-registered seed).
 - **Guardrails.** False DONEs on the invalid-target tasks are no higher than the baseline's.
-  No recorded state-tool output contains a host path, a digest, or any withheld string; any
-  hit voids the run. (The server already refuses withheld strings and scrubs path-like
-  text: [security.md, Host paths](security.md#host-paths). This guardrail checks the
-  recorded output independently.)
+  No recorded state-tool output contains a digest, or any withheld string in the forms the
+  server checks (as written, JSON-escaped, file-URL-encoded, or 16 consecutive
+  letters/digits of its separator-insensitive fold); any hit voids the run. This
+  guardrail checks the recorded output independently of the server
+  ([security.md, Host paths](security.md#host-paths)). It does not claim that no output
+  can carry the agent's own document location in any spelling: an agent can deliberately
+  re-encode it (security.md, "What no layer stops"). If a recorded output shows such an
+  encoding, the report says so.
 - **"Not shown"** is reported as such, with the numbers. It is never rounded to a win.
 
 ## Parity the wiring enforces now

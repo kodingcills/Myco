@@ -49,24 +49,54 @@ secrets. The server can only return what the agent's own open document holds.
 Host paths are NOT out of reach by construction. The document itself can produce one: a
 formula such as `=CELL("filename")` evaluates to the document's own URL
 (`'file:///<trial dir>/agent/saved.xlsx'#$Sheet1`), and Calc can rewrite an external
-reference into an absolute file URL. Two enforced layers keep them out of every reply:
+reference into an absolute file URL. A second formula the agent writes can then re-spell
+that text in any way it likes (`=MID(CELL("filename");10;300)` drops the `file:///`,
+`=SUBSTITUTE(…;"/";"|")` swaps the separators), so no check on the spelling alone can be
+complete. Four enforced layers, in the order the server applies them:
 
-- **Withheld strings (mandatory).** The harness lists the trial dir, vault root, fixture
-  dir, oracle config and other trials' dirs in `MYCO_STATE_WITHHELD`. The launch audit, the
-  plan builder and the server itself all refuse to run without the list. The backend's raw
-  cell, sheet and status strings are checked against each entry, as written, JSON-escaped
-  and file-URL-encoded, BEFORE any scrubbing, so a partial scrub cannot hide one; a hit
-  gives `OUTPUT_WITHHELD`. The serialized reply is checked again at the end.
-- **Path scrubbing (every string).** Cell `display`, `value` and `formula`, sheet names and
-  UI-tree names have path-like text replaced with `[path]`: file URLs (to the next quote,
-  so a path with spaces goes whole), absolute POSIX paths, drive and UNC paths, and `~/`
-  paths. A cell changed this way carries `pathScrubbed: true`. Dates (`2024/06/21`),
-  formula division (`=(A1)/(B1)/2`) and web URLs are left alone. This covers host paths the
-  list does not name (for example a home directory).
+1. **Path functions taint the document.** `CELL` and `INFO` are the only spreadsheet
+   functions that return the document's location. While ANY formula in the document (any
+   sheet, any named expression) calls one, every `state_read_range` and `state_ui_tree`
+   reply is `OUTPUT_WITHHELD`, including reads of cells that never touch it. The reader
+   scans the whole document on each of these calls and reports `documentPathFunctions`;
+   the server refuses a reply without the flag (`BACKEND_ERROR`) and also checks every
+   returned formula itself. This cuts the source, not the spelling: every formula-based
+   re-spelling depends on a `CELL`/`INFO` formula that is still in the document. The
+   match has no word boundary, so a literal `"INFO("` in a formula also withholds (fail
+   closed). `state_list_sheets` and `state_document_status` carry no cell text and stay
+   readable. Deleting the formula ends the taint.
+2. **Withheld strings (mandatory).** The harness lists the trial dir, vault root, fixture
+   dir, oracle config and other trials' dirs in `MYCO_STATE_WITHHELD`. The launch audit, the
+   plan builder and the server itself all refuse to run without the list, and the
+   capability-arm audit also refuses a list that does not cover the trial's own dir (the
+   dir or an ancestor). The backend's raw cell, sheet and status strings are checked
+   against each entry, as written, JSON-escaped and file-URL-encoded, BEFORE any
+   scrubbing, so a partial scrub cannot hide one; a hit gives `OUTPUT_WITHHELD`. UI-tree
+   names and roles have these strings redacted to `[path]` instead. The serialized reply
+   is checked again at the end.
+3. **Separator-insensitive match.** Each string, and each withheld entry, is NFKC-folded,
+   lowercased and stripped of everything but letters and digits. A string that contains 16
+   consecutive letters/digits of a folded entry (or a whole folded entry of 8 to 15) gives
+   `OUTPUT_WITHHELD`; for the UI tree this runs after the redaction in layer 2. This
+   catches a re-spelled path that no longer comes from a formula (computed, then pasted as
+   plain values): swapped separators, a cut prefix, case changes, fullwidth letters.
+4. **Path scrubbing (every string).** Cell `display`, `value` and `formula`, sheet names and
+   UI-tree names and roles have path-like text replaced with `[path]`: file URLs (to the
+   next quote, so a path with spaces goes whole), absolute POSIX paths, drive and UNC
+   paths, and `~/` paths. A cell changed this way carries `pathScrubbed: true`. Dates
+   (`2024/06/21`), formula division (`=(A1)/(B1)/2`) and web URLs are left alone. This
+   covers host paths the list does not name (for example a home directory) in their usual
+   spellings only.
 
-The scrubber is a pattern, so it is the second layer, not the guarantee: an exotic spelling
-of a path that is not on the withheld list could get past it. The withheld list is the
-layer that names the paths that matter.
+**What no layer stops.** An agent that deliberately computes a re-encoding of its own
+document's path that keeps fewer than 16 letters/digits of any withheld entry in order
+(reversed, spelled as character codes, split across cells), pastes the result as plain
+values and deletes the formula, can read that text back. The same text is on its screen
+through `myco-rt observe` either way, so the state server is not the only channel. What
+it learns is a location, not content: the files there stay out of reach (above). A host
+path the withheld list does not name is covered only by layer 4's patterns. These
+layers do not support the claim that no reply can ever contain a host path in any
+spelling, and the docs do not make it.
 
 ### Other defense in depth
 
@@ -81,11 +111,15 @@ those paths:
 - `test/state/state-scope.test.ts` (hermetic) runs a battery of valid and hostile calls,
   including path-like sheets and ranges and smuggled `path`, `runId`, `taskId`, `file` and
   `trial` fields;
-- `test/state/state-host-paths.test.ts` covers the two host-path layers, including a
-  `=CELL("filename")` cell whose path has spaces;
+- `test/state/state-host-paths.test.ts` covers the four host-path layers: a
+  `=CELL("filename")` cell, the round-2 verifier's re-spellings (`MID`, `SUBSTITUTE`,
+  `REGEX`, a cut prefix, case, fullwidth) both as formula results and pasted as plain
+  values, a `CELL` formula on another sheet, a missing flag, the 16-character window
+  boundary, and the reader's document scan (cells and named expressions);
 - `test/linux/state-e2e.test.ts` runs against a real live Calc from a trial dir whose path
-  has spaces, types `=CELL("filename")` into the agent's document and gets
-  `OUTPUT_WITHHELD`, and checks every byte the server wrote.
+  has spaces. It pastes a re-spelled path as plain text, types `=CELL("filename")` and the
+  verifier's `=MID(H2;10;300)`, and gets `OUTPUT_WITHHELD` for each, and for an unrelated
+  cell while the `CELL` formula is in the document. It checks every byte the server wrote.
 
 ## Read-only
 

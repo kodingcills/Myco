@@ -13,15 +13,29 @@
  *  - the backend's data is re-checked against the caps (cell count and shape, string
  *    lengths, tree depth, node count and width); a reply over a cap is refused
  *    (BACKEND_ERROR), never passed through;
- *  - host paths, two layers (docs/state/security.md, "Host paths"):
- *     1. the backend's raw cell, sheet and status strings must not contain any of the
- *        harness's `withheld` strings (trial dir, vault root, fixture dir; also their
- *        file-URL-encoded form), checked BEFORE scrubbing so a partial scrub cannot hide
- *        one (OUTPUT_WITHHELD); UI-tree names have withheld strings redacted instead;
- *     2. every string the agent sees (cell display, value and formula, sheet names, UI
- *        names) has path-like text replaced by `[path]`, so a formula such as
- *        `=CELL("filename")` cannot surface a host path the list does not name; a cell
- *        changed this way carries `pathScrubbed: true`;
+ *  - host paths, four layers (docs/state/security.md, "Host paths"):
+ *     1. path functions: while ANY formula in the document calls `CELL` or `INFO` (the only
+ *        functions that return the document's location), every cell read and UI tree is
+ *        withheld (OUTPUT_WITHHELD). The backend reports this document-wide
+ *        (`documentPathFunctions`); a reply without the flag is refused (BACKEND_ERROR),
+ *        and the server also checks every returned formula itself. This is what stops a
+ *        transformed spelling (`MID(CELL("filename");10)`, `SUBSTITUTE(…;"/";"|")`): it
+ *        cuts the source, not the spelling;
+ *     2. the backend's raw cell, sheet and status strings must not contain any of the
+ *        harness's `withheld` strings (as written, JSON-escaped, file-URL-encoded),
+ *        checked BEFORE scrubbing so a partial scrub cannot hide one (OUTPUT_WITHHELD);
+ *        UI-tree names and roles have withheld strings redacted instead;
+ *     3. separator-insensitive: no string may contain 16 consecutive letters/digits of a
+ *        withheld entry once both are NFKC-folded, lowercased and stripped of everything
+ *        but letters and digits (OUTPUT_WITHHELD), so a path whose separators were
+ *        swapped or whose prefix was cut, then pasted as plain text, is still caught;
+ *     4. every string the agent sees (cell display, value and formula, sheet names, UI
+ *        names and roles) has path-like text replaced by `[path]`, so a host path the list
+ *        does not name is not shown verbatim; a cell changed this way carries
+ *        `pathScrubbed: true`.
+ *    What no layer can stop: an agent that deliberately re-encodes its own document's path
+ *    (reverses it, spells it as character codes) and pastes the result as plain values
+ *    after removing the formula. The security model says so;
  *  - the serialized reply must fit `maxReplyBytes` (OUTPUT_TOO_LARGE) and must not contain
  *    a withheld string in any form (OUTPUT_WITHHELD);
  *  - a backend that throws gives BACKEND_ERROR; the error text goes to the operator's
@@ -60,7 +74,7 @@ export const STATE_INSTRUCTIONS =
 const DESCRIPTIONS: Readonly<Record<StateToolName, string>> = {
   state_list_sheets:
     "List the open document's sheets with each sheet's used range (A1). Read-only live state.",
-  state_read_range: `Read a cell or range (A1, at most ${STATE_CAPS.maxCells} cells): each cell's kind, value, displayed text and formula as the app holds them now. Read-only live state; not proof the document was saved.`,
+  state_read_range: `Read a cell or range (A1, at most ${STATE_CAPS.maxCells} cells): each cell's kind, value, displayed text and formula as the app holds them now. Withheld while any formula in the document calls CELL or INFO. Read-only live state; not proof the document was saved.`,
   state_document_status:
     "The open document's save state: modified (unsaved edits present), read-only, sheet count, active sheet. Read-only.",
   state_ui_tree: `A bounded summary of the app window's accessibility tree (depth <= ${STATE_CAPS.maxTreeDepth}, nodes <= ${STATE_CAPS.maxTreeNodes}, ${STATE_CAPS.maxChildrenPerNode} children per node). Read-only.`,
@@ -133,6 +147,59 @@ function cutTo(text: string, limit: number): string {
   if (text.length <= limit) return text;
   const end = /[\uD800-\uDBFF]/.test(text.charAt(limit - 1)) ? limit - 1 : limit;
   return text.slice(0, end);
+}
+
+/**
+ * Functions that return the document's own location. Matched anywhere in a formula (no word
+ * boundary), so a false positive such as a literal "INFO(" withholds: fail closed.
+ */
+export const PATH_FUNCTION = /(?:CELL|INFO)\s*\(/i;
+
+/** Letters and digits only, NFKC-folded and lowercased: the separator-insensitive form. */
+export function foldForMatch(text: string): string {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+/** The window of consecutive letters/digits of a withheld entry that may not appear. */
+export const FOLDED_WINDOW = 16;
+/** Folded entries shorter than this are too generic to match without false positives. */
+const FOLDED_MIN = 8;
+
+interface FoldedForms {
+  readonly windows: ReadonlySet<string>;
+  readonly short: readonly string[];
+}
+
+function foldedForms(values: readonly string[]): FoldedForms {
+  const windows = new Set<string>();
+  const short: string[] = [];
+  for (const v of values) {
+    const f = foldForMatch(v);
+    if (f.length < FOLDED_MIN) continue;
+    if (f.length < FOLDED_WINDOW) short.push(f);
+    else
+      for (let i = 0; i + FOLDED_WINDOW <= f.length; i++)
+        windows.add(f.slice(i, i + FOLDED_WINDOW));
+  }
+  return { windows, short };
+}
+
+/** Some string in `value` carries a withheld entry in its separator-insensitive form. */
+function containsFolded(value: unknown, folded: FoldedForms): boolean {
+  if (typeof value === "string") {
+    const f = foldForMatch(value);
+    if (folded.short.some((s) => f.includes(s))) return true;
+    for (let i = 0; i + FOLDED_WINDOW <= f.length; i++)
+      if (folded.windows.has(f.slice(i, i + FOLDED_WINDOW))) return true;
+    return false;
+  }
+  if (Array.isArray(value)) return value.some((v) => containsFolded(v, folded));
+  if (typeof value === "object" && value !== null)
+    return Object.values(value).some((v) => containsFolded(v, folded));
+  return false;
 }
 
 /** Every form of a withheld string that could appear in a reply. */
@@ -231,7 +298,7 @@ function checkTree(
     out.push(checked);
   }
   return {
-    role: node.role.slice(0, STATE_CAPS.maxNameChars),
+    role: cutTo(scrubPaths(redact(node.role, forms)), STATE_CAPS.maxNameChars),
     name: cutTo(scrubPaths(redact(node.name, forms)), STATE_CAPS.maxNameChars),
     childCount: Number.isInteger(node.childCount) ? node.childCount : 0,
     ...(node.childrenOmitted ? { childrenOmitted: node.childrenOmitted } : {}),
@@ -248,19 +315,48 @@ type Checked =
  * path-like text. BACKEND_ERROR when the backend broke a bound (fail closed),
  * OUTPUT_WITHHELD when its raw strings carry a withheld string.
  */
-function checkData(request: StateRequest, data: unknown, forms: readonly string[]): Checked {
+function checkData(
+  request: StateRequest,
+  data: unknown,
+  forms: readonly string[],
+  folded: FoldedForms,
+): Checked {
   const broken = { ok: false, code: "BACKEND_ERROR" } as const;
+  const withheld = { ok: false, code: "OUTPUT_WITHHELD" } as const;
   if (typeof data !== "object" || data === null) return broken;
   if (!stringsWithin(data, STATE_CAPS.maxCellTextChars)) return broken;
-  if (request.tool !== "state_ui_tree" && containsAny(data, forms))
-    return { ok: false, code: "OUTPUT_WITHHELD" };
+  if (request.tool === "state_read_range" || request.tool === "state_ui_tree") {
+    // Layer 1: the document-wide path-function flag is mandatory (fail closed).
+    const flag = (data as { documentPathFunctions?: unknown }).documentPathFunctions;
+    if (typeof flag !== "boolean") return broken;
+    if (flag) return withheld;
+  }
+  if (request.tool !== "state_ui_tree") {
+    if (containsAny(data, forms)) return withheld;
+    if (containsFolded(data, folded)) return withheld;
+  }
   switch (request.tool) {
     case "state_read_range": {
       const rows = (data as { rows?: unknown }).rows;
       const [c0, r0, c1, r1] = request.range;
       if (!Array.isArray(rows) || rows.length !== r1 - r0 + 1) return broken;
       if (!rows.every((row) => Array.isArray(row) && row.length === c1 - c0 + 1)) return broken;
-      const { rows: _rows, ...rest } = data as Record<string, unknown>;
+      // Layer 1, server side: a returned formula that calls a path function, whatever the
+      // backend's flag said.
+      if (
+        rows.some((row: unknown[]) =>
+          row.some((cell) => {
+            const formula = (cell as { formula?: unknown } | null)?.formula;
+            return typeof formula === "string" && PATH_FUNCTION.test(formula);
+          }),
+        )
+      )
+        return withheld;
+      const {
+        rows: _rows,
+        documentPathFunctions: _flag,
+        ...rest
+      } = data as Record<string, unknown>;
       return {
         ok: true,
         data: {
@@ -283,6 +379,8 @@ function checkData(request: StateRequest, data: unknown, forms: readonly string[
       const count = { n: 0 };
       const checked = checkTree(tree as UiNode, 0, request, count, forms);
       if (checked === null) return broken;
+      // Layer 3 on the tree, after exact withheld strings were redacted.
+      if (containsFolded(checked, folded)) return withheld;
       return {
         ok: true,
         data: {
@@ -313,6 +411,7 @@ async function dispatch(
 
 export function createStateService(options: StateServiceOptions): StateService {
   const forms = withheldForms(options.withheld ?? []);
+  const folded = foldedForms(options.withheld ?? []);
   const diag = (tool: string, detail: string) => options.onDiagnostic?.({ tool, detail });
   return {
     async call(tool, args) {
@@ -331,7 +430,7 @@ export function createStateService(options: StateServiceOptions): StateService {
         return refuse(request.tool, "BACKEND_ERROR");
       }
       if (!result.ok) return refuse(request.tool, result.code);
-      const checked = checkData(request, result.data, forms);
+      const checked = checkData(request, result.data, forms, folded);
       if (!checked.ok) {
         diag(
           request.tool,

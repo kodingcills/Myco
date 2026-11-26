@@ -9,6 +9,7 @@ import type {
   CellState,
   StateBackend,
   UiNode,
+  UiTree,
   UiTreeLimits,
 } from "../../src/state/backend.ts";
 
@@ -26,6 +27,13 @@ function cell(text: string | undefined, ref: string): CellState {
   if (/^-?\d+(\.\d+)?$/.test(text))
     return { ref, kind: "number", value: Number(text), display: text };
   return { ref, kind: "text", value: text, display: text };
+}
+
+/** Like the Linux reader: any formula anywhere in the document that calls CELL or INFO. */
+function documentPathFunctions(doc: FakeDoc): boolean {
+  return doc.sheets.some((s) =>
+    s.rows.some((r) => r.some((c) => c.startsWith("=") && /(?:CELL|INFO)\s*\(/i.test(c))),
+  );
 }
 
 export function fakeBackend(doc: FakeDoc): StateBackend & { calls: string[] } {
@@ -74,6 +82,7 @@ export function fakeBackend(doc: FakeDoc): StateBackend & { calls: string[] } {
           sheet: { index: found.index, name: found.sheet.name },
           range: `${columnName(c0)}${r0 + 1}:${columnName(c1)}${r1 + 1}`,
           rows,
+          documentPathFunctions: documentPathFunctions(doc),
         },
       };
     },
@@ -90,19 +99,37 @@ export function fakeBackend(doc: FakeDoc): StateBackend & { calls: string[] } {
         },
       };
     },
-    async uiTree(
-      limits: UiTreeLimits,
-    ): Promise<BackendResult<{ tree: UiNode; nodes: number; truncated: boolean }>> {
+    async uiTree(limits: UiTreeLimits): Promise<BackendResult<UiTree>> {
       calls.push(`uiTree:${limits.maxDepth}:${limits.maxNodes}`);
       if (!doc.tree) return { ok: false, code: "UI_TREE_UNAVAILABLE" };
-      return { ok: true, data: { tree: doc.tree, nodes: 1, truncated: false } };
+      return {
+        ok: true,
+        data: {
+          tree: doc.tree,
+          nodes: 1,
+          truncated: false,
+          documentPathFunctions: documentPathFunctions(doc),
+        },
+      };
     },
   };
 }
 
-/** A backend whose every method returns `data` as-is (to test the server's re-checks). */
-export function rawBackend(data: unknown): StateBackend {
-  const give = async () => ({ ok: true as const, data: data as never });
+/**
+ * A backend whose every method returns `data` as-is (to test the server's re-checks). An
+ * object without `documentPathFunctions` gets `documentPathFunctions: false` added, unless
+ * `omitFlag` is set (to test that the server refuses a reply without it).
+ */
+export function rawBackend(data: unknown, opts: { omitFlag?: boolean } = {}): StateBackend {
+  const body =
+    !opts.omitFlag &&
+    typeof data === "object" &&
+    data !== null &&
+    !Array.isArray(data) &&
+    !Object.hasOwn(data, "documentPathFunctions")
+      ? { ...data, documentPathFunctions: false }
+      : data;
+  const give = async () => ({ ok: true as const, data: body as never });
   return { kind: "fake", listSheets: give, readRange: give, documentStatus: give, uiTree: give };
 }
 

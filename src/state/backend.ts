@@ -47,6 +47,13 @@ export interface RangeRead {
   readonly sheet: { readonly index: number; readonly name: string };
   readonly range: string;
   readonly rows: readonly (readonly CellState[])[];
+  /**
+   * True if ANY formula or named expression in the whole document (not only this range)
+   * calls a function that returns the document's own location (`CELL`, `INFO`). The server
+   * withholds the reply while it is true, and refuses a reply without it (BACKEND_ERROR):
+   * docs/state/security.md, "Host paths".
+   */
+  readonly documentPathFunctions: boolean;
 }
 
 export interface DocumentStatus {
@@ -71,6 +78,13 @@ export interface UiTree {
   readonly tree: UiNode;
   readonly nodes: number;
   readonly truncated: boolean;
+  /**
+   * True if ANY formula or named expression in the whole document
+   * calls a function that returns the document's own location (`CELL`, `INFO`). The server
+   * withholds the reply while it is true, and refuses a reply without it (BACKEND_ERROR):
+   * docs/state/security.md, "Host paths".
+   */
+  readonly documentPathFunctions: boolean;
 }
 
 export interface UiTreeLimits {
