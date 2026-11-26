@@ -88,9 +88,13 @@ This choice over the alternatives:
       - a refusal (`live`, `verify`, `verify-all`, `status`) names an element by its argv index and prints
         only fixed text and words from the script's fixed vocabularies (QEMU option and
         property names, chardev backends, drivers). It never echoes an element's text, so a
-        positional or trailing element shows as `positional argument at argv[N]`;
+        positional or trailing element shows as `positional argument at argv[N]`. This
+        includes the options kept off the list with a reason (`-qmp`, `-object`, …): the
+        reason is fixed text, followed by the index. A cross-reference refusal is about
+        several elements, so it names none (for example "a -chardev id is declared twice");
       - `names` prints an option name only if it is in that vocabulary, otherwise
-        `<unrecognised option argv[N]>` or `<positional argv[N]>`;
+        `<unrecognised option argv[N]>` or `<positional argv[N]>`. A second copy of an
+        option UTM writes once is marked `NOT ALLOWED`, as `live` refuses it;
       - `argv` prints an element only if it is accepted as an allowlisted option name, or as
         a value that its option's rule accepts; every other element prints as
         `<redacted argv[N]>`.
@@ -116,7 +120,10 @@ This choice over the alternatives:
       and the sweep asserts the two agree). Past a refused option it keeps walking: the
       option is taken to have a value unless it is a known QEMU flag (`QEMU_FLAG_OPTIONS`).
       That set only keeps the walk aligned; nothing is accepted because of it. It exits 1 if
-      any refusal exists.
+      any refusal exists. The list is in rule order, not strict argv order: whitespace, then
+      the walk's refusals (positionals, `-opt=value` forms, options off the list, a missing
+      value) in argv order, then `-nodefaults` and the netdev count, then value rules in argv
+      order, then repeated singletons, then cross-references.
     - **Process:** exactly one guest process, identified by argv[0] (`QEMULauncher` running a
       qemu binary, or a qemu binary).
     - **Shape:** no argv element may contain whitespace, and `-nodefaults` must be present as
@@ -126,9 +133,10 @@ This choice over the alternatives:
       `-tpmdev`, `-spice`, `-netdev`, `-audio`, `-audiodev`, `-nodefaults` and `-S`
       (`SINGLETONS`). A second copy
       is refused. UTM's launch repeats only `-chardev`, `-device` and `-drive` (the committed
-      evidence shows nine `-chardev`; the builder writes several `-device` and `-drive`). If
-      the read-only live `names` run shows UTM repeating a singleton, the reset refuses
-      (closed); remove it from `SINGLETONS` with a test.
+      evidence shows nine `-chardev`; the builder writes several `-device` and `-drive`). The
+      live `names` run at `67d3b6a2` confirms it: only `-device` (19), `-chardev` (9) and
+      `-drive` (5) repeat. If a later UTM repeats a singleton, the reset refuses (closed);
+      remove it from `SINGLETONS` with a test.
     - **Every option is on a fixed allowlist** (follow-up to round 3, D7/D8). Rounds 1–3
       refused named bad options, and each round found one the list did not name: a JSON-form
       `-object` filter, `-qmp-pretty`. Now an option not on the list below is refused,
@@ -151,13 +159,15 @@ This choice over the alternatives:
     **The allowlist** (`ALLOWED` and `FLAGS` in `scripts/guest_egress_check.py`). "Live"
     means the element is in `docs/research/experiments/tif-275-egress/10-round3-verify-live.txt`.
     "Builder" means UTM 5.0.9's QEMU argument builder writes it for this VM type
-    (wizard-default Windows 11 ARM64: HVF, NVMe, virtio-ramfb, TPM, SPICE). The committed
-    evidence lists 13 of the live launch's 104 elements, so the builder entries still need
-    one read-only `names` run on the live guest (below). The VM owner's first `names` run
-    (round 4, at `bbab3659`) found 52 options: 50 allowed, plus `-audio` and `-audiodev`,
-    which are now on the list. It did not show `-boot`, which UTM's builder never writes, so
-    `-boot` is off the list. The `-audio`/`-audiodev` values below come from UTM's source and
-    still need the live `verify-all` run to confirm them.
+    (wizard-default Windows 11 ARM64: HVF, NVMe, virtio-ramfb, TPM, SPICE). The round-3
+    evidence listed 13 of the live launch's 104 elements, so the builder entries were then
+    modelled, not read. The VM owner's first `names` run (round 4, at `bbab3659`) found 52
+    options: 50 allowed, plus `-audio` and `-audiodev`, which are now on the list. It did not
+    show `-boot`, which UTM's builder never writes, so `-boot` is off the list. The live run
+    at `67d3b6a2` (`docs/research/experiments/tif-275-egress/11-allowlist-live-names.txt`)
+    confirms the whole list on this guest: `verify-all` exited 0 with no refusals, so every
+    value, the `-audio`/`-audiodev` and TPM values included, passed its rule, and `names`
+    marked all 52 options allowed.
 
     | Option | Value allowed | Source |
     |---|---|---|
@@ -195,7 +205,8 @@ This choice over the alternatives:
     1. With the VM lock free, run `python3 -I scripts/guest_egress_check.py names`. It prints
        each option NAME of the live launch with `allowed` or `NOT ALLOWED`, and no values, so
        its output is safe to paste into a PR. Then run `scripts/guest-egress.sh verify-all`,
-       which lists every value-rule refusal by argv index (no values), also safe to paste.
+       which lists every refusal (by argv index where it is about one element; no values), also
+       safe to paste.
     2. For each `NOT ALLOWED` name, read what the option can do in QEMU's documentation. If
        it can open a socket, attach to a netdev, add a monitor, or load configuration, do not
        add it; change the UTM setting that produced it instead.

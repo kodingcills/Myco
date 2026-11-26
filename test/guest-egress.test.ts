@@ -687,7 +687,7 @@ describe("follow-up: an empty argv[0] never exposes the environment (D9)", () =>
   // argv[0] is empty; the real argv has no -nodefaults, and the environment's
   // first string is "-nodefaults". The old parser skipped the empty argv[0] as
   // padding, read "-nodefaults" from the environment and passed.
-  const PLANTED = "MYCO_PLANTED_SECRET=sk-planted-do-not-print";
+  const PLANTED = "MYCO_PLANTED_ENV=PLANTED_FAKE_MARKER";
   const argv = ["", ...utmDefaultArgv().filter((a) => a !== "-nodefaults")];
   const buf = () => procargs(argv, `-nodefaults\0${PLANTED}\0`, QEMU_BIN);
 
@@ -696,8 +696,8 @@ describe("follow-up: an empty argv[0] never exposes the environment (D9)", () =>
       const r = run([buf()], GOOD_UTM, [mode]);
       const all = `${r.stdout}${r.stderr}`;
       expect(all).toContain("empty argv[0]");
-      expect(all).not.toContain("sk-planted-do-not-print");
-      expect(all).not.toContain("MYCO_PLANTED_SECRET");
+      expect(all).not.toContain("PLANTED_FAKE_MARKER");
+      expect(all).not.toContain("MYCO_PLANTED_ENV");
       // status is read-only and always exits 0; it reports the failure.
       expect(r.status).toBe(mode === "status" ? 0 : 1);
     });
@@ -707,7 +707,7 @@ describe("follow-up: an empty argv[0] never exposes the environment (D9)", () =>
     // The verifier's D9 shape: the shifted parse would print exactly this string.
     const r = run([procargs(argv, `${PLANTED}\0HOME=/nowhere\0`, QEMU_BIN)], GOOD_UTM, ["argv"]);
     expect(r.status).toBe(1);
-    expect(`${r.stdout}${r.stderr}`).not.toContain("sk-planted-do-not-print");
+    expect(`${r.stdout}${r.stderr}`).not.toContain("PLANTED_FAKE_MARKER");
   });
 
   it("refuses an empty exec path", () => {
@@ -885,6 +885,15 @@ describe("round 3 V3: one negative case per rule that survived its own removal",
   it("-serial chardev:term0 without the pty term0", () => {
     refuse(swap("-chardev", "pty,id=term0"), "-serial chardev:term0 without UTM's pty term0");
   });
+  // S1 (round 3): term0 exists but is a SPICE chardev, not UTM's pty.
+  for (const term0 of ["spicevmc,name=x,id=term0", "spiceport,name=x.0,id=term0"]) {
+    it(`S1: -serial chardev:term0 when term0 is ${term0.split(",")[0]}, not the pty`, () => {
+      refuse(
+        swap("-chardev", "pty,id=term0", "-chardev", term0),
+        "-serial chardev:term0 without UTM's pty term0",
+      );
+    });
+  }
   it("-tpmdev without the swtpm chardev chrtpm0", () => {
     refuse(
       swap("-chardev", `socket,id=chrtpm0,path=${UUID}.swtpm`),
@@ -996,6 +1005,14 @@ describe("round 3 N1: an option UTM writes once is refused when repeated", () =>
         expect(lines.slice(-2)).toEqual(["-name", `<redacted argv[${argv.length + 1}]>`]);
         expect(lines).toContain("myco-win11");
       }
+      if (mode === "names") {
+        // Round-3 nit: names agrees with live on a repeated singleton.
+        const lines = r.stdout.trimEnd().split("\n");
+        expect(lines.filter((l) => l.startsWith("-name\t"))).toEqual([
+          "-name\tallowed",
+          "-name\tNOT ALLOWED",
+        ]);
+      }
     });
   }
 });
@@ -1099,7 +1116,7 @@ describe("round 4: verify-all lists every refusal, never a value", () => {
     const lines = r.stdout.trimEnd().split("\n");
     expect(lines).toEqual([
       `FAIL: -boot is not in the launch allowlist (argv[${n}])`,
-      "FAIL: -qmp is not in the launch allowlist (a QMP monitor can add netdevs and filters at run time)",
+      `FAIL: -qmp is not in the launch allowlist (a QMP monitor can add netdevs and filters at run time) (argv[${n + 2}])`,
       `FAIL: -hda is not in the launch allowlist (argv[${n + 4}])`,
       `FAIL: -nographic is not in the launch allowlist (argv[${n + 6}])`,
       `FAIL: the option at argv[${n + 7}] is not in the launch allowlist (not a known QEMU option name)`,
@@ -1113,6 +1130,27 @@ describe("round 4: verify-all lists every refusal, never a value", () => {
     expect(r.stderr).toBe("");
     expect(r.status).toBe(1);
   });
+  // R4-1: the walk continues past a positional and past an -opt=value form.
+  const r41: [string, string, string][] = [
+    ["a positional", MARKER, "positional argument at argv[N] (QEMU would take it as a disk image)"],
+    ["an -opt=value form", `-name=${MARKER}`, "unparseable option at argv[N] (an -opt=value form)"],
+  ];
+  for (const [branch, first, line] of r41) {
+    it(`keeps walking after ${branch}: a later refusal is listed after it, in argv order`, () => {
+      const a = utmDefaultArgv();
+      const n = a.length;
+      const argv = [...a, first, "-hda", `/${MARKER}.img`];
+      const r = run([argv, SWTPM], GOOD_UTM, ["verify-all"]);
+      expect(r.stdout.trimEnd().split("\n")).toEqual([
+        `FAIL: ${line.replace("argv[N]", `argv[${n}]`)}`,
+        `FAIL: -hda is not in the launch allowlist (argv[${n + 1}])`,
+        "FAIL: 2 refusal(s)",
+        "ok: UTM config matches",
+      ]);
+      expect(`${r.stdout}${r.stderr}`).not.toContain(MARKER);
+      expect(r.status).toBe(1);
+    });
+  }
   it("its first refusal is exactly the one verify stops at", () => {
     const argv = [...utmDefaultArgv(), "-boot", "menu=on", "-hda", "x"];
     const all = run([argv], GOOD_UTM, ["verify-all"]);
