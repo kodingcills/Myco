@@ -30,7 +30,7 @@ readers would refuse, makes a new version (`myco.episode/2`).
 | `episodeId` | sha256 of the canonical JSON (sorted keys) of the episode without this field. Episodes are content-addressed. |
 | `outcome` | `verified`, `refuted`, `uncertain`, `harness-fault`, `launch-refused` or `unregistrable` |
 | `simulated` | `false` only for a real model on a real gated trial (§3) |
-| `task` | `id`, `family`, `taskSetVersion`, `faultClass`, `instruction` (redacted text, or null), `instructionSha256`, `fixtureSha256` |
+| `task` | `id`, `family`, `taskSetVersion`, `faultClass`, `instruction` (redacted text, or null; hashed in an export, §5.1), `instructionSha256`, `fixtureSha256` |
 | `actions` | `capture` (`recorded` / `not-recorded`), `truncated`, `items`: at most 1000 typed actions, numbered `seq` 0..n-1. The kinds are `click`, `type`, `key`, `scroll`, `launch`, `wait`, `shell`, `gate-check` and `observe`. Each one carries `atMs` (ms since start, or null). |
 | `observations` | `capture`, `withheld` (count of dropped observations), `items`: at most 500. A `screenshot` is a PNG file. A `state` is the `persisted` document, a `ui-tree` or `app-state`, stored as a CSV or JSON file. A `ui-status` is text of at most 200 chars. Files are content-addressed: `blobs/<sha256>.<ext>`, with the hash and byte count recorded. |
 | `agentClaim` | `done`, `not-done` or `no-claim` |
@@ -212,7 +212,41 @@ refuses:
 - an unreferenced blob;
 - a mislabelled dataset.
 
-`import` validates the dataset first, then writes into a store of the same kind.
+- an episode with any string outside its field's closed grammar (`OPEN_STRING`, below).
+
+`import` validates the dataset first, then writes into a store of the same kind. Importing a
+dataset and exporting the store again gives the same dataset, byte for byte.
+
+### 5.1 What leaves the machine: the closed allowlist (TIF-265)
+
+The store keeps each episode as written (free text redacted, on the machine that recorded
+it). **The export never writes free text.** It writes `closeEpisode(ep)` (`src/episode/closed.ts`),
+the closed-schema pattern of #553:
+
+| Field kind | Fields | Exported as |
+|---|---|---|
+| Closed value | enums, digests, timestamps, blob file names, reason codes, versions, fault codes | as is when it matches its grammar; anything else **refuses the export**, naming the field, never the value |
+| Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`), else `h-<sha256>` |
+| Free text | `task.instruction`, typed text, shell commands, UI status | always `h-<sha256>` of the raw value |
+| Short free token | key names, app names (schema cap 64) | as is when it is a closed token (no space, no separator), else `h-<60 hex>` |
+
+The digest is sha256 under the domain tag `myco.episode.export-text/1`, unsalted, so equal
+values stay equal (one run's episodes share a hashed `runId`). A digest does not reveal its
+input, but someone who guesses the exact input can confirm the guess. Every string path an
+episode can hold is listed in `FIELD_TREATMENT`. A string at any other path refuses the
+export, so a new field is a reviewed change. `episodeId` is recomputed over the closed content.
+The export filter is closed too (it is written to the manifest).
+
+Why: `redactText` rewrites host paths by pattern, and patterns miss path forms. #553's probe
+corpus (spaced folders, `Documents and Settings`, 8.3 short names, UNC, mixed separators,
+encoded forms, unicode) put a planted username into 123 of 145 exported datasets before this
+change. For example, `C:\Users\First Last\x` was stored as `<path> Last\x`, and the
+cleanliness scan cannot see a path in what is left. The scan (§4) still runs over every
+exported episode as a backstop. It is no longer what keeps a path out.
+
+Cost: a dataset carries no agent text (typed text, commands and UI status are digests). Blobs
+(screenshots behind the frame redactor, CSV/JSON state behind the byte scan) are exported as
+before, pending the lead's ruling on whether they too go digest-only under #553's rule.
 
 ## 6. How tracks U and Q consume it
 

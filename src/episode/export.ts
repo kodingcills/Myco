@@ -3,13 +3,19 @@
  *
  *   <out>/manifest.json            myco.episode-dataset/1 (counts, schema version, hashes,
  *                                  provenance; no timestamps, no host paths)
- *   <out>/episodes/<id>.json       canonical JSON, byte-identical to the store's
+ *   <out>/episodes/<id>.json       canonical JSON of the CLOSED form of a store episode
+ *                                  (closed.ts: every string allowlisted or hashed; no free text)
  *   <out>/blobs/<sha256>.<ext>     only the blobs the exported episodes reference
  *
  * Deterministic: the same stores and filter give byte-identical output (episodes sorted by
  * id, canonical JSON everywhere, no clock). Fail closed: every source episode is fully
  * validated (schema, rules, cleanliness, blob hashes) before anything is written, and a real
  * export refuses a simulated store (and the reverse), so the two never mix in one dataset.
+ *
+ * Closed (TIF-265, #553's allowlist pattern): what leaves the machine is `closeEpisode(ep)`, never
+ * the stored text. Free text is replaced by its hashed form, ids outside the closed grammar are
+ * hashed, and a closed field holding anything else refuses the export. `validateDataset` refuses a
+ * dataset with any string outside its field's closed grammar. The cleanliness scan is a backstop.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -21,6 +27,7 @@ import {
 } from "../../schemas/episode.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import { currentHost, type HostFacts } from "./clean.ts";
+import { closeEpisode, ExportInputError, openStrings } from "./closed.ts";
 import { blobsFor, EpisodeStore, readStoreDir } from "./store.ts";
 import type { Episode, EpisodeOutcome } from "./types.ts";
 import { canonicalJson, sha256Hex, validateEpisode } from "./validate.ts";
@@ -134,6 +141,11 @@ export function validateFilter(f: EpisodeFilter): void {
     throw new Error(`invalid filter: ${issues.map((i) => `${i.path} ${i.message}`).join("; ")}`);
   if (f.outcome !== null && !(EPISODE_OUTCOMES as readonly string[]).includes(f.outcome))
     throw new Error(`invalid filter outcome ${f.outcome}`);
+  // The filter is written to the manifest: its strings are closed too (never free text).
+  if (f.taskSetVersion !== null && !/^[A-Za-z0-9._-]{1,64}$/.test(f.taskSetVersion))
+    throw new Error("invalid filter: taskSetVersion is not a closed task-set id");
+  if (f.arm !== null && !/^[a-z0-9][a-z0-9+._-]{0,63}$/.test(f.arm))
+    throw new Error("invalid filter: arm is not a closed arm id");
 }
 
 export function exportDataset(options: {
@@ -169,7 +181,21 @@ export function exportDataset(options: {
         throw new Error(
           `export refused: episode ${String(ep.episodeId).slice(0, 12)} is invalid (${[...new Set(issues.map((i) => i.code))].join(", ")})`,
         );
-      byId.set(ep.episodeId, ep);
+      // Only the closed form leaves the machine; it is validated again as written.
+      let closedEp: Episode;
+      try {
+        closedEp = closeEpisode(ep);
+      } catch (e) {
+        if (e instanceof ExportInputError)
+          throw new Error(`episode ${String(ep.episodeId).slice(0, 12)}: ${e.message}`);
+        throw e;
+      }
+      const closedIssues = validateEpisode(closedEp, { blobs: own, host });
+      if (closedIssues.length > 0)
+        throw new Error(
+          `export refused: the closed form of episode ${String(ep.episodeId).slice(0, 12)} is invalid (${[...new Set(closedIssues.map((i) => i.code))].join(", ")})`,
+        );
+      byId.set(closedEp.episodeId, closedEp);
       for (const [k, v] of own) allBlobs.set(k, v);
     }
   }
@@ -256,6 +282,10 @@ export function validateDataset(dir: string, host: HostFacts = currentHost()): s
     const issues = validateEpisode(ep, { blobs: own, host });
     for (const i of issues)
       problems.push(`episode ${String(ep.episodeId).slice(0, 12)}: ${i.code} at ${i.path}`);
+    for (const path of openStrings(ep))
+      problems.push(
+        `episode ${String(ep.episodeId).slice(0, 12)}: OPEN_STRING at ${path} (not a closed value)`,
+      );
     if (ep.simulated !== manifest.simulated)
       problems.push(
         `episode ${String(ep.episodeId).slice(0, 12)}: simulated=${ep.simulated} in a ${manifest.simulated ? "simulated" : "real"} dataset`,

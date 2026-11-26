@@ -9,6 +9,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { PLANTED_MARKER as PLANTED_FAKE } from "../../src/episode/clean.ts";
 import { main as episodesMain } from "../../src/episode/cli.ts";
+import { closeEpisode } from "../../src/episode/closed.ts";
 import {
   exportDataset,
   importDataset,
@@ -245,11 +246,16 @@ describe("import and the CLI", () => {
     const back = readStoreDir(into)
       .episodes.map((e) => canonicalJson(e))
       .sort();
+    // The dataset carries the CLOSED form of each stored episode (closed.ts, TIF-265): import
+    // round-trips the dataset, and a re-export of the imported store is byte-identical to it.
     expect(back).toEqual(
       readStoreDir(a)
-        .episodes.map((e) => canonicalJson(e))
+        .episodes.map((e) => canonicalJson(closeEpisode(e)))
         .sort(),
     );
+    const again = join(dir("ir"), "ds");
+    exportDataset({ stores: [into], out: again, simulated: true, host: HOST });
+    expect(tree(again)).toEqual(tree(out));
   });
 
   it("myco-episodes export / validate / usage exit codes", async () => {
