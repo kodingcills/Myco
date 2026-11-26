@@ -3,12 +3,13 @@
  * filter, whatever the store order), filters by task set / arm / outcome / date, never mixes
  * simulated and real, and `validate` catches any edit to a dataset. Import round-trips. $0.
  */
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { PLANTED_MARKER as PLANTED_FAKE } from "../../src/episode/clean.ts";
 import { main as episodesMain } from "../../src/episode/cli.ts";
+import { closeEpisode } from "../../src/episode/closed.ts";
 import {
   exportDataset,
   importDataset,
@@ -17,6 +18,7 @@ import {
 } from "../../src/episode/export.ts";
 import { EpisodeRecorder } from "../../src/episode/recorder.ts";
 import { EpisodeStore, readStoreDir } from "../../src/episode/store.ts";
+import type { Episode } from "../../src/episode/types.ts";
 import { canonicalJson } from "../../src/episode/validate.ts";
 import { draft, HOST, scratch } from "./helpers.ts";
 
@@ -134,14 +136,25 @@ describe("exportDataset", () => {
         .episodes.filter((e) => e.outcome === "refuted")
         .flatMap((e) => e.observations.items.map((o) => ("file" in o ? o.file : ""))),
     );
-    expect(
-      readdirSync(join(out, "blobs"))
-        .map((f) => `blobs/${f}`)
-        .every((f) => refs.has(f)),
-    ).toBe(true);
-    expect(m.counts.blobs).toBe(readdirSync(join(out, "blobs")).length);
-    expect(m.counts.blobs).toBe(3);
+    // Digest-only (lead ruling 20:3xZ): no blob bytes leave the machine. Each observation keeps
+    // its sha256, byte count and content-addressed name; the dataset has no blobs/ directory.
+    expect(refs.size).toBe(3);
+    expect(existsSync(join(out, "blobs"))).toBe(false);
+    expect(m.files.every((f) => f.path.startsWith("episodes/"))).toBe(true);
+    expect(m.counts.blobs).toBe(0);
+    const exportedRefs = readdirSync(join(out, "episodes")).flatMap((f) =>
+      (
+        JSON.parse(readFileSync(join(out, "episodes", f), "utf8")) as Episode
+      ).observations.items.map((o) => ("sha256" in o ? `${o.file}:${o.bytes}` : "")),
+    );
+    expect(exportedRefs.filter((r) => r !== "").length).toBe(3);
     expect(validateDataset(out, HOST)).toEqual([]);
+    // A blobs/ directory planted into a dataset is refused.
+    mkdirSync(join(out, "blobs"));
+    writeFileSync(join(out, "blobs", `${"a".repeat(64)}.csv`), "id,v\n");
+    expect(validateDataset(out, HOST)).toContain(
+      "blobs/ is present: a dataset is digest-only and carries no blob bytes",
+    );
   });
 
   it("never mixes simulated and real stores", () => {
@@ -208,7 +221,7 @@ describe("validateDataset catches every edit", () => {
     writeFileSync(join(out, "episodes", `${"0".repeat(64)}.json`), "{}");
     expect(validateDataset(out, HOST).join("\n")).toMatch(/not in the manifest/);
     const out2 = exported();
-    rmSync(join(out2, "blobs", readdirSync(join(out2, "blobs"))[0] as string));
+    rmSync(join(out2, "episodes", readdirSync(join(out2, "episodes"))[0] as string));
     expect(validateDataset(out2, HOST).join("\n")).toMatch(/listed but missing/);
     const out3 = exported();
     const m = JSON.parse(readFileSync(join(out3, "manifest.json"), "utf8"));
@@ -239,17 +252,45 @@ describe("import and the CLI", () => {
     const a = seed(join(dir("i"), "s"), 0);
     const out = join(dir("io"), "ds");
     exportDataset({ stores: [a], out, simulated: true, host: HOST });
-    const into = join(dir("ii"), "s");
-    const results = importDataset(out, into, HOST);
-    expect(results.every((r) => r.status === "written")).toBe(true);
-    const back = readStoreDir(into)
-      .episodes.map((e) => canonicalJson(e))
-      .sort();
-    expect(back).toEqual(
-      readStoreDir(a)
+    // Digest-only: an episode that references a blob cannot be restored, so the store refuses it.
+    const refusedInto = join(dir("ii"), "s");
+    const refused = importDataset(out, refusedInto, HOST);
+    expect(refused.length).toBe(6);
+    expect(refused.every((r) => r.status === "refused")).toBe(true);
+    expect(JSON.stringify(refused)).toMatch(/BLOB_MISSING/);
+    // Blob-free episodes round-trip: the store gets the CLOSED form (closed.ts, TIF-265), and a
+    // re-export of the imported store is byte-identical to the dataset.
+    const plain = join(dir("ip"), "s");
+    const store = EpisodeStore.open(plain, { simulated: true, host: HOST });
+    for (let i = 0; i < 3; i++) {
+      const rec = new EpisodeRecorder({ host: HOST });
+      rec.action({ kind: "shell", command: `echo ${i}` });
+      const snap = rec.snapshot();
+      store.record(
+        draft({
+          actions: snap.actions,
+          observations: snap.observations,
+          provenance: { ...draft().provenance, runId: `run-p${i}` },
+        }),
+        snap.blobs,
+      );
+    }
+    const pout = join(dir("ipo"), "ds");
+    exportDataset({ stores: [plain], out: pout, simulated: true, host: HOST });
+    const into = join(dir("ipi"), "s");
+    expect(importDataset(pout, into, HOST).every((r) => r.status === "written")).toBe(true);
+    expect(
+      readStoreDir(into)
         .episodes.map((e) => canonicalJson(e))
         .sort(),
+    ).toEqual(
+      readStoreDir(plain)
+        .episodes.map((e) => canonicalJson(closeEpisode(e)))
+        .sort(),
     );
+    const again = join(dir("ir"), "ds");
+    exportDataset({ stores: [into], out: again, simulated: true, host: HOST });
+    expect(tree(again)).toEqual(tree(pout));
   });
 
   it("myco-episodes export / validate / usage exit codes", async () => {
