@@ -54,17 +54,26 @@ that text in any way it likes (`=MID(CELL("filename");10;300)` drops the `file:/
 `=SUBSTITUTE(…;"/";"|")` swaps the separators), so no check on the spelling alone can be
 complete. Four enforced layers, in the order the server applies them:
 
-1. **Path functions taint the document.** `CELL` and `INFO` are the only spreadsheet
-   functions that return the document's location. While ANY formula in the document (any
-   sheet, any named expression) calls one, every `state_read_range` and `state_ui_tree`
-   reply is `OUTPUT_WITHHELD`, including reads of cells that never touch it. The reader
-   scans the whole document on each of these calls and reports `documentPathFunctions`;
-   the server refuses a reply without the flag (`BACKEND_ERROR`) and also checks every
-   returned formula itself. This cuts the source, not the spelling: every formula-based
-   re-spelling depends on a `CELL`/`INFO` formula that is still in the document. The
-   match has no word boundary, so a literal `"INFO("` in a formula also withholds (fail
-   closed). `state_list_sheets` and `state_document_status` carry no cell text and stay
-   readable. Deleting the formula ends the taint.
+1. **Path functions taint the document.** `CELL` and `INFO` are the built-in spreadsheet
+   functions that return the document's location; a Basic macro (written in the GUI's
+   Basic IDE and called from a cell as `=WHEREAMI()`) or an extension add-in can return it
+   too. So a formula taints the document if it calls `CELL`, `INFO`, or ANY function that
+   is not built in. "Built in" is the running Calc's own opcode map, minus `CELL` and
+   `INFO`, minus add-ins other than the three LibreOffice ships (Analysis, DateFunctions,
+   PricingFunctions). The reader scans every place the document holds a formula whose
+   result can reach a cell or the UI: formula cells on every sheet, document-scoped named
+   expressions, sheet-scoped named expressions (Manage Names with a sheet scope), and the
+   validation formulas of every range (a list validation's dropdown shows its values).
+   While any of them taints, every `state_read_range` and `state_ui_tree` reply is
+   `OUTPUT_WITHHELD`, including reads of cells that never touch it. The reader scans on
+   each of these calls and reports `documentPathFunctions`; a place it cannot read fails
+   the whole call (`BACKEND_ERROR`); the server refuses a reply without the flag
+   (`BACKEND_ERROR`) and also checks every returned formula for `CELL`/`INFO` itself. This
+   cuts the source, not the spelling: a formula-based re-spelling depends on a tainting
+   formula that is still in the document. The match is loose on purpose: a call-shaped
+   string literal (`"INFO("`, `"x("`) also withholds (fail closed). `state_list_sheets` and
+   `state_document_status` carry no cell text and stay readable. Removing the formula (or
+   the name, validation or macro call) ends the taint.
 2. **Withheld strings (mandatory).** The harness lists the trial dir, vault root, fixture
    dir, oracle config and other trials' dirs in `MYCO_STATE_WITHHELD`. The launch audit, the
    plan builder and the server itself all refuse to run without the list, and the
@@ -91,7 +100,10 @@ complete. Four enforced layers, in the order the server applies them:
 **What no layer stops.** An agent that deliberately computes a re-encoding of its own
 document's path that keeps fewer than 16 letters/digits of any withheld entry in order
 (reversed, spelled as character codes, split across cells), pastes the result as plain
-values and deletes the formula, can read that text back. The same text is on its screen
+values and deletes the formula, can read that text back. The same goes for a macro run
+from the Basic IDE (not called from a cell) that writes such a re-encoding into cells as
+plain values: no formula is left to taint the document. Conditional-format formulas are
+not scanned: their result is a cell style, never text a reply carries. The same text is on its screen
 through `myco-rt observe` either way, so the state server is not the only channel. What
 it learns is a location, not content: the files there stay out of reach (above). A host
 path the withheld list does not name is covered only by layer 4's patterns. These
@@ -115,11 +127,16 @@ those paths:
   `=CELL("filename")` cell, the round-2 verifier's re-spellings (`MID`, `SUBSTITUTE`,
   `REGEX`, a cut prefix, case, fullwidth) both as formula results and pasted as plain
   values, a `CELL` formula on another sheet, a missing flag, the 16-character window
-  boundary, and the reader's document scan (cells and named expressions);
+  boundary, and the reader's document scan (cells, document- and sheet-scoped names, validation
+  formulas, macro and extension add-in calls, and which add-ins count as built in);
 - `test/linux/state-e2e.test.ts` runs against a real live Calc from a trial dir whose path
   has spaces. It pastes a re-spelled path as plain text, types `=CELL("filename")` and the
   verifier's `=MID(H2;10;300)`, and gets `OUTPUT_WITHHELD` for each, and for an unrelated
-  cell while the `CELL` formula is in the document. It checks every byte the server wrote.
+  cell while the `CELL` formula is in the document. It also defines a sheet-scoped name
+  `p` = `CELL("filename")` with the round-3 verifier's `=REGEX(MID(p;10;300);…)`, a Basic
+  function returning the document's URL, and a list validation sourced from `CELL`, and
+  gets `OUTPUT_WITHHELD` for an unrelated cell while each is present and `ok` once it is
+  removed. It checks every byte the server wrote.
 
 ## Read-only
 

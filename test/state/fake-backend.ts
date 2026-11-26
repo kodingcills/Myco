@@ -29,7 +29,10 @@ function cell(text: string | undefined, ref: string): CellState {
   return { ref, kind: "text", value: text, display: text };
 }
 
-/** Like the Linux reader: any formula anywhere in the document that calls CELL or INFO. */
+/**
+ * A simplified model of the Linux reader: formula cells that call CELL or INFO. The real
+ * reader also scans names, validation and non-built-in calls (state-host-paths.test.ts).
+ */
 function documentPathFunctions(doc: FakeDoc): boolean {
   return doc.sheets.some((s) =>
     s.rows.some((r) => r.some((c) => c.startsWith("=") && /(?:CELL|INFO)\s*\(/i.test(c))),

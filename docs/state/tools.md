@@ -81,9 +81,11 @@ Returns `rows`: one array per row, one entry per cell.
 | `truncated` | Present when `display` or `formula` was longer than 512 characters (UTF-16 code units, as JavaScript counts them; an emoji is 2) and was cut. |
 | `pathScrubbed` | Present when path-like text in `display`, `value` or `formula` was replaced with `[path]` (for example a pasted file URL). |
 
-While any formula in the document (any sheet, any named expression) calls `CELL` or
-`INFO`, every `state_read_range` and `state_ui_tree` call returns `OUTPUT_WITHHELD`, even
-for cells that do not use it. Delete that formula to read again. See
+While any formula in the document (a formula cell on any sheet, a document- or
+sheet-scoped named expression, or a validation formula) calls `CELL`, `INFO` or a function
+that is not built in (a Basic macro, an extension add-in), every `state_read_range` and
+`state_ui_tree` call returns `OUTPUT_WITHHELD`, even for cells that do not use it. Remove
+that formula to read again. See
 [security.md, Host paths](security.md#host-paths).
 
 ### `state_document_status`
@@ -147,7 +149,7 @@ A refusal has `isError: true` and carries a code only:
 | `UNKNOWN_SHEET` | No sheet with that index or name. |
 | `LIMIT_OUT_OF_RANGE` | `maxDepth` or `maxNodes` is outside its bounds. |
 | `OUTPUT_TOO_LARGE` | The serialized reply would exceed 64 KiB. |
-| `OUTPUT_WITHHELD` | The document holds a `CELL`/`INFO` formula (cell reads and the UI tree only), or the reply would contain a harness-withheld host path, including a re-spelling of one (separators, case or prefix changed). |
+| `OUTPUT_WITHHELD` | The document holds a formula calling `CELL`, `INFO` or a non-built-in function (cell reads and the UI tree only), or the reply would contain a harness-withheld host path, including a re-spelling of one (separators, case or prefix changed). |
 | `UI_TREE_UNAVAILABLE` | The backend has no accessibility tree for the window. |
 | `DOCUMENT_UNAVAILABLE` | The trial's app has no single open spreadsheet, or cannot be reached. |
 | `BACKEND_ERROR` | The backend failed, timed out, or returned something over a cap. The detail goes to the operator's log, never to the agent. |

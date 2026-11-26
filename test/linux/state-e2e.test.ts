@@ -20,7 +20,7 @@
  * `linux path` CI job), where a missing soffice / Python-UNO FAILS instead of skipping.
  * Without them, or without LibreOffice, it skips cleanly.
  */
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -51,6 +51,20 @@ describe("prerequisites (structured state)", () => {
     expect(pythonUnoAvailable(), "python3 -c 'import uno'").toBe(true);
   });
 });
+
+/** TEST ONLY GUI stand-in (test/linux/calc_taint_probe.py): see that script's docstring. */
+function calcGui(pipe: string, ...args: string[]): { ok: boolean; [k: string]: unknown } {
+  const r = spawnSync(
+    process.env.MYCO_PYTHON ?? "python3",
+    [join(ROOT, "test", "linux", "calc_taint_probe.py"), "--pipe", pipe, ...args],
+    { encoding: "utf8", timeout: 60_000 },
+  );
+  try {
+    return JSON.parse((r.stdout ?? "").trim().split("\n").pop() ?? "");
+  } catch {
+    return { ok: false, error: `probe failed (exit ${String(r.status)}): ${r.stderr}` };
+  }
+}
 
 /** A minimal scripted MCP client over a child's stdio; records every byte the server sent. */
 class ScriptedClient {
@@ -253,6 +267,48 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
       trace.pastedPath = pasted.ok ? pasted.data.rows[0][0] : pasted.code;
       expect(trace.pastedPath, JSON.stringify(trace.pastedPath)).toBe("OUTPUT_WITHHELD");
       expect((await client.tool("state_read_range", { range: "A1" })).ok).toBe(true);
+
+      // Layer 1 beyond formula cells (PR #527 round 3, D6). Each place below holds a formula
+      // the GUI can create; while it is there, every cell read and UI tree is withheld, and
+      // the taint ends when it is removed. `code` is "ok" or the refusal code.
+      const code = async (tool: string, args: object) => {
+        const r = await client.tool(tool, args);
+        return r.ok ? "ok" : (r.code as string);
+      };
+      const tainted = async (label: string) => {
+        trace[label] = await code("state_read_range", { range: "A1" });
+        expect(trace[label], label).toBe("OUTPUT_WITHHELD");
+        expect(await code("state_ui_tree", { maxDepth: 2, maxNodes: 20 }), label).toMatch(
+          /^(OUTPUT_WITHHELD|UI_TREE_UNAVAILABLE)$/,
+        );
+      };
+      const clean = async (label: string) =>
+        expect(await code("state_read_range", { range: "A1" }), label).toBe("ok");
+
+      // (a) A SHEET-scoped name `p` = CELL("filename") (document-level names stay empty), and
+      // the verifier's doubled-character re-spelling through it, formula still in place.
+      const named = calcGui(live.pipe, "sheet-name", "p", 'CELL("filename")');
+      expect(named).toMatchObject({ ok: true, sheetNames: ["p"], docNames: [] });
+      expect(live.type("H5", '=REGEX(MID(p;10;300);"(.)";"$1$1";"g")').ok).toBe(true);
+      expect(await code("state_read_range", { range: "H5" })).toBe("OUTPUT_WITHHELD");
+      await tainted("sheetScopedName");
+      expect(calcGui(live.pipe, "clear", "H5").ok).toBe(true);
+      expect(calcGui(live.pipe, "drop-sheet-name", "p").ok).toBe(true);
+      await clean("sheetScopedName dropped");
+
+      // (b) A Basic function (My Macros) that returns the document's URL without CELL/INFO.
+      expect(calcGui(live.pipe, "basic-function", "WHEREAMI").ok).toBe(true);
+      expect(live.type("H5", '=REGEX(WHEREAMI();"(.)";"$1$1";"g")').ok).toBe(true);
+      await tainted("basicFunction");
+      expect(calcGui(live.pipe, "clear", "H5").ok).toBe(true);
+      expect(calcGui(live.pipe, "drop-basic").ok).toBe(true);
+      await clean("basicFunction dropped");
+
+      // (c) A list validation whose source is CELL("filename"): its dropdown shows the path.
+      expect(calcGui(live.pipe, "validation", "H5", 'CELL("filename")').ok).toBe(true);
+      await tainted("validationFormula");
+      expect(calcGui(live.pipe, "drop-validation", "H5").ok).toBe(true);
+      await clean("validationFormula dropped");
 
       // A formula that surfaces the document's host path (round-1 D2), and a second formula
       // that re-spells it (round-2 D5, the verifier's probe). While any CELL/INFO formula is

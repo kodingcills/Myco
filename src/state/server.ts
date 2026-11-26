@@ -14,9 +14,11 @@
  *    lengths, tree depth, node count and width); a reply over a cap is refused
  *    (BACKEND_ERROR), never passed through;
  *  - host paths, four layers (docs/state/security.md, "Host paths"):
- *     1. path functions: while ANY formula in the document calls `CELL` or `INFO` (the only
- *        functions that return the document's location), every cell read and UI tree is
- *        withheld (OUTPUT_WITHHELD). The backend reports this document-wide
+ *     1. path functions: while ANY formula in the document (formula cells on every sheet,
+ *        document- and sheet-scoped named expressions, validation formulas) calls `CELL`
+ *        or `INFO` (the built-in functions that return the document's location) or any
+ *        function that is not built in (a Basic macro, an extension add-in), every cell
+ *        read and UI tree is withheld (OUTPUT_WITHHELD). The backend reports this document-wide
  *        (`documentPathFunctions`); a reply without the flag is refused (BACKEND_ERROR),
  *        and the server also checks every returned formula itself. This is what stops a
  *        transformed spelling (`MID(CELL("filename");10)`, `SUBSTITUTE(…;"/";"|")`): it
@@ -74,7 +76,7 @@ export const STATE_INSTRUCTIONS =
 const DESCRIPTIONS: Readonly<Record<StateToolName, string>> = {
   state_list_sheets:
     "List the open document's sheets with each sheet's used range (A1). Read-only live state.",
-  state_read_range: `Read a cell or range (A1, at most ${STATE_CAPS.maxCells} cells): each cell's kind, value, displayed text and formula as the app holds them now. Withheld while any formula in the document calls CELL or INFO. Read-only live state; not proof the document was saved.`,
+  state_read_range: `Read a cell or range (A1, at most ${STATE_CAPS.maxCells} cells): each cell's kind, value, displayed text and formula as the app holds them now. Withheld while any formula in the document (cells, named expressions, validation) calls CELL, INFO or a non-built-in function such as a macro. Read-only live state; not proof the document was saved.`,
   state_document_status:
     "The open document's save state: modified (unsaved edits present), read-only, sheet count, active sheet. Read-only.",
   state_ui_tree: `A bounded summary of the app window's accessibility tree (depth <= ${STATE_CAPS.maxTreeDepth}, nodes <= ${STATE_CAPS.maxTreeNodes}, ${STATE_CAPS.maxChildrenPerNode} children per node). Read-only.`,
@@ -452,6 +454,9 @@ export function createStateService(options: StateServiceOptions): StateService {
       const text = JSON.stringify(reply);
       if (Buffer.byteLength(text, "utf8") > STATE_CAPS.maxReplyBytes)
         return refuse(request.tool, "OUTPUT_TOO_LARGE");
+      // Defense in depth, believed unreachable: every string was already checked raw
+      // (layer 2) or had withheld strings redacted (UI tree) before it got here. Kept so a
+      // future field added without those checks still fails closed.
       if (forms.some((f) => text.includes(f))) {
         diag(request.tool, "reply contained a withheld string");
         return refuse(request.tool, "OUTPUT_WITHHELD");

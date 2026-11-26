@@ -15,7 +15,8 @@ versioned releases yet; entries are grouped by milestone. License: [Apache-2.0](
   accessibility-tree summary. The Linux headless Calc backend is shipped; the backend seam
   is ready for a Windows/UIA backend. The server is bound to one trial, takes no path, caps
   every reply and returns codes only. Host paths: cell reads and the UI tree are withheld
-  while the document holds a `CELL`/`INFO` formula, a mandatory withheld list is matched
+  while the document holds a formula (in a cell, a document- or sheet-scoped name, or a
+  validation) that calls `CELL`, `INFO` or a non-built-in function such as a macro, a mandatory withheld list is matched
   verbatim and separator-insensitively, and path-like text is scrubbed. An agent that
   deliberately re-encodes its own document's path can still read it back (the security
   model says so). It is not part of the gate, and it is not proof of

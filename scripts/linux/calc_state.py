@@ -41,11 +41,32 @@ ROLE_NAMES = (
 
 # Spreadsheet functions that return the document's own location (CELL("filename"), and
 # INFO for spreadsheets that support a "directory" type). Any formula ANYWHERE in the
-# document (any sheet, any named expression) that calls one taints the document: a second
-# formula can transform its result (MID, SUBSTITUTE, REGEX, ...) into a spelling no text
-# check can recognise, so the server withholds every cell read and UI tree while it holds
-# one (docs/state/security.md, "Host paths"). getFormula/getContent give English names.
+# document that calls one taints the document: a second formula can transform its result
+# (MID, SUBSTITUTE, REGEX, ...) into a spelling no text check can recognise, so the server
+# withholds every cell read and UI tree while it holds one (docs/state/security.md, "Host
+# paths"). getFormula/getContent give English (API grammar) names.
+#
+# "Anywhere" means every place the document can hold a formula whose result reaches a cell
+# or the UI: formula cells on every sheet, document-scoped named expressions, SHEET-scoped
+# named expressions (Calc's Manage Names dialog creates these from the GUI; PR #527 round 3,
+# D6), and validation formulas (a list validation's dropdown shows its values in the UI).
 PATH_FUNCTION = re.compile(r"(?:CELL|INFO)\s*\(", re.IGNORECASE)
+
+# Every function call in a formula, as `NAME(`. A call to anything that is NOT a built-in
+# Calc function also taints the document: a Basic macro (`=WHEREAMI()` returning
+# ThisComponent.URL, written in the GUI's Basic IDE) or an extension add-in can return the
+# document's location without CELL or INFO, so CELL/INFO alone would not cut the source.
+# The match is loose on purpose (a call-shaped string literal also counts): fail closed.
+FUNCTION_CALL = re.compile(r"([^\W\d][\w.]*)\s*\(")
+
+# Add-ins that ship with LibreOffice (Analysis, DateFunctions, PricingFunctions). In API
+# grammar their calls read COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.GETEDATE(...). Any other add-in
+# (an installed extension) is not built in.
+SHIPPED_ADDINS = (
+    "COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.",
+    "COM.SUN.STAR.SHEET.ADDIN.DATEFUNCTIONS.",
+    "COM.SUN.STAR.SHEET.ADDIN.PRICINGFUNCTIONS.",
+)
 
 
 class Refusal(Exception):
@@ -212,19 +233,79 @@ def cell_state(cell, ref, text_cap):
     return state
 
 
-def document_path_functions(doc):
-    """True if any formula cell or named expression in the document calls a path function."""
+def builtin_functions(doc):
+    """Upper-case names of the built-in functions, minus CELL and INFO.
+
+    From the live Calc's own opcode map, so the list matches the running version. Entries
+    with the "external" opcode are add-ins; only the ones LibreOffice ships are kept.
+    """
+    import uno  # noqa: PLC0415
+
+    mapper = doc.createInstance("com.sun.star.sheet.FormulaOpCodeMapper")
+    api = uno.getConstantByName("com.sun.star.sheet.FormulaLanguage.API")
+    functions = uno.getConstantByName("com.sun.star.sheet.FormulaMapGroup.FUNCTIONS")
+    return builtin_names(mapper.getAvailableMappings(api, functions), mapper.OpCodeExternal)
+
+
+def builtin_names(entries, external):
+    """The allowed names from opcode-map `entries` (each has .Name and .Token.OpCode)."""
+    names = set()
+    for entry in entries:
+        name = (entry.Name or "").upper()
+        if not name or name in ("CELL", "INFO"):
+            continue
+        if entry.Token.OpCode == external and not name.startswith(SHIPPED_ADDINS):
+            continue  # an add-in from an installed extension: not built in
+        names.add(name)
+    return frozenset(names)
+
+
+def formula_taints(text, builtins):
+    """True if `text` calls CELL/INFO, or calls any function that is not built in."""
+    if not text:
+        return False
+    if PATH_FUNCTION.search(text):
+        return True
+    for match in FUNCTION_CALL.finditer(text):
+        if match.group(1).upper() not in builtins:
+            return True
+    return False
+
+
+def document_formulas(doc):
+    """Every formula text the document holds whose result can reach a cell or the UI.
+
+    Formula cells on every sheet, the document's named expressions, each sheet's own named
+    expressions, and the validation formulas of every uniformly formatted range. A sheet
+    whose names or validation cannot be read raises, so the whole read fails closed
+    (BACKEND_ERROR) instead of skipping it.
+    """
     sheets = doc.getSheets()
     for index in range(sheets.getCount()):
         sheet = sheets.getByIndex(index)
         ranges = sheet.queryContentCells(16)  # com.sun.star.sheet.CellFlags.FORMULA
         enum = ranges.getCells().createEnumeration()
         while enum.hasMoreElements():
-            if PATH_FUNCTION.search(enum.nextElement().getFormula() or ""):
-                return True
+            yield enum.nextElement().getFormula()
+        local = sheet.NamedRanges  # sheet-scoped names (round-3 D6)
+        for name in local.getElementNames():
+            yield local.getByName(name).getContent()
+        formats = sheet.CellFormatRanges
+        for i in range(formats.getCount()):
+            validation = formats.getByIndex(i).Validation
+            yield validation.getFormula1()
+            yield validation.getFormula2()
     named = doc.NamedRanges
     for name in named.getElementNames():
-        if PATH_FUNCTION.search(named.getByName(name).getContent() or ""):
+        yield named.getByName(name).getContent()
+
+
+def document_path_functions(doc, builtins=None):
+    """True if any formula in the document calls a path function or a non-built-in one."""
+    if builtins is None:
+        builtins = builtin_functions(doc)
+    for text in document_formulas(doc):
+        if formula_taints(text, builtins):
             return True
     return False
 

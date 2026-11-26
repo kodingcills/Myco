@@ -48,8 +48,10 @@ export interface RangeRead {
   readonly range: string;
   readonly rows: readonly (readonly CellState[])[];
   /**
-   * True if ANY formula or named expression in the whole document (not only this range)
-   * calls a function that returns the document's own location (`CELL`, `INFO`). The server
+   * True if ANY formula in the whole document (not only this range): formula cells on every
+   * sheet, document- and sheet-scoped named expressions, and validation formulas, calls a
+   * function that returns the document's own location (`CELL`, `INFO`) or any function
+   * that is not built in (a Basic macro or extension add-in can return it too). The server
    * withholds the reply while it is true, and refuses a reply without it (BACKEND_ERROR):
    * docs/state/security.md, "Host paths".
    */
@@ -79,8 +81,10 @@ export interface UiTree {
   readonly nodes: number;
   readonly truncated: boolean;
   /**
-   * True if ANY formula or named expression in the whole document
-   * calls a function that returns the document's own location (`CELL`, `INFO`). The server
+   * True if ANY formula in the whole document (not only this range): formula cells on every
+   * sheet, document- and sheet-scoped named expressions, and validation formulas, calls a
+   * function that returns the document's own location (`CELL`, `INFO`) or any function
+   * that is not built in (a Basic macro or extension add-in can return it too). The server
    * withholds the reply while it is true, and refuses a reply without it (BACKEND_ERROR):
    * docs/state/security.md, "Host paths".
    */

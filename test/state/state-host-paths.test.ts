@@ -293,6 +293,38 @@ describe("D5: a transformed spelling of the document's path never reaches the ag
     }
   });
 
+  it("the folded match also covers state_list_sheets and state_document_status (round-3 V6)", async () => {
+    // A sheet name that re-spells the trial dir (separators swapped, prefix cut): no exact
+    // withheld form matches, only the folded one.
+    const respelled = TRIAL.slice(1).replace(/\//g, "|");
+    const service = (data: object) =>
+      createStateService({ backend: rawBackend(data), withheld: [TRIAL] });
+    const sheets = {
+      sheets: [{ index: 0, name: respelled, usedRange: "A1:B2" }],
+      sheetCount: 1,
+      truncated: false,
+    };
+    const status = {
+      modified: false,
+      hasStorageLocation: true,
+      readOnly: false,
+      sheetCount: 1,
+      activeSheet: respelled,
+    };
+    expect(await service(sheets).call("state_list_sheets", {})).toMatchObject({
+      code: "OUTPUT_WITHHELD",
+    });
+    expect(await service(status).call("state_document_status", {})).toMatchObject({
+      code: "OUTPUT_WITHHELD",
+    });
+    // Control: the same replies with an ordinary name pass.
+    const plain = { ...sheets, sheets: [{ index: 0, name: "seed", usedRange: "A1:B2" }] };
+    expect((await service(plain).call("state_list_sheets", {})).ok).toBe(true);
+    expect(
+      (await service({ ...status, activeSheet: "seed" }).call("state_document_status", {})).ok,
+    ).toBe(true);
+  });
+
   it("a short withheld entry (8-15 folded chars) is matched whole", async () => {
     const reply = await readA1(
       { kind: "text", value: "SRV|MYCO|VAULT", display: "SRV|MYCO|VAULT" },
@@ -399,9 +431,24 @@ describe.runIf(python)("D3: the reader cuts text in UTF-16 units, like the serve
 
 /**
  * The reader's document-wide scan (`document_path_functions`, scripts/linux/calc_state.py)
- * against a stand-in document: every sheet's formula cells and every named expression.
+ * against a stand-in document: every sheet's formula cells, its sheet-scoped named
+ * expressions and its validation formulas, plus the document's named expressions.
+ * `builtins` stands in for the live Calc's opcode map (`builtin_functions`).
  */
-function pyPathFunctions(doc: { sheets: string[][]; named: string[] }): boolean | null {
+interface StandInSheet {
+  readonly cells: readonly string[];
+  readonly names?: readonly string[];
+  readonly validations?: ReadonlyArray<readonly string[]>;
+}
+const BUILTINS = [
+  "SUM",
+  "MID",
+  "REGEX",
+  "SUBSTITUTE",
+  "IF",
+  "COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.GETEDATE",
+];
+function pyPathFunctions(doc: { sheets: StandInSheet[]; named: string[] }): boolean | null {
   const code = [
     "import importlib.util, json, sys",
     "spec = importlib.util.spec_from_file_location('calc_state', sys.argv[1])",
@@ -420,15 +467,6 @@ function pyPathFunctions(doc: { sheets: string[][]; named: string[] }): boolean 
     "class Ranges:",
     "    def __init__(s, fs): s.fs = fs",
     "    def getCells(s): return Cells(s.fs)",
-    "class Sheet:",
-    "    def __init__(s, fs): s.fs = fs",
-    "    def queryContentCells(s, flags):",
-    "        assert flags == 16",
-    "        return Ranges(s.fs)",
-    "class Sheets:",
-    "    def __init__(s, sh): s.sh = sh",
-    "    def getCount(s): return len(s.sh)",
-    "    def getByIndex(s, i): return Sheet(s.sh[i])",
     "class Named:",
     "    def __init__(s, c): s.c = c",
     "    def getContent(s): return s.c",
@@ -436,34 +474,193 @@ function pyPathFunctions(doc: { sheets: string[][]; named: string[] }): boolean 
     "    def __init__(s, ns): s.ns = ns",
     "    def getElementNames(s): return ['n%d' % i for i in range(len(s.ns))]",
     "    def getByName(s, n): return Named(s.ns[int(n[1:])])",
+    "class Validation:",
+    "    def __init__(s, f): s.f = f",
+    "    def getFormula1(s): return s.f[0]",
+    "    def getFormula2(s): return s.f[1]",
+    "class Fmt:",
+    "    def __init__(s, f): s.Validation = Validation(f)",
+    "class Formats:",
+    "    def __init__(s, vs): s.vs = vs",
+    "    def getCount(s): return len(s.vs)",
+    "    def getByIndex(s, i): return Fmt(s.vs[i])",
+    "class Sheet:",
+    "    def __init__(s, d):",
+    "        s.d = d",
+    "        s.NamedRanges = NamedRanges(d.get('names', []))",
+    "        s.CellFormatRanges = Formats(d.get('validations', [['', '']]))",
+    "    def queryContentCells(s, flags):",
+    "        assert flags == 16",
+    "        return Ranges(s.d['cells'])",
+    "class Sheets:",
+    "    def __init__(s, sh): s.sh = sh",
+    "    def getCount(s): return len(s.sh)",
+    "    def getByIndex(s, i): return Sheet(s.sh[i])",
     "class Doc:",
     "    def __init__(s, d): s.d = d; s.NamedRanges = NamedRanges(d['named'])",
     "    def getSheets(s): return Sheets(s.d['sheets'])",
-    "print(json.dumps(m.document_path_functions(Doc(d))))",
+    "print(json.dumps(m.document_path_functions(Doc(d), frozenset(d['builtins']))))",
   ].join("\n");
   const r = spawnSync(
     process.env.MYCO_PYTHON ?? "python3",
     ["-I", "-c", code, join(ROOT, "scripts", "linux", "calc_state.py")],
-    { input: JSON.stringify(doc), encoding: "utf8" },
+    { input: JSON.stringify({ ...doc, builtins: BUILTINS }), encoding: "utf8" },
   );
   if (r.error) return null;
   if (r.status !== 0) throw new Error(`python failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }
 
-describe.runIf(python)("D5: the reader flags a path function anywhere in the document", () => {
-  it("no path function: false", () => {
-    expect(pyPathFunctions({ sheets: [["=A1*2", "=SUM(B1:B9)"], []], named: ["$seed.$A$1"] })).toBe(
-      false,
-    );
+/** `builtin_names` (scripts/linux/calc_state.py) over stand-in opcode-map entries. */
+function pyBuiltinNames(entries: Array<[string, number]>, external: number): string[] | null {
+  const code = [
+    "import importlib.util, json, sys",
+    "spec = importlib.util.spec_from_file_location('calc_state', sys.argv[1])",
+    "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)",
+    "d = json.loads(sys.stdin.read())",
+    "class Tok:",
+    "    def __init__(s, o): s.OpCode = o",
+    "class Entry:",
+    "    def __init__(s, n, o): s.Name = n; s.Token = Tok(o)",
+    "es = [Entry(n, o) for n, o in d['entries']]",
+    "print(json.dumps(sorted(m.builtin_names(es, d['external']))))",
+  ].join("\n");
+  const r = spawnSync(
+    process.env.MYCO_PYTHON ?? "python3",
+    ["-I", "-c", code, join(ROOT, "scripts", "linux", "calc_state.py")],
+    { input: JSON.stringify({ entries, external }), encoding: "utf8" },
+  );
+  if (r.error) return null;
+  if (r.status !== 0) throw new Error(`python failed: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+
+describe.runIf(python)("D5/D6: the reader flags a path function anywhere in the document", () => {
+  it("no path function, only built-in calls: false", () => {
+    expect(
+      pyPathFunctions({
+        sheets: [
+          {
+            cells: [
+              "=A1*2",
+              "=SUM(B1:B9)",
+              '=REGEX(MID(A1;1;3);"(.)";"$1")',
+              "=com.sun.star.sheet.addin.Analysis.getEdate(A1;1)",
+            ],
+            names: ["$Sheet1.$A$1"],
+            validations: [
+              ["", ""],
+              ["$Sheet1.$A$1:$A$9", "0"],
+            ],
+          },
+          { cells: [] },
+        ],
+        named: ["$seed.$A$1", "SUM($A$1:$A$3)"],
+      }),
+    ).toBe(false);
   });
 
   it.each([
-    ["a CELL formula on the second sheet", { sheets: [["=A1"], ['=CELL("filename")']], named: [] }],
-    ["a lower-case cell( formula", { sheets: [['=MID(cell("filename");10;3)']], named: [] }],
-    ["an INFO formula", { sheets: [['=INFO("directory")']], named: [] }],
-    ["a named expression", { sheets: [["=WHERE"]], named: ['CELL("filename")'] }],
+    [
+      "a CELL formula on the second sheet",
+      { sheets: [{ cells: ["=A1"] }, { cells: ['=CELL("filename")'] }], named: [] },
+    ],
+    [
+      "a lower-case cell( formula",
+      { sheets: [{ cells: ['=MID(cell("filename");10;3)'] }], named: [] },
+    ],
+    ["an INFO formula", { sheets: [{ cells: ['=INFO("directory")'] }], named: [] }],
+    [
+      "a document-scoped named expression",
+      { sheets: [{ cells: ["=WHERE"] }], named: ['CELL("filename")'] },
+    ],
+    // Round-3 D6: Manage Names with scope Sheet1; the document-level names stay empty.
+    [
+      "a SHEET-scoped named expression (D6)",
+      {
+        sheets: [
+          { cells: ['=REGEX(MID(p;10;300);"(.)";"$1$1";"g")'], names: ['CELL("filename")'] },
+        ],
+        named: [],
+      },
+    ],
+    [
+      "a sheet-scoped name on the second sheet (D6)",
+      {
+        sheets: [{ cells: [] }, { cells: [], names: ["$Sheet2.$A$1", 'INFO("directory")'] }],
+        named: [],
+      },
+    ],
+    [
+      "a validation list sourced from CELL",
+      {
+        sheets: [
+          {
+            cells: [],
+            validations: [
+              ["", ""],
+              ['CELL("filename")', "0"],
+            ],
+          },
+        ],
+        named: [],
+      },
+    ],
+    [
+      "a validation Formula2 with INFO",
+      { sheets: [{ cells: [], validations: [["1", 'INFO("directory")']] }], named: [] },
+    ],
+    [
+      "a Basic macro call in a cell",
+      { sheets: [{ cells: ['=REGEX(WHEREAMI();"(.)";"$1$1";"g")'] }], named: [] },
+    ],
+    ["a lower-case macro call", { sheets: [{ cells: ["=whereami()"] }], named: [] }],
+    [
+      "a dotted library-qualified macro call",
+      { sheets: [{ cells: ["=Standard.Module1.Whereami()"] }], named: [] },
+    ],
+    [
+      "an extension add-in call",
+      { sheets: [{ cells: ["=ORG.EXAMPLE.ADDIN.GETPATH()"] }], named: [] },
+    ],
+    [
+      "a macro call with a space before the paren",
+      { sheets: [{ cells: ["=SUM(1)+WHEREAMI ()"] }], named: [] },
+    ],
+    ["a non-ASCII macro name", { sheets: [{ cells: ["=ÜÄÖ()"] }], named: [] }],
+    [
+      "a macro call inside a sheet-scoped name",
+      { sheets: [{ cells: ["=q"], names: ["WHEREAMI()"] }], named: [] },
+    ],
+    ["a macro call inside a document name", { sheets: [{ cells: ["=q"] }], named: ["WHEREAMI()"] }],
   ])("%s: true", (_name, doc) => {
     expect(pyPathFunctions(doc)).toBe(true);
+  });
+
+  it("built-ins come from the opcode map: CELL, INFO and extension add-ins are not allowed", () => {
+    expect(
+      pyBuiltinNames(
+        [
+          ["SUM", 224],
+          ["cell", 385],
+          ["INFO", 165],
+          ["", 162],
+          ["EDATE", 3],
+          ["COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.GETEDATE", 3],
+          ["COM.SUN.STAR.SHEET.ADDIN.DATEFUNCTIONS.GETDAYSINMONTH", 3],
+          ["COM.SUN.STAR.SHEET.ADDIN.PRICINGFUNCTIONS.OPT_TOUCH", 3],
+          ["ORG.EXAMPLE.ADDIN.GETPATH", 3],
+          ["GETPATH", 3],
+          ["FORECAST.ETS.PI.ADD", 482],
+        ],
+        3,
+      ),
+    ).toEqual([
+      "COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.GETEDATE",
+      "COM.SUN.STAR.SHEET.ADDIN.DATEFUNCTIONS.GETDAYSINMONTH",
+      "COM.SUN.STAR.SHEET.ADDIN.PRICINGFUNCTIONS.OPT_TOUCH",
+      "FORECAST.ETS.PI.ADD",
+      "SUM",
+    ]);
   });
 });
