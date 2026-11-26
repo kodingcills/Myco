@@ -12,8 +12,9 @@
  *  - networking is off by default: a spec asking for anything else is refused at create;
  *  - paths a caller hands in (seed files, capture paths) are relative, normalised and stay
  *    inside the desktop; a symlink is never followed on capture;
- *  - a program inside the desktop does not inherit the host environment (no host secret,
- *    token or path reaches it through env);
+ *  - a program inside the desktop does not inherit the host environment: it sees only the
+ *    allowlist, a fixed system PATH, and its own HOME and TMPDIR (no host secret, token or
+ *    host home path reaches it through env);
  *  - a handle answers only for its own trial: once destroyed, or from another backend, every
  *    call is refused;
  *  - errors carry codes only (`DesktopError.code`), never a host path or a value.
@@ -38,6 +39,7 @@ export const DESKTOP_ERROR_CODES = [
   "DESKTOP_DESTROYED",
   "BACKEND_MISMATCH",
   "RUN_FAILED",
+  "CAPTURE_CHANGED",
 ] as const;
 export type DesktopErrorCode = (typeof DESKTOP_ERROR_CODES)[number];
 
@@ -162,7 +164,11 @@ export function checkSpec(spec: DesktopSpec): void {
 
 /**
  * The only host environment variables a desktop program sees. Everything else (tokens,
- * proxies, cloud credentials, the host HOME and USER) is dropped. PATH is kept so the
- * program can find an interpreter; HOME is the desktop's own home.
+ * proxies, cloud credentials, the host HOME, USER and PATH) is dropped. PATH is not passed
+ * through, because a host PATH can name host home directories: a program gets the fixed
+ * `DESKTOP_PATH` instead (system directories only). HOME is the desktop's own home.
  */
-export const ENV_ALLOWLIST = ["PATH", "LANG", "TZ"] as const;
+export const ENV_ALLOWLIST = ["LANG", "TZ"] as const;
+
+/** The PATH every desktop program gets, whatever the host's PATH is. */
+export const DESKTOP_PATH = "/usr/local/bin:/usr/bin:/bin";

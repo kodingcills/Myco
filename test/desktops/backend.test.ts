@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkSpec,
+  DESKTOP_PATH,
   type DesktopError,
   type DesktopSpec,
   safeRelativePath,
@@ -118,9 +119,12 @@ describe("environment isolation", () => {
       [
         "HOME",
         "TMPDIR",
-        ...["PATH", "LANG", "TZ"].filter((k) => process.env[k] !== undefined),
+        "PATH",
+        ...["LANG", "TZ"].filter((k) => process.env[k] !== undefined),
       ].sort(),
     );
+    // PATH is never the host's (a host PATH can name host home directories).
+    expect(env.PATH).toBe(DESKTOP_PATH);
     // HOME is the desktop's own home, reported as a placeholder, never the host path.
     expect(env.HOME).toBe("<home>");
     expect(env.TMPDIR).toBe("<desktop>/tmp");

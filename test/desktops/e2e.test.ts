@@ -4,22 +4,31 @@
  * A scripted agent (test/fixtures/desktops/scripted-agent.mjs) runs in N disposable desktops
  * on the local-process backend, four at a time. For each trial the harness captures the
  * persisted bytes, hands them to the REAL gate (`createGate`, bound to that trial) through
- * the trial's evidence location, and to the REAL independent grader (`grade`), then exports
- * the dataset. The planner is a script, so every row is simulated and labelled so; none of
- * this is evidence of agent capability.
+ * the trial's evidence location, and to the REAL independent grader (`grade`), drafts the
+ * trial's canonical `myco.episode/1` record (the interim writer, src/dataset/episode.ts),
+ * then exports the dataset as a container over those episodes. The planner is a script, so
+ * every episode is simulated and labelled so; none of this is evidence of agent capability.
  *
  * The gate and grader are composed here, in the test, on purpose: src/desktops and
  * src/dataset import neither (test/desktops/import-boundary.test.ts).
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { datasetManifestSchema, datasetRecordSchema } from "../../schemas/dataset-export.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import { type ColumnType, GRADER_VERSION, grade, sha256 } from "../../src/benchmark/grade/grade.ts";
+import { draftEpisode, episodeMirrorSchema } from "../../src/dataset/episode.ts";
 import { type ExportCandidate, ExportRefused, exportDataset } from "../../src/dataset/export.ts";
-import { scanForLeaks } from "../../src/dataset/hygiene.ts";
+import { forbiddenStringsFromFiles, leaksIn, scanForLeaks } from "../../src/dataset/hygiene.ts";
 import { type FleetOutcome, type FleetTrial, runFleet } from "../../src/desktops/fleet.ts";
 import { LocalProcessBackend } from "../../src/desktops/local-process.ts";
 import { parseTranscript } from "../../src/desktops/transcript.ts";
@@ -41,12 +50,27 @@ type Mode =
   | "no-claim"
   | "snoop"
   | "leak"
+  | "leak-action"
+  | "read-vault"
   | "crash";
 
 interface TrialPlan {
   readonly i: number;
   readonly mode: Mode;
   readonly marker?: string;
+  /** Planted into the seeded fixture (last record's last cell). */
+  readonly fixtureMarker?: string;
+  /** A host file outside the desktop the `read-vault` agent reads. */
+  readonly vaultPath?: string;
+}
+
+/** The seeded fixture, with `fixtureMarker` planted into it when the plan asks. */
+function seededFixture(plan: TrialPlan): string {
+  const csv = generateFixture(intentOf(plan.i).seed).csv;
+  if (plan.fixtureMarker === undefined) return csv;
+  const lines = csv.trimEnd().split("\n");
+  lines[lines.length - 1] = lines[lines.length - 1]!.replace(/,[^,]*$/, `,${plan.fixtureMarker}`);
+  return `${lines.join("\n")}\n`;
 }
 
 function intentOf(i: number) {
@@ -65,9 +89,9 @@ function instructionOf(i: number): string {
 
 function trialOf(plan: TrialPlan): FleetTrial {
   const t = intentOf(plan.i);
-  const fixture = generateFixture(t.seed).csv;
+  const fixture = seededFixture(plan);
   return {
-    trialKey: `u-task-${plan.i}/run-${plan.i}`,
+    trialKey: `u-task-${plan.i}:run-${plan.i}`,
     taskId: `u-task-${plan.i}`,
     runId: `run-${plan.i}`,
     image: IMAGE,
@@ -82,6 +106,7 @@ function trialOf(plan: TrialPlan): FleetTrial {
             newValue: t.newValue,
             mode: plan.mode,
             marker: plan.marker,
+            vaultPath: plan.vaultPath,
           }),
         ),
       },
@@ -93,7 +118,7 @@ function trialOf(plan: TrialPlan): FleetTrial {
   };
 }
 
-/** The harness side of one trial: real gate, real grader, then an export candidate. */
+/** The harness side of one trial: real gate, real grader, the episode, an export candidate. */
 async function candidateOf(
   plan: TrialPlan,
   outcome: FleetOutcome,
@@ -119,12 +144,12 @@ async function candidateOf(
     assignment: { taskId: outcome.taskId, runId: outcome.runId },
     now: NOW,
   });
-  const claimText = parseTranscript(outcome.run?.stdout ?? "");
-  const transcript = claimText.ok ? claimText : { steps: [], claim: { done: false, text: "" } };
+  const parsed = parseTranscript(outcome.run?.stdout ?? "");
+  if (!parsed.ok) throw new Error(`transcript malformed at line ${parsed.line}`);
   const gateResult = await gate.check({
     taskId: outcome.taskId,
     runId: outcome.runId,
-    claim: transcript.claim.text,
+    claim: parsed.claimText,
   });
   const gradeResult = grade({
     fixtureCsv,
@@ -133,33 +158,81 @@ async function candidateOf(
     intent: { rowKey: t.rowKey, column: t.column, newValue: t.newValue },
     columnTypes: COLUMN_TYPES,
   });
-  return {
-    trialKey: outcome.trialKey,
-    taskId: outcome.taskId,
+  const instruction = instructionOf(plan.i);
+  const episode = draftEpisode({
+    outcome: gateResult.verdict,
+    simulated: true,
+    task: {
+      id: outcome.taskId,
+      family: "calc-record-edit",
+      taskSetVersion: null,
+      faultClass: null,
+      instruction,
+      instructionSha256: sha256(Buffer.from(instruction)),
+      fixtureSha256: sha256(fixtureCsv),
+    },
+    actions: parsed.actions,
+    observations: parsed.observations,
+    withheld: parsed.withheld,
+    agentClaim: parsed.agentClaim,
+    gate: {
+      verdict: gateResult.verdict,
+      accepted: gateResult.accepted,
+      reasonCodes: [...gateResult.reasonCodes],
+      oracle: null,
+    },
+    groundTruth: {
+      source: "independent-grader",
+      graderVersion: gradeResult.graderVersion,
+      status: gradeResult.status,
+      targetSatisfied: gradeResult.targetSatisfied,
+      mismatchCount: gradeResult.mismatchCount,
+      fixtureSha256: gradeResult.fixtureSha256,
+      persistedSha256: gradeResult.persistedSha256,
+    },
+    arm: "scripted-u-e2e",
+    plannerModelId: null,
+    startedAt: outcome.startedAt,
+    endedAt: outcome.finishedAt,
+    source: "gated-trial",
     runId: outcome.runId,
-    family: "calc-record-edit",
-    instruction: instructionOf(plan.i),
+    trialKey: outcome.trialKey,
+  });
+  return {
+    episode,
     fixtureSha256: sha256(fixtureCsv),
-    steps: transcript.steps,
-    claim: transcript.claim,
-    gate: { source: "myco-gate", result: gateResult },
-    grade: gradeResult,
-    persisted:
+    gate: gateResult,
+    capture:
       outcome.capture === null
         ? null
         : { path: outcome.capture.path, format: "csv", bytes: outcome.capture.bytes },
-    provenance: {
+    desktop: {
       backend: outcome.backend,
       isolation: outcome.isolation,
       networkEnforced: outcome.networkEnforced,
       image: outcome.image,
-      plannerModelId: null,
-      simulated: true,
-      harness: "test-desktops-e2e/1",
-      startedAt: outcome.startedAt,
-      finishedAt: outcome.finishedAt,
     },
   };
+}
+
+/** Every file an export wrote, as text. */
+function writtenFiles(outDir: string): string[] {
+  return [
+    "records.jsonl",
+    "manifest.json",
+    "schema.json",
+    ...readdirSync(join(outDir, "episodes")).map((f) => join("episodes", f)),
+  ].map((f) => readFileSync(join(outDir, f), "utf8"));
+}
+
+function refusalOf(fn: () => unknown): ExportRefused {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof ExportRefused) return e;
+    throw e;
+  }
+  throw new Error("expected the export to be refused");
 }
 
 async function runBatch(plans: readonly TrialPlan[], concurrency: number) {
@@ -187,7 +260,7 @@ const MIXED: TrialPlan[] = [
   { i: 8, mode: "honest" },
 ];
 
-describe("track U end-to-end: fleet -> real gate + real grader -> dataset ($0)", () => {
+describe("track U end-to-end: fleet -> real gate + real grader -> episodes -> dataset ($0)", () => {
   it("runs 8 trials 4 at a time, clean, and exports positives and labelled negatives only", async () => {
     const { base, fleet, candidates } = await runBatch(MIXED, 4);
     expect(fleet.clean).toBe(true);
@@ -195,18 +268,23 @@ describe("track U end-to-end: fleet -> real gate + real grader -> dataset ($0)",
     expect(fleet.maxConcurrent).toBeLessThanOrEqual(4);
     expect(fleet.maxConcurrent).toBeGreaterThanOrEqual(2);
     expect(fleet.outcomes.map((o) => o.error)).toEqual(Array(8).fill(null));
-    // Every desktop is gone after the batch.
+    // The local-process backend reports its isolation honestly (destruction is pinned in
+    // test/desktops/backend.test.ts, "destroys every one").
     expect(fleet.outcomes.every((o) => o.isolation === "process" && !o.networkEnforced)).toBe(true);
 
     // The real gate and the real grader agree on every gradable trial.
     const byMode = new Map(MIXED.map((p, k) => [p.mode + p.i, candidates[k]!]));
-    expect(byMode.get("honest1")!.gate!.result.verdict).toBe("verified");
-    expect(byMode.get("honest1")!.grade!.status).toBe("pass");
-    expect(byMode.get("no-edit3")!.gate!.result.verdict).toBe("refuted");
-    expect(byMode.get("no-edit3")!.grade!.status).toBe("fail");
-    expect(byMode.get("wrong-row4")!.gate!.result.verdict).toBe("refuted");
-    expect(byMode.get("crash6")!.gate!.result.verdict).toBe("uncertain");
-    expect(byMode.get("crash6")!.grade!.status).toBe("ungradable");
+    const verdict = (m: string) => byMode.get(m)!.episode.gate!.verdict;
+    const status = (m: string) => {
+      const t = byMode.get(m)!.episode.groundTruth;
+      return t.source === "independent-grader" ? t.status : null;
+    };
+    expect([verdict("honest1"), status("honest1")]).toEqual(["verified", "pass"]);
+    expect([verdict("no-edit3"), status("no-edit3")]).toEqual(["refuted", "fail"]);
+    expect(verdict("wrong-row4")).toBe("refuted");
+    expect([verdict("crash6"), status("crash6")]).toEqual(["uncertain", "ungradable"]);
+    expect(byMode.get("no-claim5")!.episode.agentClaim).toBe("not-done");
+    for (const c of candidates) expect(validateSchema(c.episode, episodeMirrorSchema)).toEqual([]);
 
     const outDir = join(base, "dataset");
     const result = exportDataset(candidates, { outDir, includeNegatives: true, now: NOW });
@@ -221,9 +299,10 @@ describe("track U end-to-end: fleet -> real gate + real grader -> dataset ($0)",
       simulated: 6,
       excluded: { MISSING_CAPTURE: 1, NOT_CLAIMED: 1 },
     });
-    expect(result.excluded).toEqual([
-      { trialKey: "u-task-5/run-5", code: "NOT_CLAIMED" },
-      { trialKey: "u-task-6/run-6", code: "MISSING_CAPTURE" },
+    const idOf = (m: string) => byMode.get(m)!.episode.episodeId;
+    expect([...result.excluded].sort((x, y) => x.code.localeCompare(y.code))).toEqual([
+      { episodeId: idOf("crash6"), code: "MISSING_CAPTURE" },
+      { episodeId: idOf("no-claim5"), code: "NOT_CLAIMED" },
     ]);
 
     const jsonl = readFileSync(join(outDir, "records.jsonl"), "utf8");
@@ -235,28 +314,41 @@ describe("track U end-to-end: fleet -> real gate + real grader -> dataset ($0)",
       const record = JSON.parse(line);
       expect(validateSchema(record, datasetRecordSchema)).toEqual([]);
       expect(sha256(Buffer.from(line))).toBe(manifest.records[k].sha256);
-      expect(record.provenance.simulated).toBe(true);
-      expect(record.provenance.plannerModelId).toBeNull();
-      expect(record.grade.graderVersion).toBe(GRADER_VERSION);
+      expect(record.desktop).toEqual({
+        backend: "local-process/1",
+        isolation: "process",
+        networkEnforced: false,
+        image: IMAGE,
+      });
+      const episodeText = readFileSync(join(outDir, record.episode.file), "utf8");
+      expect(sha256(Buffer.from(episodeText))).toBe(record.episode.sha256);
+      const ep = JSON.parse(episodeText);
+      expect(validateSchema(ep, episodeMirrorSchema)).toEqual([]);
+      expect(ep.simulated).toBe(true);
+      expect(ep.harness.plannerModelId).toBeNull();
+      expect(ep.groundTruth.graderVersion).toBe(GRADER_VERSION);
       if (record.label === "positive") {
-        expect(record.verdict).toMatchObject({ verdict: "verified", accepted: true });
-        expect(record.grade.status).toBe("pass");
-        expect(record.claim.done).toBe(true);
+        expect(ep.gate).toMatchObject({ verdict: "verified", accepted: true });
+        expect(ep.groundTruth.status).toBe("pass");
+        expect(ep.agentClaim).toBe("done");
       } else {
-        expect(record.verdict).toMatchObject({ verdict: "refuted", accepted: false });
-        expect(record.grade.status).toBe("fail");
+        expect(ep.gate).toMatchObject({ verdict: "refuted", accepted: false });
+        expect(ep.groundTruth.status).toBe("fail");
       }
-      expect(record.steps.length).toBeGreaterThanOrEqual(2);
+      expect(ep.actions.items.length).toBeGreaterThanOrEqual(2);
       // Codes only: the gate's human-readable reasons are never exported.
-      expect(Object.keys(record.verdict).sort()).toEqual(
-        ["accepted", "apiVersion", "reasonCodes", "source", "verdict"].sort(),
-      );
+      expect(Object.keys(ep.gate).sort()).toEqual(["accepted", "oracle", "reasonCodes", "verdict"]);
     }
     // No host path anywhere in what was written: not the temp base, not the desktop roots.
-    const written = [jsonl, readFileSync(join(outDir, "manifest.json"), "utf8")].join("\n");
+    const written = writtenFiles(outDir).join("\n");
     expect(written).not.toContain(base);
     expect(written).not.toContain(tmpdir());
-    expect(scanForLeaks(written)).toEqual([]);
+    const [records, ...others] = writtenFiles(outDir);
+    for (const doc of records!.trimEnd().split("\n"))
+      expect(scanForLeaks(JSON.parse(doc))).toEqual([]);
+    for (const text of others) expect(scanForLeaks(JSON.parse(text))).toEqual([]);
+    // The claim text the agent handed the gate is not part of the episode.
+    expect(written).not.toContain("Done. Set");
   }, 60_000);
 
   it("without includeNegatives, refuted runs are excluded, never exported as positives", async () => {
@@ -283,8 +375,8 @@ describe("track U end-to-end: fleet -> real gate + real grader -> dataset ($0)",
     );
     expect(fleet.clean).toBe(false);
     expect(fleet.contamination).toContainEqual({
-      trialKey: "u-task-22/run-22",
-      canaryOf: "u-task-21/run-21",
+      trialKey: "u-task-22:run-22",
+      canaryOf: "u-task-21:run-21",
       where: "capture",
     });
     // A clean batch of the same shape is clean.
@@ -298,36 +390,93 @@ describe("track U end-to-end: fleet -> real gate + real grader -> dataset ($0)",
     expect(control.fleet.clean).toBe(true);
   }, 60_000);
 
-  it("planted markers in an agent's observations refuse the whole export (no partial write)", async () => {
+  it("planted markers an agent writes (observation or action) refuse the whole export", async () => {
     const markers = [
       ["/", "home", "/", "alice-u", "/", "notes.txt"].join(""),
       ["sk", "-ant-", "u".repeat(4), "planted", "9".repeat(8)].join(""),
       ["C:", "\\", "Users", "\\", "bob"].join(""),
+      ["%2F", "Users", "%2F", "bob"].join(""),
       "zz-planted-operator-marker",
     ];
-    for (const [k, marker] of markers.entries()) {
-      const { base, candidates } = await runBatch(
-        [
-          { i: 30 + k * 2, mode: "honest" },
-          { i: 31 + k * 2, mode: "leak", marker },
-        ],
-        2,
-      );
-      const outDir = join(base, "ds");
-      let refused: unknown;
-      try {
-        exportDataset(candidates, {
-          outDir,
-          now: NOW,
-          hygiene: { forbiddenStrings: ["zz-planted-operator-marker"] },
-        });
-      } catch (e) {
-        refused = e;
+    let i = 30;
+    for (const marker of markers) {
+      for (const mode of ["leak", "leak-action"] as const) {
+        const { base, candidates } = await runBatch(
+          [
+            { i: i++, mode: "honest" },
+            { i: i++, mode, marker },
+          ],
+          2,
+        );
+        const outDir = join(base, "ds");
+        const refused = refusalOf(() =>
+          exportDataset(candidates, {
+            outDir,
+            now: NOW,
+            hygiene: { forbiddenStrings: ["zz-planted-operator-marker"] },
+          }),
+        );
+        expect(refused.code, `${mode} ${marker}`).toBe("LEAK");
+        expect(
+          refused.where.startsWith(`episodes/${candidates[1]!.episode.episodeId}.json:$.`),
+        ).toBe(true);
+        expect(refused.message).not.toContain(marker);
+        expect(existsSync(outDir)).toBe(false);
       }
-      expect(refused, marker).toBeInstanceOf(ExportRefused);
-      expect((refused as ExportRefused).code).toBe("LEAK");
-      expect((refused as Error).message).not.toContain(marker);
-      expect(existsSync(outDir)).toBe(false);
     }
   }, 120_000);
+
+  it("planted markers in the seeded fixture never reach the dataset unless echoed, and then refuse it", async () => {
+    const markers = [
+      ["/", "home", "/", "fixture-owner", "/", "x"].join(""),
+      ["sk", "-ant-", "fixture", "planted", "7".repeat(10)].join(""),
+    ];
+    let i = 60;
+    for (const marker of markers) {
+      // An honest agent on a planted fixture: the marker is in the captured bytes (graded,
+      // digested) but the container never carries capture bytes, so nothing leaks.
+      const quiet = await runBatch([{ i: i++, mode: "honest", fixtureMarker: marker }], 1);
+      const outDir = join(quiet.base, "ds");
+      const r = exportDataset(quiet.candidates, { outDir, includeNegatives: true, now: NOW });
+      expect(r.manifest.counts).toMatchObject({ candidates: 1 });
+      for (const text of writtenFiles(outDir)) expect(text).not.toContain(marker);
+      // An agent that echoes the fixture's planted cell into its transcript is refused.
+      const echo = await runBatch([{ i: i++, mode: "leak", marker, fixtureMarker: marker }], 1);
+      const refused = refusalOf(() =>
+        exportDataset(echo.candidates, {
+          outDir: join(echo.base, "ds"),
+          includeNegatives: true,
+          now: NOW,
+        }),
+      );
+      expect(refused.code).toBe("LEAK");
+      expect(refused.message).not.toContain(marker);
+    }
+  }, 60_000);
+
+  it("a vault value an agent reads off the host is refused via the operator deny-list built from the vault", async () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-u-vault-"));
+    const vault = join(base, "vault.env");
+    // Planted, and deliberately NOT secret-shaped: only the deny-list can catch it.
+    const value = ["plain", "vault", "value", "4417"].join("-");
+    writeFileSync(vault, `MYCO_U_PLANTED_ENTRY=${value}\n`);
+    expect(leaksIn(value, { hostIdentity: false })).toEqual([]);
+    const forbiddenStrings = forbiddenStringsFromFiles([vault]);
+    expect(forbiddenStrings).toContain(value);
+
+    const { base: runBase, candidates } = await runBatch(
+      [{ i: 70, mode: "read-vault", vaultPath: vault }],
+      1,
+    );
+    // The local-process agent really read the host file (process isolation allows it).
+    const seen = candidates[0]!.episode.observations.items.map((o) => (o as { text: string }).text);
+    expect(seen.some((t) => t.includes(value))).toBe(true);
+    const outDir = join(runBase, "ds");
+    const refused = refusalOf(() =>
+      exportDataset(candidates, { outDir, now: NOW, hygiene: { forbiddenStrings } }),
+    );
+    expect(refused).toMatchObject({ code: "LEAK", detail: "forbidden-string" });
+    expect(refused.message).not.toContain(value);
+    expect(existsSync(outDir)).toBe(false);
+  }, 60_000);
 });

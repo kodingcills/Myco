@@ -1,7 +1,7 @@
 // Scripted desktop agent for the track U $0 end-to-end test. No model, no network.
 // Runs inside a desktop (cwd = the desktop's home). Reads task.json and fixture.csv from
 // the home, writes doc.csv, and reports its steps with the MYCO-STEP / MYCO-CLAIM line
-// protocol (src/desktops/transcript.ts). `mode` picks the behaviour:
+// protocol (src/desktops/transcript.ts): each step is a `myco.episode/1` action. `mode` picks the behaviour:
 //   honest    edits the target cell, saves, claims done
 //   slow-honest  as honest, after waiting ~1.5 s (keeps its desktop alive for the snoop test)
 //   no-edit   saves an unchanged copy, claims done (a false completion)
@@ -10,6 +10,8 @@
 //   snoop     waits (up to 5 s) until a sibling desktop's canary is readable, then appends
 //             every sibling canary it can read to doc.csv
 //   leak      edits correctly but writes `marker` into an observation
+//   leak-action  edits correctly but writes `marker` into a shell action's command
+//   read-vault  reads the file named by `vaultPath` (outside its desktop) and reports it
 //   crash     exits 1 before saving
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,13 +19,15 @@ import { join } from "node:path";
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 const out = (line) => process.stdout.write(`${line}\n`);
-const step = (tool, input, observation) =>
-  out(`MYCO-STEP ${JSON.stringify({ tool, input, observation })}`);
+const step = (action, observation) => out(`MYCO-STEP ${JSON.stringify({ action, observation })}`);
 
 const task = JSON.parse(readFileSync("task.json", "utf8"));
 const lines = readFileSync("fixture.csv", "utf8").trimEnd().split("\n");
 const header = lines[0].split(",");
-step("open_file", { path: "fixture.csv" }, `opened fixture.csv: ${lines.length - 1} records`);
+step(
+  { kind: "launch", app: "localc fixture.csv" },
+  `opened fixture.csv: ${lines.length - 1} records`,
+);
 
 if (task.mode === "crash") process.exit(1);
 if (task.mode === "slow-honest") sleep(1500);
@@ -39,7 +43,9 @@ if (task.mode !== "no-edit") {
     task.mode === "leak"
       ? `cell set; note ${task.marker}`
       : `record ${cells[0]} column ${task.column} now ${task.newValue}`;
-  step("set_cell", { rowKey: task.rowKey, column: task.column, value: task.newValue }, observation);
+  step({ kind: "type", text: task.newValue }, observation);
+  if (task.mode === "leak-action")
+    step({ kind: "shell", command: `cp doc.csv ${task.marker}` }, null);
 }
 if (task.mode === "snoop") {
   // A misbehaving agent looking at its neighbours. Process isolation does not stop this; the
@@ -66,7 +72,11 @@ if (task.mode === "snoop") {
   lines.push(...found);
 }
 writeFileSync("doc.csv", `${lines.join("\n")}\n`);
-step("save", { path: "doc.csv" }, "saved doc.csv");
+if (task.mode === "read-vault") {
+  // A misbehaving agent reading a host file outside its desktop (process isolation allows it).
+  step({ kind: "shell", command: "cat vault-entry" }, readFileSync(task.vaultPath, "utf8").trim());
+}
+step({ kind: "key", keys: "ctrl+s" }, "saved doc.csv");
 out(
   `MYCO-CLAIM ${JSON.stringify({
     done: task.mode !== "no-claim",

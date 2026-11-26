@@ -30,6 +30,7 @@ import { join } from "node:path";
 import {
   type CapturedBytes,
   checkSpec,
+  DESKTOP_PATH,
   type DesktopBackend,
   DesktopError,
   type DesktopHandle,
@@ -107,6 +108,7 @@ export class LocalProcessBackend implements DesktopBackend {
       const value = process.env[name];
       if (value !== undefined) env[name] = value;
     }
+    env.PATH = DESKTOP_PATH;
     env.HOME = desktop.home;
     env.TMPDIR = join(desktop.root, "tmp");
     const started = Date.now();
@@ -200,7 +202,7 @@ export class LocalProcessBackend implements DesktopBackend {
         read += n;
       }
       // A file that shrank mid-read is refused rather than captured partially.
-      if (read !== stat.size) throw new DesktopError("RUN_FAILED");
+      if (read !== stat.size) throw new DesktopError("CAPTURE_CHANGED");
       return { path: segments.join("/"), bytes, sha256: sha256Hex(bytes), size: read };
     } finally {
       closeSync(fd);
