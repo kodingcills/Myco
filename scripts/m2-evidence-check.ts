@@ -104,7 +104,9 @@ const packs = dirs.map((dir) => {
   if (packSchema(dir) === AB_PACK_SCHEMA) {
     const input = readAbPack(dir, ROOT);
     const result = checkAbPack(input);
-    const provenance = packProvenanceErrors(dir, [...input.on.arm, ...input.off.arm]).map(
+    const provenance = packProvenanceErrors(dir, [...input.on.arm, ...input.off.arm], {
+      abPack: true,
+    }).map(
       (e) => `provenance: ${e}`,
     );
     return {
