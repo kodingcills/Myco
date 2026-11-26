@@ -9,11 +9,15 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir, userInfo } from "node:os";
@@ -21,11 +25,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   ARM_GRAMMAR,
-  CLOSED_ID,
   closeEpisode,
   closeRecordFields,
   EPISODE_FIELD_TREATMENT,
+  KNOWN_KEYS,
   openEpisodeStrings,
+  REGISTERED_APPS,
   templateOf,
 } from "../../src/dataset/closed.ts";
 import {
@@ -36,12 +41,15 @@ import {
   episodeIdOf,
 } from "../../src/dataset/episode.ts";
 import {
+  CONTAINER_MAX_FILE_BYTES,
+  CONTAINER_PROBLEM_CODES,
   canonicalJson,
   type ExportCandidate,
   ExportRefused,
   exportDataset,
   validateContainer,
 } from "../../src/dataset/export.ts";
+import { GENERIC_ACCOUNTS } from "../../src/dataset/hygiene.ts";
 import { redactText } from "../../src/episode/clean.ts";
 import { makePathFuzzer } from "./path-fuzz.ts";
 import * as CORPUS from "./probe-corpus.ts";
@@ -393,78 +401,6 @@ describe("the container is digest-only (lead ruling 2026-11-26 20:3xZ)", () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
-
-  it("validateContainer refuses a blobs/ entry, a stray entry, an edit, an open string and an unreferenced episode", () => {
-    const base = mkdtempSync(join(tmpdir(), "myco-u-allow-"));
-    const fresh = (name: string) => {
-      const dir = join(base, name);
-      exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
-      return dir;
-    };
-    try {
-      const a = fresh("a");
-      mkdirSync(join(a, "blobs"));
-      writeFileSync(join(a, "blobs", `${sha(planted)}.csv`), planted);
-      expect(validateContainer(a)).toContain("blobs/ is present: the container is digest-only");
-
-      const b = fresh("b");
-      writeFileSync(join(b, "notes.txt"), "x");
-      expect(validateContainer(b)).toContain("notes.txt: not part of the container layout");
-
-      const c = fresh("c");
-      writeFileSync(join(c, "records.jsonl"), `${readFileSync(join(c, "records.jsonl"), "utf8")} `);
-      expect(validateContainer(c)).toContain("records.jsonl does not hash to the manifest");
-
-      const d = fresh("d");
-      const [file] = readdirSync(join(d, "episodes"));
-      const ep = JSON.parse(readFileSync(join(d, "episodes", file as string), "utf8"));
-      ep.task.instruction = "cd Plain Text";
-      writeFileSync(join(d, "episodes", file as string), `${canonicalJson(ep)}\n`);
-      expect(validateContainer(d)).toEqual(
-        expect.arrayContaining([
-          `episodes/${file} does not hash to its record`,
-          `episodes/${file}: OPEN_STRING at $.task.instruction`,
-        ]),
-      );
-
-      const e = fresh("e");
-      writeFileSync(join(e, "episodes", `${"0".repeat(64)}.json`), "{}\n");
-      expect(validateContainer(e)).toContain(
-        `episodes/${"0".repeat(64)}.json is not referenced by a record`,
-      );
-
-      // A record line edited (and the file hash in the manifest made consistent): the line's own
-      // digest in the manifest catches it. A record removed the same way: the counts disagree.
-      const g = fresh("g");
-      const gm = JSON.parse(readFileSync(join(g, "manifest.json"), "utf8"));
-      const edited = readFileSync(join(g, "records.jsonl"), "utf8").replace(
-        '"positive"',
-        '"negative"',
-      );
-      writeFileSync(join(g, "records.jsonl"), edited);
-      gm.files["records.jsonl"] = sha(edited);
-      writeFileSync(join(g, "manifest.json"), JSON.stringify(gm));
-      expect(validateContainer(g)).toContain("records.jsonl#1 does not hash to the manifest");
-      const h = fresh("h");
-      const hm = JSON.parse(readFileSync(join(h, "manifest.json"), "utf8"));
-      writeFileSync(join(h, "records.jsonl"), "");
-      hm.files["records.jsonl"] = sha("");
-      writeFileSync(join(h, "manifest.json"), JSON.stringify(hm));
-      expect(validateContainer(h)).toContain(
-        "records.jsonl and the manifest list different numbers of records",
-      );
-
-      const f = fresh("f");
-      const m = JSON.parse(readFileSync(join(f, "manifest.json"), "utf8"));
-      m.blobs = [
-        { file: `blobs/${sha(planted)}.csv`, sha256: sha(planted), bytes: planted.byteLength },
-      ];
-      writeFileSync(join(f, "manifest.json"), JSON.stringify(m));
-      expect(validateContainer(f).join("\n")).toMatch(/^manifest\.json:\$\.blobs maxItems$/m);
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("#559 round 2 (prepared): arms, the container backstop, strict h- idempotence", () => {
@@ -514,42 +450,6 @@ describe("#559 round 2 (prepared): arms, the container backstop, strict h- idemp
     }
   });
 
-  it("validateContainer's backstop refuses a key-shaped id that fits CLOSED_ID (hand-edited, every hash consistent)", () => {
-    const base = mkdtempSync(join(tmpdir(), "myco-u-allow-"));
-    try {
-      const dir = join(base, "ds");
-      exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
-      const key = ["sk", "ant", "api03", "x".repeat(24)].join("-");
-      expect(CLOSED_ID.test(key)).toBe(true);
-      // Re-address the edited episode and make the record, its manifest digest and the file hash consistent.
-      const [file] = readdirSync(join(dir, "episodes"));
-      const ep = JSON.parse(readFileSync(join(dir, "episodes", file as string), "utf8"));
-      ep.task.id = key;
-      const { episodeId: _x, ...rest } = ep;
-      const id = episodeIdOf(rest);
-      const text = `${canonicalJson({ ...rest, episodeId: id })}\n`;
-      rmSync(join(dir, "episodes", file as string));
-      writeFileSync(join(dir, "episodes", `${id}.json`), text);
-      const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
-      record.episode = { ...record.episode, id, sha256: sha(text), file: `episodes/${id}.json` };
-      const line = canonicalJson(record);
-      writeFileSync(join(dir, "records.jsonl"), `${line}\n`);
-      const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
-      m.records[0] = { ...m.records[0], episodeId: id, sha256: sha(line) };
-      m.files["records.jsonl"] = sha(`${line}\n`);
-      writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
-      expect(validateContainer(dir, HYGIENE)).toEqual([
-        `episodes/${id}.json: LEAK secret-shaped at $.task.id`,
-      ]);
-      // An edit that is not re-addressed fails the content address too.
-      ep.task.id = "task-2";
-      writeFileSync(join(dir, "episodes", `${id}.json`), `${canonicalJson(ep)}\n`);
-      expect(validateContainer(dir, HYGIENE).join("\n")).toMatch(/ID_MISMATCH at \$\.episodeId/);
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
-
   it("free text that merely starts with h- is hashed, never kept (only an exact h-<64 hex> is)", () => {
     const words = ["QzPLANTEDhfirst", "QzPLANTEDhlast"];
     for (const text of [
@@ -575,8 +475,358 @@ describe("#559 round 2 (prepared): arms, the container backstop, strict h- idemp
   });
 });
 
+/**
+ * Hand-edit an exported container, keeping every hash consistent: the episode re-addressed by its
+ * content, the record's episode reference and digest, the manifest's record digest and episode id,
+ * and the records file hash. What is left wrong is only what the edit made wrong.
+ */
+function rewriteContainer(
+  dir: string,
+  edit: {
+    episode?: (ep: Record<string, unknown>) => unknown;
+    record?: (r: Record<string, unknown>) => unknown;
+    manifest?: (m: Record<string, unknown>) => unknown;
+  },
+): void {
+  const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
+  if (edit.episode !== undefined) {
+    const old = record.episode.file as string;
+    const ep = edit.episode(JSON.parse(readFileSync(join(dir, old), "utf8")));
+    const { episodeId: _x, ...rest } = ep as Record<string, unknown>;
+    const id = episodeIdOf(rest as unknown as Episode);
+    const text = `${canonicalJson({ ...rest, episodeId: id })}\n`;
+    rmSync(join(dir, old));
+    writeFileSync(join(dir, "episodes", `${id}.json`), text);
+    record.episode = { ...record.episode, id, sha256: sha(text), file: `episodes/${id}.json` };
+  }
+  const edited = edit.record === undefined ? record : edit.record(record);
+  const line = canonicalJson(edited);
+  writeFileSync(join(dir, "records.jsonl"), `${line}\n`);
+  const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+  m.records[0] = { ...m.records[0], episodeId: record.episode.id, sha256: sha(line) };
+  m.files["records.jsonl"] = sha(`${line}\n`);
+  writeFileSync(
+    join(dir, "manifest.json"),
+    JSON.stringify(edit.manifest === undefined ? m : edit.manifest(m)),
+  );
+}
+
+describe("validateContainer (#559 round 1, D1-D6): fixed codes, never a value, never a throw", () => {
+  const base = () => mkdtempSync(join(tmpdir(), "myco-u-vc-"));
+  /** A fresh valid container under a temp dir; returns [container, temp]. */
+  const fresh = (): [string, string] => {
+    const b = base();
+    const dir = join(b, "ds");
+    exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
+    expect(validateContainer(dir, HYGIENE)).toEqual([]);
+    return [dir, b];
+  };
+  const codes = (ps: readonly string[]) => ps.map((p) => p.split(" ")[0]);
+  const withFresh = (fn: (dir: string, b: string) => void) => {
+    const [dir, b] = fresh();
+    try {
+      fn(dir, b);
+    } finally {
+      rmSync(b, { recursive: true, force: true });
+    }
+  };
+
+  it("every problem is CODE location, from the fixed list", () => {
+    withFresh((dir) => {
+      mkdirSync(join(dir, "blobs"));
+      writeFileSync(join(dir, "records.jsonl"), "{}\n");
+      const ps = validateContainer(dir, HYGIENE);
+      expect(ps.length).toBeGreaterThan(0);
+      for (const p of ps)
+        expect((CONTAINER_PROBLEM_CODES as readonly string[]).includes(p.split(" ")[0]!), p).toBe(
+          true,
+        );
+    });
+  });
+
+  it("layout: blobs/, a stray entry (name never echoed), an unreferenced episode", () => {
+    withFresh((dir) => {
+      mkdirSync(join(dir, "blobs"));
+      const stray = ["Jo", " ", "Smith", " notes"].join("");
+      writeFileSync(join(dir, stray), "x");
+      writeFileSync(join(dir, "episodes", `${"0".repeat(64)}.json`), "{}\n");
+      const ps = validateContainer(dir, HYGIENE);
+      expect(ps).toEqual(
+        expect.arrayContaining([
+          "BLOBS_PRESENT blobs/",
+          `UNREFERENCED episodes/${"0".repeat(64)}.json`,
+        ]),
+      );
+      expect(ps.some((p) => /^STRAY_ENTRY h-[0-9a-f]{12}$/.test(p))).toBe(true);
+      expect(ps.some((p) => p.includes("Smith"))).toBe(false);
+    });
+  });
+
+  it("D1: a missing root, a file as root, and 200k nested arrays never throw", () => {
+    const b = base();
+    try {
+      expect(validateContainer(join(b, "absent"))).toEqual(["CONTAINER_UNREADABLE $"]);
+      writeFileSync(join(b, "file"), "x");
+      expect(validateContainer(join(b, "file"))).toEqual(["CONTAINER_UNREADABLE $"]);
+      // A container root that is a link to a valid container is refused, not followed.
+      const real = join(b, "real");
+      exportDataset([candidate("ok")], { outDir: real, hygiene: HYGIENE });
+      expect(validateContainer(real, HYGIENE)).toEqual([]);
+      symlinkSync(real, join(b, "linked"));
+      expect(validateContainer(join(b, "linked"), HYGIENE)).toEqual(["CONTAINER_UNREADABLE $"]);
+    } finally {
+      rmSync(b, { recursive: true, force: true });
+    }
+    withFresh((dir) => {
+      const deep = `${"[".repeat(200_000)}${"]".repeat(200_000)}`;
+      expect(() =>
+        openEpisodeStrings(JSON.parse(`{"a":${"[".repeat(5000)}"x"${"]".repeat(5000)}}`)),
+      ).not.toThrow();
+      const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
+      writeFileSync(join(dir, record.episode.file), deep);
+      record.episode.sha256 = sha(deep);
+      rewriteContainer(dir, { record: () => record });
+      const ps = validateContainer(dir, HYGIENE);
+      expect(codes(ps).some((c) => c === "EPISODE_DEPTH" || c === "EPISODE_JSON")).toBe(true);
+    });
+  });
+
+  it("D2: a record line is schema-checked and its free fields closed, even with every hash consistent", () => {
+    const cases: [string, (r: Record<string, unknown>) => unknown, RegExp][] = [
+      [
+        "capture.path",
+        (r) => ({
+          ...r,
+          capture: {
+            ...(r.capture as object),
+            path: ["C:", "\\Users\\Jo Smith\\doc.csv"].join(""),
+          },
+        }),
+        /^RECORD_(OPEN|SCHEMA) records\.jsonl#1:\$\.capture\.path/,
+      ],
+      [
+        "an extra note",
+        (r) => ({ ...r, note: ["/home/", "josmith/x"].join("") }),
+        /^RECORD_SCHEMA records\.jsonl#1:\$ additionalProperties/,
+      ],
+      [
+        "desktop.image",
+        (r) => ({
+          ...r,
+          desktop: { ...(r.desktop as object), image: ["/home/", "josmith/vm.qcow2"].join("") },
+        }),
+        /^RECORD_(OPEN|SCHEMA) records\.jsonl#1:\$\.desktop\.image/,
+      ],
+    ];
+    for (const [name, edit, want] of cases)
+      withFresh((dir) => {
+        rewriteContainer(dir, { record: edit });
+        const ps = validateContainer(dir, HYGIENE);
+        expect(
+          ps.some((p) => want.test(p)),
+          name,
+        ).toBe(true);
+      });
+  });
+
+  it("D3: an episode is schema-checked: a path used as a key with a non-string value is refused", () => {
+    withFresh((dir) => {
+      rewriteContainer(dir, {
+        episode: (ep) => ({ ...ep, [["C:", "\\Users\\Jo Smith"].join("")]: 1 }),
+      });
+      const ps = validateContainer(dir, HYGIENE);
+      expect(
+        ps.some((p) =>
+          /^EPISODE_SCHEMA episodes\/[0-9a-f]{64}\.json:\$ additionalProperties$/.test(p),
+        ),
+      ).toBe(true);
+      expect(ps.some((p) => p.includes("Smith"))).toBe(false);
+    });
+  });
+
+  it("D4: symlinks (records, an episode, episodes/) and hard links are refused", () => {
+    withFresh((dir, b) => {
+      const out = join(b, "outside.jsonl");
+      renameSync(join(dir, "records.jsonl"), out);
+      symlinkSync(out, join(dir, "records.jsonl"));
+      expect(validateContainer(dir, HYGIENE)).toContain("LINK records.jsonl");
+    });
+    withFresh((dir, b) => {
+      const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
+      const out = join(b, "ep.json");
+      renameSync(join(dir, record.episode.file), out);
+      symlinkSync(out, join(dir, record.episode.file));
+      expect(validateContainer(dir, HYGIENE)).toContain(`LINK ${record.episode.file}`);
+    });
+    withFresh((dir, b) => {
+      renameSync(join(dir, "episodes"), join(b, "eps"));
+      symlinkSync(join(b, "eps"), join(dir, "episodes"));
+      expect(validateContainer(dir, HYGIENE)).toContain("LINK episodes/");
+    });
+    withFresh((dir, b) => {
+      linkSync(join(dir, "manifest.json"), join(b, "m2.json"));
+      expect(validateContainer(dir, HYGIENE)).toContain("HARDLINK manifest.json");
+    });
+  });
+
+  it("D1: a parseable but deep episode is EPISODE_DEPTH; a file over the size cap is TOO_LARGE, never read", () => {
+    withFresh((dir) => {
+      const deep = `${"[".repeat(100)}${"]".repeat(100)}`;
+      const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
+      writeFileSync(join(dir, record.episode.file), deep);
+      record.episode.sha256 = sha(deep);
+      rewriteContainer(dir, { record: () => record });
+      expect(validateContainer(dir, HYGIENE)).toContain(`EPISODE_DEPTH ${record.episode.file}`);
+    });
+    withFresh((dir) => {
+      truncateSync(join(dir, "records.jsonl"), CONTAINER_MAX_FILE_BYTES + 1);
+      expect(validateContainer(dir, HYGIENE)).toContain("TOO_LARGE records.jsonl");
+    });
+  });
+
+  it("D2: schema-valid record fields that are not closed are RECORD_OPEN; a record that disagrees with the manifest is RECORD_MISMATCH", () => {
+    for (const [name, edit, path] of [
+      [
+        "capture.path not hashed",
+        (r: Record<string, unknown>) => ({
+          ...r,
+          capture: { ...(r.capture as object), path: "doc.csv" },
+        }),
+        "$.capture.path",
+      ],
+      [
+        "desktop.image not a closed id",
+        (r: Record<string, unknown>) => ({
+          ...r,
+          desktop: { ...(r.desktop as object), image: "Users.jsmith:Documents" },
+        }),
+        "$.desktop.image",
+      ],
+      [
+        "desktop.backend not a closed id",
+        (r: Record<string, unknown>) => ({
+          ...r,
+          desktop: { ...(r.desktop as object), backend: "a:b" },
+        }),
+        "$.desktop.backend",
+      ],
+    ] as const)
+      withFresh((dir) => {
+        rewriteContainer(dir, { record: edit });
+        expect(validateContainer(dir, HYGIENE), name).toContain(
+          `RECORD_OPEN records.jsonl#1:${path}`,
+        );
+      });
+    withFresh((dir) => {
+      rewriteContainer(dir, { record: (r) => ({ ...r, label: "negative" }) });
+      expect(validateContainer(dir, HYGIENE)).toContain("RECORD_MISMATCH records.jsonl#1");
+    });
+  });
+
+  it("D5: manifest counts are recomputed", () => {
+    for (const edit of [
+      // Each case changes one count only (records and candidates move together, so only the
+      // records count is wrong; positive alone; and so on).
+      (m: Record<string, unknown>) => ({
+        ...m,
+        counts: { ...(m.counts as object), records: 5, candidates: 5 },
+      }),
+      (m: Record<string, unknown>) => ({ ...m, counts: { ...(m.counts as object), positive: 0 } }),
+      (m: Record<string, unknown>) => ({
+        ...m,
+        counts: { ...(m.counts as object), positive: 0, negative: 1 },
+      }),
+      (m: Record<string, unknown>) => ({
+        ...m,
+        counts: { ...(m.counts as object), candidates: 9 },
+      }),
+      (m: Record<string, unknown>) => ({ ...m, counts: { ...(m.counts as object), simulated: 1 } }),
+    ])
+      withFresh((dir) => {
+        rewriteContainer(dir, { manifest: edit });
+        expect(validateContainer(dir, HYGIENE)).toContain("COUNTS manifest.json");
+      });
+  });
+
+  it("an episode edited without re-hashing is EPISODE_HASH; edited but not re-addressed is EPISODE_RULE", () => {
+    withFresh((dir) => {
+      const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
+      const ep = JSON.parse(readFileSync(join(dir, record.episode.file), "utf8"));
+      ep.task.id = "task-9";
+      writeFileSync(join(dir, record.episode.file), `${canonicalJson(ep)}\n`);
+      const ps = validateContainer(dir, HYGIENE);
+      expect(ps).toContain(`EPISODE_HASH ${record.episode.file}`);
+      // Now make the record's digest agree: the content address is still wrong.
+      const text = readFileSync(join(dir, record.episode.file), "utf8");
+      rewriteContainer(dir, {
+        record: (r) => ({ ...r, episode: { ...(r.episode as object), sha256: sha(text) } }),
+      });
+      expect(validateContainer(dir, HYGIENE)).toContain(
+        `EPISODE_RULE ${record.episode.file}:$.episodeId ID_MISMATCH`,
+      );
+    });
+  });
+
+  it("hashes, the record count, the line digest, open strings and the key-shaped backstop", () => {
+    withFresh((dir) => {
+      writeFileSync(
+        join(dir, "records.jsonl"),
+        `${readFileSync(join(dir, "records.jsonl"), "utf8")} `,
+      );
+      expect(validateContainer(dir, HYGIENE)).toContain("FILE_HASH records.jsonl");
+    });
+    withFresh((dir) => {
+      rewriteContainer(dir, { manifest: (m) => ({ ...m, records: [] }) });
+      expect(validateContainer(dir, HYGIENE)).toContain("RECORD_COUNT records.jsonl");
+    });
+    withFresh((dir) => {
+      rewriteContainer(dir, {
+        manifest: (m) => ({
+          ...m,
+          records: [{ ...(m.records as object[])[0], sha256: "0".repeat(64) }],
+        }),
+      });
+      expect(validateContainer(dir, HYGIENE)).toContain("RECORD_HASH records.jsonl#1");
+    });
+    withFresh((dir) => {
+      rewriteContainer(dir, {
+        episode: (ep) => ({
+          ...ep,
+          task: { ...(ep.task as object), instruction: "cd Plain Text" },
+        }),
+      });
+      expect(
+        validateContainer(dir, HYGIENE).some((p) =>
+          /^OPEN_STRING episodes\/[0-9a-f]{64}\.json:\$\.task\.instruction$/.test(p),
+        ),
+      ).toBe(true);
+    });
+    withFresh((dir) => {
+      const key = ["sk", "ant", "api03", "x".repeat(24)].join("-");
+      rewriteContainer(dir, {
+        episode: (ep) => ({ ...ep, task: { ...(ep.task as object), id: key } }),
+      });
+      expect(
+        validateContainer(dir, HYGIENE).some((p) =>
+          /^LEAK episodes\/[0-9a-f]{64}\.json:\$\.task\.id secret-shaped$/.test(p),
+        ),
+      ).toBe(true);
+    });
+    withFresh((dir) => {
+      const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+      m.blobs = [{ file: `blobs/${"a".repeat(64)}.csv`, sha256: "a".repeat(64), bytes: 1 }];
+      writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
+      expect(validateContainer(dir, HYGIENE)).toEqual([
+        "MANIFEST_SCHEMA manifest.json:$.blobs maxItems",
+      ]);
+    });
+  });
+});
+
 describe("identity strings are leaks (lead ruling 21:52Z): bare username, host name, configured identity", () => {
-  // The real host values, read now and never printed: assertions compare booleans only.
+  // The real host values, read now and never printed: assertions compare booleans only. On a CI
+  // runner the account is the generic `runner` (#560's list), so the real-value cases skip there;
+  // the PLANTED cases run everywhere and are what CI proves.
   const realUser = (() => {
     try {
       return userInfo().username;
@@ -585,29 +835,28 @@ describe("identity strings are leaks (lead ruling 21:52Z): bare username, host n
     }
   })();
   const realHost = hostname().split(".")[0] ?? "";
-  const GENERIC = new Set([
-    "root",
-    "user",
-    "runner",
-    "admin",
-    "ubuntu",
-    "node",
-    "nobody",
-    "vscode",
-    "codespace",
-  ]);
+  const idShaped = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
   const userCounts =
     realUser.length >= 3 &&
-    !GENERIC.has(realUser.toLowerCase()) &&
-    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(realUser);
+    !GENERIC_ACCOUNTS.has(realUser.toLowerCase()) &&
+    idShaped.test(realUser);
   const hostCounts =
-    realHost.length >= 4 &&
-    realHost.toLowerCase() !== "localhost" &&
-    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(realHost);
+    realHost.length >= 4 && realHost.toLowerCase() !== "localhost" && idShaped.test(realHost);
+  const PLANTED = ["qzplant", "user"].join("");
+  const planted = { identity: { user: PLANTED, host: "nohost-u" } };
   const variants = (v: string) => [v, v.toUpperCase(), v.toLowerCase()];
+  /** Joined forms: `_`, `.`, `-` and a digit, letters, camelCase. */
+  const joinedForms = (v: string) => [
+    `${v}_trial`,
+    `${v}.x`,
+    `t-${v}-1`,
+    `${v}2`,
+    `xx${v}`,
+    `${v}Trial`,
+  ];
 
-  /** A positive candidate with `v` in one closed field (gate bindings kept consistent). */
-  const placements: [string, (v: string) => ExportCandidate][] = [
+  /** Id, token and desktop-fact placements: an identity there is DIGESTED. */
+  const digested: [string, (v: string) => ExportCandidate][] = [
     [
       "task id",
       (v) => {
@@ -624,9 +873,9 @@ describe("identity strings are leaks (lead ruling 21:52Z): bare username, host n
         return { ...c, gate: { ...c.gate!, request: { ...c.gate!.request, runId: v } } };
       },
     ],
-    ["trial key", (v) => candidate("ok", { trialKey: `t-${v}-1` })],
-    ["key name", (v) => candidate("ok", { actions: [{ kind: "key", keys: v }] })],
-    ["app name", (v) => candidate("ok", { actions: [{ kind: "launch", app: v }] })],
+    ["trial key", (v) => candidate("ok", { trialKey: v })],
+    ["key name", (v) => candidate("ok", { actions: [{ kind: "key", keys: v.slice(0, 64) }] })],
+    ["app name", (v) => candidate("ok", { actions: [{ kind: "launch", app: v.slice(0, 64) }] })],
     [
       "desktop backend",
       (v) => ({ ...candidate("ok"), desktop: { ...candidate("ok").desktop, backend: v } }),
@@ -636,106 +885,257 @@ describe("identity strings are leaks (lead ruling 21:52Z): bare username, host n
       (v) => ({ ...candidate("ok"), desktop: { ...candidate("ok").desktop, image: v } }),
     ],
   ];
-  /** Export one candidate; the refusal (code, message) or null, plus every written byte. */
-  function attempt(c: ExportCandidate, hygiene: object = HYGIENE) {
-    const base = mkdtempSync(join(tmpdir(), "myco-u-id-"));
-    const dir = join(base, "ds");
+  /** A closed pattern field kept verbatim: an identity there REFUSES the export. */
+  const taskSet = (v: string) =>
+    candidate("ok", {
+      task: { ...candidate("ok").episode.task, taskSetVersion: v },
+    } as Partial<EpisodeDraft>);
+
+  function attempt(c: ExportCandidate, hygiene: object) {
+    const b = mkdtempSync(join(tmpdir(), "myco-u-id-"));
+    const dir = join(b, "ds");
     try {
       exportDataset([c], { outDir: dir, hygiene });
-      return { refused: null as ExportRefused | null, written: everyFile(dir) };
+      return {
+        refused: null as ExportRefused | null,
+        written: everyFile(dir),
+        valid: validateContainer(dir, hygiene),
+      };
     } catch (e) {
-      if (e instanceof ExportRefused) return { refused: e, written: "" };
+      if (e instanceof ExportRefused) return { refused: e, written: "", valid: [] as string[] };
       throw e;
     } finally {
-      rmSync(base, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
     }
   }
-
-  it("the real host username, in every closed field and every case, refuses the export (even under a planted identity)", () => {
-    if (!userCounts) return; // a generic or short account (CI's `runner`): its home paths are paths
-    for (const v of variants(realUser))
-      for (const [name, put] of placements) {
-        const r = attempt(put(v));
-        expect(r.refused?.code === "LEAK", name).toBe(true);
-        expect(r.refused?.detail === "username", name).toBe(true);
-        expect(
-          (r.refused?.message ?? "").toLowerCase().includes(realUser.toLowerCase()),
-          name,
-        ).toBe(false);
+  /**
+   * Never written verbatim: either the raw scan refuses the export (a word-bounded identity in
+   * the raw episode or record is a LEAK signal), or the export goes through with the value
+   * digested (a joined form the raw scan cannot see), and the container validates.
+   */
+  const digestedEverywhere = (v: string, hygiene: object) => {
+    for (const [name, put] of digested) {
+      const r = attempt(put(v), hygiene);
+      if (r.refused !== null) {
+        expect(r.refused.code === "LEAK", name).toBe(true);
+        expect(r.refused.message.toLowerCase().includes(v.toLowerCase()), name).toBe(false);
+        continue;
       }
+      expect(r.written.toLowerCase().includes(v.toLowerCase()), name).toBe(false);
+      expect(r.valid.length === 0, name).toBe(true);
+    }
+  };
+
+  it("a planted identity (runs everywhere): digested in every id, token and desktop field, in every case and joined form", () => {
+    for (const v of [...variants(PLANTED), ...joinedForms(PLANTED)]) digestedEverywhere(v, planted);
+    // Joined forms the raw (word-bounded) scan cannot see, in any case, are DIGESTED, never
+    // merely refused: closing is identity-aware.
+    for (const v of [
+      `${PLANTED}2`,
+      `xx${PLANTED}`,
+      `${PLANTED}Trial`,
+      `XX${PLANTED.toUpperCase()}9`,
+    ])
+      for (const [name, put] of digested.filter(([n]) => n !== "key name" && n !== "app name")) {
+        const r = attempt(put(v), planted);
+        expect(r.refused === null, `${name} ${v.length}`).toBe(true);
+        expect(r.written.toLowerCase().includes(v.toLowerCase()), name).toBe(false);
+      }
+    // An identity that is also a registered app id is still hashed (identity beats vocabulary).
+    const app = closeEpisode(
+      candidate("ok", { actions: [{ kind: "launch", app: "localc" }] }).episode,
+      [["identity", "localc"]],
+    ).actions.items[0] as unknown as { app: string };
+    expect(/^h-[0-9a-f]{60}$/.test(app.app)).toBe(true);
+    // Without the identity, the same id is kept verbatim (the digest is the identity check's doing).
+    const r = attempt(digested[0]![1](PLANTED), HYGIENE);
+    expect(r.refused === null && r.written.includes(PLANTED)).toBe(true);
   });
 
-  it("the real host name refuses the export the same way", () => {
-    if (!hostCounts) return;
-    for (const v of variants(realHost)) {
-      const r = attempt(placements[0]![1](v));
-      expect(r.refused?.code === "LEAK" && r.refused?.detail === "hostname").toBe(true);
-      expect((r.refused?.message ?? "").toLowerCase().includes(realHost.toLowerCase())).toBe(false);
+  it("a planted identity in a closed pattern field refuses the export (LEAK, kind and path, never the value)", () => {
+    for (const v of [...variants(PLANTED), `${PLANTED}2`, `xx${PLANTED}`]) {
+      const r = attempt(taskSet(v), planted);
+      expect(r.refused?.code === "LEAK" && r.refused?.detail === "username").toBe(true);
+      expect(/:\$\.task\.taskSetVersion$/.test(r.refused?.where ?? "")).toBe(true);
+      expect((r.refused?.message ?? "").toLowerCase().includes(PLANTED)).toBe(false);
     }
   });
 
-  it("configured identity strings (an identity file): an alias is refused in any case; a full name with a space never appears", () => {
-    const base = mkdtempSync(join(tmpdir(), "myco-u-idf-"));
+  it("the real host username and host name (skipped on CI's generic account): digested in ids, refused in a closed field", () => {
+    for (const [counts, value, kind] of [
+      [userCounts, realUser, "username"],
+      [hostCounts, realHost, "hostname"],
+    ] as const) {
+      if (!counts) continue;
+      for (const v of [...variants(value), `${value}2`]) {
+        digestedEverywhere(v, HYGIENE);
+        const r = attempt(taskSet(v), HYGIENE);
+        expect(r.refused?.code === "LEAK" && r.refused?.detail === kind).toBe(true);
+        expect((r.refused?.message ?? "").toLowerCase().includes(value.toLowerCase())).toBe(false);
+      }
+    }
+  });
+
+  it("configured identity strings (an identity file): an alias is digested or refused in any case; a full name with a space never appears", () => {
+    const b = mkdtempSync(join(tmpdir(), "myco-u-idf-"));
     try {
-      const file = join(base, "identity.txt");
+      const file = join(b, "identity.txt");
       const alias = ["qzplant", "alias"].join("");
       const full = ["Qzfirst", " ", "Plantlast"].join("");
       writeFileSync(file, `# configured identity\n${alias}\n${full}\n`);
       for (const v of variants(alias)) {
-        const r = attempt(placements[0]![1](v), { ...HYGIENE, identityFile: file });
+        digestedEverywhere(v, { ...HYGIENE, identityFile: file });
+        const r = attempt(taskSet(v), { ...HYGIENE, identityFile: file });
         expect(r.refused?.code === "LEAK" && r.refused?.detail === "identity").toBe(true);
       }
-      // Without the file the alias is just a closed id: written as is.
-      expect(attempt(placements[0]![1](alias)).refused).toBeNull();
       for (const v of variants(full)) {
         const r = attempt(
           candidate(`I am ${v}`, { actions: [{ kind: "key", keys: v.slice(0, 64) }] }),
           {
-            identity: { user: "nobody-u", host: "nohost-u" },
+            ...HYGIENE,
+            identityFile: file,
           },
         );
-        expect(r.refused).toBeNull();
-        expect(r.written.toLowerCase().includes(v.toLowerCase())).toBe(false);
+        // Never written: the raw scan refuses the episode (the full name is a word in it), or,
+        // were it not seen, the free text would be digested.
+        if (r.refused !== null) {
+          expect(r.refused.code === "LEAK" && r.refused.detail === "identity").toBe(true);
+          expect(r.refused.message.toLowerCase().includes(v.toLowerCase())).toBe(false);
+        } else expect(r.written.toLowerCase().includes(v.toLowerCase())).toBe(false);
       }
     } finally {
-      rmSync(base, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
     }
   });
 
-  it("validateContainer refuses a hand-edited container carrying a configured identity", () => {
-    const base = mkdtempSync(join(tmpdir(), "myco-u-idv-"));
+  it("validateContainer refuses a hand-edited container carrying an identity (joined forms too), this machine's included", () => {
+    const b = mkdtempSync(join(tmpdir(), "myco-u-idv-"));
     try {
-      const file = join(base, "identity.txt");
+      const file = join(b, "identity.txt");
       const alias = ["qzplant", "other"].join("");
       writeFileSync(file, `${alias}\n`);
-      const dir = join(base, "ds");
-      exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
-      const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
-      record.desktop.image = alias.toUpperCase();
-      const line = canonicalJson(record);
-      writeFileSync(join(dir, "records.jsonl"), `${line}\n`);
-      const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
-      m.records[0] = { ...m.records[0], sha256: sha(line) };
-      m.files["records.jsonl"] = sha(`${line}\n`);
-      writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
-      expect(validateContainer(dir, HYGIENE)).toEqual([]);
-      expect(validateContainer(dir, { ...HYGIENE, identityFile: file })).toEqual([
-        "records.jsonl#1: LEAK identity at $.desktop.image",
-      ]);
-      // This machine's account, under a caller that names another identity: still refused.
+      for (const image of [alias.toUpperCase(), `xx${alias}9`]) {
+        const dir = join(b, `ds-${image.length}-${image[0]}`);
+        exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
+        rewriteContainer(dir, {
+          record: (r) => ({ ...r, desktop: { ...(r.desktop as object), image } }),
+        });
+        expect(validateContainer(dir, HYGIENE)).toEqual([]);
+        expect(validateContainer(dir, { ...HYGIENE, identityFile: file })).toEqual([
+          "LEAK records.jsonl#1:$.desktop.image identity",
+        ]);
+      }
       if (userCounts) {
-        record.desktop.image = realUser.toLowerCase();
-        const line2 = canonicalJson(record);
-        writeFileSync(join(dir, "records.jsonl"), `${line2}\n`);
-        m.records[0] = { ...m.records[0], sha256: sha(line2) };
-        m.files["records.jsonl"] = sha(`${line2}\n`);
-        writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
-        const problems = validateContainer(dir, HYGIENE);
-        expect(problems.includes("records.jsonl#1: LEAK username at $.desktop.image")).toBe(true);
-        expect(problems.some((p) => p.toLowerCase().includes(realUser.toLowerCase()))).toBe(false);
+        const dir = join(b, "ds-real");
+        exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
+        rewriteContainer(dir, {
+          record: (r) => ({
+            ...r,
+            desktop: { ...(r.desktop as object), image: `${realUser.toLowerCase()}2` },
+          }),
+        });
+        const ps = validateContainer(dir, HYGIENE);
+        expect(ps.includes("LEAK records.jsonl#1:$.desktop.image username")).toBe(true);
+        expect(ps.some((p) => p.toLowerCase().includes(realUser.toLowerCase()))).toBe(false);
       }
     } finally {
-      rmSync(base, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
     }
+  });
+
+  it("fixed vocabulary and digests are exempt (no false refusal); generic accounts are not identities (#560's list)", () => {
+    // A hex-only identity inside every digest is not a false refusal (digests are exempt).
+    for (const user of ["bbbb"]) {
+      const r = attempt(candidate("ok"), { identity: { user, host: "nohost-u" } });
+      expect(r.refused).toBeNull();
+      expect(r.valid).toEqual([]);
+    }
+    expect([...GENERIC_ACCOUNTS].sort()).toEqual([
+      "admin",
+      "codespace",
+      "nobody",
+      "node",
+      "root",
+      "runner",
+      "ubuntu",
+      "user",
+      "vscode",
+    ]);
+    const r = attempt(digested[0]![1]("runner-task"), {
+      identity: { user: "runner", host: "nohost-u" },
+    });
+    expect(r.refused === null && r.written.includes("runner-task")).toBe(true);
+  });
+});
+
+describe("F1 (lead ruling 22:18Z): key and app names are verbatim only from a closed vocabulary", () => {
+  const close = (actions: EpisodeDraft["actions"]) => {
+    const ep = closeEpisode(candidate("ok", { actions }).episode);
+    return ep.actions.items as unknown as readonly { kind: string; keys?: string; app?: string }[];
+  };
+  const hashed = /^h-[0-9a-f]{60}$/;
+
+  it("a known key (or combination) and a registered app pass verbatim", () => {
+    for (const keys of [
+      "ctrl+s",
+      "Return",
+      "F5",
+      "ctrl+shift+Tab",
+      "a",
+      "escape",
+      "pagedown",
+      "cmd+alt+shift+left",
+    ])
+      expect(close([{ kind: "key", keys }])[0]?.keys, keys).toBe(keys);
+    for (const app of ["localc", "lowriter", "soffice", "libreoffice", "scalc", "swriter"])
+      expect(close([{ kind: "launch", app }])[0]?.app, app).toBe(app);
+  });
+
+  it("an unknown key, an identity-like value, a path and a near-miss spelling are hashed", () => {
+    const keys = [
+      "hyperkey",
+      "jsmith",
+      "Users.jsmith.Documents",
+      "C:Users",
+      "ctrl+ss",
+      "f13",
+      "ctrl+ctrl+ctrl+ctrl+s",
+      "retrun",
+      "localc",
+    ];
+    for (const k of keys) {
+      const out = close([{ kind: "key", keys: k }])[0]?.keys ?? "";
+      expect(hashed.test(out), k).toBe(true);
+    }
+    const apps = [
+      "jsmith",
+      "Users.jsmith.Documents",
+      "localc fixture.csv",
+      "locaIc",
+      "localc2",
+      "LOCALC",
+      "soffice.bin",
+      "bash",
+    ];
+    for (const a of apps) {
+      const out = close([{ kind: "launch", app: a }])[0]?.app ?? "";
+      expect(hashed.test(out), a).toBe(true);
+    }
+  });
+
+  it("the vocabularies are exact (anchored), and the container's open-string check holds them to it", () => {
+    expect(KNOWN_KEYS.test("xctrl+s")).toBe(false);
+    expect(KNOWN_KEYS.test("ctrl+sx")).toBe(false);
+    expect(REGISTERED_APPS.test("xlocalc")).toBe(false);
+    expect(REGISTERED_APPS.test("localcx")).toBe(false);
+    const ep = closeEpisode(
+      candidate("ok", { actions: [{ kind: "launch", app: "localc" }] }).episode,
+    );
+    expect(openEpisodeStrings(ep)).toEqual([]);
+    const edited = {
+      ...ep,
+      actions: { ...ep.actions, items: [{ ...ep.actions.items[0], app: "jsmith" }] },
+    };
+    expect(openEpisodeStrings(edited)).toEqual(["$.actions.items[0].app"]);
   });
 });

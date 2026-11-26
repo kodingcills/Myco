@@ -74,7 +74,7 @@
 #   r15: an unknown planner id may be unlabelled (#542 REAL_PLANNERS).
 #   r16: the mirror drops #542's `harness-error` fault class.
 #   r17: the mirror drops #542's `document-withheld` reason.
-#   r18: blobs are not written into the container.
+#   r18: a captured document is not scanned (it is never written, digest-only, but it is scanned raw).
 #   r19: a non-UTF-8 blob is carried unscanned (lossy decode instead of refusal).
 #   (r20 retired, TIF-265: blobs are digest-only and never carried, so a stripped byte-order
 #   mark in the scanned text changes nothing.)

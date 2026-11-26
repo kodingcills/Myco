@@ -18,17 +18,18 @@
  *  - everything else (uncertain, ungradable, gate/grader disagreement, unbound or missing
  *    records) is excluded and counted by code in the manifest.
  *
- * The container also carries each exported episode's captured persisted document as
- * `blobs/<sha256>.csv`: #542 requires a graded episode to observe the document it graded
- * (a `state` / `persisted` / `text/csv` observation), so a container without it would hold
- * episodes #542 rejects.
+ * Blobs are DIGEST-ONLY (lead ruling 2026-11-26 20:3xZ): the captured persisted document each
+ * exported episode graded is never written. The episode's `state` / `persisted` / `text/csv`
+ * observation (which #542 requires of a graded episode) carries its sha256, byte count and
+ * content-addressed name; the captured bytes bind the grade and are scanned raw, never carried.
  *
  * What refuses the WHOLE export (nothing is written): an episode that is not a valid
  * `myco.episode/1` under every rule of #542's `validateEpisode` at the pinned head
  * (`episodeProblem`), or that carries a blob other than one persisted CSV document; a leak
  * (host path, user or host name, planted marker, operator-named string, secret-shaped
- * string) anywhere in ANY output file (episodes, records, manifest, schema, blobs), or a blob
- * that is not UTF-8 text and so cannot be scanned; a value the allowlist may neither keep nor
+ * string) anywhere in ANY output file (episodes, records, manifest, schema) or in a captured
+ * document (scanned raw, never written), or a captured document that is not UTF-8 text and so
+ * cannot be scanned; a value the allowlist may neither keep nor
  * hash (`OPEN_VALUE`, closed.ts);
  * a scripted, mock or non-gated episode not labelled simulated; a duplicate trial, run or
  * episode; a record that fails its schema; an existing output directory. A refusal names
@@ -37,6 +38,7 @@
  */
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -53,7 +55,14 @@ import {
   datasetRecordSchema,
 } from "../../schemas/dataset-export.ts";
 import { validateSchema } from "../../schemas/validate.ts";
-import { closeEpisode, closeRecordFields, OpenValueError, openEpisodeStrings } from "./closed.ts";
+import {
+  closeEpisode,
+  closeRecordFields,
+  joinedIdentity,
+  OpenValueError,
+  openEpisodeStrings,
+  openRecordStrings,
+} from "./closed.ts";
 import {
   canonicalJson,
   EPISODE_MIRROR_PINNED_AT,
@@ -65,7 +74,7 @@ import {
   persistedBlobFile,
   sha256Hex,
 } from "./episode.ts";
-import { type HygieneOptions, scanForLeaks } from "./hygiene.ts";
+import { type HygieneOptions, identityStrings, scanForLeaks } from "./hygiene.ts";
 
 export { canonicalJson, sha256Hex };
 export const EXPORTER_VERSION = "myco-dataset-exporter/3";
@@ -377,15 +386,18 @@ export function exportDataset(
   options: ExportOptions,
 ): ExportResult {
   const includeNegatives = options.includeNegatives === true;
+  // Identity strings (lead ruling 21:52Z): this machine's account and host name, read now, the
+  // caller's planted identity and the identity file. Ids and tokens holding one are digested.
+  const joined = identityStrings(options.hygiene);
   if (existsSync(options.outDir)) throw new ExportRefused("OUT_EXISTS", "outDir");
 
   const trialKeys = new Set<string>();
   const runIds = new Set<string>();
   const episodeIds = new Set<string>();
   for (const [i, c] of candidates.entries()) {
-    // Structure and #542's rules. The blob itself is bound by classify(): an exported
+    // Structure and #542's rules. The captured document is bound by classify(): an exported
     // episode's persisted observation hashes to the grade's digest, which must equal the
-    // digest of the captured bytes the container writes.
+    // digest of the captured bytes (which are never written: digest-only).
     const problem = episodeProblem(c.episode);
     if (problem !== null) {
       throw new ExportRefused(
@@ -441,12 +453,12 @@ export function exportDataset(
     const capture = c.capture!;
     // Only the CLOSED form leaves the machine (closed.ts, TIF-265): free text hashed, ids
     // closed or hashed, a closed field holding anything else refuses the export. The closed
-    // episode, with the blob the container will carry, must pass every rule including BLOB_*
-    // (#542), so no exported episode references a blob the container does not hold byte for
-    // byte. (Closing never touches a digest or a blob file name, so this is the one check.)
+    // episode must pass every rule, BLOB_* included against the captured bytes: its persisted
+    // observation names exactly the document the grade is bound to (the bytes themselves are
+    // never written). Closing never touches a digest or a blob file name.
     let closedEp: Episode;
     try {
-      closedEp = closeEpisode(c.episode);
+      closedEp = closeEpisode(c.episode, joined);
     } catch (error) {
       if (error instanceof OpenValueError)
         throw new ExportRefused("OPEN_VALUE", `${episodeFile(c.episode.episodeId)}:${error.path}`);
@@ -482,15 +494,28 @@ export function exportDataset(
       },
       capture: { path: capture.path, format: capture.format, size: capture.bytes.byteLength },
     };
-    const record = closeRecordFields({
-      ...rawRecord,
-      episode: {
-        schema: EPISODE_SCHEMA,
-        id: closedEp.episodeId,
-        sha256: sha256Hex(episodeText),
-        file: episodeFile(closedEp.episodeId),
+    const record = closeRecordFields(
+      {
+        ...rawRecord,
+        episode: {
+          schema: EPISODE_SCHEMA,
+          id: closedEp.episodeId,
+          sha256: sha256Hex(episodeText),
+          file: episodeFile(closedEp.episodeId),
+        },
       },
-    });
+      joined,
+    );
+    // An identity string left in a closed pattern field (a task family, a version) refuses.
+    const named = [
+      ...joinedIdentity(closedEp, joined).map((x) => ({
+        ...x,
+        file: episodeFile(closedEp.episodeId),
+      })),
+      ...joinedIdentity(record, joined, "record").map((x) => ({ ...x, file: "records.jsonl" })),
+    ];
+    if (named.length > 0)
+      throw new ExportRefused("LEAK", `${named[0]!.file}:${named[0]!.path}`, named[0]!.kind);
     const issues = validateSchema(record, datasetRecordSchema);
     if (issues.length > 0) {
       throw new ExportRefused(
@@ -586,17 +611,11 @@ export function exportDataset(
     ["records.jsonl", exported.map((r) => `${r.rawLine}\n`).join("")],
     ...blobFiles.map((file) => [file, blobs.get(file)!] as const),
   ];
-  // Identity strings (lead ruling 21:52Z): whatever hygiene the caller passes, what is written is
-  // always scanned for THIS machine's account and host name (read now, from os) and the
-  // configured identity file, case-insensitively, the closed id and token fields included.
-  const enforced: HygieneOptions =
-    options.hygiene?.identityFile === undefined
-      ? {}
-      : { identityFile: options.hygiene.identityFile };
-  const leak =
-    firstLeak(rawOutputs, options.hygiene) ??
-    firstLeak(outputs, options.hygiene) ??
-    firstLeak(outputs, enforced);
+  // Identity strings (lead ruling 21:52Z) are handled when each episode and record is closed: this
+  // machine's account and host name (always, from os), the caller's identity and the identity file
+  // are digested out of every id and token, joined forms included, and refuse the export in any
+  // other verbatim field (`joinedIdentity`, above). Every other written string is fixed vocabulary.
+  const leak = firstLeak(rawOutputs, options.hygiene) ?? firstLeak(outputs, options.hygiene);
   if (leak !== null) throw new ExportRefused("LEAK", leak.where, leak.kind);
 
   // Write to a sibling temp directory and rename, so a failed write leaves no partial export.
@@ -616,114 +635,301 @@ export function exportDataset(
 /** The only entries a container holds (digest-only: never `blobs/`). */
 const CONTAINER_ENTRIES = new Set(["manifest.json", "records.jsonl", "schema.json", "episodes"]);
 
+/** Every code `validateContainer` reports; a problem is `CODE location`, never a value. */
+export const CONTAINER_PROBLEM_CODES = [
+  "CONTAINER_UNREADABLE",
+  "BLOBS_PRESENT",
+  "STRAY_ENTRY",
+  "LINK",
+  "NOT_REGULAR",
+  "HARDLINK",
+  "TOO_LARGE",
+  "MISSING",
+  "MANIFEST_JSON",
+  "MANIFEST_SCHEMA",
+  "FILE_HASH",
+  "RECORD_COUNT",
+  "RECORD_HASH",
+  "RECORD_JSON",
+  "RECORD_SCHEMA",
+  "RECORD_OPEN",
+  "RECORD_MISMATCH",
+  "EPISODE_HASH",
+  "EPISODE_JSON",
+  "EPISODE_DEPTH",
+  "EPISODE_SCHEMA",
+  "EPISODE_RULE",
+  "OPEN_STRING",
+  "UNREFERENCED",
+  "COUNTS",
+  "LEAK",
+  "VALIDATOR_ERROR",
+] as const;
+
+/** A container file is at most this large (an export is far smaller; a huge file is refused, not read). */
+export const CONTAINER_MAX_FILE_BYTES = 64 * 1024 * 1024;
+/** JSON nesting deeper than this is refused before anything recursive touches it. */
+export const CONTAINER_MAX_DEPTH = 32;
+
+/** A foreign directory-entry name, never echoed: `h-` plus 12 hex of its sha256. */
+const nameRef = (name: string) => `h-${sha256Hex(name).slice(0, 12)}`;
+
+/** Deepest nesting of a parsed JSON value, iteratively (stops once past `limit`). */
+function depthOf(value: unknown, limit: number): number {
+  let max = 0;
+  const stack: Array<readonly [unknown, number]> = [[value, 0]];
+  while (stack.length > 0) {
+    const [node, d] = stack.pop() as readonly [unknown, number];
+    if (d > max) max = d;
+    if (max > limit) return max;
+    if (node !== null && typeof node === "object")
+      for (const v of Array.isArray(node) ? node : Object.values(node)) stack.push([v, d + 1]);
+  }
+  return max;
+}
+
 /**
- * Validates an exported container directory (TIF-265). Returns problems (paths and codes, never
- * values); empty means valid. Refuses: any entry outside the layout, `blobs/` by name (the
- * container is digest-only); a manifest that fails its schema or carries a blob; a records or
- * schema file that does not hash to the manifest; a record line, or an episode file, that does
- * not hash to what references it; an episode file not referenced by a record; and any episode
- * string outside its closed grammar (`openEpisodeStrings`); and, as a backstop, any leak the
- * exporter's scan finds in an episode, a record or the manifest (`hygiene` as for the export).
- * Never throws on bad data.
+ * Validates an exported container directory (TIF-265; #559 round 1, D1-D6). Returns problems,
+ * each `CODE location` with a fixed code (`CONTAINER_PROBLEM_CODES`) and a location that is a
+ * fixed file name, a record index or a JSON path: never a value, and a foreign entry name only as
+ * `h-<12 hex>`. Empty means valid. NEVER throws: every read is guarded, nesting is bounded before
+ * any recursive check, and anything unexpected is `VALIDATOR_ERROR`.
+ *
+ * Refuses: a root that is missing, not a directory or a link; any entry outside the layout,
+ * `blobs/` by name (digest-only); a link, a non-regular file, a hard link (`nlink > 1`) or a file
+ * over `CONTAINER_MAX_FILE_BYTES`, for every file and for `episodes/`; a manifest that is not JSON
+ * or fails its schema (a blob in it included); a records or schema file that does not hash to the
+ * manifest; a record count, a record line's digest, its schema (`datasetRecordSchema`), its free
+ * fields' closed grammar or its episode id and label that disagree with the manifest; an episode
+ * file that does not hash to its record, is not JSON, nests deeper than `CONTAINER_MAX_DEPTH`,
+ * fails `episodeMirrorSchema` (closed: no extra key, a path used as a key included) or a #542 rule,
+ * or holds a string outside its closed grammar; an episode file no record references; manifest
+ * counts that do not match the records and episodes; and, as a backstop, any leak the exporter's
+ * scan finds (this machine's identity and the identity file always included, joined forms too).
  */
 export function validateContainer(dir: string, hygiene?: HygieneOptions): string[] {
+  try {
+    return checkContainer(dir, hygiene);
+  } catch {
+    return ["VALIDATOR_ERROR $"];
+  }
+}
+
+function checkContainer(dir: string, hygiene?: HygieneOptions): string[] {
   const problems: string[] = [];
-  const enforced: HygieneOptions =
-    hygiene?.identityFile === undefined ? {} : { identityFile: hygiene.identityFile };
-  const leaksOf = (value: unknown) => {
+  // This machine's identity (always), the caller's and the identity file's, by substring in every
+  // verbatim field (joined forms included); plus the exporter's own leak scan.
+  const joined = identityStrings(hygiene);
+  const leaksOf = (value: unknown, table: "episode" | "record" | null) => {
     const seen = new Set<string>();
-    return [...scanForLeaks(value, hygiene), ...scanForLeaks(value, enforced)].filter((l) => {
+    const all = [
+      ...scanForLeaks(value, hygiene),
+      ...(table === null ? [] : joinedIdentity(value, joined, table)),
+    ];
+    return all.filter((l) => {
       const k = `${l.kind}@${l.path}`;
       if (seen.has(k)) return false;
       seen.add(k);
       return true;
     });
   };
-  for (const entry of readdirSync(dir)) {
-    if (entry === "blobs") problems.push("blobs/ is present: the container is digest-only");
-    else if (!CONTAINER_ENTRIES.has(entry))
-      problems.push(`${entry}: not part of the container layout`);
-  }
-  let manifest: {
-    files: Record<string, string>;
-    records: { episodeId: string; sha256: string }[];
-    blobs: unknown[];
-  };
-  try {
-    manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
-  } catch {
-    return [...problems, "manifest.json is missing or not JSON"];
-  }
-  const issues = validateSchema(manifest, datasetManifestSchema);
-  if (issues.length > 0)
-    return [...problems, `manifest.json:${issues[0]!.path} ${issues[0]!.keyword}`];
-  const read = (name: string) => {
+  /** lstat a container path; null (and a problem) unless it is a plain file / directory. */
+  const plain = (rel: string, kind: "file" | "dir", label: string): boolean => {
+    let st: ReturnType<typeof lstatSync>;
     try {
-      return readFileSync(join(dir, name), "utf8");
+      st = lstatSync(join(dir, rel));
     } catch {
-      problems.push(`${name} is missing`);
+      problems.push(`MISSING ${label}`);
+      return false;
+    }
+    if (st.isSymbolicLink()) problems.push(`LINK ${label}`);
+    else if (kind === "file" ? !st.isFile() : !st.isDirectory())
+      problems.push(`NOT_REGULAR ${label}`);
+    else if (kind === "file" && st.nlink > 1) problems.push(`HARDLINK ${label}`);
+    else if (kind === "file" && st.size > CONTAINER_MAX_FILE_BYTES)
+      problems.push(`TOO_LARGE ${label}`);
+    else return true;
+    return false;
+  };
+  const readText = (rel: string, label: string): string | null => {
+    if (!plain(rel, "file", label)) return null;
+    try {
+      return readFileSync(join(dir, rel), "utf8");
+    } catch {
+      problems.push(`MISSING ${label}`);
       return null;
     }
   };
-  for (const name of ["records.jsonl", "schema.json"] as const) {
-    const text = read(name);
-    if (text !== null && sha256Hex(text) !== manifest.files[name])
-      problems.push(`${name} does not hash to the manifest`);
+
+  // The root and its entries.
+  try {
+    const st = lstatSync(dir);
+    if (st.isSymbolicLink() || !st.isDirectory()) return ["CONTAINER_UNREADABLE $"];
+  } catch {
+    return ["CONTAINER_UNREADABLE $"];
   }
-  const lines = (read("records.jsonl") ?? "").split("\n").filter((l) => l.length > 0);
-  if (lines.length !== manifest.records.length)
-    problems.push("records.jsonl and the manifest list different numbers of records");
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return ["CONTAINER_UNREADABLE $"];
+  }
+  for (const entry of entries) {
+    if (entry === "blobs") problems.push("BLOBS_PRESENT blobs/");
+    else if (!CONTAINER_ENTRIES.has(entry)) problems.push(`STRAY_ENTRY ${nameRef(entry)}`);
+  }
+
+  // The manifest.
+  const manifestText = readText("manifest.json", "manifest.json");
+  if (manifestText === null) return problems;
+  let manifest: {
+    files: Record<string, string>;
+    records: { episodeId: string; label: string; sha256: string }[];
+    counts: {
+      candidates: number;
+      records: number;
+      positive: number;
+      negative: number;
+      simulated: number;
+      excluded: Record<string, unknown>;
+    };
+    blobs: unknown[];
+  };
+  try {
+    manifest = JSON.parse(manifestText);
+  } catch {
+    return [...problems, "MANIFEST_JSON manifest.json"];
+  }
+  if (depthOf(manifest, CONTAINER_MAX_DEPTH) > CONTAINER_MAX_DEPTH)
+    return [...problems, "MANIFEST_SCHEMA manifest.json:$ depth"];
+  const mIssues = validateSchema(manifest, datasetManifestSchema);
+  if (mIssues.length > 0)
+    return [
+      ...problems,
+      `MANIFEST_SCHEMA manifest.json:${mIssues[0]!.path} ${mIssues[0]!.keyword}`,
+    ];
+  for (const leak of leaksOf(manifest, null))
+    problems.push(`LEAK manifest.json:${leak.path} ${leak.kind}`);
+
+  // records.jsonl and schema.json.
+  const recordsText = readText("records.jsonl", "records.jsonl");
+  const schemaText = readText("schema.json", "schema.json");
+  if (recordsText !== null && sha256Hex(recordsText) !== manifest.files["records.jsonl"])
+    problems.push("FILE_HASH records.jsonl");
+  if (schemaText !== null && sha256Hex(schemaText) !== manifest.files["schema.json"])
+    problems.push("FILE_HASH schema.json");
+  const lines = (recordsText ?? "").split("\n").filter((l) => l.length > 0);
+  if (lines.length !== manifest.records.length) problems.push("RECORD_COUNT records.jsonl");
+
+  // The episodes directory.
+  const episodesOk = lines.length === 0 ? true : plain("episodes", "dir", "episodes/");
   const referenced = new Set<string>();
+  let positive = 0;
+  let negative = 0;
+  let simulated = 0;
   for (const [i, line] of lines.entries()) {
-    if (sha256Hex(line) !== manifest.records[i]?.sha256)
-      problems.push(`records.jsonl#${i + 1} does not hash to the manifest`);
-    let record: { episode: { file: string; sha256: string } };
+    const at = `records.jsonl#${i + 1}`;
+    const listed = manifest.records[i];
+    if (sha256Hex(line) !== listed?.sha256) problems.push(`RECORD_HASH ${at}`);
+    let record: {
+      label: string;
+      episode: { id: string; file: string; sha256: string };
+    };
     try {
       record = JSON.parse(line);
     } catch {
-      problems.push(`records.jsonl#${i + 1} is not JSON`);
+      problems.push(`RECORD_JSON ${at}`);
       continue;
     }
-    if (!/^episodes\/[0-9a-f]{64}\.json$/.test(String(record?.episode?.file))) {
-      problems.push(`records.jsonl#${i + 1} does not reference an episode file`);
+    if (depthOf(record, CONTAINER_MAX_DEPTH) > CONTAINER_MAX_DEPTH) {
+      problems.push(`RECORD_SCHEMA ${at}:$ depth`);
       continue;
     }
+    const rIssues = validateSchema(record, datasetRecordSchema);
+    if (rIssues.length > 0) {
+      problems.push(`RECORD_SCHEMA ${at}:${rIssues[0]!.path} ${rIssues[0]!.keyword}`);
+      continue;
+    }
+    for (const path of openRecordStrings(record)) problems.push(`RECORD_OPEN ${at}:${path}`);
+    if (
+      listed !== undefined &&
+      (listed.episodeId !== record.episode.id || listed.label !== record.label)
+    )
+      problems.push(`RECORD_MISMATCH ${at}`);
+    if (record.label === "positive") positive++;
+    else negative++;
+    for (const leak of leaksOf(record, "record"))
+      problems.push(`LEAK ${at}:${leak.path} ${leak.kind}`);
     referenced.add(record.episode.file);
-    const text = read(record.episode.file);
+    if (!episodesOk) continue;
+    const file = record.episode.file;
+    const text = readText(file, file);
     if (text === null) continue;
-    if (sha256Hex(text) !== record.episode.sha256)
-      problems.push(`${record.episode.file} does not hash to its record`);
+    if (sha256Hex(text) !== record.episode.sha256) problems.push(`EPISODE_HASH ${file}`);
     let episode: unknown;
     try {
       episode = JSON.parse(text);
     } catch {
-      problems.push(`${record.episode.file} is not JSON`);
+      problems.push(`EPISODE_JSON ${file}`);
+      continue;
+    }
+    if (depthOf(episode, CONTAINER_MAX_DEPTH) > CONTAINER_MAX_DEPTH) {
+      problems.push(`EPISODE_DEPTH ${file}`);
+      continue;
+    }
+    const eIssues = validateSchema(episode, episodeMirrorSchema);
+    if (eIssues.length > 0) {
+      problems.push(`EPISODE_SCHEMA ${file}:${eIssues[0]!.path} ${eIssues[0]!.keyword}`);
       continue;
     }
     const rule = episodeProblem(episode);
-    if (rule !== null)
-      problems.push(
-        `${record.episode.file}: ${rule.detail} at ${rule.path} (not a valid myco.episode/1)`,
-      );
-    for (const path of openEpisodeStrings(episode))
-      problems.push(`${record.episode.file}: OPEN_STRING at ${path}`);
-    // The cleanliness backstop: the exporter's own leak scan over what was written, plus this
-    // machine's identity and the identity file, always (lead ruling 21:52Z).
-    for (const leak of leaksOf(episode))
-      problems.push(`${record.episode.file}: LEAK ${leak.kind} at ${leak.path}`);
-    for (const leak of leaksOf(record))
-      problems.push(`records.jsonl#${i + 1}: LEAK ${leak.kind} at ${leak.path}`);
+    if (rule !== null) problems.push(`EPISODE_RULE ${file}:${rule.path} ${rule.detail}`);
+    if ((episode as Episode).episodeId !== record.episode.id)
+      problems.push(`RECORD_MISMATCH ${at}`);
+    if ((episode as Episode).simulated) simulated++;
+    for (const path of openEpisodeStrings(episode)) problems.push(`OPEN_STRING ${file}:${path}`);
+    for (const leak of leaksOf(episode, "episode"))
+      problems.push(`LEAK ${file}:${leak.path} ${leak.kind}`);
   }
-  for (const leak of leaksOf(manifest))
-    problems.push(`manifest.json: LEAK ${leak.kind} at ${leak.path}`);
-  let files: string[] = [];
-  try {
-    files = readdirSync(join(dir, "episodes"));
-  } catch {
-    if (lines.length > 0) problems.push("episodes/ is missing");
+  if (episodesOk && lines.length > 0) {
+    let names: string[] = [];
+    try {
+      names = readdirSync(join(dir, "episodes"));
+    } catch {
+      problems.push("MISSING episodes/");
+    }
+    for (const f of names)
+      if (!referenced.has(`episodes/${f}`))
+        problems.push(
+          `UNREFERENCED ${/^[0-9a-f]{64}\.json$/.test(f) ? `episodes/${f}` : `episodes/${nameRef(f)}`}`,
+        );
+  } else if (lines.length === 0 && entries.includes("episodes")) {
+    try {
+      if (plain("episodes", "dir", "episodes/") && readdirSync(join(dir, "episodes")).length > 0)
+        problems.push("UNREFERENCED episodes/");
+    } catch {
+      problems.push("MISSING episodes/");
+    }
   }
-  for (const f of files)
-    if (!referenced.has(`episodes/${f}`))
-      problems.push(`episodes/${f} is not referenced by a record`);
+
+  // The manifest's counts, recomputed.
+  const c = manifest.counts;
+  const excludedValues = Object.entries(c.excluded);
+  const excludedOk = excludedValues.every(
+    ([k, v]) =>
+      (EXCLUSION_CODES as readonly string[]).includes(k) &&
+      Number.isInteger(v) &&
+      (v as number) >= 0,
+  );
+  const excludedSum = excludedValues.reduce((n, [, v]) => n + (typeof v === "number" ? v : 0), 0);
+  if (
+    !excludedOk ||
+    c.records !== lines.length ||
+    c.positive !== positive ||
+    c.negative !== negative ||
+    (episodesOk && c.simulated !== simulated) ||
+    c.candidates !== c.records + excludedSum
+  )
+    problems.push("COUNTS manifest.json");
   return problems;
 }
