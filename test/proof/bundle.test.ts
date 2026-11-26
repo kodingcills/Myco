@@ -13,7 +13,7 @@ import {
   serializeProofBundle,
   verifyProofBundle,
 } from "../../src/proof/bundle.ts";
-import { type LedgerEvent, ledgerEventSha256, verifyLedgerChain } from "../../src/proof/ledger.ts";
+import { type LedgerEvent, eventSha256, verifyLedgerChain } from "../../src/proof/ledger.ts";
 import {
   buildLedger,
   clone,
@@ -54,20 +54,25 @@ describe("proof bundle round trip", () => {
     expect(r.errors).toEqual([]);
     expect(r.ok).toBe(true);
     expect(r.simulated).toBe(true);
-    expect(r.evidenceRecomputed).toEqual(["ev-store"]);
-    expect(r.evidenceDigestOnly).toEqual(["ev-frame"]);
+    expect(r.evidenceRecomputed).toEqual([]);
+    expect(r.evidenceDigestOnly).toEqual(["ev-store", "ev-frame"]);
     expect(r.ledgerHead).toEqual(sampleLedger().head);
     expect(b.claim).toBe(PROOF_CLAIM);
     // Deterministic: the same run gives the same head.
     expect(bundle().head.headSha256).toBe(b.head.headSha256);
   });
 
-  it("a frame is never inlined, only its digest", () => {
-    const frame = bundle().records.find(
-      (r) => r.kind === "evidence" && (r.body as { evidenceId: string }).evidenceId === "ev-frame",
-    );
-    expect(frame?.body).toMatchObject({ withheld: "frame", bytes: 7 });
-    expect(frame?.body).not.toHaveProperty("content");
+  it("no artifact is ever inlined (text or frame): only its digest and byte count", () => {
+    const evidence = bundle().records.filter((r) => r.kind === "evidence");
+    expect(evidence).toHaveLength(2);
+    for (const r of evidence) {
+      expect(Object.keys(r.body).sort()).toEqual(
+        ["bytes", "evidenceId", "kind", "mediaType", "path", "sha256"].sort(),
+      );
+    }
+    const frame = evidence.find((r) => (r.body as { evidenceId: string }).evidenceId === "ev-frame");
+    expect(frame?.body).toMatchObject({ bytes: 7 });
+    expect(serializeProofBundle(bundle())).not.toContain("buy milk");
   });
 
   it("digest-only evidence is recomputed from an evidence dir, and a swapped file is refused", () => {
@@ -79,7 +84,7 @@ describe("proof bundle round trip", () => {
     expect(ok.errors).toEqual([]);
     expect(ok.evidenceRecomputed).toEqual(["ev-store", "ev-frame"]);
     expect(ok.evidenceDigestOnly).toEqual([]);
-    // An inline artifact whose original was swapped on disk is refused too.
+    // An artifact whose original was swapped on disk is refused.
     writeFileSync(join(dir, "run-1", ".myco-todo.json"), "{}");
     expect(codes(bundle(), { evidenceDir: dir })).toEqual(["PROOF_EVIDENCE_DIGEST"]);
     writeFileSync(join(dir, "run-1", ".myco-todo.json"), STORE_TEXT);
@@ -195,27 +200,23 @@ describe("tamper cases: every edit, gap, reorder and truncation is refused", () 
     expect(verify(b).ok).toBe(false);
   });
 
-  it("inline evidence content edited (digest left alone) is refused even if re-chained", () => {
+  it("inline evidence content added by a forger is refused even if re-chained (closed schema)", () => {
     const b = rechain(
       mutate((x) => {
-        (x.records[6]?.body as { content: string }).content = STORE_TEXT.replace(
-          "fix bike",
-          "fix car!",
-        );
+        (x.records[6]?.body as { content: string }).content = STORE_TEXT;
       }),
     );
-    expect(codes(b)).toEqual(["PROOF_EVIDENCE_DIGEST"]);
+    expect(codes(b)).toEqual(["PROOF_SCHEMA"]);
   });
 
   it("a frame inlined by a forger is refused", () => {
     const b = rechain(
       mutate((x) => {
         const e = x.records[7]?.body as Record<string, unknown>;
-        delete e.withheld;
         e.content = "PNG";
       }),
     );
-    expect(codes(b)).toContain("PROOF_EVIDENCE");
+    expect(codes(b)).toContain("PROOF_SCHEMA");
   });
 
   it("an inflated claim is refused (no stronger claim than #518's)", () => {
@@ -306,7 +307,7 @@ describe("tamper cases: every edit, gap, reorder and truncation is refused", () 
     expect(codes(late)).toContain("PROOF_VERDICT");
   });
 
-  it("an evidence id recorded twice, or with both content and withheld, is refused", () => {
+  it("an evidence id recorded twice, or with a withheld field, is refused", () => {
     const twice = rechain(
       mutate((x) => {
         (x.records[7]?.body as { evidenceId: string }).evidenceId = "ev-store";
@@ -318,10 +319,10 @@ describe("tamper cases: every edit, gap, reorder and truncation is refused", () 
         (x.records[6]?.body as Record<string, unknown>).withheld = "binary";
       }),
     );
-    expect(codes(both)).toContain("PROOF_EVIDENCE");
+    expect(codes(both)).toContain("PROOF_SCHEMA");
   });
 
-  it("an escaping (..) evidence path is refused by the schema", () => {
+  it("an evidence path written as a string (here an escaping ..) is refused by the schema", () => {
     const b = rechain(
       mutate((x) => {
         (x.records[6]?.body as { path: string }).path = "../outside/x.json";
@@ -330,7 +331,7 @@ describe("tamper cases: every edit, gap, reorder and truncation is refused", () 
     expect(codes(b)).toContain("PROOF_SCHEMA");
   });
 
-  it("an absolute evidence path (POSIX or drive letter) is refused by the schema", () => {
+  it("an absolute evidence path string (POSIX or drive letter) is refused by the schema", () => {
     for (const path of ["/abs/x.json", "C:/x.json", "c:x.json"]) {
       const b = rechain(
         mutate((x) => {
@@ -505,7 +506,7 @@ describe("the attempt ledger (#518 format) inside the bundle", () => {
     let prev = "0".repeat(64);
     const lines = full.map((e) => {
       const next = { ...e, prevSha256: prev };
-      prev = ledgerEventSha256(next);
+      prev = eventSha256(next);
       return next;
     });
     expect(() =>
@@ -516,7 +517,7 @@ describe("the attempt ledger (#518 format) inside the bundle", () => {
         },
         NO_CTX,
       ),
-    ).toThrow(/gap or a reordering/);
+    ).toThrow(/ledger event 0 fails #518's check/);
   });
 
   it("a ledger event with an unknown field is refused, even when chained", () => {
@@ -525,7 +526,7 @@ describe("the attempt ledger (#518 format) inside the bundle", () => {
     let prev = "0".repeat(64);
     const lines = base.map((e) => {
       const next = { ...e, prevSha256: prev } as unknown as LedgerEvent;
-      prev = ledgerEventSha256(next);
+      prev = eventSha256(next);
       return next;
     });
     expect(() =>
@@ -536,7 +537,7 @@ describe("the attempt ledger (#518 format) inside the bundle", () => {
         },
         NO_CTX,
       ),
-    ).toThrow(/unknown field/);
+    ).toThrow(/PROOF_LEDGER_CHAIN: ledger event 0 fails #518's check/);
   });
 
   it("a ledger trial for another task is refused", () => {
@@ -587,7 +588,7 @@ describe("the run's arm and the ledger trial's arm", () => {
   });
 });
 
-describe("ledger event rules (#518's documented schema)", () => {
+describe("ledger event rules (#518's own check, messages never echo a value)", () => {
   type In = Parameters<typeof buildLedger>[0][number];
   const chainOf = (events: readonly Record<string, unknown>[]) =>
     verifyLedgerChain(buildLedger(events as unknown as In[]).lines).errors;
@@ -602,30 +603,31 @@ describe("ledger event rules (#518's documented schema)", () => {
   });
 
   it("an arm outside the ledger's arms is refused", () => {
-    expect(chainOf([{ ...start, arm: "other-arm" }])).toEqual(["ledger event 0: arm"]);
+    expect(chainOf([{ ...start, arm: "other-arm" }])).toEqual([
+      "ledger event 0 fails #518's check (1 issue(s))",
+    ]);
   });
 
   it("a start event that carries an outcome is refused", () => {
     expect(chainOf([{ ...start, outcome: "completed" }])).toEqual([
-      "ledger event 0: a start event has no outcome or harness class",
+      "ledger event 0 fails #518's check (1 issue(s))",
     ]);
   });
 
   it("an end event without an outcome is refused", () => {
     const { outcome: _o, ...bare } = end;
-    expect(chainOf([start, bare])).toEqual(["ledger event 1: an end event must have an outcome"]);
+    expect(chainOf([start, bare])).toEqual(["ledger event 1 fails #518's check (1 issue(s))"]);
   });
 
   it("a harness class exactly when the outcome is harness-fault", () => {
-    const msg =
-      "ledger event 1: an end event has a harness class exactly when its outcome is harness-fault";
+    const msg = "ledger event 1 fails #518's check (1 issue(s))";
     expect(chainOf([start, { ...end, harnessClass: "timeout" }])).toEqual([msg]);
     expect(chainOf([start, { ...end, outcome: "harness-fault" }])).toEqual([msg]);
   });
 
   it("an unknown field is refused without echoing its name", () => {
     const errors = chainOf([{ ...start, PLANTEDKEYNAME: 1 }]);
-    expect(errors).toEqual(["ledger event 0: 1 unknown field(s)"]);
+    expect(errors).toEqual(["ledger event 0 fails #518's check (1 issue(s))"]);
     expect(JSON.stringify(errors)).not.toContain("PLANTED");
   });
 });

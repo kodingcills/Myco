@@ -1,6 +1,10 @@
 /**
  * Track Q (replayable proof): a static, offline HTML report of a VERIFIED bundle.
  *
+ * The report shows only what the bundle holds: closed values (enums, codes, ids, integers,
+ * digests). A summary or a path appears as its digest prefix and length, because the bundle
+ * never carries the text.
+ *
  * Replay is read-only and needs no server: the report is one HTML file with no script, no
  * link, no image and no remote resource, and a Content-Security-Policy of `default-src
  * 'none'` so a browser fetches nothing even if a value slipped through. Every value is
@@ -24,7 +28,8 @@ import type {
   VerifyResult,
 } from "./bundle.ts";
 import { recordSha256, runGenesis } from "./bundle.ts";
-import { EMPTY_REDACTION, findLeaks, type RedactionContext } from "./redact.ts";
+import { EMPTY_REDACTION, findLeaks, type RedactionContext } from "./backstop.ts";
+import type { TextRef } from "./closed.ts";
 
 export function escapeHtml(text: string): string {
   return text
@@ -37,21 +42,22 @@ export function escapeHtml(text: string): string {
 
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'";
 
+/** A TextRef as shown: its digest prefix and length. The text itself is not in the bundle. */
+function ref(t: TextRef): string {
+  return `<code>sha256 ${escapeHtml(t.sha256.slice(0, 16))}</code> (${t.chars} chars; text not carried)`;
+}
+
 function detail(r: ProofRecord): string {
   const e = escapeHtml;
   switch (r.kind) {
     case "action": {
       const b = r.body as ActionBody;
-      return `<b>${e(b.actor)}</b> ${e(b.tool)}: ${e(b.summary)}`;
+      return `<b>${e(b.actor)}</b> ${e(b.tool)}: summary ${ref(b.summary)}`;
     }
     case "evidence": {
       const b = r.body as EvidenceBody;
-      const where = b.path === undefined ? "" : ` ${e(b.path)}`;
-      const how =
-        b.content !== undefined
-          ? `<details><summary>inline text (digest recomputed)</summary><pre>${e(b.content)}</pre></details>`
-          : `digest only (${e(b.withheld ?? "")})`;
-      return `${e(b.evidenceId)} [${e(b.kind)}, ${e(b.mediaType)}]${where}<br><code>sha256 ${e(b.sha256)}</code>, ${b.bytes} bytes, ${how}`;
+      const where = b.path === undefined ? "" : `, path ${ref(b.path)}`;
+      return `${e(b.evidenceId)} [${e(b.kind)}, ${e(b.mediaType)}]${where}<br><code>sha256 ${e(b.sha256)}</code>, ${b.bytes} bytes, digest only`;
     }
     case "verdict": {
       const b = r.body as VerdictBody;
@@ -63,7 +69,7 @@ function detail(r: ProofRecord): string {
     }
     case "handoff": {
       const b = r.body as HandoffBody;
-      return `${e(b.from)} &rarr; ${e(b.to)}: ${e(b.summary)}`;
+      return `${e(b.from)} &rarr; ${e(b.to)}: summary ${ref(b.summary)}`;
     }
     case "policy": {
       const b = r.body as PolicyBody;
@@ -167,8 +173,8 @@ code,pre{font:12px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <p>Task ${e(bundle.run.taskId)}${bundle.run.arm === undefined ? "" : `, arm ${e(bundle.run.arm)}`}.</p>
 ${simulated}
 ${episode}
-<p class="ok">Verified: every record hash, chain link and inline evidence digest was recomputed. Head <code>${e(bundle.head.headSha256)}</code> (${bundle.head.records} records).</p>
-<p>Digest-only evidence not recomputed here: ${verification.evidenceDigestOnly.map(e).join(", ") || "none"}.</p>
+<p class="ok">Verified: every record hash and chain link was recomputed. Head <code>${e(bundle.head.headSha256)}</code> (${bundle.head.records} records).</p>
+<p>Evidence recomputed from an evidence dir: ${verification.evidenceRecomputed.map(e).join(", ") || "none"}. Evidence not recomputed here: ${verification.evidenceDigestOnly.map(e).join(", ") || "none"}.</p>
 <p class="claim">${e(bundle.claim)}</p>
 ${ledger}
 <table>

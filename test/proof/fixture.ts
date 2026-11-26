@@ -11,9 +11,9 @@ import {
   GENESIS_SHA256,
   type LedgerEvent,
   type LedgerHead,
-  ledgerEventSha256,
+  eventSha256,
 } from "../../src/proof/ledger.ts";
-import type { RedactionContext } from "../../src/proof/redact.ts";
+import type { RedactionContext } from "../../src/proof/backstop.ts";
 
 type EventInput = Omit<LedgerEvent, "schema" | "seq" | "prevSha256">;
 
@@ -31,7 +31,7 @@ export function buildLedger(inputs: readonly EventInput[]): {
       ...input,
     };
     lines.push(e);
-    prev = ledgerEventSha256(e);
+    prev = eventSha256(e);
   }
   return { lines, head: { events: lines.length, headSha256: prev } };
 }

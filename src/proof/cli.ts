@@ -12,13 +12,13 @@
  * give `attemptsFile` (an `attempts.jsonl`, relative to RUN.json) instead of `lines`, and
  * `episodeFile` (the attempt's `myco.episode/1` JSON, relative to RUN.json) names the
  * episode the bundle references. `--episode E` makes verify/report cross-check it.
- * `--forbid-file` names a file of extra literals to redact and refuse, one per line; its
- * contents are never printed. Export registers no secret VALUES of its own: it redacts the
- * host's home, temp and checkout directories and account name, the generic secret and path
- * shapes, and every `--forbid-file` line (redacted as `[redacted:vault-key]`, whatever the
- * line is: put secret values there too). `--user-file` names a file of account names (the
- * guest's account, say), one per line: each is redacted as `[redacted:user]` and refused as a
- * whole word in any letter case; its contents are never printed.
+ *
+ * Export writes closed-type values only (`closed.ts`): no text from RUN.json reaches the
+ * bundle, only digests. `--forbid-file` (literals, one per line) and `--user-file` (account
+ * names, one per line, matched in any letter case) feed the BACKSTOP scanner: if any of them,
+ * or the host's own account name, home, temp or checkout directory, still appears in an
+ * output (for example as a closed id equal to the account name), the command fails closed.
+ * Neither file's contents are ever printed.
  *
  * Exit codes: 0 ok; 1 refused (verification failed, export refused, report not written);
  * 2 usage. Output is JSON on stdout; it never echoes a redacted value, and is itself scanned
@@ -38,7 +38,7 @@ import {
   verifyProofBundle,
 } from "./bundle.ts";
 import { parseLedgerJsonl } from "./ledger.ts";
-import { findLeaks, type RedactionContext } from "./redact.ts";
+import { findLeaks, type RedactionContext } from "./backstop.ts";
 import { ProofReportError, renderProofReport } from "./report.ts";
 
 export interface CliIo {
@@ -72,7 +72,7 @@ function parseFlags(args: readonly string[]): { positional: string[]; flags: Map
     const a = args[i] as string;
     if (a.startsWith("--")) {
       const v = args[i + 1];
-      if (v === undefined || v.startsWith("--")) throw new UsageError(`${a} needs a value`);
+      if (v === undefined || v.startsWith("--")) throw new UsageError("a flag needs a value");
       flags.set(a, v);
       i++;
     } else positional.push(a);
@@ -214,10 +214,10 @@ export function main(argv: readonly string[], io: CliIo): number {
       throw new UsageError("usage: proof.ts export|verify|report ...");
     const { positional, flags } = parseFlags(rest);
     for (const f of flags.keys())
-      if (!KNOWN[command]?.includes(f)) throw new UsageError(`unknown flag ${f} for ${command}`);
-    if (positional.length !== 1) throw new UsageError(`${command} takes exactly one input file`);
+      if (!KNOWN[command]?.includes(f)) throw new UsageError("unknown flag for this command");
+    if (positional.length !== 1) throw new UsageError("the command takes exactly one input file");
     const input = positional[0] as string;
-    if (!existsSync(input)) throw new UsageError(`no such file: ${command} input`);
+    if (!existsSync(input)) throw new UsageError("no such input file");
     const forbid = readLines(flags.get("--forbid-file"));
     const users = readLines(flags.get("--user-file"));
     outCtx = hostRedaction(forbid, users);

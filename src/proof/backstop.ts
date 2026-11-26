@@ -1,40 +1,22 @@
 /**
- * Track Q (replayable proof): redaction for proof bundles and reports.
+ * Track Q (replayable proof): the leak scanner, kept ONLY as a backstop.
  *
- * A proof bundle is meant to be shared, so it must not carry a secret, an absolute host path,
- * a username or a vault key, as far as the shapes and literals below recognise them. Two
- * layers, both fail closed:
- *  1. `redactText` rewrites every string the exporter puts in a bundle: registered literal
- *     values first (secrets, vault keys, host paths), then generic shapes
- *     (home roots `Users`/`home`/`root`/`Documents and Settings`/`DOCUME~N` after any
- *     non-alphanumeric character, with spaces allowed in the user segment; UNC paths in every
- *     separator and prefix form, also after a `:` (`FileSystem::\\nas\a`), and network file
- *     URLs including `file://host/...`, with spaces allowed in every segment;
- *     Windows drive paths, also with spaced segments; absolute POSIX paths, `~user` homes,
- *     `var/folders`, `file:` URLs, key-shaped tokens; then the account-name shapes
- *     `DOMAIN\user` and `user@host`, and registered account names in any letter case). A
- *     token that still leaks once decoded (JSON escapes, percent-encoding, HTML entities) is
- *     replaced whole. What is NOT caught is listed under "Limits" in
- *     docs/architecture/replayable-proof.md.
- *  2. The scanners refuse anything left:
- *     - `findLeaksDeep` scans every parsed string value AND every object key of a value
- *       (the verifier runs it over the parsed bundle);
- *     - `findLeaks` scans a text (the verifier runs it over the raw text only when it is not
- *       valid JSON, since parsed JSON gets `findLeaksDeep`; the report renderer runs it over
- *       the final HTML before it returns it).
- *     Each scanned string is also scanned in every decoded form (`decodedVariants`), so a
- *     path behind `\/`, `\t`, `\u002f`, `%2F` or `&#47;` is still found.
- *     Anything left that a scanner recognises is a refusal: the exporter throws, the
- *     verifier refuses, the report is not rendered. A scanner cannot flag a fragment that no
- *     longer looks like a path, so the whitespace-tolerant home-root and UNC shapes run first
- *     and an encoded path with whitespace replaces the whole string (R3-D1).
+ * The exporter does not rely on this file to keep host paths or usernames out of a bundle:
+ * since #553 it writes closed-type values only (`closed.ts`), and every free-text or
+ * path-capable value is replaced structurally, by a digest, before it is written. This
+ * scanner runs AFTER that, over every output (the serialized bundle, every parsed string
+ * and key of a bundle being verified, the rendered HTML, every line the CLI prints). If it
+ * ever fires, the export, verify or report fails closed. A miss here is therefore not a
+ * leak by itself: it would take a miss here AND a value that escaped the allowlist.
  *
- * TO FILE: the episode writer (#542, `src/episode/clean.ts` / `validate.ts`) has its own
- * cleanliness scan. Once #542 merges, consolidate both onto one canonical scanner (with a
- * parity test over the bypass corpus in `test/proof/redaction.test.ts`).
+ * It recognises registered literals (secrets, vault keys, host paths, account names in any
+ * letter case) and generic shapes (home roots, UNC and drive paths, POSIX absolute paths,
+ * `~user`, `file:` and network URLs, `DOMAIN\user`, `user@host`, key-shaped tokens), each in
+ * every decoded form (JSON escapes, percent-encoding, HTML entities, stacked up to
+ * `DECODE_DEPTH`). It reports kinds and offsets, never the matched text.
  *
- * Screenshots and frames are never inlined: the watch view has no merged redaction rules
- * for pixels, so a frame can only appear as a digest (see `bundle.ts`).
+ * Its pattern list is #548's final one, unchanged: it is not where the guarantee lives, so it
+ * is not chased further here (see the doc's "Backstop" section for what it does not match).
  */
 
 export interface RedactionContext {
@@ -189,15 +171,6 @@ const USER_AT_HOST =
   /(?<![A-Za-z0-9._+-])[A-Za-z0-9_][A-Za-z0-9._+-]*@[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)*/g;
 const USERNAME_SHAPES: readonly RegExp[] = [DOMAIN_USER, USER_AT_HOST];
 
-/** The shapes whose match may span whitespace: a token-by-token rewrite cannot remove them. */
-const SPACE_SPANNING: readonly RegExp[] = [
-  HOME_ROOT,
-  UNC_SPACED,
-  NET_URL,
-  WINDOWS_SPACED,
-  DOMAIN_USER,
-];
-
 const PATH_SHAPES: readonly RegExp[] = [
   // Whitespace-tolerant shapes first (see HOME_ROOT): they must see the whole path.
   HOME_ROOT,
@@ -211,25 +184,6 @@ const PATH_SHAPES: readonly RegExp[] = [
   TILDE_USER,
   VAR_FOLDERS,
 ];
-
-export const PLACEHOLDER = {
-  secret: "[redacted:secret]",
-  vaultKey: "[redacted:vault-key]",
-  hostPath: "[redacted:host-path]",
-  username: "[redacted:user]",
-} as const;
-
-function literals(ctx: RedactionContext): Array<readonly [string, string]> {
-  const out: Array<readonly [string, string]> = [];
-  const add = (values: readonly string[], placeholder: string) => {
-    for (const v of values) if (v.length >= MIN_LITERAL) out.push([v, placeholder]);
-  };
-  add(ctx.secrets, PLACEHOLDER.secret);
-  add(ctx.vaultKeys, PLACEHOLDER.vaultKey);
-  add(ctx.hostPaths, PLACEHOLDER.hostPath);
-  // Longest first, so a path that contains another is removed whole.
-  return out.sort((a, b) => b[0].length - a[0].length);
-}
 
 function usernameRes(ctx: RedactionContext): RegExp[] {
   return (
@@ -388,70 +342,4 @@ export function findLeaksDeep(value: unknown, ctx: RedactionContext = EMPTY_REDA
   };
   visit(value);
   return leaks;
-}
-
-// ---------------------------------------------------------------------------------------
-// Rewriting
-
-function redactPlain(input: string, ctx: RedactionContext): string {
-  let out = input;
-  for (const [value, placeholder] of literals(ctx)) out = out.split(value).join(placeholder);
-  for (const re of SECRET_SHAPES) out = out.replace(re, PLACEHOLDER.secret);
-  for (const re of PATH_SHAPES) out = out.replace(re, PLACEHOLDER.hostPath);
-  for (const re of USERNAME_SHAPES) out = out.replace(re, PLACEHOLDER.username);
-  for (const re of usernameRes(ctx)) out = out.replace(re, PLACEHOLDER.username);
-  return out;
-}
-
-const KIND_PLACEHOLDER: Record<Leak["kind"], string> = {
-  secret: PLACEHOLDER.secret,
-  "vault-key": PLACEHOLDER.vaultKey,
-  "host-path": PLACEHOLDER.hostPath,
-  username: PLACEHOLDER.username,
-};
-
-/**
- * Rewrite one string so it carries no registered value and no generic secret or host path,
- * in any decoded form. A whitespace-separated token that still leaks once decoded is
- * replaced whole; if a leak still remains (it spans tokens), the whole string is replaced.
- */
-export function redactText(input: string, ctx: RedactionContext): string {
-  // A path that only appears once decoded and that contains whitespace (`C:\u005cUsers\u005c
-  // First Last`) cannot be rewritten in its plain form: a whitespace-stopping shape removes the
-  // part before the space, and the surname survives with no root left to flag it. Checked on
-  // the INPUT, before any rewrite: replace the whole string (R3-D1).
-  if (encodedSpaceSpanning(input)) return PLACEHOLDER.hostPath;
-  let out = redactPlain(input, ctx);
-  if (findLeaks(out, ctx).length === 0) return out;
-  out = out.replace(/\S+/g, (token) => {
-    const leaks = findLeaks(token, ctx);
-    return leaks.length === 0 ? token : KIND_PLACEHOLDER[(leaks[0] as Leak).kind];
-  });
-  if (findLeaks(out, ctx).length === 0) return out;
-  return PLACEHOLDER.secret;
-}
-
-/**
- * True when a decoded form of `text` (not the plain form, which `redactPlain` rewrites whole)
- * holds a home-root or UNC path that contains whitespace.
- */
-function encodedSpaceSpanning(text: string): boolean {
-  for (const variant of decodedVariants(text))
-    if (variant !== text)
-      for (const re of SPACE_SPANNING)
-        for (const m of variant.matchAll(new RegExp(re.source, re.flags)))
-          if (/\s/.test(m[0])) return true;
-  return false;
-}
-
-/** Deep-redact every string (keys included) of a JSON-like value. */
-export function redactDeep<T>(value: T, ctx: RedactionContext): T {
-  if (typeof value === "string") return redactText(value, ctx) as T;
-  if (Array.isArray(value)) return value.map((v) => redactDeep(v, ctx)) as T;
-  if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) out[redactText(k, ctx)] = redactDeep(v, ctx);
-    return out as T;
-  }
-  return value;
 }
