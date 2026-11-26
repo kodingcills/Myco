@@ -22,7 +22,7 @@
  */
 import { type Readable, Transform, type TransformCallback } from "node:stream";
 
-/** 1 MiB: about 250 times the largest valid request (a 4000-character claim, escaped). */
+/** 1 MiB: about 43 times the largest valid request (~24 KB: 128-char ids, 4000 escaped controls). */
 export const MAX_FRAME_BYTES = 1024 * 1024;
 
 /**
