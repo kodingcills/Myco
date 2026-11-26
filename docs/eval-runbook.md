@@ -287,21 +287,55 @@ scripts/reset-trial-vm.sh            # optional arg: snapshot name; default clea
 ```
 
 What it does (read from the script): force-stop → wait for `stopped` (30 s cap) → **refuse** if
-the state is `resuming` → restore → start → `wait-guest-ready.sh 600` (guest CPU must advance, then
-SSH must answer 3 consecutive probes 5 s apart, TIF-220) → resync the guest clock. It
-accepts only `clean-base`, `clean-base-live`, `m1-agent-live`, **`cua-c1-base`** (the C1
-screenshot-baseline snapshot, and the one the C1 arms run on) as snapshot names and never
-restores onto a running VM.
+the state is `resuming` → restore → start → `wait-guest-ready.sh 600` (guest CPU must advance;
+then SSH must answer 3 consecutive probes whose **starts** are at least 5 s apart, TIF-220/TIF-98) →
+resync the guest clock. It accepts only `clean-base`, `clean-base-live`, `m1-agent-live`,
+**`cua-c1-base`** (the C1 screenshot-baseline snapshot, and the one the C1 arms run on) as
+snapshot names and never restores onto a running VM.
 
-Expected: `reset-trial-vm: ready on 'clean-base'`. Cold boot costs ~21 s once UTM is warm, and
-~134-152 s measured across 5 consecutive resets immediately after a UTM restart (m1-state log 39);
-the script header's ~165 s figure is a single earlier sample. That is the price of a reset that
-cannot wedge, versus the live path's ~7 s when healthy.
+Expected stderr tail, then the stdout line:
 
-**Plan for 180–280 s, the same range as §3.2.** The two fresh row-8 runs fell outside the quiet
-figures above without a UTM restart: **195 s** at load 5.65 (2026-11-24) and **250 s** at load
-10–14 (2026-11-25), both ending in the expected line (operator report S3 and operator 4 step 2).
-The ~21 s figure needs a warm UTM and a quiet host; do not plan on it.
+```
+wait-guest-ready: first ssh answer after 152s (guest CPU 270s)
+reset-trial-vm: timing stop=1 restore=2 start=3 ready=199 egress=0 clock=11 total=214
+reset-trial-vm: host swap used 4460 of 6144 MB
+reset-trial-vm: ready on 'clean-base'
+```
+
+The `timing` line is the per-phase breakdown in seconds (TIF-98). `ready` includes the boot and the
+stability probes; the `first ssh answer` line splits them. `egress` is the TIF-275 check (§3.4); it
+reads the host process table and takes under a second. The `host swap` line is informational
+only. It records the host state the reset ran under.
+
+**Plan for 190–260 s on this Mac** (measured 2026-11-25: 8 recorded resets with the TIF-98 code and 5
+without, 185–254 s, median 213 s, at host 1-minute load 3.83–9.72;
+`docs/research/experiments/tif-98-reset/`). Where the time goes:
+
+| Phase | Typical | What it is |
+|---|---|---|
+| stop + restore + start | ~6 s | UTM AppleScript; restore is a qcow2 internal-snapshot apply |
+| boot to first SSH answer | 139–183 s | Windows booting. A plain in-guest reboot with no restore is just as slow, so the restore is not the cost |
+| stability probes | 29–54 s | each `echo ok` round trip took about 5–8 s on a guest still busy booting (a diagnostic-shell observation, not in the rows) |
+| clock resync | 6–18 s | one more SSH round trip |
+
+The guest's boot is slow because it is CPU-busy. It spends 264–314 guest CPU-seconds (median 281) before SSH
+answers, and Windows records 50+ s in session-manager init, against ~1 s on its first boot
+(2026-11-19). After SSH answers it stays busy: Defender, .NET optimization (`ngen`), scheduled
+tasks and Windows Update were still running 26 minutes after one boot, with QEMU at 187 % host CPU (a diagnostic-shell observation, not in the rows). Every reset reverts the disk, so the guest repeats that
+maintenance on every trial. `scripts/guest-boot-profile.sh` prints Windows' phase timings and the
+busiest guest processes, read-only.
+
+The older figures (~21 s "warm UTM", 25.8 s in m1-state log 44) were not reproduced: with swap
+freed to ~4.5 GB and 61–72 % host memory free, resets still took 213–254 s. Host swap pressure makes
+things worse (QEMU resident about 1.8 GB for a 6 GB guest at 9.9 GB swap, a diagnostic-shell
+observation, not in the rows), but it is not the main cost.
+
+**Timing a reset.** `scripts/reset-bench.sh reset N out.jsonl [label]` runs N resets.
+`scripts/reset-bench.sh cycle N out.jsonl [label]` runs N reset → deploy → `session_info` cycles
+and needs `MYCO_TOKEN_OUT` (§4). Both check `lsof` before every step and hold at load ≥ 10 until
+the load has stayed under 10 for 3 minutes. Each run is one JSON row: phases, load, host swap, free
+memory, QEMU resident size, exit codes. `scripts/reset-bench-summary.py label=file.jsonl …` turns
+rows into the median/min/max table. Raw step logs stay in `out.jsonl.logs/`, outside the evidence.
 
 ### 3.2 Fallback — `reset.sh cold`
 
@@ -342,6 +376,83 @@ reset. `scripts/reset-trial-vm.sh` (§3.1) detects the state and exits with this
 instead of hanging; `reset.sh` (§3.2) does not, which is why the cold path is the sweep default.
 The `resuming` wedge remains an **open hypothesis** about rapid live-resume cycling, not a
 conclusion (log 37).
+
+### 3.4 Guest egress: default deny (TIF-275)
+
+The guest has **no outbound network**. Its only network is QEMU user-mode networking, and UTM's
+**"isolate from host"** flag on that NIC adds slirp `restrict=on`: the guest cannot open any
+connection to the internet, the LAN or the host. The one explicit `hostfwd` rule,
+host `127.0.0.1:2222` → guest `:22`, still works because the host initiates it. Everything Myco
+does with the guest rides that inbound forward: `scp`/`ssh` for reset and deploy, and the agent's
+port 8765 through `ssh -L`, since the agent listens on the guest's loopback.
+
+| Direction | Allowed | How |
+|---|---|---|
+| host → guest | TCP `127.0.0.1:2222` → guest `:22` only | UTM port forward (slirp `hostfwd`) |
+| guest → internet (DNS, HTTP(S), NTP, Windows Update, activation, PyPI) | **nothing** | slirp `restrict=on` |
+| guest → host (`10.0.2.2`) | **nothing** | slirp `restrict=on` |
+
+**Every reset and every deploy checks it.** After the boot gate, `scripts/reset-trial-vm.sh`
+runs `scripts/guest-egress.sh verify`, and `agent/bootstrap/deploy-to-vm.sh` runs it before it
+copies anything. The deploy refuses outright under `MYCO_GUEST_EGRESS=open`. `verify` checks
+the following, and has three known open gaps (D7–D9, listed in
+`docs/security/guest-egress.md` under "Known open gaps"; their fix must merge before real data
+or credentials touch the guest):
+
+- **In the live QEMU process**, whose argv is read exactly from the kernel (`KERN_PROCARGS2`),
+  not from `ps`:
+  - no argv element may contain whitespace, and `-nodefaults` must be present;
+  - exactly one `-netdev`, of type `user`, with `restrict=on`, no `guestfwd` or other options,
+    and hostfwd rules of exactly `tcp:127.0.0.1:2222-:22`;
+  - no `-nic`, `-net`, `-readconfig`, `-set`, `-qmp`, `-monitor` or `-gdb` (`-qmp-pretty` is
+    not yet refused: D8);
+  - no comma-form `-object filter-*`, and no `netdev=` except the one NIC device's (a JSON-form
+    `-object` is not yet parsed: D7);
+  - chardevs only UTM's own (`spiceport`, `spicevmc`, `pty`, the swtpm unix socket), and
+    `-serial`/`-parallel` only `chardev:<id>`.
+- **In UTM:** one emulated NIC with "isolate from host" on and that one port forward.
+
+A second NIC, a `0.0.0.0` bind, an extra forward, a comma-form filter, a TCP chardev, and the
+unparseable inputs `docs/security/guest-egress.md` lists all fail. A failing reset prints:
+
+```
+reset-trial-vm: guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)
+```
+
+Commands (each takes the VM lock where it changes anything; check `lsof` first as always):
+
+```bash
+scripts/guest-egress.sh status   # read-only: UTM flag and network config, the live netdev check
+scripts/guest-egress.sh verify   # exit 0 only if the live guest AND UTM match the allowlist exactly
+scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
+python3 -I scripts/guest_egress_check.py argv   # the running guest's exact argv (argv only, no environment)
+scripts/guest-egress.sh deny     # set the flag (force-stops the VM; reset afterwards)
+scripts/guest-egress.sh allow    # clear it: base-image maintenance ONLY
+```
+
+Expected `probe` on a restricted guest (every target fails):
+
+```
+{"dns_pypi_org":"timeout","tcp_pypi_org_443":"SocketException","tcp_1_1_1_1_443":"SocketException","tcp_8_8_8_8_53":"SocketException","tcp_host_10_0_2_2_2222":"SocketException"}
+```
+
+**Maintenance that needs the internet** (building a new base image, for example):
+
+1. `scripts/guest-egress.sh allow`.
+2. Reset with `MYCO_GUEST_EGRESS=open scripts/reset-trial-vm.sh`. It prints a `WARNING` and skips
+   the check.
+3. Do the work.
+4. `scripts/guest-egress.sh deny`, then reset again.
+
+Never run trials or deploy credentials into a guest reset that way.
+
+**The deploy needs no guest internet.** The host fetches the agent's Python wheels, pinned by
+version and sha256 in `agent/bootstrap/guest-requirements.txt`, into
+`~/.cache/myco/guest-wheels` (or `$MYCO_WHEEL_CACHE`), offline from that cache after the first
+fetch. The tree copy carries them in, and the guest installs them with `pip --no-index
+--require-hashes` (§4). An offline host can pre-stage them with `MYCO_GUEST_WHEELS=<dir>`.
+
+Background and threat model: `docs/security/guest-egress.md`.
 
 ## 4. Deploy the agent
 
@@ -411,10 +522,12 @@ line names the host file the deploy wrote and the guest path, and `ops` prints a
   client commenting on the guest sshd's key exchange, not a deploy fault. The same warning can
   appear on any `ssh`, `scp` or `vssh` call in this runbook. Judge the deploy by its own lines:
   the sha256 copy check, `ping verified` and `DEPLOY OK`.
-- **No pip output (row-8 J6).** The dependency install is
-  `pip install --quiet --no-warn-script-location pywin32 comtypes uiautomation` in
-  `guest-deploy.ps1`'s `register` stage (run by the `==> registering MycoAgent task …` step), so
-  a successful install prints nothing. There is no separate pip log on the host or the guest. On
+- **No pip output (row-8 J6).** The dependency install is an **offline**
+  `pip install --quiet --no-index --find-links <agent>\wheels --require-hashes -r guest-requirements.txt`
+  in `guest-deploy.ps1`'s `register` stage (run by the `==> registering MycoAgent task …` step).
+  The guest has no internet (§3.4): the deploy stages the pinned wheels on the host first
+  (`==> staged 3 wheels for the guest (installed offline, hash-pinned)`) and copies them with the
+  tree. A successful install prints nothing. There is no separate pip log on the host or the guest. On
   failure, pip's error comes back over ssh on the deploy's stderr, followed by
   `pip install into LO python failed: <exit code>`, and the deploy exits non-zero before the ping
   step. The evidence that the install worked is §5 passing.

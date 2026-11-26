@@ -1,0 +1,9 @@
+==> staged 3 wheels for the guest (installed offline, hash-pinned)
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+==> verified 14 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> wrote the fresh token to <repo>/runs/token-<user>/agent-token (mode 600)
+==> ping verified:
+DEPLOY OK

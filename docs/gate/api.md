@@ -44,24 +44,76 @@ On the gated path this is **required**, not advice (outer-loop ruling, 2026-11-2
   the live file.
 - **The agent must never be able to write to it**: no actuator tool, shell, shared mount
   or symlink may reach the evidence root. **The file reader is not a defence against a
-  concurrent writer**, and this requirement is what the gated path relies on. What the
-  reader does guarantee:
-  - a symlink that exists anywhere below the root when it reads is refused;
-  - a final component (the state file) swapped around the open is refused, by `O_NOFOLLOW`
-    plus a check that the file at the real path is the inode it opened.
+  concurrent writer**, and this requirement is what the gated path relies on. On Linux the
+  reader also refuses a concurrent swap of an intermediate directory; on macOS and other
+  non-Linux platforms it does not. On no platform does it stop a hard link
+  to another run's file placed inside this run. The per-platform detail is in
+  [What the file reader guarantees](#what-the-file-reader-guarantees). Making the root
+  unwritable from the agent's whole tool surface is TIF-266's job.
+- TIF-266 (#470) builds this capture as seal → capture → read the sealed copies, and the
+  gate reads it through `sealedEvidenceReader` / `createSealedGate` (`src/gate/sealed.ts`;
+  see [The gate on the sealed vault](#the-gate-on-the-sealed-vault)). `fileEvidenceReader`
+  over a harness-filled directory (`--evidence-root`) is the **mock-path and development
+  stand-in only**: it checks paths, not provenance, and no gated run may use it.
 
-  What it does **not** catch: a concurrent swap of an **intermediate** directory (for
-  example `<root>/<runId>` replaced by a symlink to another run and swapped back while the
-  gate reads). Path resolution follows intermediate components, so that swap can make the
-  gate judge another run's state. It also does not stop a hard link to another run's file
-  placed inside this run. Both need write access to the evidence root. That is why host
-  capture (the agent cannot write the root) is a hard requirement. TIF-266's job is making
-  the root unwritable from the agent's whole tool surface, and #470's sealed capture must
-  be wired in before M2-12.
-- TIF-266 (#470) builds this capture as seal → capture → read the sealed copies. Until #470
-  is wired in, `fileEvidenceReader` over a harness-filled directory is the stand-in, and it
-  is fit only for the mock path. **Wiring the gate's reader to #470's sealed per-trial
-  capture is a required follow-up before any M2-12 run.**
+### What the file reader guarantees
+
+`fileEvidenceReader` reads `<root>/<runId>/<stateFile>`. The root itself may be a symlink,
+because the operator chose it. The reader:
+
+1. runs `lstat` on every component below the root: no symlink, every intermediate a
+   directory, the final component a regular file;
+2. opens the path with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` and runs `fstat` on the
+   descriptor: a regular file, at most 16 MiB;
+3. repeats the `lstat` walk and requires the final component's `dev`/`ino`, from both
+   walks, to equal the descriptor's;
+4. **on Linux only**, binds the descriptor to its path: `readlink("/proc/self/fd/<fd>")`,
+   the path the kernel says the open file is at, must equal
+   `realpath(root)/<runId>/<stateFile>` exactly. If `/proc/self/fd` cannot be read, or
+   the root cannot be resolved at that point, the read fails. A path outside the root is
+   reported as "a path outside the evidence root", never as the host path. The match is
+   exact: a run elsewhere that is also named `<runId>` (for example `<root>/x/<runId>`, or
+   `<root>-evil/<runId>` beside the root) does not match.
+
+The bytes come from the checked descriptor. Every failure is `uncertain`
+`STATE_UNREADABLE` (or `STATE_MISSING`). Reasons reach the agent, so the reader's reasons
+name paths only relative to the root and carry an errno code (for example
+`open failed: ENOENT`), never Node's error message, which contains the absolute host path.
+
+| Case | Linux | macOS and other non-Linux (no binding) |
+|---|---|---|
+| A symlink below the root that is there when the reader looks | refused | refused |
+| A FIFO or device as the state file, static or swapped in during the read | refused, never blocks | refused, never blocks |
+| The final component swapped for a symlink during the read | refused (`O_NOFOLLOW`, `dev`/`ino`) | refused |
+| The run directory swapped for a symlink between the reader's steps | refused | refused |
+| An **intermediate** component (the run directory, or a parent of the state file) swapped for a symlink to another run *while a walk is in progress*, whether that run is inside or outside the root | **refused** (step 4) | **not refused**: the reader can return another run's bytes |
+| The state file unlinked after the checks (the kernel path reads `<path> (deleted)`) | refused (step 4) | not refused: the bytes are the ones the reader opened |
+| A writer puts a hard link, or another run's real file or directory, at the run's own path | not refused | not refused |
+
+Why the intermediate case needs step 4: `lstat` refuses to follow only the **last**
+component of the path it is given. If `<root>/r` is a real directory when the walk checks
+it, and a symlink to run `good` when the walk checks `<root>/r/<stateFile>`, that final
+`lstat` returns `good`'s file. With the same timing for the open and the second walk, every
+`dev`/`ino` agrees on `good`'s file. On Linux the kernel's path for the descriptor then
+names `good`, not `r`, so the read is refused. Node has no `openat` and no equivalent of
+macOS's `F_GETPATH`, so the reader has no race-free way to do this on macOS or any other
+non-Linux platform: the binding is skipped there.
+
+The last row is not a reader defect: at read time that file *is* the run's evidence, and
+any writer with that access could simply write passing bytes.
+
+So on every platform, and on macOS in particular, **the reader's checks do not replace
+the host-capture requirement above.** M2-12 runs must use a host-side capture the agent
+cannot write, wired to #470's sealed per-trial capture. They must never use
+`fileEvidenceReader` over a directory that anything else writes while the gate reads it.
+
+The tests pin both columns: `test/gate/gate.test.ts`, "an intermediate component swapped
+during a walk". This covers a borrowed run inside and outside the root, a borrowed run that
+is also named `r` (inside at `x/r`, and in a sibling `<root>-evil`), the unlinked file,
+an unreadable `/proc/self/fd` and an unresolvable root. The Linux cases are skipped
+elsewhere. Tests that run everywhere show that, without the binding, the same
+interleavings still return `verified`. The unresolvable-root test forces the binding on,
+so it runs on every platform.
 
 The mock demo follows the same shape: the harness writes the mock app's saved store into
 the evidence root after the fake agent's session ends, and the agent has no write path
@@ -112,6 +164,49 @@ across trials would have to, which is why the API does not allow it: build one g
 trial. `reasons` is for people and may change wording. `reasonCodes` is the stable,
 machine-readable explanation.
 
+### Agent-facing reasons never carry host paths or raw error messages
+
+Everything in a `GateResult` reaches the agent (the MCP tool result's `structuredContent`
+and text, and `check --json`). So no reason carries an absolute host path (the evidence
+root as given, resolved or real; the audit-log path; any other operator path) or a raw
+error message, which can contain one. When something throws, the reason carries only a
+short code: the error's errno-style `code` (`ENOENT`, `EACCES`) if it has one, else its
+class name (`TypeError`, `SyntaxError`), else `error` (`errorCode` in
+`src/gate/reasons.ts`). A `code` is used only if it matches `^[A-Z][A-Z0-9_]{0,63}$`
+(upper case, a leading letter, at most 64 characters), and a `name` only if it matches
+`^[A-Za-z][A-Za-z0-9_]{0,63}$`; anything else, including a value whose getter throws, is
+ignored, and the message is never used. The gate-level reasons are:
+
+| Reason | Example |
+|---|---|
+| A reader threw or rejected | `could not look: reader threw: EACCES` |
+| The oracle threw | `oracle threw: TypeError` |
+| The decision log could not be written | `decision log write failed: ENOENT` |
+| The gate itself errored (defensive; no known path reaches it) | `gate error: Error` |
+| The todo-items store does not parse | `could not look: store does not parse (SyntaxError)` |
+| The file reader failed (#478) | `could not look: r1/.myco-todo.json: open failed: EACCES` |
+
+A reader may return its `ReadOutcome` directly instead of a promise: the gate wraps the
+call in `Promise.resolve().then(...)`, so a synchronous return is accepted and a
+synchronous throw is a reader error (`reader threw`). Either way, `verified` still follows
+only an oracle pass over the bytes the reader returned.
+
+**Where operators find the full error.** `GateConfig.onDiagnostic` is called with
+`{ stage, code, error }` (stage `reader`, `oracle`, `decision-log` or `gate`) and the raw
+error each time one of these happens; it is never shown to the agent, and a throw inside
+it is ignored. The CLI (`check` and `mcp`) writes each diagnostic to **stderr** as
+`myco-gate: <stage> error (<code>): <message>`. In `mcp` mode stdout is the agent's
+JSON-RPC channel and stderr is the operator's. The decision log (`--audit`) records the
+same path-free result the agent gets.
+
+**Rules for operator code that feeds reasons.** A custom `EvidenceReader`'s failure
+`detail`, a family's `StateCorruptError` message and an oracle's `reasons` are shown to the
+agent verbatim, so they must name paths only relative to the run and must not embed a raw
+error message. A family that wraps a parser error puts it in the `StateCorruptError`'s
+`cause`, which goes to `onDiagnostic`, not to the agent. The shipped reader and families
+follow this; `test/gate/reason-paths.test.ts` pins each case in process and through the
+MCP server.
+
 ## Verdicts and reason codes
 
 | Code | Verdict | Meaning |
@@ -122,7 +217,7 @@ machine-readable explanation.
 | `ORACLE_ERROR` | uncertain | The oracle threw. |
 | `ORACLE_INVALID_OUTPUT` | uncertain | The oracle returned something that is not a well-formed verdict. |
 | `STATE_MISSING` | uncertain | No persisted state at `<root>/<runId>/<stateFile>`. |
-| `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink anywhere below the evidence root, has a final component that changed between the reader's check and its open (an intermediate-directory swap is not detected; see the host-capture requirement), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
+| `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink below the evidence root, has a final component that changed between the reader's check and its open, is not at the expected path according to the kernel (Linux only; this is how an intermediate-directory swap is caught there, and on other platforms that swap is not detected; see [What the file reader guarantees](#what-the-file-reader-guarantees)), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
 | `STATE_CORRUPT` | uncertain | The file does not parse as the family's format. |
 | `INVALID_REQUEST` | uncertain | The request is not an object, lacks `taskId`/`runId`, or a field has the wrong form. |
 | `UNSUPPORTED_API_VERSION` | uncertain | `apiVersion` is present and is not `myco.gate/v1`. |
@@ -174,6 +269,7 @@ const gate = createGate({
   reader: fileEvidenceReader("/srv/myco/evidence"), // operator-only
   assignment: { taskId: "df-s01", runId: "run-42" },// operator-only, required: this trial
   onDecision: async (result) => ledger.append(result), // optional; awaited; a throw or reject fails closed
+  onDiagnostic: (d) => log.error(d.stage, d.code, d.error), // optional; operator-only raw errors
 });
 const result = await gate.check({ taskId: "df-s01", runId: "run-42" }); // never throws
 if (result.accepted) { /* done */ }
@@ -184,7 +280,7 @@ not in the registry. `readTimeoutMs` (default 30000) bounds a reader that return
 
 `EvidenceReader` is an interface: `read(runId, stateFile)` returns the bytes, or
 `missing` / `unreadable`. A bound gate only ever calls it with the assigned run id.
-For M2-12 it must be backed by #470's sealed per-trial host capture, never by a live read of the guest.
+A gated run uses `sealedEvidenceReader` (below), never a live read of the guest.
 
 ### How this lines up with TIF-266 (#470)
 
@@ -194,6 +290,37 @@ id to the calling agent's own trial. Here, the operator binds the gate to that s
 (`assignment.runId`), so an `EvidenceReader` backed by the vault can hold that trial's
 receipt and serve only that run. The agent still sends only `taskId` and `runId`, and a
 different run id never reaches the reader.
+
+### The gate on the sealed vault
+
+`createSealedGate({ tasks, vault, binding: { runId, receipt }, taskId })` builds the gate
+for one sealed trial (TIF-274 prerequisite). Its assignment run id is the binding's run id,
+and its reader is `sealedEvidenceReader`:
+
+- It opens the vault only through `openForTrial(vault, binding, runId)`
+  (`src/integrity/gate.ts`): for `binding.runId`, with `binding.receipt`, and only when
+  the request names exactly that run. A run id other than the binding's is refused there
+  too (`integrity:run-not-bound`), below the gate's own ASSIGNMENT_MISMATCH check. A
+  receipt that is the audit opt-out, missing or malformed is refused at runtime
+  (`integrity:receipt-missing` / `integrity:receipt-malformed`).
+- It returns only `captured/persisted/<task stateFile>`: bytes the harness copied on the
+  host after the agent stopped, hash-checked in the same read. No other persisted file is
+  readable through it.
+- The sealed ground truth is `gateGroundTruth(task)` (task id, family and version, state
+  file, spec). If the gate's registry task differs from what was sealed, the read is
+  refused, so the oracle never decides from an unsealed spec.
+- Every failure is `uncertain` STATE_UNREADABLE (or STATE_MISSING when the capture lacks
+  the state file). Agent-facing details carry `integrity:<code>` only; the full violations,
+  which can name host paths, go to the operator through `onIntegrity`.
+- **Before capture, every check is `uncertain`** ("no sealed capture yet"): the gate decides
+  only from the capture taken after the agent stops. A mid-run "done → refuted → retry"
+  loop needs a checkpointed capture, which is a follow-up.
+
+`runGatedTrial` (`src/gate/gated-trial.ts`) is the gated harness path that ties it
+together: audit the agent's launch plan (`auditAgentLaunch`, `src/integrity/launch.ts`),
+seal, start the agent with the same frozen plan, mark it stopped, capture, then the
+harness's own check on the same gate. The transport is the only part that differs between
+the mock path (`test/gate/sealed-gate.test.ts`) and a live run.
 
 ## CLI
 

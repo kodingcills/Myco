@@ -18,6 +18,32 @@
 #   mI: no dev/ino comparison between the walk and the descriptor (round 2 D-A).
 #   mJ: no second walk after the open (round 2 D-A).
 #   mK: the walk does not require a regular file (round 2 D-B).
+#   mL: no descriptor-path binding (/proc/self/fd) after the checks (TIF-265 follow-up,
+#       round-3 D-A'): the intermediate-swap pin tests fail on Linux.
+#   mM: the binding fails open when /proc/self/fd cannot be read (TIF-265 follow-up).
+#   mN: a descriptor path outside the evidence root fails open (TIF-265 follow-up round 2 D3).
+#   mO: the binding fails open when realpath(root) fails (round 2 D3).
+#   mP: a "(deleted)" suffix is stripped before the path compare (round 2 D3).
+#   mQ: the outside-root test accepts `startsWith(realRoot)` without the "/" (round 3 nit):
+#       a sibling <root>-evil is then reported as a path inside the root.
+#   mR: the descriptor path is compared by suffix, not exactly (round 3 D1): a borrowed run
+#       also named r (x/r, <root>-evil/r) then passes.
+#   mS: the open-failure reason carries Node's error message (with the host path) (round 3 D2).
+#   mT: the read-failure reason carries Node's error message (round 3 D2).
+#   mU: "reader threw" carries String(error) (TIF-265 follow-up 2).
+#   mV: "oracle threw" carries String(error) (follow-up 2).
+#   mW: "decision log write failed" carries String(error), i.e. the audit-log path (follow-up 2).
+#   mX: "gate error" carries String(error) (follow-up 2).
+#   mY: the todo-items family's "store does not parse" carries String(error) (follow-up 2).
+#   mZ: errorCode accepts any string `code` (a code holding a path passes through) (follow-up 2).
+#   mA: errorCode accepts any string `name` (follow-up 2).
+#   mB: a throwing onDiagnostic sink is not contained (follow-up 2).
+#   mC: a reader that throws synchronously escapes readWithin (follow-up 2).
+#   mD: errorCode falls back to the error's message instead of "error" (follow-up 2 round 2 D1).
+#   mF: `instanceof StateCorruptError` is not guarded, so a revoked Proxy thrown by the
+#       oracle escapes to "gate error" (follow-up 2 round 2 nit).
+# mL, mM, mN, mP, mQ and mR are caught only on Linux, where the binding applies; elsewhere
+# their tests skip. mO's test forces the binding on, and mS/mT's tests run everywhere.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -57,7 +83,7 @@ elif which == "m6":
 elif which == "m7":
     edit("src/gate/api.ts", '\n  "verdict",\n', "\n")
 elif which == "m8":
-    edit("src/gate/gate.ts", "await readWithin(config.reader, runId, task.stateFile, readTimeoutMs)", "await config.reader.read(runId, task.stateFile)")
+    edit("src/gate/gate.ts", "await readWithin(config.reader, runId, task.stateFile, readTimeoutMs, diagnose)", "await config.reader.read(runId, task.stateFile)")
 elif which == "m9":
     edit("src/gate/api.ts", "record.claim.length > CLAIM_LIMIT", "false")
 elif which == "mE":
@@ -72,14 +98,64 @@ elif which == "mI":
           first.final.dev !== opened.dev ||
           first.final.ino !== opened.ino""", "          false")
 elif which == "mJ":
-    edit("src/gate/gate.ts", "const second = walk(absoluteRoot, segments, where);", "const second = first;")
+    edit("src/gate/gate.ts", "const second = walk(absoluteRoot, segments, where, hooks.beforeLstat);", "const second = first;")
 elif which == "mK":
     edit("src/gate/gate.ts", "if (last && !stat.isFile()) {", "if (false) {")
+elif which == "mL":
+    edit("src/gate/gate.ts", "        if (!bound.ok) return bound;\n", "")
+elif which == "mM":
+    edit("src/gate/gate.ts", "    actual = readlinkSync(join(hooks.procFdDir ?? \"/proc/self/fd\", String(fd)));\n  } catch (error) {\n", "    actual = readlinkSync(join(hooks.procFdDir ?? \"/proc/self/fd\", String(fd)));\n  } catch (error) {\n    if (error) return { ok: true };\n")
+elif which == "mN":
+    edit("src/gate/gate.ts", "  if (actual !== join(realRoot, ...segments)) {", "  if (actual !== join(realRoot, ...segments) && actual.startsWith(`${realRoot}/`)) {")
+elif which == "mO":
+    edit("src/gate/gate.ts", "    realRoot = realpathSync(absoluteRoot);\n  } catch (error) {\n", "    realRoot = realpathSync(absoluteRoot);\n  } catch (error) {\n    if (error) return { ok: true };\n")
+elif which == "mP":
+    edit("src/gate/gate.ts", "  if (actual !== join(realRoot, ...segments)) {", "  actual = actual.replace(/ \\(deleted\\)$/, \"\");\n  if (actual !== join(realRoot, ...segments)) {")
+elif which == "mQ":
+    edit("src/gate/gate.ts", "    const shown = actual.startsWith(`${realRoot}/`)", "    const shown = actual.startsWith(realRoot)")
+elif which == "mR":
+    edit("src/gate/gate.ts", "  if (actual !== join(realRoot, ...segments)) {", "  if (!actual.endsWith(join(...segments))) {")
+elif which == "mS":
+    edit("src/gate/gate.ts", "`${where}: open failed: ${errorCode(error)}`", "`open failed: ${String(error)}`")
+elif which == "mT":
+    edit("src/gate/gate.ts", "`${where}: read failed: ${errorCode(error)}`", "`read failed: ${String(error)}`")
+elif which == "mU":
+    edit("src/gate/gate.ts", "`reader threw: ${diagnose(\"reader\", error)}`", "`reader threw: ${String(error)}`")
+elif which == "mV":
+    edit("src/gate/gate.ts", "`oracle threw: ${diagnose(\"oracle\", error)}`", "`oracle threw: ${String(error)}`")
+elif which == "mW":
+    edit("src/gate/gate.ts", "`decision log write failed: ${diagnose(\"decision-log\", error)}`", "`decision log write failed: ${String(error)}`")
+elif which == "mX":
+    edit("src/gate/gate.ts", "`gate error: ${diagnose(\"gate\", error)}`", "`gate error: ${String(error)}`")
+elif which == "mY":
+    edit("src/gate/families.ts", "`store does not parse (${errorCode(error)})`", "`store does not parse: ${String(error)}`")
+elif which == "mZ":
+    edit("src/gate/reasons.ts", "if (typeof code === \"string\" && CODE.test(code)) return code;", "if (typeof code === \"string\") return code;")
+elif which == "mA":
+    edit("src/gate/reasons.ts", "if (typeof name === \"string\" && NAME.test(name)) return name;", "if (typeof name === \"string\") return name;")
+elif which == "mB":
+    edit("src/gate/gate.ts", """    try {
+      config.onDiagnostic?.({ stage, code, error });
+    } catch {
+      // Diagnostics never change a verdict.
+    }""", "    config.onDiagnostic?.({ stage, code, error });")
+elif which == "mC":
+    edit("src/gate/gate.ts", """      Promise.resolve()
+        .then(() => reader.read(runId, stateFile))
+        .catch(""", "      reader.read(runId, stateFile).catch(")
+elif which == "mD":
+    edit("src/gate/reasons.ts", "  return \"error\";\n}", "  return String(error?.message ?? \"error\");\n}")
+elif which == "mF":
+    edit("src/gate/gate.ts", "      try {\n        if (error instanceof StateCorruptError) corrupt = error;\n      } catch {\n        corrupt = undefined;\n      }", "      if (error instanceof StateCorruptError) corrupt = error;")
 EOF
 }
 
 status=0
-for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK; do
+for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM mN mO mP mQ mR mS mT mU mV mW mX mY mZ mA mB mC mD mF; do
+  if [[ "$mutant" =~ ^m[LMNPQR]$ ]] && [[ "$(uname -s)" != Linux ]]; then
+    echo "$mutant: skipped (the /proc/self/fd binding applies on Linux only)"
+    continue
+  fi
   mutate "$mutant"
   if npx vitest run test/gate --testTimeout=10000 >/dev/null 2>&1; then
     echo "$mutant: SURVIVED (no test failed)"

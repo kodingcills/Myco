@@ -9,7 +9,13 @@ import { appendFileSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import type { GateResult } from "./api.ts";
 import { renderDemo, runMockDemo } from "./demo.ts";
-import { buildRegistry, createGate, fileEvidenceReader, type TaskEntry } from "./gate.ts";
+import {
+  buildRegistry,
+  createGate,
+  fileEvidenceReader,
+  type GateDiagnostic,
+  type TaskEntry,
+} from "./gate.ts";
 import { serveStdio } from "./mcp-server.ts";
 import { builtinTasks, loadTasksFile } from "./tasks.ts";
 
@@ -25,6 +31,8 @@ export const USAGE = `usage:
 
 operator options (check, mcp):
   --evidence-root <dir>  persisted state is read from <dir>/<runId>/<task stateFile>
+                         (mock-path and development stand-in only; a gated run reads
+                         the sealed capture, see docs/gate/api.md)
   --task <id> --run <id> the assignment: the one task and run this gate serves (mcp: the
                          agent's trial; any other task or run is ASSIGNMENT_MISMATCH)
   --tasks <file>         extra tasks: { "tasks": [ { id, family, stateFile, spec } ] }
@@ -77,7 +85,18 @@ function str(flags: Flags, name: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function operatorGate(flags: Flags) {
+/**
+ * The operator's view of an error the agent sees only as a code (stage and code, then the
+ * raw message). Written to stderr: in `mcp` mode stdout is the agent's JSON-RPC channel and
+ * stderr is the operator's.
+ */
+function writeDiagnostic(stderr: Writable, diagnostic: GateDiagnostic): void {
+  stderr.write(
+    `myco-gate: ${diagnostic.stage} error (${diagnostic.code}): ${String(diagnostic.error)}\n`,
+  );
+}
+
+function operatorGate(flags: Flags, stderr: Writable) {
   const task = str(flags, "--task");
   const run = str(flags, "--run");
   if (task === undefined || run === undefined)
@@ -94,6 +113,7 @@ function operatorGate(flags: Flags) {
     tasks: buildRegistry(entries),
     reader: fileEvidenceReader(root),
     assignment: { taskId: task, runId: run },
+    onDiagnostic: (diagnostic) => writeDiagnostic(stderr, diagnostic),
     ...(audit === undefined
       ? {}
       : {
@@ -132,7 +152,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     switch (command) {
       case "check": {
         // The operator's own call: the request is the assignment.
-        const gate = operatorGate(flags);
+        const gate = operatorGate(flags, io.stderr);
         const task = str(flags, "--task") as string;
         const run = str(flags, "--run") as string;
         const claim = str(flags, "--claim");
@@ -149,7 +169,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
         return exitFor(result);
       }
       case "mcp": {
-        const gate = operatorGate(flags);
+        const gate = operatorGate(flags, io.stderr);
         await serveStdio(gate, io.stdin, io.stdout);
         return 0;
       }
