@@ -87,6 +87,14 @@ describe("leak scan: host paths, one test per bypass", () => {
     ["unlisted root after =", j("--out=", S, "ci-cache", S, "x")],
     ["unlisted root after a colon (PATH list)", j("PATH=x:", S, "ci-cache", S, "bin")],
     ["unlisted root after -", j("-f", S, "ci-cache", S, "x")],
+    // Single-segment paths: the any-root rule needs two segments, so only the root rules
+    // (and the drive / flag rules) catch these. They keep mutants h2, h3, h8 and h18 visible.
+    ["single-segment /tmp after a redirect", j(">", S, "tmp")],
+    ["single-segment /etc glued to a flag", j("-f", S, "etc")],
+    ["single-segment /scratch", j("cd ", S, "scratch")],
+    ["single-segment /Library", j("ls ", S, "Library")],
+    ["single-segment /dev", j("cat ", S, "dev")],
+    ["Windows forward-slash drive, one segment", j("D:", S, "projects")],
     // Round 2: escapes and look-alikes.
     ["shell hex escapes", j("$'", BS, "x2f", "home", BS, "x2f", "alice'")],
     ["octal escapes", j(BS, "057", "home", BS, "057", "alice")],
