@@ -296,7 +296,7 @@ issue.
   `gate.ts:377`). The sealed reader returned the captured bytes with no size check, so the
   oracle parsed whatever the capture held.
 - **Exploit sketch:** the agent makes its app save a 1 GiB "document". The capture copies it.
-  The vault hashes it (`vault.ts:632`). The family oracle then parses 1 GiB of CSV or JSON on
+  The vault hashes it (`vault.ts:641`). The family oracle then parses 1 GiB of CSV or JSON on
   the harness: minutes of CPU and several GiB of heap. The mock path would have said
   `STATE_UNREADABLE` at once. The same input gives different behaviour on the two paths,
   which is a parity defect as well as a resource one.
@@ -364,7 +364,7 @@ writing nothing) are killed on main by those tests (the round-2 verifier re-ran 
   stops an *agent* from crossing over; it does not stop an *operator* from assigning
   aliasing ids, and then two mock/dev trials read each other's state. The sealed path
   should already fail closed: `Vault.seal` refuses a run whose directory exists
-  (`vault.ts:313`), and on such a filesystem the aliasing id's directory exists. That was
+  (`vault.ts:322`), and on such a filesystem the aliasing id's directory exists. That was
   reasoned, not run: this container's filesystem is case-sensitive.
   **Decision:** the rule now: operators must assign run ids that are unique after case
   folding and after stripping trailing dots (this doc is the record). The check is
@@ -398,11 +398,11 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 
 | Id | #508 item | Location | Smallest future seam | Why not now |
 |---|---|---|---|---|
-| H-10 | 1, tenant-namespace the vault | `vault.ts:294-296` (`runDir = join(root, runId)`), `vault.ts:313` | Optional `namespace` in `VaultOptions`, validated like a run id, prefixing `runDir`; absent means today's layout. Hosted ids must also be unique after case folding (H-08) | Nothing multi-tenant runs; adds an unused option |
+| H-10 | 1, tenant-namespace the vault | `vault.ts:303-305` (`runDir = join(root, runId)`), `vault.ts:322` | Optional `namespace` in `VaultOptions`, validated like a run id, prefixing `runDir`; absent means today's layout. Hosted ids must also be unique after case folding (H-08) | Nothing multi-tenant runs; adds an unused option |
 | H-11 | 2, persisted receipt store | `vault.ts:98-102`, `gated-trial.ts` | A `ReceiptStore` interface with an in-memory default; hosted backs it with a store the agent cannot reach | `gated-trial.ts` is unlocked now (#514 merged), but locally the receipt never leaves one process: the interface would have one implementation and no caller |
 | H-12 | 3, concurrent-safe ledger | `ledger.ts:41-53` (read the head, then `appendFileSync`), `cli.ts:134` | One chain per (tenant, eval), appends serialised per chain (a lock file or a single writer); row format unchanged | Locally one serial process writes (`serveStdio` handles requests one at a time, `mcp-server.ts:180-206`), so no fork today |
 | H-13 | 4, per-tenant vault keys | `vault.ts:251-262` | A `keyId` in the seal manifest plus a key-lookup callback in `VaultOptions`; single-key default | Changes the manifest format; no second key exists |
-| H-14 | 5, host paths out of the seal manifest | `vault.ts:95`, `vault.ts:319-322` | Record oracle sources as `{ id, sha256 }` relative to a configured oracle root | Locally the paths never reach the agent: agent-facing error text carries `integrity:<code>` only (`sealed.ts:20-21`, `sealed-gate.test.ts` "its host path never reaches the agent") |
+| H-14 | 5, host paths out of the seal manifest | `vault.ts:95`, `vault.ts:328-331` | Record oracle sources as `{ id, sha256 }` relative to a configured oracle root | Locally the paths never reach the agent: agent-facing error text carries `integrity:<code>` only (`sealed.ts:20-21`, `sealed-gate.test.ts` "its host path never reaches the agent") |
 | H-15 | 6, operator-bound caller identity | `gate.ts:435-464`, `api.ts:151-191` | Optional `GateConfig.caller`, echoed as optional `GateResult.caller` (additive `v1`); request unchanged | `gate.ts`/`api.ts` are locked by #503; no transport authenticates a caller yet |
 
 ### H-16: Oracle reason text reaches the agent verbatim (Low; defer)

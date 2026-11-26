@@ -145,18 +145,18 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   // H-06
   ["sealed.ts:117-133", /bytes\.length > STATE_FILE_LIMIT[\s\S]*cause: "unreadable"/],
   ["sealed.ts:127", /if \(bytes\.length > STATE_FILE_LIMIT\)/],
-  ["vault.ts:632", /readFileSync\(path\)/],
+  ["vault.ts:641", /readFileSync\(path\)/],
   // H-07, H-08
   ["api.ts:314-319", /\^\[A-Za-z0-9\]\[A-Za-z0-9\._-\]\{0,127\}\$/],
   ["sealed.ts:102", /openForTrial\(vault, binding, runId\)/],
   ["gate.ts:615", /const assignment = \{ \.\.\.config\.assignment \}/],
   ["gate.ts:342-352", /const segments = \[runId, \.\.\.stateFile\.split/],
-  ["vault.ts:313", /existsSync\(dir\)/],
+  ["vault.ts:322", /existsSync\(dir\)/],
   // H-09
   ["mcp-server.ts:195-198", /code: -32603/],
   ["input-fuzz.test.ts:348-380", /H-09: a deeply nested JSON-RPC id is -32603[\s\S]*code: -32603/],
   // H-10..H-15
-  ["vault.ts:294-296", /join\(this\.root, runId\)/],
+  ["vault.ts:303-305", /join\(this\.root, runId\)/],
   ["vault.ts:98-102", /export interface SealReceipt/],
   ["ledger.ts:41-53", /export function appendChainedRow/],
   ["vault.ts:251-262", /export interface VaultOptions/],
@@ -164,7 +164,7 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["sealed.ts:20-21", /Agent-facing details carry `integrity:<code>` only/],
   ["gate.test.ts:654-750", /function spyReader[\s\S]*invalid gate assignment/],
   ["sealed-gate.test.ts:334-395", /naming an earlier honest trial is ASSIGNMENT_MISMATCH/],
-  ["vault.ts:319-322", /oracle source \$\{path\} is not absolute/],
+  ["vault.ts:328-331", /oracle source \$\{path\} is not absolute/],
   ["gate.ts:435-464", /export interface GateConfig/],
   // H-16
   ["gate.ts:867", /reasons: \[\.\.\.valid\.reasons\]/],
@@ -245,7 +245,7 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
     'it("H-09: a deeply nested JSON-RPC id is -32603 from serveStdio, and the next request is served", async () => {',
     "expect(spy.reads).toBe(2);",
   ],
-  ["vault.ts:294-296", "private runDir(runId: string): string {", "return join(this.root, runId);"],
+  ["vault.ts:303-305", "private runDir(runId: string): string {", "return join(this.root, runId);"],
   [
     "vault.ts:98-102",
     "/** Held in harness memory from seal to verdict; the agent never sees it. */",
@@ -269,7 +269,7 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
     "});",
   ],
   [
-    "vault.ts:319-322",
+    "vault.ts:328-331",
     "for (const path of input.oracle.sourceFiles) {",
     "sources[path] = sha256(readFileSync(path));",
   ],
