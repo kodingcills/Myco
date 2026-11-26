@@ -146,3 +146,97 @@ describe("row7-compare check_same_base", () => {
     expect(body.indexOf("check_same_base(v3, r6)")).toBeLessThan(body.indexOf("pairs = Counter()"));
   });
 });
+
+// #529 S1 and the TIF-98 cold-boot check at the join.
+describe("row7-compare null snapshots and boot class", () => {
+  const call = (fn: string, myco: Record<number, object>, baseline: Record<number, object> = {}) =>
+    py(
+      [
+        `myco = {int(k): v for k, v in json.loads(${JSON.stringify(JSON.stringify(myco))}).items()}`,
+        `base = {int(k): v for k, v in json.loads(${JSON.stringify(JSON.stringify(baseline))}).items()}`,
+        "try:",
+        fn === "same"
+          ? "    print(json.dumps(row7.check_same_base(myco, base)))"
+          : "    print(json.dumps(row7.check_boot_class(myco)))",
+        "except SystemExit as e:",
+        "    print(json.dumps(str(e)))",
+      ].join("\n"),
+    );
+
+  it("counts null-snapshot rows instead of skipping them silently", () => {
+    expect(
+      call(
+        "same",
+        {
+          0: { snapshot: null, status: "reset-failed" },
+          1: { snapshot: "clean-base", status: "verified" },
+        },
+        { 0: {}, 1: {} },
+      ),
+    ).toEqual({ nullSnapshot: 1, nullSnapshotIndices: [0] });
+  });
+
+  it("refuses a verified row with a null snapshot", () => {
+    expect(call("same", { 0: { snapshot: null, status: "verified" } }, { 0: {} })).toContain(
+      "a verified Myco row with a null snapshot",
+    );
+  });
+
+  it("refuses a fast-boot Myco row, and a verified row with no measured boot", () => {
+    expect(call("boot", { 0: { resetBootClass: "fast", status: "refuted" } })).toContain(
+      "'fast' boot, not a full cold boot",
+    );
+    expect(call("boot", { 0: { resetBootClass: null, status: "verified" } })).toContain(
+      "no measured reset boot",
+    );
+  });
+
+  it("accepts cold rows and null on an unverified row, and counts rows recorded before the check", () => {
+    expect(
+      call("boot", {
+        0: { resetBootClass: "cold", resetGuestCpuFirstSshS: 280, status: "verified" },
+        1: { resetBootClass: null, status: "reset-failed" },
+        2: { status: "verified" },
+        3: { status: "refuted" },
+      }),
+    ).toEqual({ bootClassUnrecorded: 2 });
+  });
+
+  it("compare() runs the boot check and reports both counts", () => {
+    const src = readFileSync(join(__dirname, "..", "scripts", "row7-compare.py"), "utf8");
+    const body = src.slice(src.indexOf("def compare("));
+    expect(body).toContain("boots = check_boot_class(v3)");
+    expect(body.indexOf("check_boot_class(v3)")).toBeLessThan(body.indexOf("pairs = Counter()"));
+    expect(body).toContain("boot class unrecorded on {boots['bootClassUnrecorded']} Myco rows");
+  });
+});
+
+// #546 round 1 D2: the join recomputes the class from the recorded CPU.
+describe("row7-compare boot class recomputed from CPU", () => {
+  const boot = (myco: Record<number, object>) =>
+    py(
+      [
+        `myco = {int(k): v for k, v in json.loads(${JSON.stringify(JSON.stringify(myco))}).items()}`,
+        "try:",
+        "    print(json.dumps(row7.check_boot_class(myco)))",
+        "except SystemExit as e:",
+        "    print(json.dumps(str(e)))",
+      ].join("\n"),
+    );
+
+  it("refuses a fast boot labelled cold, and a cold label with no CPU", () => {
+    expect(
+      boot({ 0: { resetBootClass: "cold", resetGuestCpuFirstSshS: 4, status: "verified" } }),
+    ).toContain("labelled cold");
+    expect(boot({ 0: { resetBootClass: "cold", status: "refuted" } })).toContain("labelled cold");
+  });
+
+  it("puts the floor at exactly 100 s", () => {
+    expect(boot({ 0: { resetBootClass: "cold", resetGuestCpuFirstSshS: 100 } })).toEqual({
+      bootClassUnrecorded: 0,
+    });
+    expect(boot({ 0: { resetBootClass: "cold", resetGuestCpuFirstSshS: 99 } })).toContain(
+      "labelled cold",
+    );
+  });
+});

@@ -77,6 +77,8 @@ export function trial(
     hostLoad1mStart: 3.5,
     harnessClass: arm.cause?.kind === "harness" ? "timeout" : null,
     faultLanded: arm.faultClass === "none" ? null : true,
+    resetBootClass: "cold",
+    resetGuestCpuFirstSshS: 280,
     ...ops,
   };
   return { arm, grade, ops: o };

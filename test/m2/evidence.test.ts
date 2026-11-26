@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  COLD_MIN_GUEST_CPU,
   checkPack,
   LOAD_GATE,
   type PackManifest,
@@ -357,6 +358,43 @@ describe("M2 evidence: process gates", () => {
     expect(has(at(10), /g5: started at host 1-minute load 10 >= 10/)).toBe(true);
     expect(has(at(14.2), /load 14.2 >= 10/)).toBe(true);
     expect(has(at(null), /ops row 5: \$\.hostLoad1mStart/)).toBe(true);
+  });
+
+  // TIF-98 cold-boot check: only a full cold boot is the shared starting state. Required on
+  // every trial-ops row (#546 round 1 D1), and recomputed from the recorded CPU (D2).
+  it("fails a trial whose reset was not a full cold boot; boot class and CPU are required", () => {
+    expect(COLD_MIN_GUEST_CPU).toBe(100);
+    const at = (change: Record<string, unknown>, drop: string[] = []) => {
+      const trials = r1Trials();
+      const ops: Record<string, unknown> = { ...trials[5]!.ops, ...change };
+      for (const k of drop) delete ops[k];
+      trials[5]!.ops = ops as unknown as (typeof trials)[number]["ops"];
+      return checkPack(input(trials));
+    };
+    expect(at({}).ok).toBe(true);
+    expect(
+      has(
+        at({ resetBootClass: "fast", resetGuestCpuFirstSshS: 4 }),
+        /g5: its reset was a fast boot, not a full cold boot/,
+      ),
+    ).toBe(true);
+    expect(has(at({ resetBootClass: "warm" }), /ops row 5: \$\.resetBootClass/)).toBe(true);
+    // Missing fields are refused, never disclosed.
+    expect(has(at({}, ["resetBootClass"]), /ops row 5: .*resetBootClass/)).toBe(true);
+    expect(has(at({}, ["resetGuestCpuFirstSshS"]), /ops row 5: .*resetGuestCpuFirstSshS/)).toBe(
+      true,
+    );
+    // A fast boot relabelled cold fails on its recorded CPU; the floor is exact.
+    expect(
+      has(
+        at({ resetBootClass: "cold", resetGuestCpuFirstSshS: 4 }),
+        /g5: labelled cold but .* 4 s < 100 s/,
+      ),
+    ).toBe(true);
+    expect(at({ resetGuestCpuFirstSshS: 100 }).ok).toBe(true);
+    expect(has(at({ resetGuestCpuFirstSshS: 99 }), /g5: labelled cold but .* 99 s < 100 s/)).toBe(
+      true,
+    );
   });
 
   it("requires a cause on every non-verified row, and a harness class exactly on harness causes", () => {
