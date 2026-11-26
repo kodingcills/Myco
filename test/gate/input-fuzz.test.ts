@@ -350,7 +350,7 @@ describe("deep nesting", () => {
     // so handleLine throws and serveStdio's catch answers -32603 (id null). Not agent
     // reachable through the tool's arguments (the MCP client picks ids), but it is the one
     // input found that reaches that catch. The fix (reject non-scalar ids with -32600) is
-    // TO FILE: mcp-server.ts is owned by #514.
+    // TO FILE 6 in docs/security/gate-api-review.md; it flips this pin in the same PR.
     const { gate, spy } = spiedGate();
     const input = new PassThrough();
     const output = new PassThrough();
