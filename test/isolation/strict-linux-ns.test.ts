@@ -93,6 +93,12 @@ describe("strict-linux-ns: spec checks (fail closed before the kernel)", () => {
     mkdirSync(path.join(run, "real"));
     symlinkSync(path.join(run, "real"), path.join(run, "link"));
     expect(await codeOf(() => checkSpec(spec(path.join(run, "link"))))).toBe("STRICT_NS_BAD_ROOT");
+    // A real dir under a symlinked ancestor: the binds would follow the link.
+    mkdirSync(path.join(run, "real2", "t"), { recursive: true });
+    symlinkSync(path.join(run, "real2"), path.join(run, "link2"));
+    expect(await codeOf(() => checkSpec(spec(path.join(run, "link2", "t"))))).toBe(
+      "STRICT_NS_BAD_ROOT",
+    );
     mkdirSync(path.join(run, "full"));
     writeFileSync(path.join(run, "full", "x"), "x");
     expect(await codeOf(() => checkSpec(spec(path.join(run, "full"))))).toBe("STRICT_NS_BAD_ROOT");
