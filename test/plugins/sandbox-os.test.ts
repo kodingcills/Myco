@@ -9,7 +9,7 @@
  * guard and ordinary pipes, so nothing but the OS layer stands between it and the listener.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -204,6 +204,84 @@ describe("the output limit is part of the OS layer (D3)", () => {
       expect([512, 1024]).toContain(fsizeUnit());
     },
     20_000,
+  );
+
+  /**
+   * E2 (verifier round 1 on #558): "if the limits cannot be set, the call fails closed with
+   * PLUGIN_SPAWN_FAILED". `ulimit -f N` fails when N is above the hard RLIMIT_FSIZE the host
+   * hands the wrapper and the process may not raise it. So a launcher lowers the hard limit to
+   * HOST_HARD_BLOCKS, which still fits detection's probe (9 blocks of 512, or 5 of 1024), then
+   * asks for the 1 MiB ceiling (2049 or 1025 blocks). As root, the launcher runs in a user
+   * namespace, which has no CAP_SYS_RESOURCE over the host's limits.
+   */
+  const HOST_HARD_BLOCKS = 64;
+  const launcher = (): string[] => {
+    const lower = ["/bin/sh", "-c", `ulimit -f ${HOST_HARD_BLOCKS} && exec "$@"`, "sh"];
+    if (process.platform !== "linux" || process.getuid?.() !== 0) return lower;
+    const unshare = ["/usr/bin/unshare", "/bin/unshare"].find((c) => existsSync(c));
+    return unshare === undefined ? lower : [unshare, "--user", "--map-root-user", ...lower];
+  };
+  /** Bite check for the setup: under the launcher the wrapper's request cannot be met. */
+  const cannotRaise = () => {
+    const [cmd, ...args] = launcher();
+    const r = spawnSync(cmd as string, [...args, "/bin/sh", "-c", "ulimit -f 2049"], {
+      env: {},
+      stdio: "ignore",
+    });
+    return r.status !== 0;
+  };
+
+  it.runIf(SUPPORTED)(
+    "the wrapper exits 90 when the host's hard file-size limit is below the request",
+    (ctx) => {
+      if (!cannotRaise()) ctx.skip();
+      const [cmd, ...args] = launcher();
+      const run = (blocks: number) =>
+        spawnSync(
+          cmd as string,
+          [...args, ...LIMIT_WRAPPER, String(blocks), process.execPath, "-e", "0"],
+          { env: {}, stdio: "ignore" },
+        ).status;
+      expect(run(HOST_HARD_BLOCKS + 1)).toBe(90);
+      expect(run(9)).toBe(0); // control: a request under the host's hard limit runs
+    },
+    20_000,
+  );
+
+  it.runIf(SUPPORTED)(
+    "runInSandbox fails closed with PLUGIN_SPAWN_FAILED when the limit cannot be set",
+    (ctx) => {
+      if (!cannotRaise()) ctx.skip();
+      const { target } = makePlugin(
+        `export default { oracle() { return { status: "refuted", code: "X" }; } };`,
+      );
+      const sandbox = new URL("../../src/plugins/host/sandbox.ts", import.meta.url).href;
+      const script = `const { runInSandbox } = await import(${JSON.stringify(sandbox)});
+const target = JSON.parse(process.argv[1]);
+const call = (maxOutputBytes) => runInSandbox(target, { spec: ${JSON.stringify(PLUGIN_SPEC)}, op: "verify",
+  doc: { fileName: "a.txt", bytesB64: "" }, intent: null }, { maxOutputBytes });
+process.stdout.write(JSON.stringify([call(4096), call(1024 * 1024)]));`;
+      const [cmd, ...args] = launcher();
+      const r = spawnSync(
+        cmd as string,
+        [
+          ...args,
+          process.execPath,
+          "--disable-warning=ExperimentalWarning",
+          "--input-type=module",
+          "-e",
+          script,
+          JSON.stringify(target),
+        ],
+        { encoding: "utf8", timeout: 30_000 },
+      );
+      const [small, big] = JSON.parse(r.stdout || "[]") as unknown[];
+      // Control: detection and a call within the host's hard limit still work here ...
+      expect(small).toMatchObject({ ok: true, response: { status: "refuted", code: "X" } });
+      // ... and a call whose limit the host refuses never runs the plugin.
+      expect(big).toEqual({ ok: false, code: "PLUGIN_SPAWN_FAILED" });
+    },
+    40_000,
   );
 
   it("the limit is the smallest whole number of blocks above the cap", () => {

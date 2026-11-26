@@ -734,19 +734,23 @@ export default { oracle() { return { status: "refuted", code: "X" }; } };`;
   it.each([
     ["the 256-byte manifest floor", 256],
     ["the 1 MiB manifest ceiling", MIB],
-  ])("at %s the disk holds at most the cap plus one block", async (_label, cap) => {
-    const unit = fsizeUnit();
-    expect([512, 1024]).toContain(unit);
-    const limit = fsizeBlocks(cap, unit as number) * (unit as number);
-    const w = await watched(verifyWith(HOOK_64MIB, 5000, cap));
-    expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
-    expect(w.seen).toBeGreaterThan(0);
-    expect(w.maxSize).toBeGreaterThan(cap); // the plugin did push past the cap ...
-    expect(w.maxSize).toBeLessThanOrEqual(limit); // ... to this call's kernel limit, no further
-    expect(limit - cap).toBeLessThanOrEqual(unit as number);
-    expect(w.maxSize).toBeLessThanOrEqual(cap + 1024);
-    expect(w.leftover).toEqual([]);
-  }, 30_000);
+  ])(
+    "at %s the disk holds at most the cap plus one block",
+    async (_label, cap) => {
+      const unit = fsizeUnit();
+      expect([512, 1024]).toContain(unit);
+      const limit = fsizeBlocks(cap, unit as number) * (unit as number);
+      const w = await watched(verifyWith(HOOK_64MIB, 5000, cap));
+      expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+      expect(w.seen).toBeGreaterThan(0);
+      expect(w.maxSize).toBeGreaterThan(cap); // the plugin did push past the cap ...
+      expect(w.maxSize).toBeLessThanOrEqual(limit); // ... to this call's kernel limit, no further
+      expect(limit - cap).toBeLessThanOrEqual(unit as number);
+      expect(w.maxSize).toBeLessThanOrEqual(cap + 1024);
+      expect(w.leftover).toEqual([]);
+    },
+    30_000,
+  );
 
   // The verifier's probe verbatim in effect: an endless 16 MiB write loop. Without the limit
   // this wrote 14.5 GB in one 10 s call; with it the disk holds the cap and the call ends at
