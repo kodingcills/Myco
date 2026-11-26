@@ -434,26 +434,38 @@ The ledgers and the check are family-agnostic and do not change.
 
 ## 9. Corrections ON/OFF A/B under the independent grader
 
-The A/B pre-registered in the M2 plan (#526 §7.2.1) compares the gate with track B's
-agent-safe corrections (#514) ON against the same gate with them OFF. `src/m2/corrections-ab.ts`
-analyses it, and `scripts/m2-corrections-ab.ts` runs it:
+The A/B compares the gate with track B's agent-safe corrections (#514) ON against the same gate
+with them OFF. Its design is the lead's, fixed on #524 (comment 7196445749). This repo holds the
+**analysis only**: `src/m2/corrections-ab.ts` and `scripts/m2-corrections-ab.ts`. Track E's
+runner (#524 follow-up) runs the arms, owns the pre-registration file, and calls the analysis.
 
 ```
-npx tsx scripts/m2-corrections-ab.ts --on-arm on/arm.jsonl --on-grades on/grades.jsonl \
-  --off-arm off/arm.jsonl --off-grades off/grades.jsonl --stage 0|1 [--evidence]
+npx tsx scripts/m2-corrections-ab.ts --stage 0|1 \
+  --on-arm on/arm.jsonl --on-grades on/grades.jsonl \
+  --off-arm off/arm.jsonl --off-grades off/grades.jsonl \
+  --on-config on/run-config.json --off-config off/run-config.json \
+  [--stage0-on-arm s0/on/arm.jsonl --stage0-off-arm s0/off/arm.jsonl] \
+  [--prereg-file <committed pre-registration> --prereg-declared <sha256>] [--evidence]
 ```
 
-- **Two runs, two ledgers.** The arm is the ledger a row came from: an unregistrable or refused
-  row never called the gate, so it records no corrections setting. Every gate-called row of the
-  ON ledger must say `corrections: "on"`, and no OFF row may.
-- **Pairs** are one ON and one OFF myco-gate row per (taskId, fixture, fault class), with the same
-  instruction hash, planner and output ceiling.
-- **Success** is a verified task: an accepted DONE the independent grader passes. The grader never
-  sees corrections.
-- **Stage 0** has 30 pairs and is plumbing only: no effect is claimed, whatever the numbers say.
-- **Stage 1** is each arm exactly fc-v1 (bound by `src/benchmark/taskset-binding.ts`), 100
-  pairs. It uses a one-sided exact sign test on the discordant pairs (alpha 0.05) and a 95%
-  interval on the paired difference (Newcombe 1998, method 10). It claims `on-better` only when
-  the run is clean and p < 0.05.
-- **Integrity:** a false DONE accepted in either arm halts the run. It is an integrity incident,
-  never a data point. Under `--evidence`, dry-run rows are refused.
+- **Stage 0** has 30 pairs and is plumbing only. The effect claim is null, and its rows are excluded
+  from Stage 1: a Stage-1 trial may not reuse a Stage-0 trial.
+- **Stage 1** uses fc-v1, with 100 pairs per arm, each arm bound to exactly fc-v1. It runs a one-sided
+  exact sign test on the discordant pairs at alpha 0.05, and reports the discordant counts and a
+  95% interval on the paired difference (Newcombe 1998, method 10). A miss reads
+  `corrections-not-shown-to-help`, never a fail.
+- **A gate miss** is a trial the gate VERIFIED that the grader fails, in either arm. It halts the run
+  as an integrity incident, recorded in `integrityIncidents`. It is never data.
+- **Preconditions.** The analysis refuses to run unless:
+  - both arms ran identically apart from corrections. Per pair, the instruction and fixture
+    hashes, planner and output ceiling must match. Per run, the recorded configs (retry budget,
+    pacing and the rest) may differ only in `corrections`;
+  - each arm is bound to fc-v1;
+  - for Stage 1, the hash of the committed pre-registration file equals the one the pack
+    declares.
+- **Two runs, two ledgers.** An unregistrable or refused row never called the gate, so the arm is
+  the ledger a row came from. Every gate-called ON row says `corrections: "on"`, and no OFF row
+  does.
+- **Never R1 evidence.** Both arms, the OFF arm included, are experiment-only (`evidenceUse`). The R1
+  evidence path refuses corrections-ON rows by its own rule. Under `--evidence`, dry-run rows are
+  refused.

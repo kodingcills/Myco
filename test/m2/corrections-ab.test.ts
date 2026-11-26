@@ -5,6 +5,7 @@
  * from the binomial and Newcombe 1998 method 10 formulas), not by the code under test.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,8 +15,10 @@ import { type BenchmarkGradeRow, gradeRow } from "../../src/benchmark/grade/row.
 import { type BenchmarkTask, buildTaskSet } from "../../src/benchmark/taskset.ts";
 import {
   AB_ALPHA,
+  AB_EVIDENCE_USE,
   AB_STAGES,
   type AbArm,
+  type AbInput,
   checkCorrectionsAb,
   newcombePairedCi,
   signTestOneSided,
@@ -123,6 +126,30 @@ function stage1(opts: { onFalse?: number } = {}) {
   return { on, off };
 }
 
+const PREREG = "c".repeat(64);
+const config = (corrections: "on" | "off") => ({
+  corrections,
+  retryBudget: 1,
+  pacing: { perTrialGapS: 60 },
+  plannerModelId: "claude-sonnet-5-5",
+  outputCeiling: 8192,
+});
+const s0 = (side: "on" | "off") =>
+  armLedger(side, DEMO, () => "verified").arm.map((r) => ({
+    ...(r as BenchmarkArmRow),
+    trialKey: `s0-${(r as BenchmarkArmRow).trialKey}`,
+  }));
+/** Stage-0 ledgers whose trial keys differ from Stage 1's (`s0-` prefix). */
+const STAGE0 = { on: s0("on"), off: s0("off") };
+/** A complete input: identical run configs, Stage 0's ledgers, a matching pre-registration. */
+const ab = (arms: { on: AbArm; off: AbArm }, over: Partial<AbInput> = {}): AbInput => ({
+  ...arms,
+  runConfigs: { on: config("on"), off: config("off") },
+  stage0: STAGE0,
+  preregistration: { committedSha256: PREREG, declaredSha256: PREREG },
+  ...over,
+});
+
 describe("the pre-registered statistics (independent reference values)", () => {
   it("one-sided exact sign test", () => {
     expect(signTestOneSided(12, 3)).toBeCloseTo(0.017578125, 12);
@@ -147,20 +174,23 @@ describe("the pre-registered statistics (independent reference values)", () => {
       1: { pairs: 100, effectClaim: true },
     });
     expect(AB_ALPHA).toBe(0.05);
+    expect(AB_EVIDENCE_USE).toBe("experiment-only (never R1 evidence)");
   });
 });
 
 describe("Stage 1: 100 fc-v1 pairs, confirmatory", () => {
-  it("pairs the two runs, tests one-sided, and claims ON better only when p < 0.05", () => {
-    const r = checkCorrectionsAb(stage1(), { stage: 1 });
+  it("pairs the two runs, tests one-sided, and reports corrections help only when p < 0.05", () => {
+    const r = checkCorrectionsAb(ab(stage1()), { stage: 1 });
     expect(r.errors).toEqual([]);
     expect(r).toMatchObject({
       ok: true,
       halted: false,
+      integrityIncidents: [],
       pairs: 100,
       table: { both: 50, onOnly: 12, offOnly: 3, neither: 35 },
-      falseDoneAccepted: { on: 0, off: 0 },
-      effect: "on-better",
+      discordant: { onOnly: 12, offOnly: 3, total: 15 },
+      effect: "corrections-help",
+      evidenceUse: AB_EVIDENCE_USE,
     });
     expect(r.onSuccess).toMatchObject({ numerator: 62, denominator: 100 });
     expect(r.offSuccess).toMatchObject({ numerator: 53, denominator: 100 });
@@ -169,44 +199,70 @@ describe("Stage 1: 100 fc-v1 pairs, confirmatory", () => {
     expect(r.difference.ci95?.[0]).toBeCloseTo(0.01621993526115577, 10);
   });
 
-  it("no evidence of effect when the discordant pairs are balanced", () => {
+  it("a miss reads 'corrections not shown to help', and the run is still ok", () => {
     const clean = new Set(TASKS.filter((t) => t.faultClass === "none").map((t) => t.taskId));
     const on = armLedger("on", TASKS, (t, i) =>
-      clean.has(t.taskId) && i !== 0 && i !== 1
-        ? "verified"
-        : i === 70 || i === 71
-          ? "verified"
-          : "refuted",
+      (clean.has(t.taskId) && i !== 0 && i !== 1) || i === 70 || i === 71 ? "verified" : "refuted",
     );
-    const off = armLedger("off", TASKS, (t, i) => (clean.has(t.taskId) ? "verified" : "refuted"));
-    const r = checkCorrectionsAb({ on, off }, { stage: 1 });
+    const off = armLedger("off", TASKS, (t) => (clean.has(t.taskId) ? "verified" : "refuted"));
+    const r = checkCorrectionsAb(ab({ on, off }), { stage: 1 });
     expect(r.errors).toEqual([]);
-    expect(r.table.onOnly).toBe(2);
-    expect(r.table.offOnly).toBe(2);
-    expect(r.effect).toBe("no-evidence-of-effect");
+    expect(r.ok).toBe(true);
+    expect(r.discordant).toEqual({ onOnly: 2, offOnly: 2, total: 4 });
+    expect(r.effect).toBe("corrections-not-shown-to-help");
   });
 
-  it("a false DONE accepted in either arm halts the run: an integrity incident, never data", () => {
-    const r = checkCorrectionsAb(stage1({ onFalse: 1 }), { stage: 1 });
+  it("a gate miss in either arm halts the run with its own record, never data", () => {
+    const r = checkCorrectionsAb(ab(stage1({ onFalse: 1 })), { stage: 1 });
     expect(r.halted).toBe(true);
     expect(r.ok).toBe(false);
     expect(r.effect).toBe("none");
-    expect(r.falseDoneAccepted).toEqual({ on: 1, off: 0 });
+    expect(r.integrityIncidents).toEqual([
+      expect.objectContaining({ arm: "on", accepted: true, grade: "fail" }),
+    ]);
+    expect(r.errors.join("\n")).toMatch(
+      /INTEGRITY INCIDENT: the gate verified 1 trial\(s\) the grader fails \(corrections ON 1, OFF 0\)/,
+    );
     // A false DONE is never a verified task: the table (still reported) does not count it.
     expect(r.table).toEqual({ both: 50, onOnly: 12, offOnly: 3, neither: 35 });
-    expect(r.errors.join("\n")).toMatch(
-      /INTEGRITY INCIDENT: false DONE accepted \(corrections ON 1, OFF 0\)/,
-    );
-    const { on, off } = stage1();
-    const offFalse = armLedger("off", TASKS, (t, i) => (i === 0 ? "false-done" : "refuted"));
-    expect(checkCorrectionsAb({ on, off: offFalse }, { stage: 1 }).falseDoneAccepted.off).toBe(1);
-    void off;
+    const { on } = stage1();
+    const offMiss = armLedger("off", TASKS, (_t, i) => (i === 0 ? "false-done" : "refuted"));
+    expect(
+      checkCorrectionsAb(ab({ on, off: offMiss }), { stage: 1 }).integrityIncidents.map(
+        (i) => i.arm,
+      ),
+    ).toEqual(["off"]);
+  });
+
+  it("a gate miss without an accepted DONE (claim not done) still halts", () => {
+    const { off } = stage1();
+    const on = armLedger("on", TASKS, (_t, i) => (i === 0 ? "verified" : "refuted"));
+    const missed: AbArm = {
+      arm: (on.arm as BenchmarkArmRow[]).map((r, i) =>
+        i === 0
+          ? {
+              ...r,
+              claim: "not-done" as const,
+              accepted: false,
+              cause: { kind: "agent" as const, detail: "agent reported not done" },
+            }
+          : r,
+      ),
+      grades: (on.grades as BenchmarkGradeRow[]).map((g, i) =>
+        i === 0 ? { ...g, status: "fail" as const, reasons: ["x"] } : g,
+      ),
+    };
+    const r = checkCorrectionsAb(ab({ on: missed, off }), { stage: 1 });
+    expect(r.halted).toBe(true);
+    expect(r.integrityIncidents).toEqual([
+      { arm: "on", trialKey: "on-fc-v1-001", taskId: "fc-v1-001", accepted: false, grade: "fail" },
+    ]);
   });
 
   it("each arm must be exactly fc-v1: a missing task fails the binding and the pairing", () => {
     const { on, off } = stage1();
     const short: AbArm = { arm: off.arm.slice(1), grades: off.grades.slice(1) };
-    const r = checkCorrectionsAb({ on, off: short }, { stage: 1 });
+    const r = checkCorrectionsAb(ab({ on, off: short }), { stage: 1 });
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(
       /corrections-OFF ledger: myco-gate task set: 99 rows is not a whole number of runs/,
@@ -218,7 +274,7 @@ describe("Stage 1: 100 fc-v1 pairs, confirmatory", () => {
   it("and the mirror: an OFF task with no ON pair is refused", () => {
     const { on, off } = stage1();
     const short: AbArm = { arm: on.arm.slice(1), grades: on.grades.slice(1) };
-    expect(checkCorrectionsAb({ on: short, off }, { stage: 1 }).errors.join("\n")).toMatch(
+    expect(checkCorrectionsAb(ab({ on: short, off }), { stage: 1 }).errors.join("\n")).toMatch(
       /corrections-OFF off-fc-v1-001 has no ON pair/,
     );
   });
@@ -228,7 +284,7 @@ describe("Stage 0: 30 pairs, plumbing only", () => {
   it("never claims an effect, whatever the numbers", () => {
     const on = armLedger("on", DEMO, () => "verified");
     const off = armLedger("off", DEMO, () => "refuted");
-    const r = checkCorrectionsAb({ on, off }, { stage: 0 });
+    const r = checkCorrectionsAb(ab({ on, off }), { stage: 0 });
     expect(r.errors).toEqual([]);
     expect(r.pairs).toBe(30);
     expect(r.signTestOneSidedP).toBeLessThan(AB_ALPHA);
@@ -237,8 +293,97 @@ describe("Stage 0: 30 pairs, plumbing only", () => {
   it("refuses a Stage-0 run with the wrong number of pairs", () => {
     const on = armLedger("on", DEMO.slice(0, 29), () => "verified");
     const off = armLedger("off", DEMO.slice(0, 29), () => "verified");
-    expect(checkCorrectionsAb({ on, off }, { stage: 0 }).errors).toContain(
+    expect(checkCorrectionsAb(ab({ on, off }), { stage: 0 }).errors).toContain(
       "29 pairs, Stage 0 is pre-registered at 30",
+    );
+  });
+});
+
+describe("the lead's preconditions (#524, comment 7196445749)", () => {
+  it("refuses arms whose run configs differ apart from corrections (retry budget, pacing)", () => {
+    const r = checkCorrectionsAb(
+      ab(stage1(), {
+        runConfigs: {
+          on: config("on"),
+          off: { ...config("off"), retryBudget: 2, pacing: { perTrialGapS: 30 } },
+        },
+      }),
+      { stage: 1 },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors).toContain(
+      "the arms ran differently apart from corrections: pacing, retryBudget",
+    );
+    // Key order does not matter.
+    const reordered = {
+      outputCeiling: 8192,
+      plannerModelId: "claude-sonnet-5-5",
+      pacing: { perTrialGapS: 60 },
+      retryBudget: 1,
+      corrections: "off",
+    };
+    expect(
+      checkCorrectionsAb(ab(stage1(), { runConfigs: { on: config("on"), off: reordered } }), {
+        stage: 1,
+      }).ok,
+    ).toBe(true);
+    // Each config must name its own arm's corrections.
+    const mislabel = checkCorrectionsAb(
+      ab(stage1(), { runConfigs: { on: config("off"), off: config("on") } }),
+      { stage: 1 },
+    );
+    expect(mislabel.errors).toEqual(
+      expect.arrayContaining([
+        'the ON run config does not say corrections: "on"',
+        'the OFF run config does not say corrections: "off"',
+      ]),
+    );
+  });
+
+  it("Stage 1 needs the pre-registration hash, and it must match the committed file", () => {
+    const { preregistration: _p, ...noPrereg } = ab(stage1());
+    expect(checkCorrectionsAb(noPrereg, { stage: 1 }).errors).toContain(
+      "Stage 1 needs the pre-registration hash (committed and declared)",
+    );
+    const mismatch = checkCorrectionsAb(
+      ab(stage1(), {
+        preregistration: { committedSha256: PREREG, declaredSha256: "d".repeat(64) },
+      }),
+      { stage: 1 },
+    );
+    expect(mismatch.errors).toContain(
+      "the pack's pre-registration hash is not the committed file's",
+    );
+    // Stage 0 may run before the file exists, and is checked when given.
+    const on = armLedger("on", DEMO, () => "refuted");
+    const off = armLedger("off", DEMO, () => "refuted");
+    const { preregistration: _q, stage0: _s, ...bare } = ab({ on, off });
+    expect(checkCorrectionsAb(bare, { stage: 0 }).ok).toBe(true);
+    const s0Mismatch = checkCorrectionsAb(
+      ab(
+        { on, off },
+        { preregistration: { committedSha256: PREREG, declaredSha256: "e".repeat(64) } },
+      ),
+      { stage: 0 },
+    );
+    expect(s0Mismatch.errors).toContain(
+      "the pack's pre-registration hash is not the committed file's",
+    );
+  });
+
+  it("Stage-0 rows are excluded from Stage 1, and Stage 1 needs Stage 0's ledgers", () => {
+    const reuse = checkCorrectionsAb(
+      ab(stage1(), {
+        stage0: { on: [...STAGE0.on, { trialKey: "on-fc-v1-001" }], off: STAGE0.off },
+      }),
+      { stage: 1 },
+    );
+    expect(reuse.errors.join("\n")).toMatch(
+      /1 Stage-1 trial\(s\) reuse Stage-0 trials \(on-fc-v1-001\)/,
+    );
+    const { stage0: _s, ...noStage0 } = ab(stage1());
+    expect(checkCorrectionsAb(noStage0, { stage: 1 }).errors).toContain(
+      "Stage 1 needs the Stage-0 ledgers (to exclude their trials)",
     );
   });
 });
@@ -252,7 +397,7 @@ describe("arm identity, pairing rules and provenance", () => {
         i === 0 && r.gate !== null ? { ...r, gate: { ...r.gate, corrections: "off" as const } } : r,
       ),
     };
-    expect(checkCorrectionsAb({ on: onWrong, off }, { stage: 1 }).errors.join("\n")).toMatch(
+    expect(checkCorrectionsAb(ab({ on: onWrong, off }), { stage: 1 }).errors.join("\n")).toMatch(
       /corrections-ON: 1 row\(s\) ran with corrections off \(on-fc-v1-001\)/,
     );
     const offWrong: AbArm = {
@@ -261,7 +406,7 @@ describe("arm identity, pairing rules and provenance", () => {
         i === 0 && r.gate !== null ? { ...r, gate: { ...r.gate, corrections: "on" as const } } : r,
       ),
     };
-    expect(checkCorrectionsAb({ on, off: offWrong }, { stage: 1 }).errors.join("\n")).toMatch(
+    expect(checkCorrectionsAb(ab({ on, off: offWrong }), { stage: 1 }).errors.join("\n")).toMatch(
       /corrections-OFF: 1 row\(s\) ran with corrections on \(off-fc-v1-001\)/,
     );
   });
@@ -269,11 +414,11 @@ describe("arm identity, pairing rules and provenance", () => {
   it("a pair must share the instruction and the model settings", () => {
     const { on } = stage1();
     const off = armLedger("off", TASKS, () => "refuted", { plannerModelId: "claude-opus-5-5" });
-    expect(checkCorrectionsAb({ on, off }, { stage: 1 }).errors.join("\n")).toMatch(
+    expect(checkCorrectionsAb(ab({ on, off }), { stage: 1 }).errors.join("\n")).toMatch(
       /pair fc-v1-001: the two arms ran different model settings/,
     );
     const off2 = armLedger("off", TASKS, () => "refuted", { outputCeiling: 1024 });
-    expect(checkCorrectionsAb({ on, off: off2 }, { stage: 1 }).errors.join("\n")).toMatch(
+    expect(checkCorrectionsAb(ab({ on, off: off2 }), { stage: 1 }).errors.join("\n")).toMatch(
       /the two arms ran different model settings/,
     );
   });
@@ -286,7 +431,7 @@ describe("arm identity, pairing rules and provenance", () => {
         i === 0 ? { ...r, arm: "hcu+shell" as const, gate: null } : r,
       ),
     };
-    expect(checkCorrectionsAb({ on, off: shell }, { stage: 1 }).errors.join("\n")).toMatch(
+    expect(checkCorrectionsAb(ab({ on, off: shell }), { stage: 1 }).errors.join("\n")).toMatch(
       /corrections-OFF: the A\/B compares the gate with itself/,
     );
     const dupRow = { ...(off.arm[1] as BenchmarkArmRow), trialKey: "off-dup" };
@@ -295,7 +440,7 @@ describe("arm identity, pairing rules and provenance", () => {
       arm: [...off.arm.slice(1), dupRow],
       grades: [...off.grades.slice(1), dupGrade],
     };
-    expect(checkCorrectionsAb({ on, off: dup }, { stage: 1 }).errors.join("\n")).toMatch(
+    expect(checkCorrectionsAb(ab({ on, off: dup }), { stage: 1 }).errors.join("\n")).toMatch(
       /corrections-OFF: two rows for task fc-v1-002/,
     );
   });
@@ -303,20 +448,29 @@ describe("arm identity, pairing rules and provenance", () => {
   it("dry-run rows are refused as evidence and accepted as plumbing", () => {
     const on = armLedger("on", TASKS, () => "refuted", { plannerModelId: "simulated:x" });
     const off = armLedger("off", TASKS, () => "refuted", { plannerModelId: "simulated:x" });
-    expect(checkCorrectionsAb({ on, off }, { stage: 1 }).ok).toBe(true);
-    const ev = checkCorrectionsAb({ on, off }, { stage: 1, evidence: true });
+    expect(checkCorrectionsAb(ab({ on, off }), { stage: 1 }).ok).toBe(true);
+    const ev = checkCorrectionsAb(ab({ on, off }), { stage: 1, evidence: true });
     expect(ev.ok).toBe(false);
     expect(ev.errors.join("\n")).toMatch(
       /corrections-ON: 100 row\(s\) without evidence provenance/,
     );
   });
+});
 
-  it("the CLI exits 0 on a clean run, 1 on a halted one, 2 on a bad stage", () => {
+describe("the CLI", () => {
+  it("exits 0 on a clean run, 1 on a halted or unconfigured one, 2 on a bad stage", () => {
     const dir = mkdtempSync(join(tmpdir(), "myco-ab-"));
     try {
       const write = (name: string, rows: readonly unknown[]) =>
         writeFileSync(join(dir, name), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
-      const run = (stage: string) =>
+      const prereg = join(dir, "prereg.md");
+      writeFileSync(prereg, "pre-registration\n");
+      const preregSha = createHash("sha256").update("pre-registration\n").digest("hex");
+      writeFileSync(join(dir, "on.json"), JSON.stringify(config("on")));
+      writeFileSync(join(dir, "off.json"), JSON.stringify(config("off")));
+      write("s0-on.jsonl", STAGE0.on);
+      write("s0-off.jsonl", STAGE0.off);
+      const run = (stage: string, extra: string[] = []) =>
         spawnSync(
           "npx",
           [
@@ -330,8 +484,17 @@ describe("arm identity, pairing rules and provenance", () => {
             join(dir, "off-arm.jsonl"),
             "--off-grades",
             join(dir, "off-grades.jsonl"),
+            "--on-config",
+            join(dir, "on.json"),
+            "--off-config",
+            join(dir, "off.json"),
+            "--stage0-on-arm",
+            join(dir, "s0-on.jsonl"),
+            "--stage0-off-arm",
+            join(dir, "s0-off.jsonl"),
             "--stage",
             stage,
+            ...extra,
           ],
           { cwd: ROOT, encoding: "utf8" },
         );
@@ -340,16 +503,22 @@ describe("arm identity, pairing rules and provenance", () => {
       write("on-grades.jsonl", clean.on.grades);
       write("off-arm.jsonl", clean.off.arm);
       write("off-grades.jsonl", clean.off.grades);
-      const ok = run("1");
+      const preregArgs = ["--prereg-file", prereg, "--prereg-declared", preregSha];
+      const ok = run("1", preregArgs);
       expect(ok.status, ok.stderr).toBe(0);
-      expect(JSON.parse(ok.stdout).effect).toBe("on-better");
+      expect(JSON.parse(ok.stdout).effect).toBe("corrections-help");
+      // Without the pre-registration Stage 1 refuses to run.
+      expect(run("1").status).toBe(1);
+      expect(run("1", ["--prereg-file", prereg, "--prereg-declared", "f".repeat(64)]).status).toBe(
+        1,
+      );
       const halted = stage1({ onFalse: 1 });
       write("on-arm.jsonl", halted.on.arm);
       write("on-grades.jsonl", halted.on.grades);
-      expect(run("1").status).toBe(1);
+      expect(run("1", preregArgs).status).toBe(1);
       expect(run("2").status).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 90_000);
 });

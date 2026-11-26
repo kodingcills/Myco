@@ -1,26 +1,33 @@
 /**
- * The corrections ON/OFF A/B, analysed under the independent grader (TIF-274 / TIF-265 track B;
- * pre-registered in the M2 plan, #526 §7.2.1). It compares the gate with the agent-safe
- * corrections (#514) ON against the same gate with them OFF, on paired tasks.
+ * The corrections ON/OFF A/B, analysed under the independent grader (TIF-274 / TIF-265 track B).
+ * It compares the gate with the agent-safe corrections (#514) ON against the same gate with them
+ * OFF, on paired tasks. This module is the ANALYSIS only; track E's runner (#524 follow-up) runs
+ * the arms, owns the pre-registration file, and calls this.
  *
- * Pre-registered rules, as code (change them here and the tests fail, by design):
- *  - **Stage 0, plumbing:** 30 pairs. Its only purpose is to show the paired pipeline works;
- *    NO effect claim is made, whatever the numbers say (`effect: "not-claimed"`).
- *  - **Stage 1, confirmatory:** the fc-v1 task set, 100 pairs (each arm exactly fc-v1, bound
- *    by `src/benchmark/taskset-binding.ts`). Test: a ONE-SIDED exact sign test on the
- *    discordant pairs (H1: ON succeeds more often), alpha 0.05, with a 95% confidence interval
- *    on the paired difference (Newcombe 1998, method 10: the hybrid score interval for paired
- *    proportions). Concordant pairs carry no weight in the test and are still reported.
- *  - **Gates:** any false DONE accepted in either arm (an accepted DONE the grader does not
- *    pass) is an INTEGRITY INCIDENT: the run halts and is reported, never counted as data.
+ * The lead's fixed design (recorded on #524, comment 7196445749), as code (change it here and
+ * the tests fail, by design):
+ *  - **Stage 0, plumbing:** 30 pairs. Its only purpose is to show the paired pipeline works.
+ *    The effect claim is NULL whatever the numbers say (`effect: "not-claimed"`), and Stage-0
+ *    rows are excluded from Stage 1 (a Stage-1 trial may not reuse a Stage-0 trial).
+ *  - **Stage 1, confirmatory:** fc-v1, 100 pairs per arm (each arm exactly fc-v1, bound by
+ *    `src/benchmark/taskset-binding.ts`). A ONE-SIDED exact sign test on the discordant pairs
+ *    (H1: corrections ON succeed more often), alpha 0.05, reported with the discordant counts
+ *    and a 95% confidence interval on the paired difference (Newcombe 1998, method 10).
+ *    A miss reads "corrections not shown to help", never a fail.
+ *  - **Gate misses:** any trial the gate VERIFIED that the independent grader fails, in either
+ *    arm, halts the run as an INTEGRITY INCIDENT, with its own record (`integrityIncidents`),
+ *    never counted as data.
+ *  - **Identical arms:** the analysis refuses to run unless both arms ran identically apart
+ *    from corrections: the same instruction and fixture hashes, planner and output ceiling per
+ *    pair (from the rows), and the same run configuration (retry budget, pacing and the rest,
+ *    from the runner's recorded config, which must differ only in `corrections`).
+ *  - **Pre-registration:** the sha256 of the committed pre-registration file must equal the
+ *    one the pack declares (required for Stage 1; checked for Stage 0 when given).
+ *  - **Never R1 evidence:** both arms, the OFF arm included, are experiment-only
+ *    (`evidenceUse`); the R1 evidence path refuses corrections-ON rows by its own rule.
  *
  * Success is a verified task: an accepted DONE the independent grader passes. The grader never
- * sees corrections (its inputs are the bundle and the saved document); the gate's corrections
- * setting is read from each arm row (`gate.corrections`; absent means off).
- *
- * Pairs: the two arms are two runs with their own ledgers; one ON and one OFF myco-gate row per
- * (taskId, fixtureSha256, faultClass), with the same instruction hash, planner and output
- * ceiling (the R2 pairing rule).
+ * sees corrections (its inputs are the bundle and the saved document).
  */
 import {
   type BenchmarkArmRow,
@@ -41,13 +48,27 @@ export type AbStage = keyof typeof AB_STAGES;
 /** One-sided significance level for Stage 1. */
 export const AB_ALPHA = 0.05;
 
+/** How A/B rows may be used: never as R1 evidence, the OFF arm included. */
+export const AB_EVIDENCE_USE = "experiment-only (never R1 evidence)" as const;
+
+/** A gate miss: the gate VERIFIED a trial the independent grader does not pass. */
+export interface IntegrityIncident {
+  readonly arm: "on" | "off";
+  readonly trialKey: string;
+  readonly taskId: string;
+  readonly accepted: boolean;
+  readonly grade: "fail" | "ungradable" | "missing";
+}
+
 export interface AbResult {
-  /** True when the ledgers are consistent, the pairs are complete and no gate halted the run. */
+  /** True when every precondition holds, the pairs are complete and no gate missed. */
   readonly ok: boolean;
   readonly errors: readonly string[];
   readonly stage: AbStage;
-  /** True when a false DONE was accepted in either arm: an integrity incident, not data. */
+  readonly evidenceUse: typeof AB_EVIDENCE_USE;
+  /** True when the gate missed in either arm: an integrity incident, not data. */
   readonly halted: boolean;
+  readonly integrityIncidents: readonly IntegrityIncident[];
   readonly pairs: number;
   /** Both arms verified / ON only / OFF only / neither. */
   readonly table: {
@@ -56,10 +77,14 @@ export interface AbResult {
     readonly offOnly: number;
     readonly neither: number;
   };
+  /** The discordant pairs the sign test uses (concordant ones carry no weight). */
+  readonly discordant: {
+    readonly onOnly: number;
+    readonly offOnly: number;
+    readonly total: number;
+  };
   readonly onSuccess: Rate;
   readonly offSuccess: Rate;
-  /** False DONEs accepted per arm (accepted DONE the grader does not pass). Must be 0. */
-  readonly falseDoneAccepted: { readonly on: number; readonly off: number };
   /** One-sided exact sign test on the discordant pairs (H1: ON better). 1 with none. */
   readonly signTestOneSidedP: number;
   /** ON success rate minus OFF success rate, with its Newcombe (method 10) 95% interval. */
@@ -68,10 +93,10 @@ export interface AbResult {
     readonly ci95: readonly [number, number] | null;
   };
   /**
-   * Stage 0: always `not-claimed`. Stage 1: `on-better` only when the run is ok and p < alpha;
-   * otherwise `no-evidence-of-effect` (and `none` when the run is not ok).
+   * Stage 0: always `not-claimed`. Stage 1, when ok: `corrections-help` when p < alpha,
+   * otherwise `corrections-not-shown-to-help` (a miss is never a fail). `none` when not ok.
    */
-  readonly effect: "not-claimed" | "on-better" | "no-evidence-of-effect" | "none";
+  readonly effect: "not-claimed" | "corrections-help" | "corrections-not-shown-to-help" | "none";
 }
 
 function logChoose(n: number, k: number): number {
@@ -121,10 +146,44 @@ export function newcombePairedCi(
 const corrections = (r: BenchmarkArmRow) => (r.gate?.corrections === "on" ? "on" : "off");
 const pairKey = (r: BenchmarkArmRow) => `${r.taskId}|${r.fixtureSha256}|${r.faultClass}`;
 
+/** JSON with object keys sorted, so two configs compare by content, not key order. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object")
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
+
 /** One arm of the A/B: its own run's arm ledger and grade ledger. */
 export interface AbArm {
   readonly arm: readonly unknown[];
   readonly grades: readonly unknown[];
+}
+
+/** The inputs: the two arms, their run configs, Stage 0's ledgers (for Stage 1), the pre-registration. */
+export interface AbInput {
+  readonly on: AbArm;
+  readonly off: AbArm;
+  /**
+   * Each arm's run configuration as the runner recorded it (retry budget, pacing, planner,
+   * output ceiling, ...). Each names its own `corrections` ("on" / "off"); apart from that key
+   * the two must be identical.
+   */
+  readonly runConfigs: {
+    readonly on: Readonly<Record<string, unknown>>;
+    readonly off: Readonly<Record<string, unknown>>;
+  };
+  /** Stage 1 only: the Stage-0 arm ledgers, so no Stage-1 trial reuses a Stage-0 one. */
+  readonly stage0?: { readonly on: readonly unknown[]; readonly off: readonly unknown[] };
+  /**
+   * The pre-registration: the sha256 of the committed file and the one the pack declares.
+   * Required for Stage 1.
+   */
+  readonly preregistration?: { readonly committedSha256: string; readonly declaredSha256: string };
 }
 
 /**
@@ -134,12 +193,53 @@ export interface AbArm {
  * the ON ledger whose gate was called must say `corrections: "on"`, and no OFF row may.
  */
 export function checkCorrectionsAb(
-  input: { readonly on: AbArm; readonly off: AbArm },
+  input: AbInput,
   opts: { readonly stage: AbStage; readonly evidence?: boolean },
 ): AbResult {
   const { pairs: wantPairs, effectClaim } = AB_STAGES[opts.stage];
   const errors: string[] = [];
 
+  // Identical arms apart from corrections: the runner's recorded run configs.
+  const { on: cfgOn, off: cfgOff } = input.runConfigs;
+  if (cfgOn.corrections !== "on") errors.push('the ON run config does not say corrections: "on"');
+  if (cfgOff.corrections !== "off")
+    errors.push('the OFF run config does not say corrections: "off"');
+  const { corrections: _a, ...restOn } = cfgOn;
+  const { corrections: _b, ...restOff } = cfgOff;
+  if (canonical(restOn) !== canonical(restOff)) {
+    const keys = [...new Set([...Object.keys(restOn), ...Object.keys(restOff)])].filter(
+      (k) => canonical(restOn[k]) !== canonical(restOff[k]),
+    );
+    errors.push(`the arms ran differently apart from corrections: ${keys.sort().join(", ")}`);
+  }
+
+  // The pre-registration: required for Stage 1, checked whenever given.
+  const prereg = input.preregistration;
+  if (prereg === undefined) {
+    if (opts.stage === 1)
+      errors.push("Stage 1 needs the pre-registration hash (committed and declared)");
+  } else if (prereg.committedSha256 !== prereg.declaredSha256)
+    errors.push("the pack's pre-registration hash is not the committed file's");
+
+  // Stage-0 rows are excluded from Stage 1.
+  if (opts.stage === 1) {
+    if (input.stage0 === undefined)
+      errors.push("Stage 1 needs the Stage-0 ledgers (to exclude their trials)");
+    else {
+      const used = new Set(
+        [...input.stage0.on, ...input.stage0.off].map((r) => (r as BenchmarkArmRow).trialKey),
+      );
+      const reused = [...input.on.arm, ...input.off.arm]
+        .map((r) => (r as BenchmarkArmRow).trialKey)
+        .filter((k) => used.has(k));
+      if (reused.length > 0)
+        errors.push(
+          `${reused.length} Stage-1 trial(s) reuse Stage-0 trials (${reused[0]}): Stage-0 rows are excluded`,
+        );
+    }
+  }
+
+  const incidents: IntegrityIncident[] = [];
   const arms = (["on", "off"] as const).map((side) => {
     const name = side === "on" ? "ON" : "OFF";
     const rows = input[side].arm as readonly BenchmarkArmRow[];
@@ -185,10 +285,19 @@ export function checkCorrectionsAb(
     }
     const verified = (r: BenchmarkArmRow) =>
       r.accepted && grades.get(r.trialKey)?.status === "pass";
-    const falseDone = rows.filter(
-      (r) => r.accepted && grades.get(r.trialKey)?.status !== "pass",
-    ).length;
-    return { by, verified, falseDone };
+    // Gate misses: the gate verified, the independent grader does not pass.
+    for (const r of rows) {
+      const g = grades.get(r.trialKey)?.status;
+      if (r.gate?.verdict === "verified" && g !== "pass")
+        incidents.push({
+          arm: side,
+          trialKey: r.trialKey,
+          taskId: r.taskId,
+          accepted: r.accepted,
+          grade: g ?? "missing",
+        });
+    }
+    return { by, verified };
   });
   const [onArm, offArm] = arms as [(typeof arms)[number], (typeof arms)[number]];
 
@@ -220,14 +329,13 @@ export function checkCorrectionsAb(
   if (paired !== wantPairs)
     errors.push(`${paired} pairs, Stage ${opts.stage} is pre-registered at ${wantPairs}`);
 
-  // The integrity gate: a false DONE accepted in either arm halts the run.
-  const falseOn = onArm.falseDone;
-  const falseOff = offArm.falseDone;
-  const halted = falseOn > 0 || falseOff > 0;
-  if (halted)
+  const halted = incidents.length > 0;
+  if (halted) {
+    const on = incidents.filter((i) => i.arm === "on").length;
     errors.push(
-      `INTEGRITY INCIDENT: false DONE accepted (corrections ON ${falseOn}, OFF ${falseOff}): the run halts and is reported, never counted`,
+      `INTEGRITY INCIDENT: the gate verified ${incidents.length} trial(s) the grader fails (corrections ON ${on}, OFF ${incidents.length - on}): the run halts and is reported, never counted`,
     );
+  }
 
   const p = signTestOneSided(onOnly, offOnly);
   const ok = errors.length === 0;
@@ -240,12 +348,14 @@ export function checkCorrectionsAb(
     ok,
     errors,
     stage: opts.stage,
+    evidenceUse: AB_EVIDENCE_USE,
     halted,
+    integrityIncidents: incidents,
     pairs: paired,
     table: { both, onOnly, offOnly, neither },
+    discordant: { onOnly, offOnly, total: onOnly + offOnly },
     onSuccess: rate(both + onOnly, paired),
     offSuccess: rate(both + offOnly, paired),
-    falseDoneAccepted: { on: falseOn, off: falseOff },
     signTestOneSidedP: p,
     difference: {
       estimate: paired === 0 ? null : (onOnly - offOnly) / paired,
@@ -256,7 +366,7 @@ export function checkCorrectionsAb(
       : !effectClaim
         ? "not-claimed"
         : p < AB_ALPHA
-          ? "on-better"
-          : "no-evidence-of-effect",
+          ? "corrections-help"
+          : "corrections-not-shown-to-help",
   };
 }
