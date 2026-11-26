@@ -23,6 +23,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   type CheckpointSummary,
   type CheckpointVerdict,
+  type Correction,
   type EvidenceRef,
   GATE_API_VERSION,
   type GateResult,
@@ -33,6 +34,15 @@ import {
   parseGateRequest,
   type ReasonCode,
 } from "./api.ts";
+import {
+  type CorrectionPolicy,
+  correctionsAdmissible,
+  correctionsEnabled,
+  correctionTargets,
+  documentCorrections,
+  missingStateCorrections,
+  sealCorrections,
+} from "./corrections.ts";
 import { FAMILIES, type OracleFamily, type OracleOutput, StateCorruptError } from "./families.ts";
 import { errorCode } from "./reasons.ts";
 
@@ -446,11 +456,17 @@ export interface GateConfig {
    * A throw here is ignored: diagnostics never change a verdict.
    */
   readonly onDiagnostic?: (diagnostic: GateDiagnostic) => void;
+  /**
+   * Agent-safe corrections (M2 scope add B, `./corrections.ts`): the task families whose
+   * refuted / uncertain results may carry `corrections`. Operator-only and off by default
+   * (absent). Corrections never change a verdict, a reason code, a reason or a retry budget.
+   */
+  readonly corrections?: CorrectionPolicy;
 }
 
 /** One operator-side diagnostic: where the error happened, its reason code, the raw error. */
 export interface GateDiagnostic {
-  readonly stage: "reader" | "oracle" | "decision-log" | "gate";
+  readonly stage: "reader" | "oracle" | "decision-log" | "gate" | "correction";
   /** The same code the agent-facing reason carries. */
   readonly code: string;
   /** The raw error, for the operator only. */
@@ -598,6 +614,12 @@ function checkAssignment(config: GateConfig): void {
 export function createGate(config: GateConfig): Gate {
   checkAssignment(config);
   const assignment = { ...config.assignment };
+  // Corrections off (the default) touch nothing here. On: the policy is checked against the
+  // assigned task, and throws on one this gate cannot honour, so it never starts.
+  const assigned =
+    config.corrections === undefined ? undefined : config.tasks.get(assignment.taskId);
+  const correcting = assigned !== undefined && correctionsEnabled(config.corrections, assigned);
+  const targets = assigned !== undefined && correcting ? correctionTargets(assigned) : [];
   const now = config.now ?? (() => new Date());
   const readTimeoutMs = config.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS;
 
@@ -620,14 +642,28 @@ export function createGate(config: GateConfig): Gate {
     refs?: EvidenceRef[];
     oracle?: GateResult["oracle"];
     checkpoints?: CheckpointSummary;
+    corrections?: readonly Correction[];
   }): Promise<GateResult> {
     const codes = [...parts.codes];
     if (parts.request.claim !== undefined) codes.push("CLAIM_RECORDED");
     const accepted =
       parts.verdict === "verified" && parts.oracle !== undefined && codes.includes("ORACLE_PASS");
+    const verdict: GateVerdict = accepted
+      ? "verified"
+      : parts.verdict === "verified"
+        ? "uncertain"
+        : parts.verdict;
+    // The correction channel: off unless the operator enabled it, admissible paths only, and
+    // every correction rebuilt from the closed schema and the spec (`sealCorrections`).
+    const corrections =
+      correcting &&
+      parts.corrections !== undefined &&
+      correctionsAdmissible(verdict, accepted, codes, parts.corrections)
+        ? sealCorrections(parts.corrections, targets)
+        : undefined;
     const result: GateResult = {
       apiVersion: GATE_API_VERSION,
-      verdict: accepted ? "verified" : parts.verdict === "verified" ? "uncertain" : parts.verdict,
+      verdict,
       accepted,
       reasonCodes: codes,
       reasons: parts.reasons,
@@ -635,6 +671,7 @@ export function createGate(config: GateConfig): Gate {
       request: parts.request,
       ...(parts.oracle ? { oracle: parts.oracle } : {}),
       ...(parts.oracle && parts.checkpoints ? { checkpoints: parts.checkpoints } : {}),
+      ...(corrections ? { corrections } : {}),
       checkedAt: now().toISOString(),
     };
     if (!config.onDecision) return result;
@@ -642,8 +679,10 @@ export function createGate(config: GateConfig): Gate {
       await config.onDecision(result);
       return result;
     } catch (error) {
+      // An unlogged decision carries no correction either: it could not be audited.
+      const { corrections: _dropped, ...logged } = result;
       return {
-        ...result,
+        ...logged,
         verdict: "uncertain",
         accepted: false,
         reasonCodes: [...result.reasonCodes, "AUDIT_FAILED"],
@@ -702,6 +741,7 @@ export function createGate(config: GateConfig): Gate {
         codes: [read.cause === "missing" ? "STATE_MISSING" : "STATE_UNREADABLE"],
         reasons: [`could not look: ${read.detail}`],
         request,
+        ...(read.cause === "missing" ? { corrections: missingStateCorrections() } : {}),
       });
     }
     const refs: EvidenceRef[] = [
@@ -812,6 +852,16 @@ export function createGate(config: GateConfig): Gate {
       });
     }
     const { verdict, code } = verdictFromOracle(valid);
+    // Corrections come from the gate's own comparison, never from the oracle's output; any
+    // failure to build them (or a disagreement with the oracle) means none, never a verdict.
+    let corrections: Correction[] | undefined;
+    if (correcting && verdict === "refuted") {
+      try {
+        corrections = documentCorrections(task, read.bytes, fixture, valid.codes ?? []);
+      } catch (error) {
+        diagnose("correction", error);
+      }
+    }
     return finish({
       verdict,
       codes: [code, ...(valid.codes ?? [])],
@@ -820,6 +870,7 @@ export function createGate(config: GateConfig): Gate {
       refs,
       oracle,
       ...(valid.checkpoints ? { checkpoints: summarize(valid.checkpoints) } : {}),
+      ...(corrections ? { corrections } : {}),
     });
   }
 

@@ -76,6 +76,13 @@ export const benchmarkArmRowSchema: JsonSchema = {
              * verdict: `called` is false, `verdict` null, and the row is never accepted.
              */
             unregistrable: { const: true },
+            /**
+             * M2 scope add B: whether the gate's agent-safe correction channel was on for
+             * this trial (`GateConfig.corrections`). Written on every row whose gate was
+             * called; absent on rows written before the channel existed, which were off.
+             * R1 evidence runs keep it "off" unless the lead rules otherwise.
+             */
+            corrections: { type: "string", enum: ["off", "on"] },
           },
         },
       ],

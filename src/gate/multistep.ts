@@ -19,8 +19,14 @@
  * the gate computes from the oracle's per-checkpoint verdicts; nothing the agent says
  * picks it. `retryBudget: 0` runs the same loop without the retry, which is R6's paired
  * no-retry arm.
+ *
+ * Corrections (M2 scope add B): when the operator enabled them, the gate's result may carry
+ * `corrections`. The retry's `AttemptContext.corrections` hands exactly those (and nothing
+ * else from the result) to the agent. They never pick the checkpoint, never grant an attempt
+ * and never change a verdict: the budget is `retryBudget` (0 or 1, checked at run time), and
+ * there is never a third attempt.
  */
-import type { GateResult } from "./api.ts";
+import type { Correction, GateResult } from "./api.ts";
 
 export interface AttemptContext {
   /** 1 for the first attempt, 2 for the retry. */
@@ -29,6 +35,11 @@ export interface AttemptContext {
   readonly fromCheckpoint: number;
   /** The gate result that caused this retry (absent on the first attempt). */
   readonly previous?: GateResult;
+  /**
+   * The agent-safe corrections of `previous` (empty on the first attempt, and whenever the
+   * gate gave none). This is what a harness shows the agent; see docs/gate/api.md.
+   */
+  readonly corrections: readonly Correction[];
 }
 
 export interface MultiStepHarness {
@@ -52,6 +63,8 @@ export interface AttemptRecord {
   readonly checkpoints: GateResult["checkpoints"] | null;
   /** sha256 of the captured document the gate read (null if it read nothing). */
   readonly stateSha256: string | null;
+  /** The kinds of the corrections the gate returned (empty when none or when off). */
+  readonly correctionKinds: readonly Correction["kind"][];
 }
 
 export interface MultiStepTrialRecord {
@@ -85,6 +98,7 @@ function record(
     reasonCodes: [...result.reasonCodes],
     checkpoints: result.checkpoints ?? null,
     stateSha256: result.evidenceRefs[0]?.sha256 ?? null,
+    correctionKinds: (result.corrections ?? []).map((c) => c.kind),
   };
 }
 
@@ -92,16 +106,25 @@ export async function runMultiStepTrial(
   harness: MultiStepHarness,
   options: { readonly retryBudget: 0 | 1 },
 ): Promise<MultiStepTrialRecord> {
+  // The budget is the operator's, fixed before the first attempt: a correction never grants
+  // an attempt, and a budget other than 0 or 1 is refused rather than read as either.
+  if (options.retryBudget !== 0 && options.retryBudget !== 1)
+    throw new Error(`retryBudget must be 0 or 1, got ${String(options.retryBudget)}`);
   const attempts: AttemptRecord[] = [];
   await harness.restore(0);
-  const first = await harness.runAgent({ attempt: 1, fromCheckpoint: 0 });
+  const first = await harness.runAgent({ attempt: 1, fromCheckpoint: 0, corrections: [] });
   await harness.capture(1);
   let result = await harness.checkGate(first.claim);
   attempts.push(record(1, 0, first.claim, result));
   if (!result.accepted && options.retryBudget === 1) {
     const from = retryCheckpoint(result);
     await harness.restore(from);
-    const second = await harness.runAgent({ attempt: 2, fromCheckpoint: from, previous: result });
+    const second = await harness.runAgent({
+      attempt: 2,
+      fromCheckpoint: from,
+      previous: result,
+      corrections: [...(result.corrections ?? [])],
+    });
     await harness.capture(2);
     result = await harness.checkGate(second.claim);
     attempts.push(record(2, from, second.claim, result));

@@ -31,6 +31,7 @@ import {
   type Gate,
   type GateConfig,
   type GateTask,
+  STATE_FILE_LIMIT,
   specDigest,
 } from "./gate.ts";
 
@@ -120,7 +121,16 @@ export function sealedEvidenceReader(opts: SealedReaderOptions): EvidenceReader 
           cause: "missing",
           detail: `${stateFile} was not in the sealed capture`,
         };
-      return { ok: true, bytes: persisted[stateFile] as Uint8Array };
+      const bytes = persisted[stateFile] as Uint8Array;
+      // The mock reader's limit, on the sealed path too (track H, H-06): an oversized capture
+      // never reaches the oracle, and the two readers agree on the same bytes.
+      if (bytes.length > STATE_FILE_LIMIT)
+        return {
+          ok: false,
+          cause: "unreadable",
+          detail: `persisted state is larger than ${STATE_FILE_LIMIT} bytes`,
+        };
+      return { ok: true, bytes };
     },
   };
 }

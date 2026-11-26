@@ -1,0 +1,6 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 81702 vm-session.sh
+build-trial-base: 04:11:31Z step 1: open egress for the maintenance window; restore and boot clean-base
+build-trial-base: 04:12:01Z step 2: state before; signatures; ngen; idle tasks; full scan
+build-trial-base: Defender signature update failed (see 04-signatures.log)
+build-trial-base: exit trap: re-denying guest egress
+guest-egress: isolate-from-host=true, ssh forward 127.0.0.1:2222->22 intact; VM left stopped (run scripts/reset-trial-vm.sh)

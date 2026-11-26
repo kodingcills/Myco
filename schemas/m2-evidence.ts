@@ -1,3 +1,4 @@
+import { benchmarkArmRowSchema } from "./benchmark-ledger.ts";
 import type { JsonSchema } from "./validate.ts";
 
 /**
@@ -9,7 +10,13 @@ import type { JsonSchema } from "./validate.ts";
  *  - `arm.jsonl`   arm rows, `myco.benchmark.arm-row/1` (schemas/benchmark-ledger.ts);
  *  - `grades.jsonl` grade rows, `myco.benchmark.grade-row/1`, from the independent grader;
  *  - `ops.jsonl`   one trial-ops row per arm row (below): the process record the M2 plan
- *                  §2.2 keeps as a CI gate instead of a scorecard row.
+ *                  §2.2 keeps as a CI gate instead of a scorecard row;
+ *  - `attempts.jsonl` the append-only, hash-chained attempt ledger (below): one `start` and
+ *                  one `end` event per attempt, written by the runner as the attempt happens.
+ *                  Required for an R1 pack; `pack.json` pins its head (`attempts`).
+ *  - `superseded.jsonl` (optional) the durable record of attempts replaced IN PLACE (below):
+ *                  a trial lost to a harness fault is re-run and its row in `arm.jsonl`
+ *                  replaced, never appended (lead ruling 2026-11-26 12:22Z).
  *
  * The check is `src/m2/evidence.ts`; the scorecard check `scripts/m2-scorecard-check.py`
  * quotes what it recomputes.
@@ -37,6 +44,32 @@ export const m2PackManifestSchema: JsonSchema = {
       type: "object",
       additionalProperties: false,
       properties: { "myco-gate": positiveInt, "hcu+shell": positiveInt },
+    },
+    /**
+     * The asserted split of `expectTrials` (TIF-274, outer-loop ruling 2026-11-26 08:38Z):
+     * how many of an arm's trials are unregistrable (the gate's registry rejected the task
+     * spec, e.g. fc-v1's 10 invalid-target tasks); the rest are gated. Optional here; the
+     * requirement (for `myco-gate` when the pack is R1 evidence, or has unregistrable rows) and
+     * the binding to the published task set's composition live in `checkPack`
+     * (`src/m2/evidence.ts`), so a short run fails instead of shrinking R1's denominator.
+     */
+    expectUnregistrable: {
+      type: "object",
+      additionalProperties: false,
+      properties: { "myco-gate": { type: "integer", minimum: 0 } },
+    },
+    /**
+     * The attempt ledger's head (TIF-274): how many events `attempts.jsonl` holds and the
+     * sha256 of its last event. Pinned so a truncated tail is refused. Required for R1 packs.
+     */
+    attempts: {
+      type: "object",
+      additionalProperties: false,
+      required: ["events", "headSha256"],
+      properties: {
+        events: positiveInt,
+        headSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+      },
     },
     /** R2: the expected number of task pairs across the two arms; null otherwise. */
     expectPairs: { anyOf: [positiveInt, { type: "null" }] },
@@ -91,5 +124,82 @@ export const m2TrialOpsSchema: JsonSchema = {
       anyOf: [{ type: "string", enum: [...HARNESS_CLASSES] }, { type: "null" }],
     },
     faultLanded: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+  },
+};
+
+/**
+ * One event of the append-only attempt ledger (`attempts.jsonl`; TIF-274, lead ruling
+ * 2026-11-26 14:35Z). The runner appends a `start` event when an attempt begins and an `end`
+ * event when it ends, so every attempt (harness-faulted and superseded ones included) is on
+ * record before anyone decides what to keep. Each event names the sha256 of the previous
+ * event's canonical JSON (`prevSha256`; 64 zeros for the first), so an edit, a deletion or a
+ * reordering breaks the chain, `pack.json` pins the head against truncation, and an external
+ * anchor outside the pack records every head (below). Threat model: tamper-evidence against the
+ * checked agent, guest-side processes and accidental harness edits; not protection against a
+ * malicious pack author (`src/m2/attempt-ledger.ts`). `outcome` (and, for a harness fault,
+ * `harnessClass`) is on `end` events only.
+ */
+export const m2AttemptEventSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema", "seq", "prevSha256", "kind", "trialKey", "taskId", "arm"],
+  properties: {
+    schema: { const: "myco.m2.attempt-event/1" },
+    seq: { type: "integer", minimum: 0 },
+    prevSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    kind: { type: "string", enum: ["start", "end"] },
+    trialKey: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+    taskId: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+    arm: { type: "string", enum: ["myco-gate", "hcu+shell"] },
+    outcome: { type: "string", enum: ["completed", "harness-fault"] },
+    harnessClass: { type: "string", enum: [...HARNESS_CLASSES] },
+  },
+};
+
+/**
+ * A superseded attempt (TIF-274, topped-up runs; lead ruling 2026-11-26 12:22Z). A trial lost
+ * to a HARNESS fault is re-run in place: its row in `arm.jsonl` (and `grades.jsonl`,
+ * `ops.jsonl`) is the re-run, and the faulted attempt stays here, whole, with the reason and a
+ * link to the trial that replaced it (`replacedBy`: a trialKey in `arm.jsonl`, or another
+ * superseded attempt that was itself re-run). Only harness faults may be replaced: never a
+ * refuted, accepted, unregistrable or agent-caused attempt (a step-budget stop is the agent's
+ * outcome). A gated attempt on an unsatisfiable task (fc-v1 invalid-target) is never replaced:
+ * on myco-gate it must be unregistrable whatever the harness did, so such a pack is re-packed,
+ * not topped up (`checkPack` refuses it). An hcu+shell attempt on such a task has no gate and
+ * may be re-run like any other. Superseded attempts are in no R1/R2/R3 count, but their cost fields
+ * count in R7's numerator (lead ruling 2026-11-26 13:42Z). Their trial-ops rows are not
+ * load-gated or checked for `faultLanded` (a `load` harness fault is itself a reason to
+ * re-run), and an attempt carries no grade row: it was never graded.
+ */
+export const m2SupersededSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema", "replacedBy", "reason", "arm", "ops"],
+  properties: {
+    schema: { const: "myco.m2.superseded/1" },
+    replacedBy: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+    reason: { type: "string", minLength: 1, maxLength: 300 },
+    arm: benchmarkArmRowSchema,
+    /** The faulted attempt's own trial-ops row. */
+    ops: m2TrialOpsSchema,
+  },
+};
+
+/**
+ * One line of the external attempt anchor (TIF-274, lead ruling on #518 D3). At each attempt
+ * end the runner appends the ledger's head (event count and chain head) to a host-side file
+ * OUTSIDE the pack (`<pack parent>/attempt-anchors/<pack name>.jsonl`) and outside anything
+ * the agent or the guest can reach. The evidence check requires every anchored head to match
+ * the ledger's own chain at that count, and the last one to equal the pack's pin, so a ledger
+ * rewritten and re-pinned inside the pack no longer agrees with its anchor.
+ */
+export const m2AttemptAnchorSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema", "events", "headSha256"],
+  properties: {
+    schema: { const: "myco.m2.attempt-anchor/1" },
+    events: positiveInt,
+    headSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
   },
 };

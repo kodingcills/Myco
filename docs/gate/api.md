@@ -157,6 +157,7 @@ Any other field is rejected:
   ],
   "request": { "taskId": "df-s02", "runId": "run-42", "claim": "All 4 items saved." },
   "oracle": { "family": "todo-items", "version": "1", "specSha256": "…" }, // only when an oracle decided
+  // "corrections": [...]                // only when the operator enabled them; see "Corrections"
   "checkedAt": "2026-11-25T20:00:00.000Z"
 }
 ```
@@ -595,7 +596,7 @@ the mock path (`test/gate/sealed-gate.test.ts`) and a live run.
 
 ```
 pnpm myco-gate check --evidence-root <dir> --task <id> --run <id> [--claim <text>] [--json]
-pnpm myco-gate mcp   --evidence-root <dir> --task <id> --run <id> [--tasks <file>] [--no-builtin] [--audit <file>]
+pnpm myco-gate mcp   --evidence-root <dir> --task <id> --run <id> [--tasks <file>] [--no-builtin] [--audit <file>] [--corrections <families>]
 pnpm myco-gate demo  --transport mock [--family todo-items|calc-multi-step] [--out <dir>] [--json]
 ```
 
@@ -605,6 +606,10 @@ the operator is the caller. `mcp` serves one trial over stdio until stdin closes
 `--task` and `--run` it refuses to start (exit 3).
 
 ## MCP server for Claude Code
+
+Any other MCP client (the official SDK client, Oh My Pi, Gemini CLI, a plain shell) uses the
+same server: see [Using `myco-gate` from any MCP client](clients.md) and
+[`examples/mcp-clients/`](../../examples/mcp-clients/README.md).
 
 `myco-gate mcp` is a stdio MCP server (JSON-RPC 2.0, one message per line; protocol
 versions 2025-06-18, 2025-03-26 and 2024-11-05). It has exactly one tool:
@@ -745,6 +750,146 @@ per trial, bound to it, serves both attempts. Each scenario runs with and withou
 The command exits 0 only when every trial behaves as listed. The counts it prints (retry
 2/3, no retry 1/3) are mock and are not evidence; R6's 30 paired trials run in M2-12 on the
 VM.
+
+## Corrections (agent-safe, opt-in; M2 scope add B)
+
+On a refuted or uncertain verdict the gate can hand the agent a short, typed correction it
+can act on ("cell C3 holds 4224; the task asked for 4242"), so the agent fixes its document
+in the app and the harness re-checks **within the existing retry budget**. This is a new,
+explicitly scoped channel. It does not loosen the codes-only rule anywhere else: with
+corrections on, every other field of every result (`verdict`, `accepted`, `reasonCodes`,
+`reasons`, `evidenceRefs`, `oracle`, `checkpoints`) is exactly what it is with corrections
+off; the only difference is the extra `corrections` array on the two admissible paths below
+(pinned by `test/gate/corrections.test.ts`, section 5, on every reason path). The MCP
+server's `initialize` instructions mention corrections only when they are on for the
+assigned task; with them off the agent-facing text is unchanged.
+
+**Off by default, opt-in per task family.** The operator enables it with
+`GateConfig.corrections = { families: [...] }` (CLI: `--corrections calc-record-edit,calc-multi-step`;
+`runGatedTrial`: `corrections`). Supported families: `calc-record-edit` (version 2) and
+`calc-multi-step` (version 1), CSV only. A policy naming another family (`todo-items`, an
+unknown id), a family version the correction code does not mirror, or a non-CSV
+`persistedFormat` makes the gate refuse to start, because a correction must come from the
+same rule the oracle used. **R1 evidence is measured with corrections off, and this is
+enforced.** Every myco-gate arm row whose gate was called records the setting as
+`gate.corrections: "off" | "on"` (`schemas/benchmark-ledger.ts`; written from
+`runGatedTrial`'s outcome, and a result that carries corrections on a row that says "off" is
+refused by `gatedArmRow`). `checkBenchmark(..., { evidence: true })` (CLI: `--evidence`) and
+the M2 pack check for an R1 pack refuse any row recorded `"on"` (`correctionsOnError`,
+`src/benchmark/check.ts`), so a corrected run can never pass as R1 evidence. There is no lead
+ruling allowing corrections in R1 evidence; allowing it would take a code change. A row
+written before the field existed reads as off.
+
+### When a result carries corrections
+
+Only when all of these hold (`correctionsAdmissible`, `src/gate/corrections.ts`):
+
+- corrections are on for the assigned task's family;
+- the result is not accepted and not `verified`, and carries no `AUDIT_FAILED` (an unlogged
+  decision carries none);
+- either the explaining code is `ORACLE_FAIL` (document corrections), or it is
+  `STATE_MISSING` (the one `document_not_saved` / `no_saved_file` correction).
+
+Every other path carries none: request rejections (`INVALID_REQUEST`, `UNKNOWN_FIELD`,
+`ORACLE_INPUT_REJECTED`, `UNSUPPORTED_API_VERSION`), `ASSIGNMENT_MISMATCH` (nothing is read),
+`UNKNOWN_TASK`, `STATE_UNREADABLE` (including the sealed gate's "before capture" answer; pinned with
+corrections on by `test/benchmark/gated-rows-corrections.test.ts`),
+`STATE_CORRUPT`, `FIXTURE_UNREADABLE`, `FIXTURE_MISMATCH`, `ORACLE_ERROR`,
+`ORACLE_INVALID_OUTPUT`, `ORACLE_UNCERTAIN`, `AUDIT_FAILED`, and `ORACLE_PASS`.
+
+### The schema (closed)
+
+```jsonc
+"corrections": [
+  // A target cell holds something other than the requested value (and other than what it
+  // held when the agent got the document). observed: what the agent's saved cell holds
+  // (null = empty), at most 200 characters; observedTruncated: true when cut.
+  { "kind": "target_value_mismatch", "step": 2, "cell": "C4", "record": "EMP-0003",
+    "column": "qty", "expected": "4242", "observed": "4224" },
+  // A target cell still holds what it held when the agent got the document. No value.
+  { "kind": "target_unchanged", "step": 3, "cell": "F5", "record": "EMP-0004",
+    "column": "salary", "expected": "$61234.50" },
+  // Non-target cells the save changed, cleared or added: addresses only (at most 10), and
+  // how many more. Never a value.
+  { "kind": "collateral_change", "cells": ["B2"], "more": 0 },
+  // The saved document does not show the work: no file was captured after the agent
+  // stopped (uncertain STATE_MISSING), or the saved document is, cell for cell, the one
+  // the agent was given (alone; no per-target corrections then).
+  { "kind": "document_not_saved", "evidence": "no_saved_file" | "saved_file_unchanged" }
+]
+```
+
+`step` appears on multi-step tasks only. These four kinds are the whole schema: anything
+else is never emitted. Adding a kind is additive (`v1`), like a reason code.
+
+### What a correction can and cannot reveal, and why
+
+It may reveal only:
+
+- **what the task instruction already gave the agent**: the target's record, column and the
+  value it was told to write (`src/tasks/task-text.ts` states all three for a single-edit
+  task), and a multi-step task's step number. `task-text.ts` renders single-edit tasks only
+  and there is no multi-step instruction renderer yet, so for multi-step tasks this is a
+  requirement on that renderer (state each step's record, column, value and number), to be
+  pinned by a test when it lands;
+- **what the agent can observe in its own saved document**: a target cell's A1 address and
+  what that cell now holds, whether the saved document is the one it was given, and the
+  addresses of non-target cells its save changed.
+
+It never reveals: the value of any cell the task does not name (neither the pristine
+fixture's nor the agent's), the pristine value of a target cell (`target_unchanged` has no
+value field, which is why "unchanged" is its own kind), the fixture or its digest, oracle
+source or text, the spec beyond the instruction's fields (no seed, no title), file paths,
+or vault and receipt details.
+
+**Collateral addresses are safe; collateral values are not.** An address says "your save
+changed this cell", not what belongs there. The agent can see that cell in the app; the
+address is already in the agent-facing `DOCUMENT_COLLATERAL` reason (TIF-270 round 2), so the
+correction adds no information; and without the pristine value an address cannot be turned
+into a passing document except by undoing the change in the app (or by the harness's
+checkpoint restore on the retry). The pristine value would let an agent rebuild the expected
+document without doing the task, so it is never included; the agent's own value there is
+withheld too because it is not needed to act.
+
+**Why this cannot be gamed.** The only values a correction carries are the requested value
+(already in the instruction) and the agent's own target cell. Nothing in it lets an agent
+satisfy the checker without changing its saved document: the gate still decides from the
+host capture of persisted bytes, the request still takes only `taskId`/`runId`/`claim`
+(echoing a correction as a `corrections` field is `UNKNOWN_FIELD`; as `expected` it is
+`ORACLE_INPUT_REJECTED`; in the claim it is recorded and ignored), and the gate is still
+bound to one trial (another task or run is `ASSIGNMENT_MISMATCH`, with no correction).
+Repeated calls within an attempt describe the same capture, so they add nothing. This holds
+for the sealed gate and the harness-capture paths (the bytes are captured once, after the
+agent stops). On the mock/development `fileEvidenceReader` path it holds only while the
+evidence file is not rewritten between calls; that path is not evidence.
+
+### How corrections are built (trust)
+
+The gate builds corrections itself (`documentCorrections`), from its own comparison of the
+persisted bytes with the expected document (the same `calc-document.ts` rule and pristine
+document the oracle uses, the sealed fixture when the spec names one). They are never oracle
+text, and the oracle's output is not read for them. They are attached only when the gate's
+comparison agrees with the oracle's detail codes (`TARGET_MISMATCH` / `DOCUMENT_COLLATERAL`);
+a disagreement yields none and an operator diagnostic (stage `correction`). Last,
+`sealCorrections` rebuilds every correction field by field from the closed schema and the
+operator's targets: a target correction must match one target's cell, record, column,
+expected value and step exactly (and those fields are then copied from the spec); a
+collateral address must be an A1 ref that no step targets. If any candidate fails, the
+result carries **no** corrections: a wrong correction is worse than none. A correction never
+changes the verdict.
+
+### The loop and the retry budget
+
+`runMultiStepTrial` (`src/gate/multistep.ts`) hands the agent exactly the previous result's
+`corrections` on the retry (`AttemptContext.corrections`; empty on the first attempt) and
+records their kinds per attempt (`correctionKinds`). The budget is the operator's
+`retryBudget`, 0 or 1 (anything else is refused before the first attempt): one retry from
+the last verified checkpoint, never a third attempt. Corrections never pick the checkpoint
+and never grant an attempt; with budget 0 a correction is returned but nothing re-runs.
+`test/gate/corrections-loop.test.ts` runs the loop end to end through the spawned
+`myco-gate mcp --corrections calc-multi-step` process: a scripted agent misreads one value,
+gets the correction, fixes the cell in the fake app and is verified on the retry; the same
+agent with corrections off stays refuted.
 
 ## Versioning
 
