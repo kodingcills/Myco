@@ -214,6 +214,14 @@ describe("capability spec part 2: binding content per track", () => {
     expect(q).toContain("writes bundles is trusted.");
     expect(q).toContain("**It is not proof against a malicious pack author**");
     expect(barOf(q)).toContain("100% of in-scope tamper cases are refused");
+    // Q records the gate's verdict faithfully; it never claims the verdict was right
+    // (coordinator fix after the round-3 verdict, comment 7199393010, B1).
+    expect(flat(q)).toContain(
+      flat(
+        "`accepted` without `verified` is refused, so a bundle never shows VERIFIED unless the gate said `verified` + `accepted` + `ORACLE_PASS` for that run. Whether that verdict was right is the grader's question, not Q's.",
+      ),
+    );
+    expect(flat(q)).not.toContain("never shows a false VERIFIED");
     expect(barOf(q)).toContain("2. 100% of honest bundles verify (no false refusals).");
     expect(q).toContain("**honest bundles:** at least 30");
     expect(barOf(q)).toContain('"not proof against a malicious pack author"');

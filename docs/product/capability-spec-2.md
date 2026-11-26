@@ -402,7 +402,9 @@ audit-value experiment (Q2 below) is a secondary, separately pre-registered expe
 **Guardrails.** Q adds no new trust: it binds to #518's chain as it merges (#533 re-states the
 documented format and must switch to `src/m2/attempt-ledger.ts` with a parity test, failing
 closed until then) and edits none of #518's files. A `verified` record needs `ORACLE_PASS` and
-`accepted`; `accepted` without `verified` is refused, so a bundle never shows a false VERIFIED.
+`accepted`; `accepted` without `verified` is refused, so a bundle never shows VERIFIED unless
+the gate said `verified` + `accepted` + `ORACLE_PASS` for that run. Whether that verdict was
+right is the grader's question, not Q's.
 A simulated run's bundle says so.
 
 **Builder alignment (#533).** #533's Q1 integrity bar (≥30 bundles, ≥300 tamper cases, 0 leaks,
