@@ -357,3 +357,42 @@ describe("tree: every element of a pinned part sits at a path LibreOffice writes
     ]);
   });
 });
+
+/** The reader's own code on `bytes` ("read" when it accepts them). */
+function readCode(bytes: Uint8Array): string {
+  try {
+    readXlsxDocument(bytes);
+    return "read";
+  } catch (error) {
+    if (error instanceof XlsxError) return error.code;
+    throw error;
+  }
+}
+
+describe("round 1's two surviving mutants (both guards from #503), now pinned by their own code", () => {
+  // The element-tree pin runs last and would refuse both shapes too (XLSX_TREE_ELEMENT), so
+  // each row pins the EARLIER guard's own code: removing that guard changes the code.
+  it('a <sheet> hidden outside <sheets> is XLSX_XML_UNSUPPORTED (the countNamed(workbook, "sheet") guard)', async () => {
+    for (const [anchor, hidden] of [
+      ["</bookViews>", '<sheet name="h" sheetId="2" state="visible" r:id="rId3"/></bookViews>'],
+      [
+        '<fileVersion appName="Calc"/>',
+        '<fileVersion appName="Calc"><sheet name="h" sheetId="2" state="visible" r:id="rId3"/></fileVersion>',
+      ],
+    ] as const) {
+      const bytes = loEdit(WORKBOOK, anchor, hidden);
+      expect(readCode(bytes)).toBe("XLSX_XML_UNSUPPORTED");
+      expect((await gateOn(bytes)).verdict).toBe("uncertain");
+    }
+  });
+
+  it("two <dimension> elements are XLSX_CELL_MALFORMED (the dims.length > 1 guard), even when the first is right", async () => {
+    const sheet = loText(SHEET1);
+    const dim = /<dimension ref="[^"]*"\/>/.exec(sheet)?.[0] as string;
+    for (const second of [dim, '<dimension ref="A1"/>']) {
+      const bytes = loEdit(SHEET1, dim, `${dim}${second}`);
+      expect(readCode(bytes)).toBe("XLSX_CELL_MALFORMED");
+      expect((await gateOn(bytes)).verdict).toBe("uncertain");
+    }
+  });
+});

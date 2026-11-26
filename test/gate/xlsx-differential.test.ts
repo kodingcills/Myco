@@ -7,14 +7,21 @@
  *
  * Families: comments, quote style, whitespace in tags, namespace prefixes, entity
  * references, relocated parts, decoy parts, nested/duplicated text runs, v+is on one cell,
- * and a control family of in-grammar edits (attribute order, rich-run splits) so the
- * property is not vacuous: those still verify, and the grader passes them.
+ * nested decoys (round 2: an in-grammar decoy element inside a random container element of
+ * its part, the shape behind round 1's V1-V5), comment decoys (round 2, a byte-level family:
+ * a decoy archive in the EOCD comment, between entries or in front, plain comments, stray
+ * signatures, trailing bytes; round 1's V6), and a control family of in-grammar edits
+ * (attribute order, rich-run splits) so the property is not vacuous: those still verify,
+ * and the grader passes them. The two round-2 families also count how many variants fool
+ * the grader (it does not pass a variant of a base it passes): they are live attacks.
  *
  * Deterministic: a fixed seed per (family, base), so a failure names a reproducible variant.
  */
 import { describe, expect, it } from "vitest";
 import { writeZip } from "../../src/tasks/writer-docgen.ts";
 import { gateOn, graderOn, loParts, MAIN } from "./xlsx-lo-mutate.ts";
+import { writerBytes } from "./xlsx-writer-files.ts";
+import { entryEnds, withComment, withCommentDecoy, withGap } from "./xlsx-zip-surgery.ts";
 
 const BASES = [
   "exact.lo.xlsx",
@@ -369,27 +376,137 @@ const FAMILIES: Record<string, Mutator> = {
   },
 };
 
+const OD = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const STYLES = "xl/styles.xml";
+const TYPES = "[Content_Types].xml";
+
+/** A copy of the part's own sheetData with C4 set to 1 (the edited cell, wrong). */
+function sheetDataC4Wrong(sheet: string): string {
+  const data = /<sheetData>[\s\S]*<\/sheetData>/.exec(sheet)?.[0] ?? "<sheetData/>";
+  return data.replace(/(<c r="C4"[^>]*>)<v>[^<]*<\/v>/, "$1<v>1</v>");
+}
+
+/**
+ * Round 2, nested decoys: in-grammar elements either reader reads structurally, each in the
+ * part where the grader's whole-text regex would find it.
+ */
+const NESTED_DECOYS: [string, (parts: Parts) => string][] = [
+  [SHEET, () => "<sheetData/>"],
+  [SHEET, (p) => sheetDataC4Wrong(get(p, SHEET))],
+  [SHEET, () => '<row r="4"><c r="C4" s="0" t="n"><v>1</v></c></row>'],
+  [SHEET, () => '<c r="C4" s="0" t="n"><v>1</v></c>'],
+  [WORKBOOK, () => '<workbookPr date1904="true"/>'],
+  [WORKBOOK, () => '<sheets><sheet name="d" sheetId="1" state="visible" r:id="rId2"/></sheets>'],
+  [WORKBOOK, () => '<sheet name="d" sheetId="9" state="visible" r:id="rId2"/>'],
+  [STYLES, () => '<cellXfs count="1"><xf numFmtId="0"/></cellXfs>'],
+  [STYLES, () => '<cellXfs count="0"></cellXfs>'],
+  [STYLES, () => '<numFmt numFmtId="165" formatCode="0"/>'],
+  [STYLES, () => '<numFmts count="1"><numFmt numFmtId="165" formatCode="0"/></numFmts>'],
+  [STYLES, () => '<xf numFmtId="0"/>'],
+  [SST, () => '<si><t xml:space="preserve">decoy</t></si>'],
+  [WB_RELS, () => `<Relationship Id="rId3" Type="${OD}/worksheet" Target="styles.xml"/>`],
+  [WB_RELS, () => `<Relationship Id="rId4" Type="${OD}/sharedStrings" Target="styles.xml"/>`],
+  [TYPES, () => '<Override PartName="/xl/workbook.xml" ContentType="application/xml"/>'],
+];
+
+/** Round 2: put a decoy inside a random element of its part (start or end of its content). */
+function nestedDecoys(rng: Rng, parts: Parts): Parts {
+  const [name, make] = pick(rng, NESTED_DECOYS);
+  const decoy = make(parts);
+  const text = get(parts, name);
+  const [at, m] = pick(rng, matches(text, /<([A-Za-z][A-Za-z0-9:]*)((?: [^<>]*?)?)(\/?)>/));
+  const tag = m[0];
+  const qname = m[1] as string;
+  if (m[3] === "/") {
+    // A self-closing container is opened up to hold the decoy.
+    return set(
+      parts,
+      name,
+      splice(text, at, tag.length, `${tag.slice(0, -2)}>${decoy}</${qname}>`),
+    );
+  }
+  if (rng() < 0.5) return set(parts, name, splice(text, at + tag.length, 0, decoy));
+  // Before the matching end tag (the first one after the start tag: the containers here do
+  // not nest an element of their own name).
+  const close = text.indexOf(`</${qname}>`, at);
+  return set(parts, name, splice(text, close, 0, decoy));
+}
+
+/** A byte-level family: from the base archive's bytes. */
+type ByteMutator = (rng: Rng, base: Uint8Array) => Uint8Array;
+
+/** Round 2, comment decoys: the EOCD comment and bytes no entry covers (round 1, V6). */
+const commentDecoys: ByteMutator = (rng, base) => {
+  const decoy = writerBytes(pick(rng, BASES));
+  const junk = (n: number) => Uint8Array.from({ length: n }, () => Math.floor(rng() * 256));
+  const kind = pick(rng, [
+    "decoy-in-comment",
+    "decoy-in-comment",
+    "plain-comment",
+    "stray-eocd-in-comment",
+    "decoy-between-entries",
+    "decoy-in-front",
+    "junk-between-entries",
+    "trailing-bytes",
+  ]);
+  if (kind === "decoy-in-comment") return withCommentDecoy(base, decoy, Math.floor(rng() * 4));
+  if (kind === "plain-comment") return withComment(base, junk(1 + Math.floor(rng() * 64)));
+  if (kind === "stray-eocd-in-comment") {
+    const sig = new Uint8Array([0x50, 0x4b, 0x05, 0x06]);
+    return withComment(base, new Uint8Array([...junk(Math.floor(rng() * 8)), ...sig, ...junk(18)]));
+  }
+  const ends = entryEnds(base);
+  if (kind === "decoy-between-entries") return withGap(base, pick(rng, ends), decoy);
+  if (kind === "decoy-in-front") return withGap(base, 0, decoy);
+  if (kind === "junk-between-entries")
+    return withGap(base, pick(rng, ends), junk(1 + Math.floor(rng() * 32)));
+  const out = new Uint8Array(base.length + 1 + Math.floor(rng() * 32));
+  out.set(base, 0);
+  out.set(junk(out.length - base.length), base.length);
+  return out;
+};
+
+const BYTE_FAMILIES: Record<string, ByteMutator> = { commentDecoys };
+FAMILIES.nestedDecoys = nestedDecoys;
+const ALL_FAMILIES = [...Object.keys(FAMILIES), ...Object.keys(BYTE_FAMILIES)];
+
 interface Tally {
   variants: number;
   verified: number;
   refused: number;
   refuted: number;
+  /** Variants the grader does not pass, of a base the grader passes (a live decoy). */
+  graderFooled: number;
   unsound: string[];
 }
 
 async function runFamily(family: string): Promise<Tally> {
-  const tally: Tally = { variants: 0, verified: 0, refused: 0, refuted: 0, unsound: [] };
-  const mutate = FAMILIES[family] as Mutator;
+  const tally: Tally = {
+    variants: 0,
+    verified: 0,
+    refused: 0,
+    refuted: 0,
+    graderFooled: 0,
+    unsound: [],
+  };
+  const live = family === "nestedDecoys" || family === "commentDecoys";
   for (const [b, base] of BASES.entries()) {
     const parts = loParts(base);
+    const baseBytes = writerBytes(base);
+    const basePasses = live && graderOn(baseBytes) === "pass";
     const rng = mulberry32(0x5eed + b * 1000 + family.length * 7919 + family.charCodeAt(0));
     for (let k = 0; k < PER; k++) {
-      const bytes = zip(mutate(rng, parts));
+      const byteMutate = BYTE_FAMILIES[family];
+      const bytes = byteMutate
+        ? byteMutate(rng, baseBytes)
+        : zip((FAMILIES[family] as Mutator)(rng, parts));
       const gate = await gateOn(bytes);
       tally.variants++;
+      const graded = gate.verdict === "verified" || basePasses ? graderOn(bytes) : undefined;
+      if (basePasses && graded !== "pass") tally.graderFooled++;
       if (gate.verdict === "verified") {
         tally.verified++;
-        if (graderOn(bytes) !== "pass") tally.unsound.push(`${family}/${base}#${k}`);
+        if (graded !== "pass") tally.unsound.push(`${family}/${base}#${k}`);
       } else if (gate.verdict === "refuted") tally.refuted++;
       else tally.refused++;
     }
@@ -400,7 +517,7 @@ async function runFamily(family: string): Promise<Tally> {
 const TALLIES: Record<string, Tally> = {};
 
 describe("differential property: gate VERIFIED implies grader PASS, on every variant", () => {
-  it.each(Object.keys(FAMILIES))(
+  it.each(ALL_FAMILIES)(
     "%s",
     async (family) => {
       const tally = await runFamily(family);
@@ -413,33 +530,44 @@ describe("differential property: gate VERIFIED implies grader PASS, on every var
 
   it("the variant count, and the property is not vacuous", () => {
     const total = Object.values(TALLIES).reduce((n, t) => n + t.variants, 0);
-    // 10 families x 4 real LibreOffice bases x 100 variants.
-    expect(total).toBe(Object.keys(FAMILIES).length * BASES.length * PER);
-    expect(total).toBe(4_000);
+    // 12 families x 4 real LibreOffice bases x 100 variants.
+    expect(total).toBe(ALL_FAMILIES.length * BASES.length * PER);
+    expect(total).toBe(4_800);
+    // The two round-2 families: at least 200 variants each over the 4 real bases, and live
+    // (many of their variants fool the grader on the bases it passes), yet none verifies.
+    for (const family of ["nestedDecoys", "commentDecoys"]) {
+      const t = TALLIES[family] as Tally;
+      expect(t.variants).toBeGreaterThanOrEqual(200);
+      expect([family, t.graderFooled > 0]).toEqual([family, true]);
+      expect([family, t.unsound]).toEqual([family, []]);
+    }
     // The control family's in-grammar edits verify on the two exact bases (and the grader
     // passes them, above): the gate still says yes when it should.
     expect((TALLIES.control as Tally).verified).toBeGreaterThanOrEqual(2 * PER);
     // Every attack family is refused or refuted on every variant: none verifies at all.
-    for (const family of Object.keys(FAMILIES).filter((f) => f !== "control"))
+    // (nestedDecoys aside: a decoy can land where it is the only element of its name at its
+    // canonical path, e.g. a <numFmts> appended to a styles part that has none; both judges
+    // then read the same element. Its verified variants are covered by the property above.)
+    for (const family of ALL_FAMILIES.filter((f) => f !== "control" && f !== "nestedDecoys"))
       expect([family, (TALLIES[family] as Tally).verified]).toEqual([family, 0]);
   });
 });
 
-describe("tally (for the PR body; set XLSX_DIFF_TALLY=1 to print it)", () => {
+describe("tally (printed: one TALLY line per family)", () => {
   it("every variant is counted once", () => {
     const counted = Object.values(TALLIES).reduce(
       (n, t) => n + t.verified + t.refuted + t.refused,
       0,
     );
-    expect(counted).toBe(Object.keys(FAMILIES).length * BASES.length * PER);
-    if (process.env.XLSX_DIFF_TALLY === "1")
-      process.stdout.write(
-        `${Object.entries(TALLIES)
-          .map(
-            ([f, t]) =>
-              `TALLY ${f} variants=${t.variants} verified=${t.verified} refuted=${t.refuted} refused=${t.refused}`,
-          )
-          .join("\n")}\n`,
-      );
+    expect(counted).toBe(ALL_FAMILIES.length * BASES.length * PER);
+    // Printed on every run, so the counts are in the test output.
+    process.stdout.write(
+      `${Object.entries(TALLIES)
+        .map(
+          ([f, t]) =>
+            `TALLY ${f} variants=${t.variants} verified=${t.verified} refuted=${t.refuted} refused=${t.refused} graderFooled=${t.graderFooled} violations=${t.unsound.length}`,
+        )
+        .join("\n")}\n`,
+    );
   });
 });
