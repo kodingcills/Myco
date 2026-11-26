@@ -289,6 +289,14 @@ describe("workspacePolicy: scoping", () => {
     // `scratch/dirlink -> trials/run-b`: the kernel's `dirlink/..` is `trials`, not `scratch`.
     expect(resolveScoped("scratch/dirlink/..", ws)).toBe(join(realRoot, "trials"));
     expect(resolveScoped("scratch/dirlink/../..", ws)).toBe(realRoot);
+    // A new file after `dirlink/..` lands next to the link's target, outside the workspace.
+    expect(resolveScoped("scratch/dirlink/../new.txt", ws)).toBe(
+      join(realRoot, "trials", "new.txt"),
+    );
+    expect(workspacePolicy(scope).check(req({ writes: ["scratch/dirlink/../new.txt"] }))).toEqual({
+      allow: false,
+      code: "PATH_OUTSIDE_WORKSPACE",
+    });
     // A file is not a directory: `doc.xlsx/..` and `doc.xlsx/.` do not exist for the kernel,
     // so they must not resolve to the file's directory or to the file itself.
     expect(resolveScoped("doc/doc.xlsx/..", ws)).toBeNull();
