@@ -431,3 +431,29 @@ families in a new task-set version. Each new family adds:
 - its fixtures, pinned by hash.
 
 The ledgers and the check are family-agnostic and do not change.
+
+## 9. Corrections ON/OFF A/B under the independent grader
+
+The A/B pre-registered in the M2 plan (#526 §7.2.1) compares the gate with track B's
+agent-safe corrections (#514) ON against the same gate with them OFF. `src/m2/corrections-ab.ts`
+analyses it, and `scripts/m2-corrections-ab.ts` runs it:
+
+```
+npx tsx scripts/m2-corrections-ab.ts --on-arm on/arm.jsonl --on-grades on/grades.jsonl \
+  --off-arm off/arm.jsonl --off-grades off/grades.jsonl --stage 0|1 [--evidence]
+```
+
+- **Two runs, two ledgers.** The arm is the ledger a row came from: an unregistrable or refused
+  row never called the gate, so it records no corrections setting. Every gate-called row of the
+  ON ledger must say `corrections: "on"`, and no OFF row may.
+- **Pairs** are one ON and one OFF myco-gate row per (taskId, fixture, fault class), with the same
+  instruction hash, planner and output ceiling.
+- **Success** is a verified task: an accepted DONE the independent grader passes. The grader never
+  sees corrections.
+- **Stage 0** has 30 pairs and is plumbing only: no effect is claimed, whatever the numbers say.
+- **Stage 1** is each arm exactly fc-v1 (bound by `src/benchmark/taskset-binding.ts`), 100
+  pairs. It uses a one-sided exact sign test on the discordant pairs (alpha 0.05) and a 95%
+  interval on the paired difference (Newcombe 1998, method 10). It claims `on-better` only when
+  the run is clean and p < 0.05.
+- **Integrity:** a false DONE accepted in either arm halts the run. It is an integrity incident,
+  never a data point. Under `--evidence`, dry-run rows are refused.
