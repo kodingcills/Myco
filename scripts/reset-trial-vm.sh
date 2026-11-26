@@ -9,8 +9,10 @@
 # and PR #28's rejection). The disk-only path uses a plain qemu-img restore and
 # has not exhibited it.
 #
-# Known tradeoff: cold boot costs ~21s warm / ~165s from a fresh UTM start,
-# versus the live path's ~7s. We pay it for a reset that cannot wedge.
+# Known tradeoff: a cold reset costs ~190-260 s on this Mac (TIF-98, measured
+# 2026-11-25; earlier notes said ~21 s warm / ~165 s fresh), versus the live
+# path's ~7 s. We pay it for a reset that cannot wedge. Where the time goes:
+# docs/eval-runbook.md §3.1.
 #
 # usage: reset-trial-vm.sh [snapshot]   (default clean-base)
 set -euo pipefail
@@ -46,6 +48,19 @@ STOP_TIMEOUT=${MYCO_STOP_TIMEOUT:-30}
 SSH_WAIT_TIMEOUT=${MYCO_SSH_WAIT_TIMEOUT:-600}
 
 die() { echo "reset-trial-vm: $*" >&2; exit 1; }
+
+# Per-phase wall-clock timing (TIF-98). One `timing` line on stderr at the end,
+# so an operator and the evidence scripts can see where a reset's time went
+# without changing what the reset does. Seconds, integer, host clock.
+T0=$(date +%s)
+T_PREV=$T0
+TIMING=""
+phase() {
+  local now
+  now=$(date +%s)
+  TIMING="$TIMING $1=$(( now - T_PREV ))"
+  T_PREV=$now
+}
 
 status() { "$VM_SCRIPTS/vm.sh" status 2>/dev/null | tr -d '\r' || true; }
 
@@ -96,11 +111,14 @@ if [ "$s" != stopped ]; then
   fi
   die "VM did not reach 'stopped' within ${STOP_TIMEOUT}s (state: '$s')"
 fi
+phase stop
 
 # 2. Restore + boot. Never call restore on a non-stopped VM: that is what
 #    triggers UTM's live-resume path and the wedge above.
 "$VM_SCRIPTS/vm.sh" restore "$SNAPSHOT" >/dev/null
+phase restore
 "$VM_SCRIPTS/vm.sh" start >/dev/null
+phase start
 
 # 3. Wait for a real boot, then prove the state we are in is not a half-resumed
 #    one. SSH alone is not enough: a stalled guest accepts TCP on 2222 (QEMU's
@@ -111,6 +129,7 @@ fi
 GATE=$(gate_script)
 [ -x "$GATE" ] || die "readiness gate not found: '$GATE' (expected the in-repo scripts/wait-guest-ready.sh, or one via MYCO_VM_SCRIPTS). Refusing to skip the boot check."
 "$GATE" "$SSH_WAIT_TIMEOUT" >/dev/null || die "guest did not reach a real boot within ${SSH_WAIT_TIMEOUT}s (see TIF-164)"
+phase ready
 # 3b. Guest egress must be closed (TIF-275): the running netdev must carry
 #     restrict=on, so the guest can reach nothing but the host's inbound ssh
 #     forward. Checked on every reset, before anything is deployed into the
@@ -125,6 +144,7 @@ else
   [ -x "$EGRESS" ] || die "egress check not found: '$EGRESS'. Refusing to call the guest ready without proving its egress is closed (TIF-275)"
   "$EGRESS" verify >/dev/null || die "guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)"
 fi
+phase egress
 
 # 4. The guest clock is the snapshot's clock; resync so trial timestamps are sane.
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
@@ -132,4 +152,19 @@ if ! "$VM_SCRIPTS/vssh" "Set-Date -Date ([datetime]::Parse('$NOW').ToUniversalTi
   echo "reset-trial-vm: WARNING guest clock resync failed; trial timestamps may be stale" >&2
 fi
 
+phase clock
+echo "reset-trial-vm: timing${TIMING} total=$(( $(date +%s) - T0 ))" >&2
+
+# Host swap, on every reset (TIF-98), so a slow reset carries the host state
+# it ran under. Informational only: it never changes what the reset does. No
+# threshold warning: macOS resizes swap dynamically, so used/total is not a
+# stable signal, and the TIF-98 measurements found swap pressure a secondary
+# cost (resets took 213-254 s with swap freed to ~4.5 GB; the main cost is the
+# guest's own boot work, runbook §3.1).
+SWAP=$(sysctl -n vm.swapusage 2>/dev/null || true)
+SWAP_USED=$(printf '%s' "$SWAP" | sed -nE 's/.*used = ([0-9]+)[.0-9]*M.*/\1/p')
+SWAP_TOTAL=$(printf '%s' "$SWAP" | sed -nE 's/.*total = ([0-9]+)[.0-9]*M.*/\1/p')
+if [ -n "$SWAP_USED" ] && [ -n "$SWAP_TOTAL" ] && [ "$SWAP_TOTAL" -gt 0 ]; then
+  echo "reset-trial-vm: host swap used ${SWAP_USED} of ${SWAP_TOTAL} MB" >&2
+fi
 echo "reset-trial-vm: ready on '$SNAPSHOT'"
