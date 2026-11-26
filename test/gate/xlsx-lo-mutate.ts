@@ -73,8 +73,11 @@ export function editOnce(text: string, from: string | RegExp, to: string): strin
   return text.replace(from, to);
 }
 
+/** The edit every helper here uses unless told otherwise (EMP-0003 qty := 4242). */
+export type LoEdit = typeof WRITERS_MANIFEST.edit;
+
 /** The gate's verdict and reason codes on `bytes`, through the real read path. */
-export async function gateOn(bytes: Uint8Array) {
+export async function gateOn(bytes: Uint8Array, edit: LoEdit = WRITERS_MANIFEST.edit) {
   const root = tempRoot();
   writeState(root, "r", "sheet.xlsx", bytes);
   const result = await createGate({
@@ -85,7 +88,7 @@ export async function gateOn(bytes: Uint8Array) {
         stateFile: "sheet.xlsx",
         spec: {
           fixtureSeed: WRITERS_MANIFEST.seed,
-          ...WRITERS_MANIFEST.edit,
+          ...edit,
           persistedFormat: "xlsx",
         },
       },
@@ -99,12 +102,12 @@ export async function gateOn(bytes: Uint8Array) {
 const FIXTURE_CSV = Buffer.from(generateFixture(WRITERS_MANIFEST.seed).csv);
 
 /** The independent grader's status on `bytes`. */
-export function graderOn(bytes: Uint8Array): string {
+export function graderOn(bytes: Uint8Array, edit: LoEdit = WRITERS_MANIFEST.edit): string {
   return grade({
     fixtureCsv: FIXTURE_CSV,
     fixtureSha256: sha256(FIXTURE_CSV),
     persisted: { format: "xlsx", bytes },
-    intent: WRITERS_MANIFEST.edit,
+    intent: edit,
     columnTypes: COLUMN_TYPES,
   }).status;
 }

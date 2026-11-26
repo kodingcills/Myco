@@ -217,8 +217,13 @@ only a space, `>` or `/>` may follow). The grader's other attribute reads are by
 
 ## Values: what the grader derives, and what the gate does (round 3)
 
-Round 2 also found two value shapes the tree cannot see (T2, T1). For each value the grader
-derives from a workbook, the gate either derives the same value or refuses:
+Round 2 also found two value shapes the tree cannot see (T2, T1). For each row below, the
+gate derives the same value as the grader, or refuses, or (where the row says so) refutes.
+This table was first written in #550's round 3 with that claim for "each value the grader
+derives"; #550's round-3 verifier (comment 7205644970, D3/D4) showed it was false for two
+things the table had no row for: the stored kind of a number, which the grader compares by
+column type, and the day of serial 0 in the 1904 system. Both rows are now in the table, and
+the claim is only for the rows listed, on the tests named under Evidence:
 
 | What the grader derives | How (`src/benchmark/grade/sheet.ts`) | The gate |
 |---|---|---|
@@ -226,6 +231,8 @@ derives from a workbook, the gate either derives the same value or refuses:
 | date-ness of a style | a custom code with a `y` or `d` outside quotes, escapes and brackets ANYWHERE in the code; a built-in date id | renders by the first section, and refuses (`XLSX_NUMFMT_UNSUPPORTED`) any `<xf>` where its date class and that whole-code reading disagree (T2: `General;d`, `0;[Red]yyyy`); built-in ids it cannot render are refused |
 | a cell's type | `t`, default `n` | the same default; `d`, unknown types and wrong case refused |
 | a number | `Number(v)` | only the canonical spelling (`String(Number(v)) === v`): `+1`, `1e3`, `0x10`, `.5`, `1.`, `-0`, `Infinity`, `NaN`, padded values refused |
+| stored kind against column type | `cellMatches` (`grade.ts`): a stored number matches an `integer` column only as digits equal to the value and not date-styled, a `date` column only date-styled with `serialToIsoDate` equal to the expected ISO day, a `currency` column only as a `$` amount equal to the value and not date-styled; never a `text` or `key` column | the reader keeps each literal number cell's stored kind as the column types its rendered text can stand for (`numberDomain`, `xlsx-document.ts`: the same three rules, re-derived); calc-record-edit refuses (`uncertain`, `XLSX_NUMBER_DOMAIN`, `numberDomainRefusal` in `calc-document.ts`) a document it would otherwise verify when a number sits in a column outside that set, the column's type taken from the fixture schema by its header (unknown header: text). A document the text comparison already refutes stays refuted |
+| serial to day | `serialToIsoDate`: whole serials `1` to 9999-12-31 in each system; 1900 serial 60 no day | `serialDay`: the same bounds, serial `>= 1` in BOTH systems (1904 serial 0 is no day: the impossible-date marker, refuted); swept against the grader over every serial from -5 to 2,958,470 in both systems, 0 disagreements |
 | an empty cell | no `<v>`, or a text that is `""` | no `<v>`, or `""` text; an empty or whitespace-only `<v>` refused in every cell type (T1: `<v></v>` is `Number("") = 0` to the grader); `<v/>` refused by the pre-scan |
 | a shared string | `sharedStrings[Number(v)]`, items by `<si>` regex | a canonical index only; items checked structurally (one `<t>`, or runs), no attributes |
 | an inline string | the `<t>` runs of the first `<is>` | one `<is>`, structurally checked; with a `<v>` or `<f>`, refused |
@@ -258,6 +265,11 @@ Each row has a differential family over the four real LibreOffice fixtures (belo
   variants each (attribute names, format sections, `<v>` contents, cell types): 6,400
   variants in all, gate VERIFIED implies grader PASS on every one. Still evidence over those
   shapes, not a proof.
+- #550's round 3 found two value-semantics gaps (D3: a stored number in a column whose type
+  does not accept it, VA-VD; 1904 serial 0, VE). This PR (supersedes #550) adds the
+  stored-kind and serial-to-day rows above, VA-VE verbatim as probes, a column-domain
+  differential family (752 variants) and the serial sweep
+  (`test/gate/xlsx-value-domain.test.ts`). Still evidence over those shapes, not a proof.
 
 ## Evidence
 
@@ -277,4 +289,9 @@ Each row has a differential family over the four real LibreOffice fixtures (belo
 - `test/gate/xlsx-decoys.test.ts`: round 1's V1-V6 verbatim (and V7), each run through the
   gate's real read path and the grader; the zip coverage rules; `checkTree` unit rows; the
   `countNamed(workbook, "sheet")` and `dims.length > 1` guards pinned by their codes.
+- `test/gate/xlsx-value-domain.test.ts`: #550 round 3's VA-VE verbatim, each live against
+  the grader and never verified by the gate; controls; the column-domain family (column x
+  newValue x representation x date system, 752 variants, gate VERIFIED implies grader PASS on
+  every one); `serialDay` against the grader's `serialToIsoDate` over every serial from -5 to
+  2,958,470 in both systems.
 - `test/gate/xlsx-lo-grammar.test.ts`: LibreOffice's own references.

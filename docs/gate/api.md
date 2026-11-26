@@ -378,8 +378,9 @@ the stored value is exactly the value the text denotes:
 | number, General or `@` format | shortest round-trip decimal: `451` |
 | number, fixed format (`0`, `0.00`, `#,##0.00`, optionally `$`) | `$` if the format carries it, then the value at the format's decimals: `$45678.90`, `4242.00`; only if the value is exact at those decimals. Thousands grouping is display only |
 | number, date format (any day order) | the ISO day `YYYY-MM-DD`, in the workbook's 1900 or 1904 date system |
-| a date serial no real day has (below 1, serial 60 = the phantom 1900-02-29, past 9999-12-31) | the impossible-date marker: equals no expected cell, so `refuted` (R1's impossible-date rule; on the CSV path an impossible date is text that equals nothing) |
+| a date serial no real day has (below 1 in either date system, so 1904 serial 0 too; serial 60 = the phantom 1900-02-29; past 9999-12-31) | the impossible-date marker: equals no expected cell, so `refuted` (R1's impossible-date rule; on the CSV path an impossible date is text that equals nothing) |
 | date with a time of day; boolean; error value; percent, scientific, fraction, time, literal-text or non-dollar currency format; a value not exact at its format's decimals | a marker that equals no expected cell: `refuted` |
+| a number in a column whose type does not accept it (a text or key column; in an integer column, not digits or date-styled; in a date column, not a date-styled real day; in a currency column, not a `$` amount) | the rendered text as above, but a document that would otherwise verify is `uncertain` `XLSX_NUMBER_DOMAIN` instead: the independent grader compares a stored number by column type and fails it. A document the text comparison refutes stays refuted |
 | a formula (any cell) | a formula marker carrying the formula and its cached value: it equals no literal, so a formula where the pristine fixture holds a literal is `refuted` (`TARGET_MISMATCH` in the target, `DOCUMENT_COLLATERAL` elsewhere), whatever its cached value; a sealed xlsx fixture's own formula cell saved unchanged equals itself. Formulas are never evaluated. With no cached value: `uncertain` `XLSX_FORMULA_UNCACHED` |
 
 Markers begin with U+0000 and a line feed, which no expected cell can hold (XML 1.0 cannot
@@ -390,17 +391,24 @@ verdict, reason codes and reasons on both paths. The same file checks the soundn
 over every workbook it builds (the agreement and typed tables, an xlsx-only table of
 formula, string, boolean and namespace probes, the committed third-party workbooks, and the
 round-3 structure probes below): on each of them, if the gate verifies, the grader passes.
+`test/gate/xlsx-value-domain.test.ts` adds #550 round 3's value shapes (VA-VE verbatim), a
+column-domain family of 752 variants and a sweep of every date serial from -5 to 2,958,470
+in both systems.
 #503's one exception, a prefixed root the grader cannot read, is refused by the raw-byte
 pre-scan. That property is TESTED, over those workbooks, round 1's decoy shapes
-(`test/gate/xlsx-decoys.test.ts`), round 2's T1-T3 (`test/gate/xlsx-round3-probes.test.ts`)
-and the 6,400 variants of `test/gate/xlsx-differential.test.ts`; it is not proved for every
+(`test/gate/xlsx-decoys.test.ts`), round 2's T1-T3 (`test/gate/xlsx-round3-probes.test.ts`),
+the 6,400 variants of `test/gate/xlsx-differential.test.ts` and the value-domain tests
+(`test/gate/xlsx-value-domain.test.ts`); it is not proved for every
 input. An earlier version of this section said "with no exception": round 1 of the
 gate-integrity PR found six shapes (decoys nested inside elements the reader skipped, and a
 decoy archive in the EOCD comment) that the gate verified and the grader failed, and round 2
 found three more (an attribute name ending in `date1904`, a date token outside a format
 code's first section, an empty `<v></v>`). The element-tree and attribute pins, the
 byte-coverage rule, the format-code agreement rule and the empty-`<v>` refusal below close
-them.
+them. #550's round 3 found two more, in value semantics: a stored number whose rendered text
+equals the expected text in a column whose type does not accept a number (the grader
+compares by column type), and 1904 serial 0, which the gate read as 1904-01-01. The
+`XLSX_NUMBER_DOMAIN` refusal and the serial `>= 1` bound in both systems close them.
 
 *Raw-byte pre-scan and fixed part names (replaces #503, round 3 D8).* Before any XML is
 parsed, every entry must be one of LibreOffice's fixed part names and every part's bytes must
@@ -534,6 +542,7 @@ fails if a code is added to `XlsxErrorCode` without one):
 | a formula with no cached value | `XLSX_FORMULA_UNCACHED` |
 | a cell style index that is not a canonical number (`s="00"`) or is past `cellXfs`, a `numFmt` without a code or an integer id, an `xf` whose `numFmtId` is not a number | `XLSX_STYLE_MALFORMED` |
 | an unknown built-in number format; a style whose date-ness depends on the section read (round 3, T2: `General;d`, `0;[Red]yyyy`: a day or year token outside the first section, or a first-section date the whole code does not carry) | `XLSX_NUMFMT_UNSUPPORTED` |
+| calc-record-edit only, on a document whose every cell's text matches: a stored number in a column whose type does not accept it (#550 round 3, D3: `name := 4242` stored as a number; `qty := 4242.5`; `salary := 36965.5` in General; `joined := 45000` not date-styled). Raised by the family (`numberDomainRefusal`), not the reader | `XLSX_NUMBER_DOMAIN` |
 
 **Independence.** The gate's xlsx reader shares no code with the independent grader's
 (`src/benchmark/grade/zip.ts`, `sheet.ts`): its own zip walk, XML tokenizer and date
