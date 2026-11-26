@@ -15,6 +15,13 @@
  * and the grader passes them. The two round-2 families also count how many variants fool
  * the grader (it does not pass a variant of a base it passes): they are live attacks.
  *
+ * Round 3 (verdict 7204800200, D2) adds one family per value mechanism the tree pin does not
+ * cover: attribute names (decoy names on a random element of any part, and a date1904-named
+ * attribute on <workbookPr>: T3), multi-section format codes (T2), odd `<v>` contents in
+ * every cell type (T1: "", " ", "+1", "1e3", "0x10", ".5", "1.", "-0", "Infinity", "NaN"
+ * and spellings of the requested value), and boolean, error, inline-string and other
+ * cell-type variants. 400 variants each over the 4 real bases, each live.
+ *
  * Deterministic: a fixed seed per (family, base), so a failure names a reproducible variant.
  */
 import { describe, expect, it } from "vitest";
@@ -432,6 +439,197 @@ function nestedDecoys(rng: Rng, parts: Parts): Parts {
   return set(parts, name, splice(text, close, 0, decoy));
 }
 
+// ---------------------------------------------------------------------------
+// Round 3 (verdict 7204800200, D2): one family per value mechanism the grader derives that
+// the element-tree pin does not cover. Each is live (many variants fool the grader on the
+// bases it passes) and none may verify where the grader does not pass.
+// ---------------------------------------------------------------------------
+
+/** Every part of the base, pinned or not (docProps and the theme included). */
+const allNames = (parts: Parts) => parts.map(([n]) => n);
+
+/**
+ * Attribute names to put on an element: names that end in date1904 after `-`/`.` (the
+ * grader's `\bdate1904`), date1904 itself, every attribute name the grader reads (`r`, `s`,
+ * `t`, `numFmtId`, `formatCode`, `Id`, `Target`, `r:id`), lookalikes, and plain unknowns.
+ */
+const ATTR_NAMES = [
+  "x-date1904",
+  "a.date1904",
+  "x.y-date1904",
+  "_-date1904",
+  "date1904",
+  "Date1904",
+  "xdate1904",
+  "r",
+  "s",
+  "t",
+  "numFmtId",
+  "formatCode",
+  "Id",
+  "Target",
+  "Type",
+  "r:id",
+  "x-r",
+  "a.s",
+  "x-numFmtId",
+  "count",
+  "foo",
+  "x14ac:dyDescent",
+  "xr:uid",
+];
+const ATTR_VALUES = ["1", "true", "0", "14", "165", "C4", "rId2", "worksheets/sheet1.xml", ""];
+
+/** An attribute (name, value) added to a random element of a random part, any part. */
+function attributeNames(rng: Rng, parts: Parts): Parts {
+  const name = pick(rng, allNames(parts));
+  const text = get(parts, name);
+  const [at, m] = pick(rng, matches(text, /<([A-Za-z][A-Za-z0-9:]*)((?: [^<>]*?)?)(\/?)>/));
+  const tag = m[0];
+  // workbookPr gets a date1904-named attribute half the time: the shape behind T3.
+  const forced = name === WORKBOOK && rng() < 0.5;
+  const workbookPr = matches(text, /<workbookPr\b[^>]*?(\/?)>/)[0];
+  const [where, el] = forced && workbookPr ? workbookPr : [at, m];
+  const attr = forced
+    ? pick(rng, ["x-date1904", "a.date1904", "x.y-date1904", "date1904"])
+    : pick(rng, ATTR_NAMES);
+  const value = forced ? pick(rng, ["1", "true"]) : pick(rng, ATTR_VALUES);
+  const elTag = el[0];
+  const end = elTag.endsWith("/>") ? elTag.length - 2 : elTag.length - 1;
+  // Before the existing attributes or after them.
+  const head = elTag.indexOf(" ");
+  const insertAt = rng() < 0.5 || head < 0 ? end : head;
+  void tag;
+  return set(parts, name, splice(text, where + insertAt, 0, ` ${attr}="${value}"`));
+}
+
+/** Format-code sections: plain numbers, dates (y, d), times, quoted/escaped/bracketed d. */
+const SECTIONS = [
+  "General",
+  "0",
+  "0.00",
+  "#,##0",
+  "[Red]0",
+  "\\-0",
+  "@",
+  "yyyy\\-mm\\-dd",
+  "d",
+  "yy",
+  "D",
+  "[Red]yyyy",
+  "mm",
+  "h:mm",
+  "[h]:mm",
+  "&quot;d&quot;",
+  "\\d",
+  "[$-409]0",
+  "[$$-409]#,##0.00",
+  "",
+];
+
+/** A random numFmt's code replaced by a 1-4 section code (first section often the original). */
+function formatSections(rng: Rng, parts: Parts): Parts {
+  const text = get(parts, STYLES);
+  const [at, m] = pick(rng, matches(text, /formatCode="([^"]*)"/));
+  const n = 1 + Math.floor(rng() * 4);
+  const sections = Array.from({ length: n }, () => pick(rng, SECTIONS));
+  if (rng() < 0.5) sections[0] = m[1] as string;
+  return set(parts, STYLES, splice(text, at, m[0].length, `formatCode="${sections.join(";")}"`));
+}
+
+/** `<v>` contents a numeric reading may take differently from the canonical spelling. */
+const V_CONTENTS = [
+  "",
+  " ",
+  "\n",
+  "\t",
+  "+1",
+  "1e3",
+  "1E3",
+  "0x10",
+  ".5",
+  "1.",
+  "-0",
+  "Infinity",
+  "-Infinity",
+  "NaN",
+  "4242",
+  " 4242",
+  "4242 ",
+  "+4242",
+  "04242",
+  "4242.",
+  "4242.0",
+  "4.242e3",
+  "4.242E+3",
+  "0x1092",
+  "0b1",
+  "1_000",
+  "true",
+  "1",
+  "0",
+];
+
+/** A random cell's (often the target's) `<v>` set to an odd content, its type kept or dropped. */
+function vContents(rng: Rng, parts: Parts): Parts {
+  const text = get(parts, SHEET);
+  const t = pick(rng, [' t="n"', ' t="n"', "", ' t="b"', ' t="e"', ' t="s"']);
+  if (rng() < 0.4) {
+    // A NEW cell one column past the grid, where the pristine fixture holds nothing (the
+    // shape of T1), with the dimension widened to match (or, sometimes, left stale).
+    const [rowAt, row] = pick(rng, matches(text, /<row r="(\d+)"[^>]*>[\s\S]*?<\/row>/));
+    const close = rowAt + row[0].length - "</row>".length;
+    const v = rng() < 0.5 ? pick(rng, ["", " ", "\n", "\t"]) : pick(rng, V_CONTENTS);
+    const added = splice(text, close, 0, `<c r="F${row[1]}" s="0"${t}><v>${v}</v></c>`);
+    return set(
+      parts,
+      SHEET,
+      rng() < 0.9
+        ? added.replace(/<dimension ref="A1:[A-Z]+(\d+)"\/>/, '<dimension ref="A1:F$1"/>')
+        : added,
+    );
+  }
+  const target = matches(text, /<c r="C4"[^>]*>(?:<v>[^<]*<\/v>)?<\/c>/)[0];
+  const [at, m] = rng() < 0.5 && target ? target : randomCell(rng, text, /t="n"|t="s"/);
+  const ref = /r="([A-Z]+\d+)"/.exec(m[0])?.[1] as string;
+  const s = / s="(\d+)"/.exec(m[0])?.[1] ?? "0";
+  const v = pick(rng, V_CONTENTS);
+  return set(
+    parts,
+    SHEET,
+    splice(text, at, m[0].length, `<c r="${ref}" s="${s}"${t}><v>${v}</v></c>`),
+  );
+}
+
+/** Boolean, error, inline-string and other cell-type variants of a random (or target) cell. */
+function cellTypes(rng: Rng, parts: Parts): Parts {
+  const text = get(parts, SHEET);
+  const target = matches(text, /<c r="C4"[^>]*>(?:<v>[^<]*<\/v>)?<\/c>/)[0];
+  const [at, m] = rng() < 0.5 && target ? target : randomCell(rng, text);
+  const ref = /r="([A-Z]+\d+)"/.exec(m[0])?.[1] as string;
+  const s = / s="(\d+)"/.exec(m[0])?.[1] ?? "0";
+  const v = /<v>([^<]*)<\/v>/.exec(m[0])?.[1] ?? "4242";
+  const shown = pick(rng, ["4242", v, "1", "TRUE", "#N/A", ""]);
+  const cell = pick(rng, [
+    `<c r="${ref}" s="${s}" t="b"><v>${pick(rng, ["0", "1", " 1", "true", "2"])}</v></c>`,
+    `<c r="${ref}" s="${s}" t="b"/>`,
+    `<c r="${ref}" s="${s}" t="e"><v>${pick(rng, ["#N/A", "#VALUE!", "4242", v])}</v></c>`,
+    `<c r="${ref}" s="${s}" t="e"/>`,
+    `<c r="${ref}" s="${s}" t="inlineStr"><is><t>${shown}</t></is></c>`,
+    `<c r="${ref}" s="${s}" t="inlineStr"><is><r><t>${shown.slice(0, 2)}</t></r><r><t>${shown.slice(2)}</t></r></is></c>`,
+    `<c r="${ref}" s="${s}" t="inlineStr"><is><t xml:space="preserve"> ${shown}</t></is></c>`,
+    `<c r="${ref}" s="${s}" t="inlineStr"/>`,
+    `<c r="${ref}" s="${s}" t="str"><v>${shown}</v></c>`,
+    `<c r="${ref}" s="${s}" t="str"><f>${shown}</f><v>${shown}</v></c>`,
+    `<c r="${ref}" s="${s}" t="d"><v>2020-01-01</v></c>`,
+    `<c r="${ref}" s="${s}" t="${pick(rng, ["B", "N", "inlinestr", "x", ""])}"><v>${v}</v></c>`,
+    `<c r="${ref}" s="${s}"><f>${v}</f><v>${v}</v></c>`,
+    `<c r="${ref}" s="${s}" t="n"/>`,
+    `<c r="${ref}" s="${s}" t="s"/>`,
+  ]);
+  return set(parts, SHEET, splice(text, at, m[0].length, cell));
+}
+
 /** A byte-level family: from the base archive's bytes. */
 type ByteMutator = (rng: Rng, base: Uint8Array) => Uint8Array;
 
@@ -468,6 +666,14 @@ const commentDecoys: ByteMutator = (rng, base) => {
 
 const BYTE_FAMILIES: Record<string, ByteMutator> = { commentDecoys };
 FAMILIES.nestedDecoys = nestedDecoys;
+FAMILIES.attributeNames = attributeNames;
+FAMILIES.formatSections = formatSections;
+FAMILIES.vContents = vContents;
+FAMILIES.cellTypes = cellTypes;
+/** The round-3 value-mechanism families (verdict 7204800200, D2). */
+const ROUND3 = ["attributeNames", "formatSections", "vContents", "cellTypes"];
+/** Families whose liveness is counted (graderFooled): the decoy and value families. */
+const LIVE = ["nestedDecoys", "commentDecoys", ...ROUND3];
 const ALL_FAMILIES = [...Object.keys(FAMILIES), ...Object.keys(BYTE_FAMILIES)];
 
 interface Tally {
@@ -489,7 +695,7 @@ async function runFamily(family: string): Promise<Tally> {
     graderFooled: 0,
     unsound: [],
   };
-  const live = family === "nestedDecoys" || family === "commentDecoys";
+  const live = LIVE.includes(family);
   for (const [b, base] of BASES.entries()) {
     const parts = loParts(base);
     const baseBytes = writerBytes(base);
@@ -530,14 +736,15 @@ describe("differential property: gate VERIFIED implies grader PASS, on every var
 
   it("the variant count, and the property is not vacuous", () => {
     const total = Object.values(TALLIES).reduce((n, t) => n + t.variants, 0);
-    // 12 families x 4 real LibreOffice bases x 100 variants.
+    // 16 families x 4 real LibreOffice bases x 100 variants.
     expect(total).toBe(ALL_FAMILIES.length * BASES.length * PER);
-    expect(total).toBe(4_800);
-    // The two round-2 families: at least 200 variants each over the 4 real bases, and live
-    // (many of their variants fool the grader on the bases it passes), yet none verifies.
-    for (const family of ["nestedDecoys", "commentDecoys"]) {
+    expect(total).toBe(6_400);
+    // The two round-2 families (at least 200 variants each) and the four round-3 value
+    // families (at least 300 each), over the 4 real bases: live (many of their variants fool
+    // the grader on the bases it passes), yet none verifies where the grader does not pass.
+    for (const family of LIVE) {
       const t = TALLIES[family] as Tally;
-      expect(t.variants).toBeGreaterThanOrEqual(200);
+      expect(t.variants).toBeGreaterThanOrEqual(ROUND3.includes(family) ? 300 : 200);
       expect([family, t.graderFooled > 0]).toEqual([family, true]);
       expect([family, t.unsound]).toEqual([family, []]);
     }
@@ -548,7 +755,12 @@ describe("differential property: gate VERIFIED implies grader PASS, on every var
     // (nestedDecoys aside: a decoy can land where it is the only element of its name at its
     // canonical path, e.g. a <numFmts> appended to a styles part that has none; both judges
     // then read the same element. Its verified variants are covered by the property above.)
-    for (const family of ALL_FAMILIES.filter((f) => f !== "control" && f !== "nestedDecoys"))
+    // The round-3 value families aside too: each also makes in-grammar edits both judges
+    // read alike (an allowed attribute, a format code whose sections agree, the canonical
+    // spelling of the requested value, an inline string equal to it).
+    for (const family of ALL_FAMILIES.filter(
+      (f) => f !== "control" && f !== "nestedDecoys" && !ROUND3.includes(f),
+    ))
       expect([family, (TALLIES[family] as Tally).verified]).toEqual([family, 0]);
   });
 });
