@@ -7,13 +7,18 @@ ROOT="$(cd "$DIR/.." && pwd)"
 if [ "$1" = "test" ]; then
   shift
   exec npx tsx "$ROOT/scripts/myco-test.ts" "$@"
+elif [ "$1" = "watch" ]; then
+  shift
+  exec npx tsx "$ROOT/scripts/myco-watch.ts" "$@"
 elif [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ -z "$1" ]; then
   echo "Myco — Verified GUI test runner for desktop coding agents"
   echo ""
   echo "Usage: myco test <task-package.yaml>"
+  echo "       myco watch --run <runId> ... | --demo todo-items|calc-multi-step"
   echo ""
   echo "Commands:"
   echo "  test <file>   Execute a verified GUI task package and output evidence"
+  echo "  watch         Read-only local view of a run: desktop frames + gate decisions (docs/gate/watch.md)"
   echo ""
   echo "Exit codes:"
   echo "  0: Verified (state changes confirmed)"
