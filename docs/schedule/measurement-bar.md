@@ -60,8 +60,10 @@ says not `pass`.
   At n=30, the Wilson 95% upper bound is 0.114.
 - **Bar P2 (versus each baseline)**: paired exact two-sided sign test (exact McNemar) on
   discordant pairs. A discordant pair is one where one arm falsely completed and the other did
-  not. α = 0.05 with Holm correction across the two baselines. With fewer than 6 discordant
-  pairs the report says **underpowered** and makes no superiority claim.
+  not. α = 0.05 with Holm correction across the two baselines. With fewer than 7 discordant
+  pairs the report says **underpowered** and makes no superiority claim: under Holm the
+  first comparison is tested at α/2 = 0.025, and 6 of 6 discordant pairs gives an exact
+  two-sided p of 0.03125, so 7 is the smallest count that can reach significance.
 
 Secondary, reported with Wilson 95% intervals and not gating:
 

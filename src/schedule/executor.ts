@@ -29,12 +29,20 @@ export type GatedRunPlan = Omit<GatedTrialOptions, "runId" | "taskId"> & {
   readonly simulated: boolean;
 };
 
+/**
+ * The operator's transport (from `prepare`, which receives `req.signal`) must stop the agent
+ * when that signal fires. The scheduler keeps the run's concurrency slot until this
+ * executor's promise settles, so a transport that ignores the signal holds the slot.
+ */
 export function gatedRunExecutor(
   prepare: (req: RunRequest) => GatedRunPlan | Promise<GatedRunPlan>,
 ): RunExecutor {
   return {
     async run(req): Promise<ExecutorResult> {
+      req.signal.throwIfAborted();
       const { simulated, ...opts } = await prepare(req);
+      // Aborted while preparing (timeout or kill): never launch the agent.
+      req.signal.throwIfAborted();
       const outcome = await runGatedTrial({ ...opts, runId: req.runId, taskId: req.taskId });
       return { outcome, simulated };
     },
@@ -106,7 +114,19 @@ export function scriptedFcV1Executor(opts: {
       oracleSources: FC_V1_ORACLE_SOURCES,
       transport: {
         async runAgent() {
-          persisted = await agent(task, req);
+          // Stop on timeout or kill: reject (no stop marker, no capture, never verified)
+          // as soon as the signal fires, even if the scripted agent ignores it.
+          req.signal.throwIfAborted();
+          let onAbort: () => void = () => {};
+          const aborted = new Promise<never>((_, reject) => {
+            onAbort = () => reject(req.signal.reason);
+            req.signal.addEventListener("abort", onAbort, { once: true });
+          });
+          try {
+            persisted = await Promise.race([agent(task, req), aborted]);
+          } finally {
+            req.signal.removeEventListener("abort", onAbort);
+          }
         },
         async captureAfterStop(): Promise<Record<string, Uint8Array>> {
           return persisted === null

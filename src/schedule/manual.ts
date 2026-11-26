@@ -1,8 +1,9 @@
 /**
  * Track S: the manual trigger. `myco-schedule trigger` writes one request file into
  * `<stateDir>/manual/` (atomically: a dotfile, then a rename); the service picks it up on its
- * next tick, submits it, and deletes it. The request id is the file name and is the
- * idempotency key, so re-running the command with the same `--key` cannot run twice.
+ * next tick, submits it, and deletes it. The file is `<scheduleId>.<key>.json`; the key is
+ * the idempotency key (per schedule), so re-running the command with the same `--key` for
+ * the same schedule cannot run twice, and the same key for two schedules is two requests.
  *
  * A request carries a schedule id and nothing else. A malformed or oversized file is
  * deleted with a diagnostic code and never run.
@@ -18,8 +19,10 @@ const MAX_REQUEST_BYTES = 4096;
 export function writeManualRequest(spoolDir: string, scheduleId: string, key: string): string {
   if (!SCHEDULE_ID.test(scheduleId)) throw new Error("manual trigger: invalid schedule id");
   if (!MANUAL_KEY.test(key)) throw new Error("manual trigger: invalid key");
-  const final = join(spoolDir, `${key}.json`);
-  const tmp = join(spoolDir, `.tmp-${key}.json`);
+  // Named `<scheduleId>.<key>.json`: the same key for two schedules is two requests, not
+  // one file overwriting the other. A schedule id has no `.`, so the split is unambiguous.
+  const final = join(spoolDir, `${scheduleId}.${key}.json`);
+  const tmp = join(spoolDir, `.tmp-${scheduleId}.${key}.json`);
   writeFileSync(tmp, JSON.stringify({ scheduleId }), { mode: 0o600 });
   renameSync(tmp, final);
   return final;
@@ -46,7 +49,10 @@ export function drainSpool<T>(
   }
   for (const name of names) {
     const path = join(spoolDir, name);
-    const key = name.slice(0, -".json".length);
+    const stem = name.slice(0, -".json".length);
+    const dot = stem.indexOf(".");
+    const nameSchedule = dot < 0 ? "" : stem.slice(0, dot);
+    const key = dot < 0 ? "" : stem.slice(dot + 1);
     let scheduleId: unknown;
     try {
       const st = lstatSync(path);
@@ -56,7 +62,12 @@ export function drainSpool<T>(
       if (typeof v !== "object" || v === null || Object.keys(v).join() !== "scheduleId")
         throw new Error("bad");
       scheduleId = v.scheduleId;
-      if (typeof scheduleId !== "string" || !SCHEDULE_ID.test(scheduleId)) throw new Error("bad");
+      if (
+        typeof scheduleId !== "string" ||
+        !SCHEDULE_ID.test(scheduleId) ||
+        scheduleId !== nameSchedule
+      )
+        throw new Error("bad");
     } catch {
       diag("MANUAL_REQUEST_INVALID");
       rmSync(path, { force: true });

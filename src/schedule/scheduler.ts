@@ -16,8 +16,9 @@
  *  6. the claim is written durably (fsync) — a claim not on disk does not run;
  *  then, asynchronously:
  *  7. every policy allows it (a throwing or malformed policy denies);
- *  8. the pause switch is re-checked;
- *  9. the run executes under the wall-time budget (over it: aborted, `timeout`);
+ *  8. the kill and pause switches are re-checked (killed meanwhile: `killed`; paused: `skipped`);
+ *  9. the run executes under the wall-time budget (over it: aborted, `timeout`). The
+ *     concurrency slot is held until the executor's promise settles, even after the row;
  * 10. the outcome is mapped to a verdict: `accepted` is true only for a decided gate result
  *     that says `verified`, `accepted: true` and `ORACLE_PASS` for this exact run id.
  *     Anything else — a throw, a refusal, a timeout, a kill, a malformed or inconsistent
@@ -382,9 +383,19 @@ export class Scheduler {
       return this.skip(spec, req.source, keySha, "error", "STATE_WRITE_FAILED", runId);
     const controller = new AbortController();
     flights.add(controller);
-    const done = this.run(spec, req, keySha, runId, controller).finally(() => {
-      flights.delete(controller);
+    // The slot is held until the executor's own promise settles, not until the row is
+    // written: a timed-out or killed run whose executor ignores the signal still counts
+    // toward `concurrency`, so the budget caps what runs, not only what is reported.
+    const release = () => flights.delete(controller);
+    let executorStarted = false;
+    const done = this.run(spec, req, keySha, runId, controller, (executing) => {
+      executorStarted = true;
+      void executing.then(release, release);
     });
+    const releaseIfNotStarted = () => {
+      if (!executorStarted) release();
+    };
+    done.then(releaseIfNotStarted, releaseIfNotStarted);
     return { admission: { admitted: true, runId }, done };
   }
 
@@ -415,6 +426,7 @@ export class Scheduler {
     keySha: string,
     runId: string,
     controller: AbortController,
+    hold: (executing: Promise<unknown>) => void,
   ): Promise<RunRecord> {
     const startedAt = this.iso(this.opts.clock.now());
     const base = {
@@ -464,8 +476,11 @@ export class Scheduler {
         });
       return end(plain("denied", "POLICY_INVALID"));
     }
-    if (this.opts.state.isPaused() || controller.signal.aborted)
-      return end(plain("skipped", "PAUSED"));
+    // A kill that landed while the policies ran is a kill, not a quiet pause.
+    if (controller.signal.aborted) return end(plain("killed", "KILLED"));
+    // Paused while the policies ran: the claim stays (the key and its runs/day slot are
+    // used up), so the trigger does not run later. See README "Pause / kill".
+    if (this.opts.state.isPaused()) return end(plain("skipped", "PAUSED"));
 
     let cancelTimer: () => void = () => {};
     const stop = new Promise<"timeout" | "killed">((resolve) => {
@@ -489,9 +504,14 @@ export class Scheduler {
           (r) => ({ ok: true as const, r }),
           (e: unknown) => ({ ok: false as const, e }),
         );
+      hold(work);
       const first = await Promise.race([work, stop]);
-      if (first === "timeout") return end(plain("timeout", "BUDGET_WALL_TIME"));
-      if (first === "killed") return end(plain("killed", "KILLED"));
+      if (first === "timeout" || first === "killed") {
+        // Recorded now; the slot stays held until `work` settles (see `submit`).
+        return first === "timeout"
+          ? end(plain("timeout", "BUDGET_WALL_TIME"))
+          : end(plain("killed", "KILLED"));
+      }
       if (!first.ok) {
         this.diag(`EXECUTOR_ERROR:${errorCode(first.e)}`);
         return end(plain("error", "EXECUTOR_ERROR"));

@@ -49,7 +49,11 @@ explicitly says otherwise).
 - **HMAC-SHA256** over `myco.schedule.webhook/v1\n<scheduleId>\n<deliveryId>\n<body>`,
   compared in constant time. Because the schedule id and the delivery id are inside the MAC, a
   captured request cannot be aimed at another schedule or replayed under a new delivery id.
-  A replay under the same delivery id is a `DUPLICATE` (409) and runs nothing.
+  A replay under the same delivery id is a `DUPLICATE` (409) and runs nothing. A signed
+  request that was refused without a claim (423 `PAUSED`, 429 `BUDGET_CONCURRENCY`) is meant
+  to be retried, so it stays replayable until it runs; the MAC carries no timestamp.
+- **Delivery-id format.** A delivery id outside 1 to 128 characters of `[A-Za-z0-9._-]` is
+  refused 401 `BAD_SIGNATURE` even when the signature over it is correct.
 - **One refusal code.** A missing header, a malformed header and a wrong signature all return
   401 `BAD_SIGNATURE`.
 - **Fail closed on the secret.** A missing or unreadable secrets file returns 503
@@ -76,9 +80,10 @@ file seen on every tick is not.
 |---|---|
 | Claim cannot be written | The trigger does not run (`STATE_WRITE_FAILED`). |
 | `claims.jsonl` or `cursor.json` corrupt | The service refuses to start. |
+| `<stateDir>/LOCK` held (another service, or one that crashed) | The service refuses to start. |
 | Ledger row cannot be written | The run is reported `error` / `LEDGER_FAILED`, never verified, and notified. |
 | Policy throws or is malformed | Denied. |
-| Executor throws, times out, is killed, or returns a malformed, inconsistent or other-run result | Not verified. |
+| Executor throws, times out, is killed, or returns a malformed, inconsistent or other-run result | Not verified. A timed-out or killed run keeps its concurrency slot until the executor settles. |
 | Notifier throws | Diagnostic only; the record is unchanged. |
 | Zero policies configured | The scheduler refuses to construct; `serve` needs `--allow-task`. |
 

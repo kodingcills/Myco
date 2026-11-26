@@ -1,5 +1,6 @@
 /** Track S: the service wiring — the KILLED switch from the CLI, and ledger-key loading. */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseScheduleFile } from "../../src/schedule/config.ts";
@@ -7,7 +8,7 @@ import { FakeClock } from "../../src/schedule/runtime.ts";
 import { startScheduleService } from "../../src/schedule/service.ts";
 import { allowAll, decided, flush, MemoryNotifier, StubExecutor, T0, tmp } from "./helpers.ts";
 
-function config(dir: string, keyLine: string) {
+function config(dir: string, keyLine: string, webhook = false) {
   mkdirSync(join(dir, "secrets"), { recursive: true });
   writeFileSync(join(dir, "secrets", "s.env"), `${keyLine}\n`, { mode: 0o600 });
   return parseScheduleFile(
@@ -16,6 +17,15 @@ function config(dir: string, keyLine: string) {
       stateDir: join(dir, "state"),
       ledgerKey: { keyFile: join(dir, "secrets", "s.env"), keyName: "MYCO_SCHEDULE_LEDGER_KEY" },
       tickSeconds: 10,
+      ...(webhook
+        ? {
+            webhook: {
+              port: 18_765,
+              secretsFile: join(dir, "secrets", "s.env"),
+              secretName: "MYCO_WEBHOOK_SECRET",
+            },
+          }
+        : {}),
       schedules: [
         {
           id: "ops",
@@ -96,5 +106,62 @@ describe("schedule service", () => {
     }
     expect(message).toMatch(/must be 64 hex characters/);
     expect(message).not.toContain("PLANTED");
+  });
+
+  describe("one service per state dir (round-1 B3)", () => {
+    const KEYLINE = `MYCO_SCHEDULE_LEDGER_KEY=${"1a".repeat(32)}`;
+    const start = (dir: string, ex = new StubExecutor(), extra: { webhookPort?: number } = {}) =>
+      startScheduleService({
+        config: config(dir, KEYLINE, extra.webhookPort !== undefined),
+        clock: new FakeClock(T0),
+        executor: ex,
+        policies: [allowAll],
+        notifier: new MemoryNotifier(),
+        loop: false,
+        ...extra,
+      });
+
+    it("a second service on the same state dir refuses to start, so a key cannot run twice", async () => {
+      const dir = tmp();
+      const ex = new StubExecutor();
+      const first = await start(dir, ex);
+      expect(existsSync(join(dir, "state", "LOCK"))).toBe(true);
+      await expect(start(dir, ex)).rejects.toThrow(/LOCK exists: another schedule service/);
+      // The first service still runs the trigger exactly once.
+      await first.scheduler.submit({ scheduleId: "ops", source: "manual", key: "d1" }).done;
+      expect(ex.calls).toHaveLength(1);
+      await first.stop();
+      expect(existsSync(join(dir, "state", "LOCK"))).toBe(false);
+      // After a clean stop a new service starts, and the durable claim still dedups the key.
+      const second = await start(dir, ex);
+      expect(
+        second.scheduler.submit({ scheduleId: "ops", source: "manual", key: "d1" }).admission,
+      ).toEqual({ admitted: false, code: "DUPLICATE" });
+      await second.stop();
+      expect(ex.calls).toHaveLength(1);
+    });
+
+    it("a lock left behind (crashed service) refuses the start; nothing is taken over", async () => {
+      const dir = tmp();
+      mkdirSync(join(dir, "state"), { recursive: true });
+      writeFileSync(join(dir, "state", "LOCK"), "12345\n");
+      await expect(start(dir)).rejects.toThrow(/LOCK exists/);
+      expect(existsSync(join(dir, "state", "LOCK"))).toBe(true);
+    });
+
+    it("a start that fails after taking the lock releases it", async () => {
+      const dir = tmp();
+      const blocker = createServer();
+      await new Promise<void>((r) => blocker.listen(0, "127.0.0.1", () => r()));
+      const port = (blocker.address() as { port: number }).port;
+      try {
+        await expect(start(dir, new StubExecutor(), { webhookPort: port })).rejects.toThrow();
+      } finally {
+        await new Promise<void>((r) => blocker.close(() => r()));
+      }
+      expect(existsSync(join(dir, "state", "LOCK"))).toBe(false);
+      const svc = await start(dir);
+      await svc.stop();
+    });
   });
 });

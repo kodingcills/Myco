@@ -79,6 +79,24 @@ export async function startScheduleService(o: ServiceOptions): Promise<ScheduleS
   const clock = o.clock ?? systemClock;
   const key = loadLedgerKey(config.ledgerKey);
   const state = new ScheduleState(config.stateDir);
+  // One service per state dir: claims are checked in memory, so a second service could run
+  // a trigger key the first already claimed.
+  state.acquireLock();
+  try {
+    return await startLocked(o, clock, key, state);
+  } catch (e) {
+    state.releaseLock();
+    throw e;
+  }
+}
+
+async function startLocked(
+  o: ServiceOptions,
+  clock: Clock,
+  key: Uint8Array,
+  state: ScheduleState,
+): Promise<ScheduleService> {
+  const { config } = o;
   const ledgerPath = join(config.stateDir, LEDGER_FILE);
   const ledgerId = "myco.schedule.ledger/v1";
   const notifier =
@@ -150,6 +168,7 @@ export async function startScheduleService(o: ServiceOptions): Promise<ScheduleS
       cancel();
       await webhook?.close();
       await drain();
+      state.releaseLock();
     },
   };
 }

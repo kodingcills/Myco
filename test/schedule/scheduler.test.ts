@@ -102,6 +102,15 @@ describe("cron triggers", () => {
     expect(recs.map((r) => r.status).sort()).toEqual(["skipped", "verified"]);
     expect(recs.find((r) => r.status === "skipped")?.missedSlots?.count).toBe(4);
     expect(s.executor.calls).toHaveLength(1);
+    // The slot that ran is the most recent late one (15:00), not the earliest (11:00).
+    const ran = recs.find((r) => r.status === "verified");
+    const at = (h: number) => new Date(Date.UTC(2026, 10, 26, h)).toISOString();
+    expect(ran?.triggerKeySha256).toBe(triggerKeySha256("nightly", "cron", at(15)));
+    expect(recs.find((r) => r.status === "skipped")?.missedSlots).toEqual({
+      count: 4,
+      firstAt: at(11),
+      lastAt: at(14),
+    });
   });
 
   it("a slot evaluated within the grace window counts as on time", async () => {
@@ -266,6 +275,120 @@ describe("budgets", () => {
     expect(rec).toMatchObject({ status: "timeout", accepted: false, codes: ["BUDGET_WALL_TIME"] });
     expect(ex.calls[0]?.signal.aborted).toBe(true);
     expect(s.clock.pendingTimers).toBe(0);
+  });
+});
+
+describe("kill during policy evaluation (round-1 B4)", () => {
+  it("a kill that lands while policies run is recorded killed/KILLED and notifies", async () => {
+    let s: ReturnType<typeof setup> | undefined;
+    const killer = {
+      id: "test.kill-mid-policy",
+      evaluate: async () => {
+        s?.scheduler.kill();
+        return { allow: true as const };
+      },
+    };
+    s = setup({ policies: [killer] });
+    const rec = await s.scheduler.submit({ scheduleId: "nightly", source: "manual", key: "k" })
+      .done;
+    expect(rec).toMatchObject({ status: "killed", accepted: false, codes: ["KILLED"] });
+    expect(s.executor.calls).toHaveLength(0);
+    expect(s.notifier.sent.map((n) => [n.status, n.codes])).toEqual([["killed", ["KILLED"]]]);
+  });
+
+  it("a plain pause while policies run stays a quiet skipped/PAUSED", async () => {
+    let s: ReturnType<typeof setup> | undefined;
+    const pauser = {
+      id: "test.pause-mid-policy",
+      evaluate: async () => {
+        s?.scheduler.pause();
+        return { allow: true as const };
+      },
+    };
+    s = setup({ policies: [pauser] });
+    const rec = await s.scheduler.submit({ scheduleId: "nightly", source: "manual", key: "k" })
+      .done;
+    expect(rec).toMatchObject({ status: "skipped", codes: ["PAUSED"] });
+    expect(s.executor.calls).toHaveLength(0);
+    expect(s.notifier.sent).toEqual([]);
+  });
+});
+
+describe("budgets bind executions, not only rows (round-1 B2)", () => {
+  /** An executor that ignores its abort signal until the test releases it. */
+  function stubborn() {
+    const releases: (() => void)[] = [];
+    let live = 0;
+    let maxLive = 0;
+    const ex = new StubExecutor(
+      (req) =>
+        new Promise((r) => {
+          live++;
+          maxLive = Math.max(maxLive, live);
+          releases.push(() => {
+            live--;
+            r(decided(req, "verified"));
+          });
+        }),
+    );
+    return { ex, releases, live: () => live, maxLive: () => maxLive };
+  }
+
+  it("a timed-out run whose executor ignores the signal keeps its concurrency slot", async () => {
+    const st = stubborn();
+    const s = setup({
+      executor: st.ex,
+      schedules: [spec({ budget: { runsPerDay: 9, wallTimeS: 30, concurrency: 1 } })],
+    });
+    const a = s.scheduler.submit({ scheduleId: "nightly", source: "manual", key: "a" });
+    await flush();
+    s.clock.advance(30_000);
+    expect(await a.done).toMatchObject({ status: "timeout", codes: ["BUDGET_WALL_TIME"] });
+    expect(st.ex.calls[0]?.signal.aborted).toBe(true);
+    await flush();
+    // Still executing: the slot is still taken, and a second trigger is refused.
+    expect(st.live()).toBe(1);
+    expect(s.scheduler.running("nightly")).toBe(1);
+    expect(
+      s.scheduler.submit({ scheduleId: "nightly", source: "webhook", key: "b" }).admission,
+    ).toEqual({ admitted: false, code: "BUDGET_CONCURRENCY" });
+    writeManualRequest(s.state.manualDir, "nightly", "queued");
+    expect(s.scheduler.tick()).toEqual([]); // the manual request waits
+    expect(st.ex.calls).toHaveLength(1);
+    expect(st.maxLive()).toBe(1);
+    // Once the executor really stops, the slot frees and the next run is admitted.
+    st.releases[0]?.();
+    await flush();
+    expect(s.scheduler.running("nightly")).toBe(0);
+    const next = s.scheduler.tick();
+    expect(next.map((x) => x.admission.admitted)).toEqual([true]);
+    await flush();
+    expect(st.ex.calls).toHaveLength(2);
+    st.releases[1]?.();
+    await Promise.all(next.map((x) => x.done));
+    expect(st.maxLive()).toBe(1);
+  });
+
+  it("a killed run whose executor ignores the signal keeps its slot until it settles", async () => {
+    const st = stubborn();
+    const s = setup({
+      executor: st.ex,
+      schedules: [spec({ budget: { runsPerDay: 9, wallTimeS: 600, concurrency: 1 } })],
+    });
+    const a = s.scheduler.submit({ scheduleId: "nightly", source: "manual", key: "a" });
+    await flush();
+    s.scheduler.kill();
+    expect(await a.done).toMatchObject({ status: "killed", codes: ["KILLED"] });
+    await flush();
+    expect(s.scheduler.running("nightly")).toBe(1);
+    s.scheduler.resume();
+    expect(
+      s.scheduler.submit({ scheduleId: "nightly", source: "webhook", key: "b" }).admission,
+    ).toEqual({ admitted: false, code: "BUDGET_CONCURRENCY" });
+    st.releases[0]?.();
+    await flush();
+    expect(s.scheduler.running("nightly")).toBe(0);
+    expect(st.maxLive()).toBe(1);
   });
 });
 
@@ -508,7 +631,7 @@ describe("inbox and manual triggers", () => {
     });
     writeManualRequest(s.state.manualDir, "nightly", "req-1");
     writeFileSync(
-      join(s.state.manualDir, "bad.json"),
+      join(s.state.manualDir, "nightly.bad.json"), // well-named, but carries a task id
       JSON.stringify({ scheduleId: "nightly", taskId: "evil" }),
     );
     await Promise.all(s.scheduler.tick().map((x) => x.done));
@@ -519,6 +642,28 @@ describe("inbox and manual triggers", () => {
     expect(s.executor.calls).toHaveLength(1);
     expect(s.diagnostics).toContain("MANUAL_REQUEST_INVALID");
     expect(s.scheduler.tick()).toEqual([]);
+  });
+
+  it("manual: the same key for two schedules is two requests (no spool overwrite)", async () => {
+    const s = setup({
+      schedules: [spec({ id: "nightly" }), spec({ id: "other", taskId: "fc-v1-002" })],
+    });
+    writeManualRequest(s.state.manualDir, "nightly", "req-1");
+    writeManualRequest(s.state.manualDir, "other", "req-1");
+    await Promise.all(s.scheduler.tick().map((x) => x.done));
+    expect(s.executor.calls.map((c) => c.scheduleId).sort()).toEqual(["nightly", "other"]);
+  });
+
+  it("manual: a spool file whose name and body name different schedules never runs", async () => {
+    const s = setup({
+      schedules: [spec({ id: "nightly" }), spec({ id: "other", taskId: "fc-v1-002" })],
+    });
+    writeFileSync(
+      join(s.state.manualDir, "other.req-9.json"),
+      JSON.stringify({ scheduleId: "nightly" }),
+    );
+    expect(s.scheduler.tick()).toEqual([]);
+    expect(s.diagnostics).toContain("MANUAL_REQUEST_INVALID");
   });
 
   it("trigger keys are digests: the ledger holds no raw delivery id or file name", async () => {

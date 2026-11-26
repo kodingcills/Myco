@@ -9,6 +9,7 @@
  *  - `cursor.json`: the time of the last cron evaluation, for missed-run handling.
  *  - `PAUSED`: the global pause / kill switch. Its presence alone pauses every schedule,
  *    so an operator can `touch` it with the service running or stopped.
+ *  - `LOCK`: held (O_EXCL) by the one running service; a second service refuses to start.
  *  - `manual/`: the spool the `trigger` command writes manual requests into.
  *
  * Claims hold ids, sources, run ids and a SHA-256 of the trigger key, never a payload.
@@ -61,6 +62,7 @@ export class ScheduleState {
   private readonly claims = new Map<string, ClaimRecord>();
   /** `${scheduleId}\0${utcDay}` -> admitted count. */
   private readonly perDay = new Map<string, number>();
+  private locked = false;
 
   constructor(dir: string) {
     this.dir = dir;
@@ -129,6 +131,42 @@ export class ScheduleState {
       closeSync(fd);
     }
     this.remember(rec);
+  }
+
+  get lockPath(): string {
+    return join(this.dir, "LOCK");
+  }
+
+  /**
+   * Take the exclusive service lock on this state dir (`O_CREAT | O_EXCL`). Claims are checked
+   * in memory, so two services on one state dir could each admit the same trigger key: the
+   * second service refuses to start instead. A lock left by a crashed service is not taken
+   * over automatically (fail closed): the operator removes `LOCK` once no service runs.
+   */
+  acquireLock(): void {
+    let fd: number;
+    try {
+      fd = openSync(this.lockPath, "wx", 0o600);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST")
+        throw new ScheduleStateError(
+          `${this.lockPath} exists: another schedule service holds this state dir (remove it only if none is running)`,
+        );
+      throw e;
+    }
+    try {
+      writeSync(fd, `${process.pid}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    this.locked = true;
+  }
+
+  releaseLock(): void {
+    if (!this.locked) return;
+    this.locked = false;
+    rmSync(this.lockPath, { force: true });
   }
 
   readCursor(): number | undefined {

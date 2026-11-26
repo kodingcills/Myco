@@ -66,6 +66,16 @@ describe("webhook", () => {
     expect(w.executor.calls[0]?.source).toBe("webhook");
   });
 
+  it("a correctly signed delivery with a malformed delivery id is refused 401 and never runs", async () => {
+    const w = await boot();
+    for (const delivery of ["has space", "x".repeat(129), "semi;colon", "slash/path"]) {
+      const r = await w.signed("nightly", delivery);
+      expect(r).toEqual({ status: 401, body: { code: "BAD_SIGNATURE" } });
+    }
+    expect(w.executor.calls).toHaveLength(0);
+    expect(w.done).toHaveLength(0);
+  });
+
   it("refuses bad, missing, re-aimed and wrong-secret signatures with one code, and never runs", async () => {
     const w = await boot({
       schedules: [spec({ id: "nightly" }), spec({ id: "other", taskId: "fc-v1-002" })],
