@@ -39,6 +39,7 @@ import {
   EPISODE_SOURCES,
 } from "../../schemas/episode.ts";
 import { REASON_CODES } from "../gate/api.ts";
+import type { IdentityEntry } from "./identity.ts";
 import type { Episode } from "./types.ts";
 import { episodeIdOf } from "./validate.ts";
 
@@ -69,17 +70,25 @@ export type Treatment =
   | { readonly kind: "text" }
   | { readonly kind: "id" }
   | { readonly kind: "token" }
-  | { readonly kind: "closed"; readonly grammar: RegExp };
+  | {
+      readonly kind: "closed";
+      readonly grammar: RegExp;
+      /** Fixed vocabulary or a digest: cannot carry a joined identity (exempt from that check). */
+      readonly exempt?: true;
+    };
 
 const text: Treatment = { kind: "text" };
 const id: Treatment = { kind: "id" };
 const token: Treatment = { kind: "token" };
 const closed = (grammar: RegExp): Treatment => ({ kind: "closed", grammar });
-const oneOf = (...values: readonly string[]) =>
-  closed(
-    new RegExp(`^(?:${values.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`),
-  );
-const digest = closed(HEX64);
+const oneOf = (...values: readonly string[]): Treatment => ({
+  kind: "closed",
+  grammar: new RegExp(
+    `^(?:${values.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`,
+  ),
+  exempt: true,
+});
+const digest: Treatment = { kind: "closed", grammar: HEX64, exempt: true };
 
 /**
  * Every string path an episode can hold (`[]` stands for any array index), and its treatment.
@@ -165,7 +174,11 @@ export class ExportInputError extends Error {
 /** `$.actions.items[3].text` -> `$.actions.items[].text`. */
 export const templateOf = (path: string) => path.replace(/\[\d+\]/g, "[]");
 
-function treat(path: string, value: string): string {
+/** Whether `value` holds an identity string anywhere (case-insensitive; joined forms included). */
+const holds = (value: string, joined: readonly IdentityEntry[]) =>
+  joined.some(([, v]) => value.toLowerCase().includes(v.toLowerCase()));
+
+function treat(path: string, value: string, joined: readonly IdentityEntry[]): string {
   const t = FIELD_TREATMENT[templateOf(path)];
   if (t === undefined) throw new ExportInputError(templateOf(path));
   switch (t.kind) {
@@ -173,21 +186,27 @@ function treat(path: string, value: string): string {
       // Idempotent: an already-hashed value is closed (it carries nothing), so re-exporting an
       // imported dataset is byte-identical.
       return HASHED.test(value) ? value : `h-${exportDigest(value)}`;
+    // An id or token that would be kept verbatim but holds an identity string (even joined,
+    // `<Name>2`) is digested instead (lead ruling 21:52Z).
     case "id":
-      return CLOSED_ID.test(value) ? value : `h-${exportDigest(value)}`;
+      return CLOSED_ID.test(value) && !holds(value, joined) ? value : `h-${exportDigest(value)}`;
     case "token":
-      return CLOSED_TOKEN.test(value) ? value : `h-${exportDigest(value).slice(0, 60)}`;
+      return CLOSED_TOKEN.test(value) && !holds(value, joined)
+        ? value
+        : `h-${exportDigest(value).slice(0, 60)}`;
     case "closed":
       if (!t.grammar.test(value)) throw new ExportInputError(templateOf(path));
       return value;
   }
 }
 
-function walk(node: unknown, path: string): unknown {
-  if (typeof node === "string") return treat(path, node);
-  if (Array.isArray(node)) return node.map((item, i) => walk(item, `${path}[${i}]`));
+function walk(node: unknown, path: string, joined: readonly IdentityEntry[]): unknown {
+  if (typeof node === "string") return treat(path, node, joined);
+  if (Array.isArray(node)) return node.map((item, i) => walk(item, `${path}[${i}]`, joined));
   if (node !== null && typeof node === "object")
-    return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, walk(v, `${path}.${k}`)]));
+    return Object.fromEntries(
+      Object.entries(node).map(([k, v]) => [k, walk(v, `${path}.${k}`, joined)]),
+    );
   return node;
 }
 
@@ -196,8 +215,12 @@ function walk(node: unknown, path: string): unknown {
  * recomputed over the closed content. Throws `ExportInputError` on a value the export may not
  * write or hash.
  */
-export function closeEpisode(ep: Episode): Episode {
-  const { episodeId: _old, ...rest } = walk({ ...ep, episodeId: "0".repeat(64) }, "$") as Episode;
+export function closeEpisode(ep: Episode, joined: readonly IdentityEntry[] = []): Episode {
+  const { episodeId: _old, ...rest } = walk(
+    { ...ep, episodeId: "0".repeat(64) },
+    "$",
+    joined,
+  ) as Episode;
   return { ...rest, episodeId: episodeIdOf(rest) } as Episode;
 }
 
@@ -221,6 +244,36 @@ export function openStrings(ep: unknown): string[] {
       for (const [i, item] of node.entries()) visit(item, `${path}[${i}]`);
     } else if (node !== null && typeof node === "object")
       for (const [k, v] of Object.entries(node)) visit(v, `${path}.${k}`);
+  };
+  visit(ep, "$");
+  return out;
+}
+
+/**
+ * Joined identity strings (`<Name>2`, `xx<name>`) in the strings an exported episode keeps
+ * verbatim: any non-exempt closed field, and an id or token that is not a digest. Paths and
+ * classes only, never values. `closeEpisode` digests ids and tokens that hold one, so after
+ * closing this finds only closed pattern fields (a task family, a task-set id, a version), which
+ * refuse the export; on a hand-edited dataset it finds them anywhere.
+ */
+export function joinedIdentity(
+  ep: unknown,
+  joined: readonly IdentityEntry[],
+): { readonly class: IdentityEntry[0]; readonly path: string }[] {
+  const out: { class: IdentityEntry[0]; path: string }[] = [];
+  const visit = (node: unknown, path: string): void => {
+    if (typeof node === "string") {
+      const t = FIELD_TREATMENT[templateOf(path)];
+      if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) return;
+      if (HASHED.test(node) || HASHED_SHORT.test(node)) return;
+      const lower = node.toLowerCase();
+      for (const [cls, v] of joined)
+        if (lower.includes(v.toLowerCase())) out.push({ class: cls, path });
+    } else if (Array.isArray(node)) {
+      for (const [i, item] of node.entries()) visit(item, `${path}[${i}]`);
+    } else if (node !== null && typeof node === "object") {
+      for (const [k, v] of Object.entries(node)) visit(v, `${path}.${k}`);
+    }
   };
   visit(ep, "$");
   return out;

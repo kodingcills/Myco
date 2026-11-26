@@ -245,16 +245,28 @@ change. For example, `C:\Users\First Last\x` was stored as `<path> Last\x`, and 
 cleanliness scan cannot see a path in what is left. The scan (§4) still runs over every
 exported episode as a backstop. It is no longer what keeps a path out.
 
-**Identity strings are leaks** (lead ruling 2026-11-26 21:52Z; `src/episode/identity.ts`). A bare
-host username, the host name, or a configured identity string (a full name, another account)
-refuses the export wherever it appears, in any case, alone or in a path, the closed id and token
-fields included (`task.id`, `runId`, `trialKey`, `plannerModelId`, key and app names). The scope
-matches the shared leak guard (#560): the account name (`os.userInfo().username`, at least 3
-characters, not a generic account), the host name's first DNS label (`os.hostname()`, at least 4
-characters, not `localhost`), and each line of an optional identity file
-(`--identity-file <file>`, at least 3 characters). Matching is case-insensitive and by word. The
-host values are read at export time from `os` and always checked. The export filter and
-`validateDataset` are checked too. A refusal names the JSON path and the class, never the value.
+**Identity strings are leaks** (lead ruling 2026-11-26 21:52Z; `src/episode/identity.ts`). A host
+username, the host name, or a configured identity string (a full name, another account) never
+leaves the machine verbatim, in any case, whether alone, in a path or joined to other text
+(`<name>_trial`, `<Name>2`, `xx<name>`, `<name>Trial`):
+- free text is always digested;
+- an id or token field that holds one (`task.id`, `runId`, `trialKey`, `plannerModelId`, key and
+  app names) is digested;
+- any other closed pattern field that holds one (a task family, a task-set id, a version), or the
+  export filter, refuses the export, naming the JSON path and the class, never the value;
+- `validateDataset` refuses a hand-edited dataset carrying one.
+
+The scope matches the shared leak guard (#560):
+- the account name (`os.userInfo().username`), at least 3 characters and not a generic account
+  (`root`, `user`, `runner`, `admin`, `ubuntu`, `node`, `nobody`, `vscode`, `codespace`, #560's
+  list);
+- the host name's first DNS label (`os.hostname()`), at least 4 characters, not `localhost`;
+- each line of an optional identity file (`--identity-file <file>`), at least 3 characters.
+
+Matching is case-insensitive substring over every string kept verbatim. Enum values and digests
+are exempt, because a match there could only be a false refusal. The host values are read at
+export time from `os` and always checked. On a CI runner the account is the generic `runner`, so
+CI exercises the check with planted identities.
 
 **Blobs are digest-only** (lead ruling 2026-11-26 20:3xZ). Screenshots and CSV/JSON state leave
 the machine only as the sha256, byte count and content-addressed name their observation already

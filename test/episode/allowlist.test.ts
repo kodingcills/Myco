@@ -11,6 +11,7 @@ import { readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "no
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { PLANTED_MARKER } from "../../src/episode/clean.ts";
 import {
   ARM_GRAMMAR,
   CLOSED_ID,
@@ -449,6 +450,7 @@ describe("#556 round 1 fixes", () => {
       "myco-gate:retry",
       "myco-gate:no-retry",
       "hcu+shell:v2",
+      `myco-gate:${"a".repeat(32)}`,
     ])
       expect(ARM_GRAMMAR.test(ok), ok).toBe(true);
     for (const bad of [
@@ -463,6 +465,12 @@ describe("#556 round 1 fixes", () => {
       "hcu+shell:a/b",
       "zq:plantuser05",
       "plantuser05",
+      // prefixed forms that END in a known arm (pins the ^ anchor; #556 round 2, D1-r2)
+      "c:users.myco-gate",
+      "xmyco-gate",
+      "C:\\x y myco-gate",
+      // the variant cap: 32 characters at most
+      `myco-gate:${"a".repeat(33)}`,
     ])
       expect(ARM_GRAMMAR.test(bad), bad).toBe(false);
     const base = readStoreDirOrDraft();
@@ -477,16 +485,20 @@ describe("#556 round 1 fixes", () => {
     }
   });
 
-  it("T1: the dataset backstop refuses a key-shaped id that fits CLOSED_ID (hashes made consistent)", () => {
-    const r = exportWith("echo hello");
-    expect(r.written).toBe(true);
-    if (!r.written) return;
-    const key = fakeKey();
-    expect(CLOSED_ID.test(key)).toBe(true);
-    rewriteFirstEpisode(r.out, (ep) => ({ ...ep, task: { ...ep.task, id: key } }));
-    expect(validateDataset(r.out, HOST)).toEqual([
-      expect.stringMatching(/: KEY_SHAPED at \$\.task\.id$/),
-    ]);
+  it("T1: the dataset backstop refuses a key-shaped id or the planted marker that fits CLOSED_ID (hashes made consistent)", () => {
+    for (const [value, code] of [
+      [fakeKey(), "KEY_SHAPED"],
+      [PLANTED_MARKER, "PLANTED_MARKER"],
+    ] as const) {
+      const r = exportWith("echo hello");
+      expect(r.written).toBe(true);
+      if (!r.written) return;
+      expect(CLOSED_ID.test(value)).toBe(true);
+      rewriteFirstEpisode(r.out, (ep) => ({ ...ep, task: { ...ep.task, id: value } }));
+      expect(validateDataset(r.out, HOST)).toEqual([
+        expect.stringMatching(new RegExp(`: ${code} at \\$\\.task\\.id$`)),
+      ]);
+    }
   });
 
   it("T2: free text that merely starts with h- is hashed, never kept (only an exact h-<64 hex> is)", () => {
@@ -517,7 +529,9 @@ describe("#556 round 1 fixes", () => {
 });
 
 describe("identity strings are leaks (lead ruling 21:52Z): bare username, host name, configured identity", () => {
-  // The real host values, read now and never printed: assertions compare booleans only.
+  // The real host values, read now and never printed: assertions compare booleans only. On a CI
+  // runner the account is the generic `runner` (excluded, as in #560), so the real-value cases skip
+  // there; the PLANTED cases below run everywhere and are what CI proves.
   const realUser = (() => {
     try {
       return userInfo().username;
@@ -539,10 +553,20 @@ describe("identity strings are leaks (lead ruling 21:52Z): bare username, host n
   ]);
   const userCounts = realUser.length >= 3 && !GENERIC.has(realUser.toLowerCase());
   const hostCounts = realHost.length >= 4 && realHost.toLowerCase() !== "localhost";
+  const PLANTED = ["qzplant", "user"].join("");
   const variants = (v: string) => [v, v.toUpperCase(), v.toLowerCase()];
+  /** Joined forms: `_`, `.`, `-` (word-bounded) and a digit, letters, camelCase (joined). */
+  const joinedForms = (v: string) => [
+    `${v}_trial`,
+    `${v}.x`,
+    `t-${v}-1`,
+    `${v}2`,
+    `xx${v}`,
+    `${v}Trial`,
+    `my${v[0]!.toUpperCase()}${v.slice(1)}X`,
+  ];
   const leaks = (out: string, v: string) => dataset(out).toLowerCase().includes(v.toLowerCase());
 
-  /** Export one episode built by `edit`; the refusal message, or null when it exported. */
   type Draft = ReturnType<typeof draft>;
   function exportEdited(edit: (d: Draft) => Draft, identity = {}) {
     const root = join(dir("id-store"), "s");
@@ -557,15 +581,13 @@ describe("identity strings are leaks (lead ruling 21:52Z): bare username, host n
       return { refused: (e as Error).message, out };
     }
   }
-  const fields: [
-    string,
-    (v: string) => (d: ReturnType<typeof draft>) => ReturnType<typeof draft>,
-  ][] = [
+  /** Id and token fields: an identity in one is DIGESTED (the export goes on, the value never appears). */
+  const digested: [string, (v: string) => (d: Draft) => Draft][] = [
     ["$.task.id", (v) => (d) => ({ ...d, task: { ...d.task, id: v } })],
     ["$.provenance.runId", (v) => (d) => ({ ...d, provenance: { ...d.provenance, runId: v } })],
     [
       "$.provenance.trialKey",
-      (v) => (d) => ({ ...d, provenance: { ...d.provenance, trialKey: `t-${v}-1` } }),
+      (v) => (d) => ({ ...d, provenance: { ...d.provenance, trialKey: v } }),
     ],
     [
       "$.harness.plannerModelId",
@@ -578,7 +600,7 @@ describe("identity strings are leaks (lead ruling 21:52Z): bare username, host n
         actions: {
           capture: "recorded",
           truncated: false,
-          items: [{ seq: 0, atMs: null, kind: "key", keys: v }],
+          items: [{ seq: 0, atMs: null, kind: "key", keys: v.slice(0, 64) }],
         },
       }),
     ],
@@ -589,48 +611,68 @@ describe("identity strings are leaks (lead ruling 21:52Z): bare username, host n
         actions: {
           capture: "recorded",
           truncated: false,
-          items: [{ seq: 0, atMs: null, kind: "launch", app: v }],
+          items: [{ seq: 0, atMs: null, kind: "launch", app: v.slice(0, 64) }],
         },
       }),
     ],
   ];
+  /** A closed pattern field kept verbatim: an identity in one REFUSES the export. */
+  const taskSet = (v: string) => (d: Draft) => ({ ...d, task: { ...d.task, taskSetVersion: v } });
 
-  it("the real host username, in every closed id/token field and every case, refuses the export by path, never by value", () => {
-    if (!userCounts) return; // a generic or short account (CI's `runner`): its home paths are paths
-    for (const v of variants(realUser)) {
-      for (const [path, put] of fields) {
-        const r = exportEdited(put(v));
-        if (CLOSED_ID.test(v) || /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(v)) {
-          expect(r.refused !== null, path).toBe(true);
-          expect((r.refused ?? "").includes(`(username at ${path})`), path).toBe(true);
-          expect((r.refused ?? "").toLowerCase().includes(realUser.toLowerCase()), path).toBe(
-            false,
-          );
-        } else {
-          // Not a closed value: hashed, so it never appears.
-          expect(r.refused === null && !leaks(r.out, v), path).toBe(true);
-        }
+  function digestedEverywhere(v: string, identity: object) {
+    for (const [path, put] of digested) {
+      const r = exportEdited(put(v), identity);
+      expect(r.refused === null, path).toBe(true);
+      expect(leaks(r.out, v), path).toBe(false);
+    }
+  }
+
+  it("a planted identity (runs everywhere): digested in every id and token field, in every case and joined form", () => {
+    for (const v of [...variants(PLANTED), ...joinedForms(PLANTED)])
+      digestedEverywhere(v, { users: [PLANTED] });
+    // And the same value is kept verbatim when it is not an identity (the digest is the identity check's doing).
+    const r = exportEdited(digested[0]![1](PLANTED));
+    expect(r.refused === null && leaks(r.out, PLANTED)).toBe(true);
+  });
+
+  it("a planted identity in a closed pattern field refuses the export by path and class, never by value, joined forms included", () => {
+    for (const v of [...variants(PLANTED), `${PLANTED}2`, `xx${PLANTED}`, `${PLANTED}.x`]) {
+      const r = exportEdited(taskSet(v), { users: [PLANTED] });
+      expect(
+        (r.refused ?? "").includes("(username at $.task.taskSetVersion)"),
+        v.length.toString(),
+      ).toBe(true);
+      expect((r.refused ?? "").toLowerCase().includes(PLANTED)).toBe(false);
+    }
+  });
+
+  it("the real host username and host name (skipped on CI's generic account): digested in ids, refused in a closed field", () => {
+    for (const [counts, value] of [
+      [userCounts, realUser],
+      [hostCounts, realHost],
+    ] as const) {
+      if (!counts || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)) continue;
+      for (const v of [...variants(value), `${value}2`]) {
+        digestedEverywhere(v, {});
+        const r = exportEdited(taskSet(v));
+        expect(r.refused !== null).toBe(true);
+        expect((r.refused ?? "").toLowerCase().includes(value.toLowerCase())).toBe(false);
       }
     }
   });
 
-  it("the real host name refuses the export the same way", () => {
-    if (!hostCounts || !CLOSED_ID.test(realHost)) return;
-    for (const v of variants(realHost)) {
-      const r = exportEdited(fields[0]![1](v));
-      expect((r.refused ?? "").includes("(hostname at $.task.id)")).toBe(true);
-      expect((r.refused ?? "").toLowerCase().includes(realHost.toLowerCase())).toBe(false);
-    }
-  });
-
-  it("configured identity strings (an identity file): an alias is refused in any case; a full name with a space never appears", () => {
+  it("configured identity strings (an identity file): an alias is digested or refused in any case; a full name with a space never appears", () => {
     const file = join(dir("id-file"), "identity.txt");
     const alias = ["qzplant", "alias"].join("");
     const full = ["Qzfirst", " ", "Plantlast"].join("");
     writeFileSync(file, `# configured identity\n${alias}\n${full}\n`);
     for (const v of variants(alias)) {
-      const r = exportEdited(fields[0]![1](v), { identityFile: file });
-      expect((r.refused ?? "").includes("(identity at $.task.id)")).toBe(true);
+      digestedEverywhere(v, { identityFile: file });
+      expect(
+        (exportEdited(taskSet(v), { identityFile: file }).refused ?? "").includes(
+          "(identity at $.task.taskSetVersion)",
+        ),
+      ).toBe(true);
     }
     for (const v of variants(full)) {
       const r = exportEdited(
@@ -653,29 +695,43 @@ describe("identity strings are leaks (lead ruling 21:52Z): bare username, host n
     }
   });
 
-  it("the filter is checked too, and a hand-edited dataset carrying one is refused by validateDataset", () => {
+  it("fixed vocabulary and digests are exempt (no false refusal), and generic accounts are not identities (as #560)", () => {
+    // An identity equal to an enum word, or inside every digest: the export still goes through.
+    for (const users of [["verified"], ["bbbb"]]) {
+      const r = exportEdited((d) => d, { users });
+      expect(r.refused).toBeNull();
+    }
+    // A generic account name (#560's list) is not looked for: kept verbatim in an id.
+    const r = exportEdited(digested[0]![1]("runner-task"), { users: ["runner"] });
+    expect(r.refused === null && leaks(r.out, "runner-task")).toBe(true);
+  });
+
+  it("the filter is checked (joined forms too), and a hand-edited dataset carrying one is refused by validateDataset", () => {
     const file = join(dir("id-file2"), "identity.txt");
     const alias = ["qzplant", "other"].join("");
     writeFileSync(file, `${alias}\n`);
     const root = join(dir("id-f"), "s");
     EpisodeStore.open(root, { simulated: true, host: HOST }).record(draft(), new Map());
-    expect(() =>
-      exportDataset({
-        stores: [root],
-        out: join(dir("id-fo"), "ds"),
-        simulated: true,
-        host: HOST,
-        identity: { identityFile: file },
-        filter: { ...NO_FILTER, taskSetVersion: alias },
-      }),
-    ).toThrow(/the filter carries an identity string \(identity at \$\.filter\.taskSetVersion\)/);
-    const r = exportWith("echo hello");
-    expect(r.written).toBe(true);
-    if (!r.written) return;
-    rewriteFirstEpisode(r.out, (ep) => ({ ...ep, task: { ...ep.task, id: alias.toUpperCase() } }));
-    expect(validateDataset(r.out, HOST, { identityFile: file })).toEqual([
-      expect.stringMatching(/: IDENTITY identity at \$\.task\.id$/),
-    ]);
-    expect(validateDataset(r.out, HOST)).toEqual([]);
+    for (const tsv of [alias, `${alias}2`])
+      expect(() =>
+        exportDataset({
+          stores: [root],
+          out: join(dir("id-fo"), "ds"),
+          simulated: true,
+          host: HOST,
+          identity: { identityFile: file },
+          filter: { ...NO_FILTER, taskSetVersion: tsv },
+        }),
+      ).toThrow(/the filter carries an identity string \(identity at \$\.filter\.taskSetVersion\)/);
+    for (const id of [alias.toUpperCase(), `xx${alias}9`]) {
+      const r = exportWith("echo hello");
+      expect(r.written).toBe(true);
+      if (!r.written) return;
+      rewriteFirstEpisode(r.out, (ep) => ({ ...ep, task: { ...ep.task, id } }));
+      expect(validateDataset(r.out, HOST, { identityFile: file })).toEqual([
+        expect.stringMatching(/: IDENTITY identity at \$\.task\.id$/),
+      ]);
+      expect(validateDataset(r.out, HOST)).toEqual([]);
+    }
   });
 });

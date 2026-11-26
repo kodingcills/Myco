@@ -12,8 +12,13 @@
  *    `localhost`;
  *  - `identity`: each line of an optional identity file passed by path (a full name, another
  *    account), at least 3 characters.
- * Matching is case-insensitive and by word: the string, not glued to a letter or digit on either
- * side (`trial-<name>-1` matches; a digest's hex run cannot hold a word). The host values are
+ * Matching is case-insensitive and by SUBSTRING, so joined forms are caught too: `<name>_trial`,
+ * `<name>.x`, `t-<name>-1`, `<Name>2`, `xx<name>`, `<name>Trial`. It runs over every string the
+ * export keeps verbatim (closed.ts, `joinedIdentity`). An id or token holding one is DIGESTED,
+ * and any other closed pattern field holding one (a task family, a task-set id, a version)
+ * REFUSES the export, as does the export filter. Free text is always digested. Enum values and
+ * digests are exempt: they are fixed vocabulary or hex, so a substring match there would only be a
+ * false refusal (a hex-only name inside a digest, an account named like an enum word). The host values are
  * read at export time from `os`, never from the environment, and always included, whatever host
  * facts the caller passes: a fake host in a test does not switch the real check off.
  */
@@ -58,13 +63,11 @@ export interface IdentityOptions {
   readonly identityFile?: string;
 }
 
-type Pattern = readonly [IdentityClass, RegExp];
+/** An identity string and its class (lower-cased for joined-form matching; never printed). */
+export type IdentityEntry = readonly [IdentityClass, string];
 
-const word = (s: string) =>
-  new RegExp(`(?<![A-Za-z0-9])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i");
-
-/** The identity patterns: the host's (always), plus the caller's and the identity file's. */
-export function identityPatterns(options: IdentityOptions = {}): Pattern[] {
+/** The identity strings: the host's (always), plus the caller's and the identity file's. */
+export function identityEntries(options: IdentityOptions = {}): IdentityEntry[] {
   const users = [safe(() => userInfo().username), ...(options.users ?? [])].filter(
     (u) => u.length >= 3 && !GENERIC_ACCOUNTS.has(u.toLowerCase()),
   );
@@ -79,29 +82,8 @@ export function identityPatterns(options: IdentityOptions = {}): Pattern[] {
           .map((l) => l.trim())
           .filter((l) => l.length >= 3 && !l.startsWith("#"));
   return [
-    ...[...new Set(users)].map((u): Pattern => ["username", word(u)]),
-    ...[...new Set(hosts)].map((h): Pattern => ["hostname", word(h)]),
-    ...[...new Set(configured)].map((c): Pattern => ["identity", word(c)]),
+    ...[...new Set(users)].map((u): IdentityEntry => ["username", u]),
+    ...[...new Set(hosts)].map((h): IdentityEntry => ["hostname", h]),
+    ...[...new Set(configured)].map((c): IdentityEntry => ["identity", c]),
   ];
-}
-
-/** Every identity string in a JSON value (keys included), by path and class. */
-export function identityIssues(value: unknown, patterns: readonly Pattern[]): IdentityIssue[] {
-  const out: IdentityIssue[] = [];
-  const test = (s: string, path: string) => {
-    for (const [cls, re] of patterns) if (re.test(s)) out.push({ class: cls, path });
-  };
-  const visit = (node: unknown, path: string): void => {
-    if (typeof node === "string") test(node, path);
-    else if (Array.isArray(node)) {
-      for (const [i, item] of node.entries()) visit(item, `${path}[${i}]`);
-    } else if (node !== null && typeof node === "object") {
-      for (const [k, v] of Object.entries(node)) {
-        test(k, `${path}{key}`);
-        visit(v, `${path}.${k}`);
-      }
-    }
-  };
-  visit(value, "$");
-  return out;
 }

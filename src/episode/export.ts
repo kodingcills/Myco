@@ -29,8 +29,14 @@ import {
 } from "../../schemas/episode.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import { currentHost, type HostFacts } from "./clean.ts";
-import { ARM_GRAMMAR, closeEpisode, ExportInputError, openStrings } from "./closed.ts";
-import { type IdentityOptions, identityIssues, identityPatterns } from "./identity.ts";
+import {
+  ARM_GRAMMAR,
+  closeEpisode,
+  ExportInputError,
+  joinedIdentity,
+  openStrings,
+} from "./closed.ts";
+import { type IdentityOptions, identityEntries } from "./identity.ts";
 import { blobsFor, EpisodeStore, readStoreDir } from "./store.ts";
 import type { Episode, EpisodeOutcome } from "./types.ts";
 import { canonicalJson, sha256Hex, validateEpisode } from "./validate.ts";
@@ -164,8 +170,19 @@ export function exportDataset(options: {
   validateFilter(filter);
   const host = options.host ?? currentHost();
   // Identity strings (lead ruling 21:52Z): read now, from os and the identity file.
-  const identity = identityPatterns(options.identity);
-  const filterIdentity = identityIssues(filter, identity);
+  const entries = identityEntries(options.identity);
+  // The filter's strings are written to the manifest: an identity in one (joined forms too,
+  // case-insensitive) refuses the export.
+  const filterIdentity = (
+    [
+      ["$.taskSetVersion", filter.taskSetVersion],
+      ["$.arm", filter.arm],
+    ] as const
+  ).flatMap(([path, v]) => {
+    const hit =
+      v === null ? undefined : entries.find(([, e]) => v.toLowerCase().includes(e.toLowerCase()));
+    return hit === undefined ? [] : [{ class: hit[0], path }];
+  });
   if (filterIdentity.length > 0)
     throw new Error(
       `export refused: the filter carries an identity string (${filterIdentity[0]?.class} at ${filterIdentity[0]?.path.replace(/^\$/, "$.filter")})`,
@@ -195,7 +212,7 @@ export function exportDataset(options: {
       // Only the closed form leaves the machine; it is validated again as written.
       let closedEp: Episode;
       try {
-        closedEp = closeEpisode(ep);
+        closedEp = closeEpisode(ep, entries);
       } catch (e) {
         if (e instanceof ExportInputError)
           throw new Error(`episode ${String(ep.episodeId).slice(0, 12)}: ${e.message}`);
@@ -207,7 +224,7 @@ export function exportDataset(options: {
         throw new Error(
           `export refused: the closed form of episode ${String(ep.episodeId).slice(0, 12)} is invalid (${[...new Set(closedIssues.map((i) => i.code))].join(", ")})`,
         );
-      const named = identityIssues(closedEp, identity);
+      const named = joinedIdentity(closedEp, entries);
       if (named.length > 0)
         throw new Error(
           `export refused: episode ${String(ep.episodeId).slice(0, 12)} carries an identity string (${named[0]?.class} at ${named[0]?.path})`,
@@ -242,7 +259,7 @@ export function validateDataset(
   host: HostFacts = currentHost(),
   identityOptions: IdentityOptions = {},
 ): string[] {
-  const identity = identityPatterns(identityOptions);
+  const entries = identityEntries(identityOptions);
   const problems: string[] = [];
   let manifest: DatasetManifest;
   try {
@@ -293,7 +310,7 @@ export function validateDataset(
     const issues = validateEpisode(ep, { host });
     for (const i of issues)
       problems.push(`episode ${String(ep.episodeId).slice(0, 12)}: ${i.code} at ${i.path}`);
-    for (const i of identityIssues(ep, identity))
+    for (const i of joinedIdentity(ep, entries))
       problems.push(
         `episode ${String(ep.episodeId).slice(0, 12)}: IDENTITY ${i.class} at ${i.path}`,
       );
