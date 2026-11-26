@@ -81,6 +81,11 @@ function sha256(data: string | Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
+/** The digest `buildRegistry` records as a task's `specSha256` (canonical JSON, sha256). */
+export function specDigest(spec: unknown): string {
+  return sha256(canonical(spec));
+}
+
 /** Build the registry, validating every entry. Throws with every problem listed. */
 export function buildRegistry(
   entries: readonly TaskEntry[],
@@ -115,7 +120,7 @@ export function buildRegistry(
       family,
       stateFile: entry.stateFile,
       spec,
-      specSha256: sha256(canonical(spec)),
+      specSha256: specDigest(spec),
       ...(entry.title === undefined ? {} : { title: entry.title }),
     });
   }
@@ -132,8 +137,9 @@ export type ReadOutcome =
  * Where the gate reads persisted state from: an operator-configured host location that a
  * harness fills per trial after the agent stops (a capture of the saved file), never the
  * live guest and never anything the agent can write. The agent names a run; the reader
- * decides what that means. Before M2-12 this must be backed by TIF-266's (#470) sealed
- * per-trial capture.
+ * decides what that means. A gated run uses `sealedEvidenceReader` (`./sealed.ts`), which
+ * reads only the bound trial's sealed host capture from TIF-266's vault;
+ * `fileEvidenceReader` is the mock-path and development stand-in only.
  */
 export interface EvidenceReader {
   /** A description of the location for logs (never agent-controlled). */
@@ -301,8 +307,12 @@ function bindDescriptorPath(
  *    at the run's own path. At read time that IS the run's evidence; keeping writers off
  *    the root is TIF-266's job (and the host-capture requirement).
  * On every platform the gated path relies on host capture: the agent has no write access
- * to the evidence root, so nothing can swap components while the gate reads. Before M2-12
- * the reader must be backed by TIF-266's (#470) sealed per-trial capture.
+ * to the evidence root, so nothing can swap components while the gate reads.
+ *
+ * Mock-path stand-in only: this reader is for `myco-gate demo --transport mock`, tests and
+ * development. It checks paths, not provenance, so it is not acceptable for a gated run.
+ * A gated run reads through `sealedEvidenceReader` (`./sealed.ts`): the bound trial's
+ * sealed host capture, taken after the agent stopped (TIF-266, #470).
  *
  * All I/O here is synchronous and bounded by refusing non-regular files; `readTimeoutMs`
  * guards readers that return a pending promise, not a filesystem that blocks a syscall.

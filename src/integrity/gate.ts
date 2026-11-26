@@ -1,8 +1,9 @@
 /**
  * TIF-266 — the seam the TIF-265 gate calls.
  *
- * `Verdict` is the M1 three-valued type (`src/core/verify.ts`). When TIF-265 lands its own
- * gate verdict type, this function maps onto it; until then the M1 type is the contract.
+ * `Verdict` is the M1 three-valued type (`src/core/verify.ts`). The TIF-265 gate
+ * (`src/gate/`) reads through `openForTrial` (see `src/gate/sealed.ts`); `gatedVerdict` and
+ * `gateForTrial` are the same rules for a caller that runs a `SealedOracle` directly.
  *
  * Rules:
  * - Integrity failure is `uncertain` ("could not look"), never `refuted` and never
@@ -10,11 +11,22 @@
  * - The gate never trusts the agent's run id to pick the receipt. The operator binds the
  *   gate to one trial (TIF-265's `myco-gate mcp --run … --task …`); that binding carries the
  *   trial's receipt, and a request naming any other run id is `uncertain`
- *   (`integrity:run-not-bound`). See `gateForTrial`.
+ *   (`integrity:run-not-bound`). See `openForTrial`.
+ * - The receipt is checked at runtime, not only by the TypeScript signature: the named
+ *   audit opt-out (`AUDIT_WITHOUT_RECEIPT`), `null`, a non-object or a missing receipt
+ *   passed by a cast is `receipt-missing`; an object that is not a well-formed receipt is
+ *   `receipt-malformed` (TIF-274 prerequisite, #470 follow-ups N1 and N2).
  */
 
 import type { Verdict } from "../core/verify.ts";
-import type { IntegrityViolation, SealReceipt, VerdictInputs, VerdictVault } from "./vault.ts";
+import {
+  AUDIT_WITHOUT_RECEIPT,
+  type IntegrityViolation,
+  type SealReceipt,
+  type VerdictInputs,
+  type VerdictInputsResult,
+  type VerdictVault,
+} from "./vault.ts";
 
 /** An oracle over vault inputs only. It must not read any path itself. */
 export type SealedOracle = (inputs: VerdictInputs) => Verdict;
@@ -31,24 +43,91 @@ export interface TrialBinding {
   readonly receipt: SealReceipt;
 }
 
+/**
+ * Operator-side reasons: code, vault-relative path and detail. A violation's path can be
+ * an absolute host path (an oracle source file, the vault dir), so these must not reach the
+ * agent; use `integrityCodes` for agent-facing text.
+ */
 export function integrityReasons(violations: readonly IntegrityViolation[]): string[] {
   return violations.map(
     (v) => `${INTEGRITY_REASON_PREFIX}${v.code}${v.path ? ` ${v.path}` : ""}: ${v.detail}`,
   );
 }
 
+/** Agent-facing form: `integrity:<code>` only, deduplicated, in first-seen order. */
+export function integrityCodes(violations: readonly IntegrityViolation[]): string[] {
+  return [...new Set(violations.map((v) => `${INTEGRITY_REASON_PREFIX}${v.code}`))];
+}
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 /**
- * The verdict for one run: integrity first, then the oracle on the checked bytes. The
- * receipt is required and must be the one the harness kept since sealing *this* run; a
- * receipt for any other run fails `receipt-mismatch`.
+ * Why `receipt` is not a usable runtime receipt, or undefined when it is. Never throws:
+ * a throwing getter or Proxy trap counts as malformed.
  */
-export function gatedVerdict(
+export function receiptProblem(receipt: unknown): IntegrityViolation | undefined {
+  if (receipt === AUDIT_WITHOUT_RECEIPT)
+    return {
+      code: "receipt-missing",
+      detail: "the audit opt-out is not a receipt: a gate always has the calling trial's receipt",
+    };
+  if (receipt === null || receipt === undefined || typeof receipt !== "object")
+    return {
+      code: "receipt-missing",
+      detail: "no seal receipt for this trial: pass the calling trial's receipt",
+    };
+  try {
+    const { runId, sealDigest } = receipt as { runId?: unknown; sealDigest?: unknown };
+    if (typeof runId !== "string" || runId.length === 0)
+      return { code: "receipt-malformed", detail: "receipt.runId is not a non-empty string" };
+    if (typeof sealDigest !== "string" || !SHA256_HEX.test(sealDigest))
+      return { code: "receipt-malformed", detail: "receipt.sealDigest is not a sha256 hex digest" };
+  } catch {
+    return { code: "receipt-malformed", detail: "receipt could not be read" };
+  }
+  return undefined;
+}
+
+/**
+ * Open the bound trial's checked inputs for an agent request. `requestedRunId` is the run
+ * id the agent sent; the binding is the operator's. The vault is opened only for
+ * `binding.runId`, and only when the request names exactly that run and the binding holds
+ * a well-formed receipt; otherwise the result is a violation and nothing is read.
+ */
+export function openForTrial(
   vault: VerdictVault,
-  runId: string,
-  receipt: SealReceipt,
-  oracle: SealedOracle,
-): Verdict {
-  const opened = vault.openVerdictInputs(runId, receipt);
+  binding: TrialBinding,
+  requestedRunId: string,
+): VerdictInputsResult {
+  let runId: unknown;
+  let receipt: unknown;
+  try {
+    runId = binding?.runId;
+    receipt = binding?.receipt;
+  } catch {
+    runId = undefined;
+  }
+  if (typeof runId !== "string" || runId.length === 0)
+    return {
+      ok: false,
+      violations: [{ code: "run-not-bound", detail: "the gate has no bound trial" }],
+    };
+  if (requestedRunId !== runId)
+    return {
+      ok: false,
+      violations: [
+        {
+          code: "run-not-bound",
+          detail: "this gate is bound to another trial; only the bound run id is checked",
+        },
+      ],
+    };
+  const problem = receiptProblem(receipt);
+  if (problem) return { ok: false, violations: [problem] };
+  return vault.openVerdictInputs(runId, receipt as SealReceipt);
+}
+
+function runOracle(opened: VerdictInputsResult, oracle: SealedOracle): Verdict {
   if (!opened.ok) return { status: "uncertain", reasons: integrityReasons(opened.violations) };
   try {
     return oracle(opened.inputs);
@@ -61,10 +140,27 @@ export function gatedVerdict(
 }
 
 /**
- * The gate's entry point for an agent request. `requestedRunId` is the run id the agent
- * sent; the binding is the operator's. Any run id other than the bound trial's is
- * `uncertain` without opening the vault, so an agent cannot point the gate at an earlier
- * honest run.
+ * The verdict for one run: integrity first, then the oracle on the checked bytes. The
+ * receipt is required and must be the one the harness kept since sealing *this* run; a
+ * receipt for any other run fails `receipt-mismatch`. `AUDIT_WITHOUT_RECEIPT` or a
+ * malformed receipt passed by a cast is refused at runtime (`receipt-missing` /
+ * `receipt-malformed`).
+ */
+export function gatedVerdict(
+  vault: VerdictVault,
+  runId: string,
+  receipt: SealReceipt,
+  oracle: SealedOracle,
+): Verdict {
+  const problem = receiptProblem(receipt);
+  if (problem) return { status: "uncertain", reasons: integrityReasons([problem]) };
+  return runOracle(vault.openVerdictInputs(runId, receipt), oracle);
+}
+
+/**
+ * The gate's entry point for an agent request, for a caller with a `SealedOracle`. Any run
+ * id other than the bound trial's is `uncertain` without opening the vault, so an agent
+ * cannot point the gate at an earlier honest run. See `openForTrial`.
  */
 export function gateForTrial(
   vault: VerdictVault,
@@ -72,15 +168,5 @@ export function gateForTrial(
   requestedRunId: string,
   oracle: SealedOracle,
 ): Verdict {
-  if (requestedRunId !== binding.runId)
-    return {
-      status: "uncertain",
-      reasons: integrityReasons([
-        {
-          code: "run-not-bound",
-          detail: "this gate is bound to another trial; only the bound run id is checked",
-        },
-      ]),
-    };
-  return gatedVerdict(vault, binding.runId, binding.receipt, oracle);
+  return runOracle(openForTrial(vault, binding, requestedRunId), oracle);
 }
