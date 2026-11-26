@@ -1,0 +1,21 @@
+fastreset: 17:11:55Z reset t0-after-long-stop: start (VM status stopped)
+fastreset: 17:14:41Z reset t0-after-long-stop: rc=0 first ssh answer after 142s (guest CPU 283s) total=166
+fastreset: 17:14:47Z probe t0: unreadable
+fastreset: 17:14:54Z marker written: written-after-t0
+fastreset: 17:15:11Z E1: stopped by request
+fastreset: 17:15:11Z reset e1-after-request-stop: start (VM status stopped)
+fastreset: 17:18:02Z reset e1-after-request-stop: rc=0 first ssh answer after 151s (guest CPU 287s) total=171
+fastreset: 17:18:09Z probe e1: unreadable
+fastreset: 17:18:11Z marker written: written-after-e1
+fastreset: 17:18:27Z E2: stopped by request
+fastreset: 17:18:28Z E2: guest-egress deny rc=0
+fastreset: 17:18:28Z reset e2-after-request-stop-and-config-write: start (VM status stopped)
+fastreset: 17:18:54Z reset e2-after-request-stop-and-config-write: rc=0 first ssh answer after 13s (guest CPU 4s) total=26
+fastreset: 17:18:55Z probe e2: unreadable
+fastreset: 17:18:56Z marker written: written-after-e2
+fastreset: 17:18:57Z E3: guest-egress deny (force stop) rc=0
+fastreset: 17:18:57Z reset e3-after-force-stop-and-config-write: start (VM status stopped)
+fastreset: 17:19:22Z reset e3-after-force-stop-and-config-write: rc=0 first ssh answer after 13s (guest CPU 4s) total=25
+fastreset: 17:19:23Z probe e3: unreadable
+fastreset: 17:19:24Z final egress verify rc=0
+fastreset: 17:19:43Z done: VM stopped

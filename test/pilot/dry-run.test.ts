@@ -143,6 +143,9 @@ describe("SIMULATED pilot dry run (track E)", () => {
         hostLoad1mStart: 0,
         harnessClass: null,
         faultLanded: r.faultClass === "none" ? null : true,
+        // TIF-98: every trial-ops row records its reset's cold boot (required).
+        resetBootClass: "cold",
+        resetGuestCpuFirstSshS: 280,
       })),
       readErrors: [],
       runs: null,
