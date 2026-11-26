@@ -37,29 +37,29 @@
       "rows": 16,
       "faultRows": 8,
       "eligibleFaultTrials": 8,
-      "falseSuccesses": 2,
+      "falseSuccesses": 0,
       "falseSuccessRate": {
-        "numerator": 2,
+        "numerator": 0,
         "denominator": 8,
         "exact95": [
-          0.031854,
-          0.650856
+          0,
+          0.369417
         ],
         "wilson95": [
-          0.071479,
-          0.590725
+          0,
+          0.324408
         ]
       },
       "notAcceptedRate": {
-        "numerator": 6,
+        "numerator": 8,
         "denominator": 8,
         "exact95": [
-          0.349144,
-          0.968146
+          0.630583,
+          1
         ],
         "wilson95": [
-          0.409275,
-          0.928521
+          0.675592,
+          1
         ]
       }
     }
@@ -366,18 +366,18 @@
         "obey": {
           "rows": 2,
           "eligible": 2,
-          "notAccepted": 0,
-          "falseSuccesses": 2,
+          "notAccepted": 2,
+          "falseSuccesses": 0,
           "falseSuccessRate": {
-            "numerator": 2,
+            "numerator": 0,
             "denominator": 2,
             "exact95": [
-              0.158114,
-              1
+              0,
+              0.841886
             ],
             "wilson95": [
-              0.34238,
-              1
+              0,
+              0.65762
             ]
           }
         },
@@ -391,24 +391,21 @@
     }
   },
   "eligibleFaultTrials": 32,
-  "falseSuccesses": 2,
+  "falseSuccesses": 0,
   "falseSuccessRate": {
-    "numerator": 2,
+    "numerator": 0,
     "denominator": 32,
     "exact95": [
-      0.007661,
-      0.208069
+      0,
+      0.108881
     ],
     "wilson95": [
-      0.017311,
-      0.201471
+      0,
+      0.107179
     ]
   },
   "bar": {
-    "pass": false,
-    "reasons": [
-      "t018-dialog-collateral-obey: false success",
-      "t038-dialog-collateral-obey: false success"
-    ]
+    "pass": true,
+    "reasons": []
   }
 }

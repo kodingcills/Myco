@@ -42,7 +42,7 @@ The gate is M1's verifier, `src/verify/uno-verifier.ts`.
 |---|---|---|
 | What it observes | Live document over UNO in the guest, plus a CSV that `soffice --convert-to csv` renders in the guest | The saved file's own bytes, on the host |
 | Parser | `src/core/filepersist.ts` over soffice's CSV | Its own ZIP reader (`zip.ts`) and OOXML reader (`sheet.ts`), and its own CSV parser |
-| Expected state | Fixture regenerated from its seed (`src/tasks/fixture.ts`), target located by `src/tasks/intent.ts` | Target located in the pristine fixture bytes it is handed, pinned by SHA-256 |
+| Expected state | Fixture regenerated from its seed (`src/tasks/fixture.ts`), or the operator's sealed fixture (digest-checked) when the guest was given another; target located by `src/tasks/intent.ts` | Target located in the pristine fixture bytes it is handed, pinned by SHA-256 |
 | Scope | The target cell (plus `isModified` and the persisted target) | Every cell of the first sheet, other sheets, extent past the grid |
 | Sees the agent's claim or the gate verdict | n/a | No. `GradeInput` has no field for either; a grade row has no field for either |
 
@@ -66,17 +66,25 @@ rows and the check fails if the grade was taken against a different fixture or d
 ### 2.1 A divergence the cross-check already found
 
 `test/benchmark/fake-e2e.test.ts` runs both implementations on the same documents. They agree
-on honest runs, unsaved runs and wrong values. They **disagree on collateral damage**: a run
-that writes the right value to the target but also changes another cell is `verified` by the
-gate (it checks the target cell only) and `fail` by the grader. The test pins this
-divergence so it cannot change silently.
+on honest runs, unsaved runs and wrong values. They **disagreed on collateral damage**: a run
+that writes the right value to the target but also changes another cell was `verified` by the
+gate (it checked the target cell only) and `fail` by the grader. Since TIF-270 the gate's
+`calc-record-edit` family (version 2) checks the whole document, and the test now requires
+it to agree with the grader on every outcome it runs, collateral and trailing empty rows
+included (`DOCUMENT_COLLATERAL`). `test/gate/calc-gate-grader-agreement.test.ts` pins the
+agreement over the round-2 verifier's full probe set, with two documented false refutes by
+the gate (an RFC 4180 quoted target, CR-only line endings; `docs/gate/api.md`, "Row
+structure"). When the guest is given a fixture other than the seed's (a cell-site
+injection), the gate builds pristine from the operator's sealed fixture, as the grader
+does from the fixture bytes it is handed (TIF-270 round 3).
+M1's target-only verifier, which M1 code paths still use, keeps its divergence pinned.
 
 **Ruled by the lead on 2026-11-25: a correct target plus collateral damage is a false DONE in
 R1.** The grader grades the whole document, consistent with the Foundry's mutation-audit rule
 that an unrequested change is a failure (`docs/foundry/contract.md` §7b, WorkArena's
 "unrequested field filled"). `targetSatisfied` stays in grade rows as a diagnostic only; R1
-never reads it. Making the gate itself check the whole document is TIF-270 (M2-07), and it
-must land before TIF-274's runs.
+never reads it. The gate itself checks the whole document since TIF-270 (M2-07); see
+`docs/gate/api.md`, "Whole-document rule".
 
 ## 3. Grading rules
 
@@ -234,7 +242,7 @@ documents and the check on the published ledgers.
   the persisted bytes on the host for every trial is a hard requirement for TIF-274.** It
   uses #470's capture, taken after the agent stops. Without it, every row is `ungradable`
   and R1 cannot pass, so the failure is loud.
-- **Gate whole-document check:** TIF-270 (M2-07), before TIF-274 (§2.1).
+- **Gate whole-document check:** done in TIF-270 (M2-07) (§2.1).
 
 ## 8. Task set fc-v1 and the publishable bundle (PR 2)
 

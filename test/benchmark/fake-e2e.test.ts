@@ -1,8 +1,10 @@
 /**
  * End to end on the fake app (no VM, no paid API): real guarded-program runs and false
  * "done" runs, graded by the independent grader and joined by the check. Also cross-checks
- * the grader against the gate's own verifier: two independent implementations must agree
- * on every document, and the test fails loudly if they ever diverge.
+ * the grader against the gate's Calc oracle (`calc-record-edit` v2, whole document, TIF-270):
+ * two independent implementations must agree on every document, and the test fails loudly
+ * if they ever diverge. M1's target-only verifier is kept beside them, with its known
+ * collateral divergence pinned.
  */
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +16,7 @@ import { gradeRow } from "../../src/benchmark/grade/row.ts";
 import { readCsvSpreadsheet } from "../../src/core/filepersist.ts";
 import { runProgram } from "../../src/core/runner.ts";
 import { FakeSpreadsheetApp } from "../../src/fake/app.ts";
+import { calcRecordEditFamily } from "../../src/gate/families.ts";
 import { calcRecordEditVerifier, intentFor, programFor } from "../../src/tasks/calc-record-edit.ts";
 import { FIXTURE_COLUMNS, generateFixture } from "../../src/tasks/fixture.ts";
 import { type CalcRecordEditParams, generateParameterSets } from "../../src/tasks/intent.ts";
@@ -23,7 +26,7 @@ const COLUMN_TYPES: Record<string, ColumnType> = Object.fromEntries(
 );
 const SEEDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"];
 
-type Outcome = "honest" | "unsaved" | "wrong-value" | "collateral";
+type Outcome = "honest" | "unsaved" | "wrong-value" | "collateral" | "blank-line" | "trailing-rows";
 
 async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
   const dir = mkdtempSync(join(tmpdir(), "myco-bench-e2e-"));
@@ -41,13 +44,30 @@ async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
     lines[1] = lines[1]?.replace(/^([^,]*),[^,]*/, "$1,Collateral Edit") ?? "";
     writeFileSync(filePath, lines.join("\n"));
   }
+  if (outcome === "blank-line") {
+    // Round-2 D1: every record moves down one row; the M1 reader drops the empty line.
+    const lines = readFileSync(filePath, "utf8").split("\n");
+    lines.splice(1, 0, "");
+    writeFileSync(filePath, lines.join("\n"));
+  }
+  if (outcome === "trailing-rows") {
+    // Round-3 D2: empty rows after the data hold no content; both implementations pass it.
+    writeFileSync(filePath, `${readFileSync(filePath, "utf8")}\n,,,,\r\n\n`);
+  }
   return { fixtureCsv: Buffer.from(fixture.csv), filePath };
 }
 
 describe("benchmark harness on the fake app", () => {
   it("grades honest runs pass and every false-done shape fail, agreeing with the gate", async () => {
     const sets = generateParameterSets(SEEDS).slice(0, 8);
-    const outcomes: Outcome[] = ["honest", "unsaved", "wrong-value", "collateral"];
+    const outcomes: Outcome[] = [
+      "honest",
+      "unsaved",
+      "wrong-value",
+      "collateral",
+      "blank-line",
+      "trailing-rows",
+    ];
     for (const params of sets) {
       for (const outcome of outcomes) {
         const { fixtureCsv, filePath } = await runTrial(params, outcome);
@@ -61,14 +81,26 @@ describe("benchmark harness on the fake app", () => {
         });
         const gate = calcRecordEditVerifier.verify(readCsvSpreadsheet(filePath), intentFor(params));
         const label = `${params.fixtureSeed}/${params.rowKey}/${params.column} ${outcome}`;
-        expect(g.status, label).toBe(outcome === "honest" ? "pass" : "fail");
-        if (outcome === "collateral") {
-          // Known divergence, pinned: the gate checks the target cell only, so it verifies a
-          // document whose other cells were damaged. The independent grader fails it and
-          // still reports the target itself as satisfied. If the gate ever starts checking
-          // collateral cells, this assertion flips and the benchmark doc must be updated.
-          expect(gate.status, `${label}: gate`).toBe("verified");
+        const passes = outcome === "honest" || outcome === "trailing-rows";
+        expect(g.status, label).toBe(passes ? "pass" : "fail");
+        // The gate's Calc oracle (whole document, TIF-270) agrees with the grader on every
+        // outcome, collateral damage included.
+        const gateV2 = calcRecordEditFamily.decide(new Uint8Array(persisted), params, "doc.csv");
+        expect(gateV2.status === "verified", `${label}: grader and gate v2 disagree`).toBe(
+          g.status === "pass",
+        );
+        if (outcome === "blank-line") {
+          // Known divergence, pinned: M1's reader drops empty lines before numbering rows,
+          // so the M1 verifier still finds the target; the gate's strict parse does not.
+          expect(gate.status, `${label}: M1 verifier`).toBe("verified");
+          expect(gateV2.codes, label).toContain("DOCUMENT_COLLATERAL");
+        } else if (outcome === "collateral") {
+          // Known divergence, pinned: M1's verifier checks the target cell only, so it
+          // verifies a document whose other cells were damaged. The gate no longer uses it
+          // for this (calc-record-edit v2 above); M1 code paths still do.
+          expect(gate.status, `${label}: M1 verifier`).toBe("verified");
           expect(g.targetSatisfied, label).toBe(true);
+          expect(gateV2.codes, label).toEqual(["DOCUMENT_COLLATERAL"]);
         } else {
           expect(gate.status === "verified", `${label}: grader and gate disagree`).toBe(
             g.status === "pass",

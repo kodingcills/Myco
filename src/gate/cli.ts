@@ -17,6 +17,7 @@ import {
   type TaskEntry,
 } from "./gate.ts";
 import { serveStdio } from "./mcp-server.ts";
+import { renderMultiStepDemo, runMultiStepMockDemo } from "./multistep-demo.ts";
 import { builtinTasks, loadTasksFile } from "./tasks.ts";
 
 export const EXIT_VERIFIED = 0;
@@ -27,7 +28,7 @@ export const EXIT_USAGE = 3;
 export const USAGE = `usage:
   myco-gate check --evidence-root <dir> --task <id> --run <id> [--claim <text>] [options]
   myco-gate mcp   --evidence-root <dir> --task <id> --run <id> [options]
-  myco-gate demo  --transport mock [--out <dir>] [--json]
+  myco-gate demo  --transport mock [--family todo-items|calc-multi-step] [--out <dir>] [--json]
 
 operator options (check, mcp):
   --evidence-root <dir>  persisted state is read from <dir>/<runId>/<task stateFile>
@@ -62,6 +63,7 @@ const VALUE_FLAGS = new Set([
   "--claim",
   "--out",
   "--transport",
+  "--family",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--no-builtin"]);
 
@@ -178,7 +180,22 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
           throw new UsageError("demo needs --transport mock (the live path is M2-12)");
         }
         const out = str(flags, "--out");
-        const report = await runMockDemo(out === undefined ? {} : { outDir: out });
+        const opts = out === undefined ? {} : { outDir: out };
+        const family = str(flags, "--family") ?? "todo-items";
+        if (family === "calc-multi-step") {
+          // TIF-270: multi-step Calc with one retry from the last verified checkpoint.
+          const report = await runMultiStepMockDemo(opts);
+          io.stdout.write(
+            flags.has("--json")
+              ? `${JSON.stringify(report, null, 2)}\n`
+              : renderMultiStepDemo(report),
+          );
+          return report.ok ? 0 : 1;
+        }
+        if (family !== "todo-items") {
+          throw new UsageError(`demo --family must be todo-items or calc-multi-step`);
+        }
+        const report = await runMockDemo(opts);
         io.stdout.write(
           flags.has("--json") ? `${JSON.stringify(report, null, 2)}\n` : renderDemo(report),
         );
