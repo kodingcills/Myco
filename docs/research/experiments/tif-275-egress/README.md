@@ -101,6 +101,38 @@ refusal cases (filters, other netdev references, TCP/UDP/telnet/socket backends,
 `-monitor`, an element with whitespace, a missing `-nodefaults`, malformed procargs buffers)
 are host-side tests in `test/guest-egress.test.ts`, each with a mutation shown to be caught.
 
+## 8. Follow-up: option allowlist (no VM run)
+
+The allowlist follow-up (D7–D9 from PR #482's round-3 verdict) was built without the VM. The
+host-side tests in `test/guest-egress.test.ts` cover it. One read-only step on the live guest
+was owed before merge, and is now done (below): `python3 -I scripts/guest_egress_check.py
+names`, committed here as `11-allowlist-live-names.txt`, plus a clean `verify-all`. Why:
+section 7 records 13 of the 104 live elements, so the options UTM's argument builder adds
+(`-L`, `-S`, `-drive`, `-cpu`, …) were modelled from UTM 5.0.9's builder, not read from this
+guest. A missing one would have made `verify` fail closed and the reset refuse the guest.
+
+**Round 4 (relayed live result, not committed here).** The VM owner ran `names` and `verify`
+read-only at `bbab3659`, with egress denied. `verify` exited 1: `-audio is not in the launch
+allowlist (argv[38])`. `names` marked `-audio` and `-audiodev` NOT ALLOWED; the other 50
+options were allowed, and `-boot` was not present. Round 4 adds `-audio none` and `-audiodev
+spice,id=audio0` (values from UTM 5.0.9's `soundArguments`, not yet read from the guest),
+removes `-boot`, and adds the read-only `scripts/guest-egress.sh verify-all`, which lists
+every refusal by argv index. The VM owner's `verify-all` at `edc9befc` (relayed) had exactly one
+refusal: `-device driver is not in the allowlist (argv[103])`, the TPM front end. Audio was
+accepted and the UTM config matched. UTM 5.0.9's `tpmArguments` writes
+`tpm-crb-device,tpmdev=tpm0` for a `virt` machine, and the follow-up commit allows exactly that.
+
+**Live run done: 2026-11-26, 07:21Z, at head `67d3b6a2`. Result: clean.** The VM owner did a
+normal `scripts/reset-trial-vm.sh clean-base` with egress denied, under `scripts/vm-session.sh`,
+then ran these read-only, writing nothing to the guest:
+
+- `scripts/guest-egress.sh verify-all` exited 0 with no refusals:
+  `ok: user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22` and `ok: UTM config matches`.
+- `python3 -I scripts/guest_egress_check.py names` exited 0. All 52 options are allowed, none is
+  NOT ALLOWED, and `-audio`, `-audiodev` and the TPM front end are now accepted.
+
+Both outputs are in `11-allowlist-live-names.txt` (names only, no values).
+
 ## Reproduce
 
 ```bash

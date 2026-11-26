@@ -14,9 +14,11 @@
 # releases it itself; agent/bootstrap/deploy-to-vm.sh does not take it (runbook
 # lock table), so the read-only check right before the deploy is what keeps it
 # off a VM someone else owns. Before each step it checks, read-only, that nobody owns
-# the lock (`lsof`, runbook §2.0) and that the host's 1-minute load is under the
-# guest load gate (10). On a busy lock it stops. On load >= 10 it waits until the
-# load has stayed under 10 for 3 minutes (7 samples, 30 s apart), then resumes.
+# the lock (`lsof`, runbook §2.0) and that the host's NET load is under the guest
+# load gate (10): the 1-minute load minus the guest's own QEMU cores
+# (scripts/load-gate.sh, TIF-218). On a busy lock it stops. On net load >= 10 it
+# waits until it has stayed under 10 for 3 minutes (7 samples, 30 s apart), then
+# resumes. The JSON line still records the raw 1-minute load.
 #
 # The JSON line holds the label, run number, start time, commit, timings, exit
 # codes, load, host swap / free memory / page-ins, QEMU resident size, the phase
@@ -54,7 +56,10 @@ mem_free_pct() { memory_pressure 2>/dev/null | sed -nE 's/^System-wide memory fr
 qemu_rss_mb() { ps -Ao rss=,comm= 2>/dev/null | awk '/QEMULauncher/ { if ($1 > m) m = $1 } END { if (m) print int(m / 1024) }'; }
 pageins() { vm_stat 2>/dev/null | awk '/^Pageins:/ { gsub(/\./, "", $2); print $2 }'; }
 
-load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'; }
+source "$REPO/scripts/load-gate.sh"
+load1() { lg_load1; }
+# Net load for the gate; an unreadable load reads as 999 (over the line: fail closed).
+net_load() { local l; l=$(lg_load1); lg_is_num "$l" || { echo 999; return; }; lg_net "$l" "$(lg_qemu_cores)"; }
 over() { awk -v l="$1" -v m="$LOAD_LIMIT" 'BEGIN { exit !(l >= m) }'; }
 
 lock_free() {
@@ -64,20 +69,20 @@ lock_free() {
   fi
 }
 
-# The guest load gate: never start a step at load >= LOAD_LIMIT; after a high
+# The guest load gate: never start a step at net load >= LOAD_LIMIT; after a high
 # reading, resume only once 7 consecutive 30 s samples (3 min) are under it.
 load_gate() {
   local l ok
-  l=$(load1)
+  l=$(net_load)
   over "$l" || return 0
-  echo "reset-bench: load $l >= $LOAD_LIMIT; holding" >&2
+  echo "reset-bench: net load $l >= $LOAD_LIMIT; holding" >&2
   ok=0
   while [ "$ok" -lt 7 ]; do
     sleep 30
-    l=$(load1)
+    l=$(net_load)
     if over "$l"; then ok=0; else ok=$(( ok + 1 )); fi
   done
-  echo "reset-bench: load under $LOAD_LIMIT for 3 min (now $l); resuming" >&2
+  echo "reset-bench: net load under $LOAD_LIMIT for 3 min (now $l); resuming" >&2
 }
 
 gate() { lock_free && load_gate; }
