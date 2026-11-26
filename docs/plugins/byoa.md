@@ -109,9 +109,9 @@ One request, one sandboxed child process, one response line:
 1. The host checks the registration (issued by `registerPlugin`, not a look-alike), re-hashes
    the plugin directory (an edited plugin is `PLUGIN_CHANGED`), checks the kind, the file
    extension, the input size and the intent size (64 KiB).
-2. It starts `node --permission` under the host's OS network layer (an empty network
-   namespace on Linux, a deny-network Seatbelt profile on macOS; with neither, the call is
-   `PLUGIN_NO_NET_ISOLATION` and no plugin runs), with reads allowed only for the SDK and the
+2. It starts `node --permission` under the host's OS layer (empty network and PID
+   namespaces on Linux, a Seatbelt profile denying network and signals to other processes on
+   macOS; with neither, the call is `PLUGIN_NO_NET_ISOLATION` and no plugin runs), with reads allowed only for the SDK and the
    plugin directory, an empty environment, the heap cap, and the sandbox guard preloaded.
 3. It sends `{fileName (basename), bytesB64, intent}` on stdin. The child's stdin and stdout
    are regular files, never pipes or sockets.
@@ -130,7 +130,7 @@ Any failure is `uncertain` with a host code (`codeSource: "host"`):
 | `PLUGIN_INTENT_INVALID` | intent not JSON or over 64 KiB |
 | `PLUGIN_TIMEOUT` | wall clock over `timeoutMs` (SIGKILL) |
 | `PLUGIN_MEMORY_EXCEEDED` | heap over `memoryMb`, or resident memory over `memoryMb` + 128 MiB runtime allowance |
-| `PLUGIN_NO_NET_ISOLATION` | this host has no OS network layer for plugin children (fail closed) |
+| `PLUGIN_NO_NET_ISOLATION` | this host has no OS layer for plugin children (fail closed). On Ubuntu 24.04 and later, unprivileged user namespaces are blocked by AppArmor by default (`kernel.apparmor_restrict_unprivileged_userns=1`), so every plugin call there is `PLUGIN_NO_NET_ISOLATION` until an operator allows them (CI sets the sysctl to 0 on its ephemeral runners) |
 | `PLUGIN_OUTPUT_TOO_LARGE` | the answer over `maxOutputBytes` |
 | `PLUGIN_NO_HOOK` | the module lacks the hook, or has no default export |
 | `PLUGIN_THREW` | the hook or the module threw |

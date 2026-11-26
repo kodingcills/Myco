@@ -10,9 +10,9 @@
  *    `os`, `child_process`, ... throw `PLUGIN_CAP_DENIED` (so a plugin cannot register its own
  *    resolve hook ahead of this one either: `node:module` is denied);
  *  - only `file:` modules resolve (no `data:`, `http:`, bare npm packages);
- *  - `fetch`, `WebSocket`, `EventSource` are removed; `process.getBuiltinModule` and
- *    `process.kill` are replaced, non-writable and non-configurable.
- * `process.binding` is already denied by the permission model.
+ *  - `fetch`, `WebSocket`, `EventSource` are removed; every `process` function in
+ *    `PINNED_PROCESS_FUNCTIONS` (signals, bindings, `execve`, credentials) is replaced with a
+ *    throwing stub, non-writable and non-configurable.
  * `test/plugins/sandbox.test.ts` proves each of these from inside a hostile plugin.
  */
 import { isBuiltin, registerHooks } from "node:module";
@@ -60,7 +60,42 @@ registerHooks({
 for (const name of ["fetch", "WebSocket", "EventSource"]) {
   Reflect.deleteProperty(globalThis, name);
 }
-for (const name of ["getBuiltinModule", "kill"]) {
+/**
+ * `process` functions a plugin must not call, pinned to throwing stubs (verifier round 2, D2:
+ * `process.kill` alone was pinned while the raw `_kill` binding and `_debugProcess`, which
+ * sends SIGUSR1 and opens a V8 inspector in the target, stayed callable). The full review of
+ * `process` functions is in docs/security/plugin-sandbox.md ("process surface"). Grouped:
+ *  - signals to other processes: `kill`, `_kill`, `_debugProcess`, `_debugEnd`,
+ *    `_startProfilerIdleNotifier`, `_stopProfilerIdleNotifier`;
+ *  - native code and bindings: `binding`, `_linkedBinding`, `dlopen`, `getBuiltinModule`;
+ *  - process replacement, host files and stdio: `execve`, `loadEnvFile`, `openStdin`;
+ *  - credentials: `setuid`, `setgid`, `seteuid`, `setegid`, `setgroups`, `initgroups`.
+ * The OS layer (Linux: a fresh PID namespace; macOS: `deny signal`) blocks signals to host
+ * processes on its own; this is the second layer.
+ */
+const PINNED_PROCESS_FUNCTIONS = [
+  "kill",
+  "_kill",
+  "_debugProcess",
+  "_debugEnd",
+  "_startProfilerIdleNotifier",
+  "_stopProfilerIdleNotifier",
+  "binding",
+  "_linkedBinding",
+  "dlopen",
+  "getBuiltinModule",
+  "execve",
+  "loadEnvFile",
+  "openStdin",
+  "setuid",
+  "setgid",
+  "seteuid",
+  "setegid",
+  "setgroups",
+  "initgroups",
+] as const;
+
+for (const name of PINNED_PROCESS_FUNCTIONS) {
   Object.defineProperty(process, name, {
     value: () => {
       throw denied(`process.${name}`);

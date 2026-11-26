@@ -6,14 +6,19 @@
  * Isolation, each enforced here or in the child's flags, and each proven by
  * `test/plugins/sandbox.test.ts` / `test/plugins/sandbox-os.test.ts`:
  *  - no network, in three layers:
- *     1. an OS network layer around the child (`networkIsolation()`): a fresh, empty network
- *        namespace on Linux (`unshare --user --map-root-user --net`), a Seatbelt profile that
- *        denies all network on macOS (`sandbox-exec`). No OS layer, no plugin run: the call
- *        fails closed with `PLUGIN_NO_NET_ISOLATION`;
+ *     1. an OS layer around the child (`networkIsolation()`): on Linux a fresh, empty network
+ *        namespace AND a fresh PID namespace (`unshare --user --map-root-user --net --pid
+ *        --fork --kill-child`, with `/bin/sh` as the namespace's init so node is not PID 1);
+ *        on macOS a Seatbelt profile that denies all network and signals to other processes
+ *        (`sandbox-exec`). No OS layer, no plugin run: the call fails closed with
+ *        `PLUGIN_NO_NET_ISOLATION`;
  *     2. no socket in the child at all: stdin and stdout are regular files (never pipes, which
  *        Node wraps in `net.Socket`), stderr is /dev/null, and the child hides
  *        `process.stdin/stdout/stderr` from plugin code before it loads;
  *     3. `guard.ts` denies every network-capable builtin and global;
+ *  - no signals to host processes (verifier round 2, D2): the PID namespace hides every host
+ *    PID (macOS: `deny signal (target others)`), and `guard.ts` pins `kill`, `_kill`,
+ *    `_debugProcess` and the rest of the signal/binding surface of `process`;
  *  - empty environment (no secrets, no proxy settings reach a plugin);
  *  - Node permission model: reads only the SDK directory and the plugin directory; no
  *    writes, child processes, workers, addons, WASI;
@@ -75,21 +80,37 @@ export type SandboxResult = { readonly ok: true; readonly response: PluginRespon
 const fault = (code: SandboxFaultCode): SandboxFault => ({ ok: false, code });
 
 /** Seatbelt (macOS) profile for plugin children: everything the permission model allows, minus
- * every network operation (IP and Unix-domain sockets, inbound and outbound). */
-export const SEATBELT_PROFILE = "(version 1)(allow default)(deny network*)";
+ * every network operation (IP and Unix-domain sockets, inbound and outbound) and every signal
+ * to another process (D2: `kill`, and SIGUSR1 to open a host process's inspector). */
+export const SEATBELT_PROFILE =
+  "(version 1)(allow default)(deny network*)(deny signal (target others))";
 
 /**
- * The OS network layer a plugin child runs under. `prefix` is the command line that wraps
- * `node`; it `exec`s, so the time cap and exit status apply to the plugin's own process.
+ * Linux: node must not be PID 1 of its PID namespace (the kernel drops signals PID 1 sends
+ * itself, so V8's out-of-memory `abort()` would turn into a SIGSEGV and lose the memory code).
+ * `/bin/sh` is the namespace's init: it runs node as PID 2 and exits with node's status
+ * (128 + signal when node is killed). `--kill-child` takes the whole namespace down when the
+ * host SIGKILLs `unshare` on timeout. The shell exports `PWD`; it is unset so the plugin still
+ * sees an empty environment (the `env` probe in sandbox.test.ts).
+ */
+const LINUX_INIT = ["/bin/sh", "-c", 'unset PWD; "$@"; exit $?', "sh"] as const;
+
+/** A child under the Linux prefix proves the PID namespace: its parent is the init, PID 1. */
+const LINUX_PROBE = "process.exit(process.ppid === 1 ? 0 : 3)";
+
+/**
+ * The OS layer a plugin child runs under. `prefix` is the command line that wraps `node`: on
+ * macOS it `exec`s node; on Linux the namespace init runs node and exits with its status, and
+ * the host's SIGKILL on timeout takes the whole PID namespace down (`--kill-child`).
  */
 export type NetworkIsolation =
   | { readonly kind: "netns" | "seatbelt"; readonly prefix: readonly string[] }
   | { readonly kind: "none" };
 
-function works(prefix: readonly string[]): boolean {
+function works(prefix: readonly string[], probe = "0"): boolean {
   const [cmd, ...args] = prefix;
   if (cmd === undefined || !existsSync(cmd)) return false;
-  const r = spawnSync(cmd, [...args, process.execPath, "-e", "0"], {
+  const r = spawnSync(cmd, [...args, process.execPath, "-e", probe], {
     env: {},
     stdio: "ignore",
     timeout: 10_000,
@@ -103,8 +124,18 @@ export function detectNetworkIsolation(
 ): NetworkIsolation {
   if (platform === "linux") {
     for (const cmd of ["/usr/bin/unshare", "/bin/unshare"]) {
-      const prefix = [cmd, "--user", "--map-root-user", "--net"];
-      if (works(prefix)) return Object.freeze({ kind: "netns", prefix: Object.freeze(prefix) });
+      const prefix = [
+        cmd,
+        "--user",
+        "--map-root-user",
+        "--net",
+        "--pid",
+        "--fork",
+        "--kill-child",
+        ...LINUX_INIT,
+      ];
+      if (existsSync(LINUX_INIT[0]) && works(prefix, LINUX_PROBE))
+        return Object.freeze({ kind: "netns", prefix: Object.freeze(prefix) });
     }
   }
   if (platform === "darwin") {
@@ -193,7 +224,15 @@ export function runInSandbox(
     const errCode = (r.error as (Error & { code?: string }) | undefined)?.code;
     if (errCode === "ETIMEDOUT") return fault("PLUGIN_TIMEOUT");
     if (r.error !== undefined) return fault("PLUGIN_SPAWN_FAILED");
-    if (r.signal === "SIGABRT" || r.signal === "SIGTRAP" || r.status === 87 || r.status === 134)
+    // Under the Linux init, node's own signal death arrives as 128 + signal (134 SIGABRT,
+    // 133 SIGTRAP); on macOS node is the direct child and the signal is reported as such.
+    if (
+      r.signal === "SIGABRT" ||
+      r.signal === "SIGTRAP" ||
+      r.status === 87 ||
+      r.status === 133 ||
+      r.status === 134
+    )
       return fault("PLUGIN_MEMORY_EXCEEDED");
     if (r.status === 65) return fault("PLUGIN_NO_HOOK");
     if (r.status === 70) return fault("PLUGIN_THREW");

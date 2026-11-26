@@ -135,6 +135,104 @@ describe("the OS network layer", () => {
   );
 });
 
+/**
+ * D2 (verifier round 2): a plain child (no guard, no permission model) tries every `process`
+ * route to signal a host process run by the same user. Linux: the PID namespace hides host
+ * PIDs. macOS: Seatbelt denies signals to other processes.
+ */
+function trySignal(
+  prefix: readonly string[],
+  victim: number,
+  routes: "debug" | "kill" | "all" = "all",
+): Promise<string> {
+  const debug = routes !== "kill" ? "() => process._debugProcess(v)," : "";
+  const kill =
+    routes !== "debug" ? '() => process._kill(v, 9), () => process.kill(v, "SIGKILL")' : "";
+  const script = `const v = Number(process.argv[1]); const r = [];
+for (const f of [${debug}${kill}]) {
+  try { r.push(String(f())); } catch (e) { r.push(e.code || "THREW"); }
+}
+process.stdout.write(r.join(","));`;
+  const [cmd, ...args] = [...prefix, process.execPath, "-e", script, String(victim)];
+  return new Promise((resolve) => {
+    const child = spawn(cmd as string, args, { env: {}, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (d) => {
+      out += d.toString("utf8");
+    });
+    child.on("close", () => resolve(out));
+  });
+}
+
+function spawnVictim() {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    env: {},
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let err = "";
+  child.stderr.on("data", (d) => {
+    err += d.toString("utf8");
+  });
+  return { child, stderr: () => err };
+}
+
+describe("the OS layer alone blocks signals to host processes (D2)", () => {
+  it.runIf(SUPPORTED)(
+    "_debugProcess, _kill and kill from inside it leave a host victim untouched",
+    async () => {
+      const v = spawnVictim();
+      try {
+        await new Promise((r) => setTimeout(r, 300));
+        await trySignal(prefixOf(networkIsolation()), v.child.pid as number);
+        await new Promise((r) => setTimeout(r, 500));
+        expect(v.stderr()).not.toMatch(/Debugger listening/);
+        expect(v.child.exitCode).toBe(null);
+        expect(v.child.signalCode).toBe(null);
+      } finally {
+        v.child.kill("SIGKILL");
+      }
+    },
+    20_000,
+  );
+
+  it.runIf(SUPPORTED)(
+    "the same child kills the victim without it (bite check)",
+    async () => {
+      const v = spawnVictim();
+      await new Promise((r) => setTimeout(r, 300));
+      await trySignal([], v.child.pid as number, "debug");
+      await new Promise((r) => setTimeout(r, 500));
+      expect(v.stderr()).toMatch(/Debugger listening/);
+      await trySignal([], v.child.pid as number, "kill");
+      await new Promise((r) => setTimeout(r, 300));
+      expect(v.child.signalCode).toBe("SIGKILL");
+    },
+    20_000,
+  );
+
+  it.runIf(process.platform === "linux")(
+    "Linux: the child runs in its own PID namespace (its parent is the namespace init)",
+    async () => {
+      const [cmd, ...args] = [
+        ...prefixOf(networkIsolation()),
+        process.execPath,
+        "-e",
+        "process.stdout.write(process.pid + ',' + process.ppid)",
+      ];
+      const out = await new Promise<string>((resolve) => {
+        const c = spawn(cmd as string, args, { env: {}, stdio: ["ignore", "pipe", "ignore"] });
+        let o = "";
+        c.stdout.on("data", (d) => {
+          o += d.toString("utf8");
+        });
+        c.on("close", () => resolve(o));
+      });
+      expect(out).toBe("2,1");
+    },
+    20_000,
+  );
+});
+
 describe("no OS network layer, no plugin run (fail closed)", () => {
   it("runInSandbox refuses with PLUGIN_NO_NET_ISOLATION", async () => {
     const real = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor;

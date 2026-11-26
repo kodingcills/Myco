@@ -7,8 +7,9 @@
  * Each guard here is mutation-proven (PR body, mutation table): removing it turns a test red.
  */
 
-import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import inspector from "node:inspector";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,7 +22,7 @@ const PROBE = String.raw`
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function attempt(fn) {
   try { return (await fn()) ? "OPEN" : "DENIED"; } catch (e) {
-    return typeof e?.code === "string" && e.code.startsWith("ENV_") ? e.code : "DENIED";
+    return typeof e?.code === "string" && /^(ENV|PIN)_/.test(e.code) ? e.code : "DENIED";
   }
 }
 function connected(socket) {
@@ -96,6 +97,24 @@ const probes = {
   vm: async () => { await import("node:vm"); return true; },
   dataUrl: async () => { await import("data:text/javascript,export default 1"); return true; },
   kill: async () => { process.kill(process.ppid, 0); return true; },
+  // D2 (verifier round 2): signals to a host process through every route on \`process\`. The
+  // host checks the victim afterwards; "OPEN" here only means the call did not throw.
+  sigKillRaw: async (i) => { process._kill(i.victim, 9); return true; },
+  sigKillPublic: async (i) => { process.kill(i.victim, 9); return true; },
+  sigDebug: async (i) => { process._debugProcess(i.victim); return true; },
+  sigDebugEnd: async (i) => { process._debugEnd(i.victim); return true; },
+  sigDebugParent: async () => { process._debugProcess(process.ppid); return true; },
+  // The JS layer on its own: every listed \`process\` function is a pinned, throwing stub.
+  pinned: async (i) => {
+    for (const n of i.pinned) {
+      const d = Object.getOwnPropertyDescriptor(process, n);
+      let code = "";
+      try { process[n](); } catch (e) { code = e?.code ?? ""; }
+      if (d === undefined || d.writable !== false || d.configurable !== false || code !== "PLUGIN_CAP_DENIED")
+        throw { code: "PIN_" + n.toUpperCase().replace(/[^A-Z0-9]/g, "_") };
+    }
+    return false;
+  },
   // Names only (never values), folded into a code so a failure says which variable it was.
   env: async () => {
     const names = Object.keys(process.env);
@@ -159,13 +178,49 @@ afterAll(() => {
   cleanupPlugins();
 });
 
-function runProbe(name: string, fileName = "doc.txt"): SandboxResult {
+/** Every `process` function guard.ts must pin (D2); the `pinned` probe checks each. */
+const PINNED = [
+  "kill",
+  "_kill",
+  "_debugProcess",
+  "_debugEnd",
+  "_startProfilerIdleNotifier",
+  "_stopProfilerIdleNotifier",
+  "binding",
+  "_linkedBinding",
+  "dlopen",
+  "getBuiltinModule",
+  "execve",
+  "loadEnvFile",
+  "openStdin",
+  "setuid",
+  "setgid",
+  "seteuid",
+  "setegid",
+  "setgroups",
+  "initgroups",
+];
+
+function runProbe(name: string, fileName = "doc.txt", extra: Record<string, unknown> = {}) {
   return runInSandbox(probe.target, {
     spec: PLUGIN_SPEC,
     op: "verify",
     doc: { fileName, bytesB64: Buffer.from(utf8("captured")).toString("base64") },
-    intent: { probe: name, port, sock, secret, secretUrl },
+    intent: { probe: name, port, sock, secret, secretUrl, pinned: PINNED, ...extra },
   });
+}
+
+/** A host process run by the same user: it reports on stderr if its inspector opens. */
+function spawnVictim(): { child: ChildProcess; stderr: () => string } {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    env: {},
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let err = "";
+  child.stderr?.on("data", (d) => {
+    err += d.toString("utf8");
+  });
+  return { child, stderr: () => err };
 }
 
 function codeOf(r: SandboxResult): string {
@@ -261,6 +316,41 @@ describe("plugin sandbox: no access outside the captured bytes", () => {
     15_000,
   );
 
+  it("D2: every signal, binding and credential function on process is pinned", () => {
+    expect(codeOf(runProbe("pinned"))).toBe("DENIED");
+  }, 15_000);
+
+  it.each(["sigKillRaw", "sigKillPublic", "sigDebug", "sigDebugEnd", "sigDebugParent"])(
+    "D2: %s cannot signal a host process (victim alive, no inspector opened)",
+    async (name) => {
+      const v = spawnVictim();
+      try {
+        await new Promise((r) => setTimeout(r, 300));
+        expect(codeOf(runProbe(name, "doc.txt", { victim: v.child.pid }))).toBe("DENIED");
+        await new Promise((r) => setTimeout(r, 300));
+        expect(v.child.exitCode).toBe(null);
+        expect(v.child.signalCode).toBe(null);
+        expect(v.stderr()).not.toMatch(/Debugger listening/);
+        // sigDebugParent targets the plugin's parent: on macOS that is this test process.
+        expect(inspector.url()).toBeUndefined();
+      } finally {
+        v.child.kill("SIGKILL");
+      }
+    },
+    15_000,
+  );
+
+  it("D2 bite check: the same victim dies to SIGKILL and opens its inspector on SIGUSR1", async () => {
+    const v = spawnVictim();
+    await new Promise((r) => setTimeout(r, 300));
+    process.kill(v.child.pid as number, "SIGUSR1");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(v.stderr()).toMatch(/Debugger listening/);
+    process.kill(v.child.pid as number, "SIGKILL");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(v.child.signalCode).toBe("SIGKILL");
+  }, 15_000);
+
   it("the environment is empty (no secrets or proxy settings reach a plugin)", () => {
     expect(codeOf(runProbe("env"))).toBe("DENIED");
   });
@@ -287,6 +377,36 @@ describe("plugin sandbox: caps and malformed plugins fail closed", () => {
       intent: null,
     });
   };
+
+  // D2 follow-on: on Linux the plugin runs in its own PID namespace under an init; the host's
+  // SIGKILL on timeout must take the whole namespace down, not just `unshare`.
+  it.runIf(process.platform === "linux")(
+    "a timed-out plugin leaves no process behind (Linux: the PID namespace is torn down)",
+    async () => {
+      const p = makePlugin(`export default { oracle() { for (;;) {} } };`, {
+        caps: { timeoutMs: 500, memoryMb: 32, maxInputBytes: 65536, maxOutputBytes: 4096 },
+      });
+      const r = runInSandbox(p.target, {
+        spec: PLUGIN_SPEC,
+        op: "verify",
+        doc: { fileName: "a.txt", bytesB64: "" },
+        intent: null,
+      });
+      expect(r).toEqual({ ok: false, code: "PLUGIN_TIMEOUT" });
+      await new Promise((res) => setTimeout(res, 500));
+      const left = readdirSync("/proc")
+        .filter((d) => /^\d+$/.test(d))
+        .filter((d) => {
+          try {
+            return readFileSync(`/proc/${d}/cmdline`, "utf8").includes(p.dir);
+          } catch {
+            return false;
+          }
+        });
+      expect(left).toEqual([]);
+    },
+    15_000,
+  );
 
   it("a hang is killed at the time cap: PLUGIN_TIMEOUT", () => {
     const t0 = Date.now();

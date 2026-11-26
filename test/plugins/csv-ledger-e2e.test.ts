@@ -2,8 +2,10 @@
  * Capability track T, $0 end-to-end: a scripted agent (no model, no API) does ledger tasks
  * through the example plugin. It reads typed state with the plugin's READER to find its
  * target, edits the file, the harness captures the saved bytes, and the plugin's ORACLE
- * judges the capture. A separate checker written here (sharing no code with the plugin)
- * grades the same bytes, which is the plugin-vs-grader agreement the measurement bar uses.
+ * judges the capture. A separate checker written here (`independentGrade`, which imports
+ * nothing from the plugin) grades the same bytes, which is the plugin-vs-grader agreement the
+ * measurement bar uses. The scripted agent does use the plugin's `parseLedger`/`renderLedger`
+ * to make its edits; only the checker is independent of the plugin.
  *
  * Every row here is simulated: it is never evidence for any bar.
  */

@@ -10,7 +10,7 @@ A plugin is **untrusted code** from outside the repo. Assume it is written to:
 
 1. read things it should not (host files, other trials' captures, secrets, the environment);
 2. reach the network (exfiltrate, or fetch a verdict);
-3. exhaust the host (hang, allocate, flood output);
+3. exhaust or disrupt the host (hang, allocate, flood output, signal host processes);
 4. corrupt the host's view of it (malformed answers, free text in codes, forged responses,
    look-alike registrations, editing itself after registration);
 5. pass the R5 self-test without being a good oracle (over-claiming).
@@ -27,7 +27,8 @@ The one property that must hold whatever the plugin does: **a plugin failure is 
   `querystring`, `stream`, `string_decoder`, `timers`, `url`, `util`, `zlib`).
 
 Nothing else: no network, no filesystem outside those two directories, no writes anywhere, no
-child processes, workers, native addons or WASI, no stdio streams (`process.stdin/stdout/stderr`
+child processes, workers, native addons or WASI, no signals to any other process (no host
+PID is even visible on Linux), no stdio streams (`process.stdin/stdout/stderr`
 throw; `console` is discarded), an empty environment, no host path of the trial, and no other
 trial's data.
 
@@ -37,10 +38,11 @@ trial's data.
 |---|---|---|
 | Out of process | one `node` child per request (`spawnSync`), no state carried between calls | all of `test/plugins/sandbox.test.ts` |
 | No reads outside plugin + SDK | Node permission model: `--permission --allow-fs-read=<sdk> --allow-fs-read=<plugin>`; no `--allow-fs-write`, `--allow-child-process`, `--allow-worker`, `--allow-addons`, `--allow-wasi` | `fsImport`, `bindingFs`, `write` probes |
-| No network, layer 1: OS (prerequisite) | Every child runs under an OS network layer (`networkIsolation()` in `src/plugins/host/sandbox.ts`): Linux, a fresh empty network namespace (`unshare --user --map-root-user --net`; no interface is up, so no IP route exists, loopback included); macOS, `sandbox-exec` with `(deny network*)` (IP and Unix-domain sockets). With neither (e.g. Windows, or a Linux host that forbids user namespaces) the call is `PLUGIN_NO_NET_ISOLATION` and no plugin code runs. CI lifts Ubuntu 24.04's AppArmor block on user namespaces for this | `test/plugins/sandbox-os.test.ts`: a plain `node` child (no permission model, no guard, ordinary pipes) under the OS layer alone gets **zero** TCP connections to a host listener, and on macOS zero Unix-socket connections; the same child connects without it; no OS layer gives `PLUGIN_NO_NET_ISOLATION`. `sandbox.test.ts` `noInterfaces` (Linux): the plugin's own process sees no interface |
+| No network, layer 1: OS (prerequisite) | Every child runs under an OS network layer (`networkIsolation()` in `src/plugins/host/sandbox.ts`): Linux, a fresh empty network namespace (`unshare --user --map-root-user --net --pid --fork --kill-child`; no interface is up, so no IP route exists, loopback included); macOS, `sandbox-exec` with `(deny network*)` (IP and Unix-domain sockets). With neither (e.g. Windows, or a Linux host that forbids user namespaces) the call is `PLUGIN_NO_NET_ISOLATION` and no plugin code runs. CI lifts Ubuntu 24.04's AppArmor block on user namespaces for this | `test/plugins/sandbox-os.test.ts`: a plain `node` child (no permission model, no guard, ordinary pipes) under the OS layer alone gets **zero** TCP connections to a host listener, and on macOS zero Unix-socket connections; the same child connects without it; no OS layer gives `PLUGIN_NO_NET_ISOLATION`. `sandbox.test.ts` `noInterfaces` (Linux): the plugin's own process sees no interface |
 | No network, layer 2: no socket in the child | A Node pipe is a `net.Socket`, and its class connects (TCP and Unix socket) with no import, so the child gets none: stdin and stdout are regular files in a private host temp dir, stderr is `/dev/null`, and `child.ts` replaces `process.stdin/stdout/stderr` with throwing, non-configurable getters and `console` with a frozen no-op before plugin code loads | `sandbox.test.ts` D1 probes `stdoutClass`, `stdinClass`, `stderrClass`, `handleClass` (every `process._getActiveHandles()` object and its `_handle`), `consoleStream` and `exfil` (the verifier's plugin, sending the captured bytes): each tries TCP and a Unix socket and asserts **zero** connections on both listeners and no bytes received; a bite check shows both listeners are reachable unsandboxed |
-| No network, layer 3: module guard | the preloaded guard (`src/plugins/sdk/guard.ts`) denies every builtin outside the allowlist (`net`, `http(s)`, `http2`, `tls`, `dgram`, `dns`, `fs`, `module`, `vm`, `os`, `child_process`, `worker_threads`, `inspector`, ...), denies non-`file:` module URLs, deletes `fetch`/`WebSocket`/`EventSource`, and pins `process.getBuiltinModule` and `process.kill` to throwing stubs (non-writable, non-configurable). `process.binding` is denied by the permission model. A plugin cannot install its own earlier resolve hook because `node:module` itself is denied | `net`, `netBare`, `http`, `fetch`, `websocket`, `builtin`, `dns`, `binding` probes, each also asserting a real local TCP listener received **zero** connections |
-| Empty environment | `env: {}` on spawn; on macOS the child also removes `__CF_USER_TEXT_ENCODING`, which CoreFoundation sets inside the process at startup | `env` probe (reports variable names, never values, on failure) |
+| No network, layer 3: module guard | the preloaded guard (`src/plugins/sdk/guard.ts`) denies every builtin outside the allowlist (`net`, `http(s)`, `http2`, `tls`, `dgram`, `dns`, `fs`, `module`, `vm`, `os`, `child_process`, `worker_threads`, `inspector`, ...), denies non-`file:` module URLs, deletes `fetch`/`WebSocket`/`EventSource`, and pins every `process` function in its `PINNED_PROCESS_FUNCTIONS` list (signals, bindings, `execve`, credentials; see "process surface" below) to throwing stubs (non-writable, non-configurable). A plugin cannot install its own earlier resolve hook because `node:module` itself is denied | `net`, `netBare`, `http`, `fetch`, `websocket`, `builtin`, `dns`, `binding` probes, each also asserting a real local TCP listener received **zero** connections |
+| No signals to host processes (round 2, D2) | OS layer: on Linux the child runs in a fresh **PID namespace** (`--pid --fork`), so no host PID exists for it to name; `/bin/sh` is the namespace init (node runs as PID 2, so V8's out-of-memory abort still reports as SIGABRT, exit 134) and `--kill-child` tears the whole namespace down when the host SIGKILLs on timeout. Detection requires the namespace to be real (the probe child must see its parent as PID 1), or the host has no OS layer and fails closed. macOS: the Seatbelt profile adds `(deny signal (target others))`. JS layer: the guard pins `kill`, `_kill`, `_debugProcess`, `_debugEnd` and the profiler-idle notifiers | `sandbox-os.test.ts`: a plain child (no guard) under the OS layer alone calls `_debugProcess`, `_kill` and `kill` on a host victim run by the same user: the victim stays alive and opens no inspector; the same child kills it and opens its inspector without the layer (bite check); Linux: the child sees itself as PID 2 under init PID 1. `sandbox.test.ts`: `sigKillRaw`, `sigKillPublic`, `sigDebug`, `sigDebugEnd`, `sigDebugParent` through `runInSandbox` (victim alive, no "Debugger listening", and the test process's own inspector stays closed); `pinned` checks every pinned function is a non-writable, non-configurable stub that throws `PLUGIN_CAP_DENIED`; a timed-out plugin leaves no process behind (Linux) |
+| Empty environment | `env: {}` on spawn; the Linux namespace init unsets the `PWD` it would export; on macOS the child also removes `__CF_USER_TEXT_ENCODING`, which CoreFoundation sets inside the process at startup | `env` probe (reports variable names, never values, on failure) |
 | Basename only | host strips directories; the wire parser refuses `/` and `\` in file names | `hostPath` probe; registry test with a capture path |
 | Time | `timeout: caps.timeoutMs`, `killSignal: SIGKILL` | hang test (`PLUGIN_TIMEOUT` well under the test's limit) |
 | Memory | `--max-old-space-size=caps.memoryMb` (heap) and a resident-memory watchdog in the child (`memoryMb` + 128 MiB runtime allowance), checked every 5 ms and before answering | heap-growth and 400 MiB `Buffer` tests; asynchronous ~600 MiB `Buffer` growth stopped by the watchdog interval |
@@ -53,6 +55,28 @@ trial's data.
 | No over-claiming | R5 self-test per claimed class, plus host-derived read corruptions, plus "the sandbox must answer every self-test document" | over-claim tests (no corruption run; easy self-supplied corruption; crash-as-catch) |
 | Grader independence | import-graph walk both ways between `src/plugins/`, `examples/plugins/` and `src/benchmark/grade/` | `test/benchmark/independence.test.ts` |
 | Gate unchanged | no plugin module reaches `src/gate/`, `src/verify/` or `src/benchmark/` | `test/plugins/sdk-boundary.test.ts` |
+
+## `process` surface (reviewed in round 3)
+
+Every function on `process` in the plugin child (Node 22 and 24), and what stops its misuse:
+
+| Function(s) | Disposition |
+|---|---|
+| `kill`, `_kill`, `_debugProcess`, `_debugEnd` | pinned (signals another process; `_debugProcess` sends SIGUSR1, which opens the target's V8 inspector). Also blocked by the OS layer |
+| `_startProfilerIdleNotifier`, `_stopProfilerIdleNotifier` | pinned (no use to a plugin) |
+| `binding`, `_linkedBinding`, `dlopen`, `getBuiltinModule` | pinned (native bindings, addons, denied builtins); the permission model also denies the first three |
+| `execve`, `loadEnvFile`, `openStdin` | pinned (process replacement, host file read, stdin); the permission model and the hidden stdio also deny them |
+| `setuid`, `setgid`, `seteuid`, `setegid`, `setgroups`, `initgroups` | pinned (the user namespace maps a single uid, so they could not reach another host user anyway) |
+| `exit`, `reallyExit`, `abort` | allowed: they end the plugin's own process, which the host records as a fault (`uncertain`). The child needs `exit` |
+| `_getActiveHandles`, `_getActiveRequests`, `getActiveResourcesInfo` | allowed: the child holds no socket or pipe handle (D1 probes `handleClass`, `socketHandles`) |
+| `_rawDebug` | allowed: writes to fd 2, which is `/dev/null` |
+| `_fatalException`, `_tickCallback`, `nextTick`, `setUncaughtExceptionCaptureCallback`, `hasUncaughtExceptionCaptureCallback`, `emitWarning`, `assert` | allowed: in-process event-loop and error plumbing, no capability |
+| `cwd`, `chdir`, `umask` | allowed: the permission model checks reads against fixed paths and grants no writes, so neither changes what a plugin can open |
+| `uptime`, `hrtime`, `cpuUsage`, `threadCpuUsage`, `resourceUsage`, `memoryUsage`, `constrainedMemory`, `availableMemory`, `getuid`, `geteuid`, `getgid`, `getegid`, `getgroups`, `ref`, `unref`, `setSourceMapsEnabled` | allowed: read-only or self-only |
+| `report` (getter) | `getReport()` allowed (host identity, residual risk 6); `writeReport` is denied by the permission model (no writes) |
+
+A function added to `process` by a future Node is allowed until it is reviewed here; the
+`pinned` probe pins the list above, not "everything else" (residual risk 7).
 
 ## Residual risks (stated, not hidden)
 
@@ -82,6 +106,10 @@ trial's data.
    (`process.cwd()`, `process.argv`, `process.report.getReport().header`) and a reader could
    place them in its state. Nothing a plugin returns reaches an agent today; the agent-facing
    `plugin_state` tool (TO FILE) needs the host-path scan the measurement guardrail names.
+
+7. **New `process` functions.** The guard pins a reviewed list (above), not every function a
+   future Node release adds. The OS layer still blocks signals and network whatever the
+   function; re-review the list when the Node major changes.
 
 ## Operator rules
 
