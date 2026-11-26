@@ -119,6 +119,11 @@ export function scoreTrial(t: TrialRecord): LedgerRow {
   let cause: LedgerRow["cause"] = null;
   if (t.harnessError !== null)
     cause = { kind: "harness", detail: `harness error: ${t.harnessError}` };
+  // The harness never writes this shape (its catch path sets harnessError with the three
+  // records), so only a hand-edited trials.jsonl reaches it. Named here so the branches
+  // below, which read the records, only describe rows that ran.
+  else if (!ran)
+    cause = { kind: "harness", detail: "incomplete trial record: no gate, grade or agent" };
   else if (falseSuccess)
     cause = { kind: "oracle", detail: "gate accepted a document the grader does not pass" };
   else if (role === "control" && !accepted && gradeStatus === "pass")
@@ -408,6 +413,19 @@ export function record(trialsText: string): { ledger: string; summary: string } 
 export const HOST_PATH =
   /(?:^|[\s"'(=])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|\/tmp\/|[A-Za-z]:\\)/;
 
+/**
+ * Every string in a parsed value, keys included. HOST_PATH runs on these, not on the
+ * stringified row: JSON.stringify writes a tab, newline or carriage return as two
+ * characters (`\t`, `\n`, `\r`), so `\s` would never see the whitespace before a path.
+ */
+function stringsOf(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringsOf);
+  if (value !== null && typeof value === "object")
+    return Object.entries(value).flatMap(([k, v]) => [k, ...stringsOf(v)]);
+  return [];
+}
+
 export interface CheckResult {
   readonly ok: boolean;
   readonly errors: readonly string[];
@@ -477,7 +495,8 @@ export function checkLedger(input: {
       errors.push(`row ${i}: accepted without a verified verdict`);
     if (row.falseSuccess !== (row.accepted && row.grade !== "pass"))
       errors.push(`row ${i}: falseSuccess does not follow from accepted and grade`);
-    if (HOST_PATH.test(JSON.stringify(row))) errors.push(`row ${i}: contains a host path`);
+    if (stringsOf(row).some((s) => HOST_PATH.test(s)))
+      errors.push(`row ${i}: contains a host path`);
   });
 
   let summary: Summary | null = null;
