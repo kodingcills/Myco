@@ -39,7 +39,7 @@ fi
 SNAP=$(ts_resolve 2>>"$PROGRESS") || exit 11
 ts_pin "$OUT" "$LOG" "$SNAP" 2>>"$PROGRESS" || exit 11
 echo "trial snapshot: $SNAP $(date -u +%FT%TZ)" >> "$PROGRESS"
-TS_READY=""
+TS_READY=""; TS_BOOT=""
 NEW_PARAMS=$(mktemp "$OUT/params.XXXXXX") || exit 1
 PENDING=$(mktemp "$OUT/pending.XXXXXX") || { rm -f "$NEW_PARAMS"; exit 1; }
 trap 'rm -f "$NEW_PARAMS" "$PENDING"; vm_lock_release' EXIT
@@ -56,7 +56,7 @@ python3 "$RECORDER" --pending "$PARAMS" "$LOG" > "$PENDING" || exit "$?"
 
 append_record() {
   local row
-  row=$(python3 "$RECORDER" --record "$PARAMS" "$@" "--snapshot=$TS_READY") || exit 1
+  row=$(python3 "$RECORDER" --record "$PARAMS" "$@" "--snapshot=$TS_READY" "--reset-boot=$TS_BOOT") || exit 1
   printf '%s\n' "$row" >> "$LOG" || exit 1
   if [[ "$row" == *'"status": "seed-mismatch"'* ]]; then
     echo "ABORT_SEED_MISMATCH at trial $i $(date -u +%FT%TZ): $row" | tee -a "$PROGRESS" >&2
@@ -82,7 +82,7 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
 
   # Every row carries the snapshot the reset reported ready on (null if it never
   # got there). A reset ready on a different snapshot aborts the suite (exit 12).
-  TS_READY=""
+  TS_READY=""; TS_BOOT=""
   ts_reset "$SNAP" "$PROGRESS" 2>>"$PROGRESS"; RESET_RC=$?
   if [ "$RESET_RC" -eq 12 ]; then
     echo "ABORT_SNAPSHOT_MISMATCH at trial $i $(date -u +%FT%TZ)" | tee -a "$PROGRESS" >&2; exit 12
