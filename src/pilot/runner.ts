@@ -1,0 +1,622 @@
+/**
+ * The 30-trial R1 pilot runner. One entry point for the simulated dry run and the later live
+ * pilot: the only difference is the driver (the transport factory) and the planner label.
+ *
+ * Per trial attempt, in order (each step fails closed):
+ *  1. Build the launch plan from the reviewed config and audit it (`auditAgentLaunch`). A
+ *     refused plan stops the whole run before any attempt is recorded: a wrong config is not a
+ *     harness fault to retry.
+ *  2. Append the attempt's `start` line to the ledger.
+ *  3. Run the trial through the existing gated harness (`runGatedTrial`: seal, launch with
+ *     the frozen audited plan, stop, capture, the harness's own post-stop check), or, for a
+ *     task the gate registry rejects, run the agent and record it `unregistrable`.
+ *  4. Map it to the arm row with `gatedArmRow` (all its binding checks) and append the `end`.
+ *
+ * Retries: never for an agent-side outcome. Any attempt that reached the gate's post-stop
+ * check (any verdict), or is unregistrable, is final. Only a `HarnessFault` thrown by the
+ * transport before a decision (rate limit, timeout, spawn failure, transport error) is
+ * re-run, in place, as the next attempt of the same trial, linked by `supersedes`; the faulted
+ * attempt stays in the ledger with its arm row (cause `harness`) and its cost estimate, which
+ * counts toward R7. Any other exception is a harness bug: the run stops and the open `start`
+ * is closed as a `crash` on the next resume.
+ *
+ * Pacing: at most `concurrency` trials in flight; trial starts are spaced by
+ * `interTrialDelayS`; a rate-limit fault holds every worker for the backoff, and after
+ * `maxConsecutiveRateLimits` in a row the run pauses (exit, resumable). A `PAUSE` file in the
+ * run directory, or `requestStop()`, stops new starts after in-flight trials finish.
+ */
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import type { BenchmarkArmRow } from "../benchmark/check.ts";
+import { gatedArmRow, gateEntryFor, registerTask } from "../benchmark/gated-rows.ts";
+import type { BenchmarkTask } from "../benchmark/taskset.ts";
+import type { Gate } from "../gate/gate.ts";
+import { GATE_SERVER_CLASS, runGatedTrial } from "../gate/gated-trial.ts";
+import { type AgentLaunchPlan, auditAgentLaunch } from "../integrity/launch.ts";
+import type { CaptureInput } from "../integrity/vault.ts";
+import { newVaultKey, VerdictVault } from "../integrity/vault.ts";
+import { backoffS, configSha256, type PilotConfig } from "./config.ts";
+import { estimateCost, type TokenUsage } from "./cost.ts";
+import { trialLaunchPlan } from "./launch.ts";
+import {
+  ATTEMPTS_FILE,
+  AttemptLedger,
+  type AttemptRecord,
+  loadLedger,
+  type PilotHarnessClass,
+  taskStatus,
+} from "./ledger.ts";
+
+/** A fault of the harness, not the agent: the only kind of attempt that is ever re-run. */
+export class HarnessFault extends Error {
+  readonly harnessClass: PilotHarnessClass;
+  /** Tokens the agent used before the fault, when the transport measured them. */
+  readonly usage: TokenUsage | null;
+  constructor(harnessClass: PilotHarnessClass, message: string, usage: TokenUsage | null = null) {
+    super(message);
+    this.name = "HarnessFault";
+    this.harnessClass = harnessClass;
+    this.usage = usage;
+  }
+}
+
+export interface AttemptContext {
+  readonly task: BenchmarkTask;
+  readonly runId: string;
+  readonly trialKey: string;
+  /** Absolute; the transport writes `mcp.json` here and keeps its transcript here. */
+  readonly trialDir: string;
+  /** Stop the agent and throw `HarnessFault("timeout")` once this signal aborts. */
+  readonly signal: AbortSignal;
+}
+
+export interface AgentReport {
+  /** The agent's final claim, read from its transcript by the harness. */
+  readonly claim: "done" | "not-done" | "no-claim";
+  readonly usage: TokenUsage | null;
+}
+
+/**
+ * One attempt's transport. `runAgent` resolves only after the agent process and its servers
+ * exited, or throws `HarnessFault`. `gate` is null for an unregistrable task.
+ */
+export interface PilotTransport {
+  runAgent(plan: AgentLaunchPlan, gate: Gate | null): Promise<void>;
+  captureAfterStop(): Promise<CaptureInput>;
+  report(): AgentReport;
+}
+
+export interface PilotDriver {
+  /** `simulated` drivers may only write simulated runs, live drivers only live ones. */
+  readonly simulated: boolean;
+  transport(ctx: AttemptContext): PilotTransport;
+}
+
+export interface PilotRunOptions {
+  readonly config: PilotConfig;
+  /** The published task set (the pilot's tasks are looked up in it by id). */
+  readonly published: readonly BenchmarkTask[];
+  readonly outDir: string;
+  readonly repoRoot: string;
+  readonly oracleSources: readonly string[];
+  readonly driver: PilotDriver;
+  /** The arm rows' planner: a `simulated:` label for a dry run, the model id for a live run. */
+  readonly plannerModelId: string;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => number;
+  readonly log?: (line: string) => void;
+}
+
+export interface PilotRunResult {
+  readonly status: "complete" | "paused" | "incomplete";
+  readonly reason: string | null;
+  /** Trials decided by this invocation and skipped as already recorded. */
+  readonly ran: number;
+  readonly skipped: number;
+  readonly faulted: number;
+  readonly exhausted: readonly string[];
+}
+
+export const SIMULATED_PLANNER_PREFIX = "simulated:";
+export const PAUSE_FILE = "PAUSE";
+export const LOCK_FILE = "pilot.lock";
+export const SIMULATED_FILE = "SIMULATED";
+
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function acquireLock(outDir: string): () => void {
+  const path = join(outDir, LOCK_FILE);
+  if (existsSync(path)) {
+    const pid = Number(readFileSync(path, "utf8").trim());
+    let alive = false;
+    if (Number.isSafeInteger(pid) && pid > 0)
+      try {
+        process.kill(pid, 0);
+        alive = true;
+      } catch (error) {
+        alive = (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    if (alive)
+      throw new Error(`${path}: another pilot runner (pid ${pid}) holds this run directory`);
+  }
+  writeFileSync(path, `${process.pid}\n`);
+  return () => rmSync(path, { force: true });
+}
+
+/** The arm row for an attempt lost to a harness fault: no claim, no gate, cause harness. */
+export function harnessFaultRow(
+  task: BenchmarkTask,
+  trialKey: string,
+  plannerModelId: string,
+  harnessClass: PilotHarnessClass,
+  cost: BenchmarkArmRow["cost"],
+): BenchmarkArmRow {
+  return {
+    schema: "myco.benchmark.arm-row/1",
+    taskSetVersion: task.taskSetVersion,
+    arm: "myco-gate",
+    trialKey,
+    taskId: task.taskId,
+    faultClass: task.faultClass,
+    fixtureSha256: task.fixtureSha256,
+    instructionSha256: task.instructionSha256,
+    plannerModelId,
+    outputCeiling: null,
+    claim: "no-claim",
+    gate: { called: false, verdict: null },
+    accepted: false,
+    persistedSha256: null,
+    cause: { kind: "harness", detail: `harness fault: ${harnessClass}` },
+    cost,
+  };
+}
+
+export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
+  const { config, driver } = opts;
+  const sleep = opts.sleep ?? realSleep;
+  const now = opts.now ?? Date.now;
+  const log = opts.log ?? (() => {});
+  const outDir = resolve(opts.outDir);
+  const simulated = opts.plannerModelId.startsWith(SIMULATED_PLANNER_PREFIX);
+  if (simulated !== driver.simulated)
+    throw new Error(
+      simulated
+        ? "a simulated planner label needs a simulated driver"
+        : "a live driver needs a real model id as the planner, and a simulated driver a simulated: label",
+    );
+  if (!simulated && opts.plannerModelId !== config.model)
+    throw new Error(`planner ${opts.plannerModelId} is not the config's model ${config.model}`);
+  if (/docs[\\/]research[\\/]experiments/.test(outDir))
+    throw new Error(
+      "a pilot run directory is never under docs/research/experiments (evidence packs are assembled there by review, not written by the runner)",
+    );
+
+  const byId = new Map(opts.published.map((t) => [t.taskId, t]));
+  const tasks = config.trials.map((id) => {
+    const t = byId.get(id);
+    if (t === undefined) throw new Error(`pilot task ${id} is not in the published task set`);
+    return t;
+  });
+
+  mkdirSync(join(outDir, "trials"), { recursive: true });
+  const release = acquireLock(outDir);
+  try {
+    if (simulated && !existsSync(join(outDir, SIMULATED_FILE)))
+      writeFileSync(
+        join(outDir, SIMULATED_FILE),
+        "SIMULATED pilot dry run (track E). Fake transport, no model, no VM, $0. Never evidence.\n",
+      );
+    if (!simulated && existsSync(join(outDir, SIMULATED_FILE)))
+      throw new Error(`${outDir} holds a simulated run; a live pilot needs its own directory`);
+
+    const ledgerPath = join(outDir, ATTEMPTS_FILE);
+    const state = loadLedger(ledgerPath);
+    const sha = configSha256(config);
+    if (state.header !== null) {
+      if (state.header.configSha256 !== sha)
+        throw new Error(
+          `${ledgerPath} was written under config ${state.header.configSha256}, not ${sha}: a changed plan is a new run directory`,
+        );
+      if (
+        state.header.simulated !== simulated ||
+        state.header.plannerModelId !== opts.plannerModelId
+      )
+        throw new Error(`${ledgerPath} was written by a different run mode or planner`);
+    }
+    const ledger = new AttemptLedger(ledgerPath, state.torn);
+    if (state.header === null)
+      ledger.header({ configSha256: sha, simulated, plannerModelId: opts.plannerModelId });
+
+    const attempts = new Map<string, AttemptRecord[]>();
+    for (const [k, v] of state.byTask) attempts.set(k, [...v]);
+
+    // Close attempts the runner crashed in (appended, never rewritten).
+    for (const task of tasks) {
+      const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
+      if (st.kind !== "crashed") continue;
+      const cost = estimateCost(config.model, null);
+      const armRow = harnessFaultRow(
+        task,
+        st.attempt.start.trialKey,
+        opts.plannerModelId,
+        "crash",
+        {
+          modelUsd: null,
+          wallClockS: null,
+          vmS: null,
+        },
+      );
+      const end = {
+        trialKey: st.attempt.start.trialKey,
+        outcome: "harness-fault" as const,
+        harnessClass: "crash" as const,
+        recovered: true,
+        armRow,
+        cost,
+      };
+      ledger.end(end);
+      const list = attempts.get(task.taskId) as AttemptRecord[];
+      list[list.length - 1] = {
+        start: st.attempt.start,
+        end: {
+          schema: "myco.pilot.attempt/1",
+          event: "end",
+          at: new Date(now()).toISOString(),
+          ...end,
+        },
+      };
+      log(
+        `${st.attempt.start.trialKey}: closed as a crash (runner died mid-trial); re-running in place`,
+      );
+    }
+
+    const vault = new VerdictVault({
+      root: join(outDir, "vault"),
+      key: newVaultKey(),
+      agentRoots: [join(outDir, "trials")],
+    });
+
+    let skipped = 0;
+    let ran = 0;
+    let faulted = 0;
+    const exhausted: string[] = [];
+    const queue: BenchmarkTask[] = [];
+    for (const task of tasks) {
+      const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
+      if (st.kind === "done") skipped++;
+      else if (st.kind === "exhausted") exhausted.push(task.taskId);
+      else queue.push(task);
+    }
+
+    let nextStartAt = 0;
+    let consecutiveRateLimits = 0;
+    let stop: string | null = null;
+    let fatal: unknown = null;
+    const pauseRequested = () => existsSync(join(outDir, PAUSE_FILE));
+
+    const runAttempt = async (
+      task: BenchmarkTask,
+    ): Promise<"decided" | "faulted" | "exhausted"> => {
+      const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
+      if (st.kind !== "open") return "exhausted";
+      const trialKey = `r1p-${task.taskId}-a${st.nextAttempt}`;
+      const runId = trialKey;
+      const trialDir = join(outDir, "trials", trialKey);
+      mkdirSync(trialDir, { recursive: true });
+      mkdirSync(join(trialDir, "gate-evidence"), { recursive: true });
+      writeFileSync(
+        join(trialDir, "gate-tasks.json"),
+        `${JSON.stringify({ tasks: [gateEntryFor(task)] }, null, 2)}\n`,
+      );
+      const plan = trialLaunchPlan(config, task, { runId, trialKey }, trialDir, opts.repoRoot);
+      const audit = auditAgentLaunch(plan, { runId, extraServers: GATE_SERVER_CLASS });
+      if (!audit.ok)
+        throw new Error(
+          `${trialKey}: the launch audit refused the pilot plan: ${audit.violations.map((v) => `${v.tool}: ${v.detail}`).join("; ")}`,
+        );
+
+      const startLine = {
+        taskId: task.taskId,
+        attempt: st.nextAttempt,
+        trialKey,
+        runId,
+        supersedes: st.supersedes,
+      };
+      ledger.start(startLine);
+      const record: AttemptRecord = {
+        start: {
+          schema: "myco.pilot.attempt/1",
+          event: "start",
+          at: new Date(now()).toISOString(),
+          ...startLine,
+        },
+        end: null,
+      };
+      const list = attempts.get(task.taskId) ?? [];
+      list.push(record);
+      attempts.set(task.taskId, list);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), config.pacing.trialTimeoutS * 1000);
+      timer.unref?.();
+      const inner = driver.transport({
+        task,
+        runId,
+        trialKey,
+        trialDir,
+        signal: controller.signal,
+      });
+      let captured: CaptureInput | null = null;
+      const transport = {
+        runAgent: (p: AgentLaunchPlan, gate: Gate | null) => inner.runAgent(p, gate),
+        captureAfterStop: async () => {
+          captured = await inner.captureAfterStop();
+          return captured;
+        },
+      };
+      const t0 = now();
+      const common = {
+        taskId: task.taskId,
+        trialKey,
+        runId,
+        instruction: task.instruction,
+        persistedFormat: "csv" as const,
+        plannerModelId: opts.plannerModelId,
+        outputCeiling: null,
+      };
+      const persistedOf = () => {
+        const c = captured as CaptureInput | null;
+        const bytes = c?.["persisted/doc.csv"];
+        return bytes === undefined ? null : bytes;
+      };
+      try {
+        const reg = registerTask(task);
+        let armRow: BenchmarkArmRow;
+        if (!reg.ok) {
+          await transport.runAgent(plan, null);
+          await transport.captureAfterStop();
+          const rep = inner.report();
+          const cost = estimateCost(config.model, rep.usage);
+          armRow = gatedArmRow(
+            {
+              ...common,
+              outcome: { status: "unregistrable", reason: reg.reason },
+              agentClaim: rep.claim,
+              persisted: persistedOf(),
+              cost: {
+                modelUsd: cost.estimatedModelUsd,
+                wallClockS: (now() - t0) / 1000,
+                vmS: null,
+              },
+            },
+            opts.published,
+          );
+          ledger.end({
+            trialKey,
+            outcome: "decided",
+            harnessClass: null,
+            recovered: false,
+            armRow,
+            cost,
+          });
+        } else {
+          const outcome = await runGatedTrial({
+            vault,
+            runId,
+            taskId: task.taskId,
+            tasks: reg.registry,
+            plan,
+            oracleSources: opts.oracleSources,
+            transport,
+          });
+          if (outcome.status === "refused")
+            throw new Error(`${trialKey}: the launch audit refused the plan inside runGatedTrial`);
+          const rep = inner.report();
+          const cost = estimateCost(config.model, rep.usage);
+          armRow = gatedArmRow(
+            {
+              ...common,
+              outcome,
+              agentClaim: rep.claim,
+              persisted: persistedOf(),
+              cost: {
+                modelUsd: cost.estimatedModelUsd,
+                wallClockS: (now() - t0) / 1000,
+                vmS: null,
+              },
+            },
+            opts.published,
+          );
+          ledger.end({
+            trialKey,
+            outcome: "decided",
+            harnessClass: null,
+            recovered: false,
+            armRow,
+            cost,
+          });
+        }
+        const doc = persistedOf();
+        if (doc !== null) writeFileSync(join(trialDir, "doc.csv"), doc);
+        list[list.length - 1] = {
+          start: record.start,
+          end: {
+            schema: "myco.pilot.attempt/1",
+            event: "end",
+            trialKey,
+            outcome: "decided",
+            harnessClass: null,
+            recovered: false,
+            armRow,
+            cost: null,
+            at: new Date(now()).toISOString(),
+          },
+        };
+        return "decided";
+      } catch (error) {
+        const fault =
+          error instanceof HarnessFault
+            ? error
+            : controller.signal.aborted
+              ? new HarnessFault("timeout", `trial exceeded ${config.pacing.trialTimeoutS}s`)
+              : null;
+        if (fault === null) throw error; // A harness bug: stop; resume closes it as a crash.
+        const cost = estimateCost(config.model, fault.usage);
+        const armRow = harnessFaultRow(task, trialKey, opts.plannerModelId, fault.harnessClass, {
+          modelUsd: cost.estimatedModelUsd,
+          wallClockS: (now() - t0) / 1000,
+          vmS: null,
+        });
+        const end = {
+          trialKey,
+          outcome: "harness-fault" as const,
+          harnessClass: fault.harnessClass,
+          recovered: false,
+          armRow,
+          cost,
+        };
+        ledger.end(end);
+        list[list.length - 1] = {
+          start: record.start,
+          end: {
+            schema: "myco.pilot.attempt/1",
+            event: "end",
+            at: new Date(now()).toISOString(),
+            ...end,
+          },
+        };
+        log(
+          `${trialKey}: harness fault (${fault.harnessClass}); the attempt is kept and the trial re-runs in place`,
+        );
+        if (fault.harnessClass === "rate-limit") {
+          consecutiveRateLimits++;
+          if (consecutiveRateLimits >= config.pacing.maxConsecutiveRateLimits)
+            stop = `paused after ${consecutiveRateLimits} rate limits in a row; re-run the same command later to resume`;
+          else
+            nextStartAt = Math.max(
+              nextStartAt,
+              now() + backoffS(config.pacing, consecutiveRateLimits) * 1000,
+            );
+        }
+        return "faulted";
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    const worker = async () => {
+      while (stop === null && fatal === null) {
+        const task = queue.shift();
+        if (task === undefined) return;
+        for (;;) {
+          if (stop !== null || fatal !== null) {
+            queue.unshift(task);
+            return;
+          }
+          if (pauseRequested()) {
+            stop = `paused: ${PAUSE_FILE} file present in the run directory; remove it and re-run to resume`;
+            queue.unshift(task);
+            return;
+          }
+          const wait = nextStartAt - now();
+          if (wait > 0) {
+            await sleep(wait);
+            continue; // Re-check pause and the (possibly moved) start time.
+          }
+          nextStartAt = now() + config.pacing.interTrialDelayS * 1000;
+          let r: "decided" | "faulted" | "exhausted";
+          try {
+            r = await runAttempt(task);
+          } catch (error) {
+            fatal ??= error;
+            return;
+          }
+          if (r === "decided") {
+            ran++;
+            consecutiveRateLimits = 0;
+            break;
+          }
+          if (r === "faulted") {
+            faulted++;
+            const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
+            if (st.kind === "exhausted") {
+              exhausted.push(task.taskId);
+              break;
+            }
+            continue;
+          }
+          exhausted.push(task.taskId);
+          break;
+        }
+      }
+    };
+
+    await Promise.allSettled(
+      Array.from({ length: Math.min(config.pacing.concurrency, Math.max(queue.length, 1)) }, () =>
+        worker(),
+      ),
+    );
+    if (fatal !== null) throw fatal;
+    const status = stop !== null ? "paused" : exhausted.length > 0 ? "incomplete" : "complete";
+    return {
+      status,
+      reason:
+        stop ??
+        (exhausted.length > 0
+          ? `${exhausted.length} trial(s) hit maxAttemptsPerTrial on harness faults: ${exhausted.join(", ")}`
+          : null),
+      ran,
+      skipped,
+      faulted,
+      exhausted,
+    };
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Export a run for grading and checking: `<exportDir>/arm.jsonl` (one row per decided trial),
+ * `<exportDir>/faulted-attempts.jsonl` (each faulted attempt's arm row, linked to the attempt
+ * that replaced it; the input for a pack's `superseded.jsonl` once the pack is assembled with
+ * its trial-ops rows) and `<exportDir>/docs/<trialKey>.csv`. Refuses an existing `exportDir`: an
+ * export is a new directory, never an overwrite. A simulated run's export carries `SIMULATED`.
+ */
+export function exportRun(
+  outDir: string,
+  exportDir: string,
+): { readonly armRows: BenchmarkArmRow[] } {
+  if (existsSync(exportDir)) throw new Error(`${exportDir} exists: an export never overwrites`);
+  const state = loadLedger(join(outDir, ATTEMPTS_FILE));
+  if (state.header === null) throw new Error(`${outDir} has no pilot ledger`);
+  mkdirSync(join(exportDir, "docs"), { recursive: true });
+  if (state.header.simulated)
+    writeFileSync(join(exportDir, SIMULATED_FILE), readFileSync(join(outDir, SIMULATED_FILE)));
+  const armRows: BenchmarkArmRow[] = [];
+  const superseded: { replacedBy: string; reason: string; arm: BenchmarkArmRow }[] = [];
+  for (const list of state.byTask.values()) {
+    for (let i = 0; i < list.length; i++) {
+      const rec = list[i] as AttemptRecord;
+      if (rec.end === null || rec.end.armRow === null) continue;
+      if (rec.end.outcome === "decided") {
+        armRows.push(rec.end.armRow);
+        const doc = join(outDir, "trials", rec.start.trialKey, "doc.csv");
+        if (existsSync(doc))
+          writeFileSync(join(exportDir, "docs", `${rec.start.trialKey}.csv`), readFileSync(doc));
+      } else {
+        const next = list[i + 1];
+        if (next !== undefined)
+          superseded.push({
+            replacedBy: next.start.trialKey,
+            reason: `harness fault: ${rec.end.harnessClass}`,
+            arm: rec.end.armRow,
+          });
+      }
+    }
+  }
+  const jsonl = (rows: readonly unknown[]) =>
+    rows.length === 0 ? "" : `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`;
+  writeFileSync(join(exportDir, "arm.jsonl"), jsonl(armRows));
+  writeFileSync(join(exportDir, "faulted-attempts.jsonl"), jsonl(superseded));
+  return { armRows };
+}

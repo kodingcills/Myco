@@ -1,0 +1,171 @@
+/**
+ * Track E: pacing and retries, on a virtual clock with a fake transport. Starts are spaced,
+ * concurrency is bounded, rate limits back off and pause the run, and only harness faults
+ * are re-run (in place, linked); an agent-side outcome never is.
+ */
+import { rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { fakeDriver, virtualClock } from "../../src/pilot/dry-run.ts";
+import { ATTEMPTS_FILE, ledgerRows, loadLedger } from "../../src/pilot/ledger.ts";
+import { HarnessFault, PAUSE_FILE, type PilotDriver } from "../../src/pilot/runner.ts";
+import { dryRun, tmp } from "./helpers.ts";
+
+const attemptsOf = (dir: string) => loadLedger(join(dir, ATTEMPTS_FILE)).byTask;
+
+describe("pilot pacing (track E)", () => {
+  it("spaces trial starts by the inter-trial delay", async () => {
+    const dir = tmp();
+    const starts: number[] = [];
+    const clock = virtualClock();
+    await dryRun(dir, {
+      clock,
+      driver: fakeDriver({ beforeAgent: () => void starts.push(clock.now()) }),
+    });
+    expect(starts).toHaveLength(30);
+    for (let i = 1; i < starts.length; i++)
+      expect((starts[i] as number) - (starts[i - 1] as number)).toBeGreaterThanOrEqual(90_000);
+  });
+
+  it("never runs more trials at once than the configured concurrency", async () => {
+    const dir = tmp();
+    let inFlight = 0;
+    let peak = 0;
+    const driver = fakeDriver({
+      beforeAgent: async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 2));
+        inFlight--;
+      },
+    });
+    const { result } = await dryRun(dir, {
+      driver,
+      pacing: { concurrency: 2, interTrialDelayS: 0 },
+    });
+    expect(result.status).toBe("complete");
+    expect(peak).toBe(2);
+    const one = tmp();
+    peak = 0;
+    await dryRun(one, { driver, pacing: { concurrency: 1, interTrialDelayS: 0 } });
+    expect(peak).toBe(1);
+  });
+
+  it("a rate limit is a harness fault: backed off, re-run in place, the faulted attempt kept and linked", async () => {
+    const dir = tmp();
+    let n = 0;
+    const clock = virtualClock();
+    const driver = fakeDriver({
+      beforeAgent: () => {
+        if (++n === 3) throw new HarnessFault("rate-limit", "429");
+      },
+      usage: () => ({
+        inputTokens: 1000,
+        outputTokens: 100,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      }),
+    });
+    const { result } = await dryRun(dir, { driver, clock });
+    expect(result).toMatchObject({ status: "complete", ran: 30, faulted: 1 });
+    expect(clock.waits.some((w) => w >= 300_000)).toBe(true);
+    const faultedTask = [...attemptsOf(dir).entries()].find(([, a]) => a.length === 2);
+    expect(faultedTask).toBeDefined();
+    const [first, second] = faultedTask?.[1] ?? [];
+    expect(first?.end).toMatchObject({ outcome: "harness-fault", harnessClass: "rate-limit" });
+    expect(first?.end?.armRow).toMatchObject({
+      claim: "no-claim",
+      gate: { called: false, verdict: null },
+      accepted: false,
+      cause: { kind: "harness", detail: "harness fault: rate-limit" },
+    });
+    expect(second?.start.supersedes).toBe(first?.start.trialKey);
+    expect(second?.end?.outcome).toBe("decided");
+  });
+
+  it("pauses (resumable) after maxConsecutiveRateLimits rate limits in a row", async () => {
+    const dir = tmp();
+    const always: PilotDriver = fakeDriver({
+      beforeAgent: () => {
+        throw new HarnessFault("rate-limit", "usage limit");
+      },
+    });
+    const { result } = await dryRun(dir, { driver: always, pacing: { maxAttemptsPerTrial: 10 } });
+    expect(result.status).toBe("paused");
+    expect(result.reason).toMatch(/4 rate limits in a row/);
+    expect(result.faulted).toBe(4);
+    const resumed = await dryRun(dir, { pacing: { maxAttemptsPerTrial: 10 } });
+    expect(resumed.result).toMatchObject({ status: "complete", ran: 30 });
+    expect(ledgerRows(loadLedger(join(dir, ATTEMPTS_FILE))).armRows).toHaveLength(30);
+  });
+
+  it("never re-runs an agent-side outcome: refuted, not-done and unregistrable trials run once", async () => {
+    const dir = tmp();
+    const notDone = fakeDriver();
+    const driver: PilotDriver & { launched: string[] } = {
+      simulated: true,
+      launched: notDone.launched,
+      transport(ctx) {
+        const t = notDone.transport(ctx);
+        return { ...t, report: () => ({ claim: "not-done", usage: null }) };
+      },
+    };
+    await dryRun(dir, { driver });
+    expect(driver.launched).toHaveLength(30);
+    const rows = ledgerRows(loadLedger(join(dir, ATTEMPTS_FILE))).armRows;
+    expect(rows).toHaveLength(30);
+    for (const list of attemptsOf(dir).values()) expect(list).toHaveLength(1);
+    expect(rows.every((r) => r.claim === "not-done" && !r.accepted)).toBe(true);
+    // The credulous default: 12 faulted tasks refuted or unregistrable, each still run once.
+    const dir2 = tmp();
+    const credulous = fakeDriver();
+    await dryRun(dir2, { driver: credulous });
+    expect(credulous.launched).toHaveLength(30);
+    const rows2 = ledgerRows(loadLedger(join(dir2, ATTEMPTS_FILE))).armRows;
+    expect(rows2.filter((r) => r.gate?.verdict === "refuted")).toHaveLength(9);
+    expect(rows2.filter((r) => r.gate?.unregistrable === true)).toHaveLength(3);
+  });
+
+  it("stops re-running after maxAttemptsPerTrial harness faults (incomplete, not looping)", async () => {
+    const dir = tmp();
+    const driver = fakeDriver({
+      beforeAgent: (ctx) => {
+        if (ctx.task.taskId === "fc-v1-002") throw new HarnessFault("timeout", "slow");
+      },
+    });
+    const { result } = await dryRun(dir, { driver });
+    expect(result.status).toBe("incomplete");
+    expect(result.exhausted).toEqual(["fc-v1-002"]);
+    expect(attemptsOf(dir).get("fc-v1-002")).toHaveLength(3);
+    // Resume leaves an exhausted trial alone (no fourth attempt).
+    const again = await dryRun(dir);
+    expect(again.result.exhausted).toEqual(["fc-v1-002"]);
+    expect(attemptsOf(dir).get("fc-v1-002")).toHaveLength(3);
+  });
+
+  it("an exception that is not a HarnessFault stops the run instead of being retried", async () => {
+    const dir = tmp();
+    const driver = fakeDriver({
+      beforeAgent: () => {
+        throw new TypeError("harness bug");
+      },
+    });
+    await expect(dryRun(dir, { driver })).rejects.toThrow(/harness bug/);
+    expect(driver.launched).toHaveLength(1);
+  });
+
+  it("a PAUSE file stops new starts; removing it and re-running resumes", async () => {
+    const dir = tmp();
+    let n = 0;
+    const driver = fakeDriver({
+      beforeAgent: () => {
+        if (++n === 5) writeFileSync(join(dir, PAUSE_FILE), "");
+      },
+    });
+    const { result } = await dryRun(dir, { driver });
+    expect(result).toMatchObject({ status: "paused", ran: 5 });
+    expect((await dryRun(dir)).result.status).toBe("paused");
+    rmSync(join(dir, PAUSE_FILE));
+    expect((await dryRun(dir)).result).toMatchObject({ status: "complete", ran: 25, skipped: 5 });
+  });
+});
