@@ -75,6 +75,8 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     expect(checked.status, checked.stderr).toBe(0);
     const result = JSON.parse(checked.stdout) as CheckResult;
     expect(result.ok).toBe(true);
+    // Labelled as not evidence even though the check and R1 pass (#496 round 3).
+    expect(result.provenance).toBe("simulated");
     // 60 clean tasks: honest edit, gate verified, accepted. 30 faulted: the gate refutes the
     // untouched or misplaced document. 10 invalid-target: unregistrable, graded fail.
     expect(result.arms[0]).toMatchObject({
