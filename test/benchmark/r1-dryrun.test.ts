@@ -372,6 +372,7 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
       "- the setup makes one new release directory under `$TMPDIR`;",
       "(in a clone: an ENOENT error naming work/requests.jsonl,",
       "and the shell's redirect leaves an empty regraded.jsonl behind)",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
       'RELEASE=$(mktemp -d "${TMPDIR:-/tmp}/myco-release.XXXXXX")',
       "- the gated check without `--expect-unregistrable` exits 2;",
       "- both check commands exit 1 on it, with the provenance refusal above;",
@@ -412,6 +413,7 @@ function reproduceSection(doc: string): { setup: string; commands: string[] } {
   const setup = setups[0] as string;
   // An explicit template under TMPDIR: GNU and BSD mktemp both honour it, so the test's
   // "creating nothing" checks look where the setup would create (#517 round 2, D1).
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell text, not a JS template
   expect(setup).toContain('mktemp -d "${TMPDIR:-/tmp}/myco-release.XXXXXX"');
   // The setup links exactly the files the test's fake clone links.
   for (const name of LINKED) expect(setup).toContain(`"$PWD/${name}"`);

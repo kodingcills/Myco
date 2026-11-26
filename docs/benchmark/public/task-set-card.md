@@ -193,8 +193,13 @@ denominator"). Result: **RESULTS PENDING.**
 - **Evidence provenance is a declared string.** `EVIDENCE_PLANNERS` stops mislabelled dry runs,
   not a deliberate forgery of the planner field. It also lists Claude model ids only, so a
   third-party arm on another model cannot pass `--evidence` today.
-- **Disclosure of re-runs rests on the pack.** The pack alone cannot prove that every faulted
-  attempt was disclosed, or that a self-declared harness fault really was one.
+- **Disclosure of re-runs rests on the trusted harness.** The M2 pack check cross-checks the
+  pack against its append-only, hash-chained attempt ledger (`attempts.jsonl`, #518): every
+  recorded attempt must be disclosed, and a disclosed harness fault must match a recorded one.
+  An R1 pack also needs the ledger's host-side anchor outside the pack. The ledger is
+  tamper-evident against the checked agent and guest-side processes, not against a malicious
+  pack author, who controls the harness, the pack and the anchor alike; and it binds task, arm
+  and outcome only, not a row's verdict or document.
 - **The statistics are small-sample.** 100 trials bound a zero-failure rate to a Wilson 95%
   upper bound of about 3.7%, not to zero.
 

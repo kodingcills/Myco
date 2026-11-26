@@ -121,7 +121,12 @@ replaced: never a gate verdict, an accepted DONE or an unregistrable trial. A su
 attempt is in no R1, R2 or R3 count, but its cost still counts in the pack's cost row R7,
 which sums superseded attempts. `costPerVerifiedTask` in `scripts/benchmark-check.ts` reads
 `arm.jsonl` only and never includes a replaced attempt (lead rulings 2026-11-26 12:22Z and
-13:42Z; the M2 pack check enforces this, #511).
+13:42Z; the M2 pack check enforces this, #511). The pack check also cross-checks the pack
+against its append-only, hash-chained attempt ledger (`attempts.jsonl`, #518): every recorded
+attempt must be disclosed as a row or a superseded attempt, and a disclosed harness fault must
+match a recorded one. An R1 pack is refused without the ledger or without its host-side anchor
+outside the pack. The ledger is tamper-evident against the checked agent and guest-side
+processes, not against a malicious pack author.
 
 **Detection (R3).** Over the gated arm's eligible faulted trials, per fault class:
 - false successes: accepted DONEs the grader does not pass, over eligible trials;

@@ -16,7 +16,8 @@ import {
 import { GRADER_VERSION } from "../../src/benchmark/grade/grade.ts";
 import { buildTaskSet, TASK_SET_VERSION } from "../../src/benchmark/taskset.ts";
 import { wilson } from "../../src/foundry/stats.ts";
-import { INELIGIBLE_CAUSES, R1_MIN_TRIALS } from "../../src/m2/evidence.ts";
+import { checkPack, INELIGIBLE_CAUSES, R1_MIN_TRIALS } from "../../src/m2/evidence.ts";
+import { input, manifest, r1Trials } from "../m2/pack-fixture.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 /** A doc with its line wrapping flattened, so quoted texts match across line breaks. */
@@ -109,7 +110,7 @@ describe("public benchmark package matches the code", () => {
     expect(protocol).toContain("a harness-faulted trial never counts toward the 100");
   });
 
-  it("describes #511's topped-up runs as on main, and nothing from the open #518 (#517 round 2, D2)", () => {
+  it("describes #511's topped-up runs and #518's attempt ledger as on main (#517 round 2, D2)", () => {
     const flatCard = card.replace(/\s+/g, " ");
     const flatProtocol = protocol.replace(/\s+/g, " ");
     // #511 is merged: no doc calls it pending or future.
@@ -117,10 +118,35 @@ describe("public benchmark package matches the code", () => {
       const flat = doc.replace(/\s+/g, " ");
       expect(flat).not.toMatch(/#511[^.]*\bpending\b/i);
       expect(flat).not.toMatch(/once #511 merges/i);
-      // #518 (attempt ledger) is still open: nothing describes it as on main.
-      expect(flat).not.toContain("#518");
-      expect(flat).not.toMatch(/attempt ledger/i);
+      // #518 (attempt ledger) is merged too: nothing calls it pending, open or future.
+      expect(flat).not.toMatch(/#518[^.]*\b(pending|open)\b/i);
+      expect(flat).not.toMatch(/once #518 merges/i);
+      // The pre-#518 limitation ("the pack alone cannot prove...") is gone.
+      expect(flat).not.toContain("The pack alone cannot prove");
     }
+    // What main's attempt-ledger cross-check does (src/m2/attempt-ledger.ts, evidence.ts), and
+    // the boundary of its threat model (lead ruling on #518 D3).
+    expect(flatCard).toContain("**Disclosure of re-runs rests on the trusted harness.**");
+    for (const flat of [flatCard, flatProtocol]) {
+      expect(flat).toContain("append-only, hash-chained attempt ledger (`attempts.jsonl`, #518)");
+      expect(flat).toContain("a disclosed harness fault must match a recorded one");
+      expect(flat).toContain("host-side anchor outside the pack");
+      expect(flat).toContain(
+        "tamper-evident against the checked agent and guest-side processes, not against a malicious pack author",
+      );
+    }
+    expect(flatProtocol).toContain(
+      "An R1 pack is refused without the ledger or without its host-side anchor outside the pack.",
+    );
+    // The code says so: an honest R1 pack passes; drop its ledger or its anchor and it is refused.
+    const honest = input(r1Trials(), manifest());
+    expect(checkPack(honest).errors).toEqual([]);
+    const { attempts: _l, ...noLedger } = honest;
+    expect(checkPack(noLedger).errors).toContain("attempts.jsonl: missing (the attempt ledger)");
+    const { anchor: _a, ...noAnchor } = honest;
+    expect(checkPack(noAnchor).errors.some((e) => e.startsWith("attempt anchor: missing"))).toBe(
+      true,
+    );
     // What main's pack check does (src/m2/evidence.ts checkSuperseded, m2SupersededSchema).
     expect(flatCard).toContain(
       "The M2 evidence pack check (`src/m2/evidence.ts`, #511) enforces these rules and refuses a pack that breaks them.",
