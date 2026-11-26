@@ -13,6 +13,8 @@
  * a different sheet set).
  */
 import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { grade, sha256 } from "../../src/benchmark/grade/grade.ts";
@@ -452,6 +454,546 @@ describe("package and XML faults fail closed", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Namespaces resolved in scope (round 2, D3)
+// ---------------------------------------------------------------------------
+
+const MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/** Rewrite an unprefixed part so every element carries `prefix:` (hand-built, as writers may). */
+function prefixAll(xml: string, prefix: string): string {
+  return xml
+    .replace(/xmlns="/g, `xmlns:${prefix}="`)
+    .replace(/<(\/?)([A-Za-z][A-Za-z0-9]*)(?=[\s/>])/g, `<$1${prefix}:$2`);
+}
+
+/** The exact workbook (xlsxFromCsv) with some parts rewritten. */
+function exactWith(patch: Record<string, string>) {
+  return xlsxFromCsv(EXACT_CSV, { patch });
+}
+
+describe("XML namespaces are resolved in scope, whatever the prefix (round 2, D3)", () => {
+  const exactCellsRead = readXlsxDocument(EXACT).cells;
+  const workbook = entryText("xl/workbook.xml");
+
+  it("openpyxl style: xmlns:r declared on each <sheet>, not on the root, reads the same cells", () => {
+    const wb = workbook
+      .replace(` xmlns:r="${REL_NS}"`, "")
+      .replace("<sheet ", `<sheet xmlns:r="${REL_NS}" `);
+    expect(wb).not.toContain(`<workbook xmlns="${MAIN_NS}" xmlns:r`);
+    expect(readXlsxDocument(exactWith({ "xl/workbook.xml": wb })).cells).toEqual(exactCellsRead);
+  });
+
+  it("xmlns:r declared on <sheets>, under another prefix name, reads the same cells", () => {
+    const wb = workbook
+      .replace(` xmlns:r="${REL_NS}"`, "")
+      .replace("<sheets>", `<sheets xmlns:rel="${REL_NS}">`)
+      .replace(" r:id=", " rel:id=");
+    expect(readXlsxDocument(exactWith({ "xl/workbook.xml": wb })).cells).toEqual(exactCellsRead);
+  });
+
+  it("prefixed roots (<x:workbook xmlns:x=...main>) in every SpreadsheetML part read the same cells", async () => {
+    const parts = ["xl/workbook.xml", XLSX_MAIN_SHEET, "xl/sharedStrings.xml", "xl/styles.xml"];
+    const patch: Record<string, string> = {};
+    for (const name of parts) patch[name] = prefixAll(entryText(name), "x");
+    // The workbook's r: attributes stay in the relationships namespace.
+    patch["xl/workbook.xml"] = (patch["xl/workbook.xml"] as string).replace(
+      `xmlns:x:r="`,
+      `xmlns:r="`,
+    );
+    expect(patch["xl/workbook.xml"]).toContain(`<x:workbook xmlns:x="${MAIN_NS}"`);
+    expect(patch[XLSX_MAIN_SHEET]).toContain("<x:c ");
+    const bytes = exactWith(patch);
+    expect(readXlsxDocument(bytes).cells).toEqual(exactCellsRead);
+    expect((await check(bytes)).verdict).toBe("verified");
+  });
+
+  it("prefixed package parts ([Content_Types].xml, .rels) read the same cells", () => {
+    const patch: Record<string, string> = {
+      "[Content_Types].xml": prefixAll(entryText("[Content_Types].xml"), "ct"),
+      "_rels/.rels": prefixAll(entryText("_rels/.rels"), "pr"),
+      "xl/_rels/workbook.xml.rels": prefixAll(entryText("xl/_rels/workbook.xml.rels"), "pr"),
+    };
+    expect(patch["_rels/.rels"]).toContain("<pr:Relationship ");
+    expect(readXlsxDocument(exactWith(patch)).cells).toEqual(exactCellsRead);
+  });
+
+  it("a root in the right local name but another namespace is XLSX_NOT_WORKBOOK", () => {
+    const wb = workbook.replace(`<workbook xmlns="${MAIN_NS}"`, '<workbook xmlns="urn:not-main"');
+    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_NOT_WORKBOOK");
+  });
+
+  it("r:id under a prefix bound to another namespace is XLSX_NOT_WORKBOOK", () => {
+    const wb = workbook.replace(`xmlns:r="${REL_NS}"`, 'xmlns:r="urn:not-relationships"');
+    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_NOT_WORKBOOK");
+  });
+
+  it("an unbound prefix is XLSX_XML_MALFORMED", () => {
+    const wb = workbook.replace(` xmlns:r="${REL_NS}"`, "");
+    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_XML_MALFORMED");
+    const sheet = entryText(XLSX_MAIN_SHEET).replace("<sheetData>", "<sheetData><q:row/>");
+    expect(read(exactWith({ [XLSX_MAIN_SHEET]: sheet }))).toBe("XLSX_XML_MALFORMED");
+  });
+
+  it("two attributes with the same expanded name (r:id and a second prefix's id) are XLSX_XML_MALFORMED", () => {
+    const wb = workbook.replace(' r:id="', ` xmlns:q="${REL_NS}" q:id="rId9" r:id="`);
+    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_XML_MALFORMED");
+  });
+
+  it.each([
+    ['xmlns:p=""', "undeclaring a prefix"],
+    ['xmlns:xml="urn:x"', "rebinding xml"],
+    ['xmlns:p="http://www.w3.org/XML/1998/namespace"', "binding the xml URI"],
+    ['xmlns:xmlns="urn:x"', "declaring xmlns"],
+  ])("%s (%s) is XLSX_XML_MALFORMED", (decl) => {
+    const wb = workbook.replace("<sheets>", `<sheets ${decl}>`);
+    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_XML_MALFORMED");
+  });
+
+  it("a <sheet> in a foreign namespace is not a sheet, and cannot hide one: XLSX_XML_UNSUPPORTED", () => {
+    const wb = workbook.replace(
+      "</sheets>",
+      '<y:sheet xmlns:y="urn:other" name="h" sheetId="9" r:id="rId2"/></sheets>',
+    );
+    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_XML_UNSUPPORTED");
+  });
+
+  it("inside sheetData: the main namespace under another prefix is read; any other namespace is refused", () => {
+    const sheet = entryText(XLSX_MAIN_SHEET);
+    const fixed = sheet.replace(
+      /<c r="A1" t="s"><v>(\d+)<\/v><\/c>/,
+      `<m:c xmlns:m="${MAIN_NS}" r="A1" t="s"><m:v>$1</m:v></m:c>`,
+    );
+    expect(fixed).not.toBe(sheet);
+    expect(readXlsxDocument(exactWith({ [XLSX_MAIN_SHEET]: fixed })).cells).toEqual(exactCellsRead);
+    const foreignRow = sheet.replace(
+      "<sheetData>",
+      '<sheetData><row xmlns="urn:other" r="99"><c r="A99"><v>1</v></c></row>',
+    );
+    expect(read(exactWith({ [XLSX_MAIN_SHEET]: foreignRow }))).toBe("XLSX_XML_UNSUPPORTED");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 2, D4 and D5: overlap, depth cap, styles, a regex stack overflow
+// ---------------------------------------------------------------------------
+
+describe("round-2 hardening pins (D4, D5)", () => {
+  it("overlapping entries (a stored entry spanning the next local header) are XLSX_ZIP_MALFORMED", () => {
+    // xl/junk.bin is stored first; its sizes are then stretched over the whole next entry
+    // (header, name and body) and its CRC set to those bytes, so with the overlap check
+    // removed every entry would read cleanly.
+    const entries = xlsxEntriesFromCsv(EXACT_CSV);
+    const bytes = writeZip([
+      { name: "xl/junk.bin", data: new Uint8Array([1, 2, 3]), store: true },
+      ...entries,
+    ]);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const junkData = 30 + "xl/junk.bin".length;
+    const next = junkData + 3;
+    expect(view.getUint32(next, true)).toBe(0x04034b50);
+    const nextEnd = next + 30 + view.getUint16(next + 26, true) + view.getUint32(next + 18, true);
+    const size = nextEnd - junkData;
+    const crc = crc32(bytes.subarray(junkData, nextEnd)) >>> 0;
+    view.setUint32(14, crc, true);
+    view.setUint32(18, size, true);
+    view.setUint32(22, size, true);
+    const eocd = bytes.length - 22;
+    const cd = view.getUint32(eocd + 16, true);
+    expect(view.getUint32(cd, true)).toBe(0x02014b50);
+    view.setUint32(cd + 16, crc, true);
+    view.setUint32(cd + 20, size, true);
+    view.setUint32(cd + 24, size, true);
+    expect(read(bytes)).toBe("XLSX_ZIP_MALFORMED");
+  });
+
+  /** [Content_Types].xml with `depth` nested <a> elements below the root. */
+  const nested = (depth: number) =>
+    exactWith({
+      "[Content_Types].xml": entryText("[Content_Types].xml").replace(
+        "</Types>",
+        `${"<a>".repeat(depth)}${"</a>".repeat(depth)}</Types>`,
+      ),
+    });
+
+  it("the XML depth cap: maxXmlDepth levels read, one more is XLSX_XML_UNSUPPORTED", () => {
+    expect(XLSX_LIMITS.maxXmlDepth).toBe(64);
+    // The root is level 1, so maxXmlDepth - 1 nested elements reach the cap exactly.
+    expect(read(nested(XLSX_LIMITS.maxXmlDepth - 1))).toBe("no error");
+    expect(read(nested(XLSX_LIMITS.maxXmlDepth))).toBe("XLSX_XML_UNSUPPORTED");
+    expect(read(nested(500))).toBe("XLSX_XML_UNSUPPORTED");
+  });
+
+  it.each([
+    [
+      "a cell style index that is not a number",
+      (x: string) => x.replace('<c r="A1"', '<c s="x" r="A1"'),
+    ],
+    ["a cell style index past cellXfs", (x: string) => x.replace('<c r="A1"', '<c s="999" r="A1"')],
+  ])("%s is XLSX_STYLE_MALFORMED", (_name, edit) => {
+    const sheet = entryText(XLSX_MAIN_SHEET);
+    expect(edit(sheet)).not.toBe(sheet);
+    expect(read(exactWith({ [XLSX_MAIN_SHEET]: edit(sheet) }))).toBe("XLSX_STYLE_MALFORMED");
+  });
+
+  it.each([
+    ["a numFmt without a formatCode", (x: string) => x.replace(/formatCode="[^"]*"/, "")],
+    [
+      "a numFmt whose id is not an integer",
+      (x: string) => x.replace(/numFmtId="1\d\d"/, 'numFmtId="x"'),
+    ],
+    [
+      "an xf whose numFmtId is not a number",
+      (x: string) => x.replace('<xf numFmtId="2"', '<xf numFmtId="2x"'),
+    ],
+  ])("%s is XLSX_STYLE_MALFORMED", (_name, edit) => {
+    const styles = entryText("xl/styles.xml");
+    expect(edit(styles)).not.toBe(styles);
+    expect(read(exactWith({ "xl/styles.xml": edit(styles) }))).toBe("XLSX_STYLE_MALFORMED");
+  });
+
+  it("an unterminated tag with ~1M attributes (regex stack overflow) is XLSX_XML_MALFORMED, not a RangeError", async () => {
+    const huge = `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="${MAIN_NS}"><sheetData><row${' a="1"'.repeat(1_000_000)}`;
+    expect(huge.length).toBeGreaterThan(6_000_000);
+    // Stored (not deflated), as the verifier built it: a 6 MB entry under every size cap.
+    const bytes = writeZip(
+      xlsxEntriesFromCsv(EXACT_CSV).map((e) =>
+        e.name === XLSX_MAIN_SHEET
+          ? { name: e.name, data: new TextEncoder().encode(huge), store: true }
+          : e,
+      ),
+    );
+    expect(read(bytes)).toBe("XLSX_XML_MALFORMED");
+    const result = await check(bytes);
+    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_CORRUPT"] });
+    expect(result.reasons).toEqual([
+      "could not look: persisted document is not a readable xlsx document (XLSX_XML_MALFORMED)",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Every documented refusal, one row each (docs/gate/api.md, "Hardened reading")
+// ---------------------------------------------------------------------------
+
+/** EXACT with `n` bytes inserted at the front. */
+const prefixed = (junk: Uint8Array) => {
+  const out = new Uint8Array(junk.length + EXACT.length);
+  out.set(junk);
+  out.set(EXACT, junk.length);
+  return out;
+};
+const withSheetXml = (edit: (xml: string) => string) => {
+  const sheet = entryText(XLSX_MAIN_SHEET);
+  const next = edit(sheet);
+  if (next === sheet) throw new Error("edit did not apply");
+  return xlsxFromCsv(EXACT_CSV, { patch: { [XLSX_MAIN_SHEET]: next } });
+};
+/** Patch the first local header's field at `offset`. */
+const patchLocal = (offset: number, value: number) => {
+  const out = EXACT.slice();
+  new DataView(out.buffer).setUint16(offset, value, true);
+  return out;
+};
+
+const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
+  [
+    "file over 8 MiB",
+    "XLSX_TOO_LARGE",
+    () => {
+      const big = new Uint8Array(XLSX_LIMITS.maxFileBytes + 1);
+      big.set(EXACT);
+      return big;
+    },
+  ],
+  ["not a zip (CSV bytes)", "XLSX_NOT_ZIP", () => new TextEncoder().encode(EXACT_CSV)],
+  ["leading junk", "XLSX_NOT_ZIP", () => prefixed(new Uint8Array([1, 2, 3, 4]))],
+  [
+    "leading junk that starts like a zip",
+    "XLSX_ZIP_MALFORMED",
+    () => prefixed(new Uint8Array([0x50, 0x4b, 3, 4, 0, 0, 0, 0])),
+  ],
+  [
+    "trailing junk",
+    "XLSX_ZIP_MALFORMED",
+    () => {
+      const out = new Uint8Array(EXACT.length + 3);
+      out.set(EXACT);
+      return out;
+    },
+  ],
+  [
+    "multi-disk archive",
+    "XLSX_ZIP_MALFORMED",
+    () => {
+      const out = EXACT.slice();
+      new DataView(out.buffer).setUint16(out.length - 22 + 4, 1, true);
+      return out;
+    },
+  ],
+  [
+    "ZIP64 end record",
+    "XLSX_ZIP64",
+    () => {
+      const out = EXACT.slice();
+      const view = new DataView(out.buffer);
+      view.setUint32(out.length - 22 + 16, 0xffffffff, true);
+      return out;
+    },
+  ],
+  [
+    "65 entries",
+    "XLSX_TOO_MANY_ENTRIES",
+    () => writeZip(Array.from({ length: 65 }, (_, i) => lying(`e${i}.xml`, 10, 10))),
+  ],
+  [
+    "entry declaring 8 MiB + 1",
+    "XLSX_ENTRY_TOO_LARGE",
+    () => writeZip([lying("xl/big.xml", XLSX_LIMITS.maxEntryBytes + 1, 200 * 1024)]),
+  ],
+  [
+    "entry over the ratio cap",
+    "XLSX_RATIO_EXCEEDED",
+    () => writeZip([lying("xl/bomb.xml", 4 * 1024 * 1024, 1024)]),
+  ],
+  [
+    "entries summing past 16 MiB",
+    "XLSX_TOTAL_TOO_LARGE",
+    () => writeZip([0, 1, 2].map((i) => lying(`xl/p${i}.xml`, 6 * 1024 * 1024, 100 * 1024))),
+  ],
+  [
+    "traversal in an entry name",
+    "XLSX_UNSAFE_ENTRY_NAME",
+    () => writeXlsx(exactCells(), { patch: { "../evil.xml": "<x/>" } }),
+  ],
+  [
+    "case-folded duplicate entry",
+    "XLSX_DUPLICATE_ENTRY",
+    () => writeXlsx(exactCells(), { patch: { "XL/workbook.xml": "<x/>" } }),
+  ],
+  ["encrypted flag (central directory)", "XLSX_ENCRYPTED", () => patchCentral(EXACT, 8, 0x0801)],
+  ["encrypted flag (local header only)", "XLSX_ENCRYPTED", () => patchLocal(6, 0x0801)],
+  ["WinZip AES (method 99)", "XLSX_ENCRYPTED", () => patchCentral(EXACT, 10, 99)],
+  ["compression method 12", "XLSX_UNSUPPORTED_METHOD", () => patchCentral(EXACT, 10, 12)],
+  [
+    "understated size",
+    "XLSX_INFLATE_FAILED",
+    () => {
+      const zeros = new Uint8Array(1024 * 1024);
+      return writeZip([
+        {
+          name: "x.xml",
+          data: new Uint8Array(),
+          deflated: { body: deflateRawSync(zeros), crc: crc32(zeros), size: 100 },
+        },
+      ]);
+    },
+  ],
+  [
+    "bad CRC",
+    "XLSX_CRC_MISMATCH",
+    () => {
+      const data = new TextEncoder().encode("<x/>");
+      return writeZip([
+        {
+          name: "a.xml",
+          data,
+          deflated: { body: deflateRawSync(data), crc: crc32(data) ^ 1, size: data.length },
+        },
+      ]);
+    },
+  ],
+  [
+    "a zip that is not a workbook",
+    "XLSX_NOT_WORKBOOK",
+    () => writeZip([{ name: "hello.txt", data: new TextEncoder().encode("hi") }]),
+  ],
+  [
+    "another Office document (.docx)",
+    "XLSX_CONTENT_TYPE",
+    () => writeDocx(writerFixture("xlsx-test")),
+  ],
+  [
+    "vbaProject.bin",
+    "XLSX_MACROS",
+    () => writeXlsx(exactCells(), { patch: { "xl/vbaProject.bin": "x" } }),
+  ],
+  [
+    "a macro sheet part",
+    "XLSX_MACROS",
+    () => writeXlsx(exactCells(), { patch: { "xl/macrosheets/sheet1.xml": "<x/>" } }),
+  ],
+  [
+    "an ActiveX part",
+    "XLSX_MACROS",
+    () => writeXlsx(exactCells(), { patch: { "xl/activeX/activeX1.xml": "<x/>" } }),
+  ],
+  [
+    "a macro-enabled content type",
+    "XLSX_MACROS",
+    () =>
+      writeXlsx(exactCells(), {
+        patch: {
+          "[Content_Types].xml": entryText("[Content_Types].xml").replace(
+            "</Types>",
+            '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>',
+          ),
+        },
+      }),
+  ],
+  [
+    "an external-link part",
+    "XLSX_EXTERNAL_LINK",
+    () => writeXlsx(exactCells(), { patch: { "xl/externalLinks/externalLink1.xml": "<x/>" } }),
+  ],
+  [
+    "a TargetMode=External relationship",
+    "XLSX_EXTERNAL_LINK",
+    () =>
+      writeXlsx(exactCells(), {
+        patch: {
+          "xl/worksheets/_rels/sheet1.xml.rels": `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="t" Target="https://example.invalid/" TargetMode="External"/></Relationships>`,
+        },
+      }),
+  ],
+  [
+    "an embedded object",
+    "XLSX_EMBEDDED_OBJECT",
+    () => writeXlsx(exactCells(), { patch: { "xl/embeddings/oleObject1.bin": "x" } }),
+  ],
+  [
+    "a relationship target above the package",
+    "XLSX_UNSAFE_PART",
+    () =>
+      writeXlsx(exactCells(), {
+        patch: {
+          "xl/_rels/workbook.xml.rels": entryText("xl/_rels/workbook.xml.rels").replace(
+            'Target="worksheets/sheet1.xml"',
+            'Target="../../sheet1.xml"',
+          ),
+        },
+      }),
+  ],
+  [
+    "a DOCTYPE",
+    "XLSX_DTD",
+    () => withSheetXml((x) => x.replace("<worksheet ", "<!DOCTYPE worksheet><worksheet ")),
+  ],
+  [
+    "an entity declaration",
+    "XLSX_DTD",
+    () => withSheetXml((x) => x.replace("<worksheet ", '<!ENTITY a "b"><worksheet ')),
+  ],
+  [
+    "malformed XML (mismatched tags)",
+    "XLSX_XML_MALFORMED",
+    () => withSheetXml((x) => x.replace("</sheetData>", "</sheetDat>")),
+  ],
+  [
+    "an undeclared entity",
+    "XLSX_XML_MALFORMED",
+    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData>&custom;")),
+  ],
+  [
+    "a non-UTF-8 part",
+    "XLSX_XML_MALFORMED",
+    () =>
+      xlsxFromCsv(EXACT_CSV, {
+        patch: { [XLSX_MAIN_SHEET]: Buffer.from(`\ufeff${entryText(XLSX_MAIN_SHEET)}`, "utf16le") },
+      }),
+  ],
+  [
+    "an unbound namespace prefix",
+    "XLSX_XML_MALFORMED",
+    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData><q:row/>")),
+  ],
+  [
+    "CDATA",
+    "XLSX_XML_UNSUPPORTED",
+    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData><![CDATA[x]]>")),
+  ],
+  [
+    "a processing instruction",
+    "XLSX_XML_UNSUPPORTED",
+    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData><?pi x?>")),
+  ],
+  [
+    "XML nested past maxXmlDepth",
+    "XLSX_XML_UNSUPPORTED",
+    () =>
+      withSheetXml((x) =>
+        x.replace("</worksheet>", `${"<a>".repeat(70)}${"</a>".repeat(70)}</worksheet>`),
+      ),
+  ],
+  [
+    "an unknown element inside sheetData",
+    "XLSX_XML_UNSUPPORTED",
+    () =>
+      withSheetXml((x) =>
+        x.replace("<sheetData>", '<sheetData><mc:AlternateContent xmlns:mc="urn:x"/>'),
+      ),
+  ],
+  [
+    "a cell without a reference",
+    "XLSX_CELL_MALFORMED",
+    () => withSheetXml((x) => x.replace('<c r="A1"', "<c")),
+  ],
+  [
+    "a duplicate cell",
+    "XLSX_CELL_MALFORMED",
+    () => withSheetXml((x) => x.replace('<c r="B1"', '<c r="A1"')),
+  ],
+  [
+    "a formula with no cached value",
+    "XLSX_FORMULA_UNCACHED",
+    () => withSheetXml((x) => x.replace(/<c r="A1"[^>]*>.*?<\/c>/, '<c r="A1"><f>1+1</f></c>')),
+  ],
+  [
+    "a cell style index past cellXfs",
+    "XLSX_STYLE_MALFORMED",
+    () => withSheetXml((x) => x.replace('<c r="A1"', '<c s="999" r="A1"')),
+  ],
+  [
+    "an unknown built-in number format",
+    "XLSX_NUMFMT_UNSUPPORTED",
+    () =>
+      xlsxFromCsv(EXACT_CSV, {
+        patch: {
+          "xl/styles.xml": entryText("xl/styles.xml").replace(
+            '<xf numFmtId="2"',
+            '<xf numFmtId="33"',
+          ),
+        },
+      }),
+  ],
+];
+
+describe("every documented refusal (docs/gate/api.md: each one is pinned here)", () => {
+  it.each(DOCUMENTED.map(([name, code, build]) => [name, code, build] as const))(
+    "%s is %s",
+    (_name, code, build) => {
+      expect(read(build())).toBe(code);
+    },
+  );
+
+  it("every XlsxErrorCode in the reader has at least one row (a new code must be pinned)", () => {
+    const source = readFileSync(
+      join(import.meta.dirname, "../../src/gate/xlsx-document.ts"),
+      "utf8",
+    );
+    const union = /export type XlsxErrorCode =([^;]+);/.exec(source)?.[1] ?? "";
+    const declared = [...union.matchAll(/"(XLSX_[A-Z0-9_]+)"/g)].map((m) => m[1]).sort();
+    expect(declared.length).toBeGreaterThan(20);
+    expect([...new Set(DOCUMENTED.map(([, code]) => code))].sort()).toEqual(declared);
+  });
+
+  it("every code is named in docs/gate/api.md", () => {
+    const docs = readFileSync(join(import.meta.dirname, "../../docs/gate/api.md"), "utf8");
+    for (const [, code] of DOCUMENTED) expect(docs).toContain(`\`${code}\``);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The cell model
 // ---------------------------------------------------------------------------
 
@@ -540,34 +1082,126 @@ describe("the cell model", () => {
   });
 });
 
-describe("formulas: cached values only, never evaluated", () => {
+describe("formulas: never evaluated, never verified where the fixture holds a literal (round 2, D2)", () => {
   const withTarget = (cell: XlsxCell) =>
     writeXlsx(exactCells((cells) => cells.set(cellKey(TR, TC), cell)));
-
-  it("a formula is read from its cached value, not its text", async () => {
-    // Formula text says 4000+242 = 4242 but the cached value is 1: the gate reads 1.
-    const lyingCache = await check(withTarget({ kind: "formula", formula: "4000+242", cached: 1 }));
-    expect(lyingCache).toMatchObject({ verdict: "refuted" });
-    expect(lyingCache.reasonCodes).toContain("TARGET_MISMATCH");
-    // Formula text that evaluates to something else, cached as the requested value: the
-    // gate reads the cache (what the CSV conversion shows), and verifies.
-    const cached = await check(withTarget({ kind: "formula", formula: "1+1", cached: 4242 }));
-    expect(cached.verdict).toBe("verified");
-  });
-
-  it("KNOWN DIVERGENCE (documented): the grader never matches a formula, so it fails that workbook", () => {
+  /** The exact workbook with the target cell's XML replaced by `cellXml` (r= filled in). */
+  const withTargetXml = (cellXml: string) => {
+    const sheet = entryText(XLSX_MAIN_SHEET);
+    const patched = sheet.replace(
+      new RegExp(`<c r="${TARGET}"[^>]*>.*?</c>`),
+      cellXml.replace("REF", TARGET),
+    );
+    expect(patched).not.toBe(sheet);
+    return xlsxFromCsv(EXACT_CSV, { patch: { [XLSX_MAIN_SHEET]: patched } });
+  };
+  const graderStatus = (bytes: Uint8Array) => {
     const fixtureCsv = Buffer.from(generateFixture(SEED).csv);
-    const status = grade({
+    return grade({
       fixtureCsv,
       fixtureSha256: sha256(fixtureCsv),
-      persisted: {
-        format: "xlsx",
-        bytes: withTarget({ kind: "formula", formula: "1+1", cached: 4242 }),
-      },
+      persisted: { format: "xlsx", bytes },
       intent: INTENT,
       columnTypes: COLUMN_TYPES,
     }).status;
-    expect(status).toBe("fail");
+  };
+
+  it.each([
+    // h60: the cached value (4242) is not what evaluation gives (2).
+    ["h60: <f>1+1</f><v>4242</v>", '<c r="REF"><f>1+1</f><v>4242</v></c>'],
+    // h65: a formula string whose cache is the requested text.
+    ['h65: t="str", <f>"4242"</f><v>4242</v>', '<c r="REF" t="str"><f>"4242"</f><v>4242</v></c>'],
+    [
+      "a formula whose evaluation IS the requested value",
+      '<c r="REF"><f>4000+242</f><v>4242</v></c>',
+    ],
+    [
+      "a shared-formula child cached as the value",
+      '<c r="REF"><f t="shared" si="0"/><v>4242</v></c>',
+    ],
+    [
+      "an array formula cached as the value",
+      '<c r="REF"><f t="array" ref="REF">4242</f><v>4242</v></c>',
+    ],
+  ])(
+    "a formula target cached as the requested value is refuted, as the grader fails it: %s",
+    async (_name, xml) => {
+      const bytes = withTargetXml(xml);
+      const result = await check(bytes);
+      expect(result).toMatchObject({ verdict: "refuted", accepted: false });
+      expect(result.reasonCodes).toEqual(["ORACLE_FAIL", "TARGET_MISMATCH"]);
+      expect(graderStatus(bytes)).toBe("fail");
+    },
+  );
+
+  it("a formula in a non-target cell, cached as the pristine value, is collateral (the grader fails it too)", async () => {
+    const sheet = entryText(XLSX_MAIN_SHEET).replace(
+      /<c r="B2"[^>]*>.*?<\/c>/,
+      `<c r="B2" t="str"><f>"${generateFixture(SEED).rows[0]?.[1]}"</f><v>${generateFixture(SEED).rows[0]?.[1]}</v></c>`,
+    );
+    expect(sheet).not.toBe(entryText(XLSX_MAIN_SHEET));
+    const bytes = xlsxFromCsv(EXACT_CSV, { patch: { [XLSX_MAIN_SHEET]: sheet } });
+    const result = await check(bytes);
+    expect(result).toMatchObject({ verdict: "refuted" });
+    expect(result.reasonCodes).toEqual(["ORACLE_FAIL", "DOCUMENT_COLLATERAL"]);
+    expect(result.reasons.join(" ")).toContain("B2");
+    expect(graderStatus(bytes)).toBe("fail");
+  });
+
+  it("a formula cell is a marker that carries no value into a reason", async () => {
+    const result = await check(withTarget({ kind: "formula", formula: "4000+242", cached: 4242 }));
+    expect(result.verdict).toBe("refuted");
+    for (const reason of result.reasons) expect(reason).not.toContain("4242");
+    expect(
+      readXlsxDocument(withTarget({ kind: "formula", formula: "1+1", cached: 4242 })).cells[TARGET],
+    ).toMatch(new RegExp(`^${MARKERS.formula}`));
+  });
+
+  it("a formula with a lying cache is refuted too (the cache never verifies)", async () => {
+    const lyingCache = await check(withTarget({ kind: "formula", formula: "4000+242", cached: 1 }));
+    expect(lyingCache).toMatchObject({ verdict: "refuted" });
+    expect(lyingCache.reasonCodes).toContain("TARGET_MISMATCH");
+  });
+
+  it("a sealed xlsx fixture's own formula cell, saved unchanged, is not collateral; changed, it is", async () => {
+    const formulaCell: XlsxCell = { kind: "formula", formula: "SUM(C2:C3)", cached: 7 };
+    const pristineWithFormula = writeXlsx([
+      {
+        name: "s",
+        cells: (() => {
+          const cells = xlsxFromCsvCells(generateFixture(SEED).csv);
+          cells.set(cellKey(0, 6), formulaCell);
+          return cells;
+        })(),
+      },
+    ]);
+    const saved = (cell: XlsxCell) => {
+      const cells = xlsxFromCsvCells(EXACT_CSV);
+      cells.set(cellKey(0, 6), cell);
+      return writeXlsx([{ name: "s", cells }]);
+    };
+    const run = async (persisted: Uint8Array) => {
+      const root = tempRoot();
+      writeState(root, "r", "sheet.xlsx", persisted);
+      writeState(root, "r", "fixture.xlsx", pristineWithFormula);
+      return createGate({
+        tasks: buildRegistry([
+          xlsxTask({
+            ...SPEC,
+            fixtureFile: "fixture.xlsx",
+            fixtureSha256: createHash("sha256").update(pristineWithFormula).digest("hex"),
+          }),
+        ]),
+        reader: fileEvidenceReader(root),
+        assignment: { taskId: "x", runId: "r" },
+      }).check({ taskId: "x", runId: "r" });
+    };
+    expect((await run(saved(formulaCell))).verdict).toBe("verified");
+    const changed = await run(saved({ kind: "formula", formula: "SUM(C2:C4)", cached: 7 }));
+    expect(changed.verdict).toBe("refuted");
+    expect(changed.reasonCodes).toContain("DOCUMENT_COLLATERAL");
+    const literal = await run(saved({ kind: "number", value: 7 }));
+    expect(literal.reasonCodes).toContain("DOCUMENT_COLLATERAL");
   });
 
   it("a formula with no cached value is uncertain XLSX_FORMULA_UNCACHED", async () => {

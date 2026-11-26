@@ -30,9 +30,16 @@
  *  - XML: UTF-8 only, no DTD or entity declarations, no CDATA, no processing instructions,
  *    strict entity references, XML 1.0 characters only, well-formed nesting.
  *
- * Formulas are NEVER evaluated: a formula cell is read from its cached value (`<v>`) only,
- * exactly what the CSV conversion would show; a formula with no cached value is
- * `uncertain` (XLSX_FORMULA_UNCACHED).
+ *  - XML namespaces are resolved in scope (Namespaces in XML 1.0): a part's root and its
+ *    elements are matched by namespace URI and local name, whatever prefix the writer chose
+ *    and wherever it declared it (openpyxl declares `xmlns:r` on each `<sheet>`); an unbound
+ *    prefix or a duplicate expanded attribute name is XLSX_XML_MALFORMED.
+ *
+ * Formulas are NEVER evaluated. A formula cell is a formula marker (the formula text and its
+ * cached value), which equals no literal cell: a formula where the pristine fixture holds a
+ * literal, in the target or in any other cell, is refuted, never verified on its cached
+ * value (round 2, D2; the independent grader fails it too). A formula with no cached value
+ * is `uncertain` (XLSX_FORMULA_UNCACHED).
  *
  * The cell model (parity with the CSV path). A cell becomes the text the fixture CSV holds
  * for the same content, and a number becomes that text only when the stored value is
@@ -315,9 +322,86 @@ export function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
 // ---------------------------------------------------------------------------
 
 export interface XmlElement {
+  /** The qualified name as written (`x:workbook`, `c`). */
   readonly name: string;
+  /** The local name (the qualified name without its prefix). */
+  readonly local: string;
+  /** The namespace URI the element's prefix (or the default namespace) is bound to in scope. */
+  readonly ns: string | undefined;
+  /** Attributes by qualified name as written. */
   readonly attrs: ReadonlyMap<string, string>;
+  /** Prefix -> namespace URI bindings in scope at this element ("" = the default namespace). */
+  readonly scope: ReadonlyMap<string, string>;
   readonly children: readonly (XmlElement | string)[];
+}
+
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
+const BASE_SCOPE: ReadonlyMap<string, string> = new Map([["xml", XML_NS]]);
+
+/** Split a qualified name into [prefix, local]; more than one colon is malformed. */
+function splitQName(qname: string): [string | undefined, string] {
+  const parts = qname.split(":");
+  if (parts.length === 1) return [undefined, qname];
+  if (parts.length !== 2 || parts[0] === "" || parts[1] === "") fail("XLSX_XML_MALFORMED");
+  return [parts[0], parts[1] as string];
+}
+
+/**
+ * The namespace scope of an element: its parent's bindings plus the element's own `xmlns`
+ * and `xmlns:p` declarations (Namespaces in XML 1.0). Undeclaring a prefix, rebinding `xml`
+ * or `xmlns`, or binding anything to their URIs is malformed. Every prefix used by the
+ * element or its attributes must be bound, and no two attributes may share an expanded name.
+ */
+function elementScope(
+  qname: string,
+  attrs: ReadonlyMap<string, string>,
+  parent: ReadonlyMap<string, string>,
+): { scope: ReadonlyMap<string, string>; ns: string | undefined; local: string } {
+  let scope: Map<string, string> | undefined;
+  const own = () => {
+    scope ??= new Map(parent);
+    return scope;
+  };
+  for (const [key, value] of attrs) {
+    if (key === "xmlns") {
+      if (value === XML_NS || value === XMLNS_NS) fail("XLSX_XML_MALFORMED");
+      if (value === "") own().delete("");
+      else own().set("", value);
+    } else if (key.startsWith("xmlns:")) {
+      const [, prefix] = splitQName(key);
+      if (prefix === "xmlns" || value === "" || value === XMLNS_NS) fail("XLSX_XML_MALFORMED");
+      if ((prefix === "xml") !== (value === XML_NS)) fail("XLSX_XML_MALFORMED");
+      own().set(prefix, value);
+    }
+  }
+  const inScope: ReadonlyMap<string, string> = scope ?? parent;
+  const [prefix, local] = splitQName(qname);
+  if (prefix === "xmlns") fail("XLSX_XML_MALFORMED");
+  const ns = prefix === undefined ? inScope.get("") : inScope.get(prefix);
+  if (prefix !== undefined && ns === undefined) fail("XLSX_XML_MALFORMED");
+  const expanded = new Set<string>();
+  for (const key of attrs.keys()) {
+    if (key === "xmlns" || key.startsWith("xmlns:")) continue;
+    const [p, l] = splitQName(key);
+    const uri = p === undefined ? "" : inScope.get(p);
+    if (uri === undefined) fail("XLSX_XML_MALFORMED");
+    const name = `{${uri}}${l}`;
+    if (expanded.has(name)) fail("XLSX_XML_MALFORMED");
+    expanded.add(name);
+  }
+  return { scope: inScope, ns, local };
+}
+
+/** The value of the attribute `{uri}local` on `element`, under whatever prefix is in scope. */
+function nsAttr(element: XmlElement, uri: string, local: string): string | undefined {
+  for (const [key, value] of element.attrs) {
+    const colon = key.indexOf(":");
+    if (colon < 0 || key.startsWith("xmlns:")) continue;
+    if (key.slice(colon + 1) === local && element.scope.get(key.slice(0, colon)) === uri)
+      return value;
+  }
+  return undefined;
 }
 
 function isXmlChar(cp: number): boolean {
@@ -378,7 +462,10 @@ export function parseXml(bytes: Uint8Array): XmlElement {
 
   interface Building {
     name: string;
+    local: string;
+    ns: string | undefined;
     attrs: Map<string, string>;
+    scope: ReadonlyMap<string, string>;
     children: (XmlElement | string)[];
   }
   const stack: Building[] = [];
@@ -416,7 +503,15 @@ export function parseXml(bytes: Uint8Array): XmlElement {
       continue;
     }
     OPEN_TAG.lastIndex = i;
-    const m = OPEN_TAG.exec(text);
+    let m: RegExpExecArray | null;
+    try {
+      m = OPEN_TAG.exec(text);
+    } catch (error) {
+      // A pathological tag (an unterminated one with ~1M attributes) can overflow the regex
+      // engine's stack. That is malformed input, reported as a code like any other.
+      if (error instanceof RangeError) fail("XLSX_XML_MALFORMED");
+      throw error;
+    }
     if (!m) fail("XLSX_XML_MALFORMED");
     i = OPEN_TAG.lastIndex;
     const attrs = new Map<string, string>();
@@ -425,7 +520,13 @@ export function parseXml(bytes: Uint8Array): XmlElement {
       if (attrs.has(key)) fail("XLSX_XML_MALFORMED");
       attrs.set(key, decodeText(a[2] ?? a[3] ?? ""));
     }
-    const element: Building = { name: m[1] as string, attrs, children: [] };
+    const name = m[1] as string;
+    const { scope, ns, local } = elementScope(
+      name,
+      attrs,
+      stack[stack.length - 1]?.scope ?? BASE_SCOPE,
+    );
+    const element: Building = { name, local, ns, attrs, scope, children: [] };
     if (stack.length === 0 && root) fail("XLSX_XML_MALFORMED");
     if (m[3] === "/") {
       const parent = stack[stack.length - 1];
@@ -440,8 +541,11 @@ export function parseXml(bytes: Uint8Array): XmlElement {
   return root;
 }
 
-function elements(parent: XmlElement, name: string): XmlElement[] {
-  return parent.children.filter((c): c is XmlElement => typeof c !== "string" && c.name === name);
+/** Children of `parent` named `local` in `parent`'s own namespace (whatever the prefix). */
+function elements(parent: XmlElement, local: string): XmlElement[] {
+  return parent.children.filter(
+    (c): c is XmlElement => typeof c !== "string" && c.local === local && c.ns === parent.ns,
+  );
 }
 
 function child(parent: XmlElement, name: string): XmlElement | undefined {
@@ -453,7 +557,7 @@ function countNamed(element: XmlElement, local: string): number {
   let n = 0;
   for (const c of element.children) {
     if (typeof c === "string") continue;
-    if (c.name === local || c.name.endsWith(`:${local}`)) n++;
+    if (c.local === local) n++;
     n += countNamed(c, local);
   }
   return n;
@@ -483,8 +587,9 @@ const REL_TYPE = {
 const WORKBOOK_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
 
-function rootIn(element: XmlElement, ns: string, name: string): XmlElement {
-  if (element.name !== name || element.attrs.get("xmlns") !== ns) fail("XLSX_NOT_WORKBOOK");
+/** The part's root must be `{ns}local`, under any prefix (or the default namespace). */
+function rootIn(element: XmlElement, ns: string, local: string): XmlElement {
+  if (element.local !== local || element.ns !== ns) fail("XLSX_NOT_WORKBOOK");
   return element;
 }
 
@@ -579,6 +684,8 @@ export const MARKERS = {
   dateTime: `${MARK}DATE_WITH_TIME`,
   numberFormat: `${MARK}UNRENDERED_NUMBER_FORMAT`,
   inexact: `${MARK}INEXACT_AT_FORMAT_DECIMALS`,
+  /** Prefix of a formula cell: the formula and its cached value follow (never evaluated). */
+  formula: `${MARK}FORMULA\n`,
 } as const;
 
 /** How the gate renders a number in a given format. */
@@ -763,11 +870,12 @@ function stringItem(item: XmlElement): string {
       if (c.trim() !== "") fail("XLSX_CELL_MALFORMED");
       continue;
     }
-    if (c.name === "t") out += textOf(c);
-    else if (c.name === "r") {
+    if (c.ns !== item.ns) fail("XLSX_XML_UNSUPPORTED");
+    if (c.local === "t") out += textOf(c);
+    else if (c.local === "r") {
       const t = child(c, "t");
       if (t) out += textOf(t);
-    } else if (c.name !== "rPh" && c.name !== "phoneticPr") fail("XLSX_XML_UNSUPPORTED");
+    } else if (c.local !== "rPh" && c.local !== "phoneticPr") fail("XLSX_XML_UNSUPPORTED");
   }
   return out;
 }
@@ -818,15 +926,17 @@ const RUN_PROPERTIES = new Set([
   "extend",
 ]);
 
-/** Refuse anything inside sheetData the cell reader does not understand (no hidden cells). */
+/**
+ * Refuse anything inside sheetData the cell reader does not understand (no hidden cells):
+ * every element must be a known SpreadsheetML element in the main namespace, whatever its
+ * prefix. An element of any other namespace (`mc:AlternateContent`, an extension) is refused.
+ */
 function checkSheetDataTree(element: XmlElement, inRunProperties = false): void {
   for (const c of element.children) {
     if (typeof c === "string") continue;
-    const ok = inRunProperties ? RUN_PROPERTIES.has(c.name) : ALLOWED_IN_SHEET_DATA.has(c.name);
-    if (!ok || c.name.includes(":")) fail("XLSX_XML_UNSUPPORTED");
-    for (const key of c.attrs.keys())
-      if (key === "xmlns" || key.startsWith("xmlns:")) fail("XLSX_XML_UNSUPPORTED");
-    checkSheetDataTree(c, inRunProperties || c.name === "rPr");
+    const ok = inRunProperties ? RUN_PROPERTIES.has(c.local) : ALLOWED_IN_SHEET_DATA.has(c.local);
+    if (!ok || c.ns !== NS.main) fail("XLSX_XML_UNSUPPORTED");
+    checkSheetDataTree(c, inRunProperties || c.local === "rPr");
   }
 }
 
@@ -847,14 +957,14 @@ function readSheetCells(
       if (node.trim() !== "") fail("XLSX_CELL_MALFORMED");
       continue;
     }
-    if (node.name !== "row") fail("XLSX_CELL_MALFORMED");
+    if (node.local !== "row") fail("XLSX_CELL_MALFORMED");
     const rowAttr = node.attrs.get("r");
     for (const c of node.children) {
       if (typeof c === "string") {
         if (c.trim() !== "") fail("XLSX_CELL_MALFORMED");
         continue;
       }
-      if (c.name !== "c") fail("XLSX_CELL_MALFORMED");
+      if (c.local !== "c") fail("XLSX_CELL_MALFORMED");
       const ref = c.attrs.get("r");
       if (ref === undefined) fail("XLSX_CELL_MALFORMED");
       const [row, col] = parseCellRef(ref);
@@ -869,8 +979,27 @@ function readSheetCells(
   return cells;
 }
 
-/** One cell in the gate's cell model ("" = empty). Cached values only, never evaluated. */
+/**
+ * One cell in the gate's cell model ("" = empty). A formula cell is a formula marker that
+ * carries the formula and its cached value: it never equals a literal expected cell, so a
+ * formula the pristine fixture does not hold (in the target or anywhere else) is refuted,
+ * as the independent grader fails it (round 2, D2). Formulas are never evaluated.
+ */
 function cellValue(
+  c: XmlElement,
+  shared: readonly string[],
+  styles: readonly NumberClass[],
+  system: 1900 | 1904,
+): string {
+  const formula = elements(c, "f")[0];
+  const value = literalValue(c, shared, styles, system);
+  if (formula === undefined) return value;
+  const fAttrs = [...formula.attrs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `${MARKERS.formula}${JSON.stringify([fAttrs, textOf(formula), c.attrs.get("t") ?? "n", value])}`;
+}
+
+/** A cell's value as a literal: its stored (for a formula, cached) value, rendered. */
+function literalValue(
   c: XmlElement,
   shared: readonly string[],
   styles: readonly NumberClass[],
@@ -885,8 +1014,8 @@ function cellValue(
     if (typeof node === "string" && node.trim() !== "") fail("XLSX_CELL_MALFORMED");
   }
   const v = vs[0] === undefined ? undefined : textOf(vs[0]);
-  // A formula is read from its cached value only. With no cached value the gate cannot
-  // know what the document holds without evaluating it, which it never does.
+  // A formula with no cached value: the gate cannot know what the document holds without
+  // evaluating it, which it never does.
   if (formulas.length === 1 && v === undefined) fail("XLSX_FORMULA_UNCACHED");
   const sRaw = c.attrs.get("s") ?? "0";
   if (!/^\d{1,6}$/.test(sRaw)) fail("XLSX_STYLE_MALFORMED");
@@ -968,18 +1097,16 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
   else if (pr === "1" || pr === "true") system = 1904;
   else fail("XLSX_NOT_WORKBOOK");
 
-  // r:id lives in the relationships namespace under whatever prefix the root declares.
-  const prefix = [...workbook.attrs]
-    .find(([k, val]) => k.startsWith("xmlns:") && val === NS.rel)?.[0]
-    .slice("xmlns:".length);
   const sheetsEls = elements(workbook, "sheets");
   if (sheetsEls.length !== 1) fail("XLSX_NOT_WORKBOOK");
   const sheets = elements(sheetsEls[0] as XmlElement, "sheet");
-  if (prefix === undefined || sheets.length === 0) fail("XLSX_NOT_WORKBOOK");
+  if (sheets.length === 0) fail("XLSX_NOT_WORKBOOK");
   // No sheet may hide elsewhere (for example inside an mc:AlternateContent branch).
   if (countNamed(workbook, "sheet") !== sheets.length) fail("XLSX_XML_UNSUPPORTED");
   const sheetRels = sheets.map((s) => {
-    const id = s.attrs.get(`${prefix}:id`);
+    // r:id is in the relationships namespace, under whatever prefix is in scope at the
+    // <sheet> (declared on the root, on <sheets>, or on the <sheet> itself, as openpyxl does).
+    const id = nsAttr(s, NS.rel, "id");
     const rel = id === undefined ? undefined : rels.get(id);
     if (!rel) fail("XLSX_NOT_WORKBOOK");
     if (rel.type.endsWith("/macrosheet") || rel.type.endsWith("/xlMacrosheet")) fail("XLSX_MACROS");

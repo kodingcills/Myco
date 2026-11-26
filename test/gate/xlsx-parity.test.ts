@@ -8,18 +8,26 @@
  * xlsx path as from its CSV path.
  *
  * Soundness against the independent grader: whenever the gate verifies a workbook, the
- * grader (its own xlsx reader) passes the same bytes. On the probe table the two agree
- * outright, including the two CSV-only divergences (a quoted field and CR-only lines are
- * just text in a workbook, which both refute).
+ * grader (its own xlsx reader) passes the same bytes, or (one pinned probe, a prefixed
+ * SpreadsheetML root the grader's reader does not resolve) cannot look at all; the grader
+ * never FAILS a workbook the gate verifies. The last describe block EXECUTES that
+ * claim over every workbook this file and its neighbours build: the agreement table, the
+ * typed table, an xlsx-only table (formula cells, including round 1's h60 and h65, inline
+ * and rich strings, booleans, prefixed namespaces) and the committed LibreOffice and
+ * openpyxl workbooks. On the agreement table the two agree outright, including the two
+ * CSV-only divergences (a quoted field and CR-only lines are just text in a workbook,
+ * which both refute).
  */
 import { describe, expect, it } from "vitest";
 import { grade, sha256 } from "../../src/benchmark/grade/grade.ts";
 import { documentCsv } from "../../src/gate/calc-document.ts";
 import { buildRegistry, createGate, fileEvidenceReader } from "../../src/gate/gate.ts";
-import { xlsxFromCsv } from "../../src/tasks/calc-xlsxgen.ts";
+import { XLSX_MAIN_SHEET, xlsxEntriesFromCsv, xlsxFromCsv } from "../../src/tasks/calc-xlsxgen.ts";
 import { generateFixture } from "../../src/tasks/fixture.ts";
+import { groundTruth } from "../../src/tasks/intent.ts";
 import { AGREE, COLUMN_TYPES, KNOWN_DIVERGENCES, SEED } from "./calc-probes.ts";
 import { tempRoot, writeState } from "./helpers.ts";
+import { WRITERS_MANIFEST, writerBytes } from "./xlsx-writer-files.ts";
 
 interface Intent {
   readonly rowKey: string;
@@ -175,5 +183,199 @@ describe("CSV/xlsx parity over typed edits and collateral damage", () => {
       "date edit, exact",
       "currency edit, exact",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// xlsx-only probes: content a CSV cannot carry (round 2, D2 and D3)
+// ---------------------------------------------------------------------------
+
+const PROBE_EXACT = documentCsv(SEED, [PROBE_INTENT]);
+const PROBE_TARGET = groundTruth({ fixtureSeed: SEED, ...PROBE_INTENT }).cellRef;
+const MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+const partText = (name: string) =>
+  new TextDecoder().decode(xlsxEntriesFromCsv(PROBE_EXACT).find((e) => e.name === name)?.data);
+
+/** The exact workbook with the target cell's XML replaced (`REF` = the target's ref). */
+function targetXml(cellXml: string): Uint8Array {
+  const sheet = partText(XLSX_MAIN_SHEET);
+  const patched = sheet.replace(
+    new RegExp(`<c r="${PROBE_TARGET}"[^>]*>.*?</c>`),
+    cellXml.replaceAll("REF", PROBE_TARGET),
+  );
+  if (patched === sheet) throw new Error("target cell not found");
+  return xlsxFromCsv(PROBE_EXACT, { patch: { [XLSX_MAIN_SHEET]: patched } });
+}
+
+interface XlsxProbe {
+  readonly name: string;
+  readonly bytes: Uint8Array;
+  readonly gate: "verified" | "refuted" | "uncertain";
+  /** `ungradable`: the grader's own reader could not look (its limitation, never a fail). */
+  readonly grader: "pass" | "fail" | "ungradable";
+}
+
+const XLSX_ONLY: XlsxProbe[] = [
+  {
+    name: "h60: formula 1+1 cached as 4242",
+    bytes: targetXml('<c r="REF"><f>1+1</f><v>4242</v></c>'),
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: 'h65: t="str" formula "4242" cached as 4242',
+    bytes: targetXml('<c r="REF" t="str"><f>"4242"</f><v>4242</v></c>'),
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "formula 4000+242 (evaluates to the value) cached as 4242",
+    bytes: targetXml('<c r="REF"><f>4000+242</f><v>4242</v></c>'),
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "shared-formula child cached as 4242",
+    bytes: targetXml('<c r="REF"><f t="shared" si="0"/><v>4242</v></c>'),
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "formula with no cached value",
+    bytes: targetXml('<c r="REF"><f>4000+242</f></c>'),
+    gate: "uncertain",
+    grader: "fail",
+  },
+  {
+    name: "inline string 4242",
+    bytes: targetXml('<c r="REF" t="inlineStr"><is><t>4242</t></is></c>'),
+    gate: "verified",
+    grader: "pass",
+  },
+  {
+    name: "rich-text runs 42 + 42",
+    bytes: targetXml('<c r="REF" t="inlineStr"><is><r><t>42</t></r><r><t>42</t></r></is></c>'),
+    gate: "verified",
+    grader: "pass",
+  },
+  {
+    name: "number 4242 with an explicit General style",
+    bytes: targetXml('<c r="REF" s="0"><v>4242</v></c>'),
+    gate: "verified",
+    grader: "pass",
+  },
+  {
+    name: "boolean TRUE",
+    bytes: targetXml('<c r="REF" t="b"><v>1</v></c>'),
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "error value",
+    bytes: targetXml('<c r="REF" t="e"><v>#VALUE!</v></c>'),
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "4242.5",
+    bytes: targetXml('<c r="REF"><v>4242.5</v></c>'),
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "openpyxl-style xmlns:r on <sheet>",
+    bytes: xlsxFromCsv(PROBE_EXACT, {
+      patch: {
+        "xl/workbook.xml": partText("xl/workbook.xml")
+          .replace(` xmlns:r="${REL}"`, "")
+          .replace("<sheet ", `<sheet xmlns:r="${REL}" `),
+      },
+    }),
+    gate: "verified",
+    grader: "pass",
+  },
+  {
+    name: "prefixed <x:workbook> and <x:worksheet>",
+    bytes: xlsxFromCsv(PROBE_EXACT, {
+      patch: Object.fromEntries(
+        ["xl/workbook.xml", XLSX_MAIN_SHEET].map((name) => [
+          name,
+          partText(name)
+            .replace(`xmlns="${MAIN}"`, `xmlns:x="${MAIN}"`)
+            .replace(/<(\/?)([A-Za-z][A-Za-z0-9]*)(?=[\s/>])/g, "<$1x:$2"),
+        ]),
+      ),
+    }),
+    gate: "verified",
+    // KNOWN GRADER LIMITATION (TO FILE): the grader's own reader expects unprefixed
+    // SpreadsheetML roots, so it cannot look. The document is the exact edit; the gate
+    // resolving the prefix is correct (Namespaces in XML 1.0).
+    grader: "ungradable",
+  },
+];
+
+describe("xlsx-only probes (formulas never verify; namespaces resolve)", () => {
+  it.each(XLSX_ONLY.map((p) => [p.name, p] as const))("%s", async (_name, probe) => {
+    const result = await gateResult(PROBE_INTENT, "xlsx", probe.bytes);
+    expect({ gate: result.verdict, grader: graderXlsx(PROBE_INTENT, probe.bytes) }).toEqual({
+      gate: probe.gate,
+      grader: probe.grader,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The soundness claim, executed over every workbook above and the writers' files
+// ---------------------------------------------------------------------------
+
+describe("soundness: whenever the gate verifies a workbook, the grader passes the same bytes", () => {
+  const all: [string, Intent, Uint8Array][] = [
+    ...[...AGREE, ...KNOWN_DIVERGENCES].map((p): [string, Intent, Uint8Array] => [
+      `agreement: ${p.name}`,
+      PROBE_INTENT,
+      xlsxFromCsv(p.csv),
+    ]),
+    ...TYPED.map(([name, intent, csv]): [string, Intent, Uint8Array] => [
+      `typed: ${name}`,
+      intent,
+      xlsxFromCsv(csv),
+    ]),
+    ...XLSX_ONLY.map((p): [string, Intent, Uint8Array] => [
+      `xlsx-only: ${p.name}`,
+      PROBE_INTENT,
+      p.bytes,
+    ]),
+    ...Object.keys(WRITERS_MANIFEST.files).map((name): [string, Intent, Uint8Array] => [
+      `writer: ${name}`,
+      WRITERS_MANIFEST.edit,
+      writerBytes(name),
+    ]),
+  ];
+
+  it("the table holds every probe (23 agreement, 22 typed, 13 xlsx-only, 8 writer files)", () => {
+    expect(all.length).toBe(23 + TYPED.length + XLSX_ONLY.length + 8);
+    expect(TYPED.length).toBe(22);
+    expect(XLSX_ONLY.length).toBe(13);
+  });
+
+  it("no workbook is verified by the gate and failed by the grader", async () => {
+    const unsound: string[] = [];
+    const graderCannotLook: string[] = [];
+    let verified = 0;
+    for (const [name, intent, bytes] of all) {
+      if ((await gateResult(intent, "xlsx", bytes)).verdict !== "verified") continue;
+      verified++;
+      const status = graderXlsx(intent, bytes);
+      if (status === "ungradable") graderCannotLook.push(name);
+      else if (status !== "pass") unsound.push(name);
+    }
+    expect(unsound).toEqual([]);
+    // The one verified workbook the grader cannot read at all (its limitation; TO FILE).
+    expect(graderCannotLook).toEqual(["xlsx-only: prefixed <x:workbook> and <x:worksheet>"]);
+    // The claim is not vacuous: the exact edits, both writers' exact files and the
+    // xlsx-only string and namespace probes all verify.
+    expect(verified).toBeGreaterThanOrEqual(20);
   });
 });
