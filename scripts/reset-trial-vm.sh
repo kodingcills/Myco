@@ -15,8 +15,9 @@
 # docs/eval-runbook.md §3.1 and §3.5.
 #
 # usage: reset-trial-vm.sh [snapshot]
-#   The snapshot defaults to trial-base-v2, the maintenance-quiet trial base
-#   (TIF-98, runbook §3.5). MYCO_TRIAL_SNAPSHOT changes the default, for drivers
+#   The snapshot defaults to trial-base-v3, the maintenance-quiet trial base
+#   built from cold boots (TIF-98, runbook §3.5). MYCO_TRIAL_SNAPSHOT changes the
+#   default (trial-base-v3, trial-base-v2 or clean-base), for drivers
 #   that call this with no argument (scripts/m1-sweep.sh, m1-corrupt-suite.sh):
 #   MYCO_TRIAL_SNAPSHOT=clean-base rolls a whole sweep back to clean-base. An
 #   explicit argument wins over both. Every name must pass the allowlist below.
@@ -30,15 +31,15 @@ if ! vm_lock_owned_by_parent; then
   trap vm_lock_release EXIT
 fi
 
-SNAPSHOT=${1:-${MYCO_TRIAL_SNAPSHOT:-trial-base-v2}}
+SNAPSHOT=${1:-${MYCO_TRIAL_SNAPSHOT:-trial-base-v3}}
 # An explicit empty argument is a caller bug, not a request for the default.
 if [ "$#" -ge 1 ] && [ -z "$1" ]; then
   echo "reset-trial-vm: refusing an empty snapshot argument" >&2; exit 1
 fi
 # A live snapshot is never a default: the live path wedges UTM under rapid cycling
 # (runbook §3.3). Name it as an argument if one reset onto it is really meant.
-if [ "$#" -eq 0 ] && [ -n "${MYCO_TRIAL_SNAPSHOT:-}" ] && [ "$MYCO_TRIAL_SNAPSHOT" != trial-base-v2 ] && [ "$MYCO_TRIAL_SNAPSHOT" != clean-base ] && [[ "$MYCO_TRIAL_SNAPSHOT" != *-live ]]; then
-  echo "reset-trial-vm: refusing MYCO_TRIAL_SNAPSHOT=$MYCO_TRIAL_SNAPSHOT: as the default it must be a trial base (trial-base-v2 or clean-base); name any other snapshot as an argument" >&2; exit 1
+if [ "$#" -eq 0 ] && [ -n "${MYCO_TRIAL_SNAPSHOT:-}" ] && [ "$MYCO_TRIAL_SNAPSHOT" != trial-base-v3 ] && [ "$MYCO_TRIAL_SNAPSHOT" != trial-base-v2 ] && [ "$MYCO_TRIAL_SNAPSHOT" != clean-base ] && [[ "$MYCO_TRIAL_SNAPSHOT" != *-live ]]; then
+  echo "reset-trial-vm: refusing MYCO_TRIAL_SNAPSHOT=$MYCO_TRIAL_SNAPSHOT: as the default it must be a trial base (trial-base-v3, trial-base-v2 or clean-base); name any other snapshot as an argument" >&2; exit 1
 fi
 if [ "$#" -eq 0 ] && [[ "${MYCO_TRIAL_SNAPSHOT:-}" == *-live ]]; then
   echo "reset-trial-vm: refusing MYCO_TRIAL_SNAPSHOT=$MYCO_TRIAL_SNAPSHOT: a live snapshot is never the default" >&2; exit 1
@@ -109,10 +110,12 @@ egress_script() {
 # restore with Cua installed, for the screenshot-baseline C1/C2 arms only.
 # trial-base-v2 (TIF-98 follow-up): clean-base with its pending maintenance run
 # to completion and the maintenance/Windows Update triggers disabled; built by
-# scripts/build-trial-base.sh, taken with guest egress denied. clean-base stays
-# as the rollback (runbook §3.5).
+# scripts/build-trial-base.sh, taken with guest egress denied. trial-base-v3
+# (TIF-98, 2026-11-26): the same build rerun with every boot classified cold
+# (some of v2's build steps ran on fast boots); the default since then.
+# trial-base-v2 and clean-base stay as rollbacks (runbook §3.5).
 case "$SNAPSHOT" in
-  clean-base|clean-base-live|m1-agent-live|cua-c1-base|trial-base-v2) ;;
+  clean-base|clean-base-live|m1-agent-live|cua-c1-base|trial-base-v2|trial-base-v3) ;;
   *) die "refusing to restore unexpected snapshot '$SNAPSHOT'" ;;
 esac
 

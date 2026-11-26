@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# build-trial-base.sh: build the versioned trial base `trial-base-v2` from
+# build-trial-base.sh: build a versioned trial base (MYCO_TRIAL_BASE_NAME, default
+# `trial-base-v2`; `trial-base-v3` was built with MYCO_TRIAL_BASE_NAME=trial-base-v3) from
 # `clean-base` (TIF-98 follow-up). clean-base is never modified or deleted: it is
 # restored, worked on in the live disk, and the result is saved as a NEW
 # snapshot. clean-base stays the rollback (runbook §3.5).
@@ -18,7 +19,7 @@
 #   4. remove the script, shut the guest down cleanly.
 #   5. deny egress, boot the same disk in place (no restore), prove the
 #      restriction is live (verify + the TIF-275 probes, every target must fail).
-#   6. shut down cleanly; take snapshot trial-base-v2 with the VM stopped.
+#   6. shut down cleanly; take the snapshot ($NEW) with the VM stopped.
 #
 # Fails closed: any step that fails stops the build before the snapshot. The
 # VM is then left with egress DENIED (an EXIT trap re-denies it) and clean-base
