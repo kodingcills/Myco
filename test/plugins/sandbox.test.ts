@@ -14,6 +14,15 @@ import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fsizeBlocks,
+  fsizeUnit,
+  runInSandbox,
+  type SandboxResult,
+  SDK_DIR,
+} from "../../src/plugins/host/sandbox.ts";
+import { PLUGIN_SPEC } from "../../src/plugins/sdk/protocol.ts";
+import { cleanupPlugins, makePlugin, tempDir, utf8, watchDisk } from "./helpers.ts";
 
 /**
  * D3 measurement point (#558 follow-up): every answer file, as the sandbox's own cleanup is
@@ -41,15 +50,6 @@ vi.mock("node:fs", async (importOriginal) => {
   }) as typeof real.rmSync;
   return { ...real, default: { ...real, rmSync }, rmSync };
 });
-import {
-  fsizeBlocks,
-  fsizeUnit,
-  runInSandbox,
-  type SandboxResult,
-  SDK_DIR,
-} from "../../src/plugins/host/sandbox.ts";
-import { PLUGIN_SPEC } from "../../src/plugins/sdk/protocol.ts";
-import { cleanupPlugins, makePlugin, tempDir, utf8, watchDisk } from "./helpers.ts";
 
 const PROBE = String.raw`
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
