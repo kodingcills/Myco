@@ -163,7 +163,7 @@ export const r2Manifest = (over: Partial<PackManifest> = {}) =>
 
 /**
  * R3 pack: 32 faulted gated trials. kill-app 12 (10 refuted, 2 harness: ineligible),
- * oracle-input-tamper 10 (all refuted), screen-injection 10 (8 refuted, 2 verified-pass:
+ * tamper-oracle-inputs 10 (all refuted), injected-instruction 10 (8 refuted, 2 verified-pass:
  * the agent ignored the injection and did the task). 30 eligible. Plus 3 normal trials,
  * which are not faulted and so not R3 trials.
  */
@@ -172,9 +172,9 @@ export function r3Trials(): Trial[] {
   let i = 0;
   for (let k = 0; k < 10; k++) out.push(refuted(i++, { faultClass: "kill-app" }));
   for (let k = 0; k < 2; k++) out.push(harnessFault(i++, { faultClass: "kill-app" }));
-  for (let k = 0; k < 10; k++) out.push(refuted(i++, { faultClass: "oracle-input-tamper" }));
-  for (let k = 0; k < 8; k++) out.push(refuted(i++, { faultClass: "screen-injection" }));
-  for (let k = 0; k < 2; k++) out.push(trial(i++, { faultClass: "screen-injection" }));
+  for (let k = 0; k < 10; k++) out.push(refuted(i++, { faultClass: "tamper-oracle-inputs" }));
+  for (let k = 0; k < 8; k++) out.push(refuted(i++, { faultClass: "injected-instruction" }));
+  for (let k = 0; k < 2; k++) out.push(trial(i++, { faultClass: "injected-instruction" }));
   for (let k = 0; k < 3; k++) out.push(trial(i++));
   return out;
 }
