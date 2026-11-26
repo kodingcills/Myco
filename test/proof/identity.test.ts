@@ -46,7 +46,6 @@ import {
   hostIdentity,
   type IdentityContext,
   identityNormal,
-  NO_IDENTITY,
   SHAPES_ONLY,
 } from "../../src/proof/identity.ts";
 import { renderProofReport } from "../../src/proof/report.ts";
@@ -210,7 +209,7 @@ function pipelineOn(run: ProofRunInput): Outputs {
 
 /** Backstop OFF: the allowlist step alone, then verify and report with no scan context. */
 function pipelineOff(run: ProofRunInput): Outputs {
-  const bundle = assembleProofBundle(run, compileIdentity(IDENTITY));
+  const bundle = assembleProofBundle(run, IDENTITY);
   const text = serializeProofBundle(bundle);
   const result = verifyProofBundle(text, run.episode === undefined ? {} : { episode: run.episode });
   if (!result.ok) expect.fail(`verify refused: ${result.errors.map((e) => e.code).join(",")}`);
@@ -349,13 +348,13 @@ describe("r2 N1: policy reason codes are a closed enum", () => {
       expect(closedPolicyCode(v)).toBe(hashedId(v));
     const run = sampleRun();
     const steps = run.steps.map((s) => (s.kind === "policy" ? { ...s, reasonCode: "ZQGPTRR" } : s));
-    const text = serializeProofBundle(exportProofBundle({ ...run, steps }, NO_CTX, NO_IDENTITY));
+    const text = serializeProofBundle(exportProofBundle({ ...run, steps }, NO_CTX));
     expect(text.includes("ZQGPTRR")).toBe(false);
     expect(text).toContain(hashedId("ZQGPTRR"));
   });
 
   it("a forged, re-chained bundle with a code-shaped reasonCode is refused (PROOF_SCHEMA)", () => {
-    const b = clone(exportProofBundle(sampleRun(), NO_CTX, NO_IDENTITY));
+    const b = clone(exportProofBundle(sampleRun(), NO_CTX));
     (b.records[0]?.body as { reasonCode: string }).reasonCode = "ZQGPTRR";
     const r = verifyProofBundle(serializeProofBundle(rechain(b)));
     expect(r.ok).toBe(false);
@@ -398,10 +397,7 @@ describe("the host's real identity planted in every input field never reaches an
         ledger: { lines: ledger.lines, head: ledger.head, trialKey: id },
       };
       expectIdentityRefusal(() => exportProofBundle(run, CTX_ON, IDENTITY), `${label} ON`);
-      expectIdentityRefusal(
-        () => assembleProofBundle(run, compileIdentity(IDENTITY)),
-        `${label} OFF`,
-      );
+      expectIdentityRefusal(() => assembleProofBundle(run, IDENTITY), `${label} OFF`);
       const asTask = buildLedger([
         { kind: "start", trialKey: "t-ours", taskId: id, arm: "myco-gate" },
         { kind: "end", trialKey: "t-ours", taskId: id, arm: "myco-gate", outcome: "completed" },
@@ -411,28 +407,27 @@ describe("the host's real identity planted in every input field never reaches an
         taskId: id,
         ledger: { lines: asTask.lines, head: asTask.head, trialKey: "t-ours" },
       };
-      expectIdentityRefusal(
-        () => assembleProofBundle(run2, compileIdentity(IDENTITY)),
-        `${label} taskId OFF`,
-      );
+      expectIdentityRefusal(() => assembleProofBundle(run2, IDENTITY), `${label} taskId OFF`);
     }
   });
 
   it("VERIFY: a forged, re-chained bundle with an identity in a closed id is refused, codes only", () => {
-    const honest = exportProofBundle(sampleRun(), NO_CTX, NO_IDENTITY);
+    const honest = exportProofBundle(sampleRun(), NO_CTX);
     for (const [label, value] of PLANTS) {
       const id = value.replace(/[^A-Za-z0-9._-]/g, "") || "x";
       if (compileIdentity(IDENTITY).hit(id) === null) continue;
-      for (const at of ["tool", "runId"] as const) {
+      // `policyId` is a closed id; `tool` is a closed vocabulary since #562 F1.
+      for (const at of ["policyId", "runId"] as const) {
         const b = clone(honest) as unknown as {
           run: { runId: string };
           records: Array<{ body: Record<string, unknown> }>;
         };
-        if (at === "tool") (b.records[1] as { body: Record<string, unknown> }).body.tool = id;
+        if (at === "policyId")
+          (b.records[0] as { body: Record<string, unknown> }).body.policyId = id;
         else b.run.runId = id;
         const text = serializeProofBundle(rechain(b as unknown as ProofBundle));
         // Without an identity the forged bundle is structurally valid ...
-        if (at === "tool") expect(verifyProofBundle(text).ok, label).toBe(true);
+        if (at === "policyId") expect(verifyProofBundle(text).ok, label).toBe(true);
         // ... with it, it is refused before any message could name a value.
         const r = verifyProofBundle(text, { identity: IDENTITY });
         expect(r.ok, label).toBe(false);
@@ -496,8 +491,8 @@ describe("CLI: the host's identity is guarded with no flag; --identity-file adds
   });
 
   it("a bundle written elsewhere that carries this host's name is refused by verify and report", () => {
-    const b = clone(exportProofBundle(sampleRun(), NO_CTX, NO_IDENTITY));
-    (b.records[1]?.body as { tool: string }).tool = `run-${FIRST}${LAST}`;
+    const b = clone(exportProofBundle(sampleRun(), NO_CTX));
+    (b.records[0]?.body as { policyId: string }).policyId = `run-${FIRST}${LAST}`;
     const path = join(DIR, "forged.json");
     writeFileSync(path, serializeProofBundle(rechain(b)));
     const v = cli(["verify", path, "--identity-file", IDENTITY_FILE]);
@@ -520,7 +515,7 @@ describe("CLI: the host's identity is guarded with no flag; --identity-file adds
 });
 
 describe("N2: with --episode, the verdict is cross-checked against the episode's gate result", () => {
-  const honest = () => exportProofBundle(sampleRunWithEpisode(), NO_CTX, NO_IDENTITY);
+  const honest = () => exportProofBundle(sampleRunWithEpisode(), NO_CTX);
   const ep = sampleEpisode();
   const flip = (edit: (v: Record<string, unknown>) => void) => {
     const b = clone(honest());
@@ -570,12 +565,10 @@ describe("N2: with --episode, the verdict is cross-checked against the episode's
     const valid = validateEpisode(noGate).length === 0;
     if (valid) {
       const run = { ...sampleRun(), episode: noGate };
-      expect(() => exportProofBundle(run, NO_CTX, NO_IDENTITY)).toThrow(/no gate result/);
+      expect(() => exportProofBundle(run, NO_CTX)).toThrow(/no gate result/);
     }
     const run = sampleRunWithEpisode();
     const steps = run.steps.filter((s) => s.kind !== "verdict");
-    expect(() => exportProofBundle({ ...run, steps }, NO_CTX, NO_IDENTITY)).toThrow(
-      /the bundle has no verdict/,
-    );
+    expect(() => exportProofBundle({ ...run, steps }, NO_CTX)).toThrow(/the bundle has no verdict/);
   });
 });

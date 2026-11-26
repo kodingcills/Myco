@@ -17,7 +17,6 @@ import {
 } from "../../src/proof/bundle.ts";
 import { emit, hostRedaction, main } from "../../src/proof/cli.ts";
 import { hashedId } from "../../src/proof/closed.ts";
-import { NO_IDENTITY } from "../../src/proof/identity.ts";
 import { renderProofReport } from "../../src/proof/report.ts";
 import { clone, NO_CTX, rechain, sampleRun } from "./fixture.ts";
 import { exportVerifyReport, plantEverywhere } from "./plant.ts";
@@ -116,9 +115,9 @@ describe("the backstop fails every output closed", () => {
   });
 
   it("EXPORT: a closed id equal to a registered account name is digested, in any case (r3)", () => {
-    expect(exportProofBundle(runAs(GUEST), NO_CTX, NO_IDENTITY).run.runId).toBe(GUEST);
+    expect(exportProofBundle(runAs(GUEST), NO_CTX).run.runId).toBe(GUEST);
     for (const id of [GUEST, GUEST.toUpperCase()]) {
-      const b = exportProofBundle(runAs(id), ctxUser, NO_IDENTITY);
+      const b = exportProofBundle(runAs(id), ctxUser);
       expect(b.run.runId).toBe(hashedId(id));
       expect(serializeProofBundle(b).toLowerCase()).not.toContain(GUEST.toLowerCase());
     }
@@ -126,7 +125,9 @@ describe("the backstop fails every output closed", () => {
 
   it("VERIFY: a hand-edited, re-chained bundle whose closed id is a registered name is refused", () => {
     const b = clone(exportProofBundle(sampleRun(), NO_CTX));
-    (b.records[1]?.body as { tool: string }).tool = GUEST;
+    // `policyId` is a closed id (`tool` is a closed vocabulary since #562 F1: a forged
+    // non-member is a schema refusal, `vocab.test.ts`).
+    (b.records[0]?.body as { policyId: string }).policyId = GUEST;
     const text = serializeProofBundle(rechain(b));
     expect(codesOf(text)).toEqual([]);
     expect(codesOf(text, ctxUser)).toEqual(["PROOF_REDACTION"]);

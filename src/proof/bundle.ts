@@ -66,11 +66,11 @@ import {
 } from "./closed.ts";
 import { EPISODE_SCHEMA, type EpisodeRef, projectEpisode } from "./episode-ref.ts";
 import {
-  compileIdentity,
-  hostIdentity,
+  guardWithHost,
   type IdentityClass,
   type IdentityContext,
   type IdentityGuard,
+  mergeIdentity,
 } from "./identity.ts";
 import {
   canonicalJson,
@@ -79,6 +79,7 @@ import {
   sha256Hex,
   verifyLedgerChain,
 } from "./ledger.ts";
+import { APP_SOURCE, KEYS_SOURCE, SUBJECT_SOURCE, TOOL_SOURCE, VOCAB_CONSTANTS } from "./vocab.ts";
 
 export const PROOF_BUNDLE_SCHEMA = "myco.proof.bundle/1" as const;
 
@@ -114,6 +115,10 @@ export interface ActionBody {
   readonly actor: (typeof ACTORS)[number];
   readonly tool: string;
   readonly summary: TextRef;
+  /** A key sequence (#542's `key.keys`): closed key vocabulary, else hashed (F1). */
+  readonly keys?: string;
+  /** An app id (#542's `launch.app`): registered app, else hashed (F1). */
+  readonly app?: string;
 }
 export interface EvidenceBody {
   readonly evidenceId: string;
@@ -217,7 +222,13 @@ export const BODY_SCHEMAS: Record<RecordKind, JsonSchema> = {
     type: "object",
     additionalProperties: false,
     required: ["actor", "tool", "summary"],
-    properties: { actor: { enum: [...ACTORS] }, tool: ID, summary: TEXT_REF },
+    properties: {
+      actor: { enum: [...ACTORS] },
+      tool: { type: "string", pattern: TOOL_SOURCE },
+      summary: TEXT_REF,
+      keys: { type: "string", pattern: KEYS_SOURCE },
+      app: { type: "string", pattern: APP_SOURCE },
+    },
   },
   evidence: {
     type: "object",
@@ -278,7 +289,7 @@ export const BODY_SCHEMAS: Record<RecordKind, JsonSchema> = {
     required: ["policyId", "subject", "decision", "reasonCode"],
     properties: {
       policyId: ID,
-      subject: ID,
+      subject: { type: "string", pattern: SUBJECT_SOURCE },
       decision: { enum: [...DECISIONS] },
       reasonCode: { type: "string", pattern: POLICY_CODE_SOURCE },
     },
@@ -384,6 +395,10 @@ export type ProofStep =
       readonly actor: string;
       readonly tool: string;
       readonly summary: string;
+      /** The keys pressed (#542's `key.keys`). Closed key vocabulary, else hashed. */
+      readonly keys?: string;
+      /** The app launched (#542's `launch.app`). Registered app id, else hashed. */
+      readonly app?: string;
     }
   | {
       readonly kind: "evidence";
@@ -471,12 +486,16 @@ function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: Reco
       need(isIn(ACTORS, s.actor), "action.actor");
       need(isStr(s.tool), "action.tool");
       need(isStr(s.summary), "action.summary");
+      need(s.keys === undefined || isStr(s.keys), "action.keys");
+      need(s.app === undefined || isStr(s.app), "action.app");
       return {
         kind: "action",
         body: {
           actor: s.actor as ActionBody["actor"],
-          tool: a.id(s.tool as string),
+          tool: a.tool(s.tool as string),
           summary: textRef(s.summary as string),
+          ...(s.keys === undefined ? {} : { keys: a.keys(s.keys as string) }),
+          ...(s.app === undefined ? {} : { app: a.app(s.app as string) }),
         },
       };
     case "evidence": {
@@ -571,7 +590,7 @@ function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: Reco
         kind: "policy",
         body: {
           policyId: a.id(s.policyId as string),
-          subject: a.id(s.subject as string),
+          subject: a.subject(s.subject as string),
           decision: s.decision as PolicyBody["decision"],
           reasonCode: a.policyCode(s.reasonCode as string),
         },
@@ -607,28 +626,31 @@ function chain(
  * run the verifier would refuse, or anything the backstop scanner flags (with `ctx`, and the
  * identity scan with `identity`) throws instead of producing a bundle.
  *
- * `identity` defaults to the writing host's own (`hostIdentity()`: account name, hostname,
- * home directory), so a caller that passes none is still guarded; `ctx.usernames` (the
- * backstop's registered account names) are added to it.
+ * The writing host's identity (`hostIdentity()`: account name, hostname, home directory) is
+ * ALWAYS in the guard. `identity` only ADDS strings (an identity file's lines, `--user-file`
+ * names); it can never replace or drop the host's (#562, D1: in #553 an explicit identity
+ * replaced the host's, so fake host facts let the real account and host name through).
+ * `ctx.usernames` (the backstop's registered account names) are added too. The same merged
+ * guard writes the bundle and self-verifies it.
  */
 export function exportProofBundle(
   input: ProofRunInput,
   ctx: RedactionContext,
-  identity: IdentityContext = hostIdentity(),
+  identity?: IdentityContext,
 ): ProofBundle {
   // The backstop's registered account names are identity strings too.
-  const guard = compileIdentity({
-    names: [...identity.names, ...ctx.usernames],
-    homes: identity.homes,
-  });
-  const bundle = assembleProofBundle(input, guard);
+  const guard = guardWithHost(mergeIdentity(identity, { names: ctx.usernames, homes: [] }));
+  const bundle = assembleWithGuard(input, guard);
   // Self-verify: the closed schemas, the chain, the bindings, the BACKSTOP scanner and the
-  // identity scan.
-  const result = verifyProofBundle(serializeProofBundle(bundle), {
-    redaction: ctx,
-    identityGuard: guard,
-    ...(input.episode === undefined ? {} : { episode: input.episode }),
-  });
+  // identity scan, under the same host-merged guard.
+  const result = verifyWithGuard(
+    serializeProofBundle(bundle),
+    {
+      redaction: ctx,
+      ...(input.episode === undefined ? {} : { episode: input.episode }),
+    },
+    guard,
+  );
   if (!result.ok)
     throw new ProofExportError(
       result.errors[0]?.code ?? "PROOF_INVALID",
@@ -641,9 +663,15 @@ export function exportProofBundle(
  * The allowlist step alone: build the bundle with every value closed and identity-guarded,
  * WITHOUT the self-verify and its backstop scans. `exportProofBundle` is the only export
  * path; this is exported so tests can show the allowlist keeps identity strings out with no
- * help from the backstop.
+ * help from the backstop. Like export, it takes an identity to ADD and always merges the
+ * host's in (`guardWithHost`); it takes no caller-built guard (#562, D1).
  */
-export function assembleProofBundle(input: ProofRunInput, guard: IdentityGuard): ProofBundle {
+export function assembleProofBundle(input: ProofRunInput, identity?: IdentityContext): ProofBundle {
+  return assembleWithGuard(input, guardWithHost(identity));
+}
+
+/** Internal: the guard is always `guardWithHost(...)` (export and `assembleProofBundle`). */
+function assembleWithGuard(input: ProofRunInput, guard: IdentityGuard): ProofBundle {
   const a = allowlist(guard);
   const raw = input as unknown as Record<string, unknown>;
   need(isStr(raw.runId), "run.runId");
@@ -749,14 +777,14 @@ export interface VerifyOptions {
   /** Extra literals the backstop must refuse (the verifying host's own context). */
   readonly redaction?: RedactionContext;
   /**
-   * Identity strings no bundle string may contain, case-insensitively (`identity.ts`): the
-   * verifying host's account name, hostname, home, and any configured names. Every string
-   * that is not a constant of the format is checked; a hit refuses the bundle
-   * (`PROOF_IDENTITY`, classes and a count only) before any other message is built.
+   * Identity strings no bundle string may contain, case-insensitively (`identity.ts`). When
+   * given (the CLI always gives it), they are ADDED to the verifying host's own account name,
+   * hostname and home, which are then always checked too (`guardWithHost`, #562 D1); an
+   * empty or fake identity cannot turn the host's off. Every string that is not a constant of the format is
+   * checked; a hit refuses the bundle (`PROOF_IDENTITY`, classes and a count only) before any
+   * other message is built.
    */
   readonly identity?: IdentityContext;
-  /** A compiled guard (the exporter's own self-verify); used instead of `identity`. */
-  readonly identityGuard?: IdentityGuard;
   /**
    * The attempt's `myco.episode/1` record, parsed. When given, its id and digest are
    * recomputed against `run.episode` and the projected `run` fields are cross-checked.
@@ -839,6 +867,22 @@ function indexEvidenceDir(dir: string): Map<string, EvidenceIndexEntry> {
  * there is no error. Messages never quote a value from the bundle.
  */
 export function verifyProofBundle(text: string, options: VerifyOptions = {}): VerifyResult {
+  return verifyWithGuard(
+    text,
+    options,
+    options.identity === undefined ? undefined : guardWithHost(options.identity),
+  );
+}
+
+/**
+ * Internal. `guard`, when present, is always `guardWithHost(...)`: verify's (when the caller
+ * asks for the identity scan) and export's self-verify (always).
+ */
+function verifyWithGuard(
+  text: string,
+  options: VerifyOptions,
+  guard: IdentityGuard | undefined,
+): VerifyResult {
   const errors: ProofError[] = [];
   const recomputed: string[] = [];
   const digestOnly: string[] = [];
@@ -876,9 +920,6 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
     return done();
   }
   // The identity scan (#553 r3): before any message that could name a bundle value is built.
-  const guard =
-    options.identityGuard ??
-    (options.identity === undefined ? undefined : compileIdentity(options.identity));
   if (guard !== undefined) {
     const hits = findIdentityDeep(parsed, guard);
     if (hits.length > 0) {
@@ -1127,6 +1168,7 @@ export const FORMAT_CONSTANTS: ReadonlySet<string> = new Set([
   ...MEDIA_TYPES,
   ...POLICY_REASON_CODES,
   ...KNOWN_ARMS,
+  ...VOCAB_CONSTANTS,
 ]);
 
 const DIGEST_FORM = /^(?:h-)?[0-9a-f]{64}$/;

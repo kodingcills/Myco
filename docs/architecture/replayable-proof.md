@@ -148,7 +148,8 @@ The exporter does not look at what a string says. It looks at which field it is 
 | boolean | as is; any other value is refused | `run.simulated`, `verdict.accepted` |
 | integer | as is; any other value is refused | `checkpoint.checkpoint`, `handoff.checkpoint` |
 | sha256 digest | as is; any other value is refused | `verdict.oracle.specSha256` |
-| id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` **and** passes the identity guard (below), else **hashed**: `h-` + its digest (itself a closed id, so equality is still checked) | `run.runId`, `run.taskId`, `action.tool`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId`, `policy.subject` |
+| id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` **and** passes the identity guard (below), else **hashed**: `h-` + its digest (itself a closed id, so equality is still checked) | `run.runId`, `run.taskId`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId` |
+| agent-produced name (#562, F1) | as is only when it is a member of a **closed vocabulary** (`src/proof/vocab.ts`), exact case and spelling, else **hashed**; never a grammar (an id grammar wrote a foreign `jsmith`, `Users.jsmith.Documents` or `com.apple.Safari` verbatim, and the identity guard only knows this host). Tools: `TOOL_NAMES` (#542's action kinds, the runtime desktop actions, the Calc router kinds, the fast-path tools, the Windows guest agent ops, `myco_gate_check`). Apps: `REGISTERED_APPS` (`calc`, `writer`, `libreoffice-calc`, `libreoffice-writer`, `localc`, `lowriter`, `soffice`, `myco-todo`). Subject: a tool or a registered app. Keys: 1 to 4 space-separated chords, each a named key (`KEY_NAMES`: `Return`, `Tab`, `Escape`, `F1`-`F12`, ...) with optional modifiers (`ctrl`, `shift`, `alt`, `super`, `meta`, `cmd`) or one lower-case letter or digit with at least one modifier (`ctrl+s`); a bare letter is not a chord, so a sequence cannot spell a word; a key sequence is also put to the identity guard | `action.tool`, `action.keys`, `action.app`, `policy.subject` |
 | arm | as is when it is `myco-gate` or `hcu+shell`, else as an id | `run.arm` |
 | policy code | as is only when it is a member of the **closed enum** `POLICY_REASON_CODES` (the gate's `REASON_CODES` plus the repo's policy and handoff codes: `POLICY_ALLOW`, `POLICY_DENIED`, `POLICY_ERROR`, `POLICY_INVALID`, `TASK_NOT_ALLOWED`, `HUMAN_REJECTED`, `STILL_PAUSED`, `HANDOFF_TIMEOUT`, `HANDOFF_CANCELLED`, `ATTEMPT_ENDED`), else **hashed**; never a grammar (an upper-case grammar wrote `ZQGPTRR` or an account name in capitals verbatim, #553 r2 N1) | `policy.reasonCode` |
 | media type | as is only when it is a member of the **closed enum** `MEDIA_TYPES` (`application/json`, `image/jpeg`, `image/png`, `text/csv`, `text/plain`), else **hashed**; never a grammar (a `type/subtype` grammar admits `srv/<user>`) | `evidence.mediaType` |
@@ -157,7 +158,7 @@ The exporter does not look at what a string says. It looks at which field it is 
 | ledger | verbatim, because every field is closed under #518's schema (enums, integers, digests, and ids in #518's grammar `^[A-Za-z0-9._:-]{1,128}$`), NARROWED by Q: every `trialKey` and `taskId` must also match the closed id grammar above (no `:`, starts alphanumeric), since #518's grammar can spell `C:<user>` or `..`; a ledger that fails #518's check or the narrowing is refused, on export and verify; a `trialKey` or `taskId` that carries an identity string cannot be digested (it is under #518's chain), so the export is **refused** (`PROOF_IDENTITY`, the event index, field and class only) | `ledger.lines`; `ledger.trialKey` (the input) is only used to find the trial: the anchor's trial key is taken from the ledger, never from the input |
 | episode | **never written**: its id and digest only | `episode` |
 
-**Identity guard (#553 r3, lead ruling 21:52Z).** A bare username, or any configured identity
+**Identity guard (#553 r3, lead ruling 21:52Z; #562 D1 and D2).** A bare username, or any configured identity
 string, is a leak on its own, not only inside a path, and a closed id such as `alice`,
 `ALICE-run-1` or `run.alice` matches the id grammar. So every value the exporter would write
 as is from its input (every id and non-enum arm) is first put to `src/proof/identity.ts`. A
@@ -168,10 +169,19 @@ guard:
 - configured strings come from the host at write time (`os.userInfo().username`,
   `os.hostname()`, `os.homedir()`), the lines of an optional identity file whose path is
   passed in (`--identity-file`: a full name, other names), `--user-file` lines and the
-  backstop's registered account names. Library callers that pass no identity get the host's;
-- matching is on a normal form (NFKC, lower case, every non-letter, non-digit removed, on
-  both sides), so `Alice`, `ALICE`, `a.l.i.c.e`, `run-alice-1` all contain `alice`, a full name
-  `First Last` matches as `firstlast` and by each word of three or more characters, a
+  backstop's registered account names. The host's identity is **always** in the guard: an
+  identity a library caller passes to `exportProofBundle`, `assembleProofBundle` or
+  `verifyProofBundle` is **merged** with `hostIdentity()` (`guardWithHost`, as #560's
+  `mergeIdentity(hostIdentity(), ...)`), never used instead of it, so fake host facts or an
+  empty identity cannot turn the host's account name or hostname off (#562 D1). There is no
+  "no identity" argument;
+- matching is on a normal form (NFKC, **full Unicode case folding**, every non-letter,
+  non-digit removed, on both sides). The fold upper-cases then lower-cases until nothing
+  changes, so `ß`, `ẞ` and `SS` all fold to `ss` (a configured `Groß` matches `GROSS`, #562
+  D2), dotless `ı` folds to `i`, and final `ς` to `σ`. So `Alice`, `ALICE`, `a.l.i.c.e`,
+  `run-alice-1` all contain `alice`, a full name `First Last` matches **joined** as
+  `firstlast` (`FirstLast`, `first.last`, `first_last`, `First-Last`, `FIRSTLAST`) and by
+  each word of three or more characters, a
   hostname matches whole and by its first DNS label, and a home directory whole and by its
   last segment. A configured string under two characters after normalisation is not matched
   (stated limit: a one-letter needle would match nearly every id);

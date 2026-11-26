@@ -33,6 +33,7 @@
 import { createHash } from "node:crypto";
 import { REASON_CODES } from "../gate/api.ts";
 import type { IdentityGuard } from "./identity.ts";
+import { closedApp, closedSubject, closedTool, isClosedKeys } from "./vocab.ts";
 
 /** A closed id: starts alphanumeric, then letters, digits, `.`, `_`, `-`; at most 128. */
 export const CLOSED_ID_SOURCE = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$";
@@ -120,12 +121,21 @@ export function hashedId(raw: string): string {
  * or generic identity shape; otherwise it is replaced by its hashed form. Enum members
  * (`MEDIA_TYPES`, `POLICY_REASON_CODES`, `KNOWN_ARMS`) are constants of this code, not host
  * values, so they are written as is.
+ *
+ * Agent-produced names (#562, F1) are not ids: they are written as is only when they are in a
+ * CLOSED VOCABULARY (`vocab.ts`), else hashed. `tool` (`TOOL_NAMES`), `app`
+ * (`REGISTERED_APPS`) and `subject` (both) are single constants; `keys` is a sequence spelled
+ * from `KEY_NAMES` and `KEY_MODIFIERS`, and is also put to the identity guard.
  */
 export interface Allowlist {
   readonly id: (raw: string) => string;
   readonly arm: (raw: string) => string;
   readonly policyCode: (raw: string) => string;
   readonly mediaType: (raw: string) => string;
+  readonly tool: (raw: string) => string;
+  readonly app: (raw: string) => string;
+  readonly keys: (raw: string) => string;
+  readonly subject: (raw: string) => string;
 }
 
 export function allowlist(guard: IdentityGuard): Allowlist {
@@ -136,6 +146,10 @@ export function allowlist(guard: IdentityGuard): Allowlist {
     arm: (raw) => ((KNOWN_ARMS as readonly string[]).includes(raw) ? raw : id(raw)),
     policyCode: closedPolicyCode,
     mediaType: closedMediaType,
+    tool: closedTool,
+    app: closedApp,
+    keys: (raw) => (isClosedKeys(raw) && guard.hit(raw) === null ? raw : hashedId(raw)),
+    subject: closedSubject,
   };
 }
 
@@ -193,8 +207,10 @@ export const FIELD_TREATMENT = {
   "run.arm": "arm",
   "run.simulated": "boolean",
   "action.actor": "enum",
-  "action.tool": "id",
+  "action.tool": "tool",
   "action.summary": "text",
+  "action.keys": "keys",
+  "action.app": "app",
   "evidence.evidenceId": "id",
   "evidence.evidenceKind": "id",
   "evidence.mediaType": "media-type",
@@ -216,7 +232,7 @@ export const FIELD_TREATMENT = {
   "handoff.summary": "text",
   "handoff.checkpoint": "integer",
   "policy.policyId": "id",
-  "policy.subject": "id",
+  "policy.subject": "subject",
   "policy.decision": "enum",
   "policy.reasonCode": "policy-code",
   "ledger.lines": "ledger",

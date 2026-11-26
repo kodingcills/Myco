@@ -18,13 +18,23 @@
  *    (`os.userInfo().username`, `os.hostname()`, `os.homedir()`), plus the lines of an
  *    optional identity file whose PATH is passed in (a full name, another account name) and
  *    any `--user-file` entries. The values are never printed, logged or put in a message.
- *  - "Contains" is matched on a normal form: NFKC, lower case, and every character that is
- *    not a letter or a digit removed, on both sides. So `Alice`, `ALICE`, `a.l.i.c.e`,
- *    `run-alice-1` and `alice_smith` all contain `alice`, and a full name `First Last` is
- *    matched as `firstlast` (`First.Last`, `first-last`, `FIRSTLAST`) and by each of its
- *    words of three or more characters (`First` alone). A hostname is matched whole and by
- *    its first DNS label (`box` for `box.local`). A home directory is matched whole and by its
- *    last segment.
+ *  - The HOST's identity is ALWAYS part of the guard (#562, fixing #553's final-round D1). A
+ *    caller may ADD identity strings (an identity file, `--user-file`, a test's synthetic
+ *    names) but can never replace or drop the host's: every guard this module hands out for
+ *    writing or verifying is `guardWithHost(extra)`, which is
+ *    `compileIdentity(mergeIdentity(hostIdentity(), extra))`, as #560's leak guard does with
+ *    `mergeIdentity(hostIdentity(), ...)`. There is no "no identity" export argument.
+ *  - "Contains" is matched on a normal form (`identityNormal`), on both sides: NFKC, then
+ *    FULL Unicode case folding (#562, fixing #553's final-round D2: plain lower-casing left
+ *    `GROSS` unmatched by a configured `Groß`), then every character that is not a letter or a
+ *    digit removed. The fold upper-cases then lower-cases until nothing changes, so `ß`, `ẞ`
+ *    and `SS` all fold to `ss`, dotless `ı` and `I` fold to `i`, and final `ς` folds to `σ`.
+ *    So `Alice`, `ALICE`, `a.l.i.c.e`, `run-alice-1` and `alice_smith` all contain `alice`,
+ *    and a full name `First Last` is matched JOINED, as `firstlast` (`FirstLast`,
+ *    `first.last`, `first_last`, `First-Last`, `FIRSTLAST`), and by each of its words of
+ *    three or more characters (`First` alone). A hostname is matched whole and by its first
+ *    DNS label (`box` for `box.local`). A home directory is matched whole and by its last
+ *    segment.
  *  - Generic shapes (key-like strings, home-root and other host paths, `DOMAIN\user`,
  *    `user@host`) are the backstop's own patterns (`backstop.ts`), run on the raw value.
  *  - A configured string shorter than `MIN_IDENTITY` characters after normalisation is not
@@ -47,19 +57,43 @@ export interface IdentityContext {
   readonly homes: readonly string[];
 }
 
-export const NO_IDENTITY: IdentityContext = { names: [], homes: [] };
+/** No configured strings. Internal: it is never an export or verify argument (#562, D1). */
+const EMPTY_IDENTITY: IdentityContext = { names: [], homes: [] };
+
+/** The union of several identity contexts (order kept, duplicates dropped). */
+export function mergeIdentity(...ctxs: readonly (IdentityContext | undefined)[]): IdentityContext {
+  const names = new Set<string>();
+  const homes = new Set<string>();
+  for (const c of ctxs) {
+    if (c === undefined) continue;
+    for (const n of c.names) names.add(n);
+    for (const h of c.homes) homes.add(h);
+  }
+  return { names: [...names], homes: [...homes] };
+}
 
 /** Needles shorter than this (after normalisation) are not matched. */
 export const MIN_IDENTITY = 2;
 /** A word of a multi-word name is matched alone from this length. */
 export const MIN_NAME_PART = 3;
 
-/** NFKC, lower case, letters and digits only. */
+/**
+ * Full Unicode case folding by round trip: upper-case then lower-case, repeated until the
+ * value stops changing (at most a few passes). `ẞ` needs two: `ẞ` -> `ß` -> `ss`.
+ */
+export function caseFold(text: string): string {
+  let cur = text.normalize("NFKC");
+  for (let i = 0; i < 4; i++) {
+    const next = cur.toUpperCase().toLowerCase().normalize("NFKC");
+    if (next === cur) break;
+    cur = next;
+  }
+  return cur;
+}
+
+/** NFKC, full case folding, letters and digits only. */
 export function identityNormal(text: string): string {
-  return text
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "");
+  return caseFold(text).replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
 export interface IdentityGuard {
@@ -68,7 +102,7 @@ export interface IdentityGuard {
 }
 
 /** A guard that matches only the generic shapes (no configured strings). */
-export const SHAPES_ONLY: IdentityGuard = compileIdentity(NO_IDENTITY);
+export const SHAPES_ONLY: IdentityGuard = compileIdentity(EMPTY_IDENTITY);
 
 /** Build the guard. The returned function closes over the needles; nothing else keeps them. */
 export function compileIdentity(ctx: IdentityContext): IdentityGuard {
@@ -146,4 +180,13 @@ export function hostIdentity(
     names: names.filter((n) => n.length > 0),
     homes: home.length > 1 ? [home] : [],
   };
+}
+
+/**
+ * The guard every write and verify path uses: the writing host's identity (`hostIdentity()`)
+ * MERGED with whatever the caller adds. A caller's identity can only add strings; it never
+ * replaces the host's (#562, D1).
+ */
+export function guardWithHost(extra?: IdentityContext): IdentityGuard {
+  return compileIdentity(mergeIdentity(hostIdentity(), extra));
 }
