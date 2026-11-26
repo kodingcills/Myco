@@ -280,9 +280,18 @@ export class VerdictVault {
     chmodSync(this.root, 0o700);
   }
 
+  /**
+   * Why the vault is reachable from any of `roots` (inside or containing one), or undefined.
+   * Lets a caller with its own agent roots (e.g. an orchestrator's trial isolation) check the
+   * vault against them, rather than trusting that the vault was built with the same roots.
+   */
+  reachableFrom(roots: readonly string[]): string | undefined {
+    return this.reachability(roots.map(realish));
+  }
+
   /** Why the vault is reachable from an agent root, or undefined when it is not. */
-  private reachability(): string | undefined {
-    for (const agentRoot of this.agentRoots) {
+  private reachability(agentRoots: readonly string[] = this.agentRoots): string | undefined {
+    for (const agentRoot of agentRoots) {
       if (within(this.root, agentRoot))
         return `vault ${this.root} is inside agent-reachable root ${agentRoot}`;
       if (within(agentRoot, this.root))

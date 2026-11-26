@@ -32,6 +32,8 @@
     "scripts/myco-gate.ts",
     "scripts/m2-fault-suite.ts",
     "scripts/m2-evidence-check.ts",
-    "scripts/parallel-run.ts"
+    "scripts/parallel-run.ts",
+    "scripts/myco-schedule.ts",
+    "scripts/myco-record.ts"
   ]
 }
