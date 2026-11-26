@@ -54,9 +54,11 @@ that is down.
    - the right trial nonce
    - `/` is not writable
    - the agent is in a fresh pid namespace
-   - only the mounts in §1 exist, and the ones that must be read-only are
+   - only the mounts in §1 exist, the ones that must be read-only are, and the writable
+     ones (`/workspace`, `/tmp`, `/home`, `/dev/shm`) are `nosuid,nodev`
    - only a loopback network device
-   - no `hide` path, and not the host path of the trial root, exists inside
+   - no `hide` path, and not the host path of the trial root, exists inside. Each `hide`
+     entry is probed both as written and at its real path (every symlink in it resolved)
 
    If any check fails, the trial is destroyed and `create` throws
    `STRICT_NS_SELFCHECK_FAILED`. The isolation report is built only from a passing
@@ -96,8 +98,8 @@ Other routes, and why each is closed:
 | `mount --bind`, `pivot_root` in a nested namespace | only reorders the agent's own copy of its own tree |
 | Writing to the host path of another trial | the path does not exist; `/` is read-only |
 | `/proc/<pid>/root`, `/proc/1/root` | every pid visible is in the agent's own nested pid namespace, so the path resolves to its own root |
-| Symlinks planted in `/workspace` | resolve inside the trial. On the host, `readTrialFile` refuses symlinks, FIFOs and anything else that is not a regular file (`O_NOFOLLOW`, `O_NONBLOCK`, inode re-check), so the #541 D2 FIFO hang cannot happen |
-| ptrace of a sibling trial | not visible: separate pid namespaces. Not permitted: no capability in the sibling's user namespace |
+| Symlinks planted in `/workspace` | resolve inside the trial. On the host, `readTrialFile(base, rel)` walks `rel` one component at a time from a directory fd on `base` (normally `paths.workspace`), opening each step with `O_NOFOLLOW` (`O_DIRECTORY` for the directories, `O_NONBLOCK` for the file). A symlink at **any** component is refused, so a sub-directory the agent swaps for a link to a sibling's workspace (`ln -s ../../B/workspace /workspace/out`) is not followed (#551 round-1 D1). `..`, absolute paths and a `base` reached through a symlink are refused too. Anything that is not a regular file is refused, so the #541 D2 FIFO hang cannot happen |
+| ptrace of a sibling trial | not addressable: every agent shares one host uid, so the protection is that a sibling's pids are not reachable from the agent's pid namespace. A test runs `PTRACE_ATTACH` from trial A on B's holder (by its host pid) and gets `ESRCH` |
 | Abstract unix sockets | per network namespace; the marker test checks that no trial reaches a sibling's socket |
 | Exec aimed at the wrong trial (pid reuse) | the nonce check refuses it before the command runs (`STRICT_NS_TRIAL_MISMATCH`) |
 
@@ -122,12 +124,12 @@ another's markers in the workspace, `/tmp`, `/home`, `/dev/shm` or abstract sock
 | `STRICT_NS_SETUP_FAILED` | the namespaces or the view could not be built |
 | `STRICT_NS_SELFCHECK_FAILED` | built, but a property in §2.3 does not hold |
 | `STRICT_NS_BAD_ROOT` | the root is missing, a symlink, not empty, or under a system dir |
-| `STRICT_NS_HIDE_OVERLAP` | a `hide` dir is inside the trial root or under a system bind |
-| `STRICT_NS_BAD_SPEC` | a bad run id, cap, env key or command |
+| `STRICT_NS_HIDE_OVERLAP` | a `hide` dir is inside the trial root or under a system bind. Compared by real path, not lexically: every symlink in the `hide` entry, the root and each system source is resolved first (a missing tail is placed under its deepest existing ancestor, and a dangling link is followed to where it would land) |
+| `STRICT_NS_BAD_SPEC` | a bad run id, cap, env key or command, or a `hide` entry whose real path is not a plain path |
 | `STRICT_NS_DISPLAY_UNSUPPORTED` | `display: "xvfb"` was asked for (see §5) |
 | `STRICT_NS_TRIAL_MISMATCH` | an exec reached a different trial than the one it was aimed at |
 | `STRICT_NS_DESTROYED` | an exec on a destroyed trial |
-| `STRICT_NS_BAD_FILE` | host-side capture refused a file that is not a regular file |
+| `STRICT_NS_BAD_FILE` | host-side capture refused a path: a symlink at any component, `..`, an absolute `rel`, a `base` that is not a real directory, or a file that is not a regular file |
 
 - **There is no weaker fallback.** The backend never hands out a trial with less isolation
   while reporting it strict. Tests feed it an `unshare` that drops `--net`, and one that
@@ -147,7 +149,8 @@ another's markers in the workspace, `/tmp`, `/home`, `/dev/shm` or abstract sock
   That needs cgroups (lands with L).
 - **Host file names leak, not contents.** `/proc/self/mountinfo` shows the host source path
   of each bind, for example `/tmp/…/trials/A/workspace`. The trial learns names. It gets no
-  access through them.
+  access through them from inside, and host-side capture never follows a link it plants
+  with them (§3).
 - **System dirs are shared read-only.** `/usr`, `/lib*`, `/bin` and `/sbin` are the host's.
   A trial can read them, and a host secret stored there would be readable. `/etc` is not
   bound for this reason. When the harness runs as real root, host-root-owned files under
@@ -158,9 +161,10 @@ another's markers in the workspace, `/tmp`, `/home`, `/dev/shm` or abstract sock
 - **The holder is reachable from inside U1, not from the agent.** Root of U1 can see and
   kill its own trial's holder. The agent cannot: it runs in U2 and a nested pid namespace.
   Even with full U1 power, nothing outside the trial is reachable (§3.1).
-- **Harness-side capture is the harness's job.** `readTrialFile` is provided and tested.
-  The pool must use it, or something just as strict, for every file it reads from a trial
-  (lands with L).
+- **Harness-side capture is the harness's job.** `readTrialFile(paths.workspace, rel)` is
+  provided and tested. The pool must use it, or something just as strict (no symlink
+  followed at any component), for every file it reads from a trial (lands with L). It is
+  Linux-only, like the backend.
 - **If the harness dies, the trial's processes die with it** (pid 1 exits on stdin EOF).
   The trial's root dir stays on the host until the next cleanup.
 

@@ -32,6 +32,7 @@ import {
   type StrictTrialDesktop,
   type StrictTrialSpec,
   strictLinuxNs,
+  systemBindSources,
   trialPids,
 } from "../../src/isolation/strict-linux-ns.ts";
 
@@ -159,6 +160,25 @@ describe("strict-linux-ns: spec checks (fail closed before the kernel)", () => {
     expect(hideProbes([run])).toEqual([run]);
   });
 
+  it("#551 D2: the system sources are compared lexically AND resolved (merged-/usr hosts)", () => {
+    const sources = systemBindSources();
+    for (const d of ["usr", "bin", "sbin", "lib", "lib32", "lib64", "libx32", "etc/alternatives"]) {
+      expect(sources).toContain(`/${d}`);
+      if (existsSync(`/${d}`)) expect(sources).toContain(realpathSync(`/${d}`));
+    }
+  });
+
+  it("#551 D2: refuses a hide entry whose real path is not a plain path", async () => {
+    const run = mkRun();
+    const root = path.join(run, "t");
+    mkdirSync(root);
+    mkdirSync(path.join(run, "odd 'dir"));
+    symlinkSync(path.join(run, "odd 'dir"), path.join(run, "plain"));
+    expect(await codeOf(() => checkSpec(spec(root, { hide: [path.join(run, "plain")] })))).toBe(
+      "STRICT_NS_BAD_SPEC",
+    );
+  });
+
   it("refuses a root under a system dir even when that dir is empty-rooted", async () => {
     // Exercises the root-under-system-dir refusal without the non-empty check firing first.
     const subdirs = (d: string): string[] => {
@@ -279,6 +299,8 @@ describe("strict-linux-ns: self-check evaluation", () => {
     ["a visible host root", [...good, "visible1=1"]],
     ["a truncated report", without("end=")],
     ["no private /tmp", without("mount=/tmp")],
+    ["a setuid-capable /workspace", [...without("mount=/workspace"), "mount=/workspace rw,nodev"]],
+    ["a device-capable /tmp", [...without("mount=/tmp"), "mount=/tmp rw,nosuid"]],
   ])("refuses %s", (_name, lines) => {
     expect(evaluateSelfCheck(lines.join("\n"), want).length).toBeGreaterThan(0);
   });
@@ -332,7 +354,7 @@ describe.runIf(process.platform === "linux")(
       ])
         expect(await codeOf(() => readTrialFile(wsA, rel))).toBe("STRICT_NS_BAD_FILE");
       // Escapes by name are refused before any open.
-      for (const rel of ["../B/workspace/saved.csv", "/etc/hostname", "", "."])
+      for (const rel of ["../../B/workspace/saved.csv", "/etc/hostname", "", "."])
         expect(await codeOf(() => readTrialFile(wsA, rel))).toBe("STRICT_NS_BAD_FILE");
     });
     it("refuses a base that is itself reached through a symlink", async () => {
@@ -537,6 +559,51 @@ echo PLANTED "$host"`,
     expect(readTrialFile(a.paths.workspace, "mine/saved.csv").toString()).toBe("A,0\n");
     expect(readTrialFile(b.paths.workspace, "out/saved.csv").toString()).toBe("B,1\n");
   }, 60_000);
+
+  it("the agent does not inherit the fd-3 handshake pipe", async () => {
+    const { run, roots } = runLayout(["A"]);
+    const a = await make(roots.A!, run, "A");
+    const r = await a.exec("/bin/sh", [
+      "-c",
+      "if [ -e /proc/self/fd/3 ]; then echo FD3-OPEN; fi; echo ok",
+    ]);
+    expect(r.stdout).toBe("ok\n");
+  });
+
+  it("ptrace of a sibling trial's processes: not addressable (ESRCH)", async () => {
+    if (!existsSync("/usr/bin/python3")) return;
+    const { run, roots } = runLayout(["A", "B"]);
+    const a = await make(roots.A!, run, "A");
+    const b = await make(roots.B!, run, "B");
+    const py = [
+      "import ctypes, os, sys",
+      "libc = ctypes.CDLL(None, use_errno=True)",
+      "libc.ptrace.argtypes = [ctypes.c_long, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]",
+      "out = []",
+      "for pid in [int(a) for a in sys.argv[1:]]:",
+      "    r = libc.ptrace(16, pid, None, None)",
+      "    out.append(f'{pid}:{r}:{ctypes.get_errno()}')",
+      "print(' '.join(out))",
+    ].join("\n");
+    // B's holder by its HOST pid, plus a scan of low pids (A's own namespace).
+    const pids = [b.target.holderPid, ...Array.from({ length: 64 }, (_, i) => i + 2)];
+    const r = await a.exec("/usr/bin/python3", ["-c", py, ...pids.map(String)]);
+    expect(r.code).toBe(0);
+    const res = new Map(
+      r.stdout
+        .trim()
+        .split(" ")
+        .map((t) => {
+          const [pid, ret, errno] = t.split(":");
+          return [Number(pid), { ret: Number(ret), errno: Number(errno) }] as const;
+        }),
+    );
+    expect(res.get(b.target.holderPid)).toEqual({ ret: -1, errno: 3 }); // ESRCH
+    // Nothing outside A's own fresh pid namespace attached.
+    for (const [pid, v] of res) if (v.ret === 0) expect(pid).toBeLessThan(64);
+    // B is untouched and still runs.
+    expect((await b.exec("/bin/true", [])).code).toBe(0);
+  });
 
   it("D1 even with full capabilities in the trial's namespace: the run root is not in it", async () => {
     // Defense in depth: enter as root of the trial's OWN user namespace (more than any
