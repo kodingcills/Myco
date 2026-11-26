@@ -113,6 +113,23 @@ export const benchmarkArmRowSchema: JsonSchema = {
       required: ["modelUsd", "wallClockS", "vmS"],
       properties: { modelUsd: nullableNumber, wallClockS: nullableNumber, vmS: nullableNumber },
     },
+    /**
+     * Present only on rows from an experiment run, never on evidence rows (TIF-274 / track B;
+     * #547). Today the one experiment is the corrections ON/OFF A/B: its stage, its arm, and
+     * the run's fresh seed (the identity a reused trial cannot shed by changing its key). The
+     * evidence check and the M2 pack check refuse every row that carries it.
+     */
+    experiment: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "stage", "arm", "seed"],
+      properties: {
+        id: { const: "corrections-ab" },
+        stage: { type: "integer", enum: [0, 1] },
+        arm: { type: "string", enum: ["on", "off"] },
+        seed: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+      },
+    },
   },
 };
 
