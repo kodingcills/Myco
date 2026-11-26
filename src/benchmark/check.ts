@@ -110,8 +110,15 @@ export interface R1Verdict {
    * with its Wilson 95% interval. R1 cannot pass while this has denominator 0.
    */
   readonly falseAcceptRate: Rate;
-  /** Same numerator over all gated trials. Diagnostic only; not the R1 bound. */
+  /** Same numerator over all trials. Diagnostic only; not the R1 bound. */
   readonly falseAcceptPerTrial: Rate;
+  /**
+   * Trials the gate could decide: all trials minus unregistrable ones (TIF-274). Reported
+   * beside `falseAcceptPerTrial.denominator`, which counts every trial.
+   */
+  readonly gatedTrials: number;
+  /** Non-blocking notes a reader of R1 must see (e.g. ungated false DONEs). */
+  readonly notes: readonly string[];
 }
 
 export interface CheckResult {
@@ -129,11 +136,19 @@ export interface CheckOptions {
   /** Expected row count per arm present. Every arm in the ledger must be listed. */
   readonly expectTrials: Readonly<Partial<Record<Arm, number>>>;
   /**
-   * Checking evidence (a scorecard number), not plumbing: refuse any simulated row
-   * (`plannerModelId` starting `simulated:`, written by dry runs).
+   * Checking evidence (a scorecard number), not plumbing: refuse every row without evidence
+   * provenance, i.e. whose `plannerModelId` is not a Claude model id (`EVIDENCE_PLANNER`).
+   * Dry runs name a `simulated:` planner, so they never pass.
    */
   readonly evidence?: boolean;
 }
+
+/**
+ * Evidence provenance, positively: a row counts as evidence only when its planner is a Claude
+ * model id, in ASCII lower case (e.g. `claude-sonnet-5-5`). Anything else (`simulated:...`,
+ * case or Unicode variants, `dry-run:...`) is refused under `evidence: true`.
+ */
+export const EVIDENCE_PLANNER = /^claude-(?:opus|sonnet|haiku|fable)(?:-[0-9]+)+$/;
 
 /** Host paths must never reach a publishable ledger (M2 plan §6; test/no-home-paths). */
 const HOST_PATH = /(?:^|[\s"'(=])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\)/;
@@ -186,9 +201,13 @@ export function checkBenchmark(
 
   if (armInput.length === 0) errors.push("arm ledger is empty");
   if (options.evidence === true) {
-    const simulated = armRows.filter((r) => r.plannerModelId.startsWith("simulated:")).length;
-    if (simulated > 0)
-      errors.push(`${simulated} simulated row(s): dry-run rows are never evidence`);
+    const unproven = armRows.filter((r) => !EVIDENCE_PLANNER.test(r.plannerModelId));
+    if (unproven.length > 0) {
+      const ids = [...new Set(unproven.map((r) => r.plannerModelId))];
+      errors.push(
+        `${unproven.length} row(s) without evidence provenance (planner ${ids.map((i) => JSON.stringify(i)).join(", ")} is not a Claude model id): dry-run rows are never evidence`,
+      );
+    }
   }
   if (gradeInput.length === 0) errors.push("grade ledger is empty");
 
@@ -220,6 +239,17 @@ export function checkBenchmark(
     }
     if (row.gate?.unregistrable === true && (row.gate.called || row.gate.verdict !== null)) {
       errors.push(`${row.trialKey}: an unregistrable task cannot have a gate call or verdict`);
+    }
+    // In fc-v1 only invalid-target specs are unsatisfiable; any other task registers with the
+    // gate, so marking it unregistrable would dodge the gate. A task set with other
+    // unregistrable classes must widen this deliberately.
+    if (row.gate?.unregistrable === true && row.faultClass !== "invalid-target") {
+      errors.push(
+        `${row.trialKey}: only an invalid-target task can be unregistrable (got ${row.faultClass})`,
+      );
+    }
+    if (row.arm === "myco-gate" && row.accepted && row.persistedSha256 === null) {
+      errors.push(`${row.trialKey}: an accepted gated row must carry its captured bytes' sha256`);
     }
     if (row.accepted !== expectedAccepted(row)) {
       errors.push(
@@ -342,11 +372,19 @@ export function checkBenchmark(
         "insufficient evidence: no accepted DONE, so no false-accept bound can be reported",
       );
     }
+    const notes: string[] = [];
+    if (gated.unregistrable.claimedDone > 0) {
+      notes.push(
+        `${gated.unregistrable.claimedDone} DONE claim(s) on unregistrable tasks were never gated (${gated.unregistrable.graderFailClaimedDone} graded fail); they cannot be accepted, so they are not in the false-accept numerator`,
+      );
+    }
     r1 = {
       pass: reasons.length === 0,
       reasons,
       falseAcceptRate: gated.falseAcceptRate,
       falseAcceptPerTrial: gated.falseAcceptPerTrial,
+      gatedTrials: gated.trials - gated.unregistrable.trials,
+      notes,
     };
   }
 

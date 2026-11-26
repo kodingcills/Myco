@@ -3,10 +3,11 @@
  * recomputes R1.
  *
  *   npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades grades.jsonl \
- *     --expect myco-gate=100 [--expect hcu+shell=30] [--require-r1]
+ *     --expect myco-gate=100 [--expect hcu+shell=30] [--require-r1] [--evidence]
  *
  * Prints the CheckResult as JSON. Exit 1 when the ledgers are inconsistent, empty or
- * miscounted; with --require-r1, also when R1 does not pass.
+ * miscounted; with --require-r1, also when R1 does not pass; with --evidence, also when any
+ * row lacks evidence provenance (its planner is not a Claude model id, e.g. a dry run).
  */
 import { readFileSync } from "node:fs";
 import { type Arm, checkBenchmark } from "../src/benchmark/check.ts";
