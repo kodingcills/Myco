@@ -40,9 +40,25 @@ export const HEX64 = new RegExp(HEX64_SOURCE);
 /** A reason or policy code, or the hashed form of a value that was not one. */
 export const CODE_SOURCE = "^(?:[A-Z][A-Z0-9_]{1,63}|h-[0-9a-f]{64})$";
 const CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
-/** A media type (`type/subtype`), or the hashed form. */
-export const MEDIA_TYPE_SOURCE = "^(?:[a-z]+/[a-z0-9.+-]{1,64}|h-[0-9a-f]{64})$";
-const MEDIA_TYPE = /^[a-z]+\/[a-z0-9.+-]{1,64}$/;
+/**
+ * The media types an evidence record may carry AS IS: a CLOSED ENUM, never a grammar.
+ * (#553 r1 D1: the earlier `type/subtype` grammar admitted any lower-case two-segment
+ * relative path, `srv/<user>`, so a path could be written verbatim.) These are the types the
+ * harness's evidence and the episode's observations use (`text/csv`, `application/json`,
+ * `image/png`), plus `image/jpeg` and `text/plain`. Every other value, however
+ * media-type-like, is replaced by its hashed form. Adding a member is a reviewed change
+ * (`test/proof/allowlist.test.ts` pins this list).
+ */
+export const MEDIA_TYPES = [
+  "application/json",
+  "image/jpeg",
+  "image/png",
+  "text/csv",
+  "text/plain",
+] as const;
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+/** A member of `MEDIA_TYPES`, or the hashed form. */
+export const MEDIA_TYPE_SOURCE = `^(?:${MEDIA_TYPES.map(escapeRe).join("|")}|h-[0-9a-f]{64})$`;
 /**
  * The attempt ledger's own id grammar (#518, `schemas/m2-evidence.ts`): ledger events are
  * carried verbatim, so their trial keys and task ids keep #518's grammar. It is closed too:
@@ -85,9 +101,9 @@ export function closedCode(raw: string): string {
   return CODE.test(raw) ? raw : hashedId(raw);
 }
 
-/** A media type: as is when it matches `type/subtype`, else hashed. */
+/** A media type: as is when it is a member of `MEDIA_TYPES` (exact match), else hashed. */
 export function closedMediaType(raw: string): string {
-  return MEDIA_TYPE.test(raw) ? raw : hashedId(raw);
+  return (MEDIA_TYPES as readonly string[]).includes(raw) ? raw : hashedId(raw);
 }
 
 /** The arms an arm field may carry as is (#518's ledger arms); any other value is an id. */

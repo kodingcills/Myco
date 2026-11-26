@@ -6,6 +6,14 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { EPISODE_SCHEMA as MAIN_EPISODE_SCHEMA } from "../../schemas/episode.ts";
+import { buildEpisode } from "../../src/episode/build.ts";
+import {
+  canonicalJson as mainCanonicalJson,
+  episodeIdOf as mainEpisodeIdOf,
+  sha256Hex as mainSha256Hex,
+  validateEpisode,
+} from "../../src/episode/validate.ts";
 import {
   exportProofBundle,
   type ProofBundle,
@@ -17,10 +25,12 @@ import {
   EPISODE_FIELDS_USED,
   EPISODE_SCHEMA,
   episodeIdOf,
+  episodeRefusal,
   projectEpisode,
 } from "../../src/proof/episode-ref.ts";
 import { canonicalJson, sha256Hex } from "../../src/proof/ledger.ts";
 import { renderProofReport } from "../../src/proof/report.ts";
+import { draft } from "../episode/helpers.ts";
 import {
   clone,
   NO_CTX,
@@ -40,9 +50,10 @@ function deletePath(o: Record<string, unknown>, path: string): void {
   delete cur[parts.at(-1) as string];
 }
 
-describe("the mirrored episode interface (pinned until #542 merges)", () => {
+describe("the episode reference is bound to #542 (src/episode on main)", () => {
   it("Q reads exactly these episode fields and the myco.episode/1 schema id", () => {
     expect(EPISODE_SCHEMA).toBe("myco.episode/1");
+    expect(EPISODE_SCHEMA).toBe(MAIN_EPISODE_SCHEMA);
     expect([...EPISODE_FIELDS_USED]).toEqual([
       "schema",
       "episodeId",
@@ -54,38 +65,56 @@ describe("the mirrored episode interface (pinned until #542 merges)", () => {
     ]);
   });
 
+  it("the id rule is #542's own episodeIdOf (re-exported, not re-stated)", () => {
+    expect(episodeIdOf).toBe(mainEpisodeIdOf);
+  });
+
+  it("parity: an episode built by main's buildEpisode projects to main's id and digest", () => {
+    const built = buildEpisode(draft());
+    if (!built.ok) throw new Error("fixture");
+    const ep = built.episode;
+    const p = projectEpisode(ep);
+    expect(p.ok && p.projection).toEqual({
+      ref: {
+        schema: "myco.episode/1",
+        episodeId: mainEpisodeIdOf(ep),
+        sha256: mainSha256Hex(mainCanonicalJson(ep)),
+      },
+      runId: "run-1",
+      taskId: "t-1",
+      arm: "myco-gate",
+      simulated: true,
+      trialKey: "trial-1",
+    });
+    expect(validateEpisode(sampleEpisode())).toEqual([]);
+  });
+
   it("every field Q reads is required: deleting any one refuses the projection", () => {
     for (const path of EPISODE_FIELDS_USED) {
       const ep = clone(sampleEpisode());
       deletePath(ep, path);
       // Re-derive the id (except when the id itself is the deleted field), so the refusal
       // comes from the missing field, not from the content hash.
-      if (path !== "episodeId") ep.episodeId = episodeIdOf(ep);
+      if (path !== "episodeId") ep.episodeId = episodeIdOf(ep as never);
       const r = projectEpisode(ep);
       expect(r.ok, path).toBe(false);
-      expect(JSON.stringify(r), path).not.toContain("not the hash");
+      expect(JSON.stringify(r), path).toContain("SCHEMA");
+      expect(JSON.stringify(r), path).not.toContain("ID_MISMATCH");
     }
   });
 
-  it("the id is #542's rule (sha256 of the canonical episode without episodeId) and is recomputed", () => {
+  it("the id is recomputed: an edited episode whose id was not recomputed is refused", () => {
     const ep = sampleEpisode();
     const { episodeId, ...rest } = ep;
     expect(episodeId).toBe(sha256Hex(canonicalJson(rest)));
-    expect(episodeIdOf(ep)).toBe(episodeId);
-    const p = projectEpisode(ep);
-    expect(p.ok && p.projection).toMatchObject({
-      ref: { schema: "myco.episode/1", episodeId, sha256: sha256Hex(canonicalJson(ep)) },
-      runId: "run-1",
-      taskId: "df-s02",
-      arm: "myco-gate",
-      simulated: true,
-      trialKey: "t-ours",
-    });
-    // An edited episode whose id was not recomputed is refused.
-    const edited = { ...ep, outcome: "verified" };
+    const edited = {
+      ...ep,
+      outcome: "uncertain",
+      gate: { ...(ep.gate as object), verdict: "uncertain" },
+    };
     expect(projectEpisode(edited)).toEqual({
       ok: false,
-      errors: ["$.episodeId is not the hash of the episode's content"],
+      errors: [episodeRefusal(["ID_MISMATCH"])],
     });
   });
 
@@ -93,6 +122,91 @@ describe("the mirrored episode interface (pinned until #542 merges)", () => {
     expect(projectEpisode(null).ok).toBe(false);
     expect(projectEpisode(sampleEpisode({ schema: "myco.episode/2" })).ok).toBe(false);
     expect(projectEpisode(sampleEpisode({ simulated: "yes" })).ok).toBe(false);
+  });
+});
+
+/**
+ * #553 r1 D2: content-addressed episodes (the id IS the hash, so the old projection accepted
+ * them) that #542's validateEpisode refuses. Each must be refused by export and verify, never
+ * reported as cross-checked, and the refusal carries #542's codes only, never a value.
+ */
+const HOST_PATH = "/home/zqjdoe/secret/claim.txt";
+const INVALID_EPISODES: Array<[string, Record<string, unknown>, string[]]> = [
+  // The verifier's own case: an invalid outcome and a host path in agentClaim.
+  [
+    "invalid outcome + host path in agentClaim",
+    { outcome: "won", agentClaim: HOST_PATH },
+    ["ABSOLUTE_PATH", "SCHEMA"],
+  ],
+  [
+    "host path in a free-text field",
+    { task: { ...(sampleEpisode().task as object), instruction: `open ${HOST_PATH}` } },
+    ["ABSOLUTE_PATH"],
+  ],
+  ["OUTCOME: verified without the gate's verified verdict", { outcome: "verified" }, ["OUTCOME"]],
+  ["SIMULATED: a demo-mock episode marked real", { simulated: false }, ["SIMULATED"]],
+  [
+    "SEQ: actions out of order",
+    {
+      actions: {
+        capture: "recorded",
+        truncated: false,
+        items: [{ seq: 1, atMs: null, kind: "key", keys: "Return" }],
+      },
+    },
+    ["SEQ"],
+  ],
+  ["an unknown top-level key", { notes: "free text" }, ["SCHEMA"]],
+];
+
+describe("#542's validateEpisode gates the projection (D2)", () => {
+  for (const [name, over, expected] of INVALID_EPISODES) {
+    it(`refused: ${name}`, () => {
+      const ep = sampleEpisode(over);
+      // Content-addressed: the id rule alone would accept it.
+      expect(ep.episodeId).toBe(episodeIdOf(ep as never));
+      const issues = validateEpisode(ep).map((i) => i.code);
+      for (const code of expected) expect(issues, name).toContain(code);
+      const r = projectEpisode(ep);
+      expect(r).toEqual({ ok: false, errors: [episodeRefusal(issues)] });
+      expect(JSON.stringify(r)).not.toContain("zqjdoe");
+      // Export refuses it.
+      expect(() => exportProofBundle({ ...sampleRun(), episode: ep }, NO_CTX)).toThrow(
+        /^PROOF_EPISODE: the episode is not a valid myco\.episode\/1/,
+      );
+      // A forger who points a re-chained bundle's reference at it is refused, not "cross-checked".
+      const b = clone(exportProofBundle(sampleRunWithEpisode(), NO_CTX)) as unknown as {
+        run: { episode: unknown };
+      };
+      b.run.episode = {
+        schema: "myco.episode/1",
+        episodeId: ep.episodeId,
+        sha256: sha256Hex(canonicalJson(ep)),
+      };
+      const forged = rechain(b as unknown as ProofBundle);
+      const v = verify(forged, { episode: ep });
+      expect(v.ok).toBe(false);
+      expect(v.errors.map((e) => e.code)).toEqual(["PROOF_EPISODE"]);
+      expect(v.episodeChecked).toBe(false);
+      expect(JSON.stringify(v)).not.toContain("zqjdoe");
+      // The report refuses to render a bundle that did not verify (never "cross-checked").
+      expect(() => renderProofReport(forged, v)).toThrow(/does not verify/);
+    });
+  }
+
+  it("episodeChecked is false whenever any episode check fails (a valid but mismatched episode)", () => {
+    const b = exportProofBundle(sampleRunWithEpisode(), NO_CTX);
+    const other = sampleEpisode({
+      provenance: { ...(sampleEpisode().provenance as object), trialKey: "t-other" },
+    });
+    expect(validateEpisode(other)).toEqual([]);
+    const p = projectEpisode(other);
+    if (!p.ok) throw new Error("fixture");
+    const f = clone(b) as unknown as { run: { episode: unknown } };
+    f.run.episode = p.projection.ref;
+    const v = verify(rechain(f as unknown as ProofBundle), { episode: other });
+    expect(v.errors.map((e) => e.code)).toEqual(["PROOF_EPISODE"]);
+    expect(v.episodeChecked).toBe(false);
   });
 });
 
@@ -153,7 +267,15 @@ describe("a bundle references its episode by id and digest and carries no copy o
       ],
       ["taskId", { task: { ...(sampleEpisode().task as object), id: "df-s01" } }, /taskId/],
       ["arm", { harness: { ...(sampleEpisode().harness as object), arm: "hcu+shell" } }, /arm/],
-      ["simulated", { simulated: false }, /simulated/],
+      [
+        "simulated",
+        {
+          simulated: false,
+          harness: { ...(sampleEpisode().harness as object), plannerModelId: "claude-opus-5-5" },
+          provenance: { ...(sampleEpisode().provenance as object), source: "gated-trial" },
+        },
+        /simulated/,
+      ],
       [
         "trialKey",
         { provenance: { ...(sampleEpisode().provenance as object), trialKey: "t-other" } },
@@ -162,6 +284,7 @@ describe("a bundle references its episode by id and digest and carries no copy o
     ];
     for (const [name, over, re] of cases) {
       const ep = sampleEpisode(over);
+      expect(validateEpisode(ep), name).toEqual([]);
       expect(() => exportProofBundle({ ...sampleRun(), episode: ep }, NO_CTX), name).toThrow(re);
       // A forger who rewrites the reference to point at that episode is still refused.
       const p = projectEpisode(ep);

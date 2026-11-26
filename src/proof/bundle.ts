@@ -961,7 +961,9 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
   if (options.episode !== undefined) {
     if (ref === null) fail("PROOF_EPISODE", "an episode was given but the bundle references none");
     else {
+      // #542's validateEpisode runs inside projectEpisode: an invalid episode is refused.
       const projected = projectEpisode(options.episode);
+      const before = errors.length;
       if (!projected.ok) for (const m of projected.errors) fail("PROOF_EPISODE", m);
       else {
         const p = projected.projection;
@@ -978,7 +980,8 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
         const anchor = anchors[0]?.body as LedgerAnchorBody | undefined;
         if (p.trialKey !== null && anchor !== undefined && anchor.trialKey !== p.trialKey)
           fail("PROOF_EPISODE", "the anchored ledger trial differs from the episode's trial");
-        episodeChecked = true;
+        // Cross-checked only when the episode is valid AND every projected field agrees.
+        episodeChecked = errors.length === before;
       }
     }
   }

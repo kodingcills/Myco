@@ -9,17 +9,25 @@
  * the ledger anchor). With the episode in hand the verifier recomputes both the id and the
  * digest and refuses any projected field that disagrees.
  *
- * #542 is not merged, so its code is NOT imported. This module mirrors ONLY the episode
- * fields Q reads (`EPISODE_FIELDS_USED`, pinned by `test/proof/episode-ref.test.ts`) and
- * #542's documented id rule: `episodeId` is the sha256 of the canonical JSON (sorted keys,
- * no undefined members) of the episode without `episodeId`. It does not validate the
- * episode as a whole: that is #542's `validateEpisode`.
+ * Bound to #542 (merged on main): an episode is projected ONLY after #542's own
+ * `validateEpisode` accepts it as a whole (closed schema, id rule, SEQ / OUTCOME /
+ * GROUND_TRUTH / SIMULATED / COST rules, and its cleanliness scan). The id and digest are
+ * #542's `episodeIdOf` and `canonicalJson`. Nothing in `src/episode` is changed or
+ * re-implemented here: this module only calls it. An episode #542 refuses is refused here
+ * (`PROOF_EPISODE`) and is never reported as cross-checked.
  *
- * TO FILE: once #542 merges, replace `EpisodeProjectionSource` with #542's `Episode` type
- * and `episodeIdOf`, and run its `validateEpisode` before projecting (a parity test pins
- * that both compute the same id).
+ * A refusal carries #542's issue CODES only (a closed enum), never its paths or messages:
+ * a path can name an unknown key and a message can quote a value or a blob's file name.
  */
-import { canonicalJson, sha256Hex } from "./ledger.ts";
+
+import type { Episode } from "../episode/types.ts";
+import {
+  canonicalJson,
+  type EpisodeIssueCode,
+  episodeIdOf,
+  validateEpisode,
+} from "../episode/validate.ts";
+import { sha256Hex } from "./ledger.ts";
 
 export const EPISODE_SCHEMA = "myco.episode/1" as const;
 
@@ -33,16 +41,6 @@ export const EPISODE_FIELDS_USED = [
   "provenance.runId",
   "provenance.trialKey",
 ] as const;
-
-/** The subset of #542's `Episode` that Q reads (mirrored, not imported). */
-export interface EpisodeProjectionSource {
-  readonly schema: typeof EPISODE_SCHEMA;
-  readonly episodeId: string;
-  readonly simulated: boolean;
-  readonly task: { readonly id: string };
-  readonly harness: { readonly arm: string };
-  readonly provenance: { readonly runId: string; readonly trialKey: string | null };
-}
 
 /** What a bundle carries: the reference, never the episode itself. */
 export interface EpisodeRef {
@@ -65,47 +63,32 @@ export interface EpisodeProjection {
   readonly trialKey: string | null;
 }
 
-/** #542's id rule, re-stated: sha256 of the canonical episode without `episodeId`. */
-export function episodeIdOf(episode: Record<string, unknown>): string {
-  const { episodeId: _ignored, ...rest } = episode;
-  return sha256Hex(canonicalJson(rest));
+/** #542's id rule (re-exported from `src/episode/validate.ts`, not re-stated). */
+export { episodeIdOf };
+
+/** The closed message a refused episode is reported with: #542's issue codes, sorted, unique. */
+export function episodeRefusal(codes: readonly EpisodeIssueCode[]): string {
+  const unique = [...new Set(codes)].sort();
+  return `the episode is not a valid myco.episode/1 (#542 validateEpisode: ${unique.join(", ")})`;
 }
 
-const str = (v: unknown): v is string => typeof v === "string" && v.length > 0;
-const obj = (v: unknown): v is Record<string, unknown> =>
-  v !== null && typeof v === "object" && !Array.isArray(v);
-
 /**
- * Project an episode. Returns error codes-with-messages (structural only, never a value)
- * when a field Q reads is missing or mistyped, or when the id is not the content hash.
+ * Validate an episode with #542's `validateEpisode`, then project it. Any issue refuses the
+ * episode; the error names #542's codes only.
  */
 export function projectEpisode(
   value: unknown,
 ): { ok: true; projection: EpisodeProjection } | { ok: false; errors: string[] } {
-  const errors: string[] = [];
-  if (!obj(value)) return { ok: false, errors: ["the episode is not an object"] };
-  const task = value.task;
-  const harness = value.harness;
-  const prov = value.provenance;
-  if (value.schema !== EPISODE_SCHEMA) errors.push("$.schema is not myco.episode/1");
-  if (!str(value.episodeId)) errors.push("$.episodeId is missing");
-  if (typeof value.simulated !== "boolean") errors.push("$.simulated is not a boolean");
-  if (!obj(task) || !str(task.id)) errors.push("$.task.id is missing");
-  if (!obj(harness) || !str(harness.arm)) errors.push("$.harness.arm is missing");
-  if (!obj(prov) || !str(prov.runId)) errors.push("$.provenance.runId is missing");
-  if (!obj(prov) || !(prov.trialKey === null || str(prov.trialKey)))
-    errors.push("$.provenance.trialKey is not a string or null");
-  if (errors.length > 0) return { ok: false, errors };
-  if (episodeIdOf(value) !== value.episodeId)
-    return { ok: false, errors: ["$.episodeId is not the hash of the episode's content"] };
-  const ep = value as unknown as EpisodeProjectionSource;
+  const issues = validateEpisode(value);
+  if (issues.length > 0) return { ok: false, errors: [episodeRefusal(issues.map((i) => i.code))] };
+  const ep = value as Episode;
   return {
     ok: true,
     projection: {
       ref: {
         schema: EPISODE_SCHEMA,
         episodeId: ep.episodeId,
-        sha256: sha256Hex(canonicalJson(value)),
+        sha256: sha256Hex(canonicalJson(ep)),
       },
       runId: ep.provenance.runId,
       taskId: ep.task.id,

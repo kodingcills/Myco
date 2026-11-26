@@ -5,8 +5,10 @@
  *
  * For each probe value:
  *  1. EXPORT: the value is planted in every free-text, path and id input field of a run
- *     (`plantEverywhere`); the export succeeds, verifies (episode cross-checked) and renders,
- *     and no user word of the probe is in the bundle, the verify result or the HTML.
+ *     (`plantEverywhere`); an episode carrying it that #542's `validateEpisode` refuses is
+ *     refused (`PROOF_EPISODE`, no echo); the run itself exports, verifies (episode
+ *     cross-checked when #542 accepts it) and renders, and no user word of the probe is in
+ *     the bundle, the verify result or the HTML.
  *  2. VERIFY: a hand-edited bundle carrying the raw value where text used to be (a summary)
  *     or in an id field, re-chained like a forger would, is refused, and no refusal message
  *     carries a user word.
@@ -17,6 +19,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { validateEpisode } from "../../src/episode/validate.ts";
 import { findLeaks } from "../../src/proof/backstop.ts";
 import {
   exportProofBundle,
@@ -26,7 +29,13 @@ import {
 import { main } from "../../src/proof/cli.ts";
 import { CLOSED_ID } from "../../src/proof/closed.ts";
 import { clone, NO_CTX, rechain, sampleRun } from "./fixture.ts";
-import { expectAbsent, exportVerifyReport, plantEverywhere } from "./plant.ts";
+import {
+  expectAbsent,
+  expectEpisodeRefused,
+  exportVerifyReport,
+  plantEverywhere,
+  withoutEpisode,
+} from "./plant.ts";
 import {
   ANT_KEY,
   BOB,
@@ -55,13 +64,17 @@ function battery(value: string, words: readonly string[]): void {
     let message = "";
     expect(() => {
       try {
-        exportProofBundle(plantEverywhere(value), NO_CTX);
+        exportProofBundle(withoutEpisode(plantEverywhere(value)), NO_CTX);
       } catch (e) {
         message = String(e);
         throw e;
       }
     }).toThrow(/PROOF_REDACTION/);
     expectAbsent(message, words, "export refusal");
+    // With its episode, #542's validator refuses first (fail closed either way).
+    const withEpisode = plantEverywhere(value);
+    if (withEpisode.episode !== undefined && validateEpisode(withEpisode.episode).length > 0)
+      expectEpisodeRefused(withEpisode, words);
   } else exportVerifyReport(plantEverywhere(value), words);
   const honest = exportProofBundle(sampleRun(), NO_CTX);
   // A forger writes the raw value where the summary digest is.

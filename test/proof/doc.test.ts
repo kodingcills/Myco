@@ -112,7 +112,10 @@ describe("docs/architecture/replayable-proof.md matches the code", () => {
 
   it("the episode is referenced, never redefined, and the TO FILE items are present", () => {
     expect(DOC).toContain("container over the attempt's canonical episode record");
-    expect(DOC).toContain("TO FILE: switch to #542's `Episode` type");
+    // #542 is merged: the episode is bound to its validator, and the doc says so.
+    expect(DOC).toContain("**#542 (`myco.episode/1`), merged.**");
+    expect(DOC).toContain("validated as a whole by #542's own `validateEpisode`");
+    expect(DOC).not.toContain("#542 (`myco.episode/1`), open");
     expect(DOC).toContain("TO FILE: consolidate this scanner and #542's episode cleanliness scan");
     expect(DOC).toContain("#528's `handoffs` field");
   });

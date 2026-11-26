@@ -3,6 +3,7 @@
  * field of a run, and check that no planted word reaches any output byte.
  */
 import { expect } from "vitest";
+import { validateEpisode } from "../../src/episode/validate.ts";
 import type { RedactionContext } from "../../src/proof/backstop.ts";
 import {
   exportProofBundle,
@@ -87,12 +88,14 @@ export function plantEverywhere(value: string): ProofRunInput {
     },
   ];
   // The episode holds the value in the projected fields AND in free-text fields it never
-  // hands to the bundle (instruction, actions, claim).
+  // hands to the bundle (instruction, actions). `agentClaim` is an enum in #542's schema, so
+  // it is not planted. An episode #542's `validateEpisode` refuses (a path in a projected id
+  // field, an absolute path anywhere) must be refused by the export: `exportVerifyReport`
+  // checks that refusal, then carries on with the run alone.
   const base = sampleEpisode();
   const { episodeId: _id, ...rest } = base;
   const episodeBody: Record<string, unknown> = {
     ...rest,
-    agentClaim: value,
     task: { ...(rest.task as object), id: value, instruction: value },
     harness: { ...(rest.harness as object), arm: value },
     actions: {
@@ -102,7 +105,7 @@ export function plantEverywhere(value: string): ProofRunInput {
     },
     provenance: { ...(rest.provenance as object), runId: value, trialKey: null },
   };
-  const episode = { ...episodeBody, episodeId: episodeIdOf(episodeBody) };
+  const episode = { ...episodeBody, episodeId: episodeIdOf(episodeBody as never) };
   return { runId: value, taskId: value, arm: value, simulated: true, steps, episode };
 }
 
@@ -124,10 +127,15 @@ export function expectAbsent(text: string, words: readonly string[], where: stri
  * output byte may carry a planted word. Returns the outputs for further checks.
  */
 export function exportVerifyReport(
-  run: ProofRunInput,
+  planted: ProofRunInput,
   words: readonly string[],
   ctx: RedactionContext = NO_CTX,
 ): { bundle: ProofBundle; text: string; html: string } {
+  let run = planted;
+  if (run.episode !== undefined && validateEpisode(run.episode).length > 0) {
+    expectEpisodeRefused(run, words, ctx);
+    run = withoutEpisode(run);
+  }
   const bundle = exportProofBundle(run, ctx);
   const text = serializeProofBundle(bundle);
   const result = verifyProofBundle(text, {
@@ -141,4 +149,30 @@ export function exportVerifyReport(
   expectAbsent(JSON.stringify(result), words, "verify result");
   expectAbsent(html, words, "report");
   return { bundle, text, html };
+}
+
+/** The run without its episode reference. */
+export function withoutEpisode(run: ProofRunInput): ProofRunInput {
+  const { episode: _e, ...rest } = run;
+  return rest;
+}
+
+/**
+ * The run's episode is one #542's `validateEpisode` refuses: the export must refuse it
+ * (`PROOF_EPISODE`, naming #542's codes only) and the refusal must carry no planted word.
+ */
+export function expectEpisodeRefused(
+  run: ProofRunInput,
+  words: readonly string[],
+  ctx: RedactionContext = NO_CTX,
+): void {
+  let message: string | null = null;
+  try {
+    exportProofBundle(run, ctx);
+  } catch (e) {
+    message = String(e);
+  }
+  if (message === null) expect.fail("the export accepted an episode #542 refuses");
+  expect(message).toMatch(/PROOF_EPISODE: the episode is not a valid myco\.episode\/1/);
+  expectAbsent(message, words, "episode refusal");
 }

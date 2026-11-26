@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { JsonSchema } from "../../schemas/validate.ts";
+import { validateEpisode } from "../../src/episode/validate.ts";
+import { findLeaks } from "../../src/proof/backstop.ts";
 import {
   BODY_SCHEMAS,
   BUNDLE_SCHEMA,
@@ -34,10 +36,12 @@ import {
   closedMediaType,
   FIELD_TREATMENT,
   hashedId,
+  MEDIA_TYPES,
   TEXT_DIGEST_TAG,
   textDigest,
   textRef,
 } from "../../src/proof/closed.ts";
+import { renderProofReport } from "../../src/proof/report.ts";
 import { buildLedger, clone, NO_CTX, rechain, sampleLedger, sampleRun } from "./fixture.ts";
 import { makePathFuzzer } from "./path-fuzz.ts";
 import { expectAbsent, exportVerifyReport, PLANTED_FIELDS, plantEverywhere } from "./plant.ts";
@@ -72,8 +76,10 @@ describe("property: an arbitrary host path planted in every input field never re
         throw new Error(`fuzz case ${i} (${p.shape}): ${(e as Error).message}`);
       }
     }
-    // The generator really covers the template space.
+    // The generator really covers the template space, including the lower-case relative
+    // `dir/<user>` class a `type/subtype` grammar admits (#553 r1 D1).
     expect(shapes.size).toBeGreaterThanOrEqual(30);
+    expect([...shapes].filter((t) => t.startsWith("relative ")).length).toBeGreaterThanOrEqual(3);
   });
 
   it(`${FUZZ_CLI_CASES} of them through the real CLI: no planted word in any file or stdout/stderr`, () => {
@@ -82,6 +88,9 @@ describe("property: an arbitrary host path planted in every input field never re
     for (let i = 0; i < FUZZ_CLI_CASES; i++) {
       const p = next();
       const run = plantEverywhere(p.value);
+      // An episode #542 refuses: export with it must fail closed with no echo (then the run
+      // is exported alone). One #542 accepts is exported and cross-checked.
+      const episodeValid = run.episode !== undefined && validateEpisode(run.episode).length === 0;
       const runPath = join(dir, `RUN-${i}.json`);
       const episodePath = join(dir, `EP-${i}.json`);
       writeFileSync(episodePath, JSON.stringify(run.episode));
@@ -96,8 +105,14 @@ describe("property: an arbitrary host path planted in every input field never re
       const html = join(dir, `r-${i}.html`);
       const outs: string[] = [];
       const io = { out: (t: string) => outs.push(t), err: (t: string) => outs.push(t) };
+      if (!episodeValid) {
+        expect(main(["export", runPath, "--out", bundle], io), `case ${i} refused`).not.toBe(0);
+        expect(outs.join(""), `case ${i}`).toContain("PROOF_EPISODE");
+        writeFileSync(runPath, JSON.stringify({ ...rest, steps }));
+      }
       expect(main(["export", runPath, "--out", bundle], io), `case ${i} export`).toBe(0);
-      expect(main(["verify", bundle, "--episode", episodePath], io), `case ${i} verify`).toBe(0);
+      const verifyArgs = episodeValid ? ["--episode", episodePath] : [];
+      expect(main(["verify", bundle, ...verifyArgs], io), `case ${i} verify`).toBe(0);
       expect(main(["report", bundle, "--out", html], io), `case ${i} report`).toBe(0);
       expectAbsent(readFileSync(bundle, "utf8"), p.words, `case ${i} bundle file`);
       expectAbsent(readFileSync(html, "utf8"), p.words, `case ${i} report file`);
@@ -175,10 +190,15 @@ function stringsOf(v: unknown): string[] {
   return [];
 }
 
+/** No `type/subtype` grammar here: a media type is closed only as a `MEDIA_TYPES` member (D1). */
 const CLOSED_STRING =
-  /^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|[0-9a-f]{64}|[A-Z][A-Z0-9_]{1,63}|[a-z]+\/[a-z0-9.+-]{1,64}|hcu\+shell|myco\.[a-z0-9.-]+\/v?\d+)$/;
+  /^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|[0-9a-f]{64}|[A-Z][A-Z0-9_]{1,63}|hcu\+shell|myco\.[a-z0-9.-]+\/v?\d+)$/;
 function isClosedString(s: string): boolean {
-  return CLOSED_STRING.test(s) || s.startsWith("Tamper-evident, not tamper-proof:");
+  return (
+    CLOSED_STRING.test(s) ||
+    (MEDIA_TYPES as readonly string[]).includes(s) ||
+    s.startsWith("Tamper-evident, not tamper-proof:")
+  );
 }
 
 describe("the closed schema has no free-text string anywhere", () => {
@@ -250,6 +270,11 @@ describe("the structural replacements themselves", () => {
     const v = "C:\\Users\\Qzfirst Qzlast\\x";
     expect(textRef(v)).toEqual({ sha256: textDigest(v), chars: v.length });
     expect(textDigest(v)).toMatch(/^[0-9a-f]{64}$/);
+    // Known-answer vector (r1 nit V3): sha256 over `myco.proof.text/1`, a NUL byte, the raw
+    // value. Computed outside this code (`printf 'myco.proof.text/1\0/home/qzjdoe/x' | sha256sum`).
+    expect(textDigest("/home/qzjdoe/x")).toBe(
+      "31b4394e7d31bb13a3399df1a02e522088b8c4a173e16c2f0ed8fca68438e503",
+    );
     expect(textDigest(v)).toBe(textDigest(`${v}`));
     expect(textDigest(v)).not.toBe(textDigest(`${v} `));
     expect(TEXT_DIGEST_TAG).toBe("myco.proof.text/1");
@@ -272,6 +297,61 @@ describe("the structural replacements themselves", () => {
     expect(closedArm("hcu+shell")).toBe("hcu+shell");
     expect(closedArm("myco-gate")).toBe("myco-gate");
     expect(closedArm("my arm")).toBe(hashedId("my arm"));
+  });
+
+  it("D1: the media type is a CLOSED ENUM, not a grammar (pinned list; adding one is reviewed)", () => {
+    expect([...MEDIA_TYPES]).toEqual([
+      "application/json",
+      "image/jpeg",
+      "image/png",
+      "text/csv",
+      "text/plain",
+    ]);
+    for (const m of MEDIA_TYPES) expect(closedMediaType(m)).toBe(m);
+    // Media-type-shaped values outside the enum are hashed too: shape alone never passes.
+    for (const m of ["text/html", "application/xml", "TEXT/CSV", "text/csv ", "text/csv\n"])
+      expect(closedMediaType(m)).toBe(hashedId(m));
+  });
+
+  it("D1: a lower-case relative dir/<user> path in mediaType never reaches an output, with no help from the backstop", () => {
+    const values = [
+      "srv/qzjdoe",
+      "mnt/qz.doe",
+      "data/qzjdoe-1",
+      "opt/qzjdoe/out.csv",
+      "text/qzjdoe",
+      "image/qzjdoe",
+    ];
+    for (const v of values) {
+      // The backstop does not recognise these: only the allowlist keeps them out.
+      expect(findLeaks(v), v).toEqual([]);
+      const run = sampleRun();
+      const steps = run.steps.map((st) => (st.kind === "evidence" ? { ...st, mediaType: v } : st));
+      const bundle = exportProofBundle({ ...run, steps }, NO_CTX);
+      const text = serializeProofBundle(bundle);
+      const evidence = bundle.records.filter((r) => r.kind === "evidence");
+      expect(evidence.length).toBeGreaterThan(0);
+      for (const r of evidence)
+        expect((r.body as { mediaType: string }).mediaType).toBe(hashedId(v));
+      expect(text.toLowerCase()).not.toContain("qzjdoe");
+      expect(text.toLowerCase()).not.toContain("qz.doe");
+      const result = verifyProofBundle(text);
+      expect(result.ok).toBe(true);
+      const html = renderProofReport(bundle, result, NO_CTX);
+      expect(html.toLowerCase()).not.toContain("qzjdoe");
+      expect(html.toLowerCase()).not.toContain("qz.doe");
+    }
+  });
+
+  it("D1: a forged bundle carrying a raw dir/<user> mediaType is refused by the schema", () => {
+    const honest = exportProofBundle(sampleRun(), NO_CTX);
+    const f = clone(honest);
+    const ev = f.records.find((r) => r.kind === "evidence");
+    if (ev === undefined) throw new Error("fixture");
+    (ev.body as { mediaType: string }).mediaType = "srv/qzjdoe";
+    const r = verifyProofBundle(serializeProofBundle(rechain(f)));
+    expect(r.errors.map((e) => e.code)).toContain("PROOF_SCHEMA");
+    expect(JSON.stringify(r)).not.toContain("qzjdoe");
   });
 
   it("a planted path in a hashed id still binds: the verdict's runId equals the run's", () => {

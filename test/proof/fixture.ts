@@ -166,7 +166,7 @@ export function sampleEpisode(over: Record<string, unknown> = {}): Record<string
     },
     ...over,
   };
-  return { ...body, episodeId: episodeIdOf(body) };
+  return { ...body, episodeId: episodeIdOf(body as never) };
 }
 
 /** `sampleRun()` with its episode attached. */

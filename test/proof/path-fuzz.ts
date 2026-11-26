@@ -84,6 +84,16 @@ export function makePathFuzzer(seed: number): () => FuzzPath {
         parts.push(pick([word(), "Desktop", "out.csv", "AppData", "x y"]));
       return parts.join(sepOne());
     };
+    // A lower-case planted word (#553 r1 D1: a relative `dir/<user>` path in lower case is
+    // what a `type/subtype`-shaped grammar admits). Still "qz" + g-z letters: never in a digest.
+    const lower = () => {
+      const w = word().toLowerCase();
+      words.pop();
+      words.push(w);
+      return w;
+    };
+    const relDir = () =>
+      pick(["srv", "mnt", "data", "home", "users", "opt", "var", "text", "image"]);
     const s = sepOne;
     const srv = () => pick([word(), `${word()}.local`, "10.0.0.5", `${word()}@SSL@443`]);
     const templates: ReadonlyArray<readonly [string, () => string]> = [
@@ -130,6 +140,13 @@ export function makePathFuzzer(seed: number): () => FuzzPath {
         () => `Microsoft.PowerShell.Core\\FileSystem::\\\\${srv()}\\${user()}`,
       ],
       ["env assignment", () => `USERPROFILE=C:\\Users\\${user()}`],
+      ["relative 2-segment lower", () => `${relDir()}/${lower()}`],
+      ["relative 2-segment dotted", () => `${relDir()}/${lower()}.${lower()}`],
+      ["relative 2-segment suffixed", () => `${relDir()}/${lower()}-${1 + int(9)}`],
+      [
+        "relative 3-segment lower",
+        () => `${relDir()}/${lower()}/${pick(["out.csv", "x", lower()])}`,
+      ],
     ];
     const [tName, make] = pick(templates);
     let value = make();

@@ -9,7 +9,10 @@ string from the agent, the host or the harness) is replaced **structurally** bef
 written, by its sha256, never by pattern-based redaction. The pattern scanner stays only as a
 backstop that fails the export closed if it ever fires. #533 and #548 used all their rounds on
 one leak class because a denylist scanner kept missing new path forms; under the allowlist a
-path never reaches the bundle whatever its form, because no string field can hold it.
+path never reaches the bundle whatever its form, because no string field can hold it: every
+string field is an enum, a strict id grammar with no separator, a digest, or a hash. (Round 1
+of #553 found one exception, `evidence.mediaType`, whose `type/subtype` grammar admitted a
+lower-case relative `dir/<user>` path; it is now a closed enum, see below.)
 
 ## What it is
 
@@ -20,8 +23,13 @@ the one canonical record of an attempt. The bundle's `run.episode` references th
 `episodeId` and sha256 (or is `null` for a run written before episodes exist), its `run` fields
 (`runId`, `taskId`, `arm`, `simulated`) are a projection of the episode's, and the rest is Q's
 own: the hash chain, evidence digests, the ledger anchor, and handoff and policy decisions.
-With `--episode E` the verifier recomputes the episode's id and digest and refuses any
-projected field that disagrees (`PROOF_EPISODE`). The digest is over the episode's canonical
+The episode is validated as a whole by #542's own `validateEpisode` (`src/episode/validate.ts`,
+called, not modified) before anything is projected from it: the export and the verifier refuse
+an episode #542 refuses (`PROOF_EPISODE`, naming #542's issue codes only, never a path or a
+value), so an invalid episode is never reported as cross-checked. The id and digest are #542's
+`episodeIdOf` and `canonicalJson`. With `--episode E` the verifier also recomputes the
+episode's id and digest and refuses any projected field that disagrees (`PROOF_EPISODE`);
+`episodeChecked` is true only when the episode is valid and every check passed. The digest is over the episode's canonical
 JSON without the trailing newline #542's store appends, not over the file's bytes. Without
 `--episode`, a bundle that references an episode still verifies, but the reference is **not
 cross-checked**: the result says `episodeChecked: false` and the report says "reference only:
@@ -85,7 +93,7 @@ value from the bundle. It refuses (exit 1, a code per error) on:
 | `PROOF_EVIDENCE` / `PROOF_EVIDENCE_DIGEST` / `PROOF_EVIDENCE_MISSING` | a duplicate id, an evidence path that escapes the evidence dir, an original file that changed or is missing |
 | `PROOF_VERDICT` | `accepted` without `verified`, `verified` without `ORACLE_PASS` or `ORACLE_PASS` without `verified`, a verdict for another task or run, or citing evidence not recorded before it |
 | `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_HEAD` / `PROOF_LEDGER_ANCHOR` | an edited, reordered or truncated ledger; a ledger event that fails #518's own check (`verifyAttemptLedger`: unknown field, unknown arm, a start with an outcome, an end without one, a harness class without `harness-fault` or the reverse); a ledger with no anchor or an anchor with no ledger; an anchor that does not point at exactly one start and one end of the run's trial, for the run's task and arm |
-| `PROOF_EPISODE` | with `--episode`: an episode whose id is not its content hash, that differs from `run.episode`, whose run id, task, arm, simulated flag or trial key differs from the bundle's, or an episode given for a bundle that references none |
+| `PROOF_EPISODE` | with `--episode`: an episode #542's `validateEpisode` refuses (codes only), an episode whose id is not its content hash, that differs from `run.episode`, whose run id, task, arm, simulated flag or trial key differs from the bundle's, or an episode given for a bundle that references none |
 | `PROOF_ANCHOR_MISMATCH` | a head differs from the one given out of band |
 | `PROOF_REDACTION` | the backstop fires: a parsed string value or key carries something it recognises (a secret shape, a host-path shape, a registered literal or account name), in any decoded form |
 
@@ -140,7 +148,7 @@ The exporter does not look at what a string says. It looks at which field it is 
 | id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, else **hashed**: `h-` + its digest (itself a closed id, so equality is still checked) | `run.runId`, `run.taskId`, `action.tool`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId`, `policy.subject` |
 | arm | as is when it is `myco-gate` or `hcu+shell`, else as an id | `run.arm` |
 | code | as is when it matches `^[A-Z][A-Z0-9_]{1,63}$`, else **hashed** | `policy.reasonCode` |
-| media type | as is when it matches `type/subtype`, else **hashed** | `evidence.mediaType` |
+| media type | as is only when it is a member of the **closed enum** `MEDIA_TYPES` (`application/json`, `image/jpeg`, `image/png`, `text/csv`, `text/plain`), else **hashed**; never a grammar (a `type/subtype` grammar admits `srv/<user>`) | `evidence.mediaType` |
 | text | **always hashed**: a `TextRef` `{sha256, chars}`, the digest of the raw value and its length | `action.summary`, `handoff.summary`, `evidence.path` |
 | artifact | **never written**: its sha256 and byte count only | `evidence.content` |
 | ledger | verbatim, because every field is closed under #518's schema (ids in #518's grammar `^[A-Za-z0-9._:-]{1,128}$`, enums, integers, digests); a ledger that fails #518's check is refused | `ledger.lines`; `ledger.trialKey` (the input) is only used to find the trial: the anchor's trial key is taken from the ledger, never from the input |
@@ -192,8 +200,9 @@ an unlisted URL scheme, a spaced POSIX folder outside the home roots, obfuscated
 longer matter for export, because no path reaches a bundle in the first place; tests pin that
 those forms never reach a bundle.
 
-TO FILE: consolidate this scanner and #542's episode cleanliness scan onto one canonical
-scanner once #542 merges, with a parity test over the probe corpus.
+TO FILE: consolidate this scanner and #542's episode cleanliness scan (now on main, and run
+on every episode through `validateEpisode`) onto one canonical scanner, with a parity test
+over the probe corpus.
 
 ### The report
 
@@ -210,11 +219,12 @@ passes the result of verifying the same bytes.
 
 ## Dependencies
 
-- **#542 (`myco.episode/1`), open.** `src/proof/episode-ref.ts` mirrors only the episode
-  fields Q reads (`EPISODE_FIELDS_USED`, pinned by `test/proof/episode-ref.test.ts`) and #542's
-  id rule, and does not import #542. TO FILE: switch to #542's `Episode` type, `episodeIdOf` and
-  `validateEpisode` once it merges; then make `run.episode` required and project the action and
-  evidence records from the episode's actions and observations instead of `RUN.json` steps.
+- **#542 (`myco.episode/1`), merged.** `src/proof/episode-ref.ts` imports #542's `Episode`
+  type, `episodeIdOf`, `canonicalJson` and `validateEpisode` (`src/episode/`, not modified) and
+  projects only the fields Q reads (`EPISODE_FIELDS_USED`, pinned by
+  `test/proof/episode-ref.test.ts`, with a parity test against main's `buildEpisode`). TO FILE:
+  make `run.episode` required and project the action and evidence records from the episode's
+  actions and observations instead of `RUN.json` steps.
 - **#518 (attempt ledger), merged.** `src/proof/ledger.ts` calls #518's own
   `verifyAttemptLedger` and `eventSha256` (`src/m2/attempt-ledger.ts`, not modified), and
   replaces its messages with structural ones (#518's schema messages may quote a value).
