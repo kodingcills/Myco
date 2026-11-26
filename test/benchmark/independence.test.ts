@@ -57,8 +57,10 @@ describe("benchmark grader independence (TIF-267)", () => {
   });
 
   it("never names a gate module or a process launcher", () => {
+    // `state/` and `myco-state`: capability track I's live-state tools (src/state/) are an
+    // agent aid, never a grading input.
     const forbidden =
-      /uno-verifier|filepersist|tasks\/(intent|fixture|calc-record-edit)|core\/verify|child_process|soffice|execFile|spawn\(/;
+      /uno-verifier|filepersist|tasks\/(intent|fixture|calc-record-edit)|core\/verify|child_process|soffice|execFile|spawn\(|state\/|myco-state/;
     for (const file of graderFiles) {
       const code = readFileSync(file, "utf8").replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, "");
       expect(code, relative(ROOT, file)).not.toMatch(forbidden);
