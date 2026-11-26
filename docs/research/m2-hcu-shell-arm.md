@@ -86,12 +86,31 @@ to the benchmark:
    captured), the task's intent, and the column types. Paths must be relative, as the
    grader requires, so no host path reaches a row.
 
-`test/baseline/hcu-shell/e2e.test.ts` runs the whole chain on fakes. It runs the 30 pinned
-tasks, captures a Calc-shaped `.xlsx` per trial, and writes `arm.jsonl` and `requests.jsonl`.
-It then runs TIF-267's own grader CLI over the requests and its `checkBenchmark` with
-`--expect hcu+shell=30` semantics. The check reports no errors, and TIF-267's grader agrees
-with the arm's own judge on every trial. A second run drops one capture, and that accepted
-DONE comes back `ungradable` and counted.
+**Rows are keyed to the published task set fc-v1** (`benchmark/false-completion/fc-v1/`,
+TIF-267 part 2). The live harness reads a task row from the bundle and passes it to
+`armRowForTask` and `gradeRequestForTask`. These take `taskSetVersion`, `taskId`,
+`faultClass`, the fixture file and the column types from the task, so no placeholder reaches
+a row.
+
+They also refuse a trial that did not run the task, before any row is written. The trial's
+fixture hash, its instruction hash and its params must equal the task's `fixtureSha256`,
+`instructionSha256` and intent. The published `make-requests` CLI pins the same hashes, so a
+mislabelled row is caught twice. The arm still imports nothing from `src/benchmark/` and
+reads no files: the task row is the caller's.
+
+`test/baseline/hcu-shell/e2e.test.ts` runs the whole chain on fakes, over the **fc-v1 demo
+subset** (30 tasks, R2's paired count, including 3 invalid-target tasks).
+
+- **Per trial:** it captures a Calc-shaped `.xlsx` and writes `arm.jsonl` and `requests.jsonl`.
+- **Both request paths agree:** the published `make-requests` CLI produces byte-identical
+  requests from the same arm rows and documents.
+- **Grading:** TIF-267's grader CLI and `checkBenchmark` report no errors. The grader agrees
+  with the arm's own judge on every satisfiable task, and fails every document for the
+  unsatisfiable ones.
+- **Dropped capture:** a second run drops one capture, and that accepted DONE comes back
+  `ungradable` and counted.
+- **Fault classes:** recorded on each row, not injected. The fake guest has no faults; M2-12
+  applies them live.
 
 The arm's modules import nothing from `src/benchmark/`, which the import-boundary test
 enforces, so the arm shares no code with the grader that scores it.
@@ -160,7 +179,7 @@ rest are R2's parity requirements.
 | Independently observed save snapshots | **Closed (offline)** | The saved `.xlsx` is captured on the host per trial and graded by TIF-267's grader from its bytes. The arm's own judge observation also stays on the internal row as a cross-check. The live capture over the guest agent is M2-12's |
 | Trusted live evidence ingestion | **Remaining** | TIF-125 (attestation binding). Until it lands, rows are descriptive |
 | Coordinated VM time | **Remaining** | M2-12 |
-| Same task set | **Closed** | The arm runs the 30 pinned rows in `src/baseline/sweep-v3.json`, the set row 7 used. The fake end-to-end test pins index and params against it |
+| Same task set | **Closed** | Benchmark rows use the published fc-v1 task set (R2: the 30-task demo subset), keyed by `taskSetVersion`/`taskId` and pinned per row by fixture hash, instruction hash and intent (`armRowForTask`). The fake end-to-end test runs the demo subset through `make-requests` |
 | Same fixtures | **Closed** | `fixtureSha256` on every row (r6 had none; `docs/m1-scorecard.md` row 7, limit 2) |
 | Same instruction | **Closed** | `taskText(params)`, the same text C1 used, recorded per row. The prompt is C1's with one phrase swapped ("screenshot only" becomes "screenshot and a read-only shell") and one sentence added. `decision.test.ts` pins both |
 | Same output ceiling | **Closed** | 1024 (#340), recorded per row |
@@ -225,8 +244,10 @@ every call. The "ceiling" row is every call at the raised input bound with full 
 - An R2 compare script in the style of `row7-compare.py`: pair the two arms' rows by task,
   over TIF-267's grade rows (M2-11 / M2-12). The check already gives per-arm counts, but not
   the paired sign test.
-- A `taskSetVersion` and `taskId` scheme shared with TIF-267's task set (its PR 2). The fake
-  run uses `m1-sweep-v3` and `calc-<index>` as placeholders.
+- The live harness (M2-12) must read each task row from `benchmark/false-completion/fc-v1/`,
+  apply its `faultClass`, and pass the row to `armRowForTask` and `gradeRequestForTask`.
+  For an invalid-target task it needs a stand-in target for the arm's internal judge, since
+  `groundTruth` refuses one. The fake test uses B2.
 - A reset snapshot with HCU installed, plus its reset timing (M2-01).
 - A defined step and time budget for the gate arm (M2-02), so the parity rows above can be
   closed against it.

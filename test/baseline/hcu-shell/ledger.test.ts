@@ -1,11 +1,15 @@
 /** TIF-268 x TIF-267: the hcu+shell arm's shared-ledger rows and grade requests. */
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { benchmarkArmRowSchema } from "../../../schemas/benchmark-ledger.ts";
 import { validateSchema } from "../../../schemas/validate.ts";
 import {
+  armRowForTask,
   benchmarkArmRow,
   benchmarkClaim,
   gradeRequest,
+  gradeRequestForTask,
+  type PublishedTask,
 } from "../../../src/baseline/hcu-shell/ledger.ts";
 import {
   type HcuShellRow,
@@ -209,5 +213,71 @@ describe("captured document on the internal row", () => {
     expect(isHcuShellRow({ ...row, persistedSha256: "abc" })).toBe(false);
     expect(isHcuShellRow({ ...row, persistedSha256: null })).toBe(false);
     expect(isHcuShellRow({ ...row, plannerPaid: undefined })).toBe(false);
+  });
+});
+
+describe("rows keyed to a published fc-v1 task (TIF-267 part 2)", () => {
+  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  async function taskFor() {
+    const row = await run(honest("C3", "9733"));
+    const task: PublishedTask = {
+      taskSetVersion: "fc-v1",
+      taskId: "fc-v1-042",
+      faultClass: "focus-change",
+      fixtureSha256: row.fixtureSha256,
+      instructionSha256: sha(row.instruction),
+      fixtureFile: `fixtures/${row.fixtureSha256}.csv`,
+      intent: { rowKey: "EMP-0023", column: "qty", newValue: "9733" },
+      columnTypes: { id: "key", name: "text", qty: "integer", joined: "date", salary: "currency" },
+    };
+    return { row, task };
+  }
+
+  it("takes taskSetVersion, taskId, faultClass, fixture file and column types from the task", async () => {
+    const { row, task } = await taskFor();
+    const armRow = armRowForTask(row, task, { trialKey: "k-0", plannerModelId: "stub" });
+    expect(armRow).toMatchObject({
+      taskSetVersion: "fc-v1",
+      taskId: "fc-v1-042",
+      faultClass: "focus-change",
+      fixtureSha256: task.fixtureSha256,
+      instructionSha256: task.instructionSha256,
+    });
+    expect(validateSchema(armRow, benchmarkArmRowSchema)).toEqual([]);
+    const req = gradeRequestForTask(row, task, { trialKey: "k-0", persistedFile: "docs/k-0.xlsx" });
+    expect(req).toMatchObject({
+      taskId: "fc-v1-042",
+      fixtureFile: task.fixtureFile,
+      columnTypes: task.columnTypes,
+      intent: task.intent,
+    });
+  });
+
+  it.each([
+    ["another fixture", { fixtureSha256: "0".repeat(64) }, /fixture .* is not the task's/],
+    [
+      "another instruction",
+      { instructionSha256: "1".repeat(64) },
+      /instruction hash .* is not the task's/,
+    ],
+    [
+      "another intent",
+      { intent: { rowKey: "EMP-0024", column: "qty", newValue: "9733" } },
+      /params .* are not the task's intent/,
+    ],
+    [
+      "another value",
+      { intent: { rowKey: "EMP-0023", column: "qty", newValue: "9734" } },
+      /are not the task's intent/,
+    ],
+  ])("refuses a trial that ran %s", async (_label, change, pattern) => {
+    const { row, task } = await taskFor();
+    const other = { ...task, ...change } as PublishedTask;
+    expect(() => armRowForTask(row, other, { trialKey: "k-0", plannerModelId: "stub" })).toThrow(
+      pattern,
+    );
+    expect(() =>
+      gradeRequestForTask(row, other, { trialKey: "k-0", persistedFile: "docs/k-0.xlsx" }),
+    ).toThrow(pattern);
   });
 });
