@@ -99,21 +99,21 @@ const FILES: Record<string, string> = {
 /** Doc ref, then what the cited line range must contain. */
 const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   // Threat model and authz design
-  ["gate.ts:430-433", /export interface Assignment/],
-  ["gate.ts:439", /readonly assignment: Assignment/],
-  ["gate.ts:448", /readonly onDecision\?/],
+  ["gate.ts:465-468", /export interface Assignment/],
+  ["gate.ts:474", /readonly assignment: Assignment/],
+  ["gate.ts:483", /readonly onDecision\?/],
   ["api.ts:126-135", /export interface GateRequest/],
   ["api.ts:340-402", /export function parseGateRequest/],
   ["mcp-server.ts:180-206", /export function serveStdio/],
-  ["gate.ts:178", /STATE_FILE_LIMIT = 16 \* 1024 \* 1024/],
-  ["gate.ts:377", /opened\.size > STATE_FILE_LIMIT/],
+  ["gate.ts:213", /STATE_FILE_LIMIT = 16 \* 1024 \* 1024/],
+  ["gate.ts:412", /opened\.size > STATE_FILE_LIMIT/],
   ["api.ts:151-191", /export interface GateResult/],
   ["mcp-server.ts:100-106", /structuredContent: result/],
   ["cli.ts:110-146", /function operatorGate/],
   ["api.ts:356-363", /unknown request field\(s\): \$\{unknown\.join/],
   ["sealed.ts:148-165", /export function createSealedGate/],
-  ["gate.ts:712-721", /taskId !== assignment\.taskId \|\| runId !== assignment\.runId/],
-  ["gate.ts:676-690", /await config\.onDecision\(result\)/],
+  ["gate.ts:747-756", /taskId !== assignment\.taskId \|\| runId !== assignment\.runId/],
+  ["gate.ts:711-725", /await config\.onDecision\(result\)/],
   // D4: CLI scope
   ["cli.ts:79-92", /function parseFlags\(argv/],
   ["cli.ts:176-186", /gate\.check\(\{\s*taskId: task,\s*runId: run/],
@@ -135,7 +135,7 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   // H-04
   ["corrections.ts:241-246", /chars\.slice\(0, CORRECTION_VALUE_LIMIT\)/],
   // H-05
-  ["gate.ts:878-890", /async check\(raw\)/],
+  ["gate.ts:941-953", /async check\(raw\)/],
   ["cli.ts:194-198", /serveStdio\(gate, io\.stdin, io\.stdout/],
   ["multistep.ts:71", /retryBudget: 0 \| 1/],
   ["multistep.ts:111-112", /retryBudget must be 0 or 1/],
@@ -149,8 +149,8 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   // H-07, H-08
   ["api.ts:314-319", /\^\[A-Za-z0-9\]\[A-Za-z0-9\._-\]\{0,127\}\$/],
   ["sealed.ts:102", /openForTrial\(vault, binding, runId\)/],
-  ["gate.ts:615", /const assignment = \{ \.\.\.config\.assignment \}/],
-  ["gate.ts:342-352", /const segments = \[runId, \.\.\.stateFile\.split/],
+  ["gate.ts:650", /const assignment = \{ \.\.\.config\.assignment \}/],
+  ["gate.ts:377-387", /const segments = \[runId, \.\.\.stateFile\.split/],
   ["vault.ts:322", /existsSync\(dir\)/],
   // H-09
   ["mcp-server.ts:195-198", /code: -32603/],
@@ -165,23 +165,23 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["gate.test.ts:654-750", /function spyReader[\s\S]*invalid gate assignment/],
   ["sealed-gate.test.ts:334-395", /naming an earlier honest trial is ASSIGNMENT_MISMATCH/],
   ["vault.ts:328-331", /oracle source \$\{path\} is not absolute/],
-  ["gate.ts:435-464", /export interface GateConfig/],
+  ["gate.ts:470-499", /export interface GateConfig/],
   // H-16
-  ["gate.ts:867", /reasons: \[\.\.\.valid\.reasons\]/],
-  ["families.ts:144-145", /TARGET_MISMATCH: cell \$\{ref\}/],
+  ["gate.ts:930", /reasons: \[\.\.\.valid\.reasons\]/],
+  ["families.ts:160-161", /TARGET_MISMATCH: cell \$\{ref\}/],
   ["calc-document.ts:162-164", /DOCUMENT_COLLATERAL: \$\{collateral\.length\}/],
-  ["families.ts:230", /persisted as \$\{JSON\.stringify\(newValue\)\}/],
-  ["gate.ts:741", /could not look: \$\{read\.detail\}/],
-  ["gate.ts:283-290", /descriptor path check/],
-  ["gate.ts:837", /could not look: \$\{corrupt\.message\}/],
-  ["gate.ts:162-166", /must name paths relative to the run/],
-  ["gate.ts:283-286", /const shown = actual\.startsWith\(`\$\{realRoot\}\/`\)/],
+  ["families.ts:246", /persisted as \$\{JSON\.stringify\(newValue\)\}/],
+  ["gate.ts:776", /could not look: \$\{read\.detail\}/],
+  ["gate.ts:318-325", /descriptor path check/],
+  ["gate.ts:900", /could not look: \$\{corrupt\.message\}/],
+  ["gate.ts:197-201", /must name paths relative to the run/],
+  ["gate.ts:318-321", /const shown = actual\.startsWith\(`\$\{realRoot\}\/`\)/],
   ["reasons.ts:22", /export function errorCode\(error: unknown\): string/],
-  ["gate.ts:369", /open failed: \$\{errorCode\(error\)\}/],
-  ["gate.ts:405", /read failed: \$\{errorCode\(error\)\}/],
-  ["gate.ts:626-634", /function diagnose\([\s\S]*errorCode\(error\)/],
+  ["gate.ts:404", /open failed: \$\{errorCode\(error\)\}/],
+  ["gate.ts:440", /read failed: \$\{errorCode\(error\)\}/],
+  ["gate.ts:661-669", /function diagnose\([\s\S]*errorCode\(error\)/],
   // H-17
-  ["gate.ts:780-786", /kind: "sealed-fixture",[\s\S]*path: sealed\.file,[\s\S]*sha256: digest/],
+  ["gate.ts:839-845", /kind: "sealed-fixture",[\s\S]*path: sealed\.file,[\s\S]*sha256: digest/],
 ];
 
 /**
@@ -191,7 +191,7 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
  * the ends makes any shift, or a range that grew or shrank, fail here.
  */
 const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
-  ["gate.ts:430-433", "export interface Assignment {", "}"],
+  ["gate.ts:465-468", "export interface Assignment {", "}"],
   ["api.ts:126-135", "export interface GateRequest {", "}"],
   ["api.ts:340-402", "export function parseGateRequest(raw: unknown): ParsedRequest {", "}"],
   ["mcp-server.ts:180-206", "export function serveStdio(", "}"],
@@ -200,9 +200,9 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
   ["cli.ts:110-146", "function operatorGate(flags: Flags, stderr: Writable) {", "}"],
   ["api.ts:356-363", "const unknown = keys.filter((key) => !ALLOWED_FIELDS.has(key));", "};"],
   ["sealed.ts:148-165", "export function createSealedGate(config: SealedGateConfig): Gate {", "}"],
-  ["gate.ts:712-721", "if (taskId !== assignment.taskId || runId !== assignment.runId) {", "}"],
+  ["gate.ts:747-756", "if (taskId !== assignment.taskId || runId !== assignment.runId) {", "}"],
   [
-    "gate.ts:676-690",
+    "gate.ts:711-725",
     "if (!config.onDecision) return result;",
     '`decision log write failed: $\u007bdiagnose("decision-log", error)}`,',
   ],
@@ -220,7 +220,7 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
     "const truncated = chars.length > CORRECTION_VALUE_LIMIT;",
     "...(truncated ? { observedTruncated: true as const } : {}),",
   ],
-  ["gate.ts:878-890", "async check(raw) {", "},"],
+  ["gate.ts:941-953", "async check(raw) {", "},"],
   ["cli.ts:194-198", 'case "mcp": {', "}"],
   [
     "multistep.ts:111-112",
@@ -235,7 +235,7 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
   ["sealed.ts:117-133", "const { persisted } = opened.inputs;", "return { ok: true, bytes };"],
   ["api.ts:314-319", "const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;", "}"],
   [
-    "gate.ts:342-352",
+    "gate.ts:377-387",
     "export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): EvidenceReader {",
     "const first = walk(absoluteRoot, segments, where, hooks.beforeLstat);",
   ],
@@ -273,9 +273,9 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
     "for (const path of input.oracle.sourceFiles) {",
     "sources[path] = sha256(readFileSync(path));",
   ],
-  ["gate.ts:435-464", "export interface GateConfig {", "}"],
+  ["gate.ts:470-499", "export interface GateConfig {", "}"],
   [
-    "families.ts:144-145",
+    "families.ts:160-161",
     "function targetReason(ref: string, edit: CellEdit): string {",
     "return `TARGET_MISMATCH: cell $\u007bref} ($\u007bwhere(edit)}) does not hold the requested value`;",
   ],
@@ -285,26 +285,26 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
     "}",
   ],
   [
-    "gate.ts:283-290",
+    "gate.ts:318-325",
     "// Report the path relative to the root: reasons reach the agent, host paths need not.",
     "detail: `$\u007bwhere}: the opened file is at $\u007bshown}, not at $\u007bwhere} (descriptor path check)`,",
   ],
   [
-    "gate.ts:162-166",
+    "gate.ts:197-201",
     '* `detail` of a failed outcome reaches the agent (as "could not look: <detail>"), so it',
     "*/",
   ],
   [
-    "gate.ts:283-286",
+    "gate.ts:318-321",
     "// Report the path relative to the root: reasons reach the agent, host paths need not.",
     ': "a path outside the evidence root";',
   ],
   [
-    "gate.ts:626-634",
+    "gate.ts:661-669",
     'function diagnose(stage: GateDiagnostic["stage"], error: unknown): string {',
     "}",
   ],
-  ["gate.ts:780-786", "const digest = sha256(got.bytes);", "bytes: got.bytes.length,"],
+  ["gate.ts:839-845", "const digest = sha256(got.bytes);", "bytes: got.bytes.length,"],
 ];
 
 function lineAt(ref: string, which: "first" | "last"): string {
@@ -477,7 +477,7 @@ describe("the security review names no merged PR as open or pending (D1')", () =
 
   it("H-16's 'no host path' cites the enforcement, not only the rule's doc comment", () => {
     const h16 = FLAT.slice(FLAT.indexOf("### H-16:"), FLAT.indexOf("### H-17:"));
-    expect(h16).toContain("strips the evidence root before it names a path (`gate.ts:283-286`)");
+    expect(h16).toContain("strips the evidence root before it names a path (`gate.ts:318-321`)");
     expect(h16).toContain("`errorCode`, `reasons.ts:22`");
   });
 
@@ -541,7 +541,7 @@ describe("the security review records what round 1 missed", () => {
     expect(FLAT).not.toContain("about 250 times");
     expect(FLAT).toContain("about 43 times the largest valid request");
     expect(FLAT).toContain(
-      "`ASSIGNMENT_MISMATCH` (`gate.ts:712-721`) also echoes the agent's task and run ids",
+      "`ASSIGNMENT_MISMATCH` (`gate.ts:747-756`) also echoes the agent's task and run ids",
     );
   });
 });
