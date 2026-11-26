@@ -27,6 +27,7 @@ import {
   readPack,
   SIGN_TEST_UNDERPOWERED,
 } from "../src/m2/evidence.ts";
+import { packProvenanceErrors } from "../src/m2/provenance.ts";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const args = process.argv.slice(2);
@@ -78,10 +79,19 @@ function validateRuns(runsDir: string, expect: number) {
   return { ok: out.status === 0, detail: `validate-live exit ${out.status}: ${tail}` };
 }
 
-const packs = dirs.map((dir) => ({
-  pack: relative(ROOT, dir) || ".",
-  result: checkPack(readPack(dir, validateRuns)),
-}));
+const packs = dirs.map((dir) => {
+  const input = readPack(dir, validateRuns);
+  const result = checkPack(input);
+  // Provenance (src/m2/provenance.ts): simulated rows are never evidence, whatever R1 says.
+  const provenance = packProvenanceErrors(dir, input.arm).map((e) => `provenance: ${e}`);
+  return {
+    pack: relative(ROOT, dir) || ".",
+    result:
+      provenance.length === 0
+        ? result
+        : { ...result, ok: false, errors: [...result.errors, ...provenance] },
+  };
+});
 process.stdout.write(`${JSON.stringify({ packs }, null, 2)}\n`);
 for (const p of packs)
   for (const e of p.result.errors) process.stderr.write(`ERROR ${p.pack}: ${e}\n`);
