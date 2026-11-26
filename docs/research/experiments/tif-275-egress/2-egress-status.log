@@ -1,0 +1,3 @@
+utm isolate-from-host: true
+running guest netdev: restricted (restrict=on)
+guest-egress: running guest is restricted (netdev has restrict=on); egress closed, inbound ssh forward only

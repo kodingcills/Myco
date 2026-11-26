@@ -1,0 +1,20 @@
+$ scripts/guest-egress.sh verify   (round 3: exact argv via KERN_PROCARGS2)
+guest-egress: egress closed: one restricted user netdev, no guestfwd, hostfwd exactly tcp:127.0.0.1:2222-:22; UTM config matches
+exit=0
+
+$ python3 -I scripts/guest_egress_check.py argv | facts (elements: count, any with whitespace, -nodefaults, chardev/serial/object/monitor values)
+argv elements: 104
+elements containing whitespace: 0
+-nodefaults as its own element: True
+-chardev spiceport,name=org.qemu.monitor.qmp.0,id=org.qemu.monitor.qmp
+-mon chardev=org.qemu.monitor.qmp,mode=control
+-netdev user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22
+-chardev pty,id=term0
+-serial chardev:term0
+-chardev spicevmc,name=usbredir,id=usbredirchardev0
+-chardev spicevmc,name=usbredir,id=usbredirchardev1
+-chardev spicevmc,name=usbredir,id=usbredirchardev2
+-chardev spiceport,name=org.qemu.guest_agent.0,id=org.qemu.guest_agent
+-chardev spicevmc,id=vdagent,debug=0,name=vdagent
+-chardev spiceport,name=org.spice-space.webdav.0,id=charchannel1
+-chardev socket,id=chrtpm0,path=6C6414A1-9449-4E30-9503-F3F6726C8FFE.swtpm
