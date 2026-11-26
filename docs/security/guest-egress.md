@@ -67,14 +67,64 @@ This choice over the alternatives:
 - `scripts/reset-trial-vm.sh` runs `scripts/guest-egress.sh verify` after the boot gate and
   before calling the guest ready, on **every** reset. The reset is the entry point of every
   trial and every deploy.
-- `verify` passes only on positive evidence: exactly one running guest process, identified
-  by argv[0] (`QEMULauncher` or a qemu binary), whose `-netdev` is a `user` netdev with
-  `restrict=on` as a whole comma-separated option. Every other case fails the reset:
-  - no guest, or two guests;
-  - an unreadable process table;
-  - `restrict=off`, or a missing option;
-  - the string embedded inside another option;
-  - a different netdev type.
+- The deploy (`agent/bootstrap/deploy-to-vm.sh`) runs the same `verify` before anything
+  touches the guest. It refuses outright under `MYCO_GUEST_EGRESS=open`, so the agent's token
+  never enters a guest whose egress is not proven closed, even after a maintenance reset or
+  a guest started by hand.
+- `verify` refuses every configuration listed below, and accepts UTM's default launch with
+  the allowlisted netdev. It is **not** yet a complete allowlist: three known gaps (D7–D9,
+  "Known open gaps" below) still pass. It checks two sources, and both must match:
+  - **The live QEMU command line, read exactly.** `scripts/guest_egress_check.py` reads each
+    candidate process's argv from the kernel (`sysctl` `KERN_PROCARGS2`), not from `ps`.
+    `ps` joins argv with spaces, so `-name "x -netdev user,…,restrict=on"` would look like a
+    real netdev while QEMU added its default, unrestricted NIC (round 3, D6). Only `argc`
+    strings are decoded. Normally that is argv alone, but an empty argv[0] shifts the
+    environment block into them (gap D9).
+    - **Process:** exactly one guest process, identified by argv[0] (`QEMULauncher` running a
+      qemu binary, or a qemu binary).
+    - **Shape:** no argv element may contain whitespace, and `-nodefaults` must be present as
+      its own element. Without it QEMU adds a default NIC.
+    - **Network options:** every `-netdev`, `-nic` and `-net` is parsed, single- and
+      double-dash. There must be exactly one `-netdev` and no `-nic` or `-net`.
+      `-readconfig`, `-set`, `-qmp`, `-monitor` and `-gdb` are refused.
+    - **The netdev:** it must be `user`, with only `id`, `restrict` and `hostfwd`, so a
+      `guestfwd` or any other option is refused. Every `restrict` must be `on`. The `hostfwd`
+      set must be exactly `{tcp:127.0.0.1:2222-:22}`.
+    - **Filters on the netdev, comma form only** (round 3, D5). A `-object filter-*`
+      (redirector, mirror, dump, …) attaches before slirp and can tunnel past `restrict=on`.
+      The **comma-separated** form (`filter-redirector,…` or `type=filter-…,…`) is refused,
+      and so is any comma-form `-object` naming a netdev, and any `netdev=` reference other
+      than the single NIC `-device`'s. The **JSON** form of `-object` is not parsed and
+      passes (gap D7).
+    - **No host-network channel** (round 3, D5). Chardevs are limited to the ones UTM's
+      default launch uses, confirmed on the live guest on 2026-11-26: `spiceport`,
+      `spicevmc`, `pty`, and the swtpm unix socket `socket,id=chrtpm0,path=<VM-UUID>.swtpm`.
+      Anything else is refused: `socket` with `host=` or `port=`, `udp`, another unix
+      socket. `-serial` and `-parallel` may only be `chardev:<id>` or `none`, so `tcp:`,
+      `udp:` and `telnet:` are refused. That also covers a `virtserialport` on a host socket,
+      whose chardev is refused.
+  - **UTM's configuration.** There must be exactly one NIC, in emulated mode, with "isolate
+    from host" on and exactly one port forward: TCP `127.0.0.1:2222` → guest `:22`. This is
+    compared as one exact string.
+
+  These inputs fail closed:
+  - an unreadable process list, an unreadable UTM, and a process whose argv cannot be read
+    for a fixture run;
+  - a malformed or truncated procargs buffer;
+  - an option without `=`, an escaped comma, a `-netdev=` form, and a `-netdev` with no
+    value.
+
+  A JSON-form `-object` is not among them: it is not parsed and passes (gap D7).
+
+  `test/guest-egress.test.ts` has a negative case for each rule listed above, fed fixed
+  `KERN_PROCARGS2` byte buffers. A mutation that removes each of those rules fails at least
+  one test (PR #482, rounds 2–3).
+- **What `verify` cannot see.** It checks what QEMU was started with and what UTM is
+  configured to start. Two things are outside it:
+  - Changes made at run time through a QMP monitor. UTM's own QMP is a SPICE port, not a
+    host socket. `-qmp`, `-monitor` and `-gdb` are refused, but `-qmp-pretty` and
+    `--qmp-pretty` are not (gap D8).
+  - Anything inside QEMU or UTM themselves.
 - The UTM setting is a persistent VM property, not something each reset applies. If anyone
   clears it, in the GUI or with `guest-egress.sh allow`, the next reset refuses the guest
   instead of trusting it.
@@ -84,19 +134,37 @@ This choice over the alternatives:
   requirement), then read back both the flag and the SSH port forward. If the forward
   changed, they fail.
 
+## Known open gaps (TIF-275 follow-up, Linear pending)
+
+Found by the round-3 verifier on PR #482 (`55af502e`). Under the review cap, #482 shipped
+what passed, and these gaps are fixed separately. **The follow-up must merge before any real
+data or credentials touch the guest.** Until then, `verify` proves only the rules listed
+above, not that the guest is safe against a deliberately crafted QEMU command line. None of
+the three gaps is present on today's guest: its live argv
+(`docs/research/experiments/tif-275-egress/10-round3-verify-live.txt`) has no `-object`,
+no `-qmp-pretty` and a non-empty argv[0]. But `verify` would not catch one if it were added.
+
+| Gap | What passes `verify` | Effect |
+|---|---|---|
+| **D7** | A JSON-form `-object` (`{"qom-type":"filter-redirector","netdev":"net0",…}` or `filter-mirror`) on `net0`, pointed at a `pty` or `spiceport` chardev. QEMU 8.2.2 accepts it | Guest packets copied or redirected past slirp's `restrict=on` |
+| **D8** | `-qmp-pretty` / `--qmp-pretty` with any backend | A QMP monitor that can change the network at run time |
+| **D9** (low) | An empty argv[0] | The environment block shifts into the decoded argv, and `guest_egress_check.py argv` prints it |
+
+All three need a non-default QEMU or UTM launch, for example UTM's custom QEMU arguments.
+
 ## Evidence
 
 `docs/research/experiments/tif-275-egress/`: probes before and after, the live netdev, a
 reset with the check, a deploy with offline wheels, `session_info`, the guest's Python
 imports, a refused guest-side `pip download`, and a mock-transport run. Host-side tests:
 `test/guest-egress.test.ts`, `test/reset-snapshot-allowlist.test.ts` (egress cases) and
-`test/deploy-copy-retry.test.ts` (wheel cases).
+`test/deploy-copy-retry.test.ts` (wheel cases, and the deploy's egress refusal).
 
 ## Residual risks and limits
 
-- **The inbound forward is the remaining surface.** It binds host `127.0.0.1` only, so the
-  LAN cannot reach the guest, but any local process on the host can try SSH. The guest is
-  key-only.
+- **The inbound forward is the remaining surface.** `verify` requires it to bind host
+  `127.0.0.1` only, on every reset and deploy, so the LAN cannot reach the guest. Any local
+  process on the host can still try SSH. The guest is key-only.
 - **What a host-side agent sends to the guest is out of scope.** A guest that a host-side
   agent drives can still receive data the host sends it. This control limits what the
   guest can send **out**.
@@ -104,6 +172,7 @@ imports, a refused guest-side `pip download`, and a mock-transport run. Host-sid
   directory share and clipboard sharing are SPICE channels, not IP, so `restrict=on` does
   not cover them. Trials don't use them. Whether the guest has the SPICE tools that would
   activate them was not checked, so disabling both in UTM is a follow-up.
-- **IPv6 was not probed separately.** slirp's `restrict=on` applies to all guest traffic.
+- **IPv6 was not probed.** QEMU documents `restrict=on` as isolating the guest from all
+  outside traffic, but no IPv6 target is in the probe. Adding one is a follow-up.
 - **The Windows clock no longer syncs over NTP.** The reset's clock resync over `ssh`
   already covers trials.

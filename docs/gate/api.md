@@ -163,6 +163,49 @@ across trials would have to, which is why the API does not allow it: build one g
 trial. `reasons` is for people and may change wording. `reasonCodes` is the stable,
 machine-readable explanation.
 
+### Agent-facing reasons never carry host paths or raw error messages
+
+Everything in a `GateResult` reaches the agent (the MCP tool result's `structuredContent`
+and text, and `check --json`). So no reason carries an absolute host path (the evidence
+root as given, resolved or real; the audit-log path; any other operator path) or a raw
+error message, which can contain one. When something throws, the reason carries only a
+short code: the error's errno-style `code` (`ENOENT`, `EACCES`) if it has one, else its
+class name (`TypeError`, `SyntaxError`), else `error` (`errorCode` in
+`src/gate/reasons.ts`). A `code` is used only if it matches `^[A-Z][A-Z0-9_]{0,63}$`
+(upper case, a leading letter, at most 64 characters), and a `name` only if it matches
+`^[A-Za-z][A-Za-z0-9_]{0,63}$`; anything else, including a value whose getter throws, is
+ignored, and the message is never used. The gate-level reasons are:
+
+| Reason | Example |
+|---|---|
+| A reader threw or rejected | `could not look: reader threw: EACCES` |
+| The oracle threw | `oracle threw: TypeError` |
+| The decision log could not be written | `decision log write failed: ENOENT` |
+| The gate itself errored (defensive; no known path reaches it) | `gate error: Error` |
+| The todo-items store does not parse | `could not look: store does not parse (SyntaxError)` |
+| The file reader failed (#478) | `could not look: r1/.myco-todo.json: open failed: EACCES` |
+
+A reader may return its `ReadOutcome` directly instead of a promise: the gate wraps the
+call in `Promise.resolve().then(...)`, so a synchronous return is accepted and a
+synchronous throw is a reader error (`reader threw`). Either way, `verified` still follows
+only an oracle pass over the bytes the reader returned.
+
+**Where operators find the full error.** `GateConfig.onDiagnostic` is called with
+`{ stage, code, error }` (stage `reader`, `oracle`, `decision-log` or `gate`) and the raw
+error each time one of these happens; it is never shown to the agent, and a throw inside
+it is ignored. The CLI (`check` and `mcp`) writes each diagnostic to **stderr** as
+`myco-gate: <stage> error (<code>): <message>`. In `mcp` mode stdout is the agent's
+JSON-RPC channel and stderr is the operator's. The decision log (`--audit`) records the
+same path-free result the agent gets.
+
+**Rules for operator code that feeds reasons.** A custom `EvidenceReader`'s failure
+`detail`, a family's `StateCorruptError` message and an oracle's `reasons` are shown to the
+agent verbatim, so they must name paths only relative to the run and must not embed a raw
+error message. A family that wraps a parser error puts it in the `StateCorruptError`'s
+`cause`, which goes to `onDiagnostic`, not to the agent. The shipped reader and families
+follow this; `test/gate/reason-paths.test.ts` pins each case in process and through the
+MCP server.
+
 ## Verdicts and reason codes
 
 | Code | Verdict | Meaning |
@@ -225,6 +268,7 @@ const gate = createGate({
   reader: fileEvidenceReader("/srv/myco/evidence"), // operator-only
   assignment: { taskId: "df-s01", runId: "run-42" },// operator-only, required: this trial
   onDecision: async (result) => ledger.append(result), // optional; awaited; a throw or reject fails closed
+  onDiagnostic: (d) => log.error(d.stage, d.code, d.error), // optional; operator-only raw errors
 });
 const result = await gate.check({ taskId: "df-s01", runId: "run-42" }); // never throws
 if (result.accepted) { /* done */ }
@@ -245,6 +289,13 @@ id to the calling agent's own trial. Here, the operator binds the gate to that s
 (`assignment.runId`), so an `EvidenceReader` backed by the vault can hold that trial's
 receipt and serve only that run. The agent still sends only `taskId` and `runId`, and a
 different run id never reaches the reader.
+
+`src/integrity/gate.ts` (#470's seam) is not on the gate's path yet. Its reasons do not
+yet meet the rule in [Agent-facing reasons never carry host paths or raw error
+messages](#agent-facing-reasons-never-carry-host-paths-or-raw-error-messages) (its "oracle
+threw" uses the error message, and some vault violations carry `String(error)` or an
+absolute vault path), so a vault-backed reader must map its violations to path-free
+details before M2-12 wires it in.
 
 ## CLI
 

@@ -392,10 +392,28 @@ port 8765 through `ssh -L`, since the agent listens on the guest's loopback.
 | guest → internet (DNS, HTTP(S), NTP, Windows Update, activation, PyPI) | **nothing** | slirp `restrict=on` |
 | guest → host (`10.0.2.2`) | **nothing** | slirp `restrict=on` |
 
-**Every reset checks it.** After the boot gate, `scripts/reset-trial-vm.sh` runs
-`scripts/guest-egress.sh verify`. That passes only if the running QEMU's `-netdev` carries
-`restrict=on`, read from the live process. No guest, two guests, or a netdev without the option
-all **fail the reset**:
+**Every reset and every deploy checks it.** After the boot gate, `scripts/reset-trial-vm.sh`
+runs `scripts/guest-egress.sh verify`, and `agent/bootstrap/deploy-to-vm.sh` runs it before it
+copies anything. The deploy refuses outright under `MYCO_GUEST_EGRESS=open`. `verify` checks
+the following, and has three known open gaps (D7–D9, listed in
+`docs/security/guest-egress.md` under "Known open gaps"; their fix must merge before real data
+or credentials touch the guest):
+
+- **In the live QEMU process**, whose argv is read exactly from the kernel (`KERN_PROCARGS2`),
+  not from `ps`:
+  - no argv element may contain whitespace, and `-nodefaults` must be present;
+  - exactly one `-netdev`, of type `user`, with `restrict=on`, no `guestfwd` or other options,
+    and hostfwd rules of exactly `tcp:127.0.0.1:2222-:22`;
+  - no `-nic`, `-net`, `-readconfig`, `-set`, `-qmp`, `-monitor` or `-gdb` (`-qmp-pretty` is
+    not yet refused: D8);
+  - no comma-form `-object filter-*`, and no `netdev=` except the one NIC device's (a JSON-form
+    `-object` is not yet parsed: D7);
+  - chardevs only UTM's own (`spiceport`, `spicevmc`, `pty`, the swtpm unix socket), and
+    `-serial`/`-parallel` only `chardev:<id>`.
+- **In UTM:** one emulated NIC with "isolate from host" on and that one port forward.
+
+A second NIC, a `0.0.0.0` bind, an extra forward, a comma-form filter, a TCP chardev, and the
+unparseable inputs `docs/security/guest-egress.md` lists all fail. A failing reset prints:
 
 ```
 reset-trial-vm: guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)
@@ -404,9 +422,10 @@ reset-trial-vm: guest egress is not closed: refusing to call this guest ready. R
 Commands (each takes the VM lock where it changes anything; check `lsof` first as always):
 
 ```bash
-scripts/guest-egress.sh status   # read-only: UTM flag + the running guest's netdev
-scripts/guest-egress.sh verify   # exit 0 only if the running guest is restricted
+scripts/guest-egress.sh status   # read-only: UTM flag and network config, the live netdev check
+scripts/guest-egress.sh verify   # exit 0 only if the live guest AND UTM match the allowlist exactly
 scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
+python3 -I scripts/guest_egress_check.py argv   # the running guest's exact argv (argv only, no environment)
 scripts/guest-egress.sh deny     # set the flag (force-stops the VM; reset afterwards)
 scripts/guest-egress.sh allow    # clear it: base-image maintenance ONLY
 ```

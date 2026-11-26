@@ -24,6 +24,9 @@
 #                        use, then reused offline.
 #        MYCO_GUEST_WHEELS a directory that already holds the wheels: skips the
 #                        fetch entirely (tests, or an offline host).
+#        MYCO_EGRESS_SCRIPT the egress check (default: the repo's
+#                        scripts/guest-egress.sh); the deploy refuses unless it
+#                        verifies the guest's egress is closed (TIF-275).
 
 set -euo pipefail
 
@@ -75,6 +78,17 @@ if [ -e "$TOKEN_OUT" ] || [ -L "$TOKEN_OUT" ]; then
   fi
 fi
 HOST_TOKEN_TMP=""
+
+# The agent and its token go into the guest only if the guest's egress is
+# proven closed (TIF-275): a reset does check it, but a deploy can follow a
+# maintenance reset made with MYCO_GUEST_EGRESS=open, or a guest started by
+# hand. Checked before anything touches the guest.
+if [ "${MYCO_GUEST_EGRESS:-closed}" = open ]; then
+  die "MYCO_GUEST_EGRESS=open: refusing to deploy the agent and its token into a guest whose egress is not verified closed (TIF-275, docs/eval-runbook.md §3.4)"
+fi
+EGRESS_CHECK="${MYCO_EGRESS_SCRIPT:-$(cd "$(dirname "$0")/../.." && pwd)/scripts/guest-egress.sh}"
+[ -x "$EGRESS_CHECK" ] || die "egress check not found: '$EGRESS_CHECK'; refusing to deploy without proving the guest's egress is closed (TIF-275)"
+"$EGRESS_CHECK" verify >/dev/null || die "guest egress is not verified closed; refusing to deploy the agent and its token. Run scripts/guest-egress.sh verify for the reason (TIF-275, docs/eval-runbook.md §3.4)"
 
 # Fresh token per deploy. It never reaches argv, env, logs or stdout: it goes to
 # the guest through a mode-600 temp file, and to the host token file (TOKEN_OUT)

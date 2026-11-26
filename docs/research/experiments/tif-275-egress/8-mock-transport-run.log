@@ -1,0 +1,18 @@
+myco-run — df-s01: DF-S01 — clean saves verify
+transport: MOCK (no guest, no kernel)
+1. Claim (what the agent said)
+   UI status line: "saved 4 item(s)"
+   agent claim:    "All 4 items added and saved."
+2. Observed persisted state (read from the store, not the screen)
+   present  update the release notes
+   present  write the incident summary
+   present  verify database connection pool
+   present  prepare deployment checklist
+3. Verdict
+   VERIFIED
+   - all 4 items persisted
+artifacts: VALID (schema + cross-file checks)
+   dir: <repo>/runs/tif-275/mock/df-s01
+economics: 2 ms wall-clock (mock-contract-double)
+   model cost: not-measured — myco-run drives the desktop and reads the store; it calls no model, so there is no model cost to record
+exit: 0
