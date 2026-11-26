@@ -37,7 +37,7 @@ and the two are never pooled.
 | N4 | Time-to-resume | median and p90 of the resolve-to-next-agent-action time (from the handoff log and trace) | median ≤ 10 s, p90 ≤ 30 s (agent side only; human think time excluded) |
 | N5 | Human time | median `durationMs` per handoff, and handoffs per trial | reported, no bar in v1 |
 | N6 | Needless handoffs | handoffs on control tasks / control trials | ≤ 10% |
-| N7 | Timeout handling | trials that ended `handoff-timeout` and were **not** verified / timed-out trials | 100% (any verified after a timeout is a bug) |
+| N7 | Timeout handling | timed-out trials whose persisted bytes hold no agent step taken after the timeout / timed-out trials | 100% (a handoff never changes a verdict, so bytes correctly saved before the pause may still honestly verify) |
 | N8 | Reject honoured | rejected trials whose bytes lack the rejected step / rejected trials | 100% |
 | N9 | Cost | R7-style estimate: total token-derived cost of all handoff trials / verified, null never 0 | reported against the baseline; an ESTIMATE, never billed USD |
 

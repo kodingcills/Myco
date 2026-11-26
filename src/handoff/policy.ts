@@ -9,7 +9,9 @@
  *   if (decision.kind === "proceed") forward(action);
  *
  * `guardAction` first waits on the pause gate (no action is forwarded while any handoff is open,
- * whoever opened it), then asks the policy. A forced pause resolves to:
+ * whoever opened it), then asks the policy. If another handoff opened while the policy was
+ * evaluating, the forced pause is queued as its own handoff (the human sees the policy's note) and
+ * never takes the other handoff's outcome. A forced pause resolves to:
  *   approve  -> proceed (the action is forwarded as proposed)
  *   fixed-it -> skip    (the human did it; the agent is told to look again)
  *   reject   -> deny    (the action is not forwarded)

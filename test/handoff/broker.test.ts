@@ -7,6 +7,7 @@ import { handoffLogSchema } from "../../schemas/handoff.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import { HandoffBroker, type HandoffNotice, type HandoffStatus } from "../../src/handoff/broker.ts";
 import { memoryHandoffEventSink } from "../../src/handoff/events.ts";
+import { parseHandoffRows } from "../../src/handoff/evidence.ts";
 import { guardAction, type HandoffPolicy } from "../../src/handoff/policy.ts";
 import {
   assistanceOf,
@@ -127,6 +128,13 @@ describe("handoff broker: request, notify, resolve, resume", () => {
       ["uncertain", "read /etc/passwd", "NOTE_HOST_PATH"],
       ["uncertain", "/mnt/data/a.csv", "NOTE_HOST_PATH"],
       ["uncertain", "(/opt/app/x)", "NOTE_HOST_PATH"],
+      // Round-2 verifier nit 1: other punctuation boundaries.
+      ["uncertain", "see `/etc/passwd`", "NOTE_HOST_PATH"],
+      ["uncertain", "[/etc/passwd]", "NOTE_HOST_PATH"],
+      ["uncertain", "{/etc/shadow}", "NOTE_HOST_PATH"],
+      ["uncertain", "</opt/app/x>", "NOTE_HOST_PATH"],
+      ["uncertain", "a;/srv/data/x", "NOTE_HOST_PATH"],
+      ["uncertain", "a|/opt/a/b", "NOTE_HOST_PATH"],
       ["uncertain", "key sk-abcdefghijklmnop", "NOTE_SECRET_SHAPED"],
     ];
     for (const [reason, note, code] of cases)
@@ -187,6 +195,27 @@ describe("handoff broker: request, notify, resolve, resume", () => {
 });
 
 describe("handoff timeouts fail closed", () => {
+  it("the attempt is ended before any waiter or synchronous sink sees the timeout", async () => {
+    const clock = new FakeClock();
+    const seen: unknown[] = [];
+    let broker!: HandoffBroker;
+    broker = new HandoffBroker({
+      runId: "run-1",
+      taskId: "df-s01",
+      timeoutMs: 5_000,
+      clock,
+      events: {
+        append: (e) => {
+          if (e.event === "resolved") seen.push(broker.attemptEnd, broker.log().attemptEnd);
+        },
+      },
+    });
+    const agent = broker.agentChannel();
+    void agent.request({ reason: "blocked", note: "?" }, INF);
+    clock.advance(5_000);
+    expect(seen).toEqual(["handoff-timeout", "handoff-timeout"]);
+  });
+
   it("a handoff nobody answers ends the attempt as handoff-timeout, never approved", async () => {
     const s = setup(30_000);
     const call = s.agent.request({ reason: "needs-approval", note: "proceed?" }, INF);
@@ -329,15 +358,129 @@ describe("policy trigger (track O interface) and pause gate", () => {
     expect(passed).toHaveBeenCalledWith({ kind: "proceed", handoffId: null });
   });
 
-  it("a policy pause while a handoff is open joins it instead of opening a second", async () => {
+  it("B5: a policy pause while an agent handoff is open never takes the agent's answer", async () => {
     const s = setup();
-    const a = s.agent.request({ reason: "uncertain", note: "?" }, INF);
-    const p = s.policy.forcePause({ policyId: "o.x", reason: "needs-approval", note: "y" });
-    expect(s.operator.pending()).toHaveLength(1);
-    s.operator.resolve({ handoffId: "ho-1", outcome: "approve", via: "cli" });
-    expect((await a).status).toBe("resumed");
-    expect((await p).status).toBe("resumed");
-    expect(s.broker.log().entries).toHaveLength(1);
+    const a = s.agent.request({ reason: "uncertain", note: "which colour do you prefer?" }, INF);
+    const settled = vi.fn();
+    const p = s.policy
+      .forcePause({ policyId: "o.delete", reason: "needs-approval", note: "OK to delete?" })
+      .then((v) => {
+        settled(v);
+        return v;
+      });
+    // Recorded at once, with its own id, before any human sees it.
+    expect(s.events.events.map((e) => [e.event, e.handoffId])).toEqual([
+      ["requested", "ho-1"],
+      ["queued", "ho-2"],
+    ]);
+    expect(s.operator.pending().map((h) => h.handoffId)).toEqual(["ho-1"]);
+    const gate = vi.fn();
+    void s.policy.awaitClear().then(gate);
+    s.operator.resolve({ handoffId: "ho-1", outcome: "approve", note: "blue", via: "cli" });
+    expect(await a).toMatchObject({ status: "resumed", handoffId: "ho-1", humanNote: "blue" });
+    await flush();
+    // The agent's approval did not resolve the policy's pause, and the gate stayed shut.
+    expect(settled).not.toHaveBeenCalled();
+    expect(gate).not.toHaveBeenCalled();
+    const shown = s.operator.pending();
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toMatchObject({
+      handoffId: "ho-2",
+      source: "policy",
+      policyId: "o.delete",
+      note: "OK to delete?",
+    });
+    expect(s.notices.map((n) => n.handoffId)).toEqual(["ho-1", "ho-2"]);
+    s.operator.resolve({ handoffId: "ho-2", outcome: "reject", via: "cli" });
+    expect(await p).toEqual({ status: "rejected", handoffId: "ho-2", humanNote: null });
+    expect(await s.policy.awaitClear()).toBe("clear");
+    const log = s.broker.log();
+    expect(
+      log.entries.map((e) => [e.handoffId, e.source, e.policyId, e.note, e.resolution]),
+    ).toEqual([
+      ["ho-1", "agent", null, "which colour do you prefer?", "approve"],
+      ["ho-2", "policy", "o.delete", "OK to delete?", "reject"],
+    ]);
+    expect(validateSchema(log, handoffLogSchema)).toEqual([]);
+  });
+
+  it("B5: the race in guardAction (agent opens a handoff while the policy evaluates) fails closed", async () => {
+    const s = setup();
+    let release!: () => void;
+    const evaluating = new Promise<void>((r) => {
+      release = r;
+    });
+    const slowDelete: HandoffPolicy = {
+      id: "o.delete",
+      evaluate: async (action) => {
+        await evaluating;
+        return action.tool === "delete"
+          ? { policyId: "o.delete", reason: "needs-approval", note: "OK to delete?" }
+          : null;
+      },
+    };
+    const decided = vi.fn();
+    const d = guardAction(slowDelete, s.policy, { tool: "delete", args: {} }).then((v) => {
+      decided(v);
+      return v;
+    });
+    await flush();
+    void s.agent.request({ reason: "uncertain", note: "which colour do you prefer?" }, INF);
+    release();
+    await flush();
+    s.operator.resolve({ handoffId: "ho-1", outcome: "approve", note: "blue", via: "cli" });
+    await flush();
+    expect(decided).not.toHaveBeenCalled();
+    // Another action on the actuator path is held too: the policy's handoff is open.
+    const other = vi.fn();
+    void guardAction(slowDelete, s.policy, { tool: "type", args: {} }).then(other);
+    await flush();
+    expect(other).not.toHaveBeenCalled();
+    expect(s.operator.pending()[0]).toMatchObject({ handoffId: "ho-2", policyId: "o.delete" });
+    s.operator.resolve({ handoffId: "ho-2", outcome: "reject", via: "cli" });
+    expect(await d).toEqual({ kind: "deny", handoffId: "ho-2", code: "HUMAN_REJECTED" });
+  });
+
+  it("B5: queued policy pauses are recorded cancelled and end closed on timeout or close()", async () => {
+    const s = setup(5_000);
+    void s.agent.request({ reason: "blocked", note: "?" }, INF);
+    const p1 = s.policy.forcePause({ policyId: "o.a", reason: "needs-approval", note: "a" });
+    const p2 = s.policy.forcePause({ policyId: "o.b", reason: "uncertain", note: "b" });
+    s.clock.advance(5_000);
+    expect(await p1).toEqual({ status: "ended", code: "HANDOFF_TIMEOUT" });
+    expect(await p2).toEqual({ status: "ended", code: "HANDOFF_TIMEOUT" });
+    const log = s.broker.log();
+    expect(
+      log.entries.map((e) => [e.handoffId, e.source, e.policyId, e.resolution, e.resolvedBy]),
+    ).toEqual([
+      ["ho-1", "agent", null, "timeout", "host:timeout"],
+      ["ho-2", "policy", "o.a", "cancelled", "host:harness"],
+      ["ho-3", "policy", "o.b", "cancelled", "host:harness"],
+    ]);
+    expect(validateSchema(log, handoffLogSchema)).toEqual([]);
+    const row = { schema: "myco.handoff.trial/1", trialKey: "t1", log };
+    expect(parseHandoffRows([row]).errors).toEqual([]);
+    expect(parseHandoffRows([row]).byTrial.get("t1")).toBe("human-gated");
+    expect(s.operator.pending()).toEqual([]);
+    expect(s.operator.resolve({ handoffId: "ho-2", outcome: "approve", via: "cli" })).toEqual({
+      ok: false,
+      code: "ALREADY_RESOLVED",
+    });
+
+    const c = setup();
+    void c.agent.request({ reason: "blocked", note: "?" }, INF);
+    const q = c.policy.forcePause({ policyId: "o.c", reason: "needs-approval", note: "c" });
+    // A queued request cannot be resolved before it is shown.
+    expect(c.operator.resolve({ handoffId: "ho-2", outcome: "approve", via: "cli" })).toEqual({
+      ok: false,
+      code: "UNKNOWN_HANDOFF",
+    });
+    c.broker.close();
+    expect(await q).toEqual({ status: "ended", code: "HANDOFF_CANCELLED" });
+    expect(c.broker.log().entries.map((e) => [e.handoffId, e.resolution])).toEqual([
+      ["ho-1", "cancelled"],
+      ["ho-2", "cancelled"],
+    ]);
   });
 
   it("a pause-gate waiter pending at the deadline gets ended, never clear (fail closed)", async () => {

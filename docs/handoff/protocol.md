@@ -18,7 +18,7 @@ Source: `src/handoff/`. Operator CLI: `pnpm myco-handoff`. Security model:
 | Operator channel: list pending handoffs, resolve them. Issued **once** | the loopback operator endpoint | `operator-server.ts` |
 | Operator CLI | the human, on the host | `cli.ts`, `scripts/myco-handoff.ts` |
 | Notifier: terminal bell and line, desktop notification where available | the host | `notifier.ts` |
-| Event sink: `requested` / `resolved` / `attempt-ended` lines | the run directory (later #518's attempt ledger) | `events.ts` |
+| Event sink: `queued` / `requested` / `resolved` / `attempt-ended` lines | the run directory (later #518's attempt ledger) | `events.ts` |
 | Evidence guard: assisted and human-gated trials never count as unassisted R1 | the benchmark check | `evidence.ts` |
 
 `myco.gate/v1` is unchanged: its one tool still takes only `taskId`, `runId` and `claim`. The
@@ -71,8 +71,13 @@ open, whoever opened it. This holds for an actuator that calls `guardAction`; no
 it yet (that lands with track O and the live bridge). A pause-gate waiter pending when the
 handoff times out or the trial closes gets `ended`, never `clear`. Then it asks the policy. A forced pause resolves to `proceed`
 (approve), `skip` (fixed-it: the human did it), `deny` (reject), or `ended` (timeout or the
-trial closed). A policy that throws denies the action. A policy pause while a handoff is
-already open joins that handoff. The record names the policy (`source: "policy"`, `policyId`).
+trial closed). A policy that throws denies the action. A policy pause while another handoff
+is open never joins it (that human answered a different question). It is recorded at once
+(a `queued` event with its own `handoffId`) and opens as its own handoff, with the policy's
+note, as soon as the open one is resolved by a human; the pause gate stays shut in between. If
+the open handoff times out or the trial closes first, every queued policy request is recorded
+`cancelled` (`host:harness`) and its caller gets `ended`, so nothing is forwarded. Every policy
+request therefore has its own entry naming the policy (`source: "policy"`, `policyId`).
 
 ## Human side: operator endpoint and CLI
 
@@ -142,9 +147,9 @@ The run record (`result.json`) has an optional `handoffs` field, `myco.handoff.l
 ```
 
 Trial events go to `handoff-events.jsonl` in the run directory as they happen (append-only, one line
-per `requested`, `resolved` and `attempt-ended`), so a crash mid-handoff still leaves the
-request on disk. Once #518 merges, the same events go through its attempt ledger
-(`attemptLedgerSink`, see TO FILE). For a benchmark ledger, one `myco.handoff.trial/1` row per
+per `queued`, `requested`, `resolved` and `attempt-ended`), so a crash mid-handoff still leaves the
+request on disk. Routing the same events through #518's attempt ledger (merged) is
+`attemptLedgerSink`, not yet wired (see TO FILE). For a benchmark ledger, one `myco.handoff.trial/1` row per
 trial (`{trialKey, log}`) sits in a `handoffs.jsonl` beside `arm.jsonl`.
 
 ## Assistance labels
@@ -163,12 +168,11 @@ also a ledger error, like a corrections-on row.
 
 ## TO FILE (Linear limit)
 
-- Wire `handoffEvidenceError` into `checkPack` / `readPack` (`src/m2/evidence.ts`) once #518
-  merges; it owns that file.
-- Implement `AttemptLedgerEventWriter` over `src/m2/attempt-ledger.ts` once #518 merges, and
+- Wire `handoffEvidenceError` into `checkPack` / `readPack` (`src/m2/evidence.ts`).
+- Implement `AttemptLedgerEventWriter` over `src/m2/attempt-ledger.ts` and
   switch the harness to `attemptLedgerSink`.
 - Add `--handoffs <file>` to `scripts/benchmark-check.ts` (calls `checkBenchmarkWithHandoffs`).
-- Watch-view panel and mount (lands with #513).
+- Mount `createOperatorHandler` and a handoff panel in the watch view (#513, merged).
 - A live bridge: a stdio `myco-handoff-mcp` process in the agent's launch plan that reaches the
   host broker's agent channel over its own agent-only socket (no operator verbs). This PR
   serves the agent channel in-process (mock path).

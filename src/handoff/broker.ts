@@ -12,8 +12,13 @@
  *                        endpoint takes it; a second call throws, so nothing else in the process
  *                        can obtain a resolve capability later.
  *
- * At most one handoff is pending at a time (a second agent request while one is pending is
- * refused with `HANDOFF_PENDING`; a policy pause while one is pending joins it). Every pending
+ * At most one handoff is pending at a time. A second agent request while one is pending is
+ * refused with `HANDOFF_PENDING`. A policy pause while one is pending is QUEUED as its own
+ * handoff (recorded at once with a `queued` event): it never inherits the open handoff's human
+ * outcome, because that human answered a different question. When the open handoff is resolved
+ * by a human, the next queued policy handoff opens before the pause gate clears, so no action is
+ * forwarded in between; when it ends any other way (timeout, close), every queued policy request
+ * is recorded `cancelled` and its waiter gets `ended`. Every pending
  * handoff has a deadline: when it passes, the handoff resolves `timeout`, the broker ENDS
  * (`attemptEnd: "handoff-timeout"`), and every later request or pause returns `ended`. A timeout
  * never approves anything (docs/handoff/security.md §5).
@@ -98,6 +103,20 @@ export type HandoffEvent =
       readonly note: string;
       readonly at: string;
       readonly deadlineAt: string;
+    }
+  | {
+      /** A policy pause arrived while another handoff was open: recorded now, opened later. */
+      readonly schema: "myco.handoff.event/1";
+      readonly event: "queued";
+      readonly runId: string;
+      readonly taskId: string;
+      readonly handoffId: string;
+      readonly source: "policy";
+      readonly policyId: string;
+      readonly reason: HandoffReason;
+      readonly note: string;
+      readonly behind: string;
+      readonly at: string;
     }
   | {
       readonly schema: "myco.handoff.event/1";
@@ -201,7 +220,8 @@ export interface PolicyPauseRequest {
 export interface PolicyTrigger {
   /**
    * Force a pause and wait for it to resolve (or time out). If a handoff is already pending, the
-   * policy joins it instead of opening a second one. Returns the final status, never `paused`.
+   * policy's pause is queued as its own handoff and opens once the pending one is resolved by a
+   * human; it never takes that handoff's outcome. Returns the final status, never `paused`.
    */
   forcePause(request: PolicyPauseRequest): Promise<HandoffStatus>;
 }
@@ -218,6 +238,13 @@ export interface PauseGate {
 export interface OperatorChannel {
   pending(): readonly PendingHandoff[];
   resolve(input: ResolveInput): ResolveResult;
+}
+
+interface QueuedPolicy {
+  readonly handoffId: string;
+  readonly request: PolicyPauseRequest;
+  readonly requestedAtMs: number;
+  readonly waiter: (status: HandoffStatus) => void;
 }
 
 interface Open {
@@ -265,6 +292,7 @@ export class HandoffBroker {
   private readonly entries: HandoffEntry[] = [];
   private readonly byId = new Map<string, HandoffEntry>();
   private open: Open | undefined;
+  private policyQueue: QueuedPolicy[] = [];
   private seq = 0;
   private ended: HandoffAttemptEnd = null;
   private closed = false;
@@ -352,16 +380,24 @@ export class HandoffBroker {
     return undefined;
   }
 
+  private nextId(): string {
+    this.seq += 1;
+    return `ho-${this.seq}`;
+  }
+
   private openHandoff(
     source: HandoffSource,
     policyId: string | null,
     reason: HandoffReason,
     note: string,
+    queued?: { readonly handoffId: string; readonly requestedAtMs: number },
   ): Open {
-    this.seq += 1;
-    const handoffId = `ho-${this.seq}`;
-    const now = this.clock.now();
-    const deadline = now + this.timeoutMs;
+    const handoffId = queued?.handoffId ?? this.nextId();
+    const openedAt = this.clock.now();
+    // A queued policy request keeps the time it was made; its deadline runs from when it opens
+    // (when a human can first see it).
+    const now = queued?.requestedAtMs ?? openedAt;
+    const deadline = openedAt + this.timeoutMs;
     const notice: PendingHandoff = {
       handoffId,
       runId: this.runId,
@@ -442,8 +478,62 @@ export class HandoffBroker {
       at: entry.resolvedAt,
     });
     for (const w of open.waiters) w(entry);
-    if (resolution !== "timeout" && resolution !== "cancelled") this.releaseClear("clear");
+    const human = resolution !== "timeout" && resolution !== "cancelled";
+    if (human && !this.closed && this.ended === null) {
+      const next = this.policyQueue.shift();
+      if (next) {
+        // The pause gate stays shut: the queued policy handoff opens before anything clears.
+        const r = next.request;
+        const opened = this.openHandoff("policy", r.policyId, r.reason, r.note, next);
+        opened.waiters.add((e) => next.waiter(statusOf(e)));
+        return entry;
+      }
+      this.releaseClear("clear");
+    } else if (!human) {
+      this.dropQueuedPolicies();
+    }
     return entry;
+  }
+
+  /**
+   * The attempt is over (timeout or close) with policy pauses still queued: none of them was
+   * shown to a human, so each is recorded `cancelled` by the host and its caller gets `ended`.
+   * Nothing is forwarded on any of them.
+   */
+  private dropQueuedPolicies(): void {
+    const queued = this.policyQueue;
+    this.policyQueue = [];
+    for (const q of queued) {
+      const now = this.clock.now();
+      const entry: HandoffEntry = {
+        handoffId: q.handoffId,
+        runId: this.runId,
+        taskId: this.taskId,
+        source: "policy",
+        policyId: q.request.policyId,
+        reason: q.request.reason,
+        note: q.request.note,
+        requestedAt: this.iso(q.requestedAtMs),
+        resolvedAt: this.iso(now),
+        durationMs: Math.max(0, now - q.requestedAtMs),
+        resolution: "cancelled",
+        resolvedBy: "host:harness",
+        operatorLabel: null,
+        humanNote: null,
+      };
+      this.entries.push(entry);
+      this.byId.set(entry.handoffId, entry);
+      this.emit({
+        schema: "myco.handoff.event/1",
+        event: "resolved",
+        runId: this.runId,
+        taskId: this.taskId,
+        handoffId: entry.handoffId,
+        entry,
+        at: entry.resolvedAt,
+      });
+      q.waiter(this.terminal() ?? statusOf(entry));
+    }
   }
 
   private timeout(handoffId: string): void {
@@ -535,8 +625,36 @@ export class HandoffBroker {
       return { status: "refused", code: "INVALID_REASON" };
     const noteCode = noteRejection(req.note, AGENT_NOTE_LIMIT);
     if (noteCode) return { status: "refused", code: noteCode };
-    const open = this.open ?? this.openHandoff("policy", req.policyId, req.reason, req.note);
-    return this.wait(open, Number.POSITIVE_INFINITY);
+    const pending = this.open;
+    if (!pending) {
+      const open = this.openHandoff("policy", req.policyId, req.reason, req.note);
+      return this.wait(open, Number.POSITIVE_INFINITY);
+    }
+    // Another handoff is open. Never join it: its human answered a different question. Record
+    // this request now and queue it as its own handoff.
+    const request: PolicyPauseRequest = {
+      policyId: req.policyId,
+      reason: req.reason,
+      note: req.note,
+    };
+    const handoffId = this.nextId();
+    const requestedAtMs = this.clock.now();
+    this.emit({
+      schema: "myco.handoff.event/1",
+      event: "queued",
+      runId: this.runId,
+      taskId: this.taskId,
+      handoffId,
+      source: "policy",
+      policyId: request.policyId,
+      reason: request.reason,
+      note: request.note,
+      behind: pending.notice.handoffId,
+      at: this.iso(requestedAtMs),
+    });
+    return new Promise((resolve) =>
+      this.policyQueue.push({ handoffId, request, requestedAtMs, waiter: resolve }),
+    );
   }
 
   private awaitClear(): Promise<"clear" | "ended"> {

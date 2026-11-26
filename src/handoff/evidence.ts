@@ -11,8 +11,8 @@
  *
  * Wiring: `checkBenchmarkWithHandoffs` wraps `checkBenchmark` (src/benchmark/check.ts, unchanged)
  * for a ledger that has a `handoffs.jsonl` beside it. The M2 pack check (src/m2/evidence.ts) is
- * owned by #518 and not touched here.
- * TO FILE (Linear limit): after #518 merges, read an optional `handoffs.jsonl` in `readPack` and
+ * not touched here.
+ * TO FILE (Linear limit): read an optional `handoffs.jsonl` in `readPack` and
  * apply `handoffEvidenceError` in `checkPack` for R1 packs; and pass `--handoffs` through
  * scripts/benchmark-check.ts.
  *
