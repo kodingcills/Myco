@@ -4,7 +4,7 @@
  * gap, a reordering, a truncated tail, and a self-declared harness fault the ledger never
  * recorded.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -485,7 +485,7 @@ describe("#518 round 1: double ends, non-R1 triggers, end-vs-start, torn lines, 
 });
 
 describe("the external anchor (lead ruling on #518 D3)", () => {
-  /** A fully rewritten history: g61's attempt removed and g61 dropped from the pack, re-chained. */
+  /** A fully rewritten history: g60's attempt removed and g60 dropped from the pack, re-chained. */
   const rewrite = () => {
     const trials = r1Trials();
     const honest = ledgerFor(trials);
@@ -565,7 +565,7 @@ describe("the external anchor (lead ruling on #518 D3)", () => {
   });
 });
 
-describe("the agent and the guest cannot reach the ledger or the anchor", () => {
+describe("the writer refuses the ledger or the anchor inside a forbidden root", () => {
   it("the writer refuses a ledger or an anchor inside a forbidden root (the agent's workspace, the guest share)", () => {
     const base = mkdtempSync(join(tmpdir(), "myco-reach-"));
     const agent = join(base, "agent");
@@ -597,5 +597,89 @@ describe("the agent and the guest cannot reach the ledger or the anchor", () => 
       .split("\n")
       .map((l) => JSON.parse(l));
     expect(lines).toEqual([{ schema: "myco.m2.attempt-anchor/1", ...w.head() }]);
+  });
+});
+
+describe("#518 round 2: symlinks, non-R1 anchors, duplicate heads, end-aligned heads, genesis", () => {
+  it("D4: a path through a symlink into a forbidden root is refused, even below not-yet-existing directories", () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-link-"));
+    const agent = join(base, "agent");
+    mkdirSync(agent);
+    // "outside" looks like a sibling of the agent root, but is a link into it.
+    symlinkSync(agent, join(base, "outside"));
+    expect(
+      () =>
+        new AttemptLedgerWriter(join(base, "outside", "new", "deeper", "attempts.jsonl"), {
+          forbiddenRoots: [agent],
+        }),
+    ).toThrow(/refusing to write attempts\.jsonl inside .*agent/);
+    expect(
+      () =>
+        new AttemptLedgerWriter(join(base, "attempts.jsonl"), {
+          anchorPath: join(base, "outside", "anchors", "p.jsonl"),
+          forbiddenRoots: [agent],
+        }),
+    ).toThrow(/refusing to write p\.jsonl inside .*agent/);
+  });
+
+  it("D5: a non-R1 pack with a ledger, a pin and a tampered anchor is refused", () => {
+    const trials = r1Trials();
+    const r3 = manifest({ rows: ["R3"], expectTrials: { "myco-gate": 100 } });
+    const { events, head } = ledgerFor(trials);
+    const anchor = anchorFor(events);
+    const tampered = anchor.map((a, i) => (i === 5 ? { ...a, headSha256: "e".repeat(64) } : a));
+    const r = checkPack({
+      ...input(trials, r3),
+      manifest: { ...r3, attempts: head },
+      attempts: events,
+      anchor: tampered,
+    });
+    expect(
+      has(
+        r,
+        /^attempt anchor: anchor line 5: the ledger's head at \d+ events is not the anchored one/,
+      ),
+    ).toBe(true);
+    // And the same pack with the honest anchor is clean.
+    const ok = checkPack({
+      ...input(trials, r3),
+      manifest: { ...r3, attempts: head },
+      attempts: events,
+      anchor,
+    });
+    expect(ok.errors.filter((e) => e.startsWith("attempt"))).toEqual([]);
+  });
+
+  it("D6: a duplicated anchor line is refused (counts strictly increase)", () => {
+    const base = input(r1Trials(), manifest());
+    const anchor = base.anchor as unknown[];
+    const r = checkPack({ ...base, anchor: [anchor[0], anchor[0], ...anchor.slice(1)] });
+    expect(has(r, /^attempt anchor: anchor line 1: 2 events does not follow 2/)).toBe(true);
+  });
+
+  it("nit 3: each anchored head falls on an attempt end, one per end", () => {
+    const base = input(r1Trials(), manifest());
+    const events = base.attempts as AttemptEvent[];
+    const anchor = base.anchor as { events: number; headSha256: string }[];
+    // A head anchored after a start event (not an end): its hash is right, its position is not.
+    const atStart = {
+      schema: "myco.m2.attempt-anchor/1",
+      events: 1,
+      headSha256: eventSha256(events[0]!),
+    };
+    const r = checkPack({ ...base, anchor: [atStart, ...anchor] });
+    expect(has(r, /anchor line 0: 1 events does not end on an attempt end/)).toBe(true);
+    expect(has(r, /the anchor has 101 heads, the ledger has 100 attempt ends/)).toBe(true);
+    // A skipped head (one fewer line than ends) is refused too.
+    const skipped = checkPack({ ...base, anchor: [...anchor.slice(0, 10), ...anchor.slice(11)] });
+    expect(has(skipped, /the anchor has 99 heads, the ledger has 100 attempt ends/)).toBe(true);
+  });
+
+  it("M8: the first event must name the genesis hash", () => {
+    const { events } = ledgerFor(r1Trials());
+    const first = { ...events[0]!, prevSha256: "1".repeat(64) };
+    expect(verifyAttemptLedger([first, ...events.slice(1)]).errors.join()).toMatch(
+      /attempt event 0: the hash chain breaks/,
+    );
   });
 });

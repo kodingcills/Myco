@@ -321,12 +321,22 @@ export interface AnchorEntry extends LedgerHead {
 /**
  * Where a pack's external anchor lives: `<pack parent>/attempt-anchors/<pack name>.jsonl`,
  * outside the pack directory (and not an `m2-*` directory, so it is not mistaken for a pack).
+ * The anchor belongs to its pack: the harness deletes (or moves) it together with the pack, and
+ * a pack copied elsewhere without its anchor is refused as R1 evidence ("anchor missing").
  */
 export function anchorPathFor(packDir: string): string {
   return join(dirname(resolve(packDir)), "attempt-anchors", `${basename(resolve(packDir))}.jsonl`);
 }
 
-/** Whether `target` resolves inside `root` (following symlinks where the paths exist). */
+/**
+ * Whether `target` resolves inside `root`, following symlinks on the longest existing prefix of
+ * each path (so a symlink into a forbidden root is caught even when the directories below it
+ * do not exist yet). Limits, stated: it compares realpaths, so a bind mount or a hard-linked
+ * directory that aliases a forbidden root under another path, a symlink created after this
+ * check, and case-insensitive aliases of the same directory on a case-insensitive file system
+ * are not detected. The harness is trusted (threat model above); this guards against a wrong
+ * path, not a hostile host.
+ */
 function isInside(target: string, root: string): boolean {
   const real = (p: string): string => {
     let at = resolve(p);
@@ -354,6 +364,9 @@ export function verifyAnchor(
 ): string[] {
   const errors: string[] = [];
   if (lines.length === 0) return ["the external attempt anchor is empty"];
+  const ends = events.filter((e) => e.kind === "end").length;
+  if (lines.length !== ends)
+    errors.push(`the anchor has ${lines.length} heads, the ledger has ${ends} attempt ends`);
   const headAt = [GENESIS_SHA256];
   for (const e of events) headAt.push(eventSha256(e));
   let last: AnchorEntry | undefined;
@@ -366,6 +379,8 @@ export function verifyAnchor(
     const a = lines[i] as AnchorEntry;
     if (last !== undefined && a.events <= last.events)
       errors.push(`anchor line ${i}: ${a.events} events does not follow ${last.events}`);
+    if (a.events <= events.length && events[a.events - 1]?.kind !== "end")
+      errors.push(`anchor line ${i}: ${a.events} events does not end on an attempt end`);
     if (a.events > events.length || headAt[a.events] !== a.headSha256)
       errors.push(
         `anchor line ${i}: the ledger's head at ${a.events} events is not the anchored one (rewritten or truncated)`,
