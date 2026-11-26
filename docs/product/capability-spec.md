@@ -36,9 +36,20 @@ learning, parallelism, and executing intent as code.
 - **The gate's verdict is never the measurement.** Where a capability uses the gate at runtime
   (K's corrections, M's store rule), the gate is part of the treatment, and the grader still
   grades the outcome.
-- **A verified task** in this spec is what R7 already uses: the agent claimed done and the
-  grader graded the captured document `pass`. A `pass` without a done claim is "correct, not
-  claimed" and is not verified. `ungradable` is never verified.
+- **A verified task** in this spec is R7's success (`src/m2/evidence.ts`:
+  `row.accepted && grade.status === "pass"`) applied to capability rows: the row is accepted
+  and the grader graded the captured document `pass`. What makes a row accepted depends on
+  whether the arm calls the gate (`expectedAccepted`, `src/benchmark/check.ts`):
+  - **Gate-less rows** (the §1.3 default, as in `hcu+shell`): accepted means the agent claimed
+    done, so a verified task is a done claim that the grader graded `pass`.
+  - **Gated rows** (both arms of K, M's learn phase, and any gate-present variant): accepted
+    means the agent claimed done **and** the gate's verdict was `verified`, so a verified task
+    is a done claim the gate verified and the grader graded `pass`. A grader `pass` that the
+    gate refuted or left uncertain is not verified; it is reported as "correct, not accepted".
+    The gate can only withhold a verified task, never grant one the grader did not pass.
+
+  A `pass` without a done claim is "correct, not claimed" and is not verified. `ungradable` is
+  never verified.
 - **Per-trial persisted-bytes capture** is the harness's, after the agent stops, exactly as
   for the existing arms (grading protocol §2). No capability tool runs or sees the capture.
 
@@ -74,7 +85,8 @@ tool in this spec, and each track's tests must pin them:
 
 - **The comparison arms are the existing baseline tool surfaces:**
   - **`C1` (screenshot-only):** the C1 vocabulary (`click`, `type_text`, `press_key`, plus the
-    screenshot each turn), `src/baseline/c1-trial.ts`.
+    screenshot each turn), defined in `src/baseline/c1.ts`; its step budget is
+    `STEP_BUDGET` in `src/baseline/c1-trial.ts`.
   - **`hcu+shell`:** C1's GUI channel plus the read-only structured shell
     (`docs/research/m2-hcu-shell-arm.md`).
 - **Same harness for both arms of a comparison.** All runs are on Claude Ultra (§4), so both
@@ -82,6 +94,10 @@ tool in this spec, and each track's tests must pin them:
   is exactly the baseline arm's plus the named capability tools. A tool-surface parity test
   pins this. Historic C1 rows (r6, a Messages-API loop) are context only: they are never
   paired with a capability row, because the harness differs.
+- **Prerequisite: an Ultra harness for the baseline arms.** On `main` today, C1 and
+  `hcu+shell` are raw Messages-API loops (`docs/research/m2-hcu-shell-arm.md`). Neither runs
+  on Ultra yet. No capability comparison can run until its baseline arm is ported to the Ultra
+  (Claude Code) harness (§5, dependencies).
 - **Same tasks, fixtures, instruction text, model id, step budget, output ceiling, pacing and
   retry budget** in both arms, recorded per row (`instructionSha256`, `fixtureSha256`,
   `plannerModelId`, step budget, output ceiling). The check already refuses mixed planners
@@ -116,6 +132,8 @@ never 0. Every count states its denominator and a Wilson 95% interval.
 ### 1.5 Statistics
 
 - **Unit:** the task, paired across arms.
+- **Alpha is 0.05, one-sided, for every bar component in this spec.** The direction is
+  pre-registered: the capability arm better than its baseline.
 - **Binary outcomes:** exact one-sided McNemar test (a sign test on the discordant tasks),
   alpha 0.05. Only discordant tasks carry information. Critical values:
 
@@ -144,12 +162,33 @@ never 0. Every count states its denominator and a Wilson 95% interval.
   the pack's pre-registration hash does not match (§3). "Not shown" is reported as such, with
   the numbers; it is never rounded to a win, and a rate difference is never reported without
   its test.
+- **Why 5 here and 6 in R2.** R2 (`docs/m2-scorecard.md`) calls its head-to-head
+  "underpowered below 6 discordant pairs" because its sign test is two-sided: at d = 5 the
+  best two-sided p is 0.0625. This spec's tests are one-sided, where d = 5 can reach
+  p = 0.0313. The two thresholds are consistent, not in conflict.
+- **Power (computed, exact one-sided McNemar, alpha 0.05, at least 5 discordant).** "p10" is
+  the share of tasks only the capability arm verifies, "p01" the share only the baseline
+  verifies.
+
+  | n | p10 / p01 | Power |
+  |---|---|---|
+  | 40 | 0.10 / 0.00 | 0.37 |
+  | 40 | 0.15 / 0.05 | 0.26 |
+  | 40 | 0.20 / 0.05 | 0.49 |
+  | 40 | 0.25 / 0.05 | 0.69 |
+  | 90 | 0.10 / 0.00 | 0.95 |
+  | 90 | 0.15 / 0.05 | 0.63 |
+  | 90 | 0.20 / 0.05 | 0.88 |
+
+  At n = 40 (K, M) the bar is underpowered for net gains of about 10-15 points: a "not shown"
+  there is not evidence of no effect, and is reported with this table. Raising n is an open
+  question (§6).
 
 ---
 
 ## 2. The capabilities
 
-### I. Structured state access (first)
+### I. Structured state access
 
 **What it is.** The agent reads real app state as typed data through MCP tools, instead of
 guessing from pixels: cell values and types, form field values, document text, and the UI tree
@@ -224,6 +263,11 @@ actions. `route_log` is written by the harness, not the agent: per action
 2. Wall time per verified task: bootstrap upper bound of J/baseline below 1.0.
 3. Steps per verified task: bootstrap upper bound of J/baseline below 1.0.
 
+**Margin caveat.** At n = 90, true equality with 10% discordant tasks gives an expected
+one-sided 95% upper bound of about 1.645 × √(0.10 / 90) ≈ 5.5 points, above the 5-point
+margin. Step 1 may therefore fail with no real drop, and under the fixed sequence that blocks
+steps 2 and 3. The margin is an open question (§6).
+
 **Guardrails.** Every action has a route record; a trial with an unrecorded action is a
 harness fault, counted. The TIF-266 isolation test passes with J's tools. Any route access
 outside the boundary voids the trial as `uncertain`, as in `hcu+shell`.
@@ -249,7 +293,18 @@ handed. Corrections arrive through the existing #514 channel and nowhere else.
 base surface, corrections off, `retryBudget` 0). The base surface is `C1+I` if I's bar is
 shown, otherwise `C1`. Both arms get the same total step budget (proposed 80 for long tasks),
 shared across attempts, so the retry buys no extra turns. Both arms call the gate at the end
-of each attempt, so gate presence is equal.
+of each attempt, so gate presence is equal, and both arms' rows are gated rows (§1.1).
+
+**Relation to the ruled corrections A/B.** The corrections A/B on Ultra is already ruled
+(Stage 0: 30 paired trials, plumbing only; Stage 1: fc-v1, 100 paired trials per arm, exact
+sign test) and is on the critical path (§4). K does not replace it, does not re-measure the
+corrections effect, and adopts its safeguards:
+- **Any gate miss halts the K run.** A gate miss is a `verified` verdict on an attempt the
+  grader grades `fail` or `ungradable`. On the first one, the harness stops the batch, the
+  pack is reported as halted with that trial, and the track goes back to the lead.
+- **K's contrast bundles recovery tools, corrections and `retryBudget` 1** against none of
+  them. It answers "K vs nothing" only. A K result is never reported as a corrections result,
+  and a corrections result is never reported as a K result.
 
 **Task set (new).** `ms-long-v1`: 40 long multi-step Calc tasks from the `calc-multi-step`
 family (TIF-270), 8 edits each, across fixtures, with a seeded mid-task fault (`kill-app`,
@@ -303,7 +358,10 @@ including desktop start, reset and teardown.
 1. Zero contamination events across all L-agent trials (a single event fails the bar and
    voids the batch).
 2. Verified rate at N = 4 non-inferior to N = 1 (margin 5 points, §1.5).
-3. Throughput(N = 4) ≥ 2.8 × throughput(N = 1) (scaling efficiency 0.7).
+3. Throughput scaling: the one-sided 95% lower bound of throughput(N = 4) / throughput(N = 1)
+   is at least 2.8 (scaling efficiency 0.7). The bound is a paired bootstrap over tasks,
+   10,000 resamples, with a pre-registered seed (§1.5); the point estimate alone never meets
+   the bar.
 
 **Guardrails.** Contamination checks: each captured document is scanned for every other trial's canary;
 every row's `fixtureSha256` is its task's; `runId`s and evidence roots are disjoint; each gate
@@ -343,6 +401,11 @@ of I, J, else `C1`.
 The learn phase runs before the test phase, and its store is hashed and recorded in every
 test pack. Test-phase runs never write the store.
 
+**Gate use.** The learn phase calls the gate at the end of each trial, because the store rule
+needs its verdict; learn rows are gated rows (§1.1) and are never part of the bar. In the test
+phase neither arm calls the gate (the §1.3 default), so gate presence is equal and test rows
+are gate-less.
+
 **Primary metric.** Verified rate on the 40 test tasks, by the grader.
 
 **Pre-registered bar.** Exact one-sided McNemar, skills-on better than cold, p ≤ 0.05 with at
@@ -381,6 +444,10 @@ scan finds no fixture value outside the instruction, no host path and no digest.
 
 ## 4. Measurement constraints
 
+- **The critical path comes first (Tiffany, 2026-11-26 10:46 ET).** The order is: integrity
+  fixes, then the trial run (R1, the `hcu+shell` head-to-head, the corrections A/B on Ultra),
+  then the 90 s demo. Capability work never delays those steps and never takes VM time from
+  them.
 - **Claude Ultra only.** Every measured run uses the Claude Ultra plan: $0 Anthropic API, no
   Messages-API calls. Costs are token-derived estimates (§1.4).
 - **No runs until GO.** No measurement run starts until the integrity fixes land (#518's
@@ -396,19 +463,29 @@ scan finds no fixture value outside the instruction, no host path and no digest.
 
 ## 5. Sequencing
 
-1. **I first, now.** Build the tools and their separation tests; freeze I's pre-registration;
-   measure after GO.
-2. **J, K, L, M after the in-flight M2 tracks (A-H)** finish or free their files. They do not
-   block M2 work and do not touch its files.
+1. **Build I-M now, in parallel.** Every capability (I-V; N-V and data capture are in the
+   part-2 spec) is M2 scope (ruling of 2026-11-26 10:41 ET). Each track builds its tools and
+   their separation tests and freezes its pre-registration now, alongside the other M2 tracks,
+   without touching their files.
+2. **Measure only after GO,** and never ahead of the critical path or with VM time it needs
+   (§4).
 3. **Each capability is its own Tier 2 track** with its own PR, a 3-round review cap, and its
    own pre-registration. A track that hits the cap stops and goes back to the lead.
-4. **Dependencies:** K needs the multi-step instruction renderer and grader entry; L needs the
-   disposable Linux desktop and L-infra's zero-contamination result; M uses the best shown
-   base surface, so it runs after I (and J if shown).
+4. **Dependencies:** every track's measurement needs its baseline arm (C1 or `hcu+shell`)
+   ported to the Ultra (Claude Code) harness (§1.3). The capability tracks reuse the Ultra
+   `hcu+shell` harness the trial run's head-to-head needs, and do not build a second one. C1
+   has no Ultra harness, so I's primary arm (`C1+I` vs `C1`) cannot be measured until C1 is
+   ported onto that same harness; the port never takes VM time from the trial run. K needs the
+   multi-step instruction renderer and grader entry; L needs the disposable Linux desktop and
+   L-infra's zero-contamination result; M's measurement uses the best shown base surface, so
+   it is measured after I's (and J's, if shown). These order measurement, not building.
 
 ## 6. Open questions for the lead
 
 - Whether the capability arms should also run a gate-present variant (the gate as part of the
   surface), as a separate experiment.
 - The K step budget (80 proposed) and the `ms-long-v1` size (40 proposed).
-- Whether the 5-point non-inferiority margin (J, L) is right for n = 90.
+- Whether the 5-point non-inferiority margin (J, L) is right for n = 90: with 10% discordant
+  tasks and true equality, the expected upper bound is about 5.5 points (J, margin caveat).
+- Whether to raise n for K and M: at n = 40 the power for a 10-15 point net gain is 0.26-0.49
+  (§1.5, power table).
