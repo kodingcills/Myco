@@ -41,6 +41,14 @@ import {
 export const CLOSED_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export const CLOSED_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
+/**
+ * The closed arm grammar (#556 round 1, D1, for track U's arms): a first segment of at least two
+ * characters that starts with a lower-case letter (`myco-gate`, `hcu+shell`, track U's
+ * `scripted-u-e2e`), then at most one `:variant`, using only lower-case letters, digits, `+` and
+ * `-`. Never a path: a drive-relative form is refused (a one-letter drive cannot start an arm, and
+ * an arm has no `.`, `_`, `/`, `\\` or upper case: `c:users.x`, `C:Users`, `myco-gate:users.x`).
+ */
+export const ARM_GRAMMAR = /^[a-z][a-z0-9+-]{1,31}(?::[a-z0-9][a-z0-9-]{0,31})?$/;
 const HASHED = /^h-[0-9a-f]{64}$/;
 const HASHED_SHORT = /^h-[0-9a-f]{60}$/;
 
@@ -117,7 +125,7 @@ export const EPISODE_FIELD_TREATMENT: Readonly<Record<string, Treatment>> = {
   "$.groundTruth.fixtureSha256": digest,
   "$.groundTruth.persistedSha256": digest,
   "$.groundTruth.reason": oneOf(...EPISODE_NO_GRADE_REASONS),
-  "$.harness.arm": closed(/^[a-z0-9][a-z0-9+._-]{0,63}$/),
+  "$.harness.arm": closed(ARM_GRAMMAR),
   "$.harness.plannerModelId": id,
   "$.harness.corrections": oneOf("on", "off"),
   "$.harness.timing.startedAt": timestamp,

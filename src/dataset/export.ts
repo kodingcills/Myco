@@ -612,9 +612,11 @@ const CONTAINER_ENTRIES = new Set(["manifest.json", "records.jsonl", "schema.jso
  * container is digest-only); a manifest that fails its schema or carries a blob; a records or
  * schema file that does not hash to the manifest; a record line, or an episode file, that does
  * not hash to what references it; an episode file not referenced by a record; and any episode
- * string outside its closed grammar (`openEpisodeStrings`). Never throws on bad data.
+ * string outside its closed grammar (`openEpisodeStrings`); and, as a backstop, any leak the
+ * exporter's scan finds in an episode, a record or the manifest (`hygiene` as for the export).
+ * Never throws on bad data.
  */
-export function validateContainer(dir: string): string[] {
+export function validateContainer(dir: string, hygiene?: HygieneOptions): string[] {
   const problems: string[] = [];
   for (const entry of readdirSync(dir)) {
     if (entry === "blobs") problems.push("blobs/ is present: the container is digest-only");
@@ -677,9 +679,21 @@ export function validateContainer(dir: string): string[] {
       problems.push(`${record.episode.file} is not JSON`);
       continue;
     }
+    const rule = episodeProblem(episode);
+    if (rule !== null)
+      problems.push(
+        `${record.episode.file}: ${rule.detail} at ${rule.path} (not a valid myco.episode/1)`,
+      );
     for (const path of openEpisodeStrings(episode))
       problems.push(`${record.episode.file}: OPEN_STRING at ${path}`);
+    // The cleanliness backstop: the exporter's own leak scan over what was written.
+    for (const leak of scanForLeaks(episode, hygiene))
+      problems.push(`${record.episode.file}: LEAK ${leak.kind} at ${leak.path}`);
+    for (const leak of scanForLeaks(record, hygiene))
+      problems.push(`records.jsonl#${i + 1}: LEAK ${leak.kind} at ${leak.path}`);
   }
+  for (const leak of scanForLeaks(manifest, hygiene))
+    problems.push(`manifest.json: LEAK ${leak.kind} at ${leak.path}`);
   let files: string[] = [];
   try {
     files = readdirSync(join(dir, "episodes"));

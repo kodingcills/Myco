@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ARM_GRAMMAR,
+  CLOSED_ID,
   closeEpisode,
   closeRecordFields,
   EPISODE_FIELD_TREATMENT,
@@ -31,6 +33,7 @@ import {
   EPISODE_REAL_PLANNERS,
   type Episode,
   type EpisodeDraft,
+  episodeIdOf,
 } from "../../src/dataset/episode.ts";
 import {
   canonicalJson,
@@ -460,6 +463,114 @@ describe("the container is digest-only (lead ruling 2026-11-26 20:3xZ)", () => {
       expect(validateContainer(f).join("\n")).toMatch(/^manifest\.json:\$\.blobs maxItems$/m);
     } finally {
       rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("#559 round 2 (prepared): arms, the container backstop, strict h- idempotence", () => {
+  it("the arm grammar admits myco-gate, hcu+shell, variants and track U's arms; refuses drive-relative and path forms", () => {
+    for (const ok of [
+      "myco-gate",
+      "hcu+shell",
+      "myco-gate:retry",
+      "myco-gate:no-retry",
+      "scripted-u-e2e",
+    ])
+      expect(ARM_GRAMMAR.test(ok), ok).toBe(true);
+    for (const bad of [
+      "c:users.x",
+      "C:Users",
+      "c:users",
+      "d:x",
+      "myco-gate:c:x",
+      "myco-gate:users.x",
+      "myco-gate:Users",
+      "a_b",
+      "x/y",
+      "x\\y",
+    ])
+      expect(ARM_GRAMMAR.test(bad), bad).toBe(false);
+    const next = makePathFuzzer(0x559);
+    for (let i = 0; i < 1000; i++) {
+      const v = next().value.slice(0, 64);
+      expect(ARM_GRAMMAR.test(v), `case ${i}: ${JSON.stringify(v)}`).toBe(false);
+    }
+  });
+
+  it("a candidate with arm myco-gate:retry exports, and the container validates", () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-u-allow-"));
+    try {
+      const dir = join(base, "ds");
+      exportDataset([candidate("ok", { arm: "myco-gate:retry" })], {
+        outDir: dir,
+        hygiene: HYGIENE,
+      });
+      const [file] = readdirSync(join(dir, "episodes"));
+      const ep = JSON.parse(readFileSync(join(dir, "episodes", file as string), "utf8"));
+      expect(ep.harness.arm).toBe("myco-gate:retry");
+      expect(validateContainer(dir, HYGIENE)).toEqual([]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("validateContainer's backstop refuses a key-shaped id that fits CLOSED_ID (hand-edited, every hash consistent)", () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-u-allow-"));
+    try {
+      const dir = join(base, "ds");
+      exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
+      const key = ["sk", "ant", "api03", "x".repeat(24)].join("-");
+      expect(CLOSED_ID.test(key)).toBe(true);
+      // Re-address the edited episode and make the record, its manifest digest and the file hash consistent.
+      const [file] = readdirSync(join(dir, "episodes"));
+      const ep = JSON.parse(readFileSync(join(dir, "episodes", file as string), "utf8"));
+      ep.task.id = key;
+      const { episodeId: _x, ...rest } = ep;
+      const id = episodeIdOf(rest);
+      const text = `${canonicalJson({ ...rest, episodeId: id })}\n`;
+      rmSync(join(dir, "episodes", file as string));
+      writeFileSync(join(dir, "episodes", `${id}.json`), text);
+      const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
+      record.episode = { ...record.episode, id, sha256: sha(text), file: `episodes/${id}.json` };
+      const line = canonicalJson(record);
+      writeFileSync(join(dir, "records.jsonl"), `${line}\n`);
+      const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+      m.records[0] = { ...m.records[0], episodeId: id, sha256: sha(line) };
+      m.files["records.jsonl"] = sha(`${line}\n`);
+      writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
+      expect(validateContainer(dir, HYGIENE)).toEqual([
+        `episodes/${id}.json: LEAK secret-shaped at $.task.id`,
+      ]);
+      // An edit that is not re-addressed fails the content address too.
+      ep.task.id = "task-2";
+      writeFileSync(join(dir, "episodes", `${id}.json`), `${canonicalJson(ep)}\n`);
+      expect(validateContainer(dir, HYGIENE).join("\n")).toMatch(/ID_MISMATCH at \$\.episodeId/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("free text that merely starts with h- is hashed, never kept (only an exact h-<64 hex> is)", () => {
+    const words = ["QzPLANTEDhfirst", "QzPLANTEDhlast"];
+    for (const text of [
+      `h-C:\\Users\\${words[0]} ${words[1]}`,
+      `h-${"a".repeat(64)} C:\\Users\\${words[0]} ${words[1]}`,
+      `h-${"a".repeat(63)}`,
+    ]) {
+      const closed = closeEpisode(candidate(text).episode);
+      expect(closed.task.instruction, text).toMatch(/^h-[0-9a-f]{64}$/);
+      expect(closed.task.instruction).not.toBe(text);
+      expect(words.filter((w) => canonicalJson(closed).includes(w))).toEqual([]);
+      expect(
+        openEpisodeStrings({ ...closed, task: { ...closed.task, instruction: text } }),
+      ).toEqual(["$.task.instruction"]);
+    }
+    for (const [name, value, w] of PROBES.slice(0, 40)) {
+      const closed = closeEpisode(candidate(`h-${value}`).episode);
+      expect(
+        w.filter((x) => canonicalJson(closed).includes(x)),
+        name,
+      ).toEqual([]);
     }
   });
 });
