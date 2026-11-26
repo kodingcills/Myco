@@ -295,6 +295,19 @@ resync the guest clock. It accepts only `clean-base`, `clean-base-live`, `m1-age
 **`cua-c1-base`** (the C1 screenshot-baseline snapshot, and the one the C1 arms run on) as
 snapshot names and never restores onto a running VM.
 
+**Every boot must be a full cold boot (TIF-98).** The first start after a UTM configuration
+write (`scripts/guest-egress.sh allow` or `deny` rewrites it, even with no change) boots the
+same restored disk with most of Windows' boot work skipped: 4 s of guest CPU at the first ssh
+answer instead of 272-312 s. A trial on such a guest starts from a different state. So the reset
+classifies each boot by the guest CPU the gate reports at its first ssh answer:
+- at or above `MYCO_COLD_MIN_GUEST_CPU` (default 100 s) it is cold;
+- below it, the reset stops the VM by request and boots once more, and that boot is cold;
+- a second fast boot, or an unreadable first-ssh line, is refused.
+
+It prints `reset-trial-vm: boot class=cold first_ssh_s=… guest_cpu_first_ssh_s=… attempts=…`.
+After a config write, expect one reset to take about 3.5 min instead of about 2.5. The
+measurements and the threshold's basis are in `docs/research/experiments/tif-98-fast-reset-2026-11-26/`.
+
 Expected stderr tail, then the stdout line:
 
 ```

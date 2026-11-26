@@ -1,0 +1,113 @@
+{
+    "uptime_s":  266,
+    "boot_phases_ms_current":  {
+                                   "BootStartTime":  "2026-11-26T17:35:42.5386116Z",
+                                   "SystemBootInstance":  "3",
+                                   "BootTime":  17839,
+                                   "MainPathBootTime":  4239,
+                                   "BootKernelInitTime":  11,
+                                   "BootDriverInitTime":  91,
+                                   "BootDevicesInitTime":  7,
+                                   "BootPrefetchInitTime":  0,
+                                   "BootAutoChkTime":  0,
+                                   "BootSmssInitTime":  1254,
+                                   "BootCriticalServicesInitTime":  341,
+                                   "BootUserProfileProcessingTime":  74,
+                                   "BootMachineProfileProcessingTime":  439,
+                                   "BootExplorerInitTime":  1709,
+                                   "BootPostBootTime":  13600
+                               },
+    "boot_phases_ms_earliest":  {
+                                    "BootStartTime":  "2026-11-19T04:36:38.5735275Z",
+                                    "SystemBootInstance":  "1",
+                                    "BootTime":  100460,
+                                    "MainPathBootTime":  89760,
+                                    "BootKernelInitTime":  15,
+                                    "BootDriverInitTime":  174,
+                                    "BootDevicesInitTime":  67,
+                                    "BootPrefetchInitTime":  0,
+                                    "BootAutoChkTime":  0,
+                                    "BootSmssInitTime":  1147,
+                                    "BootCriticalServicesInitTime":  253,
+                                    "BootUserProfileProcessingTime":  678,
+                                    "BootMachineProfileProcessingTime":  46,
+                                    "BootExplorerInitTime":  70296,
+                                    "BootPostBootTime":  10700
+                                },
+    "top_cpu_since_boot":  [
+                               {
+                                   "name":  "System",
+                                   "cpu_s":  8.2
+                               },
+                               {
+                                   "name":  "MsMpEng",
+                                   "cpu_s":  7.3
+                               },
+                               {
+                                   "name":  "explorer",
+                                   "cpu_s":  2.6
+                               },
+                               {
+                                   "name":  "svchost",
+                                   "cpu_s":  1.9
+                               },
+                               {
+                                   "name":  "svchost",
+                                   "cpu_s":  1.4
+                               },
+                               {
+                                   "name":  "SearchHost",
+                                   "cpu_s":  1.3
+                               },
+                               {
+                                   "name":  "OneDrive",
+                                   "cpu_s":  1.2
+                               },
+                               {
+                                   "name":  "svchost",
+                                   "cpu_s":  1
+                               },
+                               {
+                                   "name":  "svchost",
+                                   "cpu_s":  0.8
+                               },
+                               {
+                                   "name":  "dwm",
+                                   "cpu_s":  0.8
+                               }
+                           ],
+    "top_cpu_10s_window":  [
+                               {
+                                   "name":  "System",
+                                   "cpu_s":  0.09
+                               },
+                               {
+                                   "name":  "svchost",
+                                   "cpu_s":  0.06
+                               },
+                               {
+                                   "name":  "MicrosoftEdgeUpdate",
+                                   "cpu_s":  0.06
+                               },
+                               {
+                                   "name":  "svchost",
+                                   "cpu_s":  0.03
+                               },
+                               {
+                                   "name":  "svchost",
+                                   "cpu_s":  0.03
+                               },
+                               {
+                                   "name":  "MicrosoftEdgeUpdate",
+                                   "cpu_s":  0.03
+                               },
+                               {
+                                   "name":  "svchost",
+                                   "cpu_s":  0.03
+                               },
+                               {
+                                   "name":  "powershell",
+                                   "cpu_s":  0.03
+                               }
+                           ]
+}

@@ -1,0 +1,22 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 31432 vm-session.sh
+fastreset: 17:19:55Z reset t0-after-long-stop: start (VM status stopped)
+fastreset: 17:22:37Z reset t0-after-long-stop: rc=0 first ssh answer after 142s (guest CPU 282s) total=162
+fastreset: 17:22:51Z probe t0: {"tickUptimeS":0,"bootEventTimeUtc":"2026-11-26T17:20:10.5287141Z","bootType":"0x0","markerPresent":false,"marker":null,"hiberbootEnabled":1,"hiberfilPresent":false}
+fastreset: 17:22:54Z marker written: written-after-t0
+fastreset: 17:23:11Z E1: stopped by request
+fastreset: 17:23:11Z reset e1-after-request-stop: start (VM status stopped)
+fastreset: 17:25:56Z reset e1-after-request-stop: rc=0 first ssh answer after 144s (guest CPU 312s) total=165
+fastreset: 17:26:10Z probe e1: {"tickUptimeS":0,"bootEventTimeUtc":"2026-11-26T17:23:25.4652940Z","bootType":"0x0","markerPresent":false,"marker":null,"hiberbootEnabled":1,"hiberfilPresent":false}
+fastreset: 17:26:12Z marker written: written-after-e1
+fastreset: 17:26:25Z E2: stopped by request
+fastreset: 17:26:26Z E2: guest-egress deny rc=0
+fastreset: 17:26:26Z reset e2-after-request-stop-and-config-write: start (VM status stopped)
+fastreset: 17:26:53Z reset e2-after-request-stop-and-config-write: rc=0 first ssh answer after 13s (guest CPU 4s) total=27
+fastreset: 17:26:54Z probe e2: {"tickUptimeS":0,"bootEventTimeUtc":"2026-11-26T17:26:38.6248757Z","bootType":"0x0","markerPresent":false,"marker":null,"hiberbootEnabled":1,"hiberfilPresent":false}
+fastreset: 17:26:55Z marker written: written-after-e2
+fastreset: 17:26:56Z E3: guest-egress deny (force stop) rc=0
+fastreset: 17:26:56Z reset e3-after-force-stop-and-config-write: start (VM status stopped)
+fastreset: 17:27:21Z reset e3-after-force-stop-and-config-write: rc=0 first ssh answer after 13s (guest CPU 4s) total=25
+fastreset: 17:27:22Z probe e3: {"tickUptimeS":0,"bootEventTimeUtc":"2026-11-26T17:27:07.5487075Z","bootType":"0x0","markerPresent":false,"marker":null,"hiberbootEnabled":1,"hiberfilPresent":false}
+fastreset: 17:27:22Z final egress verify rc=0
+fastreset: 17:27:42Z done: VM stopped
