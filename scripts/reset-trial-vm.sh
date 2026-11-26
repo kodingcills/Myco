@@ -42,6 +42,7 @@ fi
 # It is still resolved through VM_SCRIPTS so a test stub can shadow it, as
 # test/wait-guest-ready.test.ts and the reset-allowlist test both do.
 REPO_GATE=$(cd "$(dirname "$0")" && pwd)/wait-guest-ready.sh
+REPO_EGRESS=$(cd "$(dirname "$0")" && pwd)/guest-egress.sh
 
 STOP_TIMEOUT=${MYCO_STOP_TIMEOUT:-30}
 SSH_WAIT_TIMEOUT=${MYCO_SSH_WAIT_TIMEOUT:-600}
@@ -72,6 +73,15 @@ gate_script() {
     echo "$REPO_GATE"
   else
     echo "$VM_SCRIPTS/wait-guest-ready.sh"
+  fi
+}
+
+# The egress check (TIF-275) resolves like the gate: a stub directory shadows it.
+egress_script() {
+  if [ -n "${MYCO_VM_SCRIPTS:-}" ]; then
+    echo "$VM_SCRIPTS/guest-egress.sh"
+  else
+    echo "$REPO_EGRESS"
   fi
 }
 
@@ -120,6 +130,22 @@ GATE=$(gate_script)
 [ -x "$GATE" ] || die "readiness gate not found: '$GATE' (expected the in-repo scripts/wait-guest-ready.sh, or one via MYCO_VM_SCRIPTS). Refusing to skip the boot check."
 "$GATE" "$SSH_WAIT_TIMEOUT" >/dev/null || die "guest did not reach a real boot within ${SSH_WAIT_TIMEOUT}s (see TIF-164)"
 phase ready
+# 3b. Guest egress must be closed (TIF-275): the running netdev must carry
+#     restrict=on, so the guest can reach nothing but the host's inbound ssh
+#     forward. Checked on every reset, before anything is deployed into the
+#     guest, and fail-closed: a guest that booted with egress open (someone
+#     cleared UTM's "isolate from host") is refused, not trusted. The one
+#     escape is an explicit MYCO_GUEST_EGRESS=open, for base-image maintenance
+#     that needs the internet; it is loud and never the default.
+EGRESS=$(egress_script)
+if [ "${MYCO_GUEST_EGRESS:-closed}" = open ]; then
+  echo "reset-trial-vm: WARNING MYCO_GUEST_EGRESS=open: guest egress NOT verified closed. Maintenance only; never run trials or put credentials in this guest (TIF-275)" >&2
+else
+  [ -x "$EGRESS" ] || die "egress check not found: '$EGRESS'. Refusing to call the guest ready without proving its egress is closed (TIF-275)"
+  "$EGRESS" verify >/dev/null || die "guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)"
+fi
+phase egress
+
 # 4. The guest clock is the snapshot's clock; resync so trial timestamps are sane.
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 if ! "$VM_SCRIPTS/vssh" "Set-Date -Date ([datetime]::Parse('$NOW').ToUniversalTime().ToLocalTime()) | Out-Null" >/dev/null 2>&1; then

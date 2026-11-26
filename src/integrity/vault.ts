@@ -52,6 +52,7 @@ export type IntegrityViolationCode =
   | "seal-malformed"
   | "seal-signature"
   | "receipt-missing"
+  | "receipt-malformed"
   | "receipt-mismatch"
   | "run-not-bound"
   | "sealed-file-missing"
