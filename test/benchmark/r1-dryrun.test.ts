@@ -17,6 +17,12 @@ import {
 } from "../../src/benchmark/r1-dryrun.ts";
 import type { BenchmarkTask } from "../../src/benchmark/taskset.ts";
 import { parseCsvSpreadsheet } from "../../src/core/filepersist.ts";
+import {
+  anchorPathFor,
+  crossCheckAttempts,
+  verifyAnchor,
+  verifyAttemptLedger,
+} from "../../src/m2/attempt-ledger.ts";
 import { generateFixture } from "../../src/tasks/fixture.ts";
 import { groundTruth } from "../../src/tasks/intent.ts";
 
@@ -43,6 +49,32 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     const dir = mkdtempSync(join(tmpdir(), "myco-r1-dry-"));
     const { armRows } = await runDryRun(TASKS, dir, SOURCES);
     expect(armRows).toHaveLength(100);
+    // The runner logged every attempt in the append-only ledger, and it accounts for every row.
+    const ledger = verifyAttemptLedger(
+      readFileSync(join(dir, "attempts.jsonl"), "utf8")
+        .trimEnd()
+        .split("\n")
+        .map((l) => JSON.parse(l) as unknown),
+    );
+    expect(ledger.errors).toEqual([]);
+    expect(ledger.head.events).toBe(200);
+    const disclosed = armRows.map((r) => ({
+      trialKey: r.trialKey,
+      taskId: r.taskId,
+      arm: r.arm,
+      harnessClass: null,
+    }));
+    expect(crossCheckAttempts(ledger.events, disclosed, ledger.head, ledger.head)).toEqual([]);
+    // The runner's external anchor: outside the run directory, one head per attempt end, and
+    // in agreement with the ledger.
+    const anchorPath = anchorPathFor(dir);
+    expect(anchorPath.startsWith(dir)).toBe(false);
+    const anchor = readFileSync(anchorPath, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((l) => JSON.parse(l) as unknown);
+    expect(anchor).toHaveLength(100);
+    expect(verifyAnchor(anchor, ledger.events, ledger.head)).toEqual([]);
     expect(readFileSync(join(dir, "SIMULATED"), "utf8")).toBe(SIMULATED_MARKER);
     expect(armRows.every((r) => r.plannerModelId === DRY_RUN_PLANNER)).toBe(true);
 
