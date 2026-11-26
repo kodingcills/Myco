@@ -429,7 +429,8 @@ describe("the security review's symbol refs hold on main (D1)", () => {
     const text = [
       "/** doc A */",
       "function f() {",
-      "  const a = g(1, // trailing B",
+      // A character outside the BMP is two UTF-16 units: offsets after it must still line up.
+      '  const a = g("\u{1F344}", // trailing B',
       "    // own-line C",
       '    "// in a string", `/* in a template ${1} */`); /* block D */',
       "  return a; }",
@@ -441,8 +442,9 @@ describe("the security review's symbol refs hold on main (D1)", () => {
     for (const comment of ["doc A", "trailing B", "own-line C", "block D", "end E"]) {
       expect(code).not.toContain(comment);
     }
-    expect(code).toContain('"// in a string", `/* in a template ${1} */`);');
-    expect(code).toContain("const a = g(1,");
+    expect(code.replace(/\s+/g, " ").trim()).toBe(
+      'function f() { const a = g("\u{1F344}", "// in a string", `/* in a template ${1} */`); return a; }',
+    );
   });
 
   it("the resolver rejects a symbol that is not declared, or declared twice", () => {
