@@ -8,7 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { connect, type Socket } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
@@ -31,6 +31,7 @@ import {
 import {
   MAX_SSE_CLIENTS,
   startWatchServer,
+  WatchBindError,
   type WatchServer,
   type WatchState,
 } from "../../src/watch/server.ts";
@@ -627,6 +628,23 @@ describe("round 1 survivors and nits", () => {
   });
 
   it("a loopback bind other than 127.0.0.1 (127.0.0.2) serves its own Host", async () => {
+    // macOS lo0 carries only 127.0.0.1 unless an alias is added, so 127.0.0.2 cannot be bound
+    // there (EADDRNOTAVAIL); Linux routes all of 127/8 to lo. Probe first: where the OS refuses,
+    // the watch server must fail with that OS error (it accepted the host as loopback, it is
+    // not a WatchBindError), and the Host allowlist for that bind is pinned portably in
+    // test/watch/round3.test.ts. Where the bind works, the real 200-on-own-Host is asserted.
+    if (!(await canBind("127.0.0.2"))) {
+      const code = await startWatchServer({ host: "127.0.0.2", runs: ["r"] }).then(
+        async (s) => {
+          await s.close();
+          return "bound";
+        },
+        (error: NodeJS.ErrnoException) =>
+          error instanceof WatchBindError ? "WatchBindError" : error.code,
+      );
+      expect(code).toBe("EADDRNOTAVAIL");
+      return;
+    }
     const s = await serve({ host: "127.0.0.2", runs: ["r"] });
     const r = await new Promise<number>((resolve, reject) => {
       const sock = connect(s.port, "127.0.0.2", () =>
@@ -645,3 +663,14 @@ describe("round 1 survivors and nits", () => {
     expect(r).toBe(200);
   });
 });
+
+/** True when this OS lets a socket bind `host`; false only on EADDRNOTAVAIL. */
+function canBind(host: string): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", (error: NodeJS.ErrnoException) =>
+      error.code === "EADDRNOTAVAIL" ? resolve(false) : reject(error),
+    );
+    probe.listen({ host, port: 0 }, () => probe.close(() => resolve(true)));
+  });
+}

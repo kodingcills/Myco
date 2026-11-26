@@ -55,6 +55,13 @@ export interface WatchServerOptions {
   readonly sseStallMs?: number;
   /** A watcher holding more unsent bytes than this is disconnected. Default 8 MiB. */
   readonly sseMaxBufferedBytes?: number;
+  /** Most open TCP connections; the next is closed at once. Default 64. */
+  readonly maxConnections?: number;
+  /**
+   * A connection with no read or write activity for this long is destroyed (a client that
+   * stops reading a response). Default 60 s; keep it above the 15 s SSE keep-alive.
+   */
+  readonly idleSocketMs?: number;
 }
 
 export interface WatchState {
@@ -73,6 +80,8 @@ export interface SseStats {
   readonly maxBufferedBytes: number;
   /** Watchers disconnected for stalling or holding too much. */
   readonly dropped: number;
+  /** Times a watcher stopped draining (it may recover; see `sseStallMs`). */
+  readonly stalls: number;
 }
 
 export interface WatchServer {
@@ -82,13 +91,28 @@ export interface WatchServer {
   /** The current state, exactly as `/api/state` serves it. */
   state(): WatchState;
   sse(): SseStats;
+  /** Open TCP connections right now, for tests and diagnostics. */
+  connections(): Promise<number>;
   close(): Promise<void>;
 }
 
 export class WatchBindError extends Error {}
 
 export const MAX_SSE_CLIENTS = 16;
+export const DEFAULT_MAX_CONNECTIONS = 64;
+export const DEFAULT_IDLE_SOCKET_MS = 60_000;
 export const DEFAULT_MAX_EVENTS = 2000;
+
+/**
+ * The `Host` header values this server answers (DNS-rebinding defence): the loopback names
+ * and the bind host itself (e.g. 127.0.0.2), each with the bound port, lowercased.
+ * `listenHost` is the bare address passed to listen() (no brackets).
+ */
+export function allowedHostHeaders(listenHost: string, port: number): Set<string> {
+  const names = ["127.0.0.1", "localhost", "[::1]"];
+  names.push(listenHost.includes(":") ? `[${listenHost}]` : listenHost);
+  return new Set(names.map((name) => `${name.toLowerCase()}:${port}`));
+}
 
 /** True for a loopback address or the name `localhost`. */
 export function isLoopbackHost(host: string): boolean {
@@ -183,6 +207,7 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   const clients = new Set<Client>();
   let maxBufferedSeen = 0;
   let dropped = 0;
+  let stalls = 0;
   const drop = (client: Client) => {
     if (!clients.delete(client)) return;
     dropped += 1;
@@ -193,7 +218,10 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   const push = (client: Client, message: string, coalesce: boolean) => {
     if (client.res.writableNeedDrain) {
       if (coalesce) client.dirty = true;
-      client.stalledSince ??= Date.now();
+      if (client.stalledSince === null) {
+        client.stalledSince = Date.now();
+        stalls += 1;
+      }
       return;
     }
     client.res.write(message);
@@ -224,12 +252,7 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   keepAlive.unref();
 
   let boundPort = 0;
-  const allowedHosts = (): Set<string> => {
-    const names = ["127.0.0.1", "localhost", "[::1]"];
-    // The bind host itself is always allowed (e.g. 127.0.0.2), bracketed when IPv6.
-    names.push(listenHost.includes(":") ? `[${listenHost}]` : listenHost);
-    return new Set(names.map((name) => `${name.toLowerCase()}:${boundPort}`));
-  };
+  const allowedHosts = (): Set<string> => allowedHostHeaders(listenHost, boundPort);
 
   const handle = (req: IncomingMessage, res: ServerResponse): void => {
     // 1. Read-only: GET and nothing else, on every path, before anything else is looked at.
@@ -318,6 +341,11 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   });
   server.headersTimeout = 10_000;
   server.requestTimeout = 10_000;
+  // Bound what clients that stop reading can hold (verifier N1): a cap on connections, and an
+  // idle timeout that destroys a socket whose response stopped moving. With no 'timeout'
+  // listener, Node destroys the socket.
+  server.maxConnections = opts.maxConnections ?? DEFAULT_MAX_CONNECTIONS;
+  server.setTimeout(opts.idleSocketMs ?? DEFAULT_IDLE_SOCKET_MS);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen({ host: listenHost, port: opts.port ?? 0 }, () => {
@@ -349,7 +377,11 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
     port: boundPort,
     host: address.address,
     state: () => current,
-    sse: () => ({ clients: clients.size, maxBufferedBytes: maxBufferedSeen, dropped }),
+    sse: () => ({ clients: clients.size, maxBufferedBytes: maxBufferedSeen, dropped, stalls }),
+    connections: () =>
+      new Promise<number>((resolve) =>
+        server.getConnections((error, n) => resolve(error ? -1 : n)),
+      ),
     close,
   };
 }

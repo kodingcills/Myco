@@ -13,9 +13,14 @@ import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 export const MAX_LINE_BYTES = 1024 * 1024;
 const CHUNK = 256 * 1024;
 
+/** A streaming UTF-8 decoder (the global TextDecoder, so no new import); BOM kept as before. */
+const newDecoder = () => new TextDecoder("utf-8", { ignoreBOM: true });
+
 export class DecisionLogTail {
   private offset = 0;
   private pending = "";
+  /** Carries a multi-byte UTF-8 character split across two chunks into the next one. */
+  private decoder = newDecoder();
   private dropping = false;
   private readonly records: unknown[] = [];
   private malformed = 0;
@@ -42,6 +47,7 @@ export class DecisionLogTail {
         // Truncated or replaced: start over rather than show a mix of two logs.
         this.offset = 0;
         this.pending = "";
+        this.decoder = newDecoder();
         this.dropping = false;
         this.records.length = 0;
         this.malformed = 0;
@@ -53,7 +59,8 @@ export class DecisionLogTail {
         const got = readSync(fd, buffer, 0, want, this.offset);
         if (got <= 0) break;
         this.offset += got;
-        if (this.take(buffer.toString("utf8", 0, got))) changed = true;
+        if (this.take(this.decoder.decode(buffer.subarray(0, got), { stream: true })))
+          changed = true;
       }
     } finally {
       closeSync(fd);
