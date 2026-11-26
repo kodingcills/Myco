@@ -361,6 +361,12 @@ const REFUSED: readonly [string, string, ContentPartKind | undefined, PrescanCod
     "worksheet",
     "XLSX_PRESCAN_SYNTAX",
   ],
+  [
+    "a close tag with a stray byte before its >",
+    sheet('<row r="4"><c r="C4"><v>1</v=</c></row>'),
+    "worksheet",
+    "XLSX_PRESCAN_SYNTAX",
+  ],
   ["mismatched tags", sheet('<row r="4"></rows>'), "worksheet", "XLSX_PRESCAN_SYNTAX"],
   ["a cut part", sheet(C4).slice(0, 200), "worksheet", "XLSX_PRESCAN_SYNTAX"],
   ["text after the root", `${sheet(C4)}x`, "worksheet", "XLSX_PRESCAN_SYNTAX"],
