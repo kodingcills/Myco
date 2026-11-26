@@ -94,6 +94,8 @@ describe("leak scan: host paths, one test per bypass", () => {
     ["fullwidth solidus", j("\uFF0F", "home", "\uFF0F", "alice")],
     ["division slash", j("\u2215", "home", "\u2215", "alice")],
     ["zero-width split", j(S, "ho", "\u200B", "me", S, "alice")],
+    // Only the stripped form shows a home root: one segment, so the any-root rule cannot.
+    ["zero-width split, single segment", j("cd ", S, "ho", "\u200B", "me")],
     ["named HTML slash entity (round-2 K)", j("&sol;", "home", "&sol;", "alice")],
   ];
   it.each(cases)("%s is a host path", (_name, text) => {
@@ -139,6 +141,11 @@ describe("leak scan: #542's planted marker", () => {
       "planted-marker",
     );
     expect(leaksIn("PLANTED FAKE MARKER", NO_ID)).toEqual([]);
+    // A zero-width character splitting the marker or a key does not hide it.
+    expect(leaksIn(j("PLANTED_FAKE", "\u200D", "_MARKER"), NO_ID)).toContain("planted-marker");
+    expect(leaksIn(j("sk-ant-", "\u2060", "api03", "Z".repeat(20)), NO_ID)).toContain(
+      "secret-shaped",
+    );
   });
 });
 
