@@ -1,0 +1,4 @@
+wait-guest-ready: first ssh answer after 169s (guest CPU 289s)
+reset-trial-vm: timing stop=0 restore=3 start=3 ready=179 egress=0 clock=3 total=188
+reset-trial-vm: host swap used 2405 of 4096 MB
+reset-trial-vm: ready on 'trial-base-v2'
