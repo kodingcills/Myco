@@ -38,6 +38,42 @@ const synthR1 = (n: number, rows: PackManifest["rows"] = ["R1"]) =>
   manifest({ rows, expectTrials: { "myco-gate": n }, expectUnregistrable: { "myco-gate": 0 } });
 
 describe("M2 evidence: R1 from the shared ledger", () => {
+  // #514 round 1, D1: R1 is measured with the gate's corrections off.
+  it("refuses an R1 pack with any corrections-on gate row (otherwise a passing pack)", () => {
+    const trials = r1Trials();
+    const t = trials[5] as Trial;
+    trials[5] = {
+      ...t,
+      arm: { ...t.arm, gate: { called: true, verdict: "verified", corrections: "on" } },
+    };
+    const r = checkPack(input(trials));
+    expect(r.errors).toEqual([
+      expect.stringMatching(
+        /^R1: 1 row\(s\) with gate corrections on \(g5\): R1 evidence runs keep corrections off/,
+      ),
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.r1?.pass).toBe(false);
+    // Off (explicit) is the same as absent: the pack still passes.
+    trials[5] = {
+      ...t,
+      arm: { ...t.arm, gate: { called: true, verdict: "verified", corrections: "off" } },
+    };
+    expect(checkPack(input(trials))).toMatchObject({ ok: true, errors: [] });
+    expect(checkPack(input(trials)).r1?.pass).toBe(true);
+  });
+
+  it("a non-R1 pack is not held to the R1 corrections rule", () => {
+    const trials = r3Trials();
+    const t = trials[0] as Trial;
+    const on = { ...t, arm: { ...t.arm, gate: { ...t.arm.gate!, corrections: "on" as const } } };
+    expect(
+      checkPack(input([on, ...trials.slice(1)], r3Manifest())).errors.some((e) =>
+        e.includes("corrections on"),
+      ),
+    ).toBe(false);
+  });
+
   it("passes the real fc-v1 pack (each task once) and takes its counts from src/benchmark/check.ts", () => {
     const r = checkPack(input(r1Trials()));
     expect(r.errors).toEqual([]);

@@ -66,6 +66,7 @@ import {
   type BenchmarkArmRow,
   type CheckResult,
   checkBenchmark,
+  correctionsOnError,
   UNBOUND_R1,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
@@ -532,6 +533,12 @@ export function checkPack(input: PackInput): PackResult {
     // non-R1 pack is bound only when it carries unregistrable rows (no multiset: R2/R3 packs
     // run subsets), and then it too needs a known task set.
     const isR1 = manifest.rows.includes("R1");
+    // R1 is measured with corrections off (#514 round 1, D1): the same rule as
+    // `checkBenchmark(..., { evidence: true })`, which this check does not pass.
+    if (isR1) {
+      const corrected = correctionsOnError(gatedRows);
+      if (corrected !== null) errors.push(`R1: ${corrected}`);
+    }
     if (gatedRows.length > 0 && (isR1 || unreg > 0 || (split ?? 0) > 0)) {
       const binding = bindToTaskSet(gatedRows, { exactMultiset: isR1 });
       errors.push(...binding.errors.map((e) => (isR1 ? `R1 task set: ${e}` : `task set: ${e}`)));
