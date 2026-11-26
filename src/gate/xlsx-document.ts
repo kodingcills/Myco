@@ -21,8 +21,9 @@
  *  - entry names are a strict allowlist: no absolute path, backslash, `.`/`..` segment,
  *    empty segment or non-ASCII; duplicates (case-insensitive) are refused; relationship
  *    targets that climb above the package root are refused;
- *  - encrypted entries, ZIP64, multi-disk archives, overlapping entries and trailing or
- *    leading junk are refused;
+ *  - encrypted entries, ZIP64, multi-disk archives, overlapping entries, an EOCD comment,
+ *    and any byte no local header, entry data, data descriptor, central directory or EOCD
+ *    covers (leading, trailing or between entries) are refused;
  *  - no external links (`xl/externalLinks/`, any `TargetMode="External"` relationship), no
  *    macros (`vbaProject.bin`, macro-enabled content types, macro sheets, ActiveX), no
  *    embedded objects; the workbook part's content type must be the plain SpreadsheetML
@@ -157,6 +158,7 @@ const LOCAL_SIG = 0x04034b50;
 const CENTRAL_SIG = 0x02014b50;
 const EOCD_SIG = 0x06054b50;
 const ZIP64_LOCATOR_SIG = 0x07064b50;
+const DESCRIPTOR_SIG = 0x08074b50;
 
 /** True when `bytes` start like a zip archive (local header, or an empty archive's EOCD). */
 export function looksLikeZip(bytes: Uint8Array): boolean {
@@ -204,16 +206,12 @@ export function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
   const u32 = (at: number) =>
     at >= 0 && at + 4 <= bytes.length ? view.getUint32(at, true) : fail("XLSX_ZIP_MALFORMED");
 
-  // End of central directory: the comment length must reach exactly the end of the file,
-  // so a signature inside the comment or trailing junk cannot be taken for it.
-  let eocd = -1;
-  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 0xffff); i--) {
-    if (u32(i) === EOCD_SIG && i + 22 + u16(i + 20) === bytes.length) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) fail("XLSX_ZIP_MALFORMED");
+  // End of central directory: exactly the last 22 bytes, with NO comment (LibreOffice writes
+  // none). A comment is where a second, decoy archive can hide: a reader that scans back for
+  // the last `PK\x05\x06` (the independent grader does) would take the decoy's directory
+  // (round 1 of the gate-integrity PR, V6). Trailing junk is refused the same way.
+  const eocd = bytes.length - 22;
+  if (u32(eocd) !== EOCD_SIG || u16(eocd + 20) !== 0) fail("XLSX_ZIP_MALFORMED");
   if (eocd >= 20 && u32(eocd - 20) === ZIP64_LOCATOR_SIG) fail("XLSX_ZIP64");
   const disk = u16(eocd + 4);
   const cdDisk = u16(eocd + 6);
@@ -277,6 +275,7 @@ export function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
     if (u32(localOffset) !== LOCAL_SIG) fail("XLSX_ZIP_MALFORMED");
     const localFlags = u16(localOffset + 6);
     if (localFlags & 0x41) fail("XLSX_ENCRYPTED");
+    if ((localFlags & 0x8) !== (flags & 0x8)) fail("XLSX_ZIP_MALFORMED");
     if (u16(localOffset + 8) !== method) fail("XLSX_ZIP_MALFORMED");
     const localNameLength = u16(localOffset + 26);
     const localExtraLength = u16(localOffset + 28);
@@ -286,7 +285,21 @@ export function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
       fail("XLSX_ZIP_MALFORMED");
     const dataStart = localOffset + 30 + localNameLength + localExtraLength;
     const dataEnd = dataStart + compressedSize;
-    if (dataEnd > cdOffset) fail("XLSX_ZIP_MALFORMED");
+    // Bit 3: sizes and CRC follow the data in a data descriptor (LibreOffice writes one,
+    // with its optional signature). It must repeat the central directory's values exactly,
+    // and it belongs to the entry's span, so the coverage check below accounts for it.
+    let spanEnd = dataEnd;
+    if (flags & 0x8) {
+      const sig = dataEnd + 4 <= bytes.length && u32(dataEnd) === DESCRIPTOR_SIG ? 4 : 0;
+      if (
+        u32(dataEnd + sig) !== crc ||
+        u32(dataEnd + sig + 4) !== compressedSize ||
+        u32(dataEnd + sig + 8) !== size
+      )
+        fail("XLSX_ZIP_MALFORMED");
+      spanEnd = dataEnd + sig + 12;
+    }
+    if (spanEnd > cdOffset) fail("XLSX_ZIP_MALFORMED");
     entries.push({
       name,
       method,
@@ -295,16 +308,21 @@ export function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
       size,
       dataStart,
       spanStart: localOffset,
-      spanEnd: dataEnd,
+      spanEnd,
     });
   }
   if (at !== eocd) fail("XLSX_ZIP_MALFORMED");
-  // Entries may not overlap (overlap is how quine-style bombs reuse data).
+  // Entries may not overlap (overlap is how quine-style bombs reuse data), and every byte of
+  // the file is accounted for: the entries (local header, data, data descriptor) tile
+  // [0, cdOffset) with no gap, the central directory is [cdOffset, eocd) (checked above),
+  // and the EOCD is the last 22 bytes. No byte range is left where a decoy could sit.
   const spans = [...entries].sort((a, b) => a.spanStart - b.spanStart);
-  for (let i = 1; i < spans.length; i++) {
-    if ((spans[i] as CentralEntry).spanStart < (spans[i - 1] as CentralEntry).spanEnd)
-      fail("XLSX_ZIP_MALFORMED");
+  let covered = 0;
+  for (const span of spans) {
+    if (span.spanStart !== covered) fail("XLSX_ZIP_MALFORMED");
+    covered = span.spanEnd;
   }
+  if (covered !== cdOffset) fail("XLSX_ZIP_MALFORMED");
 
   // Every check passed: inflate, bounded by the declared size, then verify size and CRC.
   const out = new Map<string, Uint8Array>();
