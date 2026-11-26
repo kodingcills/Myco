@@ -13,8 +13,12 @@ the one canonical record of an attempt. The bundle's `run.episode` references th
 (`runId`, `taskId`, `arm`, `simulated`) are a projection of the episode's, and the rest is Q's
 own: the hash chain, evidence digests, the ledger anchor, and handoff and policy decisions.
 With `--episode E` the verifier recomputes the episode's id and digest and refuses any
-projected field that disagrees (`PROOF_EPISODE`). The bundle never copies the episode's other
-groups (ground truth, agent claim, provenance, observations).
+projected field that disagrees (`PROOF_EPISODE`). The digest is over the episode's canonical
+JSON without the trailing newline #542's store appends, not over the file's bytes. Without
+`--episode`, a bundle that references an episode still verifies, but the reference is **not
+cross-checked**: the result says `episodeChecked: false` and the report says "reference only:
+not checked here". The bundle never copies the episode's other groups (ground truth, agent
+claim, provenance, observations).
 
 The bundle carries:
 
@@ -113,7 +117,12 @@ No secret, absolute host path, username or vault key may be in a bundle or repor
    - Every scan also runs over each **decoded form** of the string: JSON escapes (`\/`, `\t`,
      `\u002f`), percent-encoding (`%2F`) and HTML entities (`&#47;`), stacked up to three deep.
    - A path is not recognised by an allow-list of characters before it (any character left off
-     such a list bypasses it). It is skipped only when it continues a word or a relative path.
+     such a list bypasses it). A generic absolute path is skipped only when it continues a word
+     or a relative path. **Home roots have no such exception:** `Users`, `home` or `root`
+     followed by a separator and a segment (either separator, any case), and `var/folders`, are
+     a host path after any non-alphanumeric character, so `.../home/a`, `../../Users/a`,
+     `v2/Users/a`, `build-/home/a`, `/Users\a` and drive-relative `C:Users\a` are all caught.
+     This over-matches (`src/home/x` is redacted too); it never under-matches.
      Vendor key prefixes may follow anything but a letter.
 2. Evidence text is inlined only if redaction would leave it byte-identical, so an inline
    digest is always the original artifact's. Otherwise it is digest-only (`withheld:
@@ -129,8 +138,10 @@ Planted-marker tests (`test/proof/redaction.test.ts`) plant fake secrets, key sh
 key (plain and percent-encoded), a username and macOS, Linux and Windows home paths in every
 free-text field and in evidence fixture files. They assert none reach the bundle or the
 report. One test per scanner bypass (JSON-escaped, percent-encoded and entity-encoded paths,
-backslash and UNC paths, `~user` homes, leading-character bypasses) asserts each is found,
-redacted, refused by the verifier and absent from an export.
+backslash and UNC paths, `~user` homes, leading-character bypasses, and each home root after a
+`.`, `-`, digit, letter or `/`, mixed separators and drive-relative forms) asserts each is
+found, redacted, refused by the verifier and absent from an export, and the report refuses to
+render each.
 
 TO FILE: consolidate this scanner and #542's episode cleanliness scan onto one canonical
 scanner once #542 merges, with a parity test over the bypass corpus.

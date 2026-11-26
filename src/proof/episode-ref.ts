@@ -48,7 +48,10 @@ export interface EpisodeProjectionSource {
 export interface EpisodeRef {
   readonly schema: typeof EPISODE_SCHEMA;
   readonly episodeId: string;
-  /** sha256 of the episode's canonical JSON (the bytes #542's store writes). */
+  /**
+   * sha256 of the episode's canonical JSON, WITHOUT the trailing newline #542's store appends
+   * to the file (so it is not the sha256 of the file on disk).
+   */
   readonly sha256: string;
 }
 

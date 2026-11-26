@@ -48,6 +48,18 @@ describe("docs/architecture/replayable-proof.md matches the code", () => {
     expect([...verifyFlags, "--forbid-file"].sort()).toEqual([...(KNOWN.verify ?? [])].sort());
   });
 
+  it("home roots are caught after any leading character, as documented (R2-D1)", () => {
+    expect(DOC).toContain("**Home roots have no such exception:**");
+    for (const lead of [".../", "../../", "v2/", "build-/", "x.", "-"])
+      for (const root of ["Users/", "home/", "root/", "Users\\\\"])
+        expect(findLeaks(`${lead}${root}plantuser05/x`), `${lead}${root}`).not.toEqual([]);
+  });
+
+  it("an unchecked episode reference is stated in the doc", () => {
+    expect(DOC).toContain("**not\ncross-checked**");
+    expect(DOC).toContain("episodeChecked: false");
+  });
+
   it("decoders stack three deep, as documented", () => {
     expect(DOC).toContain("stacked up to three deep");
     expect(DECODE_DEPTH).toBe(3);

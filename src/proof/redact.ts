@@ -5,8 +5,8 @@
  * path, a username or a vault key. Two layers, both fail closed:
  *  1. `redactText` rewrites every string the exporter puts in a bundle: registered literal
  *     values first (secrets, vault keys, host paths, usernames), then generic shapes
- *     (absolute POSIX, Windows and UNC paths, `~user` homes, `file:` URLs, key-shaped
- *     tokens). A token that still leaks once decoded (JSON escapes, percent-encoding, HTML
+ *     (absolute POSIX, Windows and UNC paths, `~user` homes, home roots `Users`/`home`/`root`
+ *     and `var/folders` after any non-alphanumeric character, `file:` URLs, key-shaped tokens). A token that still leaks once decoded (JSON escapes, percent-encoding, HTML
  *     entities) is replaced whole.
  *  2. The scanners refuse anything left:
  *     - `findLeaksDeep` scans every parsed string value AND every object key of a value
@@ -89,6 +89,18 @@ const BACKSLASH_ABS = /(?<![A-Za-z0-9._-])\\{1,2}(?:[^\s"'`<>|\\/:*?]+\\)+[^\s"'
 const TILDE_USER = /(?<![A-Za-z0-9._~-])~[A-Za-z_][A-Za-z0-9._-]*/g;
 /** `file:` URLs name host paths too. */
 const FILE_URL = /\bfile:\/\/[^\s"'`<>]*/gi;
+/**
+ * Home roots, with NO lookbehind deny-list (R2-D1). The POSIX shape above skips a path that
+ * follows a letter, digit, `.`, `-` or `/`, and each of those was a bypass (`Saving.../home/a`,
+ * `../../Users/a`, `v2/Users/a`, `build-/home/runner`). So any `Users`, `home` or `root`
+ * followed by a separator and a segment, after any non-alphanumeric character or at the start,
+ * is a host path, whatever precedes it and whatever the separators (`/Users\a`, drive-relative
+ * `C:Users\a`). Likewise macOS per-user temp, `var/folders/`. Case-insensitive, since Windows
+ * paths are. Over-matching (`src/home/x`) is accepted: it is redacted at export, never leaked.
+ */
+const HOME_ROOT =
+  /(?<![A-Za-z0-9])(?:users|home|root)[\\/]+[^\s"'`<>|\\/]+(?:[\\/]+[^\s"'`<>|\\/]+)*/gi;
+const VAR_FOLDERS = /(?<![A-Za-z0-9])var[\\/]+folders(?:[\\/]+[^\s"'`<>|\\/]+)*/gi;
 
 const PATH_SHAPES: readonly RegExp[] = [
   FILE_URL,
@@ -96,6 +108,8 @@ const PATH_SHAPES: readonly RegExp[] = [
   BACKSLASH_ABS,
   POSIX_ABS,
   TILDE_USER,
+  HOME_ROOT,
+  VAR_FOLDERS,
 ];
 
 export const PLACEHOLDER = {

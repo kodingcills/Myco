@@ -244,6 +244,24 @@ const BYPASSES: ReadonlyArray<readonly [string, string]> = [
   ["leading-character bypass on a key shape", `id_${ANT_KEY}`],
   ["leading-character bypass on a key shape (digit)", j("1", "ghp_", "PLANTED0000000000")],
   ["key=value without a boundary", j("my", "secret=", "PLANTEDVALUE9")],
+  // Verifier round 2, R2-D1: a home root after a character the POSIX lookbehind skips.
+  // Probe A (exported through the library with no registered literals).
+  ["R2-D1 A: home after '...'", j("Saving...", "/home/", USER, "/notes.txt")],
+  ["R2-D1 A: Users after '../../'", j("cd ../../", "Users/", USER, "/Desktop")],
+  ["R2-D1 A: Users after a digit and '/'", j("v2/", "Users/", USER, "/x")],
+  ["R2-D1 A: home after '-'", j("build-", "/home/", USER, "/work/x")],
+  ["R2-D1 A: drive-relative Users", j("dir=C:", "Users\\", USER, "\\x")],
+  // Probe B (hand-edited, re-chained bundles).
+  ["R2-D1 B: Users after '.../'", j("see.../", "Users/", USER, "/secret.txt")],
+  ["R2-D1 B: Users after '-'", j("a-/", "Users/", USER, "/secret.txt")],
+  ["R2-D1 B: home after a digit", j("2/", "home/", USER, "/x")],
+  ["R2-D1 B: mixed separators", j("/", "Users\\", USER, "\\x")],
+  ["R2-D1 B: drive-relative, bare", j("C:", "Users\\", USER, "\\x")],
+  // The same shapes under other home roots and encodings.
+  ["R2-D1: root home after a letter-adjacent '.'", j("x./", "root/", USER, "/x")],
+  ["R2-D1: upper-case Windows home", j("v1/", "USERS\\", USER)],
+  ["R2-D1: macOS per-user temp after '.'", j("x.", "/private/var/folders/", USER, "/T/a")],
+  ["R2-D1: percent-encoded, after '...'", j("...", "%2Fhome%2F", USER, "%2Fx")],
 ];
 
 describe("scanner bypasses: every encoded or prefixed host path or key is caught", () => {
@@ -295,12 +313,26 @@ describe("scanner bypasses: every encoded or prefixed host path or key is caught
     expect(codes).toEqual(["PROOF_REDACTION", "PROOF_SCHEMA"]);
   });
 
+  it("R2-D1: a guest's home (not the exporting host's) after '-' never reaches an export", () => {
+    const guest = j("run", "ner", "PLANTED");
+    const run = sampleRun();
+    const value = j("build-", "/home/", guest, "/work/x");
+    const steps = [
+      { kind: "action" as const, actor: "harness" as const, tool: "shell", summary: value },
+      ...run.steps,
+    ];
+    const text = serializeProofBundle(exportProofBundle({ ...run, steps }, NO_CTX));
+    expect(text).not.toContain(guest);
+    expect(verifyProofBundle(text).ok).toBe(true);
+  });
+
   it("ordinary text stays clean in every decoded form (no false refusal)", () => {
     for (const ok of [
       "a%20b 50% done &amp; ok &lt;tag&gt;",
       "line\\nnext \\t tab",
       "https://example.org/a/b?x=%2Fy",
       "ratio 3:4, C: drive, path a/b/c, ~/notes, task_list_items, risk-assessment",
+      "home page, root cause, users list, the users/ folder, myhome/x, rooted/x",
     ])
       expect(findLeaks(ok), ok).toEqual([]);
   });
@@ -364,6 +396,19 @@ describe("the report is an output in its own right: its HTML is scanned", () => 
   it("a path that the HTML escaping turns into entities is still found", () => {
     const value = `see ${MAC_HOME.replace(/\//g, "&#47;")}x`;
     expect(() => renderProofReport(withSummary(value), forgedOk)).toThrow(/unredacted/);
+  });
+
+  it("R2-D1: a home root after a skipped leading character stops the report", () => {
+    for (const value of [
+      j("see.../", "Users/", USER, "/secret.txt"),
+      j("a-/", "Users/", USER, "/secret.txt"),
+      j("2/", "home/", USER, "/x"),
+      j("/", "Users\\", USER, "\\x"),
+      j("C:", "Users\\", USER, "\\x"),
+    ])
+      expect(() => renderProofReport(withSummary(value), forgedOk), value).toThrow(
+        ProofReportError,
+      );
   });
 
   it("a registered literal passed to the renderer stops the report", () => {
