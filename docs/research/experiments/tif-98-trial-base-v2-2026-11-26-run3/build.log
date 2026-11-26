@@ -1,0 +1,8 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 37440 vm-session.sh
+build-trial-base: 05:39:36Z step 1: open egress for the maintenance window; restore and boot clean-base
+build-trial-base: 05:40:05Z step 2: state before; signatures; ngen; idle tasks; full scan
+build-trial-base: 06:00:50Z step 3: disable maintenance trigger and Windows Update; check Defender
+build-trial-base: 06:00:54Z step 4: remove the maintenance script; clean shutdown
+build-trial-base: 06:01:08Z step 5: deny egress; boot in place; verify + probe
+build-trial-base: 06:01:44Z step 6: clean shutdown; snapshot trial-base-v2
+build-trial-base: 06:01:58Z done: trial-base-v2 created from clean-base; egress denied; clean-base untouched

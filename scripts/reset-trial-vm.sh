@@ -88,8 +88,12 @@ egress_script() {
 # Refuse to touch a snapshot we do not own the name of; these are protected.
 # cua-c1-base (M1 Coordinator-approved): a derivative taken from a cold clean-base
 # restore with Cua installed, for the screenshot-baseline C1/C2 arms only.
+# trial-base-v2 (TIF-98 follow-up): clean-base with its pending maintenance run
+# to completion and the maintenance/Windows Update triggers disabled; built by
+# scripts/build-trial-base.sh, taken with guest egress denied. clean-base stays
+# as the rollback (runbook §3.5).
 case "$SNAPSHOT" in
-  clean-base|clean-base-live|m1-agent-live|cua-c1-base) ;;
+  clean-base|clean-base-live|m1-agent-live|cua-c1-base|trial-base-v2) ;;
   *) die "refusing to restore unexpected snapshot '$SNAPSHOT'" ;;
 esac
 
