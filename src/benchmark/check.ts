@@ -131,7 +131,11 @@ export interface R1Verdict {
    * `falseAcceptPerTrial`, named for the scorecard.
    */
   readonly headline: Rate;
-  /** The gated subset, on its own line under the headline. */
+  /**
+   * The gated subset, on its own line under the headline: every row that is not
+   * unregistrable, harness faults included. A row count, not the R1 bar: the "about 100"
+   * (eligible gated + unregistrable, ruling 09:45Z) is the M2 evidence-pack check's.
+   */
   readonly gated: {
     readonly trials: number;
     readonly accepted: number;

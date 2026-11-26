@@ -211,8 +211,9 @@ graded and kept in `trials` (R1's per-trial denominator). The check reports them
 
 **R1's denominator** (outer-loop ruling 2026-11-26 08:38Z): R1's `headline` is false DONE
 accepted (plus accepted ungradable) over **all** trials of the task set, 100 for fc-v1,
-unregistrable ones included. Under it, R1 reports the `gated` line (trials the gate could
-decide, 90 for fc-v1: accepted, false DONE accepted, accepted ungradable) and the
+unregistrable ones included (they are not dropped; faults are not excused either). Under it,
+R1 reports the `gated` line (every myco-gate row that is not unregistrable, 90 for fc-v1,
+harness faults included: accepted, false DONE accepted, accepted ungradable) and the
 `unregistrable` line (10 for fc-v1), plus a non-blocking note when any unregistrable trial
 claimed DONE (those DONEs were never gated). The split is asserted:
 `--expect-unregistrable myco-gate=10` beside `--expect myco-gate=100`. The check then requires
@@ -220,6 +221,10 @@ exactly 10 unregistrable and 90 gated rows, an arm with unregistrable rows but n
 is an error, and `--require-r1` refuses to run for `myco-gate` without the split. A short run
 therefore fails the check instead of shrinking the denominator. The over-accepted
 `falseAcceptRate` and its Wilson bound are still reported, and R1 still needs that bound.
+This check counts rows; the "about 100" bar itself is the M2 evidence-pack check's
+(`src/m2/evidence.ts`, outer-loop confirmation 2026-11-26 09:45Z): eligible gated trials (a
+usable verdict on a DONE claim, the 03:13Z rule) plus unregistrable trials. A harness fault or
+other ineligible gated trial never counts toward it, so it cannot fill the bar.
 
 **Cost per verified task** (per arm, in the check's output): the arm's total `cost.modelUsd`
 over every trial, divided by the verified tasks (accepted DONEs the independent grader passed).
