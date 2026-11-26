@@ -33,6 +33,28 @@ const INSTRUCTIONS =
   "codes; do not claim done. You cannot supply evidence or expected values; the gate reads " +
   "persisted state itself.";
 
+/**
+ * Appended to `INSTRUCTIONS` only when the operator turned corrections on for the assigned
+ * task (`ServeOptions.corrections`). With corrections off (the default, and R1 evidence) the
+ * agent-facing text is exactly what it was before corrections existed, so it never announces
+ * a channel that is closed (#514 round 1, N1).
+ */
+export const CORRECTIONS_INSTRUCTIONS =
+  " A refuted or uncertain result may carry `corrections`: typed notes about your saved " +
+  "document (a target cell's value, a cell you changed, an unsaved document). Fix the document " +
+  "in the app and save; echoing a correction back changes nothing, and corrections never add " +
+  "attempts.";
+
+export interface ServeOptions {
+  /** Whether corrections are on for the assigned task. Off when absent. */
+  readonly corrections?: boolean;
+}
+
+/** The `initialize` instructions for these options. */
+export function serverInstructions(options: ServeOptions = {}): string {
+  return options.corrections === true ? INSTRUCTIONS + CORRECTIONS_INSTRUCTIONS : INSTRUCTIONS;
+}
+
 export function toolDefinitions(): object[] {
   return [
     {
@@ -86,7 +108,11 @@ async function callTool(gate: Gate, params: Record<string, unknown>): Promise<Rp
 }
 
 /** Handle one wire line. Returns the reply line, or undefined for notifications. */
-export async function handleLine(gate: Gate, line: string): Promise<string | undefined> {
+export async function handleLine(
+  gate: Gate,
+  line: string,
+  options: ServeOptions = {},
+): Promise<string | undefined> {
   let message: unknown;
   try {
     message = JSON.parse(line);
@@ -125,7 +151,7 @@ export async function handleLine(gate: Gate, line: string): Promise<string | und
           protocolVersion,
           capabilities: { tools: {} },
           serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-          instructions: INSTRUCTIONS,
+          instructions: serverInstructions(options),
         },
       };
       break;
@@ -151,7 +177,12 @@ export async function handleLine(gate: Gate, line: string): Promise<string | und
  * Serve until `input` ends. Requests are handled one at a time, in order, so replies
  * keep request order and each reply is one complete line.
  */
-export function serveStdio(gate: Gate, input: Readable, output: Writable): Promise<void> {
+export function serveStdio(
+  gate: Gate,
+  input: Readable,
+  output: Writable,
+  options: ServeOptions = {},
+): Promise<void> {
   const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
   let chain = Promise.resolve();
   return new Promise((resolveDone) => {
@@ -160,7 +191,7 @@ export function serveStdio(gate: Gate, input: Readable, output: Writable): Promi
       chain = chain.then(async () => {
         let out: string | undefined;
         try {
-          out = await handleLine(gate, line);
+          out = await handleLine(gate, line, options);
         } catch {
           // Unreachable while the gate is total; a failure must not stall later requests.
           out = reply(null, { ok: false, code: -32603, message: "internal error" });
