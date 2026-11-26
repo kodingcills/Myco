@@ -615,7 +615,7 @@ def scan(args: list[str], off: int) -> tuple[list[tuple[int, str, str, str | Non
         if name not in ALLOWED:
             why = WHY_NOT.get(name)
             if why:
-                refused.append(f"{t} is not in the launch allowlist ({why})")
+                refused.append(f"{t} is not in the launch allowlist ({why}) ({at})")
             elif name in QEMU_OPTIONS:
                 refused.append(f"{t} is not in the launch allowlist ({at})")
             else:
@@ -638,6 +638,7 @@ def names_lines(argv: list[str]) -> list[str]:
     off = offset(argv)
     args = argv[off:]
     out = []
+    seen: set[str] = set()
     i = 0
     while i < len(args):
         t, at = args[i], f"argv[{i + off}]"
@@ -646,7 +647,11 @@ def names_lines(argv: list[str]) -> list[str]:
             i += 1
             continue
         name, eq, _ = norm(t).partition("=")
-        allowed = not eq and (name in FLAGS or name in ALLOWED)
+        # A second copy of an option UTM writes once is refused by `live`
+        # (round-3 nit), so `names` marks it NOT ALLOWED too.
+        again = name in SINGLETONS and name in seen
+        seen.add(name)
+        allowed = not eq and not again and (name in FLAGS or name in ALLOWED)
         shown = said(name, QEMU_OPTIONS | FLAGS | ALLOWED.keys() | WHY_NOT.keys(), f"<unrecognised option {at}>")
         out.append(f"{shown}\t{'allowed' if allowed else 'NOT ALLOWED'}")
         i += 1 if eq or name in FLAGS else 2
