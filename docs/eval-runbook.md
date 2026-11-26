@@ -343,6 +343,64 @@ instead of hanging; `reset.sh` (§3.2) does not, which is why the cold path is t
 The `resuming` wedge remains an **open hypothesis** about rapid live-resume cycling, not a
 conclusion (log 37).
 
+### 3.4 Guest egress: default deny (TIF-275)
+
+The guest has **no outbound network**. Its only network is QEMU user-mode networking, and UTM's
+**"isolate from host"** flag on that NIC adds slirp `restrict=on`: the guest cannot open any
+connection to the internet, the LAN or the host. The one explicit `hostfwd` rule,
+host `127.0.0.1:2222` → guest `:22`, still works because the host initiates it. Everything Myco
+does with the guest rides that inbound forward: `scp`/`ssh` for reset and deploy, and the agent's
+port 8765 through `ssh -L`, since the agent listens on the guest's loopback.
+
+| Direction | Allowed | How |
+|---|---|---|
+| host → guest | TCP `127.0.0.1:2222` → guest `:22` only | UTM port forward (slirp `hostfwd`) |
+| guest → internet (DNS, HTTP(S), NTP, Windows Update, activation, PyPI) | **nothing** | slirp `restrict=on` |
+| guest → host (`10.0.2.2`) | **nothing** | slirp `restrict=on` |
+
+**Every reset checks it.** After the boot gate, `scripts/reset-trial-vm.sh` runs
+`scripts/guest-egress.sh verify`. That passes only if the running QEMU's `-netdev` carries
+`restrict=on`, read from the live process. No guest, two guests, or a netdev without the option
+all **fail the reset**:
+
+```
+reset-trial-vm: guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)
+```
+
+Commands (each takes the VM lock where it changes anything; check `lsof` first as always):
+
+```bash
+scripts/guest-egress.sh status   # read-only: UTM flag + the running guest's netdev
+scripts/guest-egress.sh verify   # exit 0 only if the running guest is restricted
+scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
+scripts/guest-egress.sh deny     # set the flag (force-stops the VM; reset afterwards)
+scripts/guest-egress.sh allow    # clear it: base-image maintenance ONLY
+```
+
+Expected `probe` on a restricted guest (every target fails):
+
+```
+{"dns_pypi_org":"timeout","tcp_pypi_org_443":"SocketException","tcp_1_1_1_1_443":"SocketException","tcp_8_8_8_8_53":"SocketException","tcp_host_10_0_2_2_2222":"SocketException"}
+```
+
+**Maintenance that needs the internet** (building a new base image, for example):
+
+1. `scripts/guest-egress.sh allow`.
+2. Reset with `MYCO_GUEST_EGRESS=open scripts/reset-trial-vm.sh`. It prints a `WARNING` and skips
+   the check.
+3. Do the work.
+4. `scripts/guest-egress.sh deny`, then reset again.
+
+Never run trials or deploy credentials into a guest reset that way.
+
+**The deploy needs no guest internet.** The host fetches the agent's Python wheels, pinned by
+version and sha256 in `agent/bootstrap/guest-requirements.txt`, into
+`~/.cache/myco/guest-wheels` (or `$MYCO_WHEEL_CACHE`), offline from that cache after the first
+fetch. The tree copy carries them in, and the guest installs them with `pip --no-index
+--require-hashes` (§4). An offline host can pre-stage them with `MYCO_GUEST_WHEELS=<dir>`.
+
+Background and threat model: `docs/security/guest-egress.md`.
+
 ## 4. Deploy the agent
 
 ```bash
@@ -411,10 +469,12 @@ line names the host file the deploy wrote and the guest path, and `ops` prints a
   client commenting on the guest sshd's key exchange, not a deploy fault. The same warning can
   appear on any `ssh`, `scp` or `vssh` call in this runbook. Judge the deploy by its own lines:
   the sha256 copy check, `ping verified` and `DEPLOY OK`.
-- **No pip output (row-8 J6).** The dependency install is
-  `pip install --quiet --no-warn-script-location pywin32 comtypes uiautomation` in
-  `guest-deploy.ps1`'s `register` stage (run by the `==> registering MycoAgent task …` step), so
-  a successful install prints nothing. There is no separate pip log on the host or the guest. On
+- **No pip output (row-8 J6).** The dependency install is an **offline**
+  `pip install --quiet --no-index --find-links <agent>\wheels --require-hashes -r guest-requirements.txt`
+  in `guest-deploy.ps1`'s `register` stage (run by the `==> registering MycoAgent task …` step).
+  The guest has no internet (§3.4): the deploy stages the pinned wheels on the host first
+  (`==> staged 3 wheels for the guest (installed offline, hash-pinned)`) and copies them with the
+  tree. A successful install prints nothing. There is no separate pip log on the host or the guest. On
   failure, pip's error comes back over ssh on the deploy's stderr, followed by
   `pip install into LO python failed: <exit code>`, and the deploy exits non-zero before the ping
   step. The evidence that the install worked is §5 passing.

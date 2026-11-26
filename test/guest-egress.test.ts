@@ -49,7 +49,10 @@ afterEach(() => {
 
 describe("guest-egress.sh verify (TIF-275)", () => {
   it("passes when the running netdev has restrict=on", () => {
-    const r = run(["/usr/bin/login", guest("user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22")]);
+    const r = run([
+      "/usr/bin/login",
+      guest("user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22"),
+    ]);
     expect(r.psRan).toBe(true);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("egress closed");
