@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ledgerRowSchema } from "../../schemas/ledger-row.ts";
@@ -22,6 +24,40 @@ describe("Direction A: Verified GUI Task Package & Runner", () => {
     expect(taskPkg.intent.items).toHaveLength(4);
     expect(taskPkg.intent.items).toContain("bug: login page crashes on save");
     expect(taskPkg.intent.items).toContain("BUG: token expires too early");
+  });
+
+  // loadTaskPackage falls back to a default for every field, and the defaults equal
+  // tasks/todo-save.yaml, so the test above passed with the YAML parser returning `{}`
+  // (test audit, mutation M1a). A package whose values all differ pins the real read.
+  it("reads every field from the yaml, not from the built-in defaults", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-direction-a-"));
+    try {
+      const yamlPath = join(dir, "task.yaml");
+      writeFileSync(
+        yamlPath,
+        [
+          "name: audit-a",
+          "version: 3",
+          "app: audit/app-a",
+          "task: audit-a-task",
+          "fixture: audit-a-fixture",
+          "intent:",
+          "  items:",
+          '    - "first audit item"',
+          '    - "second audit item"',
+          "",
+        ].join("\n"),
+      );
+      const pkg = loadTaskPackage(yamlPath);
+      expect(pkg.name).toBe("audit-a");
+      expect(pkg.version).toBe(3);
+      expect(pkg.app).toBe("audit/app-a");
+      expect(pkg.task).toBe("audit-a-task");
+      expect(pkg.fixture).toBe("audit-a-fixture");
+      expect(pkg.intent.items).toEqual(["first audit item", "second audit item"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("executes tasks/todo-save.yaml, detects false success, and produces valid evidence", async () => {
@@ -101,17 +137,17 @@ describe("Direction A: Verified GUI Task Package & Runner", () => {
     const manifest = JSON.parse(readFileSync(join(runDir, "manifest.json"), "utf8"));
     expect(manifest.format).toBe("mycotrace/1");
     expect(manifest.runId).toBe(result.runId);
-    expect(manifest.files["trace.jsonl"]).toBeDefined();
-    expect(manifest.files["trace.extended.jsonl"]).toBeDefined();
-    expect(manifest.files["result.json"]).toBeDefined();
-    expect(manifest.files["ledger.jsonl"]).toBeDefined();
-
-    // Validate step screenshots in artifacts/
-    for (let s = 0; s <= 5; s++) {
-      expect(manifest.files[`artifacts/step-${s}.png`]).toBeDefined();
-      expect(manifest.files[`artifacts/step-${s}-meta.json`]).toBeDefined();
-      expect(existsSync(join(runDir, `artifacts/step-${s}.png`))).toBe(true);
-      expect(existsSync(join(runDir, `artifacts/step-${s}-meta.json`))).toBe(true);
+    const required = ["trace.jsonl", "trace.extended.jsonl", "result.json", "ledger.jsonl"];
+    for (let s = 0; s <= 5; s++)
+      required.push(`artifacts/step-${s}.png`, `artifacts/step-${s}-meta.json`);
+    expect(Object.keys(manifest.files)).toEqual(expect.arrayContaining(required));
+    // Every entry is the sha256 of the file it names. `toBeDefined()` let a manifest that
+    // hashed the wrong body pass (test audit, mutation M3).
+    for (const [path, digest] of Object.entries(manifest.files)) {
+      const actual = createHash("sha256")
+        .update(readFileSync(join(runDir, path)))
+        .digest("hex");
+      expect(digest, path).toBe(actual);
     }
   });
 });
