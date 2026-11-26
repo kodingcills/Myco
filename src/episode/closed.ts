@@ -12,13 +12,16 @@
  *  - a field of a CLOSED type is written as is when it matches its grammar: an enum member, a
  *    digest, a timestamp, a blob file name, a reason code, a version. A value that does not
  *    match is not guessed at: the export is refused, naming the field, never the value;
- *  - an id field is written as is when it matches `CLOSED_ID`, else replaced by
- *    `h-<sha256>` of the raw value (equality, such as one run's episodes sharing a `runId`,
- *    stays checkable);
+ *  - an id field is written as is when it matches `CLOSED_ID`, else replaced by its hashed form
+ *    (equality, such as one run's episodes sharing a `runId`, stays checkable);
  *  - every FREE-TEXT field (typed text, shell commands, UI status, the instruction) is replaced
- *    by `h-<sha256>` of the raw value, whatever it looks like. Two short free fields that the
- *    schema caps at 64 characters (key names, app names) keep their value only when it matches
- *    a closed token grammar (no space, no separator), else they get the 60-hex hashed form.
+ *    by its hashed form, whatever it looks like. Key and app names keep their value only from a
+ *    closed vocabulary (F1), else they get the hashed form.
+ *
+ * THE hashed form, on every field and every export surface (lead ruling 2026-11-26 23:06Z):
+ * `h-<60 hex>`, the first 240 bits of the tagged sha256 (`exportDigest`), carrying no input text.
+ * One form everywhere, so values stay comparable; it fits the 64-character key/app cap. Closing is
+ * idempotent for exactly that form and no other `h-` string.
  *
  * Every string path an episode can hold is listed in `FIELD_TREATMENT`; a string at a path the
  * table does not name refuses the export (a new field is a reviewed change), and
@@ -56,11 +59,14 @@ const HEX64 = /^[0-9a-f]{64}$/;
  */
 export const KNOWN_ARMS = ["myco-gate", "hcu+shell"] as const;
 export const ARM_GRAMMAR = /^(?:myco-gate|hcu\+shell)(?::[a-z0-9][a-z0-9-]{0,31})?$/;
-const HASHED = /^h-[0-9a-f]{64}$/;
-const HASHED_SHORT = /^h-[0-9a-f]{60}$/;
+/** THE hashed form (lead ruling 23:06Z): exactly `h-` and 60 lower-case hex, nothing else. */
+export const HASHED = /^h-[0-9a-f]{60}$/;
 
 /** The domain tag every text digest is computed under (versioned: a change is reviewed). */
 export const EXPORT_TEXT_TAG = "myco.episode.export-text/1";
+
+/** The hashed form of a raw value: `h-` and the first 60 hex (240 bits) of its tagged sha256. */
+export const hashed = (raw: string): string => `h-${exportDigest(raw).slice(0, 60)}`;
 
 export function exportDigest(raw: string): string {
   return createHash("sha256").update(`${EXPORT_TEXT_TAG}\u0000${raw}`, "utf8").digest("hex");
@@ -203,19 +209,17 @@ function treat(path: string, value: string, joined: readonly IdentityEntry[]): s
     case "text":
       // Idempotent: an already-hashed value is closed (it carries nothing), so re-exporting an
       // imported dataset is byte-identical.
-      return HASHED.test(value) ? value : `h-${exportDigest(value)}`;
+      return HASHED.test(value) ? value : hashed(value);
     // An id or token that would be kept verbatim but holds an identity string (even joined,
     // `<Name>2`) is digested instead (lead ruling 21:52Z).
     // An already-hashed id or token is closed and carries nothing: kept as is (#556 r3, S2), so a
     // re-export is byte-identical even when an identity's letters occur in the hash.
     case "id":
       if (HASHED.test(value)) return value;
-      return CLOSED_ID.test(value) && !holds(value, joined) ? value : `h-${exportDigest(value)}`;
+      return CLOSED_ID.test(value) && !holds(value, joined) ? value : hashed(value);
     case "token":
-      if (HASHED_SHORT.test(value)) return value;
-      return t.vocabulary.test(value) && !holds(value, joined)
-        ? value
-        : `h-${exportDigest(value).slice(0, 60)}`;
+      if (HASHED.test(value)) return value;
+      return t.vocabulary.test(value) && !holds(value, joined) ? value : hashed(value);
     case "closed":
       if (!t.grammar.test(value)) throw new ExportInputError(templateOf(path));
       return value;
@@ -259,7 +263,7 @@ export function openStrings(ep: unknown): string[] {
           : t.kind === "id"
             ? CLOSED_ID.test(node) || HASHED.test(node)
             : t.kind === "token"
-              ? t.vocabulary.test(node) || HASHED_SHORT.test(node)
+              ? t.vocabulary.test(node) || HASHED.test(node)
               : t.grammar.test(node));
       if (!ok) out.push(path);
     } else if (Array.isArray(node)) {
@@ -287,7 +291,7 @@ export function joinedIdentity(
     if (typeof node === "string") {
       const t = FIELD_TREATMENT[templateOf(path)];
       if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) return;
-      if (HASHED.test(node) || HASHED_SHORT.test(node)) return;
+      if (HASHED.test(node)) return;
       // Every identity this string holds (folded: joined forms, full case folding; identity.ts).
       for (const entry of joined)
         if (heldIdentity(node, [entry]) !== undefined) out.push({ class: entry[0], path });

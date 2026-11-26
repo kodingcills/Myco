@@ -333,7 +333,7 @@ describe("S1-S3 and #553's full Unicode case folding", () => {
 
   it("S2: an already-hashed id or token stays as it is, even when an identity's letters occur in the hash", () => {
     const ep = baseEpisode();
-    const id = `h-${"abcd".repeat(16)}`;
+    const id = `h-${"abcd".repeat(15)}`;
     const key = `h-${"abcd".repeat(15)}`;
     const closed = closeEpisode(
       {
@@ -370,7 +370,7 @@ describe("S1-S3 and #553's full Unicode case folding", () => {
         { ...baseEpisode(), task: { ...baseEpisode().task, id: written } },
         joined,
       );
-      expect(/^h-[0-9a-f]{64}$/.test(closed.task.id), `${configured} / ${written}`).toBe(true);
+      expect(/^h-[0-9a-f]{60}$/.test(closed.task.id), `${configured} / ${written}`).toBe(true);
       expect(closeEpisode(baseEpisode(), joined).task.id).toBe(baseEpisode().task.id);
     }
   });
@@ -455,5 +455,53 @@ describe("F1 (lead ruling 22:18Z): key and app names are verbatim only from a cl
         actions: { ...ep.actions, items: [{ ...ep.actions.items[0], app: "jsmith" }] },
       }),
     ).toEqual(["$.actions.items[0].app"]);
+  });
+});
+
+describe("the one hashed form, h-<60 hex> (lead ruling 23:06Z)", () => {
+  const exact = `h-${"0123456789abcdef".repeat(4).slice(0, 60)}`;
+  const old64 = `h-${"0123456789abcdef".repeat(4)}`;
+  const withAll = (v: string): Episode => ({
+    ...baseEpisode(),
+    task: { ...baseEpisode().task, instruction: v, id: v },
+    actions: {
+      capture: "recorded",
+      truncated: false,
+      items: [
+        { seq: 0, atMs: null, kind: "shell", command: v },
+        { seq: 1, atMs: null, kind: "key", keys: v.slice(0, 64) },
+      ],
+    },
+    observations: { capture: "recorded", withheld: 0, items: [] },
+  });
+
+  it("every hashed field is exactly h- and 60 hex (text, id and token alike)", () => {
+    const closed = closeEpisode(withAll("C:\\Users\\First Last\\x"));
+    const items = closed.actions.items as unknown as readonly { command?: string; keys?: string }[];
+    for (const v of [closed.task.instruction, closed.task.id, items[0]?.command, items[1]?.keys])
+      expect(/^h-[0-9a-f]{60}$/.test(v ?? "") && (v ?? "").length === 62, String(v?.length)).toBe(
+        true,
+      );
+  });
+
+  it("an exact h-<60 hex> is kept as is everywhere; no other h- form is treated as already hashed", () => {
+    const kept = closeEpisode(withAll(exact));
+    const items = kept.actions.items as unknown as readonly { command?: string; keys?: string }[];
+    expect([kept.task.instruction, kept.task.id, items[0]?.command, items[1]?.keys]).toEqual([
+      exact,
+      exact,
+      exact,
+      exact,
+    ]);
+    for (const other of [
+      old64,
+      `h-${"0".repeat(59)}`,
+      `h-${"0".repeat(61)}`,
+      `h-${"A".repeat(60)}`,
+    ]) {
+      const closed = closeEpisode(withAll(other));
+      expect(closed.task.instruction, String(other.length)).not.toBe(other);
+      expect(/^h-[0-9a-f]{60}$/.test(closed.task.instruction ?? "")).toBe(true);
+    }
   });
 });

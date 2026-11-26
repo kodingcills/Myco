@@ -229,13 +229,17 @@ the closed-schema pattern of #553:
 | Field kind | Fields | Exported as |
 |---|---|---|
 | Closed value | enums, digests, timestamps, blob file names, reason codes, versions, fault codes, and the arm (a known arm, `myco-gate` or `hcu+shell`, optionally with a `:variant` of lower-case letters, digits and hyphens, such as the multi-step demo's `myco-gate:retry`) | as is when it matches its grammar; anything else **refuses the export**, naming the field, never the value |
-| Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`), else `h-<sha256>` |
-| Free text | `task.instruction`, typed text, shell commands, UI status | always `h-<sha256>` of the raw value |
-| Key and app names (F1, lead ruling 22:18Z) | `keys`, `app` (schema cap 64) | as is ONLY from a closed vocabulary: a known key or key combination (`KNOWN_KEYS`: up to three modifiers plus a named key, any case) or a registered app id (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`); anything else `h-<60 hex>` (the 64-hex form does not fit the cap) |
+| Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`), else `h-<60 hex>` |
+| Free text | `task.instruction`, typed text, shell commands, UI status | always `h-<60 hex>` of the raw value |
+| Key and app names (F1, lead ruling 22:18Z) | `keys`, `app` (schema cap 64) | as is ONLY from a closed vocabulary: a known key or key combination (`KNOWN_KEYS`: up to three modifiers plus a named key, any case) or a registered app id (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`); anything else `h-<60 hex>` |
 
-The digest is sha256 under the domain tag `myco.episode.export-text/1`, unsalted, so equal
-values stay equal (one run's episodes share a hashed `runId`). A digest does not reveal its
-input, but someone who guesses the exact input can confirm the guess. Every string path an
+**One hashed form** (lead ruling 2026-11-26 23:06Z): every hashed value on every field is
+`h-` followed by the first 60 hex digits (240 bits) of sha256 under the domain tag
+`myco.episode.export-text/1`. It carries no input text, and it fits the 64-character key and app
+cap. Closing is idempotent for exactly that form: an `h-<60 hex>` value is kept as is, and no
+other `h-` string (64 hex, 59 or 61 hex, upper case) counts as already hashed. The digest is
+unsalted, so equal values stay equal (one run's episodes share a hashed `runId`). A digest does
+not reveal its input, but someone who guesses the exact input can confirm the guess. Every string path an
 episode can hold is listed in `FIELD_TREATMENT`. A string at any other path refuses the
 export, so a new field is a reviewed change. `episodeId` is recomputed over the closed content.
 The export filter is closed too (it is written to the manifest).

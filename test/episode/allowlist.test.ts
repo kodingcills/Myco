@@ -319,7 +319,7 @@ describe("the field table covers every string path an episode can hold", () => {
     const ep = everything();
     const a = closeEpisode({ ...ep, provenance: { ...ep.provenance, runId: "run:C:x" } });
     const b = closeEpisode({ ...ep, provenance: { ...ep.provenance, runId: "run:C:x" } });
-    expect(a.provenance.runId).toMatch(/^h-[0-9a-f]{64}$/);
+    expect(a.provenance.runId).toMatch(/^h-[0-9a-f]{60}$/);
     expect(a.provenance.runId).toBe(b.provenance.runId);
     expect(closeEpisode(ep).provenance.runId).toBe(ep.provenance.runId);
   });
@@ -501,7 +501,7 @@ describe("#556 round 1 fixes", () => {
     }
   });
 
-  it("T2: free text that merely starts with h- is hashed, never kept (only an exact h-<64 hex> is)", () => {
+  it("T2: free text that merely starts with h- is hashed, never kept (only an exact h-<60 hex> is)", () => {
     const words = ["QzPLANTEDhfirst", "QzPLANTEDhlast"];
     const base = readStoreDirOrDraft();
     for (const text of [
@@ -510,7 +510,7 @@ describe("#556 round 1 fixes", () => {
       `h-${"a".repeat(63)}`,
     ]) {
       const closed = closeEpisode({ ...base, task: { ...base.task, instruction: text } });
-      expect(closed.task.instruction, text).toMatch(/^h-[0-9a-f]{64}$/);
+      expect(closed.task.instruction, text).toMatch(/^h-[0-9a-f]{60}$/);
       expect(closed.task.instruction).not.toBe(text);
       expect(words.filter((w) => canonicalJson(closed).includes(w))).toEqual([]);
       // And an exported string that is only h-prefixed is open.
