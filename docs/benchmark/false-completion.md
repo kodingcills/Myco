@@ -195,9 +195,13 @@ row that has a gate call or verdict or whose task is not `invalid-target` (see b
 
 **`--evidence`** (TIF-274): when the numbers are evidence (a scorecard, not a plumbing
 test), pass `--evidence`. The check then refuses every row whose `plannerModelId` is not a
-Claude model id (`EVIDENCE_PLANNER` in `src/benchmark/check.ts`, e.g. `claude-sonnet-5-5`).
-This is positive provenance, not a denylist: a dry run's `simulated:...` planner, and any case,
-whitespace or Unicode variant of it, fails.
+Claude model id this project runs (the `EVIDENCE_PLANNERS` allowlist in
+`src/benchmark/check.ts`: `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-haiku-5-5`,
+`claude-fable-5-2`). This is positive provenance, not a denylist: a dry run's `simulated:...`
+planner, any case, whitespace or Unicode variant, and any other id fails. With or without the
+flag, the result's `provenance` field says `evidence`, `simulated` or `mixed`, so a plumbing run
+is labelled even when its R1 passes. The planner is a declared string: this stops mislabelled
+dry runs, not a deliberate forgery.
 
 **Unregistrable gated trials** (TIF-274, outer-loop ruling 2026-11-25): the gate registry
 rejects fc-v1's 10 invalid-target specs. Their arm rows carry

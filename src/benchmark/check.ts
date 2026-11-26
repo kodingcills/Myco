@@ -153,6 +153,13 @@ export interface CheckResult {
   readonly arms: readonly ArmCounts[];
   /** R1 applies to the gated arm; null when no `myco-gate` rows were supplied. */
   readonly r1: R1Verdict | null;
+  /**
+   * Whether these rows can be evidence, computed whether or not `evidence` was asked for:
+   * `evidence` when every arm row's planner is in `EVIDENCE_PLANNERS`, `simulated` when none is
+   * (a dry run, a scripted agent), `mixed` otherwise. A plumbing run says `simulated` here even
+   * when its R1 passes. Null when no arm row is valid.
+   */
+  readonly provenance: "evidence" | "simulated" | "mixed" | null;
 }
 
 export interface CheckOptions {
@@ -167,18 +174,25 @@ export interface CheckOptions {
   readonly expectUnregistrable?: Readonly<Partial<Record<Arm, number>>>;
   /**
    * Checking evidence (a scorecard number), not plumbing: refuse every row without evidence
-   * provenance, i.e. whose `plannerModelId` is not a Claude model id (`EVIDENCE_PLANNER`).
+   * provenance, i.e. whose `plannerModelId` is not in `EVIDENCE_PLANNERS`.
    * Dry runs name a `simulated:` planner, so they never pass.
    */
   readonly evidence?: boolean;
 }
 
 /**
- * Evidence provenance, positively: a row counts as evidence only when its planner is a Claude
- * model id, in ASCII lower case (e.g. `claude-sonnet-5-5`). Anything else (`simulated:...`,
- * case or Unicode variants, `dry-run:...`) is refused under `evidence: true`.
+ * Evidence provenance, positively: a row counts as evidence only when its planner is exactly
+ * one of the Claude model ids this project runs (an allowlist, not a pattern; a new model is
+ * added here deliberately). Anything else (`simulated:...`, case, whitespace or Unicode
+ * variants, an older or made-up id) is refused under `evidence: true`. This is a declared
+ * string: it stops mislabelled dry runs, not a deliberate forgery of the planner field.
  */
-export const EVIDENCE_PLANNER = /^claude-(?:opus|sonnet|haiku|fable)(?:-[0-9]+)+$/;
+export const EVIDENCE_PLANNERS: ReadonlySet<string> = new Set([
+  "claude-sonnet-5-5",
+  "claude-opus-5-5",
+  "claude-haiku-5-5",
+  "claude-fable-5-2",
+]);
 
 /** Host paths must never reach a publishable ledger (M2 plan §6; test/no-home-paths). */
 const HOST_PATH = /(?:^|[\s"'(=])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\)/;
@@ -196,6 +210,13 @@ const rate = (numerator: number, denominator: number): Rate => ({
   denominator,
   wilson95: wilson(numerator, denominator),
 });
+
+function provenanceOf(rows: readonly BenchmarkArmRow[]): CheckResult["provenance"] {
+  if (rows.length === 0) return null;
+  const proven = rows.filter((r) => EVIDENCE_PLANNERS.has(r.plannerModelId)).length;
+  if (proven === rows.length) return "evidence";
+  return proven === 0 ? "simulated" : "mixed";
+}
 
 /** Whether a row's `accepted` is what its claim and gate imply. */
 export function expectedAccepted(row: BenchmarkArmRow): boolean {
@@ -231,7 +252,7 @@ export function checkBenchmark(
 
   if (armInput.length === 0) errors.push("arm ledger is empty");
   if (options.evidence === true) {
-    const unproven = armRows.filter((r) => !EVIDENCE_PLANNER.test(r.plannerModelId));
+    const unproven = armRows.filter((r) => !EVIDENCE_PLANNERS.has(r.plannerModelId));
     if (unproven.length > 0) {
       const ids = [...new Set(unproven.map((r) => r.plannerModelId))];
       errors.push(
@@ -467,5 +488,6 @@ export function checkBenchmark(
     graderVersion: graderVersions.size === 1 ? ([...graderVersions][0] as string) : null,
     arms: counts,
     r1,
+    provenance: provenanceOf(armRows),
   };
 }
