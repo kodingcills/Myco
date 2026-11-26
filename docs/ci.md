@@ -33,10 +33,11 @@ nothing is skipped or fails for lack of one.
   `test/linux` with `MYCO_LINUX_PATH_REQUIRED=1` (a missing prerequisite fails the suite
   instead of skipping it), then `pnpm myco-linux --demo`, which exits non-zero unless
   every scenario gets its expected verdict. See `docs/product/linux-path.md` (TIF-269).
-- **Safe parallelism.** Track L. Installs LibreOffice Calc, Python-UNO and Xvfb, lifts
-  Ubuntu's AppArmor restriction on unprivileged user namespaces, runs `test/parallel`
-  with `MYCO_PARALLEL_REQUIRED=1` (the namespace and real-Calc suites fail instead of
-  skipping), then a $0 throughput run at N = 1, 2, 4 with scripted agents. See
+- **Safe parallelism.** Track L. Installs LibreOffice Calc, Python-UNO and Xvfb, runs
+  `test/parallel` with `MYCO_PARALLEL_REQUIRED=1` (the Xvfb and real-Calc suites fail
+  instead of skipping), then a $0 throughput run at N = 1, 2, 4 with scripted agents on
+  the unprivileged `linux-plain` backend (`--allow-weak-isolation`; nothing is counted as
+  verified there). Strict namespace isolation is not in this job. See
   `docs/product/safe-parallelism.md`.
 - **M2 evidence and scorecard.** `scripts/m2-evidence-check.ts --all` checks every
   committed `docs/research/experiments/m2-*` pack (schemas, the shared benchmark ledger,

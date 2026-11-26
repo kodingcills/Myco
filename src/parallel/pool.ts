@@ -5,8 +5,10 @@
  * Per trial, in order (each step fails closed):
  *
  *  1. Claim the run id by its case-folded form (`RunIdRegistry`, in-process and on disk).
- *  2. Create a fresh desktop in an empty private root (`DesktopBackend.create`), hiding
- *     the run root (other trials, vaults, evidence, locks) from it.
+ *  2. Create a fresh desktop in an empty private root (`DesktopBackend.create`), asking
+ *     it to hide the run root (other trials, vaults, evidence, locks). A backend that
+ *     cannot (`hostDirsHidden !== true`, e.g. `linux-plain`) says so, and its trial is
+ *     never counted (`shared-host-dirs`).
  *  3. Check the desktop's isolation report against the operator's requirements. A
  *     shortfall destroys the desktop before anything is sealed: the trial is `isolation`.
  *  4. Plant the trial's marker (a random nonce only the harness and this trial know) in

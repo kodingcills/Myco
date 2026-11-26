@@ -9,6 +9,17 @@ destroyed afterwards. Each trial gets its own verdict vault and gate, and no tri
 contaminate another. Parallelism must never raise a verdict. It can only withhold one: a
 trial that breaks any isolation rule is not counted as verified, whatever the gate said.
 
+> **Scope of this PR (round 2, narrowed).** Strict namespace isolation (`linux-ns`: per-trial
+> user, mount, network and pid namespaces) is **NOT in this PR**. Its round-1 form gave a false
+> VERIFIED: a trial could unmount the "hidden" run root and write another trial's saved file.
+> It also needs privileges cloud sessions lack. It is filed as "L strict linux-ns isolation
+> (fresh PR, round 1)". What ships here is the pool, its guards, and the unprivileged
+> `linux-plain` backend. `linux-plain` leaves other trials' roots writable, so **no
+> `linux-plain` trial is ever counted as verified** (`shared-host-dirs`, §2). It measures the
+> harness and checks every gate verdict, but it produces no counted result. Counted results
+> need a backend that really hides other trials: strict `linux-ns` (filed) or a microVM
+> (track U, §6).
+
 No model is called anywhere in this track. The agents are scripted, so every run here costs
 $0. Measurement runs with a real agent are out of scope for this PR. They need the integrity
 fixes in flight and the lead's GO, and they run on Claude Ultra only (§7).
@@ -20,31 +31,34 @@ fixes in flight and the lead's GO, and they run on Claude Ultra only (§7).
 ```sh
 pnpm install --frozen-lockfile
 pnpm myco-parallel --probe                       # what isolation this host can give
-pnpm myco-parallel --n 1,2,4 --trials 8          # $0, scripted file agent
-pnpm myco-parallel --n 1,2,4 --trials 8 --agent calc --display xvfb   # real headless Calc
+pnpm myco-parallel --n 1,2,4 --trials 8 --allow-weak-isolation          # $0, scripted file agent
+pnpm myco-parallel --n 1,2,4 --trials 8 --agent calc --display xvfb --allow-weak-isolation
 ```
 
 `--agent calc` needs LibreOffice Calc, Python-UNO and Xvfb (`sudo apt-get install -y
---no-install-recommends libreoffice-calc python3-uno xvfb`). On Ubuntu 24.04, unprivileged
-user namespaces are restricted by AppArmor. Lift the restriction with
-`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. Otherwise the strict default
-refuses every trial (§3).
+--no-install-recommends libreoffice-calc python3-uno xvfb`). No privilege and no sysctl is
+needed. Without `--allow-weak-isolation`, the strict default refuses every `linux-plain`
+trial (`isolation`, §3), because no backend in this PR meets it.
 
-A real-Calc run on a 4-CPU Linux container (8 trials per level, half of them honest; numbers
-from this PR's test run):
+A real-Calc run on a 4-CPU Linux container (8 trials per level, half of them honest). These
+numbers are **simulated, not evidence**: scripted agents, `linux-plain`, nothing counted.
 
 ```
-   N  trials  wall s  trials/h  verified  verified/h  correct  contaminated  peak  speedup
-   1       8     4.8    5956.6         4      2978.3        8             0     1       1x
-   2       8     2.3   12592.9         4      6296.5        8             0     2    2.11x
-   4       8     1.1   25285.3         4     12642.7        8             0     4    4.24x
+   N  trials  wall s  trials/h  gate-ok  counted  counted/h  correct  contaminated  peak  speedup
+   1      8    5.4   5347.2        4        0          0       8            0    1      1x
+   2      8    2.5    11557        4        0          0       8            0    2   2.16x
+   4      8    1.7  17204.3        4        0          0       8            0    4   3.22x
 ```
+
+`gate-ok` is how many trials the gate said `verified` for. `counted` is how many may be
+counted, and it is always 0 on `linux-plain`. `correct` means the gate verdict matched the
+scripted behaviour, with no disqualifier other than `shared-host-dirs`.
 
 The report is stamped `simulated: true`, `evidence: false`, `costEstimate: null`. Scripted
 agents measure the harness: isolation overhead and scaling. They never measure an agent's
 capability, so these numbers are not evidence and never enter R7.
 
-Exit codes: 0 means every trial got its expected verdict with no disqualifier. 1 means a
+Exit codes: 0 means every trial got its expected verdict with no blocking disqualifier. 1 means a
 mismatch, a contamination, a refused pool or an unavailable backend. 3 means a usage error.
 
 ## 2. What one trial does
@@ -52,14 +66,17 @@ mismatch, a contamination, a refused pool or an unavailable backend. 3 means a u
 `runPool` (`src/parallel/pool.ts`) runs these steps for every trial. Each step fails closed.
 
 1. **Claim the run id by its case-folded form.** `Run-A` and `run-a` are the same trial on a
-   case-insensitive filesystem. A batch with both is refused before anything starts. Two
+   case-insensitive filesystem. A run id ending in `.` is refused (NTFS drops the dot, so
+   `run-a.` is `run-a`), and so is a Windows device name (`con`, `nul.txt`, `COM1`, …). A batch with both is refused before anything starts. Two
    pools that share a lock dir refuse each other's folded-equal ids while either holds one
    (`open(…, "wx")` on a lock named by the folded id's sha256). A stale lock is a refusal
    too: an operator removes it by hand.
 2. **Create a fresh desktop** in an empty private root under `<run>/trials/<runId>`. The dir
    must not exist yet, so a root is never reused.
 3. **Check isolation.** The pool compares the desktop's `IsolationReport` with the operator's
-   requirements. A shortfall destroys the desktop before anything is sealed.
+   requirements. A shortfall destroys the desktop before anything is sealed. Separately, and
+   whatever the requirements say, a desktop whose report does not say `hostDirsHidden:
+   true` gets `shared-host-dirs`: the trial runs, but it is never counted.
 4. **Plant the trial's marker.** This is a random nonce known only to the harness and this
    trial. It goes in `workspace/.myco-trial-marker` and `$MYCO_TRIAL_MARKER`. The task's
    fixture is laid down next to it.
@@ -69,10 +86,15 @@ mismatch, a contamination, a refused pool or an unavailable backend. 3 means a u
    `{ runId, receipt }`. Then the agent runs, stops, its output is captured, and the gate
    decides from the sealed capture. The agent still sends only taskId, runId and claim
    (`myco.gate/v1`). Track L adds no gate input.
-6. **Capture without following links.** The saved file is read for the vault only if it is
-   a regular file with exactly one link, inside the workspace the harness resolved before
-   the agent ran. A symlink or hard link to another trial's saved file, or to a host file
-   with the right content, is `capture-refused`, and the trial has no verdict.
+6. **Capture without following links, and without blocking.** The saved file is read for the
+   vault only if it is a regular file with exactly one link and at most 16 MiB, inside the
+   workspace the harness resolved before the agent ran. The file is `lstat`ed first and
+   opened `O_NONBLOCK | O_NOFOLLOW`, then re-checked on the open fd, so a FIFO, socket,
+   directory or device planted as the state file is refused at once instead of freezing the
+   pool. A symlink or hard link to another trial's saved file, or to a host file with the
+   right content, is refused too. Every refusal has a code (`missing`, `outside-workspace`,
+   `symlink`, `not-regular`, `hard-linked`, `too-large`). The trial gets `capture-refused`
+   and no verdict. The marker scan opens files the same non-blocking way.
 7. **Scan, then destroy.** The pool scans the desktop's tree for every other trial's marker,
    then destroys the desktop. It then checks the destroy report: no process left and the
    root removed.
@@ -89,6 +111,7 @@ and none of these disqualifiers applies:
 | --- | --- |
 | `run-id` | The folded run id was already claimed, or the id is malformed |
 | `isolation` | The desktop's isolation report falls short of the requirements |
+| `shared-host-dirs` | The backend leaves other trials' roots writable (`hostDirsHidden` is not `true`). Always set on `linux-plain`. Not configurable |
 | `contaminated` | Another trial's marker was found in this trial's workspace, evidence, vault or gate records |
 | `leaked` | This trial's marker was found in another trial |
 | `own-marker-missing` | This trial's own marker was gone at scan time, so the scan proves nothing |
@@ -96,29 +119,45 @@ and none of these disqualifiers applies:
 | `teardown` | A process survived destroy, or the root was not removed |
 | `resource-cap` | The watchdog killed the desktop for exceeding memory or CPU time |
 | `timeout` | The trial ran past its wall-clock cap |
-| `capture-refused` | The saved file was a link, or was outside the workspace |
+| `capture-refused` | The saved file was a link, a special file (FIFO, socket, dir), too large, or outside the workspace |
 | `agent-error`, `harness-error` | The agent or the setup threw |
 
-## 3. The Linux backend and its two modes
+## 3. The Linux backend (`linux-plain` only)
 
-`linuxBackend()` (`src/parallel/linux-backend.ts`) probes the host and picks a mode. Every
-desktop records the mode it actually got.
+`linuxBackend()` (`src/parallel/linux-backend.ts`) has one mode in this PR, `linux-plain`.
+It needs no privilege. Every desktop's report says exactly what it got:
 
-| | `linux-ns` (user namespaces available) | `linux-plain` (fallback) |
-| --- | --- | --- |
-| Root | private, under the run root | private, under the run root |
-| Other trials, vaults, evidence, locks | hidden: a tmpfs over the run root, then the trial's own root bound back | visible |
-| `/tmp` | a private tmpfs | shared (only `TMPDIR` points into the root) |
-| Network | its own network namespace with loopback only (abstract unix sockets are per namespace too) | shared |
-| Processes | a pid namespace: SIGKILL to its init kills all of them, including `setsid` children | one process group per exec (a `setsid` child escapes) |
-| Display | Xvfb `:99`, private to the namespace, so every trial can use `:99` | Xvfb on a display it picks (`-displayfd`) |
-| Env | allowlist only: `PATH`, `LANG`, plus the desktop's own `HOME`, `TMPDIR`, `XDG_*`, `DISPLAY` and the marker | same |
-| Memory and CPU caps | a /proc watchdog on all the namespace's processes | a /proc watchdog on the exec'd process groups |
+| | `linux-plain` |
+| --- | --- |
+| Root | private, under the run root |
+| Other trials, vaults, evidence, locks | **visible and writable** (`hostDirsHidden: false`) |
+| `/tmp` | shared (only `TMPDIR` points into the root) |
+| Network | shared |
+| Processes | one process group per exec, killed at destroy (a `setsid` child escapes) |
+| Display | its own Xvfb on a display Xvfb picks (`-displayfd`), so trials never share one |
+| Env | allowlist only: `PATH`, `LANG`, plus the desktop's own `HOME`, `TMPDIR`, `XDG_*`, `DISPLAY` and the marker |
+| Memory and CPU caps | a /proc watchdog on the exec'd process groups |
 
 The default requirements are strict: an own network, a private `/tmp`, and hidden host dirs.
 Under them, `linux-plain` is refused trial by trial with `isolation`.
-`--allow-weak-isolation` lowers all three to best-effort. The report still records what
-each trial got. A private root and processes that die with the desktop are always required.
+`--allow-weak-isolation` lowers all three to best-effort so the trials run. A private root
+and processes that die with the desktop are always required. Even then, every
+`linux-plain` trial carries `shared-host-dirs` and is never counted (§2).
+
+**Why the count rule, and not the marker scan.** A hostile trial on a shared filesystem can
+write another trial's saved file with the right bytes and write no marker at all. The
+victim's gate then reads forged bytes and says `verified`, and the marker scan sees
+nothing. That is round-1 D1 in a new form. Both shapes are tests in
+`test/parallel/linux-backend.test.ts`: two trials running at once, and a `setsid` process
+left behind by trial 1 that forges trial 2's file in a serial pool. In both, the victim's
+gate says `verified` and the pool does not count it.
+
+**Strict namespace isolation is not in this PR.** It is filed as "L strict linux-ns
+isolation (fresh PR, round 1)". That PR must make the hide mounts impossible for the agent
+to undo: lock them by setting them up in an outer user namespace and starting the agent in
+a nested one, or drop the agent's capabilities. It must also add the round-1 regression
+tests: `umount` of every hide dir fails from inside, and the pool-level forgery is not
+counted.
 
 ## 4. Resource caps
 
@@ -152,12 +191,14 @@ defence against it, and the test that proves the defence:
 
 | Goal of the agent in A | Defence | Proved by |
 | --- | --- | --- |
-| Read or write trial B's workspace | `linux-ns`: B's root does not exist inside A's mount namespace | `linux-backend.test.ts` "hides other trials' roots", and the pool cross-write test |
-| Get verified on B's work | B has its own vault (own key and receipt); A's gate is bound to A's run id; capture refuses links | `pool.test.ts` capture tests; `test/gate/sealed-gate.test.ts` (unchanged) |
-| Leak something into B that changes B's outcome | Markers are scanned in workspace, evidence, vault and gate records; a hit disqualifies both trials | `pool.test.ts` contamination tests; the `linux-plain` positive control |
-| Talk to B over the network or a socket | A network namespace with loopback only; Xvfb is private to the namespace | "has loopback only"; "runs a private Xvfb per trial" |
-| Leave a process behind to affect a later trial | pid-namespace teardown, checked after destroy | "destroy kills every process" |
-| Read the operator's secrets | Env allowlist; `--hide $HOME` puts a tmpfs over the operator's home | "passes no host env var"; "an operator --hide dir" |
+| Write trial B's saved file so B is counted on forged bytes | NOT prevented on `linux-plain`. Prevented from being COUNTED: every `linux-plain` trial is `shared-host-dirs` | `linux-backend.test.ts` "D1 shape" and "serial too"; `pool.test.ts` "never counted" |
+| Get verified on B's work through its own capture | B has its own vault (own key and receipt); A's gate is bound to A's run id; capture refuses links and special files | `pool.test.ts` capture and special-file tests; `test/gate/sealed-gate.test.ts` (unchanged) |
+| Hang the pool with a FIFO or another special file as its state file | `lstat` first, `O_NONBLOCK` open, re-check on the fd, size cap; coded refusal | `pool.test.ts` "special file as the state file" (in a child with a hard limit) |
+| Leak something into B that changes B's outcome | Markers are scanned in workspace, evidence, vault and gate records; a hit disqualifies both trials | `pool.test.ts` contamination tests; `linux-backend.test.ts` "planted markers" |
+| Talk to B over the network or a socket | NOT prevented on `linux-plain` (shared network). Covered by the count rule | — |
+| Share B's X display | Each desktop starts its own Xvfb on a display Xvfb picks | "runs a private Xvfb per trial" |
+| Leave a process behind to affect a later trial | NOT prevented for a `setsid` child (it leaves the process group). Covered by the count rule | "serial too" |
+| Read the operator's secrets from the env | Env allowlist | "passes no host env var" |
 | Starve its siblings | Caps checked at admission, plus the per-trial watchdog | watchdog and cap tests |
 | Alias another run through case folding | Folded-id claims, in-process and on disk | `units.test.ts`; the "two pools sharing a lock dir" test |
 
@@ -175,18 +216,21 @@ The gate guarantees are unchanged and are not weakened here:
 
 Residual risks:
 
-- **Same uid.** Inside `linux-ns` the agent is "root" in its own user namespace, mapped to
-  the operator's uid. It can read any host file that is neither hidden nor protected by
-  permissions. This matches the existing trust model for Claude Code on the host. Use
-  `--hide` for sensitive dirs. Use a microVM (track U) for agents you do not trust.
-- **`linux-plain` is weak** (shared network, shared `/tmp`, visible roots, `setsid`
-  escapes). That is why the strict default refuses it.
+- **Same uid, nothing hidden.** On `linux-plain` the agent runs as the operator's uid and can
+  read and write any host file the operator can, other trials' roots included. This is why
+  the strict default refuses it and why its trials are never counted. Use a microVM
+  (track U) for agents you do not trust.
+- **`setsid` escapes and harness death.** A process that leaves its process group survives
+  `destroy()`, and `processesGone` only covers the desktop's own process groups. If the
+  harness itself dies, the desktops' processes are not killed. Neither can produce a
+  counted result, because of the count rule.
+- **No pids or CPU-affinity cap.** `cpusPerTrial` is only used at admission; only CPU
+  seconds are enforced at run time, and there is no pids cap (fork bomb). cgroups are a
+  follow-up.
 - **Scan timing.** A trial's workspace is scanned just before its own destroy. A write that
-  lands in a finished trial's tree after its scan is not seen. Under `linux-ns` such a write
-  cannot happen, because the tree is not visible. Under `linux-plain`, the evidence-root and
-  vault scans after all trials still cover what the gate read.
-- **The namespaced `/tmp` is not scanned.** It is private to the trial and dies with it, so
-  it cannot reach another trial.
+  lands in a finished trial's tree after its scan is not seen. The evidence-root and vault
+  scans after all trials still cover what the gate read, and the count rule covers the
+  rest.
 
 ## 6. Interface for track U (microVM backend)
 
@@ -206,7 +250,9 @@ nothing else from it (lands with U).
   `rootRemoved`.
 
 `isolationShortfalls` already accepts the VM values, so a microVM backend passes the strict
-requirements unchanged. Anything VM-specific (images, snapshots, the Windows guest) belongs
+requirements unchanged. It may report `hostDirsHidden: true` only if the agent cannot see or
+write other trials' roots by any means, unmounting included: that one field decides whether
+its trials can be counted. Anything VM-specific (images, snapshots, the Windows guest) belongs
 to track U and the VM lock, not to this PR.
 
 ## 7. Proposed pre-registered measurement bar (for `docs/product/capability-spec.md`)
@@ -234,7 +280,8 @@ gate. The gate's verdict is not the outcome measure.
 - Paired: every (task, seed) runs once at N = 1 and once at N = 4, for every arm, in
   randomized order.
 - 30 pairs per arm, matching R2.
-- The host has at least 4 CPUs and the strict isolation requirements.
+- The host has at least 4 CPUs and the strict isolation requirements. No backend in this PR
+  meets them, so the measurement waits for strict `linux-ns` (filed) or track U.
 
 **Endpoints:**
 
@@ -263,10 +310,17 @@ public leaderboard.
 | File | What |
 | --- | --- |
 | `src/parallel/backend.ts` | The backend interface, isolation report and requirements, `isolationShortfalls` |
-| `src/parallel/linux-backend.ts` | `linux-ns` and `linux-plain` desktops, the watchdog, teardown |
+| `src/parallel/linux-backend.ts` | The `linux-plain` desktop, the watchdog, teardown |
 | `src/parallel/pool.ts` | `runPool`, the marker scan, `captureRegularFile`, disqualifiers |
 | `src/parallel/runid.ts` | Folded run-id claims (in-process and lock files) |
 | `src/parallel/caps.ts` | Cap validation |
 | `src/parallel/agents.ts` | Scripted agents: the real-Calc actuator and the hermetic file writer |
 | `src/parallel/throughput.ts` | The throughput harness and its report |
 | `src/parallel/cli.ts`, `scripts/parallel-run.ts` | `pnpm myco-parallel` |
+
+## 9. TO FILE (Linear limit)
+
+- **L strict linux-ns isolation (fresh PR, round 1).** Removed from this PR in round 2. Needs
+  locked hide mounts (outer user namespace plus a nested one for the agent, or dropped
+  capabilities), the holder tied to the harness's lifetime (`--pdeathsig`), and the round-1
+  D1 regression tests (`umount` from inside fails; the pool-level forgery is not counted).
