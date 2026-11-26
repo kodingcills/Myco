@@ -76,7 +76,8 @@
 #   r17: the mirror drops #542's `document-withheld` reason.
 #   r18: blobs are not written into the container.
 #   r19: a non-UTF-8 blob is carried unscanned (lossy decode instead of refusal).
-#   r20: a byte-order mark is stripped from a carried blob.
+#   (r20 retired, TIF-265: blobs are digest-only and never carried, so a stripped byte-order
+#   mark in the scanned text changes nothing.)
 #   s5: blobs are not scanned for leaks.
 #   t1: a step's action is not checked against the episode action schema.
 #   t2: over-long status text is kept instead of withheld.
@@ -206,7 +207,6 @@ M = {
   "r17": [(P, '  "agent-never-ran",\n  "document-withheld",\n] as const;', '  "agent-never-ran",\n] as const;')],
   "r18": [(E, '    ...blobFiles.map((file) => [file, blobs.get(file)!] as const),\n', '')],
   "r19": [(E, 'new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })', 'new TextDecoder("utf-8", { fatal: false, ignoreBOM: true })')],
-  "r20": [(E, 'new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })', 'new TextDecoder("utf-8", { fatal: true, ignoreBOM: false })')],
   "s5": [(E, '    if (name.startsWith("blobs/")) {\n      // A captured document: raw text, scanned as one string (every decoded form).\n      const leaks = scanForLeaks(text, hygiene);', '    if (name.startsWith("blobs/")) {\n      // A captured document: raw text, scanned as one string (every decoded form).\n      const leaks: Array<{ path: string; kind: string }> = [];')],
   "n5": [(E, 'if (decided.includes(e.outcome) && e.gate?.verdict !== e.outcome) {', 'if (false) {')],
   "n6": [(E, 'if (a.seq !== i) return', 'if (false) return')],
@@ -259,7 +259,7 @@ EOF
 MUTANTS=(d1 d2 d3 d4 d5 d6 d7 d8 d9 d10 d11 d12 d13 d14 f1 f2 f3 f4
   e1 e2 e2b e2c e3 e4 e5 e6 e7 e8 e9 e10 e11 e17 e18 e19 e20 e20b e21
   n1 n2 n3 n4 n5 n6 n7 s1 s2 s3 s4 s5 t1 t2
-  r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20
+  r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19
   e12 e13 e14 e15 e16 h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
   h19 h20 h21 h22 h23 h24 h25 h26 h27 h28)
 if [ "$#" -gt 0 ]; then MUTANTS=("$@"); fi
