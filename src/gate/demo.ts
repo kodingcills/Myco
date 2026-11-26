@@ -118,16 +118,23 @@ async function fakeAgentRun(taskId: string, evidenceRoot: string, runId: string)
   return status;
 }
 
+/** A gate process bound to one trial, kept open so the trial can call it more than once. */
+export interface BoundGateSession {
+  readonly toolNames: readonly string[];
+  call(args: Record<string, unknown>): Promise<GateResult>;
+  close(): Promise<void>;
+}
+
 /**
  * Start one gate process bound to one trial, the way Claude Code starts an MCP server for
- * one agent session, make one tool call, and stop it.
+ * one agent session. `operatorArgs` are extra operator flags (`--tasks`, `--no-builtin`).
  */
-async function callBoundGate(
+export async function openBoundGate(
   evidenceRoot: string,
   auditLog: string,
   assignment: { readonly taskId: string; readonly runId: string },
-  args: Record<string, unknown>,
-): Promise<{ result: GateResult; toolNames: string[] }> {
+  operatorArgs: readonly string[] = [],
+): Promise<BoundGateSession> {
   const child = spawn(
     process.execPath,
     [
@@ -143,10 +150,19 @@ async function callBoundGate(
       assignment.runId,
       "--audit",
       auditLog,
+      ...operatorArgs,
     ],
     { cwd: ROOT, stdio: ["pipe", "pipe", "inherit"] },
   );
   const client = mcpStdio(child.stdin, child.stdout);
+  async function close(): Promise<void> {
+    client.close();
+    child.stdin.end();
+    await new Promise<void>((done) => {
+      if (child.exitCode !== null) done();
+      else child.once("exit", () => done());
+    });
+  }
   try {
     await client.request("initialize", {
       protocolVersion: PROTOCOL_VERSIONS[0],
@@ -155,17 +171,35 @@ async function callBoundGate(
     });
     await client.notify("notifications/initialized");
     const listed = (await client.request("tools/list", {})) as { tools: { name: string }[] };
-    const called = (await client.request("tools/call", { name: GATE_TOOL, arguments: args })) as {
-      structuredContent: GateResult;
+    return {
+      toolNames: listed.tools.map((tool) => tool.name),
+      async call(args) {
+        const called = (await client.request("tools/call", {
+          name: GATE_TOOL,
+          arguments: args,
+        })) as { structuredContent: GateResult };
+        return called.structuredContent;
+      },
+      close,
     };
-    return { result: called.structuredContent, toolNames: listed.tools.map((tool) => tool.name) };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+/** One tool call on a freshly started bound gate, then stop it. */
+async function callBoundGate(
+  evidenceRoot: string,
+  auditLog: string,
+  assignment: { readonly taskId: string; readonly runId: string },
+  args: Record<string, unknown>,
+): Promise<{ result: GateResult; toolNames: string[] }> {
+  const session = await openBoundGate(evidenceRoot, auditLog, assignment);
+  try {
+    return { result: await session.call(args), toolNames: [...session.toolNames] };
   } finally {
-    client.close();
-    child.stdin.end();
-    await new Promise<void>((done) => {
-      if (child.exitCode !== null) done();
-      else child.once("exit", () => done());
-    });
+    await session.close();
   }
 }
 

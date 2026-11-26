@@ -176,3 +176,92 @@ export function gradeRequest(
     columnTypes: meta.columnTypes,
   };
 }
+
+// ---------------------------------------------------------------------------
+// fc-v1: rows keyed to a published task (TIF-267 part 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The fields of a published benchmark task row (`benchmark/false-completion/fc-v1/tasks.jsonl`,
+ * schema `myco.benchmark.task/1`) that the arm needs. Mirrored here, not imported: the arm
+ * shares no code with `src/benchmark/`, and it cannot read files. The live harness (M2-12)
+ * or a test reads the bundle and passes the task in.
+ */
+export interface PublishedTask {
+  readonly taskSetVersion: string;
+  readonly taskId: string;
+  readonly faultClass: string;
+  readonly fixtureSha256: string;
+  readonly instructionSha256: string;
+  readonly fixtureFile: string;
+  readonly intent: { readonly rowKey: string; readonly column: string; readonly newValue: string };
+  readonly columnTypes: Readonly<Record<string, ColumnType>>;
+}
+
+/**
+ * Refuse a trial that did not run the published task. `make-requests` refuses such a row
+ * later anyway (it pins `fixtureSha256` and `instructionSha256`); refusing here keeps a
+ * mislabelled row from ever being written. This cannot detect a relabelled task object
+ * (`taskSetVersion`, `faultClass`, `taskId`): the arm reads no files, so only `make-requests`,
+ * which checks rows against the bundle, catches that. Three things must match:
+ *  - the fixture placed in the guest (`row.fixtureSha256`) is the task's fixture;
+ *  - the instruction the planner saw hashes to the task's `instructionSha256` (R2 parity);
+ *  - the trial's params are the task's intent.
+ */
+function assertRanTask(row: HcuShellRow, task: PublishedTask): void {
+  const where = `trial ${row.index} vs task ${task.taskId}`;
+  if (row.fixtureSha256 !== task.fixtureSha256)
+    throw new Error(
+      `${where}: fixture ${row.fixtureSha256} is not the task's ${task.fixtureSha256}`,
+    );
+  const instructionSha = createHash("sha256").update(row.instruction, "utf8").digest("hex");
+  if (instructionSha !== task.instructionSha256)
+    throw new Error(
+      `${where}: instruction hash ${instructionSha} is not the task's ${task.instructionSha256}`,
+    );
+  const ran = {
+    rowKey: row.params.rowKey,
+    column: row.params.column,
+    newValue: String(row.params.newValue),
+  };
+  if (
+    ran.rowKey !== task.intent.rowKey ||
+    ran.column !== task.intent.column ||
+    ran.newValue !== task.intent.newValue
+  )
+    throw new Error(
+      `${where}: params ${JSON.stringify(ran)} are not the task's intent ${JSON.stringify(task.intent)}`,
+    );
+}
+
+/** The arm row for a trial of a published task: version, id and fault class come from the task. */
+export function armRowForTask(
+  row: HcuShellRow,
+  task: PublishedTask,
+  meta: { readonly trialKey: string; readonly plannerModelId: string },
+): HcuShellArmRow {
+  assertRanTask(row, task);
+  return benchmarkArmRow(row, {
+    taskSetVersion: task.taskSetVersion,
+    trialKey: meta.trialKey,
+    taskId: task.taskId,
+    faultClass: task.faultClass,
+    plannerModelId: meta.plannerModelId,
+  });
+}
+
+/** The grade request for a trial of a published task: fixture file and column types from the task. */
+export function gradeRequestForTask(
+  row: HcuShellRow,
+  task: PublishedTask,
+  meta: { readonly trialKey: string; readonly persistedFile: string | null },
+): GradeRequest {
+  assertRanTask(row, task);
+  return gradeRequest(row, {
+    trialKey: meta.trialKey,
+    taskId: task.taskId,
+    fixtureFile: task.fixtureFile,
+    persistedFile: meta.persistedFile,
+    columnTypes: task.columnTypes,
+  });
+}
