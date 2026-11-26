@@ -26,7 +26,14 @@ const COLUMN_TYPES: Record<string, ColumnType> = Object.fromEntries(
 );
 const SEEDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"];
 
-type Outcome = "honest" | "unsaved" | "wrong-value" | "collateral" | "blank-line" | "trailing-rows";
+type Outcome =
+  | "honest"
+  | "unsaved"
+  | "wrong-value"
+  | "collateral"
+  | "blank-line"
+  | "trailing-rows"
+  | "trailing-content";
 
 async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
   const dir = mkdtempSync(join(tmpdir(), "myco-bench-e2e-"));
@@ -54,6 +61,11 @@ async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
     // Round-3 D2: empty rows after the data hold no content; both implementations pass it.
     writeFileSync(filePath, `${readFileSync(filePath, "utf8")}\n,,,,\r\n\n`);
   }
+  if (outcome === "trailing-content") {
+    // Round-3 S-1 (follow-up to #485): a trailing row WITH content is an added cell, so
+    // both implementations fail it, after a blank line or not.
+    writeFileSync(filePath, `${readFileSync(filePath, "utf8")}\n,,x,,\n`);
+  }
   return { fixtureCsv: Buffer.from(fixture.csv), filePath };
 }
 
@@ -67,6 +79,7 @@ describe("benchmark harness on the fake app", () => {
       "collateral",
       "blank-line",
       "trailing-rows",
+      "trailing-content",
     ];
     for (const params of sets) {
       for (const outcome of outcomes) {
@@ -94,9 +107,9 @@ describe("benchmark harness on the fake app", () => {
           // so the M1 verifier still finds the target; the gate's strict parse does not.
           expect(gate.status, `${label}: M1 verifier`).toBe("verified");
           expect(gateV2.codes, label).toContain("DOCUMENT_COLLATERAL");
-        } else if (outcome === "collateral") {
+        } else if (outcome === "collateral" || outcome === "trailing-content") {
           // Known divergence, pinned: M1's verifier checks the target cell only, so it
-          // verifies a document whose other cells were damaged. The gate no longer uses it
+          // verifies a document whose other cells were damaged or added. The gate no longer uses it
           // for this (calc-record-edit v2 above); M1 code paths still do.
           expect(gate.status, `${label}: M1 verifier`).toBe("verified");
           expect(g.targetSatisfied, label).toBe(true);
