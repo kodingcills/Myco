@@ -392,12 +392,15 @@ formula, string, boolean and namespace probes, the committed third-party workboo
 round-3 structure probes below): on each of them, if the gate verifies, the grader passes.
 #503's one exception, a prefixed root the grader cannot read, is refused by the raw-byte
 pre-scan. That property is TESTED, over those workbooks, round 1's decoy shapes
-(`test/gate/xlsx-decoys.test.ts`) and the 4,800 variants of
-`test/gate/xlsx-differential.test.ts`; it is not proved for every input. An earlier version
-of this section said "with no exception": round 1 of the gate-integrity PR found six shapes
-(decoys nested inside elements the reader skipped, and a decoy archive in the EOCD comment)
-that the gate verified and the grader failed. The element-tree pin and the byte-coverage
-rule below close them.
+(`test/gate/xlsx-decoys.test.ts`), round 2's T1-T3 (`test/gate/xlsx-round3-probes.test.ts`)
+and the 6,400 variants of `test/gate/xlsx-differential.test.ts`; it is not proved for every
+input. An earlier version of this section said "with no exception": round 1 of the
+gate-integrity PR found six shapes (decoys nested inside elements the reader skipped, and a
+decoy archive in the EOCD comment) that the gate verified and the grader failed, and round 2
+found three more (an attribute name ending in `date1904`, a date token outside a format
+code's first section, an empty `<v></v>`). The element-tree and attribute pins, the
+byte-coverage rule, the format-code agreement rule and the empty-`<v>` refusal below close
+them.
 
 *Raw-byte pre-scan and fixed part names (replaces #503, round 3 D8).* Before any XML is
 parsed, every entry must be one of LibreOffice's fixed part names and every part's bytes must
@@ -410,7 +413,11 @@ referenced (no decoy). Every element of every pinned part (workbook, worksheets,
 strings, styles, content types, relationships) must sit at a path LibreOffice writes, from a
 per-parent allowlist of child names; a singleton child appears at most once; nothing sits
 inside a leaf (a `<Relationship>`, `<Override>`, `<Default>`, `<numFmt>`, `<v>` ...); docProps
-and the theme hold no element name either reader reads (`XLSX_TREE_ELEMENT`). In the zip, the
+and the theme hold no element name either reader reads (`XLSX_TREE_ELEMENT`). Every attribute
+of every element of a pinned part is one LibreOffice writes at that path
+(`XLSX_TREE_ATTRIBUTE`). A style whose date-ness differs between its first section and its
+whole code is refused (`XLSX_NUMFMT_UNSUPPORTED`), as is an empty or whitespace-only `<v>`
+in any cell (`XLSX_CELL_MALFORMED`). In the zip, the
 EOCD is the last 22 bytes with no comment, and the entries, the central directory and the
 EOCD cover every byte of the file (`XLSX_ZIP_MALFORMED`). Anything else is `uncertain` with a
 code, never `verified`. The
@@ -523,10 +530,10 @@ fails if a code is added to `XlsxErrorCode` without one):
 | a DTD or an entity declaration, at the parser behind the pre-scan (unreachable through the reader: `XLSX_PRESCAN_DTD` refuses first) | `XLSX_DTD` |
 | malformed XML: mismatched tags, an undeclared entity, bytes that are not UTF-8, an unbound namespace prefix, a duplicate attribute (raw or expanded name), a tag the tokenizer cannot match (an unterminated tag with a million attributes is caught here, never a stack overflow) | `XLSX_XML_MALFORMED` |
 | an XML declaration other than version plus optional UTF-8 `encoding` and `standalone` (a non-UTF-8 encoding), CDATA, processing instructions, nesting deeper than 64 (`XLSX_LIMITS.maxXmlDepth`), an unknown element in cell or string structure (`sheetData`, `sst`; `rPh`, `extLst`, any other namespace: a route to hidden cells), a sheet hidden outside `<sheets>` | `XLSX_XML_UNSUPPORTED` |
-| a cell without a reference, a duplicate cell, a reference off the grid, a shared-string index that is out of range or not a canonical decimal, any cell or string structure outside the accepted shapes above, a number not in its canonical spelling (`04242`, `4.242E3`), `t="str"` without a formula, a `t="d"` cell, a `<dimension>` that is not the used range | `XLSX_CELL_MALFORMED` |
+| a cell without a reference, a duplicate cell, a reference off the grid, a shared-string index that is out of range or not a canonical decimal, any cell or string structure outside the accepted shapes above, a number not in its canonical spelling (`04242`, `4.242E3`), `t="str"` without a formula, a `t="d"` cell, a `<dimension>` that is not the used range, an empty or whitespace-only `<v>` in any cell type (round 3, T1: `<v></v>`) | `XLSX_CELL_MALFORMED` |
 | a formula with no cached value | `XLSX_FORMULA_UNCACHED` |
 | a cell style index that is not a canonical number (`s="00"`) or is past `cellXfs`, a `numFmt` without a code or an integer id, an `xf` whose `numFmtId` is not a number | `XLSX_STYLE_MALFORMED` |
-| an unknown built-in number format | `XLSX_NUMFMT_UNSUPPORTED` |
+| an unknown built-in number format; a style whose date-ness depends on the section read (round 3, T2: `General;d`, `0;[Red]yyyy`: a day or year token outside the first section, or a first-section date the whole code does not carry) | `XLSX_NUMFMT_UNSUPPORTED` |
 
 **Independence.** The gate's xlsx reader shares no code with the independent grader's
 (`src/benchmark/grade/zip.ts`, `sheet.ts`): its own zip walk, XML tokenizer and date

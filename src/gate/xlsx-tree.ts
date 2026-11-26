@@ -32,6 +32,10 @@
  * LibreOffice writes when a cell is formatted (bold, colour). None of the additions is a
  * name either reader reads structurally, and all are leaves.
  *
+ * Attributes are pinned the same way (round 3, closes round 2's T3): every attribute of
+ * every element of a pinned part must be one LibreOffice writes at that path (`LO_ATTRS`),
+ * or `XLSX_TREE_ATTRIBUTE`.
+ *
  * Pure function over the parsed tree; codes only.
  */
 import type { XmlElement } from "./xlsx-document.ts";
@@ -389,8 +393,9 @@ export const DECOY_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Is every element of a pinned part's tree at a path LibreOffice writes? `root` must already
- * be the part's root (its name and namespace are checked by the caller).
+ * Is every element of a pinned part's tree at a path LibreOffice writes, with only the
+ * attributes LibreOffice writes there? `root` must already be the part's root (its name and
+ * namespace are checked by the caller).
  */
 export function checkTree(root: XmlElement, kind: ContentPartKind): TreeCode | undefined {
   const schema = LO_TREES[kind];

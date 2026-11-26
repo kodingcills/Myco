@@ -110,7 +110,8 @@ relationships parts) also:
 - no text, not even whitespace, directly inside `sheetData`, `row`, `c`, `is`, `si`, `r`,
   `rPr`, `sst`, `sheets`, `Types` or `Relationships` (LibreOffice's one LF before `</Types>`
   and `</Relationships>` aside);
-- no self-closing `<v/>` or `<t/>`.
+- no self-closing `<v/>` or `<t/>` (an empty or whitespace-only `<v></v>` is refused behind
+  the pre-scan, by the cell reader: see "Values" below).
 
 docProps and the theme get the grammar but no namespace pin: no reader looks inside them.
 
@@ -187,6 +188,54 @@ part root's name, anywhere (`checkUnpinnedTree`). `XLSX_TREE_ELEMENT`. The pin r
 where an earlier reader check also refuses a shape, its more specific code is the one
 reported.
 
+## Attributes (round 3: closes round 2's T3)
+
+The element tree pins names only. The grader reads attributes by regex over a tag's text,
+and one of its patterns, `<workbookPr\b[^>]*\bdate1904\s*=\s*"(1|true)"`, also matches an
+attribute NAME that ends in `date1904` after `-` or `.` (`x-date1904="true"`,
+`a.date1904="1"`): the grader switched to the 1904 date system, the gate (which reads the
+exact attribute) did not (round 2, T3).
+
+So every attribute of every element of a pinned part must be one LibreOffice writes at that
+element's path (`LO_ATTRS` in `src/gate/xlsx-tree.ts`, keyed by the same paths as
+`LO_TREES`); a path with no entry allows no attribute. Namespace declarations count: only the
+root's, and `xmlns:loext` on the workbook's `<ext>`. The list is every attribute LibreOffice
+24.2 writes on each path in the six committed `.lo.xlsx` fixtures, plus: `date1904` on
+`<workbookPr>` (LibreOffice writes it for a 1904 workbook; the reader interprets it, and only
+`0`, `1`, `false`, `true`), `applyNumberFormat` on an `<xf>`, `val` on the run-property and
+font leaves the tree adds, a colour's `rgb`/`theme`/`tint`/`indexed`/`auto`, a border side's
+`style`, and on `<f>` `aca`, `t`, `ref`, `si`, `ca` (a formula cell is a marker that never
+equals a literal). Of the additions, only `date1904` is an attribute the grader reads.
+Anything else is `XLSX_TREE_ATTRIBUTE`. The pin is checked in
+the same walk as the element tree, so it also runs last.
+
+A grader pattern could in principle match inside an attribute VALUE instead of a name. For
+`\bdate1904\s*=\s*"(1|true)"` that needs a value ending in `date1904=` followed directly by
+`1"` or `true"` after its closing quote, which the pre-scan refuses (after a closing quote
+only a space, `>` or `/>` may follow). The grader's other attribute reads are by exact name
+(its `attributes()` captures whole names, `[A-Za-z_][\w:.-]*`).
+
+## Values: what the grader derives, and what the gate does (round 3)
+
+Round 2 also found two value shapes the tree cannot see (T2, T1). For each value the grader
+derives from a workbook, the gate either derives the same value or refuses:
+
+| What the grader derives | How (`src/benchmark/grade/sheet.ts`) | The gate |
+|---|---|---|
+| date system | `\bdate1904="1"`/`"true"` in `<workbookPr>` | the exact attribute, `0`/`1`/`false`/`true` only; every other attribute name refused (above); a second or nested `<workbookPr>` refused (tree) |
+| date-ness of a style | a custom code with a `y` or `d` outside quotes, escapes and brackets ANYWHERE in the code; a built-in date id | renders by the first section, and refuses (`XLSX_NUMFMT_UNSUPPORTED`) any `<xf>` where its date class and that whole-code reading disagree (T2: `General;d`, `0;[Red]yyyy`); built-in ids it cannot render are refused |
+| a cell's type | `t`, default `n` | the same default; `d`, unknown types and wrong case refused |
+| a number | `Number(v)` | only the canonical spelling (`String(Number(v)) === v`): `+1`, `1e3`, `0x10`, `.5`, `1.`, `-0`, `Infinity`, `NaN`, padded values refused |
+| an empty cell | no `<v>`, or a text that is `""` | no `<v>`, or `""` text; an empty or whitespace-only `<v>` refused in every cell type (T1: `<v></v>` is `Number("") = 0` to the grader); `<v/>` refused by the pre-scan |
+| a shared string | `sharedStrings[Number(v)]`, items by `<si>` regex | a canonical index only; items checked structurally (one `<t>`, or runs), no attributes |
+| an inline string | the `<t>` runs of the first `<is>` | one `<is>`, structurally checked; with a `<v>` or `<f>`, refused |
+| a boolean | `v.trim() === "1"` | `0` or `1` exactly, else refused; a marker that equals no expected cell |
+| an error | the text of `<v>` (even absent) | a marker that equals no expected cell |
+| a formula | any `<f>`, before the type | a marker carrying the formula and its cache; never equals a literal; uncached refused |
+
+Each row has a differential family over the four real LibreOffice fixtures (below).
+
+
 ## Consequences
 
 - openpyxl files (single-quoted declarations, other root declarations) are refused. #503
@@ -203,6 +252,12 @@ reported.
   tables, and the 4,800 variants of the differential test, including 400 nested decoys and
   400 comment and coverage decoys over the four real LibreOffice fixtures), gate VERIFIED
   implies grader PASS. That is evidence over those shapes, not a proof over all inputs.
+- Round 2 of this PR found three more (T1-T3, above). Round 3 adds the attribute pin, the
+  format-code agreement rule and the empty-`<v>` refusal, the three round-2 repros verbatim
+  as probes (`test/gate/xlsx-round3-probes.test.ts`), and four differential families of 400
+  variants each (attribute names, format sections, `<v>` contents, cell types): 6,400
+  variants in all, gate VERIFIED implies grader PASS on every one. Still evidence over those
+  shapes, not a proof.
 
 ## Evidence
 
@@ -210,10 +265,15 @@ reported.
   per code, plus every part of every committed LibreOffice fixture accepted.
 - `test/gate/xlsx-parts.test.ts`: part names and relationships, unit and end to end.
 - `test/gate/xlsx-probes-503.test.ts`: #503's P01-P53, none verified.
-- `test/gate/xlsx-differential.test.ts`: 4,800 seeded variants of the real LibreOffice
-  workbooks over twelve families (400 each), among them `nestedDecoys` and `commentDecoys`
-  (round 2); gate VERIFIED implies grader PASS on every one. Each family prints a `TALLY`
-  line; the two round-2 families also count the variants that fool the grader (live decoys).
+- `test/gate/xlsx-differential.test.ts`: 6,400 seeded variants of the real LibreOffice
+  workbooks over sixteen families (400 each), among them `nestedDecoys` and `commentDecoys`
+  (round 2) and `attributeNames`, `formatSections`, `vContents`, `cellTypes` (round 3); gate
+  VERIFIED implies grader PASS on every one. Each family prints a `TALLY` line; the round-2
+  and round-3 families also count the variants that fool the grader (live decoys), and the
+  test requires each of them to have some.
+- `test/gate/xlsx-round3-probes.test.ts`: round 2's T1-T3 verbatim, with variants, each
+  live against the grader and refused by the gate; and rows for the zip reader's local-name,
+  descriptor-CRC and EOCD comment-length checks.
 - `test/gate/xlsx-decoys.test.ts`: round 1's V1-V6 verbatim (and V7), each run through the
   gate's real read path and the grader; the zip coverage rules; `checkTree` unit rows; the
   `countNamed(workbook, "sheet")` and `dims.length > 1` guards pinned by their codes.
