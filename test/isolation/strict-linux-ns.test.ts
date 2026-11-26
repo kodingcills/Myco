@@ -281,6 +281,34 @@ afterAll(async () => {
   for (const d of desktops) await d.destroy();
 });
 
+/** Run a script as root of the trial's OWN user namespace (more than an agent gets). */
+async function asTrialRoot(holderPid: number, script: string): Promise<string> {
+  return await new Promise<string>((resolve) => {
+    const c = spawn(
+      "nsenter",
+      [
+        "-t",
+        String(holderPid),
+        "--user",
+        "--mount",
+        "--pid",
+        "--net",
+        "--preserve-credentials",
+        "--",
+        "/bin/sh",
+        "-c",
+        script,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let s = "";
+    c.stdout.on("data", (d: Buffer) => {
+      s += d.toString();
+    });
+    c.on("close", () => resolve(s));
+  });
+}
+
 /** Every way a trial controls to unmount, remount, bind, pivot or reach a host path. */
 function attackScript(run: string): string {
   const victim = `${run}/trials/B/workspace/record.csv`;
@@ -384,30 +412,7 @@ echo FORGED > '${victim}' 2>/dev/null && echo WROTE
 [ -e '${run}' ] && echo RUN-VISIBLE
 echo PRIV-DONE
 `;
-    const out = await new Promise<string>((resolve) => {
-      const c = spawn(
-        "nsenter",
-        [
-          "-t",
-          String(a.target.holderPid),
-          "--user",
-          "--mount",
-          "--pid",
-          "--net",
-          "--preserve-credentials",
-          "--",
-          "/bin/sh",
-          "-c",
-          script,
-        ],
-        { stdio: ["ignore", "pipe", "pipe"] },
-      );
-      let s = "";
-      c.stdout.on("data", (d: Buffer) => {
-        s += d.toString();
-      });
-      c.on("close", () => resolve(s));
-    });
+    const out = await asTrialRoot(a.target.holderPid, script);
     expect(out).toContain("PRIV-DONE");
     expect(out).toMatch(/UMOUNTED \/workspace/); // it really had the power to unmount ...
     expect(out).not.toMatch(/WROTE|RUN-VISIBLE/); // ... and still found nothing.
@@ -447,8 +452,13 @@ echo PRIV-DONE
     try {
       const r = await a.exec("/usr/bin/env", [], { env: { MYCO_MARK: "m1" } });
       expect(r.stdout).not.toContain("MYCO_STRICT_CANARY");
-      expect(r.stdout).toContain("MYCO_MARK=m1");
-      expect(r.stdout).toContain("HOME=/home");
+      // Exactly the trial's own env: nothing inherited from the harness or the wrapper.
+      const keys = r.stdout
+        .trim()
+        .split("\n")
+        .map((l) => l.split("=")[0])
+        .sort();
+      expect(keys).toEqual(["HOME", "LANG", "MYCO_MARK", "PATH", "TMPDIR", "USER"]);
     } finally {
       delete process.env.MYCO_STRICT_CANARY;
     }
@@ -647,4 +657,51 @@ exec unshare "$@"
     expect(code).toMatch(/^STRICT_NS_(SETUP|SELFCHECK)_FAILED$/);
     expect(existsSync(root)).toBe(false);
   });
+
+  it("pid 1 of the trial reaps orphans (no zombies left after an exec's parent dies)", async () => {
+    const { run, roots } = runLayout(["A"]);
+    const a = await make(roots.A!, run, "A");
+    const ns = readlinkSync(`/proc/${a.target.holderPid}/ns/pid`);
+    const base = trialPids(ns);
+    // The background sleep outlives its parent, is re-parented to pid 1, then exits.
+    await asTrialRoot(a.target.holderPid, "sleep 0.2 & exit 0");
+    let left: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      await new Promise((res) => setTimeout(res, 50));
+      left = trialPids(ns).filter((p) => !base.includes(p));
+      if (i > 8 && left.length === 0) break;
+    }
+    expect(left).toEqual([]);
+  });
+
+  it("a hide path that exists inside the trial is refused at create (self-check probe)", async () => {
+    const run = mkRun();
+    const root = path.join(run, "t");
+    mkdirSync(root);
+    // /etc/hosts exists in the generated /etc, so the in-trial probe must see it.
+    const code = await codeOf(backend.create(spec(root, { hide: ["/etc/hosts"] })));
+    expect(code).toBe("STRICT_NS_SELFCHECK_FAILED");
+    expect(existsSync(root)).toBe(false);
+  });
+
+  it("per-process memory and CPU-time limits apply inside the trial", async () => {
+    const run = mkRun();
+    const root = path.join(run, "t");
+    mkdirSync(root);
+    const d = await backend.create(
+      spec(root, { hide: [run], memoryMbPerTrial: 64, cpuSecondsPerTrial: 1 }),
+    );
+    desktops.push(d);
+    const mem = await d.exec("/bin/sh", [
+      "-c",
+      'awk \'BEGIN { s = sprintf("%200000000s", ""); print length(s) }\'',
+    ]);
+    expect(mem.code).not.toBe(0);
+    expect(mem.stdout).not.toContain("200000000");
+    const t0 = Date.now();
+    const cpu = await d.exec("/bin/sh", ["-c", "while :; do :; done"], { timeoutMs: 20_000 });
+    expect(cpu.timedOut).toBe(false);
+    expect(cpu.code === 0).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(15_000);
+  }, 30_000);
 });
