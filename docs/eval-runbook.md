@@ -45,8 +45,9 @@ points to the section that holds the detail; read it there.
 - **Convert deadline:** 360 s. A miss is `uncertain` and tagged as a harness fault
   ([§7.1](#71-normal-trial)).
 - **Agent calls:** `run-live` times out an agent call at 60 s (TIF-216) ([§7.1](#71-normal-trial)).
-- **Load gate:** resume a paused sweep only when the 1-min load stays under 10 for 3 minutes
-  ([§7.3](#73-the-30-trial-sweep)).
+- **Load gate:** resume a paused sweep only when the net 1-min load stays under 10 for 3 minutes;
+  pause above 14. Net load is the host 1-min load minus the guest's own QEMU cores
+  (`scripts/load-gate.sh`, TIF-218) ([§7.3](#73-the-30-trial-sweep)).
 - **Validation:** `validate-live` fails on 0 run dirs, and `--expect N` pins the count
   ([§8.2](#82-validate)).
 
@@ -332,8 +333,8 @@ observation, not in the rows), but it is not the main cost.
 
 **Timing a reset.** `scripts/reset-bench.sh reset N out.jsonl [label]` runs N resets.
 `scripts/reset-bench.sh cycle N out.jsonl [label]` runs N reset → deploy → `session_info` cycles
-and needs `MYCO_TOKEN_OUT` (§4). Both check `lsof` before every step and hold at load ≥ 10 until
-the load has stayed under 10 for 3 minutes. Each run is one JSON row: phases, load, host swap, free
+and needs `MYCO_TOKEN_OUT` (§4). Both check `lsof` before every step and hold at net load ≥ 10
+(`scripts/load-gate.sh`) until it has stayed under 10 for 3 minutes. Each run is one JSON row: phases, load, host swap, free
 memory, QEMU resident size, exit codes. `scripts/reset-bench-summary.py label=file.jsonl …` turns
 rows into the median/min/max table. Raw step logs stay in `out.jsonl.logs/`, outside the evidence.
 
@@ -1105,7 +1106,7 @@ record. Per-trial reset is mandatory, because a failed trial can leak `soffice` 
 that contaminate the next verdict (log 27). The driver does it for you.
 
 **Fresh launch** (from the repo root of a pinned checkout, see "Pin the code" below). Launch only
-when the resume gate below holds (lock free, 1-min load under 10 for 3 minutes); both row-8
+when the resume gate below holds (lock free, net 1-min load under 10 for 3 minutes); both row-8
 operators gated the first launch that way too:
 
 ```bash
@@ -1145,7 +1146,7 @@ with its two first-minute logging glitches fixed, G20/G31):
 ```bash
 #!/bin/bash
 # Usage: bash supervise.sh <repo-root> <driver: scripts/m1-sweep.sh | scripts/m1-corrupt-suite.sh> <OUT>
-# Waits for the gate (lock free AND 1-min load < 10 on 7 consecutive 30 s samples = 3 min), runs
+# Waits for the gate (lock free AND net load < 10 on 7 consecutive 30 s samples = 3 min), runs
 # the driver, and resumes the SAME OUT only after exit 4 (PAUSED_LOAD), at most 12 times. Any
 # other exit stops it. Read-only on the VM lock (lsof); never kills, deletes or rewrites anything.
 set -u
@@ -1153,14 +1154,15 @@ REPO=$1 DRIVER=$2 OUT=$3
 cd "$REPO" || exit 1
 echo $$ > "$OUT.supervise.pid"
 ts()        { date -u +%FT%TZ; }
-load()      { sysctl -n vm.loadavg | awk '{print $2}'; }
+source scripts/load-gate.sh   # net load = 1-min load minus the guest's QEMU cores (TIF-218)
+load()      { lg_load1; }
 lock_free() { ! lsof /tmp/myco-win11.vm.lock >/dev/null 2>&1; }
 wait_gate() {
-  local ok=0 l
+  local ok=0 l q
   while [ "$ok" -lt 7 ]; do
-    l=$(load)
-    if lock_free && awk -v l="$l" 'BEGIN{exit !(l<10)}'; then ok=$((ok+1)); else ok=0; fi
-    echo "$(ts) gate load1=$l ok=$ok/7"
+    l=$(load); q=$(lg_qemu_cores)
+    if lock_free && lg_resume_sample_ok "$l" "$q"; then ok=$((ok+1)); else ok=0; fi
+    echo "$(ts) gate load1=$l qemu=$q net=$(lg_net "$l" "$q") ok=$ok/7"
     [ "$ok" -lt 7 ] && sleep 30
   done
 }
@@ -1203,11 +1205,15 @@ the lock), `$OUT.supervise.log` (gate samples, `START`/`EXIT rc=`/`DONE`), `$OUT
 (60 s), `$OUT.done` (the final exit code, written once). The sweep is finished when `$OUT.done`
 exists.
 
-**Resume after a load pause (exit 4).** Wait until the **1-min load is under 10 and stays under 10
-for 3 minutes** (lead ruling, 2026-11-25; the supervisor above checks 7 samples 30 s apart). The
-driver itself pauses only above 14 (`scripts/m1-sweep.sh:73-74`) and checks only before each
-trial, so resuming at 13.9 passes and can pause again one trial later. A running guest alone can
-hold the load at 12–15 (operator report S8), so expect to wait. Then re-run the driver with the
+**Resume after a load pause (exit 4).** Wait until the **net 1-min load is under 10 and stays
+under 10 for 3 minutes** (lead ruling, 2026-11-25; the supervisor above checks 7 samples 30 s
+apart). Net load is the host 1-min load minus the cores the guest's own QEMU process is using
+(`scripts/load-gate.sh`, TIF-218). Before TIF-218 the gate used the raw load, and a running guest
+alone held that at 12–15 (operator report S8), so it could not clear. Measured 2026-11-26
+(`docs/research/experiments/tif-218-load-gate-2026-11-26/`): net load stayed at or under 8.40
+with a guest idle on `clean-base`, and at or under 11.17 across back-to-back resets. The driver
+itself pauses only above net 14 (`lg_decide`) and checks only before each trial, so resuming at
+13.9 passes and can pause again one trial later. Then re-run the driver with the
 **same** `OUT`. There is no `--resume` flag for `m1-sweep.sh`: re-running on the same `OUT` *is*
 the resume, and it skips every index already in `trials.jsonl`. **Do not re-run the fresh-launch
 block above.** Its dated `OUT=` line makes a new directory and starts again at index 0, and its
@@ -1252,7 +1258,8 @@ change, or a re-taken snapshot; start a fresh `OUT` instead.
   appear, one to one with their hashes; otherwise `SEED_CHECK_FAILED` and exit 8. History: the
   pilot driver dropped the seed, and every trial ran on one sheet (log 47).
 - **Gates and exit codes.** Checked before every trial; the driver exits rather than running
-  through them: 4 = 1-min load > 14, 6 = swap free < 300 MB. Power is NOT a gate (Tiffany:
+  through them: 4 = net load > 14 (1-min load minus the guest's QEMU cores), 6 = swap free
+  < 300 MB or unreadable. Power is NOT a gate (Tiffany:
   never pause or gate VM work on charger state); `acPower` is recorded per row. There is **no
   exit 3** (the old on-battery gate is gone). Re-running the driver on the same `OUT` resumes
   (the resume block above, not the fresh-launch block): indices already in `trials.jsonl` are
@@ -1328,7 +1335,7 @@ nohup caffeinate -dimsu bash "$OUT.supervise.sh" "$PWD" scripts/m1-corrupt-suite
   >> "$OUT.supervise.log" 2>&1 < /dev/null &
 ```
 
-Liveness, which pid to watch, the exit-4 resume gate (1-min load under 10 for 3 minutes), and
+Liveness, which pid to watch, the exit-4 resume gate (net 1-min load under 10 for 3 minutes), and
 the resume block (same `OUT`, `>>`, no new dated line) are as in §7.3; `m1-corrupt-suite.sh` has
 no `--resume` flag either. Unlike the sweep, this driver compares its parameters itself and exits
 1 with `FATAL: suite parameters changed` on a mismatch (`scripts/m1-corrupt-suite.sh:39-43`); the
@@ -1386,7 +1393,7 @@ from recorded evidence and print a `RECLASSIFIED` line when the stored false-suc
 |---|---|
 | 0 | Full suite passed all coverage and evidence gates, or the supplemental batch recorded its manifest and passed its evidence checks. |
 | 1 | Driver or manifest error. |
-| 4 / 6 | Paused for one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. **Exit 3 (on battery) is no longer emitted** — power is recorded, never enforced. |
+| 4 / 6 | Paused for net one-minute load above 14 (load minus the guest's QEMU cores), or swap free below 300 MB. Resume in the same directory when the gate clears. **Exit 3 (on battery) is no longer emitted** — power is recorded, never enforced. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
 | 8 | Final audit failed. Inspect `summary.json`, `summary.txt` and `ledger.jsonl`. |
 | 10 | VM in use. `REFUSED_VM_LOCKED` names the lock holder or the legacy driver process. |
