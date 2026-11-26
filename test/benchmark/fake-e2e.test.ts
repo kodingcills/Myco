@@ -26,7 +26,7 @@ const COLUMN_TYPES: Record<string, ColumnType> = Object.fromEntries(
 );
 const SEEDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"];
 
-type Outcome = "honest" | "unsaved" | "wrong-value" | "collateral" | "blank-line";
+type Outcome = "honest" | "unsaved" | "wrong-value" | "collateral" | "blank-line" | "trailing-rows";
 
 async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
   const dir = mkdtempSync(join(tmpdir(), "myco-bench-e2e-"));
@@ -50,13 +50,24 @@ async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
     lines.splice(1, 0, "");
     writeFileSync(filePath, lines.join("\n"));
   }
+  if (outcome === "trailing-rows") {
+    // Round-3 D2: empty rows after the data hold no content; both implementations pass it.
+    writeFileSync(filePath, `${readFileSync(filePath, "utf8")}\n,,,,\r\n\n`);
+  }
   return { fixtureCsv: Buffer.from(fixture.csv), filePath };
 }
 
 describe("benchmark harness on the fake app", () => {
   it("grades honest runs pass and every false-done shape fail, agreeing with the gate", async () => {
     const sets = generateParameterSets(SEEDS).slice(0, 8);
-    const outcomes: Outcome[] = ["honest", "unsaved", "wrong-value", "collateral", "blank-line"];
+    const outcomes: Outcome[] = [
+      "honest",
+      "unsaved",
+      "wrong-value",
+      "collateral",
+      "blank-line",
+      "trailing-rows",
+    ];
     for (const params of sets) {
       for (const outcome of outcomes) {
         const { fixtureCsv, filePath } = await runTrial(params, outcome);
@@ -70,7 +81,8 @@ describe("benchmark harness on the fake app", () => {
         });
         const gate = calcRecordEditVerifier.verify(readCsvSpreadsheet(filePath), intentFor(params));
         const label = `${params.fixtureSeed}/${params.rowKey}/${params.column} ${outcome}`;
-        expect(g.status, label).toBe(outcome === "honest" ? "pass" : "fail");
+        const passes = outcome === "honest" || outcome === "trailing-rows";
+        expect(g.status, label).toBe(passes ? "pass" : "fail");
         // The gate's Calc oracle (whole document, TIF-270) agrees with the grader on every
         // outcome, collateral damage included.
         const gateV2 = calcRecordEditFamily.decide(new Uint8Array(persisted), params, "doc.csv");

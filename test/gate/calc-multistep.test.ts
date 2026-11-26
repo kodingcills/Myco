@@ -180,8 +180,10 @@ function insertLines(csv: string, at: number, extra: readonly string[], eol = "\
 
 // Round-2 D1: the M1 reader drops empty lines before numbering rows, so a blank line used to
 // shift every record below it without the gate noticing (the grader fails such a document).
-// The gate's strict parse keeps row structure exact. Allowed: one line terminator at EOF
-// (LF or CRLF), or none. Everything else that changes the row structure is refuted.
+// The gate's strict parse keeps row structure exact: an interior blank or all-empty row is
+// refuted. Round-3 D2: rows after the last row with content hold no content (like a
+// trailing empty column), so trailing blank lines and `,,,,` rows are the same document,
+// as the independent grader already ruled (test/gate/calc-gate-grader-agreement.test.ts).
 describe("calc-record-edit v2: row structure is exact (blank lines, extra rows)", () => {
   const exact = sheet(SEED, [EDIT]);
   const allowed: [string, string][] = [
@@ -189,6 +191,10 @@ describe("calc-record-edit v2: row structure is exact (blank lines, extra rows)"
     ["no trailing newline", exact.trimEnd()],
     ["CRLF line endings, one trailing CRLF", exact.replaceAll("\n", "\r\n")],
     ["CRLF line endings, no trailing newline", exact.trimEnd().replaceAll("\n", "\r\n")],
+    ["a blank line at the end", `${exact}\n`],
+    ["two blank lines at the end", `${exact}\n\n`],
+    ["a CRLF blank line at the end", `${exact.replaceAll("\n", "\r\n")}\r\n`],
+    ["an all-empty row at the end", `${exact},,,,\n`],
   ];
   it.each(allowed)("%s → verified", async (_name, csv) => {
     const result = await check(CALC, csv);
@@ -201,10 +207,7 @@ describe("calc-record-edit v2: row structure is exact (blank lines, extra rows)"
     ["a blank line after row 3", insertLines(exact, 2, [""])],
     ["two blank lines inside the sheet", insertLines(exact, 4, ["", ""])],
     ["a CRLF blank line inside a CRLF sheet", insertLines(exact, 1, [""], "\r\n")],
-    ["a blank line at the end only", `${exact}\n`],
-    ["two blank lines at the end", `${exact}\n\n`],
-    ["a CRLF blank line at the end", `${exact.replaceAll("\n", "\r\n")}\r\n`],
-    ["an all-empty row at the end", `${exact},,,,\n`],
+    ["an all-empty row inside the sheet", insertLines(exact, 3, [",,,,"])],
   ];
   it.each(structural)("%s → refuted DOCUMENT_COLLATERAL", async (_name, csv) => {
     const result = await check(CALC, csv);
@@ -214,24 +217,13 @@ describe("calc-record-edit v2: row structure is exact (blank lines, extra rows)"
     expect(result.reasons.some((r) => r.startsWith("DOCUMENT_COLLATERAL"))).toBe(true);
   });
 
-  it("a trailing blank line is reported as a row count, not as cells", async () => {
-    const result = await check(CALC, `${exact}\n`);
-    const rows = generateFixture(SEED).rows.length + 1;
-    expect(result.reasonCodes).toEqual(["ORACLE_FAIL", "DOCUMENT_COLLATERAL"]);
-    expect(result.reasons.join("\n")).toContain(`has ${rows + 1} row(s)`);
-  });
-
-  it("parseDocument keeps blank lines as rows; without them it matches the M1 reader", () => {
+  it("parseDocument keeps interior blank lines as rows; trailing empty rows add nothing", () => {
     expect(parseDocument("a,b\n\nc,d\n")).toEqual({
       cells: { A1: "a", B1: "b", A3: "c", B3: "d" },
-      rows: 3,
     });
-    expect(parseDocument("a,b\r\nc,d")).toEqual({
-      cells: { A1: "a", B1: "b", A2: "c", B2: "d" },
-      rows: 2,
-    });
-    expect(parseDocument("a\n\n").rows).toBe(2);
-    expect(parseDocument("").rows).toBe(0);
+    expect(parseDocument("a,b\r\nc,d")).toEqual({ cells: { A1: "a", B1: "b", A2: "c", B2: "d" } });
+    expect(parseDocument("a,b\nc,d\n\n,,\r\n\n")).toEqual(parseDocument("a,b\nc,d"));
+    expect(parseDocument("")).toEqual({ cells: {} });
     expect(parseDocument(exact).cells).toEqual(parseCsvSpreadsheet(exact, "x").cells);
   });
 });
@@ -294,13 +286,19 @@ describe("calc-multi-step: per-checkpoint verdicts from the document alone", () 
 
   it.each([
     ["a blank line inside the sheet", (csv: string) => insertLines(csv, 3, [""])],
-    ["a blank line at the end", (csv: string) => `${csv}\n`],
+    ["an all-empty row inside the sheet", (csv: string) => insertLines(csv, 1, [",,,,"])],
   ])("every step right but %s → every checkpoint refuted (round-2 D1)", async (_name, edit) => {
     const result = await check(MS, edit(sheet(MSEED, [S1, S2, S3])));
     assertInvariant(result);
     expect(result.reasonCodes).toContain("DOCUMENT_COLLATERAL");
     expect(verdicts(result)).toBe("RRR");
     expect(result.checkpoints).toMatchObject({ total: 3, lastVerified: 0 });
+  });
+
+  it("every step right plus empty rows at the end → every checkpoint verified (round-3 D2)", async () => {
+    const result = await check(MS, `${sheet(MSEED, [S1, S2, S3])}\n,,,,\r\n`);
+    assertInvariant(result);
+    expect(verdicts(result)).toBe("VVV");
   });
 
   it("the agent cannot supply steps, values or checkpoints; the oracle never runs", async () => {

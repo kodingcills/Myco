@@ -43,7 +43,7 @@ The gate is M1's verifier, `src/verify/uno-verifier.ts`.
 |---|---|---|
 | What it observes | Live document over UNO in the guest, plus a CSV that `soffice --convert-to csv` renders in the guest | The saved file's own bytes, on the host |
 | Parser | `src/core/filepersist.ts` over soffice's CSV | Its own ZIP reader (`zip.ts`) and OOXML reader (`sheet.ts`), and its own CSV parser |
-| Expected state | Fixture regenerated from its seed (`src/tasks/fixture.ts`), target located by `src/tasks/intent.ts` | Target located in the pristine fixture bytes it is handed, pinned by SHA-256 |
+| Expected state | Fixture regenerated from its seed (`src/tasks/fixture.ts`), or the operator's sealed fixture (digest-checked) when the guest was given another; target located by `src/tasks/intent.ts` | Target located in the pristine fixture bytes it is handed, pinned by SHA-256 |
 | Scope | The target cell (plus `isModified` and the persisted target) | Every cell of the first sheet, other sheets, extent past the grid |
 | Sees the agent's claim or the gate verdict | n/a | No. `GradeInput` has no field for either; a grade row has no field for either |
 
@@ -71,7 +71,13 @@ on honest runs, unsaved runs and wrong values. They **disagreed on collateral da
 that writes the right value to the target but also changes another cell was `verified` by the
 gate (it checked the target cell only) and `fail` by the grader. Since TIF-270 the gate's
 `calc-record-edit` family (version 2) checks the whole document, and the test now requires
-it to agree with the grader on every outcome, collateral included (`DOCUMENT_COLLATERAL`).
+it to agree with the grader on every outcome it runs, collateral and trailing empty rows
+included (`DOCUMENT_COLLATERAL`). `test/gate/calc-gate-grader-agreement.test.ts` pins the
+agreement over the round-2 verifier's full probe set, with two documented false refutes by
+the gate (an RFC 4180 quoted target, CR-only line endings; `docs/gate/api.md`, "Row
+structure"). When the guest is given a fixture other than the seed's (a cell-site
+injection), the gate builds pristine from the operator's sealed fixture, as the grader
+does from the fixture bytes it is handed (TIF-270 round 3).
 M1's target-only verifier, which M1 code paths still use, keeps its divergence pinned.
 
 **Ruled by the lead on 2026-11-25: a correct target plus collateral damage is a false DONE in

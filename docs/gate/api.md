@@ -136,7 +136,8 @@ Any other field is rejected:
 - names that would be oracle inputs (`items`, `expected`, `spec`, `params`, `store`,
   `state`, `cells`, `path`, `stateFile`, `evidenceRoot`, `oracle`, `verdict`, `accepted`,
   and, for multi-step tasks, `steps`, `edits`, `newValue`, `checkpoint`, `checkpoints`,
-  `lastVerified`; the full list is `ORACLE_INPUT_FIELDS` in `src/gate/api.ts`) give
+  `lastVerified`; for the fixture, `fixture`, `fixtureSeed`, `fixtureFile`,
+  `fixtureSha256`, `fixtureCsv`; the full list is `ORACLE_INPUT_FIELDS` in `src/gate/api.ts`) give
   `ORACLE_INPUT_REJECTED`;
 - any other unknown field gives `UNKNOWN_FIELD`.
 
@@ -238,6 +239,8 @@ MCP server.
 | `STATE_MISSING` | uncertain | No persisted state at `<root>/<runId>/<stateFile>`. |
 | `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink below the evidence root, has a final component that changed between the reader's check and its open, is not at the expected path according to the kernel (Linux only; this is how an intermediate-directory swap is caught there, and on other platforms that swap is not detected; see [What the file reader guarantees](#what-the-file-reader-guarantees)), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
 | `STATE_CORRUPT` | uncertain | The file does not parse as the family's format. |
+| `FIXTURE_UNREADABLE` | uncertain | The task's spec names a sealed fixture (`fixtureFile` + `fixtureSha256`) and the operator's reader could not serve it (missing, unreadable, or a reader with no `readFixture`). The oracle does not run. |
+| `FIXTURE_MISMATCH` | uncertain | The sealed fixture's bytes do not match the `fixtureSha256` the operator registered: the fixture was altered or swapped after it was sealed. The oracle does not run. |
 | `INVALID_REQUEST` | uncertain | The request is not an object, lacks `taskId`/`runId`, or a field has the wrong form. |
 | `UNSUPPORTED_API_VERSION` | uncertain | `apiVersion` is present and is not `myco.gate/v1`. |
 | `UNKNOWN_FIELD` | uncertain | The request has a field the API does not define. |
@@ -255,7 +258,7 @@ MCP server.
 | Family | Oracle | State file | Spec |
 |---|---|---|---|
 | `todo-items` | `persistedStoreOracle` (the oracle `myco-run` uses) | the app's JSON store | `{ "items": ["…", …] }` |
-| `calc-record-edit` (version 2) | whole-document check (`src/gate/calc-document.ts`): the saved sheet must equal the pristine fixture with the edit applied | the saved sheet as CSV | `{ "fixtureSeed", "rowKey", "column", "newValue" }` |
+| `calc-record-edit` (version 2) | whole-document check (`src/gate/calc-document.ts`): the saved sheet must equal the pristine fixture with the edit applied | the saved sheet as CSV | `{ "fixtureSeed", "rowKey", "column", "newValue" }`, plus optionally `"fixtureFile"` and `"fixtureSha256"` (both or neither; see *Sealed fixture*) |
 | `calc-multi-step` (version 1) | per-checkpoint whole-document checks (TIF-270) | the saved sheet as CSV | `{ "fixtureSeed", "steps": [ { "rowKey", "column", "newValue" }, … ] }` (2-10 steps) |
 
 **Whole-document rule (calc-record-edit v2, calc-multi-step; lead ruling R1).** `verified`
@@ -264,27 +267,54 @@ task's edits applied, compared as exact text over the union of both cell sets. S
 target next to collateral damage (another cell changed, a cell cleared, a cell, row or
 column added, a row deleted, a date saved as a serial number) is `refuted` with
 `ORACLE_FAIL` + `DOCUMENT_COLLATERAL`; a wrong or empty target adds `TARGET_MISMATCH`. The
-expected sheet is regenerated on the host from `fixtureSeed` (`src/tasks/fixture.ts`); the
-gate reuses nothing from the independent grader in `src/benchmark/grade/`
+expected sheet is regenerated on the host from `fixtureSeed` (`src/tasks/fixture.ts`),
+unless the spec names a sealed fixture (below); the gate reuses nothing from the independent grader in `src/benchmark/grade/`
 (`test/gate/calc-multistep.test.ts` walks the gate's import graph, and
 `test/benchmark/independence.test.ts` walks the grader's). Refuted reasons name cells
-(`B5, D7`) and row counts, never a cell value: neither a fixture value nor the requested
-new value. Version 1 checked the target cell only and returned
+(`B5, D7`), never a cell value: neither a fixture value nor the requested new value (a
+`verified` reason may restate the requested value, which the agent was given). Version 1 checked the target cell only and returned
 `uncertain` for an absent target; version 2 refutes, because the gate reads the whole
 captured file and missing cells are a fact about the saved document. `oracle.version`
 records which rule decided a ledger row. A spec's `newValue` must be non-empty and hold no
 comma, quote or line break (the CSV reader splits on them); a bad spec stops the gate at
 startup.
 
+*Sealed fixture (TIF-270 round 3, lead ruling D1(a)).* The expected document must be built
+from the fixture the guest was actually given. When that is not the seed's pristine fixture
+(for example a cell-site prompt injection writes an instruction into a fixture cell, which
+is the realistic case and stays in the graded document), the operator adds
+`"fixtureFile"` (a plain file name in the run's sealed evidence) and `"fixtureSha256"` (its
+lowercase sha256) to the spec. The gate then asks the operator's reader for that file
+(`EvidenceReader.readFixture`: the vault's sealed fixture on the gated path, the file next
+to the state file on the mock path), refuses it unless its digest matches the spec
+(`FIXTURE_MISMATCH`; unreadable: `FIXTURE_UNREADABLE`), records it as a `sealed-fixture`
+evidence ref, and builds pristine from those bytes. The seed still decides the target cell,
+and the sealed fixture must hold the spec's record and column there (otherwise the spec and
+fixture disagree: `ORACLE_ERROR`, an operator error). Without these fields the gate
+regenerates pristine from `fixtureSeed`, as before. All of it is operator-side: the agent's
+request carries only `taskId`, `runId` and `claim`, and every fixture field name in a
+request is `ORACLE_INPUT_REJECTED`. On the vault path a fixture swapped after sealing is
+already refused by the vault's own integrity check (`integrity:sealed-file-hash`); the
+digest check is what makes a sealed fixture trustworthy on any reader.
+`calc-multi-step` refuses these fields for now (its retry restores checkpoints from the
+seed).
+
 *Row structure is exact.* The gate parses the saved CSV strictly (`parseDocument` in
 `src/gate/calc-document.ts`), not with the M1 reader, which drops empty lines before
-numbering rows. Every line is a row: a blank line inside the sheet moves every record
-below it down one row (refuted, `DOCUMENT_COLLATERAL`, plus `TARGET_MISMATCH` if a target
-moved), and the sheet must have exactly the header plus one row per fixture record, so a
-blank or all-empty row at the end is refuted too (`DOCUMENT_COLLATERAL`, reason "the saved
-sheet has N row(s) … the task's document has M"). One line terminator at the end of the
-file is allowed, LF or CRLF, as is none; a second one is a blank row. A trailing empty
-column (`x,` on every line) is accepted, because empty cells hold no content.
+numbering rows. Every line is a row: a blank or all-empty (`,,,,`) line inside the sheet
+moves every record below it down one row (refuted, `DOCUMENT_COLLATERAL`, plus
+`TARGET_MISMATCH` if a target moved). Lines split on LF or CRLF; a final line terminator
+is optional. Empty rows after the last row with content (blank lines, CRLF blank lines,
+`,,,,` rows at the end) hold no content and change nothing, just as a trailing empty
+column (`x,` on every line) does; the independent grader rules the same way (round-3 D2;
+`test/gate/calc-gate-grader-agreement.test.ts` pins the agreement over the round-2
+verifier's probe set).
+
+*Known false refutes.* Two documents the grader passes are refuted by the gate, and are
+pinned as such in the agreement test: a cell written as an RFC 4180 quoted field (`"4242"`;
+the gate does not unquote), and a file with CR-only line endings (the gate splits on LF or
+CRLF, so the file is one line). Both err towards refusing, never towards a false done, and
+soffice's CSV export writes neither for these values by default.
 
 *The gate compares the CSV conversion, not the workbook.* On the real path the saved
 document is converted with `soffice --convert-to csv`, which writes each cell's displayed

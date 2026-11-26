@@ -4,66 +4,69 @@
  * Outer-loop ruling R1: a Calc task is done only when the WHOLE saved document equals the
  * pristine fixture with the task's edits applied. A correct target cell next to collateral
  * damage (another cell changed, cleared, or a cell added) is not done. This module builds
- * the expected document from the operator's spec alone (fixture seed + edits, regenerated
- * on the host by `src/tasks/fixture.ts`) and diffs it against the parsed persisted cells.
+ * the expected document from the operator's side only and diffs it against the parsed
+ * persisted cells. The pristine document is the operator's sealed fixture when the spec
+ * names one (the exact bytes the guest was given, digest-checked by the gate; TIF-270
+ * round 3, ruling D1(a)), and otherwise the fixture regenerated on the host from the spec's
+ * seed by `src/tasks/fixture.ts`.
  *
  * Independence: this is gate code. It imports nothing from `src/benchmark/grade/` (the
  * independent grader), and the grader imports nothing from here; both directions are
  * pinned by import-graph tests (`test/benchmark/independence.test.ts`,
  * `test/gate/calc-multistep.test.ts`).
  *
- * Agent-facing reasons name cells (A1 refs) and row counts, never a cell value: neither the
- * requested new value nor what the operator's fixture holds there. The agent learns where
- * the document is wrong, not what belongs there.
+ * Refuted reasons name cells (A1 refs), never a cell value: neither the requested new value
+ * nor what the operator's fixture holds there. The agent learns where the document is
+ * wrong, not what belongs there. (A `verified` reason may restate the requested value,
+ * which the agent was given in its task.)
  *
- * Row structure is exact (round-2 D1): `parseDocument` keeps every line as a row, so a
- * blank line moves every later record down and shows as collateral, unlike the M1 reader
- * (`parseCsvSpreadsheet`), which drops empty lines before numbering rows.
+ * Row structure: `parseDocument` keeps every line as a row, so an interior blank line moves
+ * every later record down and shows as collateral (round-2 D1), unlike the M1 reader
+ * (`parseCsvSpreadsheet`), which drops empty lines before numbering rows. Trailing rows
+ * that hold no content (blank lines, CRLF blank lines, `,,,,` rows at the end) are no
+ * content, exactly as a trailing empty column is, so they change nothing (round-3 D2, in
+ * agreement with the independent grader).
+ *
+ * Known false refutes (documented, pinned in `test/gate/calc-gate-grader-agreement.test.ts`):
+ * the gate does not unquote RFC 4180 fields (`"4242"` is not `4242`), and it splits lines on
+ * LF or CRLF only (a CR-only file is one line). The grader handles both, so it passes such
+ * documents and the gate refutes them. Never a false done; soffice writes neither by
+ * default for these values.
  */
 import { cellRef } from "../core/filepersist.ts";
 import { DATA_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import { groundTruth, isAutoCorrectImmune, locateInFixture } from "../tasks/intent.ts";
 
-/** A saved sheet as the gate reads it: cells by A1 ref, and the number of rows (lines). */
+/** A saved sheet as the gate reads it: non-empty cells by A1 ref. */
 export interface ParsedDocument {
   readonly cells: Readonly<Record<string, string>>;
-  readonly rows: number;
 }
 
 /**
- * Strict gate-side CSV parse. Lines split on LF or CRLF; ONE line terminator at the end of
- * the file is allowed (with or without it, the document is the same). Every other line is
- * a row, an empty one included, so an interior blank line shifts the rows below it and a
- * trailing blank line (a second terminator at EOF) is an extra row. Cells split on commas
+ * Strict gate-side CSV parse. Lines split on LF or CRLF, and every line is a row, an empty
+ * one included, so an interior blank line shifts the rows below it. Cells split on commas
  * exactly as `parseCsvSpreadsheet` does (empty cells omitted), so a document without
- * blank lines parses to the same cells as the M1 reader gives.
+ * interior blank lines parses to the same cells as the M1 reader gives. Empty rows after
+ * the last row with content hold no cells, so they never change the result: a document
+ * with trailing blank or all-empty rows is the same document as one without (round-3 D2).
  */
 export function parseDocument(text: string): ParsedDocument {
-  const lines = text.split(/\r?\n/);
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-  if (lines.length === 1 && lines[0] === "") lines.pop();
   const cells: Record<string, string> = {};
-  lines.forEach((line, r) => {
+  text.split(/\r?\n/).forEach((line, r) => {
     line.split(",").forEach((value, c) => {
       if (value !== "") cells[cellRef(r, c)] = value;
     });
   });
-  return { cells, rows: lines.length };
-}
-
-/** Rows of the expected document: the header plus one per fixture record. */
-export function expectedRows(seed: string): number {
-  return generateFixture(seed).rows.length + 1;
+  return { cells };
 }
 
 /**
- * The row-structure check: the saved sheet must have exactly the expected number of rows.
- * Interior blank lines also show as shifted cells; this catches the cases cells cannot,
- * such as a blank or all-empty row at the end. Names counts only, never values.
+ * Cells of an operator's sealed fixture (the bytes the guest was given). Throws when the
+ * bytes are not UTF-8: a fixture the gate cannot read is an operator error, never a verdict.
  */
-export function rowsReason(actual: number, expected: number): string | undefined {
-  if (actual === expected) return undefined;
-  return `DOCUMENT_COLLATERAL: the saved sheet has ${actual} row(s) (blank lines count), the task's document has ${expected}`;
+export function fixtureCells(bytes: Uint8Array): Map<string, string> {
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  return new Map(Object.entries(parseDocument(text).cells));
 }
 
 /** One edit: "set record `rowKey`, column `column`, to `newValue`". */
@@ -90,9 +93,16 @@ export function targetRef(seed: string, edit: CellEdit): string {
   return groundTruth({ fixtureSeed: seed, ...edit }).cellRef;
 }
 
-/** The expected document: the pristine fixture with `edits` applied, in order. */
-export function expectedCells(seed: string, edits: readonly CellEdit[]): Map<string, string> {
-  const cells = pristineCells(seed);
+/**
+ * The expected document: the pristine fixture with `edits` applied, in order. `pristine`
+ * is the operator's sealed fixture when the task has one; by default, the seed's fixture.
+ */
+export function expectedCells(
+  seed: string,
+  edits: readonly CellEdit[],
+  pristine: ReadonlyMap<string, string> = pristineCells(seed),
+): Map<string, string> {
+  const cells = new Map(pristine);
   for (const edit of edits) cells.set(targetRef(seed, edit), edit.newValue);
   return cells;
 }

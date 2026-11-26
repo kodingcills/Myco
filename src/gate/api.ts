@@ -46,6 +46,16 @@ export const REASON_CODES = [
   "STATE_UNREADABLE",
   /** The persisted state was read but does not parse as the family's format. */
   "STATE_CORRUPT",
+  /**
+   * The task's spec names a sealed fixture (the exact document the guest was given, TIF-270
+   * round 3) and the gate could not read it from the operator's evidence location.
+   */
+  "FIXTURE_UNREADABLE",
+  /**
+   * The sealed fixture the gate read does not match the digest in the operator's spec: the
+   * fixture was altered or swapped after the operator registered it. Nothing is decided.
+   */
+  "FIXTURE_MISMATCH",
   /** The request is not an object, lacks a field, or a field has the wrong form. */
   "INVALID_REQUEST",
   /** The request named an API version this gate does not serve. */
@@ -126,7 +136,11 @@ export interface GateRequest {
 
 /** A pointer to something the gate read, with a digest so a ledger can pin it. */
 export interface EvidenceRef {
-  readonly kind: "persisted-state";
+  /**
+   * `persisted-state`: the saved document the oracle decided on. `sealed-fixture`: the
+   * operator's sealed fixture the expected document was built from (TIF-270 round 3).
+   */
+  readonly kind: "persisted-state" | "sealed-fixture";
   readonly runId: string;
   /** Path relative to the run's evidence location. */
   readonly path: string;
@@ -203,6 +217,11 @@ export const ORACLE_INPUT_FIELDS: readonly string[] = [
   "checkpoint",
   "checkpoints",
   "lastVerified",
+  // Sealed fixture (TIF-270 round 3): the fixture and its digest are the operator's.
+  "fixtureSeed",
+  "fixtureFile",
+  "fixtureSha256",
+  "fixtureCsv",
 ];
 
 /** Ids are path segments, so they are restricted to a safe alphabet and never `.`/`..`. */
