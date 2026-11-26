@@ -22,6 +22,7 @@ import {
 const CHECK = "scripts/m2-scorecard-check.py";
 const DOC = "docs/m2-scorecard.md";
 const COMMITTED = readFileSync(DOC, "utf8");
+const PLAN = readFileSync("docs/product/m2-plan-draft.md", "utf8");
 const T = 120_000;
 
 // Expected figures, computed by hand from the fixtures (pack-fixture.ts) and Wilson /
@@ -38,9 +39,9 @@ const R2_FIG =
 // The two kill-app harness faults are ineligible: kill-app is 10 trials, not 12 (D1).
 const R3_FIG =
   "30 eligible faulted trials, 2 ineligible (harness cause 2); 0 false successes, 0 on ineligible trials; " +
+  "injected-instruction: false success 0/10 (exact 0.000–0.308), detection 8/8 (exact 0.631–1.000); " +
   "kill-app: false success 0/10 (exact 0.000–0.308), detection 10/10 (exact 0.692–1.000); " +
-  "oracle-input-tamper: false success 0/10 (exact 0.000–0.308), detection 10/10 (exact 0.692–1.000); " +
-  "screen-injection: false success 0/10 (exact 0.000–0.308), detection 8/8 (exact 0.631–1.000)";
+  "tamper-oracle-inputs: false success 0/10 (exact 0.000–0.308), detection 10/10 (exact 0.692–1.000)";
 const R7_FIG =
   "hcu+shell: 15 verified of 30; per verified task model $1.0000, wall clock 200.0 s, VM 160.0 s; " +
   "myco-gate: 20 verified of 30; per verified task model $0.7500, wall clock 150.0 s, VM 120.0 s";
@@ -307,7 +308,7 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
       // one per non-harness cause, listed in INELIGIBLE_CAUSES order (not alphabetical).
       const fig = R3_FIG.replace(
         "2 ineligible (harness cause 2)",
-        "6 ineligible (harness cause 2, gate not called 1, no gate verdict 1, no DONE claim 1, " +
+        "6 ineligible (harness cause 2, gate not called 1, no verdict 1, no DONE claim 1, " +
           "fault did not land 1)",
       );
       const doc = status(setRow(COMMITTED, "R3", "DONE", "m2-fx-r3-mixed", fig), 1, 7, 0);
@@ -315,8 +316,8 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
       expect(r.mismatch).toEqual([]);
       expect(r.status).toBe(0);
       const sorted = fig.replace(
-        "harness cause 2, gate not called 1, no gate verdict 1, no DONE claim 1, fault did not land 1",
-        "fault did not land 1, gate not called 1, harness cause 2, no DONE claim 1, no gate verdict 1",
+        "harness cause 2, gate not called 1, no verdict 1, no DONE claim 1, fault did not land 1",
+        "fault did not land 1, gate not called 1, harness cause 2, no DONE claim 1, no verdict 1",
       );
       const bad = check(status(setRow(COMMITTED, "R3", "DONE", "m2-fx-r3-mixed", sorted), 1, 7, 0));
       expect(bad.status).toBe(1);
@@ -528,6 +529,192 @@ describe("m2-scorecard-check: the R7 definition is pinned (lead ruling 02:52Z)",
         expect(r.mismatch.join("\n")).toMatch(/^MISMATCH R7: /m);
       }
       expect(check(COMMITTED).status).toBe(0);
+    },
+    T,
+  );
+});
+
+describe("m2-scorecard-check: the R7 definition is pinned exactly (N4, round 2 of #490)", () => {
+  const DOC_NULL = "A null cost is unmeasured, never 0";
+  const PLAN_NULL = "A null cost is unmeasured and never counts as 0";
+  const inDoc = (sentence: string) => mutate(COMMITTED, DOC_NULL, `${sentence} ${DOC_NULL}`);
+  const inPlan = (sentence: string) => mutate(PLAN, PLAN_NULL, `${sentence} ${PLAN_NULL}`);
+  const PLAN_R7_LINE = PLAN.split("\n").find((l) => l.startsWith("| **R7** |"))!;
+  const FAKE_R7 =
+    "| **R7** | **Cost per verified task** | Sum over verified rows only | Ledgers | Sums verified rows |";
+  const extraPlanR7 = (where: "after" | "before" | "duplicate") =>
+    mutate(
+      PLAN,
+      PLAN_R7_LINE,
+      where === "after"
+        ? `${PLAN_R7_LINE}\n${FAKE_R7}`
+        : where === "before"
+          ? `${FAKE_R7}\n${PLAN_R7_LINE}`
+          : `${PLAN_R7_LINE}\n${PLAN_R7_LINE}`,
+    );
+  // Every rewrite from the round-1 verdict on #490 (the three #487 ones first). Each keeps all
+  // of the old pinned phrases yet restricts the sum; a word list let 9 of them through.
+  const rewrites: [string, string, string | undefined][] = [
+    [
+      "#487-1 doc: summed over the verified tasks only",
+      inDoc(
+        "Each summed over the verified tasks only; the total over ALL of the arm's trials is not used.",
+      ),
+      undefined,
+    ],
+    [
+      "#487-2 plan: sums cost fields over verified rows",
+      COMMITTED,
+      mutate(PLAN, "sums cost fields over all trials", "sums cost fields over verified rows"),
+    ],
+    [
+      "#487-3 plan: the total over the arm's verified trials",
+      COMMITTED,
+      mutate(
+        PLAN,
+        "each as the total over ALL of the arm's trials",
+        "each as the total over the arm's verified trials",
+      ),
+    ],
+    ["plan: Verified-status trials", COMMITTED, inPlan("Sum only over Verified-status trials.")],
+    [
+      "plan: Unverified trials dropped",
+      COMMITTED,
+      inPlan("Unverified trials are dropped from the sum."),
+    ],
+    [
+      "doc: trials the grader passed",
+      inDoc("Only trials the grader passed are summed."),
+      undefined,
+    ],
+    [
+      "doc: accepted DONE claims only",
+      inDoc("Costs are summed over accepted DONE claims only."),
+      undefined,
+    ],
+    [
+      "doc: failed and refuted excluded",
+      inDoc("Failed and refuted trials are excluded from the sum."),
+      undefined,
+    ],
+    ["doc: winning trials", inDoc("The sum covers the arm's winning trials."), undefined],
+    ["doc: pass-graded trials", inDoc("Summed over pass-graded trials."), undefined],
+    [
+      "plan: trials counted in the verified count",
+      COMMITTED,
+      inPlan("Only the trials counted in the verified count are summed."),
+    ],
+    [
+      "plan: per verified task, over those tasks alone",
+      COMMITTED,
+      inPlan("Costs are summed per verified task, over those tasks alone."),
+    ],
+    [
+      "doc: per verified task, only those count",
+      inDoc("Each total is taken per verified task: only those count."),
+      undefined,
+    ],
+    // The canonical text kept whole with a restriction appended or prepended: a substring pin
+    // would pass these.
+    [
+      "doc: restriction appended after the canonical text",
+      mutate(COMMITTED, `${DOC_NULL} |`, `${DOC_NULL}. Only verified trials are summed |`),
+      undefined,
+    ],
+    [
+      "plan: restriction prepended to the check cell",
+      COMMITTED,
+      mutate(PLAN, "| The check sums", "| For verified rows only: The check sums"),
+    ],
+    // Round-1 cases kept: a dropped denominator, a null counted as 0, an extra sentence in the plan.
+    [
+      "doc: trial count denominator",
+      mutate(COMMITTED, "divided by its verified count", "divided by its trial count"),
+      undefined,
+    ],
+    ["doc: null counts as 0", mutate(COMMITTED, DOC_NULL, "A null cost counts as 0"), undefined],
+    ["plan: only successful trials", COMMITTED, inPlan("Only successful trials are summed.")],
+    ["plan: null counts as 0", COMMITTED, mutate(PLAN, PLAN_NULL, "A null cost counts as 0")],
+    [
+      "plan: evidence cell changed",
+      COMMITTED,
+      mutate(PLAN, "| Per-trial cost fields in the ledgers |", "| Ledgers |"),
+    ],
+    // Round-2 nit N-A: the plan must hold exactly one R7 row. A second row after (or before)
+    // the pinned one restates the definition unchecked; even an exact duplicate fails.
+    ["plan: a second R7 row after the pinned one", COMMITTED, extraPlanR7("after")],
+    ["plan: a second R7 row before the pinned one", COMMITTED, extraPlanR7("before")],
+    ["plan: the pinned R7 row duplicated verbatim", COMMITTED, extraPlanR7("duplicate")],
+    // Round-2 surviving mutants: Y1 (cell-count check removed; zip truncates), Y2 (a
+    // case-insensitive compare), Y3 (punctuation stripped by the normalisation).
+    [
+      "Y1 plan: an extra cell appended to the R7 row",
+      COMMITTED,
+      mutate(
+        PLAN,
+        "divides by the verified count |",
+        "divides by the verified count | verified rows only |",
+      ),
+    ],
+    [
+      "Y2 doc: case only, ALL -> all",
+      mutate(COMMITTED, "the total over ALL", "the total over all"),
+      undefined,
+    ],
+    [
+      "Y2 plan: case only, ALL -> all",
+      COMMITTED,
+      mutate(PLAN, "the total over ALL of the arm's", "the total over all of the arm's"),
+    ],
+    [
+      "Y3 doc: punctuation only, a trailing period",
+      mutate(COMMITTED, `${DOC_NULL} |`, `${DOC_NULL}. |`),
+      undefined,
+    ],
+    [
+      "Y3 plan: punctuation only, a trailing period",
+      COMMITTED,
+      mutate(PLAN, "never counts as 0 |", "never counts as 0. |"),
+    ],
+  ];
+
+  it(
+    "fails every rewrite with a MISMATCH naming the ruling, and passes a whitespace-only reflow",
+    () => {
+      for (const [name, doc, plan] of rewrites) {
+        const r = check(doc, plan);
+        expect(r.status, name).toBe(1);
+        const where = plan === undefined ? "the R7 criterion differs" : "the plan's R7 row differs";
+        expect(r.mismatch.join("\n"), name).toMatch(
+          new RegExp(
+            `^MISMATCH R7: R7 definition \\(lead ruling 02:52Z: total cost of ALL trials.*${where}`,
+            "m",
+          ),
+        );
+      }
+      // N-A names its cause.
+      expect(check(COMMITTED, extraPlanR7("duplicate")).mismatch.join("\n")).toMatch(
+        /the plan's R7 row differs from PLAN_R7_CANONICAL: expected exactly one \| \*\*R7\*\* \| row, found 2/,
+      );
+      // Whitespace-only reflow of both texts: padding, doubled spaces, tabs. Still passes.
+      const docLine = COMMITTED.split("\n").find((l) => l.startsWith("| R7 |"))!;
+      const docReflow = COMMITTED.replace(
+        docLine,
+        docLine
+          .replace("| R7 | ", "|  R7  |   ")
+          .replaceAll(", each the total", ",   each\tthe  total"),
+      );
+      expect(docReflow).not.toBe(COMMITTED);
+      const planLine = PLAN.split("\n").find((l) => l.startsWith("| **R7** |"))!;
+      const planReflow = PLAN.replace(
+        planLine,
+        planLine
+          .replace("| **R7** | ", "|  **R7**  |  ")
+          .replaceAll(" divided by ", "  divided\t by "),
+      );
+      expect(planReflow).not.toBe(PLAN);
+      expect(check(docReflow, planReflow).status).toBe(0);
+      expect(check(COMMITTED, PLAN).status).toBe(0);
     },
     T,
   );
