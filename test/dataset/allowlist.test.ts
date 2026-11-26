@@ -7,7 +7,15 @@
  * and a closed field holding anything else refuses the export by name.
  */
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -29,6 +37,7 @@ import {
   type ExportCandidate,
   ExportRefused,
   exportDataset,
+  validateContainer,
 } from "../../src/dataset/export.ts";
 import { redactText } from "../../src/episode/clean.ts";
 import { makePathFuzzer } from "./path-fuzz.ts";
@@ -338,6 +347,117 @@ describe("refusals name the field, never the value", () => {
       expect(err?.where).toMatch(/:\$\.groundTruth\.graderVersion$/);
       expect(err?.message).not.toContain("QzPLANTEDref");
       expect(readdirSync(base)).toEqual([]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the container is digest-only (lead ruling 2026-11-26 20:3xZ)", () => {
+  const words = ["QzPLANTEDdocfirst", "QzPLANTEDdoclast"];
+  /** A captured document holding a long-path UNC path the leak scan does not flag. */
+  const planted = Buffer.from(
+    `id,qty\nEMP-0001,${["\\\\?\\UNC\\nas\\homes\\", words[0], " ", words[1]].join("")}\n`,
+  );
+  function withDoc(doc: Buffer): ExportCandidate {
+    const c = candidate("ok", {
+      groundTruth: {
+        source: "independent-grader",
+        graderVersion: "false-completion-grader/1",
+        status: "pass",
+        targetSatisfied: true,
+        mismatchCount: 0,
+        fixtureSha256: FIXTURE_SHA,
+        persistedSha256: sha(doc),
+      },
+      persisted: doc,
+    });
+    return { ...c, capture: { path: "doc.csv", format: "csv", bytes: doc } };
+  }
+
+  it("a captured document the scan lets through never reaches the container; only its digest and size do", () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-u-allow-"));
+    const dir = join(base, "ds");
+    try {
+      const r = exportDataset([withDoc(planted)], { outDir: dir, hygiene: HYGIENE });
+      const written = everyFile(dir);
+      expect(words.filter((w) => written.includes(w))).toEqual([]);
+      expect(existsSync(join(dir, "blobs"))).toBe(false);
+      expect(r.manifest.blobs).toEqual([]);
+      expect(written).toContain(sha(planted));
+      expect(validateContainer(dir)).toEqual([]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("validateContainer refuses a blobs/ entry, a stray entry, an edit, an open string and an unreferenced episode", () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-u-allow-"));
+    const fresh = (name: string) => {
+      const dir = join(base, name);
+      exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
+      return dir;
+    };
+    try {
+      const a = fresh("a");
+      mkdirSync(join(a, "blobs"));
+      writeFileSync(join(a, "blobs", `${sha(planted)}.csv`), planted);
+      expect(validateContainer(a)).toContain("blobs/ is present: the container is digest-only");
+
+      const b = fresh("b");
+      writeFileSync(join(b, "notes.txt"), "x");
+      expect(validateContainer(b)).toContain("notes.txt: not part of the container layout");
+
+      const c = fresh("c");
+      writeFileSync(join(c, "records.jsonl"), `${readFileSync(join(c, "records.jsonl"), "utf8")} `);
+      expect(validateContainer(c)).toContain("records.jsonl does not hash to the manifest");
+
+      const d = fresh("d");
+      const [file] = readdirSync(join(d, "episodes"));
+      const ep = JSON.parse(readFileSync(join(d, "episodes", file as string), "utf8"));
+      ep.task.instruction = "cd Plain Text";
+      writeFileSync(join(d, "episodes", file as string), `${canonicalJson(ep)}\n`);
+      expect(validateContainer(d)).toEqual(
+        expect.arrayContaining([
+          `episodes/${file} does not hash to its record`,
+          `episodes/${file}: OPEN_STRING at $.task.instruction`,
+        ]),
+      );
+
+      const e = fresh("e");
+      writeFileSync(join(e, "episodes", `${"0".repeat(64)}.json`), "{}\n");
+      expect(validateContainer(e)).toContain(
+        `episodes/${"0".repeat(64)}.json is not referenced by a record`,
+      );
+
+      // A record line edited (and the file hash in the manifest made consistent): the line's own
+      // digest in the manifest catches it. A record removed the same way: the counts disagree.
+      const g = fresh("g");
+      const gm = JSON.parse(readFileSync(join(g, "manifest.json"), "utf8"));
+      const edited = readFileSync(join(g, "records.jsonl"), "utf8").replace(
+        '"positive"',
+        '"negative"',
+      );
+      writeFileSync(join(g, "records.jsonl"), edited);
+      gm.files["records.jsonl"] = sha(edited);
+      writeFileSync(join(g, "manifest.json"), JSON.stringify(gm));
+      expect(validateContainer(g)).toContain("records.jsonl#1 does not hash to the manifest");
+      const h = fresh("h");
+      const hm = JSON.parse(readFileSync(join(h, "manifest.json"), "utf8"));
+      writeFileSync(join(h, "records.jsonl"), "");
+      hm.files["records.jsonl"] = sha("");
+      writeFileSync(join(h, "manifest.json"), JSON.stringify(hm));
+      expect(validateContainer(h)).toContain(
+        "records.jsonl and the manifest list different numbers of records",
+      );
+
+      const f = fresh("f");
+      const m = JSON.parse(readFileSync(join(f, "manifest.json"), "utf8"));
+      m.blobs = [
+        { file: `blobs/${sha(planted)}.csv`, sha256: sha(planted), bytes: planted.byteLength },
+      ];
+      writeFileSync(join(f, "manifest.json"), JSON.stringify(m));
+      expect(validateContainer(f).join("\n")).toMatch(/^manifest\.json:\$\.blobs maxItems$/m);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

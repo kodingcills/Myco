@@ -13,9 +13,10 @@ import type { JsonSchema } from "./validate.ts";
  *                     track U's own fields: the label, the desktop backend facts and where
  *                     the capture was taken. Steps, verdict, grade, claim, provenance and
  *                     the simulated flag live in the episode, never here;
- *  - `blobs/<sha256>.csv`  the persisted document each exported episode graded, byte for
- *                     byte, named by its digest (the episode's `state`/`persisted`
- *                     observation references it; #542 requires it of a graded episode);
+ *  - (no blobs)       DIGEST-ONLY (lead ruling 2026-11-26 20:3xZ): the persisted document each
+ *                     exported episode graded is referenced by the sha256, byte count and
+ *                     content-addressed name its `state`/`persisted` observation carries, and
+ *                     never written. `validateContainer` refuses a `blobs/` entry;
  *  - `manifest.json`  `myco.dataset.manifest/3`: counts, per-record digests, file and blob
  *                     digests;
  *  - `schema.json`    these two schemas plus the mirrored episode schema.
@@ -167,9 +168,13 @@ export const datasetManifestSchema: JsonSchema = {
       required: ["records.jsonl", "schema.json"],
       properties: { "records.jsonl": sha256, "schema.json": sha256 },
     },
-    /** Every carried blob, sorted by file: the file is named by `sha256`, which it hashes to. */
+    /**
+     * Blobs carried: none. The container is digest-only (lead ruling 2026-11-26 20:3xZ): a captured
+     * document is referenced by the digest, size and name its episode's observation carries.
+     */
     blobs: {
       type: "array",
+      maxItems: 0,
       items: {
         type: "object",
         additionalProperties: false,

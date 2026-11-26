@@ -185,11 +185,14 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
   Steps (actions and observations), the claim, the gate verdict (codes only), the
   independent grader's ground truth, harness metadata, provenance and the `simulated` flag
   live here, and only here.
-- `blobs/<sha256>.csv`: the persisted document each exported episode graded, byte for byte,
-  named by its digest. #542 requires a graded episode to observe the document it graded (a
-  `state` / `persisted` / `text/csv` observation whose hash is `groundTruth.persistedSha256`),
-  so the container carries it; every exported episode passes #542's `validateEpisode` with
-  these blobs. Two attempts that saved identical bytes share one blob.
+- **No blobs** (digest-only, lead ruling 2026-11-26 20:3xZ): the persisted document each exported
+  episode graded is referenced by the sha256, byte count and content-addressed name its
+  `state` / `persisted` / `text/csv` observation carries (#542 requires the observation), and is
+  never written: a captured document can hold a host path the leak scan misses. The captured
+  bytes still bind the grade (`classify`), the closed episode is checked against them, and they
+  are scanned raw, so a planted marker or a secret in one still refuses the export. The manifest's
+  `blobs` list is empty (`maxItems: 0`), and `validateContainer` refuses a `blobs/` entry, a stray
+  entry, an edited file, an unreferenced episode and any open string.
 - `records.jsonl`: one `myco.dataset.record/3` per exported episode, sorted by episode id. A
   record references its episode by id and digest (`episode.id`, `episode.sha256`,
   `episode.file`) and carries only U's own fields: the `label` (`positive` / `negative`), the
