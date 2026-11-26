@@ -204,6 +204,8 @@ describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned check
       hostLoad1mStart: 1,
       harnessClass,
       faultLanded: live.faultClass === "none" ? null : true,
+      resetBootClass: "cold",
+      resetGuestCpuFirstSshS: 280,
     },
   });
   const live = () => r1Trials()[LIVE]!.arm;

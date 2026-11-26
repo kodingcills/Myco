@@ -58,6 +58,9 @@ describe("M2 pack CLI refuses simulated rows (track E)", () => {
       hostLoad1mStart: 0,
       harnessClass: null,
       faultLanded: r.faultClass === "none" ? null : true,
+      // TIF-98: every trial-ops row records its reset's cold boot (required).
+      resetBootClass: "cold",
+      resetGuestCpuFirstSshS: 280,
     }));
     // The attempt ledger an honest runner writes for these trials (#518, the shared fixture's
     // `ledgerFor`/`anchorFor`): one start and one completed end per trial, no harness faults.
