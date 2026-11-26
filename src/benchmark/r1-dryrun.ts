@@ -61,10 +61,13 @@ export function scriptedDocument(task: BenchmarkTask): string {
 
 function plan(base: string): AgentLaunchPlan {
   return {
+    mcpConfigPath: join(base, "mcp.json"),
     argv: [
       "-p",
       "simulated dry run",
       "--strict-mcp-config",
+      "--tools",
+      "",
       "--mcp-config",
       join(base, "mcp.json"),
       "--permission-mode",

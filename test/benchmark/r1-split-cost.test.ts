@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type BenchmarkArmRow, COST_BASIS, checkBenchmark } from "../../src/benchmark/check.ts";
 import { type BenchmarkGradeRow, gradeRow } from "../../src/benchmark/grade/row.ts";
+import { buildTaskSet } from "../../src/benchmark/taskset.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const H = (c: string) => c.repeat(64);
@@ -74,6 +75,32 @@ function ledger() {
   );
   return { rows, grades };
 }
+
+/**
+ * The real fc-v1 task set as a gated ledger, each task once, with the REAL hashes: 60 clean
+ * verified and graded pass, 30 faulted refuted and graded fail, 10 invalid-target
+ * unregistrable and graded fail.
+ */
+function fcLedger() {
+  const rows = buildTaskSet().tasks.map((t, i): BenchmarkArmRow => {
+    const bind = {
+      taskId: t.taskId,
+      faultClass: t.faultClass,
+      fixtureSha256: t.fixtureSha256,
+      instructionSha256: t.instructionSha256,
+    };
+    const key = `f${i}`;
+    if (!t.satisfiable) return unreg(key, bind);
+    return t.faultClass === "none" ? gated(key, bind) : refuted(key, bind);
+  });
+  const grades = rows.map((r) => grade(r, r.faultClass === "none" ? "pass" : "fail"));
+  return { rows, grades };
+}
+const fcOpts = (total: number, split: number) => ({
+  expectTrials: { "myco-gate": total },
+  expectUnregistrable: { "myco-gate": split },
+  bindTaskSet: true,
+});
 
 describe("R1 over all trials with the split asserted (ruling 08:38Z)", () => {
   it("reports the headline over all trials, and the gated and unregistrable lines under it", () => {
@@ -146,7 +173,7 @@ describe("R1 over all trials with the split asserted (ruling 08:38Z)", () => {
   it("the CLI's --require-r1 needs the split for myco-gate, and checks it", () => {
     const dir = mkdtempSync(join(tmpdir(), "myco-r1-split-"));
     try {
-      const { rows, grades } = ledger();
+      const { rows, grades } = fcLedger();
       writeFileSync(join(dir, "arm.jsonl"), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
       writeFileSync(join(dir, "g.jsonl"), `${grades.map((r) => JSON.stringify(r)).join("\n")}\n`);
       const run = (extra: string[]) =>
@@ -160,7 +187,7 @@ describe("R1 over all trials with the split asserted (ruling 08:38Z)", () => {
             "--grades",
             join(dir, "g.jsonl"),
             "--expect",
-            "myco-gate=5",
+            "myco-gate=100",
             "--require-r1",
             ...extra,
           ],
@@ -169,9 +196,35 @@ describe("R1 over all trials with the split asserted (ruling 08:38Z)", () => {
       const missing = run([]);
       expect(missing.status).toBe(2);
       expect(missing.stderr).toMatch(/--require-r1 needs --expect-unregistrable myco-gate/);
-      expect(run(["--expect-unregistrable", "myco-gate=2"]).status).toBe(0);
-      expect(run(["--expect-unregistrable", "myco-gate=1"]).status).toBe(1);
+      expect(run(["--expect-unregistrable", "myco-gate=10"]).status).toBe(0);
+      expect(run(["--expect-unregistrable", "myco-gate=9"]).status).toBe(1);
       expect(run(["--expect-unregistrable", "myco-gate=-1"]).status).toBe(2);
+      // The synthetic 5-row ledger is not a published task set: --require-r1 refuses it.
+      const { rows: synth, grades: synthGrades } = ledger();
+      writeFileSync(join(dir, "arm.jsonl"), `${synth.map((r) => JSON.stringify(r)).join("\n")}\n`);
+      writeFileSync(
+        join(dir, "g.jsonl"),
+        `${synthGrades.map((r) => JSON.stringify(r)).join("\n")}\n`,
+      );
+      const s5 = spawnSync(
+        "npx",
+        [
+          "tsx",
+          join(ROOT, "scripts", "benchmark-check.ts"),
+          "--arm",
+          join(dir, "arm.jsonl"),
+          "--grades",
+          join(dir, "g.jsonl"),
+          "--expect",
+          "myco-gate=5",
+          "--expect-unregistrable",
+          "myco-gate=2",
+          "--require-r1",
+        ],
+        { cwd: ROOT, encoding: "utf8" },
+      );
+      expect(s5.status).toBe(1);
+      expect(s5.stdout).toMatch(/myco-gate task set: /);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -280,28 +333,74 @@ describe("#509 round 1: what the check does and does not bind (D1, D2)", () => {
     expect(r.r1?.pass).toBe(false);
   });
 
-  // The verifier's three short-run probes. The split here is self-declared (pending #506's
-  // task-set binding), so these pass today when the operator asserts matching numbers. They
-  // are pinned so the gap is visible, and flip to failures when the binding is reused.
-  it("KNOWN GAP pending #506: a short run passes when the operator asserts matching numbers", () => {
-    const { rows, grades } = ledger();
-    const gatedOnly = checkBenchmark(rows.slice(0, 3), grades.slice(0, 3), {
-      expectTrials: { "myco-gate": 3 },
-      expectUnregistrable: { "myco-gate": 0 },
+  // The verifier's three short-run probes, now FAILURES: the check reuses #506's task-set
+  // binding (`src/benchmark/taskset-binding.ts`), so typed numbers cannot carry a short run.
+  it("the real fc-v1 ledger passes with the binding on", () => {
+    const { rows, grades } = fcLedger();
+    const r = checkBenchmark(rows, grades, fcOpts(100, 10));
+    expect(r.errors).toEqual([]);
+    expect(r.r1).toMatchObject({
+      pass: true,
+      headline: { denominator: 100 },
+      gated: { trials: 90 },
     });
-    expect(gatedOnly.r1?.pass).toBe(true);
-    const oneShort = checkBenchmark(rows.slice(1), grades.slice(1), {
-      expectTrials: { "myco-gate": 4 },
-      expectUnregistrable: { "myco-gate": 2 },
-    });
-    expect(oneShort.r1?.pass).toBe(true);
-    const relabelled = rows.map((r) =>
-      r.trialKey === "u2" ? refuted("u2", { faultClass: "none" }) : r,
+  });
+
+  it("probe 1: the 10 unregistrable rows dropped (90 rows, split 0) fails", () => {
+    const { rows, grades } = fcLedger();
+    const keep = rows.filter((r) => r.gate?.unregistrable !== true);
+    const r = checkBenchmark(
+      keep,
+      grades.filter((g) => keep.some((k) => k.trialKey === g.trialKey)),
+      fcOpts(90, 0),
     );
-    const relabel = checkBenchmark(relabelled, grades, {
-      expectTrials: { "myco-gate": 5 },
-      expectUnregistrable: { "myco-gate": 1 },
-    });
-    expect(relabel.errors).toEqual([]);
+    expect(r.errors).toContain(
+      "myco-gate task set: 90 rows is not a whole number of runs of fc-v1's 100 tasks",
+    );
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  it("probe 2: one gated row dropped (99 rows, split 10) fails", () => {
+    const { rows, grades } = fcLedger();
+    const r = checkBenchmark(rows.slice(1), grades.slice(1), fcOpts(99, 10));
+    expect(r.errors).toContain(
+      "myco-gate task set: 99 rows is not a whole number of runs of fc-v1's 100 tasks",
+    );
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  it("probe 3: one invalid-target row relabelled as a gated clean row (91+9, split 9) fails", () => {
+    const { rows, grades } = fcLedger();
+    const i = rows.findIndex((r) => r.gate?.unregistrable === true);
+    const relabelled = rows.map((r, k) =>
+      k === i
+        ? refuted(r.trialKey, {
+            ...r,
+            faultClass: "none",
+            gate: { called: true, verdict: "refuted" },
+          })
+        : r,
+    );
+    const r = checkBenchmark(relabelled, grades, fcOpts(100, 9));
+    expect(r.errors).toContain(
+      `myco-gate task set: ${rows[i]?.trialKey}: faultClass none is not task ${rows[i]?.taskId}'s (invalid-target)`,
+    );
+    expect(r.errors).toContain(
+      `myco-gate task set: ${rows[i]?.trialKey}: task ${rows[i]?.taskId} is unsatisfiable, so it must be unregistrable`,
+    );
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  it("a whole number of runs passes (each task twice); an unknown task set fails", () => {
+    const { rows, grades } = fcLedger();
+    const twice = [...rows, ...rows.map((r) => ({ ...r, trialKey: `${r.trialKey}b` }))];
+    const twiceGrades = [...grades, ...grades.map((g) => ({ ...g, trialKey: `${g.trialKey}b` }))];
+    expect(checkBenchmark(twice, twiceGrades, fcOpts(200, 20)).errors).toEqual([]);
+    const unknownRows = rows.map((r) => ({ ...r, taskSetVersion: "fc-v9" }));
+    const unknown = checkBenchmark(unknownRows, grades, fcOpts(100, 10));
+    expect(unknown.errors).toContain(
+      'myco-gate task set: task set "fc-v9" is not a published task set this check knows',
+    );
+    expect(unknown.r1?.pass).toBe(false);
   });
 });

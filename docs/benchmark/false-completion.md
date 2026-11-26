@@ -219,15 +219,18 @@ claimed DONE (those DONEs were never gated). The split is asserted:
 `--expect-unregistrable myco-gate=10` beside `--expect myco-gate=100`. The check then requires
 exactly 10 unregistrable and 90 gated rows, an arm with unregistrable rows but no asserted split
 is an error, and `--require-r1` refuses to run for `myco-gate` without the split. **The split
-is self-declared here** (pending #506): the numbers come from the operator's command line, so
-a short or relabelled run passes when the operator asserts matching numbers (for example
-`--expect myco-gate=90 --expect-unregistrable myco-gate=0`). The binding to the published task
-set (fc-v1: 100 tasks, 10 invalid-target) is #506's pack check; this check will reuse it once
-#506 merges. Until then a short run fails only when the asserted numbers are right. A gated
-row on an invalid-target task is refused here in both directions. The over-accepted
+is bound to the published task set**, not to the typed numbers: with `--require-r1` or
+`--evidence` the check calls `src/benchmark/taskset-binding.ts`, the same module as the M2
+evidence-pack check (#506). The myco-gate rows must be exactly a whole number k of runs of a
+known task set (fc-v1: 100 tasks, 10 invalid-target): every task exactly k times, each with its
+own `faultClass`, `fixtureSha256` and `instructionSha256`, unregistrable exactly on its
+unsatisfiable tasks, and the asserted split equal to k x those tasks. So a short run
+(`--expect myco-gate=90 --expect-unregistrable myco-gate=0`), a run missing a task, a
+relabelled run, or a run on an unknown task set fails even when the typed numbers agree. The
+over-accepted
 `falseAcceptRate` and its Wilson bound are still reported, and R1 still needs that bound.
 This check counts rows; the "about 100" bar itself is the M2 evidence-pack check's
-(`src/m2/evidence.ts`, pending #506; outer-loop confirmation 2026-11-26 09:45Z): eligible gated trials (a
+(`src/m2/evidence.ts`, outer-loop confirmation 2026-11-26 09:45Z): eligible gated trials (a
 usable verdict on a DONE claim, the 03:13Z rule) plus unregistrable trials. A harness fault or
 other ineligible gated trial never counts toward it, so it cannot fill the bar.
 

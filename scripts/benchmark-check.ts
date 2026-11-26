@@ -11,7 +11,9 @@
  * row lacks evidence provenance (its planner is not a Claude model id, e.g. a dry run).
  * --expect-unregistrable asserts how many of an arm's --expect trials are unregistrable (the
  * rest must be gated); --require-r1 needs it for myco-gate (ruling 2026-11-26 08:38Z), so R1's
- * denominator cannot shrink silently.
+ * denominator cannot shrink silently. With --require-r1 or --evidence the myco-gate rows are also
+ * bound to their published task set (src/benchmark/taskset-binding.ts, shared with the M2 pack
+ * check): exactly a whole number of runs of fc-v1, real hashes, split = runs x 10.
  */
 import { readFileSync } from "node:fs";
 import { type Arm, checkBenchmark } from "../src/benchmark/check.ts";
@@ -68,6 +70,9 @@ const result = checkBenchmark(readJsonl(armPath), readJsonl(gradesPath), {
   expectTrials,
   expectUnregistrable,
   evidence,
+  // R1 and evidence runs are bound to the published task set (#509 round 1, D2), by the same
+  // module as the M2 pack check: the split cannot rest on numbers typed here.
+  bindTaskSet: requireR1 || evidence,
 });
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 process.exit(!result.ok || (requireR1 && result.r1?.pass !== true) ? 1 : 0);

@@ -24,6 +24,7 @@ import { benchmarkArmRowSchema, benchmarkGradeRowSchema } from "../../schemas/be
 import { validateSchema } from "../../schemas/validate.ts";
 import { wilson } from "../foundry/stats.ts";
 import type { BenchmarkGradeRow } from "./grade/row.ts";
+import { bindToTaskSet } from "./taskset-binding.ts";
 
 export type Arm = "myco-gate" | "hcu+shell";
 
@@ -192,6 +193,16 @@ export interface CheckOptions {
    * Dry runs name a `simulated:` planner, so they never pass.
    */
   readonly evidence?: boolean;
+  /**
+   * Bind the myco-gate rows to their PUBLISHED task set (#509 round 1, D2), with the same
+   * module the M2 pack check uses (`src/benchmark/taskset-binding.ts`): exactly a whole number
+   * k of runs of a known task set, each task k times with its own faultClass, fixture and
+   * instruction hashes, unregistrable exactly on its unsatisfiable tasks, and the asserted
+   * split equal to k x those tasks. An unknown task set is an error. The CLI turns this on for
+   * `--require-r1` and `--evidence`, so a short or relabelled run cannot pass on numbers the
+   * operator typed.
+   */
+  readonly bindTaskSet?: boolean;
 }
 
 /**
@@ -373,6 +384,20 @@ export function checkBenchmark(
   }
   for (const arm of Object.keys(options.expectUnregistrable ?? {}) as Arm[]) {
     if (!arms.has(arm)) errors.push(`${arm}: unregistrable split given, but no ${arm} rows`);
+  }
+  const gatedRows = arms.get("myco-gate");
+  if (options.bindTaskSet === true && gatedRows !== undefined) {
+    const binding = bindToTaskSet(gatedRows, { exactMultiset: true });
+    errors.push(...binding.errors.map((e) => `myco-gate task set: ${e}`));
+    const want = options.expectUnregistrable?.["myco-gate"];
+    if (
+      want !== undefined &&
+      binding.expectedUnregistrable !== null &&
+      want !== binding.expectedUnregistrable
+    )
+      errors.push(
+        `myco-gate: asserted split ${want} is not ${binding.version}'s ${binding.expectedUnregistrable} (its unsatisfiable tasks x ${binding.repetitions} run(s))`,
+      );
   }
   for (const arm of Object.keys(options.expectTrials) as Arm[]) {
     if (!arms.has(arm))
