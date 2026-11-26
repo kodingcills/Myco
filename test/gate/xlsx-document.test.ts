@@ -1231,6 +1231,19 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
       }),
   ],
   [
+    "an attribute LibreOffice does not write at its path (round 3, T3: x-date1904 on <workbookPr>)",
+    "XLSX_TREE_ATTRIBUTE",
+    () =>
+      xlsxFromCsv(EXACT_CSV, {
+        patch: {
+          "xl/workbook.xml": entryText("xl/workbook.xml").replace(
+            "<workbookPr",
+            '<workbookPr x-date1904="true"',
+          ),
+        },
+      }),
+  ],
+  [
     "an element at a path LibreOffice does not write (round 2: a <numFmt> inside <cellXfs>)",
     "XLSX_TREE_ELEMENT",
     () =>

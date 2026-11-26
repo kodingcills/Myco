@@ -319,7 +319,7 @@ describe("tree: every element of a pinned part sits at a path LibreOffice writes
     // The one foreign element LibreOffice writes, and only there.
     const wb = (inner: string) =>
       enc(
-        `<workbook xmlns="${MAIN}" xmlns:loext="http://schemas.libreoffice.org/"><sheets><sheet/></sheets><extLst><ext>${inner}</ext></extLst></workbook>`,
+        `<workbook xmlns="${MAIN}"><sheets><sheet/></sheets><extLst><ext xmlns:loext="http://schemas.libreoffice.org/">${inner}</ext></extLst></workbook>`,
       );
     expect(checkTree(wb("<loext:extCalcPr/>"), "workbook")).toBeUndefined();
     expect(checkTree(wb("<extCalcPr/>"), "workbook")).toBe("XLSX_TREE_ELEMENT");

@@ -37,7 +37,7 @@
 import type { XmlElement } from "./xlsx-document.ts";
 import type { ContentPartKind } from "./xlsx-prescan.ts";
 
-export type TreeCode = "XLSX_TREE_ELEMENT";
+export type TreeCode = "XLSX_TREE_ELEMENT" | "XLSX_TREE_ATTRIBUTE";
 
 /** Run-property leaves (`<rPr>` in a rich-text run, and a `<font>` record in styles). */
 const RUN_PROPERTIES = [
@@ -144,6 +144,213 @@ export const LO_TREES: Readonly<
   rels: { Relationships: ["Relationship*"] },
 };
 
+/** Attributes of a formatting-only leaf that names a colour (`<color>`, `<fgColor>`, ...). */
+const COLOR_ATTRS = ["rgb", "theme", "tint", "indexed", "auto"];
+/** Attributes of a run-property leaf, by name (`<sz val="10"/>`, `<color rgb=".."/>`). */
+const RUN_PROPERTY_ATTRS: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+  RUN_PROPERTIES.map((p) => [p, p === "color" ? COLOR_ATTRS : ["val"]]),
+);
+/** Attributes of the elements of a string item (`<si>` or `<is>`), relative to the item. */
+const STRING_ITEM_ATTRS = {
+  "": [],
+  t: ["xml:space"],
+  r: [],
+  "r/t": ["xml:space"],
+  "r/rPr": [],
+  ...Object.fromEntries(Object.entries(RUN_PROPERTY_ATTRS).map(([k, v]) => [`r/rPr/${k}`, v])),
+} as const;
+const XF_ALIGNMENT = [
+  "horizontal",
+  "vertical",
+  "textRotation",
+  "wrapText",
+  "indent",
+  "shrinkToFit",
+];
+const XF_PROTECTION = ["locked", "hidden"];
+const XF_COMMON = [
+  "numFmtId",
+  "fontId",
+  "fillId",
+  "borderId",
+  "applyFont",
+  "applyBorder",
+  "applyAlignment",
+  "applyProtection",
+  "applyNumberFormat",
+];
+
+/**
+ * Allowed attributes by element path (the same paths as `LO_TREES`), round 3, D2 T3. Every
+ * attribute of every element of a pinned part must be listed for its path; an element at a
+ * path with no key here may carry no attribute at all. Namespace declarations count as
+ * attributes: only the ones LibreOffice writes, where it writes them (the pre-scan pins
+ * their values and order on the root).
+ *
+ * Why: the independent grader reads attributes by regex over a tag's text, and one of its
+ * patterns (`\bdate1904` in `<workbookPr ...>`) also matches a NAME that merely ends in
+ * `date1904` after `-` or `.` (`x-date1904="true"`, `a.date1904="1"`). The gate reads the
+ * exact attribute only, so before this pin the two judges disagreed on the date system.
+ * With every attribute name pinned to LibreOffice's, no name the gate ignores is left for
+ * any grader pattern to match. `date1904` itself is allowed on `<workbookPr>` (LibreOffice
+ * writes it for a 1904 workbook; the reader interprets it, and only "0", "1", "false",
+ * "true").
+ *
+ * Taken from LibreOffice 24.2's output for the committed fixtures (every attribute it writes
+ * on each path in test/fixtures/calc-xlsx-writers/*.lo.xlsx and calc-xlsx-lo-grammar/*.lo.xlsx),
+ * plus the attributes of the formatting-only leaves `LO_TREES` adds (colour and run-property
+ * leaves: `val`, or a colour's `rgb`/`theme`/`tint`/`indexed`/`auto`), `date1904`, and on
+ * `<f>` the formula attributes the cell reader already carries into its formula marker
+ * (`aca`, `t`, `ref`, `si`, `ca`: a formula cell never equals a literal expected cell).
+ */
+export const LO_ATTRS: Readonly<
+  Record<ContentPartKind, Readonly<Record<string, readonly string[]>>>
+> = {
+  workbook: {
+    workbook: ["xmlns", "xmlns:r"],
+    "workbook/fileVersion": ["appName"],
+    "workbook/workbookPr": ["backupFile", "showObjects", "dateCompatibility", "date1904"],
+    "workbook/bookViews/workbookView": [
+      "showHorizontalScroll",
+      "showVerticalScroll",
+      "showSheetTabs",
+      "xWindow",
+      "yWindow",
+      "windowWidth",
+      "windowHeight",
+      "tabRatio",
+      "firstSheet",
+      "activeTab",
+    ],
+    "workbook/sheets/sheet": ["name", "sheetId", "state", "r:id"],
+    "workbook/calcPr": ["iterateCount", "refMode", "iterate", "iterateDelta"],
+    "workbook/extLst/ext": ["xmlns:loext", "uri"],
+    "workbook/extLst/ext/extCalcPr": ["stringRefSyntax"],
+  },
+  worksheet: {
+    worksheet: ["xmlns", "xmlns:r", "xmlns:xdr", "xmlns:x14", "xmlns:xr2", "xmlns:mc"],
+    "worksheet/sheetPr": ["filterMode"],
+    "worksheet/sheetPr/pageSetUpPr": ["fitToPage"],
+    "worksheet/dimension": ["ref"],
+    "worksheet/sheetViews/sheetView": [
+      "showFormulas",
+      "showGridLines",
+      "showRowColHeaders",
+      "showZeros",
+      "rightToLeft",
+      "tabSelected",
+      "showOutlineSymbols",
+      "defaultGridColor",
+      "view",
+      "topLeftCell",
+      "colorId",
+      "zoomScale",
+      "zoomScaleNormal",
+      "zoomScalePageLayoutView",
+      "workbookViewId",
+    ],
+    "worksheet/sheetViews/sheetView/selection": ["pane", "activeCell", "activeCellId", "sqref"],
+    "worksheet/sheetFormatPr": [
+      "defaultColWidth",
+      "defaultRowHeight",
+      "zeroHeight",
+      "outlineLevelRow",
+      "outlineLevelCol",
+    ],
+    "worksheet/cols/col": [
+      "collapsed",
+      "customWidth",
+      "hidden",
+      "outlineLevel",
+      "max",
+      "min",
+      "style",
+      "width",
+    ],
+    "worksheet/sheetData/row": [
+      "r",
+      "customFormat",
+      "ht",
+      "hidden",
+      "customHeight",
+      "outlineLevel",
+      "collapsed",
+    ],
+    "worksheet/sheetData/row/c": ["r", "s", "t"],
+    "worksheet/sheetData/row/c/f": ["aca", "t", "ref", "si", "ca"],
+    ...under("worksheet/sheetData/row/c/is", STRING_ITEM_ATTRS),
+    "worksheet/printOptions": [
+      "headings",
+      "gridLines",
+      "gridLinesSet",
+      "horizontalCentered",
+      "verticalCentered",
+    ],
+    "worksheet/pageMargins": ["left", "right", "top", "bottom", "header", "footer"],
+    "worksheet/pageSetup": [
+      "paperSize",
+      "scale",
+      "fitToWidth",
+      "fitToHeight",
+      "pageOrder",
+      "orientation",
+      "blackAndWhite",
+      "draft",
+      "cellComments",
+      "firstPageNumber",
+      "useFirstPageNumber",
+      "horizontalDpi",
+      "verticalDpi",
+      "copies",
+    ],
+    "worksheet/headerFooter": ["differentFirst", "differentOddEven"],
+  },
+  sst: {
+    sst: ["xmlns", "count", "uniqueCount"],
+    ...under("sst/si", STRING_ITEM_ATTRS),
+  },
+  styles: {
+    styleSheet: ["xmlns"],
+    "styleSheet/numFmts": ["count"],
+    "styleSheet/numFmts/numFmt": ["numFmtId", "formatCode"],
+    "styleSheet/fonts": ["count"],
+    ...Object.fromEntries(
+      Object.entries(RUN_PROPERTY_ATTRS).map(([k, v]) => [`styleSheet/fonts/font/${k}`, v]),
+    ),
+    "styleSheet/fills": ["count"],
+    "styleSheet/fills/fill/patternFill": ["patternType"],
+    "styleSheet/fills/fill/patternFill/fgColor": COLOR_ATTRS,
+    "styleSheet/fills/fill/patternFill/bgColor": COLOR_ATTRS,
+    "styleSheet/borders": ["count"],
+    "styleSheet/borders/border": ["diagonalUp", "diagonalDown"],
+    ...Object.fromEntries(
+      ["left", "right", "top", "bottom", "diagonal"].flatMap((side) => [
+        [`styleSheet/borders/border/${side}`, ["style"]],
+        [`styleSheet/borders/border/${side}/color`, COLOR_ATTRS],
+      ]),
+    ),
+    "styleSheet/cellStyleXfs": ["count"],
+    "styleSheet/cellStyleXfs/xf": XF_COMMON,
+    "styleSheet/cellStyleXfs/xf/alignment": XF_ALIGNMENT,
+    "styleSheet/cellStyleXfs/xf/protection": XF_PROTECTION,
+    "styleSheet/cellXfs": ["count"],
+    "styleSheet/cellXfs/xf": [...XF_COMMON, "xfId"],
+    "styleSheet/cellXfs/xf/alignment": XF_ALIGNMENT,
+    "styleSheet/cellXfs/xf/protection": XF_PROTECTION,
+    "styleSheet/cellStyles": ["count"],
+    "styleSheet/cellStyles/cellStyle": ["name", "xfId", "builtinId"],
+  },
+  types: {
+    Types: ["xmlns"],
+    "Types/Default": ["Extension", "ContentType"],
+    "Types/Override": ["PartName", "ContentType"],
+  },
+  rels: {
+    Relationships: ["xmlns"],
+    "Relationships/Relationship": ["Id", "Type", "Target"],
+  },
+};
+
 /** The one element outside the root's namespace LibreOffice writes, by full path. */
 const FOREIGN: ReadonlyMap<string, string> = new Map([
   ["workbook/extLst/ext/extCalcPr", "http://schemas.libreoffice.org/"],
@@ -187,9 +394,15 @@ export const DECOY_NAMES: ReadonlySet<string> = new Set([
  */
 export function checkTree(root: XmlElement, kind: ContentPartKind): TreeCode | undefined {
   const schema = LO_TREES[kind];
+  const attrSchema = LO_ATTRS[kind];
   if (!Object.hasOwn(schema, root.local)) return "XLSX_TREE_ELEMENT";
   const walk = (element: XmlElement, path: string): TreeCode | undefined => {
     const allowed = Object.hasOwn(schema, path) ? schema[path] : undefined;
+    // Every attribute name (namespace declarations included) must be LibreOffice's for this
+    // path; a path with no key allows none.
+    const attrsAllowed = Object.hasOwn(attrSchema, path) ? attrSchema[path] : undefined;
+    for (const key of element.attrs.keys())
+      if (!attrsAllowed?.includes(key)) return "XLSX_TREE_ATTRIBUTE";
     const once = new Set<string>();
     for (const c of element.children) {
       if (typeof c === "string") continue;
