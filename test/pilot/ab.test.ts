@@ -28,6 +28,8 @@ import {
   abPlanSha256,
   abSchedule,
   ackIncident,
+  analysisCommand,
+  analyzeAbPack,
   armConfig,
   bundleGrader,
   checkAbPack,
@@ -35,10 +37,14 @@ import {
   diffArmConfigs,
   evidenceRefusals,
   exportAbPack,
+  fillAnalysisCommand,
   type GradeFn,
+  gateMissesFromRows,
   type HookContext,
   incidentStatus,
+  LEAD_GO_FILE,
   launchPlanDiff,
+  leadGoProblems,
   liveAbRefusals,
   loadPrereg,
   PREREG_JSON,
@@ -46,6 +52,7 @@ import {
   R1AttemptSink,
   type RecordStep,
   realRunRefusals,
+  reconcileGrades,
   recordDecided,
   runAbStage,
   stageRoot,
@@ -1168,5 +1175,246 @@ describe("real runs are gated", () => {
     expect(recordDecided(ctx(true), decided("k-fast", "fast"))).toMatch(/boot class is fast/);
     expect(recordDecided(ctx(true), decided("k-cold", "cold"))).toBeNull();
     expect(recordDecided(ctx(false), decided("k-sim", null))).toBeNull();
+  });
+});
+
+describe("round 3: the pre-registered analysis command is the one run (D3)", () => {
+  const template = LOADED.prereg.analysis.command;
+  const declared = LOADED.markdownSha256;
+
+  it("filled in for a pack, equals analysisCommand for both stages", () => {
+    for (const pack of ["packs/ab-stage1", "/abs/packs/ab-stage1", "rel/pack/"])
+      for (const stage of [0, 1] as const) {
+        const filled = fillAnalysisCommand(template, {
+          stage,
+          pack,
+          stage0Pack: "packs/ab-stage0",
+          declared,
+        });
+        // analysisArgs reads the declared hash from the pack; none exists here, so swap it in.
+        const run = analysisCommand(pack, stage, "packs/ab-stage0").replace(
+          "<ab-pack.json prereg.markdownSha256>",
+          declared,
+        );
+        expect(filled).toBe(run);
+      }
+    expect(template).toContain("--on-config <pack>/on/analysis-config.json");
+    // Round 2's command (#547 refuses run-config.json) would no longer match.
+    const stale = template.replaceAll("analysis-config.json", "run-config.json");
+    expect(fillAnalysisCommand(stale, { stage: 0, pack: "p", stage0Pack: "s", declared })).not.toBe(
+      analysisCommand("p", 0).replace("<ab-pack.json prereg.markdownSha256>", declared),
+    );
+  });
+
+  it("the markdown states the same command as the JSON, and #547's row marker", () => {
+    const md = readFileSync(join(ROOT, PREREG_MD), "utf8");
+    const block = /## Analysis[\s\S]*?```\n([\s\S]*?)```/.exec(md)?.[1] ?? "";
+    expect(block.replace(/\\\n\s*/g, "").trim()).toBe(template);
+    expect(md).toContain('`experiment: {id: "corrections-ab", stage, arm, seed}`');
+    expect(md).not.toMatch(/corrections-ab\/stage-<N>/);
+  });
+
+  it("analyze refuses when the pre-registered command is not the one it would run", {
+    timeout: 60_000,
+  }, async () => {
+    const out = tmp("myco-ab-cmd-");
+    await run(out, 0);
+    const pack = join(out, "pack");
+    exportAbPack(out, 0, pack, ROOT);
+    // A root whose committed JSON pins a different command (the pack re-pointed at it, so the
+    // hash checks pass and only the command check can refuse).
+    const root = tmp("myco-ab-cmd-root-");
+    mkdirSync(join(root, "docs", "benchmark"), { recursive: true });
+    cpSync(join(ROOT, PREREG_MD), join(root, PREREG_MD));
+    const pj = JSON.parse(readFileSync(join(ROOT, PREREG_JSON), "utf8"));
+    pj.analysis.command = pj.analysis.command.replaceAll("analysis-config.json", "run-config.json");
+    writeFileSync(join(root, PREREG_JSON), `${JSON.stringify(pj, null, 2)}\n`);
+    const m = JSON.parse(readFileSync(join(pack, "ab-pack.json"), "utf8"));
+    m.prereg.jsonSha256 = createHash("sha256")
+      .update(readFileSync(join(root, PREREG_JSON)))
+      .digest("hex");
+    writeFileSync(join(pack, "ab-pack.json"), JSON.stringify(m));
+    expect(checkAbPack(pack, root).ok).toBe(true);
+    const a = analyzeAbPack(pack, root);
+    expect(a.status).toBe("refused");
+    expect(a.errors.join(" ")).toMatch(/pre-registered analysis command .* is not the command/);
+    // The committed pre-registration's command is the one run: #547 analyses Stage 0.
+    const real = JSON.parse(readFileSync(join(pack, "ab-pack.json"), "utf8"));
+    real.prereg.jsonSha256 = createHash("sha256")
+      .update(readFileSync(join(ROOT, PREREG_JSON)))
+      .digest("hex");
+    writeFileSync(join(pack, "ab-pack.json"), JSON.stringify(real));
+    expect(analyzeAbPack(pack, ROOT)).toMatchObject({ status: "analysed", exitCode: 0 });
+  });
+});
+
+describe("round 3: the lead's GO file (survivor M-G, N2)", () => {
+  const git = (cwd: string, ...args: string[]) =>
+    spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...args], {
+      cwd,
+      encoding: "utf8",
+    });
+  const repo = (go: string | null) => {
+    const root = tmp("myco-ab-go-");
+    mkdirSync(join(root, "docs", "benchmark"), { recursive: true });
+    cpSync(join(ROOT, PREREG_MD), join(root, PREREG_MD));
+    cpSync(join(ROOT, PREREG_JSON), join(root, PREREG_JSON));
+    if (go !== null) writeFileSync(join(root, LEAD_GO_FILE), go);
+    git(root, "init", "-q");
+    git(root, "add", "-A");
+    expect(git(root, "commit", "-q", "-m", "t").status).toBe(0);
+    return root;
+  };
+  const go = (stages: unknown, sha = LOADED.markdownSha256) =>
+    JSON.stringify({ preregSha256: sha, stages });
+
+  it("a GO for Stage 0 approves Stage 0 only, never Stage 1", () => {
+    const root = repo(go([0]));
+    expect(leadGoProblems(root, LOADED, 0)).toEqual([]);
+    expect(leadGoProblems(root, LOADED, 1).join()).toMatch(/does not approve Stage 1/);
+    expect(realRunRefusals(root, LOADED, 1, PUBLISHED).join()).toMatch(/does not approve Stage 1/);
+    expect(realRunRefusals(root, LOADED, 0, PUBLISHED).join()).not.toMatch(
+      /lead GO|corrections-ab-go/,
+    );
+    expect(leadGoProblems(repo(go([0, 1])), LOADED, 1)).toEqual([]);
+  });
+
+  it("refuses a GO naming another pre-registration, a malformed GO, and an edited GO", () => {
+    expect(leadGoProblems(repo(go([0, 1], "2".repeat(64))), LOADED, 0).join()).toMatch(
+      /names another pre-registration/,
+    );
+    expect(leadGoProblems(repo(go("0")), LOADED, 0).join()).toMatch(/does not approve Stage 0/);
+    expect(leadGoProblems(repo("not json"), LOADED, 0).join()).toMatch(/not a JSON object/);
+    const edited = repo(go([0]));
+    writeFileSync(join(edited, LEAD_GO_FILE), go([0, 1]));
+    expect(leadGoProblems(edited, LOADED, 1).join()).toMatch(/differs from the committed copy/);
+    const untracked = repo(null);
+    writeFileSync(join(untracked, LEAD_GO_FILE), go([0]));
+    expect(leadGoProblems(untracked, LOADED, 0).join()).toMatch(/is not committed/);
+    expect(leadGoProblems(repo(null), LOADED, 0).join()).toMatch(/no lead GO/);
+  });
+});
+
+describe("round 3: incident and ack guards (survivors M-A, M-B, M-E, M-H)", () => {
+  const task = PUBLISHED.find((t) => t.taskId === stageTasks(LOADED, 0, PUBLISHED)[0]);
+  if (task === undefined) throw new Error("no task");
+  const failGrader: GradeFn = (t, _p, key) =>
+    gradeRow(key, t.taskId, {
+      graderVersion: "test",
+      status: "fail",
+      reasons: ["test"],
+      fixtureSha256: t.fixtureSha256,
+      persistedSha256: null,
+      target: null,
+      targetSatisfied: false,
+      mismatches: [],
+      mismatchCount: 0,
+    } as unknown as Parameters<typeof gradeRow>[2]);
+  const unit = (prefix: string, live = false) => {
+    const armDir = join(tmp(prefix), "stage0", "on");
+    mkdirSync(armDir, { recursive: true });
+    const ctx: HookContext = {
+      stageRoot: dirname(armDir),
+      armDir,
+      stage: 0,
+      arm: "on",
+      grader: failGrader,
+      live,
+      now: () => 0,
+      load1m: () => 0,
+    };
+    return ctx;
+  };
+  const verified = (key: string) => ({
+    task,
+    trialKey: key,
+    armRow: {
+      accepted: true,
+      persistedSha256: null,
+      gate: { called: true, verdict: "verified" },
+    } as unknown as BenchmarkArmRow,
+    persisted: null,
+    resetBootClass: "cold" as const,
+  });
+
+  it("M-A: a non-record file at the incident path halts the trial and is never acknowledged", () => {
+    const ctx = unit("myco-ab-ma-");
+    const dir = join(ctx.stageRoot, "incidents");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "incident-k1.json"), "not a record\n");
+    expect(recordDecided(ctx, verified("k1"))).toMatch(/HALTED: integrity incident/);
+    expect(readFileSync(join(dir, "incident-k1.json"), "utf8")).toBe("not a record\n");
+    expect(incidentStatus(ctx.stageRoot)[0]?.acknowledged).toBe(false);
+  });
+
+  it("M-B: a gate-verified row with no grade at all is a gate miss", () => {
+    const rows = [
+      { trialKey: "a", gate: { verdict: "verified" } },
+      { trialKey: "b", gate: { verdict: "verified" } },
+      { trialKey: "c", gate: { verdict: "refuted" } },
+    ];
+    expect(gateMissesFromRows(rows, new Map([["a", { status: "pass" }]]))).toEqual(["b"]);
+  });
+
+  it("M-E: a hand-written ack without an operator or statement is not an ack", () => {
+    const ctx = unit("myco-ab-me-");
+    expect(recordDecided(ctx, verified("k2"))).toMatch(/HALTED/);
+    const [inc] = incidentStatus(ctx.stageRoot);
+    if (inc === undefined) throw new Error("no incident");
+    const ackPath = join(ctx.stageRoot, "incidents", `${inc.id}.ack.json`);
+    const base = {
+      schema: "myco.pilot.ab-incident-ack/1",
+      incidentSha256: inc.sha256,
+      statement: "reviewed the record in full",
+      operator: "an operator",
+    };
+    for (const [patch, why] of [
+      [{ operator: undefined }, /names no operator/],
+      [{ operator: "  " }, /names no operator/],
+      [{ statement: "ok" }, /no statement/],
+      [{ incidentSha256: "3".repeat(64) }, /different incident sha256/],
+      [{ schema: "x" }, /ack schema/],
+    ] as const) {
+      writeFileSync(ackPath, JSON.stringify({ ...base, ...patch }));
+      const st = incidentStatus(ctx.stageRoot)[0];
+      expect(st?.acknowledged).toBe(false);
+      expect(st?.problem).toMatch(why);
+    }
+    writeFileSync(ackPath, JSON.stringify(base));
+    expect(incidentStatus(ctx.stageRoot)[0]?.acknowledged).toBe(true);
+  });
+
+  it("M-H: a trial re-recorded after a crash has no boot class, so a live resume halts", {
+    timeout: 60_000,
+  }, async () => {
+    const out = tmp("myco-ab-mh-");
+    let crashed: string | null = null;
+    const crashPoint = (s: RecordStep, key: string) => {
+      if (s === "graded" && crashed === null) {
+        crashed = key;
+        throw new Crash("crash at graded");
+      }
+    };
+    await expect(run(out, 0, { crashPoint })).rejects.toThrow(Crash);
+    const root = stageRoot(out, 0);
+    const arm = (["on", "off"] as const).find(
+      (a) => loadLedger(join(root, a, PROGRESS_FILE)).byTask.size > 0,
+    );
+    if (arm === undefined) throw new Error("no arm ran");
+    const ctx = (live: boolean): HookContext => ({
+      stageRoot: root,
+      armDir: join(root, arm),
+      stage: 0,
+      arm,
+      grader: bundleGrader(BUNDLE),
+      live,
+      now: () => 0,
+      load1m: () => 0,
+    });
+    expect(reconcileGrades(ctx(true), PUBLISHED)).toMatch(
+      new RegExp(`${crashed}'s reset boot class is unrecorded`),
+    );
+    const rec = jsonl(join(root, arm, "ab-trials.jsonl")).find((r) => r.trialKey === crashed);
+    expect(rec?.resetBootClass).toBeNull();
   });
 });

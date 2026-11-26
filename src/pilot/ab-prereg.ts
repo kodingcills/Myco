@@ -20,7 +20,7 @@ export const PREREG_JSON = "docs/benchmark/corrections-ab-prereg.json";
 /** The lead's GO for real trials: a committed file. Absent until the lead gives it. */
 export const LEAD_GO_FILE = "docs/benchmark/corrections-ab-go.json";
 export const PREREG_SCHEMA = "myco.pilot.corrections-ab-prereg/1" as const;
-/** #547's analysis CLI. Present once #547 merges; until then `analyzeAbPack` says pending. */
+/** #547's analysis CLI (merged). `analyzeAbPack` refuses a pack when it is missing. */
 export const ANALYSIS_SCRIPT = "scripts/m2-corrections-ab.ts";
 export const ANALYSIS_MODULE = "src/m2/corrections-ab.ts";
 
@@ -107,8 +107,8 @@ export function loadPrereg(repoRoot: string): LoadedPrereg {
     problems.push("the primary test must be the exact sign test");
   if (!/never the gate/i.test(p.primaryMetric ?? ""))
     problems.push("the primary metric must be grader-verified, never the gate");
-  if (!(p.analysis?.command ?? "").includes(ANALYSIS_SCRIPT))
-    problems.push(`the analysis command must be ${ANALYSIS_SCRIPT} (#547)`);
+  if (!(p.analysis?.command ?? "").startsWith(`npx tsx ${ANALYSIS_SCRIPT} `))
+    problems.push(`the analysis command must be npx tsx ${ANALYSIS_SCRIPT} (#547)`);
   const pc = p.pacing;
   try {
     checkPacing(pc.trial);
@@ -124,6 +124,33 @@ export function loadPrereg(repoRoot: string): LoadedPrereg {
   if (problems.length > 0)
     throw new Error(`invalid corrections A/B pre-registration: ${problems.join("; ")}`);
   return { prereg: p, markdownSha256, jsonSha256 };
+}
+
+/**
+ * The pre-registered analysis command (`analysis.command`, with placeholders) filled in for one
+ * pack: `<0|1>` the stage, `<pack>/X` and `<stage0-pack>/X` joined like the runner joins them,
+ * `<pack's recorded sha256>` the pack's recorded hash, and the bracketed Stage-0 options kept
+ * (without brackets) for Stage 1 and dropped for Stage 0. `analyzeAbPack` refuses unless this
+ * equals the command it runs, so the frozen file always states the command actually run.
+ */
+export function fillAnalysisCommand(
+  template: string,
+  v: {
+    readonly stage: AbStage;
+    readonly pack: string;
+    readonly stage0Pack: string;
+    readonly declared: string;
+  },
+): string {
+  const optional = /\s*\[([^\]]*)\]/;
+  const withStage0 = template.replace(optional, (_m, inner: string) =>
+    v.stage === 1 ? ` ${inner.trim()}` : "",
+  );
+  return withStage0
+    .replaceAll("<0|1>", String(v.stage))
+    .replaceAll("<pack's recorded sha256>", v.declared)
+    .replace(/<stage0-pack>\/(\S+)/g, (_m, rest: string) => join(v.stage0Pack, rest))
+    .replace(/<pack>\/(\S+)/g, (_m, rest: string) => join(v.pack, rest));
 }
 
 /**
@@ -177,6 +204,45 @@ export function r1Nameable(pilotClass: string): boolean {
 // ---------------------------------------------------------------------------------------------
 
 /**
+ * Why the lead's GO file does not approve a real run of `stage`: it must exist, be JSON, be
+ * committed and unchanged from HEAD, name this pre-registration's markdown sha256, and list the
+ * stage in `stages` (a GO for Stage 0 never admits Stage 1). Never throws: a malformed file is a
+ * refusal, so this fails closed.
+ */
+export function leadGoProblems(repoRoot: string, loaded: LoadedPrereg, stage: AbStage): string[] {
+  const goPath = join(repoRoot, LEAD_GO_FILE);
+  if (!existsSync(goPath))
+    return [`no lead GO: ${LEAD_GO_FILE} is not committed (real runs wait for the lead's GO)`];
+  const out: string[] = [];
+  let go: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(readFileSync(goPath, "utf8")) as unknown;
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed))
+      go = parsed as Record<string, unknown>;
+  } catch {
+    // reported below
+  }
+  if (go === null) out.push(`${LEAD_GO_FILE} is not a JSON object`);
+  else {
+    if (go.preregSha256 !== loaded.markdownSha256)
+      out.push(`${LEAD_GO_FILE} names another pre-registration (preregSha256)`);
+    if (!Array.isArray(go.stages) || !go.stages.includes(stage))
+      out.push(`${LEAD_GO_FILE} does not approve Stage ${stage} (its stages do not list it)`);
+  }
+  const tracked = spawnSync("git", ["ls-files", "--error-unmatch", LEAD_GO_FILE], {
+    cwd: repoRoot,
+  });
+  if (tracked.status !== 0) out.push(`${LEAD_GO_FILE} is not committed`);
+  else {
+    const clean = spawnSync("git", ["diff", "--quiet", "HEAD", "--", LEAD_GO_FILE], {
+      cwd: repoRoot,
+    });
+    if (clean.status !== 0) out.push(`${LEAD_GO_FILE} differs from the committed copy`);
+  }
+  return out;
+}
+
+/**
  * Why a REAL A/B run cannot start now. Empty only when every precondition holds; the CLI also
  * refuses afterwards because no live driver is wired (the VM-side capture is a later step).
  *  - the pre-registration is committed and unchanged;
@@ -192,18 +258,7 @@ export function realRunRefusals(
   published: readonly BenchmarkTask[],
 ): string[] {
   const out = preregCommitProblems(repoRoot).map((p) => `pre-registration: ${p}`);
-  const goPath = join(repoRoot, LEAD_GO_FILE);
-  if (!existsSync(goPath))
-    out.push(`no lead GO: ${LEAD_GO_FILE} is not committed (real runs wait for the lead's GO)`);
-  else {
-    const go = JSON.parse(readFileSync(goPath, "utf8")) as Record<string, unknown>;
-    if (go.preregSha256 !== loaded.markdownSha256 || !(go.stages as unknown[])?.includes(stage))
-      out.push(`${LEAD_GO_FILE} does not approve Stage ${stage} of this pre-registration`);
-    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", LEAD_GO_FILE], {
-      cwd: repoRoot,
-    });
-    if (tracked.status !== 0) out.push(`${LEAD_GO_FILE} is not committed`);
-  }
+  out.push(...leadGoProblems(repoRoot, loaded, stage));
   const gateFormat = extname(GATE_STATE_FILE).slice(1);
   const ids = new Set(stageTasks(loaded, stage, published));
   const formats = [

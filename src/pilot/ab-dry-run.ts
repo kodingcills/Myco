@@ -6,7 +6,7 @@
  * The steps, each checked, in order:
  *  1. Stage 0 on both arms (30 pairs, seeded chunks, the real gate on a sealed vault, the
  *     independent grader per trial, #518's ledger and anchor), exported and pack-checked, then
- *     analysed by #547's CLI (or `analysis-pending` until #547 merges).
+ *     analysed by #547's CLI (the pre-registered command, filled in for the pack).
  *  2. Stage 1 the same (100 pairs), analysed with the Stage-0 pack excluded.
  *  3. Both packs, both arms: refused as R1 evidence by the shared check and the pack CLI's
  *     provenance check.
@@ -57,7 +57,6 @@ export interface AbDryRunOptions {
 
 /** #547 refused the pack, and only because its rows are simulated (no evidence provenance). */
 const provenanceOnlyRefusal = (a: AbAnalysis) => {
-  if (a.status === "analysis-pending") return true;
   const errs = (a.result as { errors?: readonly string[] } | null)?.errors ?? [];
   return (
     a.status === "analysed" &&
@@ -68,7 +67,6 @@ const provenanceOnlyRefusal = (a: AbAnalysis) => {
 };
 
 const analysisOk = (a: AbAnalysis, effects: readonly string[]) => {
-  if (a.status === "analysis-pending") return true;
   if (a.status !== "analysed" || a.exitCode !== 0) return false;
   const effect = (a.result as { effect?: string } | null)?.effect;
   return effect !== undefined && effects.includes(effect);

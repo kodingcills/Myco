@@ -65,6 +65,7 @@ import {
   type AbStage,
   ANALYSIS_MODULE,
   ANALYSIS_SCRIPT,
+  fillAnalysisCommand,
   type LoadedPrereg,
   loadPrereg,
   PREREG_JSON,
@@ -97,8 +98,10 @@ export {
   type AbStagePrereg,
   ANALYSIS_MODULE,
   ANALYSIS_SCRIPT,
+  fillAnalysisCommand,
   LEAD_GO_FILE,
   type LoadedPrereg,
+  leadGoProblems,
   loadPrereg,
   PREREG_JSON,
   PREREG_MD,
@@ -701,9 +704,13 @@ const gradesByKey = (armDir: string) =>
  *    now from the saved document, which writes its incident if it is a miss;
  *  - every graded trial is re-checked from the rows: a gate-VERIFIED trial whose grade is not
  *    `pass` and that has no valid incident record gets one now (re-derived) and halts.
+ * A re-recorded trial's boot class is unknown (`null`): a live run halts on it (never `cold`).
  * Returns the first halt reason, if any.
  */
-function reconcileGrades(ctx: HookContext, published: readonly BenchmarkTask[]): string | null {
+export function reconcileGrades(
+  ctx: HookContext,
+  published: readonly BenchmarkTask[],
+): string | null {
   const byId = new Map(published.map((t) => [t.taskId, t]));
   const grades = gradesByKey(ctx.armDir);
   let halt: string | null = null;
@@ -1435,7 +1442,7 @@ export function checkAbPack(
 }
 
 export interface AbAnalysis {
-  readonly status: "analysed" | "refused" | "analysis-pending";
+  readonly status: "analysed" | "refused";
   readonly exitCode: number | null;
   readonly command: string;
   readonly errors: readonly string[];
@@ -1444,34 +1451,39 @@ export interface AbAnalysis {
 }
 
 /**
- * Check the pack (refuse on any error, the pre-registration hash included), then run #547's
- * analysis CLI on it. Until #547 merges the analysis is `analysis-pending` (TO FILE: drop the
- * fallback once it lands); the pack check still runs.
+ * Check the pack (refuse on any error, the pre-registration hash included), check that the
+ * pre-registered `analysis.command`, filled in for this pack, is exactly the command about to
+ * run (refused otherwise), then run #547's analysis CLI on it. A missing #547 is a refusal.
  */
 export function analyzeAbPack(packDir: string, repoRoot: string, stage0Pack?: string): AbAnalysis {
   const checked = checkAbPack(packDir, repoRoot);
   const stage = checked.stage ?? 0;
   const command = analysisCommand(packDir, stage, stage0Pack);
-  if (!checked.ok)
-    return { status: "refused", exitCode: null, command, errors: checked.errors, result: null };
+  const refused = (errors: readonly string[]): AbAnalysis => ({
+    status: "refused",
+    exitCode: null,
+    command,
+    errors,
+    result: null,
+  });
+  if (!checked.ok) return refused(checked.errors);
   if (stage === 1 && stage0Pack === undefined)
-    return {
-      status: "refused",
-      exitCode: null,
-      command,
-      errors: ["Stage 1 analysis needs the Stage-0 pack (its rows are excluded)"],
-      result: null,
-    };
+    return refused(["Stage 1 analysis needs the Stage-0 pack (its rows are excluded)"]);
+  const manifest = JSON.parse(
+    readFileSync(join(packDir, "ab-pack.json"), "utf8"),
+  ) as AbPackManifest;
+  const preregistered = fillAnalysisCommand(loadPrereg(repoRoot).prereg.analysis.command, {
+    stage,
+    pack: packDir,
+    stage0Pack: stage0Pack ?? "",
+    declared: manifest.prereg.markdownSha256,
+  });
+  if (preregistered !== command)
+    return refused([
+      `the pre-registered analysis command (${PREREG_JSON} analysis.command, filled in for this pack) is not the command the runner would run: refused. Pre-registered: ${preregistered}`,
+    ]);
   if (!existsSync(join(repoRoot, ANALYSIS_SCRIPT)) || !existsSync(join(repoRoot, ANALYSIS_MODULE)))
-    return {
-      status: "analysis-pending",
-      exitCode: null,
-      command,
-      errors: [
-        `${ANALYSIS_SCRIPT} (#547) is not on this branch yet: the pack passed this runner's checks; run the command above once #547 merges`,
-      ],
-      result: null,
-    };
+    return refused([`${ANALYSIS_SCRIPT} (#547) is missing: nothing analysed`]);
   const r = spawnSync(
     process.execPath,
     ["--import", "tsx", ANALYSIS_SCRIPT, ...analysisArgs(packDir, stage, stage0Pack)],

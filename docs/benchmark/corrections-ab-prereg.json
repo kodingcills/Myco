@@ -2,7 +2,7 @@
   "schema": "myco.pilot.corrections-ab-prereg/1",
   "experiment": "corrections-ab",
   "markdown": "docs/benchmark/corrections-ab-prereg.md",
-  "markdownSha256": "50c60a8523e4a673925dff2b12b5f8ae3b41aa0cd6e9be2fdf25d2cdcb55bffe",
+  "markdownSha256": "cbfe3527fb85ac916bb02611d2ca166a43f3fde3f554d0b51ab087faf01c7d2a",
   "hypothesis": "H1: with the gate's agent-safe corrections (#514) ON the agent completes more fc-v1 tasks (grader-verified) than with them OFF; H0: no increase. One-sided.",
   "primaryMetric": "grader-verified rate: claimed DONE, accepted by the gate AND passed by the independent grader (src/benchmark/grade/); never the gate's verdict alone",
   "successBar": "Stage 1 only: one-sided exact sign test on the discordant pairs, p < 0.05 reads 'corrections help'; otherwise 'corrections not shown to help' (a miss, never a fail). Stage 0 never claims an effect.",
@@ -60,7 +60,7 @@
   ],
   "failClosed": "Any gate miss (gate VERIFIED, independent grader not pass), in either arm, is an integrity incident: the run halts, an incident record is written, and nothing resumes until an operator acknowledges the record by its sha256 (never automatic).",
   "analysis": {
-    "command": "npx tsx scripts/m2-corrections-ab.ts --stage <0|1> --on-arm <pack>/on/arm.jsonl --on-grades <pack>/on/grades.jsonl --off-arm <pack>/off/arm.jsonl --off-grades <pack>/off/grades.jsonl --on-config <pack>/on/run-config.json --off-config <pack>/off/run-config.json [--stage0-on-arm <stage0-pack>/on/arm.jsonl --stage0-off-arm <stage0-pack>/off/arm.jsonl] --prereg-file docs/benchmark/corrections-ab-prereg.md --prereg-declared <pack's recorded sha256>",
+    "command": "npx tsx scripts/m2-corrections-ab.ts --stage <0|1> --on-arm <pack>/on/arm.jsonl --on-grades <pack>/on/grades.jsonl --off-arm <pack>/off/arm.jsonl --off-grades <pack>/off/grades.jsonl --on-config <pack>/on/analysis-config.json --off-config <pack>/off/analysis-config.json [--stage0-on-arm <stage0-pack>/on/arm.jsonl --stage0-off-arm <stage0-pack>/off/arm.jsonl] --prereg-file docs/benchmark/corrections-ab-prereg.md --prereg-declared <pack's recorded sha256>",
     "module": "src/m2/corrections-ab.ts",
     "pr": 547
   },

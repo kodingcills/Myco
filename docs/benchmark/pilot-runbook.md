@@ -211,7 +211,7 @@ OFF, on paired tasks. It uses this runner. The design is pre-registered and fixe
   compared on every resume.
 - **Pacing:** the pilot's per-trial pacing inside a chunk. One chunk per invocation, and
   30 min between chunks within one invocation. Re-run the same command to continue.
-- **Experiment only:** every arm row carries `experiment: "corrections-ab/stage-<N>"`, the OFF
+- **Experiment only:** every arm row carries `experiment: {id: "corrections-ab", stage, arm, seed}`, the OFF
   arm included, and every pack carries an `EXPERIMENT` marker. `benchmark-check --evidence` and
   `m2-evidence-check` refuse them. They are never R1 evidence.
 
@@ -225,7 +225,7 @@ npx tsx scripts/m2-corrections-ab-run.ts prereg-hash
 npx tsx scripts/m2-corrections-ab-run.ts plan --stage 0
 
 # The SIMULATED dry run ($0, no model, no VM, never evidence). It runs the whole path: both
-# stages, export, the pack check, #547's analysis (or "analysis-pending" until #547 merges),
+# stages, export, the pack check, #547's analysis (the pre-registered command),
 # the evidence refusal, a pack with a wrong pre-registration hash, and the gate-miss drill
 # (halt, refused resume, refused wrong ack, the operator's ack, resume, Stage 1 refused).
 npx tsx scripts/m2-corrections-ab-run.ts dry-run --out runs/ab-dry
@@ -243,7 +243,8 @@ npx tsx scripts/m2-corrections-ab-run.ts check-pack packs/ab-stage0
 npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage0
 npx tsx scripts/m2-corrections-ab-run.ts export --out runs/ab --stage 1 --to packs/ab-stage1
 npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage1 --stage0-pack packs/ab-stage0
-# analyze exits 4 while #547 is absent ("analysis-pending"): the pack passed, nothing was analysed.
+# analyze refuses (exit 3) unless the pre-registered analysis command, filled in for the pack,
+# equals the command it runs; otherwise it exits with #547's code.
 
 # Real Stage 0, then Stage 1 (later, after the GO). In this change it prints the plan, lists
 # every unmet precondition and refuses (exit 3).

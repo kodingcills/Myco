@@ -18,8 +18,9 @@
  * `simulate` runs one stage on the fake transport (virtual clock, chunk budget honoured, so
  * pause/resume can be practised). `launch` never starts a real trial in this change: it prints
  * the plan, checks every real-run precondition and refuses with the reasons.
- * Exit: 0 ok / complete, 1 failed, 2 usage, 3 refused, 4 paused / incomplete / halted, or
- * (`analyze`) analysis pending: the pack passed its checks but #547 is not here to analyse it.
+ * Exit: 0 ok / complete, 1 failed, 2 usage, 3 refused, 4 paused / incomplete / halted.
+ * `analyze` exits with #547's code once it ran, 3 when the pack, the pre-registered command or
+ * #547 itself is refused.
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -97,6 +98,7 @@ function printPlan(stage: AbStage) {
     launchPlanDiff: first === undefined ? null : launchPlanDiff(on, off, first, ROOT),
     pacing: loaded.prereg.pacing,
     schedule: abSchedule(s.seed, tasks, loaded.prereg.pacing.chunkPairs),
+    // The pre-registered command; `analyze` refuses unless it equals what it runs.
     analysis: loaded.prereg.analysis.command,
   });
   return { sha, loaded, published };
@@ -196,9 +198,7 @@ try {
       const r = analyzeAbPack(need("--pack"), ROOT, flag("--stage0-pack"));
       out(`${r.command}\n`);
       json(r);
-      // analysis-pending: the pack passed, but nothing was analysed, so never exit 0.
-      process.exitCode =
-        r.status === "refused" ? 3 : r.status === "analysed" ? (r.exitCode ?? 1) : 4;
+      process.exitCode = r.status === "refused" ? 3 : (r.exitCode ?? 1);
       break;
     }
     case "ack-incident": {

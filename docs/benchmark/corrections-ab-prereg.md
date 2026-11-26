@@ -142,20 +142,25 @@ Run #547's CLI on each exported pack:
 npx tsx scripts/m2-corrections-ab.ts --stage <0|1> \
   --on-arm <pack>/on/arm.jsonl --on-grades <pack>/on/grades.jsonl \
   --off-arm <pack>/off/arm.jsonl --off-grades <pack>/off/grades.jsonl \
-  --on-config <pack>/on/run-config.json --off-config <pack>/off/run-config.json \
+  --on-config <pack>/on/analysis-config.json --off-config <pack>/off/analysis-config.json \
   [--stage0-on-arm <stage0-pack>/on/arm.jsonl --stage0-off-arm <stage0-pack>/off/arm.jsonl] \
   --prereg-file docs/benchmark/corrections-ab-prereg.md --prereg-declared <pack's recorded sha256>
 ```
 
-The runner's `analyze` command checks the pack first, then prints and runs exactly this
-command. Report the 2x2 table, the discordant counts (ON-only, OFF-only), the one-sided exact
+`<pack>/<arm>/analysis-config.json` is the arm's `run-config.json` with the keys #547 requires
+added (`retryBudget`, `plannerModelId`, `outputCeiling`); the pack check refuses one that is not
+derived from `run-config.json`. The bracketed Stage-0 options are given for Stage 1 only.
+
+The runner's `analyze` command checks the pack first. It then fills this command in for the
+pack and refuses unless the result equals the command it runs, prints it, and runs the same
+script with the same arguments. Report the 2x2 table, the discordant counts (ON-only, OFF-only), the one-sided exact
 sign-test p, the paired difference (ON rate minus OFF rate) with its 95% CI (Newcombe, method
 10), and the effect reading.
 
 ## Evidence use
 
 Experiment only. Neither arm is ever R1 evidence, the OFF arm included. Every arm row carries
-`experiment: "corrections-ab/stage-<N>"`, and every pack carries an `EXPERIMENT` marker and no
+`experiment: {id: "corrections-ab", stage, arm, seed}` (#547's row marker), and every pack carries an `EXPERIMENT` marker and no
 `pack.json`. `checkBenchmark(..., { evidence: true })` and the M2 pack CLI refuse them. The ON
 arm is also refused by the corrections-on rule. A simulated run is also marked `SIMULATED`.
 
