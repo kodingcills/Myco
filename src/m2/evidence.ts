@@ -53,7 +53,11 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { benchmarkArmRowSchema, benchmarkGradeRowSchema } from "../../schemas/benchmark-ledger.ts";
-import { m2PackManifestSchema, m2TrialOpsSchema } from "../../schemas/m2-evidence.ts";
+import {
+  m2PackManifestSchema,
+  m2SupersededSchema,
+  m2TrialOpsSchema,
+} from "../../schemas/m2-evidence.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import {
   type Arm,
@@ -128,6 +132,11 @@ export interface PackInput {
   readonly arm: readonly unknown[];
   readonly grades: readonly unknown[];
   readonly ops: readonly unknown[];
+  /**
+   * Attempts replaced in place (`superseded.jsonl`, optional; TIF-274 topped-up runs). Never
+   * counted: the row in `arm.jsonl` is the re-run.
+   */
+  readonly superseded?: readonly unknown[];
   /** Errors found while reading the pack (missing file, malformed JSON line). */
   readonly readErrors: readonly string[];
   /** validate-live over the manifest's run directories; null when not run. */
@@ -257,6 +266,95 @@ export interface PackResult {
   readonly r2: R2Result | null;
   readonly r3: R3Result | null;
   readonly r7: R7Result | null;
+  /** Attempts replaced in place: how many, and by harness class. Never in any count above. */
+  readonly superseded: {
+    readonly count: number;
+    readonly byHarnessClass: Readonly<Record<string, number>>;
+  };
+}
+
+/** A superseded attempt, as `m2SupersededSchema` closes it. */
+export interface SupersededAttempt {
+  readonly schema: "myco.m2.superseded/1";
+  readonly replacedBy: string;
+  readonly reason: string;
+  readonly arm: BenchmarkArmRow;
+  readonly ops: TrialOps;
+}
+
+/** The fields a replacement must share with the attempt it replaces: the same trial, re-run. */
+const SAME_TRIAL = [
+  "arm",
+  "taskSetVersion",
+  "taskId",
+  "faultClass",
+  "fixtureSha256",
+  "instructionSha256",
+] as const;
+
+/**
+ * Topped-up runs (lead ruling 2026-11-26 12:22Z): check every superseded attempt. Only a
+ * harness fault may be replaced, in place (its key is not in `arm.jsonl`), by a re-run of the
+ * same trial; the link chain must end at a row in `arm.jsonl`, with no cycle.
+ */
+function checkSuperseded(
+  input: readonly unknown[],
+  armRows: readonly BenchmarkArmRow[],
+  errors: string[],
+): PackResult["superseded"] {
+  const live = new Map(armRows.map((r) => [r.trialKey, r]));
+  const attempts = new Map<string, SupersededAttempt>();
+  input.forEach((e, i) => {
+    const issues = validateSchema(e, m2SupersededSchema);
+    if (issues.length > 0) {
+      errors.push(...issues.map((s) => `superseded row ${i}: ${s.path} ${s.message}`));
+      return;
+    }
+    const a = e as SupersededAttempt;
+    const key = a.arm.trialKey;
+    if (attempts.has(key)) errors.push(`superseded: duplicate attempt ${key}`);
+    attempts.set(key, a);
+  });
+  const byHarnessClass: Record<string, number> = {};
+  for (const [key, a] of attempts) {
+    const who = `superseded ${key}`;
+    if (live.has(key))
+      errors.push(`${who}: still in arm.jsonl (a re-run replaces its row; it is never appended)`);
+    if (a.ops.trialKey !== key) errors.push(`${who}: its trial-ops row is for ${a.ops.trialKey}`);
+    if (a.arm.cause?.kind !== "harness" || a.ops.harnessClass === null)
+      errors.push(
+        `${who}: only a harness fault may be replaced (cause ${a.arm.cause?.kind ?? "none"}, harness class ${a.ops.harnessClass ?? "none"})`,
+      );
+    if (a.arm.accepted) errors.push(`${who}: an accepted DONE is never replaced`);
+    if (a.arm.gate?.verdict === "refuted" || a.arm.gate?.verdict === "verified")
+      errors.push(`${who}: a gate verdict (${a.arm.gate.verdict}) is an outcome, never replaced`);
+    if (a.arm.gate?.unregistrable === true)
+      errors.push(`${who}: an unregistrable trial is never replaced`);
+    const next = live.get(a.replacedBy) ?? attempts.get(a.replacedBy)?.arm;
+    if (next === undefined) {
+      errors.push(`${who}: replacedBy ${a.replacedBy} is neither in arm.jsonl nor superseded`);
+    } else {
+      for (const f of SAME_TRIAL)
+        if (next[f] !== a.arm[f])
+          errors.push(`${who}: its replacement ${a.replacedBy} is another trial (${f} differs)`);
+    }
+    // The chain must reach arm.jsonl without a cycle.
+    const seen = new Set([key]);
+    let at = a.replacedBy;
+    while (!live.has(at)) {
+      const step = attempts.get(at);
+      if (step === undefined) break;
+      if (seen.has(at)) {
+        errors.push(`${who}: its replacement chain loops at ${at}`);
+        break;
+      }
+      seen.add(at);
+      at = step.replacedBy;
+    }
+    if (a.ops.harnessClass !== null)
+      byHarnessClass[a.ops.harnessClass] = (byHarnessClass[a.ops.harnessClass] ?? 0) + 1;
+  }
+  return { count: attempts.size, byHarnessClass };
 }
 
 const exact = (numerator: number, denominator: number): ExactRate => {
@@ -442,6 +540,7 @@ export function checkPack(input: PackInput): PackResult {
   if (input.ops.length === 0) errors.push("ops ledger is empty");
   const armKeys = new Set(armRows.map((r) => r.trialKey));
   for (const key of ops.keys()) if (!armKeys.has(key)) errors.push(`ops row ${key} has no arm row`);
+  const superseded = checkSuperseded(input.superseded ?? [], armRows, errors);
 
   const accounting = { nonVerified: 0, agent: 0, oracle: 0, harness: 0 };
   const byHarnessClass: Record<string, number> = {};
@@ -683,6 +782,7 @@ export function checkPack(input: PackInput): PackResult {
     r2: settle(r2),
     r3: settle(r3),
     r7: settle(r7),
+    superseded,
   };
 }
 
@@ -724,7 +824,13 @@ export function readPack(
       readErrors.push("pack.json: not JSON");
     }
   }
-  const known = new Set(["pack.json", "arm.jsonl", "grades.jsonl", "ops.jsonl"]);
+  const known = new Set([
+    "pack.json",
+    "arm.jsonl",
+    "grades.jsonl",
+    "ops.jsonl",
+    "superseded.jsonl",
+  ]);
   const runsPath =
     manifest !== null && typeof manifest === "object" && "runs" in manifest
       ? ((manifest as { runs: { path?: unknown } | null }).runs?.path ?? null)
@@ -743,5 +849,9 @@ export function readPack(
       ? validateRuns(join(dir, m.runs.path), m.runs.expect)
       : { ok: false, detail: "runs.path is not a plain directory name" };
   }
-  return { manifest, arm, grades, ops, readErrors, runs };
+  const supersededPath = join(dir, "superseded.jsonl");
+  const superseded = existsSync(supersededPath)
+    ? readJsonl(supersededPath, "superseded.jsonl", readErrors)
+    : [];
+  return { manifest, arm, grades, ops, superseded, readErrors, runs };
 }

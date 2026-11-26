@@ -1,3 +1,4 @@
+import { benchmarkArmRowSchema } from "./benchmark-ledger.ts";
 import type { JsonSchema } from "./validate.ts";
 
 /**
@@ -9,7 +10,10 @@ import type { JsonSchema } from "./validate.ts";
  *  - `arm.jsonl`   arm rows, `myco.benchmark.arm-row/1` (schemas/benchmark-ledger.ts);
  *  - `grades.jsonl` grade rows, `myco.benchmark.grade-row/1`, from the independent grader;
  *  - `ops.jsonl`   one trial-ops row per arm row (below): the process record the M2 plan
- *                  §2.2 keeps as a CI gate instead of a scorecard row.
+ *                  §2.2 keeps as a CI gate instead of a scorecard row;
+ *  - `superseded.jsonl` (optional) the durable record of attempts replaced IN PLACE (below):
+ *                  a trial lost to a harness fault is re-run and its row in `arm.jsonl`
+ *                  replaced, never appended (lead ruling 2026-11-26 12:22Z).
  *
  * The check is `src/m2/evidence.ts`; the scorecard check `scripts/m2-scorecard-check.py`
  * quotes what it recomputes.
@@ -104,5 +108,29 @@ export const m2TrialOpsSchema: JsonSchema = {
       anyOf: [{ type: "string", enum: [...HARNESS_CLASSES] }, { type: "null" }],
     },
     faultLanded: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+  },
+};
+
+/**
+ * A superseded attempt (TIF-274, topped-up runs; lead ruling 2026-11-26 12:22Z). A trial lost
+ * to a HARNESS fault is re-run in place: its row in `arm.jsonl` (and `grades.jsonl`,
+ * `ops.jsonl`) is the re-run, and the faulted attempt stays here, whole, with the reason and a
+ * link to the trial that replaced it (`replacedBy`: a trialKey in `arm.jsonl`, or another
+ * superseded attempt that was itself re-run). Only harness faults may be replaced: never a
+ * refuted, accepted, unregistrable or agent-caused attempt (a step-budget stop is the agent's
+ * outcome). An invalid-target trial the harness lost is not replaced: it must be unregistrable
+ * whatever the harness did, so such a pack is re-packed, not topped up.
+ */
+export const m2SupersededSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema", "replacedBy", "reason", "arm", "ops"],
+  properties: {
+    schema: { const: "myco.m2.superseded/1" },
+    replacedBy: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+    reason: { type: "string", minLength: 1, maxLength: 300 },
+    arm: benchmarkArmRowSchema,
+    /** The faulted attempt's own trial-ops row. */
+    ops: m2TrialOpsSchema,
   },
 };
