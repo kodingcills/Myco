@@ -133,8 +133,9 @@ injection channel (§2 V).
 
 ### 1.5 Labels that keep rows out of R1
 
-Rows from N (`assisted`, `human-gated`), O, P, R, S, V and U are experiment rows under Part 1
-§3.4 and never count as R1 evidence. Simulated rows never count (Part 1 §3.5).
+Rows from N (`assisted`, `human-gated`), O, P, R, S, T (`plugin-experiment`), V and U are
+experiment rows under Part 1 §3.4 and never count as R1 evidence. Simulated rows never count
+(Part 1 §3.5). Q writes no rows: a proof bundle holds episodes of rows already labelled here.
 
 ---
 
@@ -693,8 +694,8 @@ Windows VM is single-owner, so V runs on L's and U's Linux desktops.
 task, a note that goes to the worker's assignment and the ledger; any other field refused). The
 `note` is free text from the planner agent to a worker agent, so it is an injection channel:
 V's scoped review must cap its length, keep it out of the gate request and every host path,
-and treat it as untrusted input to the worker. The planner receives per-worker reports as **codes only** (`done`, `refuted`, `uncertain`,
-`unverified`, `refused`, `killed`): `done` only when the gate decided `verified` + `accepted` +
+and treat it as untrusted input to the worker. The planner receives per-worker reports as
+**codes only** (`done`, `refuted`, `uncertain`, `unverified`, `refused`, `killed`): `done` only when the gate decided `verified` + `accepted` +
 `ORACLE_PASS` from the sealed capture, any configured grader said `pass`, the verdict row was
 logged, and the run was not halted. No reason text, evidence bytes or host paths. The kill
 switch (`kill()` or an operator kill file) has no agent verb.

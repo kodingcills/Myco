@@ -405,3 +405,142 @@ describe("capability spec part 2: binding lines", () => {
     expect(DOC).toContain("No N-V track touches their files or branches");
   });
 });
+
+/**
+ * The binding gate guarantees the doc restates, each pinned word for word inside the section
+ * that states it: the gate bound to one trial, grader independence, per-trial persisted bytes,
+ * fail closed, CSV-only Calc, R1 rules unchanged, R7's rule, experiment and simulated rows never
+ * R1 evidence, and oracle and ground truth kept from the agent. Inverting any one fails here.
+ */
+describe("capability spec part 2: binding gate guarantees", () => {
+  const sec4 = () => sectionFrom("## 4. Pre-registration");
+
+  it.each<[string, () => string, string]>([
+    [
+      "§1.5 experiment rows never R1",
+      () => sectionFrom("### 1.5"),
+      "Rows from N (`assisted`, `human-gated`), O, P, R, S, T (`plugin-experiment`), V and U are experiment rows under Part 1 §3.4 and never count as R1 evidence.",
+    ],
+    [
+      "§1.5 simulated never",
+      () => sectionFrom("### 1.5"),
+      "Simulated rows never count (Part 1 §3.5).",
+    ],
+    [
+      "§4 the whole guarantees sentence",
+      sec4,
+      "Binding gate guarantees restated as constraints on N-V (not new rules): the agent supplies only `taskId`, `runId` and `claim` through `myco.gate/v1`; the gate is bound to one trial; the grader shares no code with the gate; persisted bytes are captured per trial; the gate fails closed; agent-facing reasons are codes only; the gate stays CSV-only for Calc until the xlsx replacement lands; R1 evidence rules (`src/benchmark/taskset-binding.ts`) are unchanged; R7 is the total cost of ALL trials over verified, with null cost never 0 and cost a token-derived estimate, never billed USD.",
+    ],
+    [
+      "§4 Part 1 constraints",
+      sec4,
+      "experiment rows, not R1 evidence; simulated rows never count;",
+    ],
+    [
+      "N7 timeout never verified",
+      () => section("N"),
+      "**N7 timeout integrity:** no trial that ended `handoff-timeout` is verified. A timeout never auto-approves.",
+    ],
+    [
+      "O checker independence",
+      () => section("O"),
+      "It shares no code with the policy engine (an import-graph test, as for the grader), so the engine never grades itself.",
+    ],
+    [
+      "O fail closed",
+      () => section("O"),
+      "**Fail closed:** a policy-engine error, timeout or unparseable config denies the action; a test pins it. A missing config refuses to start the trial rather than running unpoliced.",
+    ],
+    [
+      "P grader independence",
+      () => section("P"),
+      "#535's `src/benchmark/grade/cross-app.ts`, which shares no code with the gate).",
+    ],
+    [
+      "P CSV-only Calc",
+      () => section("P"),
+      "Not xlsx: the sheet is CSV and the report plain UTF-8 text, so the gate stays CSV-only for Calc; an xlsx/odt version waits for the #503 replacement.",
+    ],
+    [
+      "R derived oracle never R1, never grades",
+      () => section("R"),
+      'the derived oracle\'s gate verdict is labelled `trust: "derived"` and never grades the arm; the independent grader does. Not R1 evidence (`r1Evidence: false`).',
+    ],
+    [
+      "S one trial, per-trial bytes",
+      () => section("S"),
+      "Every run goes through `runGatedTrial` (a gate bound to one trial, persisted bytes captured per trial)",
+    ],
+    [
+      "S webhook loopback",
+      () => section("S"),
+      "a webhook bound to loopback only and signed with HMAC-SHA256",
+    ],
+    [
+      "S triggered rows never R1",
+      () => section("S"),
+      "Triggered rows are `evidence: false` and simulated unless the executor says otherwise, and are never R1 evidence.",
+    ],
+    [
+      "T plugin verdicts not R1",
+      () => section("T"),
+      "Not wired into the gate: plugin verdicts are `plugin-experiment` rows with `r1Evidence: false`, refused by `myco.benchmark.arm-row/1`;",
+    ],
+    [
+      "U export positives need the gate",
+      () => section("U"),
+      "A record is positive only when the gate said `verified` and accepted for that trial, the grader graded the exact captured bytes `pass`, and the agent claimed done;",
+    ],
+    [
+      "V no gate call for a worker",
+      () => section("V"),
+      "each worker's gate is bound to its own run, a planner naming another worker's run gets `ASSIGNMENT_MISMATCH`, and the planner never calls a worker's gate or claims for it.",
+    ],
+    [
+      "V R7 rule",
+      () => section("V"),
+      "Cost per verified task (R7's rule: cost of ALL trials, workers included, null never 0, an estimate never billed USD)",
+    ],
+    [
+      "DC not agent-readable",
+      dataCapture,
+      "**What it is not.** Not agent-readable: episodes are written after the agent stops, into a root the launch audit forbids to the agent and the guest, because an episode holds ground truth.",
+    ],
+    [
+      "DC ground truth hash only, host-side",
+      dataCapture,
+      "| Ground truth | the intent's expected values and the pinned pristine fixture's SHA-256 (not its bytes), host-side only |",
+    ],
+  ])("%s", (_name, scope, line) => {
+    expect(scope()).toContain(line);
+  });
+
+  // An added sentence that contradicts a guarantee fails even if the pinned line survives.
+  it.each([
+    /fails? open/i,
+    /\ballows the action\b/i,
+    /may (?:span|share|call|be verified)/i,
+    /reuses the (?:gate|policy engine)/i,
+    /accepts? xlsx/i,
+    /0\.0\.0\.0/,
+    /r1Evidence: true/,
+    /(?<!never )auto-approves/,
+    /(?<!Not )\bagent-readable\b/i,
+    /\bcount as R1 evidence when\b/i,
+    /\bare relaxed\b/i,
+  ])("states no contradiction of a guarantee: %s", (re) => {
+    expect(DOC).not.toMatch(re);
+  });
+});
+
+describe("capability spec part 2: §6 sizes agree with the task sets", () => {
+  it("ho-v1's size in §6 is the sum of N's strata", () => {
+    const n = section("N");
+    const human = Number(n.match(/(\d+) \*\*needs-human\*\* tasks: (\d+) needs-approval/)?.[1]);
+    const parts = n.match(/(\d+) needs-approval .*?, (\d+) blocked .*?, (\d+) uncertain/);
+    const control = Number(n.match(/(\d+) \*\*control\*\* tasks/)?.[1]);
+    expect(parts).not.toBeNull();
+    expect(Number(parts?.[1]) + Number(parts?.[2]) + Number(parts?.[3])).toBe(human);
+    expect(sectionFrom("## 6. ")).toContain(`**Sizes:** \`ho-v1\` ${human + control},`);
+  });
+});
