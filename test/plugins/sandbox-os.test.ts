@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   detectNetworkIsolation,
   fsizeBlocks,
+  fsizeUnit,
   LIMIT_WRAPPER,
   type NetworkIsolation,
   networkIsolation,
@@ -192,15 +193,25 @@ describe("the output limit is part of the OS layer (D3)", () => {
       // limit is 0 and cannot be raised, so the case cannot be set up).
       if (bare.c === undefined || bare.c === 0) ctx.skip();
       expect(bare.c).toBe(1024 * 512);
-      expect(limitsSeen(raise, true)).toEqual({ f: 9 * 512, c: 0 });
+      expect(limitsSeen(raise, true)).toEqual({ f: 9 * (fsizeUnit() ?? Number.NaN), c: 0 });
     },
     20_000,
   );
 
-  it("the limit is the smallest whole number of 512-byte blocks above the cap", () => {
-    expect(fsizeBlocks(4096)).toBe(9);
-    expect(fsizeBlocks(4095)).toBe(8);
-    expect(fsizeBlocks(1)).toBe(1);
+  it.runIf(SUPPORTED)(
+    "the shell's ulimit block size is measured as 512 or 1024 bytes",
+    () => {
+      expect([512, 1024]).toContain(fsizeUnit());
+    },
+    20_000,
+  );
+
+  it("the limit is the smallest whole number of blocks above the cap", () => {
+    expect(fsizeBlocks(4096, 512)).toBe(9);
+    expect(fsizeBlocks(4095, 512)).toBe(8);
+    expect(fsizeBlocks(1, 512)).toBe(1);
+    expect(fsizeBlocks(4096, 1024)).toBe(5);
+    expect(fsizeBlocks(4095, 1024)).toBe(4);
   });
 });
 

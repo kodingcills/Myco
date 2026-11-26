@@ -28,7 +28,8 @@
  *  - bounded output WHILE the child runs (verifier round 3 on #537, D3), not only after it
  *    exits: every child runs under `RLIMIT_FSIZE` (`ulimit -f`, set by `/bin/sh` in
  *    `LIMIT_WRAPPER` before the OS layer and node start), so the kernel refuses any write that
- *    would take a file past the cap plus at most one 512-byte block. The child can write only
+ *    would take a file past the cap plus at most one shell block (512 or 1024 bytes, measured
+ *    by `measureFsizeUnit`). The child can write only
  *    the answer file (the permission model denies every path write; `fs` is denied), so the
  *    host disk holds at most `maxOutputBytes + 1024` bytes of plugin output per call, whatever
  *    route the plugin finds to that file. Node ignores SIGXFSZ, so a write past the limit fails
@@ -109,7 +110,7 @@ const LINUX_INIT = ["/bin/sh", "-c", 'unset PWD; "$@"; exit $?', "sh"] as const;
 
 /**
  * The outermost layer of every plugin child, on both platforms (D3): `/bin/sh` sets the file
- * size limit (`ulimit -f`, in 512-byte blocks, given as `$1`) and turns core dumps off, then
+ * size limit (`ulimit -f`, in the shell's blocks, given as `$1`) and turns core dumps off, then
  * `exec`s the OS layer with an empty environment (`env -i`: the shell may export `PWD`,
  * `SHLVL` or `_`). rlimits are inherited across `exec`, `unshare` and `sandbox-exec`, so node
  * and anything it could start run under them. If either limit cannot be set the call exits 90
@@ -124,18 +125,49 @@ export const LIMIT_WRAPPER = [
 ] as const;
 
 const EXIT_LIMIT_FAILED = 90;
-const FSIZE_BLOCK = 512;
 
-/** The `ulimit -f` value for an output cap: the smallest whole number of 512-byte blocks
- * strictly larger than the cap, so an answer of exactly `maxOutput` bytes still fits and any
- * file the kernel lets reach the limit is over the cap. */
-export function fsizeBlocks(maxOutput: number): number {
-  return Math.floor(maxOutput / FSIZE_BLOCK) + 1;
+/**
+ * The byte size of one `ulimit -f` block in this host's `/bin/sh`, measured, not assumed:
+ * POSIX says 512 (dash, bash in POSIX mode from 4.x), but macOS's bash 3.2 counts 1024.
+ * The wrapper sets 8 blocks and a plain node child reports the raw rlimit it got. Anything
+ * but 512 or 1024 (or a wrapper that does not run) is `undefined`: no OS layer, fail closed.
+ */
+export function measureFsizeUnit(): number | undefined {
+  if (!existsSync(LIMIT_WRAPPER[0]) || !existsSync("/usr/bin/env")) return undefined;
+  const [cmd, ...args] = LIMIT_WRAPPER;
+  const r = spawnSync(
+    cmd,
+    [
+      ...args,
+      "8",
+      process.execPath,
+      "-e",
+      "process.stdout.write(String(process.report.getReport().userLimits.file_size_blocks.soft))",
+    ],
+    { env: {}, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 },
+  );
+  if (r.error !== undefined || r.status !== 0) return undefined;
+  const unit = Number(r.stdout) / 8;
+  return unit === 512 || unit === 1024 ? unit : undefined;
+}
+
+let unitMeasured: { unit: number | undefined } | undefined;
+/** This host's `ulimit -f` block size (measured once per process). */
+export function fsizeUnit(): number | undefined {
+  unitMeasured ??= { unit: measureFsizeUnit() };
+  return unitMeasured.unit;
+}
+
+/** The `ulimit -f` value for an output cap: the smallest whole number of blocks strictly
+ * larger than the cap, so an answer of exactly `maxOutput` bytes still fits and any file the
+ * kernel lets reach the limit is over the cap (at most one block, 1024 bytes, past it). */
+export function fsizeBlocks(maxOutput: number, unit: number): number {
+  return Math.floor(maxOutput / unit) + 1;
 }
 
 /** The full command prefix for one call: the limit wrapper, then the OS layer. */
-function limitedPrefix(prefix: readonly string[], maxOutput: number): string[] {
-  return [...LIMIT_WRAPPER, String(fsizeBlocks(maxOutput)), ...prefix];
+function limitedPrefix(prefix: readonly string[], maxOutput: number, unit: number): string[] {
+  return [...LIMIT_WRAPPER, String(fsizeBlocks(maxOutput, unit)), ...prefix];
 }
 
 /** A child under the Linux prefix proves the PID namespace: its parent is the init, PID 1. */
@@ -157,16 +189,17 @@ const PROBE_OUTPUT_CAP = 4096;
  * soft and hard file-size limit is the expected byte count, and core dumps are off. Node's
  * diagnostic report gives the raw rlimit values (bytes, despite the `_blocks` name).
  */
-const LIMIT_PROBE = `{const u=process.report.getReport().userLimits;const f=${fsizeBlocks(PROBE_OUTPUT_CAP) * FSIZE_BLOCK};if(u.file_size_blocks.soft!==f||u.file_size_blocks.hard!==f||u.core_file_size_blocks.soft!==0)process.exit(4)}`;
+const limitProbe = (unit: number) =>
+  `{const u=process.report.getReport().userLimits;const f=${fsizeBlocks(PROBE_OUTPUT_CAP, unit) * unit};if(u.file_size_blocks.soft!==f||u.file_size_blocks.hard!==f||u.core_file_size_blocks.soft!==0)process.exit(4)}`;
 
 /** Whether a plugin child can run under `osPrefix` with the D3 limits in force (exported for
  * `sandbox-os.test.ts`). */
 export function works(osPrefix: readonly string[], probe = "0"): boolean {
-  if (!existsSync(LIMIT_WRAPPER[0]) || !existsSync("/usr/bin/env")) return false;
-  if (!existsSync(osPrefix[0] ?? "")) return false;
-  const [cmd, ...args] = limitedPrefix(osPrefix, PROBE_OUTPUT_CAP);
+  const unit = fsizeUnit();
+  if (unit === undefined || !existsSync(osPrefix[0] ?? "")) return false;
+  const [cmd, ...args] = limitedPrefix(osPrefix, PROBE_OUTPUT_CAP, unit);
   if (cmd === undefined) return false;
-  const r = spawnSync(cmd, [...args, process.execPath, "-e", `${LIMIT_PROBE};${probe}`], {
+  const r = spawnSync(cmd, [...args, process.execPath, "-e", `${limitProbe(unit)};${probe}`], {
     env: {},
     stdio: "ignore",
     timeout: 10_000,
@@ -251,7 +284,9 @@ export function runInSandbox(
     writeFileSync(join(io, "in.json"), input, { mode: 0o600 });
     inFd = openSync(join(io, "in.json"), "r");
     outFd = openSync(join(io, "out.json"), "w", 0o600);
-    const [cmd, ...prefixArgs] = limitedPrefix(isolation.prefix, maxOutput);
+    const unit = fsizeUnit();
+    if (unit === undefined) return fault("PLUGIN_NO_NET_ISOLATION");
+    const [cmd, ...prefixArgs] = limitedPrefix(isolation.prefix, maxOutput, unit);
     const r = spawnSync(
       cmd as string,
       [
