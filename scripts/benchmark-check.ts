@@ -8,7 +8,8 @@
  *
  * Prints the CheckResult as JSON. Exit 1 when the ledgers are inconsistent, empty or
  * miscounted; with --require-r1, also when R1 does not pass; with --evidence, also when any
- * row lacks evidence provenance (its planner is not a Claude model id, e.g. a dry run).
+ * row lacks evidence provenance (its planner is not a Claude model id, e.g. a dry run) or had
+ * the gate's corrections on (R1 evidence keeps corrections off).
  * --expect-unregistrable asserts how many of an arm's --expect trials are unregistrable (the
  * rest must be gated); --require-r1 needs it for myco-gate (ruling 2026-11-26 08:38Z), so R1's
  * denominator cannot shrink silently. With --require-r1 or --evidence the myco-gate rows are also
