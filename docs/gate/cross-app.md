@@ -187,14 +187,18 @@ baseline arm on cross-app tasks. The bar is executable: `src/benchmark/cross-app
 any run.
 
 - **Task set:** xa-v1, by manifest digest
-  `d740ed0434c664cc79fa9517562ba7c540489ffc39f7f24a58a6cc758975c79c`.
+  `d740ed0434c664cc79fa9517562ba7c540489ffc39f7f24a58a6cc758975c79c`. The 12 task ids are
+  frozen in the module (`XA_BAR.taskIds`); the caller cannot pass its own list. A test checks
+  that they are exactly the ids in the committed `tasks.jsonl` that this manifest hashes. A
+  trial on any other id makes the run `incomplete`.
 - **Arms:** `baseline` (the agent alone, same tasks, same instruction text by digest, same
   apps and step protocol, no gate, no retry) and `myco` (gate per trial, one retry from the
   gate's last verified checkpoint).
 - **Sample size:** 12 tasks x 10 repetitions = 120 trials per arm. Each (task, repetition)
   cell runs exactly once per arm; a run that does not fill every cell is `incomplete`, never
-  a pass. Harness faults are re-run in place per the topped-up-run rule, so the cell still
-  counts once.
+  a pass. The module enforces only "exactly once": it does not record or classify harness
+  faults. How a faulted trial is re-run is the run procedure's job, outside this code.
+  No power analysis was computed for n = 120 and the 0.10 margin.
 - **Primary metric: the independent grader's pass rate.** The grade alone decides it, in
   both arms (`src/benchmark/grade/`); `fail` and `ungradable` count as not passed. The gate's
   verdict is not part of the primary metric, since the baseline arm has no gate.
@@ -207,13 +211,16 @@ any run.
 - **False-verified** is a separate property of the myco arm: a trial with gate `verified`
   and grade `fail` or `ungradable`. One fails the bar outright. With zero in 120, the report
   carries the 95% upper bound 1 - 0.05^(1/120), under 2.5%. A gate verdict recorded in the
-  baseline arm is ignored.
+  baseline arm is ignored. Every myco-arm trial must carry its gate verdict: a missing one,
+  or any arm, grade or verdict outside the known values, makes the run `incomplete`. Zero
+  false-verified is never claimed without the verdicts.
 - **Secondary (reported, not part of the decision):** per-step failure distribution (first
   refuted checkpoint, myco arm; first failing step by grade, both arms), repair rate
   (verified on the retry / refuted on the first attempt), and masking incidence (trials whose
   end state is correct but an earlier checkpoint is refuted).
-- **Cost:** R7 = total estimated cost of ALL trials / verified trials; null cost is never 0;
-  cost is a token-derived estimate, never billed USD.
+- **Cost (not computed by `cross-app-bar.ts`):** reported under the existing R7 rule
+  (`docs/m2-scorecard.md`): total estimated cost of ALL trials / verified trials; null cost is
+  never 0; cost is a token-derived estimate, never billed USD.
 - **Evidence rules:** only live trials with sealed captures count; scripted and mock rows
   (everything on this page) never count. The vault path needs the multi-file capture below
   before cross-app trials can be evidence.
