@@ -606,6 +606,12 @@ describe("follow-up: option allowlist (D7, D8, unknown options)", () => {
     );
     refuse(argv, "-spice option port= is not in the allowlist");
   });
+  it("SPICE without unix=on", () => {
+    const argv = utmDefaultArgv().map((a) =>
+      a.startsWith("unix=on,") ? a.replace("unix=on,", "") : a,
+    );
+    refuse(argv, "-spice needs unix=on");
+  });
   it("an extra SPICE TCP port beside the unix socket", () => {
     const argv = utmDefaultArgv().map((a) => (a.startsWith("unix=on,") ? `${a},tls-port=5931` : a));
     refuse(argv, "-spice option tls-port= is not in the allowlist");
