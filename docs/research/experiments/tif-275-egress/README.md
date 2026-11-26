@@ -121,8 +121,17 @@ every refusal by argv index. The VM owner's `verify-all` at `edc9befc` (relayed)
 refusal: `-device driver is not in the allowlist (argv[103])`, the TPM front end. Audio was
 accepted and the UTM config matched. UTM 5.0.9's `tpmArguments` writes
 `tpm-crb-device,tpmdev=tpm0` for a `virt` machine, and the follow-up commit allows exactly that.
-A clean `verify-all` on the live guest is still owed before merge, and so is committing its
-output and the `names` output as `11-allowlist-live-names.txt`.
+
+**Live run done: 2026-11-26, 07:21Z, at head `67d3b6a2`. Result: clean.** The VM owner did a
+normal `scripts/reset-trial-vm.sh clean-base` with egress denied, under `scripts/vm-session.sh`,
+then ran these read-only, writing nothing to the guest:
+
+- `scripts/guest-egress.sh verify-all` exited 0 with no refusals:
+  `ok: user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22` and `ok: UTM config matches`.
+- `python3 -I scripts/guest_egress_check.py names` exited 0. All 52 options are allowed, none is
+  NOT ALLOWED, and `-audio`, `-audiodev` and the TPM front end are now accepted.
+
+Both outputs are in `11-allowlist-live-names.txt` (names only, no values).
 
 ## Reproduce
 
