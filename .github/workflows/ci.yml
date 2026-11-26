@@ -163,6 +163,16 @@ jobs:
         run: npm install -g pnpm@10
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      # TIF-265 T: plugin children run in an empty network namespace (unshare --user --net);
+      # Ubuntu 24.04 blocks unprivileged user namespaces by default, so lift that here. With no
+      # OS network layer every plugin call fails closed (PLUGIN_NO_NET_ISOLATION).
+      # No `if:`: the script is a no-op where the sysctl does not exist (macOS), and the
+      # workflow evaluator in test/ci-hygiene/test_ci_plan.py has no `runner.os` token.
+      - name: Allow user namespaces (plugin sandbox network layer)
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Typecheck
         if: env.MODE != 'docs'
         run: pnpm typecheck
@@ -349,6 +359,35 @@ jobs:
         run: python3 scripts/m2-scorecard-check.py
       - name: Checker tests (fixture packs, every failure mode)
         run: pnpm exec vitest run test/m2
+
+  # Track L2: strict per-trial isolation (strict-linux-ns). Ubuntu 24.04 restricts
+  # unprivileged user namespaces through AppArmor, so the job lifts that sysctl first;
+  # MYCO_STRICT_NS_REQUIRED=1 makes the namespace suite FAIL instead of skip when the
+  # backend cannot start. Runs as the unprivileged runner user. No VM, no model, no secrets.
+  strict-isolation:
+    name: strict isolation (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MYCO_STRICT_NS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Strict isolation tests (namespaces; must not skip)
+        run: pnpm exec vitest run test/isolation
 
   # TIF-269 (M2-06): the Linux path an outsider can run. A real headless
   # LibreOffice Calc is driven by a scripted agent; Myco's oracle reads the saved

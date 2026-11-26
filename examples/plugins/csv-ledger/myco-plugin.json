@@ -1,0 +1,11 @@
+{
+  "spec": "myco.plugin/1",
+  "name": "csv-ledger",
+  "version": "1.0.0",
+  "app": "ledger-csv",
+  "kinds": ["oracle", "reader"],
+  "formats": [{ "ext": ".csv", "mediaType": "text/csv" }],
+  "claims": ["edit-missing", "wrong-value", "wrong-target", "truncated", "missing-file"],
+  "caps": { "timeoutMs": 5000, "memoryMb": 64, "maxInputBytes": 1048576, "maxOutputBytes": 262144 },
+  "entry": "plugin.ts"
+}

@@ -8,6 +8,8 @@
  * runner does not write them yet, so a pilot run cannot become an R1 pack (refused, by design).
  * TO FILE: write every attempt through #518's `AttemptLedgerWriter` and anchor for R1 evidence;
  * this file stays the runner's own resume state.
+ * The corrections A/B mode (`src/pilot/ab.ts`) does write #518's ledger and anchor beside this
+ * file, through `runPilot`'s `attemptSink`; the R1 pilot itself still does not.
  *
  * Every attempt is written twice: a `start` line before the agent is launched and an `end`
  * line after the trial is decided or faulted. Lines are only ever appended (`appendFileSync`);
