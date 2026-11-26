@@ -64,6 +64,37 @@ ROW_FIELDS = (
 
 ESCAPE_KEYS = ("esc", "escape")
 
+# TIF-98: both arms of a comparison must start from the same base family
+# (m1-state acceptance #7, docs/baseline/screenshot-agent.md §2). The Myco trial
+# default moved to trial-base-v2 on 2026-11-26; the baseline arms restore
+# cua-c1-base, a clean-base derivative. A Myco row records the snapshot its reset
+# reported ready on. A row with no `snapshot` key predates that field and ran on
+# clean-base (the only default before 2026-11-26). A null snapshot means the reset
+# never got to ready, so no guest state was compared on that row.
+BASE_FAMILY = {"clean-base": "clean-base", "cua-c1-base": "clean-base", "trial-base-v2": "trial-base-v2"}
+BASELINE_SNAPSHOT = "cua-c1-base"  # src/baseline/c1-trial.ts RESET_SNAPSHOT
+LEGACY_MYCO_SNAPSHOT = "clean-base"
+
+
+def check_same_base(myco: dict, baseline: dict) -> None:
+    """Refuse (SystemExit) any index whose Myco row and baseline row come from different bases."""
+    for i in sorted(myco):
+        b = baseline.get(i, {})
+        base_snap = b.get("snapshot", BASELINE_SNAPSHOT)
+        base_family = BASE_FAMILY.get(base_snap)
+        if base_family is None:
+            raise SystemExit(f"index {i}: baseline snapshot {base_snap!r} has no known base family")
+        row = myco[i]
+        snap = row["snapshot"] if "snapshot" in row else LEGACY_MYCO_SNAPSHOT
+        if snap is None:
+            continue
+        if BASE_FAMILY.get(snap) != base_family:
+            raise SystemExit(
+                f"index {i}: Myco ran on {snap!r} but the baseline on {base_snap!r} "
+                f"(base family {base_family!r}); a comparison needs both arms on the same base "
+                "(run the Myco arm with MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base)"
+            )
+
 
 def key_counts(actions: list[dict]) -> dict:
     """press_key totals for the extract. Key names compare case-insensitively, and the
@@ -134,6 +165,7 @@ def compare(check: bool, scorecard: Path = SCORECARD) -> int:
             v3[t["index"]] = t
     if sorted(r6) != list(range(30)) or sorted(v3) != list(range(30)):
         raise SystemExit(f"need indices 0..29 on both sides: r6 {sorted(r6)}, v3 {sorted(v3)}")
+    check_same_base(v3, r6)
 
     pairs = Counter()
     print("idx  seed         record    column  value            v3        r6 verdict / reason")
