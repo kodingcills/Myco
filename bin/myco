@@ -10,17 +10,27 @@ if [ "$1" = "test" ]; then
 elif [ "$1" = "watch" ]; then
   shift
   exec npx tsx "$ROOT/scripts/myco-watch.ts" "$@"
+elif [ "$1" = "init" ]; then
+  shift
+  if [ ! -x "$ROOT/node_modules/.bin/tsx" ]; then
+    echo "myco init: $ROOT/node_modules/.bin/tsx is missing; run 'pnpm install --frozen-lockfile' in $ROOT first" >&2
+    exit 1
+  fi
+  exec "$ROOT/node_modules/.bin/tsx" "$ROOT/scripts/myco-init.ts" "$@"
 elif [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ -z "$1" ]; then
   echo "Myco — Verified GUI test runner for desktop coding agents"
   echo ""
   echo "Usage: myco test <task-package.yaml>"
+  echo "       myco init [--dry-run] [--global [--yes]] [--help]"
   echo "       myco watch --run <runId> ... | --demo todo-items|calc-multi-step"
   echo ""
   echo "Commands:"
   echo "  test <file>   Execute a verified GUI task package and output evidence"
+  echo "  init          One-command setup: check the Linux desktop path, start the gate once,"
+  echo "                write the myco-gate MCP config for Claude Code and Codex (project dir)"
   echo "  watch         Read-only local view of a run: desktop frames + gate decisions (docs/gate/watch.md)"
   echo ""
-  echo "Exit codes:"
+  echo "Exit codes (test):"
   echo "  0: Verified (state changes confirmed)"
   echo "  1: Refuted (false success or failed checks)"
   echo "  2: Uncertain (ambiguous or runtime error)"
