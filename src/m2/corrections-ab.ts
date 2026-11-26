@@ -46,7 +46,8 @@ import {
   type Rate,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
-import { buildTaskSet } from "../benchmark/taskset.ts";
+import { publishedTasks } from "../benchmark/published-tasks.ts";
+import { TASK_SET_VERSION } from "../benchmark/task-types.ts";
 import { bindToTaskSet } from "../benchmark/taskset-binding.ts";
 import { wilson } from "../foundry/stats.ts";
 
@@ -163,12 +164,11 @@ const pairKey = (r: BenchmarkArmRow) => r.taskId;
 
 /**
  * Stage 0's tasks: the pilot's 30, fc-v1's demo subset (the first 18 clean tasks and the first
- * 3 of each fault class, by task id; the same selection as #524's `PILOT_STRATA`).
+ * 3 of each fault class, by task id; the same selection as #524's `PILOT_STRATA`), read from
+ * the published bundle, not rebuilt from the task generators (#547 O1 follow-up).
  */
 export const STAGE0_TASK_IDS: ReadonlySet<string> = new Set(
-  buildTaskSet()
-    .tasks.filter((t) => t.inDemo)
-    .map((t) => t.taskId),
+  (publishedTasks(TASK_SET_VERSION) ?? []).filter((t) => t.inDemo).map((t) => t.taskId),
 );
 
 /** The run-config keys the parity check requires present in both arms (#547 round 1, D3). */
