@@ -550,9 +550,9 @@ def ab_cells(r: Report) -> list[str] | None:
     for line in r.text.splitlines():
         if AB_ROW_LINE.match(line) and line not in seg.splitlines():
             r.fail("layout", "experiment row", f"an AB row outside {EXPERIMENT_HEADING!r}: {line[:40]!r}")
-    table = [line for line in seg.splitlines() if line.startswith("|")]
     if not seg:
         return None
+    table = [line for line in seg.splitlines() if line.startswith("|")]
     if table[:2] != [HEADER, SEPARATOR] or len(table) != 3 or not AB_ROW_LINE.match(table[2]):
         r.fail("experiment", "experiment table",
                f"the section must hold exactly {HEADER!r}, {SEPARATOR!r} and one `| AB |` row; found {len(table)} table lines")

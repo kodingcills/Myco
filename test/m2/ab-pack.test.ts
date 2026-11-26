@@ -4,7 +4,8 @@
  * independent reference values pinned in test/m2/corrections-ab.test.ts.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -296,4 +297,185 @@ describe("kept apart from R1", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 120_000);
+});
+
+describe("#554 round 1 fixes", () => {
+  const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
+  /** Re-point a written pack's pre-registration at `file` with the sha256 of `text`. */
+  const setPrereg = (dir: string, file: string, text: string) => {
+    const m = JSON.parse(readFileSync(join(dir, "pack.json"), "utf8"));
+    m.preregistration = { file, sha256: sha256(text) };
+    writeFileSync(join(dir, "pack.json"), `${JSON.stringify(m, null, 2)}\n`);
+  };
+
+  it("V11: a Stage-1 pack whose trial reuses a Stage-0 seed is refused (the exclusion, end to end)", () => {
+    const root = fresh();
+    try {
+      const { on, off } = stage1Arms();
+      const row = on.arm[0] as BenchmarkArmRow;
+      on.arm[0] = {
+        ...row,
+        experiment: { ...(row.experiment as object), seed: "s0-on" },
+      } as BenchmarkArmRow;
+      const r = check(writeAbPack("m2-ab-reuse", { stage: 1, arms: { on, off } }, root), root);
+      expect(r.ok).toBe(false);
+      expect(r.errors.join("\n")).toMatch(/reuse Stage-0 trials/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("V3: two trial-ops rows for one trial are refused", () => {
+    const root = fresh();
+    try {
+      const { on, off } = stage1Arms();
+      off.ops.push({ ...(off.ops[0] as AbArmFiles["ops"][number]) });
+      const r = check(writeAbPack("m2-ab-dupops", { stage: 1, arms: { on, off } }, root), root);
+      expect(r.errors).toContain("off/ops.jsonl: duplicate row for s1-off-fc-v1-001");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("V5: a file other than arm.jsonl under stage0/<side>/ is refused", () => {
+    const root = fresh();
+    try {
+      const dir = writeAbPack("m2-ab-s0leaf", { stage: 1 }, root);
+      writeFileSync(join(dir, "stage0", "on", "grades.jsonl"), "");
+      expect(check(dir, root).errors).toContain(
+        "stage0/on/grades.jsonl: not part of the A/B pack layout",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("V2: a row the grader passes but the gate refuted is non-verified, so it needs a cause", () => {
+    const root = fresh();
+    try {
+      const { on, off } = stage1Arms();
+      const k = on.arm.findIndex((r) => r.gate?.called === true && r.accepted === false);
+      const row = on.arm[k] as BenchmarkArmRow;
+      on.arm[k] = { ...row, cause: null };
+      on.grades[k] = {
+        ...on.grades[k]!,
+        status: "pass",
+        reasons: [],
+        mismatchCount: 0,
+        targetSatisfied: true,
+      };
+      const r = check(writeAbPack("m2-ab-cause", { stage: 1, arms: { on, off } }, root), root);
+      expect(r.errors).toContain(`on: ${row.trialKey}: non-verified row has no cause`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  describe("D2: the pre-registration must be a repository file the pack cannot have written", () => {
+    it("the pack's own README (written after the run, hash matching) is refused", () => {
+      const root = fresh();
+      try {
+        const dir = writeAbPack("m2-ab-self", { stage: 1 }, root);
+        const text = "# the design, written after the run\n";
+        writeFileSync(join(dir, "README.md"), text);
+        setPrereg(dir, "m2-ab-self/README.md", text);
+        const r = check(dir, root);
+        expect(r.ok).toBe(false);
+        expect(r.errors).toContain(
+          "preregistration.file m2-ab-self/README.md: inside the pack (a pack cannot certify its own pre-registration)",
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("a file anywhere under the evidence tree (another pack's README) is refused", () => {
+      const root = fresh();
+      try {
+        const dir = writeAbPack("m2-ab-tree", { stage: 1 }, root);
+        const other = join(root, "docs", "research", "experiments", "m2-other");
+        mkdirSync(other, { recursive: true });
+        const text = "# a design inside the evidence tree\n";
+        writeFileSync(join(other, "README.md"), text);
+        setPrereg(dir, "docs/research/experiments/m2-other/README.md", text);
+        expect(check(dir, root).errors.join("\n")).toMatch(
+          /preregistration\.file docs\/research\/experiments\/m2-other\/README\.md: inside the evidence tree/,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("an in-repo link to a file outside the repository is refused (realpath, not the declared path)", () => {
+      const root = fresh();
+      const outside = fresh();
+      try {
+        const dir = writeAbPack("m2-ab-link", { stage: 1 }, root);
+        const text = "# a design outside the repository\n";
+        writeFileSync(join(outside, "design.md"), text);
+        mkdirSync(join(root, "docs"), { recursive: true });
+        symlinkSync(join(outside, "design.md"), join(root, "docs", "design.md"));
+        setPrereg(dir, "docs/design.md", text);
+        expect(check(dir, root).errors).toContain(
+          "preregistration.file docs/design.md: outside the repository (through a link)",
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it("a link into a sibling directory whose name starts with the repository's is outside it", () => {
+      const parent = fresh();
+      const root = join(parent, "repo");
+      const sibling = join(parent, "repo-evil");
+      try {
+        mkdirSync(root);
+        mkdirSync(sibling);
+        const dir = writeAbPack("m2-ab-sib", { stage: 1 }, root);
+        const text = "# a design next door\n";
+        writeFileSync(join(sibling, "design.md"), text);
+        symlinkSync(join(sibling, "design.md"), join(root, "design.md"));
+        setPrereg(dir, "design.md", text);
+        expect(check(dir, root).errors).toContain(
+          "preregistration.file design.md: outside the repository (through a link)",
+        );
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
+    });
+
+    it("a declared file that is not in the repository is reported, not read", () => {
+      const root = fresh();
+      try {
+        const dir = writeAbPack("m2-ab-missing", { stage: 1 }, root);
+        setPrereg(dir, "docs/benchmark/absent.md", "x");
+        expect(check(dir, root).errors).toContain(
+          "preregistration.file docs/benchmark/absent.md: not committed",
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("a directory is not a pre-registration; a committed design document outside the pack is bound", () => {
+      const root = fresh();
+      try {
+        const dir = writeAbPack("m2-ab-dir", { stage: 1 }, root);
+        mkdirSync(join(root, "docs", "benchmark"), { recursive: true });
+        setPrereg(dir, "docs/benchmark", "");
+        expect(check(dir, root).errors).toContain(
+          "preregistration.file docs/benchmark: not a file",
+        );
+        const text = "# corrections A/B pre-registration\n";
+        writeFileSync(join(root, "docs", "benchmark", "prereg.md"), text);
+        setPrereg(dir, "docs/benchmark/prereg.md", text);
+        const r = check(dir, root);
+        expect(r.errors).toEqual([]);
+        expect(r.ok).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
 });

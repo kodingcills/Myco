@@ -15,8 +15,8 @@
  *    or otherwise failing pack is not ok, and the scorecard may not cite it.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { m2AbPackManifestSchema } from "../../schemas/m2-ab-pack.ts";
 import { m2TrialOpsSchema } from "../../schemas/m2-evidence.ts";
 import { validateSchema } from "../../schemas/validate.ts";
@@ -132,6 +132,39 @@ function layoutErrors(dir: string, stage1: boolean): string[] {
   return errors;
 }
 
+/** Where every evidence pack lives; a pre-registration may never be one of its files. */
+export const EVIDENCE_TREE = "docs/research/experiments";
+
+/** True when `path` is `dir` itself or inside it (separator-safe: `/a/b-x` is not in `/a/b`). */
+const within = (path: string, dir: string) => path === dir || path.startsWith(`${dir}${sep}`);
+
+/**
+ * Why a declared pre-registration file may not be bound, or null (#554 round 1, D2). The
+ * pre-registration states the fixed design BEFORE the run, so it must be a repository file the
+ * pack cannot have written: it must exist inside the repository once symlinks are resolved
+ * (`realpath`, so an in-repo link to a file outside is refused), and it may not be inside the
+ * pack directory (its own README, say) or anywhere under the evidence tree. Track E's committed
+ * file (#549) will pin the exact path once it lands.
+ */
+export function preregLocationError(
+  packDir: string,
+  repoRoot: string,
+  file: string,
+): string | null {
+  const root = realpathSync(resolve(repoRoot));
+  const declared = resolve(root, file);
+  if (!within(declared, root) || declared === root) return "outside the repository";
+  if (!existsSync(declared)) return "not committed";
+  const real = realpathSync(declared);
+  if (!within(real, root) || real === root) return "outside the repository (through a link)";
+  if (!statSync(real).isFile()) return "not a file";
+  if (within(real, realpathSync(resolve(packDir))))
+    return "inside the pack (a pack cannot certify its own pre-registration)";
+  if (within(real, join(root, EVIDENCE_TREE)))
+    return `inside the evidence tree (${EVIDENCE_TREE}); the pre-registration is a design document`;
+  return null;
+}
+
 /** Reads an A/B pack directory. `repoRoot` resolves the pre-registration file the manifest names. */
 export function readAbPack(dir: string, repoRoot: string): AbPackInput {
   const readErrors: string[] = [];
@@ -156,12 +189,12 @@ export function readAbPack(dir: string, repoRoot: string): AbPackInput {
   let preregCommittedSha256: string | null = null;
   const file = (manifest as { preregistration?: { file?: unknown } } | null)?.preregistration?.file;
   if (typeof file === "string") {
-    const root = resolve(repoRoot);
-    const path = resolve(root, file);
-    if (!path.startsWith(`${root}/`))
-      readErrors.push(`preregistration.file ${file}: outside the repository`);
-    else if (!existsSync(path)) readErrors.push(`preregistration.file ${file}: not committed`);
-    else preregCommittedSha256 = createHash("sha256").update(readFileSync(path)).digest("hex");
+    const where = preregLocationError(dir, repoRoot, file);
+    if (where !== null) readErrors.push(`preregistration.file ${file}: ${where}`);
+    else
+      preregCommittedSha256 = createHash("sha256")
+        .update(readFileSync(realpathSync(resolve(repoRoot, file))))
+        .digest("hex");
   }
   return { manifest, on: arm("on"), off: arm("off"), stage0, preregCommittedSha256, readErrors };
 }

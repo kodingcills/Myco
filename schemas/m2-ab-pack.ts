@@ -29,7 +29,10 @@ export const m2AbPackManifestSchema: JsonSchema = {
     evidenceUse: { const: "experiment-only (never R1 evidence)" },
     /**
      * Stage 1 only (required there): the committed pre-registration file, as a repository-relative
-     * path, and the sha256 the pack declares for it. The check hashes the file itself.
+     * path, and the sha256 the pack declares for it. The check hashes the file itself. The file must
+     * be inside the repository once symlinks are resolved, and may not be inside the pack or under
+     * `docs/research/experiments/` (a pack cannot certify its own pre-registration; #554 round 1,
+     * D2). Track E's committed file (#549) will pin the exact path once it lands.
      */
     preregistration: {
       type: "object",
