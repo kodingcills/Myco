@@ -134,7 +134,12 @@ export const EPISODE_FIELD_TREATMENT: Readonly<Record<string, Treatment>> = {
   "$.observations.items[].mediaType": oneOf("image/png", "text/csv", "application/json"),
   "$.observations.items[].label": oneOf("persisted", "ui-tree", "app-state"),
   "$.observations.items[].sha256": digest,
-  "$.observations.items[].file": closed(/^blobs\/[0-9a-f]{64}\.(?:png|csv|json)$/),
+  // A content-addressed name (hex): exempt from the identity check, like a digest (#556 r3, S1).
+  "$.observations.items[].file": {
+    kind: "closed",
+    grammar: /^blobs\/[0-9a-f]{64}\.(?:png|csv|json)$/,
+    exempt: true,
+  },
   "$.observations.items[].text": text,
   "$.agentClaim": oneOf("done", "not-done", "no-claim"),
   "$.gate.verdict": oneOf("verified", "refuted", "uncertain"),
@@ -185,9 +190,26 @@ export class OpenValueError extends Error {
 
 export const templateOf = (path: string) => path.replace(/\[\d+\]/g, "[]");
 
-/** Whether `value` holds an identity string anywhere (case-insensitive; joined forms included). */
-const holds = (value: string, joined: readonly JoinedIdentity[]) =>
-  joined.some(([, v]) => value.toLowerCase().includes(v.toLowerCase()));
+/**
+ * The form identity matching compares (#556 round 3, B2/S3; #553's final verdict): full Unicode
+ * case folding (NFKC, then upper case, then lower case, so `ß`/`ẞ` become `ss` and a dotless `ı`
+ * or dotted `İ` becomes `i`), then letters and digits only (combining marks dropped). So a spaced
+ * full name matches every joined form of it (`FirstLast`, `first.last`, `first_last`,
+ * `First-Last`), and `GROSS` matches a configured `Groß`, in any case.
+ */
+export const fold = (s: string) =>
+  s
+    .normalize("NFKC")
+    .toUpperCase()
+    .toLowerCase()
+    .replace(/ß/g, "ss")
+    .replace(/[^\p{L}\p{N}]/gu, "");
+
+/** Whether `value` holds an identity string anywhere (folded; joined forms included). */
+const holds = (value: string, joined: readonly JoinedIdentity[]) => {
+  const v = fold(value);
+  return joined.some(([, id]) => fold(id).length >= 3 && v.includes(fold(id)));
+};
 
 function treat(
   table: Readonly<Record<string, Treatment>>,
@@ -204,6 +226,8 @@ function treat(
     // An id or token that would be kept verbatim but holds an identity string (even joined,
     // `<Name>2`) is digested instead (lead ruling 21:52Z).
     case "id":
+      // Idempotent (#556 round 3, S2): an already-hashed id is closed (it carries nothing).
+      if (HASHED.test(value)) return value;
       return (CLOSED_ID.test(value) || t.also?.test(value) === true) && !holds(value, joined)
         ? value
         : `h-${exportDigest(value)}`;
@@ -338,8 +362,36 @@ export function joinedIdentity(
     const t = fields[templateOf(path)];
     if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) continue;
     if (HASHED.test(v) || HASHED_SHORT.test(v)) continue;
-    const lower = v.toLowerCase();
-    for (const [kind, id] of joined) if (lower.includes(id.toLowerCase())) out.push({ kind, path });
+    const folded = fold(v);
+    for (const [kind, id] of joined) {
+      const f = fold(id);
+      if (f.length >= 3 && folded.includes(f)) out.push({ kind, path });
+    }
+  }
+  return out;
+}
+
+/**
+ * Identity strings in a manifest (or any closed JSON whose strings are codes, versions and
+ * digests): every string leaf that is not a 64-hex digest, folded. Kinds and paths only.
+ */
+export function manifestIdentity(
+  value: unknown,
+  joined: readonly JoinedIdentity[],
+): Array<{ readonly kind: string; readonly path: string }> {
+  const out: Array<{ kind: string; path: string }> = [];
+  for (const [path, v] of stringLeaves(value)) {
+    if (
+      HEX64.test(v) ||
+      /^blobs\/[0-9a-f]{64}\.[a-z]+$/.test(v) ||
+      /^episodes\/[0-9a-f]{64}\.json$/.test(v)
+    )
+      continue;
+    const folded = fold(v);
+    for (const [kind, id] of joined) {
+      const f = fold(id);
+      if (f.length >= 3 && folded.includes(f)) out.push({ kind, path });
+    }
   }
   return out;
 }

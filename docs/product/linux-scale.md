@@ -185,13 +185,41 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
   Steps (actions and observations), the claim, the gate verdict (codes only), the
   independent grader's ground truth, harness metadata, provenance and the `simulated` flag
   live here, and only here.
-- **Identity strings are leaks** (lead ruling 2026-11-26 21:52Z). Whatever hygiene options the
-  caller passes, everything written is also scanned for this machine's account name and host
-  name (read at export time from `os`) and for each line of `hygiene.identityFile` (a full name,
-  another account). Matching is case-insensitive and by word, the closed id and token fields and
-  the record's desktop facts included. One match refuses the export (`LEAK`, kind `username`,
-  `hostname` or `identity`, with a location, never the value). `validateContainer` applies the
-  same scan.
+- **Identity strings are leaks** (lead ruling 2026-11-26 21:52Z). The identity strings are:
+  - this machine's account name and the first DNS label of its host name, read from `os` at
+    export time and ALWAYS merged in, whatever identity the caller passes: fake facts, an empty
+    identity or `hostIdentity: false` never switch them off;
+  - the caller's identity;
+  - each line of `hygiene.identityFile` (a full name, another account; CRLF accepted).
+
+  The scope is #560's: an account of at least 3 characters, not one of `root`, `user`, `runner`,
+  `admin`, `ubuntu`, `node`, `nobody`, `vscode`, `codespace`; a host label of at least 4, not
+  `localhost`.
+
+  Matching uses full Unicode case folding (NFKC, upper then lower case, so `GROSS` matches a
+  configured `Groß` and `yildiz` matches `Yıldız`). It compares letters and digits only, so a
+  spaced full name matches every joined form of it (`FirstLast`, `first.last`, `first_last`,
+  `First-Last`, `xx<name>9`).
+
+  What happens to a match:
+  - an id, token or desktop fact holding one is digested;
+  - any other verbatim closed field holding one refuses the export (`LEAK`, kind `username`,
+    `hostname` or `identity`, with a location, never the value);
+  - free text is always digested;
+  - enum values, digests and content-addressed names are exempt;
+  - `validateContainer` applies the same check to episodes, records and the manifest.
+- **Key and app names** (F1, lead ruling 2026-11-26 22:18Z) are written verbatim only from a
+  closed vocabulary: a known key or key combination (`KNOWN_KEYS`) or a registered app id
+  (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`).
+  Anything else is `h-<60 hex>`, since the schema caps both fields at 64 characters.
+- **`validateContainer`** never throws. Every problem is `CODE location`, with a fixed code from
+  `CONTAINER_PROBLEM_CODES`, and a foreign entry name appears only as `h-<12 hex>`. It refuses:
+  - links, non-regular files and hard links, and files over 64 MiB;
+  - JSON nested deeper than 32;
+  - record lines that fail `datasetRecordSchema` or the closed record-field grammar, or that
+    disagree with the manifest;
+  - episodes that fail `episodeMirrorSchema` or a #542 rule;
+  - manifest counts that do not match the records and episodes.
 - **No blobs** (digest-only, lead ruling 2026-11-26 20:3xZ): the persisted document each exported
   episode graded is referenced by the sha256, byte count and content-addressed name its
   `state` / `persisted` / `text/csv` observation carries (#542 requires the observation), and is

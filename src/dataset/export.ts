@@ -59,6 +59,7 @@ import {
   closeEpisode,
   closeRecordFields,
   joinedIdentity,
+  manifestIdentity,
   OpenValueError,
   openEpisodeStrings,
   openRecordStrings,
@@ -724,7 +725,8 @@ function checkContainer(dir: string, hygiene?: HygieneOptions): string[] {
     const seen = new Set<string>();
     const all = [
       ...scanForLeaks(value, hygiene),
-      ...(table === null ? [] : joinedIdentity(value, joined, table)),
+      // The manifest has no field table: every non-digest string is checked (B1 for #559).
+      ...(table === null ? manifestIdentity(value, joined) : joinedIdentity(value, joined, table)),
     ];
     return all.filter((l) => {
       const k = `${l.kind}@${l.path}`;
