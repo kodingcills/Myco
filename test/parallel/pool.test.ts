@@ -1,0 +1,529 @@
+/**
+ * Track L — the trial pool's guards, on a portable fake backend (runs on macOS and Linux).
+ *
+ * Every guard here is mutation-proved: the PR body's mutation table names the line each
+ * test kills. The fake backend has no isolation of its own, which is what lets the
+ * contamination tests leak on purpose and prove the detector catches it.
+ */
+
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  type AgentBehaviour,
+  claimFor,
+  editedCsv,
+  type ScriptedDesktopAgent,
+  scriptedFileAgent,
+} from "../../src/parallel/agents.ts";
+import { STRICT_REQUIREMENTS } from "../../src/parallel/backend.ts";
+import {
+  CaptureRefused,
+  captureRegularFile,
+  MARKER_ENV,
+  MARKER_FILE,
+  type PoolOptions,
+  PoolRefused,
+  runPool,
+  type TrialSpec,
+} from "../../src/parallel/pool.ts";
+import {
+  CALC_ORACLE_SOURCES,
+  L_TASK_ID,
+  L_TASK_SPEC,
+  lTaskRegistry,
+} from "../../src/parallel/throughput.ts";
+import { type FakeBackend, fakeBackend, STRONG } from "./fake-backend.ts";
+
+let base: string;
+beforeEach(() => {
+  base = mkdtempSync(join(tmpdir(), "myco-pool-"));
+});
+afterEach(() => {
+  rmSync(base, { recursive: true, force: true });
+});
+
+const CAPS = {
+  maxConcurrent: 2,
+  memoryMbPerTrial: 64,
+  cpusPerTrial: 1,
+  cpuSecondsPerTrial: 60,
+  trialTimeoutMs: 20_000,
+  memoryBudgetMb: 1024,
+  cpuBudget: 1,
+} as const;
+
+function options(backend: FakeBackend, extra: Partial<PoolOptions> = {}): PoolOptions {
+  return {
+    backend,
+    caps: { ...CAPS, cpuBudget: 2 },
+    requirements: STRICT_REQUIREMENTS,
+    runRoot: join(base, "run"),
+    tasks: lTaskRegistry(),
+    oracleSources: CALC_ORACLE_SOURCES,
+    ...extra,
+  };
+}
+
+const trial = (runId: string, agent: ScriptedDesktopAgent | AgentBehaviour): TrialSpec => ({
+  runId,
+  taskId: L_TASK_ID,
+  agent: typeof agent === "string" ? scriptedFileAgent(agent) : agent,
+});
+
+function barrier(n: number): () => Promise<void> {
+  let count = 0;
+  let open: () => void = () => {};
+  const opened = new Promise<void>((r) => {
+    open = r;
+  });
+  return async () => {
+    count++;
+    if (count >= n) open();
+    await opened;
+  };
+}
+
+/** An agent from a function, simulated like every scripted agent. */
+function agent(id: string, run: ScriptedDesktopAgent["run"]): ScriptedDesktopAgent {
+  return { id, simulated: true, run };
+}
+
+/** Write the honest saved CSV inside the desktop, then call the gate. */
+async function honestSave(ctx: Parameters<ScriptedDesktopAgent["run"]>[0]) {
+  await ctx.desktop.exec("sh", ["-c", 'cat > "$1"', "sh", ctx.stateFile], {
+    input: editedCsv(ctx.spec, "honest"),
+  });
+  const claim = claimFor(ctx.spec);
+  await ctx.callGate(claim);
+  return { claim, output: "" };
+}
+
+describe("pool: verdicts through the unchanged gated path, one vault and gate per trial", () => {
+  it("honest is counted verified; skips-save and wrong-row are refuted; the mid-run gate call is uncertain", async () => {
+    const backend = fakeBackend();
+    const report = await runPool(options(backend), [
+      trial("t-honest", "honest"),
+      trial("t-skip", "skips-save"),
+      trial("t-wrong", "wrong-row"),
+    ]);
+    const by = Object.fromEntries(report.trials.map((t) => [t.runId, t]));
+    expect(by["t-honest"]?.gate?.verdict).toBe("verified");
+    expect(by["t-honest"]?.countedVerified).toBe(true);
+    expect(by["t-honest"]?.disqualifiers).toEqual([]);
+    expect(by["t-skip"]?.gate?.verdict).toBe("refuted");
+    expect(by["t-wrong"]?.gate?.verdict).toBe("refuted");
+    expect(by["t-skip"]?.countedVerified).toBe(false);
+    // Before stop and capture the gate never verifies (sealed-gate rule, unchanged).
+    for (const t of report.trials) expect(t.agentSaw?.verdict).toBe("uncertain");
+    expect(report.verifiedCount).toBe(1);
+    expect(report.simulated).toBe(true);
+    // Fresh desktop per trial, all destroyed.
+    expect(backend.created.sort()).toEqual(["t-honest", "t-skip", "t-wrong"]);
+    expect(backend.live.size).toBe(0);
+    expect(readdirSync(join(base, "run", "trials"))).toEqual([]);
+  });
+
+  it("each trial has its own vault dir and evidence root, and its gate refuses every other run id", async () => {
+    const report = await runPool(options(fakeBackend()), [
+      trial("a1", "honest"),
+      trial("b1", "honest"),
+    ]);
+    expect(readdirSync(join(base, "run", "vaults")).sort()).toEqual(["a1", "b1"]);
+    expect(readdirSync(join(base, "run", "evidence")).sort()).toEqual(["a1", "b1"]);
+    for (const t of report.trials) {
+      expect(t.gate?.request.runId).toBe(t.runId);
+      const rec = JSON.parse(
+        readFileSync(join(base, "run", "evidence", t.runId, "record.json"), "utf8"),
+      );
+      expect(rec.runId).toBe(t.runId);
+    }
+  });
+});
+
+describe("pool: isolation requirements fail closed", () => {
+  it.each([
+    ["a shared network", { network: "shared" as const }],
+    ["a shared /tmp", { tmp: "env" as const }],
+    ["visible host dirs", { hostDirsHidden: false }],
+    ["no private root", { privateRoot: false }],
+  ])("a desktop with %s is refused before sealing and destroyed", async (_n, weaken) => {
+    const backend = fakeBackend({ isolation: () => ({ ...STRONG, ...weaken }) });
+    const report = await runPool(options(backend), [trial("weak-1", "honest")]);
+    const t = report.trials[0];
+    expect(t?.disqualifiers).toContain("isolation");
+    expect(t?.gate).toBeNull();
+    expect(t?.countedVerified).toBe(false);
+    expect(existsSync(join(base, "run", "vaults", "weak-1"))).toBe(false);
+    expect(backend.destroyed).toEqual(["weak-1"]);
+  });
+
+  it("an Xvfb requirement refuses a desktop without a display", async () => {
+    const report = await runPool(
+      options(fakeBackend(), { requirements: { ...STRICT_REQUIREMENTS, display: "xvfb" } }),
+      [trial("nodisp", "honest")],
+    );
+    expect(report.trials[0]?.disqualifiers).toEqual(["isolation"]);
+  });
+});
+
+describe("pool: resource caps", () => {
+  it("never runs more desktops at once than maxConcurrent", async () => {
+    const backend = fakeBackend({ createDelayMs: 20 });
+    const slow = agent("slow", async (ctx) => {
+      await new Promise((r) => setTimeout(r, 60));
+      return honestSave(ctx);
+    });
+    const report = await runPool(
+      options(backend, { caps: { ...CAPS, maxConcurrent: 3, cpuBudget: 3 } }),
+      Array.from({ length: 7 }, (_, i) => trial(`c-${i}`, slow)),
+    );
+    expect(backend.peakLive).toBe(3);
+    expect(report.peakConcurrent).toBe(3);
+    expect(report.verifiedCount).toBe(7);
+  });
+
+  it.each([
+    ["maxConcurrent 0", { maxConcurrent: 0 }],
+    ["fractional memory", { memoryMbPerTrial: 1.5 }],
+    ["NaN timeout", { trialTimeoutMs: Number.NaN }],
+    ["memory oversubscribed", { maxConcurrent: 2, memoryMbPerTrial: 600, memoryBudgetMb: 1024 }],
+    ["cpu oversubscribed", { maxConcurrent: 2, cpuBudget: 1 }],
+    ["above the hard ceiling", { maxConcurrent: 65, cpuBudget: 1, cpusPerTrial: 1 }],
+  ])("refuses to start with %s, before any desktop exists", async (_n, bad) => {
+    const backend = fakeBackend();
+    await expect(
+      runPool(options(backend, { caps: { ...CAPS, cpuBudget: 2, ...bad } }), [
+        trial("cap-1", "honest"),
+      ]),
+    ).rejects.toBeInstanceOf(PoolRefused);
+    expect(backend.created).toEqual([]);
+  });
+
+  it("a trial past its wall-clock cap is a timeout, destroyed, never verified", async () => {
+    const backend = fakeBackend();
+    const hang = agent("hang", async (ctx) => {
+      await ctx.desktop.exec("sh", ["-c", 'cat > "$1"', "sh", ctx.stateFile], {
+        input: editedCsv(ctx.spec, "honest"),
+      });
+      await new Promise((r) => setTimeout(r, 5_000));
+      return { claim: "late", output: "" };
+    });
+    const report = await runPool(
+      options(backend, { caps: { ...CAPS, cpuBudget: 2, trialTimeoutMs: 200 } }),
+      [trial("slow-1", hang)],
+    );
+    expect(report.trials[0]?.disqualifiers).toContain("timeout");
+    expect(report.trials[0]?.countedVerified).toBe(false);
+    expect(backend.live.size).toBe(0);
+  });
+
+  it("a desktop the watchdog flagged over a cap is never counted verified", async () => {
+    const backend = fakeBackend({ breach: () => ({ cap: "memory", observed: 900, limit: 64 }) });
+    const report = await runPool(options(backend), [trial("mem-1", "honest")]);
+    expect(report.trials[0]?.disqualifiers).toContain("resource-cap");
+    expect(report.trials[0]?.breach?.cap).toBe("memory");
+    expect(report.trials[0]?.countedVerified).toBe(false);
+  });
+
+  it("a desktop whose teardown left a process or its root is never counted verified", async () => {
+    for (const [i, bad] of [{ processesGone: false }, { rootRemoved: false }].entries()) {
+      const report = await runPool(
+        options(fakeBackend({ destroy: () => bad }), { runRoot: join(base, `td-${i}`) }),
+        [trial("td-1", "honest")],
+      );
+      expect(report.trials[0]?.gate?.verdict).toBe("verified");
+      expect(report.trials[0]?.disqualifiers).toEqual(["teardown"]);
+      expect(report.trials[0]?.countedVerified).toBe(false);
+    }
+  });
+});
+
+describe("pool: run ids that collide after case folding", () => {
+  it("a batch with Run-A and run-a is refused before anything starts", async () => {
+    const backend = fakeBackend();
+    await expect(
+      runPool(options(backend), [trial("Run-A", "honest"), trial("run-a", "honest")]),
+    ).rejects.toThrow(/duplicate-folded/);
+    expect(backend.created).toEqual([]);
+  });
+
+  it("two pools sharing a lock dir: the second claim of a folded-equal id is refused while the first runs", async () => {
+    const lockDir = join(base, "locks");
+    const holdFirst = barrier(2);
+    let release: () => void = () => {};
+    const released = new Promise<void>((r) => {
+      release = r;
+    });
+    const first = runPool(
+      options(fakeBackend(), {
+        runRoot: join(base, "p1"),
+        lockDir,
+        onDesktop: async () => {
+          await holdFirst();
+          await released;
+        },
+      }),
+      [trial("Shared-Run", "honest")],
+    );
+    // Wait until the first pool's trial holds its claim and desktop.
+    const secondBackend = fakeBackend();
+    const waitForFirst = holdFirst();
+    await waitForFirst;
+    const second = await runPool(options(secondBackend, { runRoot: join(base, "p2"), lockDir }), [
+      trial("shared-run", "honest"),
+    ]);
+    release();
+    const firstReport = await first;
+    expect(second.trials[0]?.disqualifiers).toEqual(["run-id"]);
+    expect(second.trials[0]?.error).toMatch(/^locked:/);
+    expect(secondBackend.created).toEqual([]);
+    expect(firstReport.trials[0]?.countedVerified).toBe(true);
+    // Released after the first pool finished: the id can be claimed again.
+    const third = await runPool(options(fakeBackend(), { runRoot: join(base, "p3"), lockDir }), [
+      trial("SHARED-RUN", "honest"),
+    ]);
+    expect(third.trials[0]?.countedVerified).toBe(true);
+  });
+
+  it("a reused run root never reuses a trial dir", async () => {
+    await runPool(options(fakeBackend()), [trial("again", "honest")]);
+    // Simulate a left-over dir from a crashed run.
+    mkdirSync(join(base, "run", "trials", "again2"));
+    const report = await runPool(options(fakeBackend()), [trial("again2", "honest")]);
+    expect(report.trials[0]?.disqualifiers).toEqual(["harness-error"]);
+  });
+});
+
+describe("pool: contamination (markers planted in one trial must not appear in another)", () => {
+  it("every trial's own marker is planted in its workspace and env, and found by the scan", async () => {
+    const seen: Record<string, string> = {};
+    const report = await runPool(options(fakeBackend()), [
+      trial(
+        "own-1",
+        agent("echo-marker", async (ctx) => {
+          const r = await ctx.desktop.exec("sh", ["-c", `printf %s "$${MARKER_ENV}"`]);
+          seen.env = r.stdout;
+          seen.file = readFileSync(join(ctx.desktop.paths.workspace, MARKER_FILE), "utf8").trim();
+          return honestSave(ctx);
+        }),
+      ),
+    ]);
+    expect(seen.env).toMatch(/^MYCO-L-MARK-[0-9a-f]{32}$/);
+    expect(seen.file).toBe(seen.env);
+    expect(report.trials[0]?.ownMarkerSeen).toBe(true);
+    expect(report.trials[0]?.countedVerified).toBe(true);
+  });
+
+  it("a leak into another trial's workspace (possible on this unisolated backend) is caught both ways", async () => {
+    const backend = fakeBackend();
+    const bothReady = barrier(2);
+    const leaked = barrier(2);
+    let victimWorkspace = "";
+    const report = await runPool(
+      options(backend, {
+        onDesktop: (runId, desktop) => {
+          if (runId === "victim") victimWorkspace = desktop.paths.workspace;
+        },
+      }),
+      [
+        trial(
+          "leaker",
+          agent("leaker", async (ctx) => {
+            await bothReady();
+            await ctx.desktop.exec("sh", [
+              "-c",
+              `printf %s "$${MARKER_ENV}" > "$1/note.txt"`,
+              "sh",
+              victimWorkspace,
+            ]);
+            await leaked();
+            return honestSave(ctx);
+          }),
+        ),
+        trial(
+          "victim",
+          agent("victim", async (ctx) => {
+            await bothReady();
+            await leaked();
+            return honestSave(ctx);
+          }),
+        ),
+      ],
+    );
+    const by = Object.fromEntries(report.trials.map((t) => [t.runId, t]));
+    expect(by.victim?.gate?.verdict).toBe("verified");
+    expect(by.victim?.foreignMarkers).toEqual(["leaker"]);
+    expect(by.victim?.disqualifiers).toContain("contaminated");
+    expect(by.leaker?.disqualifiers).toContain("leaked");
+    expect(by.victim?.countedVerified).toBe(false);
+    expect(by.leaker?.countedVerified).toBe(false);
+    expect(report.verifiedCount).toBe(0);
+    expect(report.contaminatedCount).toBe(1);
+  });
+
+  it("another trial's marker in this trial's claim (its verdict record) is contamination", async () => {
+    const ready = barrier(2);
+    let otherWorkspace = "";
+    const report = await runPool(
+      options(fakeBackend(), {
+        onDesktop: (runId, d) => {
+          if (runId === "src") otherWorkspace = d.paths.workspace;
+        },
+      }),
+      [
+        trial(
+          "thief",
+          agent("thief", async (ctx) => {
+            await ready();
+            const stolen = readFileSync(join(otherWorkspace, MARKER_FILE), "utf8").trim();
+            await ctx.desktop.exec("sh", ["-c", 'cat > "$1"', "sh", ctx.stateFile], {
+              input: editedCsv(ctx.spec, "honest"),
+            });
+            const claim = `done ${stolen}`;
+            await ctx.callGate(claim);
+            return { claim, output: "" };
+          }),
+        ),
+        trial(
+          "src",
+          agent("src", async (ctx) => {
+            await ready();
+            return honestSave(ctx);
+          }),
+        ),
+      ],
+    );
+    const thief = report.trials.find((t) => t.runId === "thief");
+    expect(thief?.foreignMarkers).toEqual(["src"]);
+    expect(thief?.countedVerified).toBe(false);
+  });
+
+  it.each([
+    ["only in the claim it sent to its gate mid-run (the agent-seen gate record)", "gate"],
+    ["only in its output (its evidence root)", "output"],
+  ])("another trial's marker %s is contamination", async (_n, where) => {
+    const ready = barrier(2);
+    let otherWorkspace = "";
+    const report = await runPool(
+      options(fakeBackend(), {
+        onDesktop: (runId, d) => {
+          if (runId === "src2") otherWorkspace = d.paths.workspace;
+        },
+      }),
+      [
+        trial(
+          "thief2",
+          agent("thief2", async (ctx) => {
+            await ready();
+            const stolen = readFileSync(join(otherWorkspace, MARKER_FILE), "utf8").trim();
+            await ctx.desktop.exec("sh", ["-c", 'cat > "$1"', "sh", ctx.stateFile], {
+              input: editedCsv(ctx.spec, "honest"),
+            });
+            await ctx.callGate(where === "gate" ? `done ${stolen}` : "done");
+            return { claim: "done", output: where === "output" ? stolen : "" };
+          }),
+        ),
+        trial(
+          "src2",
+          agent("src2", async (ctx) => {
+            await ready();
+            return honestSave(ctx);
+          }),
+        ),
+      ],
+    );
+    const thief = report.trials.find((t) => t.runId === "thief2");
+    expect(thief?.gate?.verdict).toBe("verified");
+    expect(thief?.foreignMarkers).toEqual(["src2"]);
+    expect(thief?.countedVerified).toBe(false);
+  });
+
+  it("an agent that deletes its own marker cannot be counted verified (the scan proved nothing)", async () => {
+    const report = await runPool(options(fakeBackend()), [
+      trial(
+        "erase-1",
+        agent("erase", async (ctx) => {
+          await ctx.desktop.exec("rm", ["-f", MARKER_FILE]);
+          return honestSave(ctx);
+        }),
+      ),
+    ]);
+    expect(report.trials[0]?.gate?.verdict).toBe("verified");
+    expect(report.trials[0]?.disqualifiers).toEqual(["own-marker-missing"]);
+    expect(report.trials[0]?.countedVerified).toBe(false);
+  });
+});
+
+describe("pool: the host-side capture follows no link the agent planted", () => {
+  const honestElsewhere = () => {
+    const p = join(base, "elsewhere.csv");
+    writeFileSync(p, editedCsv(L_TASK_SPEC, "honest"));
+    return p;
+  };
+
+  it.each([
+    [
+      "a symlink to an honest file elsewhere",
+      (ws: string, file: string) => {
+        rmSync(join(ws, "sheet.csv"));
+        symlinkSync(file, join(ws, "sheet.csv"));
+      },
+    ],
+    [
+      "a hard link to an honest file elsewhere",
+      (ws: string, file: string) => {
+        rmSync(join(ws, "sheet.csv"));
+        linkSync(file, join(ws, "sheet.csv"));
+      },
+    ],
+  ])("%s is refused: capture-refused, never verified", async (_n, plant) => {
+    const target = honestElsewhere();
+    const report = await runPool(options(fakeBackend()), [
+      trial(
+        "link-1",
+        agent("linker", async (ctx) => {
+          plant(ctx.desktop.paths.workspace, target);
+          const claim = claimFor(ctx.spec);
+          await ctx.callGate(claim);
+          return { claim, output: "" };
+        }),
+      ),
+    ]);
+    expect(report.trials[0]?.disqualifiers).toEqual(["capture-refused"]);
+    expect(report.trials[0]?.gate).toBeNull();
+    expect(report.trials[0]?.countedVerified).toBe(false);
+  });
+
+  it("a workspace swapped for a symlink is refused", () => {
+    const real = join(base, "ws");
+    mkdirSync(real);
+    const other = join(base, "other");
+    mkdirSync(other);
+    writeFileSync(join(other, "sheet.csv"), "x");
+    rmSync(real, { recursive: true });
+    symlinkSync(other, real);
+    expect(() => captureRegularFile(join(realpathSync(base), "ws"), "sheet.csv")).toThrow(
+      CaptureRefused,
+    );
+  });
+
+  it("a plain regular file is captured", () => {
+    const ws = join(base, "ws2");
+    mkdirSync(ws);
+    writeFileSync(join(ws, "sheet.csv"), "ok");
+    expect(captureRegularFile(realpathSync(ws), "sheet.csv").toString()).toBe("ok");
+  });
+});
