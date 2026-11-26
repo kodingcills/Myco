@@ -51,7 +51,12 @@ const NOT_EXACT: ReadonlyArray<readonly [string, string]> = [
   ["h-<64hex> (the round-1 form)", `h-${hexOf("a", 64)}`],
   ["h-<59hex>", `h-${hexOf("b", 59)}`],
   ["h-<61hex>", `h-${hexOf("c", 61)}`],
-  ["h-<60HEX> upper-case hex", `h-${hexOf("d", 60).toUpperCase().replace(/^[0-9]/, "A")}`],
+  [
+    "h-<60HEX> upper-case hex",
+    `h-${hexOf("d", 60)
+      .toUpperCase()
+      .replace(/^[0-9]/, "A")}`,
+  ],
   ["H-<60hex> upper-case prefix", `H-${hexOf("e", 60)}`],
   ["h-<60hex> with a suffix", `h-${hexOf("f", 60)}x`],
   ["h- with a word", "h-jsmith"],
@@ -175,7 +180,10 @@ describe("D-H: verify refuses a forged bundle with any hashed form but h-<60hex>
       const b = clone(exportProofBundle(run({ app: "calc", keys: "Return" }), NO_CTX));
       (b.records[0]?.body as unknown as Record<string, unknown>)[field] = `h-${hexOf(field, 64)}`;
       const r = verifyProofBundle(serializeProofBundle(rechain(b)));
-      expect(r.errors.map((e) => e.code), field).toContain("PROOF_SCHEMA");
+      expect(
+        r.errors.map((e) => e.code),
+        field,
+      ).toContain("PROOF_SCHEMA");
     }
   });
 });

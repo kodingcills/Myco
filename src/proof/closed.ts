@@ -97,7 +97,14 @@ export const POLICY_CODE_SOURCE = `^(?:${[...new Set(POLICY_REASON_CODES)].map(e
  */
 export const LEDGER_ID_SOURCE = "^[A-Za-z0-9._:-]{1,128}$";
 
-export { HASHED_SOURCE, hashedId, hashValue, isHashed, TEXT_DIGEST_TAG, textDigest } from "./hashed.ts";
+export {
+  HASHED_SOURCE,
+  hashedId,
+  hashValue,
+  isHashed,
+  TEXT_DIGEST_TAG,
+  textDigest,
+} from "./hashed.ts";
 
 /** What a free-text or path field becomes. Never the text itself. */
 export interface TextRef {
