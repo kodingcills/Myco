@@ -1,0 +1,7 @@
+# QEMU argv of the running guest after the cold reset and after the fast reset (pass 3),
+# read with python3 -I scripts/guest_egress_check.py argv. The captures name host paths, so only
+# their SHA-256 is committed. diff of the two files: identical.
+05611855753f3b4a99ee3795de4a6fe35663b3d6dc07eb8450b9dd2661ed9b8c  argv-cold.txt
+05611855753f3b4a99ee3795de4a6fe35663b3d6dc07eb8450b9dd2661ed9b8c  argv-fast.txt
+lines: 104 and 104
+diff: identical
