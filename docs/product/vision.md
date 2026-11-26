@@ -3,6 +3,8 @@
 ## Mission
 Make existing desktop software reliably executable by AI agents through verified operations, recoverable execution, and reusable procedural knowledge. Agents stop where real work begins: spreadsheets, legacy clients, vendor tools, and remote sessions are built for people. Agents can touch them, but nobody can trust them to finish work there.
 
+**Framing (Tiffany, 2026-11-26):** Myco is solving desktop use for agents broadly. Verified completion (the gate) is the first proven piece, not the whole product; the roadmap below builds outward from it.
+
 ## What current tools leave unsolved
 - **True app state:** agents guess from pixels or noisy accessibility dumps.
 - **Action success:** nothing checks whether an action worked, so errors compound silently.
@@ -80,6 +82,12 @@ What only we combine: typed state from object models beyond accessibility, guard
 2. **Portable execution layer for agent OSes** (Windows Agent Workspace, MXC, Windows 365 for Agents, ANOLISA, and others). They solve containment, identity, and access; nobody solves operating software reliably inside. Myco is the POSIX/Kubernetes-like layer: an open interface spec (state, act, verify, fork, commit, skills) with Myco as the reference implementation.
    - **Order:** Windows inside MXC and Agent Workspace first, then Linux and cloud desktops, then a cross-OS skill registry, then RL on top.
    - **Risks:** Microsoft builds it natively, and sandbox policies block deep hooks.
+
+## Roadmap track: Lightweight agent desktops (after the demo)
+A core track, sequenced **after the demo**. Nothing is built for it now, and it does not slow the current integrity fixes or the trial runs.
+- **Goal:** fast-booting, low-memory, disposable Linux desktop VMs for agents, as the base for the Linux path and for future hosting.
+- **Approach to evaluate:** existing microVM stacks (Firecracker, Cloud Hypervisor) with a slim GUI desktop, against today's QEMU path.
+- **Research question:** see the TO FILE item on this PR. It compares boot time, memory per desktop, reset time, and GUI and screenshot support with the current QEMU path.
 
 ## Platforms
 Value is highest on Windows (Office, line-of-business apps, Java, Citrix). Linux is the fleet substrate; macOS is the developer machine.
