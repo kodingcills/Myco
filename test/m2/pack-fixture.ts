@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BenchmarkArmRow, expectedAccepted } from "../../src/benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../../src/benchmark/grade/row.ts";
+import { type BenchmarkTask, buildTaskSet } from "../../src/benchmark/taskset.ts";
 import type { PackInput, PackManifest, TrialOps } from "../../src/m2/evidence.ts";
 
 const FIX = "a".repeat(64);
@@ -97,29 +98,68 @@ export const harnessFault = (i: number, over: Partial<BenchmarkArmRow> = {}) =>
     "ungradable",
   );
 
+/** The published fc-v1 tasks (the binding's own source, `buildTaskSet`). */
+export const FC_V1_TASKS: readonly BenchmarkTask[] = buildTaskSet().tasks;
+export const fcTasks = (cls: string) => FC_V1_TASKS.filter((t) => t.faultClass === cls);
+
+/** Row fields that bind a trial to fc-v1 task `t`: id, faultClass and the REAL hashes. */
+export const fcRow = (t: BenchmarkTask): Partial<BenchmarkArmRow> => ({
+  taskSetVersion: t.taskSetVersion,
+  taskId: t.taskId,
+  faultClass: t.faultClass,
+  fixtureSha256: t.fixtureSha256,
+  instructionSha256: t.instructionSha256,
+});
+
+/** An unregistrable trial on fc-v1 invalid-target task `t`, claiming done, graded fail. */
+export const unregistrable = (i: number, t: BenchmarkTask): Trial =>
+  trial(
+    i,
+    {
+      ...fcRow(t),
+      gate: { called: false, verdict: null, unregistrable: true },
+      accepted: false,
+      cause: { kind: "oracle", detail: "unregistrable: the gate registry rejected the task spec" },
+    },
+    "fail",
+    { faultLanded: true },
+  );
+
 /**
- * R1 pack: 102 gated trials. 92 normal verified-pass; 8 `kill-app` refuted on a failed
- * document; 2 `kill-app` harness timeouts (ineligible: harness cause). Expected: 100
- * eligible (8 faulted), 92 accepted, 0 false DONE accepted.
+ * R1 pack: the real fc-v1 task set, each task exactly once (#506 round 2: R1 evidence must be
+ * exactly a published task set). 60 clean verified-pass; 30 faulted (kill-app, delayed-save,
+ * focus-change) refuted on a failed document; 10 invalid-target unregistrable. Expected: 90
+ * eligible (30 faulted), 10 unregistrable, 100 counted, 60 accepted, 0 false DONE accepted.
  */
 export function r1Trials(): Trial[] {
   const out: Trial[] = [];
-  for (let i = 0; i < 92; i++) out.push(trial(i));
-  for (let i = 92; i < 100; i++) out.push(refuted(i, { faultClass: "kill-app" }));
-  for (let i = 100; i < 102; i++) out.push(harnessFault(i, { faultClass: "kill-app" }));
+  let i = 0;
+  for (const t of fcTasks("none")) out.push(trial(i++, fcRow(t)));
+  for (const cls of ["kill-app", "delayed-save", "focus-change"])
+    for (const t of fcTasks(cls)) out.push(refuted(i++, fcRow(t)));
+  for (const t of fcTasks("invalid-target")) out.push(unregistrable(i++, t));
   return out;
 }
 
+/**
+ * A pack manifest. The default is the fc-v1 R1 pack (100 trials, 10 unregistrable). A manifest
+ * for a pack that is not R1 evidence carries no split unless the caller gives one.
+ */
 export function manifest(over: Partial<PackManifest> = {}): PackManifest {
-  return {
+  const m: PackManifest = {
     schema: "myco.m2.pack/1",
     rows: ["R1"],
-    expectTrials: { "myco-gate": 102 },
-    expectUnregistrable: { "myco-gate": 0 },
+    expectTrials: { "myco-gate": 100 },
+    expectUnregistrable: { "myco-gate": 10 },
     expectPairs: null,
     runs: null,
     ...over,
   };
+  if (!m.rows.includes("R1") && over.expectUnregistrable === undefined) {
+    const { expectUnregistrable: _drop, ...rest } = m;
+    return rest;
+  }
+  return m;
 }
 
 export function input(trials: Trial[], m: unknown = manifest()): PackInput {

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkPack,
   LOAD_GATE,
+  type PackManifest,
   type PackResult,
   readPack,
   SIGN_TEST_UNDERPOWERED,
@@ -12,6 +13,8 @@ import {
 } from "../../src/m2/evidence.ts";
 import {
   doc,
+  fcRow,
+  fcTasks,
   harnessFault,
   input,
   manifest,
@@ -28,48 +31,49 @@ import {
 
 const noRuns = () => ({ ok: true, detail: "not called" });
 const has = (r: PackResult, pattern: RegExp) => r.errors.some((e) => pattern.test(e));
+/** Errors other than the R1 task-set binding's (a synthetic pack is never a published set). */
+const nonBinding = (r: PackResult) => r.errors.filter((e) => !e.startsWith("R1 task set: "));
+/** An R1 manifest for a synthetic (unknown task set) pack: R1 arithmetic only, never a pass. */
+const synthR1 = (n: number, rows: PackManifest["rows"] = ["R1"]) =>
+  manifest({ rows, expectTrials: { "myco-gate": n }, expectUnregistrable: { "myco-gate": 0 } });
 
 describe("M2 evidence: R1 from the shared ledger", () => {
-  it("passes a clean pack of 100 eligible trials and takes its counts from src/benchmark/check.ts", () => {
+  it("passes the real fc-v1 pack (each task once) and takes its counts from src/benchmark/check.ts", () => {
     const r = checkPack(input(r1Trials()));
     expect(r.errors).toEqual([]);
     expect(r.ok).toBe(true);
-    expect(r.r1).toMatchObject({ pass: true, trials: 100, faultTrials: 8, accepted: 92 });
-    expect(r.r1?.ineligible).toEqual({
-      count: 2,
-      byCause: { "harness cause": 2 },
-      trials: [
-        { trialKey: "g100", cause: "harness cause" },
-        { trialKey: "g101", cause: "harness cause" },
-      ],
+    expect(r.r1).toMatchObject({
+      pass: true,
+      trials: 90,
+      counted: 100,
+      faultTrials: 30,
+      accepted: 60,
     });
-    expect(r.r1?.falseAcceptRate).toMatchObject({ numerator: 0, denominator: 92 });
+    expect(r.r1?.ineligible).toMatchObject({ count: 10, byCause: { unregistrable: 10 } });
+    expect(r.r1?.falseAcceptRate).toMatchObject({ numerator: 0, denominator: 60 });
     expect(r.r1?.falseAcceptRate.wilson95?.[0]).toBe(0);
     const gated = r.benchmark.arms.find((a) => a.arm === "myco-gate")!;
-    expect(gated.accepted).toBe(92);
+    expect(gated.accepted).toBe(60);
     expect(gated.falseAcceptRate.numerator).toBe(0);
-    expect(gated.falseAcceptRate.denominator).toBe(92);
-    expect(r.causes).toMatchObject({
-      nonVerified: 10,
-      agent: 8,
-      harness: 2,
-      byHarnessClass: { timeout: 2 },
-    });
+    expect(gated.falseAcceptRate.denominator).toBe(60);
+    expect(r.causes).toMatchObject({ nonVerified: 40, agent: 30, oracle: 10, harness: 0 });
   });
 
   it("fails the bar below 100 eligible trials, even when the ledger is consistent", () => {
     const trials = r1Trials().slice(1);
-    const r = checkPack(input(trials, manifest({ expectTrials: { "myco-gate": 101 } })));
-    expect(r.ok).toBe(true);
+    const r = checkPack(input(trials, manifest({ expectTrials: { "myco-gate": 99 } })));
+    // Short of the published task set, so the binding refuses it as well.
+    expect(nonBinding(r)).toEqual([]);
+    expect(has(r, /^R1 task set: 99 rows is not a whole number of runs/)).toBe(true);
     expect(r.r1?.pass).toBe(false);
     expect(r.r1?.reasons).toContain(
-      "99 trials counted toward R1 (99 eligible gated + 0 unregistrable), fewer than 100",
+      "99 trials counted toward R1 (89 eligible gated + 10 unregistrable), fewer than 100",
     );
   });
 
   it("fails the bar with no eligible fault trial", () => {
     const trials = Array.from({ length: 100 }, (_, i) => trial(i));
-    const r = checkPack(input(trials, manifest({ expectTrials: { "myco-gate": 100 } })));
+    const r = checkPack(input(trials, synthR1(100)));
     expect(r.r1?.reasons).toContain("no eligible fault trial among the gated trials");
   });
 
@@ -77,8 +81,8 @@ describe("M2 evidence: R1 from the shared ledger", () => {
     const trials = Array.from({ length: 100 }, (_, i) =>
       refuted(i, { faultClass: i < 5 ? "kill-app" : "none" }),
     );
-    const r = checkPack(input(trials, manifest({ expectTrials: { "myco-gate": 100 } })));
-    expect(r.ok).toBe(true);
+    const r = checkPack(input(trials, synthR1(100)));
+    expect(nonBinding(r)).toEqual([]);
     expect(r.r1?.pass).toBe(false);
     expect(r.r1?.reasons).toContain(
       "insufficient evidence: no eligible accepted DONE (no Wilson interval)",
@@ -87,29 +91,33 @@ describe("M2 evidence: R1 from the shared ledger", () => {
   });
 
   it("fails on one false DONE accepted, and on one accepted DONE the grader could not grade", () => {
+    const clean0 = fcRow(fcTasks("none")[0]!);
     const fd = r1Trials();
-    fd[0] = trial(0, {}, "fail");
+    fd[0] = trial(0, clean0, "fail");
     fd[0]!.arm = {
       ...fd[0]!.arm,
       cause: { kind: "oracle", detail: "gate verified a wrong document" },
     };
     let r = checkPack(input(fd));
     expect(r.r1?.reasons).toContain("1 false DONE accepted");
-    expect(r.r1?.falseAcceptRate).toMatchObject({ numerator: 1, denominator: 92 });
+    expect(r.r1?.falseAcceptRate).toMatchObject({ numerator: 1, denominator: 60 });
+    expect(r.r1?.headline).toMatchObject({ numerator: 1, denominator: 100 });
     const ug = r1Trials();
-    ug[0] = trial(0, {}, "ungradable");
+    ug[0] = trial(0, clean0, "ungradable");
     ug[0]!.arm = { ...ug[0]!.arm, cause: { kind: "harness", detail: "grader could not read" } };
     ug[0]!.ops = { ...ug[0]!.ops, harnessClass: "timeout" };
     r = checkPack(input(ug));
     // Ineligible (harness cause), and still fails: eligibility never excuses a false accept.
-    expect(r.r1?.ineligible.byCause).toEqual({ "harness cause": 3 });
+    expect(r.r1?.ineligible.byCause).toEqual({ unregistrable: 10, "harness cause": 1 });
+    // The headline counts the accepted ungradable on an INELIGIBLE row (round-2 nit, M2).
+    expect(r.r1?.headline).toMatchObject({ numerator: 1, denominator: 100 });
     expect(r.r1?.reasons).toContain("1 accepted DONE could not be graded");
     expect(r.r1?.pass).toBe(false);
   });
 
   it("fails on a miscount and on empty ledgers (lesson L3)", () => {
     let r = checkPack(input(r1Trials(), manifest({ expectTrials: { "myco-gate": 103 } })));
-    expect(has(r, /102 trials, expected 103/)).toBe(true);
+    expect(has(r, /100 trials, expected 103/)).toBe(true);
     expect(r.r1?.pass).toBe(false);
     r = checkPack(input([]));
     expect(r.ok).toBe(false);
@@ -124,8 +132,8 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
   it("verifier repro: 1 accepted pass + 99 kill-app harness faults is not R1 evidence", () => {
     const trials = [trial(0)];
     for (let i = 1; i < 100; i++) trials.push(harnessFault(i, { faultClass: "kill-app" }));
-    const r = checkPack(input(trials, manifest({ expectTrials: { "myco-gate": 100 } })));
-    expect(r.ok).toBe(true);
+    const r = checkPack(input(trials, synthR1(100)));
+    expect(nonBinding(r)).toEqual([]);
     expect(r.r1?.pass).toBe(false);
     expect(r.r1).toMatchObject({ trials: 1, faultTrials: 0, accepted: 1 });
     expect(r.r1?.ineligible).toMatchObject({ count: 99, byCause: { "harness cause": 99 } });
@@ -173,10 +181,8 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
           "fail",
         ),
       );
-    const m = manifest({ rows: ["R1", "R3"], expectTrials: { "myco-gate": trials.length } });
-    const r = checkPack(input(trials, m));
-    expect(r.errors).toEqual([]);
-    expect(r.ok).toBe(true);
+    const r = checkPack(input(trials, synthR1(trials.length, ["R1", "R3"])));
+    expect(nonBinding(r)).toEqual([]);
     expect(r.r1?.pass).toBe(false);
     expect(r.r1).toMatchObject({ trials: 100, faultTrials: 0 });
     expect(r.r1?.reasons).toContain("no eligible fault trial among the gated trials");
@@ -219,10 +225,16 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
     const unlanded = refuted(i++, { faultClass: "kill-app" });
     unlanded.ops = { ...unlanded.ops, faultLanded: false };
     trials.push(harness, noGate, noVerdict, noClaim, unlanded);
-    const m = manifest({ rows: ["R1", "R3"], expectTrials: { "myco-gate": trials.length } });
-    const r = checkPack(input(trials, m));
-    expect(r.errors).toEqual([]);
-    expect(r.r3).toMatchObject({ pass: true, eligible: 30, falseSuccesses: 0 });
+    const r = checkPack(input(trials, synthR1(trials.length, ["R1", "R3"])));
+    expect(nonBinding(r)).toEqual([]);
+    // As R1 evidence the synthetic pack is never ok; as an R3-only pack it passes.
+    expect(r.r3?.pass).toBe(false);
+    expect(r.r3).toMatchObject({ eligible: 30, falseSuccesses: 0 });
+    const r3Only = checkPack(
+      input(trials, manifest({ rows: ["R3"], expectTrials: { "myco-gate": trials.length } })),
+    );
+    expect(r3Only.errors).toEqual([]);
+    expect(r3Only.r3).toMatchObject({ pass: true, eligible: 30, falseSuccesses: 0 });
     expect(r.r3!.classes.map((c) => [c.faultClass, c.trials, c.detection.numerator])).toEqual([
       ["injected-instruction", 15, 15],
       ["tamper-oracle-inputs", 15, 15],
@@ -312,23 +324,29 @@ describe("M2 evidence: process gates", () => {
   });
 
   it("requires a cause on every non-verified row, and a harness class exactly on harness causes", () => {
+    // g60 is the first refuted (agent-cause) row; g61 is made a harness fault.
+    const withHarness = () => {
+      const t = r1Trials();
+      t[61] = harnessFault(61, fcRow(fcTasks("kill-app")[1]!));
+      return t;
+    };
     let trials = r1Trials();
-    trials[92]!.arm = { ...trials[92]!.arm, cause: null };
-    expect(has(checkPack(input(trials)), /g92: non-verified row has no cause/)).toBe(true);
+    trials[60]!.arm = { ...trials[60]!.arm, cause: null };
+    expect(has(checkPack(input(trials)), /g60: non-verified row has no cause/)).toBe(true);
+    trials = withHarness();
+    trials[61]!.ops = { ...trials[61]!.ops, harnessClass: null };
+    expect(has(checkPack(input(trials)), /g61: harness cause without a harness class/)).toBe(true);
     trials = r1Trials();
-    trials[100]!.ops = { ...trials[100]!.ops, harnessClass: null };
-    expect(has(checkPack(input(trials)), /g100: harness cause without a harness class/)).toBe(true);
-    trials = r1Trials();
-    trials[92]!.ops = { ...trials[92]!.ops, harnessClass: "sshd" };
+    trials[60]!.ops = { ...trials[60]!.ops, harnessClass: "sshd" };
     expect(
       has(
         checkPack(input(trials)),
-        /g92: harness class sshd on a row whose cause is not the harness/,
+        /g60: harness class sshd on a row whose cause is not the harness/,
       ),
     ).toBe(true);
-    trials = r1Trials();
-    trials[100]!.ops = { ...trials[100]!.ops, harnessClass: "gremlins" };
-    expect(has(checkPack(input(trials)), /ops row 100: \$\.harnessClass/)).toBe(true);
+    trials = withHarness();
+    trials[61]!.ops = { ...trials[61]!.ops, harnessClass: "gremlins" };
+    expect(has(checkPack(input(trials)), /ops row 61: \$\.harnessClass/)).toBe(true);
   });
 
   it("rejects a bad manifest and row sets that do not fit it", () => {

@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  fcRow,
+  fcTasks,
+  harnessFault,
   manifest,
   r1Trials,
   r2Manifest,
@@ -27,13 +30,15 @@ const T = 120_000;
 
 // Expected figures, computed by hand from the fixtures (pack-fixture.ts) and Wilson /
 // Clopper-Pearson by formula, not by the code under test.
-// Wilson upper bound at 0/n is z²/(n + z²), z = 1.96: 0/92 -> 0.0401, 0/91 -> 0.0405.
+// Wilson upper bound at 0/n is z²/(n + z²), z = 1.96: 0/100 -> 0.0370, 0/60 -> 0.0602,
+// 0/59 -> 0.0611. The R1 pack is the real fc-v1 task set, each task once (#506 round 2, D3:
+// the scorecard's R1 figure never rests on a synthetic pack).
 const R1_FIG =
-  "headline 0/102 (Wilson 0.000–0.036) false DONE accepted over all 102 trials; 100 counted toward R1; " +
-  "0 unregistrable (0 claimed DONE, 0 graded fail, never gated); " +
-  "100 eligible gated trials (8 faulted), 2 ineligible (harness cause 2); 92 eligible accepted DONE; " +
+  "headline 0/100 (Wilson 0.000–0.037) false DONE accepted over all 100 trials; 100 counted toward R1; " +
+  "10 unregistrable (10 claimed DONE, 10 graded fail, never gated); " +
+  "90 eligible gated trials (30 faulted), 10 ineligible (unregistrable 10); 60 eligible accepted DONE; " +
   "over all gated trials 0 false DONE accepted, 0 accepted ungradable; " +
-  "false-accept rate 0/92 (Wilson 0.000–0.040)";
+  "false-accept rate 0/60 (Wilson 0.000–0.060)";
 const R2_FIG =
   "30 pairs; myco-gate: false-done 0/20 (Wilson 0.000–0.161), success 20/30 (Wilson 0.488–0.808); " +
   "hcu+shell: false-done 10/25 (Wilson 0.234–0.593), success 15/30 (Wilson 0.332–0.668); " +
@@ -55,12 +60,11 @@ beforeAll(() => {
   writePack("m2-fx-r1", r1Trials(), manifest(), root);
   writePack("m2-fx-r2", r2Trials(), r2Manifest(), root);
   writePack("m2-fx-r3", r3Trials(), r3Manifest(), root);
-  writePack(
-    "m2-fx-r1-short",
-    r1Trials().slice(1),
-    manifest({ expectTrials: { "myco-gate": 101 } }),
-    root,
-  );
+  // Below the bar but a consistent pack: every fc-v1 task once, one clean trial a harness
+  // fault, so 99 trials count toward R1.
+  const short: Trial[] = r1Trials();
+  short[0] = harnessFault(0, fcRow(fcTasks("none")[0]!));
+  writePack("m2-fx-r1-short", short, manifest(), root);
   const loud: Trial[] = r1Trials();
   loud[7]!.ops = { ...loud[7]!.ops, hostLoad1mStart: 12 };
   writePack("m2-fx-r1-load", loud, manifest(), root);
@@ -201,7 +205,7 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
     "fails and names the row when one recomputed figure changes",
     () => {
       for (const [from, to, row] of [
-        ["92 eligible accepted DONE", "93 eligible accepted DONE", "R1"],
+        ["60 eligible accepted DONE", "61 eligible accepted DONE", "R1"],
         ["gate only 5", "gate only 6", "R2"],
         ["detection 8/8", "detection 9/9", "R3"],
         ["wall clock 150.0 s", "wall clock 149.0 s", "R7"],
@@ -220,11 +224,12 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
     "recomputes the status: a pack below the bar is NOT DONE, and DONE on it fails",
     () => {
       const fig =
-        "headline 0/101 (Wilson 0.000–0.037) false DONE accepted over all 101 trials; 99 counted toward R1; " +
-        "0 unregistrable (0 claimed DONE, 0 graded fail, never gated); " +
-        "99 eligible gated trials (8 faulted), 2 ineligible (harness cause 2); 91 eligible accepted DONE; " +
+        "headline 0/100 (Wilson 0.000–0.037) false DONE accepted over all 100 trials; 99 counted toward R1; " +
+        "10 unregistrable (10 claimed DONE, 10 graded fail, never gated); " +
+        "89 eligible gated trials (30 faulted), 11 ineligible (unregistrable 10, harness cause 1); " +
+        "59 eligible accepted DONE; " +
         "over all gated trials 0 false DONE accepted, 0 accepted ungradable; " +
-        "false-accept rate 0/91 (Wilson 0.000–0.041)";
+        "false-accept rate 0/59 (Wilson 0.000–0.061)";
       const notDone = status(setRow(COMMITTED, "R1", "NOT DONE", "m2-fx-r1-short", fig), 0, 7, 1);
       const ok = check(notDone);
       expect(ok.mismatch).toEqual([]);

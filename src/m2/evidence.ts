@@ -62,21 +62,9 @@ import {
   checkBenchmark,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
-import { type BenchmarkTask, buildTaskSet, TASK_SET_VERSION } from "../benchmark/taskset.ts";
+import { bindToTaskSet } from "../benchmark/taskset-binding.ts";
 import { M2_FAULT_CLASSES } from "../faults/security/classes.ts";
 import { clopperPearson, wilson } from "../foundry/stats.ts";
-
-/**
- * Published task sets the pack check knows (TIF-274 #506 round 1, D2): the gated/unregistrable
- * split is bound to the task set's own composition, not only to `pack.json`, which the run's
- * operator writes. Built from the same code as the committed bundle (`buildTaskSet`, which
- * `test/benchmark/taskset.test.ts` pins byte-identical to `benchmark/false-completion/fc-v1/`).
- */
-let knownTaskSets: ReadonlyMap<string, readonly BenchmarkTask[]> | undefined;
-export function knownTaskSet(version: string): readonly BenchmarkTask[] | undefined {
-  knownTaskSets ??= new Map([[TASK_SET_VERSION, buildTaskSet().tasks]]);
-  return knownTaskSets.get(version);
-}
 
 /** Guest load gate: no trial starts at host 1-minute load >= this (eval-runbook §7.3). */
 export const LOAD_GATE = 10;
@@ -405,37 +393,24 @@ export function checkPack(input: PackInput): PackResult {
           `myco-gate: ${gatedRows.length - unreg} gated trials, expected ${total - split}`,
         );
     }
-    // Bound to the task set, not only to pack.json (#506 round 1, D2): on a known task set
-    // every gated row is one of its tasks (same faultClass), an unregistrable row is one of
-    // its unsatisfiable tasks, and the split is the task set's own share of unsatisfiable
-    // tasks. Unregistrable rows on a task set the check does not know are refused, so they
-    // can never fill R1's bar.
-    const versions = [...new Set(gatedRows.map((r) => r.taskSetVersion))];
-    const published = versions.length === 1 ? knownTaskSet(versions[0] as string) : undefined;
-    if (published === undefined) {
-      if (unreg > 0 || (split ?? 0) > 0)
+    // Bound to the PUBLISHED task set (#506 rounds 1-2), by the shared module
+    // `src/benchmark/taskset-binding.ts`. R1 evidence must be exactly a published task set
+    // run k times: every task exactly k times with its own faultClass, fixture and
+    // instruction hashes, unregistrable exactly on its unsatisfiable tasks, and the split is
+    // k x its unsatisfiable tasks. An unknown task set (fx-synthetic included) fails R1. A
+    // non-R1 pack is bound only when it carries unregistrable rows (no multiset: R2/R3 packs
+    // run subsets), and then it too needs a known task set.
+    const isR1 = manifest.rows.includes("R1");
+    if (gatedRows.length > 0 && (isR1 || unreg > 0 || (split ?? 0) > 0)) {
+      const binding = bindToTaskSet(gatedRows, { exactMultiset: isR1 });
+      errors.push(...binding.errors.map((e) => (isR1 ? `R1 task set: ${e}` : `task set: ${e}`)));
+      if (
+        split !== undefined &&
+        binding.expectedUnregistrable !== null &&
+        split !== binding.expectedUnregistrable
+      )
         errors.push(
-          `myco-gate: unregistrable trials need a task set this check knows (got ${versions.join(", ") || "none"})`,
-        );
-    } else {
-      const byId = new Map(published.map((t) => [t.taskId, t]));
-      for (const r of gatedRows) {
-        const task = byId.get(r.taskId);
-        if (task === undefined)
-          errors.push(`${r.trialKey}: task ${r.taskId} is not in ${r.taskSetVersion}`);
-        else if (task.faultClass !== r.faultClass)
-          errors.push(
-            `${r.trialKey}: faultClass ${r.faultClass} is not task ${r.taskId}'s (${task.faultClass})`,
-          );
-        else if (r.gate?.unregistrable === true && task.satisfiable)
-          errors.push(
-            `${r.trialKey}: task ${r.taskId} is satisfiable, so it cannot be unregistrable`,
-          );
-      }
-      const unsat = published.filter((t) => !t.satisfiable).length;
-      if (split !== undefined && total !== undefined && split * published.length !== total * unsat)
-        errors.push(
-          `pack.json: expectUnregistrable ${split} of ${total} does not follow ${versions[0]}'s composition (${unsat} of ${published.length} tasks are unsatisfiable)`,
+          `pack.json: expectUnregistrable ${split} is not ${binding.version}'s ${binding.expectedUnregistrable} (its unsatisfiable tasks x ${binding.repetitions} run(s))`,
         );
     }
     for (const row of ["R2", "R7"]) {

@@ -6,46 +6,28 @@
  */
 import { describe, expect, it } from "vitest";
 import type { BenchmarkArmRow } from "../../src/benchmark/check.ts";
-import { buildTaskSet } from "../../src/benchmark/taskset.ts";
 import { checkPack, ineligibleCause, type PackResult } from "../../src/m2/evidence.ts";
-import { input, manifest, refuted, type Trial, trial } from "./pack-fixture.ts";
+import {
+  fcRow,
+  fcTasks,
+  input,
+  manifest,
+  r1Trials,
+  refuted,
+  type Trial,
+  trial,
+  unregistrable as unregTrial,
+} from "./pack-fixture.ts";
 
 const has = (r: PackResult, pattern: RegExp) => r.errors.some((e) => pattern.test(e));
 
-const TASKS = buildTaskSet().tasks;
-const of = (cls: string) => TASKS.filter((t) => t.faultClass === cls);
-const FC = (i: number, cls: string): Partial<BenchmarkArmRow> => {
-  const t = of(cls)[i] as (typeof TASKS)[number];
-  return { taskSetVersion: "fc-v1", taskId: t.taskId, faultClass: cls };
-};
-
-/** An unregistrable invalid-target trial whose agent claims done on the untouched document. */
+/** Row fields binding a trial to the i-th fc-v1 task of `cls`, with the REAL hashes. */
+const FC = (i: number, cls: string): Partial<BenchmarkArmRow> => fcRow(fcTasks(cls)[i]!);
+/** An unregistrable trial on the k-th fc-v1 invalid-target task. */
 const unregistrable = (i: number, k = i % 10): Trial =>
-  trial(
-    i,
-    {
-      ...FC(k, "invalid-target"),
-      gate: { called: false, verdict: null, unregistrable: true },
-      accepted: false,
-      cause: { kind: "oracle", detail: "unregistrable: the gate registry rejected the task spec" },
-    },
-    "fail",
-    { faultLanded: true },
-  );
-
-/**
- * The real fc-v1 task set, one trial per task: 60 clean verified-pass, 30 faulted (kill-app,
- * delayed-save, focus-change) refuted, 10 invalid-target unregistrable.
- */
-function fcV1(): Trial[] {
-  const out: Trial[] = [];
-  for (let i = 0; i < 60; i++) out.push(trial(i, FC(i, "none")));
-  let i = 60;
-  for (const cls of ["kill-app", "delayed-save", "focus-change"])
-    for (let k = 0; k < 10; k++) out.push(refuted(i++, FC(k, cls)));
-  for (let k = 0; k < 10; k++) out.push(unregistrable(90 + k, k));
-  return out;
-}
+  unregTrial(i, fcTasks("invalid-target")[k]!);
+/** The real fc-v1 pack, each task once (the shared fixture). */
+const fcV1 = r1Trials;
 const fcManifest = (over: Record<string, unknown> = {}) =>
   manifest({
     rows: ["R1"],
@@ -101,8 +83,8 @@ describe("R1 over all 100 fc-v1 trials (ruling 08:38Z)", () => {
         "myco-gate: 90 gated trials, expected 80",
       ]),
     );
-    // Relabelling the split to 0 is refused by the task set's composition (#506 round 1, D2),
-    // and R1 is still short of 100 counted trials.
+    // Relabelling the split to 0 is refused by the task-set binding (not the whole published
+    // set), and R1 is still short of 100 counted trials.
     const relabel = checkPack(
       input(
         short,
@@ -110,7 +92,7 @@ describe("R1 over all 100 fc-v1 trials (ruling 08:38Z)", () => {
       ),
     );
     expect(relabel.errors).toEqual([
-      "pack.json: expectUnregistrable 0 of 90 does not follow fc-v1's composition (10 of 100 tasks are unsatisfiable)",
+      "R1 task set: 90 rows is not a whole number of runs of fc-v1's 100 tasks",
     ]);
     expect(relabel.r1?.pass).toBe(false);
     expect(relabel.r1?.reasons).toContain(
@@ -161,6 +143,38 @@ describe("R1 over all 100 fc-v1 trials (ruling 08:38Z)", () => {
     const { expectTrials: _t, ...m } = fcManifest({ rows: ["R2"] });
     const r = checkPack(input(fcV1(), { ...m, expectTrials: {} }));
     expect(has(r, /expectUnregistrable\["myco-gate"\] needs expectTrials\["myco-gate"\]/)).toBe(
+      true,
+    );
+  });
+
+  it("a non-R1 pack on fc-v1 with unregistrable rows is bound row by row, not to the whole set", () => {
+    // R3 packs run a subset of tasks, so no multiset; the rows are still fc-v1's own.
+    const subset = fcV1().slice(85); // 5 refuted focus-change + 10 unregistrable
+    const ok = checkPack(
+      input(
+        subset,
+        manifest({
+          rows: ["R3"],
+          expectTrials: { "myco-gate": 15 },
+          expectUnregistrable: { "myco-gate": 10 },
+        }),
+      ),
+    );
+    expect(ok.errors).toEqual([]);
+    const forged = subset.map((t, i) =>
+      i === 0 ? { ...t, arm: { ...t.arm, fixtureSha256: "a".repeat(64) } } : t,
+    );
+    const bad = checkPack(
+      input(
+        forged,
+        manifest({
+          rows: ["R3"],
+          expectTrials: { "myco-gate": 15 },
+          expectUnregistrable: { "myco-gate": 10 },
+        }),
+      ),
+    );
+    expect(has(bad, /^task set: g85: fixtureSha256 is not task .*'s published fixture$/)).toBe(
       true,
     );
   });
@@ -242,8 +256,10 @@ describe("R1 over all 100 fc-v1 trials (ruling 08:38Z)", () => {
       for (let k = 0; k < 10; k++) trials.push(refuted(40 + k, FC(k, "kill-app")));
       for (let k = 0; k < 50; k++) trials.push(unregistrable(50 + k, k % 10));
       const r = checkPack(input(trials, fcManifest({ expectUnregistrable: { "myco-gate": 50 } })));
-      expect(r.errors).toContain(
-        "pack.json: expectUnregistrable 50 of 100 does not follow fc-v1's composition (10 of 100 tasks are unsatisfiable)",
+      // 20 clean, 20 faulted tasks missing; every invalid-target task ran 5 times.
+      expect(has(r, /^R1 task set: task fc-v1-\d+ ran 0 time\(s\), expected 1/)).toBe(true);
+      expect(has(r, /^R1 task set: \d+ more task\(s\) of fc-v1 ran other than 1 time\(s\)$/)).toBe(
+        true,
       );
       expect(r.r1?.pass).toBe(false);
     });
@@ -256,8 +272,8 @@ describe("R1 over all 100 fc-v1 trials (ruling 08:38Z)", () => {
       const r = checkPack(input(trials, fcManifest()));
       expect(r.errors).toEqual(
         expect.arrayContaining([
-          "g0: task fc-v1-999 is not in fc-v1",
-          `g1: faultClass kill-app is not task ${of("none")[1]?.taskId}'s (none)`,
+          "R1 task set: g0: task fc-v1-999 is not in fc-v1",
+          `R1 task set: g1: faultClass kill-app is not task ${fcTasks("none")[1]?.taskId}'s (none)`,
         ]),
       );
     });
@@ -267,9 +283,10 @@ describe("R1 over all 100 fc-v1 trials (ruling 08:38Z)", () => {
         arm: { ...t.arm, taskSetVersion: "fc-v9" },
       }));
       const r = checkPack(input(trials, fcManifest()));
-      expect(has(r, /unregistrable trials need a task set this check knows \(got fc-v9\)/)).toBe(
-        true,
+      expect(r.errors).toContain(
+        'R1 task set: task set "fc-v9" is not a published task set this check knows',
       );
+      expect(r.r1?.pass).toBe(false);
     });
     it("the schema alone refuses a negative split and a split for another arm", () => {
       const neg = checkPack(
@@ -280,6 +297,145 @@ describe("R1 over all 100 fc-v1 trials (ruling 08:38Z)", () => {
         input(fcV1(), fcManifest({ expectUnregistrable: { "myco-gate": 10, "hcu+shell": 0 } })),
       );
       expect(has(other, /^pack\.json: .*expectUnregistrable/)).toBe(true);
+    });
+  });
+
+  describe("R1 evidence is exactly the published task set (#506 round 2, D1-D3)", () => {
+    const inv = fcTasks("invalid-target");
+    const clean = fcTasks("none");
+
+    it("D1: all 10 unregistrable rows on one invalid-target task fail", () => {
+      const trials = fcV1();
+      for (let k = 0; k < 10; k++) trials[90 + k] = unregistrable(90 + k, 0);
+      const r = checkPack(input(trials, fcManifest()));
+      expect(r.errors).toEqual(
+        expect.arrayContaining([
+          `R1 task set: task ${inv[0]?.taskId} ran 10 time(s), expected 1 (each fc-v1 task exactly 1)`,
+          `R1 task set: task ${inv[1]?.taskId} ran 0 time(s), expected 1 (each fc-v1 task exactly 1)`,
+        ]),
+      );
+      expect(r.r1?.pass).toBe(false);
+    });
+
+    it("D1: the 60 clean rows on one clean task fail", () => {
+      const trials = fcV1();
+      for (let i = 0; i < 60; i++) trials[i] = trial(i, FC(0, "none"));
+      const r = checkPack(input(trials, fcManifest()));
+      expect(r.errors).toContain(
+        `R1 task set: task ${clean[0]?.taskId} ran 60 time(s), expected 1 (each fc-v1 task exactly 1)`,
+      );
+      expect(has(r, /^R1 task set: \d+ more task\(s\) of fc-v1 ran other than 1 time\(s\)$/)).toBe(
+        true,
+      );
+      expect(r.r1?.pass).toBe(false);
+    });
+
+    it("D1: 89 copies of one clean task + 1 refuted kill-app + 10 copies of one invalid-target task fail", () => {
+      const trials: Trial[] = [];
+      for (let i = 0; i < 89; i++) trials.push(trial(i, FC(0, "none")));
+      trials.push(refuted(89, FC(0, "kill-app")));
+      for (let k = 0; k < 10; k++) trials.push(unregistrable(90 + k, 0));
+      const r = checkPack(input(trials, fcManifest()));
+      expect(has(r, /^R1 task set: task .* ran 89 time\(s\), expected 1/)).toBe(true);
+      expect(r.r1?.pass).toBe(false);
+    });
+
+    it("D1: a whole number of runs passes (each task twice), and the split must be the set's", () => {
+      const twice = [
+        ...fcV1(),
+        ...fcV1().map((t) => ({
+          arm: { ...t.arm, trialKey: `${t.arm.trialKey}b` },
+          grade: { ...t.grade, trialKey: `${t.grade.trialKey}b` },
+          ops: { ...t.ops, trialKey: `${t.ops.trialKey}b` },
+        })),
+      ];
+      const ok = checkPack(
+        input(
+          twice,
+          fcManifest({
+            expectTrials: { "myco-gate": 200 },
+            expectUnregistrable: { "myco-gate": 20 },
+          }),
+        ),
+      );
+      expect(ok.errors).toEqual([]);
+      expect(ok.r1).toMatchObject({ pass: true, counted: 200, unregistrable: { trials: 20 } });
+      // A split that is not the task set's own (k x its unsatisfiable tasks) is refused.
+      const wrongSplit = checkPack(
+        input(
+          twice,
+          fcManifest({
+            expectTrials: { "myco-gate": 200 },
+            expectUnregistrable: { "myco-gate": 10 },
+          }),
+        ),
+      );
+      expect(wrongSplit.errors).toContain(
+        "pack.json: expectUnregistrable 10 is not fc-v1's 20 (its unsatisfiable tasks x 2 run(s))",
+      );
+    });
+
+    it("D2: a row whose fixture or instruction hash is not its task's fails", () => {
+      const fixture = fcV1();
+      fixture[0] = trial(0, { ...FC(0, "none"), fixtureSha256: "a".repeat(64) });
+      const rf = checkPack(input(fixture, fcManifest()));
+      expect(rf.errors).toContain(
+        `R1 task set: g0: fixtureSha256 is not task ${clean[0]?.taskId}'s published fixture`,
+      );
+      expect(rf.r1?.pass).toBe(false);
+      const instruction = fcV1();
+      instruction[0] = trial(0, { ...FC(0, "none"), instructionSha256: "b".repeat(64) });
+      const ri = checkPack(input(instruction, fcManifest()));
+      expect(ri.errors).toContain(
+        `R1 task set: g0: instructionSha256 is not task ${clean[0]?.taskId}'s published instruction`,
+      );
+      expect(ri.r1?.pass).toBe(false);
+    });
+
+    it("D2: the passing pack carries the real fc-v1 hashes", () => {
+      for (const t of fcV1()) {
+        const task = [
+          ...clean,
+          ...inv,
+          ...fcTasks("kill-app"),
+          ...fcTasks("delayed-save"),
+          ...fcTasks("focus-change"),
+        ].find((x) => x.taskId === t.arm.taskId);
+        expect(t.arm.fixtureSha256, t.arm.trialKey).toBe(task?.fixtureSha256);
+        expect(t.arm.instructionSha256, t.arm.trialKey).toBe(task?.instructionSha256);
+      }
+    });
+
+    it("D2: a gated row on an unsatisfiable task fails (unregistrable in both directions)", () => {
+      const trials = fcV1();
+      trials[90] = refuted(90, FC(0, "invalid-target"));
+      const r = checkPack(input(trials, fcManifest({ expectUnregistrable: { "myco-gate": 9 } })));
+      expect(r.errors).toContain(
+        `R1 task set: g90: task ${inv[0]?.taskId} is unsatisfiable, so it must be unregistrable`,
+      );
+      expect(r.r1?.pass).toBe(false);
+    });
+
+    it("D3: an unknown task set never passes R1, the synthetic fixture included", () => {
+      const synthetic = Array.from({ length: 100 }, (_, i) =>
+        i < 99 ? trial(i) : refuted(i, { faultClass: "kill-app" }),
+      );
+      for (const version of ["fx-synthetic", "fc-v1-rerun"]) {
+        const rows = synthetic.map((t) => ({ ...t, arm: { ...t.arm, taskSetVersion: version } }));
+        const r = checkPack(
+          input(
+            rows,
+            manifest({
+              expectTrials: { "myco-gate": 100 },
+              expectUnregistrable: { "myco-gate": 0 },
+            }),
+          ),
+        );
+        expect(r.errors, version).toEqual([
+          `R1 task set: task set ${JSON.stringify(version)} is not a published task set this check knows`,
+        ]);
+        expect(r.r1?.pass, version).toBe(false);
+      }
     });
   });
 });
