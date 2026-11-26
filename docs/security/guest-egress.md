@@ -71,13 +71,15 @@ This choice over the alternatives:
   touches the guest. It refuses outright under `MYCO_GUEST_EGRESS=open`, so the agent's token
   never enters a guest whose egress is not proven closed, even after a maintenance reset or
   a guest started by hand.
-- `verify` accepts exactly **one** configuration. It checks two sources, and both must
-  match:
+- `verify` refuses every configuration listed below, and accepts UTM's default launch with
+  the allowlisted netdev. It is **not** yet a complete allowlist: three known gaps (D7–D9,
+  "Known open gaps" below) still pass. It checks two sources, and both must match:
   - **The live QEMU command line, read exactly.** `scripts/guest_egress_check.py` reads each
     candidate process's argv from the kernel (`sysctl` `KERN_PROCARGS2`), not from `ps`.
     `ps` joins argv with spaces, so `-name "x -netdev user,…,restrict=on"` would look like a
-    real netdev while QEMU added its default, unrestricted NIC (round 3, D6). Only the argv
-    strings are decoded; the environment block after them is never decoded or printed.
+    real netdev while QEMU added its default, unrestricted NIC (round 3, D6). Only `argc`
+    strings are decoded. Normally that is argv alone, but an empty argv[0] shifts the
+    environment block into them (gap D9).
     - **Process:** exactly one guest process, identified by argv[0] (`QEMULauncher` running a
       qemu binary, or a qemu binary).
     - **Shape:** no argv element may contain whitespace, and `-nodefaults` must be present as
@@ -88,10 +90,12 @@ This choice over the alternatives:
     - **The netdev:** it must be `user`, with only `id`, `restrict` and `hostfwd`, so a
       `guestfwd` or any other option is refused. Every `restrict` must be `on`. The `hostfwd`
       set must be exactly `{tcp:127.0.0.1:2222-:22}`.
-    - **Nothing else on the netdev's packets** (round 3, D5). `-object filter-*`
-      (redirector, mirror, dump, …) attaches before slirp and can tunnel past `restrict=on`,
-      so it is refused. So is any `-object` naming a netdev, and any `netdev=` reference
-      other than the single NIC `-device`'s.
+    - **Filters on the netdev, comma form only** (round 3, D5). A `-object filter-*`
+      (redirector, mirror, dump, …) attaches before slirp and can tunnel past `restrict=on`.
+      The **comma-separated** form (`filter-redirector,…` or `type=filter-…,…`) is refused,
+      and so is any comma-form `-object` naming a netdev, and any `netdev=` reference other
+      than the single NIC `-device`'s. The **JSON** form of `-object` is not parsed and
+      passes (gap D7).
     - **No host-network channel** (round 3, D5). Chardevs are limited to the ones UTM's
       default launch uses, confirmed on the live guest on 2026-11-26: `spiceport`,
       `spicevmc`, `pty`, and the swtpm unix socket `socket,id=chrtpm0,path=<VM-UUID>.swtpm`.
@@ -103,20 +107,23 @@ This choice over the alternatives:
     from host" on and exactly one port forward: TCP `127.0.0.1:2222` → guest `:22`. This is
     compared as one exact string.
 
-  Anything it cannot read or parse is a failure. That includes:
+  These inputs fail closed:
   - an unreadable process list, an unreadable UTM, and a process whose argv cannot be read
     for a fixture run;
   - a malformed or truncated procargs buffer;
   - an option without `=`, an escaped comma, a `-netdev=` form, and a `-netdev` with no
     value.
 
-  `test/guest-egress.test.ts` has a negative case for each rule, fed fixed `KERN_PROCARGS2`
-  byte buffers. A mutation that removes each rule fails at least one test (PR #482, rounds
-  2–3).
+  A JSON-form `-object` is not among them: it is not parsed and passes (gap D7).
+
+  `test/guest-egress.test.ts` has a negative case for each rule listed above, fed fixed
+  `KERN_PROCARGS2` byte buffers. A mutation that removes each of those rules fails at least
+  one test (PR #482, rounds 2–3).
 - **What `verify` cannot see.** It checks what QEMU was started with and what UTM is
   configured to start. Two things are outside it:
-  - Changes made at run time through a QMP monitor. UTM's QMP is a SPICE port, not a host
-    socket, and `-qmp`/`-monitor` are refused.
+  - Changes made at run time through a QMP monitor. UTM's own QMP is a SPICE port, not a
+    host socket. `-qmp`, `-monitor` and `-gdb` are refused, but `-qmp-pretty` and
+    `--qmp-pretty` are not (gap D8).
   - Anything inside QEMU or UTM themselves.
 - The UTM setting is a persistent VM property, not something each reset applies. If anyone
   clears it, in the GUI or with `guest-egress.sh allow`, the next reset refuses the guest
@@ -126,6 +133,24 @@ This choice over the alternatives:
 - `deny` and `allow` take the VM lock, change the flag only with the VM stopped (a UTM
   requirement), then read back both the flag and the SSH port forward. If the forward
   changed, they fail.
+
+## Known open gaps (TIF-275 follow-up, Linear pending)
+
+Found by the round-3 verifier on PR #482 (`55af502e`). Under the review cap, #482 shipped
+what passed, and these gaps are fixed separately. **The follow-up must merge before any real
+data or credentials touch the guest.** Until then, `verify` proves only the rules listed
+above, not that the guest is safe against a deliberately crafted QEMU command line. None of
+the three gaps is present on today's guest: its live argv
+(`docs/research/experiments/tif-275-egress/10-round3-verify-live.txt`) has no `-object`,
+no `-qmp-pretty` and a non-empty argv[0]. But `verify` would not catch one if it were added.
+
+| Gap | What passes `verify` | Effect |
+|---|---|---|
+| **D7** | A JSON-form `-object` (`{"qom-type":"filter-redirector","netdev":"net0",…}` or `filter-mirror`) on `net0`, pointed at a `pty` or `spiceport` chardev. QEMU 8.2.2 accepts it | Guest packets copied or redirected past slirp's `restrict=on` |
+| **D8** | `-qmp-pretty` / `--qmp-pretty` with any backend | A QMP monitor that can change the network at run time |
+| **D9** (low) | An empty argv[0] | The environment block shifts into the decoded argv, and `guest_egress_check.py argv` prints it |
+
+All three need a non-default QEMU or UTM launch, for example UTM's custom QEMU arguments.
 
 ## Evidence
 
