@@ -58,7 +58,7 @@ const RUN_PROPERTIES = [
   "condense",
   "extend",
 ];
-const STRING_ITEM = { "": ["t", "r"], r: ["rPr", "t"], "r/rPr": RUN_PROPERTIES } as const;
+const STRING_ITEM = { "": ["t", "r*"], r: ["rPr", "t"], "r/rPr": RUN_PROPERTIES } as const;
 
 /** Prefix every key of a sub-schema with `at/`. */
 function under(at: string, schema: Readonly<Record<string, readonly string[]>>) {
@@ -69,7 +69,10 @@ function under(at: string, schema: Readonly<Record<string, readonly string[]>>) 
 
 /**
  * Allowed children by parent path (local names, `/`-joined from the root). A path that is
- * not a key holds no element children.
+ * not a key holds no element children. A name ending in `*` may repeat; any other child
+ * appears at most once under its parent (LibreOffice writes one `<numFmts>`, one
+ * `<cellXfs>`, one `<workbookPr>`, ...): a second one is where a decoy would sit, since the
+ * reader takes the first and the grader, for `<numFmt>`, the last match in the text.
  */
 export const LO_TREES: Readonly<
   Record<ContentPartKind, Readonly<Record<string, readonly string[]>>>
@@ -84,9 +87,9 @@ export const LO_TREES: Readonly<
       "calcPr",
       "extLst",
     ],
-    "workbook/bookViews": ["workbookView"],
-    "workbook/sheets": ["sheet"],
-    "workbook/extLst": ["ext"],
+    "workbook/bookViews": ["workbookView*"],
+    "workbook/sheets": ["sheet*"],
+    "workbook/extLst": ["ext*"],
     "workbook/extLst/ext": ["extCalcPr"],
   },
   worksheet: {
@@ -103,42 +106,42 @@ export const LO_TREES: Readonly<
       "headerFooter",
     ],
     "worksheet/sheetPr": ["pageSetUpPr"],
-    "worksheet/sheetViews": ["sheetView"],
-    "worksheet/sheetViews/sheetView": ["selection"],
-    "worksheet/cols": ["col"],
-    "worksheet/sheetData": ["row"],
-    "worksheet/sheetData/row": ["c"],
+    "worksheet/sheetViews": ["sheetView*"],
+    "worksheet/sheetViews/sheetView": ["selection*"],
+    "worksheet/cols": ["col*"],
+    "worksheet/sheetData": ["row*"],
+    "worksheet/sheetData/row": ["c*"],
     "worksheet/sheetData/row/c": ["f", "v", "is"],
     ...under("worksheet/sheetData/row/c/is", STRING_ITEM),
     "worksheet/headerFooter": ["oddHeader", "oddFooter"],
   },
   sst: {
-    sst: ["si"],
+    sst: ["si*"],
     ...under("sst/si", STRING_ITEM),
   },
   styles: {
     styleSheet: ["numFmts", "fonts", "fills", "borders", "cellStyleXfs", "cellXfs", "cellStyles"],
-    "styleSheet/numFmts": ["numFmt"],
-    "styleSheet/fonts": ["font"],
+    "styleSheet/numFmts": ["numFmt*"],
+    "styleSheet/fonts": ["font*"],
     "styleSheet/fonts/font": RUN_PROPERTIES,
-    "styleSheet/fills": ["fill"],
+    "styleSheet/fills": ["fill*"],
     "styleSheet/fills/fill": ["patternFill"],
     "styleSheet/fills/fill/patternFill": ["fgColor", "bgColor"],
-    "styleSheet/borders": ["border"],
+    "styleSheet/borders": ["border*"],
     "styleSheet/borders/border": ["left", "right", "top", "bottom", "diagonal"],
     "styleSheet/borders/border/left": ["color"],
     "styleSheet/borders/border/right": ["color"],
     "styleSheet/borders/border/top": ["color"],
     "styleSheet/borders/border/bottom": ["color"],
     "styleSheet/borders/border/diagonal": ["color"],
-    "styleSheet/cellStyleXfs": ["xf"],
+    "styleSheet/cellStyleXfs": ["xf*"],
     "styleSheet/cellStyleXfs/xf": ["alignment", "protection"],
-    "styleSheet/cellXfs": ["xf"],
+    "styleSheet/cellXfs": ["xf*"],
     "styleSheet/cellXfs/xf": ["alignment", "protection"],
-    "styleSheet/cellStyles": ["cellStyle"],
+    "styleSheet/cellStyles": ["cellStyle*"],
   },
-  types: { Types: ["Default", "Override"] },
-  rels: { Relationships: ["Relationship"] },
+  types: { Types: ["Default*", "Override*"] },
+  rels: { Relationships: ["Relationship*"] },
 };
 
 /** The one element outside the root's namespace LibreOffice writes, by full path. */
@@ -187,10 +190,15 @@ export function checkTree(root: XmlElement, kind: ContentPartKind): TreeCode | u
   if (!Object.hasOwn(schema, root.local)) return "XLSX_TREE_ELEMENT";
   const walk = (element: XmlElement, path: string): TreeCode | undefined => {
     const allowed = Object.hasOwn(schema, path) ? schema[path] : undefined;
+    const once = new Set<string>();
     for (const c of element.children) {
       if (typeof c === "string") continue;
       const at = `${path}/${c.local}`;
-      if (allowed === undefined || !allowed.includes(c.local)) return "XLSX_TREE_ELEMENT";
+      if (allowed === undefined) return "XLSX_TREE_ELEMENT";
+      if (!allowed.includes(`${c.local}*`)) {
+        if (!allowed.includes(c.local) || once.has(c.local)) return "XLSX_TREE_ELEMENT";
+        once.add(c.local);
+      }
       if (c.ns !== (FOREIGN.get(at) ?? root.ns)) return "XLSX_TREE_ELEMENT";
       const bad = walk(c, at);
       if (bad) return bad;

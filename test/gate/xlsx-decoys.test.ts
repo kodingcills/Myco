@@ -192,9 +192,32 @@ const TREE_PROBES: [string, () => Uint8Array, string][] = [
       ),
     "ungradable",
   ],
+  // Found while building round 2's nested-decoy family: a names-only allowlist still let a
+  // SECOND singleton through at its canonical path. The reader takes the first; the grader
+  // takes the last <numFmt> in the text, and any <workbookPr> carrying date1904.
+  [
+    'V7: a second <numFmts> after the real one, redefining 165 (the date style) as "0"',
+    () =>
+      loEdit(
+        STYLES,
+        "</numFmts>",
+        '</numFmts><numFmts count="1"><numFmt numFmtId="165" formatCode="0"/></numFmts>',
+      ),
+    "fail",
+  ],
+  [
+    'V7: a second <workbookPr date1904="true"/> after the real one',
+    () =>
+      loEdit(
+        WORKBOOK,
+        "<workbookProtection/>",
+        '<workbookPr date1904="true"/><workbookProtection/>',
+      ),
+    "fail",
+  ],
 ];
 
-describe("tree: every element of a pinned part sits at a path LibreOffice writes (V1-V5)", () => {
+describe("tree: every element of a pinned part sits at a path LibreOffice writes (V1-V5, V7)", () => {
   it.each(TREE_PROBES)(
     "%s: the grader is fooled, the gate refuses",
     async (_label, build, graded) => {
