@@ -76,8 +76,13 @@ BASELINE_SNAPSHOT = "cua-c1-base"  # src/baseline/c1-trial.ts RESET_SNAPSHOT
 LEGACY_MYCO_SNAPSHOT = "clean-base"
 
 
-def check_same_base(myco: dict, baseline: dict) -> None:
-    """Refuse (SystemExit) any index whose Myco row and baseline row come from different bases."""
+def check_same_base(myco: dict, baseline: dict) -> dict:
+    """Refuse (SystemExit) any index whose Myco row and baseline row come from different bases.
+
+    Returns the null-snapshot rows it skipped (the reset never reached ready). Those are
+    counted and reported, and a verified row with a null snapshot is refused: a verdict with
+    no recorded starting state cannot be compared (#529 S1)."""
+    null_rows = []
     for i in sorted(myco):
         b = baseline.get(i, {})
         base_snap = b.get("snapshot", BASELINE_SNAPSHOT)
@@ -87,6 +92,9 @@ def check_same_base(myco: dict, baseline: dict) -> None:
         row = myco[i]
         snap = row["snapshot"] if "snapshot" in row else LEGACY_MYCO_SNAPSHOT
         if snap is None:
+            if row.get("status") == "verified":
+                raise SystemExit(f"index {i}: a verified Myco row with a null snapshot (no reset reached ready)")
+            null_rows.append(i)
             continue
         if BASE_FAMILY.get(snap) != base_family:
             raise SystemExit(
@@ -94,6 +102,28 @@ def check_same_base(myco: dict, baseline: dict) -> None:
                 f"(base family {base_family!r}); a comparison needs both arms on the same base "
                 "(run the Myco arm with MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base)"
             )
+    return {"nullSnapshot": len(null_rows), "nullSnapshotIndices": null_rows}
+
+
+def check_boot_class(myco: dict) -> dict:
+    """TIF-98 cold-boot check at the join. A Myco row's `resetBootClass` records whether its
+    reset was a full cold boot. A row whose reset was not (`fast`), or a verified row whose
+    record is present but null (no measured boot), is refused. A row with no `resetBootClass`
+    key predates the check; those are counted and reported, never assumed cold."""
+    unrecorded = []
+    for i in sorted(myco):
+        row = myco[i]
+        if "resetBootClass" not in row:
+            unrecorded.append(i)
+            continue
+        cls = row["resetBootClass"]
+        if cls is None:
+            if row.get("status") == "verified":
+                raise SystemExit(f"index {i}: a verified Myco row with no measured reset boot (resetBootClass null)")
+            continue
+        if cls != "cold":
+            raise SystemExit(f"index {i}: the Myco row's reset was a {cls!r} boot, not a full cold boot (TIF-98)")
+    return {"bootClassUnrecorded": len(unrecorded)}
 
 
 def key_counts(actions: list[dict]) -> dict:
@@ -165,7 +195,8 @@ def compare(check: bool, scorecard: Path = SCORECARD) -> int:
             v3[t["index"]] = t
     if sorted(r6) != list(range(30)) or sorted(v3) != list(range(30)):
         raise SystemExit(f"need indices 0..29 on both sides: r6 {sorted(r6)}, v3 {sorted(v3)}")
-    check_same_base(v3, r6)
+    nulls = check_same_base(v3, r6)
+    boots = check_boot_class(v3)
 
     pairs = Counter()
     print("idx  seed         record    column  value            v3        r6 verdict / reason")
@@ -204,6 +235,10 @@ def compare(check: bool, scorecard: Path = SCORECARD) -> int:
     print(f"r6 falseSuccess : {r6_false}")
     print(f"pairs (v3, r6)  : {dict(sorted(pairs.items()))}")
     print(f"discordant      : Myco-only {myco_only}, baseline-only {base_only}, exact two-sided p = {p:.3g}")
+    print(
+        f"reset records   : snapshot null on {nulls['nullSnapshot']} Myco rows (none verified); "
+        f"boot class unrecorded on {boots['bootClassUnrecorded']} Myco rows (recorded before the TIF-98 check)"
+    )
     print(f"r6 scored spend : {micros} micros = ${micros / 1e6:.4f}")
     print(f"step-budget rows: {len(budget_rows)}; typed expected + >=1 Ctrl+S: {len(save_loop)}; other: {other_budget}")
     for i in other_budget:

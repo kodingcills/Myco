@@ -134,7 +134,8 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     (name) => {
       const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: name } });
       expect(r.status).toBe(1);
-      expect(r.stderr).toContain("refusing to restore unexpected snapshot");
+      // Refused before the allowlist since #529 nit 1 (not a trial base as the default).
+      expect(r.stderr).toContain(`refusing MYCO_TRIAL_SNAPSHOT=${name}`);
       expect(r.calls).toBe("");
     },
   );
@@ -279,5 +280,23 @@ describe("trial drivers use the default trial snapshot", () => {
     expect(read("scripts/reset-bench.sh")).toContain(
       "SNAPSHOT=$" + "{MYCO_BENCH_SNAPSHOT:-trial-base-v2}",
     );
+  });
+});
+
+// #529 nit 1: as the default (no argument), MYCO_TRIAL_SNAPSHOT may only name a trial base.
+describe("reset-trial-vm.sh MYCO_TRIAL_SNAPSHOT as the default", () => {
+  it.each(["cua-c1-base", "m1-agent-live"])(
+    "refuses MYCO_TRIAL_SNAPSHOT=%s with no argument",
+    (name) => {
+      const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: name } });
+      expect(r.status).toBe(1);
+      expect(r.calls).toBe("");
+    },
+  );
+
+  it("still accepts cua-c1-base as an explicit argument", () => {
+    const r = run("cua-c1-base", { env: { MYCO_TRIAL_SNAPSHOT: "cua-c1-base" } });
+    expect(r.status).toBe(0);
+    expect(r.calls).toContain("vm.sh restore cua-c1-base");
   });
 });

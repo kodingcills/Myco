@@ -120,6 +120,10 @@ export interface TrialOps {
   readonly hostLoad1mStart: number;
   readonly harnessClass: string | null;
   readonly faultLanded: boolean | null;
+  /** TIF-98: the trial reset's boot class; absent on packs recorded before the cold-boot check. */
+  readonly resetBootClass?: "cold" | "fast";
+  readonly resetGuestCpuFirstSshS?: number;
+  readonly resetTotalS?: number;
 }
 
 /** Why a gated trial is not eligible for R1 / R3, in the order the check tests them. */
@@ -279,6 +283,8 @@ export interface CauseAccounting {
   readonly harness: number;
   readonly byHarnessClass: Readonly<Record<string, number>>;
   readonly maxHostLoad1m: number | null;
+  /** Trial-ops rows with no `resetBootClass` (recorded before the TIF-98 cold-boot check). */
+  readonly bootClassUnrecorded: number;
 }
 
 export interface PackResult {
@@ -605,6 +611,7 @@ export function checkPack(input: PackInput): PackResult {
   const accounting = { nonVerified: 0, agent: 0, oracle: 0, harness: 0 };
   const byHarnessClass: Record<string, number> = {};
   let maxLoad: number | null = null;
+  let bootClassUnrecorded = 0;
   for (const row of armRows) {
     const o = ops.get(row.trialKey);
     if (o === undefined) {
@@ -615,6 +622,13 @@ export function checkPack(input: PackInput): PackResult {
     if (o.hostLoad1mStart >= LOAD_GATE)
       errors.push(
         `${row.trialKey}: started at host 1-minute load ${o.hostLoad1mStart} >= ${LOAD_GATE} (guest load gate)`,
+      );
+    // TIF-98: only a full cold boot is the shared starting state. A fast boot (the first start
+    // after a UTM configuration write) skips most of Windows' boot work on the same disk.
+    if (o.resetBootClass === undefined) bootClassUnrecorded++;
+    else if (o.resetBootClass !== "cold")
+      errors.push(
+        `${row.trialKey}: its reset was a ${o.resetBootClass} boot, not a full cold boot (TIF-98 cold-boot check)`,
       );
     const verified = success(row, grades.get(row.trialKey));
     if (!verified) {
@@ -904,7 +918,7 @@ export function checkPack(input: PackInput): PackResult {
     errors,
     manifest,
     benchmark,
-    causes: { ...accounting, byHarnessClass, maxHostLoad1m: maxLoad },
+    causes: { ...accounting, byHarnessClass, maxHostLoad1m: maxLoad, bootClassUnrecorded },
     r1: settle(r1),
     r2: settle(r2),
     r3: settle(r3),

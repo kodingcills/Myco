@@ -359,6 +359,26 @@ describe("M2 evidence: process gates", () => {
     expect(has(at(null), /ops row 5: \$\.hostLoad1mStart/)).toBe(true);
   });
 
+  // TIF-98 cold-boot check: only a full cold boot is the shared starting state.
+  it("fails a trial whose reset was a fast boot, accepts cold, and counts unrecorded boot classes", () => {
+    const at = (boot: unknown) => {
+      const trials = r1Trials();
+      trials[5]!.ops = {
+        ...trials[5]!.ops,
+        // A deliberately bad value ("warm") is sent through the typed field.
+        ...(boot === undefined ? {} : { resetBootClass: boot as "cold" }),
+      };
+      return checkPack(input(trials));
+    };
+    expect(at("cold").ok).toBe(true);
+    expect(has(at("fast"), /g5: its reset was a fast boot, not a full cold boot/)).toBe(true);
+    expect(has(at("warm"), /ops row 5: \$\.resetBootClass/)).toBe(true);
+    const recorded = at("cold");
+    const unrecorded = at(undefined);
+    expect(unrecorded.ok).toBe(true);
+    expect(unrecorded.causes.bootClassUnrecorded - recorded.causes.bootClassUnrecorded).toBe(1);
+  });
+
   it("requires a cause on every non-verified row, and a harness class exactly on harness causes", () => {
     // g60 is the first refuted (agent-cause) row; g61 is made a harness fault.
     const withHarness = () => {

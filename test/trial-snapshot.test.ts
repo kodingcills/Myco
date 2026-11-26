@@ -239,7 +239,7 @@ describe("the drivers use it", () => {
 
   it("m1-sweep.sh passes the ready snapshot to its row writer, and puts it on every echoed row", () => {
     const src = readFileSync(join(ROOT, "scripts/m1-sweep.sh"), "utf8");
-    expect(src).toContain('"$FPRINTS" "$AC_POWER" "$TS_READY" >> "$LOG"');
+    expect(src).toContain('"$FPRINTS" "$AC_POWER" "$TS_READY" "$TS_BOOT" >> "$LOG"');
     const echoed = src.match(/echo "\{\\"index\\": \$i, \\"status\\": [^\n]*/g) ?? [];
     expect(echoed.length).toBe(4);
     // Round 3 (V5): no reset reached ready on param-error / reset-failed, so those are null;
@@ -256,7 +256,7 @@ describe("the drivers use it", () => {
   it("m1-corrupt-suite.sh passes the ready snapshot on every row it records", () => {
     const src = readFileSync(join(ROOT, "scripts/m1-corrupt-suite.sh"), "utf8");
     expect(src).toContain(
-      'row=$(python3 "$RECORDER" --record "$PARAMS" "$@" "--snapshot=$TS_READY") || exit 1',
+      'row=$(python3 "$RECORDER" --record "$PARAMS" "$@" "--snapshot=$TS_READY" "--reset-boot=$TS_BOOT") || exit 1',
     );
   });
 });
@@ -338,5 +338,142 @@ describe("explicit-snapshot callers", () => {
     expect(read("scripts/build-trial-base.sh")).toContain(
       'MYCO_GUEST_EGRESS=open bash "$RESET" "$FROM"',
     );
+  });
+});
+
+// TIF-98 cold-boot record: ts_reset parses the reset's boot and timing lines, and both row
+// writers carry the measured reset on every row (null when there is none).
+describe("reset boot record (TIF-98 cold-boot check)", () => {
+  const stubReset = (lines: string[]) => {
+    const out = mkdtempSync(join(tmpdir(), "myco-ts-boot-"));
+    const p = join(out, "reset.sh");
+    writeFileSync(p, `#!/bin/bash\n${lines.map((l) => `echo "${l}"`).join("\n")}\nexit 0\n`, {
+      mode: 0o755,
+    });
+    return p;
+  };
+  const tsBoot = (lines: string[]) =>
+    ts('ts_reset trial-base-v2 "$OUT/progress.log"; echo "rc=$? boot=$TS_BOOT"', {
+      MYCO_RESET_SCRIPT: stubReset(lines),
+    }).stdout;
+
+  it("ts_reset sets TS_BOOT to class:first_ssh:cpu:total:attempts", () => {
+    expect(
+      tsBoot([
+        "reset-trial-vm: boot class=cold first_ssh_s=143 guest_cpu_first_ssh_s=291 attempts=2",
+        "reset-trial-vm: timing stop=0 restore=3 total=205",
+        "reset-trial-vm: ready on 'trial-base-v2'",
+      ]),
+    ).toBe("rc=0 boot=cold:143:291:205:2");
+  });
+
+  it("TS_BOOT is empty when the reset printed no boot line", () => {
+    expect(
+      tsBoot([
+        "reset-trial-vm: timing stop=0 total=160",
+        "reset-trial-vm: ready on 'trial-base-v2'",
+      ]),
+    ).toBe("rc=0 boot=");
+  });
+
+  it("m1-sweep-record.py carries the reset record as fields, null when absent or malformed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-sweep-boot-"));
+    const fp = join(dir, "fp.json");
+    writeFileSync(fp, "{}");
+    const rec = (...extra: string[]) =>
+      JSON.parse(
+        spawnSync(
+          "python3",
+          [
+            join(ROOT, "scripts", "m1-sweep-record.py"),
+            "3",
+            "seed-b",
+            "EMP-0001",
+            "qty",
+            "1",
+            join(dir, "none.json"),
+            fp,
+            ...extra,
+          ],
+          { encoding: "utf8" },
+        ).stdout,
+      );
+    expect(rec("yes", "trial-base-v2", "cold:143:291:205:2")).toMatchObject({
+      resetBootClass: "cold",
+      resetFirstSshS: 143,
+      resetGuestCpuFirstSshS: 291,
+      resetTotalS: 205,
+      resetBootAttempts: 2,
+    });
+    for (const bad of [
+      [],
+      ["yes", "trial-base-v2", ""],
+      ["yes", "trial-base-v2", "warm:1:2:3:4"],
+      ["yes", "trial-base-v2", "cold:1:2"],
+    ]) {
+      const row = rec(...bad);
+      expect(Object.hasOwn(row, "resetBootClass")).toBe(true);
+      expect(row.resetBootClass).toBeNull();
+      expect(row.resetTotalS).toBeNull();
+    }
+  });
+
+  it("m1-corrupt-suite-record.py carries --reset-boot= as fields", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-corrupt-boot-"));
+    const manifest = join(dir, "params.json");
+    writeFileSync(manifest, JSON.stringify(corruptionPlan()));
+    const rec = (...args: string[]) =>
+      JSON.parse(
+        spawnSync(
+          "python3",
+          [join(ROOT, "scripts", "m1-corrupt-suite-record.py"), "--record", manifest, ...args],
+          {
+            encoding: "utf8",
+          },
+        ).stdout,
+      );
+    expect(
+      rec("0", "deploy-failed", "--snapshot=trial-base-v2", "--reset-boot=cold:150:280:170:1"),
+    ).toMatchObject({
+      resetBootClass: "cold",
+      resetGuestCpuFirstSshS: 280,
+      resetTotalS: 170,
+    });
+    expect(rec("0", "reset-failed", "--snapshot=", "--reset-boot=").resetBootClass).toBeNull();
+  });
+});
+
+// #529 S4: a deleted pin cannot turn an OUT into a mixed one.
+describe("ts_pin with a deleted pin", () => {
+  const rows = (snap: string) => (out: string) =>
+    writeFileSync(
+      join(out, "trials.jsonl"),
+      `{"index": 0, "snapshot": "${snap}"}\n{"index": 1, "snapshot": null}\n`,
+    );
+
+  it("refuses a resume whose rows record a different snapshot, even as clean-base", () => {
+    const r = ts(
+      'ts_pin "$OUT" "$OUT/trials.jsonl" clean-base',
+      { MYCO_TRIAL_SNAPSHOT: "clean-base" },
+      rows("trial-base-v2"),
+    );
+    expect(r.status).toBe(11);
+    expect(r.stderr).toContain("REFUSED_SNAPSHOT_PIN_DELETED");
+    expect(existsSync(join(r.out, "snapshot"))).toBe(false);
+  });
+
+  it("re-pins when every recorded snapshot is the one this run resolves", () => {
+    const r = ts('ts_pin "$OUT" "$OUT/trials.jsonl" trial-base-v2', {}, rows("trial-base-v2"));
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(r.out, "snapshot"), "utf8")).toBe("trial-base-v2\n");
+  });
+
+  it("refuses rows that record two snapshots", () => {
+    const mixed = (out: string) =>
+      writeFileSync(
+        join(out, "trials.jsonl"),
+        '{"snapshot": "trial-base-v2"}\n{"snapshot": "clean-base"}\n',
+      );
+    expect(ts('ts_pin "$OUT" "$OUT/trials.jsonl" trial-base-v2', {}, mixed).status).toBe(11);
   });
 });

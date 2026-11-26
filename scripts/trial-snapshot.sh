@@ -30,7 +30,9 @@
 #       that.
 #   ts_reset <snapshot> <progress.log>
 #       Run the reset with the snapshot named explicitly, append its output to
-#       the progress log, and set TS_READY to the snapshot its
+#       the progress log, set TS_BOOT to the reset's cold-boot record
+#       (class:first_ssh_s:guest_cpu_first_ssh_s:total_s:attempts, TIF-98; empty if
+#       the reset printed none), and set TS_READY to the snapshot its
 #       `reset-trial-vm: ready on '<snap>'` line names (empty if none). Returns
 #       the reset's status, or 12 if it reported ready on a different snapshot.
 #       MYCO_RESET_SCRIPT overrides the reset script (tests only).
@@ -72,6 +74,18 @@ ts_pin() {
     fi
     return 0
   fi
+  # A pin that was deleted: the rows already record their snapshot (#529 S4). Re-pin only when
+  # every recorded snapshot is the one this run resolves; anything else would mix bases.
+  local recorded
+  recorded=$( { grep -oE '"snapshot": "[^"]+"' "$log" 2>/dev/null || true; } | sort -u)
+  if [ -n "$recorded" ]; then
+    if [ "$recorded" != "\"snapshot\": \"$snap\"" ]; then
+      echo "REFUSED_SNAPSHOT_PIN_DELETED: $out has no pin but its rows record $(printf '%s' "$recorded" | tr '\n' ' ')and this run resolves '$snap'; restore the pin or start a fresh OUT" >&2
+      return 11
+    fi
+    printf '%s\n' "$snap" > "$out/snapshot"
+    return 0
+  fi
   if [ -s "$log" ] && [ "${MYCO_TRIAL_SNAPSHOT:-}" != clean-base ]; then
     echo "REFUSED_SNAPSHOT_UNKNOWN: $log has rows but $out has no snapshot pin, so it was started before 2026-11-26, on clean-base; resume it with MYCO_TRIAL_SNAPSHOT=clean-base, or start a fresh OUT" >&2
     return 11
@@ -86,6 +100,15 @@ ts_reset() {
   rc=$?
   cat "$capture" >> "$progress"
   TS_READY=$(sed -n "s/^reset-trial-vm: ready on '\\([^']*\\)'\$/\\1/p" "$capture" | tail -n 1)
+  # TIF-98 cold-boot record for the row: class:first_ssh_s:guest_cpu_first_ssh_s:total_s:attempts,
+  # from the reset's `boot class=...` and `timing ... total=` lines (empty when either is missing).
+  local boot total
+  boot=$(sed -nE 's/^reset-trial-vm: boot class=([a-z]+) first_ssh_s=([0-9]+) guest_cpu_first_ssh_s=([0-9]+) attempts=([0-9]+)$/\1:\2:\3:\4/p' "$capture" | tail -n 1)
+  total=$(sed -nE 's/^reset-trial-vm: timing .* total=([0-9]+)$/\1/p' "$capture" | tail -n 1)
+  TS_BOOT=""
+  if [ -n "$boot" ] && [ -n "$total" ]; then
+    TS_BOOT="${boot%:*}:$total:${boot##*:}"
+  fi
   rm -f "$capture"
   [ "$rc" -eq 0 ] || return "$rc"
   if [ "$TS_READY" != "$snap" ]; then

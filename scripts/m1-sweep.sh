@@ -98,7 +98,7 @@ for i in $(seq 0 29); do
 
   # Every row carries the snapshot the reset reported ready on (null if it never
   # got there). A reset ready on a different snapshot aborts the sweep (exit 12).
-  TS_READY=""
+  TS_READY=""; TS_BOOT=""
   ts_reset "$SNAP" "$PROGRESS" 2>>"$PROGRESS"; RESET_RC=$?
   if [ "$RESET_RC" -eq 12 ]; then
     echo "ABORT_SNAPSHOT_MISMATCH at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 12
@@ -117,7 +117,7 @@ for i in $(seq 0 29); do
     --mode normal --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial.out" 2> "$OUT/trial.err"
 
-  python3 scripts/m1-sweep-record.py "$i" "$FS" "$RK" "$CL" "$NV" "$OUT/trial.out" "$FPRINTS" "$AC_POWER" "$TS_READY" >> "$LOG"
+  python3 scripts/m1-sweep-record.py "$i" "$FS" "$RK" "$CL" "$NV" "$OUT/trial.out" "$FPRINTS" "$AC_POWER" "$TS_READY" "$TS_BOOT" >> "$LOG"
   if tail -1 "$LOG" | grep -q '"status": "seed-mismatch"'; then
     echo "ABORT_SEED_MISMATCH at trial $i $(date -u +%FT%TZ): $(tail -1 "$LOG")" >> "$PROGRESS"; exit 7
   fi
