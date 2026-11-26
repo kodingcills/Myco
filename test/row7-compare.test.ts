@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // TIF-211: the two numeric helpers behind row 7, called in process from Python so the
@@ -81,5 +83,66 @@ describe("m1-scorecard wilson", () => {
 
   it("returns None with no trials", () => {
     expect(py("print(json.dumps(card.wilson(0, 0)))")).toBeNull();
+  });
+});
+
+// TIF-98 (#529 round 3, D1' b): the comparator refuses to pair arms from different bases.
+// The Myco default moved to trial-base-v2; C1 restores cua-c1-base, a clean-base derivative.
+describe("row7-compare check_same_base", () => {
+  /** Runs check_same_base(myco, baseline) in process; returns "ok" or the refusal text. */
+  const same = (myco: Record<number, object>, baseline: Record<number, object>) =>
+    py(
+      [
+        `myco = {int(k): v for k, v in json.loads(${JSON.stringify(JSON.stringify(myco))}).items()}`,
+        `base = {int(k): v for k, v in json.loads(${JSON.stringify(JSON.stringify(baseline))}).items()}`,
+        "try:",
+        "    row7.check_same_base(myco, base)",
+        "    print(json.dumps('ok'))",
+        "except SystemExit as e:",
+        "    print(json.dumps(str(e)))",
+      ].join("\n"),
+    ) as string;
+
+  it("accepts legacy Myco rows (no snapshot key: pre-2026-11-26 clean-base) against C1", () => {
+    expect(same({ 0: { status: "verified" } }, { 0: {} })).toBe("ok");
+  });
+
+  it("accepts a Myco row on clean-base against C1's cua-c1-base (same base family)", () => {
+    expect(same({ 0: { snapshot: "clean-base" } }, { 0: {} })).toBe("ok");
+    expect(same({ 0: { snapshot: "clean-base" } }, { 0: { snapshot: "cua-c1-base" } })).toBe("ok");
+  });
+
+  it("refuses a Myco row on trial-base-v2 against C1's cua-c1-base", () => {
+    const r = same(
+      { 0: { snapshot: "clean-base" }, 1: { snapshot: "trial-base-v2" } },
+      { 0: {}, 1: {} },
+    );
+    expect(r).toContain("index 1: Myco ran on 'trial-base-v2' but the baseline on 'cua-c1-base'");
+  });
+
+  it("refuses an unknown Myco snapshot and an unknown baseline snapshot", () => {
+    expect(same({ 0: { snapshot: "clean-base-live" } }, { 0: {} })).toContain(
+      "index 0: Myco ran on",
+    );
+    expect(same({ 0: { snapshot: "clean-base" } }, { 0: { snapshot: "mystery" } })).toContain(
+      "has no known base family",
+    );
+  });
+
+  it("skips a null Myco snapshot (the reset never reached ready, no guest state)", () => {
+    expect(same({ 0: { snapshot: null, status: "reset-failed" } }, { 0: {} })).toBe("ok");
+  });
+
+  it("would accept both arms on trial-base-v2 once a baseline derivative exists", () => {
+    expect(same({ 0: { snapshot: "trial-base-v2" } }, { 0: { snapshot: "trial-base-v2" } })).toBe(
+      "ok",
+    );
+  });
+
+  it("compare() runs the check before pairing", () => {
+    const src = readFileSync(join(__dirname, "..", "scripts", "row7-compare.py"), "utf8");
+    const body = src.slice(src.indexOf("def compare("));
+    expect(body.indexOf("check_same_base(v3, r6)")).toBeGreaterThan(0);
+    expect(body.indexOf("check_same_base(v3, r6)")).toBeLessThan(body.indexOf("pairs = Counter()"));
   });
 });
