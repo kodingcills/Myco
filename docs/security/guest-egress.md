@@ -80,8 +80,27 @@ This choice over the alternatives:
     - **Exactly argc strings, never the environment.** The argv starts at the exec path
       rounded up to the pointer size (8), which is how xnu pads it. An empty argv[0] is
       refused: it looks like padding, and skipping it read the first environment string as
-      the last argument (follow-up, D9). No mode (`live`, `argv`, `names`) prints anything
-      from the environment block.
+      the last argument (follow-up, D9).
+    - **Nothing unvetted is printed, in any mode** (round 2, V1). argc is fixed at exec, but
+      the string area is the process's own memory: a process that rewrites it
+      (setproctitle-style) can leave fewer argv strings than argc, and then the last
+      "elements" read are environment strings. They cannot be told apart, so:
+      - a refusal (`live`, `verify`, `status`) names an element by its argv index and prints
+        only fixed text and words from the script's fixed vocabularies (QEMU option and
+        property names, chardev backends, drivers). It never echoes an element's text, so a
+        positional or trailing element shows as `positional argument at argv[N]`;
+      - `names` prints an option name only if it is in that vocabulary, otherwise
+        `<unrecognised option argv[N]>` or `<positional argv[N]>`;
+      - `argv` prints an element only if it is accepted as an allowlisted option name, or as
+        a value that its option's rule accepts; every other element prints as
+        `<redacted argv[N]>`.
+
+      So an environment string (`NAME=value`) never prints, unless the process itself wrote
+      it in the exact shape of an allowlisted value directly after a dangling allowlisted
+      option. Tests plant `PLANTED_FAKE_MARKER` in the environment with argc raised by 1, 2,
+      3, 5, 7 and 8, and assert it is absent from every mode's output. A sweep replaces each
+      element of UTM's launch with planted variants (over 1,000 cases) and asserts no
+      refusal or `names` line contains the marker.
     - **Process:** exactly one guest process, identified by argv[0] (`QEMULauncher` running a
       qemu binary, or a qemu binary).
     - **Shape:** no argv element may contain whitespace, and `-nodefaults` must be present as
@@ -99,8 +118,8 @@ This choice over the alternatives:
       form, so no `filter-redirector`/`filter-mirror`/`filter-dump` can attach before slirp.
       `-global` is not on the list either. `netdev=` may appear only once, on the one
       `virtio-net-pci` device, naming the netdev's id.
-    - **No host-network channel** (D5, D7). Chardevs are exactly UTM's: `spiceport` and
-      `spicevmc` (name, id, debug only), the one pty `pty,id=term0`, and the swtpm socket
+    - **No host-network channel** (D5, D7). Chardevs are exactly UTM's: `spiceport`
+      (name and id only), `spicevmc` (name, id and `debug` only), the one pty `pty,id=term0`, and the swtpm socket
       `socket,id=chrtpm0,path=<VM-UUID>.swtpm`. A second pty is refused: a pty was the
       `outdev` of round 3's D7 tunnel. A `-device chardev=` must name a SPICE chardev.
       `-serial` is exactly `chardev:term0`, and `-mon` is exactly UTM's QMP on its spiceport.
@@ -141,7 +160,9 @@ This choice over the alternatives:
        it can open a socket, attach to a netdev, add a monitor, or load configuration, do not
        add it; change the UTM setting that produced it instead.
     3. Otherwise add it to `ALLOWED` with the tightest value rule that UTM's value fits (use
-       `argv` mode to see the value; it may contain host paths, so don't paste it). Add the
+       `argv` mode to see the value; it may contain host paths, so don't paste it). `argv`
+       redacts every element no rule accepts, so a value the list does not yet allow shows as
+       `<redacted argv[N]>`: read that one element on the host yourself, never paste it. Add the
        option to the `utmDefaultArgv()` fixture and a refusal test for a bad value of it in
        `test/guest-egress.test.ts`.
     4. Re-run `scripts/guest-egress.sh verify` on the live guest and commit the `names`
@@ -153,6 +174,9 @@ This choice over the alternatives:
   Anything it cannot read or parse is a failure. That includes:
   - an unreadable process list, an unreadable UTM, and a process whose argv cannot be read
     for a fixture run;
+  - a readable process whose procargs do not parse when its exec path is a qemu binary or
+    `QEMULauncher` (outside fixture runs other unparseable processes are skipped, so a
+    second guest with an empty argv[0] would otherwise go uncounted);
   - a malformed or truncated procargs buffer, an empty exec path, non-NUL padding and an
     empty argv[0];
   - an option without `=`, an escaped comma, a JSON value, a `-netdev=` form, and an option

@@ -399,7 +399,9 @@ exactly one configuration:
 
 - **In the live QEMU process**, whose argv is read exactly from the kernel (`KERN_PROCARGS2`),
   not from `ps`:
-  - exactly argc strings are read, never the environment, and an empty argv[0] is refused;
+  - exactly argc strings are read and an empty argv[0] is refused; no mode prints an element
+    the allowlist has not accepted (refusals name the argv index only), so an environment
+    string left in the argv area by a process that rewrote it is never printed;
   - every option must be on a fixed allowlist taken from UTM's launch, with its value in UTM's
     shape; anything else is refused, including `-object` (any form), `-qmp`, `-qmp-pretty`,
     `-monitor`, `-nic`, `-net`, `-global`, `-vnc`, a positional argument and any JSON value;
@@ -425,7 +427,7 @@ Commands (each takes the VM lock where it changes anything; check `lsof` first a
 scripts/guest-egress.sh status   # read-only: UTM flag and network config, the live netdev check
 scripts/guest-egress.sh verify   # exit 0 only if the live guest AND UTM match the allowlist exactly
 scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
-python3 -I scripts/guest_egress_check.py argv   # the running guest's exact argv (argv only, no environment)
+python3 -I scripts/guest_egress_check.py argv   # the guest's argv; elements no rule accepts print as <redacted argv[N]>
 python3 -I scripts/guest_egress_check.py names  # option names only, each marked allowed / NOT ALLOWED (safe to paste)
 scripts/guest-egress.sh deny     # set the flag (force-stops the VM; reset afterwards)
 scripts/guest-egress.sh allow    # clear it: base-image maintenance ONLY

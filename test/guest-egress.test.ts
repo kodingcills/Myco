@@ -448,8 +448,34 @@ describe("guest-egress.sh verify refuses: tunnels past slirp (D5)", () => {
   it("any other -object that references a netdev", () => {
     refuse(["-object", "colo-compare,id=cc,netdev=net0"], "-object is not in the launch allowlist");
   });
-  it("a second NIC device on the same netdev", () => {
+  it("an e1000 NIC on the same netdev (driver not allowlisted)", () => {
     refuse(["-device", "e1000,netdev=net0"], "-device e1000 is not in the allowlist");
+  });
+  // V2 (round 2): these reach the netdev-references rule in check(); removing
+  // that rule must fail them.
+  it("a second virtio-net-pci on the same netdev", () => {
+    refuse(["-device", "virtio-net-pci,netdev=net0"], "netdev references: 2 NIC devices");
+  });
+  it("a second virtio-net-pci on another netdev id (net1)", () => {
+    refuse(["-device", "virtio-net-pci,netdev=net1"], "netdev references: 2 NIC devices");
+  });
+  it("the one NIC naming a netdev other than the -netdev's id", () => {
+    const argv = guestArgv().map((a) =>
+      a === "virtio-net-pci,mac=4A:50:C3:24:9B:33,netdev=net0"
+        ? "virtio-net-pci,mac=4A:50:C3:24:9B:33,netdev=net1"
+        : a,
+    );
+    const r = run([argv]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("netdev references: the NIC names a netdev other");
+  });
+  it("no NIC device on the netdev", () => {
+    const argv = guestArgv().filter(
+      (a, i, all) => !(a.startsWith("virtio-net-pci") || all[i + 1]?.startsWith("virtio-net-pci")),
+    );
+    const r = run([argv]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("netdev references: 0 NIC devices");
   });
   it("a netdev= reference outside any -device", () => {
     refuse(["-global", "virtio-net-pci.netdev=net0"], "-global is not in the launch allowlist");
@@ -476,7 +502,10 @@ describe("guest-egress.sh verify refuses: tunnels past slirp (D5)", () => {
     );
   });
   it("-serial tcp:", () => {
-    refuse(["-serial", "tcp:203.0.113.9:9"], "-serial tcp:203.0.113.9:9 is not in the allowlist");
+    const r = run([guestArgv(undefined, ["-serial", "tcp:203.0.113.9:9"])]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("-serial value is not in the allowlist (want chardev:term0)");
+    expect(r.stderr).not.toContain("203.0.113.9");
   });
   it("-serial udp:", () => {
     refuse(["-serial", "udp:203.0.113.9:9"], "is not in the allowlist");
@@ -570,14 +599,15 @@ describe("follow-up: option allowlist (D7, D8, unknown options)", () => {
   it("a device wired to the pty instead of a SPICE chardev", () => {
     refuse(
       withExtra("-device", "virtserialport,chardev=term0,name=x"),
-      "chardev=term0 is not one of UTM's SPICE",
+      "chardev= is not one of UTM's SPICE chardevs (it names UTM's pty term0)",
     );
   });
   it("the monitor moved off UTM's spiceport", () => {
     const argv = utmDefaultArgv().map((a) =>
       a === "chardev=org.qemu.monitor.qmp,mode=control" ? "chardev=term0,mode=control" : a,
     );
-    refuse(argv, "-mon chardev=term0,mode=control is not in the allowlist");
+    const r = refuse(argv, "-mon value is not in the allowlist");
+    expect(r.stderr).not.toContain("chardev=term0");
   });
   it("D8: -qmp-pretty on a TCP listener", () => {
     refuse(
@@ -591,8 +621,12 @@ describe("follow-up: option allowlist (D7, D8, unknown options)", () => {
       "--qmp-pretty is not in the launch allowlist",
     );
   });
-  it("an unknown option (no special reason)", () => {
-    refuse(withExtra("-frobnicate", "x"), "-frobnicate is not in the launch allowlist");
+  it("an unknown option (no special reason), named by index only", () => {
+    const r = refuse(
+      withExtra("-frobnicate", "x"),
+      `the option at argv[${utmDefaultArgv().length}] is not in the launch allowlist`,
+    );
+    expect(r.stderr).not.toContain("frobnicate");
   });
   it("the round-3 N10 listeners and channels", () => {
     refuse(withExtra("-vnc", "0.0.0.0:0"), "-vnc is not in the launch allowlist");
@@ -618,10 +652,11 @@ describe("follow-up: option allowlist (D7, D8, unknown options)", () => {
     refuse(argv, "-spice option tls-port= is not in the allowlist");
   });
   it("a network block device as a drive", () => {
-    refuse(
+    const r = refuse(
       withExtra("-drive", "if=none,id=d9,file=nbd://203.0.113.9:10809/x"),
-      "file=nbd://203.0.113.9:10809/x is not in the allowed shape",
+      "-drive option file= has a value not in the allowed shape",
     );
+    expect(r.stderr).not.toContain("nbd://");
   });
   it("a drive that names its own block driver", () => {
     refuse(
@@ -630,7 +665,8 @@ describe("follow-up: option allowlist (D7, D8, unknown options)", () => {
     );
   });
   it("a positional argument (QEMU takes it as a disk image)", () => {
-    refuse(withExtra("disk.img"), "positional argument 'disk.img'");
+    const r = refuse(withExtra("disk.img"), "positional argument at argv[");
+    expect(r.stderr).not.toContain("disk.img");
   });
   it("netdev= on an allowlisted device that is not the NIC", () => {
     refuse(withExtra("-device", "usb-storage,netdev=net0"), "netdev= on a usb-storage device");
@@ -687,6 +723,145 @@ describe("follow-up: an empty argv[0] never exposes the environment (D9)", () =>
     const r = run([b]);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("malformed exec path padding");
+  });
+});
+
+describe("round 2 V1: argc larger than the argv strings never prints the environment", () => {
+  // A process that rewrites its own argv area (setproctitle-style) can leave
+  // fewer argv strings than the kernel's argc, so the parser's last elements
+  // are environment strings. They cannot be told apart, so nothing unvetted
+  // may print. MARKER is a clearly fake planted value, never key-shaped.
+  const MARKER = "PLANTED_FAKE_MARKER";
+  const ENV_TAIL = [
+    `${MARKER}=planted-fake-value`,
+    `-${MARKER}`,
+    `--${MARKER}=1`,
+    "-netdev",
+    `user,id=${MARKER},restrict=on`,
+    "-device",
+    `e1000,${MARKER}=1`,
+    `{"${MARKER}":1}`,
+    "HOME=/nowhere",
+  ];
+  const overshoot = (argv: string[], extra: number) => {
+    const b = procargs(argv, `${ENV_TAIL.join("\0")}\0`);
+    b.writeInt32LE(argv.length + extra, 0);
+    return b;
+  };
+
+  for (const extra of [1, 2, 3, 5, 7, 8]) {
+    for (const mode of ["verify", "status", "live", "argv", "names"]) {
+      it(`argc+${extra}: ${mode} never prints the planted marker`, () => {
+        const argv = utmDefaultArgv();
+        const r = run([overshoot(argv, extra)], GOOD_UTM, [mode]);
+        expect(`${r.stdout}${r.stderr}`).not.toContain(MARKER);
+        expect(`${r.stdout}${r.stderr}`).not.toContain("planted-fake-value");
+        if (mode === "verify" || mode === "live") expect(r.status).toBe(1);
+        else expect(r.status).toBe(0);
+        if (mode === "argv") expect(r.stdout).toContain(`<redacted argv[${argv.length}]>`);
+        if (mode === "live") expect(r.stdout).toContain(`argv[${argv.length}]`);
+      });
+    }
+  }
+
+  it("argc+1 on the minimal launch: live refuses by index, argv redacts", () => {
+    const argv = guestArgv();
+    const live = run([overshoot(argv, 1)], GOOD_UTM, ["live"]);
+    expect(live.stdout).toContain(`positional argument at argv[${argv.length}]`);
+    const dump = run([overshoot(argv, 1)], GOOD_UTM, ["argv"]);
+    expect(dump.stdout.trimEnd().split("\n").at(-1)).toBe(`<redacted argv[${argv.length}]>`);
+    expect(dump.stdout).toContain("-nodefaults\n");
+    expect(`${live.stdout}${dump.stdout}`).not.toContain(MARKER);
+  });
+
+  it("no refusal, names line or redacted argv line echoes a planted element (sweep)", () => {
+    // Every element of UTM's launch, replaced in turn by planted variants. A
+    // refusal and a `names` line may hold only fixed words and indexes; `argv`
+    // may hold an element only if its option's rule accepts it, and no rule
+    // accepts ';'.
+    const driver = `
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import guest_egress_check as g
+M = "${MARKER}"
+argv = json.load(sys.stdin)
+variants = lambda a: [M, "-" + M, "--" + M, "--" + M + "=1", "-name=" + M, a + "," + M + "=1",
+                      a + "," + M, a + "," + M + "=x;y", a + ",id=" + M + ";", a + "," + M + "=1," + M + "=1",
+                      "{" + M + "}", M + "=1", a + ";" + M, "-device", "-chardev", "-netdev"]
+leaks, refused, n = [], 0, 0
+for i in range(2, len(argv)):
+    for v in variants(argv[i]):
+        bad = argv[:i] + [v] + argv[i + 1:]
+        n += 1
+        try:
+            g.check(bad)
+        except g.Refused as e:
+            refused += 1
+            if M in str(e): leaks.append(("check", i, str(e)))
+        if any(M in line for line in g.names_lines(bad)): leaks.append(("names", i))
+        if ";" in v and any(M in line for line in g.argv_lines(bad)): leaks.append(("argv", i))
+print(json.dumps({"n": n, "refused": refused, "leaks": leaks[:5]}))
+`;
+    const r = spawnSync(
+      "python3",
+      ["-I", "-c", driver, join(import.meta.dirname, "..", "scripts")],
+      {
+        input: JSON.stringify(utmDefaultArgv()),
+        encoding: "utf8",
+      },
+    );
+    expect(r.stderr).toBe("");
+    const out = JSON.parse(r.stdout) as { n: number; refused: number; leaks: unknown[] };
+    expect(out.leaks).toEqual([]);
+    expect(out.n).toBeGreaterThan(1000);
+    expect(out.refused).toBeGreaterThan(out.n * 0.9);
+  });
+});
+
+describe("round 2 nit: an unparseable qemu process is never skipped", () => {
+  // Outside fixture mode, processes whose procargs do not parse are skipped
+  // (other users' processes, exited ones). A qemu executable must not be: a
+  // second guest with an empty argv[0] would go uncounted.
+  const driver = (badExec: string) => `
+import struct, sys
+sys.path.insert(0, sys.argv[1])
+import guest_egress_check as g
+def buf(argv, exec_path):
+    p = exec_path.encode() + b"\\0"
+    p += b"\\0" * (-len(p) % 8)
+    return struct.pack("<i", len(argv)) + p + b"\\0".join(a.encode() for a in argv) + b"\\0HOME=/x\\0"
+good = ["/a/QEMULauncher", "/a/qemu-aarch64-softmmu", "-nodefaults"]
+bad = buf(["", "-nodefaults"], ${JSON.stringify(badExec)})
+bufs = {1: buf(good, good[0]), 2: bad}
+g.candidate_pids = lambda: [1, 2]
+g.read_procargs2 = lambda pid: bufs[pid]
+try:
+    print("guest argv of", len(g.find_guest_argv()))
+except g.Refused as e:
+    print("FAIL:", e)
+`;
+  const go = (badExec: string) =>
+    spawnSync(
+      "python3",
+      ["-I", "-c", driver(badExec), join(import.meta.dirname, "..", "scripts")],
+      {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin:/bin" },
+      },
+    );
+
+  it("refuses when an unparseable buffer's exec path is a qemu binary", () => {
+    const r = go(QEMU_BIN);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toContain("FAIL: procargs: empty argv[0]");
+  });
+  it("refuses when it is QEMULauncher", () => {
+    expect(go(LAUNCHER).stdout).toContain("FAIL: procargs: empty argv[0]");
+  });
+  it("still skips an unparseable non-qemu process", () => {
+    const r = go("/usr/bin/login");
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toContain("guest argv of 3");
   });
 });
 
