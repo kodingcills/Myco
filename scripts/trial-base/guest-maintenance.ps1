@@ -138,8 +138,15 @@ if ($Stage -eq 'ngen') {
 
 if ($Stage -eq 'idle') {
   # Automatic Maintenance on demand, then the idle-task queue. Done when no
-  # \Microsoft\Windows task has been running and the guest CPU has stayed low
-  # for 3 consecutive 30 s samples; give up (exit 1) after 60 minutes.
+  # \Microsoft\Windows task (except the two below) has been running and the
+  # guest CPU has stayed low for 3 consecutive 30 s samples; give up (exit 1)
+  # after 60 minutes.
+  # Exactly two tasks are not counted, matched by full path (equality, no
+  # wildcards; lead ruling 2026-11-26 05:37Z). Both run for the whole session:
+  # in build run 2 they were running in all 116 samples, and also 22 s after
+  # boot, so the stage could never pass while they counted. They are still
+  # logged in every sample.
+  $notCounted = @('\Microsoft\Windows\Multimedia\SystemSoundsService', '\Microsoft\Windows\Wininet\CacheTask')
   $msched = "$env:windir\System32\MSchedExe.exe"
   if (Test-Path -LiteralPath $msched) { Native { & $msched Start }; "idle: Automatic Maintenance started" } else { "idle: MSchedExe.exe not present; idle tasks only" }
   Native { & "$env:windir\System32\rundll32.exe" advapi32.dll,ProcessIdleTasks }
@@ -148,9 +155,10 @@ if ($Stage -eq 'idle') {
     if ((Get-Date) -gt $deadline) { "idle: not quiet after 60 min; running: $((RunningWindowsTasks) -join ', ')"; exit 1 }
     Start-Sleep -Seconds 30
     $running = RunningWindowsTasks
+    $counted = @($running | Where-Object { $notCounted -notcontains $_ })
     $cpu = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 0)
-    "idle: $(Get-Date -Format HH:mm:ss) cpu=$cpu% running=$($running.Count) $($running -join ', ')"
-    if ($running.Count -eq 0 -and $cpu -lt 15) { $quiet++ } else { $quiet = 0 }
+    "idle: $(Get-Date -Format HH:mm:ss) cpu=$cpu% running=$($running.Count) counted=$($counted.Count) $($running -join ', ')"
+    if ($counted.Count -eq 0 -and $cpu -lt 15) { $quiet++ } else { $quiet = 0 }
   }
   "idle: quiet for 3 samples"
   exit 0

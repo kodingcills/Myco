@@ -251,3 +251,52 @@ describe("guest-maintenance.ps1 signatures stage", () => {
     expect(stage).toMatch(/if \(\(Get-Date\) -gt \$deadline\) \{[^}]*exit 1 \}/);
   });
 });
+
+/**
+ * Idle stage (lead ruling 2026-11-26 05:37Z): exactly two always-running tasks
+ * are not counted, matched by full path with no wildcards. Build run 2 had them
+ * running in all 116 samples. Every other \Microsoft\Windows task still has to
+ * be idle, and the stage fails closed (exit 1) at the 60 min deadline.
+ */
+describe("guest-maintenance.ps1 idle stage", () => {
+  const ps = readFileSync(join(ROOT, "scripts", "trial-base", "guest-maintenance.ps1"), "utf8");
+  const start = ps.indexOf("if ($Stage -eq 'idle') {");
+  const end = ps.indexOf("if ($Stage -eq", start + 1);
+  const stage = ps
+    .slice(start, end)
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+
+  it("is found", () => {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+  });
+
+  it("does not count exactly the two tasks, by full path, with no wildcards", () => {
+    const m = stage.match(/\$notCounted = @\(([^)]*)\)/);
+    expect(m).not.toBeNull();
+    const paths = [...(m?.[1] ?? "").matchAll(/'([^']*)'/g)].map((x) => x[1]);
+    expect(paths).toEqual([
+      "\\Microsoft\\Windows\\Multimedia\\SystemSoundsService",
+      "\\Microsoft\\Windows\\Wininet\\CacheTask",
+    ]);
+    // Nothing else between the parentheses (no unquoted or extra entries).
+    expect((m?.[1] ?? "").replace(/'[^']*'/g, "").replace(/[\s,]/g, "")).toBe("");
+    for (const p of paths) expect(p).not.toMatch(/[*?[\]]/);
+    // Exact matching only: no -like / -match family anywhere in the stage.
+    expect(stage).not.toMatch(/-(not)?(i|c)?(like|match)\b/i);
+    expect(stage).toContain("Where-Object { $notCounted -notcontains $_ }");
+  });
+
+  it("still requires every other task to be idle", () => {
+    expect(stage).toMatch(/\$running = RunningWindowsTasks/);
+    expect(stage).toMatch(/\$counted = @\(\$running \| Where-Object/);
+    expect(stage).toMatch(/if \(\$counted\.Count -eq 0 -and \$cpu -lt 15\) \{ \$quiet\+\+ \}/);
+  });
+
+  it("fails closed at the 60 min deadline", () => {
+    expect(stage).toContain("$deadline = (Get-Date).AddMinutes(60)");
+    expect(stage).toMatch(/if \(\(Get-Date\) -gt \$deadline\) \{[^}]*exit 1 \}/);
+  });
+});
