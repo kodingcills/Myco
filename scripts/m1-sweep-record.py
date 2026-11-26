@@ -30,9 +30,13 @@ def record(argv):
     expected = json.load(open(fp_path)).get(seed)
     # acPower is recorded as evidence, never enforced: a battery row is valid.
     ac = "yes" if rest and rest[0] == "yes" else "no"
+    # The snapshot the trial's reset reported ready on (TIF-98): the driver parses
+    # it from `reset-trial-vm: ready on '<snap>'`. Every row carries the key; it is
+    # null when the driver passed none.
+    snapshot = rest[1] if len(rest) > 1 and rest[1] else None
     rec = {
         "index": int(idx), "fixtureSeed": seed, "rowKey": rk, "column": cl,
-        "typed": nv, "acPower": ac,
+        "typed": nv, "acPower": ac, "snapshot": snapshot,
     }
     try:
         d = json.load(open(out_path))
