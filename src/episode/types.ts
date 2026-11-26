@@ -96,7 +96,12 @@ export type EpisodeGroundTruth =
     }
   | {
       readonly source: "none";
-      readonly reason: "no-independent-grader" | "harness-fault" | "agent-never-ran";
+      readonly reason:
+        | "no-independent-grader"
+        | "harness-fault"
+        | "agent-never-ran"
+        /** The captured document was withheld as unclean, so no grade can be bound to it. */
+        | "document-withheld";
     };
 
 export interface EpisodeHarness {

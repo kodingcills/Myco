@@ -6,13 +6,16 @@
  * observes (it tees the capture to read the persisted document, and notes whether the agent
  * run or the capture threw); the gate's inputs, its binding and its verdict are unchanged,
  * and the episode is written AFTER the gate decided, from its result. An episode that cannot
- * be written (refused as unclean) never changes the trial's outcome; the refusal is logged in
- * the store by code and returned.
+ * be written never changes the trial's outcome: a refusal (unclean) is logged in the store by
+ * code and returned; any other error while building or writing it (a store I/O error, a
+ * throwing caller callback) is caught and returned as `{ status: "error" }` beside the outcome.
  *
  * Outcome labels:
  *  - the launch audit refused the plan: `launch-refused` (the agent never ran);
- *  - the transport's `runAgent` or `captureAfterStop` threw: `harness-fault`
- *    (`transport-error` / `capture-error`), and the error is re-thrown;
+ *  - `runGatedTrial` threw: `harness-fault`, and the original error is re-thrown (an error
+ *    saving the episode never replaces it). The class is `transport-error` when the
+ *    transport's `runAgent` threw, `capture-error` when its `captureAfterStop` threw, and
+ *    `harness-error` for any other throw (e.g. the vault refusing a captured file name);
  *  - the gate decided with a harness reason code (the codes `src/benchmark/gated-rows.ts`
  *    classes as harness): `harness-fault` / `gate-harness-code`, never an agent outcome;
  *  - the caller declares a harness fault (`harnessFault`, e.g. from its trial-ops row):
@@ -21,7 +24,8 @@
  *
  * Ground truth is the INDEPENDENT grader's (`groundTruth` callback, e.g. `gradeCalcRecordEdit`
  * in `ground-truth.ts`), handed the captured document only; the gate's result is never passed
- * to it.
+ * to it. When the captured document was withheld as unclean, the grader is not called and
+ * ground truth is `document-withheld`.
  */
 import type { ReasonCode } from "../gate/api.ts";
 import {
@@ -76,9 +80,12 @@ export interface EpisodeCapture {
   readonly persistedMediaType?: "text/csv" | "application/json";
 }
 
+/** The store's result, or the error that kept the episode from being built or written. */
+export type EpisodeSaveResult = WriteResult | { readonly status: "error"; readonly error: unknown };
+
 export interface GatedTrialWithEpisode {
   readonly outcome: GatedTrialOutcome;
-  readonly episode: WriteResult;
+  readonly episode: EpisodeSaveResult;
 }
 
 export async function runGatedTrialWithEpisode(
@@ -93,9 +100,10 @@ export async function runGatedTrialWithEpisode(
   // Written from inside the transport wrapper (closures), so held in one object.
   const seen: {
     persisted: Uint8Array | null;
+    persistedKept: boolean;
     agentRan: boolean;
     fault: { class: EpisodeFaultClass; code: string | null } | null;
-  } = { persisted: null, agentRan: false, fault: null };
+  } = { persisted: null, persistedKept: false, agentRan: false, fault: null };
   const transport: GatedTrialOptions["transport"] = {
     async runAgent(plan, gate) {
       seen.agentRan = true;
@@ -117,14 +125,32 @@ export async function runGatedTrialWithEpisode(
       const bytes = stateFile === undefined ? undefined : input[`persisted/${stateFile}`];
       if (bytes !== undefined) {
         seen.persisted = Uint8Array.from(bytes);
-        recorder.state("persisted", capture.persistedMediaType ?? "text/csv", seen.persisted);
+        seen.persistedKept = recorder.state(
+          "persisted",
+          capture.persistedMediaType ?? "text/csv",
+          seen.persisted,
+        );
       }
       return input;
     },
   };
 
   const family = entry?.family.id ?? "unknown";
+  // Never throws: the trial's outcome (or its original error) must reach the caller whatever
+  // happens to the episode. The draft is a thunk so a throwing callback is caught too.
   const save = (
+    makeDraft: () => Pick<EpisodeDraft, "outcome" | "gate" | "groundTruth"> & {
+      fault: EpisodeHarness["fault"];
+      corrections: "on" | "off";
+    },
+  ): EpisodeSaveResult => {
+    try {
+      return write(makeDraft());
+    } catch (error) {
+      return { status: "error", error };
+    }
+  };
+  const write = (
     draft: Pick<EpisodeDraft, "outcome" | "gate" | "groundTruth"> & {
       fault: EpisodeHarness["fault"];
       corrections: "on" | "off";
@@ -167,28 +193,28 @@ export async function runGatedTrialWithEpisode(
   try {
     outcome = await runGatedTrial({ ...opts, transport });
   } catch (error) {
-    // The harness could not finish the attempt: saved labelled, never as an agent outcome.
-    if (seen.fault !== null)
-      save({
-        outcome: "harness-fault",
-        gate: null,
-        groundTruth: { source: "none", reason: "harness-fault" },
-        fault: seen.fault,
-        corrections: correctionsSetting,
-      });
+    // The harness could not finish the attempt: saved labelled, never as an agent outcome,
+    // wherever the throw came from. `save` never throws, so `error` is what propagates.
+    save(() => ({
+      outcome: "harness-fault",
+      gate: null,
+      groundTruth: { source: "none", reason: "harness-fault" },
+      fault: seen.fault ?? { class: "harness-error", code: null },
+      corrections: correctionsSetting,
+    }));
     throw error;
   }
 
   if (outcome.status === "refused") {
     return {
       outcome,
-      episode: save({
+      episode: save(() => ({
         outcome: "launch-refused",
         gate: null,
         groundTruth: { source: "none", reason: "agent-never-ran" },
         fault: null,
         corrections: correctionsSetting,
-      }),
+      })),
     };
   }
 
@@ -212,26 +238,30 @@ export async function runGatedTrialWithEpisode(
   if (declared !== null) {
     return {
       outcome,
-      episode: save({
+      episode: save(() => ({
         outcome: "harness-fault",
         gate,
         groundTruth: { source: "none", reason: "harness-fault" },
         fault: declared,
         corrections: outcome.corrections,
-      }),
+      })),
     };
   }
   return {
     outcome,
-    episode: save({
+    episode: save(() => ({
       outcome: result.verdict,
       gate,
-      groundTruth: capture.groundTruth?.(seen.persisted) ?? {
-        source: "none",
-        reason: "no-independent-grader",
-      },
+      // A document withheld as unclean is not graded: the grade could not be bound to it.
+      groundTruth:
+        seen.persisted !== null && !seen.persistedKept
+          ? { source: "none", reason: "document-withheld" }
+          : (capture.groundTruth?.(seen.persisted) ?? {
+              source: "none",
+              reason: "no-independent-grader",
+            }),
       fault: null,
       corrections: outcome.corrections,
-    }),
+    })),
   };
 }

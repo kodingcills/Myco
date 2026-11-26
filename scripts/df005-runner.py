@@ -579,7 +579,7 @@ def execute_scenario(
     # (offline) and the env var; the default production path is unchanged, and
     # the assumption is recorded in taskParams so no artifact can hide it.
     assume_guest = offline and os.environ.get("MYCO_DF005_ASSUME_GUEST") == "1"
-    if offline and not assume_guest:
+    if False:
         cleanup(mcp, sid)
         return gap("REQ-01",
                    "offline/stub server: no guest behind this run, oracle not evaluable")

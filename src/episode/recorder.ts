@@ -109,16 +109,19 @@ export class EpisodeRecorder {
     });
   }
 
-  /** Structured state (never scrubbed: an unclean document is withheld, not altered). */
+  /**
+   * Structured state (never scrubbed: an unclean document is withheld, not altered). Returns
+   * whether it was kept: a caller grading a withheld document must not bind the grade to it.
+   */
   state(
     label: "persisted" | "ui-tree" | "app-state",
     mediaType: "text/csv" | "application/json",
     bytes: Uint8Array,
     afterAction: number | null = this.lastAction,
-  ): void {
+  ): boolean {
     if (blobIssues(bytes, "text", this.#host).length > 0) {
       this.#withheld += 1;
-      return;
+      return false;
     }
     const sha256 = sha256Hex(bytes);
     const file = `blobs/${sha256}.${mediaType === "text/csv" ? "csv" : "json"}`;
@@ -132,6 +135,7 @@ export class EpisodeRecorder {
       bytes: bytes.length,
       file,
     });
+    return this.#observations.some((o) => o.kind === "state" && o.sha256 === sha256);
   }
 
   uiStatus(text: string, afterAction: number | null = this.lastAction): void {

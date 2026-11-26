@@ -7,7 +7,8 @@
  * episode is `simulated: true` and goes to a simulated store. The dry run's arm rows carry the
  * gate's verdict but not its reason codes, so `gate.reasonCodes` is null (not recorded), and
  * the scripted agent's actions are not seen (`not-recorded`). Ground truth is the independent
- * grader on the captured document against the published fixture.
+ * grader on the captured document against the published fixture; a document withheld as
+ * unclean is not graded (`document-withheld`), since the grade could not be bound to it.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,7 +42,7 @@ export function writeDryRunEpisodes(input: DryRunEpisodesInput): WriteResult[] {
       throw new Error(`${row.trialKey}: task ${row.taskId} is not in the task set`);
     const doc = new Uint8Array(readFileSync(join(input.dryRunDir, "docs", `${row.trialKey}.csv`)));
     const recorder = new EpisodeRecorder();
-    recorder.state("persisted", "text/csv", doc, null);
+    const kept = recorder.state("persisted", "text/csv", doc, null);
     const snap = recorder.snapshot();
 
     let outcome: EpisodeOutcome;
@@ -72,13 +73,15 @@ export function writeDryRunEpisodes(input: DryRunEpisodesInput): WriteResult[] {
         ? ({ source: "none", reason: "harness-fault" } as const)
         : outcome === "launch-refused"
           ? ({ source: "none", reason: "agent-never-ran" } as const)
-          : gradeCalcRecordEdit({
-              fixtureCsv: new Uint8Array(readFileSync(join(input.bundleDir, task.fixtureFile))),
-              fixtureSha256: task.fixtureSha256,
-              intent: task.intent,
-              columnTypes: task.columnTypes,
-              persistedFormat: "csv",
-            })(doc);
+          : !kept
+            ? ({ source: "none", reason: "document-withheld" } as const)
+            : gradeCalcRecordEdit({
+                fixtureCsv: new Uint8Array(readFileSync(join(input.bundleDir, task.fixtureFile))),
+                fixtureSha256: task.fixtureSha256,
+                intent: task.intent,
+                columnTypes: task.columnTypes,
+                persistedFormat: "csv",
+              })(doc);
     const observations =
       outcome === "launch-refused" ? NOT_RECORDED.observations : snap.observations;
     results.push(

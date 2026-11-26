@@ -4,7 +4,7 @@
  * the M2 dry run and the gate's mock demo. Simulated rows are labelled simulated and a real
  * store refuses them. Real gate (sealed vault, calc-record-edit), no VM, no model.
  */
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import { writeDryRunEpisodes } from "../../src/episode/dry-run.ts";
 import { runGatedTrialWithEpisode } from "../../src/episode/gated.ts";
 import { EpisodeStore, readStoreDir } from "../../src/episode/store.ts";
 import type { Episode } from "../../src/episode/types.ts";
+import { sha256Hex } from "../../src/episode/validate.ts";
 import { main as gateMain } from "../../src/gate/cli.ts";
 import {
   BUNDLE,
@@ -47,13 +48,19 @@ function only(store: EpisodeStore): Episode {
 }
 
 async function gated(
-  doc: Uint8Array | null | "throw-run" | "throw-capture",
+  doc: Uint8Array | null | "throw-run" | "throw-capture" | "bad-capture-name",
   over: Parameters<typeof captureFor>[2] = {},
   planEnv: Record<string, string> = {},
+  extra: {
+    readonly breakStore?: boolean;
+    readonly corrections?: { readonly families: readonly string[] };
+  } = {},
 ) {
   const base = dir("gated");
   const t = task("none");
   const store = EpisodeStore.open(join(base, "store"), { simulated: true, host: HOST });
+  // A store I/O error after the gate decides: the episodes directory is gone.
+  if (extra.breakStore === true) rmSync(join(store.root, "episodes"), { recursive: true });
   const run = runGatedTrialWithEpisode(
     {
       vault: vaultIn(base),
@@ -62,12 +69,15 @@ async function gated(
       tasks: registry(t),
       plan: plan(base, planEnv),
       oracleSources: ORACLE_SOURCES,
+      ...(extra.corrections ? { corrections: extra.corrections } : {}),
       transport: {
         async runAgent() {
           if (doc === "throw-run") throw new Error("ssh dropped");
         },
         async captureAfterStop(): Promise<Record<string, Uint8Array>> {
           if (doc === "throw-capture") throw new Error("copy failed");
+          // A name the vault refuses: the throw comes from vault.capture, not the transport.
+          if (doc === "bad-capture-name") return { "../escape": new Uint8Array([0x41]) };
           return doc === null || typeof doc === "string" ? {} : { "persisted/doc.csv": doc };
         },
       },
@@ -108,12 +118,19 @@ describe("runGatedTrialWithEpisode: every ending writes a labelled episode", () 
   });
 
   it("uncertain: a document the gate cannot read is labelled uncertain", async () => {
-    const { store, run } = await gated(new Uint8Array([0xff, 0xfe, 0x00, 0x22, 0x0a, 0x22]));
+    const doc = new Uint8Array([0xff, 0xfe, 0x00, 0x22, 0x0a, 0x22]);
+    const { store, run } = await gated(doc);
     await run;
     const ep = only(store);
     expect(ep.outcome).toBe("uncertain");
     expect(ep.gate?.verdict).toBe("uncertain");
     expect(ep.harness.fault).toBeNull();
+    // The independent grader's result on that same document, bound to it by hash.
+    expect(ep.groundTruth).toMatchObject({
+      source: "independent-grader",
+      persistedSha256: sha256Hex(doc),
+    });
+    expect(ep.observations.items[0]).toMatchObject({ label: "persisted", sha256: sha256Hex(doc) });
   });
 
   it("harness fault (gate harness code): no document captured is a harness fault, not an agent outcome", async () => {
@@ -183,6 +200,7 @@ describe("runGatedTrialWithEpisode: every ending writes a labelled episode", () 
     expect(outcome.status).toBe("refused");
     const ep = only(store2);
     expect(ep.outcome).toBe("launch-refused");
+    expect(ep.harness.corrections).toBe("off");
     expect(ep.agentClaim).toBe("no-claim");
     expect(ep.groundTruth).toEqual({ source: "none", reason: "agent-never-ran" });
   });
@@ -196,6 +214,71 @@ describe("runGatedTrialWithEpisode: every ending writes a labelled episode", () 
     expect(outcome.status).toBe("decided");
     expect(episode.status).toBe("refused");
     expect(readdirSync(join(store.root, "episodes"))).toEqual([]);
+  });
+
+  it("harness fault outside the transport (the vault refuses the capture): saved, error propagates", async () => {
+    const { store, run } = await gated("bad-capture-name");
+    await expect(run).rejects.toThrow(/bad-name/);
+    const ep = only(store);
+    expect(ep.outcome).toBe("harness-fault");
+    expect(ep.harness.fault).toEqual({ class: "harness-error", code: null });
+    expect(ep.gate).toBeNull();
+    expect(ep.groundTruth).toEqual({ source: "none", reason: "harness-fault" });
+  });
+
+  it("a store I/O error after the gate decides: the outcome is still returned, the error beside it", async () => {
+    const t = task("none");
+    const { run } = await gated(honestDoc(t), {}, {}, { breakStore: true });
+    const { outcome, episode } = await run;
+    expect(outcome.status).toBe("decided");
+    expect(outcome.status === "decided" && outcome.result.verdict).toBe("verified");
+    expect(episode.status).toBe("error");
+    expect(episode.status === "error" && String(episode.error)).toMatch(/ENOENT/);
+  });
+
+  it("a store I/O error on a harness fault never masks the original error", async () => {
+    const { run } = await gated("throw-run", {}, {}, { breakStore: true });
+    await expect(run).rejects.toThrow(/ssh dropped/);
+  });
+
+  it("a throwing caller callback is caught: the outcome is still returned", async () => {
+    const t = task("none");
+    const { run } = await gated(honestDoc(t), {
+      claim: () => {
+        throw new Error("claim file unreadable");
+      },
+    });
+    const { outcome, episode } = await run;
+    expect(outcome.status).toBe("decided");
+    expect(episode.status === "error" && String(episode.error)).toMatch(/claim file unreadable/);
+  });
+
+  it("an unclean captured document is withheld and not graded (ground truth cannot point at it)", async () => {
+    const t = task("none");
+    const doc = new TextEncoder().encode(
+      `${new TextDecoder().decode(honestDoc(t))}PLANTED_FAKE_MARKER\n`,
+    );
+    const { store, run } = await gated(doc, {
+      groundTruth: () => {
+        throw new Error("the grader must not be called on a withheld document");
+      },
+    });
+    const { episode } = await run;
+    expect(episode.status).toBe("written");
+    const ep = only(store);
+    expect(ep.observations).toMatchObject({ items: [], withheld: 1 });
+    expect(ep.groundTruth).toEqual({ source: "none", reason: "document-withheld" });
+    expect(JSON.stringify(ep)).not.toContain("PLANTED_FAKE_MARKER");
+  });
+
+  it("records the corrections setting on the launch-refused and throw paths", async () => {
+    const t = task("none");
+    const off = await gated("throw-run", {}, {}, { corrections: { families: ["todo-items"] } });
+    await expect(off.run).rejects.toThrow();
+    expect(only(off.store).harness.corrections).toBe("off");
+    const on = await gated("throw-run", {}, {}, { corrections: { families: [t.family] } });
+    await expect(on.run).rejects.toThrow();
+    expect(only(on.store).harness.corrections).toBe("on");
   });
 
   it("records the attempt ledger head when one is kept (lands with #518)", async () => {
@@ -277,6 +360,46 @@ describe("M2 dry run hook (SIMULATED)", () => {
         store: real,
       }),
     ).toThrow(/simulated/);
+  });
+});
+
+describe("M2 dry run hook: harness rows and withheld documents", () => {
+  it("a harness-cause row is saved harness-fault, and an unclean document is not graded", {
+    timeout: 60_000,
+  }, async () => {
+    const subset = ["none", "kill-app"].map((f) => task(f));
+    const out = dir("dry-h");
+    const { armRows } = await runDryRun(subset, join(out, "run"), ORACLE_SOURCES);
+    const [first, second] = armRows;
+    if (first === undefined || second === undefined) throw new Error("expected two arm rows");
+    // Row 1: the harness could not deliver (the M2 runner's `cause.kind: harness`).
+    const harnessRow = {
+      ...first,
+      cause: { kind: "harness", detail: "gate: STATE_MISSING" },
+    } as const;
+    // Row 2: its captured document carries a planted marker, so the recorder withholds it.
+    const docPath = join(out, "run", "docs", `${second.trialKey}.csv`);
+    writeFileSync(docPath, `${readFileSync(docPath, "utf8")}PLANTED_FAKE_MARKER\n`);
+    const store = EpisodeStore.open(join(out, "episodes"), { simulated: true, host: HOST });
+    const results = writeDryRunEpisodes({
+      tasks: TASKS,
+      armRows: [harnessRow, second],
+      dryRunDir: join(out, "run"),
+      bundleDir: BUNDLE,
+      store,
+    });
+    expect(results.map((r) => r.status)).toEqual(["written", "written"]);
+    const eps = readStoreDir(store.root).episodes;
+    const byKey = new Map(eps.map((e) => [e.provenance.trialKey, e]));
+    expect(byKey.get(first.trialKey)).toMatchObject({
+      outcome: "harness-fault",
+      harness: { fault: { class: "gate-harness-code", code: "STATE_MISSING" } },
+      groundTruth: { source: "none", reason: "harness-fault" },
+    });
+    expect(byKey.get(second.trialKey)).toMatchObject({
+      observations: { items: [], withheld: 1 },
+      groundTruth: { source: "none", reason: "document-withheld" },
+    });
   });
 });
 

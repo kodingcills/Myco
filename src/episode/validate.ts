@@ -9,8 +9,10 @@
  *    `uncertain` exactly when the gate decided that verdict; `accepted` exactly when
  *    `verified`; no gate decision on `launch-refused` / `unregistrable`;
  *  - GROUND_TRUTH: a harness-faulted attempt carries no ground truth (it is not an agent
- *    outcome); a graded episode's persisted hash equals the `persisted` state observation's,
- *    and a grade with no document is `ungradable`;
+ *    outcome); a grade of a document (non-null `persistedSha256`) needs a `persisted` state
+ *    observation with that hash in the episode (a withheld document cannot carry a grade:
+ *    it is `document-withheld`, which needs a withheld observation and no persisted one);
+ *    a grade with no document is `ungradable`;
  *  - SIMULATED: an episode is real (`simulated: false`) only from a gated trial whose planner
  *    is a Claude model id; every other row must say simulated;
  *  - COST: an estimate is token-derived, so a non-null `estimateUsd` needs both token counts
@@ -163,16 +165,30 @@ export function validateEpisode(
       "$.groundTruth",
       "ground truth says harness fault but the outcome does not",
     );
+  if (
+    gt.source === "none" &&
+    gt.reason === "document-withheld" &&
+    (ep.observations.withheld === 0 ||
+      ep.observations.items.some((o) => o.kind === "state" && o.label === "persisted"))
+  )
+    bad(
+      "GROUND_TRUTH",
+      "$.groundTruth",
+      "document-withheld needs a withheld observation and no captured persisted document",
+    );
   if (gt.source === "independent-grader") {
     if (gt.persistedSha256 === null && gt.status !== "ungradable")
       bad("GROUND_TRUTH", "$.groundTruth.status", "a grade without a document is ungradable");
     const persisted = ep.observations.items.find(
       (o) => o.kind === "state" && o.label === "persisted",
     );
+    // Bound both ways: a captured document must be the graded one, and a graded document must
+    // be captured (a withheld one leaves no observation, so the grade would point at nothing).
     if (
-      persisted !== undefined &&
-      persisted.kind === "state" &&
-      persisted.sha256 !== gt.persistedSha256
+      (persisted !== undefined &&
+        persisted.kind === "state" &&
+        persisted.sha256 !== gt.persistedSha256) ||
+      (persisted === undefined && gt.persistedSha256 !== null)
     )
       bad(
         "GROUND_TRUTH",

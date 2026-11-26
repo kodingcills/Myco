@@ -217,6 +217,14 @@ describe("validateDataset catches every edit", () => {
     expect(validateDataset(out3, HOST).join("\n")).toMatch(/do not match the dataset/);
   });
 
+  it("an episode outside the manifest filter (filter edited after export)", () => {
+    const out = exported();
+    const m = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8"));
+    m.filter = { ...m.filter, outcome: "verified" };
+    writeFileSync(join(out, "manifest.json"), JSON.stringify(m));
+    expect(validateDataset(out, HOST).join("\n")).toMatch(/does not match the manifest filter/);
+  });
+
   it("a dataset relabelled real", () => {
     const out = exported();
     const m = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8"));

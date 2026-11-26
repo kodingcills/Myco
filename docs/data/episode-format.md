@@ -35,7 +35,7 @@ readers would refuse, makes a new version (`myco.episode/2`).
 | `observations` | `capture`, `withheld` (count of dropped observations), `items`: at most 500. A `screenshot` is a PNG file. A `state` is the `persisted` document, a `ui-tree` or `app-state`, stored as a CSV or JSON file. A `ui-status` is text of at most 200 chars. Files are content-addressed: `blobs/<sha256>.<ext>`, with the hash and byte count recorded. |
 | `agentClaim` | `done`, `not-done` or `no-claim` |
 | `gate` | null, or `verdict`, `accepted`, `reasonCodes` (stable `myco.gate/v1` codes; null when the path does not see them) and `oracle` (`family`, `version`, `specSha256`, or null). Gate prose (`reasons`) is never captured. |
-| `groundTruth` | Either the **independent grader**'s result (`src/benchmark/grade`): `graderVersion`, `status` (pass / fail / ungradable), `targetSatisfied`, `mismatchCount`, `fixtureSha256` and `persistedSha256`. Or `{ source: "none", reason }`, where the reason is `no-independent-grader`, `harness-fault` or `agent-never-ran`. The gate's verdict is never ground truth. |
+| `groundTruth` | Either the **independent grader**'s result (`src/benchmark/grade`): `graderVersion`, `status` (pass / fail / ungradable), `targetSatisfied`, `mismatchCount`, `fixtureSha256` and `persistedSha256`. Or `{ source: "none", reason }`, where the reason is `no-independent-grader`, `harness-fault`, `agent-never-ran` or `document-withheld` (the captured document was withheld as unclean, so no grade can be bound to it). The gate's verdict is never ground truth. |
 | `harness` | `arm`, `plannerModelId`, `outputCeiling`, `corrections` (on / off), `flags` (`policy`, `handoff`, `assisted`: each a boolean, or null for not applicable), `timing` (`startedAt`, `endedAt`, `wallClockS`, `vmS`), `cost` and `fault` (`class`, `code`, or null). `cost` is `basis` (always *"token-derived estimate at frozen rates; not billed USD"*), `estimateUsd`, `inputTokens` and `outputTokens`. |
 | `provenance` | `source` (`gated-trial`, `m2-dry-run`, `demo-mock` or `demo-multistep-mock`), `runId`, `trialKey`, `attemptLedger` (the #518 ledger head, or null) and `writer` (`myco.episode-writer/1`) |
 
@@ -55,7 +55,11 @@ these rules fails. Each rule has its own test, and each was mutation-proved (see
   is true exactly when the verdict is `verified`. A `launch-refused` or `unregistrable`
   episode has no gate decision.
 - **Ground truth.** A harness-faulted attempt is never graded as an agent outcome. A grade
-  is bound to the captured `persisted` document and to the task's fixture by hash. A grade
+  is bound to the task's fixture by hash, and to the captured `persisted` document both
+  ways: a captured document must be the graded one, and a grade of a document
+  (non-null `persistedSha256`) needs that document's `persisted` observation in the
+  episode. A document withheld as unclean is therefore never graded: ground truth is
+  `document-withheld`, which needs a withheld observation and no `persisted` one. A grade
   with no document is `ungradable`.
 - **Simulated label.** `simulated: false` requires a `gated-trial` source and a Claude model
   planner id (the same list as R1's `EVIDENCE_PLANNERS`).
@@ -78,9 +82,11 @@ How each ending is labelled:
 - **Verified / refuted / uncertain.** The gate's post-stop verdict, labelled as such.
   `uncertain` is its own label, never a success or a failure.
 - **Harness fault.** Saved and labelled `harness-fault` with a class, never as an agent
-  outcome. This covers four cases:
-  - the transport threw (`transport-error`);
-  - the capture threw (`capture-error`);
+  outcome. This covers five cases:
+  - the transport's `runAgent` threw (`transport-error`);
+  - the transport's `captureAfterStop` threw (`capture-error`);
+  - anything else in the gated trial threw, for example the vault refusing a captured
+    file name (`harness-error`). The original error is re-thrown;
   - the gate decided with a harness reason code (`gate-harness-code`). These are the codes
     `src/benchmark/gated-rows.ts` classes as harness: `STATE_MISSING`, `STATE_UNREADABLE`,
     `AUDIT_FAILED`, `FIXTURE_UNREADABLE` and `FIXTURE_MISMATCH`;
@@ -89,7 +95,17 @@ How each ending is labelled:
 - **Unregistrable.** The gate's registry rejected the task spec (fc-v1 invalid-target).
 
 Writing an episode never changes a trial's outcome or its exit code. A refused episode is
-logged in the store's `refused.jsonl` by issue code only, and the result is returned.
+logged in the store's `refused.jsonl` by issue code only, and the result is returned. On the
+gated hook, any other error building or writing the episode (a store I/O error, or a caller
+callback such as `claim` that throws) is caught and returned as
+`{ status: "error", error }` beside the outcome; when the trial itself threw, that original
+error is what propagates.
+
+**Realness is the caller's statement.** The gated hook labels an episode real from the
+caller's `simulated: false` and planner id; the validator checks only that the planner id is
+a Claude model id, not that the transport was a live Claude run. A real store must therefore
+be fed only by the live Claude transport (the pilot runner, #524); a mock transport with a
+real label would write a real episode.
 
 **Simulated rows never mix with real ones.** A store is real or simulated, fixed in
 `STORE.json` when the store is created, and it refuses episodes of the other kind. An export

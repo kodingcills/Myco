@@ -388,6 +388,36 @@ describe("validateEpisode rules (each guard has its own red test)", () => {
     expect(codesOf(f)).toContain("GROUND_TRUTH");
   });
 
+  it("GROUND_TRUTH: a grade of a document the episode does not contain (withheld) is refused", () => {
+    const e = ok();
+    // As the recorder leaves it when the persisted document was withheld as unclean.
+    e.observations = { capture: "recorded", withheld: 1, items: [] };
+    e.groundTruth = {
+      source: "independent-grader",
+      graderVersion: "g/1",
+      status: "fail",
+      targetSatisfied: false,
+      mismatchCount: 1,
+      fixtureSha256: "b".repeat(64),
+      persistedSha256: "e".repeat(64),
+    };
+    expect(codesOf(e)).toContain("GROUND_TRUTH");
+  });
+
+  it("GROUND_TRUTH: document-withheld needs a withheld observation and no captured document", () => {
+    const valid = ok();
+    valid.observations = { capture: "recorded", withheld: 1, items: [] };
+    valid.groundTruth = { source: "none", reason: "document-withheld" };
+    expect(codesOf(valid)).toEqual([]);
+    const nothingWithheld = ok();
+    nothingWithheld.groundTruth = { source: "none", reason: "document-withheld" };
+    expect(codesOf(nothingWithheld)).toContain("GROUND_TRUTH");
+    const captured = JSON.parse(JSON.stringify(full().episode)) as Loose;
+    captured.observations.withheld = 1;
+    captured.groundTruth = { source: "none", reason: "document-withheld" };
+    expect(codesOf(captured)).toContain("GROUND_TRUTH");
+  });
+
   it("SIMULATED: a real episode needs a gated trial and a Claude planner", () => {
     const e = ok();
     e.simulated = false;

@@ -51,6 +51,7 @@ export const EPISODE_FAULT_CLASSES = [
   "transport-error",
   "capture-error",
   "gate-harness-code",
+  "harness-error",
 ] as const;
 
 export const MAX_ACTIONS = 1000;
@@ -299,7 +300,12 @@ export const episodeSchema: JsonSchema = {
             source: { const: "none" },
             reason: {
               type: "string",
-              enum: ["no-independent-grader", "harness-fault", "agent-never-ran"],
+              enum: [
+                "no-independent-grader",
+                "harness-fault",
+                "agent-never-ran",
+                "document-withheld",
+              ],
             },
           },
         },
