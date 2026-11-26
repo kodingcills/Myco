@@ -78,7 +78,13 @@ describe("public benchmark package matches the code", () => {
       for (const m of mentions) expect(m.toLowerCase()).toMatch(/^no\s/);
       expect(doc).not.toMatch(/hosted (?:gate|benchmark) (?:api|service) is available/i);
     }
-    expect(card).toContain("RESULTS PENDING");
+    // Each place a result will go is marked pending, not filled.
+    for (const slot of [
+      "| Results | **RESULTS PENDING.** None yet |",
+      "R1 result on fc-v1: **RESULTS PENDING.**",
+      "Result: **RESULTS PENDING.**",
+    ])
+      expect(card).toContain(slot);
     expect(readme).toContain("RESULTS PENDING");
   });
 });
