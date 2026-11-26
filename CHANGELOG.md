@@ -11,8 +11,10 @@ versioned releases yet; entries are grouped by milestone. License: [Apache-2.0](
 
 - `myco init` (`bin/myco init`, `pnpm myco init`): one-command setup. Checks the Linux
   desktop path, starts the gate once and checks it fails closed, then writes the `myco-gate`
-  MCP entry for Claude Code and Codex into the project. User-level configs only with
-  `--global --yes`, after a dry-run diff and a backup; no secrets
+  MCP entry for Claude Code and Codex into the project (refuses HOME as the project, never
+  follows a symlink out of it). Each change is one splice of the original file, re-parsed
+  before it is written; anything it cannot merge is a conflict and nothing is written.
+  User-level configs only with `--global --yes`, after the exact diff and a backup; no secrets
   ([docs/product/setup.md](docs/product/setup.md)).
 - `LICENSE`: Apache-2.0, chosen by the owner on 2026-11-25.
 - Community files for open-source readiness: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`

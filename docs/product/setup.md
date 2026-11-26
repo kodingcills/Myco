@@ -13,7 +13,9 @@ cd /path/to/your/project
 ```
 
 `pnpm myco init` (from inside the Myco checkout) does the same; it configures the
-directory you ran pnpm from (`INIT_CWD`). `--project <dir>` names a project explicitly.
+directory you ran pnpm from (`INIT_CWD`, honoured only when pnpm runs this package's own
+`myco` script; `bin/myco init` always means the current directory). `--project <dir>`
+names a project explicitly. The project directory must already exist.
 
 ## What it does
 
@@ -22,7 +24,7 @@ directory you ran pnpm from (`INIT_CWD`). `--project <dir>` names a project expl
 | 1. gate launcher | `node_modules/.bin/tsx` and `scripts/myco-gate.ts` exist in this checkout | says to run `pnpm install --frozen-lockfile`; writes nothing; exit 1 |
 | 2. Linux desktop path | `soffice --version` names LibreOffice, and `python3 -c 'import uno'` works (the headless Calc path CI's `linux-path` job runs, [linux-path.md](linux-path.md)). `MYCO_SOFFICE` / `MYCO_PYTHON` override the binaries. Skipped off Linux, or with `--skip-desktop`. | names each missing piece and prints the install line CI uses (`sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno`); the configs are still written; exit 1 |
 | 3. gate health check | starts the gate with the **exact launch line it is about to write**, with `PATH` as its only environment variable, and runs an MCP session: `initialize`, `tools/list` (must be exactly `myco_gate_check`), and one `tools/call` naming a task other than the assignment, which must come back `uncertain` / `ASSIGNMENT_MISMATCH` (the gate is bound to its trial and fails closed). The probe reads no evidence. | prints what failed; **writes nothing**; exit 1 |
-| 4. MCP client configs | merges the `myco-gate` entry into `<project>/.mcp.json` (Claude Code) and `<project>/.codex/config.toml` (Codex) | a file that cannot be merged safely is left alone and reported as a conflict; exit 1 |
+| 4. MCP client configs | merges the `myco-gate` entry into `<project>/.mcp.json` (Claude Code) and `<project>/.codex/config.toml` (Codex) | a file that cannot be merged safely is a conflict; **no file is written while any conflict remains** (not even the other one); exit 1 |
 
 The entry is the same launch line as
 [`examples/mcp-clients/claude-code.mcp.json`](../../examples/mcp-clients/claude-code.mcp.json)
@@ -40,24 +42,48 @@ Exit codes: `0` done (or a dry run), `1` a check failed or a config conflicted, 
 ## What it changes, and what it never touches
 
 - **Project mode (the default) reads and writes only inside the project directory** (and
-  checks that the launcher exists in the Myco checkout). It never reads or writes your
-  home directory: not `~/.claude`, `~/.claude.json` or `~/.codex`.
-- **Only the `myco-gate` entry changes.** In `.mcp.json` that is `mcpServers["myco-gate"]`;
-  every other key and server is kept. In the Codex TOML it is a block between
-  `# >>> myco-gate ...` and `# <<< myco-gate <<<` markers; everything outside the block is
-  kept byte for byte. If the TOML already defines `mcp_servers.myco-gate` outside the
-  markers (or uses an inline `mcp_servers = {...}` table), or the JSON does not parse, init
-  leaves the file alone and reports a conflict.
+  checks that the launcher exists in the Myco checkout). It never reads or writes
+  `~/.claude`, `~/.claude.json` or `~/.codex`. To make sure of that, it:
+  - **refuses a project directory that is your home directory** (where
+    `.codex/config.toml` *is* the user-level Codex config), or that is inside `~/.claude`,
+    `~/.codex` or `$CODEX_HOME`, or whose `.codex` is `$CODEX_HOME`. This is a usage error
+    (exit 3) before anything starts. To find out, it resolves links in those paths
+    (metadata only); it never opens anything in them;
+  - **never follows a symlink** in the project: a `.mcp.json`, `.codex` or
+    `.codex/config.toml` that is a link is a conflict, and is not read, backed up or
+    written. A cloned repository can ship such a link (say `.codex -> ../../.codex`).
+    Reads refuse a link at the last component (`O_NOFOLLOW`), backups and temp files are
+    created exclusively, so a link planted there is refused, not written through.
+- **Only the `myco-gate` entry changes, and every other byte of the file is kept.** The
+  change is one splice of the original text: in `.mcp.json`, the value of
+  `mcpServers["myco-gate"]` (or one inserted member, in the file's own indentation); in the
+  Codex TOML, a block between `# >>> myco-gate ...` and `# <<< myco-gate <<<` markers.
+  Init never re-serialises a file, so key order, indentation, number spelling (a
+  20-digit integer stays as written) and comments survive. The result is parsed again
+  (`JSON.parse`; a TOML parser, `smol-toml`) and must equal the original document plus the
+  entry, or nothing is written.
+- **Conflicts fail closed.** Init leaves a file alone and reports a conflict when: it does
+  not parse (TOML errors are reported by line and column only, never quoted); it already
+  defines `mcp_servers.myco-gate` outside the markers, including inside an
+  `[mcp_servers]` table (`myco-gate = {...}` or `myco-gate.command = ...`); its
+  `mcp_servers` is not a table; the marked block was edited by hand; a key appears twice;
+  an existing JSON `myco-gate` entry has keys init does not manage (an `env`, say); or the
+  merged file would not parse to exactly the original plus the entry.
 - **Every changed file is backed up first**, to `<file>.myco-backup-<UTC timestamp>` next to
-  it (a backup never replaces an earlier one), and the file keeps its permission bits. A
-  newly created file has no backup.
+  it (anything already at that name, even a dangling link, is skipped for the next name),
+  and the file keeps its permission bits. A newly created file has no backup.
 - **Idempotent.** A second run reports both files `unchanged` and writes nothing.
-- **Diffs print only the `myco-gate` entry**, never the rest of a config: another server's
-  `env` values in the same file are never echoed.
+- **The diff is exactly the change**: the bytes removed (`-`) and inserted (`+`) at a
+  given line and column, and nothing else of the file. So another server's `env` values
+  are never echoed, and what `--global` prints is what `--global --yes` writes.
 - **No secrets.** The entry has no `env` table, key or token; the gate needs none. Init
   reads exactly five environment variables (`HOME`, `CODEX_HOME`, `PATH`, `MYCO_SOFFICE`,
   `MYCO_PYTHON`), never enumerates the environment, and gives every process it starts an
-  environment of `PATH` alone. It never opens a credentials file.
+  environment of `PATH` alone. It never opens a credentials file. (`soffice` and Python
+  themselves may still touch their own caches under your passwd home directory, such as
+  `~/.cache/dconf` or `~/.local/lib/python3.*`; init does not control that.)
+- **Do not commit the written `.mcp.json`.** It holds absolute paths of your machine (the
+  Myco checkout's `tsx`, the evidence root), which usually include your user name.
 - **The Windows VM path is out of scope.** Init starts only `soffice`, Python and the gate.
   The VM has a single owner and runs under a lock; set it up separately with
   [quickstart.md](quickstart.md) and [docs/eval-runbook.md](../eval-runbook.md).
@@ -72,8 +98,13 @@ bin/myco init --global --yes  # applies exactly that change, backing up each fil
 `--global` targets the user-level files instead of the project: `$HOME/.claude.json`
 (where `claude mcp add --scope user` keeps user-scoped servers) and
 `${CODEX_HOME:-$HOME/.codex}/config.toml`. Without `--yes` it is a dry run, whatever else is
-given. `--yes` without `--global` is a usage error. The same merge, backup and no-secrets
-rules apply. Prefer the project files: a user-level entry is bound to one task and run for
+given. `--yes` without `--global` is a usage error. The same splice, conflict, backup and
+no-secrets rules apply.
+
+If a user-level config is a **symlink** (a dotfiles setup, say), init writes through to the
+file it names, so the link is kept and keeps working, and backs up that target file next to
+it. The dry run says so (`note: a symlink to <target>: init writes through to that file`).
+A dangling link, or one to something other than a regular file, is a conflict. Prefer the project files: a user-level entry is bound to one task and run for
 every project.
 
 ## This is a starter config, not a trial harness
@@ -107,7 +138,9 @@ myco init: project mode
 
 [4/4] MCP client configs
   Claude Code: /tmp/demo-project/.mcp.json
-    create, changing mcpServers["myco-gate"] only; every other key is kept:
+    create, new file:
+    + {
+    +   "mcpServers": {
     ...
   wrote /tmp/demo-project/.mcp.json
   wrote /tmp/demo-project/.codex/config.toml

@@ -62,10 +62,12 @@ agents to use the gate in:
 `myco init` checks the Linux desktop path (headless LibreOffice Calc and Python-UNO, or says
 exactly what to install), starts the gate once with the launch line it is about to write and
 checks it answers and fails closed, then adds the `myco-gate` MCP server for Claude Code
-(`./.mcp.json`) and Codex (`./.codex/config.toml`). It changes only that entry, backs up any
-file it changes, and a second run changes nothing. It never reads or writes `~/.claude`,
-`~/.claude.json` or `~/.codex` unless you pass `--global`, and even then it only prints the
-diff until you add `--yes`. No config it writes carries a key or token. It does not touch the
+(`./.mcp.json`) and Codex (`./.codex/config.toml`). It changes only that entry (one splice; every
+other byte is kept, and a file it cannot merge into valid JSON/TOML is left alone), backs up
+any file it changes, and a second run changes nothing. It never reads or writes `~/.claude`,
+`~/.claude.json` or `~/.codex` unless you pass `--global`: it refuses to run with your home
+directory as the project and never follows a symlink out of the project. With `--global`
+it only prints the exact diff until you add `--yes`. No config it writes carries a key or token. It does not touch the
 Windows VM path. Details: [docs/product/setup.md](docs/product/setup.md).
 
 ---

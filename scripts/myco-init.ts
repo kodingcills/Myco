@@ -9,7 +9,7 @@
  * (`pickInitEnv`): the environment is never enumerated or forwarded.
  */
 import { resolve } from "node:path";
-import { mainInit, pickInitEnv } from "../src/setup/init.ts";
+import { initCwd, mainInit, pickInitEnv } from "../src/setup/init.ts";
 import { nodeSetupFs, nodeSpawner } from "../src/setup/node-io.ts";
 
 process.exitCode = mainInit(process.argv.slice(2), {
@@ -18,7 +18,14 @@ process.exitCode = mainInit(process.argv.slice(2), {
   env: pickInitEnv(process.env),
   platform: process.platform,
   now: () => new Date(),
-  cwd: process.env.INIT_CWD ?? process.cwd(),
+  cwd: initCwd(
+    {
+      INIT_CWD: process.env.INIT_CWD,
+      npm_lifecycle_event: process.env.npm_lifecycle_event,
+      npm_package_name: process.env.npm_package_name,
+    },
+    process.cwd(),
+  ),
   mycoRoot: resolve(import.meta.dirname, ".."),
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
