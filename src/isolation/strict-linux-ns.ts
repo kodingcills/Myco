@@ -271,7 +271,8 @@ export function checkSpec(spec: StrictTrialSpec): void {
  * Runs as root of the trial's OWN user namespace (U1), in a fresh mount + pid + net
  * namespace, before any agent code exists. It builds the view, pivots into it, detaches
  * the host root, then becomes the holder: pid 1 of the trial's pid namespace, alive until
- * its stdin (a pipe from the harness) closes. Harness death closes the pipe, pid 1 exits,
+ * its stdin (a pipe from the harness) closes. While it waits, sh reaps every child
+ * re-parented to it, so killed execs do not linger as zombies. Harness death closes the pipe, pid 1 exits,
  * and the kernel kills every process in the trial.
  */
 export const SETUP_SCRIPT = String.raw`
@@ -327,7 +328,10 @@ pivot_root . .old
 cd /
 umount -l /.old
 echo MYCO-READY
-exec cat > /dev/null
+exec 3<&0 0</dev/null
+cat >/dev/null <&3 &
+exec 3<&-
+wait $!
 `;
 
 /**
@@ -500,9 +504,14 @@ export async function runInTrial(
             timedOut = true;
             // nsenter's forked child becomes (by exec) the nested namespace's `unshare`
             // parent; killing it makes --kill-child take the command's whole pid
-            // namespace with it. Then nsenter itself.
-            for (const c of childrenOf(child.pid!)) killQuietly(c);
-            child.kill("SIGKILL");
+            // namespace with it. nsenter then reaps it and exits; it is forced only if it
+            // does not (a child orphaned into the trial would be left unreaped by pid 1).
+            // Kill the nested namespace's init first so `unshare` reaps it and exits.
+            const kids = childrenOf(child.pid!);
+            const inits = kids.flatMap((k) => childrenOf(k));
+            for (const c of inits.length > 0 ? inits : kids) killQuietly(c);
+            if (kids.length === 0) child.kill("SIGKILL");
+            else setTimeout(() => child.kill("SIGKILL"), 2000).unref();
           }, opts.timeoutMs)
         : undefined;
     child.on("error", (e) => {
