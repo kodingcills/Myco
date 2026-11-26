@@ -15,6 +15,8 @@
  * entities included) before it is returned. A leak throws and no report is produced: the
  * report is an output in its own right, not only a view of a scanned bundle.
  */
+
+import { EMPTY_REDACTION, findLeaks, type RedactionContext } from "./backstop.ts";
 import type {
   ActionBody,
   CheckpointBody,
@@ -28,7 +30,6 @@ import type {
   VerifyResult,
 } from "./bundle.ts";
 import { recordSha256, runGenesis } from "./bundle.ts";
-import { EMPTY_REDACTION, findLeaks, type RedactionContext } from "./backstop.ts";
 import type { TextRef } from "./closed.ts";
 
 export function escapeHtml(text: string): string {
@@ -104,7 +105,7 @@ export function renderProofReport(
   const leaks = findLeaks(html, redaction);
   if (leaks.length > 0)
     throw new ProofReportError(
-      `refusing to write a report that carries ${leaks.length} unredacted value(s): ${[
+      `refusing to write a report: the backstop flags ${leaks.length} value(s): ${[
         ...new Set(leaks.map((l) => l.kind)),
       ].join(", ")}`,
     );

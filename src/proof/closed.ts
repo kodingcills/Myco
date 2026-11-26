@@ -139,5 +139,5 @@ export const FIELD_TREATMENT = {
   "policy.reasonCode": "code",
   "ledger.lines": "ledger",
   "ledger.trialKey": "ledger-id",
-  "episode": "reference",
+  episode: "reference",
 } as const;

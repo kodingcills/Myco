@@ -18,13 +18,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findLeaks } from "../../src/proof/backstop.ts";
-import { CLOSED_ID } from "../../src/proof/closed.ts";
 import {
   exportProofBundle,
   serializeProofBundle,
   verifyProofBundle,
 } from "../../src/proof/bundle.ts";
 import { main } from "../../src/proof/cli.ts";
+import { CLOSED_ID } from "../../src/proof/closed.ts";
 import { clone, NO_CTX, rechain, sampleRun } from "./fixture.ts";
 import { expectAbsent, exportVerifyReport, plantEverywhere } from "./plant.ts";
 import {

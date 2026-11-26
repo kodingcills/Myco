@@ -27,6 +27,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { findLeaks, type RedactionContext } from "./backstop.ts";
 import {
   exportProofBundle,
   type ProofBundle,
@@ -38,7 +39,6 @@ import {
   verifyProofBundle,
 } from "./bundle.ts";
 import { parseLedgerJsonl } from "./ledger.ts";
-import { findLeaks, type RedactionContext } from "./backstop.ts";
 import { ProofReportError, renderProofReport } from "./report.ts";
 
 export interface CliIo {

@@ -760,8 +760,7 @@ function indexEvidenceDir(dir: string): Map<string, EvidenceIndexEntry> {
           continue;
         }
         const back = relative(root, target);
-        const escapes =
-          escaped || back === ".." || back.startsWith(`..${sep}`) || isAbsolute(back);
+        const escapes = escaped || back === ".." || back.startsWith(`..${sep}`) || isAbsolute(back);
         const tst = lstatSync(target);
         // A symlinked directory: its files are indexed under the link's own relative path.
         if (tst.isDirectory()) walk(full, escapes);
@@ -808,7 +807,10 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
     : findLeaks(text, options.redaction);
   if (leaks.length > 0) {
     const kinds = [...new Set(leaks.map((l) => l.kind))].join(", ");
-    fail("PROOF_REDACTION", `the bundle carries ${leaks.length} value(s) the backstop flags: ${kinds}`);
+    fail(
+      "PROOF_REDACTION",
+      `the bundle carries ${leaks.length} value(s) the backstop flags: ${kinds}`,
+    );
   }
   if (!parseOk) {
     fail("PROOF_SCHEMA", "not JSON");
