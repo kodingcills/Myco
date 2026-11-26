@@ -20,6 +20,11 @@
  *     check the destroy report (no process left, root removed).
  *  7. Write the trial's evidence (record, agent output) to its own evidence root.
  *
+ * Every file the harness writes (marker, fixture, MCP config, evidence, pool report) goes
+ * through `writeHarnessFile`: exclusive, no-follow, non-blocking create in a dir that is
+ * still its own realpath, off the event loop with a hard timeout. A planted FIFO (or
+ * anything else) at a target is refused with a code (`evidence-refused`), never written to.
+ *
  * After every trial: scan each trial's evidence root and vault dir for other trials'
  * markers. A trial counts as verified only when the gate said `verified` AND no
  * disqualifier applies (isolation, a backend that leaves other trials' roots writable

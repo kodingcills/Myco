@@ -4,7 +4,7 @@
  * This is the only Linux backend in this PR. Strict namespace isolation (`linux-ns`:
  * per-trial user/mount/net/pid namespaces) is NOT here: its round-1 form let a trial
  * unmount the "hidden" run root and write another trial's saved file, and it needs
- * privileges cloud sessions lack. It is filed as its own follow-up (see
+ * privileges cloud sessions lack. It is being rebuilt in #551 (see
  * docs/product/safe-parallelism.md §2).
  *
  * What `linux-plain` gives each trial, and the report says exactly this:

@@ -12,12 +12,12 @@ trial that breaks any isolation rule is not counted as verified, whatever the ga
 > **Scope of this PR (round 2, narrowed).** Strict namespace isolation (`linux-ns`: per-trial
 > user, mount, network and pid namespaces) is **NOT in this PR**. Its round-1 form gave a false
 > VERIFIED: a trial could unmount the "hidden" run root and write another trial's saved file.
-> It also needs privileges cloud sessions lack. It is filed as "L strict linux-ns isolation
-> (fresh PR, round 1)". What ships here is the pool, its guards, and the unprivileged
+> It also needs privileges cloud sessions lack. It is being rebuilt in **#551** ("L2 strict
+> linux-ns isolation"). What ships here is the pool, its guards, and the unprivileged
 > `linux-plain` backend. `linux-plain` leaves other trials' roots writable, so **no
 > `linux-plain` trial is ever counted as verified** (`shared-host-dirs`, §2). It measures the
 > harness and checks every gate verdict, but it produces no counted result. Counted results
-> need a backend that really hides other trials: strict `linux-ns` (filed) or a microVM
+> need a backend that really hides other trials: strict `linux-ns` (#551) or a microVM
 > (track U, §6).
 
 No model is called anywhere in this track. The agents are scripted, so every run here costs
@@ -79,7 +79,7 @@ mismatch, a contamination, a refused pool or an unavailable backend. 3 means a u
    true` gets `shared-host-dirs`: the trial runs, but it is never counted.
 4. **Plant the trial's marker.** This is a random nonce known only to the harness and this
    trial. It goes in `workspace/.myco-trial-marker` and `$MYCO_TRIAL_MARKER`. The task's
-   fixture is laid down next to it.
+   fixture is laid down next to it. Both are harness writes (see "Harness writes" below).
 5. **Run the existing gated path, unchanged** (`runGatedTrial`): launch audit, then seal into
    a vault for this trial only. The vault has its own root under `<run>/vaults/<runId>`, a
    fresh key, and the desktop's root as its agent root. The gate is bound to
@@ -100,12 +100,34 @@ mismatch, a contamination, a refused pool or an unavailable backend. 3 means a u
    root removed.
 8. **Write evidence** to `<run>/evidence/<runId>/`: `record.json` and `agent-output.txt`.
 
+**Harness writes never block, and refuse anything planted (round-3 B1).** On `linux-plain`
+every dir the harness writes into (the trial's workspace and home, its evidence dir, the
+run root) is reachable by every trial, and a plain blocking write onto a planted FIFO
+would freeze the whole event loop: every trial, timeout and watchdog. So every
+harness-written file (marker, fixture, `mcp.json`, `agent-output.txt`, `record.json`) goes
+through `writeHarnessFile`:
+
+- the target dir must still be its own realpath, taken before any agent ran (and the
+  workspace and home must resolve inside the trial's root), so a dir swapped for a symlink
+  is refused, not written through (`outside-dir`);
+- the file is created `O_CREAT | O_EXCL | O_NOFOLLOW | O_NONBLOCK`. Each harness file is
+  written once, so any entry already there (FIFO, socket, symlink, dir, or a planted
+  regular file) is refused at once (`exists`) and nothing that could block is opened;
+- the write runs off the event loop and is raced against a hard timeout (10 s,
+  `timeout`).
+
+A refusal gives the trial `evidence-refused`. A refused `record.json` withholds the count
+even when the gate said `verified`. The pool report is written to a fresh random name and
+`rename`d over `pool-report.json` (a regular file from an earlier run in a reused run root
+is replaced); a target that is not a regular file rejects the whole run with
+`HarnessWriteRefused`: no report, no count.
+
 After all trials finish, the pool scans each trial's evidence root, its vault dir and its
 gate records (the agent-seen result, the final result and the claim) for the other trials'
 markers.
 
-A trial counts as verified (`countedVerified`) only when the gate's verdict is `verified`
-and none of these disqualifiers applies:
+A trial counts as verified (`countedVerified`) only when the gate's verdict is `verified`,
+the gate `accepted` it, and none of these disqualifiers applies:
 
 | Disqualifier | Meaning |
 | --- | --- |
@@ -120,6 +142,7 @@ and none of these disqualifiers applies:
 | `resource-cap` | The watchdog killed the desktop for exceeding memory or CPU time |
 | `timeout` | The trial ran past its wall-clock cap |
 | `capture-refused` | The saved file was a link, a special file (FIFO, socket, dir), too large, or outside the workspace |
+| `evidence-refused` | A harness write (marker, fixture, `mcp.json`, agent output, record) found something planted at its target, a swapped dir, or timed out |
 | `agent-error`, `harness-error` | The agent or the setup threw |
 
 ## 3. The Linux backend (`linux-plain` only)
@@ -134,8 +157,8 @@ It needs no privilege. Every desktop's report says exactly what it got:
 | `/tmp` | shared (only `TMPDIR` points into the root) |
 | Network | shared |
 | Processes | one process group per exec, killed at destroy (a `setsid` child escapes) |
-| Display | its own Xvfb on a display Xvfb picks (`-displayfd`), so trials never share one |
-| Env | allowlist only: `PATH`, `LANG`, plus the desktop's own `HOME`, `TMPDIR`, `XDG_*`, `DISPLAY` and the marker |
+| Display | its own Xvfb on a display Xvfb picks (`-displayfd`), with its own random MIT-MAGIC-COOKIE-1 (`-auth`, `-noreset`); `XAUTHORITY` is set in that trial's env only. A client without the cookie is refused, but the cookie file sits in the trial's root, which other trials can read (same uid) |
+| Env | allowlist only: `PATH`, `LANG`, plus the desktop's own `HOME`, `TMPDIR`, `XDG_*`, `DISPLAY`, `XAUTHORITY` and the marker |
 | Memory and CPU caps | a /proc watchdog on the exec'd process groups |
 
 The default requirements are strict: an own network, a private `/tmp`, and hidden host dirs.
@@ -152,8 +175,8 @@ nothing. That is round-1 D1 in a new form. Both shapes are tests in
 left behind by trial 1 that forges trial 2's file in a serial pool. In both, the victim's
 gate says `verified` and the pool does not count it.
 
-**Strict namespace isolation is not in this PR.** It is filed as "L strict linux-ns
-isolation (fresh PR, round 1)". That PR must make the hide mounts impossible for the agent
+**Strict namespace isolation is not in this PR.** It is being rebuilt in **#551** ("L2
+strict linux-ns isolation"). That PR must make the hide mounts impossible for the agent
 to undo: lock them by setting them up in an outer user namespace and starting the agent in
 a nested one, or drop the agent's capabilities. It must also add the round-1 regression
 tests: `umount` of every hide dir fails from inside, and the pool-level forgery is not
@@ -193,10 +216,11 @@ defence against it, and the test that proves the defence:
 | --- | --- | --- |
 | Write trial B's saved file so B is counted on forged bytes | NOT prevented on `linux-plain`. Prevented from being COUNTED: every `linux-plain` trial is `shared-host-dirs` | `linux-backend.test.ts` "D1 shape" and "serial too"; `pool.test.ts` "never counted" |
 | Get verified on B's work through its own capture | B has its own vault (own key and receipt); A's gate is bound to A's run id; capture refuses links and special files | `pool.test.ts` capture and special-file tests; `test/gate/sealed-gate.test.ts` (unchanged) |
-| Hang the pool with a FIFO or another special file as its state file | `lstat` first, `O_NONBLOCK` open, re-check on the fd, size cap; coded refusal | `pool.test.ts` "special file as the state file" (in a child with a hard limit) |
+| Hang the pool with a FIFO or another special file as its state file | `lstat` first, `O_NONBLOCK` open, re-check on the fd, size cap; coded refusal | `pool.test.ts` "special file as the state file" and "B3: a file swapped for a FIFO between the lstat and the open" (in a child with a hard limit) |
+| Hang the pool with a FIFO at a harness write (its own or another trial's evidence dir, workspace or home, or the pool report) | `writeHarnessFile`: `O_EXCL \| O_NOFOLLOW \| O_NONBLOCK` create, realpath'd dir, off-loop write with a hard timeout; `evidence-refused` / run rejected | `pool.test.ts` "B1: harness writes" (real pool in a child with a hard KILL limit, per site, honest sibling still counted) |
 | Leak something into B that changes B's outcome | Markers are scanned in workspace, evidence, vault and gate records; a hit disqualifies both trials | `pool.test.ts` contamination tests; `linux-backend.test.ts` "planted markers" |
 | Talk to B over the network or a socket | NOT prevented on `linux-plain` (shared network). Covered by the count rule | — |
-| Share B's X display | Each desktop starts its own Xvfb on a display Xvfb picks | "runs a private Xvfb per trial" |
+| Connect to B's X display (read its screen, inject input) | A blind connect is refused: each Xvfb requires its own random cookie, set only in its own trial's env. NOT prevented against a trial that reads B's cookie file (same uid, B's root is readable on `linux-plain`). Covered by the count rule | `linux-backend.test.ts` "B2: a trial cannot connect to another trial's X display" (A's processes are refused on B's filesystem and abstract sockets, with no cookie and with A's own; B's client is accepted) |
 | Leave a process behind to affect a later trial | NOT prevented for a `setsid` child (it leaves the process group). Covered by the count rule | "serial too" |
 | Read the operator's secrets from the env | Env allowlist | "passes no host env var" |
 | Starve its siblings | Caps checked at admission, plus the per-trial watchdog | watchdog and cap tests |
@@ -220,6 +244,10 @@ Residual risks:
   read and write any host file the operator can, other trials' roots included. This is why
   the strict default refuses it and why its trials are never counted. Use a microVM
   (track U) for agents you do not trust.
+- **X cookies are readable by other trials.** The per-trial cookie stops a blind connect to
+  another trial's display, not a trial that reads the cookie file from B's root (or B's
+  process memory) as the same uid. Covered by the count rule; strict isolation (#551) is
+  the real fix.
 - **`setsid` escapes and harness death.** A process that leaves its process group survives
   `destroy()`, and `processesGone` only covers the desktop's own process groups. If the
   harness itself dies, the desktops' processes are not killed. Neither can produce a
@@ -281,7 +309,7 @@ gate. The gate's verdict is not the outcome measure.
   randomized order.
 - 30 pairs per arm, matching R2.
 - The host has at least 4 CPUs and the strict isolation requirements. No backend in this PR
-  meets them, so the measurement waits for strict `linux-ns` (filed) or track U.
+  meets them, so the measurement waits for strict `linux-ns` (#551) or track U.
 
 **Endpoints:**
 
@@ -320,7 +348,7 @@ public leaderboard.
 
 ## 9. TO FILE (Linear limit)
 
-- **L strict linux-ns isolation (fresh PR, round 1).** Removed from this PR in round 2. Needs
+- **L strict linux-ns isolation: #551.** Removed from this PR in round 2. Needs
   locked hide mounts (outer user namespace plus a nested one for the agent, or dropped
   capabilities), the holder tied to the harness's lifetime (`--pdeathsig`), and the round-1
   D1 regression tests (`umount` from inside fails; the pool-level forgery is not counted).

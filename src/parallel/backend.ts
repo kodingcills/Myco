@@ -11,7 +11,8 @@
  * - `linux-plain` (`./linux-backend.ts`): a process group with a private root, TMPDIR and
  *   its own Xvfb. The host filesystem, /tmp and network are SHARED (`hostDirsHidden:
  *   false`), so strict requirements refuse it and the pool never counts its trials as
- *   verified. Strict namespace isolation (`linux-ns`) is NOT in this PR (filed separately).
+ *   verified. Strict namespace isolation (`linux-ns`) is NOT in this PR (it is
+ *   being rebuilt in #551).
  * - microVM (lands with U): implements `DesktopBackend` with `kind: "microvm"`. The pool
  *   needs nothing else from it. See docs/product/safe-parallelism.md §6 for the contract.
  */
