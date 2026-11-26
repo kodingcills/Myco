@@ -9,6 +9,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { S0_TASKS } from "../../src/discovery/s0-sequence.js";
+import { SCENARIOS } from "../../src/gate/demo.js";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const DOC = readFileSync(join(ROOT, "docs/product/demo-storyboard.md"), "utf8");
@@ -93,6 +95,38 @@ describe("demo storyboard commands", () => {
     }
     for (const line of [...pending, ...readmePending].filter((l) => /myco init/.test(l)))
       expect(line).toMatch(/^\/path\/to\/Myco\/bin\/myco init --dry-run --project \S+ /);
+  });
+
+  it("the status table's pending rows are exactly the pending PRs", () => {
+    const table = section(DOC, "Status of the pieces");
+    const notYet = [...table.matchAll(/\| no \(lands with #(\d+)\) \|$/gm)].map((m) => m[1]);
+    expect(new Set(notYet)).toEqual(PENDING_PRS);
+    expect(notYet).toHaveLength(PENDING_PRS.size);
+    for (const row of table.split("\n").filter((r) => /^\| (?!Piece|---)/.test(r)))
+      expect(row, row).toMatch(/\| (yes|no \(lands with #\d+\)) \|$/);
+  });
+
+  it("the README's getting started never promises a write to a home config", () => {
+    const start = section(README, "Getting started");
+    expect(start).not.toMatch(/~\/\.claude|~\/\.codex|\.claude\.json|--global/);
+    expect(start).toContain("your project's `.mcp.json`");
+  });
+
+  it("beat 3 describes the tamper payload the demo actually sends", () => {
+    const tamper = SCENARIOS.find((s) => s.runId === "demo-df-s02" && s.tamper)?.tamper;
+    const sent = (tamper?.items ?? []) as string[];
+    const task = S0_TASKS.find((t) => t.id === "df-s02");
+    const quote = /`not persisted: ([^`]+)`/.exec(DOC)?.[1] ?? "";
+    const missing = quote.split(", ");
+    const saved = (task?.items ?? []).filter((item) => !missing.includes(item));
+    expect(missing).toHaveLength(2);
+    // The agent sends the items that DID persist, not the missing ones.
+    expect([...sent].sort()).toEqual([...saved].sort());
+    for (const item of missing) expect(sent).not.toContain(item);
+    const narration = shotRows(DOC)[2]?.[4] ?? "";
+    const counts = ["zero", "one", "two", "three", "four"];
+    expect(narration).toContain(`only the ${counts[sent.length]} that saved`);
+    expect(narration).not.toMatch(/missing items|items that did not|unsaved items/i);
   });
 
   it("the shot list has 8 contiguous beats, each with all six cells, summing to 90 s", () => {
