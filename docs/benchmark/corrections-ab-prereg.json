@@ -1,0 +1,68 @@
+{
+  "schema": "myco.pilot.corrections-ab-prereg/1",
+  "experiment": "corrections-ab",
+  "markdown": "docs/benchmark/corrections-ab-prereg.md",
+  "markdownSha256": "50c60a8523e4a673925dff2b12b5f8ae3b41aa0cd6e9be2fdf25d2cdcb55bffe",
+  "hypothesis": "H1: with the gate's agent-safe corrections (#514) ON the agent completes more fc-v1 tasks (grader-verified) than with them OFF; H0: no increase. One-sided.",
+  "primaryMetric": "grader-verified rate: claimed DONE, accepted by the gate AND passed by the independent grader (src/benchmark/grade/); never the gate's verdict alone",
+  "successBar": "Stage 1 only: one-sided exact sign test on the discordant pairs, p < 0.05 reads 'corrections help'; otherwise 'corrections not shown to help' (a miss, never a fail). Stage 0 never claims an effect.",
+  "stages": {
+    "0": {
+      "role": "non-confirmatory, plumbing only: arm byte-identity, the #518 ledger and anchor, the grader wiring, zero gate misses",
+      "taskSet": "pilot-30",
+      "pairs": 30,
+      "k": 1,
+      "seed": "ab-s0-2026-11-26-k7Qm",
+      "effectClaim": false
+    },
+    "1": {
+      "role": "confirmatory",
+      "taskSet": "fc-v1",
+      "pairs": 100,
+      "k": 1,
+      "seed": "ab-s1-2026-11-26-Xp4v",
+      "effectClaim": true
+    }
+  },
+  "test": {
+    "name": "exact sign test on discordant pairs (grader-verified ON vs OFF)",
+    "sided": "one-sided",
+    "alpha": 0.05,
+    "miss": "corrections not shown to help (not a fail)",
+    "report": [
+      "2x2 table (both, ON only, OFF only, neither)",
+      "discordant counts",
+      "one-sided exact sign-test p",
+      "paired difference ON - OFF with its 95% CI (Newcombe method 10)",
+      "effect reading"
+    ]
+  },
+  "pacing": {
+    "trial": {
+      "concurrency": 1,
+      "interTrialDelayS": 90,
+      "rateLimitBackoffS": 300,
+      "rateLimitBackoffMaxS": 3600,
+      "maxConsecutiveRateLimits": 4,
+      "trialTimeoutS": 1800,
+      "maxAttemptsPerTrial": 3
+    },
+    "chunkPairs": 10,
+    "interChunkPauseS": 1800,
+    "chunksPerInvocation": 1
+  },
+  "stoppingRule": [
+    "A stage stops when all its pairs are decided; no early stop for efficacy or futility and no interim analysis (status prints counts, never a p-value).",
+    "The first gate miss halts the run (fail-closed).",
+    "Rate limits, a lost login, a PAUSE file or the chunk budget pause the run; re-running the same command resumes it.",
+    "A trial that spends its harness-fault budget is closed and the stage is incomplete; an incomplete Stage 1 makes no effect claim and no pair is dropped.",
+    "Stage 1 starts only after Stage 0 finished with zero gate misses and after the lead's GO for Stage 1."
+  ],
+  "failClosed": "Any gate miss (gate VERIFIED, independent grader not pass), in either arm, is an integrity incident: the run halts, an incident record is written, and nothing resumes until an operator acknowledges the record by its sha256 (never automatic).",
+  "analysis": {
+    "command": "npx tsx scripts/m2-corrections-ab.ts --stage <0|1> --on-arm <pack>/on/arm.jsonl --on-grades <pack>/on/grades.jsonl --off-arm <pack>/off/arm.jsonl --off-grades <pack>/off/grades.jsonl --on-config <pack>/on/run-config.json --off-config <pack>/off/run-config.json [--stage0-on-arm <stage0-pack>/on/arm.jsonl --stage0-off-arm <stage0-pack>/off/arm.jsonl] --prereg-file docs/benchmark/corrections-ab-prereg.md --prereg-declared <pack's recorded sha256>",
+    "module": "src/m2/corrections-ab.ts",
+    "pr": 547
+  },
+  "realRuns": "Wait for: this pre-registration committed; the lead's GO committed in docs/benchmark/corrections-ab-go.json; the integrity fixes (the gate reads the tasks' xlsx format, #546's cold-boot guard); --launch-real-trials with the printed --plan-sha256. No API: subscription only."
+}

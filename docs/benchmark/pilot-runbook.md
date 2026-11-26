@@ -191,3 +191,118 @@ Exit codes: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incom
   through review, never by the runner writing under `docs/research/experiments`.
 - **Faulted attempts** are kept and linked (`faulted-attempts.jsonl` in an export); they are in
   no R1, R2 or R3 count, and their cost counts in R7.
+
+## Corrections ON/OFF A/B
+
+The A/B runs the gate with its agent-safe corrections (#514) ON against the same gate with them
+OFF, on paired tasks. It uses this runner. The design is pre-registered and fixed:
+`docs/benchmark/corrections-ab-prereg.md` (the lead's decision, verbatim) and its machine form,
+`docs/benchmark/corrections-ab-prereg.json`. The runner is `src/pilot/ab.ts`, driven by
+`scripts/m2-corrections-ab-run.ts`. The analysis is #547's `scripts/m2-corrections-ab.ts`.
+
+- **Stage 0** (plumbing, no effect claim): the pilot's 30 tasks, 30 pairs.
+- **Stage 1** (confirmatory): fc-v1, 100 pairs, a fresh seed, no Stage 0 row reused. Stage 1
+  refuses to start until Stage 0 is complete in the same A/B directory with zero gate misses.
+- **Arms:** the two arm configs differ in `corrections` and nothing else. `plan` diffs them at
+  every depth, and diffs the launch plans too (only the ON arm's `--corrections` flag may
+  differ). The run refuses any other difference.
+- **Order:** the stage's seed shuffles the tasks, cuts them into chunks of 10 pairs and picks
+  which arm runs first in each chunk. `schedule.json` is written once, then re-derived and
+  compared on every resume.
+- **Pacing:** the pilot's per-trial pacing inside a chunk. One chunk per invocation, and
+  30 min between chunks within one invocation. Re-run the same command to continue.
+- **Experiment only:** every arm row carries `experiment: "corrections-ab/stage-<N>"`, the OFF
+  arm included, and every pack carries an `EXPERIMENT` marker. `benchmark-check --evidence` and
+  `m2-evidence-check` refuse them. They are never R1 evidence.
+
+### Exact commands
+
+```bash
+# The pre-registration's hashes (what every pack records). jsonPinsMarkdown must be true.
+npx tsx scripts/m2-corrections-ab-run.ts prereg-hash
+
+# A stage's plan: planSha256, both arm config hashes, the launch-plan diff, the schedule.
+npx tsx scripts/m2-corrections-ab-run.ts plan --stage 0
+
+# The SIMULATED dry run ($0, no model, no VM, never evidence). It runs the whole path: both
+# stages, export, the pack check, #547's analysis (or "analysis-pending" until #547 merges),
+# the evidence refusal, a pack with a wrong pre-registration hash, and the gate-miss drill
+# (halt, refused resume, refused wrong ack, the operator's ack, resume, Stage 1 refused).
+npx tsx scripts/m2-corrections-ab-run.ts dry-run --out runs/ab-dry
+
+# Practise pause and resume on the fake transport: one chunk per invocation.
+npx tsx scripts/m2-corrections-ab-run.ts simulate --stage 0 --out runs/ab-sim   # exit 4: paused
+npx tsx scripts/m2-corrections-ab-run.ts simulate --stage 0 --out runs/ab-sim   # the next chunk
+
+# Progress (counts only, never a p-value before a stage is complete) and incidents.
+npx tsx scripts/m2-corrections-ab-run.ts status --out runs/ab
+
+# Export a stage as an A/B pack, check it, analyse it with #547.
+npx tsx scripts/m2-corrections-ab-run.ts export --out runs/ab --stage 0 --to packs/ab-stage0
+npx tsx scripts/m2-corrections-ab-run.ts check-pack packs/ab-stage0
+npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage0
+npx tsx scripts/m2-corrections-ab-run.ts export --out runs/ab --stage 1 --to packs/ab-stage1
+npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage1 --stage0-pack packs/ab-stage0
+
+# Real Stage 0, then Stage 1 (later, after the GO). In this change it prints the plan, lists
+# every unmet precondition and refuses (exit 3).
+npx tsx scripts/m2-corrections-ab-run.ts launch --stage 0 --out runs/ab \
+  --launch-real-trials --plan-sha256 <planSha256 from plan --stage 0>
+```
+
+`analyze` checks the pack first: the manifest, the markers, the labels, identical arm configs,
+and the recorded pre-registration sha256 against the committed file. It refuses on any error
+(exit 3). Then it prints and runs #547's exact command, with `--prereg-file` and
+`--prereg-declared`, so #547 checks the hash too.
+
+### Before a real run
+
+`launch` refuses, naming each reason, until all of these hold:
+
+1. The pre-registration (both files) is committed and unchanged from HEAD.
+2. The lead's GO is committed as `docs/benchmark/corrections-ab-go.json`, with the stage(s) in
+   `stages` and this pre-registration's sha256 in `preregSha256`.
+3. The integrity fixes have landed. The gate reads the tasks' format: fc-v1 persists xlsx, and
+   the gate reads CSV until the xlsx replacement for #503. #546's cold-boot guard is merged: the
+   trial-ops schema has `resetBootClass`, and the live transport reports a cold boot per trial.
+4. #518's attempt-event vocabulary names the pilot's harness classes. Until then, a fault it
+   cannot name stays open in `attempts.jsonl` and is recorded with its exact class in
+   `attempts-unclassified.jsonl`; the pack discloses the count.
+5. The subscription preflight passes (no API-key variable, names only), with
+   `--launch-real-trials` and the `planSha256` that `plan` printed.
+6. A live driver with VM-side capture is wired. This change has none, so `launch` always
+   refuses for now.
+
+### Pause and resume
+
+- `touch runs/ab/PAUSE` (the whole A/B) or `touch runs/ab/stage<N>/PAUSE` (one stage) stops new
+  trial starts after in-flight trials finish. Remove the file and re-run the same command.
+- Rate limits, a lost login and the chunk budget pause the run the same way as in the pilot.
+  The pilot's crash recovery, lock and in-place re-runs of harness faults all apply per arm.
+- A changed pre-registration, seed, config, planner or mode is refused on resume. It needs a
+  new A/B directory.
+
+### Integrity incident (gate miss)
+
+A gate miss is a trial the gate VERIFIED whose independent grade is not pass. The runner
+grades every decided trial as soon as it is decided, in both arms. A trial decided but never
+graded, for example after a crash, is graded on the next invocation before anything else runs.
+
+1. On a gate miss the runner halts the whole run (exit 4, status `halted`). It writes
+   `runs/ab/stage<N>/incidents/incident-<trialKey>.json`: arm, trial, task, gate verdict,
+   grader status and version, the persisted document's sha256 and the rule.
+2. Every later invocation refuses (exit 3) until the incident is acknowledged. Nothing resumes
+   automatically, and the runner never writes an ack.
+3. Review the record and the trial (`runs/ab/stage<N>/<arm>/trials/<trialKey>/`), and file it.
+   A gate miss is the one thing the gate must not do. Then acknowledge it with the record's
+   sha256, which `status` prints:
+
+   ```bash
+   npx tsx scripts/m2-corrections-ab-run.ts ack-incident --out runs/ab --stage 0 \
+     --incident incident-<trialKey> --incident-sha256 <sha256> \
+     --operator "<name>" --statement "<what was reviewed and where it is filed>"
+   ```
+
+4. The incident stays in the export (`incidents/`, `ab-pack.json`), and #547 reports the pack
+   as `halted`. It is never counted as data. A Stage 0 gate miss blocks Stage 1 even after the
+   ack: only a lead decision, recorded in code, reopens it.

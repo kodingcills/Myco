@@ -49,6 +49,8 @@ export interface BenchmarkArmRow {
     readonly corrections?: "off" | "on";
   } | null;
   readonly accepted: boolean;
+  /** Experiment-only label (the corrections A/B): never R1 evidence (`experimentRowError`). */
+  readonly experiment?: string;
   readonly persistedSha256: string | null;
   readonly cause: { readonly kind: "agent" | "oracle" | "harness"; readonly detail: string } | null;
   readonly cost: {
@@ -248,6 +250,19 @@ export function correctionsOnError(rows: readonly BenchmarkArmRow[]): string | n
   return `${on.length} row(s) with gate corrections on (${keys.join(", ")}${on.length > 5 ? ", ..." : ""}): R1 evidence runs keep corrections off, so these rows are never evidence`;
 }
 
+/**
+ * Experiment rows are never R1 evidence (corrections ON/OFF A/B, `src/pilot/ab.ts`). Every row
+ * an experiment run writes carries `experiment`, the corrections-OFF arm included: the OFF
+ * arm ran under the A/B's schedule, pacing and pre-registration, not as an R1 run, so it is
+ * refused under `evidence: true` even though its gate had corrections off.
+ */
+export function experimentRowError(rows: readonly BenchmarkArmRow[]): string | null {
+  const labelled = rows.filter((r) => r.experiment !== undefined);
+  if (labelled.length === 0) return null;
+  const names = [...new Set(labelled.map((r) => r.experiment))];
+  return `${labelled.length} experiment-only row(s) (${names.join(", ")}): experiment rows are never R1 evidence, the corrections-OFF arm included`;
+}
+
 /** Host paths must never reach a publishable ledger (M2 plan §6; test/no-home-paths). */
 const HOST_PATH = /(?:^|[\s"'(=])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\)/;
 
@@ -319,6 +334,8 @@ export function checkBenchmark(
     }
     const corrected = correctionsOnError(armRows);
     if (corrected !== null) errors.push(corrected);
+    const experiment = experimentRowError(armRows);
+    if (experiment !== null) errors.push(experiment);
   }
   if (gradeInput.length === 0) errors.push("grade ledger is empty");
 
