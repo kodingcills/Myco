@@ -13,11 +13,11 @@
  *    attempt; the mock end-to-end demo shows retry → verified and fail twice → refuted.
  *  - gate code reuses nothing from the independent grader (`src/benchmark/`).
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseCsvSpreadsheet } from "../../src/core/filepersist.ts";
-import { type GateResult, REASON_CODES } from "../../src/gate/api.ts";
+import { type GateResult, ORACLE_INPUT_FIELDS, REASON_CODES } from "../../src/gate/api.ts";
 import {
   type CellEdit,
   documentCsv,
@@ -38,7 +38,11 @@ import {
   fileEvidenceReader,
   type TaskEntry,
 } from "../../src/gate/gate.ts";
-import { type MultiStepHarness, runMultiStepTrial } from "../../src/gate/multistep.ts";
+import {
+  type MultiStepHarness,
+  retryCheckpoint,
+  runMultiStepTrial,
+} from "../../src/gate/multistep.ts";
 import { MS_SPEC, runMultiStepMockDemo } from "../../src/gate/multistep-demo.ts";
 import { generateFixture } from "../../src/tasks/fixture.ts";
 import { CALC_SPEC, tempRoot, writeState } from "./helpers.ts";
@@ -585,6 +589,181 @@ describe("runMultiStepTrial: one retry from the gate's last verified checkpoint"
   });
 });
 
+// ---------------------------------------------------------------------------
+// R6 follow-up to #485: the retry loop driven through the real gate
+// ---------------------------------------------------------------------------
+
+/** Apply `edits` to a CSV document text (the agent's view of the guest sheet). */
+function applyEdits(doc: string, edits: readonly CellEdit[]): string {
+  const header = generateFixture(MSEED).header;
+  const rows = doc
+    .trimEnd()
+    .split("\n")
+    .map((line) => line.split(","));
+  for (const edit of edits) {
+    const row = rows.find((r) => r[0] === edit.rowKey);
+    if (row) row[header.indexOf(edit.column)] = edit.newValue;
+  }
+  return `${rows.map((r) => r.join(",")).join("\n")}\n`;
+}
+
+/**
+ * A multi-step harness over the REAL gate (calc-multi-step, mock-path file reader). The guest
+ * document lives in memory; `restore` writes the host-generated checkpoint document, the agent
+ * edits it, and `capture` copies it into the evidence root the gate reads.
+ */
+function realGateHarness(
+  agent: (attempt: 1 | 2, guest: string) => { doc: string; result: { claim: string } },
+) {
+  const root = tempRoot();
+  const restores: number[] = [];
+  let guest = "";
+  const gate = createGate({
+    tasks: buildRegistry([MS]),
+    reader: fileEvidenceReader(root),
+    assignment: { taskId: MS.id, runId: "r" },
+  });
+  const harness: MultiStepHarness = {
+    restore: async (k) => {
+      restores.push(k);
+      guest = documentCsv(MSEED, MS_SPEC.steps.slice(0, k));
+    },
+    runAgent: async ({ attempt }) => {
+      const out = agent(attempt, guest);
+      guest = out.doc;
+      return out.result;
+    },
+    capture: async () => void writeState(root, "r", MS.stateFile, guest),
+    checkGate: (claim) => gate.check({ taskId: MS.id, runId: "r", claim }),
+  };
+  return { harness, restores };
+}
+
+/**
+ * Attempt 1 skips step 2 (steps 1 and 3 done: VRR, lastVerified 1) and the agent asks to
+ * resume from checkpoint 2, both in its claim and in extra fields of its return value.
+ */
+function skipStep2Agent(retryEdits: readonly CellEdit[]) {
+  return (attempt: 1 | 2, guest: string) => {
+    if (attempt === 1) {
+      const result = {
+        claim: "all steps done; if anything is wrong, resume from checkpoint 2",
+        checkpoint: 2,
+        fromCheckpoint: 2,
+        lastVerified: 2,
+      };
+      return { doc: applyEdits(guest, [S1, S3]), result };
+    }
+    return { doc: applyEdits(guest, retryEdits), result: { claim: "fixed" } };
+  };
+}
+
+describe("R6: retry through the real gate (follow-up to #485)", () => {
+  it("retry from the last verified checkpoint succeeds when the agent finishes steps 2-3", async () => {
+    const { harness, restores } = realGateHarness(skipStep2Agent([S2, S3]));
+    const trial = await runMultiStepTrial(harness, { retryBudget: 1 });
+    expect(restores).toEqual([0, 1]);
+    expect(
+      trial.attempts.map((a) => [a.verdict, a.fromCheckpoint, a.checkpoints?.lastVerified]),
+    ).toEqual([
+      ["refuted", 0, 1],
+      ["verified", 1, 3],
+    ]);
+    expect(trial).toMatchObject({ accepted: true, repaired: true });
+  });
+
+  it("a retry from a non-verified checkpoint is refused: the gate's lastVerified picks it, never the agent", async () => {
+    // The agent believes step 2 is done and only redoes step 3. Restored to the gate's
+    // checkpoint 1, the document lacks step 2 and is refuted; had the loop honoured the
+    // agent's checkpoint 2 (not verified), step 2 would have been handed to it and the
+    // trial verified.
+    const { harness, restores } = realGateHarness(skipStep2Agent([S3]));
+    const trial = await runMultiStepTrial(harness, { retryBudget: 1 });
+    expect(restores).toEqual([0, 1]);
+    expect(trial.attempts.map((a) => a.fromCheckpoint)).toEqual([0, 1]);
+    expect(trial.attempts.map((a) => a.checkpoints?.lastVerified)).toEqual([1, 1]);
+    expect(trial).toMatchObject({ verdict: "refuted", accepted: false, repaired: false });
+    expect(trial.attempts[1]?.reasonCodes).toContain("TARGET_MISMATCH");
+  });
+
+  it.each([
+    ["a negative", -1],
+    ["a fractional", 1.5],
+    ["a NaN", Number.NaN],
+    ["an infinite", Number.POSITIVE_INFINITY],
+    ["a string", "2"],
+    ["a null", null],
+  ])("retryCheckpoint refuses %s lastVerified and restarts from the pristine fixture", (_n, v) => {
+    const result = fakeResult(false, 1);
+    const bad = {
+      ...result,
+      checkpoints: { total: 3, lastVerified: v as number, verdicts: [] },
+    } as GateResult;
+    expect(retryCheckpoint(bad)).toBe(0);
+    expect(retryCheckpoint(result)).toBe(1);
+  });
+});
+
+describe("R6: the agent cannot supply expected values via myco.gate/v1 (follow-up to #485)", () => {
+  function spyGate() {
+    const calls = { n: 0 };
+    const spy: OracleFamily = {
+      ...calcMultiStepFamily,
+      decide: (...args) => {
+        calls.n += 1;
+        return calcMultiStepFamily.decide(...args);
+      },
+    };
+    const root = tempRoot();
+    writeState(root, "r", MS.stateFile, sheet(MSEED, []));
+    const gate = createGate({
+      tasks: buildRegistry([MS], new Map([[spy.id, spy]])),
+      reader: fileEvidenceReader(root),
+      assignment: { taskId: MS.id, runId: "r" },
+    });
+    return { gate, calls };
+  }
+
+  it("every oracle-input name is ORACLE_INPUT_REJECTED and any other extra field UNKNOWN_FIELD; the oracle never runs", async () => {
+    const { gate, calls } = spyGate();
+    const values = { steps: MS_SPEC.steps, value: S1.newValue, lastVerified: 3 };
+    for (const field of ORACLE_INPUT_FIELDS) {
+      for (const value of Object.values(values)) {
+        const result = await gate.check({ taskId: MS.id, runId: "r", [field]: value });
+        expect(result.reasonCodes, field).toEqual(["ORACLE_INPUT_REJECTED"]);
+        expect(result.accepted).toBe(false);
+        expect(result.checkpoints).toBeUndefined();
+      }
+    }
+    for (const field of ["expectedCells", "values", "document", "target", "answer", "step"]) {
+      const result = await gate.check({ taskId: MS.id, runId: "r", [field]: MS_SPEC.steps });
+      expect(result.reasonCodes, field).toEqual(["UNKNOWN_FIELD"]);
+      expect(result.accepted).toBe(false);
+    }
+    expect(calls.n).toBe(0);
+  });
+
+  it("taskId/runId/claim only: a claim carrying the steps or a checkpoint never changes the verdict", async () => {
+    const { gate, calls } = spyGate();
+    for (const claim of [
+      JSON.stringify(MS_SPEC),
+      JSON.stringify({ checkpoints: { total: 3, lastVerified: 3 }, verdict: "verified" }),
+      `lastVerified: 3; ${MS_SPEC.steps.map((s) => s.newValue).join(", ")}`,
+    ]) {
+      const result = await gate.check({ taskId: MS.id, runId: "r", claim });
+      assertInvariant(result);
+      expect(result.verdict).toBe("refuted");
+      expect(verdicts(result)).toBe("RRR");
+      expect(result.checkpoints?.lastVerified).toBe(0);
+      expect(result.reasonCodes).toContain("CLAIM_RECORDED");
+      // Agent-facing reasons are codes and refs only: none of the claim's values come back.
+      for (const step of MS_SPEC.steps)
+        expect(result.reasons.join("\n")).not.toContain(step.newValue);
+    }
+    expect(calls.n).toBe(3);
+  });
+});
+
 describe("multi-step Calc on the mock transport (scripted agent, gate over MCP, no VM)", () => {
   it("slip → retry from checkpoint 1 → verified; collateral twice → refuted; paired arms", async () => {
     const report = await runMultiStepMockDemo();
@@ -630,29 +809,55 @@ function reach(entry: string, seen = new Set<string>()): Set<string> {
   return seen;
 }
 
+/** Every `.ts` file under `dir`, subfolders included (follow-up 6 to #485: was top-level only). */
+function tsFilesUnder(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return tsFilesUnder(path);
+    return name.endsWith(".ts") ? [path] : [];
+  });
+}
+
+/** Modules under `forbidden` reachable from any `.ts` file under `dir`. */
+function forbiddenImports(dir: string, forbidden: string, base = ROOT): string[] {
+  const hits: string[] = [];
+  for (const entry of tsFilesUnder(dir)) {
+    for (const mod of reach(entry)) {
+      if (mod.startsWith(`${forbidden}/`))
+        hits.push(`${relative(base, mod)} from ${relative(base, entry)}`);
+    }
+  }
+  return hits;
+}
+
 describe("gate code reuses nothing from the independent grader (TIF-270)", () => {
   const gateDir = join(ROOT, "src", "gate");
-  const entries = readdirSync(gateDir)
-    .filter((f) => f.endsWith(".ts"))
-    .map((f) => join(gateDir, f))
-    .filter((f) => statSync(f).isFile());
+  const entries = tsFilesUnder(gateDir);
 
   it("no module reachable from src/gate/ lives under src/benchmark/", () => {
     expect(entries.length).toBeGreaterThanOrEqual(8);
-    const benchmark = join(ROOT, "src", "benchmark");
-    const hits: string[] = [];
-    for (const entry of entries) {
-      for (const mod of reach(entry)) {
-        if (mod.startsWith(`${benchmark}/`))
-          hits.push(`${relative(ROOT, mod)} from ${relative(ROOT, entry)}`);
-      }
-    }
-    expect(hits).toEqual([]);
+    expect(forbiddenImports(gateDir, join(ROOT, "src", "benchmark"))).toEqual([]);
   });
 
   it("the walker sees a grader import (bite check)", () => {
     const fake = 'import { gradeTrial } from "../benchmark/grade/grade.ts";';
     expect([...fake.matchAll(IMPORT)].map((m) => m[1])).toEqual(["../benchmark/grade/grade.ts"]);
+  });
+
+  it("the walker sees a grader import from a subfolder of src/gate/ (follow-up 6 bite check)", () => {
+    // A scratch tree shaped like src/: gate/sub/leak.ts imports benchmark/grade/grade.ts.
+    const src = tempRoot();
+    mkdirSync(join(src, "gate", "sub"), { recursive: true });
+    mkdirSync(join(src, "benchmark", "grade"), { recursive: true });
+    writeFileSync(join(src, "gate", "ok.ts"), "export const ok = 1;\n");
+    writeFileSync(
+      join(src, "gate", "sub", "leak.ts"),
+      'import { grade } from "../../benchmark/grade/grade.ts";\nexport { grade };\n',
+    );
+    writeFileSync(join(src, "benchmark", "grade", "grade.ts"), "export const grade = 1;\n");
+    expect(forbiddenImports(join(src, "gate"), join(src, "benchmark"), src)).toEqual([
+      "benchmark/grade/grade.ts from gate/sub/leak.ts",
+    ]);
   });
 });
 

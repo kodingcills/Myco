@@ -60,7 +60,7 @@ function graderXlsx(intent: Intent, bytes: Uint8Array) {
 describe("CSV/xlsx parity over the agreement table (every probe)", () => {
   const probes = [...AGREE, ...KNOWN_DIVERGENCES];
   it("covers the whole table", () => {
-    expect(probes.length).toBe(17);
+    expect(probes.length).toBe(23);
   });
 
   it.each(probes.map((p) => [p.name, p] as const))("%s", async (_name, probe) => {

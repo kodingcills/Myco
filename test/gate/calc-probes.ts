@@ -101,6 +101,41 @@ export const AGREE: Probe[] = [
     gate: "verified",
     grader: "pass",
   },
+  // S-1 (round-3 verdict, follow-up to #485): a trailing row WITH content is a cell the
+  // agent added, so it is refuted (DOCUMENT_COLLATERAL) and the grader fails it. Only rows
+  // with no content at all are ignored at the end. Carried here from main's #499 by the
+  // TIF-274 merge (round 2, D1).
+  { name: "',,x,,' row at the end", csv: `${exact},,x,,\n`, gate: "refuted", grader: "fail" },
+  {
+    name: "',,x,,' row at the end, no trailing newline",
+    csv: `${exact},,x,,`,
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "blank line, then an 'x' row, at the end",
+    csv: `${exact}\nx\n`,
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "',,,,' row, then a ',,x,,' row, at the end",
+    csv: `${exact},,,,\n,,x,,\n`,
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "trailing row whose only content is whitespace in one cell (', ,,,')",
+    csv: `${exact}, ,,,\n`,
+    gate: "refuted",
+    grader: "fail",
+  },
+  {
+    name: "trailing row whose only content is a tab in one cell",
+    csv: `${exact},,\t,,\n`,
+    gate: "refuted",
+    grader: "fail",
+  },
 ];
 
 /** Known divergences: the gate refutes, the grader passes. Never the other way round. */

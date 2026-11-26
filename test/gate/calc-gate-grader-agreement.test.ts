@@ -6,7 +6,9 @@
  *
  * Trailing rows with no content (blank lines, CRLF blank lines, `,,,,` rows at the end) are
  * no content to both, like a trailing empty column; interior blank or all-empty rows shift
- * the records below them and fail both.
+ * the records below them and fail both. A trailing row WITH content (`,,x,,`, a blank line
+ * then `x`, or a cell holding only whitespace) is an added cell: refuted with
+ * DOCUMENT_COLLATERAL by the gate and failed by the grader (round-3 S-1, follow-up to #485).
  *
  * Two rows are KNOWN DIVERGENCES, pinned here on purpose (false refutes, never a false
  * done): an RFC 4180 quoted target and CR-only line endings. The grader parses RFC 4180 and
