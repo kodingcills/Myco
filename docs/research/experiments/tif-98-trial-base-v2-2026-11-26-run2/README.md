@@ -22,10 +22,10 @@ taken.
 ## Why the idle stage cannot pass as written
 
 The stage counts the guest as quiet only after 3 consecutive 30 s samples with **no**
-running `\Microsoft\Windows\*` task and CPU under 15%. Two tasks were running in all 116
-samples: `\Microsoft\Windows\Multimedia\SystemSoundsService` and
+running `\Microsoft\Windows\*` task and CPU under 15%. Two tasks were running in all 115
+samples, and both are named in the deadline line: `\Microsoft\Windows\Multimedia\SystemSoundsService` and
 `\Microsoft\Windows\Wininet\CacheTask`. Both also appear as running in
-`03-state-before.json`, taken 22 s after boot (in both runs). From sample 25 on (guest clock
+`03-state-before.json`, taken 22 s (run 1) and 23 s (run 2) after boot. From sample 25 on (guest clock
 23:33, about 04:33Z), these two were the only running tasks, for 91 samples. Guest CPU in the
 last 95 samples was at most 19%, and mostly 0-5%.
 

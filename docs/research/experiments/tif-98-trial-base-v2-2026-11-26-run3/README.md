@@ -41,8 +41,8 @@ The idle stage does not count exactly two tasks, matched by full path with no wi
 `\Microsoft\Windows\Multimedia\SystemSoundsService` and `\Microsoft\Windows\Wininet\CacheTask`.
 
 The reason is the run-2 evidence (`../tif-98-trial-base-v2-2026-11-26-run2/06-idle.log`).
-Both tasks were running in all 116 samples of a 60 min idle stage, and both were already
-running 22 s after boot. So "no running task" could never be reached.
+Both tasks were running in all 115 samples of a 60 min idle stage (and are named in its
+deadline line), and both were already running 22-23 s after boot (runs 1 and 2). So "no running task" could never be reached.
 
 Every other `\Microsoft\Windows` task must still be idle. The 60 min bound and the exit 1 stay.
 Both tasks are still logged in every sample (`running=` and `counted=`). Both are running in
@@ -55,7 +55,9 @@ with `clean-base`, back to back. Times: 06:02:24Z to 06:41Z. The script's lsof c
 host load gate (10) ran before each step, and it held twice for load. All 10 resets were rc 0
 and passed the readiness re-check.
 
-Snapshot memory state, read from UTM's `snapshots.plist` (`HasState`) for this VM:
+Snapshot memory state, read from UTM's `snapshots.plist` (`HasState`) for this VM. The raw
+`plutil -p` and `qemu-img snapshot -l -U` output is in `snapshot-metadata.txt` (captured
+read-only after the round-1 review; no snapshot changed since run 3):
 
 | snapshot | HasState | UTM state size |
 |---|---|---|
@@ -67,7 +69,8 @@ Snapshot memory state, read from UTM's `snapshots.plist` (`HasState`) for this V
 `reset-trial-vm.sh` restores the named snapshot on a stopped VM and boots it ("disk-only cold
 restore", its header). So both halves are cold boots of a disk-only snapshot.
 
-Per reset (from each reset's `timing` and `wait-guest-ready` lines):
+Per reset (from each reset's `timing` and `wait-guest-ready` lines, committed as
+`bench-reset-lines.txt`):
 
 | half | run | total s | first ssh s | guest CPU at first ssh s |
 |---|---|---|---|---|
@@ -106,4 +109,6 @@ this same-session bench, where every `clean-base` reset took 204-222 s.
 ## Files not committed
 
 `bench-*.jsonl.logs/` holds raw per-step logs, which `reset-bench.sh` marks as
-operator-only, not evidence. The figures above are copied from them and from the JSONL.
+operator-only, not evidence. The two lines each reset contributes to the table above (first
+ssh with guest CPU, and the timing line) are extracted into `bench-reset-lines.txt`. Every
+other figure comes from the committed JSONL or `snapshot-metadata.txt`.

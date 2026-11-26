@@ -236,6 +236,49 @@ describe("guest-maintenance.ps1 signatures stage", () => {
     expect(stage).toMatch(/Start-Sleep -Seconds \d+/);
   });
 
+  // Round 2 (verifier D1, mutants S1 and S2b): pin the exact busy test and the whole retry loop,
+  // so "every HRESULT is busy" and "the busy branch exits instead of waiting" both fail.
+  const lines = stage
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  it("classifies busy by exactly the two 0x80070652 forms, nothing else", () => {
+    expect(lines).toContain(
+      "$busy = ($_.FullyQualifiedErrorId -like 'HRESULT 0x80070652,*') -or ($_.Exception.HResult -eq -2147023278)",
+    );
+    expect(lines.filter((l) => l.startsWith("$busy")).length).toBe(1);
+  });
+
+  it("the busy branch logs and falls through to the deadline-then-wait path: no exit or break in catch", () => {
+    const from = lines.indexOf("catch {");
+    const to = lines.indexOf("}", from);
+    const body = lines.slice(from, to + 1);
+    expect(body.some((l) => /\bexit\b|\bbreak\b|\breturn\b/.test(l))).toBe(false);
+  });
+
+  it("the retry loop is exactly: try, catch (busy or rethrow), deadline exit 1, wait 60 s, version check", () => {
+    const from = lines.indexOf("while ($true) {");
+    expect(from).toBeGreaterThan(0);
+    expect(lines.slice(from, from + 14)).toEqual([
+      "while ($true) {",
+      "$attempt++",
+      "try { Update-MpSignature; break }",
+      "catch {",
+      "$busy = ($_.FullyQualifiedErrorId -like 'HRESULT 0x80070652,*') -or ($_.Exception.HResult -eq -2147023278)",
+      "if (-not $busy) { throw }",
+      // PowerShell's ${attempt}, split so it is not read as a JS template placeholder.
+      '"signatures: attempt $' + '{attempt}: another install is in progress (HRESULT 0x80070652)"',
+      "}",
+      'if ((Get-Date) -gt $deadline) { "signatures: FAIL still 0x80070652 after 25 min ($attempt attempts); version $before"; exit 1 }',
+      "Start-Sleep -Seconds 60",
+      "$now = (Get-MpComputerStatus).AntivirusSignatureVersion",
+      'if ($now -ne $before) { "signatures: the other install moved the version to $now"; break }',
+      "}",
+      "$after = Get-MpComputerStatus",
+    ]);
+  });
+
   it("stops waiting when the signature version moves", () => {
     const loop = stage.slice(stage.indexOf("Start-Sleep"));
     expect(loop).toMatch(/\$now = \(Get-MpComputerStatus\)\.AntivirusSignatureVersion/);
@@ -255,7 +298,7 @@ describe("guest-maintenance.ps1 signatures stage", () => {
 /**
  * Idle stage (lead ruling 2026-11-26 05:37Z): exactly two always-running tasks
  * are not counted, matched by full path with no wildcards. Build run 2 had them
- * running in all 116 samples. Every other \Microsoft\Windows task still has to
+ * running in all 115 samples (and the deadline line). Every other \Microsoft\Windows task still has to
  * be idle, and the stage fails closed (exit 1) at the 60 min deadline.
  */
 describe("guest-maintenance.ps1 idle stage", () => {
@@ -293,6 +336,25 @@ describe("guest-maintenance.ps1 idle stage", () => {
     expect(stage).toMatch(/\$running = RunningWindowsTasks/);
     expect(stage).toMatch(/\$counted = @\(\$running \| Where-Object/);
     expect(stage).toMatch(/if \(\$counted\.Count -eq 0 -and \$cpu -lt 15\) \{ \$quiet\+\+ \}/);
+  });
+
+  // Round 2 (verifier D1, mutant I8): the counted set is exactly "running minus the two", with no
+  // further filter that could drop every task.
+  it("counts exactly the running tasks minus the two, with no extra filter", () => {
+    const lines = stage
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const counted = lines.filter((l) => l.startsWith("$counted"));
+    expect(counted).toEqual([
+      "$counted = @($running | Where-Object { $notCounted -notcontains $_ })",
+    ]);
+    const from = lines.indexOf("while ($quiet -lt 3) {");
+    expect(lines.slice(from + 2, from + 5)).toEqual([
+      "Start-Sleep -Seconds 30",
+      "$running = RunningWindowsTasks",
+      "$counted = @($running | Where-Object { $notCounted -notcontains $_ })",
+    ]);
   });
 
   it("fails closed at the 60 min deadline", () => {

@@ -143,8 +143,9 @@ if ($Stage -eq 'idle') {
   # after 60 minutes.
   # Exactly two tasks are not counted, matched by full path (equality, no
   # wildcards; lead ruling 2026-11-26 05:37Z). Both run for the whole session:
-  # in build run 2 they were running in all 116 samples, and also 22 s after
-  # boot, so the stage could never pass while they counted. They are still
+  # in build run 2 they were running in all 115 samples and in the deadline
+  # line, and also 22-23 s after boot, so the stage could never pass while they
+  # counted. They are still
   # logged in every sample.
   $notCounted = @('\Microsoft\Windows\Multimedia\SystemSoundsService', '\Microsoft\Windows\Wininet\CacheTask')
   $msched = "$env:windir\System32\MSchedExe.exe"
