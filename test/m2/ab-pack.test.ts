@@ -5,12 +5,28 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BenchmarkArmRow } from "../../src/benchmark/check.ts";
-import { checkAbPack, readAbPack } from "../../src/m2/ab-pack.ts";
+import {
+  checkAbPack,
+  EVIDENCE_TREE,
+  preregLocation,
+  preregSha256,
+  readAbPack,
+} from "../../src/m2/ab-pack.ts";
 import { checkPack, readPack } from "../../src/m2/evidence.ts";
 import {
   AB_TASKS,
@@ -473,6 +489,115 @@ describe("#554 round 1 fixes", () => {
         const r = check(dir, root);
         expect(r.errors).toEqual([]);
         expect(r.ok).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("#554 round 3: location by identity, never by spelling", () => {
+    it("D1: the upper-case spelling of the pack's own README is refused on every file system", () => {
+      const root = fresh();
+      try {
+        const dir = writeAbPack("m2-ab-case", { stage: 1 }, join(root, EVIDENCE_TREE), root);
+        const text = "# the design, written after the run\n";
+        writeFileSync(join(dir, "README.md"), text);
+        // Case-insensitive (macOS APFS): the spelling names the pack's own README; elsewhere none.
+        const folds = existsSync(join(root, "Docs"));
+        for (const spelling of [
+          "Docs/research/experiments/m2-ab-case/README.md",
+          "docs/research/experiments/M2-AB-CASE/README.md",
+          "docs/research/experiments/m2-ab-case/readme.md",
+        ]) {
+          setPrereg(dir, spelling, text);
+          const r = check(dir, root);
+          expect(r.ok, spelling).toBe(false);
+          expect(r.errors, spelling).toContain(
+            `preregistration.file ${spelling}: ${folds ? "inside the pack (a pack cannot certify its own pre-registration)" : "not committed"}`,
+          );
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("the evidence tree reached through a link is still the evidence tree", () => {
+      const root = fresh();
+      try {
+        const store = join(root, "store", "experiments");
+        mkdirSync(join(store, "m2-other"), { recursive: true });
+        mkdirSync(join(root, "docs", "research"), { recursive: true });
+        symlinkSync(store, join(root, EVIDENCE_TREE));
+        const dir = writeAbPack("m2-ab-tl", { stage: 1 }, root);
+        const text = "# a design inside the evidence tree\n";
+        writeFileSync(join(store, "m2-other", "README.md"), text);
+        setPrereg(dir, "store/experiments/m2-other/README.md", text);
+        const r = check(dir, root);
+        expect(r.ok).toBe(false);
+        expect(r.errors.join("\n")).toMatch(
+          /preregistration\.file store\/experiments\/m2-other\/README\.md: inside the evidence tree/,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("a hard-linked file is refused: its other names (the pack's README here) are invisible", () => {
+      const root = fresh();
+      try {
+        const dir = writeAbPack("m2-ab-hl", { stage: 1 }, root);
+        const text = "# the design, written after the run\n";
+        writeFileSync(join(dir, "README.md"), text);
+        mkdirSync(join(root, "docs"), { recursive: true });
+        linkSync(join(dir, "README.md"), join(root, "docs", "design.md"));
+        setPrereg(dir, "docs/design.md", text);
+        const r = check(dir, root);
+        expect(r.ok).toBe(false);
+        expect(r.errors).toContain(
+          "preregistration.file docs/design.md: a file with 2 hard links (its other names are invisible to realpath, so its location cannot be checked)",
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("the bound file is the one checked: the hash is read from the checked real path", () => {
+      const root = fresh();
+      try {
+        const dir = writeAbPack("m2-ab-real", { stage: 1 }, root);
+        const text = "# corrections A/B pre-registration\n";
+        mkdirSync(join(root, "docs", "benchmark"), { recursive: true });
+        writeFileSync(join(root, "docs", "benchmark", "prereg.md"), text);
+        symlinkSync(join(root, "docs", "benchmark"), join(root, "via"));
+        setPrereg(dir, "via/prereg.md", text);
+        const input = readAbPack(dir, root);
+        expect(input.readErrors).toEqual([]);
+        expect(input.preregCommittedSha256).toBe(sha256(text));
+        expect(checkAbPack(input).ok).toBe(true);
+        // A file replaced between the check and the read is not bound (one descriptor, same inode).
+        const where = preregLocation(dir, root, "via/prereg.md");
+        expect(where.error).toBeNull();
+        if (where.error !== null) return;
+        expect(preregSha256(where)).toBe(sha256(text));
+        writeFileSync(join(root, "docs", "benchmark", "swap.md"), "# a different design\n");
+        renameSync(join(root, "docs", "benchmark", "swap.md"), where.real);
+        expect(preregSha256(where)).toBeNull();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("M4: an accepted row the grader cannot grade is non-verified, so it needs a cause", () => {
+      const root = fresh();
+      try {
+        const { on, off } = stage1Arms();
+        const k = on.arm.findIndex((r) => r.accepted === true);
+        const row = on.arm[k] as BenchmarkArmRow;
+        on.arm[k] = { ...row, cause: null };
+        on.grades[k] = { ...on.grades[k]!, status: "ungradable" };
+        const r = check(writeAbPack("m2-ab-ungr", { stage: 1, arms: { on, off } }, root), root);
+        expect(r.ok).toBe(false);
+        expect(r.errors).toContain(`on: ${row.trialKey}: non-verified row has no cause`);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

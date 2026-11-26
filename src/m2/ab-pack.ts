@@ -15,8 +15,18 @@
  *    or otherwise failing pack is not ok, and the scorecard may not cite it.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  type Stats,
+  statSync,
+} from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { m2AbPackManifestSchema } from "../../schemas/m2-ab-pack.ts";
 import { m2TrialOpsSchema } from "../../schemas/m2-evidence.ts";
 import { validateSchema } from "../../schemas/validate.ts";
@@ -138,31 +148,75 @@ export const EVIDENCE_TREE = "docs/research/experiments";
 /** True when `path` is `dir` itself or inside it (separator-safe: `/a/b-x` is not in `/a/b`). */
 const within = (path: string, dir: string) => path === dir || path.startsWith(`${dir}${sep}`);
 
+/** A file system object's identity: the same object under any spelling, link or case. */
+const identity = (st: Stats) => `${st.dev}:${st.ino}`;
+
+/** The identities of every directory above `path` (`path` has no links: a native realpath). */
+function ancestorIdentities(path: string): Set<string> {
+  const ids = new Set<string>();
+  for (let d = dirname(path); ; ) {
+    ids.add(identity(statSync(d)));
+    const up = dirname(d);
+    if (up === d) return ids;
+    d = up;
+  }
+}
+
+/** Where a declared pre-registration file may not be bound (`error`), or the checked file. */
+export type PreregLocation =
+  | { readonly error: string; readonly real?: undefined; readonly stat?: undefined }
+  | { readonly error: null; readonly real: string; readonly stat: Stats };
+
 /**
- * Why a declared pre-registration file may not be bound, or null (#554 round 1, D2). The
- * pre-registration states the fixed design BEFORE the run, so it must be a repository file the
- * pack cannot have written: it must exist inside the repository once symlinks are resolved
- * (`realpath`, so an in-repo link to a file outside is refused), and it may not be inside the
- * pack directory (its own README, say) or anywhere under the evidence tree. Track E's committed
- * file (#549) will pin the exact path once it lands.
+ * Why a declared pre-registration file may not be bound, or the checked file (#554 rounds 1-3).
+ * The pre-registration states the fixed design BEFORE the run, so it must be a repository file
+ * the pack cannot have written: it must exist inside the repository once symlinks are resolved
+ * (an in-repo link to a file outside is refused), and it may not be inside the pack directory
+ * (its own README, say) or anywhere under the evidence tree.
+ *
+ * Containment is by identity (device and inode of every directory above the file's native
+ * realpath), never by spelling: on a case-insensitive file system (macOS APFS)
+ * `Docs/research/experiments/<pack>/README.md` names the pack's own README under a spelling no
+ * string comparison matches, and the evidence tree may itself be reached through a link. A
+ * regular file with more than one hard link is refused, as `resolveScoped` does
+ * (`src/actions/policy.ts`): its other names are invisible to realpath, so its location cannot be
+ * checked. The caller reads the returned `real` and verifies it is still `stat` (no re-resolve).
  */
-export function preregLocationError(
-  packDir: string,
-  repoRoot: string,
-  file: string,
-): string | null {
-  const root = realpathSync(resolve(repoRoot));
+export function preregLocation(packDir: string, repoRoot: string, file: string): PreregLocation {
+  const root = realpathSync.native(resolve(repoRoot));
   const declared = resolve(root, file);
-  if (!within(declared, root) || declared === root) return "outside the repository";
-  if (!existsSync(declared)) return "not committed";
-  const real = realpathSync(declared);
-  if (!within(real, root) || real === root) return "outside the repository (through a link)";
-  if (!statSync(real).isFile()) return "not a file";
-  if (within(real, realpathSync(resolve(packDir))))
-    return "inside the pack (a pack cannot certify its own pre-registration)";
-  if (within(real, join(root, EVIDENCE_TREE)))
-    return `inside the evidence tree (${EVIDENCE_TREE}); the pre-registration is a design document`;
-  return null;
+  if (!within(declared, root) || declared === root) return { error: "outside the repository" };
+  if (!existsSync(declared)) return { error: "not committed" };
+  const real = realpathSync.native(declared);
+  const stat = statSync(real);
+  const above = ancestorIdentities(real);
+  const rootId = identity(statSync(root));
+  if (!above.has(rootId) || identity(stat) === rootId)
+    return { error: "outside the repository (through a link)" };
+  if (!stat.isFile()) return { error: "not a file" };
+  if (stat.nlink > 1)
+    return {
+      error: `a file with ${stat.nlink} hard links (its other names are invisible to realpath, so its location cannot be checked)`,
+    };
+  if (above.has(identity(statSync(packDir))))
+    return { error: "inside the pack (a pack cannot certify its own pre-registration)" };
+  const tree = join(root, EVIDENCE_TREE);
+  if (existsSync(tree) && above.has(identity(statSync(tree))))
+    return {
+      error: `inside the evidence tree (${EVIDENCE_TREE}); the pre-registration is a design document`,
+    };
+  return { error: null, real, stat };
+}
+
+/** The checked file's sha256, read through one descriptor that must still be the checked file. */
+export function preregSha256(where: { readonly real: string; readonly stat: Stats }): string | null {
+  const fd = openSync(where.real, "r");
+  try {
+    if (identity(fstatSync(fd)) !== identity(where.stat)) return null;
+    return createHash("sha256").update(readFileSync(fd)).digest("hex");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Reads an A/B pack directory. `repoRoot` resolves the pre-registration file the manifest names. */
@@ -189,12 +243,13 @@ export function readAbPack(dir: string, repoRoot: string): AbPackInput {
   let preregCommittedSha256: string | null = null;
   const file = (manifest as { preregistration?: { file?: unknown } } | null)?.preregistration?.file;
   if (typeof file === "string") {
-    const where = preregLocationError(dir, repoRoot, file);
-    if (where !== null) readErrors.push(`preregistration.file ${file}: ${where}`);
-    else
-      preregCommittedSha256 = createHash("sha256")
-        .update(readFileSync(realpathSync(resolve(repoRoot, file))))
-        .digest("hex");
+    const where = preregLocation(dir, repoRoot, file);
+    if (where.error !== null) readErrors.push(`preregistration.file ${file}: ${where.error}`);
+    else {
+      preregCommittedSha256 = preregSha256(where);
+      if (preregCommittedSha256 === null)
+        readErrors.push(`preregistration.file ${file}: replaced while it was checked`);
+    }
   }
   return { manifest, on: arm("on"), off: arm("off"), stage0, preregCommittedSha256, readErrors };
 }
