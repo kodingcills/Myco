@@ -434,6 +434,10 @@ the operator is the caller. `mcp` serves one trial over stdio until stdin closes
 
 ## MCP server for Claude Code
 
+Any other MCP client (the official SDK client, Oh My Pi, Gemini CLI, a plain shell) uses the
+same server: see [Using `myco-gate` from any MCP client](clients.md) and
+[`examples/mcp-clients/`](../../examples/mcp-clients/README.md).
+
 `myco-gate mcp` is a stdio MCP server (JSON-RPC 2.0, one message per line; protocol
 versions 2025-06-18, 2025-03-26 and 2024-11-05). It has exactly one tool:
 
