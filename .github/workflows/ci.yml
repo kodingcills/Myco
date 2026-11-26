@@ -240,6 +240,13 @@ jobs:
         run: pnpm exec vitest run test/linux
       - name: Demo (every scenario must produce its expected verdict)
         run: pnpm myco-linux --demo --out "$RUNNER_TEMP/myco-linux"
+      # TIF-265 track D: `myco init` (desktop check on) writes the project configs, real Calc
+      # edits the file under the configured evidence root, and a scripted MCP client gets
+      # verified / refuted through the written .mcp.json and .codex/config.toml. Must not skip.
+      - name: myco init end to end (real Calc, written config, scripted MCP client)
+        env:
+          MYCO_INIT_E2E_TRANSCRIPT: ${{ runner.temp }}/myco-linux/init-e2e.txt
+        run: pnpm exec vitest run test/init/init-linux-e2e.test.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
