@@ -31,7 +31,10 @@ const INSTRUCTIONS =
   'verdict "verified" (accepted: true). On "refuted", the persisted state contradicts the ' +
   'task: fix it and call again. On "uncertain", the gate could not look: report the reason ' +
   "codes; do not claim done. You cannot supply evidence or expected values; the gate reads " +
-  "persisted state itself.";
+  "persisted state itself. If the operator enabled corrections, a refuted or uncertain result " +
+  "may carry `corrections`: typed notes about your saved document (a target cell's value, a " +
+  "cell you changed, an unsaved document). Fix the document in the app and save; echoing a " +
+  "correction back changes nothing, and corrections never add attempts.";
 
 export function toolDefinitions(): object[] {
   return [

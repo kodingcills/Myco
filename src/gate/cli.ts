@@ -39,6 +39,9 @@ operator options (check, mcp):
   --tasks <file>         extra tasks: { "tasks": [ { id, family, stateFile, spec } ] }
   --no-builtin           do not register the built-in myco-run tasks (df-s01, df-s02)
   --audit <file>         append every decision as one JSON line (fails closed if unwritable)
+  --corrections <ids>    agent-safe corrections for these task families (comma-separated:
+                         calc-record-edit, calc-multi-step); off when absent. Never on
+                         for R1 evidence runs unless the lead rules otherwise
   --json                 check: print the GateResult as JSON
 
 exit (check): 0 verified, 1 refuted, 2 uncertain, 3 usage
@@ -64,6 +67,7 @@ const VALUE_FLAGS = new Set([
   "--out",
   "--transport",
   "--family",
+  "--corrections",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--no-builtin"]);
 
@@ -111,11 +115,15 @@ function operatorGate(flags: Flags, stderr: Writable) {
   if (entries.length === 0)
     throw new UsageError("no tasks registered (--no-builtin without --tasks)");
   const audit = str(flags, "--audit");
+  const corrections = str(flags, "--corrections");
   return createGate({
     tasks: buildRegistry(entries),
     reader: fileEvidenceReader(root),
     assignment: { taskId: task, runId: run },
     onDiagnostic: (diagnostic) => writeDiagnostic(stderr, diagnostic),
+    ...(corrections === undefined
+      ? {}
+      : { corrections: { families: corrections.split(",").filter((id) => id !== "") } }),
     ...(audit === undefined
       ? {}
       : {
@@ -166,7 +174,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
         io.stdout.write(
           flags.has("--json")
             ? `${JSON.stringify(result, null, 2)}\n`
-            : `${result.verdict}${result.accepted ? " (accepted)" : " (not accepted)"}: ${result.reasonCodes.join(", ")}\n${result.reasons.map((r) => `  - ${r}\n`).join("")}`,
+            : `${result.verdict}${result.accepted ? " (accepted)" : " (not accepted)"}: ${result.reasonCodes.join(", ")}\n${result.reasons.map((r) => `  - ${r}\n`).join("")}${(result.corrections ?? []).map((c) => `  correction: ${JSON.stringify(c)}\n`).join("")}`,
         );
         return exitFor(result);
       }
@@ -207,7 +215,8 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
   } catch (error) {
     if (
       error instanceof UsageError ||
-      (error instanceof Error && /^invalid gate (task registry|assignment)/.test(error.message))
+      (error instanceof Error &&
+        /^invalid gate (task registry|assignment|corrections)/.test(error.message))
     ) {
       io.stderr.write(`myco-gate: ${error.message}\n`);
       return EXIT_USAGE;
