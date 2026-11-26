@@ -20,6 +20,12 @@ How to brief a delegated verifier, and the failure each rule exists to prevent: 
 
 Single-context layout: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+### Targeted tests and targeted CI
+
+While iterating, run only the tests for your area (per-area commands: `CONTRIBUTING.md`, "Targeted tests per area"; the rule: `docs/coordination/CONTRIBUTING-agents.md`, "Targeted testing"). The quickest is `pnpm exec vitest run --changed origin/main`. Run the full `pnpm test` once before opening a PR.
+
+CI narrows itself too (`docs/ci.md`, "Targeted CI"): docs-only and low-tier PRs run the related tests plus a core smoke set; pushes to `main` and every Tier 2 PR run everything. A PR is Tier 2 for CI when its body has a `Tier: 2` line, it has the `tier-2` label, or it touches a Tier 2 or tooling path. If you raise a PR's tier, add the `tier-2` label: that starts a full run.
+
 ### Secrets (TIF-206, enforced)
 
 Never print a secret value into a thread, log, PR, or commit. This is enforced, not advisory: on Tiffany's Mac every agent harness (Oh My Pi, Claude Code, Codex) runs `~/.config/secret-guard/guard.sh`, which refuses `ps e`/`eww`/`-E`, bare `env`/`printenv`/`export -p`/`set`/`declare -x`, `/proc/*/environ`, `launchctl getenv`, keychain `-w`/`-g` reads, `gh auth token`, reads of `.env*`, `credentials.txt`, `seed.iso`, `~/.t3/userdata/secrets`, `~/.myco/secrets` and private keys, and `echo $*KEY*`-style prints, and it redacts key-shaped strings from tool output. A block is the answer: do not rephrase, encode, or split the command to get past it. Use names-only checks instead (`env | cut -d= -f1`, `[ -n "$VAR" ] && echo set`, `test -f PATH && echo exists`, `ps -o pid,ppid,etime,command -p PID`), and if you truly need a value, stop and ask the human.

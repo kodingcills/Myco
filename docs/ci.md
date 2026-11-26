@@ -13,14 +13,15 @@ nothing is skipped or fails for lack of one.
 
 | Workflow | Job (check name) | Runs on fork PRs | Required on `main` |
 | --- | --- | --- | --- |
+| `ci.yml` | `ci plan (path classes)` | yes | no |
 | `ci.yml` | `secret scan (gitleaks)` | yes | yes |
 | `ci.yml` | `ci hygiene (workflows)` | yes | no |
 | `ci.yml` | `check (ubuntu-latest)`, `check (macos-latest)` | yes | yes |
 | `ci.yml` | `myco-agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `myco-agent tests (macos-latest)` | yes | no |
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
-| `ci.yml` | `linux path (ubuntu-latest)` | yes | no |
-| `ci.yml` | `m2 evidence and scorecard` | yes | no |
+| `ci.yml` | `linux path (ubuntu-latest)` | yes, when the plan says so | no |
+| `ci.yml` | `m2 evidence and scorecard` | yes, when the plan says so | no |
 | `ci.yml` | `viewer verdict budget (…)` | only with the `perf` label | no |
 | `tif-170-race-diagnostics.yml` | `race x1` | only when the PR touches its paths | no |
 
@@ -41,6 +42,65 @@ nothing is skipped or fails for lack of one.
   on pushes to `main` and on PRs a maintainer labels `perf`. Only people with triage
   access or above can add labels, and a labelled fork PR still runs under
   `pull_request`: same read-only token, no secrets.
+
+## Targeted CI (test audit, TIF-265 follow-up)
+
+The `ci plan (path classes)` job runs `scripts/ci-plan.py` on the PR's changed files,
+labels, title and body, and every other job reads its decision. It picks one of three
+modes.
+
+| Mode | When | `check` runs | agent, runtime jobs |
+| --- | --- | --- | --- |
+| `full` | Pushes to `main`; any Tier 2 signal (below); any changed path in a Tier 2 or tooling class; any file kind the planner does not know (yaml, json, py, sh, fixtures); a doc that `src/` or `scripts/` names; a diff it cannot compute, or over 300 files | typecheck, lint, `pnpm test`, build: exactly what it ran before the planner existed | run |
+| `targeted` | Only `.md` docs and TypeScript under `src/`, `test/`, `scripts/`, `viewer/` outside the full-suite classes | typecheck, lint, `vitest run --changed <PR base>` (changed test files and every test importing a changed module), the core smoke set, the doc tests, `pnpm schema-validate`, build | steps skipped, job green |
+| `docs` | Only `.md` docs, none of them named by `src/` or `scripts/` | the core smoke set plus the test files that name a changed doc | steps skipped, job green |
+
+**The secret scan always runs.** It does not depend on the plan.
+
+**Required checks never hang.** The five required checks keep their names, and their
+jobs are never skipped at the job level. A skipped matrix job reports as
+`check (${{ matrix.os }})`, which would leave `check (macos-latest)` pending forever. Each
+required job starts, reads the plan in its first step, and skips only its own later
+steps. If the plan job fails or is skipped, every required job runs in full.
+`test/ci-hygiene/test_ci_plan.py` (run by `ci hygiene (workflows)`) fails if a required
+name changes, if a required job gains a job-level condition, or if the fallback to full
+is missing.
+
+**Tier 2 always gets the full suite.** Any one of these forces `full`:
+
+- the `tier-2` label (or `full-ci`);
+- a PR title or a body line that states the tier as 2 (`Tier: 2`, `**Tier 2.**`, `Tier 2 (locks)`),
+  as `.github/PULL_REQUEST_TEMPLATE.md` asks every PR to;
+- a changed path in a Tier 2 class: `schemas/`, `src/{core,verify,gate,integrity,win,integration,faults,m2,pilot,oracle-selftest}/`,
+  `src/benchmark/grade/`, `src/foundry/{grader,oracles,hidden-split}/`, `src/foundry/guard.ts`,
+  the secret-file, spend-ceiling and run-lock modules, `agent/`, `runtime/`, `foundry/`,
+  `benchmark/`, `docs/research/`, the scorecards, and the guard tests
+  (`test/{gate,integrity,oracle-selftest,fault-classes,m2}/`, faults, VM-lock, scorecard);
+- a changed tooling path: `.github/`, `.githooks/`, `package.json`, the lockfile,
+  `tsconfig*`, `vitest.config.ts`, `biome.json`, `test/setup/`, `test/ci-hygiene/`, the CI
+  scripts.
+
+The workflow also runs on `labeled` and `unlabeled`. Adding `tier-2` after a targeted run
+starts a new run, which cancels the old one, so the required checks go back to pending
+until the full suite passes. A body edit alone does not start a run; the stated tier takes
+effect at the next push, or add the label. **When unsure, add `tier-2`.** A reviewer who
+raises a PR's tier adds the label.
+
+**Core smoke set** (about 5 s, in `scripts/ci-plan.py` `SMOKE`): claim isolation, eval,
+evidence, faults, no-home-paths, recovery, runner, verify, the baseline import graph, the
+gate, the integrity isolation suite and the R5 oracle self-test.
+
+The `linux path` and `m2 evidence and scorecard` jobs are not required. They run in
+`full` mode, and in the other modes only when their own paths change (`src/linux/`,
+`scripts/linux*`, `src/setup/`, `scripts/myco-init.ts`, `test/{linux,init}/`;
+`src/m2/`, `scripts/m2-*`, `test/m2/`, `docs/research/experiments/m2-*`). `viewer-perf`
+is unchanged.
+
+See what the planner would do for your branch:
+
+```sh
+python3 scripts/ci-plan.py --event pull_request --files $(git diff --name-only origin/main...HEAD)
+```
 
 ## Security posture
 
@@ -161,7 +221,10 @@ test and make its child processes async (`spawn`), as
 - Maintainers (write access): "Re-run jobs" or "Re-run failed jobs" on the run page.
   A macOS job cancelled with no steps is a no-runner cancellation; see
   [macOS runner cancellations](#macos-runner-cancellations-tif-256).
-- Locally, the `check` job is: `pnpm install --frozen-lockfile && pnpm typecheck &&
+- Locally, the targeted `check` job is `pnpm exec vitest run --changed origin/main` plus
+  the smoke set `scripts/ci-plan.py` prints; per-area commands are in
+  [CONTRIBUTING.md](../CONTRIBUTING.md#targeted-tests-per-area).
+- Locally, the full `check` job is: `pnpm install --frozen-lockfile && pnpm typecheck &&
   pnpm lint && pnpm test && pnpm build`. The agent job: `cd agent && pip install -e .
   pytest && pytest -v`. The runtime job: `cd runtime && cargo test -p myco-rt-agent`
   (its confinement tests run only on Linux). The Linux path job, after installing

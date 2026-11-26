@@ -49,6 +49,37 @@ answer while you edit. The guest agent and runtime jobs are `cd agent && pip ins
 pytest -v` and `cd runtime && cargo test -p myco-rt-agent`. [docs/ci.md](docs/ci.md) lists every
 CI job, which ones are required on `main`, and how to rerun them.
 
+## Targeted tests per area
+
+While you iterate, run only the tests for the area you changed; run the full `pnpm test`
+once before you open the PR. CI does the same split: see
+[docs/ci.md](docs/ci.md#targeted-ci-test-audit-tif-265-follow-up).
+
+| You changed | Run |
+|---|---|
+| anything (what CI's targeted mode runs) | `pnpm exec vitest run --changed origin/main` |
+| one file or one test | `pnpm exec vitest run test/benchmark/taskset.test.ts`, `pnpm exec vitest run -t "accepts a battery row"`, `pnpm exec vitest related src/baseline/planner.ts` |
+| `src/gate/`, `src/integrity/` | `pnpm exec vitest run test/gate test/integrity` |
+| `src/benchmark/` | `pnpm exec vitest run test/benchmark` |
+| `src/baseline/` | `pnpm exec vitest run test/baseline` |
+| `src/foundry/`, `src/tasks/`, `tasks/` | `pnpm exec vitest run test/foundry test/tasks` |
+| `src/oracle-selftest/` | `pnpm exec vitest run test/oracle-selftest` |
+| `src/discovery/`, `scripts/s0-live*` | `pnpm exec vitest run test/discovery --exclude test/discovery/s0-live-launcher.test.ts && pnpm exec vitest run --pool=forks --no-file-parallelism test/discovery/s0-live-launcher.test.ts` |
+| `src/m2/`, `scripts/m2-*`, M2 evidence packs | `pnpm exec vitest run test/m2 && pnpm exec tsx scripts/m2-evidence-check.ts --all && python3 scripts/m2-scorecard-check.py` |
+| `src/linux/`, `src/setup/`, `myco init` (needs `libreoffice-calc python3-uno`) | `MYCO_LINUX_PATH_REQUIRED=1 pnpm exec vitest run test/linux test/init` |
+| `schemas/` | `pnpm schema-validate` and `pnpm exec vitest run test/evidence.test.ts` |
+| M1 scorecard or its evidence | `python3 scripts/scorecard-check.py && python3 scripts/check-scorecard-links.py` |
+| `viewer/` | `pnpm --filter viewer typecheck && pnpm --filter viewer lint && pnpm exec vitest run viewer/test` |
+| `.github/workflows/`, `scripts/ci-*` | `python3 scripts/ci-hygiene-check.py && python3 -m unittest discover -s test/ci-hygiene -v`, then `actionlint` |
+| `agent/` | `cd agent && pip install -e . pytest && pytest -v` |
+| `runtime/` | `cd runtime && cargo test -p myco-rt-agent` (its confinement tests run only on Linux) |
+| docs only | `pnpm exec vitest run test/no-home-paths.test.ts`, plus any test that names the doc |
+
+`python3 scripts/ci-plan.py --event pull_request --files $(git diff --name-only origin/main...HEAD)`
+prints which CI mode your branch gets and the smoke set it runs. A Tier 2 PR always gets
+the full suite in CI: state `Tier: 2` in the body, as the template asks, or add the
+`tier-2` label.
+
 ## How a change lands
 
 1. **Issue first.** Every pull request links an issue. Maintainers track work in Linear (team TIF)
