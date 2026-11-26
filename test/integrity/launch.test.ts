@@ -2,11 +2,15 @@
  * TIF-274 prerequisite (#470 F2): the launch audit reads the agent's real argv and MCP
  * server environment, and fails closed on anything it cannot classify.
  */
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type AgentLaunchPlan,
   auditAgentLaunch,
   grantedToolsFromArgv,
+  mcpConfigJson,
   parseAgentArgv,
 } from "../../src/integrity/launch.ts";
 import { rtSessionIdFor, type ToolClass } from "../../src/integrity/surface.ts";
@@ -20,15 +24,31 @@ const SERVERS: AgentLaunchPlan["mcpServers"] = {
   "myco-gate": { command: "myco-gate", args: ["mcp"], env: {} },
 };
 const TOOLS = "mcp__myco-rt__create,mcp__myco-rt__act,mcp__myco-gate__myco_gate_check,TodoWrite";
+/** The plan's MCP config path: the only `--mcp-config` value the audit accepts. */
+const MCP_PATH = "/run/myco/trial-7/mcp.json";
+/** The locked MCP flags a gated launch carries (#497 D1). */
+const MCP_LOCK = ["--strict-mcp-config", "--mcp-config", MCP_PATH];
 
 /** Audit `argv` with no built-in tools (`--tools ""`), as a locked gated launch has. */
 function audit(argv: string[], servers: AgentLaunchPlan["mcpServers"] = SERVERS) {
   return auditRaw(["--tools", "", ...argv], servers);
 }
 
-/** Audit `argv` exactly as given. */
+/** Audit `argv` with the locked MCP flags only (no `--tools`). */
 function auditRaw(argv: string[], servers: AgentLaunchPlan["mcpServers"] = SERVERS) {
-  return auditAgentLaunch({ argv, mcpServers: servers }, { runId: RUN, extraServers: GATE });
+  return auditBare([...MCP_LOCK, ...argv], servers);
+}
+
+/** Audit `argv` exactly as given, against a plan whose config path is `mcpConfigPath`. */
+function auditBare(
+  argv: string[],
+  servers: AgentLaunchPlan["mcpServers"] = SERVERS,
+  mcpConfigPath = MCP_PATH,
+) {
+  return auditAgentLaunch(
+    { argv, mcpServers: servers, mcpConfigPath },
+    { runId: RUN, extraServers: GATE },
+  );
 }
 
 describe("grantedToolsFromArgv", () => {
@@ -145,16 +165,24 @@ describe("variadic launch flags are parsed the way Claude Code parses them (#484
   });
 
   it("a second --mcp-config value is a config, not the prompt, and is refused", () => {
-    const argv = ["--mcp-config", "plan.json", "extra.json", "--allowedTools", TOOLS];
-    expect(parseAgentArgv(argv).mcpConfigs).toEqual(["plan.json", "extra.json"]);
-    const a = audit(argv);
+    const argv = ["--mcp-config", MCP_PATH, "extra.json", "--allowedTools", TOOLS];
+    expect(parseAgentArgv(argv).mcpConfigs).toEqual([MCP_PATH, "extra.json"]);
+    const a = auditBare(["--tools", "", "--strict-mcp-config", ...argv]);
     expect(a.ok).toBe(false);
-    expect(a.violations.map((v) => v.tool)).toEqual(["--mcp-config"]);
+    expect([...new Set(a.violations.map((v) => v.tool))]).toEqual(["--mcp-config"]);
     expect(a.hostRoots).toEqual(["/"]);
   });
 
-  it("one --mcp-config value passes", () => {
-    const a = audit(["--strict-mcp-config", "--mcp-config", "plan.json", "--allowedTools", TOOLS]);
+  it("one --mcp-config value, the plan's path, passes", () => {
+    const a = auditBare([
+      "--tools",
+      "",
+      "--strict-mcp-config",
+      "--mcp-config",
+      MCP_PATH,
+      "--allowedTools",
+      TOOLS,
+    ]);
     expect(a.violations).toEqual([]);
   });
 
@@ -198,15 +226,20 @@ describe("variadic launch flags are parsed the way Claude Code parses them (#484
       parseAgentArgv(["--disallowedTools", "Read", "--disallowedTools", "Glob"]).disallowed,
     ).toEqual(["Read", "Glob"]);
     expect(parseAgentArgv(["--tools", "", "--tools", "Read"]).builtins).toEqual(["Read"]);
-    const twice = audit([
+    // Even the plan's own path, given twice, is two configs and is refused.
+    const twice = auditBare([
+      "--tools",
+      "",
+      "--strict-mcp-config",
       "--mcp-config",
-      "a.json",
+      MCP_PATH,
       "--mcp-config",
-      "b.json",
+      MCP_PATH,
       "--allowedTools",
       TOOLS,
     ]);
     expect(twice.violations.map((v) => v.tool)).toEqual(["--mcp-config"]);
+    expect(twice.violations[0]?.detail).toMatch(/^2 MCP configs/);
     const tools = auditRaw(["--tools", "", "--tools", "Read", "--allowedTools", TOOLS]);
     expect(tools.violations.map((v) => v.tool)).toEqual(["Read"]);
   });
@@ -228,7 +261,17 @@ describe("variadic launch flags are parsed the way Claude Code parses them (#484
     expect(parseAgentArgv(["--mcp-config=plan.json", "extra.json"]).mcpConfigs).toEqual([
       "plan.json",
     ]);
-    expect(audit(["--mcp-config=plan.json", "extra.json", "--allowedTools", TOOLS]).ok).toBe(true);
+    expect(
+      auditBare([
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        `--mcp-config=${MCP_PATH}`,
+        "extra.json",
+        "--allowedTools",
+        TOOLS,
+      ]).ok,
+    ).toBe(true);
     // `--tools=` is no built-ins.
     expect(parseAgentArgv(["--tools="]).builtins).toEqual([]);
   });
@@ -329,5 +372,173 @@ describe("the launch audit covers the full tool surface, built-ins included (#48
     ]);
     expect(a.violations).toEqual([]);
     expect(a.effective).toEqual(["mcp__myco-rt__create"]);
+  });
+});
+
+// #497 D1: the MCP servers the agent can load must be exactly plan.mcpServers. The audit
+// requires --strict-mcp-config (no user / project / local servers) and exactly one
+// --mcp-config, equal to the plan's mcpConfigPath; the transport writes mcpConfigJson(plan)
+// there. Inline JSON and every other path are refused.
+describe("the MCP config is pinned to the launch plan (#497 D1)", () => {
+  const EVIL = JSON.stringify({ mcpServers: { evil: { command: "bash", args: ["-c", "id"] } } });
+  /** A locked launch with `mcp` in place of the MCP flags. */
+  const launch = (mcp: string[]) => ["--tools", "", ...mcp, "--allowedTools", TOOLS];
+  const mcpTools = (a: ReturnType<typeof auditBare>) => a.violations.map((v) => v.tool);
+
+  it("the locked launch passes", () => {
+    const a = auditBare(launch(MCP_LOCK));
+    expect(a.violations).toEqual([]);
+    expect(a.ok).toBe(true);
+  });
+
+  it("verifier probe 1: --strict-mcp-config plus an inline JSON config is refused", () => {
+    const a = auditBare(launch(["--strict-mcp-config", "--mcp-config", EVIL]));
+    expect(a.ok).toBe(false);
+    expect(mcpTools(a)).toEqual(["--mcp-config"]);
+    expect(a.violations[0]?.detail).toMatch(/inline JSON/);
+    expect(a.hostRoots).toEqual(["/"]);
+  });
+
+  it("inline JSON as a second value, after the plan's path, is refused", () => {
+    const a = auditBare(launch(["--strict-mcp-config", "--mcp-config", MCP_PATH, EVIL]));
+    expect(a.ok).toBe(false);
+    expect(a.violations.map((v) => v.detail)).toEqual([
+      "2 MCP configs: exactly one, the plan's mcpConfigPath, must load",
+      "inline JSON MCP config: only the plan's mcpConfigPath may load",
+    ]);
+  });
+
+  it("inline JSON in the equals form, or with leading space, is refused", () => {
+    expect(auditBare(launch(["--strict-mcp-config", `--mcp-config=${EVIL}`])).ok).toBe(false);
+    expect(auditBare(launch(["--strict-mcp-config", "--mcp-config", ` ${EVIL}`])).ok).toBe(false);
+  });
+
+  it.each([
+    ["verifier probe 2: another absolute path", "/tmp/other.json"],
+    ["a relative path", "mcp.json"],
+    ["a ./ relative path", "./mcp.json"],
+    ["a relative path that resolves elsewhere", "../trial-6/mcp.json"],
+    ["a path with ..", "/run/myco/trial-7/../trial-7/mcp.json"],
+    ["a path with a doubled slash", "/run/myco/trial-7//mcp.json"],
+    ["a trailing slash", `${MCP_PATH}/`],
+    ["a different case", MCP_PATH.toUpperCase()],
+    ["an empty value", ""],
+  ])("%s is refused", (_, value) => {
+    const a = auditBare(launch(["--strict-mcp-config", "--mcp-config", value]));
+    expect(a.ok).toBe(false);
+    expect(mcpTools(a)).toEqual(["--mcp-config"]);
+    expect(a.violations[0]?.detail).toMatch(/not the plan's mcpConfigPath|inline JSON/);
+  });
+
+  it("a symlink to the plan's file is refused: the audit compares the path itself", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-mcp-"));
+    try {
+      const real = join(dir, "mcp.json");
+      writeFileSync(real, "{}");
+      const link = join(dir, "link.json");
+      symlinkSync(real, link);
+      expect(realpathSync(link)).toBe(realpathSync(real));
+      const a = auditBare(
+        launch(["--strict-mcp-config", "--mcp-config", link]),
+        SERVERS,
+        realpathSync(real),
+      );
+      expect(a.ok).toBe(false);
+      expect(mcpTools(a)).toEqual(["--mcp-config"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("verifier probe 3: no --strict-mcp-config (user/project/local servers load) is refused", () => {
+    const a = auditBare(launch(["--mcp-config", MCP_PATH]));
+    expect(a.ok).toBe(false);
+    expect(mcpTools(a)).toEqual(["--strict-mcp-config"]);
+    expect(a.violations[0]?.detail).toMatch(/user, project and local/);
+  });
+
+  it("no --mcp-config at all is refused: exactly one must load", () => {
+    const a = auditBare(launch(["--strict-mcp-config"]));
+    expect(a.ok).toBe(false);
+    expect(a.violations.map((v) => v.detail)).toEqual([
+      "0 MCP configs: exactly one, the plan's mcpConfigPath, must load",
+    ]);
+  });
+
+  it("the equals form of the plan's path passes", () => {
+    expect(
+      auditBare(launch(["--strict-mcp-config", `--mcp-config=${MCP_PATH}`])).violations,
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["a relative path", "mcp.json"],
+    ["a path with ..", "/run/myco/x/../mcp.json"],
+    ["an empty path", ""],
+    ["inline JSON", "{}"],
+  ])("a plan whose mcpConfigPath is %s is refused even when the argv matches it", (_, path) => {
+    const a = auditBare(launch(["--strict-mcp-config", "--mcp-config", path]), SERVERS, path);
+    expect(a.ok).toBe(false);
+    expect(a.violations.some((v) => /not an absolute, normalised path/.test(v.detail))).toBe(true);
+  });
+
+  it("mcpConfigJson writes exactly the plan's servers", () => {
+    const plan: AgentLaunchPlan = { argv: [], mcpServers: SERVERS, mcpConfigPath: MCP_PATH };
+    const parsed = JSON.parse(mcpConfigJson(plan)) as unknown;
+    expect(parsed).toEqual({ mcpServers: SERVERS });
+  });
+});
+
+// #497 nit 2: a boolean flag takes no value. The equals form is refused (Claude Code rejects
+// it as an unknown option), and `--strict-mcp-config=…` does not count as the lock.
+describe("boolean flags in the equals form are refused (#497 nit 2)", () => {
+  it.each([["--strict-mcp-config=true"], ["--strict-mcp-config="], ["--print=x"], ["--verbose=1"]])(
+    "%s fails closed",
+    (flag) => {
+      const p = parseAgentArgv([flag]);
+      expect(p.violations.map((v) => [v.tool, v.detail])).toEqual([
+        [flag.slice(0, flag.indexOf("=")), "unrecognised agent flag: fail closed"],
+      ]);
+      expect(p.strictMcpConfig).toBe(false);
+    },
+  );
+
+  it("--strict-mcp-config=true in place of the bare flag leaves the lock missing", () => {
+    const a = auditBare([
+      "--tools",
+      "",
+      "--strict-mcp-config=true",
+      "--mcp-config",
+      MCP_PATH,
+      "--allowedTools",
+      TOOLS,
+    ]);
+    expect(a.ok).toBe(false);
+    expect(a.violations.map((v) => v.tool).sort()).toEqual([
+      "--strict-mcp-config",
+      "--strict-mcp-config",
+    ]);
+  });
+});
+
+describe("launch audit nits (#497 nits 1 and 4)", () => {
+  it.each([["default"], ["manual"]])(
+    "--permission-mode %s is refused (not a 2.1.332 safe mode)",
+    (mode) => {
+      const a = audit(["--permission-mode", mode, "--allowedTools", TOOLS]);
+      expect(a.violations.map((v) => v.tool)).toEqual(["--permission-mode"]);
+    },
+  );
+
+  it("effective lists no granted tool whose server the plan does not start", () => {
+    const a = audit(["--allowedTools", `${TOOLS},mcp__evil__run`]);
+    expect(a.ok).toBe(false);
+    expect(a.effective).not.toContain("mcp__evil__run");
+  });
+
+  it("effective lists no flag-like --tools value", () => {
+    const a = auditRaw(["--tools", "--allowedTools", TOOLS]);
+    expect(a.ok).toBe(false);
+    expect(a.effective).not.toContain("--allowedTools");
   });
 });

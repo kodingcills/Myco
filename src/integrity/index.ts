@@ -19,6 +19,7 @@ export {
   type LaunchAudit,
   type LaunchAuditOptions,
   type McpServerLaunch,
+  mcpConfigJson,
   type ParsedAgentArgv,
   parseAgentArgv,
 } from "./launch.ts";

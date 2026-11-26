@@ -12,8 +12,10 @@
  *   gate to one trial (TIF-265's `myco-gate mcp --run … --task …`); that binding carries the
  *   trial's receipt, and a request naming any other run id is `uncertain`
  *   (`integrity:run-not-bound`). See `openForTrial`.
- * - Agent-facing reasons are codes only: `gateForTrial` returns `integrity:<code>` and a
- *   fixed oracle-threw reason, never a host path or error text (#484 N-b). `gatedVerdict`
+ * - Agent-facing reasons are codes only: on an integrity failure or an oracle throw,
+ *   `gateForTrial` returns `integrity:<code>` or a fixed oracle-threw reason, never a host
+ *   path or error text (#484 N-b). A verdict the oracle returns passes through as is, so
+ *   its reasons must be path-free (the `SealedOracle` contract; #497 nit 3). `gatedVerdict`
  *   is operator-side and keeps the full reasons.
  * - The receipt is checked at runtime, not only by the TypeScript signature: the named
  *   audit opt-out (`AUDIT_WITHOUT_RECEIPT`), `null`, a non-object or a missing receipt
@@ -32,7 +34,14 @@ import {
   type VerdictVault,
 } from "./vault.ts";
 
-/** An oracle over vault inputs only. It must not read any path itself. */
+/**
+ * An oracle over vault inputs only. It must not read any path itself.
+ *
+ * Its returned verdict, `reasons` included, reaches the agent verbatim through `gateForTrial`
+ * (#497 nit 3): the reasons must be path-free. `VerdictInputs` carries no host path (the
+ * vault's dir and the oracle source paths stay out of it; tested), so an oracle that obeys
+ * this type has none to leak.
+ */
 export type SealedOracle = (inputs: VerdictInputs) => Verdict;
 
 export const INTEGRITY_REASON_PREFIX = "integrity:";
@@ -204,7 +213,9 @@ export const ORACLE_THREW_REASON = "could not look: oracle threw";
  *
  * Agent-facing: an integrity failure's reasons are `integrityCodes` only (`integrity:<code>`)
  * and an oracle that throws gives the fixed `ORACLE_THREW_REASON`, so no host path or error
- * text reaches the agent (#484 N-b). The full details go to the operator through `opts`.
+ * text from the vault or a throw reaches the agent (#484 N-b). The full details go to the
+ * operator through `opts`. A verdict the oracle *returns* is passed through unchanged, its
+ * own reasons included: keeping those path-free is the oracle's contract (see `SealedOracle`).
  */
 export function gateForTrial(
   vault: VerdictVault,

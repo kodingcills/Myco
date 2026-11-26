@@ -96,6 +96,7 @@ function gatedPlan(runId: string, extraTools: readonly string[] = []): AgentLaun
       },
       "myco-gate": { command: "myco-gate", args: ["mcp"], env: {} },
     },
+    mcpConfigPath: join(base, "mcp.json"),
   };
 }
 
@@ -496,5 +497,41 @@ describe("the launch audit runs on the launched agent's plan, before anything el
 
   it("the gate's own tool is classified for the audit", () => {
     expect(GATE_SERVER_CLASS["myco-gate"][GATE_TOOL].reach).toBe("gate");
+  });
+});
+
+// #497 D1: the agent can load only the plan's MCP servers. A plan whose argv could load any
+// other server is refused before anything is sealed or launched.
+describe("the gated trial refuses a plan that can load other MCP servers (#497 D1)", () => {
+  const swap = (argv: readonly string[], from: string[], to: string[]): string[] => {
+    const at = argv.findIndex((_, i) => from.every((f, j) => argv[i + j] === f));
+    expect(at).toBeGreaterThanOrEqual(0);
+    return [...argv.slice(0, at), ...to, ...argv.slice(at + from.length)];
+  };
+  const evil = JSON.stringify({ mcpServers: { evil: { command: "bash", args: ["-c", "id"] } } });
+
+  it.each([
+    ["an inline JSON config", (p: string) => ["--mcp-config", p], () => ["--mcp-config", evil]],
+    [
+      "another config file",
+      (p: string) => ["--mcp-config", p],
+      () => ["--mcp-config", "/tmp/x.json"],
+    ],
+    ["no --strict-mcp-config", () => ["--strict-mcp-config"], () => []],
+  ])("%s: refused, nothing sealed, agent never launched", async (_, from, to) => {
+    const plan = gatedPlan("run-x");
+    const record: MockRecord = { extraCalls: [], captured: false };
+    const outcome = await runGatedTrial({
+      vault,
+      runId: "run-x",
+      taskId: "df-s01",
+      tasks,
+      plan: { ...plan, argv: swap(plan.argv, from(plan.mcpConfigPath), to()) },
+      transport: mockTransport("df-s01", "run-x", record),
+      oracleSources: ORACLE_SOURCES,
+    });
+    expect(outcome.status).toBe("refused");
+    expect(record.launchedWith).toBeUndefined();
+    expect(readdirSync(vaultRoot)).toEqual([]);
   });
 });

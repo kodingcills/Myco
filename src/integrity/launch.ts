@@ -18,18 +18,27 @@
  *   granted MCP tools, minus whole-tool `--disallowedTools` rules; a launch where it exceeds
  *   the grant is refused, so `--tools` must be given and name only granted tools;
  * - refuses argv flags that widen the surface past that list (`--dangerously-skip-permissions`,
- *   a permission mode other than `default` / `dontAsk`, `--add-dir`), more than one
- *   `--mcp-config` value, and any argv entry it does not recognise (fail closed);
- * - refuses an MCP server it cannot classify, and an `mcp__<server>__…` tool whose server is
- *   not in the plan;
+ *   a permission mode other than `dontAsk`, `--add-dir`), and any argv entry it does not
+ *   recognise (fail closed);
+ * - pins the MCP servers the agent can load to `plan.mcpServers`: `--strict-mcp-config` must be
+ *   given (so Claude Code loads no user, project or local MCP server), and there must be
+ *   exactly one `--mcp-config` value, equal to `plan.mcpConfigPath` (an absolute, normalised
+ *   path; the transport writes `mcpConfigJson(plan)` there). Inline JSON, any other path
+ *   (relative, `..`, a symlink's own path) and a second value are refused. The audit is pure
+ *   and does not read the file: the transport owns writing it (see `GatedTrialTransport`);
+ * - refuses an MCP server in `plan.mcpServers` it cannot classify, and an
+ *   `mcp__<server>__…` tool whose server is not in the plan;
  * - derives `mycoRtSessionPinned` from the `myco-rt` server's real environment
  *   (`MYCO_RT_SESSION_ID` must equal `rtSessionIdFor(runId)`, so an empty or other value
  *   leaves `create` rejected; #470 N3) instead of taking the caller's word.
  *
- * What it does not see: permission rules loaded from Claude Code settings files. The real
- * driver must launch the agent with those sources off (see the PR's follow-ups).
+ * What it does not see: permission rules loaded from Claude Code settings files (the real
+ * driver must launch the agent with those sources off; see the PR's follow-ups), and the bytes
+ * at `plan.mcpConfigPath`: the transport must write `mcpConfigJson(plan)` there itself, after
+ * the audit and before the launch, replacing whatever is there.
  */
 
+import { isAbsolute, normalize } from "node:path";
 import {
   type AuditOptions,
   auditToolSurface,
@@ -48,12 +57,33 @@ export interface McpServerLaunch {
   readonly env: Readonly<Record<string, string>>;
 }
 
-/** Exactly what the transport starts: nothing else may widen the agent's tools. */
+/**
+ * Exactly what the transport starts. `auditAgentLaunch` refuses a plan whose argv could load
+ * any MCP server other than `mcpServers` (it requires `--strict-mcp-config` and exactly one
+ * `--mcp-config mcpConfigPath`) or enable any tool outside the audited grant.
+ */
 export interface AgentLaunchPlan {
   /** The agent process argv after the executable (e.g. Claude Code's flags). */
   readonly argv: readonly string[];
   /** MCP servers by the name the agent sees them under (`mcp__<name>__<tool>`). */
   readonly mcpServers: Readonly<Record<string, McpServerLaunch>>;
+  /**
+   * Absolute, normalised host path of the MCP config the transport writes from `mcpServers`
+   * (`mcpConfigJson(plan)`) before starting the agent. The argv's one `--mcp-config` value
+   * must equal it exactly.
+   */
+  readonly mcpConfigPath: string;
+}
+
+/**
+ * The MCP config file content for `plan`: `plan.mcpServers` and nothing else, in Claude
+ * Code's `{"mcpServers": {...}}` shape. The transport writes this to `plan.mcpConfigPath`.
+ */
+export function mcpConfigJson(plan: AgentLaunchPlan): string {
+  const mcpServers: Record<string, McpServerLaunch> = {};
+  for (const [name, server] of Object.entries(plan.mcpServers))
+    mcpServers[name] = { command: server.command, args: [...server.args], env: { ...server.env } };
+  return `${JSON.stringify({ mcpServers }, null, 2)}\n`;
 }
 
 export interface LaunchAuditOptions {
@@ -112,7 +142,8 @@ const WIDENING_FLAGS = new Set([
   "--dangerously-skip-permissions",
   "--allow-dangerously-skip-permissions",
 ]);
-const SAFE_PERMISSION_MODES = new Set(["default", "dontAsk"]);
+// `default` is not a choice in Claude Code 2.1.332 (#497 verifier nit 1); only `dontAsk`.
+const SAFE_PERMISSION_MODES = new Set(["dontAsk"]);
 
 /** Claude Code's (commander's) test for an argv entry that is an option, not a value. */
 function looksLikeOption(entry: string): boolean {
@@ -140,6 +171,8 @@ export interface ParsedAgentArgv {
   readonly builtins: "all" | string[];
   /** `--mcp-config` values (files or JSON strings). */
   readonly mcpConfigs: string[];
+  /** True when the bare `--strict-mcp-config` flag was given. */
+  readonly strictMcpConfig: boolean;
   readonly violations: SurfaceViolation[];
 }
 
@@ -157,6 +190,7 @@ export function parseAgentArgv(argv: readonly string[]): ParsedAgentArgv {
   let toolsDefault = false;
   const builtins: string[] = [];
   const mcpConfigs: string[] = [];
+  let strictMcpConfig = false;
   const violations: SurfaceViolation[] = [];
   const flagViolation = (flag: string, detail: string) =>
     violations.push({ tool: flag, reach: "unknown", detail });
@@ -211,21 +245,18 @@ export function parseAgentArgv(argv: readonly string[]): ParsedAgentArgv {
     } else if (WIDENING_FLAGS.has(flag)) {
       flagViolation(flag, "widens the agent's tools past --allowedTools: fail closed");
     } else if (BOOL_FLAGS.has(flag) && inline === undefined) {
-      // no value
+      // A boolean flag takes no value; `--flag=x` is refused below (Claude Code rejects it).
+      if (flag === "--strict-mcp-config") strictMcpConfig = true;
     } else {
       flagViolation(flag, "unrecognised agent flag: fail closed");
     }
   }
-  if (mcpConfigs.length > 1)
-    flagViolation(
-      "--mcp-config",
-      `${mcpConfigs.length} MCP configs: only the one written from the launch plan may load`,
-    );
   return {
     granted,
     disallowed,
     builtins: !toolsGiven || toolsDefault ? "all" : builtins,
     mcpConfigs,
+    strictMcpConfig,
     violations,
   };
 }
@@ -254,11 +285,58 @@ function whollyDisallowed(tool: string, disallowed: readonly string[]): boolean 
 }
 
 /**
+ * The MCP servers the agent can load must be exactly `plan.mcpServers`: `--strict-mcp-config`
+ * (no user / project / local servers) and one `--mcp-config` equal to `plan.mcpConfigPath`.
+ * String equality on an absolute, normalised path: inline JSON, a relative path, a path with
+ * `..` and a symlink at another path all differ from it and are refused.
+ */
+function mcpConfigViolations(
+  plan: AgentLaunchPlan,
+  mcpConfigs: readonly string[],
+  strict: boolean,
+): SurfaceViolation[] {
+  const out: SurfaceViolation[] = [];
+  const violation = (tool: string, detail: string) => out.push({ tool, reach: "unknown", detail });
+  if (!strict)
+    violation(
+      "--strict-mcp-config",
+      "missing: without it Claude Code also loads user, project and local MCP servers",
+    );
+  const planPath = typeof plan.mcpConfigPath === "string" ? plan.mcpConfigPath : "";
+  const planPathOk =
+    planPath.length > 0 && isAbsolute(planPath) && normalize(planPath) === planPath;
+  if (!planPathOk)
+    violation(
+      "--mcp-config",
+      "the launch plan's mcpConfigPath is not an absolute, normalised path: fail closed",
+    );
+  if (mcpConfigs.length !== 1)
+    violation(
+      "--mcp-config",
+      `${mcpConfigs.length} MCP configs: exactly one, the plan's mcpConfigPath, must load`,
+    );
+  for (const value of mcpConfigs)
+    if (value !== planPath)
+      violation(
+        "--mcp-config",
+        value.trimStart().startsWith("{")
+          ? "inline JSON MCP config: only the plan's mcpConfigPath may load"
+          : "MCP config is not the plan's mcpConfigPath: only that file may load",
+      );
+  return out;
+}
+
+/**
  * Audit a launch plan. `ok` is true only when the argv grants nothing outside guest / gate /
- * agent-local reach, no flag widens it, and every MCP server is classified.
+ * agent-local reach, no flag widens it, the agent can load only `plan.mcpServers` (via
+ * `--strict-mcp-config` and the one `--mcp-config plan.mcpConfigPath`), and every one of
+ * those servers is classified.
  */
 export function auditAgentLaunch(plan: AgentLaunchPlan, opts: LaunchAuditOptions): LaunchAudit {
-  const { granted, disallowed, builtins, violations } = parseAgentArgv(plan.argv);
+  const { granted, disallowed, builtins, mcpConfigs, strictMcpConfig, violations } = parseAgentArgv(
+    plan.argv,
+  );
+  violations.push(...mcpConfigViolations(plan, mcpConfigs, strictMcpConfig));
   const servers: Readonly<Record<string, Readonly<Record<string, ToolClass>>>> = {
     ...MCP_SERVERS,
     ...opts.extraServers,
@@ -305,8 +383,12 @@ export function auditAgentLaunch(plan: AgentLaunchPlan, opts: LaunchAuditOptions
         });
   }
   const effective = [
-    ...effectiveBuiltins,
-    ...granted.filter((t) => t.startsWith("mcp__") && !whollyDisallowed(t, disallowed)),
+    ...effectiveBuiltins.filter((t) => !looksLikeOption(t)),
+    ...granted.filter(
+      (t) =>
+        serverNames.includes(/^mcp__(.+?)__/.exec(t)?.[1] ?? "") &&
+        !whollyDisallowed(t, disallowed),
+    ),
   ];
   const rt = Object.hasOwn(plan.mcpServers, "myco-rt") ? plan.mcpServers["myco-rt"] : undefined;
   const pin = rt && Object.hasOwn(rt.env, MYCO_RT_SESSION_ENV) ? rt.env[MYCO_RT_SESSION_ENV] : "";

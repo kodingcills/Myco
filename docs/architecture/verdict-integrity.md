@@ -215,11 +215,17 @@ Claude Code's built-in tools are set separately by `--tools` (absent or `default
 default built-in, `""` = none), so the effective surface is the built-ins `--tools` enables
 plus the granted MCP tools, minus whole-tool `--disallowedTools` rules, and a launch whose
 effective surface exceeds the granted list is refused; a gated launch passes `--tools ""`
-(#484 F2). It also refuses more than one `--mcp-config` value, widening or unknown flags
-and unclassified servers, and derives
+(#484 F2). The MCP servers the agent can load are pinned to the plan's (#497 D1): the argv
+must carry `--strict-mcp-config` (so no user, project or local server loads) and exactly one
+`--mcp-config` value, equal to the plan's `mcpConfigPath` (an absolute, normalised path; the
+transport writes `mcpConfigJson(plan)` there before the launch). Inline JSON, any other path
+and a second value are refused. It also refuses widening or unknown flags (a boolean flag in
+`--flag=value` form included), a permission mode other than `dontAsk`, and unclassified
+servers, and derives
 `mycoRtSessionPinned` from the `myco-rt` server's real `MYCO_RT_SESSION_ID`, which must
 equal `rtSessionIdFor(runId)` (#470 N3). It does not see permission rules loaded from
-Claude Code settings files: the live driver must launch with those sources off.
+Claude Code settings files (the live driver must launch with those sources off) or the
+bytes at `mcpConfigPath` (the transport must write them itself).
 
 ## 4. What this does not do
 
