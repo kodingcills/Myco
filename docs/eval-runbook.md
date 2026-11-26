@@ -100,7 +100,8 @@ full row-8 reproduction runs it, because every step is part of what is tested (t
 the skip, and why, with your results, as §6 F20 asks for a skipped reset. If a later VM step then
 fails in a way that could be host-side, run the second line before blaming the VM.
 
-**Run `pnpm test` on a quiet host** (1-min load under 10, the same level as the §7.3 resume gate).
+**Run `pnpm test` on a quiet host** (raw 1-min load under 10: here the guest's own CPU counts too,
+because it slows the tests; the §7.3 resume gate uses the same number on net load).
 Under load it fails on timeouts alone: on 2026-11-25, with the 1-min load at 12.9–15.4 while a
 sweep ran, 43 of 1080 tests failed, every one a 5 s timeout (vitest's default `testTimeout`, and
 `spawnSync(..., {timeout: 5000})` at `test/vm-lock.test.ts:27`), with no logic failure. If every

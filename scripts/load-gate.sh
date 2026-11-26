@@ -13,21 +13,38 @@
 #   clean-base idle          9.11 / 10.23        2.60             7.07 / 8.40
 #   3 trial-base-v2 resets   13.04 / 13.23       2.98             11.11 / 11.17
 #   trial-base-v2 idle       11.87 / 16.33       1.57             11.59 / 16.31 (*)
-#   (*) the max is a host burst with QEMU at 2% of a core: real contention, which
-#       the gate should pause on.
+#   (*) the max is a jump with QEMU at 0.02 cores. By inference it was another
+#       host process: there is no per-process data except QEMU's.
 #
-# Thresholds, from those numbers:
-#   pause   net > 14  (LG_PAUSE_NET):  about 2.8 above the highest net load the
-#           guest's own resets produced (11.17)
-#   resume  net < 10 for 7 consecutive 30 s samples (LG_RESUME_NET): above the
-#           net max of an idle host with or without a guest (8.40, 7.22), below
-#           the pause line (a hysteresis band of 4)
-#   swap    free < 300 MB pauses (LG_MIN_SWAP_FREE_MB, unchanged)
+# Thresholds. Both are the old numbers, kept; the measurement checks them, it did
+# not derive them:
+#   pause   net > 14 (LG_PAUSE_NET): about 2.8 above the highest net load the
+#           guest's own resets produced (11.17).
+#   resume  net < 10 for 7 consecutive 30 s samples (LG_RESUME_NET). There is NO
+#           margin over an idle trial-base-v2 guest: it reached net 10.00
+#           (08:30:12Z) and 9.52 (08:29:12Z). It is above the clean-base-idle and
+#           VM-stopped maxima (8.40, 7.22). A sample at 10 does not block a
+#           resume, it restarts the 3-minute wait. The 3-minute window cleared
+#           274 s into idle trial-base-v2 and about 180 s into the clean-base-idle
+#           and VM-stopped states. It never cleared during back-to-back resets
+#           (7 of 36 samples at or over 10). The supervisor checks the resume gate
+#           only while no driver runs, so no reset is in progress then
+#           (summary.md, resume table).
+#   swap    free < 300 MB pauses (LG_MIN_SWAP_FREE_MB, unchanged; no memory
+#           pressure was seen, so the data cannot derive it).
 #
 # Fail closed: an unreadable load counts as over the line, and unreadable swap
-# counts as under the floor. An unreadable QEMU share subtracts nothing, so the
-# gate falls back to the raw load (the old, stricter behaviour). The swap gate
-# does not depend on the QEMU share, so real memory pressure still pauses.
+# counts as under the floor. A threshold override that is not a number pauses
+# (it never compares as a string). An unreadable QEMU share subtracts nothing,
+# so the gate falls back to the raw load (the old, stricter behaviour). The swap
+# gate does not depend on the QEMU share, so real memory pressure still pauses.
+#
+# What is subtracted: every process whose executable's basename is exactly
+# QEMULauncher. One UTM guest runs as 2 such processes (qemu_procs = 2 in every
+# guest state measured), so they are summed. Any other UTM VM running on the host
+# is subtracted too. The subtraction is bounded only by the guest's vCPUs (6 for
+# myco-win11). That is acceptable before a reset, which discards what the guest
+# was doing.
 #
 # Functions:
 #   lg_load1 | lg_qemu_cores | lg_swap_free_mb   read the host (names-only ps)
@@ -42,15 +59,18 @@ LG_PAUSE_NET=${LG_PAUSE_NET:-14}
 LG_RESUME_NET=${LG_RESUME_NET:-10}
 LG_MIN_SWAP_FREE_MB=${LG_MIN_SWAP_FREE_MB:-300}
 
+# Field 2 of `{ 1m 5m 15m }`: the 1-minute load.
 lg_load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'; }
 
-# Cores used by processes whose executable is QEMULauncher (UTM's guest), from
-# ps's %cpu (100 = one core). Executable paths only: no arguments, no environment.
+# Cores used by processes whose executable's basename is exactly QEMULauncher
+# (UTM's guest), from ps's %cpu (100 = one core). Executable paths only: no
+# arguments, no environment.
 lg_qemu_cores() {
   ps -Ao pcpu=,comm= 2>/dev/null | awk '{c=$1; $1=""; sub(/^ +/, ""); n=split($0, a, "/");
     if (a[n] == "QEMULauncher") s += c } END { printf "%.2f\n", s / 100 }'
 }
 
+# The `free = NNN.NNM` field of vm.swapusage; empty when it is not there.
 lg_swap_free_mb() { sysctl -n vm.swapusage 2>/dev/null | sed -nE 's/.*free = ([0-9.]+)M.*/\1/p'; }
 
 lg_is_num() { [[ "${1:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
@@ -62,20 +82,25 @@ lg_net() {
 }
 
 lg_decide() {
-  local load=${1:-} qemu=${2:-} swap=${3:-} net
+  local load=${1:-} qemu=${2:-} swap=${3:-} net shown
+  if ! lg_is_num "$LG_PAUSE_NET" || ! lg_is_num "$LG_MIN_SWAP_FREE_MB"; then
+    echo "PAUSED_LOAD gate-config-invalid"; return 4
+  fi
   if ! lg_is_num "$load"; then echo "PAUSED_LOAD load1=unreadable"; return 4; fi
+  shown=$qemu; lg_is_num "$qemu" || shown=unreadable
   net=$(lg_net "$load" "$qemu")
   if awk -v n="$net" -v m="$LG_PAUSE_NET" 'BEGIN { exit !(n > m) }'; then
-    echo "PAUSED_LOAD net=$net load1=$load qemu=${qemu:-unreadable}"; return 4
+    echo "PAUSED_LOAD net=$net load1=$load qemu=$shown"; return 4
   fi
   if ! lg_is_num "$swap" || awk -v f="$swap" -v m="$LG_MIN_SWAP_FREE_MB" 'BEGIN { exit !(f < m) }'; then
     echo "PAUSED_SWAP free=${swap:-unreadable}M"; return 6
   fi
-  echo "ok net=$net load1=$load qemu=${qemu:-unreadable}"
+  echo "ok net=$net load1=$load qemu=$shown"
 }
 
 lg_resume_sample_ok() {
   local load=${1:-} qemu=${2:-}
+  lg_is_num "$LG_RESUME_NET" || return 1
   lg_is_num "$load" || return 1
   awk -v n="$(lg_net "$load" "$qemu")" -v m="$LG_RESUME_NET" 'BEGIN { exit !(n < m) }'
 }

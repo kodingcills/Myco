@@ -34,14 +34,16 @@ sample() {
   qemu=$(ps -Ao pid=,pcpu=,comm= | awk '{c=$2; $1=""; $2=""; sub(/^ +/, ""); n=split($0, a, "/");
           if (a[n] == "QEMULauncher") { s += c; k++ } } END { printf "%.1f %d", s, k }')
   swap=$(sysctl -n vm.swapusage)
-  used=$(sed -E 's/.*used = ([0-9.]+)M.*/\1/' <<<"$swap")
-  free=$(sed -E 's/.*free = ([0-9.]+)M.*/\1/' <<<"$swap")
+  # -n ... p: an unexpected format gives an empty value, written as null (valid JSON).
+  used=$(sed -nE 's/.*used = ([0-9.]+)M.*/\1/p' <<<"$swap")
+  free=$(sed -nE 's/.*free = ([0-9.]+)M.*/\1/p' <<<"$swap")
   mem=$(memory_pressure -Q 2>/dev/null | sed -nE 's/.*free percentage: ([0-9]+)%.*/\1/p')
   vm=$(vm_stat | awk -F: '/^Pageins/{i=$2} /^Pageouts/{o=$2} /^Swapins/{si=$2} /^Swapouts/{so=$2}
         END { gsub(/[ .]/, "", i); gsub(/[ .]/, "", o); gsub(/[ .]/, "", si); gsub(/[ .]/, "", so); print i, o, si, so }')
+  # shellcheck disable=SC2086  # intended split into positional fields
   set -- $qemu $vm
   printf '{"ts_utc":"%s","state":"%s","ncpu":%s,"load1":%s,"qemu_pcpu":%s,"qemu_procs":%s,"swap_used_mb":%s,"swap_free_mb":%s,"mem_free_pct":%s,"pageins":%s,"pageouts":%s,"swapins":%s,"swapouts":%s}\n' \
-    "$(date -u +%FT%TZ)" "$STATE" "$NCPU" "$load1" "$1" "$2" "$used" "$free" "${mem:-null}" "$3" "$4" "$5" "$6" >> "$OUT"
+    "$(date -u +%FT%TZ)" "$STATE" "$NCPU" "$load1" "$1" "$2" "${used:-null}" "${free:-null}" "${mem:-null}" "$3" "$4" "$5" "$6" >> "$OUT"
 }
 
 end=$(( $(date +%s) + SECS ))

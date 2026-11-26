@@ -22,6 +22,10 @@ import sys
 from datetime import datetime
 
 
+RESUME = 10.0  # LG_RESUME_NET in scripts/load-gate.sh
+CLEAR_S = 180  # the resume gate's window: 7 samples, 30 s apart
+
+
 def pct(values: list[float], p: float) -> float:
     """Nearest-rank percentile: the smallest value with at least p% of values <= it."""
     v = sorted(values)
@@ -62,7 +66,7 @@ def main(argv: list[str]) -> int:
         qemu = [float(r["qemu_pcpu"]) / 100 for r in rs]
         net = [max(0.0, a - b) for a, b in zip(load, qemu)]
         mem = [float(r["mem_free_pct"]) for r in rs if r.get("mem_free_pct") is not None]
-        swap = [float(r["swap_free_mb"]) for r in rs]
+        swap = [float(r["swap_free_mb"]) for r in rs if r.get("swap_free_mb") is not None]
         rates = []
         for a, b in zip(rs, rs[1:]):
             dt = ts(b["ts_utc"]) - ts(a["ts_utc"])
@@ -76,6 +80,35 @@ def main(argv: list[str]) -> int:
             return f"{pct(v, 5):.0f} / {pct(v, 50):.0f} / {min(v):.0f}" if v else "n/a"
 
         print(f"| {s} | {len(rs)} | {hi(load)} | {hi(qemu)} | {hi(net)} | {lo(mem)} | {lo(swap)} | {hi(rates)} |")
+
+    # The resume gate needs net < RESUME for 3 minutes (7 samples 30 s apart = a
+    # 180 s span). Per state: the longest span of consecutive samples under the
+    # line, and when the first 180 s span completed, counted from the state's
+    # first sample. Spans are first-to-last sample time in a run.
+    print()
+    print(f"Resume check: consecutive samples with net load < {RESUME} (a {CLEAR_S} s span clears the gate).")
+    print()
+    print(f"| state | samples at or over {RESUME} | longest span under {RESUME} (s) | first {CLEAR_S} s span complete at (s from state start) |")
+    print("|---|---|---|---|")
+    for s in states:
+        rs = [r for r in rows if r["state"] == s]
+        t0 = ts(rs[0]["ts_utc"])
+        over = 0
+        longest = 0.0
+        first = None
+        start = None
+        for r in rs:
+            t = ts(r["ts_utc"])
+            if max(0.0, float(r["load1"]) - float(r["qemu_pcpu"]) / 100) < RESUME:
+                start = t if start is None else start
+                span = t - start
+                longest = max(longest, span)
+                if first is None and span >= CLEAR_S:
+                    first = t - t0
+            else:
+                over += 1
+                start = None
+        print(f"| {s} | {over} | {longest:.0f} | {'never' if first is None else f'{first:.0f}'} |")
     return 0
 
 
