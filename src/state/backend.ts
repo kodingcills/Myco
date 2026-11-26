@@ -23,7 +23,19 @@ export interface SheetSummary {
   readonly usedRange: string | null;
 }
 
-export interface SheetList {
+/**
+ * True if the document holds, or can pull in, content from outside itself: a formula
+ * anywhere (cells, names, validation) with an external reference or an INDIRECT, DDE or
+ * WEBSERVICE call, or any external-document, DDE, area or sheet link, or a database range
+ * or pilot table importing from a data source. The server withholds the reply while it is
+ * true, and refuses a reply without it (BACKEND_ERROR): docs/state/security.md, "Content
+ * from other files" (PR #545 round 1, D7).
+ */
+export interface ForeignContentFlag {
+  readonly documentForeignContent: boolean;
+}
+
+export interface SheetList extends ForeignContentFlag {
   readonly sheets: readonly SheetSummary[];
   readonly sheetCount: number;
   readonly truncated: boolean;
@@ -43,7 +55,7 @@ export interface CellState {
   readonly truncated?: true;
 }
 
-export interface RangeRead {
+export interface RangeRead extends ForeignContentFlag {
   readonly sheet: { readonly index: number; readonly name: string };
   readonly range: string;
   readonly rows: readonly (readonly CellState[])[];
@@ -76,7 +88,7 @@ export interface UiNode {
   readonly children?: readonly UiNode[];
 }
 
-export interface UiTree {
+export interface UiTree extends ForeignContentFlag {
   readonly tree: UiNode;
   readonly nodes: number;
   readonly truncated: boolean;

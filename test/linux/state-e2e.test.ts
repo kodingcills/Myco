@@ -14,7 +14,10 @@
  *
  * Planted markers (PLANTED_FAKE_MARKER) sit in the pristine fixture, the vault, the oracle
  * config and another trial's dir; no byte the state server writes contains one, nor any of
- * those host paths.
+ * those host paths. The second case also pulls each of them into the live document the ways
+ * the PR #545 round-1 verifier did (D7: external references, INDIRECT, DDE, a linked sheet,
+ * a linked area, and another trial's file opened in place of the trial's), proves the
+ * content really is in the app, and gets a refusal from every state tool.
  *
  * Opt-in like linux-path.test.ts: MYCO_LINUX_PATH=1, or MYCO_LINUX_PATH_REQUIRED=1 (the
  * `linux path` CI job), where a missing soffice / Python-UNO FAILS instead of skipping.
@@ -25,6 +28,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerTask } from "../../src/benchmark/gated-rows.ts";
 import { createSealedGate, gateGroundTruth } from "../../src/gate/sealed.ts";
@@ -121,10 +125,12 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
       JSON.stringify({ expected: `${MARKER}-oracle` }),
     );
     writeFileSync(join(layout.other as string, "saved.csv"), `id,name\nEMP-0007,${MARKER}-other\n`);
+    mkdirSync(layout.vault as string, { recursive: true });
+    writeFileSync(join(layout.vault as string, "sealed.csv"), `id,v\nEMP-0007,${MARKER}-vault\n`);
   });
   afterAll(() => rmSync(base, { recursive: true, force: true }));
 
-  async function trial(runId: string, save: boolean) {
+  async function trial(runId: string, save: boolean, foreign = false) {
     const params = {
       fixtureSeed: "linux-path",
       rowKey: "EMP-0007",
@@ -172,6 +178,7 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
     });
 
     const live = await startLiveCalc({ docPath, runId });
+    expect(live.docUid).toMatch(/^[1-9][0-9]{0,9}$/);
     const withheld = [
       base,
       trialDir,
@@ -190,6 +197,7 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
         args: [join(ROOT, "scripts", "myco-state.ts"), "mcp"],
       },
       statePipe: live.pipe,
+      stateDocUid: live.docUid,
       withheld,
     });
     const audit = auditCapabilityArmLaunch(plan, { arm: "structured-state", runId, trialDir });
@@ -256,7 +264,11 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
         trace.treeCode,
         `state_ui_tree gave ${JSON.stringify(trace.treeCode)}; server stderr: ${client.stderr.join("").slice(-1500)}`,
       ).toMatch(/^(ok|UI_TREE_UNAVAILABLE)$/);
-      if (tree.ok) expect(tree.data.nodes).toBeLessThanOrEqual(20);
+      if (tree.ok) {
+        expect(tree.data.nodes).toBeLessThanOrEqual(20);
+        // The window title carried the document's file name (round-1 non-blocking): redacted.
+        expect(JSON.stringify(tree.data)).not.toContain("saved.xlsx");
+      }
 
       // The document's host path, re-spelled and pasted as a plain value (no formula):
       // separators swapped and the leading `/` cut (round-2 D5). Withheld by the
@@ -333,6 +345,71 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
       expect(
         await client.tool("state_read_range", { range: "A1", path: join(vaultRoot, "x") }),
       ).toMatchObject({ code: "UNKNOWN_FIELD" });
+
+      if (foreign) {
+        // PR #545 round 1, D7: content from other files. Clear the CELL taint first, so what
+        // follows is withheld for foreign content alone.
+        for (const c of ["H2", "H3"]) expect(calcGui(live.pipe, "clear", c).ok).toBe(true);
+        await clean("before D7");
+        const fixtureRow = fixture.csv.split("\n").filter(Boolean).length + 1;
+        const vaultCsv = join(layout.vault as string, "sealed.csv");
+        // The verifier's shape: H1 reads another file, I1 is `=H1`, and only I1 is read, so
+        // the path is in no cell the agent reads. Relative references need no path knowledge.
+        const sources: Array<[string, string, string]> = [
+          ["pristine fixture", `='../fixture/fixture.csv'#$fixture.B${fixtureRow}`, "pristine"],
+          ["other trial", "='../../run-other/agent/saved.csv'#$saved.B2", "other"],
+          ["vault", "='../../../vault/sealed.csv'#$sealed.B2", "vault"],
+          ["oracle config", "='../../../oracle/config.json'#$config.A1", "oracle"],
+          ["INDIRECT", `=INDIRECT("'../fixture/fixture.csv'#$fixture.B${fixtureRow}")`, "pristine"],
+          ["DDE", `=DDE("soffice";"${vaultCsv}";"B2")`, "vault"],
+        ];
+        for (const [label, formula, from] of sources) {
+          expect(calcGui(live.pipe, "formula", "H1", formula), label).toMatchObject({ ok: true });
+          // The content really is in the live document (test-side check, not a state tool).
+          const shown = calcGui(live.pipe, "formula", "I1", "=H1");
+          expect(shown.shows, label).toContain(`${MARKER}-${from}`);
+          trace[`d7 ${label}`] = await code("state_read_range", { range: "I1" });
+          expect(trace[`d7 ${label}`], label).toBe("OUTPUT_WITHHELD");
+          await tainted(`d7 ${label} (unrelated cell)`);
+          expect(await code("state_list_sheets", {}), label).toBe("OUTPUT_WITHHELD");
+          for (const c of ["H1", "I1"]) expect(calcGui(live.pipe, "clear", c).ok).toBe(true);
+          // Calc keeps the external document (and its cached content) linked after the
+          // formula is gone, so the document stays foreign: still withheld.
+          expect(await code("state_read_range", { range: "A1" }), label).toBe("OUTPUT_WITHHELD");
+        }
+        // A linked sheet (Sheet > Insert Sheet from File, Link) and a linked area.
+        const otherUrl = pathToFileURL(join(layout.other as string, "saved.csv")).href;
+        const linked = calcGui(live.pipe, "sheet-link", "L", otherUrl);
+        expect(linked.shows).toBe(`${MARKER}-other`);
+        expect(await code("state_read_range", { sheet: "L", range: "A1:B2" })).toBe(
+          "OUTPUT_WITHHELD",
+        );
+        const area = calcGui(
+          live.pipe,
+          "area-link",
+          "J1",
+          pathToFileURL(vaultCsv).href,
+          "$sealed.A1:B2",
+        );
+        expect(area.shows).toBe(`${MARKER}-vault`);
+        expect(await code("state_read_range", { range: "J1:K2" })).toBe("OUTPUT_WITHHELD");
+        expect(await code("state_ui_tree", { maxDepth: 2, maxNodes: 20 })).toMatch(
+          /^(OUTPUT_WITHHELD|UI_TREE_UNAVAILABLE)$/,
+        );
+        // Another trial's file opened in place of the trial's document: the one spreadsheet
+        // open now has no link and no formula, so only the document binding stops it.
+        const swapped = calcGui(live.pipe, "swap", otherUrl);
+        expect(swapped.shows).toBe(`${MARKER}-other`);
+        for (const [tool, args] of [
+          ["state_read_range", { range: "A1:B2" }],
+          ["state_list_sheets", {}],
+          ["state_document_status", {}],
+          ["state_ui_tree", { maxDepth: 2, maxNodes: 20 }],
+        ] as const) {
+          trace[`swap ${tool}`] = await code(tool, args);
+          expect(trace[`swap ${tool}`], tool).toBe("DOCUMENT_UNAVAILABLE");
+        }
+      }
     } finally {
       await client.close();
       await live.stop();
@@ -363,7 +440,7 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
   it(
     "live state shows the edit, the client never saves, and the gate refutes (state is not proof)",
     async () => {
-      const { verdict, trace } = await trial("run-state-unsaved", false);
+      const { verdict, trace } = await trial("run-state-unsaved", false, true);
       expect(trace.after).toBe("STATE-I-0007");
       expect(trace.modifiedAfterEdit).toBe(true);
       expect(verdict.verdict).toBe("refuted");

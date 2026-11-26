@@ -10,6 +10,8 @@ either types one value into one cell through Calc's input path (`.uno:EnterStrin
 Usage:
   calc_live_act.py --pipe NAME type --cell B8 --value TEXT
   calc_live_act.py --pipe NAME save
+  calc_live_act.py --pipe NAME uid      (the document's RuntimeUID: the harness binds the
+                                         state reader to it, `--uid`)
   calc_live_act.py --pipe NAME quit     (close without storing, end soffice; harness teardown)
 Prints one JSON object: {"ok": true, ...} or {"ok": false, "error": "..."}.
 """
@@ -38,6 +40,7 @@ def main(argv):
     typ.add_argument("--cell", required=True)
     typ.add_argument("--value", required=True)
     sub.add_parser("save")
+    sub.add_parser("uid")
     sub.add_parser("quit")
     args = parser.parse_args(argv)
     import uno  # noqa: PLC0415
@@ -98,6 +101,8 @@ def main(argv):
             )
             out["cell"] = args.cell
             out["after"] = cell.getString()
+        elif args.op == "uid":
+            out["uid"] = str(doc.getPropertyValue("RuntimeUID"))
         else:
             doc.store()
         out["ok"] = True

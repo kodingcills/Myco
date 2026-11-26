@@ -22,13 +22,15 @@ The harness starts one server per trial. The agent never starts it and cannot na
 target.
 
 ```sh
-MYCO_STATE_RUN_ID=<run id> MYCO_STATE_UNO_PIPE=<pipe> pnpm myco-state mcp
+MYCO_STATE_RUN_ID=<run id> MYCO_STATE_UNO_PIPE=<pipe> MYCO_STATE_DOC_UID=<uid> \
+  MYCO_STATE_WITHHELD='["/srv/myco/trials/<run id>", …]' pnpm myco-state mcp
 ```
 
 | Variable | Set by | Meaning |
 |---|---|---|
 | `MYCO_STATE_RUN_ID` | harness | The trial this server is bound to. The launch audit checks it equals the trial's run id. |
 | `MYCO_STATE_UNO_PIPE` | harness | The UNO pipe of the trial's live soffice (`statePipeFor(runId)`, shape `myco-state-<hex>-<hex>`). Not a path. |
+| `MYCO_STATE_DOC_UID` | harness | The trial document's `RuntimeUID` in that soffice (`LiveCalc.docUid`, read right after the document loads; decimal, `^[1-9][0-9]{0,9}$`). Calc assigns it per load and no client can set it, so the reader refuses any other document, including the trial's own reopened (`DOCUMENT_UNAVAILABLE`). Not a path. |
 | `MYCO_STATE_WITHHELD` | harness, required | JSON array of 1 to 64 absolute host paths (trial dir, vault, fixture, oracle config, other trials) that no reply may contain. The server does not start without it. |
 | `MYCO_PYTHON` | operator, optional | Python with LibreOffice's UNO bridge (default `python3`). |
 
@@ -55,7 +57,9 @@ No arguments. Returns the open document's sheets, at most 64.
   "sheetCount": 1, "truncated": false }
 ```
 
-`usedRange` is `null` for an empty sheet.
+`usedRange` is `null` for an empty sheet. While the document holds content from another
+file (see below), this tool returns `OUTPUT_WITHHELD`: a linked sheet's name and used range
+describe that file.
 
 ### `state_read_range`
 
@@ -88,6 +92,16 @@ that is not built in (a Basic macro, an extension add-in), every `state_read_ran
 that formula to read again. See
 [security.md, Host paths](security.md#host-paths).
 
+While the document holds, or can pull in, content from another file, every
+`state_read_range`, `state_list_sheets` and `state_ui_tree` call returns `OUTPUT_WITHHELD`.
+That is: a formula anywhere (cells, names, validation) with an external reference
+(`='../x.csv'#$x.B2`) or a call to `INDIRECT`, `DDE` or `WEBSERVICE`; any external-document,
+DDE, area or sheet link (Insert Sheet from File with Link, Link to External Data); or a
+database range or pilot table that imports from a data source. Calc keeps an external
+document linked, with its cached content, after the formula that referenced it is gone, so
+the withholding lasts until that link is broken (Edit > Links to External Files). See
+[security.md, Content from other files](security.md#content-from-other-files).
+
 ### `state_document_status`
 
 No arguments.
@@ -113,14 +127,14 @@ breadth-first, so the node budget covers the top levels first. Each node lists a
 children, because a spreadsheet table has millions.
 
 ```json
-{ "tree": { "role": "root_pane", "name": "[path] — LibreOffice Calc", "childCount": 7,
+{ "tree": { "role": "root_pane", "name": "[document] — LibreOffice Calc", "childCount": 7,
             "children": [{ "role": "menu_bar", "name": "", "childCount": 11, "childrenOmitted": "depth" }] },
   "nodes": 8, "truncated": true }
 ```
 
 `childrenOmitted` says why a node's children are missing or incomplete: `depth`, `nodes`
-or `width`. Path-like text in names and roles (window titles carry file names) is
-replaced with `[path]`. The tree is available only where the backend has an accessibility
+or `width`. The document's file name (window titles carry it) is replaced with
+`[document]`, and path-like text in names and roles with `[path]`. The tree is available only where the backend has an accessibility
 implementation behind the window; where it does not (some headless LibreOffice builds),
 the tool returns `UI_TREE_UNAVAILABLE`.
 
@@ -149,9 +163,9 @@ A refusal has `isError: true` and carries a code only:
 | `UNKNOWN_SHEET` | No sheet with that index or name. |
 | `LIMIT_OUT_OF_RANGE` | `maxDepth` or `maxNodes` is outside its bounds. |
 | `OUTPUT_TOO_LARGE` | The serialized reply would exceed 64 KiB. |
-| `OUTPUT_WITHHELD` | The document holds a formula calling `CELL`, `INFO` or a non-built-in function (cell reads and the UI tree only), or the reply would contain a harness-withheld host path, including a re-spelling of one (separators, case or prefix changed). |
+| `OUTPUT_WITHHELD` | The document holds a formula calling `CELL`, `INFO` or a non-built-in function (cell reads and the UI tree only); or it holds or can pull in content from another file (cell reads, the sheet list and the UI tree); or the reply would contain a harness-withheld host path, including a re-spelling of one (separators, case or prefix changed). |
 | `UI_TREE_UNAVAILABLE` | The backend has no accessibility tree for the window. |
-| `DOCUMENT_UNAVAILABLE` | The trial's app has no single open spreadsheet, or cannot be reached. |
+| `DOCUMENT_UNAVAILABLE` | The trial's app has no single open spreadsheet, the one open is not the trial's document as the harness bound it (another file, or the trial's closed and reopened), or the app cannot be reached. |
 | `BACKEND_ERROR` | The backend failed, timed out, or returned something over a cap. The detail goes to the operator's log, never to the agent. |
 
 JSON-RPC framing follows `myco-gate`. A parse error gets -32700, and the server keeps

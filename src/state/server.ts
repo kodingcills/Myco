@@ -13,6 +13,13 @@
  *  - the backend's data is re-checked against the caps (cell count and shape, string
  *    lengths, tree depth, node count and width); a reply over a cap is refused
  *    (BACKEND_ERROR), never passed through;
+ *  - foreign content (PR #545 round 1, D7): the document can pull another file's content
+ *    into a cell (an external reference, INDIRECT, DDE, a sheet or area link) while the
+ *    file's path appears only in a formula the agent never reads. The backend reports
+ *    `documentForeignContent` document-wide on every read that carries cell text, sheet
+ *    names or UI text (`state_list_sheets`, `state_read_range`, `state_ui_tree`); a reply
+ *    without the flag is refused (BACKEND_ERROR), a true flag withholds (OUTPUT_WITHHELD),
+ *    and the server also checks every returned formula itself (`FOREIGN_REFERENCE`);
  *  - host paths, four layers (docs/state/security.md, "Host paths"):
  *     1. path functions: while ANY formula in the document (formula cells on every sheet,
  *        document- and sheet-scoped named expressions, validation formulas) calls `CELL`
@@ -76,7 +83,7 @@ export const STATE_INSTRUCTIONS =
 const DESCRIPTIONS: Readonly<Record<StateToolName, string>> = {
   state_list_sheets:
     "List the open document's sheets with each sheet's used range (A1). Read-only live state.",
-  state_read_range: `Read a cell or range (A1, at most ${STATE_CAPS.maxCells} cells): each cell's kind, value, displayed text and formula as the app holds them now. Withheld while any formula in the document (cells, named expressions, validation) calls CELL, INFO or a non-built-in function such as a macro. Read-only live state; not proof the document was saved.`,
+  state_read_range: `Read a cell or range (A1, at most ${STATE_CAPS.maxCells} cells): each cell's kind, value, displayed text and formula as the app holds them now. Withheld while any formula in the document (cells, named expressions, validation) calls CELL, INFO or a non-built-in function such as a macro, and while the document links to or references another file (external references, INDIRECT, DDE, linked sheets or areas). Read-only live state; not proof the document was saved.`,
   state_document_status:
     "The open document's save state: modified (unsaved edits present), read-only, sheet count, active sheet. Read-only.",
   state_ui_tree: `A bounded summary of the app window's accessibility tree (depth <= ${STATE_CAPS.maxTreeDepth}, nodes <= ${STATE_CAPS.maxTreeNodes}, ${STATE_CAPS.maxChildrenPerNode} children per node). Read-only.`,
@@ -156,6 +163,20 @@ function cutTo(text: string, limit: number): string {
  * boundary), so a false positive such as a literal "INFO(" withholds: fail closed.
  */
 export const PATH_FUNCTION = /(?:CELL|INFO)\s*\(/i;
+
+/**
+ * A formula that reads content from outside the document: an external reference (`'#` or
+ * `#$`: Calc's `'file:///…/x.csv'#$Sheet1.B2`) or a call to INDIRECT, DDE or WEBSERVICE.
+ * Loose on purpose (no word boundary before the name, string literals count): fail closed.
+ */
+export const FOREIGN_REFERENCE = /'\s*#|#\s*\$|(?:INDIRECT|DDE|WEBSERVICE)\s*\(/i;
+
+/** The tools whose replies carry document content and so need the foreign-content flag. */
+const CONTENT_TOOLS: ReadonlySet<StateToolName> = new Set([
+  "state_list_sheets",
+  "state_read_range",
+  "state_ui_tree",
+]);
 
 /** Letters and digits only, NFKC-folded and lowercased: the separator-insensitive form. */
 export function foldForMatch(text: string): string {
@@ -327,6 +348,12 @@ function checkData(
   const withheld = { ok: false, code: "OUTPUT_WITHHELD" } as const;
   if (typeof data !== "object" || data === null) return broken;
   if (!stringsWithin(data, STATE_CAPS.maxCellTextChars)) return broken;
+  if (CONTENT_TOOLS.has(request.tool)) {
+    // Foreign content (D7): the document-wide flag is mandatory (fail closed).
+    const foreign = (data as { documentForeignContent?: unknown }).documentForeignContent;
+    if (typeof foreign !== "boolean") return broken;
+    if (foreign) return withheld;
+  }
   if (request.tool === "state_read_range" || request.tool === "state_ui_tree") {
     // Layer 1: the document-wide path-function flag is mandatory (fail closed).
     const flag = (data as { documentPathFunctions?: unknown }).documentPathFunctions;
@@ -343,13 +370,16 @@ function checkData(
       const [c0, r0, c1, r1] = request.range;
       if (!Array.isArray(rows) || rows.length !== r1 - r0 + 1) return broken;
       if (!rows.every((row) => Array.isArray(row) && row.length === c1 - c0 + 1)) return broken;
-      // Layer 1, server side: a returned formula that calls a path function, whatever the
-      // backend's flag said.
+      // Layer 1 and foreign content, server side: a returned formula that calls a path
+      // function or reads from outside the document, whatever the backend's flags said.
       if (
         rows.some((row: unknown[]) =>
           row.some((cell) => {
             const formula = (cell as { formula?: unknown } | null)?.formula;
-            return typeof formula === "string" && PATH_FUNCTION.test(formula);
+            return (
+              typeof formula === "string" &&
+              (PATH_FUNCTION.test(formula) || FOREIGN_REFERENCE.test(formula))
+            );
           }),
         )
       )
@@ -357,6 +387,7 @@ function checkData(
       const {
         rows: _rows,
         documentPathFunctions: _flag,
+        documentForeignContent: _foreign,
         ...rest
       } = data as Record<string, unknown>;
       return {
@@ -371,7 +402,8 @@ function checkData(
       const sheets = (data as { sheets?: unknown }).sheets;
       if (!Array.isArray(sheets) || sheets.length > STATE_CAPS.maxSheets) return broken;
       if (!stringsWithin(sheets, STATE_CAPS.maxNameChars)) return broken;
-      return { ok: true, data: scrubDeep(data, STATE_CAPS.maxNameChars).value };
+      const { documentForeignContent: _foreign, ...rest } = data as Record<string, unknown>;
+      return { ok: true, data: scrubDeep(rest, STATE_CAPS.maxNameChars).value };
     }
     case "state_document_status":
       return { ok: true, data: scrubDeep(data, STATE_CAPS.maxNameChars).value };

@@ -19,7 +19,12 @@ versioned releases yet; entries are grouped by milestone. License: [Apache-2.0](
   validation) that calls `CELL`, `INFO` or a non-built-in function such as a macro, a mandatory withheld list is matched
   verbatim and separator-insensitively, and path-like text is scrubbed. An agent that
   deliberately re-encodes its own document's path can still read it back (the security
-  model says so). It is not part of the gate, and it is not proof of
+  model says so). Other files' content: the reader reads only the trial's own document (bound
+  to its Calc RuntimeUID), and every reply carrying cell text, sheet names or UI text is
+  withheld while the document links to or references another file (external references,
+  `INDIRECT`, `DDE`, `WEBSERVICE`, linked sheets and areas, data-source imports). Content
+  copied in as plain values is not caught; on the Linux path keeping those files unreadable
+  to the trial's soffice is the boundary, not built yet. It is not part of the gate, and it is not proof of
   completion. Launch plans for the `structured-state`, `screenshot-only` and `hcu+shell`
   arms are audited by the extended launch audit. Their rows never count as R1 evidence
   ([docs/state/tools.md](docs/state/tools.md), [security](docs/state/security.md),

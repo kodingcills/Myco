@@ -17,32 +17,87 @@ field gets `UNKNOWN_FIELD`.
   server's environment: `MYCO_STATE_RUN_ID` (the trial's run id) and `MYCO_STATE_UNO_PIPE`
   (the trial's live soffice pipe). The pipe name comes from the run id plus random bytes,
   and it matches `^myco-state-[a-z0-9-]{8,64}$`. It is never a path.
+- It sets `MYCO_STATE_DOC_UID`: the trial document's `RuntimeUID` in that soffice, which
+  the harness reads right after the document loads. Calc assigns it per load, as a
+  decimal counter, and no client can set it. The reader reads only the spreadsheet with
+  that uid. Another file opened in its place (another trial's, the pristine fixture), or
+  the trial's own document closed and reopened, has a different uid and gets
+  `DOCUMENT_UNAVAILABLE`.
 - It also sets `MYCO_STATE_WITHHELD`: the trial's host paths (trial dir, vault root,
   fixture dir, oracle config, other trials' dirs) as a JSON array of 1 to 64 absolute
   paths. The list is mandatory; see [Host paths](#host-paths).
-- The server refuses to start without all three, and with any argument except `mcp`.
+- The server refuses to start without all four, and with any argument except `mcp`.
 - The reader finds the one spreadsheet loaded in that soffice. With none or more than one,
-  it returns `DOCUMENT_UNAVAILABLE`; it never guesses.
+  or one whose uid is not the bound one, it returns `DOCUMENT_UNAVAILABLE`; it never
+  guesses.
 - The launch audit (`src/integrity/launch.ts`) checks a `myco-state` server's environment:
-  the run id must equal the trial's, the pipe must have the issued shape, the withheld list
-  must be present and valid, there must be no other keys than the four binding keys, and
+  the run id must equal the trial's, the pipe must have the issued shape, the document uid
+  must be present with its shape, the withheld list must be present and valid, there must
+  be no other keys than the binding keys (those four plus `MYCO_PYTHON`), and
   the args must end in `mcp` with no flag anywhere (`["--inspect", "mcp"]` is refused).
-  `capabilityArmPlan` refuses to build a structured-state plan without withheld paths.
+  `capabilityArmPlan` refuses to build a structured-state plan without withheld paths or a
+  document uid.
 
 The binding works like the gate's: one server, one trial, and nothing in a request can
 point it elsewhere.
 
-## What it can never reach
+## What it reads, and what it never opens
 
 The server never opens a file. `src/state/{api,backend,server,cli}.ts` and
 `linux/uno.ts` import no file-system API (`test/state/state-scope.test.ts`). The only
 state module that touches the file system is the harness's own live-session launcher. It
-makes a throwaway profile and clears a lock file. The reader script takes only `--pipe`,
-never calls `getURL` or `getLocation`, and never prints exception text.
+makes a throwaway profile and clears a lock file. The reader script takes only `--pipe`
+and `--uid`, never calls `getURL` or `getLocation`, and never prints exception text.
 
-So the contents of these are out of reach by construction: the pristine fixture, the
-sealed vault and its receipts, the oracle config and expected values, other trials, and
-secrets. The server can only return what the agent's own open document holds.
+That does NOT put other files' contents out of reach on its own. The server returns what
+the trial's open document holds, and the document can hold content from any file the
+trial's soffice process can read. On the Linux path that process runs as the harness user,
+so the pristine fixture, the vault, the oracle config and other trials are readable to it.
+The round-1 verifier of PR #545 showed this (D7): a formula in `H1` reading another file and
+`=H1` in `I1` returned the other file's content through a read of `I1` alone. The next
+section is what the tools enforce against that, and what they cannot.
+
+### Content from other files
+
+Enforced, in the reader and the server:
+
+1. **Only the trial's document.** The reader is bound to the document's `RuntimeUID`
+   (above). Opening another file in place of the trial's gets `DOCUMENT_UNAVAILABLE`, from
+   every tool.
+2. **Foreign content withholds.** The reader reports `documentForeignContent` for the whole
+   document on every `state_list_sheets`, `state_read_range` and `state_ui_tree` call
+   (scanned after the cells are read, since reading a cell can resolve a reference). It is
+   true when:
+   - a formula anywhere the host-path scan looks (formula cells on every sheet, document-
+     and sheet-scoped named expressions, validation formulas) holds an external-reference
+     marker (`'#` or `#$`: Calc holds `='../fixture/fixture.csv'#$fixture.B2` as
+     `'file:///…/fixture.csv'#$fixture.B2`) or calls `INDIRECT`, `DDE` or `WEBSERVICE`
+     (built in, so the non-built-in rule does not catch them). The match is loose on
+     purpose: a string literal holding `'#` also withholds;
+   - any link container is not empty: external-document links (Calc keeps one, with its
+     cached content, for every external reference it resolved, including one in a
+     conditional format, and after the formula is gone), DDE links, area links (Link to
+     External Data), sheet links (Insert Sheet from File with Link), or a sheet whose link
+     mode is not `NONE`;
+   - a database range (named or unnamed) or a pilot table imports from a data source.
+
+   A container or place the reader cannot read fails the call (`BACKEND_ERROR`). The server
+   refuses a reply to those three tools without the flag (`BACKEND_ERROR`) and withholds
+   while it is true (`OUTPUT_WITHHELD`). It also checks every returned formula for the same
+   markers and calls itself. `state_document_status` carries no document content and stays
+   readable. The withholding lasts until the link is broken (Edit > Links to External
+   Files); reloading the document instead ends state access for the trial (rule 1).
+
+**What these do not stop.** Content the agent copies into its own document as plain values
+becomes part of that document, with no link or formula left to detect: Insert Sheet from
+File *without* Link, Data > XML Source, opening the file in the GUI and pasting from it
+(while the second spreadsheet is open, every tool gets `DOCUMENT_UNAVAILABLE`, but the
+pasted values stay once it is closed), or a macro run from the Basic IDE that writes into
+cells. The same content is on screen through `myco-rt observe` either way, so the state
+server is not the only channel. The boundary for these is the operating system: on the
+Linux path the harness must keep the pristine fixture, the vault, the oracle config and
+other trials unreadable to the trial's soffice process. That isolation is not built yet
+(TO FILE). On the Windows VM path these files are not on the guest at all.
 
 ### Host paths
 
@@ -105,8 +160,9 @@ from the Basic IDE (not called from a cell) that writes such a re-encoding into 
 plain values: no formula is left to taint the document. Conditional-format formulas are
 not scanned: their result is a cell style, never text a reply carries. The same text is on its screen
 through `myco-rt observe` either way, so the state server is not the only channel. What
-it learns is a location, not content: the files there stay out of reach (above). A host
-path the withheld list does not name is covered only by layer 4's patterns. These
+it learns is a location. Whether the content at that location can reach the tools is the
+subject of [Content from other files](#content-from-other-files), not of this section. A
+host path the withheld list does not name is covered only by layer 4's patterns. These
 layers do not support the claim that no reply can ever contain a host path in any
 spelling, and the docs do not make it.
 
@@ -120,6 +176,11 @@ The tests plant `PLANTED_FAKE_MARKER` in the pristine fixture, the vault, the or
 and another trial's dir. Then they check that no tool output contains the marker or any of
 those paths:
 
+- `test/state/state-foreign.test.ts` (hermetic) covers content from other files (D7): the
+  server's flag rules for each content tool, its own formula check (external references,
+  `INDIRECT`, `DDE`, `WEBSERVICE`), the reader's document scan over every formula place
+  and every link container, the document-uid binding (another document, a reopened one,
+  none, two) and the uid shape check, and planted markers pulled into a stand-in document;
 - `test/state/state-scope.test.ts` (hermetic) runs a battery of valid and hostile calls,
   including path-like sheets and ranges and smuggled `path`, `runId`, `taskId`, `file` and
   `trial` fields;
@@ -136,7 +197,14 @@ those paths:
   `p` = `CELL("filename")` with the round-3 verifier's `=REGEX(MID(p;10;300);…)`, a Basic
   function returning the document's URL, and a list validation sourced from `CELL`, and
   gets `OUTPUT_WITHHELD` for an unrelated cell while each is present and `ok` once it is
-  removed. It checks every byte the server wrote.
+  removed. Then, with the markers planted, it pulls each one into the live document the
+  ways the D7 verifier did: relative external references to the pristine fixture, another
+  trial, the vault and the oracle config, `INDIRECT`, `DDE`, a linked sheet and a linked
+  area. For each it first proves the marker really is in the live document, then gets
+  `OUTPUT_WITHHELD` from a read of the cell that holds only the value, from an unrelated
+  cell, from the sheet list and from the UI tree. Last, it opens another trial's file in
+  place of the trial's document and gets `DOCUMENT_UNAVAILABLE` from every tool. It checks
+  every byte the server wrote.
 
 ## Read-only
 

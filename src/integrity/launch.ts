@@ -52,6 +52,7 @@ import {
   classifyTool,
   MCP_SERVERS,
   MYCO_RT_SESSION_ENV,
+  MYCO_STATE_DOC_ENV,
   MYCO_STATE_ENV_KEYS,
   MYCO_STATE_PIPE_ENV,
   MYCO_STATE_RUN_ENV,
@@ -341,10 +342,12 @@ function mcpConfigViolations(
 
 /** Harness-issued UNO pipe names (`UNO_PIPE_NAME` in src/state/linux/uno.ts). */
 const STATE_PIPE = /^myco-state-[a-z0-9-]{8,64}$/;
+/** A Calc RuntimeUID (`DOC_UID` in src/state/linux/uno.ts). */
+const STATE_DOC_UID = /^[1-9][0-9]{0,9}$/;
 
 /**
  * A `myco-state` server in the plan must be bound to this trial: run id pinned, a
- * harness-issued pipe, a non-empty withheld list, no other env keys, args ending in `mcp`
+ * harness-issued pipe, the trial document's uid, a non-empty withheld list, no other env keys, args ending in `mcp`
  * with no flag. Fail closed on any other.
  */
 function stateBindingViolations(plan: AgentLaunchPlan, runId: string): SurfaceViolation[] {
@@ -363,6 +366,9 @@ function stateBindingViolations(plan: AgentLaunchPlan, runId: string): SurfaceVi
   const pipe = Object.hasOwn(env, MYCO_STATE_PIPE_ENV) ? (env[MYCO_STATE_PIPE_ENV] ?? "") : "";
   if (!STATE_PIPE.test(pipe))
     violation(`${MYCO_STATE_PIPE_ENV} is not a harness-issued myco-state pipe name`);
+  const docUid = Object.hasOwn(env, MYCO_STATE_DOC_ENV) ? (env[MYCO_STATE_DOC_ENV] ?? "") : "";
+  if (!STATE_DOC_UID.test(docUid))
+    violation(`${MYCO_STATE_DOC_ENV} does not bind the server to the trial's document`);
   const withheld = Object.hasOwn(env, MYCO_STATE_WITHHELD_ENV)
     ? env[MYCO_STATE_WITHHELD_ENV]
     : undefined;

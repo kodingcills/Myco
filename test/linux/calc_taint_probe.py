@@ -14,6 +14,19 @@ places the reader's layer-1 scan must cover besides formula cells (PR #527 round
   drop-validation RANGE       back to "any value"
   clear CELL                  empty a cell of sheet 1
 
+and the ways a document can pull another file's content in (PR #545 round 1, D7):
+
+  formula CELL FORMULA        set a formula on sheet 1 (as typed in the GUI, where an
+                              external reference such as '../fixture/fixture.csv'#$fixture.B2
+                              resolves) and report what the cell then shows, so the test can
+                              prove the content really is in the live document
+  read CELL                   what a cell of sheet 1 shows now (test-side check only)
+  sheet-link NAME URL         Sheet > Insert Sheet from File, Link: a new sheet NAME linked
+                              to the CSV at URL
+  area-link CELL URL AREA     Sheet > Link to External Data: AREA of the CSV at URL at CELL
+  swap URL                    open URL (a CSV) and close the trial's document, so the one
+                              spreadsheet open is another file
+
 It is not part of the arm and is never on an agent's PATH; the arm's acting channel stays
 scripts/linux/calc_live_act.py. Prints one JSON object; exception text is printed because
 this runs only in tests, never in a trial.
@@ -63,7 +76,35 @@ def main(argv):
         if len(docs) != 1:
             raise RuntimeError("expected one open spreadsheet, found %d" % len(docs))
         sheet = docs[0].Sheets.getByIndex(0)
-        if args.op == "sheet-name":
+        csv = "Text - txt - csv (StarCalc)"
+        if args.op == "formula":
+            cell = sheet.getCellRangeByName(args.args[0])
+            cell.setFormula(args.args[1])
+            docs[0].calculateAll()
+            out["shows"] = cell.getString()
+        elif args.op == "read":
+            out["shows"] = sheet.getCellRangeByName(args.args[0]).getString()
+        elif args.op == "sheet-link":
+            name, url = args.args
+            docs[0].Sheets.insertNewByName(name, docs[0].Sheets.getCount())
+            linked = docs[0].Sheets.getByName(name)
+            linked.link(url, "", csv, "44,34,76,1",
+                        uno.Enum("com.sun.star.sheet.SheetLinkMode", "NORMAL"))
+            out["shows"] = linked.getCellRangeByName("B2").getString()
+        elif args.op == "area-link":
+            cells, url, area = args.args
+            at = sheet.getCellRangeByName(cells).getCellAddress()
+            docs[0].AreaLinks.insertAtPosition(at, url, area, csv, "44,34,76,1")
+            out["shows"] = sheet.getCellByPosition(at.Column + 1, at.Row + 1).getString()
+        elif args.op == "swap":
+            hidden = uno.createUnoStruct("com.sun.star.beans.PropertyValue")
+            hidden.Name = "Hidden"
+            hidden.Value = True
+            other = desktop.loadComponentFromURL(args.args[0], "_blank", 0, (hidden,))
+            out["shows"] = other.Sheets.getByIndex(0).getCellRangeByName("B2").getString()
+            docs[0].setModified(False)
+            docs[0].close(True)
+        elif args.op == "sheet-name":
             name, content = args.args
             where = uno.createUnoStruct("com.sun.star.table.CellAddress")
             sheet.NamedRanges.addNewByName(name, content, where, 0)

@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { linuxUnoBackend } from "./uno.ts";
+import { DOC_UID, linuxUnoBackend } from "./uno.ts";
 
 export const LIVE_ACT_SCRIPT = resolve(
   import.meta.dirname,
@@ -56,6 +56,11 @@ export interface ActReport {
 
 export interface LiveCalc {
   readonly pipe: string;
+  /**
+   * The trial document's RuntimeUID, read once it loaded. The harness binds the state server
+   * to it (`MYCO_STATE_DOC_UID`), so a document opened in its place is never read.
+   */
+  readonly docUid: string;
   /** Type `value` into `cell` of the first sheet through Calc's input path. */
   type(cell: string, value: string): ActReport;
   /** Store the document to its own location. */
@@ -112,12 +117,19 @@ export async function startLiveCalc(options: LiveCalcOptions): Promise<LiveCalc>
     }
   }
 
-  // Ready when the reader sees exactly one loaded spreadsheet.
-  const reader = linuxUnoBackend({ pipe, python, timeoutMs: 5_000 });
+  // Ready when exactly one spreadsheet is loaded (its RuntimeUID is then the binding) and the
+  // reader, bound to that uid, can read it.
   const deadline = Date.now() + (options.readyTimeoutMs ?? 60_000);
+  let docUid = "";
   for (;;) {
-    const status = await reader.documentStatus();
-    if (status.ok) break;
+    const bound = act(["--timeout", "5", "uid"]) as ActReport & { uid?: unknown };
+    if (bound.ok && typeof bound.uid === "string" && DOC_UID.test(bound.uid)) {
+      const reader = linuxUnoBackend({ pipe, docUid: bound.uid, python, timeoutMs: 5_000 });
+      if ((await reader.documentStatus()).ok) {
+        docUid = bound.uid;
+        break;
+      }
+    }
     if (Date.now() > deadline || child.exitCode !== null) {
       await stop();
       throw new Error("live Calc did not load the trial document in time");
@@ -126,6 +138,7 @@ export async function startLiveCalc(options: LiveCalcOptions): Promise<LiveCalc>
   }
   return {
     pipe,
+    docUid,
     type: (cell, value) => act(["type", "--cell", cell, "--value", value]),
     save: () => act(["save"]),
     stop,

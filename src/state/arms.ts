@@ -30,6 +30,7 @@ import {
 } from "../integrity/launch.ts";
 import {
   MYCO_RT_SESSION_ENV,
+  MYCO_STATE_DOC_ENV,
   MYCO_STATE_PIPE_ENV,
   MYCO_STATE_RUN_ENV,
   MYCO_STATE_WITHHELD_ENV,
@@ -93,6 +94,8 @@ export interface CapabilityArmPlanInput {
   readonly stateServer?: { readonly command: string; readonly args: readonly string[] };
   /** The trial's live soffice pipe (`statePipeFor(runId)`); structured-state only. */
   readonly statePipe?: string;
+  /** The trial document's RuntimeUID in that soffice (`LiveCalc.docUid`); structured-state only. */
+  readonly stateDocUid?: string;
   /**
    * Host paths no state reply may contain (trial dir, vault, fixture, oracle config).
    * Mandatory for structured-state: at least one absolute path (the launch audit refuses a
@@ -112,8 +115,10 @@ export function capabilityArmPlan(input: CapabilityArmPlanInput): AgentLaunchPla
     [GATE_SERVER_NAME]: { command: "myco-gate", args: ["mcp"], env: {} },
   };
   if (input.arm === "structured-state") {
-    if (!input.stateServer || !input.statePipe)
-      throw new Error("structured-state arm needs the state server command and the trial's pipe");
+    if (!input.stateServer || !input.statePipe || !input.stateDocUid)
+      throw new Error(
+        "structured-state arm needs the state server command, the trial's pipe and document uid",
+      );
     if (!input.withheld || input.withheld.length === 0)
       throw new Error("structured-state arm needs the withheld host paths (trial dir, vault, …)");
     servers[STATE_SERVER_NAME] = {
@@ -122,6 +127,7 @@ export function capabilityArmPlan(input: CapabilityArmPlanInput): AgentLaunchPla
       env: {
         [MYCO_STATE_RUN_ENV]: input.runId,
         [MYCO_STATE_PIPE_ENV]: input.statePipe,
+        [MYCO_STATE_DOC_ENV]: input.stateDocUid,
         [MYCO_STATE_WITHHELD_ENV]: JSON.stringify(input.withheld),
       },
     };

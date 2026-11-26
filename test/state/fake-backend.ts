@@ -17,6 +17,8 @@ export interface FakeDoc {
   sheets: { name: string; rows: string[][] }[];
   modified: boolean;
   tree?: UiNode;
+  /** The document holds a link to another file (external doc, DDE, area or sheet link). */
+  links?: boolean;
 }
 
 function cell(text: string | undefined, ref: string): CellState {
@@ -36,6 +38,23 @@ function cell(text: string | undefined, ref: string): CellState {
 function documentPathFunctions(doc: FakeDoc): boolean {
   return doc.sheets.some((s) =>
     s.rows.some((r) => r.some((c) => c.startsWith("=") && /(?:CELL|INFO)\s*\(/i.test(c))),
+  );
+}
+
+/**
+ * A simplified model of the reader's foreign-content scan (D7): a link, or a formula cell
+ * with an external reference or an INDIRECT/DDE/WEBSERVICE call.
+ */
+function documentForeignContent(doc: FakeDoc): boolean {
+  return (
+    doc.links === true ||
+    doc.sheets.some((s) =>
+      s.rows.some((r) =>
+        r.some(
+          (c) => c.startsWith("=") && /'\s*#|#\s*\$|(?:INDIRECT|DDE|WEBSERVICE)\s*\(/i.test(c),
+        ),
+      ),
+    )
   );
 }
 
@@ -64,6 +83,7 @@ export function fakeBackend(doc: FakeDoc): StateBackend & { calls: string[] } {
           })),
           sheetCount: doc.sheets.length,
           truncated: false,
+          documentForeignContent: documentForeignContent(doc),
         },
       };
     },
@@ -86,6 +106,7 @@ export function fakeBackend(doc: FakeDoc): StateBackend & { calls: string[] } {
           range: `${columnName(c0)}${r0 + 1}:${columnName(c1)}${r1 + 1}`,
           rows,
           documentPathFunctions: documentPathFunctions(doc),
+          documentForeignContent: documentForeignContent(doc),
         },
       };
     },
@@ -112,6 +133,7 @@ export function fakeBackend(doc: FakeDoc): StateBackend & { calls: string[] } {
           nodes: 1,
           truncated: false,
           documentPathFunctions: documentPathFunctions(doc),
+          documentForeignContent: documentForeignContent(doc),
         },
       };
     },
@@ -121,17 +143,19 @@ export function fakeBackend(doc: FakeDoc): StateBackend & { calls: string[] } {
 /**
  * A backend whose every method returns `data` as-is (to test the server's re-checks). An
  * object without `documentPathFunctions` gets `documentPathFunctions: false` added, unless
- * `omitFlag` is set (to test that the server refuses a reply without it).
+ * `omitFlag` is set, and likewise `documentForeignContent: false` unless `omitForeignFlag`
+ * is set (to test that the server refuses a reply without either).
  */
-export function rawBackend(data: unknown, opts: { omitFlag?: boolean } = {}): StateBackend {
-  const body =
-    !opts.omitFlag &&
-    typeof data === "object" &&
-    data !== null &&
-    !Array.isArray(data) &&
-    !Object.hasOwn(data, "documentPathFunctions")
-      ? { ...data, documentPathFunctions: false }
-      : data;
+export function rawBackend(
+  data: unknown,
+  opts: { omitFlag?: boolean; omitForeignFlag?: boolean } = {},
+): StateBackend {
+  const isObject = typeof data === "object" && data !== null && !Array.isArray(data);
+  let body = data;
+  if (isObject && !opts.omitFlag && !Object.hasOwn(data, "documentPathFunctions"))
+    body = { ...(body as object), documentPathFunctions: false };
+  if (isObject && !opts.omitForeignFlag && !Object.hasOwn(data, "documentForeignContent"))
+    body = { ...(body as object), documentForeignContent: false };
   const give = async () => ({ ok: true as const, data: body as never });
   return { kind: "fake", listSheets: give, readRange: give, documentStatus: give, uiTree: give };
 }

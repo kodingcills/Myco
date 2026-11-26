@@ -182,6 +182,7 @@ describe("myco-state CLI binding", () => {
   const good = {
     MYCO_STATE_RUN_ID: "run-a",
     MYCO_STATE_UNO_PIPE: "myco-state-0123456789abcdef-a1b2c3d4e5f6",
+    MYCO_STATE_DOC_UID: "1",
     MYCO_STATE_WITHHELD: JSON.stringify(["/srv/myco/trials/run-a"]),
   };
   const run = async (argv: string[], env: Record<string, string>) => {
@@ -210,8 +211,24 @@ describe("myco-state CLI binding", () => {
         {
           MYCO_STATE_RUN_ID: good.MYCO_STATE_RUN_ID,
           MYCO_STATE_UNO_PIPE: good.MYCO_STATE_UNO_PIPE,
+          MYCO_STATE_DOC_UID: good.MYCO_STATE_DOC_UID,
         },
       ],
+      // The document binding is mandatory (PR #545 round 2, D7): missing or not a RuntimeUID.
+      [
+        ["mcp"],
+        {
+          MYCO_STATE_RUN_ID: good.MYCO_STATE_RUN_ID,
+          MYCO_STATE_UNO_PIPE: good.MYCO_STATE_UNO_PIPE,
+          MYCO_STATE_WITHHELD: good.MYCO_STATE_WITHHELD,
+        },
+      ],
+      [["mcp"], { ...good, MYCO_STATE_DOC_UID: "" }],
+      [["mcp"], { ...good, MYCO_STATE_DOC_UID: "0" }],
+      [["mcp"], { ...good, MYCO_STATE_DOC_UID: "01" }],
+      [["mcp"], { ...good, MYCO_STATE_DOC_UID: "1\n" }],
+      [["mcp"], { ...good, MYCO_STATE_DOC_UID: "file:///tmp/x.xlsx" }],
+      [["mcp"], { ...good, MYCO_STATE_DOC_UID: "12345678901" }],
       [["mcp"], { ...good, MYCO_STATE_WITHHELD: "" }],
       [["mcp"], { ...good, MYCO_STATE_WITHHELD: "[]" }],
       [["mcp"], { ...good, MYCO_STATE_WITHHELD: JSON.stringify(["runs"]) }],

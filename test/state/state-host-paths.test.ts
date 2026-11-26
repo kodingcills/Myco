@@ -87,7 +87,9 @@ describe("D2: a formula-derived host path never reaches the agent", () => {
     );
   });
 
-  it("formula text with an absolute external reference is scrubbed", async () => {
+  it("formula text with an absolute external reference is withheld (D7), not just scrubbed", async () => {
+    // Before PR #545 round 2 this was scrubbed to `='[path]'#$Sheet1.A1` and returned; the
+    // external reference reads another file's content, so the reply is now withheld.
     const reply = await readA1({
       kind: "formula",
       formula: "='file:///srv/elsewhere/vault.ods'#$Sheet1.A1",
@@ -95,10 +97,13 @@ describe("D2: a formula-derived host path never reaches the agent", () => {
       value: null,
       display: "#REF!",
     });
-    expect(reply.data.rows[0][0]).toMatchObject({
-      formula: "='[path]'#$Sheet1.A1",
-      pathScrubbed: true,
-    });
+    expect(reply).toMatchObject({ ok: false, code: "OUTPUT_WITHHELD" });
+  });
+
+  it("a file URL in plain cell text is scrubbed", async () => {
+    const text = "see file:///srv/elsewhere/vault.ods";
+    const reply = await readA1({ kind: "text", value: text, display: text });
+    expect(reply.data.rows[0][0]).toMatchObject({ display: "see [path]", pathScrubbed: true });
   });
 
   it.each([

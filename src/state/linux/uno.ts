@@ -2,8 +2,10 @@
  * The `linux-uno` state backend (capability track I): reads a live headless LibreOffice
  * Calc over Python-UNO, through `scripts/linux/calc_state.py`.
  *
- * Bound at construction to ONE trial's soffice (its UNO pipe name, set by the harness).
- * Each call spawns the reader once with a fixed argv (`--pipe <name>`) and sends the
+ * Bound at construction to ONE trial's soffice (its UNO pipe name, set by the harness) and
+ * to ONE document in it (its RuntimeUID, read by the harness right after the trial's
+ * document loaded). Each call spawns the reader once with a fixed argv (`--pipe <name>
+ * --uid <uid>`) and sends the
  * already-validated request on stdin; the agent's input never reaches an argv, a path or a
  * shell. The reader prints `{ok, data}` or `{ok: false, code}`; anything else (a crash, a
  * timeout, a non-code) is BACKEND_ERROR, and stderr is kept for the operator only.
@@ -43,9 +45,17 @@ const READER_CAPS = {
 /** UNO pipe names the harness may bind: no separators, so never a path. */
 export const UNO_PIPE_NAME = /^myco-state-[a-z0-9-]{8,64}$/;
 
+/**
+ * The trial document's RuntimeUID: a decimal load counter Calc assigns per soffice process.
+ * No client can set it, and a reopened or different document gets a new one.
+ */
+export const DOC_UID = /^[1-9][0-9]{0,9}$/;
+
 export interface LinuxUnoBackendOptions {
   /** The trial's soffice UNO pipe name (harness-chosen; must match `UNO_PIPE_NAME`). */
   readonly pipe: string;
+  /** The trial document's RuntimeUID (harness-read; must match `DOC_UID`). */
+  readonly docUid: string;
   /** Python with LibreOffice's UNO bridge; defaults to `$MYCO_PYTHON` or `python3`. */
   readonly python?: string;
   /** Per-call timeout, ms. */
@@ -56,6 +66,8 @@ export interface LinuxUnoBackendOptions {
 export function linuxUnoBackend(options: LinuxUnoBackendOptions): StateBackend {
   if (!UNO_PIPE_NAME.test(options.pipe))
     throw new Error("myco-state: the UNO pipe name is not a harness-issued myco-state pipe");
+  if (!DOC_UID.test(options.docUid))
+    throw new Error("myco-state: the document uid is not a Calc RuntimeUID");
   const python = options.python ?? process.env.MYCO_PYTHON ?? "python3";
   const timeoutMs = options.timeoutMs ?? 20_000;
 
@@ -67,6 +79,8 @@ export function linuxUnoBackend(options: LinuxUnoBackendOptions): StateBackend {
           STATE_READER_SCRIPT,
           "--pipe",
           options.pipe,
+          "--uid",
+          options.docUid,
           "--timeout",
           String(Math.ceil(timeoutMs / 1000)),
         ],

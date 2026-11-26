@@ -140,12 +140,15 @@ export const STATE_SERVER_CLASS: Readonly<Record<string, Readonly<Record<string,
 export const MYCO_STATE_RUN_ENV = "MYCO_STATE_RUN_ID";
 /** The env var naming the trial's live soffice UNO pipe (`STATE_ENV.pipe`). */
 export const MYCO_STATE_PIPE_ENV = "MYCO_STATE_UNO_PIPE";
+/** The env var naming the trial document's RuntimeUID in that soffice (`STATE_ENV.docUid`). */
+export const MYCO_STATE_DOC_ENV = "MYCO_STATE_DOC_UID";
 /** The env var listing the host paths no state reply may contain (`STATE_ENV.withheld`). */
 export const MYCO_STATE_WITHHELD_ENV = "MYCO_STATE_WITHHELD";
 /** The only env keys a `myco-state` server may be launched with. */
 export const MYCO_STATE_ENV_KEYS: readonly string[] = [
   MYCO_STATE_RUN_ENV,
   MYCO_STATE_PIPE_ENV,
+  MYCO_STATE_DOC_ENV,
   MYCO_STATE_WITHHELD_ENV,
   "MYCO_PYTHON",
 ];

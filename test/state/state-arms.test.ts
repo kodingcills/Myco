@@ -39,7 +39,7 @@ import {
   GATE_TOOL,
 } from "../../src/state/arms.ts";
 import { STATE_ENV } from "../../src/state/cli.ts";
-import { UNO_PIPE_NAME } from "../../src/state/linux/uno.ts";
+import { DOC_UID, linuxUnoBackend, UNO_PIPE_NAME } from "../../src/state/linux/uno.ts";
 import { STATE_SERVER_NAME } from "../../src/state/server.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: JSON-RPC replies are read loosely in tests
@@ -48,6 +48,8 @@ type Json = any;
 const RUN = "run-cap-i-001";
 const PIPE = "myco-state-0123456789abcdef-a1b2c3d4e5f6";
 const CONFIG = "/srv/myco/trials/run-cap-i-001";
+/** A Calc RuntimeUID, as `LiveCalc.docUid` reads it after the trial's document loaded. */
+const DOC_UID_VALUE = "1";
 
 function plan(arm: CapabilityArm): AgentLaunchPlan {
   return capabilityArmPlan({
@@ -57,6 +59,7 @@ function plan(arm: CapabilityArm): AgentLaunchPlan {
     configDir: CONFIG,
     stateServer: { command: "npx", args: ["tsx", "/opt/myco/scripts/myco-state.ts", "mcp"] },
     statePipe: PIPE,
+    stateDocUid: DOC_UID_VALUE,
     withheld: ["/srv/myco/vault", CONFIG],
   });
 }
@@ -210,6 +213,21 @@ describe("the audit refuses each mutation (mutation table)", () => {
       },
     ],
     [
+      "document uid missing (PR #545 round 2, D7)",
+      ss,
+      (m) => {
+        delete m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_DOC_UID;
+      },
+    ],
+    [
+      "document uid that is a path",
+      ss,
+      (m) => {
+        m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_DOC_UID =
+          "/srv/myco/runs/run-other/agent/saved.csv";
+      },
+    ],
+    [
       "withheld list missing",
       ss,
       (m) => {
@@ -284,6 +302,23 @@ describe("the audit refuses each mutation (mutation table)", () => {
       },
       /MYCO_STATE_WITHHELD/,
     ],
+    // PR #545 round 2 (D7): the server is bound to the trial's document, not just its soffice.
+    ...(["", "0", "01", "1\n", "12345678901", "7a", "file:///x.xlsx"].map((uid) => [
+      `a document uid of ${JSON.stringify(uid)}`,
+      (e: Record<string, string>, a: string[]) => {
+        e.MYCO_STATE_DOC_UID = uid;
+        return a;
+      },
+      /MYCO_STATE_DOC_UID/,
+    ]) as Array<[string, (env: Record<string, string>, args: string[]) => string[], RegExp]>),
+    [
+      "no document uid",
+      (e, a) => {
+        delete e.MYCO_STATE_DOC_UID;
+        return a;
+      },
+      /MYCO_STATE_DOC_UID/,
+    ],
   ];
   it.each(binding)("the state binding names the rule for %s", (_name, change, detail) => {
     const p = mutate(plan(ss), (m) => {
@@ -297,6 +332,26 @@ describe("the audit refuses each mutation (mutation table)", () => {
     expect(audit.launch.violations.map((v) => v.detail)).toEqual([expect.stringMatching(detail)]);
   });
 
+  it("the plan builder refuses a structured-state plan with no document uid (D7)", () => {
+    for (const stateDocUid of [undefined, ""])
+      expect(() =>
+        capabilityArmPlan({
+          arm: ss,
+          runId: RUN,
+          instruction: "x",
+          configDir: CONFIG,
+          stateServer: { command: "npx", args: ["tsx", "/opt/x.ts", "mcp"] },
+          statePipe: PIPE,
+          stateDocUid,
+          withheld: [CONFIG],
+        }),
+      ).toThrow(/document uid/);
+  });
+
+  it("the plan binds the server to the trial's document uid", () => {
+    expect(plan(ss).mcpServers[STATE_SERVER_NAME]?.env?.MYCO_STATE_DOC_UID).toBe(DOC_UID_VALUE);
+  });
+
   it("the plan builder refuses a structured-state plan with no withheld paths", () => {
     for (const withheld of [undefined, []])
       expect(() =>
@@ -307,6 +362,7 @@ describe("the audit refuses each mutation (mutation table)", () => {
           configDir: CONFIG,
           stateServer: { command: "npx", args: ["tsx", "/opt/x.ts", "mcp"] },
           statePipe: PIPE,
+          stateDocUid: DOC_UID_VALUE,
           withheld,
         }),
       ).toThrow(/withheld/);
@@ -370,6 +426,33 @@ describe("surface classification matches the server", () => {
     expect(Object.keys(MYCO_STATE_MCP_TOOLS).sort()).toEqual([...STATE_TOOL_NAMES].sort());
     for (const cls of Object.values(MYCO_STATE_MCP_TOOLS)) expect(cls.reach).toBe("app-state");
     expect(Object.keys(STATE_SERVER_CLASS)).toEqual([STATE_SERVER_NAME]);
+  });
+
+  it("the audit and the server accept the same document uids (D7)", () => {
+    for (const uid of [
+      "1",
+      "7",
+      "42",
+      "1234567890",
+      "",
+      "0",
+      "01",
+      "1\n",
+      "12345678901",
+      "-1",
+      "1.0",
+    ]) {
+      const audit = auditCapabilityArmLaunch(
+        mutate(plan("structured-state"), (m) => {
+          m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_DOC_UID = uid;
+        }),
+        { arm: "structured-state", runId: RUN, trialDir: CONFIG },
+      );
+      expect(audit.ok, JSON.stringify(uid)).toBe(DOC_UID.test(uid));
+      const build = () => linuxUnoBackend({ pipe: PIPE, docUid: uid });
+      if (DOC_UID.test(uid)) expect(build).not.toThrow();
+      else expect(build, JSON.stringify(uid)).toThrow(/document uid/);
+    }
   });
 
   it("names the same env keys and pipe shape as the server", () => {
