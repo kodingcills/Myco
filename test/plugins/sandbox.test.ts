@@ -212,7 +212,7 @@ function runProbe(name: string, fileName = "doc.txt", extra: Record<string, unkn
 
 /** A host process run by the same user: it reports on stderr if its inspector opens. */
 function spawnVictim(): { child: ChildProcess; stderr: () => string } {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  const child = spawn(process.execPath, ["--inspect-port=0", "-e", "setInterval(() => {}, 1000)"], {
     env: {},
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -330,7 +330,7 @@ describe("plugin sandbox: no access outside the captured bytes", () => {
         await new Promise((r) => setTimeout(r, 300));
         expect(v.child.exitCode).toBe(null);
         expect(v.child.signalCode).toBe(null);
-        expect(v.stderr()).not.toMatch(/Debugger listening/);
+        expect(v.stderr()).not.toMatch(/Debugger listening|inspector/i);
         // sigDebugParent targets the plugin's parent: on macOS that is this test process.
         expect(inspector.url()).toBeUndefined();
       } finally {

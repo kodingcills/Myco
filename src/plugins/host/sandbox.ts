@@ -9,7 +9,7 @@
  *     1. an OS layer around the child (`networkIsolation()`): on Linux a fresh, empty network
  *        namespace AND a fresh PID namespace (`unshare --user --map-root-user --net --pid
  *        --fork --kill-child`, with `/bin/sh` as the namespace's init so node is not PID 1);
- *        on macOS a Seatbelt profile that denies all network and signals to other processes
+ *        on macOS a Seatbelt profile that denies all network and every signal except to itself
  *        (`sandbox-exec`). No OS layer, no plugin run: the call fails closed with
  *        `PLUGIN_NO_NET_ISOLATION`;
  *     2. no socket in the child at all: stdin and stdout are regular files (never pipes, which
@@ -17,7 +17,7 @@
  *        `process.stdin/stdout/stderr` from plugin code before it loads;
  *     3. `guard.ts` denies every network-capable builtin and global;
  *  - no signals to host processes (verifier round 2, D2): the PID namespace hides every host
- *    PID (macOS: `deny signal (target others)`), and `guard.ts` pins `kill`, `_kill`,
+ *    PID (macOS: Seatbelt denies signals to any process but itself), and `guard.ts` pins `kill`, `_kill`,
  *    `_debugProcess` and the rest of the signal/binding surface of `process`;
  *  - empty environment (no secrets, no proxy settings reach a plugin);
  *  - Node permission model: reads only the SDK directory and the plugin directory; no
@@ -81,9 +81,11 @@ const fault = (code: SandboxFaultCode): SandboxFault => ({ ok: false, code });
 
 /** Seatbelt (macOS) profile for plugin children: everything the permission model allows, minus
  * every network operation (IP and Unix-domain sockets, inbound and outbound) and every signal
- * to another process (D2: `kill`, and SIGUSR1 to open a host process's inspector). */
+ * to any process but itself (D2: `kill`, and SIGUSR1 to open a host process's inspector).
+ * `(deny signal (target others))` is not enough: macOS CI showed a same-process-group victim
+ * (the host itself is in the plugin child's process group) still being killed under it. */
 export const SEATBELT_PROFILE =
-  "(version 1)(allow default)(deny network*)(deny signal (target others))";
+  "(version 1)(allow default)(deny network*)(deny signal)(allow signal (target self))";
 
 /**
  * Linux: node must not be PID 1 of its PID namespace (the kernel drops signals PID 1 sends

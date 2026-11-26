@@ -164,10 +164,12 @@ process.stdout.write(r.join(","));`;
   });
 }
 
-function spawnVictim() {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+/** `detached: false` puts the victim in this process's group, which the child shares too. */
+function spawnVictim(detached = false) {
+  const child = spawn(process.execPath, ["--inspect-port=0", "-e", "setInterval(() => {}, 1000)"], {
     env: {},
     stdio: ["ignore", "ignore", "pipe"],
+    detached,
   });
   let err = "";
   child.stderr.on("data", (d) => {
@@ -177,15 +179,18 @@ function spawnVictim() {
 }
 
 describe("the OS layer alone blocks signals to host processes (D2)", () => {
-  it.runIf(SUPPORTED)(
-    "_debugProcess, _kill and kill from inside it leave a host victim untouched",
-    async () => {
-      const v = spawnVictim();
+  it.runIf(SUPPORTED).each([
+    ["in the child's own process group", false],
+    ["in another process group", true],
+  ])(
+    "_debugProcess, _kill and kill from inside it leave a host victim untouched (%s)",
+    async (_where, detached) => {
+      const v = spawnVictim(detached as boolean);
       try {
         await new Promise((r) => setTimeout(r, 300));
         await trySignal(prefixOf(networkIsolation()), v.child.pid as number);
         await new Promise((r) => setTimeout(r, 500));
-        expect(v.stderr()).not.toMatch(/Debugger listening/);
+        expect(v.stderr()).not.toMatch(/Debugger listening|inspector/i);
         expect(v.child.exitCode).toBe(null);
         expect(v.child.signalCode).toBe(null);
       } finally {
