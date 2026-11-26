@@ -30,6 +30,14 @@
       "reason": "Planted fake account in test/skills/record-markers.test.ts (the leak it must refuse)."
     },
     {
+      "account": "bob",
+      "reason": "Conventional placeholder account in src/dataset/hygiene.ts comments (backslash home-root examples)."
+    },
+    {
+      "account": "alice",
+      "reason": "Conventional placeholder account in src/dataset/hygiene.ts comments and handoff tests."
+    },
+    {
       "account": "Public",
       "reason": "Windows' built-in shared profile C:\\Users\\Public (the SAI fixture drop folder); not a person's account."
     }

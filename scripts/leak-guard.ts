@@ -13,7 +13,7 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { hostIdentity } from "../src/leak-guard/detect.ts";
+import { hostIdentity, mergeIdentity } from "../src/leak-guard/detect.ts";
 import {
   ALLOWLIST_PATH,
   type Finding,
@@ -25,24 +25,58 @@ import { runProducers } from "../test/leak-guard/produce.ts";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
+const USAGE = `usage: pnpm leak-guard [--scan <dir>]... [--scan-only]
+  --scan <dir>          also scan every file under <dir> (your run's outputs or logs)
+  --scan-only           skip the tracked-file and writer scans (only the --scan dirs)
+  --plant-user <name>   also look for this account name (revert checks; never a real one)
+  --plant-host <name>   also look for this host name (revert checks)
+`;
+
 async function main(argv: readonly string[]): Promise<number> {
   const extra: string[] = [];
+  const users: string[] = [];
+  const hosts: string[] = [];
+  let scanOnly = false;
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--scan" && argv[i + 1] !== undefined) extra.push(argv[++i] as string);
-    else {
-      process.stderr.write("usage: pnpm leak-guard [--scan <dir>]...\n");
+    const flag = argv[i];
+    const value = argv[i + 1];
+    const list =
+      flag === "--scan"
+        ? extra
+        : flag === "--plant-user"
+          ? users
+          : flag === "--plant-host"
+            ? hosts
+            : null;
+    if (flag === "--scan-only") scanOnly = true;
+    else if (list !== null && value !== undefined) {
+      list.push(value);
+      i++;
+    } else {
+      process.stderr.write(USAGE);
       return 2;
     }
   }
-  const identity = hostIdentity(ROOT);
+  if (scanOnly && extra.length === 0) {
+    process.stderr.write(USAGE);
+    return 2;
+  }
+  const identity = mergeIdentity(hostIdentity(ROOT), { users, hosts });
   const findings: Finding[] = [];
-  const tracked = scanTracked(ROOT, identity, readFileSync(resolve(ROOT, ALLOWLIST_PATH), "utf8"));
-  findings.push(...tracked.findings);
-  const produced = await runProducers(identity);
-  findings.push(...produced.findings);
+  const parts: string[] = [];
+  if (!scanOnly) {
+    const allowlist = readFileSync(resolve(ROOT, ALLOWLIST_PATH), "utf8");
+    const tracked = scanTracked(ROOT, identity, allowlist);
+    findings.push(...tracked.findings);
+    const produced = await runProducers(identity);
+    findings.push(...produced.findings);
+    parts.push(`${tracked.files} tracked file(s)`);
+    parts.push(`${produced.producers.length} writer(s) [${produced.producers.join(", ")}]`);
+  }
   for (const [i, dir] of extra.entries())
     findings.push(...scanDir(resolve(dir), `--scan#${i}`, identity));
-  const summary = `leak-guard: ${tracked.files} tracked file(s), ${produced.producers.length} writer(s) [${produced.producers.join(", ")}], ${extra.length} extra dir(s): ${findings.length} finding(s)`;
+  parts.push(`${extra.length} extra dir(s)`);
+  const summary = `leak-guard: ${parts.join(", ")}: ${findings.length} finding(s)`;
   if (findings.length > 0) {
     process.stdout.write(`${formatFindings(findings)}\n${summary}\nleak-guard: FAIL\n`);
     return 1;

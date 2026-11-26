@@ -280,6 +280,8 @@ SMOKE_PINNED = (
     "test/gate/gate.test.ts",
     "test/integrity/isolation.test.ts",
     "test/oracle-selftest/selftest.test.ts",
+    "test/leak-guard/leak-guard.test.ts",
+    "test/leak-guard/detect.property.test.ts",
 )
 
 
@@ -449,6 +451,7 @@ REPO_GUARDS = (
     "test/baseline/probe-directory.test.ts",
     "test/benchmark/independence.test.ts",  # grader independence
     "test/no-home-paths.test.ts",
+    "test/leak-guard/leak-guard.test.ts",  # TIF-98 shared leak guard (tracked files, writers)
     "test/claim-isolation.test.ts",
     "test/baseline/secret-file.test.ts",
     "test/sai/harness.test.ts",

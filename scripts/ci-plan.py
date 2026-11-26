@@ -109,6 +109,9 @@ TIER2 = (
     "test/foundry/split.test.ts",
     "test/foundry/hidden-split.test.ts",
     "test/no-home-paths.test.ts",
+    # TIF-98 shared leak guard: the detector, its allowlist and the guard tests.
+    "src/leak-guard/",
+    "test/leak-guard/",
     "test/claim-isolation.test.ts",
     "test/evidence.test.ts",
     "test/faults.test.ts",
@@ -164,6 +167,9 @@ SMOKE = (
     "test/gate/gate.test.ts",
     "test/integrity/isolation.test.ts",
     "test/oracle-selftest/selftest.test.ts",
+    # TIF-98: the shared leak guard runs on every PR, whatever the plan mode.
+    "test/leak-guard/leak-guard.test.ts",
+    "test/leak-guard/detect.property.test.ts",
 )
 
 # `pnpm test` runs this file on its own in a forked pool, so `vitest run --changed`
