@@ -178,7 +178,8 @@ guard:
 - matching is on a normal form (NFKC, **full Unicode case folding**, every non-letter,
   non-digit removed, on both sides). The fold upper-cases then lower-cases until nothing
   changes, so `ß`, `ẞ` and `SS` all fold to `ss` (a configured `Groß` matches `GROSS`, #562
-  D2), dotless `ı` folds to `i`, and final `ς` to `σ`. So `Alice`, `ALICE`, `a.l.i.c.e`,
+  D2), dotless `ı` folds to `i`, and final `ς` is mapped to `σ` after the fold (lower-casing
+  picks one from context, so `Νίκος` alone and `ΝίκοςTrial` would otherwise disagree). So `Alice`, `ALICE`, `a.l.i.c.e`,
   `run-alice-1` all contain `alice`, a full name `First Last` matches **joined** as
   `firstlast` (`FirstLast`, `first.last`, `first_last`, `First-Last`, `FIRSTLAST`) and by
   each word of three or more characters, a
@@ -190,7 +191,14 @@ guard:
 
 Enum members (`MEDIA_TYPES`, `POLICY_REASON_CODES`, the known arms, and every schema enum
 and constant) are constants of this code, not host values, so they are written as is and
-skipped by the verify-time scan. A hit is reported as a class and a location only, never
+skipped by the verify-time scan. The same holds for a single vocabulary member (`tool`,
+`app`, `subject`): it is one of a fixed set of constants, so it carries no information even
+when it happens to equal a configured string (`shell` for a configured `Kim Shell`), and it is
+written as is. A key sequence (`keys`) is COMPOSED from the vocabulary, so it is also put to
+the identity guard and hashed on a hit. Stated limit: a 2 to 4 character string can still be
+spelled one letter per modified chord (`ctrl+m ctrl+x`), and a longer one across several key
+actions; that is a low-rate channel for an adversarial agent and outside this guard's scope.
+A hit is reported as a class and a location only, never
 the value. Verify (and the exporter's self-verify) re-scans every non-constant string of the
 bundle with the configured identity (`PROOF_IDENTITY`).
 
