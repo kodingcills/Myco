@@ -93,23 +93,23 @@ for i in $(seq 0 29); do
 
   FS=$(field "$i" fixtureSeed); RK=$(field "$i" rowKey); CL=$(field "$i" column); NV=$(field "$i" newValue)
   if [ -z "$FS" ] || [ -z "$RK" ] || [ -z "$CL" ] || [ -z "$NV" ]; then
-    echo "{\"index\": $i, \"status\": \"param-error\", \"snapshot\": null}" >> "$LOG"; continue
+    echo "{\"index\": $i, \"status\": \"param-error\", \"snapshot\": null, $(ts_boot_json "")}" >> "$LOG"; continue
   fi
 
   # Every row carries the snapshot the reset reported ready on (null if it never
   # got there). A reset ready on a different snapshot aborts the sweep (exit 12).
-  TS_READY=""
+  TS_READY=""; TS_BOOT=""
   ts_reset "$SNAP" "$PROGRESS" 2>>"$PROGRESS"; RESET_RC=$?
   if [ "$RESET_RC" -eq 12 ]; then
     echo "ABORT_SNAPSHOT_MISMATCH at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 12
   fi
   if [ "$RESET_RC" -ne 0 ]; then
-    echo "{\"index\": $i, \"status\": \"reset-failed\", \"snapshot\": null}" >> "$LOG"; sleep 20; continue
+    echo "{\"index\": $i, \"status\": \"reset-failed\", \"snapshot\": null, $(ts_boot_json "")}" >> "$LOG"; sleep 20; continue
   fi
   perl -e "alarm 400; exec @ARGV" agent/bootstrap/deploy-to-vm.sh >> "$PROGRESS" 2>&1 || {
-    echo "{\"index\": $i, \"status\": \"deploy-failed\", \"snapshot\": \"$TS_READY\"}" >> "$LOG"; continue; }
+    echo "{\"index\": $i, \"status\": \"deploy-failed\", \"snapshot\": \"$TS_READY\", $(ts_boot_json "$TS_BOOT")}" >> "$LOG"; continue; }
   TOK=$(~/VMs/myco-win11/scripts/vssh 'Get-Content C:\ProgramData\Myco\agent.token' 2>/dev/null | tr -d '\r\n')
-  [ ${#TOK} -lt 20 ] && { echo "{\"index\": $i, \"status\": \"token-failed\", \"snapshot\": \"$TS_READY\"}" >> "$LOG"; continue; }
+  [ ${#TOK} -lt 20 ] && { echo "{\"index\": $i, \"status\": \"token-failed\", \"snapshot\": \"$TS_READY\", $(ts_boot_json "$TS_BOOT")}" >> "$LOG"; continue; }
 
   # Allow the sequential cold-start polls and agent RPCs to finish (see the
   # M1-014 cold-start note in docs/research/experiments).
@@ -117,7 +117,7 @@ for i in $(seq 0 29); do
     --mode normal --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial.out" 2> "$OUT/trial.err"
 
-  python3 scripts/m1-sweep-record.py "$i" "$FS" "$RK" "$CL" "$NV" "$OUT/trial.out" "$FPRINTS" "$AC_POWER" "$TS_READY" >> "$LOG"
+  python3 scripts/m1-sweep-record.py "$i" "$FS" "$RK" "$CL" "$NV" "$OUT/trial.out" "$FPRINTS" "$AC_POWER" "$TS_READY" "$TS_BOOT" >> "$LOG"
   if tail -1 "$LOG" | grep -q '"status": "seed-mismatch"'; then
     echo "ABORT_SEED_MISMATCH at trial $i $(date -u +%FT%TZ): $(tail -1 "$LOG")" >> "$PROGRESS"; exit 7
   fi
