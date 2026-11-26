@@ -146,7 +146,7 @@ elif which == "mC":
 elif which == "mD":
     edit("src/gate/reasons.ts", "  return \"error\";\n}", "  return String(error?.message ?? \"error\");\n}")
 elif which == "mF":
-    edit("src/gate/gate.ts", "      try {\n        corrupt = error instanceof StateCorruptError;\n      } catch {\n        corrupt = false;\n      }", "      corrupt = error instanceof StateCorruptError;")
+    edit("src/gate/gate.ts", "      try {\n        if (error instanceof StateCorruptError) corrupt = error;\n      } catch {\n        corrupt = undefined;\n      }", "      if (error instanceof StateCorruptError) corrupt = error;")
 EOF
 }
 

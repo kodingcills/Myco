@@ -645,21 +645,21 @@ export function createGate(config: GateConfig): Gate {
     } catch (error) {
       // `instanceof` can itself throw (a revoked Proxy, a throwing getPrototypeOf trap); such
       // a value is an oracle error, not a gate error.
-      let corrupt = false;
+      let corrupt: StateCorruptError | undefined;
       try {
-        corrupt = error instanceof StateCorruptError;
+        if (error instanceof StateCorruptError) corrupt = error;
       } catch {
-        corrupt = false;
+        corrupt = undefined;
       }
       // A StateCorruptError's message is written by the family to be agent-facing (no host
       // path, no raw error text; see families.ts); its `cause`, if any, goes to the operator.
-      if (corrupt && error.cause !== undefined) diagnose("oracle", error.cause);
+      if (corrupt && corrupt.cause !== undefined) diagnose("oracle", corrupt.cause);
       return finish({
         verdict: "uncertain",
         codes: [corrupt ? "STATE_CORRUPT" : "ORACLE_ERROR"],
         reasons: [
           corrupt
-            ? `could not look: ${error.message}`
+            ? `could not look: ${corrupt.message}`
             : `oracle threw: ${diagnose("oracle", error)}`,
         ],
         request,
