@@ -14,11 +14,26 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { EVIDENCE_PLANNERS } from "../benchmark/check.ts";
 
+/** The marker file every corrections A/B pack carries (`src/pilot/ab.ts`). */
+export const EXPERIMENT_FILE = "EXPERIMENT";
+
 /** Errors that make a pack directory not evidence, whatever its numbers say. */
 export function packProvenanceErrors(dir: string, arm: readonly unknown[]): string[] {
   const errors: string[] = [];
   if (existsSync(join(dir, "SIMULATED")))
     errors.push("the pack carries a SIMULATED marker: simulated rows are never evidence");
+  // The corrections ON/OFF A/B (`src/pilot/ab.ts`): experiment-only, both arms.
+  if (existsSync(join(dir, EXPERIMENT_FILE)))
+    errors.push(
+      "the pack carries an EXPERIMENT marker: experiment packs are never R1 evidence (both A/B arms)",
+    );
+  const labelled = arm.filter(
+    (r) => r !== null && typeof r === "object" && "experiment" in (r as object),
+  ).length;
+  if (labelled > 0)
+    errors.push(
+      `${labelled} arm row(s) labelled experiment-only: experiment rows are never R1 evidence, the corrections-OFF arm included`,
+    );
   const planners = arm.map((r) =>
     r !== null && typeof r === "object"
       ? (r as { plannerModelId?: unknown }).plannerModelId
