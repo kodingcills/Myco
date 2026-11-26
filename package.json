@@ -23,7 +23,8 @@
     "myco-run": "tsx scripts/myco-run.ts",
     "myco-linux": "tsx scripts/linux-run.ts",
     "myco-gate": "tsx scripts/myco-gate.ts",
-    "myco-schedule": "tsx scripts/myco-schedule.ts"
+    "myco-schedule": "tsx scripts/myco-schedule.ts",
+    "myco": "bash bin/myco"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
@@ -31,6 +32,7 @@
     "@playwright/test": "^1.65.1",
     "@types/node": "^24.0.0",
     "fflate": "^0.8.3",
+    "smol-toml": "1.9.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
