@@ -67,6 +67,7 @@ import {
   type CheckResult,
   checkBenchmark,
   correctionsOnError,
+  experimentRowsError,
   UNBOUND_R1,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
@@ -83,6 +84,12 @@ import {
 
 /** Guest load gate: no trial starts at host 1-minute load >= this (eval-runbook §7.3). */
 export const LOAD_GATE = 10;
+/**
+ * TIF-98 cold-boot floor: a trial reset is a full cold boot only when the guest had used at
+ * least this many CPU seconds by its first ssh answer (measured: fast 4-23 s, cold 272-312 s;
+ * scripts/reset-trial-vm.sh's default and floor).
+ */
+export const COLD_MIN_GUEST_CPU = 100;
 /** R1: "about 100 gated trials" (M2 plan §2.1). */
 export const R1_MIN_TRIALS = 100;
 /** R2: 30 paired trials (the demo-row count). */
@@ -120,6 +127,10 @@ export interface TrialOps {
   readonly hostLoad1mStart: number;
   readonly harnessClass: string | null;
   readonly faultLanded: boolean | null;
+  /** TIF-98: the trial reset's boot class and its guest CPU at the first ssh answer. */
+  readonly resetBootClass: "cold" | "fast";
+  readonly resetGuestCpuFirstSshS: number;
+  readonly resetTotalS?: number;
 }
 
 /** Why a gated trial is not eligible for R1 / R3, in the order the check tests them. */
@@ -555,6 +566,10 @@ export function checkPack(input: PackInput): PackResult {
       const corrected = correctionsOnError(gatedRows);
       if (corrected !== null) errors.push(`R1: ${corrected}`);
     }
+    // Experiment rows (the corrections A/B, both arms) are never evidence for any row of any
+    // pack (#547 round 1, D1).
+    const experimental = experimentRowsError(armRows);
+    if (experimental !== null) errors.push(experimental);
     if (gatedRows.length > 0 && (isR1 || unreg > 0 || (split ?? 0) > 0)) {
       const binding = bindToTaskSet(gatedRows, { exactMultiset: isR1 });
       errors.push(...binding.errors.map((e) => (isR1 ? `R1 task set: ${e}` : `task set: ${e}`)));
@@ -615,6 +630,18 @@ export function checkPack(input: PackInput): PackResult {
     if (o.hostLoad1mStart >= LOAD_GATE)
       errors.push(
         `${row.trialKey}: started at host 1-minute load ${o.hostLoad1mStart} >= ${LOAD_GATE} (guest load gate)`,
+      );
+    // TIF-98: only a full cold boot is the shared starting state. A fast boot (the first start
+    // after a UTM configuration write) skips most of Windows' boot work on the same disk. The
+    // class is checked, and recomputed from the recorded guest CPU against the committed
+    // constant, so a row labelled cold with a fast boot's CPU fails too (#546 round 1 D2).
+    if (o.resetBootClass !== "cold")
+      errors.push(
+        `${row.trialKey}: its reset was a ${o.resetBootClass} boot, not a full cold boot (TIF-98 cold-boot check)`,
+      );
+    else if (o.resetGuestCpuFirstSshS < COLD_MIN_GUEST_CPU)
+      errors.push(
+        `${row.trialKey}: labelled cold but its reset's guest CPU at the first ssh answer was ${o.resetGuestCpuFirstSshS} s < ${COLD_MIN_GUEST_CPU} s (TIF-98 cold-boot check)`,
       );
     const verified = success(row, grades.get(row.trialKey));
     if (!verified) {

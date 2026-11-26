@@ -77,6 +77,8 @@ export interface GatedTrialRecord {
   readonly plannerModelId: string;
   readonly outputCeiling: number | null;
   readonly cost: BenchmarkArmRow["cost"];
+  /** Only for an experiment run (the corrections A/B): written on the row as-is. */
+  readonly experiment?: BenchmarkArmRow["experiment"];
 }
 
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
@@ -185,6 +187,7 @@ export function gatedArmRow(
     outputCeiling: rec.outputCeiling,
     persistedSha256: rec.persisted === null ? null : sha256(rec.persisted),
     cost: rec.cost,
+    ...(rec.experiment === undefined ? {} : { experiment: rec.experiment }),
   };
   return checked(rec.trialKey, rowFor(rec, task, base));
 }

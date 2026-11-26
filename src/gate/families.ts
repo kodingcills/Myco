@@ -17,6 +17,11 @@
  *
  * A family's `decide` sees only the persisted bytes, the operator's spec and operator-side
  * inputs the gate checked (a sealed fixture). It cannot see the request, so the agent's claim and any agent-supplied value never reach it.
+ *  - `cross-app-steps`   : a multi-app task (PDF -> Calc -> Writer, capability track P,
+ *                          `cross-app.ts`). Each step's checkpoint is decided from that
+ *                          step's own snapshot of every task document (whole-document rule
+ *                          per document); the verdict needs every checkpoint and the end
+ *                          state, so a later step never masks an earlier failure.
  * M2-08 (Writer) adds a family here.
  */
 
@@ -37,17 +42,13 @@ import {
   pristineCells,
   targetRef,
 } from "./calc-document.ts";
+import { crossAppFamily } from "./cross-app.ts";
 import { errorCode } from "./reasons.ts";
+import { StateCorruptError } from "./state-corrupt.ts";
 
-/**
- * Thrown by `decide` when the persisted bytes do not parse as the family's format. The
- * message reaches the agent ("could not look: <message>"), so it must not carry a host
- * path or a raw error message; put the underlying error in `cause`, which the gate hands
- * to the operator only (`GateConfig.onDiagnostic`).
- */
-export class StateCorruptError extends Error {
-  override readonly name = "StateCorruptError";
-}
+// `StateCorruptError` lives in `./state-corrupt.ts` so a family module can throw it without
+// an import cycle through this file; re-exported here for every existing importer.
+export { StateCorruptError };
 
 /** What an oracle returns. The gate validates this shape before trusting it. */
 export interface OracleOutput {
@@ -69,6 +70,12 @@ export interface OracleInputs {
    * its bytes matched the spec's digest (the gate checks this before calling `decide`).
    */
   readonly fixture?: Uint8Array;
+  /**
+   * Every persisted file the gate read for this trial, by path relative to the run's
+   * evidence location: the task's `stateFile` and, for a family with `stateFiles`, each of
+   * those (capability track P). Present for every family; one entry for single-file ones.
+   */
+  readonly states?: ReadonlyMap<string, Uint8Array>;
 }
 
 /** A sealed fixture an operator spec names: a file in the run's evidence, and its digest. */
@@ -89,6 +96,15 @@ export interface OracleFamily {
    * `decide` as `inputs.fixture`.
    */
   sealedFixture?(spec: unknown): SealedFixtureRef | undefined;
+  /**
+   * Families whose evidence is more than one persisted file (capability track P: a cross-app
+   * task snapshots every document after every step). The relative paths the gate must read
+   * for a (valid) spec, the task's `stateFile` among them. The gate reads every one through
+   * the operator's evidence reader with the same rules as `stateFile` (any missing or
+   * unreadable file is `uncertain`, never a verdict) and hands them to `decide` as
+   * `inputs.states`. Absent: the gate reads `stateFile` alone, as before.
+   */
+  stateFiles?(spec: unknown): readonly string[];
   /** Decide from persisted bytes and operator-side inputs only. May throw. */
   decide(bytes: Uint8Array, spec: unknown, ref: string, inputs?: OracleInputs): OracleOutput;
 }
@@ -329,5 +345,8 @@ export const calcMultiStepFamily: OracleFamily = {
 };
 
 export const FAMILIES: ReadonlyMap<string, OracleFamily> = new Map(
-  [todoItemsFamily, calcRecordEditFamily, calcMultiStepFamily].map((family) => [family.id, family]),
+  [todoItemsFamily, calcRecordEditFamily, calcMultiStepFamily, crossAppFamily].map((family) => [
+    family.id,
+    family,
+  ]),
 );
