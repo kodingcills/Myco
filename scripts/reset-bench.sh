@@ -4,7 +4,8 @@
 #
 # usage: reset-bench.sh <reset|cycle> <count> <out.jsonl> [label]
 #
-#   reset  N runs of scripts/reset-trial-vm.sh (clean-base), each followed by a
+#   reset  N runs of scripts/reset-trial-vm.sh (MYCO_BENCH_SNAPSHOT, default
+#          clean-base), each followed by a
 #          readiness re-check of the guest over ssh.
 #   cycle  N runs of reset -> agent/bootstrap/deploy-to-vm.sh -> session_info.
 #          Needs MYCO_TOKEN_OUT (a private token path, runbook §4).
@@ -35,6 +36,7 @@ LOCK=${MYCO_VM_LOCK_PATH:-/tmp/myco-win11.vm.lock}
 LOAD_LIMIT=${MYCO_LOAD_LIMIT:-10}
 VSSH=${MYCO_VSSH:-$HOME/VMs/myco-win11/scripts/vssh}
 LOGS="$OUT.logs"
+SNAPSHOT=${MYCO_BENCH_SNAPSHOT:-clean-base}
 mkdir -p "$LOGS"
 
 case "$MODE" in reset|cycle) ;; *) echo "reset-bench: unknown mode '$MODE'" >&2; exit 2 ;; esac
@@ -103,7 +105,7 @@ for i in $(seq 1 "$COUNT"); do
   PI0=$(pageins)
   MF0=$(mem_free_pct)
   STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  step reset "$LOGS/$i-reset.log" bash "$REPO/scripts/reset-trial-vm.sh" clean-base
+  step reset "$LOGS/$i-reset.log" bash "$REPO/scripts/reset-trial-vm.sh" "$SNAPSHOT"
   R_RC=$STEP_RC R_S=$STEP_S
   PI1=$(pageins)
   SW1=$(swap_used_mb)
@@ -135,7 +137,7 @@ for i in $(seq 1 "$COUNT"); do
     SESSION=$(grep -m1 '^{"session_id"' "$LOGS/$i-session.log" || echo null)
   fi
   # Values pass through the environment, never interpolated into the program.
-  B_LABEL=$LABEL B_MODE=$MODE B_RUN=$i B_STARTED=$STARTED B_L0=$L0 B_TIMING=$TIMING \
+  B_SNAP=$SNAPSHOT B_LABEL=$LABEL B_MODE=$MODE B_RUN=$i B_STARTED=$STARTED B_L0=$L0 B_TIMING=$TIMING \
   B_FIRST=$FIRST B_R_RC=$R_RC B_R_S=$R_S B_C_RC=$C_RC B_D_RC=$D_RC B_D_S=$D_S \
   B_SW0=$SW0 B_SW1=$SW1 B_MF0=$MF0 B_QRSS=$QRSS B_PI0=$PI0 B_PI1=$PI1 B_S_RC=$S_RC B_S_S=$S_S B_SESSION=$SESSION B_HEAD=$(git -C "$REPO" rev-parse --short HEAD) python3 - "$OUT" <<'PY'
 import json, os, sys
@@ -146,7 +148,7 @@ for kv in e["B_TIMING"].split():
     k, _, v = kv.partition("=")
     timing[k] = int(v)
 row = {
-    "label": e["B_LABEL"], "mode": e["B_MODE"], "run": int(e["B_RUN"]), "commit": e["B_HEAD"],
+    "label": e["B_LABEL"], "mode": e["B_MODE"], "run": int(e["B_RUN"]), "commit": e["B_HEAD"], "snapshot": e["B_SNAP"],
     "started_utc": e["B_STARTED"], "load1_at_start": float(e["B_L0"]),
     "reset_rc": num("B_R_RC"), "reset_s": num("B_R_S"), "phases_s": timing,
     "first_ssh_answer_s": num("B_FIRST"),
