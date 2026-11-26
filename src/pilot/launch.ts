@@ -16,7 +16,7 @@ import { join, normalize } from "node:path";
 import type { BenchmarkTask } from "../benchmark/taskset.ts";
 import { SERVER_NAME } from "../gate/mcp-server.ts";
 import type { AgentLaunchPlan } from "../integrity/launch.ts";
-import type { PilotConfig } from "./config.ts";
+import { correctionPolicy, type PilotConfig } from "./config.ts";
 
 /**
  * Environment variable names that put Claude Code (or an SDK it spawns) on a paid API path or
@@ -92,6 +92,12 @@ function fill(s: string, vars: Readonly<Record<string, string>>): string {
   return s.replace(/\{([A-Z_]+)\}/g, (m, k: string) => (k in vars ? (vars[k] as string) : m));
 }
 
+/** `--corrections <families>` when the config turns corrections on, else nothing. */
+export function correctionsArgs(config: Pick<PilotConfig, "corrections">): string[] {
+  const policy = correctionPolicy(config);
+  return policy === undefined ? [] : ["--corrections", policy.families.join(",")];
+}
+
 /**
  * The launch plan for one trial attempt. `trialDir` must be absolute; the MCP config is
  * `<trialDir>/mcp.json` (normalised, as the audit requires).
@@ -126,7 +132,11 @@ export function trialLaunchPlan(
     mcpServers: {
       [SERVER_NAME]: {
         command: config.gateServerTemplate.command,
-        args: config.gateServerTemplate.args.map((a) => fill(a, vars)),
+        // The A/B's ON arm (and only it) adds the gate's own `--corrections` flag.
+        args: [
+          ...config.gateServerTemplate.args.map((a) => fill(a, vars)),
+          ...correctionsArgs(config),
+        ],
         env: {},
       },
     },

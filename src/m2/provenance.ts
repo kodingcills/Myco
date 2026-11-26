@@ -14,11 +14,38 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { EVIDENCE_PLANNERS } from "../benchmark/check.ts";
 
-/** Errors that make a pack directory not evidence, whatever its numbers say. */
-export function packProvenanceErrors(dir: string, arm: readonly unknown[]): string[] {
+/** The marker file every corrections A/B pack carries (`src/pilot/ab.ts`). */
+export const EXPERIMENT_FILE = "EXPERIMENT";
+
+/**
+ * Errors that make a pack directory not evidence, whatever its numbers say.
+ *
+ * `abPack` (#554): the pack is a scorecard A/B pack (`myco.m2.ab-pack/1`, `src/m2/ab-pack.ts`),
+ * experiment-only by its manifest and never citable for an R row. Its rows are experiment rows
+ * by definition, so the row-label refusal does not apply to it; the SIMULATED and EXPERIMENT
+ * markers (neither is part of its layout) and the planner allowlist still do. R packs never
+ * pass it.
+ */
+export function packProvenanceErrors(
+  dir: string,
+  arm: readonly unknown[],
+  opts: { readonly abPack?: boolean } = {},
+): string[] {
   const errors: string[] = [];
   if (existsSync(join(dir, "SIMULATED")))
     errors.push("the pack carries a SIMULATED marker: simulated rows are never evidence");
+  // The corrections ON/OFF A/B (`src/pilot/ab.ts`): experiment-only, both arms.
+  if (existsSync(join(dir, EXPERIMENT_FILE)))
+    errors.push(
+      "the pack carries an EXPERIMENT marker: experiment packs are never R1 evidence (both A/B arms)",
+    );
+  const labelled = arm.filter(
+    (r) => r !== null && typeof r === "object" && "experiment" in (r as object),
+  ).length;
+  if (opts.abPack !== true && labelled > 0)
+    errors.push(
+      `${labelled} arm row(s) labelled experiment-only: experiment rows are never R1 evidence, the corrections-OFF arm included`,
+    );
   const planners = arm.map((r) =>
     r !== null && typeof r === "object"
       ? (r as { plannerModelId?: unknown }).plannerModelId

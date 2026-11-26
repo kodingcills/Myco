@@ -5,6 +5,12 @@
 > this document applies the decisions (a)–(g) as relayed by the coordinator and adds no
 > detail beyond them. Where a point is still open, §4 says so. The outer loop files the
 > issues in §5 in Linear; agents do not (AGENTS.md).
+>
+> **Scope expanded 2026-11-26.** Tiffany widened M2 in four steps that day (08:33, 09:30,
+> 10:29 and 10:41 ET). §7 records the expanded scope: tracks A–V, the integrity work and the
+> constraints. It adds to §1–§6 and deletes nothing. Where §7 overrides an earlier point,
+> that point is marked **Superseded (2026-11-26)** in place and points to §7. This is a
+> plan, not a status report: it states scope, order, gates and owners, and claims no results.
 
 First written 2026-11-25 against main `5cc8fde7` (M1 signed off) as the pre-M2 Workstream 4
 draft (TIF-241). This version is updated against main `15ef2c3c`.
@@ -61,7 +67,7 @@ why `mvd-preregistration.md` calls `hcu+shell` the arm that decides the wedge.
 | O1. Second task family | **Resolved: multi-step Calc, plus a host-only Writer oracle** | (e) |
 | O3. Trial counts | **Resolved: about 100 trials for the false-done row (R1); 30 for demo rows** | (b) |
 | Q3. VM time on the shared Mac | **Resolved in part: a faster VM reset comes first, as an enabling item** | (b) |
-| Scope | **Resolved: cut roughly in half.** The process-only rows (old R7 evidence, R8 harness-fault accounting, R9 cold-operator reproduction) are dropped as rows and kept as CI checks (§2.2). At most about 15 issues | (d) |
+| Scope | **Resolved: cut roughly in half.** The process-only rows (old R7 evidence, R8 harness-fault accounting, R9 cold-operator reproduction) are dropped as rows and kept as CI checks (§2.2). At most about 15 issues. **Superseded (2026-11-26) in part:** the process-only rows stay dropped, but the ~15-issue cap no longer holds; M2 now also covers tracks A–V (§7) | (d) |
 | Q7. License | **Resolved: Apache-2.0.** Ships as its own separate PR; not part of this plan's issue list | Tiffany |
 | Q8. Release timing | **Resolved: announce at the end of M2.** The repo is already public, so the history safety pass (§6) is still urgent | (f) |
 | Q4, Q5, Q6 | **Open** (§4) | — |
@@ -87,6 +93,17 @@ and a Wilson 95% interval. Demo rows use 30 trials; R1 uses about 100 (decision 
 | **R6** | **Multi-step Calc with one targeted retry; host-only Writer oracle** | Multi-step Calc: 30 trials (demo row) with checkpoint oracles and one retry from the last verified checkpoint, paired against no retry; report the lift. Writer: the oracle runs host-only against generated documents and passes R5's self-test | Paired ledger with checkpoint verdicts; Writer self-test report | Paired script as for R2; Writer recomputed with R5 |
 | **R7** | **Cost per verified task** | Reported for both R2 arms: model cost, wall clock and VM time, each as the total over ALL of the arm's trials (failed and refuted trials still cost) divided by the arm's `verified` count, with the denominators. A null cost is unmeasured and never counts as 0 | Per-trial cost fields in the ledgers | The check sums cost fields over all trials and divides by the verified count |
 | **R8** | **Reach** | A Linux path an outsider can run without our Windows VM, exercised in public CI; the false-completion benchmark published (tasks, grader, results); a 90-second demo of: the agent says done → REFUTED → retry → VERIFIED | The CI job; the published benchmark; the demo recording and the run it shows | CI runs the Linux path; the benchmark's grader recomputes its published numbers |
+
+### 2.1a Experiment row: corrections ON/OFF A/B (experiment-only, never R1 evidence)
+
+Tiffany asked for this row; the lead fixed its design (#524, comment 7196445749) and ruled it gets
+its own scorecard row (2026-11-26 19:2xZ). It is kept apart from R1-R8: it is not an M2 pass
+criterion, its evidence is a separate pack kind (`myco.m2.ab-pack/1`), and its rows are never R1
+evidence, in either arm.
+
+| # | Criterion | Pre-registered design | Evidence | How it is recomputed |
+|---|---|---|---|---|
+| **AB** | **Corrections ON/OFF A/B, experiment-only** | Stage 0: **30** pairs on the pilot's tasks, plumbing only, effect claim null. Stage 1: **100** pairs per arm on fc-v1 with fresh seeds; a one-sided exact sign test on the discordant pairs at alpha **0.05**, the discordant counts and a 95% CI on the paired difference. A miss reads "corrections not shown to help", never a fail; a gate miss halts the run as an integrity incident | Both arms' ledgers, trial-ops rows and run configs; Stage 0's ledgers and the pre-registration hash for Stage 1 | `src/m2/ab-pack.ts` runs `src/m2/corrections-ab.ts` with evidence on; the scorecard check quotes its figures |
 
 ### 2.2 Process checks, kept as CI gates (not rows)
 
@@ -147,7 +164,9 @@ is single-source and was not reproduced.
 
 - **Q4. Spend.** R1, R2 and the demo call a paid model (Claude Code, and the `hcu+shell`
   arm's planner, `claude-sonnet-5-5` in `mvd-preregistration.md`). M2 needs its own cap and
-  approval. Model policy stays Claude only.
+  approval. Model policy stays Claude only. **Superseded (2026-11-26):** M2 spends $0 on the
+  Anthropic API. All trials and measurement run on the Claude Ultra plan, not a paid API
+  key (§7.6).
 - **Q5. Close the "given the VM bundle" limit** (`build-all.sh` has never run end to end)?
   Less pressing now that R8's Linux path is the outsider route, but undecided.
 - **Q6. Who signs M2 off.**
@@ -170,7 +189,8 @@ is single-source and was not reproduced.
 
 ## 5. Linear M2 milestone (for the outer loop to file)
 
-At most about 15 issues, per decision (d). `M2-nn` labels are placeholders for TIF ids.
+At most about 15 issues, per decision (d). **Superseded (2026-11-26):** the cap no longer
+holds. M2-01 to M2-15 stay as listed; tracks A–V (§7) add to them. `M2-nn` labels are placeholders for TIF ids.
 Tiers follow `docs/coordination/CONTRIBUTING-agents.md` §A. **VM** means single owner,
 under the lock; **non-VM** means host or CI only. **Start now** marks issues with no
 unmet dependency that can run in parallel from day one.
@@ -197,7 +217,10 @@ unmet dependency that can run in parallel from day one.
 
 **Outside the list:** the Apache-2.0 `LICENSE` ships as its own PR (decision on Q7).
 Deferred, not M2 issues: the pre-action guard (sweep P-4) and oracle-validated procedure
-replay (sweep P-5, under TIF-100 and TIF-101).
+replay (sweep P-5, under TIF-100 and TIF-101). **Superseded (2026-11-26):** capability
+tracks I–V are all M2 scope (§7.4). The pre-action guard sits closest to track O (policies
+and guardrails), and procedure replay to tracks M and R; the outer loop decides the exact
+mapping when it files the tracks.
 
 **Parallel start.** The five named candidates start now: M2-02 (gate API and MCP server),
 M2-06 (Linux path), M2-03 (verdict-integrity isolation), M2-04 (benchmark harness) and
@@ -227,3 +250,148 @@ What stays from the draft's workstream, under the ~15-issue cap:
 | History safety pass | **Hard gate**, urgent | Blocks the announcement; the history is already public | M2-14 |
 | Public CI hygiene | Trails, gate before announcement | Mostly done in #464; the approval setting remains | M2-14 |
 | Repo layout, prebuilt releases, versioned install, architecture docs | Trail | Not in decisions (a)–(g); revisit after M2 or within M2-15 if time allows | — |
+
+---
+
+## 7. Expanded M2 scope (Tiffany, 2026-11-26)
+
+Tiffany widened M2 in four steps on 2026-11-26. This section adds that scope to §1–§6. It
+deletes nothing; overridden points are marked **Superseded (2026-11-26)** where they stand.
+PR numbers are references, not status claims, except where a PR is named as merged.
+
+**Owners.** Two roles do the work. The **cloud builder** is a Claude cloud session: it builds
+everything that runs on a host or in CI. The **local VM owner** is the single owner of the
+shared Mac's VM: it runs every VM step, one at a time, under the VM lock. A track with both
+parts is split between them.
+
+### 7.0 Priority order (Tiffany, 10:46 ET; overrides the max-parallel pacing where they conflict)
+
+Builders keep going in parallel on every track, but one path is critical:
+
+1. **Integrity fixes** (§7.3).
+2. **The trial run, on Claude Ultra:** R1 false-done, the R2 head-to-head against `hcu+shell`, and the self-correcting loop ON/OFF A/B.
+3. **The 90-second demo** (R8, track F).
+
+Each step ships as soon as the integrity fixes land. No capability track (§7.4) may delay these steps or take VM time from them. The local VM owner runs capability-track VM work only when the critical path does not need the VM.
+
+Two more items were approved at the same time (10:47 ET):
+
+- **Data capture, from now on.** Every verified or refuted run is saved in a clean, versioned, exportable episode format: task, actions, screenshots and state, the oracle verdict, ground truth from the independent grader, and harness metadata. The format holds no secrets and never the raw Sai ledger. It is Tier 2 and is the canonical format that tracks U and Q consume.
+- **A test-quality and CI-targeting audit** by an independent auditor. It removes or rewrites meaningless tests, with proof for each. CI runs only the affected areas, and docs-only changes skip the test jobs. The full suite stays required for Tier 2 PRs and on main, and the required-check names do not change. Gate-integrity, oracle-mutation, fault-injection and security tests are never weakened.
+
+### 7.1 Product tracks A–D (08:33 ET)
+
+| Track | Scope | PR | Owner |
+|---|---|---|---|
+| **A** | **Live watch view.** A person can watch a run as it happens: the agent's actions, the gate calls and the verdicts | #513 | cloud builder; any VM check by the local VM owner |
+| **B** | **Self-correcting loop.** Agent-safe gate corrections: on a refuted claim, the agent gets a correction it may act on, without the oracle's inputs (merged) | #514 | cloud builder |
+| **C** | **Agent-written checks.** The agent writes a check for its own task. The check goes through R5's mutation self-test before anything relies on it, and is never the grader | — | cloud builder |
+| **D** | **One-command setup.** A newcomer gets from clone to a working gate with one command | #512 | cloud builder |
+
+### 7.2 Trial and release tracks E–H (09:30 ET)
+
+| Track | Scope | PR | Owner |
+|---|---|---|---|
+| **E** | **Trial-run prep,** including the corrections ON/OFF A/B (§7.2.1) | #524 | cloud builder builds; local VM owner runs |
+| **F** | **Demo script.** The scripted run behind R8's 90-second demo | #516 | cloud builder; recording by the local VM owner |
+| **G** | **Benchmark package.** The public false-completion package: task set, grader, protocol | #517 | cloud builder |
+| **H** | **API and MCP security hardening** of the gate's API and MCP wire | #519–#523 | cloud builder |
+
+#### 7.2.1 Corrections ON/OFF A/B (pre-registered)
+
+The A/B compares the gate with track B's corrections ON against the same gate with them
+OFF. It is pre-registered here, before any trial.
+
+- **Stage 0, plumbing.** 30 paired tasks. Its only purpose is to show the paired pipeline
+  works end to end. **No effect claim** is made from Stage 0, whatever it shows.
+- **Stage 1, confirmatory.** The fc-v1 task set, **100 paired tasks per arm**. Test: a
+  **one-sided exact sign test on the discordant pairs**, **alpha 0.05**, with a **95%
+  confidence interval on the paired difference**. Concordant pairs carry no weight in the
+  test and are still reported.
+- **Gates.** Every gate in this plan (§2.2 CI gates, §7.3 integrity work, §7.6 constraints)
+  must hold for the run. **Any gate miss halts the run** and is handled as an **integrity
+  incident**, not as a data point. A halted run is not resumed or patched; it is reported.
+- Stage 1 does not start until Stage 0 is clean and the lead gives GO (§7.6).
+
+### 7.3 Integrity work (before any real trial)
+
+These items guard the verdict and the run record. Real trials wait for them (§7.6).
+
+| Item | Scope | Owner |
+|---|---|---|
+| **#509** | R1 counts every fc-v1 trial, with the split asserted, and cost per verified task; dry run is SIMULATED only | cloud builder |
+| **#511** (merged) | Topped-up runs: a harness-faulted trial is re-run in place, and the faulted attempt is kept and linked | cloud builder |
+| **#518** | **Attempt ledger with a host-side anchor** (below) | cloud builder; anchor on the host by the local VM owner |
+| **#494** (merged) and its **tests-only follow-up** | Trial base v2 (versioned snapshot) and its build script; the follow-up adds tests only, no behaviour change | cloud builder; any VM check by the local VM owner |
+| **xlsx replacement for #503** | The gate reads xlsx, whole-document, hardened, so both R2 arms run on the format fc-v1 specifies. Until it lands, **the gate stays CSV-only** | cloud builder |
+
+**#518 threat model.** The attempt ledger records every attempt, so a failed attempt cannot
+be dropped quietly. Its anchor lives on the host, outside the guest.
+
+- **In scope:** the agent and the guest. Either may try to hide, drop or rewrite attempts.
+- **Trusted:** the harness.
+- **Guarantee:** the ledger is **tamper-evident**. It is **not proof against a malicious pack
+  author**, who controls the harness side.
+- **TO FILE before any outside submission:** keyed anchors, so outside packs can be checked
+  against a key the submitter does not hold. No outside submissions are taken until it lands.
+
+### 7.4 Capability tracks I–V (10:29 / 10:41 ET override)
+
+**Override.** Capability tracks I–V are **all M2 scope**, built **in parallel now**. This
+supersedes "after the demo" for any of them, including the Lightweight agent desktops track
+in `docs/product/vision.md`, which merges into track U.
+
+| Track | Capability |
+|---|---|
+| **I** | Structured state access |
+| **J** | Fastest action path |
+| **K** | Recovery |
+| **L** | Safe parallelism |
+| **M** | Learning from verified outcomes |
+| **N** | Human handoff |
+| **O** | Policies and guardrails |
+| **P** | Cross-app workflows |
+| **Q** | Replayable proof |
+| **R** | Task recording to automation |
+| **S** | Scheduled and triggered runs |
+| **T** | Bring your own app |
+| **U** | Linux scale track (merged with Lightweight agent desktops) |
+| **V** | Recursive orchestration |
+
+**How each track runs.**
+
+- **Split by machine.** Non-VM parts are built in the cloud by the cloud builder. VM parts
+  are queued for the local VM owner: single owner, under the VM lock, one at a time.
+- **Tier.** Tier 2 for any work that touches a verdict, a policy or security. Other work
+  follows `docs/coordination/CONTRIBUTING-agents.md` §A.
+- **Review.** An independent verifier (`docs/agents/verifier-briefs.md`), with a **3-round
+  cap**.
+- **Bars.** Each track's pass bar is pre-registered in `docs/product/capability-spec.md`
+  before its build is judged. That file is to be written; a track has no bar until it is.
+- **Integrity.** No track's trials are real until §7.3 lands and the lead gives GO (§7.6).
+
+### 7.5 Sequencing
+
+1. **Now, in parallel (cloud builder):** the integrity work (§7.3), tracks A, C, D, F, G
+   and H, track E's build, and the non-VM parts of tracks I–V. `capability-spec.md` bars are
+   written before each track is judged.
+2. **Now, queued (local VM owner):** VM parts of the above, one at a time under the VM lock,
+   in the order the lead sets. No VM step runs a real trial yet.
+3. **Gate to real trials:** §7.3 has landed (the gate stays CSV-only until the xlsx
+   replacement for #503 lands) and the lead gives GO.
+4. **After GO:** track E's Stage 0 (plumbing), then Stage 1 (confirmatory), then the M2
+   evaluation runs (M2-12). Any gate miss halts the run as an integrity incident.
+5. **Release:** G's benchmark package and F's demo feed M2-15, after M2-14's safety pass.
+
+### 7.6 Constraints
+
+- **$0 Anthropic API.** All trials and measurement run on Claude Ultra. No paid API key is
+  used (supersedes Q4, §4).
+- **Codex is gated.** It is used only as the second MCP client of the gate, never as an arm
+  or a builder.
+- **No CheaperInference.**
+- **No public leaderboard.** The benchmark package (G) ships tasks, grader and protocol, not
+  a ranking.
+- **Open core.** Nothing in M2 is built for billing, accounts or hosting.
+- **No real trials** until the integrity fixes (§7.3) land **and the lead gives GO**.
+  Until then, every run is plumbing or SIMULATED and is refused as evidence.
