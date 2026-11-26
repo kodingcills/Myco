@@ -64,6 +64,8 @@ describe("R1 over all 100 fc-v1 trials (ruling 08:38Z)", () => {
     const r = checkPack(input(trials, fcManifest()));
     expect(r.errors).toEqual([]);
     expect(r.r1?.unregistrable).toEqual({ trials: 10, claimedDone: 9, graderFailClaimedDone: 9 });
+    // An unregistrable row counts toward the 100 whatever its claim (#506 round 3, N1).
+    expect(r.r1).toMatchObject({ pass: true, counted: 100 });
     // A DONE claim the grader passes is not a grader fail (#506 round 1, D3). Unreachable on a
     // real invalid-target document; pinned so the count cannot drift to "every DONE claim".
     const passed = fcV1();
