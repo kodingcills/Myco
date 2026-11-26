@@ -545,6 +545,10 @@ def check_process(r: Report, const: dict, runbook_path: Path = RUNBOOK) -> None:
     r.unchecked(s, "plan reference", "a section reference into the plan, not a figure", "The plan's §2.2")
     r.quote(s, "harness classes", "(" + ", ".join(const["harnessClasses"]) + ")",
             source="schemas/m2-evidence.ts HARNESS_CLASSES")
+    # The runbook line is the M1 sweep gate, on NET load (host load minus the guest's QEMU
+    # cores, TIF-218); LOAD_GATE is the M2 per-trial rule on RAW recorded load. This check
+    # equates the two by number only. Moving M2 to net load needs a schema change (TIF-218
+    # PR, TO FILE #1).
     runbook = grab(r"1-min load stays under (\d+) for", runbook_path.read_text())
     r.check(s, "load gate", runbook == str(const["loadGate"]),
             f"src/m2/evidence.ts LOAD_GATE = {const['loadGate']}; eval-runbook load gate = {runbook}",

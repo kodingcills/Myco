@@ -24,6 +24,7 @@ PROGRESS="$OUT/progress.log"
 RECORDER=scripts/m1-corrupt-suite-record.py
 cd "$WS" || exit 1
 source "$WS/scripts/vm-lock.sh"
+source "$WS/scripts/load-gate.sh"
 vm_lock_acquire m1-corrupt-suite.sh "$PROGRESS" || exit "$?"
 trap vm_lock_release EXIT
 
@@ -64,13 +65,12 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   # valid evidence. The value goes into the row so the JSONL shows it.
   AC_POWER=no; pmset -g batt | head -1 | grep -q "AC Power" && AC_POWER=yes
   echo "ac_power=$AC_POWER trial=$i" >> "$PROGRESS"
-  LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
-  SWAP_FREE=$(sysctl -n vm.swapusage | sed -E 's/.*free = ([0-9.]+)M.*/\1/')
-  if awk -v l="$LOAD1" 'BEGIN{exit !(l>14.0)}'; then
-    echo "PAUSED_LOAD $LOAD1 at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 4
-  fi
-  if awk -v f="${SWAP_FREE:-9999}" 'BEGIN{exit !(f<300)}'; then
-    echo "PAUSED_SWAP free=${SWAP_FREE}M at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 6
+  # Host gate (TIF-218, scripts/load-gate.sh): net load = 1-min load minus the
+  # guest's own QEMU cores; pause above 14 (exit 4) or below 300 MB swap free
+  # (exit 6). Unreadable load or swap pauses (fail closed).
+  GATE=$(lg_now_decide); GATE_RC=$?
+  if [ "$GATE_RC" -ne 0 ]; then
+    echo "$GATE at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit "$GATE_RC"
   fi
 
   bash scripts/reset-trial-vm.sh >> "$PROGRESS" 2>&1 || {
