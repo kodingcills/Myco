@@ -1,0 +1,1 @@
+guest-egress: isolate-from-host=false, ssh forward 127.0.0.1:2222->22 intact; VM left stopped (run scripts/reset-trial-vm.sh)
