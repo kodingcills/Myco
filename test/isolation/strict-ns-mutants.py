@@ -116,6 +116,18 @@ MUTANTS = [
      "MUST_BE_NOSUID_NODEV.has(mp) &&", "false &&", "killed"),
     ("M46", "the agent does not inherit the fd-3 handshake pipe",
      "exec 3>&-\nexec setpriv", "exec setpriv", "killed"),
+    # #551 cb56e9d review D2: SysV IPC per trial.
+    ("M47", "trial has its own ipc namespace (setup)",
+     '"--net",\n        "--ipc",\n        "--fork",', '"--net",\n        "--fork",', "killed"),
+    ("M48", "harness: holder must not share its ipc ns (layer 1 of 2; self-check is layer 2)",
+     'if (!ipcNs || ipcNs === nsInode(process.pid, "ipc"))', "if (false)", "survives"),
+    ("M49", "each exec enters the trial's ipc namespace",
+     '"--net",\n    "--ipc",\n    "--pid",', '"--net",\n    "--pid",', "killed"),
+    ("M50", "self-check: agent not in the host ipc ns",
+     "if (!/^ipc:\\[[0-9]+\\]$/.test(ipc) || ipc === want.hostIpcNs)", "if (false)", "killed"),
+    ("M51", "harness holder ipc check alone (self-check evaluation removed, setup --ipc removed)",
+     "if (!/^ipc:\\[[0-9]+\\]$/.test(ipc) || ipc === want.hostIpcNs)", "if (false)", "killed",
+     ('"--net",\n        "--ipc",\n        "--fork",', '"--net",\n        "--fork",')),
 ]
 
 

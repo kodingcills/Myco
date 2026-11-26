@@ -3,7 +3,7 @@
  * unprivileged user namespaces; without them it skips with "skipped: no userns", and
  * MYCO_STRICT_NS_REQUIRED=1 (set in CI) turns that skip into a failure.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -276,9 +276,10 @@ describe("strict-linux-ns: self-check evaluation", () => {
     "mount=/proc rw,nosuid,nodev,noexec,relatime",
     "netdev=lo:",
     "pid=1",
+    "ipcns=ipc:[4026532999]",
     "end=1",
   ];
-  const want = { nonce: "N", hideCount: 1 };
+  const want = { nonce: "N", hideCount: 1, hostIpcNs: "ipc:[4026531839]" };
   const without = (prefix: string) => good.filter((l) => !l.startsWith(prefix));
 
   it("accepts the strict shape", () => {
@@ -298,6 +299,8 @@ describe("strict-linux-ns: self-check evaluation", () => {
     ["a visible hide dir", [...good, "visible0=1"]],
     ["a visible host root", [...good, "visible1=1"]],
     ["a truncated report", without("end=")],
+    ["the host ipc namespace", [...without("ipcns="), "ipcns=ipc:[4026531839]"]],
+    ["no ipc namespace reported", without("ipcns=")],
     ["no private /tmp", without("mount=/tmp")],
     ["a setuid-capable /workspace", [...without("mount=/workspace"), "mount=/workspace rw,nodev"]],
     ["a device-capable /tmp", [...without("mount=/tmp"), "mount=/tmp rw,nosuid"]],
@@ -423,6 +426,7 @@ async function asTrialRoot(holderPid: number, script: string): Promise<string> {
         "--mount",
         "--pid",
         "--net",
+        "--ipc",
         "--preserve-credentials",
         "--",
         "/bin/sh",
@@ -707,6 +711,59 @@ echo PRIV-DONE
       await new Promise((res) => setTimeout(res, 50));
     }
     expect(left).toEqual([]);
+  });
+
+  it("SysV IPC is per trial: no segment is shared with a sibling or the host", async () => {
+    if (!existsSync("/usr/bin/python3")) return;
+    const { run, roots } = runLayout(["A", "B"]);
+    const a = await make(roots.A!, run, "A");
+    const b = await make(roots.B!, run, "B");
+    // shmget(key, size, flags) -> id, errno; IPC_CREAT=0o1000, IPC_RMID=0.
+    const shm = (body: string): string =>
+      [
+        "import ctypes, os, sys",
+        "libc = ctypes.CDLL(None, use_errno=True)",
+        "def get(key, size, flags):",
+        "    r = libc.shmget(ctypes.c_int(key), ctypes.c_size_t(size), ctypes.c_int(flags))",
+        "    return r, ctypes.get_errno()",
+        body,
+      ].join("\n");
+    // The host harness holds a private 0600 segment (its own uid: the agent's kuid).
+    const hostKey = 0x4d59_4801;
+    const host = spawnSync("/usr/bin/python3", [
+      "-c",
+      shm(`r, e = get(${hostKey}, 64, 0o1600); print(r)`),
+    ]);
+    const hostId = Number(host.stdout.toString().trim());
+    expect(hostId).toBeGreaterThanOrEqual(0);
+    try {
+      const ra = await a.exec("/usr/bin/python3", [
+        "-c",
+        shm(
+          [
+            `print("host", *get(${hostKey}, 0, 0))`,
+            `print("mine", *get(0x4d594102, 64, 0o1666))`,
+            'print("ns", os.readlink("/proc/self/ns/ipc"))',
+          ].join("\n"),
+        ),
+      ]);
+      expect(ra.code).toBe(0);
+      expect(ra.stdout).toMatch(/^host -1 2$/m); // ENOENT: the host's segment is not there
+      expect(ra.stdout).toMatch(/^mine [0-9]+ /m);
+      const ns = /^ns (.*)$/m.exec(ra.stdout)?.[1];
+      expect(ns).toBeDefined();
+      expect(ns).not.toBe(readlinkSync("/proc/self/ns/ipc"));
+      const rb = await b.exec("/usr/bin/python3", [
+        "-c",
+        shm('print("sibling", *get(0x4d594102, 0, 0))'),
+      ]);
+      expect(rb.stdout).toMatch(/^sibling -1 2$/m); // A's segment is not in B
+    } finally {
+      spawnSync("/usr/bin/python3", [
+        "-c",
+        `import ctypes; ctypes.CDLL(None).shmctl(${hostId}, 0, None)`,
+      ]);
+    }
   });
 
   it("planted markers: concurrent trials never see or touch each other", async () => {

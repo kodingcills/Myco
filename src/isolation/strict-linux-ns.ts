@@ -420,6 +420,7 @@ echo "nsroot=$(cat /.myco-trial)"
 while read -r _id _p _dev _r mp opts _rest; do echo "mount=$mp $opts"; done < /proc/self/mountinfo
 tail -n +3 /proc/net/dev | while read -r ifc _rest; do echo "netdev=$ifc"; done
 echo "pid=$$"
+echo "ipcns=$(readlink /proc/self/ns/ipc)"
 if touch /myco-selfcheck 2>/dev/null; then echo rootwritable=1; fi
 ${probes}
 echo end=1
@@ -429,6 +430,8 @@ echo end=1
 export interface SelfCheckExpectation {
   readonly nonce: string;
   readonly hideCount: number;
+  /** The harness's own ipc namespace (`ipc:[N]`); the agent's must differ. */
+  readonly hostIpcNs?: string;
 }
 
 const ALLOWED_MOUNTS = new Set([
@@ -472,6 +475,8 @@ export function evaluateSelfCheck(output: string, want: SelfCheckExpectation): s
   if (kv.get("rootwritable") === "1") out.push("root is writable");
   if (!/^[0-9]+$/.test(kv.get("pid") ?? "") || Number(kv.get("pid")) > 64)
     out.push("not in a fresh pid namespace");
+  const ipc = kv.get("ipcns") ?? "";
+  if (!/^ipc:\[[0-9]+\]$/.test(ipc) || ipc === want.hostIpcNs) out.push("shares the host ipc ns");
   if (mounts.length === 0) out.push("no mounts listed");
   const seen = new Set<string>();
   for (const m of mounts) {
@@ -523,6 +528,7 @@ export async function runInTrial(
     "--user",
     "--mount",
     "--net",
+    "--ipc",
     "--pid",
     "--preserve-credentials",
     "--",
@@ -799,6 +805,7 @@ export function strictLinuxNs(options: StrictBackendOptions = {}): StrictBackend
         "--mount",
         "--pid",
         "--net",
+        "--ipc",
         "--fork",
         "--kill-child",
         "--",
@@ -868,6 +875,11 @@ export function strictLinuxNs(options: StrictBackendOptions = {}): StrictBackend
     const pidNs = nsInode(holderPid, "pid");
     if (!pidNs || pidNs === nsInode(process.pid, "pid"))
       return await fail("STRICT_NS_SETUP_FAILED", "holder not in its own pid ns");
+    // SysV IPC is not per mount or pid ns: without its own ipc ns the trial shares shm
+    // segments and message queues with siblings and the harness (#551 cb56e9d review D2).
+    const ipcNs = nsInode(holderPid, "ipc");
+    if (!ipcNs || ipcNs === nsInode(process.pid, "ipc"))
+      return await fail("STRICT_NS_SETUP_FAILED", "holder not in its own ipc ns");
 
     const target: TrialTarget = { holderPid, nonce };
     const limits = { memoryMb: spec.memoryMbPerTrial, cpuSeconds: spec.cpuSecondsPerTrial };
@@ -897,7 +909,11 @@ export function strictLinuxNs(options: StrictBackendOptions = {}): StrictBackend
     } catch (e) {
       return await fail("STRICT_NS_SELFCHECK_FAILED", String((e as Error).message));
     }
-    const failures = evaluateSelfCheck(check.stdout, { nonce, hideCount: probes.length });
+    const failures = evaluateSelfCheck(check.stdout, {
+      nonce,
+      hideCount: probes.length,
+      hostIpcNs: nsInode(process.pid, "ipc"),
+    });
     if (check.code !== 0 || failures.length > 0)
       return await fail(
         "STRICT_NS_SELFCHECK_FAILED",

@@ -31,7 +31,7 @@ that is down.
 
 ## 2. How it is built
 
-1. **Setup (once per trial).** `unshare --user --map-root-user --mount --pid --net --fork`
+1. **Setup (once per trial).** `unshare --user --map-root-user --mount --pid --net --ipc --fork`
    runs a setup script as root of the trial's own user namespace (call it U1). The script
    mounts a tmpfs at `<root>/.nsroot`, binds the entries in §1 into it, makes them
    read-only, and `pivot_root`s into it. Then it **detaches the old root** with
@@ -39,8 +39,8 @@ that is down.
    the trial's mount namespace at all. The script then becomes the holder: pid 1 of the
    trial's pid namespace. It waits on its stdin, a pipe from the harness, and reaps every
    orphan handed to it.
-2. **Each exec.** The harness runs `nsenter` into U1 and the trial's mount, net and pid
-   namespaces. A wrapper checks the trial's nonce in `/.myco-trial`. It tells the harness
+2. **Each exec.** The harness runs `nsenter` into U1 and the trial's mount, net, ipc and
+   pid namespaces. A wrapper checks the trial's nonce in `/.myco-trial`. It tells the harness
    on fd 3 that it reached the right trial, then closes fd 3. Then it runs
    `setpriv --no-new-privs` and `unshare --user --mount --pid --fork --kill-child
    --mount-proc --map-user=1000 --map-group=1000`, then `prlimit --as --cpu`, then
@@ -57,6 +57,7 @@ that is down.
    - only the mounts in §1 exist, the ones that must be read-only are, and the writable
      ones (`/workspace`, `/tmp`, `/home`, `/dev/shm`) are `nosuid,nodev`
    - only a loopback network device
+   - an ipc namespace that is not the harness's (the harness also checks the holder's)
    - no `hide` path, and not the host path of the trial root, exists inside. Each `hide`
      entry is probed both as written and at its real path (every symlink in it resolved)
 
@@ -101,6 +102,7 @@ Other routes, and why each is closed:
 | Symlinks planted in `/workspace` | resolve inside the trial. On the host, `readTrialFile(base, rel)` walks `rel` one component at a time from a directory fd on `base` (normally `paths.workspace`), opening each step with `O_NOFOLLOW` (`O_DIRECTORY` for the directories, `O_NONBLOCK` for the file). A symlink at **any** component is refused, so a sub-directory the agent swaps for a link to a sibling's workspace (`ln -s ../../B/workspace /workspace/out`) is not followed (#551 round-1 D1). `..`, absolute paths and a `base` reached through a symlink are refused too. Anything that is not a regular file is refused, so the #541 D2 FIFO hang cannot happen |
 | ptrace of a sibling trial | not addressable: every agent shares one host uid, so the protection is that a sibling's pids are not reachable from the agent's pid namespace. A test runs `PTRACE_ATTACH` from trial A on B's holder (by its host pid) and gets `ESRCH` |
 | Abstract unix sockets | per network namespace; the marker test checks that no trial reaches a sibling's socket |
+| SysV shared memory, message queues, semaphores | per ipc namespace: each trial has its own. A test has the harness hold a private `0600` segment and has trial A create one; A cannot open the harness's (`ENOENT`) and B cannot open A's. Without `--ipc` both succeed, because every agent runs as the harness's host uid |
 | Exec aimed at the wrong trial (pid reuse) | the nonce check refuses it before the command runs (`STRICT_NS_TRIAL_MISMATCH`) |
 
 The tests (`test/isolation/strict-linux-ns.test.ts`) run the D1 attack battery from trial A
