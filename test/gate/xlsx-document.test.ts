@@ -654,12 +654,23 @@ describe("round-2 hardening pins (D4, D5)", () => {
       ),
     });
 
-  it("the XML depth cap: maxXmlDepth levels read, one more is XLSX_XML_UNSUPPORTED", () => {
+  it("the XML depth cap: maxXmlDepth levels parse, one more is XLSX_XML_UNSUPPORTED", () => {
     expect(XLSX_LIMITS.maxXmlDepth).toBe(64);
+    const types = (depth: number) =>
+      new TextEncoder().encode(
+        entryText("[Content_Types].xml").replace(
+          "</Types>",
+          `${"<a>".repeat(depth)}${"</a>".repeat(depth)}</Types>`,
+        ),
+      );
     // The root is level 1, so maxXmlDepth - 1 nested elements reach the cap exactly.
-    expect(read(nested(XLSX_LIMITS.maxXmlDepth - 1))).toBe("no error");
+    expect(codeOf(() => parseXml(types(XLSX_LIMITS.maxXmlDepth - 1)))).toBe("no error");
+    expect(codeOf(() => parseXml(types(XLSX_LIMITS.maxXmlDepth)))).toBe("XLSX_XML_UNSUPPORTED");
+    // In a workbook the parser's cap is reached first; below it, the element-tree pin
+    // (xlsx-tree.ts) refuses any element LibreOffice does not write inside <Types>.
     expect(read(nested(XLSX_LIMITS.maxXmlDepth))).toBe("XLSX_XML_UNSUPPORTED");
     expect(read(nested(500))).toBe("XLSX_XML_UNSUPPORTED");
+    expect(read(nested(XLSX_LIMITS.maxXmlDepth - 1))).toBe("XLSX_TREE_ELEMENT");
   });
 
   it.each([

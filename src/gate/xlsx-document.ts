@@ -76,7 +76,13 @@ import {
   type PartsCode,
   type RawRelationship,
 } from "./xlsx-parts.ts";
-import { contentKindOf, type PrescanCode, prescanXmlPart } from "./xlsx-prescan.ts";
+import {
+  type ContentPartKind,
+  contentKindOf,
+  type PrescanCode,
+  prescanXmlPart,
+} from "./xlsx-prescan.ts";
+import { checkTree, checkUnpinnedTree, type TreeCode } from "./xlsx-tree.ts";
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -137,7 +143,8 @@ export type XlsxErrorCode =
   | "XLSX_STYLE_MALFORMED"
   | "XLSX_NUMFMT_UNSUPPORTED"
   | PrescanCode
-  | PartsCode;
+  | PartsCode
+  | TreeCode;
 
 export class XlsxError extends Error {
   override readonly name = "XlsxError";
@@ -642,15 +649,15 @@ function resolvePart(owner: string, target: string): string {
 
 /** The relationships part of `owner` (`a/b.xml` → `a/_rels/b.xml.rels`), by id. */
 function relationships(
-  entries: ReadonlyMap<string, Uint8Array>,
+  parts: ReadonlyMap<string, XmlElement>,
   owner: string,
 ): Map<string, Relationship> {
   const slash = owner.lastIndexOf("/");
   const relsName = `${owner.slice(0, slash + 1)}_rels/${owner.slice(slash + 1)}.rels`;
   const out = new Map<string, Relationship>();
-  const bytes = entries.get(relsName);
-  if (!bytes) return out;
-  const root = rootIn(parseXml(bytes), NS.pkgRel, "Relationships");
+  const part = parts.get(relsName);
+  if (!part) return out;
+  const root = rootIn(part, NS.pkgRel, "Relationships");
   for (const rel of elements(root, "Relationship")) {
     const id = rel.attrs.get("Id");
     const type = rel.attrs.get("Type");
@@ -679,22 +686,20 @@ function refuseActiveNames(entries: ReadonlyMap<string, Uint8Array>): void {
 }
 
 /** Refuse an external relationship target in any relationships part (after the pre-scan). */
-function refuseExternalTargets(entries: ReadonlyMap<string, Uint8Array>): void {
-  for (const name of entries.keys()) {
+function refuseExternalTargets(parts: ReadonlyMap<string, XmlElement>): void {
+  for (const [name, root] of parts) {
     if (!name.endsWith(".rels")) continue;
-    // Parse every relationships part: an external target anywhere is refused.
-    const root = rootIn(parseXml(entries.get(name) as Uint8Array), NS.pkgRel, "Relationships");
-    for (const rel of elements(root, "Relationship")) {
+    // Every relationships part: an external target anywhere is refused.
+    for (const rel of elements(rootIn(root, NS.pkgRel, "Relationships"), "Relationship")) {
       if (rel.attrs.get("TargetMode") === "External") fail("XLSX_EXTERNAL_LINK");
     }
   }
 }
 
 /** A relationships part's relationships as written (no resolution), for xlsx-parts.ts. */
-function rawRelationships(bytes: Uint8Array | undefined): RawRelationship[] {
-  if (!bytes) return [];
-  const root = rootIn(parseXml(bytes), NS.pkgRel, "Relationships");
-  return elements(root, "Relationship").map((rel) => ({
+function rawRelationships(part: XmlElement | undefined): RawRelationship[] {
+  if (!part) return [];
+  return elements(rootIn(part, NS.pkgRel, "Relationships"), "Relationship").map((rel) => ({
     id: rel.attrs.get("Id"),
     type: rel.attrs.get("Type"),
     target: rel.attrs.get("Target"),
@@ -1216,14 +1221,43 @@ export interface XlsxDocument {
   readonly sheetCount: number;
 }
 
+/** The root each pinned part must have (namespace URI, local name). */
+const PINNED_ROOTS: Readonly<Record<ContentPartKind, readonly [string, string]>> = {
+  types: [NS.types, "Types"],
+  rels: [NS.pkgRel, "Relationships"],
+  workbook: [NS.main, "workbook"],
+  worksheet: [NS.main, "worksheet"],
+  sst: [NS.main, "sst"],
+  styles: [NS.main, "styleSheet"],
+};
+
+/**
+ * Check every part's root and pin every part's element tree to LibreOffice's (`checkTree`);
+ * docProps and the theme may hold no element a reader reads structurally
+ * (`checkUnpinnedTree`). Runs over ALL parts, the ones the reader never opened included.
+ */
+function pinTrees(parts: ReadonlyMap<string, XmlElement>): void {
+  for (const [name, root] of parts) {
+    const kind = contentKindOf(name);
+    if (kind === undefined) {
+      const refusal = checkUnpinnedTree(root);
+      if (refusal) fail(refusal);
+      continue;
+    }
+    const [ns, local] = PINNED_ROOTS[kind];
+    rootIn(root, ns, local);
+    const refusal = checkTree(root, kind);
+    if (refusal) fail(refusal);
+  }
+}
+
 /**
  * Read a workbook's bytes into the gate's cell model. Throws `XlsxError` (a code only) on
  * anything malformed, truncated, encrypted, oversized, active or of an unexpected type.
  */
 export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
   const entries = readZipEntries(bytes);
-  const typesBytes = entries.get("[Content_Types].xml");
-  if (!typesBytes) fail("XLSX_NOT_WORKBOOK");
+  if (!entries.has("[Content_Types].xml")) fail("XLSX_NOT_WORKBOOK");
   refuseActiveNames(entries);
   // LibreOffice's fixed part names only (see xlsx-parts.ts); no other entry is looked at.
   const partsRefusal = checkPartNames(entries.keys());
@@ -1234,23 +1268,27 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
     const refusal = prescanXmlPart(data, contentKindOf(name));
     if (refusal) fail(refusal);
   }
-  refuseExternalTargets(entries);
-  const types = rootIn(parseXml(typesBytes), NS.types, "Types");
+  // Parse every part exactly once; every reader below reads these trees, and `pinTrees`
+  // checks the same trees (all of them) before anything is returned.
+  const parts = new Map<string, XmlElement>();
+  for (const [name, data] of entries) parts.set(name, parseXml(data));
+  refuseExternalTargets(parts);
+  const types = rootIn(parts.get("[Content_Types].xml") as XmlElement, NS.types, "Types");
   for (const node of [...elements(types, "Override"), ...elements(types, "Default")]) {
     const ct = node.attrs.get("ContentType")?.toLowerCase() ?? "";
     if (ct.includes("macroenabled") || ct.includes("vbaproject")) fail("XLSX_MACROS");
   }
 
-  const office = [...relationships(entries, "").values()].filter(
+  const office = [...relationships(parts, "").values()].filter(
     (r) => r.type === REL_TYPE.officeDocument,
   );
   if (office.length !== 1) fail("XLSX_NOT_WORKBOOK");
   const workbookName = (office[0] as Relationship).target;
   if (contentTypeOf(types, workbookName) !== WORKBOOK_CONTENT_TYPE) fail("XLSX_CONTENT_TYPE");
-  const workbookBytes = entries.get(workbookName);
-  if (!workbookBytes) fail("XLSX_NOT_WORKBOOK");
-  const workbook = rootIn(parseXml(workbookBytes), NS.main, "workbook");
-  const rels = relationships(entries, workbookName);
+  const workbookRoot = parts.get(workbookName);
+  if (!workbookRoot) fail("XLSX_NOT_WORKBOOK");
+  const workbook = rootIn(workbookRoot, NS.main, "workbook");
+  const rels = relationships(parts, workbookName);
 
   const pr = child(workbook, "workbookPr")?.attrs.get("date1904");
   let system: 1900 | 1904;
@@ -1275,8 +1313,8 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
   });
   const relsRefusal = checkRelationships({
     names: entries.keys(),
-    rootRels: rawRelationships(entries.get("_rels/.rels")),
-    workbookRels: rawRelationships(entries.get("xl/_rels/workbook.xml.rels")),
+    rootRels: rawRelationships(parts.get("_rels/.rels")),
+    workbookRels: rawRelationships(parts.get("xl/_rels/workbook.xml.rels")),
     sheetIds: sheets.map((s) => s.attrs.get("r:id")),
     overrides: elements(types, "Override").map((o) => o.attrs.get("PartName")),
   });
@@ -1287,18 +1325,23 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
   const sharedRel = [...rels.values()].filter((r) => r.type === REL_TYPE.sharedStrings);
   const stylesRel = [...rels.values()].filter((r) => r.type === REL_TYPE.styles);
   if (sharedRel.length > 1 || stylesRel.length > 1) fail("XLSX_NOT_WORKBOOK");
-  const part = (rel: Relationship | undefined) => {
+  const part = (rel: Relationship | undefined, local: string) => {
     if (!rel) return undefined;
-    const b = entries.get(rel.target);
-    if (!b) fail("XLSX_NOT_WORKBOOK");
-    return parseXml(b);
+    const root = parts.get(rel.target);
+    if (!root) fail("XLSX_NOT_WORKBOOK");
+    return rootIn(root, NS.main, local);
   };
-  const sstXml = part(sharedRel[0]);
-  const shared = sstXml ? sharedStrings(rootIn(sstXml, NS.main, "sst")) : [];
-  const stylesXml = part(stylesRel[0]);
-  const styles = readStyles(stylesXml ? rootIn(stylesXml, NS.main, "styleSheet") : undefined);
+  const sstXml = part(sharedRel[0], "sst");
+  const shared = sstXml ? sharedStrings(sstXml) : [];
+  const styles = readStyles(part(stylesRel[0], "styleSheet"));
 
-  const sheetXml = part(first) as XmlElement;
-  const cells = readSheetCells(rootIn(sheetXml, NS.main, "worksheet"), shared, styles, system);
+  const sheetXml = part(first, "worksheet") as XmlElement;
+  const cells = readSheetCells(sheetXml, shared, styles, system);
+  // The element tree of every part, pinned (see xlsx-tree.ts). The readers above walk down
+  // from each root and see only the paths they read; the independent grader regex-scans the
+  // whole text of a part. Without this pin, a decoy nested inside an element the readers
+  // skip would be read by the grader and never by the gate (round 1, D1 V1-V5). It runs
+  // last so the readers' own, more specific codes win where both refuse.
+  pinTrees(parts);
   return { cells, sheetCount: sheets.length };
 }

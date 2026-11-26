@@ -14,8 +14,27 @@
  * PR's round-2 comment); the mutants were run by hand, one at a time.
  */
 import { describe, expect, it } from "vitest";
-import { readZipEntries, XlsxError } from "../../src/gate/xlsx-document.ts";
-import { gateOn, graderOn, LO_BASE } from "./xlsx-lo-mutate.ts";
+import {
+  parseXml,
+  readXlsxDocument,
+  readZipEntries,
+  XlsxError,
+} from "../../src/gate/xlsx-document.ts";
+import { checkTree, checkUnpinnedTree, DECOY_NAMES, LO_TREES } from "../../src/gate/xlsx-tree.ts";
+import {
+  editOnce,
+  gateOn,
+  graderOn,
+  LO_BASE,
+  loEdit,
+  loText,
+  loWith,
+  SHEET1,
+  STYLES,
+  TYPES,
+  WB_RELS,
+  WORKBOOK,
+} from "./xlsx-lo-mutate.ts";
 import { writerBytes } from "./xlsx-writer-files.ts";
 import { entryEnds, withComment, withCommentDecoy, withGap } from "./xlsx-zip-surgery.ts";
 
@@ -97,5 +116,221 @@ describe("zip: every byte is accounted for, and the EOCD carries no comment (V6)
       "roundtrip-exact.lo.xlsx",
     ])
       expect(zipCode(writerBytes(name)), name).toBe("read");
+  });
+});
+
+const OD = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/** A full copy of the real sheetData with C4 (the edited cell, 4242) set back to 1. */
+function sheetDataCopyC4Wrong(): string {
+  const sheet = loText(SHEET1);
+  const data = /<sheetData>[\s\S]*<\/sheetData>/.exec(sheet)?.[0] as string;
+  return editOnce(
+    data,
+    '<c r="C4" s="0" t="n"><v>4242</v></c>',
+    '<c r="C4" s="0" t="n"><v>1</v></c>',
+  );
+}
+
+/**
+ * Round 1, V1-V5, verbatim, plus the variants the verifier's nested-decoy family drew. Each
+ * row: [label, bytes, the grader's status on them].
+ */
+const TREE_PROBES: [string, () => Uint8Array, string][] = [
+  [
+    "V1: <sheetData/> nested inside <sheetPr> (before the real <sheetData>)",
+    () =>
+      loEdit(
+        SHEET1,
+        '<pageSetUpPr fitToPage="false"/></sheetPr>',
+        '<pageSetUpPr fitToPage="false"/><sheetData/></sheetPr>',
+      ),
+    "fail",
+  ],
+  [
+    "V1 (copy): a full sheetData copy with C4 wrong, nested inside <sheetPr>",
+    () =>
+      loEdit(
+        SHEET1,
+        '<pageSetUpPr fitToPage="false"/></sheetPr>',
+        `<pageSetUpPr fitToPage="false"/>${sheetDataCopyC4Wrong()}</sheetPr>`,
+      ),
+    "fail",
+  ],
+  [
+    'V2: <fileVersion appName="Calc"><workbookPr date1904="true"/></fileVersion>',
+    () =>
+      loEdit(
+        WORKBOOK,
+        '<fileVersion appName="Calc"/>',
+        '<fileVersion appName="Calc"><workbookPr date1904="true"/></fileVersion>',
+      ),
+    "fail",
+  ],
+  [
+    'V3: <cellXfs count="1"><xf numFmtId="0"/></cellXfs> nested in <fonts>',
+    () => loEdit(STYLES, "</fonts>", '<cellXfs count="1"><xf numFmtId="0"/></cellXfs></fonts>'),
+    "fail",
+  ],
+  [
+    'V3 (empty): an empty <cellXfs count="0"></cellXfs> nested in <fonts>',
+    () => loEdit(STYLES, "</fonts>", '<cellXfs count="0"></cellXfs></fonts>'),
+    "fail",
+  ],
+  [
+    'V4: <numFmt numFmtId="165" formatCode="0"/> nested in <borders>',
+    () => loEdit(STYLES, "</borders>", '<numFmt numFmtId="165" formatCode="0"/></borders>'),
+    "fail",
+  ],
+  [
+    "V5: the rId4 <Relationship> made non-empty, holding a rId3 worksheet relationship to styles.xml",
+    () =>
+      loEdit(
+        WB_RELS,
+        `Target="sharedStrings.xml"/>`,
+        `Target="sharedStrings.xml"><Relationship Id="rId3" Type="${OD}/worksheet" Target="styles.xml"/></Relationship>`,
+      ),
+    "ungradable",
+  ],
+];
+
+describe("tree: every element of a pinned part sits at a path LibreOffice writes (V1-V5)", () => {
+  it.each(TREE_PROBES)(
+    "%s: the grader is fooled, the gate refuses",
+    async (_label, build, graded) => {
+      const bytes = build();
+      // The shape is live: the grader reads the decoy.
+      expect(graderOn(bytes)).toBe(graded);
+      const gate = await gateOn(bytes);
+      expect(gate.verdict).toBe("uncertain");
+      expect(gate.reasonCodes).toEqual(["STATE_CORRUPT"]);
+      expect(gate.reasons.join(" ")).toContain("XLSX_TREE_ELEMENT");
+    },
+  );
+
+  it("a canonical name nested anywhere else in a pinned part is refused (one row per name)", async () => {
+    // Each structural name the grader or the reader reads, dropped inside <cols> (worksheet),
+    // <bookViews> (workbook), <fills> (styles): never at its canonical path.
+    const where: [string, string, string][] = [
+      [SHEET1, "</cols>", "worksheet"],
+      [WORKBOOK, "</bookViews>", "workbook"],
+      [STYLES, "</fills>", "styles"],
+    ];
+    for (const [part, anchor] of where)
+      for (const name of [
+        "sheetData",
+        "row",
+        "c",
+        "sheet",
+        "sheets",
+        "workbookPr",
+        "cellXfs",
+        "numFmts",
+        "numFmt",
+        "xf",
+        "si",
+        "Relationship",
+        "Override",
+        "Default",
+      ]) {
+        const bytes = loEdit(part, anchor, `<${name}/>${anchor}`);
+        const gate = await gateOn(bytes);
+        expect(gate.verdict, `${name} in ${part}`).toBe("uncertain");
+        expect(gate.reasons.join(" "), `${name} in ${part}`).toContain("XLSX_");
+      }
+  });
+
+  it("no element may sit inside a <Relationship>, <Override> or <Default>", async () => {
+    const override = loEdit(
+      TYPES,
+      '<Default Extension="png" ContentType="image/png"/>',
+      '<Default Extension="png" ContentType="image/png"><Override PartName="/xl/workbook.xml" ContentType="application/xml"/></Default>',
+    );
+    const inOverride = loEdit(
+      TYPES,
+      /<Override PartName="\/xl\/workbook.xml" ContentType="([^"]*)"\/>/,
+      '<Override PartName="/xl/workbook.xml" ContentType="$1"><Default Extension="xml" ContentType="application/xml"/></Override>',
+    );
+    const rootRel = loWith({
+      "_rels/.rels": editOnce(
+        loText("_rels/.rels"),
+        /Target="xl\/workbook.xml"\/>/,
+        'Target="xl/workbook.xml"><Relationship Id="rIdX" Type="x" Target="y"/></Relationship>',
+      ),
+    });
+    for (const bytes of [override, inOverride, rootRel]) {
+      const gate = await gateOn(bytes);
+      expect(gate.verdict).toBe("uncertain");
+      expect(gate.reasons.join(" ")).toContain("XLSX_TREE_ELEMENT");
+    }
+  });
+
+  it("docProps and the theme (read by no one) may hold no decoy name anywhere", async () => {
+    const app = loText("docProps/app.xml");
+    const bytes = loWith({
+      "docProps/app.xml": editOnce(app, "<TotalTime>", "<sheetData/><TotalTime>"),
+    });
+    const gate = await gateOn(bytes);
+    expect(gate.verdict).toBe("uncertain");
+    expect(gate.reasons.join(" ")).toContain("XLSX_TREE_ELEMENT");
+    const theme = loText("xl/theme/theme1.xml");
+    const themed = loWith({
+      "xl/theme/theme1.xml": editOnce(
+        theme,
+        "</a:themeElements>",
+        "<a:sheetData/></a:themeElements>",
+      ),
+    });
+    expect((await gateOn(themed)).verdict).toBe("uncertain");
+  });
+
+  it("checkTree unit rows: the namespace rule, the root rule, and leaves", () => {
+    const enc = (x: string) => parseXml(new TextEncoder().encode(x));
+    const MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    // An allowed path in another namespace (the pre-scan refuses the declaration first in a
+    // workbook; checkTree refuses it on its own too).
+    expect(
+      checkTree(enc(`<sst xmlns="${MAIN}"><si xmlns="urn:x"><t>a</t></si></sst>`), "sst"),
+    ).toBe("XLSX_TREE_ELEMENT");
+    expect(checkTree(enc(`<sst xmlns="${MAIN}"><si><t>a</t></si></sst>`), "sst")).toBeUndefined();
+    // The one foreign element LibreOffice writes, and only there.
+    const wb = (inner: string) =>
+      enc(
+        `<workbook xmlns="${MAIN}" xmlns:loext="http://schemas.libreoffice.org/"><sheets><sheet/></sheets><extLst><ext>${inner}</ext></extLst></workbook>`,
+      );
+    expect(checkTree(wb("<loext:extCalcPr/>"), "workbook")).toBeUndefined();
+    expect(checkTree(wb("<extCalcPr/>"), "workbook")).toBe("XLSX_TREE_ELEMENT");
+    // A root the schema does not know.
+    expect(checkTree(enc(`<worksheet xmlns="${MAIN}"/>`), "sst")).toBe("XLSX_TREE_ELEMENT");
+    expect(checkTree(enc(`<toString xmlns="${MAIN}"/>`), "sst")).toBe("XLSX_TREE_ELEMENT");
+    // Text in a leaf is fine; an element in a leaf is not.
+    expect(checkTree(enc(`<sst xmlns="${MAIN}"><si><t>a<b/></t></si></sst>`), "sst")).toBe(
+      "XLSX_TREE_ELEMENT",
+    );
+    expect(
+      checkUnpinnedTree(enc("<Properties><TotalTime>0</TotalTime></Properties>")),
+    ).toBeUndefined();
+    for (const name of DECOY_NAMES)
+      expect(checkUnpinnedTree(enc(`<Properties><x><${name}/></x></Properties>`)), name).toBe(
+        "XLSX_TREE_ELEMENT",
+      );
+  });
+
+  it("every LibreOffice fixture's tree is inside the allowlist (no path of theirs is refused)", () => {
+    for (const name of [
+      "exact.lo.xlsx",
+      "pristine.lo.xlsx",
+      "collateral.lo.xlsx",
+      "roundtrip-exact.lo.xlsx",
+    ])
+      expect(() => readXlsxDocument(writerBytes(name)), name).not.toThrow();
+    expect(Object.keys(LO_TREES).sort()).toEqual([
+      "rels",
+      "sst",
+      "styles",
+      "types",
+      "workbook",
+      "worksheet",
+    ]);
   });
 });
