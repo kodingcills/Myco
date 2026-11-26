@@ -8,9 +8,8 @@
  * xlsx path as from its CSV path.
  *
  * Soundness against the independent grader: whenever the gate verifies a workbook, the
- * grader (its own xlsx reader) passes the same bytes, or (one pinned probe, a prefixed
- * SpreadsheetML root the grader's reader does not resolve) cannot look at all; the grader
- * never FAILS a workbook the gate verifies. The last describe block EXECUTES that
+ * grader (its own xlsx reader) passes the same bytes. (#503 had one exception, a prefixed
+ * root the grader cannot read; the raw-byte pre-scan now refuses it.) The last describe block EXECUTES that
  * claim over every workbook this file and its neighbours build: the agreement table, the
  * typed table, an xlsx-only table (formula cells, including round 1's h60 and h65, inline
  * and rich strings, booleans, prefixed namespaces) and the committed LibreOffice and
@@ -72,11 +71,33 @@ describe("CSV/xlsx parity over the agreement table (every probe)", () => {
     expect(probes.length).toBe(23);
   });
 
+  /**
+   * Probes whose workbook holds a tab or CR in a text cell. The generator writes those as
+   * `&#9;` / `&#13;` (LibreOffice writes `&#9;` and `&#10;`), and the raw-byte pre-scan
+   * refuses every numeric reference, so the xlsx path is `uncertain` where the CSV path
+   * refutes. Neither verifies; the difference errs towards refusing.
+   */
+  const XLSX_REFUSED = new Set([
+    "trailing row whose only content is a tab in one cell",
+    "CR-only line endings",
+  ]);
+
   it.each(probes.map((p) => [p.name, p] as const))("%s", async (_name, probe) => {
     const xlsx = xlsxFromCsv(probe.csv);
     const fromCsv = await gateResult(PROBE_INTENT, "csv", probe.csv);
     const fromXlsx = await gateResult(PROBE_INTENT, "xlsx", xlsx);
     expect(fromCsv.verdict).toBe(probe.gate);
+    if (XLSX_REFUSED.has(probe.name)) {
+      expect(fromCsv.verdict).not.toBe("verified");
+      expect(fromXlsx).toEqual({
+        verdict: "uncertain",
+        reasonCodes: ["STATE_CORRUPT"],
+        reasons: [
+          "could not look: persisted document is not a readable xlsx document (XLSX_PRESCAN_ENTITY)",
+        ],
+      });
+      return;
+    }
     expect(fromXlsx).toEqual(fromCsv);
     // Never verified where the independent grader fails the same workbook; on this table
     // the two agree outright.
@@ -294,7 +315,8 @@ const XLSX_ONLY: XlsxProbe[] = [
           .replace("<sheet ", `<sheet xmlns:r="${REL}" `),
       },
     }),
-    gate: "verified",
+    // Outside LibreOffice's byte grammar: refused by the pre-scan (was verified in #503).
+    gate: "uncertain",
     grader: "pass",
   },
   {
@@ -309,15 +331,14 @@ const XLSX_ONLY: XlsxProbe[] = [
         ]),
       ),
     }),
-    gate: "verified",
-    // KNOWN GRADER LIMITATION (TO FILE): the grader's own reader expects unprefixed
-    // SpreadsheetML roots, so it cannot look. The document is the exact edit; the gate
-    // resolving the prefix is correct (Namespaces in XML 1.0).
+    // Refused by the pre-scan (XLSX_PRESCAN_NAMESPACE). #503 verified it while the grader,
+    // reading prefixes literally, could not look: that exception is gone.
+    gate: "uncertain",
     grader: "ungradable",
   },
 ];
 
-describe("xlsx-only probes (formulas never verify; namespaces resolve)", () => {
+describe("xlsx-only probes (formulas never verify; foreign namespace shapes are refused)", () => {
   it.each(XLSX_ONLY.map((p) => [p.name, p] as const))("%s", async (_name, probe) => {
     const result = await gateResult(PROBE_INTENT, "xlsx", probe.bytes);
     expect({ gate: result.verdict, grader: graderXlsx(PROBE_INTENT, probe.bytes) }).toEqual({
@@ -395,7 +416,7 @@ describe("soundness: whenever the gate verifies a workbook, the grader passes th
     expect(MALFORMED.filter((p) => p.grader !== undefined)).toHaveLength(8);
   });
 
-  it("whenever the gate verifies, the grader passes (one named exception: the grader cannot look)", async () => {
+  it("whenever the gate verifies, the grader passes (no exception since the pre-scan)", async () => {
     const verifiedNotPassed: string[] = [];
     const verifiedMalformed: string[] = [];
     for (const [name, intent, bytes] of all) {
@@ -404,9 +425,7 @@ describe("soundness: whenever the gate verifies a workbook, the grader passes th
       if (graderXlsx(intent, bytes) !== "pass") verifiedNotPassed.push(name);
     }
     expect(verifiedMalformed).toEqual([]);
-    // The single exception is a correct, exact workbook the grader's reader cannot parse
-    // (prefixed roots; ungradable, never fail). Documented, TO FILE.
-    expect(verifiedNotPassed).toEqual(["xlsx-only: prefixed <x:workbook> and <x:worksheet>"]);
+    expect(verifiedNotPassed).toEqual([]);
   });
 
   it("no workbook is verified by the gate and failed by the grader", async () => {
@@ -421,10 +440,9 @@ describe("soundness: whenever the gate verifies a workbook, the grader passes th
       else if (status !== "pass") unsound.push(name);
     }
     expect(unsound).toEqual([]);
-    // The one verified workbook the grader cannot read at all (its limitation; TO FILE).
-    expect(graderCannotLook).toEqual(["xlsx-only: prefixed <x:workbook> and <x:worksheet>"]);
-    // The claim is not vacuous: the exact edits, both writers' exact files and the
-    // xlsx-only string and namespace probes all verify.
-    expect(verified).toBeGreaterThanOrEqual(20);
+    expect(graderCannotLook).toEqual([]);
+    // The claim is not vacuous: the exact edits, LibreOffice's exact files and the xlsx-only
+    // string probes all verify.
+    expect(verified).toBeGreaterThanOrEqual(15);
   });
 });

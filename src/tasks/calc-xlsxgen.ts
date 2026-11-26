@@ -110,7 +110,7 @@ function sheetXml(sheet: XlsxSheet, shared: Map<string, number>): string {
       return `<row r="${r + 1}">${cells}</row>`;
     })
     .join("");
-  return `${XML_HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${REL}"><sheetPr filterMode="false"><pageSetUpPr fitToPage="false"/></sheetPr><dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="12.8"/><sheetData>${rows}</sheetData><pageMargins left="0.7875" right="0.7875" top="1.05277777777778" bottom="1.05277777777778" header="0.7875" footer="0.7875"/></worksheet>`;
+  return `${XML_HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${REL}" xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xr2="http://schemas.microsoft.com/office/spreadsheetml/2015/revision2" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><sheetPr filterMode="false"><pageSetUpPr fitToPage="false"/></sheetPr><dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="12.8"/><sheetData>${rows}</sheetData><pageMargins left="0.7875" right="0.7875" top="1.05277777777778" bottom="1.05277777777778" header="0.7875" footer="0.7875"/></worksheet>`;
 }
 
 function styleAttr(style: XlsxStyle | undefined): string {

@@ -221,7 +221,7 @@ export const MALFORMED: MalformedProbe[] = [
   {
     name: "a foreign-namespace element inside <t>",
     cell: INLINE('<is><t>42<x:y xmlns:x="urn:x"/>42</t></is>'),
-    code: "XLSX_CELL_MALFORMED",
+    code: "XLSX_PRESCAN_NAMESPACE",
   },
   {
     name: "an element inside <f>",
@@ -314,7 +314,7 @@ export const MALFORMED: MalformedProbe[] = [
   {
     name: "a foreign-namespace element inside <c>",
     cell: '<c r="REF" s="0" t="n"><v>4242</v><x:y xmlns:x="urn:x"/></c>',
-    code: "XLSX_XML_UNSUPPORTED",
+    code: "XLSX_PRESCAN_NAMESPACE",
   },
   {
     name: "phonetic run <rPh> in <is> (the grader reads its text, LibreOffice skips it)",

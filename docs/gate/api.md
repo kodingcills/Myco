@@ -477,7 +477,17 @@ fails if a code is added to `XlsxErrorCode` without one):
 | external links: `xl/externalLinks/`, any `TargetMode="External"` relationship | `XLSX_EXTERNAL_LINK` |
 | embedded objects | `XLSX_EMBEDDED_OBJECT` |
 | a relationship target that climbs above the package | `XLSX_UNSAFE_PART` |
-| a DTD or an entity declaration | `XLSX_DTD` |
+| any part's bytes, before parsing: an XML declaration other than LibreOffice's two (`<?xml version="1.0" encoding="UTF-8"?>`, with or without `standalone="yes"`), or none | `XLSX_PRESCAN_DECL` |
+| any part's bytes: `<!--` anywhere | `XLSX_PRESCAN_COMMENT` |
+| any part's bytes: `<![CDATA[` | `XLSX_PRESCAN_CDATA` |
+| any part's bytes: any other `<!` (DOCTYPE, ENTITY) | `XLSX_PRESCAN_DTD` |
+| any part's bytes: a processing instruction other than the XML declaration | `XLSX_PRESCAN_PI` |
+| any part's bytes: a single-quoted attribute value | `XLSX_PRESCAN_QUOTE` |
+| any part's bytes: whitespace before `>` or `/>`, around `=`, more than one space, or a tab, CR or LF inside a tag | `XLSX_PRESCAN_TAG_SPACE` |
+| workbook, worksheet, shared strings, styles, content types, relationships: root namespace declarations other than LibreOffice's exact set and order; a namespace declaration below the root (except `xmlns:loext` on a workbook `<ext>`); a prefixed element outside an `<extLst>`; a prefixed attribute other than `r:id` on `<sheet>` and `xml:space` on `<t>` | `XLSX_PRESCAN_NAMESPACE` |
+| any part's bytes: a reference other than `&amp;` `&lt;` `&gt;` `&quot;` `&apos;` (numeric references included, though LibreOffice writes `&#9;` and `&#10;` for a tab or line break in text: those cells are refused, never guessed at); any reference inside `<v>` | `XLSX_PRESCAN_ENTITY` |
+| any part's bytes: anything else outside the accepted grammar (a literal `>` in text or a value, mismatched or unclosed tags, text after the root, an unquoted value) | `XLSX_PRESCAN_SYNTAX` |
+| a DTD or an entity declaration, at the parser behind the pre-scan (unreachable through the reader: `XLSX_PRESCAN_DTD` refuses first) | `XLSX_DTD` |
 | malformed XML: mismatched tags, an undeclared entity, bytes that are not UTF-8, an unbound namespace prefix, a duplicate attribute (raw or expanded name), a tag the tokenizer cannot match (an unterminated tag with a million attributes is caught here, never a stack overflow) | `XLSX_XML_MALFORMED` |
 | an XML declaration other than version plus optional UTF-8 `encoding` and `standalone` (a non-UTF-8 encoding), CDATA, processing instructions, nesting deeper than 64 (`XLSX_LIMITS.maxXmlDepth`), an unknown element in cell or string structure (`sheetData`, `sst`; `rPh`, `extLst`, any other namespace: a route to hidden cells), a sheet hidden outside `<sheets>` | `XLSX_XML_UNSUPPORTED` |
 | a cell without a reference, a duplicate cell, a reference off the grid, a shared-string index that is out of range or not a canonical decimal, any cell or string structure outside the accepted shapes above | `XLSX_CELL_MALFORMED` |

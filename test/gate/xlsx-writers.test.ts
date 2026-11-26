@@ -19,19 +19,43 @@ import { COLUMN_TYPES, INTENT, SEED } from "./calc-probes.ts";
 import { tempRoot, writeState } from "./helpers.ts";
 import { WRITERS_MANIFEST, writerBytes } from "./xlsx-writer-files.ts";
 
-/** What each committed workbook must get from the gate (and, below, the grader). */
-const EXPECTED: Record<string, { verdict: "verified" | "refuted"; codes?: readonly string[] }> = {
-  "exact.lo.xlsx": { verdict: "verified" },
-  "roundtrip-exact.lo.xlsx": { verdict: "verified" },
-  "exact.openpyxl.xlsx": { verdict: "verified" },
-  "exact-text.openpyxl.xlsx": { verdict: "verified" },
-  "pristine.lo.xlsx": { verdict: "refuted", codes: ["ORACLE_FAIL", "TARGET_MISMATCH"] },
-  "pristine.openpyxl.xlsx": { verdict: "refuted", codes: ["ORACLE_FAIL", "TARGET_MISMATCH"] },
-  "collateral.lo.xlsx": { verdict: "refuted", codes: ["ORACLE_FAIL", "DOCUMENT_COLLATERAL"] },
-  "collateral.openpyxl.xlsx": {
+/**
+ * What each committed workbook must get from the gate, and what the grader says.
+ *
+ * openpyxl's files are outside the byte grammar LibreOffice writes (single-quoted XML
+ * declarations, other root namespace declarations), so since the raw-byte pre-scan they are
+ * refused (`uncertain`, never verified), whatever the grader says (lead ruling 11:39Z).
+ */
+const OPENPYXL_REFUSED = {
+  verdict: "uncertain",
+  codes: ["STATE_CORRUPT"],
+  reason: "could not look: persisted document is not a readable xlsx document (XLSX_PRESCAN_DECL)",
+} as const;
+const EXPECTED: Record<
+  string,
+  {
+    verdict: "verified" | "refuted" | "uncertain";
+    codes?: readonly string[];
+    reason?: string;
+    grader: "pass" | "fail";
+  }
+> = {
+  "exact.lo.xlsx": { verdict: "verified", grader: "pass" },
+  "roundtrip-exact.lo.xlsx": { verdict: "verified", grader: "pass" },
+  "exact.openpyxl.xlsx": { ...OPENPYXL_REFUSED, grader: "pass" },
+  "exact-text.openpyxl.xlsx": { ...OPENPYXL_REFUSED, grader: "pass" },
+  "pristine.lo.xlsx": {
+    verdict: "refuted",
+    codes: ["ORACLE_FAIL", "TARGET_MISMATCH"],
+    grader: "fail",
+  },
+  "pristine.openpyxl.xlsx": { ...OPENPYXL_REFUSED, grader: "fail" },
+  "collateral.lo.xlsx": {
     verdict: "refuted",
     codes: ["ORACLE_FAIL", "DOCUMENT_COLLATERAL"],
+    grader: "fail",
   },
+  "collateral.openpyxl.xlsx": { ...OPENPYXL_REFUSED, grader: "fail" },
 };
 
 async function gateResult(bytes: Uint8Array) {
@@ -97,19 +121,16 @@ describe("workbooks from LibreOffice Calc and openpyxl (round 2, D3)", () => {
       const result = await gateResult(bytes);
       expect(result.verdict).toBe(want.verdict);
       if (want.codes) expect(result.reasonCodes).toEqual(want.codes);
-      // Agreement with the independent grader, both directions.
-      expect(graderStatus(bytes)).toBe(want.verdict === "verified" ? "pass" : "fail");
+      if (want.reason) expect(result.reasons).toEqual([want.reason]);
+      // The independent grader: it passes every verified one, and never fails a verified one.
+      expect(graderStatus(bytes)).toBe(want.grader);
+      if (want.verdict === "verified") expect(want.grader).toBe("pass");
+      if (want.verdict === "refuted") expect(want.grader).toBe("fail");
     },
   );
 
-  it("every LibreOffice and openpyxl exact workbook reads to the same cells as the CSV path's document", () => {
+  it("both LibreOffice exact workbooks read to the same cells", () => {
     const lo = readXlsxDocument(writerBytes("exact.lo.xlsx")).cells;
-    for (const name of [
-      "roundtrip-exact.lo.xlsx",
-      "exact.openpyxl.xlsx",
-      "exact-text.openpyxl.xlsx",
-    ]) {
-      expect(readXlsxDocument(writerBytes(name)).cells).toEqual(lo);
-    }
+    expect(readXlsxDocument(writerBytes("roundtrip-exact.lo.xlsx")).cells).toEqual(lo);
   });
 });

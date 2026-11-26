@@ -69,6 +69,7 @@
  */
 import { crc32, inflateRawSync } from "node:zlib";
 import { cellRef } from "../core/filepersist.ts";
+import { contentKindOf, type PrescanCode, prescanXmlPart } from "./xlsx-prescan.ts";
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -127,7 +128,8 @@ export type XlsxErrorCode =
   | "XLSX_CELL_MALFORMED"
   | "XLSX_FORMULA_UNCACHED"
   | "XLSX_STYLE_MALFORMED"
-  | "XLSX_NUMFMT_UNSUPPORTED";
+  | "XLSX_NUMFMT_UNSUPPORTED"
+  | PrescanCode;
 
 export class XlsxError extends Error {
   override readonly name = "XlsxError";
@@ -1172,6 +1174,12 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
   const typesBytes = entries.get("[Content_Types].xml");
   if (!typesBytes) fail("XLSX_NOT_WORKBOOK");
   refuseActiveContent(entries);
+  // Raw-byte pre-scan of EVERY XML part, before any XML parsing (see xlsx-prescan.ts).
+  for (const [name, data] of entries) {
+    if (!/\.(xml|rels)$/i.test(name)) continue;
+    const refusal = prescanXmlPart(data, contentKindOf(name));
+    if (refusal) fail(refusal);
+  }
   const types = rootIn(parseXml(typesBytes), NS.types, "Types");
   for (const node of [...elements(types, "Override"), ...elements(types, "Default")]) {
     const ct = node.attrs.get("ContentType")?.toLowerCase() ?? "";

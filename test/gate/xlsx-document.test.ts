@@ -28,6 +28,7 @@ import {
 import {
   classifyFormat,
   MARKERS,
+  parseXml,
   readXlsxDocument,
   readZipEntries,
   serialDay,
@@ -319,41 +320,43 @@ const entryText = (name: string) =>
   new TextDecoder().decode(xlsxEntriesFromCsv(EXACT_CSV).find((e) => e.name === name)?.data);
 
 describe("package and XML faults fail closed", () => {
-  it("a DTD (entity expansion) is XLSX_DTD", () => {
+  it("a DTD (entity expansion) is refused by the pre-scan: XLSX_PRESCAN_DTD", () => {
     const sst = entryText("xl/sharedStrings.xml").replace(
       "<sst ",
       '<!DOCTYPE sst [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;">]><sst ',
     );
     expect(read(writeXlsx(exactCells(), { patch: { "xl/sharedStrings.xml": sst } }))).toBe(
-      "XLSX_DTD",
+      "XLSX_PRESCAN_DTD",
     );
+    // The parser keeps its own refusal behind the pre-scan (defence in depth).
+    expect(codeOf(() => parseXml(new TextEncoder().encode(sst)))).toBe("XLSX_DTD");
   });
 
-  it("an undeclared entity reference is XLSX_XML_MALFORMED", () => {
+  it("an undeclared entity reference is XLSX_PRESCAN_ENTITY", () => {
     const sst = entryText("xl/sharedStrings.xml").replace("<t>id</t>", "<t>&custom;</t>");
     expect(read(writeXlsx(exactCells(), { patch: { "xl/sharedStrings.xml": sst } }))).toBe(
-      "XLSX_XML_MALFORMED",
+      "XLSX_PRESCAN_ENTITY",
     );
   });
 
-  it("CDATA is XLSX_XML_UNSUPPORTED", () => {
+  it("CDATA is XLSX_PRESCAN_CDATA", () => {
     const sst = entryText("xl/sharedStrings.xml").replace("<t>id</t>", "<t><![CDATA[id]]></t>");
     expect(read(writeXlsx(exactCells(), { patch: { "xl/sharedStrings.xml": sst } }))).toBe(
-      "XLSX_XML_UNSUPPORTED",
+      "XLSX_PRESCAN_CDATA",
     );
   });
 
-  it("mismatched tags are XLSX_XML_MALFORMED", () => {
+  it("mismatched tags are XLSX_PRESCAN_SYNTAX", () => {
     const sheet = entryText(XLSX_MAIN_SHEET).replace("</sheetData>", "</sheetDat>");
     expect(read(writeXlsx(exactCells(), { patch: { [XLSX_MAIN_SHEET]: sheet } }))).toBe(
-      "XLSX_XML_MALFORMED",
+      "XLSX_PRESCAN_SYNTAX",
     );
   });
 
-  it("a UTF-16 part is XLSX_XML_MALFORMED", () => {
+  it("a UTF-16 part is XLSX_PRESCAN_DECL", () => {
     const utf16 = Buffer.from(`\ufeff${entryText(XLSX_MAIN_SHEET)}`, "utf16le");
     expect(read(writeXlsx(exactCells(), { patch: { [XLSX_MAIN_SHEET]: utf16 } }))).toBe(
-      "XLSX_XML_MALFORMED",
+      "XLSX_PRESCAN_DECL",
     );
   });
 
@@ -417,21 +420,29 @@ describe("package and XML faults fail closed", () => {
     );
   });
 
-  it("a half-written worksheet (valid zip, cut XML) is XLSX_XML_MALFORMED", () => {
+  it("a half-written worksheet (valid zip, cut XML) is XLSX_PRESCAN_SYNTAX", () => {
     const sheet = entryText(XLSX_MAIN_SHEET);
     expect(
       read(
         writeXlsx(exactCells(), { patch: { [XLSX_MAIN_SHEET]: sheet.slice(0, sheet.length / 2) } }),
       ),
-    ).toBe("XLSX_XML_MALFORMED");
+    ).toBe("XLSX_PRESCAN_SYNTAX");
   });
 
-  it("an unknown element inside sheetData (a hidden cell route) is XLSX_XML_UNSUPPORTED", () => {
+  it("an unknown element inside sheetData (a hidden cell route) is refused", () => {
     const sheet = entryText(XLSX_MAIN_SHEET).replace(
       "<sheetData>",
       '<sheetData><mc:AlternateContent xmlns:mc="urn:x"><row r="99"><c r="A99" t="n"><v>1</v></c></row></mc:AlternateContent>',
     );
     expect(read(writeXlsx(exactCells(), { patch: { [XLSX_MAIN_SHEET]: sheet } }))).toBe(
+      "XLSX_PRESCAN_NAMESPACE",
+    );
+    // Unprefixed, it passes the pre-scan and the parsed-tree allowlist refuses it.
+    const bare = entryText(XLSX_MAIN_SHEET).replace(
+      "<sheetData>",
+      '<sheetData><AlternateContent><row r="99"><c r="A99" t="n"><v>1</v></c></row></AlternateContent>',
+    );
+    expect(read(writeXlsx(exactCells(), { patch: { [XLSX_MAIN_SHEET]: bare } }))).toBe(
       "XLSX_XML_UNSUPPORTED",
     );
   });
@@ -474,72 +485,68 @@ function exactWith(patch: Record<string, string>) {
   return xlsxFromCsv(EXACT_CSV, { patch });
 }
 
-describe("XML namespaces are resolved in scope, whatever the prefix (round 2, D3)", () => {
-  const exactCellsRead = readXlsxDocument(EXACT).cells;
+describe("namespace shapes LibreOffice does not write are refused before parsing (was round 2, D3)", () => {
+  // #503 resolved namespaces in scope, whatever the prefix, and verified what it read. The
+  // independent grader reads prefixes literally, so every such shape was a place the two could
+  // diverge (D8). Now the pre-scan refuses every one of them; the parser's own namespace
+  // checks stay behind it.
   const workbook = entryText("xl/workbook.xml");
+  const refusedAs = (patch: Record<string, string>, code: XlsxErrorCode) =>
+    expect(read(exactWith(patch))).toBe(code);
 
-  it("openpyxl style: xmlns:r declared on each <sheet>, not on the root, reads the same cells", () => {
+  it("openpyxl style: xmlns:r declared on each <sheet>, not on the root", () => {
     const wb = workbook
       .replace(` xmlns:r="${REL_NS}"`, "")
       .replace("<sheet ", `<sheet xmlns:r="${REL_NS}" `);
-    expect(wb).not.toContain(`<workbook xmlns="${MAIN_NS}" xmlns:r`);
-    expect(readXlsxDocument(exactWith({ "xl/workbook.xml": wb })).cells).toEqual(exactCellsRead);
+    refusedAs({ "xl/workbook.xml": wb }, "XLSX_PRESCAN_NAMESPACE");
   });
 
-  it("xmlns:r declared on <sheets>, under another prefix name, reads the same cells", () => {
+  it("xmlns:r declared on <sheets>, under another prefix name", () => {
     const wb = workbook
       .replace(` xmlns:r="${REL_NS}"`, "")
       .replace("<sheets>", `<sheets xmlns:rel="${REL_NS}">`)
       .replace(" r:id=", " rel:id=");
-    expect(readXlsxDocument(exactWith({ "xl/workbook.xml": wb })).cells).toEqual(exactCellsRead);
+    refusedAs({ "xl/workbook.xml": wb }, "XLSX_PRESCAN_NAMESPACE");
   });
 
-  it("prefixed roots (<x:workbook xmlns:x=...main>) in every SpreadsheetML part read the same cells", async () => {
-    const parts = ["xl/workbook.xml", XLSX_MAIN_SHEET, "xl/sharedStrings.xml", "xl/styles.xml"];
-    const patch: Record<string, string> = {};
-    for (const name of parts) patch[name] = prefixAll(entryText(name), "x");
-    // The workbook's r: attributes stay in the relationships namespace.
-    patch["xl/workbook.xml"] = (patch["xl/workbook.xml"] as string).replace(
-      `xmlns:x:r="`,
-      `xmlns:r="`,
-    );
-    expect(patch["xl/workbook.xml"]).toContain(`<x:workbook xmlns:x="${MAIN_NS}"`);
-    expect(patch[XLSX_MAIN_SHEET]).toContain("<x:c ");
-    const bytes = exactWith(patch);
-    expect(readXlsxDocument(bytes).cells).toEqual(exactCellsRead);
-    expect((await check(bytes)).verdict).toBe("verified");
-  });
+  it.each(["xl/workbook.xml", XLSX_MAIN_SHEET, "xl/sharedStrings.xml", "xl/styles.xml"])(
+    "a prefixed root (<x:root xmlns:x=...main>) in %s",
+    async (name) => {
+      const bytes = exactWith({ [name]: prefixAll(entryText(name), "x") });
+      expect(read(bytes)).toBe("XLSX_PRESCAN_NAMESPACE");
+      expect((await check(bytes)).verdict).toBe("uncertain");
+    },
+  );
 
-  it("prefixed package parts ([Content_Types].xml, .rels) read the same cells", () => {
-    const patch: Record<string, string> = {
-      "[Content_Types].xml": prefixAll(entryText("[Content_Types].xml"), "ct"),
-      "_rels/.rels": prefixAll(entryText("_rels/.rels"), "pr"),
-      "xl/_rels/workbook.xml.rels": prefixAll(entryText("xl/_rels/workbook.xml.rels"), "pr"),
-    };
-    expect(patch["_rels/.rels"]).toContain("<pr:Relationship ");
-    expect(readXlsxDocument(exactWith(patch)).cells).toEqual(exactCellsRead);
-  });
+  it.each(["[Content_Types].xml", "_rels/.rels", "xl/_rels/workbook.xml.rels"])(
+    "a prefixed package part: %s",
+    (name) => {
+      refusedAs({ [name]: prefixAll(entryText(name), "pr") }, "XLSX_PRESCAN_NAMESPACE");
+    },
+  );
 
-  it("a root in the right local name but another namespace is XLSX_NOT_WORKBOOK", () => {
+  it("a root in the right local name but another namespace", () => {
     const wb = workbook.replace(`<workbook xmlns="${MAIN_NS}"`, '<workbook xmlns="urn:not-main"');
-    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_NOT_WORKBOOK");
+    refusedAs({ "xl/workbook.xml": wb }, "XLSX_PRESCAN_NAMESPACE");
   });
 
-  it("r:id under a prefix bound to another namespace is XLSX_NOT_WORKBOOK", () => {
+  it("r:id under a prefix bound to another namespace", () => {
     const wb = workbook.replace(`xmlns:r="${REL_NS}"`, 'xmlns:r="urn:not-relationships"');
-    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_NOT_WORKBOOK");
+    refusedAs({ "xl/workbook.xml": wb }, "XLSX_PRESCAN_NAMESPACE");
   });
 
-  it("an unbound prefix is XLSX_XML_MALFORMED", () => {
-    const wb = workbook.replace(` xmlns:r="${REL_NS}"`, "");
-    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_XML_MALFORMED");
+  it("an unbound prefix", () => {
+    refusedAs(
+      { "xl/workbook.xml": workbook.replace(` xmlns:r="${REL_NS}"`, "") },
+      "XLSX_PRESCAN_NAMESPACE",
+    );
     const sheet = entryText(XLSX_MAIN_SHEET).replace("<sheetData>", "<sheetData><q:row/>");
-    expect(read(exactWith({ [XLSX_MAIN_SHEET]: sheet }))).toBe("XLSX_XML_MALFORMED");
+    refusedAs({ [XLSX_MAIN_SHEET]: sheet }, "XLSX_PRESCAN_NAMESPACE");
   });
 
-  it("two attributes with the same expanded name (r:id and a second prefix's id) are XLSX_XML_MALFORMED", () => {
+  it("two attributes with the same expanded name (r:id and a second prefix's id)", () => {
     const wb = workbook.replace(' r:id="', ` xmlns:q="${REL_NS}" q:id="rId9" r:id="`);
-    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_XML_MALFORMED");
+    refusedAs({ "xl/workbook.xml": wb }, "XLSX_PRESCAN_NAMESPACE");
   });
 
   it.each([
@@ -547,32 +554,40 @@ describe("XML namespaces are resolved in scope, whatever the prefix (round 2, D3
     ['xmlns:xml="urn:x"', "rebinding xml"],
     ['xmlns:p="http://www.w3.org/XML/1998/namespace"', "binding the xml URI"],
     ['xmlns:xmlns="urn:x"', "declaring xmlns"],
-  ])("%s (%s) is XLSX_XML_MALFORMED", (decl) => {
-    const wb = workbook.replace("<sheets>", `<sheets ${decl}>`);
-    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_XML_MALFORMED");
+  ])("%s (%s) below the root", (decl) => {
+    refusedAs(
+      { "xl/workbook.xml": workbook.replace("<sheets>", `<sheets ${decl}>`) },
+      "XLSX_PRESCAN_NAMESPACE",
+    );
   });
 
-  it("a <sheet> in a foreign namespace is not a sheet, and cannot hide one: XLSX_XML_UNSUPPORTED", () => {
+  it("a <sheet> in a foreign namespace", () => {
     const wb = workbook.replace(
       "</sheets>",
       '<y:sheet xmlns:y="urn:other" name="h" sheetId="9" r:id="rId2"/></sheets>',
     );
-    expect(read(exactWith({ "xl/workbook.xml": wb }))).toBe("XLSX_XML_UNSUPPORTED");
+    refusedAs({ "xl/workbook.xml": wb }, "XLSX_PRESCAN_NAMESPACE");
   });
 
-  it("inside sheetData: the main namespace under another prefix is read; any other namespace is refused", () => {
+  it("inside sheetData: the main namespace under another prefix, or another namespace", () => {
     const sheet = entryText(XLSX_MAIN_SHEET);
     const fixed = sheet.replace(
       /<c r="A1" t="s"><v>(\d+)<\/v><\/c>/,
       `<m:c xmlns:m="${MAIN_NS}" r="A1" t="s"><m:v>$1</m:v></m:c>`,
     );
     expect(fixed).not.toBe(sheet);
-    expect(readXlsxDocument(exactWith({ [XLSX_MAIN_SHEET]: fixed })).cells).toEqual(exactCellsRead);
+    refusedAs({ [XLSX_MAIN_SHEET]: fixed }, "XLSX_PRESCAN_NAMESPACE");
     const foreignRow = sheet.replace(
       "<sheetData>",
       '<sheetData><row xmlns="urn:other" r="99"><c r="A99"><v>1</v></c></row>',
     );
-    expect(read(exactWith({ [XLSX_MAIN_SHEET]: foreignRow }))).toBe("XLSX_XML_UNSUPPORTED");
+    refusedAs({ [XLSX_MAIN_SHEET]: foreignRow }, "XLSX_PRESCAN_NAMESPACE");
+  });
+
+  it("the parser still resolves and refuses on its own (defence in depth behind the pre-scan)", () => {
+    const enc = (x: string) => new TextEncoder().encode(x);
+    expect(codeOf(() => parseXml(enc('<a xmlns:p=""/>')))).toBe("XLSX_XML_MALFORMED");
+    expect(codeOf(() => parseXml(enc("<q:a/>")))).toBe("XLSX_XML_MALFORMED");
   });
 });
 
@@ -639,7 +654,7 @@ describe("round-2 hardening pins (D4, D5)", () => {
   });
 
   it.each([
-    ["a numFmt without a formatCode", (x: string) => x.replace(/formatCode="[^"]*"/, "")],
+    ["a numFmt without a formatCode", (x: string) => x.replace(/ formatCode="[^"]*"/, "")],
     [
       "a numFmt whose id is not an integer",
       (x: string) => x.replace(/numFmtId="1\d\d"/, 'numFmtId="x"'),
@@ -654,8 +669,9 @@ describe("round-2 hardening pins (D4, D5)", () => {
     expect(read(exactWith({ "xl/styles.xml": edit(styles) }))).toBe("XLSX_STYLE_MALFORMED");
   });
 
-  it("an unterminated tag with ~1M attributes (regex stack overflow) is XLSX_XML_MALFORMED, not a RangeError", async () => {
-    const huge = `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="${MAIN_NS}"><sheetData><row${' a="1"'.repeat(1_000_000)}`;
+  it("an unterminated tag with ~1M attributes (regex stack overflow) is refused with a code, not a RangeError", async () => {
+    const head = entryText(XLSX_MAIN_SHEET).split("<sheetData>")[0] as string;
+    const huge = `${head}<sheetData><row${' a="1"'.repeat(1_000_000)}`;
     expect(huge.length).toBeGreaterThan(6_000_000);
     // Stored (not deflated), as the verifier built it: a 6 MB entry under every size cap.
     const bytes = writeZip(
@@ -665,12 +681,14 @@ describe("round-2 hardening pins (D4, D5)", () => {
           : e,
       ),
     );
-    expect(read(bytes)).toBe("XLSX_XML_MALFORMED");
+    expect(read(bytes)).toBe("XLSX_PRESCAN_SYNTAX");
     const result = await check(bytes);
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_CORRUPT"] });
     expect(result.reasons).toEqual([
-      "could not look: persisted document is not a readable xlsx document (XLSX_XML_MALFORMED)",
+      "could not look: persisted document is not a readable xlsx document (XLSX_PRESCAN_SYNTAX)",
     ]);
+    // The parser behind the pre-scan still refuses it without a RangeError.
+    expect(codeOf(() => parseXml(new TextEncoder().encode(huge)))).toBe("XLSX_XML_MALFORMED");
   });
 });
 
@@ -767,23 +785,28 @@ describe("round-3 pins for the round-2 mutation survivors (D7)", () => {
       [XLSX_MAIN_SHEET]: entryText(XLSX_MAIN_SHEET).replace(/^<\?xml[^?]*\?>/, decl),
     });
 
-  it("V10: only a UTF-8 (or encoding-less) XML declaration is accepted", () => {
+  it("V10: only the two XML declarations LibreOffice writes are accepted (pre-scan)", () => {
     expect(read(withDecl('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'))).toBe(
       "no error",
     );
-    expect(read(withDecl("<?xml version='1.0' encoding='utf-8'?>"))).toBe("no error");
-    expect(read(withDecl('<?xml version="1.0"?>'))).toBe("no error");
+    expect(read(withDecl('<?xml version="1.0" encoding="UTF-8"?>'))).toBe("no error");
     for (const decl of [
+      "<?xml version='1.0' encoding='utf-8'?>",
+      '<?xml version="1.0"?>',
       '<?xml version="1.0" encoding="ISO-8859-1"?>',
       '<?xml version="1.0" encoding="windows-1252"?>',
       '<?xml version="1.0" encoding="UTF-16"?>',
       '<?xml version="1.0" encoding="utf8"?>',
+      '<?xml version="1.0" encoding="utf-8"?>',
       '<?xml version="1.0" standalone="yes" encoding="UTF-8"?>',
       '<?xml version="1.0" x="encoding=\'utf-8\'" encoding="latin1"?>',
       "<?xml encoding='UTF-8'?>",
     ]) {
-      expect([decl, read(withDecl(decl))]).toEqual([decl, "XLSX_XML_UNSUPPORTED"]);
+      expect([decl, read(withDecl(decl))]).toEqual([decl, "XLSX_PRESCAN_DECL"]);
     }
+    // The parser's own encoding check stays behind the pre-scan.
+    const latin = '<?xml version="1.0" encoding="ISO-8859-1"?><a/>';
+    expect(codeOf(() => parseXml(new TextEncoder().encode(latin)))).toBe("XLSX_XML_UNSUPPORTED");
   });
 });
 
@@ -991,27 +1014,27 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
   ],
   [
     "a DOCTYPE",
-    "XLSX_DTD",
+    "XLSX_PRESCAN_DTD",
     () => withSheetXml((x) => x.replace("<worksheet ", "<!DOCTYPE worksheet><worksheet ")),
   ],
   [
     "an entity declaration",
-    "XLSX_DTD",
+    "XLSX_PRESCAN_DTD",
     () => withSheetXml((x) => x.replace("<worksheet ", '<!ENTITY a "b"><worksheet ')),
   ],
   [
     "malformed XML (mismatched tags)",
-    "XLSX_XML_MALFORMED",
+    "XLSX_PRESCAN_SYNTAX",
     () => withSheetXml((x) => x.replace("</sheetData>", "</sheetDat>")),
   ],
   [
     "an undeclared entity",
-    "XLSX_XML_MALFORMED",
+    "XLSX_PRESCAN_ENTITY",
     () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData>&custom;")),
   ],
   [
-    "a non-UTF-8 part",
-    "XLSX_XML_MALFORMED",
+    "a UTF-16 part",
+    "XLSX_PRESCAN_DECL",
     () =>
       xlsxFromCsv(EXACT_CSV, {
         patch: { [XLSX_MAIN_SHEET]: Buffer.from(`\ufeff${entryText(XLSX_MAIN_SHEET)}`, "utf16le") },
@@ -1019,17 +1042,17 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
   ],
   [
     "an unbound namespace prefix",
-    "XLSX_XML_MALFORMED",
+    "XLSX_PRESCAN_NAMESPACE",
     () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData><q:row/>")),
   ],
   [
     "CDATA",
-    "XLSX_XML_UNSUPPORTED",
+    "XLSX_PRESCAN_CDATA",
     () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData><![CDATA[x]]>")),
   ],
   [
     "a processing instruction",
-    "XLSX_XML_UNSUPPORTED",
+    "XLSX_PRESCAN_PI",
     () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData><?pi x?>")),
   ],
   [
@@ -1043,10 +1066,42 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
   [
     "an unknown element inside sheetData",
     "XLSX_XML_UNSUPPORTED",
+    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData><AlternateContent/>")),
+  ],
+  [
+    "a comment",
+    "XLSX_PRESCAN_COMMENT",
+    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData><!-- x -->")),
+  ],
+  [
+    "a single-quoted attribute",
+    "XLSX_PRESCAN_QUOTE",
+    () => withSheetXml((x) => x.replace('<c r="A1"', "<c r='A1'")),
+  ],
+  [
+    "whitespace before > in a tag",
+    "XLSX_PRESCAN_TAG_SPACE",
+    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData >")),
+  ],
+  [
+    "a duplicate raw attribute",
+    "XLSX_XML_MALFORMED",
+    () => withSheetXml((x) => x.replace('<c r="A1"', '<c r="A1" r="A1"')),
+  ],
+  [
+    "invalid UTF-8 bytes in a string",
+    "XLSX_XML_MALFORMED",
     () =>
-      withSheetXml((x) =>
-        x.replace("<sheetData>", '<sheetData><mc:AlternateContent xmlns:mc="urn:x"/>'),
-      ),
+      xlsxFromCsv(EXACT_CSV, {
+        patch: {
+          "xl/sharedStrings.xml": Buffer.concat([
+            Buffer.from(entryText("xl/sharedStrings.xml").split("<t>id</t>")[0] as string),
+            Buffer.from("<t>"),
+            Buffer.from([0xff, 0xfe]),
+            Buffer.from(`</t>${entryText("xl/sharedStrings.xml").split("<t>id</t>")[1]}`),
+          ]),
+        },
+      }),
   ],
   [
     "a cell without a reference",
@@ -1096,10 +1151,22 @@ describe("every documented refusal (docs/gate/api.md: each one is pinned here)",
       join(import.meta.dirname, "../../src/gate/xlsx-document.ts"),
       "utf8",
     );
-    const union = /export type XlsxErrorCode =([^;]+);/.exec(source)?.[1] ?? "";
-    const declared = [...union.matchAll(/"(XLSX_[A-Z0-9_]+)"/g)].map((m) => m[1]).sort();
-    expect(declared.length).toBeGreaterThan(20);
-    expect([...new Set(DOCUMENTED.map(([, code]) => code))].sort()).toEqual(declared);
+    const prescan = readFileSync(
+      join(import.meta.dirname, "../../src/gate/xlsx-prescan.ts"),
+      "utf8",
+    );
+    const codes = (src: string, type: string) =>
+      [
+        ...(new RegExp(`export type ${type} =([^;]+);`).exec(src)?.[1] ?? "").matchAll(
+          /"(XLSX_[A-Z0-9_]+)"/g,
+        ),
+      ].map((m) => m[1] as string);
+    const declared = [...codes(source, "XlsxErrorCode"), ...codes(prescan, "PrescanCode")].sort();
+    expect(declared.length).toBeGreaterThan(30);
+    // XLSX_DTD is the parser's own refusal; the pre-scan refuses every DTD first
+    // (XLSX_PRESCAN_DTD), so its row is the parser-level pin in "package and XML faults".
+    const pinned = new Set([...DOCUMENTED.map(([, code]) => code as string), "XLSX_DTD"]);
+    expect([...pinned].sort()).toEqual(declared);
   });
 
   it("every code is named in docs/gate/api.md", () => {
