@@ -222,6 +222,37 @@ describe("gatedArmRow", () => {
   it("refuses a verified trial with no captured document", () => {
     expect(() => row({ persisted: null })).toThrow(/record says none was captured/);
   });
+  it("keeps the corrections A/B marker on every row it writes, so an A/B row is never R1 evidence (#547 R2-D4)", () => {
+    const experiment = {
+      id: "corrections-ab" as const,
+      stage: 1 as const,
+      arm: "off" as const,
+      seed: "s1-off",
+    };
+    const verified = row({ experiment });
+    const unregistrable = gatedArmRow(
+      record({
+        taskId: INVALID.taskId,
+        instruction: INVALID.instruction,
+        outcome: { status: "unregistrable", reason: "r" },
+        experiment,
+      }),
+      TASKS,
+    );
+    for (const r of [verified, unregistrable]) {
+      expect(r.experiment).toEqual(experiment);
+      expect(validateSchema(r, benchmarkArmRowSchema)).toEqual([]);
+    }
+    // The marker is what the R1 evidence check refuses.
+    const grades = [gradeFor(verified, "pass")];
+    expect(
+      checkBenchmark([verified], grades, {
+        expectTrials: { "myco-gate": 1 },
+        evidence: true,
+      }).errors.join("\n"),
+    ).toMatch(/from an experiment run \(corrections-ab; .*\): experiment-only, never evidence/);
+    expect(row()).not.toHaveProperty("experiment");
+  });
 });
 
 describe("gatedArmRow binds the gate result to this trial (#496 D1-D3, D5)", () => {
