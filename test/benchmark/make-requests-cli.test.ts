@@ -28,6 +28,7 @@ import {
   readlinkSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -311,7 +312,9 @@ describe("make-requests checks containment on disk, so symlinks cannot escape (D
     expect(linked.status).toBe(1);
     expect(linked.stderr).toMatch(/--out .* exists and is not a plain directory/);
     expect(readdirSync(elsewhere)).toEqual([]);
-    rmSync(ws.out);
+    // unlink, not rmSync: some Node versions (24.4 locally) refuse rmSync on a symlink to a
+    // directory with "Path is a directory".
+    unlinkSync(ws.out);
     mkdirSync(ws.out);
     writeFileSync(join(ws.out, "stale.txt"), "fake\n");
     const full = run(ws, [armRow(t1, "ok-1")]);

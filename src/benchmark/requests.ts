@@ -64,6 +64,22 @@ export function buildRequests(
   documentFor: (trialKey: string) => { file: string; format: "xlsx" | "csv" } | null,
 ): GradeRequest[] {
   const byId = new Map(tasks.map((t) => [t.taskId, t]));
+  // Saved documents are named `<trialKey>.<ext>`. On a case-insensitive filesystem (macOS
+  // by default) two keys that differ only in case would share one file, so refuse them here,
+  // in planning, before anything is written.
+  const seenKeys = new Map<string, string>();
+  for (const row of rows) {
+    const folded = row.trialKey.toLowerCase();
+    const prior = seenKeys.get(folded);
+    if (prior !== undefined) {
+      throw new RequestBuildError(
+        prior === row.trialKey
+          ? `duplicate trialKey ${row.trialKey}`
+          : `trialKey ${row.trialKey} collides with ${prior} on a case-insensitive filesystem`,
+      );
+    }
+    seenKeys.set(folded, row.trialKey);
+  }
   return rows.map((row) => {
     const task = byId.get(row.taskId);
     if (task === undefined)
@@ -219,16 +235,29 @@ export function destinationInside(out: string, name: string): string {
 /**
  * The write phase, run only after planning succeeded: create `out`, copy each planned file
  * to its destination (relative to `out`) without overwriting anything, then write
- * `requests.jsonl` the same way. Returns the requests path. An I/O error part-way can leave a
- * partial `out`; refusals all happen in planning, before this runs.
+ * `requests.jsonl` the same way. Returns the requests path.
+ *
+ * Refusals normally all happen in planning. This phase can still refuse if the disk changed
+ * between planning and writing (a race) or on an I/O error: any filesystem error here is
+ * re-raised as a `RequestBuildError` naming the destination, so the CLI prints one refusal
+ * line, and it can leave a partial `out`.
  */
 export function writePlanned(
   out: string,
   copies: readonly { src: string; dst: string }[],
   requestsText: string,
 ): string {
-  mkdirSync(out, { recursive: true });
-  const st = lstatSync(out);
+  const fsStep = <T>(what: string, step: () => T): T => {
+    try {
+      return step();
+    } catch (e) {
+      if (e instanceof RequestBuildError) throw e;
+      const code = (e as NodeJS.ErrnoException).code ?? (e as Error).name;
+      throw new RequestBuildError(`write refused for ${what}: ${code} (--out may be partial)`);
+    }
+  };
+  fsStep(`--out ${out}`, () => mkdirSync(out, { recursive: true }));
+  const st = fsStep(`--out ${out}`, () => lstatSync(out));
   if (st.isSymbolicLink() || !st.isDirectory())
     throw new RequestBuildError(`--out ${out} is not a plain directory`);
   const done = new Map<string, string>();
@@ -238,10 +267,10 @@ export function writePlanned(
       if (prior === src) continue;
       throw new RequestBuildError(`two sources planned for ${dst}`);
     }
-    copyFileSync(src, destinationInside(out, dst), constants.COPYFILE_EXCL);
+    fsStep(dst, () => copyFileSync(src, destinationInside(out, dst), constants.COPYFILE_EXCL));
     done.set(dst, src);
   }
-  const requestsPath = destinationInside(out, "requests.jsonl");
-  writeFileSync(requestsPath, requestsText, { flag: "wx" });
+  const requestsPath = fsStep("requests.jsonl", () => destinationInside(out, "requests.jsonl"));
+  fsStep("requests.jsonl", () => writeFileSync(requestsPath, requestsText, { flag: "wx" }));
   return requestsPath;
 }
