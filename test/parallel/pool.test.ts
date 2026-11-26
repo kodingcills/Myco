@@ -602,6 +602,16 @@ describe.skipIf(process.platform === "win32")(
       HARD_LIMIT_MS + 5_000,
     );
 
+    it(
+      "the non-blocking open returns at once on a FIFO (a file swapped after the lstat)",
+      () => {
+        const fifo = join(base, "swapped");
+        spawnSync("mkfifo", [fifo]);
+        expect(child(["open", fifo])).toEqual({ regular: false });
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+
     it.each(["fifo", "dir", "socket"] as const)(
       "pool: an agent that plants a %s as its state file gets capture-refused, and the pool returns",
       (kind) => {

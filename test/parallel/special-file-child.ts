@@ -8,17 +8,25 @@
  *
  *   tsx special-file-child.ts capture <workspace-dir> <rel>
  *     prints {"refused":"<code>"} or {"bytes":<n>}
+ *   tsx special-file-child.ts open <path>
+ *     opens <path> the way capture and the scan do and prints {"regular":bool}: on a FIFO
+ *     it must return at once (the guard against a file swapped after the lstat)
  *   tsx special-file-child.ts pool <run-root> fifo|dir|socket
  *     runs one trial on the fake backend whose agent replaces its state file with that
  *     special file, and prints {"disqualifiers":[...],"counted":bool,"error":"..."}
  */
 
-import { realpathSync } from "node:fs";
+import { closeSync, fstatSync, realpathSync } from "node:fs";
 import { createServer } from "node:net";
 import type { ScriptedDesktopAgent } from "../../src/parallel/agents.ts";
 import { claimFor } from "../../src/parallel/agents.ts";
 import { STRICT_REQUIREMENTS } from "../../src/parallel/backend.ts";
-import { CaptureRefused, captureRegularFile, runPool } from "../../src/parallel/pool.ts";
+import {
+  CaptureRefused,
+  captureRegularFile,
+  openNoBlock,
+  runPool,
+} from "../../src/parallel/pool.ts";
 import { CALC_ORACLE_SOURCES, L_TASK_ID, lTaskRegistry } from "../../src/parallel/throughput.ts";
 import { fakeBackend } from "./fake-backend.ts";
 
@@ -32,6 +40,15 @@ async function main(): Promise<void> {
     } catch (e) {
       if (!(e instanceof CaptureRefused)) throw e;
       process.stdout.write(`${JSON.stringify({ refused: e.code })}\n`);
+    }
+    return;
+  }
+  if (mode === "open") {
+    const fd = openNoBlock(a as string);
+    try {
+      process.stdout.write(`${JSON.stringify({ regular: fstatSync(fd).isFile() })}\n`);
+    } finally {
+      closeSync(fd);
     }
     return;
   }
