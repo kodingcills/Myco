@@ -7,17 +7,27 @@
  *    refused (D2, round 1);
  *  - on any refusal it exits 1 and writes nothing, inside or outside --out;
  *  - a trial with no saved document reaches the grader as `persistedFile: null` and grades
- *    `ungradable` (N1, round 1).
+ *    `ungradable` (N1, round 1);
+ *  - containment is checked on disk, not only lexically: a symlink (or non-regular entry)
+ *    below --docs or --bundle is refused, and an existing non-empty or symlinked --out is
+ *    refused, so nothing is read from outside --docs/--bundle or written outside --out
+ *    (D3, round 2). All file contents here are fakes.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  cpSync,
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -93,11 +103,11 @@ function workspace() {
   return { w, docs, out: join(base, "out"), arm: join(w, "arm.jsonl") };
 }
 
-function run(ws: ReturnType<typeof workspace>, rows: object[]) {
-  writeFileSync(ws.arm, `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
+function run(ws: ReturnType<typeof workspace>, rows: object[], bundle = BUNDLE) {
+  writeFileSync(ws.arm, rows.map((r) => `${JSON.stringify(r)}\n`).join(""));
   return tsx("benchmark-make-requests.ts", [
     "--bundle",
-    BUNDLE,
+    bundle,
     "--arm",
     ws.arm,
     "--docs",
@@ -203,3 +213,183 @@ describe("make-requests with a missing saved document", () => {
     expect(grades.find((g) => g.trialKey === "ok-1")?.status).toBe("fail");
   });
 });
+
+describe("make-requests checks containment on disk, so symlinks cannot escape (D3)", () => {
+  /** W/outside/secret.txt: a fake "secret" outside every root the CLI is given. */
+  function withOutside() {
+    const ws = workspace();
+    const outside = join(ws.w, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "secret.txt"), "fake-outside-content\n");
+    return { ...ws, outside };
+  }
+  /** Every entry under W, with its bytes (or link target), so a read- or write-through shows up. */
+  function snapshot(dir: string) {
+    return tree(dir)
+      .filter((f) => !f.endsWith("/"))
+      .map((f) => {
+        const p = join(dir, f);
+        return lstatSync(p).isSymbolicLink() ? `${f}->${readlinkSync(p)}` : `${f}:${sha(p)}`;
+      });
+  }
+
+  it("refuses a docs entry that is a symlink to a file outside --docs", { timeout: 30_000 }, () => {
+    const ws = withOutside();
+    rmSync(join(ws.docs, "ok-1.csv"));
+    symlinkSync(join(ws.outside, "secret.txt"), join(ws.docs, "ok-1.csv"));
+    const r = run(ws, [armRow(t1, "ok-1")]);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stderr).toMatch(
+      /RequestBuildError: path "ok-1\.csv" under .*: ok-1\.csv is a symlink/,
+    );
+    expect(existsSync(ws.out)).toBe(false);
+  });
+
+  it("refuses a docs entry that is a symlink even when it points inside --docs", {
+    timeout: 30_000,
+  }, () => {
+    const ws = withOutside();
+    symlinkSync(join(ws.docs, "ok-1.csv"), join(ws.docs, "ok-2.csv"));
+    const r = run(ws, [armRow(t2, "ok-2")]);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stderr).toMatch(/ok-2\.csv is a symlink/);
+    expect(existsSync(ws.out)).toBe(false);
+  });
+
+  it("refuses a docs entry that is a symlinked directory or a plain directory", {
+    timeout: 30_000,
+  }, () => {
+    // trialKeys cannot carry separators, so the docs entry is the only component below
+    // --docs; a symlinked directory there, or a directory, is not a regular file.
+    const ws = withOutside();
+    symlinkSync(ws.outside, join(ws.docs, "ok-2.csv"));
+    const linked = run(ws, [armRow(t2, "ok-2")]);
+    expect(linked.status, linked.stdout).toBe(1);
+    expect(linked.stderr).toMatch(/ok-2\.csv is a symlink/);
+    mkdirSync(join(ws.docs, "ok-3.csv"));
+    const dir = run(ws, [armRow(t2, "ok-3")]);
+    expect(dir.status, dir.stdout).toBe(1);
+    expect(dir.stderr).toMatch(/ok-3\.csv is not a regular file/);
+    expect(existsSync(ws.out)).toBe(false);
+  });
+
+  it("refuses a docs entry that is a hard link to a file outside --docs", {
+    timeout: 30_000,
+  }, () => {
+    const ws = withOutside();
+    linkSync(join(ws.outside, "secret.txt"), join(ws.docs, "ok-2.csv"));
+    const r = run(ws, [armRow(t2, "ok-2")]);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stderr).toMatch(/ok-2\.csv has 2 hard links/);
+    expect(existsSync(ws.out)).toBe(false);
+  });
+
+  it("refuses an existing --out whose docs/ is a symlink, creating nothing outside --out", {
+    timeout: 30_000,
+  }, () => {
+    const ws = withOutside();
+    const elsewhere = join(ws.w, "elsewhere");
+    mkdirSync(elsewhere);
+    mkdirSync(ws.out);
+    symlinkSync(elsewhere, join(ws.out, "docs"));
+    const before = snapshot(ws.w);
+    const r = run(ws, [armRow(t1, "ok-1")]);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stderr).toMatch(/RequestBuildError: --out .* exists and is not empty/);
+    expect(readdirSync(elsewhere)).toEqual([]);
+    expect(snapshot(ws.w)).toEqual([...before, `arm.jsonl:${sha(ws.arm)}`].sort());
+  });
+
+  it("refuses an --out that is itself a symlink, or exists and is not empty", {
+    timeout: 30_000,
+  }, () => {
+    const ws = withOutside();
+    const elsewhere = join(ws.w, "elsewhere");
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, ws.out);
+    const linked = run(ws, [armRow(t1, "ok-1")]);
+    expect(linked.status).toBe(1);
+    expect(linked.stderr).toMatch(/--out .* exists and is not a plain directory/);
+    expect(readdirSync(elsewhere)).toEqual([]);
+    rmSync(ws.out);
+    mkdirSync(ws.out);
+    writeFileSync(join(ws.out, "stale.txt"), "fake\n");
+    const full = run(ws, [armRow(t1, "ok-1")]);
+    expect(full.status).toBe(1);
+    expect(full.stderr).toMatch(/--out .* exists and is not empty/);
+    expect(readdirSync(ws.out)).toEqual(["stale.txt"]);
+  });
+
+  it("accepts an empty --out, and --docs reached through a symlink (the operator's own path)", {
+    timeout: 30_000,
+  }, () => {
+    const ws = withOutside();
+    mkdirSync(ws.out);
+    const docsLink = join(ws.w, "docs-link");
+    symlinkSync(ws.docs, docsLink);
+    const r = run({ ...ws, docs: docsLink }, [armRow(t1, "ok-1")]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(tree(ws.out)).toEqual(
+      [
+        "docs/",
+        "docs/ok-1.csv",
+        "fixtures/",
+        `fixtures/${t1.fixtureFile.split("/")[1]}`,
+        "requests.jsonl",
+      ].sort(),
+    );
+  });
+
+  function bundleCopy(w: string) {
+    const copy = join(w, "bundle");
+    cpSync(BUNDLE, copy, { recursive: true });
+    return copy;
+  }
+
+  it("refuses a --bundle whose fixtures/ directory is a symlink", { timeout: 30_000 }, () => {
+    const ws = withOutside();
+    const bundle = bundleCopy(ws.w);
+    const moved = join(ws.outside, "fixtures");
+    cpSync(join(bundle, "fixtures"), moved, { recursive: true });
+    rmSync(join(bundle, "fixtures"), { recursive: true });
+    symlinkSync(moved, join(bundle, "fixtures"));
+    const r = run(ws, [armRow(t1, "ok-1")], bundle);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stderr).toMatch(/under .*bundle: fixtures is a symlink/);
+    expect(existsSync(ws.out)).toBe(false);
+  });
+
+  it("refuses a --bundle whose fixture file or tasks.jsonl is a symlink", {
+    timeout: 30_000,
+  }, () => {
+    const ws = withOutside();
+    const bundle = bundleCopy(ws.w);
+    const fixture = join(bundle, t1.fixtureFile);
+    copyFileSync(fixture, join(ws.outside, "fixture.csv"));
+    rmSync(fixture);
+    symlinkSync(join(ws.outside, "fixture.csv"), fixture);
+    const fx = run(ws, [armRow(t1, "ok-1")], bundle);
+    expect(fx.status, fx.stdout).toBe(1);
+    expect(fx.stderr).toMatch(/is a symlink/);
+    const tasksFile = join(bundle, "tasks.jsonl");
+    copyFileSync(tasksFile, join(ws.outside, "tasks.jsonl"));
+    rmSync(tasksFile);
+    symlinkSync(join(ws.outside, "tasks.jsonl"), tasksFile);
+    const tj = run(ws, [armRow(t1, "ok-1")], bundle);
+    expect(tj.status, tj.stdout).toBe(1);
+    expect(tj.stderr).toMatch(/tasks\.jsonl is a symlink/);
+    expect(existsSync(ws.out)).toBe(false);
+  });
+
+  it("refuses an empty arm ledger and writes nothing (N-d)", { timeout: 30_000 }, () => {
+    const ws = withOutside();
+    const r = run(ws, []);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/arm ledger is empty/);
+    expect(existsSync(ws.out)).toBe(false);
+  });
+});
+
+function sha(p: string) {
+  return createHash("sha256").update(readFileSync(p)).digest("hex");
+}

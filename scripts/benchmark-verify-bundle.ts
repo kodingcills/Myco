@@ -6,14 +6,17 @@
  * For someone holding only the bundle: it re-hashes every file and compares it with the
  * SHA-256 the manifest records, and reports any file that is missing, differs, or is not in
  * the manifest. It uses Node built-ins only and imports nothing from the repo, so it can be
- * copied out and run on its own. Exits 0 when the bundle matches, 1 otherwise.
+ * copied out and run on its own. Exits 0 when the bundle matches, 1 otherwise. A manifest
+ * entry that escapes the bundle (`bad path`), or whose file is a symlink or not a regular
+ * file, or resolves outside the bundle's realpath (`not a regular file`), is a mismatch, so a
+ * planted link cannot stand in for a listed file.
  *
  * Unlike `benchmark-build-taskset.ts --check`, which regenerates the bundle from code, this
  * trusts the manifest; it proves the copy is intact, not that the manifest is the one the
  * repo publishes (compare manifest.json's own hash with a published one for that).
  */
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 const dir = process.argv[2];
@@ -22,6 +25,15 @@ if (dir === undefined) {
   process.exit(2);
 }
 const root = resolve(dir);
+const rootReal = realpathSync(root);
+const escapes = (rel: string) => rel === "" || isAbsolute(rel) || rel.split(/[\\/]/)[0] === "..";
+const lstatOrNull = (p: string) => {
+  try {
+    return lstatSync(p);
+  } catch {
+    return null;
+  }
+};
 
 function listFiles(d: string): string[] {
   return readdirSync(d, { withFileTypes: true }).flatMap((e) =>
@@ -52,15 +64,17 @@ const listed = new Set<string>();
 for (const [path, expected] of Object.entries(files as Record<string, unknown>)) {
   const full = resolve(root, path);
   const rel = relative(root, full);
-  if (rel === "" || isAbsolute(rel) || rel.split(/[\\/]/)[0] === ".." || path === "manifest.json") {
+  if (escapes(rel) || path === "manifest.json") {
     problems.push(`bad path ${JSON.stringify(path)}`);
     continue;
   }
   listed.add(rel.split("\\").join("/"));
   if (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected)) {
     problems.push(`bad hash for ${path}`);
-  } else if (!existsSync(full)) {
+  } else if (lstatOrNull(full) === null) {
     problems.push(`missing ${path}`);
+  } else if (!lstatOrNull(full)?.isFile() || escapes(relative(rootReal, realpathSync(full)))) {
+    problems.push(`not a regular file ${path}`);
   } else if (createHash("sha256").update(readFileSync(full)).digest("hex") !== expected) {
     problems.push(`differs ${path}`);
   }

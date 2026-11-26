@@ -44,7 +44,7 @@ Node built-ins only, so it can also be copied out and run on its own.
 
 1. For each task, open its fixture in a spreadsheet app (LibreOffice Calc imports the
    CSV and saves `.xlsx`), give your agent the task's `instruction`, and apply the
-   task's `faultClass` if you are measuring faults (see "Fault classes" below). The
+   task's `faultClass` if you are measuring faults (see "Fault classes" above). The
    arm's agent must see only the task's `instruction` and the fixture. `faultClass`,
    `satisfiable`, `intent` and the rest of the task row are for your harness and the
    grader; an agent that can read them can key its answer off them, and its result is

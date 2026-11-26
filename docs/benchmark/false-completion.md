@@ -287,11 +287,25 @@ arm. The arm file is untrusted input:
 - a row whose `taskSetVersion`, `faultClass`, `fixtureSha256` or `instructionSha256`
   differs from its task's is refused, so a result cannot be published under another
   task-set version or with relabelled fault classes;
-- every path it reads or writes is asserted to stay inside `--bundle`, `--docs` or `--out`;
-- on any refusal it exits 1 having written nothing.
+- every file it reads under `--bundle` or `--docs` is checked on disk, not only by name: it
+  must be a regular file with a single link, no component below that directory may be a
+  symlink, and its realpath must lie inside the directory's realpath. So a symlink, a
+  hard link, a FIFO or a directory planted under `--docs` or `--bundle` is refused, never
+  followed;
+- `--out` must not exist yet, or be an empty real directory (not a symlink). Every directory
+  it creates below `--out` is checked the same way, and every file is created exclusively
+  (`COPYFILE_EXCL`, flag `wx`), so nothing is written through a planted entry;
+- the `--bundle`, `--docs`, `--out` and `--arm` arguments themselves are the operator's and
+  may be reached through symlinks (on macOS `/tmp` is one);
+- every refusal happens before anything is written: on any refusal it exits 1 having
+  written nothing. An I/O error during the copy itself (a full disk, say) can still leave a
+  partial `--out`; delete it and rerun.
+- On Windows a `trialKey` such as `C:x` would name a drive-relative path. Windows is not a
+  supported host for these scripts (CI runs Linux and macOS).
 
 `npx tsx scripts/benchmark-verify-bundle.ts <bundle dir>` checks a copy of the bundle against
-its own `manifest.json` (missing, differing or unlisted files), using Node built-ins only.
+its own `manifest.json` (missing, differing or unlisted files, entries that escape the
+bundle, and listed files that are symlinks or not regular files), using Node built-ins only.
 The fault-class harness notes ship in the bundle README.
 
 ### 8.3 Proof
@@ -308,7 +322,15 @@ The fault-class harness notes ship in the bundle README.
   - the request builder, including the per-field refusals and `pathInside`.
 - **`test/benchmark/make-requests-cli.test.ts`:** the CLI refuses `../`, absolute and
   separator `trialKey`s and relabelled rows with exit 1 and no file written, and a missing
-  document reaches the grader as `persistedFile: null` and grades `ungradable`.
+  document reaches the grader as `persistedFile: null` and grades `ungradable`. It refuses,
+  with exit 1 and nothing read from outside or written anywhere: a docs entry that is a
+  symlink (to a file outside `--docs`, to a file inside it, or to a directory), a hard link
+  or a directory; a `--bundle` whose `fixtures/`, a fixture or `tasks.jsonl` is a symlink;
+  an existing `--out` whose `docs/` is a symlink, an `--out` that is a symlink, or one that is
+  not empty; and an empty arm ledger.
+- **`test/benchmark/requests-fs.test.ts`:** the write-side guards on their own:
+  `destinationInside` refuses a symlinked or non-directory component below `--out`, and
+  `writePlanned` refuses to copy or write `requests.jsonl` through a planted symlink.
 - **`test/benchmark/taskset-fake-run.test.ts`:** a fake run over all 100 tasks, end to end
   through `make-requests`, `benchmark-grade` and `benchmark-check`.
   - Setup: a credulous fake agent claims done on every task under its fault class.
@@ -319,7 +341,8 @@ The fault-class harness notes ship in the bundle README.
     | `hcu+shell` (accepts every claim) | 100 | 40, 10 per fault class | n/a |
 
   - It also covers builder `--check` on an extra and a tampered file, and
-    `benchmark-verify-bundle.ts` on a tampered, a missing and an extra file.
+    `benchmark-verify-bundle.ts` on a tampered, a missing and an extra file, a manifest
+    entry that escapes the bundle (`bad path`), and a listed file that is a symlink.
 
 ### 8.4 Extension point (TIF-270, #472)
 

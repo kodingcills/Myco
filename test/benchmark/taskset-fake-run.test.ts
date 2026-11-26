@@ -19,7 +19,16 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -250,5 +259,38 @@ describe("bundle verify-bundle (manifest-only, for an outsider holding only the 
     expect(extra.stderr).toMatch(/extra notes\.txt/);
     rmSync(join(copy, "notes.txt"));
     expect(tsx("benchmark-verify-bundle.ts", [copy]).status).toBe(0);
+  });
+
+  it("fails on a manifest entry that escapes the bundle, even with the right hash (N-c)", {
+    timeout: 60_000,
+  }, () => {
+    const w = mkdtempSync(join(tmpdir(), "myco-fc-v1-verify-"));
+    const copy = join(w, "bundle");
+    cpSync(BUNDLE, copy, { recursive: true });
+    writeFileSync(join(w, "outside.txt"), "fake-outside-content\n");
+    const manifestPath = join(copy, "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.files["../outside.txt"] = createHash("sha256")
+      .update(readFileSync(join(w, "outside.txt")))
+      .digest("hex");
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const r = tsx("benchmark-verify-bundle.ts", [copy]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/bad path "\.\.\/outside\.txt"/);
+  });
+
+  it("fails when a listed file is a symlink, even to identical bytes (D3 rule)", {
+    timeout: 60_000,
+  }, () => {
+    const w = mkdtempSync(join(tmpdir(), "myco-fc-v1-verify-"));
+    const copy = join(w, "bundle");
+    cpSync(BUNDLE, copy, { recursive: true });
+    const fixture = (tasks[0] as BenchmarkTask).fixtureFile;
+    copyFileSync(join(copy, fixture), join(w, "same-bytes.csv"));
+    rmSync(join(copy, fixture));
+    symlinkSync(join(w, "same-bytes.csv"), join(copy, fixture));
+    const r = tsx("benchmark-verify-bundle.ts", [copy]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(new RegExp(`not a regular file ${fixture}`));
   });
 });

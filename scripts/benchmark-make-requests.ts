@@ -9,20 +9,28 @@
  * work directory (the grader refuses anything else). A trial with no saved document gets
  * `persistedFile: null` and grades `ungradable`.
  *
- * The arm file is untrusted input. Every row is validated against the closed arm-row schema
- * and checked against its task before any path is built, and every path read or written is
- * asserted to stay inside --bundle, --docs or --out. On any refusal it exits 1 having
- * written nothing.
+ * The arm file and the --docs directory are untrusted input. Every row is validated against
+ * the closed arm-row schema and checked against its task before any path is built. Every
+ * file read under --bundle or --docs must be a regular file with a single link, reached
+ * without a symlink at any component below that directory, and its realpath must lie inside
+ * the directory's realpath (`regularFileInside`). --out must not exist or be an empty real
+ * directory; each directory created under it is checked for symlinks and realpath
+ * containment, and every file is created exclusively, never written through an existing
+ * entry (`writePlanned`). The --bundle, --docs, --out and --arm arguments themselves are the
+ * operator's and may be reached through symlinks. All refusals happen before anything is
+ * written: on any refusal it exits 1 having written nothing (an I/O error mid-copy can still
+ * leave a partial --out).
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import { benchmarkArmRowSchema, benchmarkTaskSchema } from "../schemas/benchmark-ledger.ts";
 import { validateSchema } from "../schemas/validate.ts";
 import {
   type ArmRowRef,
+  assertFreshOut,
   buildRequests,
-  pathInside,
   RequestBuildError,
+  regularFileInside,
+  writePlanned,
 } from "../src/benchmark/requests.ts";
 import type { BenchmarkTask } from "../src/benchmark/taskset.ts";
 
@@ -72,7 +80,7 @@ const copies: { src: string; dst: string }[] = [];
 let requests: ReturnType<typeof buildRequests>;
 try {
   const tasks = validated<BenchmarkTask>(
-    jsonl(pathInside(bundle, "tasks.jsonl"), "tasks.jsonl"),
+    jsonl(regularFileInside(bundle, "tasks.jsonl") as string, "tasks.jsonl"),
     benchmarkTaskSchema,
     "tasks.jsonl",
   );
@@ -81,9 +89,9 @@ try {
   requests = buildRequests(tasks, rows, (trialKey) => {
     for (const format of ["xlsx", "csv"] as const) {
       const name = `${trialKey}.${format}`;
-      const src = pathInside(docs, name);
-      if (existsSync(src)) {
-        copies.push({ src, dst: pathInside(out, `docs/${name}`) });
+      const src = regularFileInside(docs, name, { optional: true });
+      if (src !== null) {
+        copies.push({ src, dst: `docs/${name}` });
         return { file: `docs/${name}`, format };
       }
     }
@@ -91,21 +99,26 @@ try {
   });
   for (const req of requests) {
     copies.push({
-      src: pathInside(bundle, req.fixtureFile),
-      dst: pathInside(out, req.fixtureFile),
+      src: regularFileInside(bundle, req.fixtureFile) as string,
+      dst: req.fixtureFile,
     });
   }
+  assertFreshOut(out);
 } catch (e) {
   if (e instanceof RequestBuildError) fail(`RequestBuildError: ${e.message}`);
   throw e;
 }
 
-// Nothing is written until every row and every path has been checked.
-for (const { src, dst } of copies) {
-  mkdirSync(dirname(dst), { recursive: true });
-  copyFileSync(src, dst);
+// Nothing is written until every row, every source and --out have been checked.
+let requestsPath: string;
+try {
+  requestsPath = writePlanned(
+    out,
+    copies,
+    `${requests.map((r) => JSON.stringify(r)).join("\n")}\n`,
+  );
+} catch (e) {
+  if (e instanceof RequestBuildError) fail(`RequestBuildError: ${e.message}`);
+  throw e;
 }
-const requestsPath = pathInside(out, "requests.jsonl");
-mkdirSync(dirname(requestsPath), { recursive: true });
-writeFileSync(requestsPath, `${requests.map((r) => JSON.stringify(r)).join("\n")}\n`);
 process.stdout.write(`wrote ${requests.length} requests to ${requestsPath}\n`);
