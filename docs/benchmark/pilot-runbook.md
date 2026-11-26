@@ -322,3 +322,23 @@ also re-derives Stage 0's misses from its rows, not only from its incident files
    `gateMisses`), and #547 reports the pack
    as `halted`. It is never counted as data. A Stage 0 gate miss blocks Stage 1 even after the
    ack: only a lead decision, recorded in code, reopens it.
+
+### Integrity incident (live reset not a cold boot)
+
+The pre-registration says a live trial whose reset is missing or is not a cold boot halts the
+run (#546). The halt is sticky, in the same way as a gate miss:
+
+1. The runner writes `runs/ab/stage<N>/incidents/incident-boot-<trialKey>.json` atomically,
+   before the trial's `ab-trials.jsonl` record and its grade. The record holds the arm, trial,
+   task, the recorded boot class (`fast`, `null` or anything else) and the rule.
+2. On every invocation the runner re-derives the boot class of each decided trial in a live run
+   from `ab-trials.jsonl`. A trial with no record, or with a record that is not exactly `cold`,
+   gets its incident record if it is missing. A trial re-recorded after a crash has an unknown
+   boot class (`null`), so it halts too.
+3. Every later invocation refuses (exit 3) until the record is acknowledged with `ack-incident`,
+   exactly as for a gate miss (`--incident incident-boot-<trialKey>`). Nothing clears it
+   automatically.
+4. An ack lets the run continue. It does not make the trial count: `export` and `check-pack`
+   refuse a live pack whose trials are not all recorded cold boots, so do not ack and carry on
+   unless the lead has ruled how the stage is to be completed. A Stage 0 boot-class incident
+   also blocks Stage 1, like any Stage 0 incident.

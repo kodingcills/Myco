@@ -457,7 +457,9 @@ export function ackIncident(
   const st = incidentStatus(stageRoot).find((i) => i.id === id);
   if (st === undefined) throw new AbRefusal(`no incident ${id} under ${incidentsDir(stageRoot)}`);
   if (readIncident(st.path, id) === null)
-    throw new AbRefusal(`${st.path} is not a valid gate-miss incident record: refused`);
+    throw new AbRefusal(
+      `${st.path} is not a valid gate-miss incident record or boot-class incident record: refused`,
+    );
   if (ack.incidentSha256 !== st.sha256)
     throw new AbRefusal(
       `incident ${id}'s sha256 is ${st.sha256}, not ${ack.incidentSha256}: read the record first`,
