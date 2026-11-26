@@ -95,9 +95,17 @@ This choice over the alternatives:
         a value that its option's rule accepts; every other element prints as
         `<redacted argv[N]>`.
 
-      So an environment string (`NAME=value`) never prints, unless the process itself wrote
-      it in the exact shape of an allowlisted value directly after a dangling allowlisted
-      option. Tests plant `PLANTED_FAKE_MARKER` in the environment with argc raised by 1, 2,
+      So an environment string (`NAME=value`) never prints. One narrow exception remains:
+      the process itself wrote two environment strings shaped as an allowlisted option and a
+      value its rule accepts, for an option UTM may legitimately repeat (`-chardev`,
+      `-device`, `-drive`), directly after the last real element. `argv` mode then prints
+      that value, but it is still vetted, and `live`/`verify` still apply every rule to it
+      (a second chardev id, a second NIC, a `netdev=` or a non-SPICE `chardev=` is refused).
+      For every other option the pair is closed (round 3, N1): a second copy of an option
+      UTM writes once is refused by `live`/`verify`, and `argv` redacts its value. The test
+      plants the environment strings `-name` and a bare `PLANTED_FAKE_MARKER` at argc+2:
+      `live` and `verify` refuse with `-name given more than once (argv[N]; …)`, and no
+      mode prints the marker. Tests plant `PLANTED_FAKE_MARKER` in the environment with argc raised by 1, 2,
       3, 5, 7 and 8, and assert it is absent from every mode's output. A sweep replaces each
       element of UTM's launch with planted variants (over 1,000 cases) and asserts no
       refusal or `names` line contains the marker.
@@ -105,6 +113,13 @@ This choice over the alternatives:
       qemu binary, or a qemu binary).
     - **Shape:** no argv element may contain whitespace, and `-nodefaults` must be present as
       its own element. Without it QEMU adds a default NIC.
+    - **Options UTM writes once appear once** (round 3, N1): `-name`, `-uuid`, `-m`, `-smp`,
+      `-machine`, `-accel`, `-cpu`, `-L`, `-vga`, `-rtc`, `-boot`, `-mon`, `-serial`,
+      `-tpmdev`, `-spice`, `-netdev`, `-nodefaults` and `-S` (`SINGLETONS`). A second copy
+      is refused. UTM's launch repeats only `-chardev`, `-device` and `-drive` (the committed
+      evidence shows nine `-chardev`; the builder writes several `-device` and `-drive`). If
+      the read-only live `names` run shows UTM repeating a singleton, the reset refuses
+      (closed); remove it from `SINGLETONS` with a test.
     - **Every option is on a fixed allowlist** (follow-up to round 3, D7/D8). Rounds 1–3
       refused named bad options, and each round found one the list did not name: a JSON-form
       `-object` filter, `-qmp-pretty`. Now an option not on the list below is refused,

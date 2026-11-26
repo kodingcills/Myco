@@ -818,6 +818,159 @@ print(json.dumps({"n": n, "refused": refused, "leaks": leaks[:5]}))
   });
 });
 
+describe("round 3 V3: one negative case per rule that survived its own removal", () => {
+  const refuse = (p: string[] | Buffer, why: string) => {
+    const r = run([p]);
+    expect(r.stderr).toContain(why);
+    expect(r.status).toBe(1);
+    return r;
+  };
+  /** UTM's launch with argv[i] (an option) and its value replaced by `with`. */
+  const swap = (opt: string, value: string | null, ...with_: string[]) => {
+    const a = utmDefaultArgv();
+    const i = a.findIndex((t, j) => t === opt && (value === null || a[j + 1] === value));
+    expect(i).toBeGreaterThan(1);
+    a.splice(i, 2, ...with_);
+    return a;
+  };
+
+  it("an argv element that is not UTF-8 (raw buffer)", () => {
+    // 0xff is never valid UTF-8. If the element were dropped instead, the
+    // option/value pairing after it would shift.
+    const argv = utmDefaultArgv();
+    const i = argv.indexOf("myco-win11");
+    const good = procargs(argv);
+    const at = good.indexOf(Buffer.from("\0myco-win11\0")) + 1;
+    const bad = Buffer.concat([good.subarray(0, at), Buffer.from([0xff]), good.subarray(at + 1)]);
+    expect(i).toBeGreaterThan(1);
+    refuse(bad, "procargs: argv is not UTF-8");
+  });
+  it("a key=value option given twice (-smp cpus=6,cpus=8)", () => {
+    refuse(swap("-smp", null, "-smp", "cpus=6,cpus=8"), "-smp option cpus= given twice");
+  });
+  it("a -chardev without id= is a clean refusal", () => {
+    const r = refuse(
+      [...utmDefaultArgv(), "-chardev", "spiceport,name=org.example.x.0"],
+      "not the allowlist: -chardev without id=",
+    );
+    expect(r.stderr).not.toContain("Traceback");
+  });
+  it("an option with no value (trailing -m) is a clean refusal", () => {
+    const r = refuse([...swap("-m", "6144"), "-m"], "not the allowlist: -m without a value");
+    expect(r.stderr).not.toContain("Traceback");
+  });
+  it("a chardev id declared twice (a second pty,id=term0)", () => {
+    refuse([...utmDefaultArgv(), "-chardev", "pty,id=term0"], "a -chardev id is declared twice");
+  });
+  it("-mon on a chardev that is not the spiceport", () => {
+    refuse(
+      swap(
+        "-chardev",
+        "spiceport,name=org.qemu.monitor.qmp.0,id=org.qemu.monitor.qmp",
+        "-chardev",
+        "spicevmc,name=org.qemu.monitor.qmp.0,id=org.qemu.monitor.qmp",
+      ),
+      "-mon must sit on UTM's spiceport chardev",
+    );
+  });
+  it("-serial chardev:term0 without the pty term0", () => {
+    refuse(swap("-chardev", "pty,id=term0"), "-serial chardev:term0 without UTM's pty term0");
+  });
+  it("-tpmdev without the swtpm chardev chrtpm0", () => {
+    refuse(
+      swap("-chardev", `socket,id=chrtpm0,path=${UUID}.swtpm`),
+      "-tpmdev without UTM's swtpm socket chrtpm0",
+    );
+  });
+  it("N3: a netdev id that is not a word, even when the NIC names it", () => {
+    const a = swap("-netdev", GOOD_NETDEV, "-netdev", GOOD_NETDEV.replace("id=net0", "id=n/0"));
+    const nic = a.indexOf("virtio-net-pci,mac=4A:50:C3:24:9B:33,netdev=net0");
+    a[nic] = "virtio-net-pci,mac=4A:50:C3:24:9B:33,netdev=n/0";
+    refuse(a, "expected exactly one id= (a word) in the netdev");
+  });
+  it("N3: a netdev with two ids", () => {
+    refuse(
+      swap("-netdev", GOOD_NETDEV, "-netdev", `${GOOD_NETDEV},id=net0`),
+      "expected exactly one id= (a word) in the netdev",
+    );
+  });
+});
+
+describe("round 3 N1: an option UTM writes once is refused when repeated", () => {
+  const MARKER = "PLANTED_FAKE_MARKER";
+  // UTM's launch repeats only -chardev, -device and -drive.
+  const once: [string, string][] = [
+    ["-name", "myco-win11"],
+    ["-uuid", UUID],
+    ["-m", "6144"],
+    ["-smp", "cpus=6,sockets=1,cores=6,threads=1"],
+    ["-machine", "virt,highmem=on"],
+    ["-accel", "hvf"],
+    ["-cpu", "host"],
+    ["-L", "/Applications/UTM.app/Contents/Resources/qemu"],
+    ["-vga", "none"],
+    ["-rtc", "base=localtime"],
+    ["-boot", "menu=on"],
+    ["-mon", "chardev=org.qemu.monitor.qmp,mode=control"],
+    ["-serial", "chardev:term0"],
+    ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm0"],
+    ["-spice", `unix=on,addr=${UUID}.spice,disable-ticketing=on`],
+  ];
+  for (const [opt, value] of once) {
+    it(`${opt} given twice`, () => {
+      const r = run([[...utmDefaultArgv(), opt, value]]);
+      expect(r.stderr).toContain(`${opt} given more than once`);
+      expect(r.status).toBe(1);
+    });
+  }
+  for (const flag of ["-nodefaults", "-S"]) {
+    it(`the flag ${flag} given twice`, () => {
+      const r = run([[...utmDefaultArgv(), flag]]);
+      expect(r.stderr).toContain(`${flag} given more than once`);
+      expect(r.status).toBe(1);
+    });
+  }
+  it("UTM's own launch repeats -chardev, -device and -drive and still passes", () => {
+    const a = utmDefaultArgv();
+    for (const o of ["-chardev", "-device", "-drive"]) {
+      expect(a.filter((t) => t === o).length).toBeGreaterThan(1);
+    }
+    for (const [o] of once) expect(a.filter((t) => t === o).length).toBe(1);
+    expect(run([a, SWTPM]).status).toBe(0);
+  });
+
+  // The verifier's probe: env strings "-name" and a bare marker read past a
+  // short argv (argc+2) form an allowlisted-looking pair.
+  const planted = () => {
+    const argv = utmDefaultArgv();
+    const b = procargs(argv, `-name\0${MARKER}\0HOME=/nowhere\0`);
+    b.writeInt32LE(argv.length + 2, 0);
+    return { argv, b };
+  };
+  for (const mode of ["live", "verify"]) {
+    it(`${mode} refuses "-name" + a bare marker planted at argc+2, without printing it`, () => {
+      const { argv, b } = planted();
+      const r = run([b], GOOD_UTM, [mode]);
+      expect(`${r.stdout}${r.stderr}`).toContain(`-name given more than once (argv[${argv.length}]`);
+      expect(`${r.stdout}${r.stderr}`).not.toContain(MARKER);
+      expect(r.status).toBe(1);
+    });
+  }
+  for (const mode of ["argv", "names", "status"]) {
+    it(`${mode} never prints the marker planted after "-name" at argc+2`, () => {
+      const { argv, b } = planted();
+      const r = run([b], GOOD_UTM, [mode]);
+      expect(`${r.stdout}${r.stderr}`).not.toContain(MARKER);
+      expect(r.status).toBe(0);
+      if (mode === "argv") {
+        const lines = r.stdout.trimEnd().split("\n");
+        expect(lines.slice(-2)).toEqual(["-name", `<redacted argv[${argv.length + 1}]>`]);
+        expect(lines).toContain("myco-win11");
+      }
+    });
+  }
+});
+
 describe("round 2 nit: an unparseable qemu process is never skipped", () => {
   // Outside fixture mode, processes whose procargs do not parse are skipped
   // (other users' processes, exited ones). A qemu executable must not be: a

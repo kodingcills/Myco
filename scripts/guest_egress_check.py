@@ -359,7 +359,17 @@ def shape(what: str, pattern: str) -> Callable[[str], None]:
 # -netdev variants, -nic, -net, -qmp*, -monitor, -gdb, -readconfig, -set,
 # -global, -add-fd, -incoming, -vnc, -display, -debugcon or -parallel.
 
-FLAGS = {"-nodefaults", "-S"}  # LIVE: -nodefaults. -S: UTM starts paused, resumes over QMP.
+FLAGS = {"-nodefaults", "-S"}
+
+# Options UTM writes exactly once (round-3 N1). UTM's launch repeats only
+# -chardev, -device and -drive (10-round3-verify-live.txt and the builder).
+# A second copy is refused: it is either a second configuration QEMU would
+# merge or override, or an environment string shaped as an allowlisted pair
+# read past a short argv (see the module docstring).
+SINGLETONS = {
+    "-name", "-uuid", "-m", "-smp", "-machine", "-accel", "-cpu", "-L", "-vga", "-rtc",
+    "-boot", "-mon", "-serial", "-tpmdev", "-spice", "-netdev", "-nodefaults", "-S",
+}  # fmt: skip  # LIVE: -nodefaults. -S: UTM starts paused, resumes over QMP.
 
 SAFE = r"[A-Za-z0-9_.:/+@-]*"  # a device property value: no ',' '=' '{' or whitespace
 
@@ -565,9 +575,10 @@ def tokens(args: list[str], off: int) -> list[tuple[int, str, str, str | None]]:
             if name in QEMU_OPTIONS:
                 raise Refused(f"{t} is not in the launch allowlist ({at})")
             raise Refused(f"the option at {at} is not in the launch allowlist (not a known QEMU option name)")
-        if i + 1 >= len(args):
+        value = args[i + 1] if i + 1 < len(args) else None
+        if value is None:
             raise Refused(f"{t} without a value ({at})")
-        out.append((i + off, t, name, args[i + 1]))
+        out.append((i + off, t, name, value))
         i += 2
     return out
 
@@ -611,10 +622,15 @@ def argv_lines(argv: list[str]) -> list[str]:
     off = offset(argv)
     out = [a if re.fullmatch("/" + PATH, a) else f"<redacted argv[{j}]>" for j, a in enumerate(argv[:off])]
     args = argv[off:]
+    seen: set[str] = set()
     i = 0
     while i < len(args):
         t, at = args[i], i + off
         name = norm(t)
+        # A second copy of a singleton is not vetted (round-3 N1): it may be an
+        # environment string shaped as an allowlisted pair.
+        again = name in SINGLETONS and name in seen
+        seen.add(name)
         if is_positional(t) or "=" in name or any(c.isspace() for c in t):
             out.append(f"<redacted argv[{at}]>")
             i += 1
@@ -625,7 +641,7 @@ def argv_lines(argv: list[str]) -> list[str]:
             out.append(t)
             if i + 1 < len(args):
                 v = args[i + 1]
-                out.append(v if vets(name, v) else f"<redacted argv[{at + 1}]>")
+                out.append(v if not again and vets(name, v) else f"<redacted argv[{at + 1}]>")
             i += 2
         else:
             known = name in QEMU_OPTIONS or name in WHY_NOT
@@ -655,6 +671,11 @@ def check(argv: list[str]) -> str:
             except Refused as e:
                 raise Refused(f"{e} (argv[{at + 1}])") from None
             values.setdefault(name, []).append(value)
+    seen: set[str] = set()
+    for at, _, name, _ in toks:
+        if name in SINGLETONS and name in seen:
+            raise Refused(f"{name} given more than once (argv[{at}]; UTM writes it once)")
+        seen.add(name)
 
     nd = values["-netdev"][0]  # the only one, fully vetted by netdev_rule
     nid = dict(options(nd, "netdev"))["id"]
@@ -662,7 +683,7 @@ def check(argv: list[str]) -> str:
     # Chardev ids and what may reference them.
     chardevs: dict[str, str] = {}
     for c in values.get("-chardev", []):
-        cid = dict(options(c, "-chardev"))["id"]
+        cid = dict(options(c, "-chardev")).get("id")  # chardev_rule requires it
         if cid in chardevs:
             raise Refused("a -chardev id is declared twice")
         chardevs[cid] = c.split(",")[0]
