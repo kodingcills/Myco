@@ -30,6 +30,7 @@ import {
   type ReasonCode,
 } from "./api.ts";
 import { FAMILIES, type OracleFamily, type OracleOutput, StateCorruptError } from "./families.ts";
+import { errorCode } from "./reasons.ts";
 
 // ---------------------------------------------------------------------------
 // Operator side: task registry and evidence reader
@@ -137,6 +138,12 @@ export type ReadOutcome =
 export interface EvidenceReader {
   /** A description of the location for logs (never agent-controlled). */
   readonly describe: string;
+  /**
+   * `detail` of a failed outcome reaches the agent (as "could not look: <detail>"), so it
+   * must name paths relative to the run and never carry a host path or a raw error
+   * message (see `errorCode`). A reader that throws or rejects is reported by error code
+   * only.
+   */
   read(runId: string, stateFile: string): Promise<ReadOutcome>;
 }
 
@@ -207,15 +214,6 @@ function walk(
     if (last) final = { dev: stat.dev, ino: stat.ino };
   }
   return { ok: true, final };
-}
-
-/**
- * The errno code of a filesystem error, for reasons. Reasons reach the agent, and Node's
- * error message embeds the absolute host path, so the message is never used.
- */
-function errorCode(error: unknown): string {
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === "string" ? code : "error";
 }
 
 /**
@@ -411,6 +409,24 @@ export interface GateConfig {
    * `uncertain` with AUDIT_FAILED.
    */
   readonly onDecision?: (result: GateResult) => void | Promise<void>;
+  /**
+   * Operator-side diagnostics. Agent-facing reasons carry only an error code (see
+   * `errorCode`), never a raw message, because a message can hold a host path. When the
+   * reader throws, the oracle throws (or reports corrupt state with a `cause`), the
+   * decision log fails, or the gate itself errors, this is called with the full error so
+   * the operator can see it. It is never shown to the agent; the CLI writes it to stderr.
+   * A throw here is ignored: diagnostics never change a verdict.
+   */
+  readonly onDiagnostic?: (diagnostic: GateDiagnostic) => void;
+}
+
+/** One operator-side diagnostic: where the error happened, its reason code, the raw error. */
+export interface GateDiagnostic {
+  readonly stage: "reader" | "oracle" | "decision-log" | "gate";
+  /** The same code the agent-facing reason carries. */
+  readonly code: string;
+  /** The raw error, for the operator only. */
+  readonly error: unknown;
 }
 
 export const DEFAULT_READ_TIMEOUT_MS = 30_000;
@@ -449,6 +465,7 @@ async function readWithin(
   runId: string,
   stateFile: string,
   timeoutMs: number,
+  diagnose: (stage: GateDiagnostic["stage"], error: unknown) => string,
 ): Promise<ReadOutcome> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<ReadOutcome>((done) => {
@@ -460,13 +477,16 @@ async function readWithin(
   });
   try {
     return await Promise.race([
-      reader.read(runId, stateFile).catch(
-        (error): ReadOutcome => ({
-          ok: false,
-          cause: "unreadable",
-          detail: `reader threw: ${String(error)}`,
-        }),
-      ),
+      // Promise.resolve().then: a reader that throws synchronously is a reader error too.
+      Promise.resolve()
+        .then(() => reader.read(runId, stateFile))
+        .catch(
+          (error): ReadOutcome => ({
+            ok: false,
+            cause: "unreadable",
+            detail: `reader threw: ${diagnose("reader", error)}`,
+          }),
+        ),
       timeout,
     ]);
   } finally {
@@ -497,6 +517,17 @@ export function createGate(config: GateConfig): Gate {
   const assignment = { ...config.assignment };
   const now = config.now ?? (() => new Date());
   const readTimeoutMs = config.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS;
+
+  /** Hand the raw error to the operator; return the path-free code for the agent's reason. */
+  function diagnose(stage: GateDiagnostic["stage"], error: unknown): string {
+    const code = errorCode(error);
+    try {
+      config.onDiagnostic?.({ stage, code, error });
+    } catch {
+      // Diagnostics never change a verdict.
+    }
+    return code;
+  }
 
   async function finish(parts: {
     verdict: GateVerdict;
@@ -531,7 +562,10 @@ export function createGate(config: GateConfig): Gate {
         verdict: "uncertain",
         accepted: false,
         reasonCodes: [...result.reasonCodes, "AUDIT_FAILED"],
-        reasons: [...result.reasons, `decision log write failed: ${String(error)}`],
+        reasons: [
+          ...result.reasons,
+          `decision log write failed: ${diagnose("decision-log", error)}`,
+        ],
       };
     }
   }
@@ -572,7 +606,7 @@ export function createGate(config: GateConfig): Gate {
       });
     }
 
-    const read = await readWithin(config.reader, runId, task.stateFile, readTimeoutMs);
+    const read = await readWithin(config.reader, runId, task.stateFile, readTimeoutMs, diagnose);
     if (!read.ok) {
       return finish({
         verdict: "uncertain",
@@ -609,11 +643,25 @@ export function createGate(config: GateConfig): Gate {
       // result keeps its request and evidence refs.
       valid = validOracleOutput(output);
     } catch (error) {
-      const corrupt = error instanceof StateCorruptError;
+      // `instanceof` can itself throw (a revoked Proxy, a throwing getPrototypeOf trap); such
+      // a value is an oracle error, not a gate error.
+      let corrupt: StateCorruptError | undefined;
+      try {
+        if (error instanceof StateCorruptError) corrupt = error;
+      } catch {
+        corrupt = undefined;
+      }
+      // A StateCorruptError's message is written by the family to be agent-facing (no host
+      // path, no raw error text; see families.ts); its `cause`, if any, goes to the operator.
+      if (corrupt && corrupt.cause !== undefined) diagnose("oracle", corrupt.cause);
       return finish({
         verdict: "uncertain",
         codes: [corrupt ? "STATE_CORRUPT" : "ORACLE_ERROR"],
-        reasons: [corrupt ? `could not look: ${error.message}` : `oracle threw: ${String(error)}`],
+        reasons: [
+          corrupt
+            ? `could not look: ${corrupt.message}`
+            : `oracle threw: ${diagnose("oracle", error)}`,
+        ],
         request,
         refs,
       });
@@ -641,7 +689,7 @@ export function createGate(config: GateConfig): Gate {
         return finish({
           verdict: "uncertain",
           codes: ["ORACLE_ERROR"],
-          reasons: [`gate error: ${String(error)}`],
+          reasons: [`gate error: ${diagnose("gate", error)}`],
           request: {},
         });
       }
