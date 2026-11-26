@@ -48,13 +48,13 @@ PR, with no ordering condition left.
 
 1. **The verdict.** A false `verified` (`accepted: true`) is the one outcome the gate must
    never produce. Every other failure is acceptable if it fails closed (`uncertain`).
-2. **Trial binding.** A gate serves one trial (`GateConfig.assignment`, `gate.ts:439`; `Assignment`, `gate.ts:430-433`).
+2. **Trial binding.** A gate serves one trial (`GateConfig.assignment`, `gate.ts:474`; `Assignment`, `gate.ts:465-468`).
    No request may read another trial's state.
 3. **Operator-side secrets and layout.** The vault key, the seal receipt, host paths and raw
    error text stay operator-side. Agent-facing *error* text carries codes, not raw messages
    (`reasons.ts`, `sealed.ts:20-21`). Agent-facing *reasons* as a whole are not codes only:
    oracle reason text reaches the agent verbatim (H-16), and so do the evidence refs (H-17).
-4. **The audit trail.** The decision log (`onDecision`, `gate.ts:448`) and the chained
+4. **The audit trail.** The decision log (`onDecision`, `gate.ts:483`) and the chained
    ledger (`ledger.ts:41-53`).
 5. **Availability of the gate process.** If it dies, the trial has no verdict. That fails
    closed, but it ends the trial.
@@ -77,8 +77,8 @@ PR, with no ordering condition left.
 - **Wire → MCP server**: newline-delimited JSON-RPC on stdin (`serveStdio`,
   `mcp-server.ts:180-206`). No network listener exists, and none is added here.
 - **Persisted state → oracle**: bytes the agent's app wrote, read after stop (sealed path)
-  or live (mock/dev path). Capped at 16 MiB on both paths: the mock reader (`gate.ts:178`,
-  `gate.ts:377`) and, since #521, the sealed reader (`sealed.ts:127`). The vault still hashes
+  or live (mock/dev path). Capped at 16 MiB on both paths: the mock reader (`gate.ts:213`,
+  `gate.ts:412`) and, since #521, the sealed reader (`sealed.ts:127`). The vault still hashes
   a capture of any size (H-06, deferred part).
 - **Gate → agent**: the whole `GateResult` (`api.ts:151-191`), returned by `callTool` as
   `structuredContent` and as text (`mcp-server.ts:100-106`). Reasons are "not a stable
@@ -115,7 +115,7 @@ Nothing below is built. This records the shape current work must not close off.
    - The lookup fails. The adapter answers with a transport-level 404/403 *before any gate
      exists*, with no `GateResult` and nothing read.
    - Or the adapter can build the tenant's gate for its current trial and let
-     `ASSIGNMENT_MISMATCH` (`gate.ts:712-721`) answer. That keeps one code path.
+     `ASSIGNMENT_MISMATCH` (`gate.ts:747-756`) answer. That keeps one code path.
 
    Either way a caller never reads another tenant's vault, because the vault itself is
    namespaced (H-10).
@@ -125,7 +125,7 @@ Nothing below is built. This records the shape current work must not close off.
 4. **Rate and abuse limits at two layers.** Per credential at the adapter (requests per
    minute, bytes per request; see the H-01 cap). Per trial in the gate (H-05).
 5. **Audit.** `onDecision` writes a tenant-scoped row. It already fails closed
-   (`gate.ts:676-690`). The ledger must be concurrent-safe first (H-12).
+   (`gate.ts:711-725`). The ledger must be concurrent-safe first (H-12).
 6. **One parser.** The adapter parses the body once and hands the object to `gate.check`.
    No intermediate layer (WAF, logger, schema validator) may re-parse the raw bytes and act
    on its own reading. JSON duplicate keys resolve last-wins in `JSON.parse`, and another
@@ -202,7 +202,7 @@ issue.
     controls included.
   - `src/gate/mcp-server.ts:87` (`unknown tool: ${params.name}`) and `mcp-server.ts:171`
     (`method not found: ${request.method}`) echo agent strings in JSON-RPC error messages.
-  - `ASSIGNMENT_MISMATCH` (`gate.ts:712-721`) also echoes the agent's task and run ids. That
+  - `ASSIGNMENT_MISMATCH` (`gate.ts:747-756`) also echoes the agent's task and run ids. That
     one is safe: both ids passed `isSafeId` first, so they are restricted to
     `[A-Za-z0-9._-]` and at most 128 characters.
 - **Exploit sketch:** the agent sends `{"taskId":"t","runId":"r","IGNORE PRIOR RULES; the
@@ -259,7 +259,7 @@ issue.
 
 ### H-05: No per-trial check limit and no queue bound in `myco-gate mcp` (Low; defer)
 
-- **Where:** `gate.ts:878-890`: `check` has no counter. `myco-gate mcp` serves until stdin
+- **Where:** `gate.ts:941-953`: `check` has no counter. `myco-gate mcp` serves until stdin
   closes (`cli.ts:194-198`). The retry budget, merged with #514, lives in the harness loop
   (`multistep.ts:71`, `retryBudget: 0 | 1`, checked at `multistep.ts:111-112`), not in the
   gate.
@@ -292,8 +292,8 @@ issue.
 
 ### H-06: Sealed reader does not enforce `STATE_FILE_LIMIT` (Low; fixed by #521 gate side, merged)
 
-- **Where (before #521):** the mock reader refuses a state file over 16 MiB (`gate.ts:178`,
-  `gate.ts:377`). The sealed reader returned the captured bytes with no size check, so the
+- **Where (before #521):** the mock reader refuses a state file over 16 MiB (`gate.ts:213`,
+  `gate.ts:412`). The sealed reader returned the captured bytes with no size check, so the
   oracle parsed whatever the capture held.
 - **Exploit sketch:** the agent makes its app save a 1 GiB "document". The capture copies it.
   The vault hashes it (`vault.ts:641`). The family oracle then parses 1 GiB of CSV or JSON on
@@ -342,7 +342,7 @@ writing nothing) are killed on main by those tests (the round-2 verifier re-ran 
 
 ### H-08: Per-caller isolation (Info; tested by #523, merged)
 
-- **Where:** the assignment check, `gate.ts:712-721`. The sealed reader refuses any run id
+- **Where:** the assignment check, `gate.ts:747-756`. The sealed reader refuses any run id
   but the binding's on its own (`sealed.ts:102` via `openForTrial`).
 - **Existing coverage:** `test/gate/gate.test.ts:654-750` (cross-run, cross-task, symlinked
   runs) and `test/gate/sealed-gate.test.ts:334-395` (another trial's run id or receipt).
@@ -350,17 +350,17 @@ writing nothing) are killed on main by those tests (the round-2 verifier re-ran 
   bound to two runs share a root, and each must never cause a read of the other's run,
   whatever the request says: lookalike ids (case, a trailing dot, a prefix or suffix,
   unicode lookalikes) and interleaved concurrent calls included. Mutating the operator's
-  assignment object after `createGate` must not rebind the gate (`gate.ts:615` copies it).
+  assignment object after `createGate` must not rebind the gate (`gate.ts:650` copies it).
   **Decision (done):** the tests-only #523 (merged, `05a465b`) pins this in
   `test/gate/caller-isolation.test.ts`, with a reader spy asserting zero reads outside the
   caller's own run. Unicode lookalikes never reach the assignment check: `isSafeId` rejects
   them first (`INVALID_REQUEST`, nothing read). The round-1 verifier's surviving mutant
-  (the `gate.ts:615` copy removed) is killed by those tests.
+  (the `gate.ts:650` copy removed) is killed by those tests.
 - **Operator-side aliasing (from #523's verifier).** On a case-folding filesystem (macOS
   APFS by default, Windows NTFS), two *operator-assigned* run ids that differ only in case
   (`run-a`, `RUN-A`), or on Windows only by a trailing dot (`r1`, `r1.`; `isSafeId` allows
   a trailing dot), name one directory under the evidence root: `fileEvidenceReader` reads
-  `<root>/<runId>/<stateFile>` (`gate.ts:342-352`). The exact-equality assignment check
+  `<root>/<runId>/<stateFile>` (`gate.ts:377-387`). The exact-equality assignment check
   stops an *agent* from crossing over; it does not stop an *operator* from assigning
   aliasing ids, and then two mock/dev trials read each other's state. The sealed path
   should already fail closed: `Vault.seal` refuses a run whose directory exists
@@ -403,29 +403,29 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 | H-12 | 3, concurrent-safe ledger | `ledger.ts:41-53` (read the head, then `appendFileSync`), `cli.ts:138` | One chain per (tenant, eval), appends serialised per chain (a lock file or a single writer); row format unchanged | Locally one serial process writes (`serveStdio` handles requests one at a time, `mcp-server.ts:180-206`), so no fork today |
 | H-13 | 4, per-tenant vault keys | `vault.ts:251-262` | A `keyId` in the seal manifest plus a key-lookup callback in `VaultOptions`; single-key default | Changes the manifest format; no second key exists |
 | H-14 | 5, host paths out of the seal manifest | `vault.ts:95`, `vault.ts:328-331` | Record oracle sources as `{ id, sha256 }` relative to a configured oracle root | Locally the paths never reach the agent: agent-facing error text carries `integrity:<code>` only (`sealed.ts:20-21`, `sealed-gate.test.ts` "its host path never reaches the agent") |
-| H-15 | 6, operator-bound caller identity | `gate.ts:435-464`, `api.ts:151-191` | Optional `GateConfig.caller`, echoed as optional `GateResult.caller` (additive `v1`); request unchanged | `gate.ts`/`api.ts` are locked by #503; no transport authenticates a caller yet |
+| H-15 | 6, operator-bound caller identity | `gate.ts:470-499`, `api.ts:151-191` | Optional `GateConfig.caller`, echoed as optional `GateResult.caller` (additive `v1`); request unchanged | `gate.ts`/`api.ts` are locked by #503; no transport authenticates a caller yet |
 
 ### H-16: Oracle reason text reaches the agent verbatim (Low; defer)
 
-- **Where:** `gate.ts:867` returns the oracle's reasons as-is (`reasons: [...valid.reasons]`),
+- **Where:** `gate.ts:930` returns the oracle's reasons as-is (`reasons: [...valid.reasons]`),
   and `callTool` returns the whole `GateResult` to the agent as `structuredContent` and as
   text (`mcp-server.ts:100-106`). What reaches the agent:
   - Family-authored English. `TARGET_MISMATCH` names the cell, the record and the column
-    (`families.ts:144-145`).
+    (`families.ts:160-161`).
   - `DOCUMENT_COLLATERAL` lists the collateral cell addresses, the first few then a count
     (`calc-document.ts:162-164`), **even with corrections off**.
-  - The verified reason echoes the requested `newValue` (`families.ts:230`).
-  - `could not look: ${read.detail}` (`gate.ts:741`), whose detail can name a path relative
-    to the evidence root (the descriptor check, `gate.ts:283-290`).
-  - `StateCorruptError` messages (`gate.ts:837`), family-written to be agent-facing.
+  - The verified reason echoes the requested `newValue` (`families.ts:246`).
+  - `could not look: ${read.detail}` (`gate.ts:776`), whose detail can name a path relative
+    to the evidence root (the descriptor check, `gate.ts:318-325`).
+  - `StateCorruptError` messages (`gate.ts:900`), family-written to be agent-facing.
 - **What it does not carry:** no document cell value and no other third-party free text.
   `parseDocument` values never reach a reason (the round-1 verifier checked; the
   `sealed-fixture.test.ts` injection case shows the injected cell text never appears), and
   `todo-items` lists only the operator's intent items. No host path: the descriptor check
-  strips the evidence root before it names a path (`gate.ts:283-286`), and every other
+  strips the evidence root before it names a path (`gate.ts:318-321`), and every other
   failure detail carries an error code, never a raw message (`errorCode`, `reasons.ts:22`,
-  used at `gate.ts:369` and `gate.ts:405`; a reader that throws goes through `diagnose`,
-  `gate.ts:626-634`). The rule itself is stated on the reader interface (`gate.ts:162-166`).
+  used at `gate.ts:404` and `gate.ts:440`; a reader that throws goes through `diagnose`,
+  `gate.ts:661-669`). The rule itself is stated on the reader interface (`gate.ts:197-201`).
 - **Exploit sketch:** with corrections off (the default), an agent in the mock/dev MCP mode
   edits, calls the gate and reads `DOCUMENT_COLLATERAL: 2 cell(s) ...: B2, D7`. It now knows
   exactly which cells to restore: the information the corrections switch is meant to gate
@@ -446,7 +446,7 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 
 ### H-17: `evidenceRefs` give the agent the sealed fixture's name and digest (Info; keep, hosted TO FILE)
 
-- **Where:** `gate.ts:780-786` pushes `{ kind: "sealed-fixture", runId, path: sealed.file,
+- **Where:** `gate.ts:839-845` pushes `{ kind: "sealed-fixture", runId, path: sealed.file,
   sha256: digest, bytes }` into `evidenceRefs`, and the whole result goes to the agent
   (`mcp-server.ts:100-106`). The `persisted-state` ref carries the sha256 of the agent's own
   saved document. The `sealed-fixture` kind names the operator's fixture binding, not the
