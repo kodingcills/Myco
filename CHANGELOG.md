@@ -14,7 +14,10 @@ versioned releases yet; entries are grouped by milestone. License: [Apache-2.0](
   MCP entry for Claude Code and Codex into the project (refuses HOME as the project, never
   follows a symlink out of it). Each change is one splice of the original file, re-parsed
   before it is written; anything it cannot merge is a conflict and nothing is written.
-  User-level configs only with `--global --yes`, after the exact diff and a backup; no secrets
+  User-level configs only with `--global --yes`, after the exact diff and a backup; no secrets.
+  A hard-linked or non-regular target is a conflict; CRLF files keep CRLF. `--tasks <file>`
+  passes an operator tasks file to the gate. An end-to-end test (`linux path` CI job) runs
+  init against real headless Calc and gets verdicts through the written config
   ([docs/product/setup.md](docs/product/setup.md)).
 - `LICENSE`: Apache-2.0, chosen by the owner on 2026-11-25.
 - Community files for open-source readiness: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`

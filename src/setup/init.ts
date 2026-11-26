@@ -87,8 +87,11 @@ export type Spawner = (
   },
 ) => SpawnResult;
 
-/** What `lstat` says is at a path (a symlink is reported as such, never followed). */
-export type PathKind = "missing" | "file" | "dir" | "symlink" | "other";
+/**
+ * What `lstat` says is at a path (a symlink is reported as such, never followed). A regular
+ * file with more than one name is `hardlink`: another name of it may be a user-level config.
+ */
+export type PathKind = "missing" | "file" | "hardlink" | "dir" | "symlink" | "other";
 
 /** The file operations init uses; tests wrap the real one to record every path touched. */
 export interface SetupFs {
@@ -97,7 +100,10 @@ export interface SetupFs {
   kind(path: string): PathKind;
   /** The canonical path, every link resolved; throws if it does not resolve. */
   realpath(path: string): string;
-  /** Read a regular file; refuses (throws) if the last component is a symlink. */
+  /**
+   * Read a regular file; refuses (throws) if the last component is a symlink, or if what it
+   * opened is not a regular file or has more than one link.
+   */
   readText(path: string): string;
   /** Permission bits of an existing file. */
   mode(path: string): number;
@@ -130,6 +136,8 @@ export interface InitOptions {
   readonly task: string;
   readonly run: string;
   readonly evidenceRoot: string;
+  /** Operator tasks file passed to the gate as `--tasks` (absolute), if any. */
+  readonly tasksFile?: string;
 }
 
 export const EXIT_OK = 0;
@@ -158,6 +166,8 @@ myco-gate MCP server entry for Claude Code and Codex into the project directory.
   --task <id>            the trial's task id the gate is bound to (default: ${DEFAULT_TASK})
   --run <id>             the trial's run id (default: ${DEFAULT_RUN})
   --evidence-root <dir>  where the gate reads persisted state (default: <project>/.myco/evidence)
+  --tasks <file>         an operator tasks file the gate loads (\`myco-gate --tasks\`), for a
+                         task beyond the built-in df-s01/df-s02, e.g. a calc-record-edit task
   --dry-run              run every check and print every planned change; write nothing
   --skip-desktop         do not check the Linux desktop path
   --global               target the user-level configs (~/.claude.json and
@@ -182,6 +192,7 @@ export function parseInitArgs(argv: readonly string[], cwd: string): InitOptions
   let task = DEFAULT_TASK;
   let run = DEFAULT_RUN;
   let evidenceRoot: string | undefined;
+  let tasksFile: string | undefined;
   let global = false;
   let yes = false;
   let dryRun = false;
@@ -211,6 +222,9 @@ export function parseInitArgs(argv: readonly string[], cwd: string): InitOptions
       case "--evidence-root":
         evidenceRoot = value();
         break;
+      case "--tasks":
+        tasksFile = value();
+        break;
       case "--global":
         global = true;
         break;
@@ -234,16 +248,28 @@ export function parseInitArgs(argv: readonly string[], cwd: string): InitOptions
     evidenceRoot === undefined
       ? join(projectDir, ".myco", "evidence")
       : resolve(projectDir, evidenceRoot);
+  const tasks = tasksFile === undefined ? undefined : resolve(projectDir, tasksFile);
   for (const [name, path] of [
     ["--project", projectDir],
     ["--evidence-root", root],
+    ...(tasks === undefined ? [] : [["--tasks", tasks] as const]),
   ] as const) {
     // A control character in a path would end up verbatim in a config file.
     // biome-ignore lint/suspicious/noControlCharactersInRegex: that is the point
     if (/[\u0000-\u001f\u007f]/.test(path))
       throw new InitUsageError(`${name} has a control character`);
   }
-  return { projectDir, task, run, evidenceRoot: root, global, yes, dryRun, skipDesktop };
+  return {
+    projectDir,
+    task,
+    run,
+    evidenceRoot: root,
+    ...(tasks === undefined ? {} : { tasksFile: tasks }),
+    global,
+    yes,
+    dryRun,
+    skipDesktop,
+  };
 }
 
 /** The gate launch line: the command and arguments every client config names. */
@@ -264,6 +290,8 @@ export function launchLine(mycoRoot: string, options: InitOptions): LaunchLine {
       options.task,
       "--run",
       options.run,
+      // An operator flag of the gate, like --evidence-root: what the agent sends is unchanged.
+      ...(options.tasksFile === undefined ? [] : ["--tasks", options.tasksFile]),
     ],
   };
 }
@@ -356,6 +384,19 @@ function applySplice(text: string, s: Splice): string {
 }
 
 const conflict = (reason: string): MergeResult => ({ action: "conflict", reason });
+
+/** The file's line ending: CRLF when it has any CRLF, else LF. */
+function eolOf(text: string): "\r\n" | "\n" {
+  return text.includes("\r\n") ? "\r\n" : "\n";
+}
+
+/**
+ * Inserted text in the file's own line ending, so a CRLF file does not end up with mixed
+ * endings. Inserted text never holds a CR of its own (JSON.stringify escapes it).
+ */
+function withEol(text: string, eol: "\r\n" | "\n"): string {
+  return eol === "\n" ? text : text.replaceAll("\n", eol);
+}
 
 // --- JSON -------------------------------------------------------------------
 
@@ -573,6 +614,7 @@ export function mergeJson(existing: string | null, entry: Record<string, unknown
       };
     }
   }
+  splice = { ...splice, insert: withEol(splice.insert, eolOf(existing)) };
   const content = applySplice(existing, splice);
   const expected = { ...parsed, mcpServers: { ...(servers ?? {}), [SERVER_KEY]: entry } };
   let after: unknown;
@@ -641,6 +683,8 @@ export function mergeToml(existing: string | null, block: string, entry: LaunchL
   const whole = parseToml(existing);
   if (!whole.ok) return conflict(`not valid TOML (${whole.where}); left unchanged`);
 
+  const eol = eolOf(existing);
+  const ownBlock = withEol(block, eol);
   const begins = existing.split(TOML_BEGIN).length - 1;
   const ends = existing.split(TOML_END).length - 1;
   let outside = existing;
@@ -656,12 +700,15 @@ export function mergeToml(existing: string | null, block: string, entry: LaunchL
     if (!own.ok || !isOwnBlockDoc(own.value))
       return conflict("the marked myco-gate block was edited by hand; left unchanged");
     outside = existing.slice(0, start) + existing.slice(stop);
-    if (before === block) splice = { offset: start, remove: before, insert: before };
-    else splice = { offset: start, remove: before, insert: block };
+    splice = { offset: start, remove: before, insert: ownBlock };
   } else {
     const sep =
-      existing === "" || existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
-    splice = { offset: existing.length, remove: "", insert: `${sep}${block}\n` };
+      existing === "" || existing.endsWith(`${eol}${eol}`)
+        ? ""
+        : existing.endsWith("\n")
+          ? eol
+          : `${eol}${eol}`;
+    splice = { offset: existing.length, remove: "", insert: `${sep}${ownBlock}${eol}` };
   }
   const rest = parseToml(outside);
   if (!rest.ok)
@@ -973,6 +1020,15 @@ function projectTarget(fs: SetupFs, root: string, parts: readonly string[]): Tar
         exists: true,
         conflict: `${join(...parts.slice(0, i + 1))} is a symlink; project mode never follows a link out of the project; left unchanged`,
       };
+    if (kind === "hardlink")
+      // Another name of this file may be ~/.claude.json: reading it would carry HOME's
+      // content into the project (round-2 DB). Never read, never backed up.
+      return {
+        path: join(root, ...parts),
+        writePath: join(root, ...parts),
+        exists: true,
+        conflict: `${join(...parts.slice(0, i + 1))} has more than one hard link (another name of it may be a user-level config); project mode never reads it; left unchanged`,
+      };
     if (last ? kind !== "file" : kind !== "dir")
       return {
         path: join(root, ...parts),
@@ -989,6 +1045,14 @@ function globalTarget(fs: SetupFs, path: string): Target {
   const kind = fs.kind(path);
   if (kind === "missing") return { path, writePath: path, exists: false };
   if (kind === "file") return { path, writePath: path, exists: true };
+  if (kind === "hardlink")
+    // The atomic rename would split the link and leave the file's other names stale.
+    return {
+      path,
+      writePath: path,
+      exists: true,
+      conflict: "has more than one hard link; a write would split it; left unchanged",
+    };
   if (kind !== "symlink")
     return { path, writePath: path, exists: true, conflict: "not a regular file; left unchanged" };
   let real: string;

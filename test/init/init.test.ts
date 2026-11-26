@@ -17,6 +17,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -197,6 +198,8 @@ function snapshot(dir: string): Record<string, string> {
       const st = lstatSync(p);
       if (st.isSymbolicLink()) files[relative(dir, p)] = `link:${readlinkSync(p)}`;
       else if (st.isDirectory()) walk(p);
+      else if (!st.isFile())
+        files[relative(dir, p)] = `special:${st.mtimeMs}`; // a FIFO
       else files[relative(dir, p)] = `${st.mtimeMs}:${readFileSync(p, "base64")}`;
     }
   };
@@ -1149,6 +1152,185 @@ describe("Windows VM path is out of scope", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Round 3 (verifier round 2 @ 12956c9c): DB, DC, N2, N3, N5, and --tasks for DA.
+
+function mkfifo(path: string): void {
+  const r = spawnSync("mkfifo", [path]);
+  if (r.status !== 0) throw new Error(`mkfifo ${path} failed`);
+}
+
+describe("a hard link never carries HOME into the project (DB)", () => {
+  it("a project .mcp.json hard-linked to ~/.claude.json is a conflict: never read or backed up", () => {
+    plantClaudeJson();
+    plantHomeSecrets();
+    linkSync(join(sb.home, ".claude.json"), join(sb.project, ".mcp.json"));
+    const homeBefore = snapshot(sb.home);
+    const projectBefore = snapshot(sb.project);
+    expect(run([])).toBe(EXIT_INCOMPLETE);
+    expect(output()).toContain(".mcp.json has more than one hard link");
+    expect(output()).toContain("Nothing was written");
+    expect(output()).not.toContain(MARKER);
+    expect(sb.log.filter((r) => r.op === "readText" || writeOps.has(r.op))).toEqual([]);
+    expect(snapshot(sb.home)).toEqual(homeBefore);
+    expect(snapshot(sb.project)).toEqual(projectBefore);
+  });
+
+  it("so is a hard-linked .codex/config.toml (and the other file is not written either)", () => {
+    plantHomeSecrets();
+    mkdirSync(join(sb.project, ".codex"));
+    linkSync(join(sb.home, ".codex", "config.toml"), join(sb.project, ".codex", "config.toml"));
+    const projectBefore = snapshot(sb.project);
+    expect(run([])).toBe(EXIT_INCOMPLETE);
+    expect(output()).toContain(".codex/config.toml has more than one hard link");
+    expect(output()).not.toContain(MARKER);
+    expect(snapshot(sb.project)).toEqual(projectBefore);
+  });
+
+  it("--global --yes refuses a hard-linked ~/.claude.json (a write would split the link)", () => {
+    plantClaudeJson();
+    linkSync(join(sb.home, ".claude.json"), join(sb.project, "elsewhere.json"));
+    const homeBefore = snapshot(sb.home);
+    expect(run(["--global", "--yes"])).toBe(EXIT_INCOMPLETE);
+    expect(output()).toContain("has more than one hard link");
+    expect(output()).not.toContain(MARKER);
+    expect(sb.log.filter((r) => writeOps.has(r.op))).toEqual([]);
+    expect(snapshot(sb.home)).toEqual(homeBefore);
+  });
+
+  it("the real fs reports a hard link, and readText refuses one, a FIFO, a dir and a symlink", () => {
+    const file = join(sb.project, "f.json");
+    writeFileSync(file, "{}");
+    expect(nodeSetupFs.kind(file)).toBe("file");
+    expect(nodeSetupFs.readText(file)).toBe("{}");
+    linkSync(file, join(sb.project, "g.json"));
+    expect(nodeSetupFs.kind(file)).toBe("hardlink");
+    expect(() => nodeSetupFs.readText(file)).toThrow(/more than one hard link/);
+    const fifo = join(sb.project, "fifo");
+    mkfifo(fifo);
+    expect(nodeSetupFs.kind(fifo)).toBe("other");
+    expect(() => nodeSetupFs.readText(fifo)).toThrow(/not a regular file/); // and does not hang
+    expect(() => nodeSetupFs.readText(sb.home)).toThrow(/not a regular file/);
+    symlinkSync(join(sb.project, "g.json"), join(sb.project, "l.json"));
+    expect(() => nodeSetupFs.readText(join(sb.project, "l.json"))).toThrow();
+  });
+});
+
+describe("a project target of the wrong kind is a conflict (N2)", () => {
+  for (const [what, make] of [
+    ["a directory at .mcp.json", () => mkdirSync(join(sb.project, ".mcp.json"))],
+    ["a FIFO at .mcp.json", () => mkfifo(join(sb.project, ".mcp.json"))],
+    [
+      "a FIFO at .codex/config.toml",
+      () => {
+        mkdirSync(join(sb.project, ".codex"));
+        mkfifo(join(sb.project, ".codex", "config.toml"));
+      },
+    ],
+    ["a file at .codex", () => writeFileSync(join(sb.project, ".codex"), "x")],
+  ] as const) {
+    it(`${what}: conflict, never read, nothing written`, () => {
+      make();
+      const before = snapshot(sb.project);
+      expect(run([])).toBe(EXIT_INCOMPLETE);
+      expect(output()).toMatch(/is not a regular (file|directory); left unchanged/);
+      expect(sb.log.filter((r) => r.op === "readText" || writeOps.has(r.op))).toEqual([]);
+      expect(snapshot(sb.project)).toEqual(before);
+    });
+  }
+});
+
+describe("a symlinked HOME is still HOME (DC)", () => {
+  it("HOME given through a link: running from the real home, or from the link, is refused", () => {
+    plantClaudeJson();
+    const link = join(sb.project, "..", "home-link");
+    symlinkSync(sb.home, link);
+    const env = { HOME: link, PATH: "/usr/bin:/bin" };
+    const homeBefore = snapshot(sb.home);
+    for (const cwd of [sb.home, link]) {
+      sb.out.length = 0;
+      sb.err.length = 0;
+      expect(run([], { env, cwd }), cwd).toBe(EXIT_USAGE);
+      expect(output()).toContain("is your home directory");
+    }
+    expect(run(["--project", sb.home], { env })).toBe(EXIT_USAGE);
+    expect(output()).toContain("is your home directory");
+    expect(sb.calls).toEqual([]);
+    expect(snapshot(sb.home)).toEqual(homeBefore);
+  });
+});
+
+describe("JSON and TOML splices match the file (N3, N5)", () => {
+  const line = { command: "/r/tsx", args: ["/r/g.ts", "mcp"] };
+  const entry = claudeEntry(line);
+
+  it("a compact mcpServers with a `, ` separator gets the same separator", () => {
+    const text = '{"mcpServers": {"a": {"command": "x"}, "b": {"command": "y"}}}';
+    const plan = mergeJson(text, entry);
+    expect(plan.action).toBe("update");
+    expect(plan.content).toBe(
+      `{"mcpServers": {"a": {"command": "x"}, "b": {"command": "y"}, "myco-gate": ${JSON.stringify(entry)}}}`,
+    );
+  });
+
+  it("a CRLF config.toml gets a CRLF block, and a second run is unchanged", () => {
+    const text = 'model = "m"\r\n\r\n[mcp_servers.other]\r\ncommand = "o"\r\n';
+    const plan = mergeToml(text, codexBlock(line), line);
+    expect(plan.action).toBe("update");
+    const content = plan.content as string;
+    expect(content.startsWith(text)).toBe(true);
+    expect(content.replaceAll("\r\n", "")).not.toContain("\n"); // no bare LF anywhere
+    expect(content).toContain(codexBlock(line).replaceAll("\n", "\r\n"));
+    expect(mergeToml(content, codexBlock(line), line).action).toBe("unchanged");
+  });
+
+  it("an LF config.toml stays LF-only", () => {
+    const plan = mergeToml('model = "m"\n', codexBlock(line), line);
+    expect(plan.content).not.toContain("\r");
+  });
+
+  it("a CRLF pretty .mcp.json gets CRLF lines, and a second run is unchanged", () => {
+    const text = JSON.stringify({ a: 1, mcpServers: { o: { command: "o" } } }, null, 2)
+      .replaceAll("\n", "\r\n")
+      .concat("\r\n");
+    const plan = mergeJson(text, entry);
+    expect(plan.action).toBe("update");
+    const content = plan.content as string;
+    expect(content.replaceAll("\r\n", "")).not.toContain("\n");
+    expect(mergeJson(content, entry).action).toBe("unchanged");
+  });
+});
+
+describe("--tasks: an operator tasks file for the gate (for DA)", () => {
+  it("is resolved against the project and passed to the gate after the assignment", () => {
+    const o = parseInitArgs(["--tasks", "t.json"], "/p");
+    if (o === "help") throw new Error("help");
+    expect(o.tasksFile).toBe("/p/t.json");
+    expect(launchLine("/r", o).args.slice(-2)).toEqual(["--tasks", "/p/t.json"]);
+    const none = parseInitArgs([], "/p");
+    if (none === "help") throw new Error("help");
+    expect(launchLine("/r", none).args).not.toContain("--tasks");
+    expect(run(["--tasks", "/x\ny"])).toBe(EXIT_USAGE);
+    expect(run(["--tasks"])).toBe(EXIT_USAGE);
+  });
+
+  it("the health check and both written configs carry it, and init never reads the file", () => {
+    writeFileSync(join(sb.project, "tasks.json"), JSON.stringify({ secret: MARKER }));
+    expect(run(["--tasks", "tasks.json"])).toBe(EXIT_OK);
+    const want = ["--tasks", join(sb.project, "tasks.json")];
+    const gate = sb.calls.find((c) => c.command === TSX);
+    expect(gate?.args.slice(-2)).toEqual(want);
+    const claude = JSON.parse(readFileSync(join(sb.project, ".mcp.json"), "utf8"));
+    expect(claude.mcpServers["myco-gate"].args.slice(-2)).toEqual(want);
+    const codex = parseToml(readFileSync(join(sb.project, ".codex", "config.toml"), "utf8")) as {
+      mcp_servers: Record<string, { args: string[] }>;
+    };
+    expect(codex.mcp_servers["myco-gate"]?.args.slice(-2)).toEqual(want);
+    expect(sb.log.filter((r) => r.path.endsWith("tasks.json") && r.op === "readText")).toEqual([]);
+    expect(output()).not.toContain(MARKER);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The real CLI: real filesystem, real gate, real environment scrubbing.
 
 describe("bin/myco init end to end", () => {
@@ -1212,6 +1394,18 @@ describe("bin/myco init end to end", () => {
     expect(inherited.text).toContain(`project: ${sb.project}`);
     expect(snapshot(sb.home)).toEqual(homeBefore);
     expect(readdirSync(sb.project)).toEqual([]);
+  }, 120_000);
+
+  it("a project .mcp.json hard-linked to ~/.claude.json: conflict, no HOME byte copied (DB)", () => {
+    plantClaudeJson();
+    linkSync(join(sb.home, ".claude.json"), join(sb.project, ".mcp.json"));
+    const homeBefore = snapshot(sb.home);
+    const r = cli([]);
+    expect(r.status, r.text).toBe(1);
+    expect(r.text).toContain("has more than one hard link");
+    expect(r.text).not.toContain(MARKER);
+    expect(readdirSync(sb.project)).toEqual([".mcp.json"]); // no backup, no .codex
+    expect(snapshot(sb.home)).toEqual(homeBefore);
   }, 120_000);
 
   it("--global without --yes writes nothing; with --yes it writes a backup", () => {

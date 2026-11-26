@@ -9,6 +9,7 @@ import {
   constants,
   copyFileSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -31,7 +32,7 @@ export const nodeSetupFs: SetupFs = {
     try {
       const st = lstatSync(path);
       if (st.isSymbolicLink()) return "symlink";
-      if (st.isFile()) return "file";
+      if (st.isFile()) return st.nlink > 1 ? "hardlink" : "file";
       return st.isDirectory() ? "dir" : "other";
     } catch (error) {
       if (code(error) === "ENOENT" || code(error) === "ENOTDIR") return "missing";
@@ -41,8 +42,16 @@ export const nodeSetupFs: SetupFs = {
   realpath: (path) => realpathSync.native(path),
   readText: (path) => {
     // O_NOFOLLOW: a link swapped in after the lstat check is refused, not followed.
-    const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    // O_NONBLOCK: a FIFO swapped in opens at once (and is then refused) instead of hanging.
+    const fd = openSync(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
     try {
+      // Checked on the open descriptor, so a swap after the caller's lstat cannot get past it.
+      const st = fstatSync(fd);
+      if (!st.isFile()) throw new Error(`${path} is not a regular file`);
+      if (st.nlink > 1) throw new Error(`${path} has more than one hard link`);
       return readFileSync(fd, "utf8");
     } finally {
       closeSync(fd);

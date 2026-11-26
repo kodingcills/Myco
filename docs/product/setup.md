@@ -6,7 +6,7 @@ the `myco-gate` MCP server entry for Claude Code and Codex into your **project**
 directory. It writes nothing outside the project unless you ask for that twice.
 
 ```sh
-pnpm install --frozen-lockfile        # once, in the Myco checkout
+pnpm install --frozen-lockfile        # once, in the Myco checkout (the full install: see below)
 cd /path/to/your/project
 /path/to/Myco/bin/myco init --dry-run # every check and every planned change; writes nothing
 /path/to/Myco/bin/myco init           # the same, then writes the two project files
@@ -16,6 +16,11 @@ cd /path/to/your/project
 directory you ran pnpm from (`INIT_CWD`, honoured only when pnpm runs this package's own
 `myco` script; `bin/myco init` always means the current directory). `--project <dir>`
 names a project explicitly. The project directory must already exist.
+
+Init needs the checkout's full install. Myco is a private package with no runtime-only
+dependency set: `tsx`, which runs every script including the gate, and `smol-toml`, which
+init uses to re-parse Codex configs, are both devDependencies, so `pnpm install --prod` is
+not a supported install.
 
 ## What it does
 
@@ -36,6 +41,11 @@ paths filled in:
 | `--task <id>` | `df-s01` |
 | `--run <id>` | `local` |
 | `--evidence-root <dir>` | `<project>/.myco/evidence` (the gate reads `<dir>/<run>/<stateFile>`) |
+| `--tasks <file>` | none: only the built-in `df-s01` / `df-s02`. An operator tasks file the gate loads (`myco-gate --tasks`, `{ "tasks": [ { id, family, stateFile, spec } ] }`), e.g. a `calc-record-edit` task for the Linux Calc path. Resolved against the project; init passes the path and never reads the file. |
+
+`--tasks` is an operator flag of the gate, like `--evidence-root`: it decides which tasks
+the gate knows. What the agent sends is unchanged (`taskId`, `runId`, `claim`), and the gate
+stays bound to the one `--task` / `--run` assignment.
 
 Exit codes: `0` done (or a dry run), `1` a check failed or a config conflicted, `3` usage.
 
@@ -53,7 +63,13 @@ Exit codes: `0` done (or a dry run), `1` a check failed or a config conflicted, 
     `.codex/config.toml` that is a link is a conflict, and is not read, backed up or
     written. A cloned repository can ship such a link (say `.codex -> ../../.codex`).
     Reads refuse a link at the last component (`O_NOFOLLOW`), backups and temp files are
-    created exclusively, so a link planted there is refused, not written through.
+    created exclusively, so a link planted there is refused, not written through;
+  - **never reads a hard-linked target**: a `.mcp.json` or `.codex/config.toml` with more
+    than one hard link (another name of it may be `~/.claude.json`) is a conflict, and is
+    not read, backed up or written. A target that is not a regular file (a directory, a
+    FIFO) is a conflict too. The read itself checks the opened file (`fstat`: a regular
+    file with one link) and opens non-blocking, so a FIFO swapped in is refused instead of
+    hanging.
 - **Only the `myco-gate` entry changes, and every other byte of the file is kept.** The
   change is one splice of the original text: in `.mcp.json`, the value of
   `mcpServers["myco-gate"]` (or one inserted member, in the file's own indentation); in the
@@ -73,6 +89,8 @@ Exit codes: `0` done (or a dry run), `1` a check failed or a config conflicted, 
   it (anything already at that name, even a dangling link, is skipped for the next name),
   and the file keeps its permission bits. A newly created file has no backup.
 - **Idempotent.** A second run reports both files `unchanged` and writes nothing.
+- **Line endings are the file's own.** In a file that uses CRLF, the inserted entry or
+  block uses CRLF too, so the file never ends up with mixed line endings.
 - **The diff is exactly the change**: the bytes removed (`-`) and inserted (`+`) at a
   given line and column, and nothing else of the file. So another server's `env` values
   are never echoed, and what `--global` prints is what `--global --yes` writes.
@@ -104,8 +122,12 @@ no-secrets rules apply.
 If a user-level config is a **symlink** (a dotfiles setup, say), init writes through to the
 file it names, so the link is kept and keeps working, and backs up that target file next to
 it. The dry run says so (`note: a symlink to <target>: init writes through to that file`).
-A dangling link, or one to something other than a regular file, is a conflict. Prefer the project files: a user-level entry is bound to one task and run for
-every project.
+A dangling link, or one to something other than a regular file, is a conflict. So is a
+user-level config with more than one hard link: the atomic rename would split the link and
+leave its other names stale.
+
+Prefer the project files: a user-level entry is bound to one task and run for every
+project.
 
 ## This is a starter config, not a trial harness
 
@@ -148,5 +170,35 @@ myco init: project mode
 myco init: done
 ```
 
+## End to end on the Linux path
+
+`test/init/init-linux-e2e.test.ts` runs the whole chain on Linux with a real headless
+LibreOffice Calc and no model ($0):
+
+1. `bin/myco init --task linux-calc-edit --run e2e --tasks tasks.json`, without
+   `--skip-desktop`, in a temp project with a temp HOME: the desktop check attaches Calc, the
+   health check starts the real gate, and both project configs are written;
+2. the test parses the **written** `.mcp.json` and `.codex/config.toml` and takes the evidence
+   root, task, run and tasks file from the args init wrote;
+3. the Linux path's own pieces (the fixture, the scripted agents `honest`, `wrong-row` and
+   `skips-save`, and the Calc actuator `scripts/linux/calc_actuator.py`) drive Calc to open
+   the fixture CSV at `<evidence-root>/<run>/saved.csv`, type the edit and save it (or not),
+   so the bytes the gate reads are the bytes Calc wrote;
+4. the official MCP client (`@modelcontextprotocol/sdk`) spawns the server exactly from each
+   written config (environment `PATH` alone) and calls `myco_gate_check` with only
+   `taskId` / `runId` / `claim`;
+5. the verdicts must be `verified` (ORACLE_PASS) for the honest edit, and `refuted` with
+   oracle codes (TARGET_MISMATCH, plus DOCUMENT_COLLATERAL for the wrong row) for the other
+   two. Each result's evidence digest must equal the sha256 of the file Calc persisted.
+
+It is opt-in like the Linux path suite (`MYCO_LINUX_PATH=1`), skips without soffice or
+Python-UNO, and FAILS instead of skipping under `MYCO_LINUX_PATH_REQUIRED=1`, which the
+`linux path (ubuntu-latest)` CI job sets; that job runs it as its own step and uploads the
+transcript with the Linux path runs.
+
+```sh
+MYCO_LINUX_PATH=1 pnpm exec vitest run test/init/init-linux-e2e.test.ts
+```
+
 Tests: `test/init/init.test.ts` (temp HOME and temp project; the last block runs
-`bin/myco init` end to end against the real gate).
+`bin/myco init` end to end against the real gate) and the end-to-end test above.

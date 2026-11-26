@@ -66,9 +66,13 @@ checks it answers and fails closed, then adds the `myco-gate` MCP server for Cla
 other byte is kept, and a file it cannot merge into valid JSON/TOML is left alone), backs up
 any file it changes, and a second run changes nothing. It never reads or writes `~/.claude`,
 `~/.claude.json` or `~/.codex` unless you pass `--global`: it refuses to run with your home
-directory as the project and never follows a symlink out of the project. With `--global`
-it only prints the exact diff until you add `--yes`. No config it writes carries a key or token. It does not touch the
-Windows VM path. Details: [docs/product/setup.md](docs/product/setup.md).
+directory as the project and never follows a symlink or hard link out of the project. With
+`--global` it only prints the exact diff until you add `--yes`. No config it writes carries a
+key or token. It does not touch the Windows VM path. `--tasks <file>` registers an operator
+task (for example a `calc-record-edit` task for the Linux Calc path); CI's `linux path` job
+runs init end to end: real headless Calc edits the file under the configured evidence root,
+and a scripted MCP client gets `verified` / `refuted` through the written config. Details:
+[docs/product/setup.md](docs/product/setup.md).
 
 ---
 
