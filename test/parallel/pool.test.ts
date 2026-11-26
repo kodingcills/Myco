@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -595,6 +596,8 @@ describe.skipIf(process.platform === "win32")(
             "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])",
             path,
           ]);
+        // The special file must really exist, or the case would pass as "missing".
+        expect(lstatSync(path).isFile()).toBe(false);
         const t0 = Date.now();
         expect(child(["capture", ws, "sheet.csv"])).toEqual({ refused: code });
         expect(Date.now() - t0).toBeLessThan(HARD_LIMIT_MS);
@@ -615,7 +618,14 @@ describe.skipIf(process.platform === "win32")(
     it.each(["fifo", "dir", "socket"] as const)(
       "pool: an agent that plants a %s as its state file gets capture-refused, and the pool returns",
       (kind) => {
-        const out = child(["pool", join(base, `pool-${kind}`), kind]);
+        // A short root: macOS caps a unix socket path at 104 bytes, and its tmpdir is long.
+        const short = mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "mps-"));
+        let out: ReturnType<typeof child>;
+        try {
+          out = child(["pool", join(short, "r"), kind]);
+        } finally {
+          rmSync(short, { recursive: true, force: true });
+        }
         expect(out.disqualifiers).toEqual(["capture-refused"]);
         expect(out.counted).toBe(false);
         expect(out.error).toMatch(/^not-regular:/);

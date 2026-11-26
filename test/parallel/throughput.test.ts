@@ -4,7 +4,7 @@
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type ScriptedDesktopAgent, scriptedFileAgent } from "../../src/parallel/agents.ts";
@@ -27,8 +27,10 @@ const caps = {
   cpuSecondsPerTrial: 60,
   trialTimeoutMs: 20_000,
   memoryBudgetMb: 1024,
-  cpuBudget: 4,
+  // The macOS runner has 3 CPUs: the cap check (rightly) refuses a budget above the host.
+  cpuBudget: Math.min(4, availableParallelism()),
 };
+const LEVELS = [1, 2, 4].filter((n) => n <= caps.cpuBudget);
 
 describe("throughput harness ($0, scripted agents)", () => {
   it("runs each N, counts verified results, gets every verdict right, and is stamped simulated", async () => {
@@ -36,7 +38,7 @@ describe("throughput harness ($0, scripted agents)", () => {
       backend: fakeBackend(),
       requirements: STRICT_REQUIREMENTS,
       runRoot: base,
-      ns: [1, 2, 4],
+      ns: LEVELS,
       trialsPerN: 8,
       agent: scriptedFileAgent,
       caps,
@@ -45,7 +47,7 @@ describe("throughput harness ($0, scripted agents)", () => {
     expect(report.evidence).toBe(false);
     expect(report.costEstimate).toBeNull();
     expect(report.allCorrect).toBe(true);
-    expect(report.points.map((p) => p.n)).toEqual([1, 2, 4]);
+    expect(report.points.map((p) => p.n)).toEqual(LEVELS);
     for (const p of report.points) {
       expect(p.trials).toBe(8);
       // honest at i = 0, 2, 4, 6 of the cycle: 4 of 8 verified, the rest refuted.
