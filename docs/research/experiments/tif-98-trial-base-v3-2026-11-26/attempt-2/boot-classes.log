@@ -1,0 +1,1 @@
+step 1 reset: reset-trial-vm: boot class=cold first_ssh_s=156 guest_cpu_first_ssh_s=289 attempts=2

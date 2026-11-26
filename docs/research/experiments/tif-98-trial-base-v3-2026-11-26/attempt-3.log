@@ -1,0 +1,8 @@
+build-trial-base: 21:10:47Z step 1: open egress for the maintenance window; restore and boot clean-base
+build-trial-base: 21:15:27Z step 2: state before; signatures; ngen; idle tasks; full scan
+build-trial-base: 22:49:17Z step 3: disable maintenance trigger and Windows Update; check Defender
+build-trial-base: 22:49:50Z step 4: remove the maintenance script; clean shutdown
+build-trial-base: 22:50:20Z step 5: deny egress; boot in place; verify + probe
+build-trial-base: 22:50:43Z step 5: boot in place was fast (guest CPU 4s < 100s); clean shutdown and one more start
+build-trial-base: 22:54:03Z step 6: clean shutdown; snapshot trial-base-v3
+build-trial-base: 22:54:28Z done: trial-base-v3 created from clean-base; egress denied; clean-base untouched

@@ -1,0 +1,60 @@
+{
+    "taken_utc":  "2026-11-26T18:19:15.4073565Z",
+    "uptime_s":  259,
+    "os_build":  "26100",
+    "defender":  {
+                     "am_service_enabled":  true,
+                     "realtime_protection_enabled":  true,
+                     "antivirus_enabled":  true,
+                     "signature_version":  "1.403.7.0",
+                     "signature_last_updated_utc":  "2023-12-05T22:12:39.0000000Z",
+                     "quick_scan_end_utc":  null,
+                     "full_scan_end_utc":  null,
+                     "disable_realtime_monitoring_pref":  false,
+                     "exclusion_path":  [
+
+                                        ],
+                     "exclusion_process":  [
+
+                                           ],
+                     "exclusion_extension":  [
+
+                                             ]
+                 },
+    "ngen":  [
+                 {
+                     "ngen":  "Microsoft.NET\\Framework\\v4.0.30319\\ngen.exe",
+                     "queue_status":  "Microsoft (R) CLR Native Image Generator - Version 4.8.9032.0\r\nCopyright (c) Microsoft Corporation.  All rights reserved.\r\n\r\nService name is: .NET Framework NGEN v4.0.30319 Critical\r\nThe .NET Runtime Optimization Service is running."
+                 },
+                 {
+                     "ngen":  "Microsoft.NET\\Framework64\\v4.0.30319\\ngen.exe",
+                     "queue_status":  "Microsoft (R) CLR Native Image Generator - Version 4.8.9032.0\r\nCopyright (c) Microsoft Corporation.  All rights reserved.\r\n\r\nService name is: .NET Framework NGEN v4.0.30319 64 Critical\r\nThe .NET Runtime Optimization Service is running."
+                 },
+                 {
+                     "ngen":  "Microsoft.NET\\FrameworkArm64\\v4.0.30319\\ngen.exe",
+                     "queue_status":  "Microsoft (R) CLR Native Image Generator - Version 4.8.9032.0\r\nCopyright (c) Microsoft Corporation.  All rights reserved.\r\n\r\nService name is: .NET Framework NGEN v4.0.30319 Arm64 Critical\r\nThe .NET Runtime Optimization Service is running."
+                 }
+             ],
+    "scheduled_tasks":  {
+                            "windows_tasks":  218,
+                            "running":  [
+                                            "\\Microsoft\\Windows\\.NET Framework\\.NET Framework NGEN v4.0.30319 64 Critical",
+                                            "\\Microsoft\\Windows\\.NET Framework\\.NET Framework NGEN v4.0.30319 Arm64 Critical",
+                                            "\\Microsoft\\Windows\\.NET Framework\\.NET Framework NGEN v4.0.30319 Critical",
+                                            "\\Microsoft\\Windows\\Multimedia\\SystemSoundsService",
+                                            "\\Microsoft\\Windows\\Wininet\\CacheTask",
+                                            "\\Microsoft\\Windows\\WlanSvc\\CDSSync"
+                                        ],
+                            "never_run":  174,
+                            "disabled":  31
+                        },
+    "automatic_maintenance":  {
+                                  "maintenance_disabled":  null,
+                                  "last_start_raw":  null
+                              },
+    "windows_update":  {
+                           "wuauserv_start_type":  "Manual",
+                           "wuauserv_status":  "Running",
+                           "policy_no_auto_update":  1
+                       }
+}
