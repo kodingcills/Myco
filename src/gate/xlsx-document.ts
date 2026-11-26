@@ -876,6 +876,29 @@ export function renderNumber(value: number, cls: NumberClass, system: 1900 | 190
   }
 }
 
+/**
+ * Built-in number formats that are dates in ECMA-376 Part 1, 18.8.30 (whatever the gate can
+ * render: ids outside BUILTIN_FORMATS are refused before this matters).
+ */
+const BUILTIN_DATE_IDS: ReadonlySet<number> = new Set([
+  14, 15, 16, 17, 22, 27, 28, 29, 30, 31, 34, 35, 36, 50, 51, 52, 53, 54, 57, 58,
+]);
+
+/**
+ * Does a format code carry a day or year token ANYWHERE (every section, not only the first)
+ * outside quoted text, backslash escapes and bracketed tags? This is the reading under which
+ * a reader that looks at the whole code (the independent grader does) calls a style a date
+ * style. The gate renders by the first section; where the two readings disagree on whether a
+ * style is a date, the gate refuses the style (round 2 verdict, D2 T2: `General;d`).
+ */
+export function codeHasDateToken(code: string): boolean {
+  const bare = code
+    .replace(/"[^"]*"/g, "")
+    .replace(/\\./g, "")
+    .replace(/\[[^\]]*\]/g, "");
+  return /[yd]/i.test(bare);
+}
+
 function readStyles(xml: XmlElement | undefined): NumberClass[] {
   if (!xml) return [{ kind: "general" }];
   const custom = new Map<number, string>();
@@ -892,9 +915,17 @@ function readStyles(xml: XmlElement | undefined): NumberClass[] {
     const raw = xf.attrs.get("numFmtId") ?? "0";
     if (!/^\d{1,5}$/.test(raw)) fail("XLSX_STYLE_MALFORMED");
     const id = Number(raw);
-    const code = custom.get(id) ?? BUILTIN_FORMATS[id];
+    const own = custom.get(id);
+    const code = own ?? BUILTIN_FORMATS[id];
     if (code === undefined) fail("XLSX_NUMFMT_UNSUPPORTED");
-    return classifyFormat(code);
+    const cls = classifyFormat(code);
+    // A date style to a whole-code reader (a custom code with a day or year token in ANY
+    // section; a built-in date id) must be a date style to the gate, and the other way
+    // round. Otherwise refused: e.g. `General;d` or `0;[Red]yyyy`, which the gate renders as
+    // a number by their first section and a whole-code reader reads as dates.
+    const wholeDate = own !== undefined ? codeHasDateToken(own) : BUILTIN_DATE_IDS.has(id);
+    if ((cls.kind === "date") !== wholeDate) fail("XLSX_NUMFMT_UNSUPPORTED");
+    return cls;
   });
 }
 

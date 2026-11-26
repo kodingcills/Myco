@@ -19,6 +19,7 @@
  * were run by hand, one at a time.
  */
 import { describe, expect, it } from "vitest";
+import { classifyFormat, codeHasDateToken } from "../../src/gate/xlsx-document.ts";
 import {
   editOnce,
   gateOn,
@@ -102,5 +103,82 @@ describe("T3: an attribute name ending in date1904 (the grader's \\bdate1904)", 
         "XLSX_TREE_ATTRIBUTE",
       );
     }
+  });
+});
+
+describe("T2: a date token outside the first section of a format code", () => {
+  // Verbatim from the verdict's repro.
+  const t2 = loWith({
+    [STYLES]: editOnce(loText(STYLES), 'formatCode="General"', 'formatCode="General;d"'),
+  });
+
+  it("verbatim: General;d makes every qty cell a date to the grader; the gate refuses", async () => {
+    expect(graderOn(t2)).toBe("fail");
+    await expectRefused(t2, "XLSX_NUMFMT_UNSUPPORTED");
+  });
+
+  it.each(["0;[Red]yyyy", "General;General;d", "0;0;0;yy", "#,##0;-#,##0;D", "0;&quot;x&quot;d"])(
+    "variant %s: the grader is fooled, the gate refuses",
+    async (code) => {
+      const bytes = loWith({
+        [STYLES]: editOnce(loText(STYLES), 'formatCode="General"', `formatCode="${code}"`),
+      });
+      expect(graderOn(bytes)).toBe("fail");
+      await expectRefused(bytes, "XLSX_NUMFMT_UNSUPPORTED");
+    },
+  );
+
+  it("a code whose sections agree is still read: verified, and the grader passes", async () => {
+    // A second section whose only d is quoted: both readings say "not a date".
+    const bytes = loWith({
+      [STYLES]: editOnce(
+        loText(STYLES),
+        'formatCode="General"',
+        'formatCode="General;&quot;d&quot;"',
+      ),
+    });
+    expect(graderOn(bytes)).toBe("pass");
+    expect((await gateOn(bytes)).verdict).toBe("verified");
+  });
+
+  it("codeHasDateToken reads every section, outside quotes, escapes and brackets", () => {
+    for (const code of ["General;d", "0;[Red]yyyy", "0;0;0;y", "D", "[h]:mm;yy"])
+      expect([code, codeHasDateToken(code)]).toEqual([code, true]);
+    for (const code of ["General", "0;-0", '0;"d"', "0;\\d", "0;[$-409]0", "h:mm;[Red]h", "@"])
+      expect([code, codeHasDateToken(code)]).toEqual([code, false]);
+  });
+
+  it("every built-in format the gate renders: its date class agrees with ECMA-376's date ids", () => {
+    const ecmaDateIds = new Set([
+      14, 15, 16, 17, 22, 27, 28, 29, 30, 31, 34, 35, 36, 50, 51, 52, 53, 54, 57, 58,
+    ]);
+    const builtins: Record<number, string> = {
+      0: "General",
+      1: "0",
+      2: "0.00",
+      3: "#,##0",
+      4: "#,##0.00",
+      9: "0%",
+      10: "0.00%",
+      11: "0.00E+00",
+      12: "# ?/?",
+      13: "# ??/??",
+      14: "mm-dd-yy",
+      15: "d-mmm-yy",
+      16: "d-mmm",
+      17: "mmm-yy",
+      18: "h:mm AM/PM",
+      19: "h:mm:ss AM/PM",
+      20: "h:mm",
+      21: "h:mm:ss",
+      22: "m/d/yy h:mm",
+      45: "mm:ss",
+      46: "[h]:mm:ss",
+      47: "mmss.0",
+      48: "##0.0E+0",
+      49: "@",
+    };
+    for (const [id, code] of Object.entries(builtins))
+      expect([id, classifyFormat(code).kind === "date"]).toEqual([id, ecmaDateIds.has(Number(id))]);
   });
 });
