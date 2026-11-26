@@ -425,6 +425,26 @@ describe("the security review's symbol refs hold on main (D1)", () => {
     expect(DOC.match(/`[^`]*› [^`]*`/g)?.length ?? 0).toBe(parsed);
   });
 
+  it("anchors match code: every comment is blanked, and only comments", () => {
+    const text = [
+      "/** doc A */",
+      "function f() {",
+      "  const a = g(1, // trailing B",
+      "    // own-line C",
+      '    "// in a string", `/* in a template ${1} */`); /* block D */',
+      "  return a; }",
+      "// end E",
+    ].join("\n");
+    const code = blankComments(ts.createSourceFile("blank-probe.ts", text, ts.ScriptTarget.Latest));
+    expect(code).toHaveLength(text.length);
+    expect(code.split("\n")).toHaveLength(text.split("\n").length);
+    for (const comment of ["doc A", "trailing B", "own-line C", "block D", "end E"]) {
+      expect(code).not.toContain(comment);
+    }
+    expect(code).toContain('"// in a string", `/* in a template ${1} */`);');
+    expect(code).toContain("const a = g(1,");
+  });
+
   it("the resolver rejects a symbol that is not declared, or declared twice", () => {
     expect(() => symbolBody("gate.ts › noSuchSymbol")).toThrow(/declared 0 times/);
     expect(() => symbolBody("gate.ts › createGate › noSuchSymbol")).toThrow(/declared 0 times/);
