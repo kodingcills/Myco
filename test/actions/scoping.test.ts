@@ -191,7 +191,8 @@ describe("script route scoping with planted markers", () => {
       for (const host of hostPaths) expect(result.output, command).not.toContain(host);
     }
     const out = (command: string) => r.act({ kind: "shell.run", command }).output ?? "";
-    expect(out("wc -l scratch/notes.txt")).toBe("1 ./scratch/notes.txt\n");
+    // GNU wc prints "1 path"; BSD wc (macOS) left-pads the count with spaces.
+    expect(out("wc -l scratch/notes.txt")).toMatch(/^ *1 \.\/scratch\/notes\.txt\n$/);
     expect(out("head -n 1 scratch/notes.txt scratch/b.txt")).toContain("==> ./scratch/b.txt <==");
     expect(out("ls scratch doc")).toContain("./doc:");
   });
@@ -234,6 +235,9 @@ describe("script route scoping with planted markers", () => {
     expect(r.log()[0]?.attempts[0]?.code).toBe("ROUTE_OUTPUT_LEAK");
     // And ordinary output under a symlinked workspace carries neither spelling.
     const wc = r.act({ kind: "shell.run", command: "wc -l scratch/notes.txt" });
-    expect(wc).toMatchObject({ ok: true, output: "1 ./scratch/notes.txt\n" });
+    expect(wc).toMatchObject({
+      ok: true,
+      output: expect.stringMatching(/^ *1 \.\/scratch\/notes\.txt\n$/),
+    });
   });
 });
