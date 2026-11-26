@@ -200,10 +200,10 @@ This choice over the alternatives:
   `test/guest-egress.test.ts` has a negative case for each rule, fed fixed `KERN_PROCARGS2`
   byte buffers. **Mutation claim** (round 3, PR #488): every `raise Refused(…)` in
   `scripts/guest_egress_check.py` was replaced with `pass`, one at a time, and the suite
-  run. Every replacement fails at least one test, except these six, which are not counted
+  run. Every replacement fails at least one test, except these five, which are not counted
   as tested rules:
-  - the fixture-only "no procargs for pid" refusal, and the real-host `sysctl` failures
-    (`KERN_ARGMAX`, `KERN_PROCARGS2`): tests serve fixed buffers, so no test reaches them;
+  - the two real-host `sysctl` failures (`KERN_ARGMAX`, `KERN_PROCARGS2`): tests serve
+    fixed buffers, so no test reaches them;
   - the three process-listing refusals in `candidate_pids()` (listing failed, empty or
     non-zero exit, a non-numeric pid): tests supply their own `ps`. The empty-listing case is
     also backstopped by "expected exactly one running guest, found 0".

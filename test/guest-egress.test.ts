@@ -968,7 +968,9 @@ describe("round 3 N1: an option UTM writes once is refused when repeated", () =>
     it(`${mode} refuses "-name" + a bare marker planted at argc+2, without printing it`, () => {
       const { argv, b } = planted();
       const r = run([b], GOOD_UTM, [mode]);
-      expect(`${r.stdout}${r.stderr}`).toContain(`-name given more than once (argv[${argv.length}]`);
+      expect(`${r.stdout}${r.stderr}`).toContain(
+        `-name given more than once (argv[${argv.length}]`,
+      );
       expect(`${r.stdout}${r.stderr}`).not.toContain(MARKER);
       expect(r.status).toBe(1);
     });
@@ -1027,6 +1029,29 @@ except g.Refused as e:
   });
   it("refuses when it is QEMULauncher", () => {
     expect(go(LAUNCHER).stdout).toContain("FAIL: procargs: empty argv[0]");
+  });
+  it("a fixture run never skips a listed pid that has no procargs file", () => {
+    // Outside fixture mode an unreadable process is skipped; a fixture run
+    // must refuse instead, or a guest would go uncounted in the tests.
+    const pa = join(dir, "pa");
+    mkdirSync(pa);
+    writeFileSync(join(pa, "1.bin"), procargs(utmDefaultArgv()));
+    const code = `
+import sys
+sys.path.insert(0, sys.argv[1])
+import guest_egress_check as g
+g.candidate_pids = lambda: [1, 2]
+try:
+    print("guest argv of", len(g.find_guest_argv()))
+except g.Refused as e:
+    print("FAIL:", e)
+`;
+    const r = spawnSync("python3", ["-I", "-c", code, join(import.meta.dirname, "..", "scripts")], {
+      encoding: "utf8",
+      env: { PATH: "/usr/bin:/bin", MYCO_PROCARGS_DIR: pa },
+    });
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toContain("FAIL: no procargs for pid 2");
   });
   it("still skips an unparseable non-qemu process", () => {
     const r = go("/usr/bin/login");
