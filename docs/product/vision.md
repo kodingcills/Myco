@@ -53,6 +53,13 @@ Full solution path:
 - **Also:** branch race view, state-diff view, outcome receipts, app map explorer, fleet controls, collaboration, and mobile approvals.
 - **Risk:** UI scope swallowing the core. Build the debugger, time travel, and commit queue first, from runtime primitives.
 
+## Future: hosted API (open core)
+Decision (Tiffany, 2026-11-26): Myco's intended business model is open core with a hosted offering.
+- **The code stays Apache-2.0 and self-hostable for free.** The self-hosted gate (`myco-gate`, `myco.gate/v1`) stays fully functional; nothing it does today moves behind a paywall.
+- **Later, a paid hosted gate API:** billed per verified check or by subscription, with paid team features (dashboards, audit logs, private task sets).
+- **This is a later phase, after the demo and the first R1 results.** Nothing is built for it now: no billing, no accounts, no hosting. No prices or dates are set.
+- **What it asks of current work:** keep the gate a transport-independent service (MCP is one adapter over it), and keep the agent's request to `taskId`, `runId` and `claim`. A hosted caller's identity would come from the transport's authentication, never from a field the agent sends.
+
 ## Competitive landscape (Tiffany's research; verify before relying on it)
 - **Cua:** driver, multiplayer cursors, sandboxes, Lume, Cua-Bench. No verification, learning, or commits.
 - **Vercel Labs agent-desktop:** Rust; reads the accessibility tree (AX, UIA, AT-SPI) and returns refs; headless; explicit stale-ref errors; MCP. A likely ADAPTER candidate for us.
