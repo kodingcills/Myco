@@ -41,10 +41,11 @@
 #
 # What is subtracted: every process whose executable's basename is exactly
 # QEMULauncher. One UTM guest runs as 2 such processes (qemu_procs = 2 in every
-# guest state measured), so they are summed. Any other UTM VM running on the host
-# is subtracted too. The subtraction is bounded only by the guest's vCPUs (6 for
-# myco-win11). That is acceptable before a reset, which discards what the guest
-# was doing.
+# guest state measured), so they are summed. There is no cap: any other UTM VM on
+# the host is subtracted too, and a second VM would hide that much real host load.
+# In every measured guest state the subtraction was at most 3.11 cores (the
+# v2-resets maximum). Before a reset that is acceptable, because the reset
+# discards what the guest was doing.
 #
 # Functions:
 #   lg_load1 | lg_qemu_cores | lg_swap_free_mb   read the host (names-only ps)

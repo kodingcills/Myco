@@ -193,6 +193,24 @@ describe("host readers (fake sysctl / ps)", () => {
     expect(host("lg_qemu_cores", { FAKE_PS: PS }).out).toBe("3.17");
   });
 
+  // Round 3 (verifier D2): the subtraction has no cap. A second UTM VM adds its cores too.
+  it("lg_qemu_cores has no cap: two VMs' launchers at 400 + 450 %cpu subtract 8.50 cores", () => {
+    const ps = [`  400.0 ${LAUNCHER}`, "  450.0 /Applications/UTM copy.app/QEMULauncher"].join(
+      "\n",
+    );
+    expect(host("lg_qemu_cores", { FAKE_PS: ps }).out).toBe("8.50");
+  });
+
+  // Round 3 (verifier D1): the exact thresholds through the live readers.
+  it("live boundaries: net 14.00 passes and 14.01 pauses; net 10.00 is not clear, 9.99 is", () => {
+    const at = (load: string, fn: string) =>
+      host(fn, { FAKE_LOADAVG: `{ ${load} 1 1 }`, FAKE_SWAP: SWAP_OK, FAKE_PS: "" }).status;
+    expect(at("14.00", "lg_now_decide")).toBe(0);
+    expect(at("14.01", "lg_now_decide")).toBe(4);
+    expect(at("10.00", "lg_now_resume_ok")).toBe(1);
+    expect(at("9.99", "lg_now_resume_ok")).toBe(0);
+  });
+
   it("lg_qemu_cores is 0.00 when no guest runs", () => {
     expect(host("lg_qemu_cores", { FAKE_PS: "  5.0 /usr/sbin/syslogd" }).out).toBe("0.00");
   });
@@ -317,14 +335,31 @@ describe("the drivers' gate blocks, executed (D2)", () => {
     );
   });
 
-  /** reset-bench.sh's own net_load and over definitions, taken from its source. */
+  /** reset-bench.sh's own LOAD_LIMIT default, net_load and over definitions, from its source. */
   function benchGate(): string {
     const s = readFileSync(join(ROOT, "scripts", "reset-bench.sh"), "utf8");
+    const limit = s.match(/\nLOAD_LIMIT=.*\n/)?.[0];
     const net = s.match(/\nnet_load\(\) \{.*\}\n/)?.[0];
     const over = s.match(/\nover\(\) \{.*\}\n/)?.[0];
-    if (!net || !over) throw new Error("reset-bench.sh: net_load/over not found");
-    return `LOAD_LIMIT=10\n${net}${over}`;
+    if (!limit || !net || !over)
+      throw new Error("reset-bench.sh: LOAD_LIMIT/net_load/over not found");
+    return `${limit}${net}${over}`;
   }
+
+  // Round 3 (verifier D1): net exactly 10.00 occurs in the data (v2-idle 08:30:12Z). The hold is
+  // ">= 10", matching the resume rule "net < 10", so 10.00 must hold and 9.99 must not.
+  it("reset-bench.sh: net exactly 10.00 holds; 9.99 does not (default limit 10 from the script)", () => {
+    const at = host(`${benchGate()}n=$(net_load); echo "$LOAD_LIMIT $n"; over "$n" && echo HOLD`, {
+      FAKE_LOADAVG: "{ 10.00 1 1 }",
+      FAKE_PS: "",
+    });
+    expect(at.out).toBe("10 10.00\nHOLD");
+    const below = host(`${benchGate()}n=$(net_load); echo "$n"; over "$n" && echo HOLD`, {
+      FAKE_LOADAVG: "{ 9.99 1 1 }",
+      FAKE_PS: "",
+    });
+    expect(below.out).toBe("9.99");
+  });
 
   it("reset-bench.sh: an unreadable load reads as 999 and holds the gate (fail closed)", () => {
     const r = host(`${benchGate()}n=$(net_load); echo "$n"; over "$n" && echo HOLD`, {

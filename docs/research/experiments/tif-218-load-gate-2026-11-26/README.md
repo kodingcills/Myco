@@ -45,12 +45,13 @@ nearest-rank, and every line is counted. `test/load-gate.test.ts` checks that th
 
 What the samples show:
 
-- **This host carries 4-7 load with no guest at all** (`vm-stopped`). That load comes from
-  other work on the shared Mac.
+- **This host carries load 2.55-7.22 with no guest at all** (`vm-stopped`, p50 4.32). That load
+  comes from other work on the shared Mac.
 - **A booting guest adds about 2.5-3 cores of QEMU** (`v2-resets`) and pushes the raw load
   to 13.2. That is the old gate's 14 minus about one core.
-- **An idle `clean-base` guest keeps QEMU at 1-2.6 cores** for the whole 10 min. An idle
-  `trial-base-v2` guest drops to about 0.02 cores within 3 min of boot.
+- **An idle `clean-base` guest keeps QEMU at 0.92-2.67 cores** for the whole 10 min. An idle
+  `trial-base-v2` guest dropped to 0.08 cores about 30 s after ready (08:21:20Z), and mostly
+  stayed near 0 after that, with spikes to 1.57, 1.75 and 1.18 cores.
 - **Right after the `trial-base-v2` reset said ready, net load was 9.15, 9.75 and 10.87**
   (08:20:49Z-08:21:20Z), while QEMU fell from 2.7 to 0.08 cores. Then came one jump to 16.31
   at 08:21:35Z, and that jump decayed over the next minute: 13.74, 11.59, 9.68. These samples
@@ -62,8 +63,9 @@ What the samples show:
   share, not per-process data. Supporting it, but not proving it: no similar jump followed the
   three later readies in `v2-resets`.
 - **One guest runs as 2 `QEMULauncher` processes** (`qemu_procs` is 2 in every guest state and
-  0 with the VM stopped), so the gate sums all of them. Any other UTM VM on the host would be
-  subtracted too. The subtraction is bounded only by the guest's 6 vCPUs.
+  0 with the VM stopped), so the gate sums all of them. There is no cap: any other UTM VM on
+  the host would be subtracted too, which could hide that much real host load. In every
+  measured guest state the subtraction was at most 3.11 cores (the `v2-resets` maximum).
 - **Memory was never under pressure**: free memory was 62-75%, swap free was 1,683-1,691 MB,
   and no swapouts happened in any state.
 
@@ -88,6 +90,9 @@ them.
   - during back-to-back resets: never (7 of 36 samples at or over 10, longest run under 10
     was 152 s). The supervisor only checks the resume gate while no driver runs, so no reset
     is in progress at that point.
+
+  The table uses the 15 s samples, but the supervisor samples every 30 s. It can miss a
+  15-second excursion over 10 and clear sooner than the table shows.
 - **Swap free under 300 MB still pauses** (unchanged; no memory pressure was seen, so the data
   cannot derive it). An unreadable load or swap value pauses, and so does a threshold override
   that is not a number.
