@@ -13,7 +13,16 @@ const SCRIPT = join(__dirname, "..", "scripts", "reset-trial-vm.sh");
 
 function run(
   snapshot?: string,
-  opts: { egress?: "closed" | "open-guest" | "missing"; env?: Record<string, string> } = {},
+  opts: {
+    egress?: "closed" | "open-guest" | "missing";
+    env?: Record<string, string>;
+    /** Guest CPU seconds the gate reports at the first ssh answer, one per boot; "none" prints no line. */
+    gateCpu?: (number | "none")[];
+    /** The gate's exit code (after it prints its first-ssh line). */
+    gateRc?: number;
+    /** After a `vm.sh stop`, status keeps reporting "started" (a VM that will not stop). */
+    neverStops?: boolean;
+  } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "myco-reset-allowlist-"));
   const stubs = join(dir, "stubs");
@@ -24,8 +33,24 @@ function run(
   const stub = (name: string, body: string) =>
     writeFileSync(join(stubs, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
   // vm.sh logs every call; `status` reports a stopped VM so the script proceeds.
-  stub("vm.sh", `echo "vm.sh $*" >> "${log}"\n[ "$1" = status ] && echo stopped\nexit 0`);
-  stub("wait-guest-ready.sh", `echo "wait-guest-ready.sh $*" >> "${log}"\nexit 0`);
+  stub(
+    "vm.sh",
+    `echo "vm.sh $*" >> "${log}"
+${opts.neverStops ? `[ "$1" = stop ] && touch "${dir}/stuck"` : ""}
+if [ "$1" = status ]; then if [ -e "${dir}/stuck" ]; then echo started; else echo stopped; fi; fi
+exit 0`,
+  );
+  // The readiness gate prints its first-ssh line to stderr, as the real one does; one
+  // scripted CPU value per boot (default: one cold boot at 280 s).
+  const cpu = (opts.gateCpu ?? [280]).map(String).join(" ");
+  stub(
+    "wait-guest-ready.sh",
+    `echo "wait-guest-ready.sh $*" >> "${log}"
+n=$(cat "${dir}/gate.count" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "${dir}/gate.count"
+set -- ${cpu}; eval "c=\\\${$n:-}"
+if [ -n "$c" ] && [ "$c" != none ]; then echo "wait-guest-ready: first ssh answer after 140s (guest CPU \${c}s)" >&2; fi
+exit ${opts.gateRc ?? 0}`,
+  );
   stub("vssh", `echo "vssh" >> "${log}"\nexit 0`);
   // TIF-275 egress check: closed by default; "open-guest" models a guest that
   // booted with egress open; "missing" leaves the script out entirely.
@@ -119,7 +144,8 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     (name) => {
       const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: name } });
       expect(r.status).toBe(1);
-      expect(r.stderr).toContain("refusing to restore unexpected snapshot");
+      // Refused before the allowlist since #529 nit 1 (not a trial base as the default).
+      expect(r.stderr).toContain(`refusing MYCO_TRIAL_SNAPSHOT=${name}`);
       expect(r.calls).toBe("");
     },
   );
@@ -183,6 +209,62 @@ describe("reset-trial-vm.sh guest egress check (TIF-275)", () => {
   });
 });
 
+// TIF-98 fast-reset guard: the first start after a UTM config write boots the restored disk
+// with most of Windows' boot work skipped (4 s guest CPU at the first ssh answer vs 272-312 s).
+describe("reset-trial-vm.sh cold-boot check", () => {
+  const restores = (calls: string) =>
+    calls.split("\n").filter((l) => l.startsWith("vm.sh restore")).length;
+
+  it("calls a boot at or above the threshold cold and reports it", () => {
+    const r = run("clean-base", { gateCpu: [280] });
+    expect(r.status).toBe(0);
+    expect(restores(r.calls)).toBe(1);
+    expect(r.stderr).toContain(
+      "reset-trial-vm: boot class=cold first_ssh_s=140 guest_cpu_first_ssh_s=280 attempts=1",
+    );
+    expect(r.stdout).toContain("ready on 'clean-base'");
+  });
+
+  it("on a fast boot, stops by request and boots once more; a cold second boot is accepted", () => {
+    const r = run("clean-base", { gateCpu: [4, 287] });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("fast boot (guest CPU 4s at the first ssh answer, under 100s)");
+    expect(restores(r.calls)).toBe(2);
+    expect(r.calls).toContain("vm.sh stop");
+    expect(r.calls.indexOf("vm.sh stop")).toBeLessThan(r.calls.lastIndexOf("vm.sh restore"));
+    expect(r.stderr).toContain(
+      "boot class=cold first_ssh_s=140 guest_cpu_first_ssh_s=287 attempts=2",
+    );
+    expect(r.stdout).toContain("ready on 'clean-base'");
+  });
+
+  it("refuses a second fast boot (fail closed)", () => {
+    const r = run("clean-base", { gateCpu: [4, 4] });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("fast boot again on attempt 2");
+    expect(r.stdout).not.toContain("ready on");
+    expect(r.calls).not.toContain("guest-egress.sh");
+  });
+
+  it("refuses a boot whose first-ssh guest CPU cannot be read", () => {
+    const r = run("clean-base", { gateCpu: ["none"] });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("cannot read the guest CPU at the first ssh answer");
+    expect(r.stdout).not.toContain("ready on");
+  });
+
+  it("puts the boundary at the threshold: 100 s is cold, 99 s is fast", () => {
+    expect(run("clean-base", { gateCpu: [100] }).stderr).toContain("class=cold");
+    expect(run("clean-base", { gateCpu: [99, 99] }).status).toBe(1);
+  });
+
+  it("refuses a threshold override that is not a whole number", () => {
+    const r = run("clean-base", { env: { MYCO_COLD_MIN_GUEST_CPU: "abc" } });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("is not a whole number of seconds");
+  });
+});
+
 // TIF-98: the callers that follow the default really do follow it.
 describe("trial drivers use the default trial snapshot", () => {
   const read = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
@@ -208,5 +290,65 @@ describe("trial drivers use the default trial snapshot", () => {
     expect(read("scripts/reset-bench.sh")).toContain(
       "SNAPSHOT=$" + "{MYCO_BENCH_SNAPSHOT:-trial-base-v2}",
     );
+  });
+});
+
+// #529 nit 1: as the default (no argument), MYCO_TRIAL_SNAPSHOT may only name a trial base.
+describe("reset-trial-vm.sh MYCO_TRIAL_SNAPSHOT as the default", () => {
+  it.each(["cua-c1-base", "m1-agent-live"])(
+    "refuses MYCO_TRIAL_SNAPSHOT=%s with no argument",
+    (name) => {
+      const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: name } });
+      expect(r.status).toBe(1);
+      expect(r.calls).toBe("");
+    },
+  );
+
+  it("still accepts cua-c1-base as an explicit argument", () => {
+    const r = run("cua-c1-base", { env: { MYCO_TRIAL_SNAPSHOT: "cua-c1-base" } });
+    expect(r.status).toBe(0);
+    expect(r.calls).toContain("vm.sh restore cua-c1-base");
+  });
+});
+
+// #546 round 1 D2 / D3: the override is bounded, and the two untested fail-closed paths.
+describe("reset-trial-vm.sh cold-boot check, round 2", () => {
+  it.each(["99", "0", "272"])(
+    "refuses MYCO_COLD_MIN_GUEST_CPU=%s (outside the measured gap 100-271 s)",
+    (t) => {
+      const r = run("clean-base", { env: { MYCO_COLD_MIN_GUEST_CPU: t }, gateCpu: [4] });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("is outside 100-271 s");
+      expect(r.stdout).not.toContain("ready on");
+    },
+  );
+
+  it("accepts an override at either edge of the gap", () => {
+    expect(
+      run("clean-base", { env: { MYCO_COLD_MIN_GUEST_CPU: "100" }, gateCpu: [280] }).status,
+    ).toBe(0);
+    expect(
+      run("clean-base", { env: { MYCO_COLD_MIN_GUEST_CPU: "271" }, gateCpu: [280] }).status,
+    ).toBe(0);
+  });
+
+  it("refuses a gate that fails after printing a cold first-ssh line (ssh answered but never held)", () => {
+    const r = run("clean-base", { gateCpu: [280], gateRc: 1 });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("did not reach a real boot");
+    expect(r.stdout).not.toContain("ready on");
+    expect(r.calls).not.toContain("guest-egress.sh");
+  });
+
+  it("refuses when the VM will not stop after a fast boot (no second boot on a running VM)", () => {
+    const r = run("clean-base", {
+      gateCpu: [4, 280],
+      neverStops: true,
+      env: { MYCO_FAST_STOP_TIMEOUT: "2" },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("VM did not stop after a fast boot");
+    expect(r.calls.split("\n").filter((l) => l.startsWith("vm.sh restore")).length).toBe(1);
+    expect(r.stdout).not.toContain("ready on");
   });
 });
