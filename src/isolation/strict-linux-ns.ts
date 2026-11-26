@@ -277,7 +277,7 @@ export function checkSpec(spec: StrictTrialSpec): void {
 }
 
 /** Every host dir the view binds read-only, lexical and resolved. */
-function systemBindSources(): string[] {
+export function systemBindSources(): string[] {
   const out = new Set<string>();
   for (const s of [...SYSTEM_DIRS.map((d) => `/${d}`), ...ETC_BINDS]) {
     out.add(s);
@@ -445,6 +445,8 @@ const ALLOWED_MOUNTS = new Set([
   "/proc",
 ]);
 const MUST_BE_RO = new Set(["/", ...SYSTEM_DIRS.map((d) => `/${d}`), ...ETC_BINDS, "/evidence"]);
+/** Writable mounts the agent can create files in: no setuid binaries, no device nodes. */
+const MUST_BE_NOSUID_NODEV = new Set(["/workspace", "/tmp", "/home", "/dev/shm"]);
 
 /** Turn self-check output into failures; empty means every strict property holds. */
 export function evaluateSelfCheck(output: string, want: SelfCheckExpectation): string[] {
@@ -477,6 +479,11 @@ export function evaluateSelfCheck(output: string, want: SelfCheckExpectation): s
     seen.add(mp);
     if (!ALLOWED_MOUNTS.has(mp)) out.push(`unexpected mount ${mp}`);
     if (MUST_BE_RO.has(mp) && !opts.split(",").includes("ro")) out.push(`${mp} is not read-only`);
+    if (
+      MUST_BE_NOSUID_NODEV.has(mp) &&
+      !["nosuid", "nodev"].every((o) => opts.split(",").includes(o))
+    )
+      out.push(`${mp} lacks nosuid,nodev`);
   }
   for (const need of ["/", "/workspace", "/evidence", "/tmp", "/proc"])
     if (!seen.has(need)) out.push(`missing mount ${need}`);
