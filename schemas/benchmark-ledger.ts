@@ -70,6 +70,12 @@ export const benchmarkArmRowSchema: JsonSchema = {
                 { type: "null" },
               ],
             },
+            /**
+             * TIF-274: the gate's registry rejected the task spec (for example an fc-v1
+             * invalid-target task), so no gate decision exists. Its own outcome, never a
+             * verdict: `called` is false, `verdict` null, and the row is never accepted.
+             */
+            unregistrable: { const: true },
           },
         },
       ],
