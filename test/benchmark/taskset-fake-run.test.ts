@@ -110,7 +110,10 @@ describe("fake run over the full fc-v1 task set", () => {
         await fakeTrial(task, docPath);
         const persisted = readFileSync(docPath);
         let gate: BenchmarkArmRow["gate"] = null;
-        if (arm === "myco-gate") {
+        if (arm === "myco-gate" && task.faultClass === "invalid-target") {
+          // The gate's registry rejects every invalid-target spec (TIF-274): no decision.
+          gate = { called: false, verdict: null, unregistrable: true };
+        } else if (arm === "myco-gate") {
           const params: CalcRecordEditParams = { fixtureSeed: task.fixtureSeed, ...task.intent };
           const verdict = calcRecordEditVerifier.verify(
             readCsvSpreadsheet(docPath),
@@ -168,6 +171,8 @@ describe("fake run over the full fc-v1 task set", () => {
       "myco-gate=100",
       "--expect",
       "hcu+shell=100",
+      "--expect-unregistrable",
+      "myco-gate=10",
       "--require-r1",
     ]);
     expect(checked.status, checked.stderr).toBe(0);

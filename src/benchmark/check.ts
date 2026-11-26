@@ -24,6 +24,7 @@ import { benchmarkArmRowSchema, benchmarkGradeRowSchema } from "../../schemas/be
 import { validateSchema } from "../../schemas/validate.ts";
 import { wilson } from "../foundry/stats.ts";
 import type { BenchmarkGradeRow } from "./grade/row.ts";
+import { bindToTaskSet } from "./taskset-binding.ts";
 
 export type Arm = "myco-gate" | "hcu+shell";
 
@@ -54,6 +55,12 @@ export interface BenchmarkArmRow {
     readonly vmS: number | null;
   };
 }
+
+/**
+ * What the cost figures are: estimates from token counts at frozen per-token rates, not
+ * billed dollars (trials run on the Claude subscription; $0 Anthropic API).
+ */
+export const COST_BASIS = "token-derived estimate at frozen rates; not billed USD" as const;
 
 /** A count with its denominator and a Wilson 95% interval (null when n = 0). */
 export interface Rate {
@@ -93,6 +100,23 @@ export interface ArmCounts {
     readonly claimedDone: number;
     readonly graderFailClaimedDone: number;
   };
+  /**
+   * ESTIMATED model cost per verified task: the arm's total `cost.modelUsd` over every trial,
+   * divided by the trials whose DONE was accepted AND graded pass by the independent grader.
+   * `cost.modelUsd` is token-derived at frozen rates, never a bill: trials run on the Claude
+   * subscription ($0 Anthropic API, Tiffany 2026-11-26 05:19 ET), so `basis` says so in the
+   * JSON itself. Measured rows only: if any trial's cost is unmeasured (null) the metric is
+   * null and `reason` says so (an unmeasured cost is never 0, R7); likewise with no verified
+   * task.
+   */
+  readonly costPerVerifiedTask: {
+    readonly basis: typeof COST_BASIS;
+    readonly estimatedUsd: number | null;
+    readonly estimatedTotalModelUsd: number | null;
+    readonly verifiedTasks: number;
+    readonly unmeasuredTrials: number;
+    readonly reason: string | null;
+  };
   /** (false DONE accepted + accepted ungradable) / accepted. */
   readonly falseAcceptRate: Rate;
   /** Same numerator over all trials. */
@@ -113,10 +137,24 @@ export interface R1Verdict {
   /** Same numerator over all trials. Diagnostic only; not the R1 bound. */
   readonly falseAcceptPerTrial: Rate;
   /**
-   * Trials the gate could decide: all trials minus unregistrable ones (TIF-274). Reported
-   * beside `falseAcceptPerTrial.denominator`, which counts every trial.
+   * The headline (outer-loop ruling 2026-11-26 08:38Z): false DONE accepted (plus accepted
+   * ungradable) over ALL trials of the task set, unregistrable ones included. Same value as
+   * `falseAcceptPerTrial`, named for the scorecard.
    */
-  readonly gatedTrials: number;
+  readonly headline: Rate;
+  /**
+   * The gated subset, on its own line under the headline: every row that is not
+   * unregistrable, harness faults included. A row count, not the R1 bar: the "about 100"
+   * (eligible gated + unregistrable, ruling 09:45Z) is the M2 evidence-pack check's.
+   */
+  readonly gated: {
+    readonly trials: number;
+    readonly accepted: number;
+    readonly falseDoneAccepted: number;
+    readonly acceptedUngradable: number;
+  };
+  /** The unregistrable rows, on their own line under the headline. */
+  readonly unregistrable: ArmCounts["unregistrable"];
   /** Non-blocking notes a reader of R1 must see (e.g. ungated false DONEs). */
   readonly notes: readonly string[];
 }
@@ -137,17 +175,45 @@ export interface CheckResult {
    * when its R1 passes. Null when no arm row is valid.
    */
   readonly provenance: "evidence" | "simulated" | "mixed" | null;
+  /**
+   * Whether the myco-gate rows were bound to their published task set (`bindTaskSet`; the CLI
+   * applies it with `--require-r1` or `--evidence`). Null when there are no myco-gate rows.
+   * Unbound, R1 never passes (`UNBOUND_R1`): a short or relabelled run must not read as R1
+   * evidence (#509 round 2, D2).
+   */
+  readonly taskSetBinding: {
+    readonly applied: boolean;
+    readonly version: string | null;
+    readonly repetitions: number | null;
+  } | null;
 }
 
 export interface CheckOptions {
   /** Expected row count per arm present. Every arm in the ledger must be listed. */
   readonly expectTrials: Readonly<Partial<Record<Arm, number>>>;
   /**
+   * The asserted split of `expectTrials` (ruling 08:38Z): how many of an arm's trials are
+   * unregistrable; the rest must be gated. When given, the counts must match exactly. An arm
+   * with unregistrable rows and no asserted split is an error, so a short run fails instead of
+   * shrinking the denominator.
+   */
+  readonly expectUnregistrable?: Readonly<Partial<Record<Arm, number>>>;
+  /**
    * Checking evidence (a scorecard number), not plumbing: refuse every row without evidence
    * provenance, i.e. whose `plannerModelId` is not in `EVIDENCE_PLANNERS`.
    * Dry runs name a `simulated:` planner, so they never pass.
    */
   readonly evidence?: boolean;
+  /**
+   * Bind the myco-gate rows to their PUBLISHED task set (#509 round 1, D2), with the same
+   * module the M2 pack check uses (`src/benchmark/taskset-binding.ts`): exactly a whole number
+   * k of runs of a known task set, each task k times with its own faultClass, fixture and
+   * instruction hashes, unregistrable exactly on its unsatisfiable tasks, and the asserted
+   * split equal to k x those tasks. An unknown task set is an error. The CLI turns this on for
+   * `--require-r1` and `--evidence`, so a short or relabelled run cannot pass on numbers the
+   * operator typed.
+   */
+  readonly bindTaskSet?: boolean;
 }
 
 /**
@@ -194,6 +260,10 @@ export function expectedAccepted(row: BenchmarkArmRow): boolean {
   if (row.arm === "hcu+shell") return true;
   return row.gate?.called === true && row.gate.verdict === "verified";
 }
+
+/** The R1 reason an unbound check always carries: it is never R1 evidence. */
+export const UNBOUND_R1 =
+  "not R1 evidence: the task-set binding was not applied (the CLI applies it with --require-r1 or --evidence)";
 
 export function checkBenchmark(
   armInput: readonly unknown[],
@@ -269,6 +339,15 @@ export function checkBenchmark(
         `${row.trialKey}: only an invalid-target task can be unregistrable (got ${row.faultClass})`,
       );
     }
+    // The other direction (#509 round 1): the gate's registry rejects every fc-v1
+    // invalid-target spec, so a gated arm row on one claims a gate decision that cannot exist.
+    if (
+      row.arm === "myco-gate" &&
+      row.faultClass === "invalid-target" &&
+      row.gate?.unregistrable !== true
+    ) {
+      errors.push(`${row.trialKey}: an invalid-target task cannot be gated (it is unregistrable)`);
+    }
     if (row.arm === "myco-gate" && row.accepted && row.persistedSha256 === null) {
       errors.push(`${row.trialKey}: an accepted gated row must carry its captured bytes' sha256`);
     }
@@ -301,6 +380,50 @@ export function checkBenchmark(
     else if (rows.length !== expected)
       errors.push(`${arm}: ${rows.length} trials, expected ${expected}`);
   }
+  for (const [arm, rows] of arms) {
+    const unreg = rows.filter((r) => r.gate?.unregistrable === true).length;
+    const want = options.expectUnregistrable?.[arm];
+    const total = options.expectTrials[arm];
+    if (want === undefined) {
+      if (unreg > 0)
+        errors.push(
+          `${arm}: ${unreg} unregistrable trial(s) but no asserted gated/unregistrable split`,
+        );
+    } else {
+      if (total !== undefined && want > total)
+        errors.push(`${arm}: expected ${want} unregistrable of only ${total} trials`);
+      if (unreg !== want) errors.push(`${arm}: ${unreg} unregistrable trials, expected ${want}`);
+      if (total !== undefined && rows.length - unreg !== total - want)
+        errors.push(`${arm}: ${rows.length - unreg} gated trials, expected ${total - want}`);
+    }
+  }
+  for (const arm of Object.keys(options.expectUnregistrable ?? {}) as Arm[]) {
+    if (!arms.has(arm)) errors.push(`${arm}: unregistrable split given, but no ${arm} rows`);
+  }
+  const gatedRows = arms.get("myco-gate");
+  let taskSetBinding: CheckResult["taskSetBinding"] = null;
+  if (gatedRows !== undefined)
+    taskSetBinding = { applied: false, version: null, repetitions: null };
+  if (options.bindTaskSet === true && gatedRows !== undefined) {
+    const binding = bindToTaskSet(gatedRows, { exactMultiset: true });
+    taskSetBinding = {
+      applied: true,
+      version: binding.version,
+      repetitions: binding.repetitions,
+    };
+    errors.push(...binding.errors.map((e) => `myco-gate task set: ${e}`));
+    const want = options.expectUnregistrable?.["myco-gate"];
+    // Defence in depth (#509 round 2, N2): with the count check and the binding both passing,
+    // the asserted split always equals k x unsatisfiable, so this fires only alongside them.
+    if (
+      want !== undefined &&
+      binding.expectedUnregistrable !== null &&
+      want !== binding.expectedUnregistrable
+    )
+      errors.push(
+        `myco-gate: asserted split ${want} is not ${binding.version}'s ${binding.expectedUnregistrable} (its unsatisfiable tasks x ${binding.repetitions} run(s))`,
+      );
+  }
   for (const arm of Object.keys(options.expectTrials) as Arm[]) {
     if (!arms.has(arm))
       errors.push(`${arm}: expected ${options.expectTrials[arm]} trials, found none`);
@@ -317,6 +440,8 @@ export function checkBenchmark(
     let graderFail = 0;
     let ungradable = 0;
     let correctNotAccepted = 0;
+    let modelUsd = 0;
+    let unmeasuredTrials = 0;
     const unregistrable = { trials: 0, claimedDone: 0, graderFailClaimedDone: 0 };
     const perFaultClass: Record<
       string,
@@ -332,6 +457,8 @@ export function checkBenchmark(
       };
       perFaultClass[row.faultClass] = cls;
       cls.trials++;
+      if (row.cost.modelUsd === null) unmeasuredTrials++;
+      else modelUsd += row.cost.modelUsd;
       if (row.claim === "done") claimedDone++;
       if (status === "pass") graderPass++;
       else if (status === "fail") graderFail++;
@@ -357,6 +484,10 @@ export function checkBenchmark(
       }
     }
     const bad = falseDoneAccepted + acceptedUngradable;
+    let costReason: string | null = null;
+    if (unmeasuredTrials > 0)
+      costReason = `${unmeasuredTrials} of ${rows.length} trial(s) have no measured model cost`;
+    else if (acceptedPass === 0) costReason = "no verified task (accepted DONE graded pass)";
     counts.push({
       arm,
       trials: rows.length,
@@ -370,6 +501,14 @@ export function checkBenchmark(
       ungradable,
       correctNotAccepted,
       unregistrable,
+      costPerVerifiedTask: {
+        basis: COST_BASIS,
+        estimatedUsd: costReason === null ? modelUsd / acceptedPass : null,
+        estimatedTotalModelUsd: unmeasuredTrials === 0 ? modelUsd : null,
+        verifiedTasks: acceptedPass,
+        unmeasuredTrials,
+        reason: costReason,
+      },
       falseAcceptRate: rate(bad, accepted),
       falseAcceptPerTrial: rate(bad, rows.length),
       acceptedSuccessRate: rate(acceptedPass, rows.length),
@@ -393,6 +532,7 @@ export function checkBenchmark(
         "insufficient evidence: no accepted DONE, so no false-accept bound can be reported",
       );
     }
+    if (taskSetBinding?.applied !== true) reasons.push(UNBOUND_R1);
     const notes: string[] = [];
     if (gated.unregistrable.claimedDone > 0) {
       notes.push(
@@ -404,7 +544,14 @@ export function checkBenchmark(
       reasons,
       falseAcceptRate: gated.falseAcceptRate,
       falseAcceptPerTrial: gated.falseAcceptPerTrial,
-      gatedTrials: gated.trials - gated.unregistrable.trials,
+      headline: gated.falseAcceptPerTrial,
+      gated: {
+        trials: gated.trials - gated.unregistrable.trials,
+        accepted: gated.accepted,
+        falseDoneAccepted: gated.falseDoneAccepted,
+        acceptedUngradable: gated.acceptedUngradable,
+      },
+      unregistrable: gated.unregistrable,
       notes,
     };
   }
@@ -417,5 +564,6 @@ export function checkBenchmark(
     arms: counts,
     r1,
     provenance: provenanceOf(armRows),
+    taskSetBinding,
   };
 }

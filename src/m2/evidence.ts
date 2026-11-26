@@ -66,6 +66,7 @@ import {
   type BenchmarkArmRow,
   type CheckResult,
   checkBenchmark,
+  UNBOUND_R1,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
 import { bindToTaskSet, knownTaskSet } from "../benchmark/taskset-binding.ts";
@@ -463,6 +464,11 @@ export function checkPack(input: PackInput): PackResult {
 
   const benchmark = checkBenchmark(input.arm, input.grades, {
     expectTrials: manifest?.expectTrials ?? {},
+    // The asserted split, so the shared ledger check counts it too (TIF-274). The task-set
+    // binding runs below (`bindToTaskSet`), with the multiset only for R1 packs.
+    ...(manifest?.expectUnregistrable === undefined
+      ? {}
+      : { expectUnregistrable: manifest.expectUnregistrable }),
   });
   errors.push(...benchmark.errors.map((e) => `ledger: ${e}`));
 
@@ -647,7 +653,12 @@ export function checkPack(input: PackInput): PackResult {
       reasons.push("insufficient evidence: no eligible accepted DONE (no Wilson interval)");
     // check.ts's strict R1 runs over every gated row: an ineligible false accept still fails.
     if (benchmark.r1 === null) reasons.push("no myco-gate rows");
-    else reasons.push(...benchmark.r1.reasons.filter((r) => !r.startsWith("ledgers are not")));
+    // The pack check binds the task set itself (`bindToTaskSet` above), so check.ts's
+    // unbound-R1 reason does not apply here.
+    else
+      reasons.push(
+        ...benchmark.r1.reasons.filter((r) => !r.startsWith("ledgers are not") && r !== UNBOUND_R1),
+      );
     r1 = {
       pass: false,
       reasons,
