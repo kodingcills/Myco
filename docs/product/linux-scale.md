@@ -173,7 +173,15 @@ the episode, the raw gate result (to bind the episode's gate record to its trial
 captured CSV bytes (to bind the grade, and carried as the episode's document blob), the task
 set's declared fixture digest, and U's desktop facts. It writes one directory:
 
-- `episodes/<episodeId>.json`: each exported episode, copied byte for byte as canonical JSON.
+- `episodes/<episodeId>.json`: each exported episode in its **closed** form, as canonical JSON
+  (`src/dataset/closed.ts`, TIF-265; #553's allowlist pattern). No free text leaves the
+  machine: typed text, shell commands, UI status and the instruction are written as
+  `h-<sha256>`, ids that are not closed ids are hashed, a closed field (enum, digest, timestamp,
+  version) holding anything else refuses the export (`OPEN_VALUE`), and the record's
+  `desktop.backend` / `desktop.image` (ids or `name/N`) and `capture.path` (hashed) are closed
+  too. The leak scan still runs on the raw episode and record, so a planted marker or a secret
+  refuses the export, and on every closed output as a backstop. Why: the deny-list scan let a
+  planted username through in 40 of #553's 145 probes (92 after #542's redaction).
   Steps (actions and observations), the claim, the gate verdict (codes only), the
   independent grader's ground truth, harness metadata, provenance and the `simulated` flag
   live here, and only here.

@@ -4,8 +4,10 @@ import type { JsonSchema } from "./validate.ts";
  * Exported dataset (track U, docs/product/linux-scale.md §6): a CONTAINER over canonical
  * `myco.episode/1` records (#538 §3, #542). An export is one directory:
  *
- *  - `episodes/<episodeId>.json`  each exported episode, canonical JSON, byte-identical to
- *                                 the episode the harness recorded (content-addressed);
+ *  - `episodes/<episodeId>.json`  each exported episode in its CLOSED form (src/dataset/closed.ts,
+ *                                 TIF-265): canonical JSON with no free text (typed text,
+ *                                 commands, UI status and the instruction are `h-<sha256>`), ids
+ *                                 closed or hashed; content-addressed by the closed content;
  *  - `records.jsonl`  one `myco.dataset.record/3` per exported episode, sorted by episode id.
  *                     A record references its episode by id and digest and carries ONLY
  *                     track U's own fields: the label, the desktop backend facts and where
