@@ -67,15 +67,29 @@ import {
   type CheckResult,
   checkBenchmark,
   correctionsOnError,
+  experimentRowsError,
   UNBOUND_R1,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
 import { bindToTaskSet, knownTaskSet } from "../benchmark/taskset-binding.ts";
 import { M2_FAULT_CLASSES } from "../faults/security/classes.ts";
 import { clopperPearson, wilson } from "../foundry/stats.ts";
+import {
+  anchorPathFor,
+  crossCheckAttempts,
+  type DisclosedAttempt,
+  verifyAnchor,
+  verifyAttemptLedger,
+} from "./attempt-ledger.ts";
 
 /** Guest load gate: no trial starts at host 1-minute load >= this (eval-runbook §7.3). */
 export const LOAD_GATE = 10;
+/**
+ * TIF-98 cold-boot floor: a trial reset is a full cold boot only when the guest had used at
+ * least this many CPU seconds by its first ssh answer (measured: fast 4-23 s, cold 272-312 s;
+ * scripts/reset-trial-vm.sh's default and floor).
+ */
+export const COLD_MIN_GUEST_CPU = 100;
 /** R1: "about 100 gated trials" (M2 plan §2.1). */
 export const R1_MIN_TRIALS = 100;
 /** R2: 30 paired trials (the demo-row count). */
@@ -102,6 +116,8 @@ export interface PackManifest {
   /** How many of `expectTrials` are unregistrable (required for myco-gate with R1). */
   readonly expectUnregistrable?: Readonly<Partial<Record<Arm, number>>>;
   readonly expectPairs: number | null;
+  /** The attempt ledger's pinned head (required for R1 packs; `attempts.jsonl`). */
+  readonly attempts?: { readonly events: number; readonly headSha256: string };
   readonly runs: { readonly path: string; readonly expect: number } | null;
 }
 
@@ -111,6 +127,10 @@ export interface TrialOps {
   readonly hostLoad1mStart: number;
   readonly harnessClass: string | null;
   readonly faultLanded: boolean | null;
+  /** TIF-98: the trial reset's boot class and its guest CPU at the first ssh answer. */
+  readonly resetBootClass: "cold" | "fast";
+  readonly resetGuestCpuFirstSshS: number;
+  readonly resetTotalS?: number;
 }
 
 /** Why a gated trial is not eligible for R1 / R3, in the order the check tests them. */
@@ -136,6 +156,13 @@ export interface PackInput {
   readonly arm: readonly unknown[];
   readonly grades: readonly unknown[];
   readonly ops: readonly unknown[];
+  /** The append-only attempt ledger (`attempts.jsonl`), when the pack has one. */
+  readonly attempts?: readonly unknown[];
+  /**
+   * The external attempt anchor (host-side, OUTSIDE the pack: `anchorPathFor(packDir)`), when
+   * it exists. Required for R1 packs.
+   */
+  readonly anchor?: readonly unknown[];
   /**
    * Attempts replaced in place (`superseded.jsonl`, optional; TIF-274 topped-up runs). Never
    * counted: the row in `arm.jsonl` is the re-run.
@@ -539,6 +566,10 @@ export function checkPack(input: PackInput): PackResult {
       const corrected = correctionsOnError(gatedRows);
       if (corrected !== null) errors.push(`R1: ${corrected}`);
     }
+    // Experiment rows (the corrections A/B, both arms) are never evidence for any row of any
+    // pack (#547 round 1, D1).
+    const experimental = experimentRowsError(armRows);
+    if (experimental !== null) errors.push(experimental);
     if (gatedRows.length > 0 && (isR1 || unreg > 0 || (split ?? 0) > 0)) {
       const binding = bindToTaskSet(gatedRows, { exactMultiset: isR1 });
       errors.push(...binding.errors.map((e) => (isR1 ? `R1 task set: ${e}` : `task set: ${e}`)));
@@ -600,6 +631,18 @@ export function checkPack(input: PackInput): PackResult {
       errors.push(
         `${row.trialKey}: started at host 1-minute load ${o.hostLoad1mStart} >= ${LOAD_GATE} (guest load gate)`,
       );
+    // TIF-98: only a full cold boot is the shared starting state. A fast boot (the first start
+    // after a UTM configuration write) skips most of Windows' boot work on the same disk. The
+    // class is checked, and recomputed from the recorded guest CPU against the committed
+    // constant, so a row labelled cold with a fast boot's CPU fails too (#546 round 1 D2).
+    if (o.resetBootClass !== "cold")
+      errors.push(
+        `${row.trialKey}: its reset was a ${o.resetBootClass} boot, not a full cold boot (TIF-98 cold-boot check)`,
+      );
+    else if (o.resetGuestCpuFirstSshS < COLD_MIN_GUEST_CPU)
+      errors.push(
+        `${row.trialKey}: labelled cold but its reset's guest CPU at the first ssh answer was ${o.resetGuestCpuFirstSshS} s < ${COLD_MIN_GUEST_CPU} s (TIF-98 cold-boot check)`,
+      );
     const verified = success(row, grades.get(row.trialKey));
     if (!verified) {
       accounting.nonVerified++;
@@ -619,6 +662,56 @@ export function checkPack(input: PackInput): PackResult {
       errors.push(
         `${row.trialKey}: faultLanded is null exactly on an unfaulted trial (faultClass ${row.faultClass}, faultLanded ${o.faultLanded})`,
       );
+  }
+
+  // The append-only attempt ledger (TIF-274, lead ruling 14:35Z): required for R1 evidence,
+  // and checked whenever a pack carries or pins one. Every attempt it recorded must be
+  // disclosed, every disclosed trial must be a recorded attempt, and a disclosed harness fault
+  // must match a recorded one (`src/m2/attempt-ledger.ts`).
+  const wantsLedger =
+    manifest !== null &&
+    (manifest.rows.includes("R1") ||
+      manifest.attempts !== undefined ||
+      input.attempts !== undefined);
+  if (wantsLedger) {
+    if (input.attempts === undefined) errors.push("attempts.jsonl: missing (the attempt ledger)");
+    else {
+      const ledger = verifyAttemptLedger(input.attempts);
+      errors.push(...ledger.errors);
+      // Disclosed: the pack's rows and its superseded attempts (#511). A superseded attempt's
+      // harness fault must match a recorded one, and it must end before its replacement starts.
+      const disclosed: DisclosedAttempt[] = [
+        ...armRows.map((r) => ({
+          trialKey: r.trialKey,
+          taskId: r.taskId,
+          arm: r.arm,
+          harnessClass: ops.get(r.trialKey)?.harnessClass ?? null,
+        })),
+        ...supersededAttempts.map((a) => ({
+          trialKey: a.arm.trialKey,
+          taskId: a.arm.taskId,
+          arm: a.arm.arm,
+          harnessClass: a.ops.harnessClass,
+          replacedBy: a.replacedBy,
+        })),
+      ];
+      errors.push(
+        ...crossCheckAttempts(ledger.events, disclosed, manifest?.attempts, ledger.head).map(
+          (e) => `attempt ledger: ${e}`,
+        ),
+      );
+      // The external anchor (lead ruling on #518 D3): required for R1, checked when present.
+      if (input.anchor !== undefined)
+        errors.push(
+          ...verifyAnchor(input.anchor, ledger.events, manifest?.attempts).map(
+            (e) => `attempt anchor: ${e}`,
+          ),
+        );
+      else if (manifest?.rows.includes("R1") === true)
+        errors.push(
+          "attempt anchor: missing (the host-side anchor outside the pack, attempt-anchors/<pack>.jsonl)",
+        );
+    }
   }
 
   const byArm = (arm: Arm) => armRows.filter((r) => r.arm === arm);
@@ -891,6 +984,7 @@ export function readPack(
     "grades.jsonl",
     "ops.jsonl",
     "superseded.jsonl",
+    "attempts.jsonl",
   ]);
   const runsPath =
     manifest !== null && typeof manifest === "object" && "runs" in manifest
@@ -914,5 +1008,20 @@ export function readPack(
   const superseded = existsSync(supersededPath)
     ? readJsonl(supersededPath, "superseded.jsonl", readErrors)
     : [];
-  return { manifest, arm, grades, ops, superseded, readErrors, runs };
+  const attemptsPath = join(dir, "attempts.jsonl");
+  return {
+    manifest,
+    arm,
+    grades,
+    ops,
+    superseded,
+    ...(existsSync(attemptsPath)
+      ? { attempts: readJsonl(attemptsPath, "attempts.jsonl", readErrors) }
+      : {}),
+    ...(existsSync(anchorPathFor(dir))
+      ? { anchor: readJsonl(anchorPathFor(dir), "attempt anchor", readErrors) }
+      : {}),
+    readErrors,
+    runs,
+  };
 }

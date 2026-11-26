@@ -41,7 +41,6 @@ describe("canonical task text", () => {
 
 describe("the row records the instruction it used", () => {
   const shot = { type: "image", mimeType: "image/png", data: "eA==" } as const;
-  const action = { tool: "click", arguments: { x: 1, y: 2 } };
 
   function plannerCapturing(seen: string[]): Planner {
     return {
@@ -99,6 +98,5 @@ describe("the row records the instruction it used", () => {
     expect(seen[0]).toBe(taskText(params));
     expect(row.instruction).toBe(taskText(params));
     expect(row.instruction).toContain("save the file");
-    expect(action).toBeDefined();
   });
 });

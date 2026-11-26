@@ -51,7 +51,7 @@ function attempt(
 }
 
 const check = (superseded: unknown[], trials: Trial[] = r1Trials()) =>
-  checkPack({ ...input(trials, manifest()), superseded });
+  checkPack(input(trials, manifest(), superseded));
 
 describe("topped-up runs: a harness-faulted trial re-run in place", () => {
   it("passes: the faulted attempt is kept, linked, and never counted", () => {
@@ -148,8 +148,7 @@ describe("topped-up runs: a harness-faulted trial re-run in place", () => {
   });
 
   it("reads superseded.jsonl from a pack directory", () => {
-    const dir = writePack("m2-topped", r1Trials(), manifest());
-    writeFileSync(join(dir, "superseded.jsonl"), `${JSON.stringify(attempt("g61-a1"))}\n`);
+    const dir = writePack("m2-topped", r1Trials(), manifest(), undefined, [attempt("g61-a1")]);
     const read = readPack(dir, () => ({ ok: true, detail: "not called" }));
     expect(read.superseded).toHaveLength(1);
     const r = checkPack(read);
@@ -205,6 +204,8 @@ describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned check
       hostLoad1mStart: 1,
       harnessClass,
       faultLanded: live.faultClass === "none" ? null : true,
+      resetBootClass: "cold",
+      resetGuestCpuFirstSshS: 280,
     },
   });
   const live = () => r1Trials()[LIVE]!.arm;
@@ -286,10 +287,11 @@ describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned check
       { faultLanded: true },
     );
     const trials = [...r1Trials(), shellLive];
-    const r = checkPack({
-      ...input(trials, manifest({ expectTrials: { "myco-gate": 100, "hcu+shell": 1 } })),
-      superseded: [attemptOf(shellLive.arm, "s300-a1")],
-    });
+    const r = checkPack(
+      input(trials, manifest({ expectTrials: { "myco-gate": 100, "hcu+shell": 1 } }), [
+        attemptOf(shellLive.arm, "s300-a1"),
+      ]),
+    );
     expect(r.errors).toEqual([]);
     expect(r.superseded.count).toBe(1);
   });
