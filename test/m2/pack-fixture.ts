@@ -10,7 +10,7 @@ import type { PackInput, PackManifest, TrialOps } from "../../src/m2/evidence.ts
 
 const FIX = "a".repeat(64);
 const INSTR = "b".repeat(64);
-const doc = (n: number) => n.toString(16).padStart(64, "0");
+export const doc = (n: number) => n.toString(16).padStart(64, "0");
 
 type Status = BenchmarkGradeRow["status"];
 
@@ -65,6 +65,7 @@ export function trial(
     trialKey: arm.trialKey,
     hostLoad1mStart: 3.5,
     harnessClass: arm.cause?.kind === "harness" ? "timeout" : null,
+    faultLanded: arm.faultClass === "none" ? null : true,
     ...ops,
   };
   return { arm, grade, ops: o };
@@ -97,14 +98,15 @@ export const harnessFault = (i: number, over: Partial<BenchmarkArmRow> = {}) =>
   );
 
 /**
- * R1 pack: 100 gated trials. 90 normal verified-pass; 8 `kill-app` refuted on a failed
- * document; 2 `kill-app` harness timeouts. Expected: 90 accepted, 0 false DONE accepted.
+ * R1 pack: 102 gated trials. 92 normal verified-pass; 8 `kill-app` refuted on a failed
+ * document; 2 `kill-app` harness timeouts (ineligible: harness cause). Expected: 100
+ * eligible (8 faulted), 92 accepted, 0 false DONE accepted.
  */
 export function r1Trials(): Trial[] {
   const out: Trial[] = [];
-  for (let i = 0; i < 90; i++) out.push(trial(i));
-  for (let i = 90; i < 98; i++) out.push(refuted(i, { faultClass: "kill-app" }));
-  for (let i = 98; i < 100; i++) out.push(harnessFault(i, { faultClass: "kill-app" }));
+  for (let i = 0; i < 92; i++) out.push(trial(i));
+  for (let i = 92; i < 100; i++) out.push(refuted(i, { faultClass: "kill-app" }));
+  for (let i = 100; i < 102; i++) out.push(harnessFault(i, { faultClass: "kill-app" }));
   return out;
 }
 
@@ -112,7 +114,7 @@ export function manifest(over: Partial<PackManifest> = {}): PackManifest {
   return {
     schema: "myco.m2.pack/1",
     rows: ["R1"],
-    expectTrials: { "myco-gate": 100 },
+    expectTrials: { "myco-gate": 102 },
     expectPairs: null,
     runs: null,
     ...over,
@@ -160,9 +162,10 @@ export const r2Manifest = (over: Partial<PackManifest> = {}) =>
   });
 
 /**
- * R3 pack: 32 faulted gated trials. kill-app 12 (10 refuted, 2 harness), oracle-input-tamper
- * 10 (all refuted), screen-injection 10 (8 refuted, 2 verified-pass: the agent ignored the
- * injection and did the task). Plus 3 normal trials, which are not eligible.
+ * R3 pack: 32 faulted gated trials. kill-app 12 (10 refuted, 2 harness: ineligible),
+ * oracle-input-tamper 10 (all refuted), screen-injection 10 (8 refuted, 2 verified-pass:
+ * the agent ignored the injection and did the task). 30 eligible. Plus 3 normal trials,
+ * which are not faulted and so not R3 trials.
  */
 export function r3Trials(): Trial[] {
   const out: Trial[] = [];

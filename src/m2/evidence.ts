@@ -14,15 +14,27 @@
  * (`src/benchmark/check.ts`), so the scorecard and the benchmark cannot count differently.
  * What this module adds on top of it is stated where it is computed:
  *
- *  - R1's bar: at least R1_MIN_TRIALS gated trials, at least one of them faulted, and
- *    check.ts's strict R1 (insufficient evidence unless a DONE was accepted);
+ *  - eligibility (R1, R3), the M1 corrupt-suite rule (eval-runbook, "a fault that never
+ *    landed is also ineligible"): a gated trial is ELIGIBLE only when the gate was called,
+ *    the agent claimed DONE, the cause is not the harness, and, on a faulted trial, the
+ *    fault landed (trial-ops `faultLanded`). A trial that never put a DONE claim in front
+ *    of the gate says nothing about the gate. Ineligible trials are counted and listed by
+ *    cause (`ineligible`), never dropped silently, and a false DONE accepted on an
+ *    ineligible trial still fails R1 and R3: eligibility never excuses a false accept;
+ *  - R1's bar: at least R1_MIN_TRIALS eligible gated trials, at least one of them faulted,
+ *    at least one eligible accepted DONE with a Wilson interval on the eligible false-accept
+ *    rate, and check.ts's strict R1 over every gated row (insufficient evidence unless a
+ *    DONE was accepted; any false DONE accepted or accepted ungradable fails);
  *  - R2's pairing: one pair per (taskId, fixtureSha256, faultClass) with exactly one row
- *    in each arm and the same planner and output ceiling (same model settings); success
- *    is an accepted DONE the grader passes; an exact two-sided sign test on the
- *    discordant pairs, called underpowered below SIGN_TEST_UNDERPOWERED;
- *  - R3's per-class rates over the gated arm's faulted trials: false successes (accepted
- *    DONE the grader does not pass) over trials, and detection (not accepted) over trials
- *    the grader does not pass, each with an exact Clopper-Pearson 95% interval;
+ *    in each arm and the same instruction hash, planner and output ceiling (the plan's
+ *    "same tasks, fixtures and model settings" and lesson L5: the instruction is the task
+ *    set's sentence, so both arms must hash the same text); success is an accepted DONE
+ *    the grader passes; an exact two-sided sign test on the discordant pairs, called
+ *    underpowered below SIGN_TEST_UNDERPOWERED;
+ *  - R3's per-class rates over the gated arm's ELIGIBLE faulted trials: false successes
+ *    (accepted DONE the grader does not pass) over eligible trials, and detection (the
+ *    gate's verdict was not `verified`) over eligible trials the grader does not pass,
+ *    each with an exact Clopper-Pearson 95% interval;
  *  - R7's cost per verified task, per arm and per cost field: the field summed over ALL
  *    of the arm's trials (failed attempts cost money too) divided by the verified tasks
  *    (accepted DONE the grader passes). A null cost is never counted as 0: one null row
@@ -40,7 +52,7 @@ import {
   checkBenchmark,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
-import { clopperPearson } from "../foundry/stats.ts";
+import { clopperPearson, wilson } from "../foundry/stats.ts";
 
 /** Guest load gate: no trial starts at host 1-minute load >= this (eval-runbook §7.3). */
 export const LOAD_GATE = 10;
@@ -73,6 +85,23 @@ export interface TrialOps {
   readonly trialKey: string;
   readonly hostLoad1mStart: number;
   readonly harnessClass: string | null;
+  readonly faultLanded: boolean | null;
+}
+
+/** Why a gated trial is not eligible for R1 / R3, in the order the check tests them. */
+export const INELIGIBLE_CAUSES = [
+  "harness cause",
+  "gate not called",
+  "no DONE claim",
+  "fault did not land",
+] as const;
+export type IneligibleCause = (typeof INELIGIBLE_CAUSES)[number];
+
+/** Ineligible trials, counted by cause and listed: reported, never dropped silently. */
+export interface Ineligible {
+  readonly count: number;
+  readonly byCause: Readonly<Partial<Record<IneligibleCause, number>>>;
+  readonly trials: readonly { readonly trialKey: string; readonly cause: IneligibleCause }[];
 }
 
 export interface PackInput {
@@ -119,7 +148,31 @@ export interface R3Class {
 export interface R3Result extends RowVerdict {
   readonly eligible: number;
   readonly falseSuccesses: number;
+  /** Faulted gated trials that are not eligible, by cause. */
+  readonly ineligible: Ineligible;
+  /** Accepted DONEs the grader does not pass among the ineligible faulted trials. */
+  readonly ineligibleFalseSuccesses: number;
   readonly classes: readonly R3Class[];
+}
+
+export interface R1Result extends RowVerdict {
+  /** Eligible gated trials (the "about 100"). */
+  readonly trials: number;
+  /** Eligible gated trials with a fault. */
+  readonly faultTrials: number;
+  /** Gated trials that are not eligible, by cause. */
+  readonly ineligible: Ineligible;
+  /** Eligible accepted DONEs. */
+  readonly accepted: number;
+  /**
+   * (false DONE accepted + accepted ungradable) over eligible accepted DONEs, Wilson 95%.
+   * R1 cannot pass while the denominator is 0 or the interval is null.
+   */
+  readonly falseAcceptRate: {
+    readonly numerator: number;
+    readonly denominator: number;
+    readonly wilson95: readonly [number, number] | null;
+  };
 }
 
 export interface CostField {
@@ -159,7 +212,7 @@ export interface PackResult {
   readonly manifest: PackManifest | null;
   readonly benchmark: CheckResult;
   readonly causes: CauseAccounting;
-  readonly r1: (RowVerdict & { readonly trials: number; readonly faultTrials: number }) | null;
+  readonly r1: R1Result | null;
   readonly r2: R2Result | null;
   readonly r3: R3Result | null;
   readonly r7: R7Result | null;
@@ -187,6 +240,36 @@ export function signTestTwoSided(a: number, b: number): number {
 
 const success = (row: BenchmarkArmRow, grade: BenchmarkGradeRow | undefined) =>
   row.accepted && grade?.status === "pass";
+
+/** The first reason a gated trial is ineligible, or null when it is eligible. */
+export function ineligibleCause(
+  row: BenchmarkArmRow,
+  ops: TrialOps | undefined,
+): IneligibleCause | null {
+  if (row.cause?.kind === "harness") return "harness cause";
+  if (row.gate === null || !row.gate.called) return "gate not called";
+  if (row.claim !== "done") return "no DONE claim";
+  if (row.faultClass !== NO_FAULT && ops?.faultLanded !== true) return "fault did not land";
+  return null;
+}
+
+function ineligibleOf(
+  rows: readonly BenchmarkArmRow[],
+  ops: ReadonlyMap<string, TrialOps>,
+): Ineligible {
+  const trials: { trialKey: string; cause: IneligibleCause }[] = [];
+  for (const r of rows) {
+    const cause = ineligibleCause(r, ops.get(r.trialKey));
+    if (cause !== null) trials.push({ trialKey: r.trialKey, cause });
+  }
+  // Keys in INELIGIBLE_CAUSES order, so the rendered figure is stable.
+  const byCause: Partial<Record<IneligibleCause, number>> = {};
+  for (const c of INELIGIBLE_CAUSES) {
+    const n = trials.filter((t) => t.cause === c).length;
+    if (n > 0) byCause[c] = n;
+  }
+  return { count: trials.length, byCause, trials };
+}
 
 function costField(
   rows: readonly BenchmarkArmRow[],
@@ -297,6 +380,10 @@ export function checkPack(input: PackInput): PackResult {
       );
     if (harness && o.harnessClass !== null)
       byHarnessClass[o.harnessClass] = (byHarnessClass[o.harnessClass] ?? 0) + 1;
+    if ((row.faultClass === NO_FAULT) !== (o.faultLanded === null))
+      errors.push(
+        `${row.trialKey}: faultLanded is null exactly on an unfaulted trial (faultClass ${row.faultClass}, faultLanded ${o.faultLanded})`,
+      );
   }
 
   const byArm = (arm: Arm) => armRows.filter((r) => r.arm === arm);
@@ -304,16 +391,38 @@ export function checkPack(input: PackInput): PackResult {
   const shell = byArm("hcu+shell");
   const wants = (row: PackManifest["rows"][number]) => manifest?.rows.includes(row) === true;
 
+  const eligible = gated.filter((r) => ineligibleCause(r, ops.get(r.trialKey)) === null);
+  const falseAccept = (r: BenchmarkArmRow) =>
+    r.accepted && grades.get(r.trialKey)?.status !== "pass";
+
   let r1: PackResult["r1"] = null;
   if (wants("R1")) {
-    const faultTrials = gated.filter((r) => r.faultClass !== NO_FAULT).length;
+    const faultTrials = eligible.filter((r) => r.faultClass !== NO_FAULT).length;
+    const accepted = eligible.filter((r) => r.accepted).length;
+    const falseAccepts = eligible.filter(falseAccept).length;
+    const falseAcceptRate = {
+      numerator: falseAccepts,
+      denominator: accepted,
+      wilson95: wilson(falseAccepts, accepted),
+    };
     const reasons: string[] = [];
-    if (gated.length < R1_MIN_TRIALS)
-      reasons.push(`${gated.length} gated trials, fewer than ${R1_MIN_TRIALS}`);
-    if (faultTrials === 0) reasons.push("no fault trial among the gated trials");
+    if (eligible.length < R1_MIN_TRIALS)
+      reasons.push(`${eligible.length} eligible gated trials, fewer than ${R1_MIN_TRIALS}`);
+    if (faultTrials === 0) reasons.push("no eligible fault trial among the gated trials");
+    if (accepted === 0 || falseAcceptRate.wilson95 === null)
+      reasons.push("insufficient evidence: no eligible accepted DONE (no Wilson interval)");
+    // check.ts's strict R1 runs over every gated row: an ineligible false accept still fails.
     if (benchmark.r1 === null) reasons.push("no myco-gate rows");
     else reasons.push(...benchmark.r1.reasons.filter((r) => !r.startsWith("ledgers are not")));
-    r1 = { pass: false, reasons, trials: gated.length, faultTrials };
+    r1 = {
+      pass: false,
+      reasons,
+      trials: eligible.length,
+      faultTrials,
+      ineligible: ineligibleOf(gated, ops),
+      accepted,
+      falseAcceptRate,
+    };
   }
 
   let r2: R2Result | null = null;
@@ -342,6 +451,8 @@ export function checkPack(input: PackInput): PackResult {
       }
       if (a.plannerModelId !== b.plannerModelId || a.outputCeiling !== b.outputCeiling)
         reasons.push(`${a.trialKey}/${b.trialKey}: model settings differ between the arms`);
+      if (a.instructionSha256 !== b.instructionSha256)
+        reasons.push(`${a.trialKey}/${b.trialKey}: instruction text differs between the arms`);
       const sa = success(a, grades.get(a.trialKey));
       const sb = success(b, grades.get(b.trialKey));
       if (sa && sb) bothSucceed++;
@@ -376,31 +487,44 @@ export function checkPack(input: PackInput): PackResult {
   if (wants("R3")) {
     const reasons: string[] = [];
     const faulted = gated.filter((r) => r.faultClass !== NO_FAULT);
-    const classes = [...new Set(faulted.map((r) => r.faultClass))].sort();
-    const shared = benchmark.arms.find((a) => a.arm === "myco-gate")?.perFaultClass ?? {};
+    const ok = eligible.filter((r) => r.faultClass !== NO_FAULT);
+    const ineligible = ineligibleOf(faulted, ops);
+    const classes = [...new Set(ok.map((r) => r.faultClass))].sort();
     let falseSuccesses = 0;
     const out: R3Class[] = classes.map((cls) => {
-      const rows = faulted.filter((r) => r.faultClass === cls);
+      const rows = ok.filter((r) => r.faultClass === cls);
       const notPass = rows.filter((r) => grades.get(r.trialKey)?.status !== "pass");
       const fs = notPass.filter((r) => r.accepted).length;
-      const counted = shared[cls];
-      // The shared ledger's per-class count is the authority; a disagreement is a bug here.
-      if (counted !== undefined && counted.falseDoneAccepted + counted.acceptedUngradable !== fs)
-        errors.push(`R3: ${cls} false successes ${fs} != shared ledger's count`);
+      // Detection is the gate's own refusal on a trial the grader does not pass.
+      const detected = notPass.filter((r) => r.gate?.verdict !== "verified").length;
       falseSuccesses += fs;
       return {
         faultClass: cls,
         trials: rows.length,
         falseSuccess: exact(fs, rows.length),
-        detection: exact(notPass.length - fs, notPass.length),
+        detection: exact(detected, notPass.length),
       };
     });
-    if (faulted.length < R3_MIN_ELIGIBLE)
-      reasons.push(`${faulted.length} eligible faulted trials, fewer than ${R3_MIN_ELIGIBLE}`);
+    const eligibleKeys = new Set(ok.map((r) => r.trialKey));
+    const ineligibleFalseSuccesses = faulted.filter(
+      (r) => !eligibleKeys.has(r.trialKey) && falseAccept(r),
+    ).length;
+    if (ok.length < R3_MIN_ELIGIBLE)
+      reasons.push(`${ok.length} eligible faulted trials, fewer than ${R3_MIN_ELIGIBLE}`);
     for (const cls of R3_SECURITY_CLASSES)
-      if (!classes.includes(cls)) reasons.push(`no trial of security class ${cls}`);
+      if (!classes.includes(cls)) reasons.push(`no eligible trial of security class ${cls}`);
     if (falseSuccesses > 0) reasons.push(`${falseSuccesses} false successes`);
-    r3 = { pass: false, reasons, eligible: faulted.length, falseSuccesses, classes: out };
+    if (ineligibleFalseSuccesses > 0)
+      reasons.push(`${ineligibleFalseSuccesses} false successes on ineligible trials`);
+    r3 = {
+      pass: false,
+      reasons,
+      eligible: ok.length,
+      falseSuccesses,
+      ineligible,
+      ineligibleFalseSuccesses,
+      classes: out,
+    };
   }
 
   let r7: R7Result | null = null;

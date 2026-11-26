@@ -80,7 +80,7 @@ ROW_LINE = re.compile(r"\| *(R\d+) *\|")
 # Words with a word-internal digit run that no claim covers, per section, in doc order.
 # Regenerate with --identifiers after a deliberate doc edit and check the diff.
 IDENTIFIER_PINS: dict[str, tuple[str, ...]] = {
-    "status": ("M2", "M2", "m2-scorecard-check"),
+    "status": ("M2", "M2", "m2-scorecard-check", "R1", "R3"),
     "process": ("m2-evidence-check", "m2-", "m2", "m2-evidence"),
     "how": ("python3", "m2-scorecard-check"),
 }
@@ -303,12 +303,19 @@ def arm_counts(result: dict, arm: str) -> dict:
     return next(a for a in result["benchmark"]["arms"] if a["arm"] == arm)
 
 
+def ineligible(inel: dict) -> str:
+    """`N ineligible (cause n, ...)`, causes in the evidence check's order; never omitted."""
+    causes = ", ".join(f"{c} {n}" for c, n in inel["byCause"].items())
+    return f"{inel['count']} ineligible" + (f" ({causes})" if causes else "")
+
+
 def figures_r1(result: dict) -> str:
     g = arm_counts(result, "myco-gate")
     r1 = result["r1"]
-    return (f"{r1['trials']} gated trials ({r1['faultTrials']} faulted); {g['accepted']} accepted DONE, "
-            f"{g['falseDoneAccepted']} false DONE accepted, {g['acceptedUngradable']} accepted ungradable; "
-            f"false-accept rate {rate(g['falseAcceptRate'])}")
+    return (f"{r1['trials']} eligible gated trials ({r1['faultTrials']} faulted), {ineligible(r1['ineligible'])}; "
+            f"{r1['accepted']} eligible accepted DONE; over all gated trials {g['falseDoneAccepted']} false DONE "
+            f"accepted, {g['acceptedUngradable']} accepted ungradable; "
+            f"false-accept rate {rate(r1['falseAcceptRate'])}")
 
 
 def figures_r2(result: dict) -> str:
@@ -326,7 +333,8 @@ def figures_r3(result: dict) -> str:
     r3 = result["r3"]
     classes = "; ".join(f"{c['faultClass']}: false success {rate(c['falseSuccess'], 'exact')}, "
                         f"detection {rate(c['detection'], 'exact')}" for c in r3["classes"])
-    return f"{r3['eligible']} eligible faulted trials, {r3['falseSuccesses']} false successes; {classes}"
+    return (f"{r3['eligible']} eligible faulted trials, {ineligible(r3['ineligible'])}; "
+            f"{r3['falseSuccesses']} false successes, {r3['ineligibleFalseSuccesses']} on ineligible trials; {classes}")
 
 
 def cost(field: dict, verified: int, unit: str) -> str:
@@ -445,12 +453,12 @@ def check_preamble(r: Report, statuses: Counter) -> None:
                 "`docs/product/m2-plan-draft.md` §2.1")
 
 
-def check_process(r: Report, const: dict) -> None:
+def check_process(r: Report, const: dict, runbook_path: Path = RUNBOOK) -> None:
     s = "process"
     r.unchecked(s, "plan reference", "a section reference into the plan, not a figure", "The plan's §2.2")
     r.quote(s, "harness classes", "(" + ", ".join(const["harnessClasses"]) + ")",
             source="schemas/m2-evidence.ts HARNESS_CLASSES")
-    runbook = grab(r"1-min load stays under (\d+) for", RUNBOOK.read_text())
+    runbook = grab(r"1-min load stays under (\d+) for", runbook_path.read_text())
     r.check(s, "load gate", runbook == str(const["loadGate"]),
             f"src/m2/evidence.ts LOAD_GATE = {const['loadGate']}; eval-runbook load gate = {runbook}",
             f"trial started at load {const['loadGate']} or more fails")
@@ -465,6 +473,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--evidence-root", type=Path, default=ROOT / EVIDENCE_PREFIX,
                     help="where cited packs are read from (tests point it at fixtures)")
     ap.add_argument("--plan", type=Path, default=PLAN, help="the M2 plan the pass bars are checked against")
+    ap.add_argument("--runbook", type=Path, default=RUNBOOK,
+                    help="the eval runbook the load gate is checked against (tests point it at a copy)")
     ap.add_argument("--identifiers", action="store_true",
                     help="print, as JSON, each section's identifier words outside every claim, then exit")
     args = ap.parse_args(argv)
@@ -476,7 +486,7 @@ def main(argv: list[str]) -> int:
     check_bars(r, const, args.plan.read_text(encoding="utf-8"))
     statuses = check_rows(r, args.evidence_root.resolve())
     check_preamble(r, statuses)
-    check_process(r, const)
+    check_process(r, const, args.runbook)
     r.sweep_numbers()
     if args.identifiers:
         print(json.dumps({w: r.sequences[w] for w in r.in_scope() if r.sequences.get(w)}))

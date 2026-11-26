@@ -74,11 +74,15 @@ export const HARNESS_CLASSES = [
  * Per-trial process record. `hostLoad1mStart` is the host's 1-minute load when the trial
  * started (the guest load gate: no trial starts at load >= 10, eval-runbook §7.3).
  * `harnessClass` is set exactly when the arm row's `cause.kind` is `harness`.
+ * `faultLanded` says whether the injected fault took effect; it is null exactly on an
+ * unfaulted trial (`faultClass: "none"`). A fault that never landed makes the trial
+ * ineligible for R1 and R3 (eval-runbook, M1 corrupt suite: "a fault that never landed is
+ * also ineligible").
  */
 export const m2TrialOpsSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["schema", "trialKey", "hostLoad1mStart", "harnessClass"],
+  required: ["schema", "trialKey", "hostLoad1mStart", "harnessClass", "faultLanded"],
   properties: {
     schema: { const: "myco.m2.trial-ops/1" },
     trialKey: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
@@ -86,5 +90,6 @@ export const m2TrialOpsSchema: JsonSchema = {
     harnessClass: {
       anyOf: [{ type: "string", enum: [...HARNESS_CLASSES] }, { type: "null" }],
     },
+    faultLanded: { anyOf: [{ type: "boolean" }, { type: "null" }] },
   },
 };

@@ -24,16 +24,19 @@ const T = 120_000;
 
 // Expected figures, computed by hand from the fixtures (pack-fixture.ts) and Wilson /
 // Clopper-Pearson by formula, not by the code under test.
+// Wilson upper bound at 0/n is z²/(n + z²), z = 1.96: 0/92 -> 0.0401, 0/91 -> 0.0405.
 const R1_FIG =
-  "100 gated trials (10 faulted); 90 accepted DONE, 0 false DONE accepted, 0 accepted ungradable; " +
-  "false-accept rate 0/90 (Wilson 0.000–0.041)";
+  "100 eligible gated trials (8 faulted), 2 ineligible (harness cause 2); 92 eligible accepted DONE; " +
+  "over all gated trials 0 false DONE accepted, 0 accepted ungradable; " +
+  "false-accept rate 0/92 (Wilson 0.000–0.040)";
 const R2_FIG =
   "30 pairs; myco-gate: false-done 0/20 (Wilson 0.000–0.161), success 20/30 (Wilson 0.488–0.808); " +
   "hcu+shell: false-done 10/25 (Wilson 0.234–0.593), success 15/30 (Wilson 0.332–0.668); " +
   "both 15, gate only 5, shell only 0, neither 10; sign test p = 0.0625, underpowered";
+// The two kill-app harness faults are ineligible: kill-app is 10 trials, not 12 (D1).
 const R3_FIG =
-  "32 eligible faulted trials, 0 false successes; " +
-  "kill-app: false success 0/12 (exact 0.000–0.265), detection 12/12 (exact 0.735–1.000); " +
+  "30 eligible faulted trials, 2 ineligible (harness cause 2); 0 false successes, 0 on ineligible trials; " +
+  "kill-app: false success 0/10 (exact 0.000–0.308), detection 10/10 (exact 0.692–1.000); " +
   "oracle-input-tamper: false success 0/10 (exact 0.000–0.308), detection 10/10 (exact 0.692–1.000); " +
   "screen-injection: false success 0/10 (exact 0.000–0.308), detection 8/8 (exact 0.631–1.000)";
 const R7_FIG =
@@ -50,7 +53,7 @@ beforeAll(() => {
   writePack(
     "m2-fx-r1-short",
     r1Trials().slice(1),
-    manifest({ expectTrials: { "myco-gate": 99 } }),
+    manifest({ expectTrials: { "myco-gate": 101 } }),
     root,
   );
   const loud: Trial[] = r1Trials();
@@ -160,7 +163,7 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
     "fails and names the row when one recomputed figure changes",
     () => {
       for (const [from, to, row] of [
-        ["90 accepted DONE", "91 accepted DONE", "R1"],
+        ["92 eligible accepted DONE", "93 eligible accepted DONE", "R1"],
         ["gate only 5", "gate only 6", "R2"],
         ["detection 8/8", "detection 9/9", "R3"],
         ["wall clock 150.0 s", "wall clock 149.0 s", "R7"],
@@ -179,8 +182,9 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
     "recomputes the status: a pack below the bar is NOT DONE, and DONE on it fails",
     () => {
       const fig =
-        "99 gated trials (10 faulted); 89 accepted DONE, 0 false DONE accepted, 0 accepted ungradable; " +
-        "false-accept rate 0/89 (Wilson 0.000–0.041)";
+        "99 eligible gated trials (8 faulted), 2 ineligible (harness cause 2); 91 eligible accepted DONE; " +
+        "over all gated trials 0 false DONE accepted, 0 accepted ungradable; " +
+        "false-accept rate 0/91 (Wilson 0.000–0.041)";
       const notDone = status(setRow(COMMITTED, "R1", "NOT DONE", "m2-fx-r1-short", fig), 0, 7, 1);
       const ok = check(notDone);
       expect(ok.mismatch).toEqual([]);
@@ -394,6 +398,10 @@ describe("m2-scorecard-check: the number sweep and layout", () => {
           ),
           /the header line must be exactly/,
         ],
+        [
+          mutate(COMMITTED, "|---|---|---|---|---|", "|---|---|---|---|---|7|"),
+          /the separator line must be exactly/,
+        ],
       ];
       for (const [text, pattern] of cases) {
         const r = check(text);
@@ -429,6 +437,29 @@ describe("m2-scorecard-check: the number sweep and layout", () => {
       expect(r.mismatch.join("\n")).toMatch(
         /MISMATCH process: identifier words: word 1: the doc has 'm2-scorecard-check' where IDENTIFIER_PINS has 'm2-evidence-check'/,
       );
+    },
+    T,
+  );
+});
+
+describe("m2-scorecard-check: the load gate agrees with the runbook", () => {
+  it(
+    "fails when the eval runbook's load gate moves away from LOAD_GATE",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "m2-scorecard-runbook-"));
+      const runbook = join(dir, "eval-runbook.md");
+      const doc = join(dir, "m2-scorecard.md");
+      writeFileSync(doc, COMMITTED);
+      const text = readFileSync("docs/eval-runbook.md", "utf8");
+      writeFileSync(runbook, text);
+      expect(run(["--doc", doc, "--runbook", runbook]).status).toBe(0);
+      writeFileSync(
+        runbook,
+        mutate(text, "1-min load stays under 10 for", "1-min load stays under 12 for"),
+      );
+      const r = run(["--doc", doc, "--runbook", runbook]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/MISMATCH process: load gate: .*eval-runbook load gate = 12/);
     },
     T,
   );
