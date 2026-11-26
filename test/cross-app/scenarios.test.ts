@@ -9,7 +9,7 @@
  * with the gate (pass iff accepted; its first failing step is the gate's first refuted
  * checkpoint).
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -17,6 +17,7 @@ import {
   crossAppTaskEntry,
   fakeCrossAppActuator,
   runCrossAppScenario,
+  runCrossAppTrial,
 } from "../../src/gate/cross-app-demo.ts";
 import { openBoundGate } from "../../src/gate/demo.ts";
 import { buildRegistry, createGate, fileEvidenceReader } from "../../src/gate/gate.ts";
@@ -69,6 +70,49 @@ describe("the retry follows the existing budget", () => {
     }
     const repaired = runs.find((r) => r.scenario === "slip-step-2-then-repair");
     expect(repaired?.trial.repaired).toBe(true);
+  });
+
+  it("before a retry the harness deletes the captures of the steps it redoes and the end state, and keeps the verified ones", async () => {
+    // A stale marker planted in every capture dir after the first gate call must be gone
+    // from step-2, step-3 and end/ (redone from checkpoint 1) and still in step-1.
+    const root = tempRoot();
+    roots.push(root);
+    const scenario = CROSS_APP_SCENARIOS.find((s) => s.name === "slip-step-2-then-repair");
+    if (!scenario) throw new Error("scenario missing");
+    const evidenceDir = join(root, "evidence", "xa-stale");
+    const dirs = ["step-1", "step-2", "step-3", "end"];
+    const seen: Record<string, boolean>[] = [];
+    let calls = 0;
+    const trial = await runCrossAppTrial({
+      spec: task.spec,
+      guestDir: join(root, "guest", "xa-stale"),
+      evidenceDir,
+      actuator: fakeCrossAppActuator,
+      slips: scenario.slips,
+      retryBudget: 1,
+      async checkGate(claim) {
+        calls++;
+        if (calls === 2)
+          seen.push(
+            Object.fromEntries(dirs.map((d) => [d, existsSync(join(evidenceDir, d, "stale"))])),
+          );
+        const gate = createGate({
+          tasks: buildRegistry([crossAppTaskEntry(task.taskId, task.spec)]),
+          reader: fileEvidenceReader(join(root, "evidence")),
+          assignment: { taskId: task.taskId, runId: "xa-stale" },
+        });
+        const result = await gate.check({ taskId: task.taskId, runId: "xa-stale", claim });
+        if (calls === 1)
+          for (const d of dirs) {
+            mkdirSync(join(evidenceDir, d), { recursive: true });
+            writeFileSync(join(evidenceDir, d, "stale"), "from attempt 1");
+          }
+        return result;
+      },
+    });
+    expect(trial.attempts).toHaveLength(2);
+    expect(trial.attempts[1]?.fromCheckpoint).toBe(1);
+    expect(seen).toEqual([{ "step-1": true, "step-2": false, "step-3": false, end: false }]);
   });
 
   it("the agent's request is { taskId, runId, claim } only", async () => {

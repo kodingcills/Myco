@@ -247,6 +247,35 @@ describe("verdicts from the real gate", () => {
       for (const edit of step.edits) expect(text).not.toContain(edit.newValue);
   });
 
+  it("a report value that differs only in letter case is refuted (values compare exactly)", async () => {
+    const want = STEP3.edits.find((e) => /[A-Z]/.test(e.newValue))?.newValue as string;
+    expect(want).toBeDefined();
+    const lower = reportAt(SPEC, 3).replace(want, want.toLowerCase());
+    expect(lower).not.toBe(reportAt(SPEC, 3));
+    const result = await trial({
+      [`${stepDir(3)}/${REPORT_FILE}`]: lower,
+      [`${END_DIR}/${REPORT_FILE}`]: lower,
+    });
+    expect(result.verdict).toBe("refuted");
+    expect(result.checkpoints?.lastVerified).toBe(2);
+    expect(result.reasons[0]).toMatch(/^step 3 \(report\.txt\): TARGET_MISMATCH/);
+  });
+
+  it("a report label that differs only in letter case is refuted", async () => {
+    const report = reportAt(SPEC, 3);
+    const line = report.split("\n")[4] as string;
+    const swapped = report.replace(
+      line,
+      line.replace(/name:|qty:/, (m) => m.toUpperCase()),
+    );
+    expect(swapped).not.toBe(report);
+    const result = await trial({
+      [`${stepDir(3)}/${REPORT_FILE}`]: swapped,
+      [`${END_DIR}/${REPORT_FILE}`]: swapped,
+    });
+    expect(result.verdict).toBe("refuted");
+  });
+
   it("accepts what Writer and Calc legitimately write: a BOM, CRLF line ends, trailing blanks", async () => {
     const report = `\ufeff${reportAt(SPEC, 3).replace(/\n/g, "  \r\n")}\r\n`;
     const result = await trial({
@@ -327,5 +356,41 @@ describe("fail closed: the gate never decides without every file", () => {
   it("parseReport refusals are StateCorruptError (the gate's uncertain path)", () => {
     expect(() => parseReport(new Uint8Array([0xff]))).toThrow(StateCorruptError);
     expect(parseReport(new TextEncoder().encode("a  \r\nb\n\n\n"))).toEqual(["a", "b"]);
+  });
+});
+
+describe("corrections are not supported for this family", () => {
+  it("a corrections policy naming cross-app-steps is refused at gate start", () => {
+    const root = tempRoot();
+    try {
+      expect(() =>
+        createGate({
+          tasks: buildRegistry([crossAppTaskEntry(TASK, SPEC)]),
+          reader: fileEvidenceReader(root),
+          assignment: { taskId: TASK, runId: RUN },
+          corrections: { families: ["cross-app-steps"] },
+        }),
+      ).toThrow(/invalid gate corrections: family "cross-app-steps" has no correction support/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a policy naming only other families leaves this family's results without corrections", async () => {
+    const root = tempRoot();
+    writeTrial(root, SPEC, { [`${stepDir(2)}/${SHEET_FILE}`]: sheetAt(SPEC, 1) });
+    try {
+      const gate = createGate({
+        tasks: buildRegistry([crossAppTaskEntry(TASK, SPEC)]),
+        reader: fileEvidenceReader(root),
+        assignment: { taskId: TASK, runId: RUN },
+        corrections: { families: ["calc-record-edit"] },
+      });
+      const result = await gate.check({ taskId: TASK, runId: RUN, claim: "done" });
+      expect(result.verdict).toBe("refuted");
+      expect(result.corrections).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

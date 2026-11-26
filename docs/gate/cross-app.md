@@ -67,7 +67,8 @@ filled.
 restores both guest documents to `expected(lastVerified)` (host-generated), deletes the
 captures of the steps it is about to redo and the end state, and lets the agent redo steps
 `lastVerified + 1 .. n`; the second gate result is the verdict. Never a third attempt.
-Corrections are not supported for this family (a policy naming it is refused at start).
+Corrections are not supported for this family (a policy naming it is refused at start;
+`test/cross-app/family.test.ts`).
 
 The agent's input to the gate is unchanged: `{ taskId, runId, claim }` over `myco.gate/v1`.
 No new agent-facing input was added; the multi-file read is operator-side (registry +
@@ -160,6 +161,10 @@ joined, salary).
   `MYCO_LINUX_PATH_REQUIRED=1` and installs `libreoffice-writer`, so it fails rather than
   skips there). Skips cleanly without soffice, Python-UNO or Writer.
 - `test/cross-app/grader.test.ts`, `oracle-selftest.test.ts`, `taskset.test.ts`.
+- `test/cross-app/bar.test.ts`: the measurement bar below (design, Newcombe interval,
+  decision rule, false-verified rule, incomplete designs).
+- `test/cross-app/sealed-path.test.ts`: the vault-path limit below (a complete, correct
+  sealed capture is `uncertain` STATE_UNREADABLE).
 
 Scenarios (`CROSS_APP_SCENARIOS`):
 
@@ -177,24 +182,36 @@ All rows are `scripted` provenance and are never evidence.
 ## Measurement bar proposal (for docs/product/capability-spec.md)
 
 Proposed for the capability spec's cross-app track, to measure what Myco adds over the
-baseline arms on cross-app tasks:
+baseline arm on cross-app tasks. The bar is executable: `src/benchmark/cross-app-bar.ts`
+(`evaluateXaBar`), pinned by `test/cross-app/bar.test.ts`. Everything below is fixed before
+any run.
 
-- **Primary metric: graded verified rate on cross-app tasks.** Over a pre-registered task set
-  (xa-v1, by manifest digest), the share of trials whose final gate verdict is `verified` AND
-  whose independent grade is `pass`. Denominator: every trial started (harness faults
-  re-run in place per the topped-up-run rule and counted once; uncertain counts as not
-  verified).
-- **Arms:** the baseline arm(s) (the agent alone, same tasks, same instruction text by
-  digest, same apps and step protocol, no gate feedback, no retry) versus the Myco arm (gate
-  per trial, one retry from the last verified checkpoint). Report each arm's rate with its
-  denominator and a 95% interval, and the difference.
-- **Bar (proposal):** the Myco arm's graded verified rate exceeds the baseline's by a margin
-  pre-registered before the run, AND the false-verified rate is zero (no trial with gate
-  `verified` and grader `fail` or `ungradable`). A false VERIFIED fails the bar outright.
-- **Secondary:** per-step failure distribution (first refuted checkpoint per arm: where
-  cross-app tasks break), repair rate (verified on the retry / refuted on the first attempt),
-  and masking incidence (trials whose end state is correct but an earlier checkpoint is
-  refuted: what an end-state-only check would have wrongly accepted).
+- **Task set:** xa-v1, by manifest digest
+  `d740ed0434c664cc79fa9517562ba7c540489ffc39f7f24a58a6cc758975c79c`.
+- **Arms:** `baseline` (the agent alone, same tasks, same instruction text by digest, same
+  apps and step protocol, no gate, no retry) and `myco` (gate per trial, one retry from the
+  gate's last verified checkpoint).
+- **Sample size:** 12 tasks x 10 repetitions = 120 trials per arm. Each (task, repetition)
+  cell runs exactly once per arm; a run that does not fill every cell is `incomplete`, never
+  a pass. Harness faults are re-run in place per the topped-up-run rule, so the cell still
+  counts once.
+- **Primary metric: the independent grader's pass rate.** The grade alone decides it, in
+  both arms (`src/benchmark/grade/`); `fail` and `ungradable` count as not passed. The gate's
+  verdict is not part of the primary metric, since the baseline arm has no gate.
+- **Test:** the Newcombe hybrid-score 95% interval (Newcombe 1998, method 10) on
+  p(myco) - p(baseline), built from each arm's Wilson interval. Each arm's rate is reported
+  with its Wilson 95% interval and denominator.
+- **Decision rule:** pass iff (1) the interval's lower bound is above 0, (2) the observed
+  difference is at least a margin of 0.10, and (3) the myco arm has zero false-verified
+  trials. Otherwise fail.
+- **False-verified** is a separate property of the myco arm: a trial with gate `verified`
+  and grade `fail` or `ungradable`. One fails the bar outright. With zero in 120, the report
+  carries the 95% upper bound 1 - 0.05^(1/120), under 2.5%. A gate verdict recorded in the
+  baseline arm is ignored.
+- **Secondary (reported, not part of the decision):** per-step failure distribution (first
+  refuted checkpoint, myco arm; first failing step by grade, both arms), repair rate
+  (verified on the retry / refuted on the first attempt), and masking incidence (trials whose
+  end state is correct but an earlier checkpoint is refuted).
 - **Cost:** R7 = total estimated cost of ALL trials / verified trials; null cost is never 0;
   cost is a token-derived estimate, never billed USD.
 - **Evidence rules:** only live trials with sealed captures count; scripted and mock rows
