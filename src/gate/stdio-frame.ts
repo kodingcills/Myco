@@ -15,8 +15,10 @@
  * pass through byte for byte.
  *
  * Nothing here parses JSON or reads a request field: the gate's own parser stays the only
- * judge of a request. Depth needs no separate cap, because V8's `JSON.parse` is iterative,
- * the gate reads only top-level keys, and the byte cap bounds depth anyway.
+ * judge of a request. This is a byte cap, not a depth cap: V8's `JSON.parse` is iterative and
+ * the gate reads only top-level keys, but a deeply nested JSON-RPC `id` still overflows the
+ * reply's `JSON.stringify` (finding H-09, answered -32603 by `serveStdio`; its fix belongs in
+ * `mcp-server.ts`).
  */
 import { type Readable, Transform, type TransformCallback } from "node:stream";
 
