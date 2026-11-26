@@ -2,7 +2,8 @@
  * Evidence provenance for M2 packs (track E follow-on). `checkPack` (`src/m2/evidence.ts`)
  * recomputes R1/R2/R3/R7 from a pack but does not itself refuse rows whose planner is not a
  * Claude model id: a full-size SIMULATED run (100 fc-v1 rows from the TIF-274 dry run, or a
- * pilot dry run topped up) passes it with R1 ok. The pack CLI (`scripts/m2-evidence-check.ts`)
+ * pilot dry run topped up), packed with a valid #518 attempt ledger, pin and anchor, passes it
+ * with R1 ok. The pack CLI (`scripts/m2-evidence-check.ts`)
  * therefore adds this check, with the shared ledger check's own allowlist
  * (`EVIDENCE_PLANNERS`, `src/benchmark/check.ts`): simulated rows are never evidence.
  *

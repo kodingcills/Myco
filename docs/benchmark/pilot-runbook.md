@@ -169,9 +169,12 @@ Exit codes: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incom
   from a crash (the header included) is closed with an appended `torn-previous-line` marker,
   never edited. It is deliberately **not** `attempts.jsonl`: that name is the R1 evidence
   attempt ledger (#518, `src/m2/attempt-ledger.ts`, hash-chained and pinned by `pack.json`),
-  and the two formats are incompatible. Once #518 lands, the runner must also write every
-  attempt through #518's writer for R1 evidence; until then a pilot run directory carries no
-  R1 attempt ledger.
+  and the two formats are incompatible. #518 is on main and `checkPack` refuses an R1 pack
+  without that ledger, its `pack.json` pin and its host-side anchor
+  (`<pack parent>/attempt-anchors/<pack>.jsonl`). The pilot runner does not yet write them, so
+  a pilot run or export cannot be assembled into an R1 pack: it is refused as R1 evidence, by
+  design. TO FILE: write every attempt through #518's `AttemptLedgerWriter` and anchor, for R1
+  evidence.
 - **Deadline.** A trial past `trialTimeoutS` gets SIGTERM, then SIGKILL 10 s later if it is
   still running, and is recorded as a harness `timeout`.
 

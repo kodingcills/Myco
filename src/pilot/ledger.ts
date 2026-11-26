@@ -3,9 +3,11 @@
  * runner reads back to resume. It is deliberately NOT named `attempts.jsonl`: that name belongs
  * to the R1 evidence attempt ledger (#518, `src/m2/attempt-ledger.ts`, a hash-chained
  * `myco.m2.attempt-event/1` file pinned by `pack.json`), whose format this file does not
- * follow. The two must never collide in one run directory (`test/pilot/resume.test.ts`). Once
- * #518 lands, the runner must ALSO write every attempt through #518's writer for R1 evidence
- * (TO FILE); this file stays the runner's own resume state.
+ * follow. The two must never collide in one run directory (`test/pilot/resume.test.ts`). #518 is
+ * on main and `checkPack` refuses an R1 pack without that ledger, pin and host-side anchor; the
+ * runner does not write them yet, so a pilot run cannot become an R1 pack (refused, by design).
+ * TO FILE: write every attempt through #518's `AttemptLedgerWriter` and anchor for R1 evidence;
+ * this file stays the runner's own resume state.
  *
  * Every attempt is written twice: a `start` line before the agent is launched and an `end`
  * line after the trial is decided or faulted. Lines are only ever appended (`appendFileSync`);
