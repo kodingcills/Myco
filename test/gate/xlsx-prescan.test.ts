@@ -373,6 +373,13 @@ const REFUSED: readonly [string, string, ContentPartKind | undefined, PrescanCod
     "worksheet",
     "XLSX_PRESCAN_SYNTAX",
   ],
+  [
+    "a part ending with its root unclosed",
+    `${DECL}${root("sst", ' count="1" uniqueCount="1"')}<si><t>a</t></si>`,
+    "sst",
+    "XLSX_PRESCAN_SYNTAX",
+  ],
+  ["a declaration and no root", DECL, "sst", "XLSX_PRESCAN_SYNTAX"],
   ["mismatched tags", sheet('<row r="4"></rows>'), "worksheet", "XLSX_PRESCAN_SYNTAX"],
   ["a cut part", sheet(C4).slice(0, 200), "worksheet", "XLSX_PRESCAN_SYNTAX"],
   ["text after the root", `${sheet(C4)}x`, "worksheet", "XLSX_PRESCAN_SYNTAX"],
