@@ -116,7 +116,13 @@ describe("M2 pack CLI refuses simulated rows (track E)", () => {
       /ERROR \S*m2-simulated: provenance: 100 arm row\(s\) without evidence provenance/,
     );
     // Refused on provenance alone: the ledger, pin and anchor the CLI read back all pass.
-    expect(refused.stderr.trim().split("\n")).toEqual([
+    // npm's own "npm warn ..." config notices (seen in CI) are not the CLI's output; drop
+    // only those, so any other stray line (e.g. a ledger ERROR) still fails this assertion.
+    const cliLines = refused.stderr
+      .trim()
+      .split("\n")
+      .filter((line) => !line.startsWith("npm warn "));
+    expect(cliLines).toEqual([
       expect.stringMatching(/^ERROR \S*m2-simulated: provenance: /),
     ]);
 
