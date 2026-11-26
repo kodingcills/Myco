@@ -1,10 +1,12 @@
 /**
  * Pins `docs/security/gate-api-review.md` (track H) to main. The review is the record the
  * H fix PRs cite by finding id and file:line, so a stale ref or a missing finding is a
- * defect (#519 round 1, D1-D4). Three layers:
+ * defect (#519 round 1, D1-D4; round 2, D1'). Four layers:
  *
- *  1. Every load-bearing file:line the doc cites names a line that holds what the doc says
- *     is there. A code move breaks this test, not the doc silently.
+ *  1. Every file:line the doc cites names a line that holds what the doc says is there, and
+ *     both ends of every range are pinned. A code move breaks this test, not the doc silently.
+ *  1b. No PR that has merged is described as open, lock-holding or pending, and this track's
+ *     open PRs carry a tripwire that fails when they merge (round 2, D1').
  *  2. The round-1 refs anchored to `12c35ea`, and the claims round 1 got wrong ("codes
  *     only", the #514 lock), do not come back.
  *  3. The behaviour H-16 and H-17 describe is real: oracle reason text and the sealed
@@ -14,7 +16,8 @@
  * Fakes only: a temp evidence root and the in-process MCP handler. No model, no VM.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { calcRecordEditFamily } from "../../src/gate/families.ts";
 import { buildRegistry, createGate, fileEvidenceReader } from "../../src/gate/gate.ts";
@@ -27,6 +30,49 @@ const repo = (path: string) => new URL(`../../${path}`, import.meta.url);
 const DOC = readFileSync(repo("docs/security/gate-api-review.md"), "utf8");
 /** The doc wraps lines; compare claims with whitespace collapsed. */
 const FLAT = DOC.replace(/\s+/g, " ");
+
+/**
+ * PRs the doc cites that are on `origin/main` (checked at `08f487f`), with their merge
+ * commits. `track` marks this track's own fix and test PRs, which the doc must call merged.
+ */
+const MERGED = [
+  { pr: 508, sha: "a0cf862", track: false },
+  { pr: 511, sha: "d632628", track: false },
+  { pr: 512, sha: "08f487f", track: false },
+  { pr: 514, sha: "9388442", track: false },
+  { pr: 520, sha: "b174eea", track: true },
+  { pr: 522, sha: "db9c5a2", track: true },
+] as const;
+
+/**
+ * This track's open PRs, each with a file it adds that is not on main. When one merges, its
+ * file lands and the tripwire below fails until the doc stops calling it open.
+ */
+const OPEN = [
+  { pr: 521, witness: "test/gate/sealed-size-cap.test.ts" },
+  { pr: 523, witness: "test/gate/caller-isolation.test.ts" },
+] as const;
+
+/**
+ * Open PRs off this track that the doc cites for their file locks: #503 (xlsx), #513 (watch
+ * view), #518 (attempt ledger). No tripwire on purpose: it would turn their CI red for a
+ * docs reason, and #503 is on the integrity critical path. They are re-checked by hand.
+ */
+const UNTRACKED_OPEN = [503, 513, 518];
+
+/** Wording that treats PR `pr` as still open or pending. */
+function pendingPhrases(pr: number): RegExp[] {
+  return [
+    new RegExp(`after #${pr} merges`),
+    new RegExp(`#${pr}'s (file|to make)`),
+    new RegExp(`#${pr} (owns|still owns|pins today)`),
+    new RegExp(`(fix|test) now(\\*\\*)? \\(#${pr}\\b`),
+    new RegExp(`Fix \\(this track, #${pr}\\)`),
+    new RegExp(`#${pr} \\(H-\\d+ on this track\\)`),
+    new RegExp(`\\bopen (PR )?#${pr}\\b`),
+    new RegExp(`#${pr}\\b[^.]{0,120}(right after it merges|in its next round)`),
+  ];
+}
 
 const FILES: Record<string, string> = {
   "api.ts": "src/gate/api.ts",
@@ -42,6 +88,10 @@ const FILES: Record<string, string> = {
   "gate.test.ts": "test/gate/gate.test.ts",
   "sealed-gate.test.ts": "test/gate/sealed-gate.test.ts",
   "ledger.ts": "src/integrity/ledger.ts",
+  "reasons.ts": "src/gate/reasons.ts",
+  "stdio-frame.ts": "src/gate/stdio-frame.ts",
+  "myco-gate.ts": "scripts/myco-gate.ts",
+  "input-fuzz.test.ts": "test/gate/input-fuzz.test.ts",
 };
 
 /** Doc ref, then what the cited line range must contain. */
@@ -66,7 +116,10 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["cli.ts:75-88", /function parseFlags\(argv/],
   ["cli.ts:172-182", /gate\.check\(\{\s*taskId: task,\s*runId: run/],
   ["cli.ts:114-115", /loadTasksFile\(tasksFile\)/],
-  // H-01
+  // H-01 (fixed by #520, merged)
+  ["stdio-frame.ts:26", /export const MAX_FRAME_BYTES = 1024 \* 1024;/],
+  ["stdio-frame.ts:32", /OVERSIZED_FRAME_LINE = '\{"id":null\}'/],
+  ["myco-gate.ts:21", /boundFrames\(process\.stdin/],
   ["mcp-server.ts:186", /createInterface\(/],
   ["mcp-server.ts:111-174", /export async function handleLine/],
   ["api.ts:387", /record\.claim\.length > CLAIM_LIMIT/],
@@ -74,13 +127,13 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["mcp-server.ts:87", /unknown tool: \$\{params\.name\}/],
   ["mcp-server.ts:171", /method not found: \$\{request\.method\}/],
   // H-03
-  ["api.ts:385-392", /claim is longer than/],
+  ["api.ts:384-393", /claim is longer than/],
   ["cli.ts:134", /appendFileSync\(audit/],
   ["api.ts:133", /never read by the oracle/],
   // H-04
   ["corrections.ts:241-246", /chars\.slice\(0, CORRECTION_VALUE_LIMIT\)/],
   // H-05
-  ["gate.ts:877-891", /async check\(raw\)/],
+  ["gate.ts:878-890", /async check\(raw\)/],
   ["cli.ts:190-194", /serveStdio\(gate, io\.stdin, io\.stdout/],
   ["multistep.ts:71", /retryBudget: 0 \| 1/],
   ["multistep.ts:111-112", /retryBudget must be 0 or 1/],
@@ -98,11 +151,12 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["vault.ts:313", /existsSync\(dir\)/],
   // H-09
   ["mcp-server.ts:195-198", /code: -32603/],
+  ["input-fuzz.test.ts:348-380", /H-09: a deeply nested JSON-RPC id is -32603[\s\S]*code: -32603/],
   // H-10..H-15
   ["vault.ts:294-296", /join\(this\.root, runId\)/],
   ["vault.ts:98-102", /export interface SealReceipt/],
   ["ledger.ts:41-53", /export function appendChainedRow/],
-  ["vault.ts:247-255", /export interface VaultOptions/],
+  ["vault.ts:251-262", /export interface VaultOptions/],
   ["vault.ts:95", /sourceFiles: readonly string\[\]/],
   ["sealed.ts:20-21", /Agent-facing details carry `integrity:<code>` only/],
   ["gate.test.ts:654-750", /function spyReader[\s\S]*invalid gate assignment/],
@@ -118,9 +172,151 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["gate.ts:283-290", /descriptor path check/],
   ["gate.ts:837", /could not look: \$\{corrupt\.message\}/],
   ["gate.ts:162-166", /must name paths relative to the run/],
+  ["gate.ts:283-286", /const shown = actual\.startsWith\(`\$\{realRoot\}\/`\)/],
+  ["reasons.ts:22", /export function errorCode\(error: unknown\): string/],
+  ["gate.ts:369", /open failed: \$\{errorCode\(error\)\}/],
+  ["gate.ts:405", /read failed: \$\{errorCode\(error\)\}/],
+  ["gate.ts:626-634", /function diagnose\([\s\S]*errorCode\(error\)/],
   // H-17
   ["gate.ts:780-786", /kind: "sealed-fixture",[\s\S]*path: sealed\.file,[\s\S]*sha256: digest/],
 ];
+
+/**
+ * Both ends of every cited range, as the exact trimmed text of its first and last line. An
+ * anchor regex matches anywhere inside its range, so on its own it survives a one-line shift
+ * (round-2 verifier mutation V6: one line inserted at the top of `calc-document.ts`). Pinning
+ * the ends makes any shift, or a range that grew or shrank, fail here.
+ */
+const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
+  ["gate.ts:430-433", "export interface Assignment {", "}"],
+  ["api.ts:126-135", "export interface GateRequest {", "}"],
+  ["api.ts:340-402", "export function parseGateRequest(raw: unknown): ParsedRequest {", "}"],
+  ["mcp-server.ts:180-206", "export function serveStdio(", "}"],
+  ["api.ts:151-191", "export interface GateResult {", "}"],
+  ["mcp-server.ts:100-106", "return {", "},"],
+  ["cli.ts:106-142", "function operatorGate(flags: Flags, stderr: Writable) {", "}"],
+  ["api.ts:356-363", "const unknown = keys.filter((key) => !ALLOWED_FIELDS.has(key));", "};"],
+  ["sealed.ts:138-155", "export function createSealedGate(config: SealedGateConfig): Gate {", "}"],
+  ["gate.ts:712-721", "if (taskId !== assignment.taskId || runId !== assignment.runId) {", "}"],
+  [
+    "gate.ts:676-690",
+    "if (!config.onDecision) return result;",
+    '`decision log write failed: $\u007bdiagnose("decision-log", error)}`,',
+  ],
+  ["cli.ts:75-88", "function parseFlags(argv: readonly string[]): Flags | string {", "}"],
+  ["cli.ts:172-182", 'case "check": {', "});"],
+  [
+    "cli.ts:114-115",
+    'const tasksFile = str(flags, "--tasks");',
+    "if (tasksFile !== undefined) entries.push(...loadTasksFile(tasksFile));",
+  ],
+  ["mcp-server.ts:111-174", "export async function handleLine(", "}"],
+  ["api.ts:384-393", 'if (record.claim !== undefined && typeof record.claim !== "string") {', "};"],
+  [
+    "corrections.ts:241-246",
+    "const truncated = chars.length > CORRECTION_VALUE_LIMIT;",
+    "...(truncated ? { observedTruncated: true as const } : {}),",
+  ],
+  ["gate.ts:878-890", "async check(raw) {", "},"],
+  ["cli.ts:190-194", 'case "mcp": {', "}"],
+  [
+    "multistep.ts:111-112",
+    "if (options.retryBudget !== 0 && options.retryBudget !== 1)",
+    "throw new Error(`retryBudget must be 0 or 1, got $\u007bString(options.retryBudget)}`);",
+  ],
+  [
+    "sealed.ts:105-110",
+    "const early = codes.length > 0 && codes.every((code) => BEFORE_CAPTURE.has(code));",
+    '? `no sealed capture yet: the gate decides from the host capture taken after the agent stops ($\u007bcodes.join(", ")})`',
+  ],
+  [
+    "sealed.ts:116-123",
+    "const { persisted } = opened.inputs;",
+    "return { ok: true, bytes: persisted[stateFile] as Uint8Array };",
+  ],
+  ["api.ts:314-319", "const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;", "}"],
+  [
+    "gate.ts:342-352",
+    "export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): EvidenceReader {",
+    "const first = walk(absoluteRoot, segments, where, hooks.beforeLstat);",
+  ],
+  ["mcp-server.ts:195-198", "} catch {", "}"],
+  [
+    "input-fuzz.test.ts:348-380",
+    'it("H-09: a deeply nested JSON-RPC id is -32603 from serveStdio, and the next request is served", async () => {',
+    "expect(spy.reads).toBe(2);",
+  ],
+  ["vault.ts:294-296", "private runDir(runId: string): string {", "return join(this.root, runId);"],
+  [
+    "vault.ts:98-102",
+    "/** Held in harness memory from seal to verdict; the agent never sees it. */",
+    "}",
+  ],
+  ["ledger.ts:41-53", "export function appendChainedRow(", "}"],
+  ["vault.ts:251-262", "export interface VaultOptions {", "}"],
+  [
+    "sealed.ts:20-21",
+    "* Agent-facing details carry `integrity:<code>` only (#478/#480): a violation's path can be",
+    "* an absolute host path. The full violations go to the operator through `onIntegrity`.",
+  ],
+  [
+    "gate.test.ts:654-750",
+    'describe("gate: the assignment binds the gate to one trial (round 1 D1)", () => {',
+    "});",
+  ],
+  [
+    "sealed-gate.test.ts:334-395",
+    "describe(\"the agent's run id never selects another trial's sealed bytes\", () => {",
+    "});",
+  ],
+  [
+    "vault.ts:319-322",
+    "for (const path of input.oracle.sourceFiles) {",
+    "sources[path] = sha256(readFileSync(path));",
+  ],
+  ["gate.ts:435-464", "export interface GateConfig {", "}"],
+  [
+    "families.ts:144-145",
+    "function targetReason(ref: string, edit: CellEdit): string {",
+    "return `TARGET_MISMATCH: cell $\u007bref} ($\u007bwhere(edit)}) does not hold the requested value`;",
+  ],
+  [
+    "calc-document.ts:162-164",
+    "export function collateralReason(collateral: readonly string[]): string {",
+    "}",
+  ],
+  [
+    "gate.ts:283-290",
+    "// Report the path relative to the root: reasons reach the agent, host paths need not.",
+    "detail: `$\u007bwhere}: the opened file is at $\u007bshown}, not at $\u007bwhere} (descriptor path check)`,",
+  ],
+  [
+    "gate.ts:162-166",
+    '* `detail` of a failed outcome reaches the agent (as "could not look: <detail>"), so it',
+    "*/",
+  ],
+  [
+    "gate.ts:283-286",
+    "// Report the path relative to the root: reasons reach the agent, host paths need not.",
+    ': "a path outside the evidence root";',
+  ],
+  [
+    "gate.ts:626-634",
+    'function diagnose(stage: GateDiagnostic["stage"], error: unknown): string {',
+    "}",
+  ],
+  ["gate.ts:780-786", "const digest = sha256(got.bytes);", "bytes: got.bytes.length,"],
+];
+
+function lineAt(ref: string, which: "first" | "last"): string {
+  const match = /^([\w.-]+\.ts):(\d+)-(\d+)$/.exec(ref);
+  if (!match) throw new Error(`not a range ${ref}`);
+  const [, name, from, to] = match as unknown as [string, string, string, string];
+  const file = FILES[name];
+  if (!file) throw new Error(`no file for ${name}`);
+  const lines = readFileSync(repo(file), "utf8").split("\n");
+  return (lines[Number(which === "first" ? from : to) - 1] ?? "").trim();
+}
 
 function cited(ref: string): string {
   const match = /^([\w.-]+\.ts):(\d+)(?:-(\d+))?$/.exec(ref);
@@ -141,6 +337,18 @@ describe("the security review's file:line refs hold on main (D1)", () => {
     expect(cited(ref)).toMatch(anchor);
   });
 
+  it.each(RANGE_ENDS)("%s starts and ends where the doc says (V6)", (ref, first, last) => {
+    expect(lineAt(ref, "first"), `${ref}: first line moved`).toBe(first);
+    expect(lineAt(ref, "last"), `${ref}: last line moved`).toBe(last);
+  });
+
+  it("every cited range has both ends pinned", () => {
+    const ended = new Set(RANGE_ENDS.map(([ref]) => ref));
+    const ranges = ANCHORS.map(([ref]) => ref).filter((ref) => /:\d+-\d+$/.test(ref));
+    expect(ranges.filter((ref) => !ended.has(ref))).toEqual([]);
+    expect([...ended].filter((ref) => !ranges.includes(ref))).toEqual([]);
+  });
+
   it("every ref the doc makes into these files is pinned above", () => {
     const pinned = new Set(ANCHORS.map(([ref]) => ref));
     const refs = [...DOC.matchAll(/([\w.-]+\.ts):(\d+(?:-\d+)?)/g)]
@@ -152,10 +360,15 @@ describe("the security review's file:line refs hold on main (D1)", () => {
     expect(DOC).not.toMatch(/`:\d/);
   });
 
-  it("re-anchors the status line past #514 and #511", () => {
-    expect(DOC).not.toMatch(/\*\*Status:\*\* review of `origin\/main` at `12c35ea`/);
-    expect(DOC).toMatch(/\*\*Status:\*\* review of `origin\/main` at `d632628`/);
+  it("re-anchors the status line past #514, #511, #520, #522 and #512", () => {
+    expect(DOC).not.toMatch(/\*\*Status:\*\* review of `origin\/main` at `(12c35ea|d632628)`/);
+    expect(DOC).toMatch(/\*\*Status:\*\* review of `origin\/main` at `08f487f`/);
     expect(FLAT).toContain("which includes #514 (agent-safe corrections) and #511");
+    const status = FLAT.slice(0, FLAT.indexOf("**Scope.**"));
+    // #508 is the starting list, not a merge the review is anchored past.
+    for (const { pr } of MERGED.filter((p) => p.pr !== 508)) {
+      expect(status, `#${pr}`).toContain(`#${pr}`);
+    }
   });
 
   it("drops the round-1 refs that moved when #514 merged", () => {
@@ -190,6 +403,8 @@ describe("the security review's file:line refs hold on main (D1)", () => {
     expect(table).not.toMatch(/^\| #514/m);
     expect(table).not.toMatch(/^\| #511/m);
     expect(table).toMatch(/^\| #503 xlsx replacement/m);
+    for (const { pr } of MERGED)
+      expect(table, `#${pr}`).not.toMatch(new RegExp(`^\\| #${pr}\\b`, "m"));
     expect(FLAT).toContain("So `mcp-server.ts` is fixable now.");
   });
 
@@ -204,6 +419,69 @@ describe("the security review's file:line refs hold on main (D1)", () => {
     expect(FLAT).toContain("MCP half (re-decided):");
     expect(FLAT).toContain("Fix (re-decided: still deferred)");
     expect(FLAT).toContain("Smallest future seam, now unblocked:");
+  });
+});
+
+describe("the security review names no merged PR as open or pending (D1')", () => {
+  it.each(MERGED)(
+    "#$pr (merged $sha) is not described as open, owning files or pending",
+    ({ pr }) => {
+      for (const pending of pendingPhrases(pr)) {
+        expect(FLAT, `#${pr} is merged, but the doc says: ${pending.source}`).not.toMatch(pending);
+      }
+    },
+  );
+
+  it.each(MERGED.filter((p) => p.track))(
+    "this track's #$pr is marked merged with its commit $sha",
+    ({ pr, sha }) => {
+      expect(FLAT).toContain(`#${pr}, merged \``);
+      expect(FLAT).toContain(sha);
+    },
+  );
+
+  it.each(OPEN)(
+    "#$pr, which the doc treats as open, has not merged: $witness is not on this tree",
+    ({ pr, witness }) => {
+      // Tripwire: when this PR merges, its new file lands, this fails, and the doc's
+      // "fix now"/"test now"/coordination text for it must become "fixed"/"tested (merged)".
+      expect(
+        existsSync(fileURLToPath(repo(witness))),
+        `#${pr} has merged (${witness} exists): update docs/security/gate-api-review.md, then move #${pr} to MERGED here`,
+      ).toBe(false);
+      expect(FLAT).toContain(`#${pr}`);
+    },
+  );
+
+  it("every PR the doc mentions is classified as merged, open or reference-only", () => {
+    const known = new Set<number>([...MERGED, ...OPEN].map(({ pr }) => pr));
+    for (const pr of UNTRACKED_OPEN) known.add(pr);
+    const mentioned = [...new Set([...DOC.matchAll(/#(\d{3})\b/g)].map(([, n]) => Number(n)))];
+    expect(mentioned.filter((n) => !known.has(n))).toEqual([]);
+  });
+
+  it("code comments on the merged files agree with the doc (nits)", () => {
+    const frame = readFileSync(repo("src/gate/stdio-frame.ts"), "utf8");
+    expect(frame).not.toContain("about 250 times");
+    expect(frame).toContain("about 43 times the largest valid request");
+    const fuzz = readFileSync(repo("test/gate/input-fuzz.test.ts"), "utf8");
+    expect(fuzz).not.toContain("mcp-server.ts is owned by #514");
+    expect(fuzz).toContain("TO FILE 6 in docs/security/gate-api-review.md");
+  });
+
+  it("H-16's 'no host path' cites the enforcement, not only the rule's doc comment", () => {
+    const h16 = FLAT.slice(FLAT.indexOf("### H-16:"), FLAT.indexOf("### H-17:"));
+    expect(h16).toContain("strips the evidence root before it names a path (`gate.ts:283-286`)");
+    expect(h16).toContain("`errorCode`, `reasons.ts:22`");
+  });
+
+  it("the H-01/H-07/H-09 decisions say the merged work has landed", () => {
+    expect(FLAT).toContain("**fixed** (#520, merged `b174eea`)");
+    expect(FLAT).toContain("**tested** (#522, merged `db9c5a2`)");
+    expect(FLAT).toContain("tested (#522, merged `db9c5a2`); fix next (unlocked): TO FILE 6");
+    expect(DOC).toMatch(/^### H-01: .*\(Medium; fixed by #520, merged\)$/m);
+    expect(DOC).toMatch(/^### H-07: Input fuzzing \(Info; tested by #522, merged\)$/m);
+    expect(DOC).toMatch(/^### H-09: .*\(Info; tested by #522, fix next\)$/m);
   });
 });
 
@@ -314,7 +592,7 @@ async function agentReply(saved: string) {
 }
 
 describe("H-16 and H-17 describe what the agent actually receives", () => {
-  it("H-16: oracle reasons, including the collateral cell list, reach the agent with corrections off", async () => {
+  it("H-16: oracle reasons, including the collateral cell list, reach the agent with corrections off (mock/dev reader)", async () => {
     const { fixture, reply } = await agentReply(collateralOnly(generateFixture(SEED).csv));
     const result = reply.structuredContent as { verdict: string; reasons: string[] };
     expect(result.verdict).toBe("refuted");
@@ -327,7 +605,9 @@ describe("H-16 and H-17 describe what the agent actually receives", () => {
     expect(result.reasons.join("\n")).not.toContain(fixture.split("\n")[1]?.split(",")[1] ?? "?");
   });
 
-  it("H-17: the sealed fixture's file name and sha256 reach the agent in evidenceRefs", async () => {
+  // The `sealed-fixture` ref kind names the operator's fixture binding, not the reader: it is
+  // pushed on both reader paths. These pins use the mock/dev `fileEvidenceReader` (doc, H-17).
+  it("H-17: the operator fixture's file name and sha256 reach the agent in evidenceRefs (kind sealed-fixture, mock/dev reader)", async () => {
     const { fixture, reply } = await agentReply(collateralOnly(generateFixture(SEED).csv));
     const refs = (reply.structuredContent as { evidenceRefs: unknown[] }).evidenceRefs;
     expect(refs).toContainEqual({

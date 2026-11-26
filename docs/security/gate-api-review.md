@@ -1,12 +1,14 @@
 # Gate API and `myco-gate` MCP: security review (M2 scope add, track H)
 
-**Status:** review of `origin/main` at `d632628` (2026-11-26), which includes #514
-(agent-safe corrections) and #511 (topped-up runs). Round 1 reviewed `12c35ea`; every
-file:line below was re-read on `d632628`, and `test/gate/security-review.test.ts` pins the
-load-bearing ones to the code. Each finding has an id (`H-NN`), a severity, its location, an
-exploit sketch and a decision: **fix now** (a fix PR on this track), **test now** (behaviour
-is already correct; a test PR pins it), or **defer** (listed as TO FILE, with the smallest
-future seam).
+**Status:** review of `origin/main` at `08f487f` (2026-11-26), which includes #514
+(agent-safe corrections) and #511 (topped-up runs), and this track's #520 (H-01 frame cap,
+`b174eea`) and #522 (H-07 input fuzz tests, `db9c5a2`), plus #512 (`myco init`, no gate
+file). Round 1 reviewed `12c35ea` and round 2 `d632628`; every file:line below was re-read
+on `08f487f`, and `test/gate/security-review.test.ts` pins every one to the code, both ends
+of each range. Each finding has an id (`H-NN`), a severity, its location, an exploit sketch
+and a decision: **fixed** or **tested** (a PR on this track has merged, named with its merge
+commit), **fix now** or **test now** (an open PR on this track), **fix next** (unlocked, no
+PR yet; listed as TO FILE), or **defer** (listed as TO FILE, with the smallest future seam).
 
 **Scope.** The gate API (`src/gate/api.ts`, `src/gate/gate.ts`), the `myco-gate` MCP server
 (`src/gate/mcp-server.ts`), the CLI (`src/gate/cli.ts`, `scripts/myco-gate.ts`), the sealed
@@ -23,21 +25,21 @@ JSON reaches the gate only through `myco-gate mcp` (H-01, H-07, H-09).
 defaults stay. The authn/authz section below is design only. The secret guard and the
 harness hooks are not touched.
 
-**Coordination.** #514 and #511 have merged, so `cli.ts`, `mcp-server.ts`, `multistep.ts`,
-`gated-trial.ts`, `docs/gate/api.md`, `schemas/m2-evidence.ts`, `src/m2/evidence.ts` and
-`test/m2/*` are no longer locked by them. These open PRs still own files a fix would touch,
-and this track does not edit them:
+**Coordination.** #514, #511, #520 and #522 have merged, so `cli.ts`, `mcp-server.ts`,
+`multistep.ts`, `gated-trial.ts`, `scripts/myco-gate.ts`, `src/gate/stdio-frame.ts`,
+`test/gate/input-fuzz.test.ts` and `test/m2/*` are locked by no PR. These open PRs still own
+files a fix would touch, and this track does not edit them:
 
 | PR | Files this track must not edit |
 |---|---|
 | #503 xlsx replacement (`claude/tif-274-gate-xlsx-t1bdii`) | `src/gate/api.ts`, `gate.ts`, `families.ts`, `calc-document.ts`, `docs/gate/api.md`, `test/gate/gate.test.ts` |
-| #520 (H-01 on this track) | `scripts/myco-gate.ts`, `src/gate/stdio-frame.ts` |
-| #522 (H-07 on this track) | `test/gate/input-fuzz.test.ts`, which pins today's `-32603` for a deep id (H-09) |
 | #518 (attempt ledger) | `schemas/m2-evidence.ts`, `src/m2/evidence.ts` |
+| #521 (H-06 on this track) | `src/gate/sealed.ts` |
 
 So `mcp-server.ts` is fixable now. A finding whose fix belongs in a file #503 owns stays
-**deferred** and is listed as TO FILE. A fix in `mcp-server.ts` that flips a behaviour #522
-pins (H-09) is sequenced after #522 merges, so the pin and the fix change in one PR.
+**deferred** and is listed as TO FILE. The H-09 fix in `mcp-server.ts` flips the `-32603`
+pin #522 put on main (`input-fuzz.test.ts:348-380`), so that pin and the fix change in one
+PR, with no ordering condition left.
 
 ## Threat model
 
@@ -138,15 +140,15 @@ issue.
 
 | Id | Severity | Title | Decision |
 |---|---|---|---|
-| H-01 | Medium | MCP stdio frames are unbounded (memory DoS of the gate process) | **fix now** (#520); move into `serveStdio` now unblocked |
+| H-01 | Medium | MCP stdio frames are unbounded (memory DoS of the gate process) | **fixed** (#520, merged `b174eea`); move into `serveStdio`: TO FILE 5 |
 | H-02 | Low | Agent-controlled strings echoed in agent-facing text (`UNKNOWN_FIELD` reason, MCP error messages) | MCP half: fix next (unlocked, with H-09); `api.ts` half: TO FILE (#503) |
 | H-03 | Info | `claim` is echoed verbatim into the result and the audit log | defer: document for consumers |
 | H-04 | Low | `corrections[].observed` (merged with #514) carries document free text into agent context | TO FILE on main |
 | H-05 | Low | No per-trial check limit and no queue bound in `myco-gate mcp` | defer: TO FILE (`gate.ts`/`api.ts` locked by #503) |
 | H-06 | Low | Sealed reader does not enforce `STATE_FILE_LIMIT` | **fix now** (#521, gate side); vault side TO FILE |
-| H-07 | Info | Input fuzzing: malformed JSON-RPC, wrong types, unicode/NUL/path tricks, duplicate and prototype keys | **test now** (#522) |
+| H-07 | Info | Input fuzzing: malformed JSON-RPC, wrong types, unicode/NUL/path tricks, duplicate and prototype keys | **tested** (#522, merged `db9c5a2`) |
 | H-08 | Info | Per-caller isolation across run ids and lookalike ids; case-folding aliasing of operator ids | **test now** (#523); operator rule now, check TO FILE |
-| H-09 | Info | A deeply nested JSON-RPC `id` makes `handleLine` throw (answered `-32603`) | test now (#522); fix next (unlocked), after #522 merges |
+| H-09 | Info | A deeply nested JSON-RPC `id` makes `handleLine` throw (answered `-32603`) | tested (#522, merged `db9c5a2`); fix next (unlocked): TO FILE 6 |
 | H-10 | Hosting | Vault keyed by `runId` alone (#508 TO FILE 1) | defer |
 | H-11 | Hosting | Seal receipt only in harness memory (#508 TO FILE 2) | defer |
 | H-12 | Hosting | Ledger is single-writer (#508 TO FILE 3) | defer |
@@ -156,7 +158,7 @@ issue.
 | H-16 | Low | Oracle reason text reaches the agent verbatim; the collateral cell list bypasses the corrections switch | defer: TO FILE (`gate.ts`/`families.ts`/`calc-document.ts` locked by #503) |
 | H-17 | Info | `evidenceRefs` give the agent the sealed fixture's file name and sha256 | keep (self-hosted); hosted projection TO FILE |
 
-### H-01: MCP stdio frames are unbounded (Medium; fix now)
+### H-01: MCP stdio frames are unbounded (Medium; fixed by #520, merged)
 
 - **Where:** `src/gate/mcp-server.ts:186`: `serveStdio` uses `readline.createInterface`,
   which buffers a line until it sees a newline. There is no size limit, so `JSON.parse` then
@@ -169,10 +171,12 @@ issue.
   newline at all is buffered forever. Hosted, the same frame is a trivial unauthenticated
   DoS. (The round-1 verifier reproduced this against the real process: RSS rose until it
   died between 200 and 300 MiB with a 256 MiB heap cap.)
-- **Fail-closed today?** Yes for the verdict (a dead gate verifies nothing). No for
-  availability.
-- **Fix (this track, #520):** a bounded line splitter, `src/gate/stdio-frame.ts`, put in
-  front of stdin in `scripts/myco-gate.ts`. A frame over `MAX_FRAME_BYTES` (1 MiB, about 43
+- **Fail-closed before #520?** Yes for the verdict (a dead gate verifies nothing). No for
+  availability. The exploit above is what `serveStdio` alone still allows; `myco-gate mcp`
+  no longer does.
+- **Fix (merged with #520, `b174eea`):** a bounded line splitter, `src/gate/stdio-frame.ts`
+  (`stdio-frame.ts:26`, `stdio-frame.ts:32`), put in front of stdin in `scripts/myco-gate.ts`
+  (`myco-gate.ts:21`). A frame over `MAX_FRAME_BYTES` (1 MiB, about 43
   times the largest valid request: 128-character ids and a 4000-unit claim of control
   characters, each 6 bytes once JSON-escaped, is about 24 KB) is dropped *while it streams*:
   at most the cap is ever held. It is replaced by a fixed in-band line that `handleLine`
@@ -182,11 +186,10 @@ issue.
   problem found is the echoed JSON-RPC `id` (H-09), which needs its own fix.
 - **What it does not bound:** the cap bounds one frame, not the `serveStdio` queue. That is
   H-05 ("rate and backpressure").
-- **Smallest future seam, now unblocked:** #514 has merged and no open PR but this track
-  touches `mcp-server.ts`, so the cap can move into `serveStdio` itself and programmatic
-  callers get it too. `stdio-frame.ts` is #520's file, so the move is #520's to make (a
-  later round) or its follow-up after it merges. The constant and the splitter stay. TO
-  FILE 5.
+- **Smallest future seam, now unblocked:** no open PR touches `mcp-server.ts`,
+  `stdio-frame.ts` or `scripts/myco-gate.ts`, so the cap can move into `serveStdio` itself
+  and programmatic callers get it too. It is a plain follow-up with no owner condition. The
+  constant and the splitter stay. TO FILE 5.
 
 ### H-02: Agent-controlled strings in agent-facing text (Low; MCP half fix next, `api.ts` half defer)
 
@@ -220,7 +223,7 @@ issue.
 
 ### H-03: `claim` is echoed verbatim (Info; defer, document)
 
-- **Where:** `api.ts:385-392` (accepted when it is a string of at most 4000 UTF-16 units,
+- **Where:** `api.ts:384-393` (accepted when it is a string of at most 4000 UTF-16 units,
   any code points, NUL and lone surrogates included), echoed in `GateResult.request.claim`
   and written by `--audit` (`cli.ts:134`).
 - **Why it is only Info:** the claim is the agent's own text, returned to the agent, and
@@ -254,7 +257,7 @@ issue.
 
 ### H-05: No per-trial check limit and no queue bound in `myco-gate mcp` (Low; defer)
 
-- **Where:** `gate.ts:877-891`: `check` has no counter. `myco-gate mcp` serves until stdin
+- **Where:** `gate.ts:878-890`: `check` has no counter. `myco-gate mcp` serves until stdin
   closes (`cli.ts:190-194`). The retry budget, merged with #514, lives in the harness loop
   (`multistep.ts:71`, `retryBudget: 0 | 1`, checked at `multistep.ts:111-112`), not in the
   gate.
@@ -302,7 +305,7 @@ issue.
 - **Deferred part:** the vault still reads the whole captured file to hash it. The full fix
   caps artifact size at `vault.capture` (fail closed: no capture, no verdict). TO FILE 4.
 
-### H-07: Input fuzzing (Info; test now)
+### H-07: Input fuzzing (Info; tested by #522, merged)
 
 Probed by hand on `12c35ea` and re-probed by the round-1 verifier on main. Every case fails
 closed, with a code and never `verified`:
@@ -327,11 +330,12 @@ closed, with a code and never `verified`:
   only top-level keys, so deep `arguments` give `UNKNOWN_FIELD` or `INVALID_REQUEST`. The
   exception is the JSON-RPC `id`, which is echoed. See H-09.
 
-**Decision:** a tests-only PR (#522) pins all of these through `parseGateRequest`,
-`createGate` and the MCP `handleLine`. Each case asserts a code and `accepted: false`, and a
-sweep asserts that `verified` appears only for the one well-formed, assigned request whose
-state passes. The round-1 verifier's surviving mutants on main (the `m` flag on the id
-regex; `serveStdio`'s catch writing nothing) are killed by #522's tests.
+**Decision (done):** the tests-only #522 (merged, `db9c5a2`) pins all of these in
+`test/gate/input-fuzz.test.ts`, through `parseGateRequest`, `createGate` and the MCP
+`handleLine`. Each case asserts a code and `accepted: false`, and a sweep asserts that
+`verified` appears only for the one well-formed, assigned request whose state passes. The
+round-1 verifier's surviving mutants (the `m` flag on the id regex; `serveStdio`'s catch
+writing nothing) are killed on main by those tests (the round-2 verifier re-ran both).
 
 ### H-08: Per-caller isolation (Info; test now)
 
@@ -364,7 +368,7 @@ regex; `serveStdio`'s catch writing nothing) are killed by #522's tests.
   listed by `readdir`, is not byte-equal to `runId` (`unreadable`, nothing read), which
   catches both case and trailing-dot aliasing on any filesystem. TO FILE 8.
 
-### H-09: A deeply nested JSON-RPC `id` reaches `serveStdio`'s catch (Info; test now, fix next)
+### H-09: A deeply nested JSON-RPC `id` reaches `serveStdio`'s catch (Info; tested by #522, fix next)
 
 - **Where:** `handleLine` (`mcp-server.ts:111-174`) echoes `request.id` unchanged into
   `reply()`, which calls `JSON.stringify`. An `id` nested about 5,000 or more levels deep
@@ -378,9 +382,9 @@ regex; `serveStdio`'s catch writing nothing) are killed by #522's tests.
 - **Fix (re-decided: unlocked, fix next):** JSON-RPC 2.0 allows only a string, a number or
   null as an id. `handleLine` should answer any other id with `-32600` and id null, before
   running a method, and the "unreachable" comment should say what still reaches the catch.
-  `mcp-server.ts` is no longer locked, so the only reason to wait is order: #522 pins
-  today's `-32603`, and the fix must flip that pin in the same PR. So it is one small
-  `mcp-server.ts` PR with the H-02 MCP half, opened after #522 merges. TO FILE 6.
+  `mcp-server.ts` is no longer locked and #522 has merged, so nothing orders it: the
+  `-32603` pin is on main (`input-fuzz.test.ts:348-380`) and the fix flips it in place, in
+  the same PR. One small `mcp-server.ts` PR with the H-02 MCP half. TO FILE 6.
 
 ### H-10 to H-15: hosting items from #508 (defer)
 
@@ -393,7 +397,7 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 | H-10 | 1, tenant-namespace the vault | `vault.ts:294-296` (`runDir = join(root, runId)`), `vault.ts:313` | Optional `namespace` in `VaultOptions`, validated like a run id, prefixing `runDir`; absent means today's layout. Hosted ids must also be unique after case folding (H-08) | Nothing multi-tenant runs; adds an unused option |
 | H-11 | 2, persisted receipt store | `vault.ts:98-102`, `gated-trial.ts` | A `ReceiptStore` interface with an in-memory default; hosted backs it with a store the agent cannot reach | `gated-trial.ts` is unlocked now (#514 merged), but locally the receipt never leaves one process: the interface would have one implementation and no caller |
 | H-12 | 3, concurrent-safe ledger | `ledger.ts:41-53` (read the head, then `appendFileSync`), `cli.ts:134` | One chain per (tenant, eval), appends serialised per chain (a lock file or a single writer); row format unchanged | Locally one serial process writes (`serveStdio` handles requests one at a time, `mcp-server.ts:180-206`), so no fork today |
-| H-13 | 4, per-tenant vault keys | `vault.ts:247-255` | A `keyId` in the seal manifest plus a key-lookup callback in `VaultOptions`; single-key default | Changes the manifest format; no second key exists |
+| H-13 | 4, per-tenant vault keys | `vault.ts:251-262` | A `keyId` in the seal manifest plus a key-lookup callback in `VaultOptions`; single-key default | Changes the manifest format; no second key exists |
 | H-14 | 5, host paths out of the seal manifest | `vault.ts:95`, `vault.ts:319-322` | Record oracle sources as `{ id, sha256 }` relative to a configured oracle root | Locally the paths never reach the agent: agent-facing error text carries `integrity:<code>` only (`sealed.ts:20-21`, `sealed-gate.test.ts` "its host path never reaches the agent") |
 | H-15 | 6, operator-bound caller identity | `gate.ts:435-464`, `api.ts:151-191` | Optional `GateConfig.caller`, echoed as optional `GateResult.caller` (additive `v1`); request unchanged | `gate.ts`/`api.ts` are locked by #503; no transport authenticates a caller yet |
 
@@ -413,8 +417,11 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 - **What it does not carry:** no document cell value and no other third-party free text.
   `parseDocument` values never reach a reason (the round-1 verifier checked; the
   `sealed-fixture.test.ts` injection case shows the injected cell text never appears), and
-  `todo-items` lists only the operator's intent items. No host path: the reader rules keep
-  `detail` relative (`gate.ts:162-166`).
+  `todo-items` lists only the operator's intent items. No host path: the descriptor check
+  strips the evidence root before it names a path (`gate.ts:283-286`), and every other
+  failure detail carries an error code, never a raw message (`errorCode`, `reasons.ts:22`,
+  used at `gate.ts:369` and `gate.ts:405`; a reader that throws goes through `diagnose`,
+  `gate.ts:626-634`). The rule itself is stated on the reader interface (`gate.ts:162-166`).
 - **Exploit sketch:** with corrections off (the default), an agent in the mock/dev MCP mode
   edits, calls the gate and reads `DOCUMENT_COLLATERAL: 2 cell(s) ...: B2, D7`. It now knows
   exactly which cells to restore: the information the corrections switch is meant to gate
@@ -438,7 +445,10 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 - **Where:** `gate.ts:780-786` pushes `{ kind: "sealed-fixture", runId, path: sealed.file,
   sha256: digest, bytes }` into `evidenceRefs`, and the whole result goes to the agent
   (`mcp-server.ts:100-106`). The `persisted-state` ref carries the sha256 of the agent's own
-  saved document.
+  saved document. The `sealed-fixture` kind names the operator's fixture binding, not the
+  reader: the ref is pushed whenever the task's spec names a fixture, on the sealed reader
+  and on the mock/dev `fileEvidenceReader` alike. The behaviour pins in
+  `test/gate/security-review.test.ts` use the mock/dev reader.
 - **Exploit sketch:** none that moves a verdict. The agent was given the fixture bytes, so
   it can compute the digest itself; the digest is not a key and the gate checks the bytes
   against the operator's registered digest, not against anything the agent says. Knowing
@@ -467,8 +477,8 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 ## TO FILE (Linear limit)
 
 1. **H-02:** stop echoing agent strings in MCP error messages (`mcp-server.ts:87`,
-   `mcp-server.ts:171`): unlocked, in one `mcp-server.ts` PR with item 6, after #522
-   merges. Stop echoing agent-chosen key names in the `UNKNOWN_FIELD` reason
+   `mcp-server.ts:171`): unlocked, in one `mcp-server.ts` PR with item 6, no ordering
+   condition. Stop echoing agent-chosen key names in the `UNKNOWN_FIELD` reason
    (`api.ts:356-363`) after #503 merges.
 2. **H-04, on main:** escape or reject control and bidi characters in
    `corrections[].observed` (`corrections.ts:241-246`), pin it with a test, and document in
@@ -478,12 +488,12 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
    merges; plus a bound on `serveStdio`'s pending queue (`mcp-server.ts:191`).
 4. **H-06 (vault side):** cap captured artifact size in `vault.capture`, so the vault never
    reads an oversized file whole.
-5. **H-01 follow-up:** move the frame cap into `serveStdio` (now unblocked: #514 merged).
-   #520 owns `stdio-frame.ts`, so in its next round or right after it merges.
+5. **H-01 follow-up:** move the frame cap into `serveStdio`, so programmatic callers get
+   it too. Unlocked: #514 and #520 have merged and no open PR touches these files.
 6. **H-09:** answer a JSON-RPC `id` that is not a string, number or null with `-32600`
    (`handleLine`, `mcp-server.ts:111-174`), and correct the "unreachable" comment on
-   `serveStdio`'s catch (`mcp-server.ts:195-198`). Unlocked; after #522 merges, flipping
-   its `-32603` pin in the same PR.
+   `serveStdio`'s catch (`mcp-server.ts:195-198`). Unlocked, no ordering condition: the same
+   PR flips #522's `-32603` pin (`input-fuzz.test.ts:348-380`).
 7. **H-10 to H-15:** the six hosting seams in the table above (#508 TO FILE 1-6).
 8. **H-08 (operator aliasing):** `fileEvidenceReader` refuses a run whose directory entry
    under the root is not byte-equal to `runId`, so ids that alias after case folding or a
