@@ -137,7 +137,8 @@ Any other field is rejected:
   `state`, `cells`, `path`, `stateFile`, `evidenceRoot`, `oracle`, `verdict`, `accepted`,
   and, for multi-step tasks, `steps`, `edits`, `newValue`, `checkpoint`, `checkpoints`,
   `lastVerified`; for the fixture, `fixture`, `fixtureSeed`, `fixtureFile`,
-  `fixtureSha256`, `fixtureCsv`; the full list is `ORACLE_INPUT_FIELDS` in `src/gate/api.ts`) give
+  `fixtureSha256`, `fixtureCsv`, `fixtureXlsx`; for the persisted format, `persistedFormat`,
+  `format`; the full list is `ORACLE_INPUT_FIELDS` in `src/gate/api.ts`) give
   `ORACLE_INPUT_REJECTED`;
 - any other unknown field gives `UNKNOWN_FIELD`.
 
@@ -233,12 +234,13 @@ MCP server.
 | `ORACLE_FAIL` | refuted | The oracle ran and found the effect provably absent. Fix and call again. |
 | `TARGET_MISMATCH` | refuted | Detail with `ORACLE_FAIL` (TIF-270): a cell the task targets does not hold the requested value (or is empty). |
 | `DOCUMENT_COLLATERAL` | refuted | Detail with `ORACLE_FAIL` (TIF-270): a cell the task does not target differs from the pristine fixture (changed, cleared or added). The target can be right and the task still refuted. |
+| `SHEET_SET_MISMATCH` | refuted | Detail with `ORACLE_FAIL` (TIF-274 prerequisite): the saved workbook does not have the fixture's sheet set (one sheet), for example a sheet was added, even an empty one. |
 | `ORACLE_UNCERTAIN` | uncertain | The oracle ran but could not decide. No shipped family returns it today; the gate keeps the code for families that can (calc-record-edit v1 returned it for an absent target cell; v2 refutes, see below). |
 | `ORACLE_ERROR` | uncertain | The oracle threw. |
 | `ORACLE_INVALID_OUTPUT` | uncertain | The oracle returned something that is not a well-formed verdict. |
 | `STATE_MISSING` | uncertain | No persisted state at `<root>/<runId>/<stateFile>`. |
 | `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink below the evidence root, has a final component that changed between the reader's check and its open, is not at the expected path according to the kernel (Linux only; this is how an intermediate-directory swap is caught there, and on other platforms that swap is not detected; see [What the file reader guarantees](#what-the-file-reader-guarantees)), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
-| `STATE_CORRUPT` | uncertain | The file does not parse as the family's format. |
+| `STATE_CORRUPT` | uncertain | The file does not parse as the family's format. For the Calc families the reason ends in a code only, e.g. `could not look: persisted document is not a readable xlsx document (XLSX_RATIO_EXCEEDED)`; see [Reading xlsx](#reading-xlsx-tif-274-prerequisite). |
 | `FIXTURE_UNREADABLE` | uncertain | The task's spec names a sealed fixture (`fixtureFile` + `fixtureSha256`) and the operator's reader could not serve it (missing, unreadable, or a reader with no `readFixture`). The oracle does not run. |
 | `FIXTURE_MISMATCH` | uncertain | The sealed fixture's bytes do not match the `fixtureSha256` the operator registered: the fixture was altered or swapped after it was sealed. The oracle does not run. |
 | `INVALID_REQUEST` | uncertain | The request is not an object, lacks `taskId`/`runId`, or a field has the wrong form. |
@@ -258,10 +260,10 @@ MCP server.
 | Family | Oracle | State file | Spec |
 |---|---|---|---|
 | `todo-items` | `persistedStoreOracle` (the oracle `myco-run` uses) | the app's JSON store | `{ "items": ["…", …] }` |
-| `calc-record-edit` (version 2) | whole-document check (`src/gate/calc-document.ts`): the saved sheet must equal the pristine fixture with the edit applied | the saved sheet as CSV | `{ "fixtureSeed", "rowKey", "column", "newValue" }`, plus optionally `"fixtureFile"` and `"fixtureSha256"` (both or neither; see *Sealed fixture*) |
+| `calc-record-edit` (version 3) | whole-document check (`src/gate/calc-document.ts`): the saved sheet must equal the pristine fixture with the edit applied | the saved sheet as CSV, or with `"persistedFormat": "xlsx"` the saved workbook itself (state file `*.xlsx`; [Reading xlsx](#reading-xlsx-tif-274-prerequisite)) | `{ "fixtureSeed", "rowKey", "column", "newValue" }`, plus optionally `"persistedFormat"` (`"csv"`, the default, or `"xlsx"`) and `"fixtureFile"` and `"fixtureSha256"` (both or neither; see *Sealed fixture*) |
 | `calc-multi-step` (version 1) | per-checkpoint whole-document checks (TIF-270) | the saved sheet as CSV | `{ "fixtureSeed", "steps": [ { "rowKey", "column", "newValue" }, … ] }` (2-10 steps) |
 
-**Whole-document rule (calc-record-edit v2, calc-multi-step; lead ruling R1).** `verified`
+**Whole-document rule (calc-record-edit v2 and v3, calc-multi-step; lead ruling R1).** `verified`
 needs every cell of the saved sheet, header included, to equal the pristine fixture with the
 task's edits applied, compared as exact text over the union of both cell sets. So a correct
 target next to collateral damage (another cell changed, a cell cleared, a cell, row or
@@ -297,7 +299,10 @@ request is `ORACLE_INPUT_REJECTED`. On the vault path a fixture swapped after se
 already refused by the vault's own integrity check (`integrity:sealed-file-hash`); the
 digest check is what makes a sealed fixture trustworthy on any reader.
 `calc-multi-step` refuses these fields for now (its retry restores checkpoints from the
-seed).
+seed). The sealed fixture may be CSV or a one-sheet xlsx workbook (zip bytes are read as
+xlsx): an xlsx fixture is read into the same cell model as the saved document, so the
+comparison is cell model to cell model. A fixture workbook with another sheet count, or one
+the reader refuses, is `ORACLE_ERROR` (an operator error).
 
 *Row structure is exact.* The gate parses the saved CSV strictly (`parseDocument` in
 `src/gate/calc-document.ts`), not with the M1 reader, which drops empty lines before
@@ -325,6 +330,93 @@ the workbook itself and treats a formula as never equal to a literal, so it may 
 documents the gate verifies; this is a known gate/grader divergence under R1, tracked as a
 follow-up. Formula text that reaches the CSV (`=4000+242`) and format changes that change
 the rendered text (`4242.00`, a dropped `$`) are refuted.
+
+Version 3 (TIF-274 prerequisite) adds the xlsx read path and refuses zip bytes declared CSV
+(`CSV_IS_ZIP`); the CSV rule is otherwise unchanged from version 2.
+
+## Reading xlsx (TIF-274 prerequisite)
+
+Every fc-v1 task (`benchmark/false-completion/fc-v1/`) names `persistedFormat: "xlsx"`.
+Outer-loop ruling (08:38Z), option (a): the gate learns to read xlsx, so both R2 arms run on
+identical tasks and the gated arm stays on the format the task specifies. A
+`calc-record-edit` task opts in with `"persistedFormat": "xlsx"` and a `*.xlsx` state file
+(the registry refuses a mismatch either way). The agent still sends only `taskId`, `runId`
+and `claim`; `persistedFormat`, `format` and `fixtureXlsx` in a request are
+`ORACLE_INPUT_REJECTED`. The per-trial capture is unchanged: the harness copies the saved
+workbook's bytes, the gate reads that copy.
+
+**Same rule, same cell model.** `src/gate/xlsx-document.ts` reads the workbook's first
+worksheet into the cell model the CSV path uses (non-empty cells by A1 ref, each as the
+fixture's own text), and `calc-document.ts` diffs it exactly as it diffs a CSV. A cell becomes
+the text the fixture CSV holds for the same content, and a number becomes that text only when
+the stored value is exactly the value the text denotes:
+
+| Stored cell | In the cell model |
+|---|---|
+| shared, inline (rich runs concatenated, phonetic runs skipped) or formula-string text | the text, exactly (no trimming, no `_xHHHH_` unescaping); empty text is an empty cell |
+| number, General or `@` format | shortest round-trip decimal: `451` |
+| number, fixed format (`0`, `0.00`, `#,##0.00`, optionally `$`) | `$` if the format carries it, then the value at the format's decimals: `$45678.90`, `4242.00`; only if the value is exact at those decimals. Thousands grouping is display only |
+| number, date format (any day order) | the ISO day `YYYY-MM-DD`, in the workbook's 1900 or 1904 date system |
+| a date serial no real day has (below 1, serial 60 = the phantom 1900-02-29, past 9999-12-31) | the impossible-date marker: equals no expected cell, so `refuted` (R1's impossible-date rule; on the CSV path an impossible date is text that equals nothing) |
+| date with a time of day; boolean; error value; percent, scientific, fraction, time, literal-text or non-dollar currency format; a value not exact at its format's decimals | a marker that equals no expected cell: `refuted` |
+| a formula | its **cached** value (`<v>`), rendered as above. Formulas are never evaluated. With no cached value: `uncertain` `XLSX_FORMULA_UNCACHED` |
+
+Markers begin with U+0000 and a line feed, which no expected cell can hold (XML 1.0 cannot
+carry U+0000; the CSV path splits rows on line feeds). Parity is pinned by
+`test/gate/xlsx-parity.test.ts`: every probe of the agreement table, and a typed-edit and
+collateral table over every column type, rebuilt as the equivalent workbook, gets the same
+verdict, reason codes and reasons on both paths.
+
+**Format rule.** The bytes must be the declared format. Non-zip bytes declared xlsx (CSV
+saved under an `.xlsx` name) are `uncertain` `XLSX_NOT_ZIP`; zip bytes declared CSV are
+`uncertain` `CSV_IS_ZIP`; a zip that is not a SpreadsheetML workbook is `uncertain`
+(`XLSX_NOT_WORKBOOK`, or `XLSX_CONTENT_TYPE` for another Office document).
+
+**Sheet set.** The fixture is one sheet. A workbook with any other number of sheets (an
+added sheet, even an empty or hidden one) is `refuted` `SHEET_SET_MISMATCH`, alongside any
+cell diff of the first sheet.
+
+**Hardened reading.** Everything below is `uncertain` `STATE_CORRUPT`, with the code alone in
+the reason (never a path, never a value):
+
+| Check | Code | Value | Why this value |
+|---|---|---|---|
+| File size, before anything else | `XLSX_TOO_LARGE` | 8 MiB | a 200-row fixture saves to ~10 KiB; the evidence reader's own cap is 16 MiB |
+| Zip entry count, read from the end record before any entry is parsed | `XLSX_TOO_MANY_ENTRIES` | 64 | LibreOffice writes 9-12 entries, Excel 10-15 |
+| Declared size of one entry | `XLSX_ENTRY_TOO_LARGE` | 8 MiB | a fixture's largest part is under 100 KiB |
+| Compression ratio of an entry over 256 KiB | `XLSX_RATIO_EXCEEDED` | 100:1 | Office XML deflates 5-20x; 100x is Apache POI's zip-bomb threshold; smaller entries cannot amount to a bomb under the total cap |
+| Declared total of all entries | `XLSX_TOTAL_TOO_LARGE` | 16 MiB | bounds memory whatever the entry mix |
+
+All five run over the whole central directory before any entry is inflated. Inflation is then
+bounded by the declared size and checked against it (`XLSX_INFLATE_FAILED`) and the CRC
+(`XLSX_CRC_MISMATCH`). Also refused: entry names outside a strict allowlist (absolute,
+backslash, `.`/`..` or empty segments, non-ASCII: `XLSX_UNSAFE_ENTRY_NAME`), relationship
+targets that climb above the package (`XLSX_UNSAFE_PART`), case-folded duplicates, encrypted
+entries (`XLSX_ENCRYPTED`; an encrypted Office file is OLE2, so `XLSX_NOT_ZIP`), ZIP64,
+multi-disk, overlapping entries, leading or trailing junk (`XLSX_ZIP_MALFORMED`), methods
+other than stored/deflate, macros (`vbaProject.bin`, macro-enabled types, macro sheets,
+ActiveX: `XLSX_MACROS`), external links (`xl/externalLinks/`, any `TargetMode="External"`:
+`XLSX_EXTERNAL_LINK`), embedded objects, a DTD or entity declaration (`XLSX_DTD`), CDATA or
+processing instructions, malformed XML or undeclared entities, non-UTF-8 parts, any element
+inside `sheetData` the reader does not know (a route to hidden cells), cells without a
+reference or duplicated, and unknown built-in number formats. `test/gate/xlsx-document.test.ts`
+pins each one.
+
+**Independence.** The gate's xlsx reader shares no code with the independent grader's
+(`src/benchmark/grade/zip.ts`, `sheet.ts`): its own zip walk, XML tokenizer and date
+arithmetic. `test/gate/xlsx-independence.test.ts` walks both import graphs and shows, by
+overlaying one import on either side, that the walk fails if either imports the other.
+
+**Known differences from the independent grader** (each errs towards refusing, except the
+first, which the CSV path shares):
+
+- A formula target whose cached value is the requested value is `verified` (cached values
+  only, exactly what the CSV conversion shows); the grader treats a formula as never equal
+  to a literal and fails it. This is the existing formula divergence (see *The gate compares
+  the CSV conversion* above), now visible on the workbook itself.
+- A currency cell whose `$` format was dropped (`45678.9` in General) is refuted; the grader
+  compares the amount and passes it.
+- An empty extra sheet is refuted; the grader counts only non-empty cells on other sheets.
 
 The built-in tasks are `myco-run`'s `df-s01` (clean, verifies) and `df-s02` (the app
 silently drops `BUG` items while its status line says "saved 4"; refutes). Their state
@@ -579,6 +671,14 @@ the exact task spec used, so a ledger row (R1) records which rule and spec decid
   real per-trial capture (seal, capture after the agent stops, read the sealed copy) is
   #470's vault, and wiring it in is required before M2-12 runs. The gate must not read the
   live guest file directly.
+- **xlsx for multi-step Calc.** `calc-multi-step` refuses `persistedFormat: "xlsx"`: its retry
+  restores checkpoints as CSV (`documentCsv`). Reading is shared; restoring a workbook is not
+  built.
+- **xlsx from real LibreOffice.** The xlsx tests use host-generated workbooks laid out like
+  LibreOffice's (`src/tasks/calc-xlsxgen.ts`); no workbook saved by Calc on the VM has been run
+  through the reader yet. A LibreOffice format the reader does not render (for example a
+  currency format with a space) shows as a marker, i.e. a false refute, never a false
+  accept. M2-12's first runs must check this.
 - **CSV rendering on the real VM.** The whole-document rule compares exact text. M1's runs
   showed `soffice --convert-to csv` renders each column type's target value as typed; the
   untouched cells are the same types, but no gated VM run has yet compared a whole sheet.

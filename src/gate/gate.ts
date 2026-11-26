@@ -113,7 +113,8 @@ export function buildRegistry(
       problems.push(`${where}: stateFile must be a relative path without "." or ".." segments`);
       continue;
     }
-    const specProblem = family.checkSpec(entry.spec);
+    const specProblem =
+      family.checkSpec(entry.spec) ?? family.checkStateFile?.(entry.stateFile, entry.spec);
     if (specProblem) {
       problems.push(`${where}: ${specProblem}`);
       continue;

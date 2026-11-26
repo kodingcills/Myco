@@ -57,7 +57,7 @@ describe("benchmark grader independence (TIF-267)", () => {
 
   it("never names a gate module or a process launcher", () => {
     const forbidden =
-      /uno-verifier|filepersist|tasks\/(intent|fixture|calc-record-edit)|core\/verify|child_process|soffice|execFile|spawn\(/;
+      /uno-verifier|filepersist|tasks\/(intent|fixture|calc-record-edit|calc-xlsxgen)|core\/verify|gate\/|xlsx-document|child_process|soffice|execFile|spawn\(/;
     for (const file of graderFiles) {
       const code = readFileSync(file, "utf8").replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, "");
       expect(code, relative(ROOT, file)).not.toMatch(forbidden);
