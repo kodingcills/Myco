@@ -717,7 +717,8 @@ means. Test file names are the ones the build PRs must create or extend.
 - **Probe:** `test/watch/clip-privacy.test.ts`. The clip module passes #560's
   `test/leak-guard/routing.test.ts`. Planted values go into every free-form input field (claim,
   reasons, evidence paths, frame file names, oracle family): a fake username, a fake full name,
-  a fake hostname, `/Users/<name>/…`, `C:\Users\<name>\…`, a key-shaped token, and a window
+  a fake hostname, macOS, Linux and Windows home paths built from the fake name, a key-shaped
+  token, and a window
   title carrying the fake name. No byte of the GIF, poster or sidecar contains any of them
   (raw-byte scan with the shared detector); ids carrying them are `h-<60hex>`; and an existing
   `h-<60hex>` value is kept, while `h-<64hex>` and `h-<59hex>` are re-hashed.
