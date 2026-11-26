@@ -197,7 +197,7 @@ M = {
   "r8": [(E, 'if (gt.persistedSha256 === null && gt.status !== "ungradable")', 'if (false)')],
   "r9": [(E, 'if (e.task.fixtureSha256 !== null && gt.fixtureSha256 !== e.task.fixtureSha256)', 'if (false)')],
   "r10": [(E, 'if ((e.outcome === "launch-refused" || e.outcome === "unregistrable") && e.gate !== null)', 'if (false)')],
-  "r11": [(E, '    if (blobProblem !== null) {', '    if (false) {')],
+  "r11": [(E, '    if (closedProblem !== null) {', '    if (false) {')],
   "r12": [(E, '      sha256Hex(bytes) !== persisted.sha256 ||\n      bytes.byteLength !== persisted.bytes ||\n      persisted.file !== `blobs/${persisted.sha256}.csv`\n', '      false\n')],
   "r13": [(E, 'if (bytes === undefined) return { path: persistedAt, detail: "BLOB_MISSING" };', 'if (bytes === undefined) return null;')],
   "r14": [(E, '      o.mediaType !== "text/csv" ||\n      persisted !== undefined\n', '      o.mediaType !== "text/csv"\n')],

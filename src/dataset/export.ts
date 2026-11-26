@@ -428,24 +428,13 @@ export function exportDataset(
       excluded.push({ episodeId: c.episode.episodeId, code: decision.excluded });
       continue;
     }
-    // classify() has proven the capture present and bound to the grade. The episode, with the
-    // blob the container will carry, must now pass every rule including BLOB_* (#542), so no
-    // exported episode references a blob the container does not hold byte for byte.
+    // classify() has proven the capture present and bound to the grade.
     const capture = c.capture!;
-    const blobProblem = episodeProblem(
-      c.episode,
-      new Map([[persistedBlobFile(capture.bytes), capture.bytes]]),
-    );
-    if (blobProblem !== null) {
-      throw new ExportRefused(
-        "EPISODE_INVALID",
-        `${episodeFile(c.episode.episodeId)}:${blobProblem.path}`,
-        blobProblem.detail,
-      );
-    }
     // Only the CLOSED form leaves the machine (closed.ts, TIF-265): free text hashed, ids
-    // closed or hashed, a closed field holding anything else refuses the export. It must pass
-    // every rule again, blobs included.
+    // closed or hashed, a closed field holding anything else refuses the export. The closed
+    // episode, with the blob the container will carry, must pass every rule including BLOB_*
+    // (#542), so no exported episode references a blob the container does not hold byte for
+    // byte. (Closing never touches a digest or a blob file name, so this is the one check.)
     let closedEp: Episode;
     try {
       closedEp = closeEpisode(c.episode);
