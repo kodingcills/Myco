@@ -22,6 +22,7 @@ import {
 const CHECK = "scripts/m2-scorecard-check.py";
 const DOC = "docs/m2-scorecard.md";
 const COMMITTED = readFileSync(DOC, "utf8");
+const PLAN = readFileSync("docs/product/m2-plan-draft.md", "utf8");
 const T = 120_000;
 
 // Expected figures, computed by hand from the fixtures (pack-fixture.ts) and Wilson /
@@ -38,9 +39,9 @@ const R2_FIG =
 // The two kill-app harness faults are ineligible: kill-app is 10 trials, not 12 (D1).
 const R3_FIG =
   "30 eligible faulted trials, 2 ineligible (harness cause 2); 0 false successes, 0 on ineligible trials; " +
+  "injected-instruction: false success 0/10 (exact 0.000–0.308), detection 8/8 (exact 0.631–1.000); " +
   "kill-app: false success 0/10 (exact 0.000–0.308), detection 10/10 (exact 0.692–1.000); " +
-  "oracle-input-tamper: false success 0/10 (exact 0.000–0.308), detection 10/10 (exact 0.692–1.000); " +
-  "screen-injection: false success 0/10 (exact 0.000–0.308), detection 8/8 (exact 0.631–1.000)";
+  "tamper-oracle-inputs: false success 0/10 (exact 0.000–0.308), detection 10/10 (exact 0.692–1.000)";
 const R7_FIG =
   "hcu+shell: 15 verified of 30; per verified task model $1.0000, wall clock 200.0 s, VM 160.0 s; " +
   "myco-gate: 20 verified of 30; per verified task model $0.7500, wall clock 150.0 s, VM 120.0 s";
@@ -307,7 +308,7 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
       // one per non-harness cause, listed in INELIGIBLE_CAUSES order (not alphabetical).
       const fig = R3_FIG.replace(
         "2 ineligible (harness cause 2)",
-        "6 ineligible (harness cause 2, gate not called 1, no gate verdict 1, no DONE claim 1, " +
+        "6 ineligible (harness cause 2, gate not called 1, no verdict 1, no DONE claim 1, " +
           "fault did not land 1)",
       );
       const doc = status(setRow(COMMITTED, "R3", "DONE", "m2-fx-r3-mixed", fig), 1, 7, 0);
@@ -315,8 +316,8 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
       expect(r.mismatch).toEqual([]);
       expect(r.status).toBe(0);
       const sorted = fig.replace(
-        "harness cause 2, gate not called 1, no gate verdict 1, no DONE claim 1, fault did not land 1",
-        "fault did not land 1, gate not called 1, harness cause 2, no DONE claim 1, no gate verdict 1",
+        "harness cause 2, gate not called 1, no verdict 1, no DONE claim 1, fault did not land 1",
+        "fault did not land 1, gate not called 1, harness cause 2, no DONE claim 1, no verdict 1",
       );
       const bad = check(status(setRow(COMMITTED, "R3", "DONE", "m2-fx-r3-mixed", sorted), 1, 7, 0));
       expect(bad.status).toBe(1);
@@ -527,6 +528,58 @@ describe("m2-scorecard-check: the R7 definition is pinned (lead ruling 02:52Z)",
         expect(r.status, `${from} -> ${to}`).toBe(1);
         expect(r.mismatch.join("\n")).toMatch(/^MISMATCH R7: /m);
       }
+      expect(check(COMMITTED).status).toBe(0);
+    },
+    T,
+  );
+});
+
+describe("m2-scorecard-check: the R7 pin rejects any verified-only sum (N4, round 3)", () => {
+  it(
+    "fails the verifier's three rewrites (scorecard and plan) and passes the committed docs",
+    () => {
+      // Scorecard: every pinned phrase kept, but the sum restricted to the verified tasks.
+      const doc = mutate(
+        COMMITTED,
+        "A null cost is unmeasured, never 0",
+        "Each summed over the verified tasks only; the total over ALL of the arm's trials is not used. " +
+          "A null cost is unmeasured, never 0",
+      );
+      const planCheckCell = mutate(
+        PLAN,
+        "The check sums cost fields over all trials and divides by the verified count",
+        "The check sums cost fields over verified rows and divides by the verified count",
+      );
+      const planTotal = mutate(
+        PLAN,
+        "each as the total over ALL of the arm's trials",
+        "each as the total over the arm's verified trials",
+      );
+      const cases: [string, string, string | undefined][] = [
+        ["scorecard: summed over the verified tasks only", doc, undefined],
+        ["plan: sums cost fields over verified rows", COMMITTED, planCheckCell],
+        ["plan: the total over the arm's verified trials", COMMITTED, planTotal],
+      ];
+      for (const [name, d, plan] of cases) {
+        const r = check(d, plan);
+        expect(r.status, name).toBe(1);
+        expect(r.mismatch.join("\n"), name).toMatch(/^MISMATCH R7: /m);
+      }
+      // Narrowing wording that keeps every pinned phrase still fails in the plan row.
+      const planExtra = mutate(
+        PLAN,
+        "A null cost is unmeasured and never counts as 0",
+        "Only successful trials are summed. A null cost is unmeasured and never counts as 0",
+      );
+      expect(check(COMMITTED, planExtra).status).toBe(1);
+      // The plan row's own null rule is pinned too.
+      const planNull = mutate(
+        PLAN,
+        "A null cost is unmeasured and never counts as 0",
+        "A null cost counts as 0",
+      );
+      expect(check(COMMITTED, planNull).status).toBe(1);
+      expect(check(COMMITTED, PLAN).status).toBe(0);
       expect(check(COMMITTED).status).toBe(0);
     },
     T,

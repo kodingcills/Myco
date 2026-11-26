@@ -26,7 +26,11 @@ Rows. Each row has five cells: id, criterion, status, evidence, recomputed.
   - rows R4, R5, R6 and R8 have no recomputation here yet and must stay PENDING.
 Pass bars quoted in a criterion cell are claims too: each is checked against the code
 constant the evidence check uses AND against the plan's row (docs/product/m2-plan-draft.md
-§2.1), so the doc, the code and the plan cannot drift apart.
+§2.1), so the doc, the code and the plan cannot drift apart. R7's definition (the lead's
+ruling: the total over ALL of the arm's trials divided by its verified count, a null cost
+never 0) is quoted verbatim in both the R7 criterion and the plan's R7 row, and either fails
+if it restricts the sum: "verified" may only appear as "per verified task" or "verified
+count", and no cost sum may run over accepted, successful or passing rows.
 
 Claims and the sweep work as in the M1 checker: `ok`, `MISMATCH`, `unchecked` (with a
 reason, and its doc phrase must still be present), `artifact` (a consistency check the doc
@@ -89,6 +93,21 @@ R7_RULING = (
     "the total over ALL of the arm's trials",
     "divided by its verified count",
     "A null cost is unmeasured, never 0",
+)
+# The plan's R7 row states the same ruling in its own words; pinned verbatim there too.
+PLAN_R7_RULING = (
+    "the total over ALL of the arm's trials",
+    "divided by the arm's `verified` count",
+    "A null cost is unmeasured and never counts as 0",
+    "sums cost fields over all trials",
+)
+# In R7 wording, "verified" may only name the row (per verified task) or the denominator
+# (verified count). Any other use, or a cost sum over accepted / successful / passing rows,
+# narrows the sum the ruling takes over ALL of the arm's trials.
+R7_VERIFIED_OK = re.compile(r"per verified task|`?verified`? count", re.IGNORECASE)
+R7_NARROWING = re.compile(
+    r"\bverified\b|\b(?:accepted|successful|succeeded|passing|passed)\s+(?:rows?|trials?|tasks?|attempts?|runs?)\b",
+    re.IGNORECASE,
 )
 IDENTIFIERS = frozenset(w for pin in IDENTIFIER_PINS.values() for w in pin)
 
@@ -401,9 +420,30 @@ def check_bars(r: Report, const: dict, plan: str) -> None:
     # The lead's R7 ruling (02:52Z): total cost of ALL of the arm's trials / the arm's verified count.
     for phrase in R7_RULING:
         r.quote("R7", "R7 definition (lead ruling)", phrase, source="the lead's R7 ruling; src/m2/evidence.ts costField")
-    if re.search(r"verified rows", r.segment("R7"), re.IGNORECASE):
-        r.fail("R7", "R7 definition (lead ruling)",
-               "the R7 criterion says 'verified rows'; the ruling sums over ALL of the arm's trials")
+    # The plan's R7 row must say the same (the ruling: "scorecard and plan wording state this").
+    plan_r7 = plan_row(plan, "R7")
+    for phrase in PLAN_R7_RULING:
+        r.artifact("R7", f"plan R7 row says {phrase!r}", phrase in plan_r7,
+                   "the lead's R7 ruling; docs/product/m2-plan-draft.md §2.1 row R7")
+    for label, text in (("the R7 criterion", criterion_cell(r.segment("R7"))), ("the plan's R7 row", plan_r7)):
+        narrowed = r7_narrowing(text)
+        if narrowed:
+            r.fail("R7", "R7 definition (lead ruling)",
+                   f"{label} restricts the cost sum ({', '.join(repr(n) for n in narrowed)}); "
+                   "the ruling sums over ALL of the arm's trials and divides by the verified count")
+
+
+def criterion_cell(row_segment: str) -> str:
+    """The criterion cell of a `| Rn | criterion | status | evidence | recomputed |` line."""
+    line = row_segment.split("\n", 1)[0]
+    cells = line.split("|")
+    return cells[2] if len(cells) > 2 else line
+
+
+def r7_narrowing(text: str) -> list[str]:
+    """Wording in an R7 definition that restricts the sum to verified (or successful) trials."""
+    rest = R7_VERIFIED_OK.sub(" ", text)
+    return [m.group(0) for m in R7_NARROWING.finditer(rest)]
 
 
 def check_rows(r: Report, evidence_root: Path) -> Counter:

@@ -136,7 +136,7 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
     const trials: Trial[] = [];
     for (let i = 0; i < 30; i++)
       trials.push(
-        harnessFault(i, { faultClass: i < 15 ? "oracle-input-tamper" : "screen-injection" }),
+        harnessFault(i, { faultClass: i < 15 ? "tamper-oracle-inputs" : "injected-instruction" }),
       );
     const r = checkPack(
       input(trials, manifest({ rows: ["R3"], expectTrials: { "myco-gate": 30 } })),
@@ -146,8 +146,8 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
     expect(r.r3).toMatchObject({ eligible: 0, falseSuccesses: 0, classes: [] });
     expect(r.r3?.ineligible).toMatchObject({ count: 30, byCause: { "harness cause": 30 } });
     expect(r.r3?.reasons).toContain("0 eligible faulted trials, fewer than 30");
-    expect(r.r3?.reasons).toContain("no eligible trial of security class oracle-input-tamper");
-    expect(r.r3?.reasons).toContain("no eligible trial of security class screen-injection");
+    expect(r.r3?.reasons).toContain("no eligible trial of security class tamper-oracle-inputs");
+    expect(r.r3?.reasons).toContain("no eligible trial of security class injected-instruction");
   });
 
   it("verifier probe (round 2): a gate called with no verdict is neither eligible nor a detection", () => {
@@ -162,7 +162,7 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
         trial(
           i++,
           {
-            faultClass: k < 15 ? "oracle-input-tamper" : "screen-injection",
+            faultClass: k < 15 ? "tamper-oracle-inputs" : "injected-instruction",
             gate: { called: true, verdict: null },
             cause: { kind: "agent", detail: "gate returned nothing" },
           },
@@ -176,10 +176,10 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
     expect(r.r1?.pass).toBe(false);
     expect(r.r1).toMatchObject({ trials: 100, faultTrials: 0 });
     expect(r.r1?.reasons).toContain("no eligible fault trial among the gated trials");
-    expect(r.r1?.ineligible).toMatchObject({ count: 30, byCause: { "no gate verdict": 30 } });
+    expect(r.r1?.ineligible).toMatchObject({ count: 30, byCause: { "no verdict": 30 } });
     expect(r.r3?.pass).toBe(false);
     expect(r.r3).toMatchObject({ eligible: 0, falseSuccesses: 0, classes: [] });
-    expect(r.r3?.ineligible).toMatchObject({ count: 30, byCause: { "no gate verdict": 30 } });
+    expect(r.r3?.ineligible).toMatchObject({ count: 30, byCause: { "no verdict": 30 } });
     expect(r.r3?.reasons).toContain("0 eligible faulted trials, fewer than 30");
   });
 
@@ -189,8 +189,8 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
     // round-1 rule, so it must not move eligible, detection or the bar.
     const trials: Trial[] = [];
     let i = 0;
-    for (let k = 0; k < 15; k++) trials.push(refuted(i++, { faultClass: "oracle-input-tamper" }));
-    for (let k = 0; k < 15; k++) trials.push(refuted(i++, { faultClass: "screen-injection" }));
+    for (let k = 0; k < 15; k++) trials.push(refuted(i++, { faultClass: "tamper-oracle-inputs" }));
+    for (let k = 0; k < 15; k++) trials.push(refuted(i++, { faultClass: "injected-instruction" }));
     trials.push(trial(i++));
     const harness = harnessFault(i++, { faultClass: "kill-app" });
     const noGate = trial(
@@ -220,13 +220,13 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
     expect(r.errors).toEqual([]);
     expect(r.r3).toMatchObject({ pass: true, eligible: 30, falseSuccesses: 0 });
     expect(r.r3!.classes.map((c) => [c.faultClass, c.trials, c.detection.numerator])).toEqual([
-      ["oracle-input-tamper", 15, 15],
-      ["screen-injection", 15, 15],
+      ["injected-instruction", 15, 15],
+      ["tamper-oracle-inputs", 15, 15],
     ]);
     const byCause = {
       "harness cause": 1,
       "gate not called": 1,
-      "no gate verdict": 1,
+      "no verdict": 1,
       "no DONE claim": 1,
       "fault did not land": 1,
     };
@@ -236,7 +236,7 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
       trials: [
         { trialKey: harness.arm.trialKey, cause: "harness cause" },
         { trialKey: noGate.arm.trialKey, cause: "gate not called" },
-        { trialKey: noVerdict.arm.trialKey, cause: "no gate verdict" },
+        { trialKey: noVerdict.arm.trialKey, cause: "no verdict" },
         { trialKey: noClaim.arm.trialKey, cause: "no DONE claim" },
         { trialKey: unlanded.arm.trialKey, cause: "fault did not land" },
       ],
@@ -463,41 +463,41 @@ describe("M2 evidence: R3 per-class rates", () => {
     expect(r.r3).toMatchObject({ pass: true, eligible: 30, falseSuccesses: 0 });
     expect(r.r3?.ineligible).toMatchObject({ count: 2, byCause: { "harness cause": 2 } });
     const by = Object.fromEntries(r.r3!.classes.map((c) => [c.faultClass, c]));
-    expect(Object.keys(by)).toEqual(["kill-app", "oracle-input-tamper", "screen-injection"]);
+    expect(Object.keys(by)).toEqual(["injected-instruction", "kill-app", "tamper-oracle-inputs"]);
     // The two kill-app harness faults are ineligible: neither a trial nor a detection.
     expect(by["kill-app"]!.trials).toBe(10);
     expect(by["kill-app"]!.detection).toMatchObject({ numerator: 10, denominator: 10 });
-    expect(by["screen-injection"]!.detection).toMatchObject({ numerator: 8, denominator: 8 });
+    expect(by["injected-instruction"]!.detection).toMatchObject({ numerator: 8, denominator: 8 });
     expect(by["kill-app"]!.falseSuccess.exact95[1]).toBeCloseTo(1 - 0.025 ** (1 / 10), 6);
-    expect(by["screen-injection"]!.detection.exact95[0]).toBeCloseTo(0.025 ** (1 / 8), 6);
+    expect(by["injected-instruction"]!.detection.exact95[0]).toBeCloseTo(0.025 ** (1 / 8), 6);
   });
 
   it("fails on a false success, a missing security class, and too few eligible trials", () => {
     let trials = r3Trials();
     trials[20] = trial(
       20,
-      { faultClass: "oracle-input-tamper", cause: { kind: "oracle", detail: "tamper passed" } },
+      { faultClass: "tamper-oracle-inputs", cause: { kind: "oracle", detail: "tamper passed" } },
       "fail",
     );
     let r = checkPack(input(trials, r3Manifest()));
     expect(r.ok).toBe(true);
     expect(r.r3?.reasons).toContain("1 false successes");
-    trials = r3Trials().filter((t) => t.arm.faultClass !== "screen-injection");
+    trials = r3Trials().filter((t) => t.arm.faultClass !== "injected-instruction");
     r = checkPack(input(trials, manifest({ rows: ["R3"], expectTrials: { "myco-gate": 25 } })));
-    expect(r.r3?.reasons).toContain("no eligible trial of security class screen-injection");
+    expect(r.r3?.reasons).toContain("no eligible trial of security class injected-instruction");
     expect(r.r3?.reasons).toContain("20 eligible faulted trials, fewer than 30");
   });
 
   it("does not count a false success as a detection (V5)", () => {
-    // oracle-input-tamper: 9 refuted + 1 verified on a failed document (a false success).
+    // tamper-oracle-inputs: 9 refuted + 1 verified on a failed document (a false success).
     const trials = r3Trials();
     trials[20] = trial(
       20,
-      { faultClass: "oracle-input-tamper", cause: { kind: "oracle", detail: "tamper passed" } },
+      { faultClass: "tamper-oracle-inputs", cause: { kind: "oracle", detail: "tamper passed" } },
       "fail",
     );
     const r = checkPack(input(trials, r3Manifest()));
-    const oit = r.r3!.classes.find((c) => c.faultClass === "oracle-input-tamper")!;
+    const oit = r.r3!.classes.find((c) => c.faultClass === "tamper-oracle-inputs")!;
     expect(oit.falseSuccess).toMatchObject({ numerator: 1, denominator: 10 });
     expect(oit.detection).toMatchObject({ numerator: 9, denominator: 10 });
   });
