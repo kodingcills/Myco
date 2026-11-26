@@ -33,5 +33,6 @@ Tier:
 - [ ] `pnpm typecheck` passes
 - [ ] `pnpm lint` passes
 - [ ] `npx biome check .` passes
+- [ ] `pnpm leak-guard` passes before every push (result stated in a PR comment)
 - [ ] No secrets in the code, logs, commits or this description
 - [ ] Synced by merging `origin/main`; no force push
