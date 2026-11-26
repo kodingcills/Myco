@@ -29,7 +29,8 @@
  *    FULL Unicode case folding (#562, fixing #553's final-round D2: plain lower-casing left
  *    `GROSS` unmatched by a configured `Groß`), then every character that is not a letter or a
  *    digit removed. The fold upper-cases then lower-cases until nothing changes, so `ß`, `ẞ`
- *    and `SS` all fold to `ss`, dotless `ı` and `I` fold to `i`, and final `ς` folds to `σ`.
+ *    and `SS` all fold to `ss`, dotless `ı` and `I` fold to `i`, and final `ς` is mapped to `σ`
+ *    after the fold (lower-casing picks one from context).
  *    So `Alice`, `ALICE`, `a.l.i.c.e`, `run-alice-1` and `alice_smith` all contain `alice`,
  *    and a full name `First Last` is matched JOINED, as `firstlast` (`FirstLast`,
  *    `first.last`, `first_last`, `First-Last`, `FIRSTLAST`), and by each of its words of
@@ -89,7 +90,9 @@ export function caseFold(text: string): string {
     if (next === cur) break;
     cur = next;
   }
-  return cur;
+  // JS lower-casing picks final `ς` or `σ` from context, so `Νίκος` alone ends in `ς` but
+  // `ΝίκοςTrial` folds to `...σtrial`. Map `ς` to `σ` so both sides agree (#562 r1 nit).
+  return cur.replace(/ς/g, "σ");
 }
 
 /** NFKC, full case folding, letters and digits only. */

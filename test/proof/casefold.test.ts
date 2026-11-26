@@ -49,6 +49,12 @@ describe("the fold", () => {
       expect(identityNormal(joined)).toBe(identityNormal("Zqanna Zqmeyer"));
   });
 
+  it("a name ending in final ς matches it glued to more letters (#562 r1 nit)", () => {
+    const g = compileIdentity({ names: ["Ζqνίκος"], homes: [] });
+    for (const v of ["ΖqνίκοςTrial", "Ζqνίκος.trial", "ΖQΝΊΚΟΣ", "run-ζqνίκοσ-1"])
+      expect(g.hit(v), v).toBe("identity");
+  });
+
   it("plain lower-casing would NOT match (the D2 defect, pinned)", () => {
     expect("zqgross".includes("zqgroß")).toBe(false);
     expect("ZQGROSS".toLowerCase().includes("Zqgroß".toLowerCase())).toBe(false);
