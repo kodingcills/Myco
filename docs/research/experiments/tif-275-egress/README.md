@@ -105,11 +105,11 @@ are host-side tests in `test/guest-egress.test.ts`, each with a mutation shown t
 
 The allowlist follow-up (D7–D9 from PR #482's round-3 verdict) was built without the VM. The
 host-side tests in `test/guest-egress.test.ts` cover it. One read-only step on the live guest
-is still owed before merge: `python3 -I scripts/guest_egress_check.py names`, committed here as
-`11-allowlist-live-names.txt`, plus a `verify` exit 0. Why: section 7 records 13 of the 104
-live elements, so the options UTM's argument builder adds (`-L`, `-S`, `-drive`, `-cpu`, …)
-are modelled from UTM 5.0.9's builder, not read from this guest. If one is missing, `verify`
-fails closed and the reset refuses the guest.
+was owed before merge, and is now done (below): `python3 -I scripts/guest_egress_check.py
+names`, committed here as `11-allowlist-live-names.txt`, plus a clean `verify-all`. Why:
+section 7 records 13 of the 104 live elements, so the options UTM's argument builder adds
+(`-L`, `-S`, `-drive`, `-cpu`, …) were modelled from UTM 5.0.9's builder, not read from this
+guest. A missing one would have made `verify` fail closed and the reset refuse the guest.
 
 **Round 4 (relayed live result, not committed here).** The VM owner ran `names` and `verify`
 read-only at `bbab3659`, with egress denied. `verify` exited 1: `-audio is not in the launch
