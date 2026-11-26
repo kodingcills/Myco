@@ -5,6 +5,10 @@
  *   npx tsx scripts/m2-evidence-check.ts PACK_DIR...           the named packs
  *   npx tsx scripts/m2-evidence-check.ts --constants           the bars and the load gate
  *
+ * A pack whose pack.json says `myco.m2.ab-pack/1` is a corrections A/B pack (the scorecard's
+ * experiment row; schemas/m2-ab-pack.ts) and is checked by src/m2/ab-pack.ts. Every other pack is
+ * an R pack, checked by src/m2/evidence.ts, which refuses the A/B manifest and A/B rows.
+ *
  * DIR defaults to docs/research/experiments. Every `m2-*` directory there is a pack and
  * must hold a valid pack.json (a directory without one fails, so evidence cannot skip the
  * check by leaving the manifest out). `--all` with no pack at all prints an empty list and
@@ -13,9 +17,11 @@
  * Prints JSON. Exit 1 when any pack fails a schema, ledger or process check; 2 on usage.
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { HARNESS_CLASSES } from "../schemas/m2-evidence.ts";
+import { AB_PACK_SCHEMA, checkAbPack, readAbPack } from "../src/m2/ab-pack.ts";
+import { AB_ALPHA, AB_EVIDENCE_USE, AB_STAGES } from "../src/m2/corrections-ab.ts";
 import {
   checkPack,
   LOAD_GATE,
@@ -43,6 +49,11 @@ if (args[0] === "--constants") {
       noFault: NO_FAULT,
       r3SecurityClasses: R3_SECURITY_CLASSES,
       harnessClasses: HARNESS_CLASSES,
+      abStage0Pairs: AB_STAGES[0].pairs,
+      abStage1Pairs: AB_STAGES[1].pairs,
+      abAlpha: AB_ALPHA,
+      abEvidenceUse: AB_EVIDENCE_USE,
+      abPackSchema: AB_PACK_SCHEMA,
     })}\n`,
   );
   process.exit(0);
@@ -79,7 +90,31 @@ function validateRuns(runsDir: string, expect: number) {
   return { ok: out.status === 0, detail: `validate-live exit ${out.status}: ${tail}` };
 }
 
+/** The manifest's schema id, or null when pack.json is missing or not JSON (the R check says so). */
+function packSchema(dir: string): unknown {
+  try {
+    const m = JSON.parse(readFileSync(join(dir, "pack.json"), "utf8")) as { schema?: unknown };
+    return m?.schema ?? null;
+  } catch {
+    return null;
+  }
+}
+
 const packs = dirs.map((dir) => {
+  if (packSchema(dir) === AB_PACK_SCHEMA) {
+    const input = readAbPack(dir, ROOT);
+    const result = checkAbPack(input);
+    const provenance = packProvenanceErrors(dir, [...input.on.arm, ...input.off.arm]).map(
+      (e) => `provenance: ${e}`,
+    );
+    return {
+      pack: relative(ROOT, dir) || ".",
+      result:
+        provenance.length === 0
+          ? result
+          : { ...result, ok: false, errors: [...result.errors, ...provenance] },
+    };
+  }
   const input = readPack(dir, validateRuns);
   const result = checkPack(input);
   // Provenance (src/m2/provenance.ts): simulated rows are never evidence, whatever R1 says.
