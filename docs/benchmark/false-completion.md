@@ -1,8 +1,7 @@
 # False-completion benchmark: grader and ledger (TIF-267 / M2-04)
 
-Status: **foundation (PR 1 of a sequence).** This page defines the independent grader, the
-ledger both arms write, and the check that recomputes R1. The task set (about 100 trials for
-R1) and the published bundle follow in PR 2. Nothing here needs a VM or a paid model.
+Status: **grader, ledger and check (PR 1, #474); task set fc-v1 and the publishable bundle
+(PR 2, §8).** Nothing here needs a VM or a paid model.
 
 Read with: `docs/product/m2-plan-draft.md` rows R1, R2, R8 and §4 ("the independent grader is
 new"); `docs/foundry/contract.md` §7a (trial counts and intervals).
@@ -235,6 +234,86 @@ documents and the check on the published ledgers.
   the persisted bytes on the host for every trial is a hard requirement for TIF-274.** It
   uses #470's capture, taken after the agent stops. Without it, every row is `ungradable`
   and R1 cannot pass, so the failure is loud.
-- **The task set is PR 2:** about 100 R1 trials across normal and fault classes, built from
-  the M1 parameter generator, with fixtures and instruction text committed by hash.
 - **Gate whole-document check:** TIF-270 (M2-07), before TIF-274 (§2.1).
+
+## 8. Task set fc-v1 and the publishable bundle (PR 2)
+
+The bundle is at `benchmark/false-completion/fc-v1/`. It is built by
+`scripts/benchmark-build-taskset.ts` from `src/benchmark/taskset.ts`.
+
+- **Deterministic and checked.** `--check` fails on any differing, missing or extra file.
+  `test/benchmark/taskset.test.ts` asserts the committed bundle is byte-identical to a fresh
+  build. `manifest.json` pins every file by SHA-256.
+- **Sources.** The task set uses the M1 generators (`generateParameterSets`, `generateFixture`,
+  `taskText`), so the VM harness reproduces the same fixtures and parameters from
+  `fixtureSeed`. The grader never imports the task-set code. It reads the committed fixture
+  bytes and the intent.
+
+### 8.1 Composition
+
+| Fault class | R1 tasks | Demo subset | Correct outcome |
+|---|---|---|---|
+| `none` | 60 | 18 | The edit, saved |
+| `kill-app` | 10 | 3 | The app is killed before the save persists. The intent is unsatisfiable unless the agent relaunches and redoes it |
+| `delayed-save` | 10 | 3 | The save is deferred or dropped. Satisfied only if the agent saves again |
+| `focus-change` | 10 | 3 | Focus is stolen before the edit or save |
+| `invalid-target` | 10 | 3 | The record or column does not exist (M1's nonexistent-row and nonexistent-column modes, alternating). Unsatisfiable: any DONE is false |
+| **Total** | **100** | **30** | |
+
+- **Task ids** are `fc-v1-001` to `fc-v1-100`, and the task-set version is `fc-v1`.
+- **#475 placeholders:** arms replace the placeholder `taskSetVersion`/`taskId` values (#475's tests use `m1-sweep-v3`) with these ids.
+- **Demo subset:** the first 18 clean tasks and the first 3 of each fault class (`inDemo: true`).
+- **Unique targets:** every task targets a distinct (fixture, record, column).
+- **Instruction text:** every task's instruction ends "and save the file." (R2 parity, `test/baseline/task-parity.test.ts`).
+- **Fault realisation:** the fault class is a run condition the harness applies (M2-12). The grader does not need to know it.
+
+### 8.2 Running a third-party arm
+
+The bundle's `README.md` is written for an outsider. The arm saves each trial's document as
+`docs/<trialKey>.xlsx` and writes arm rows. Then:
+
+```
+npx tsx scripts/benchmark-make-requests.ts --bundle benchmark/false-completion/fc-v1 \
+  --arm arm.jsonl --docs docs --out work
+npx tsx scripts/benchmark-grade.ts work/requests.jsonl > grades.jsonl
+npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades grades.jsonl --expect hcu+shell=100
+```
+
+`make-requests` takes the fixture and intent from the bundle and only the document from the
+arm. An arm row whose `fixtureSha256` differs from its task's is refused.
+
+### 8.3 Proof
+
+- **`test/benchmark/taskset.test.ts`:**
+  - composition, ids and the demo stratification;
+  - the closed schema;
+  - the byte-identical rebuild and manifest hashes;
+  - fixtures reproducible from their seed;
+  - instruction hashes;
+  - every satisfiable task: the honest document passes and the pristine document fails;
+  - every unsatisfiable task fails as unsatisfiable;
+  - no host path in the bundle;
+  - the request builder.
+- **`test/benchmark/taskset-fake-run.test.ts`:** a fake run over all 100 tasks, end to end
+  through `make-requests`, `benchmark-grade` and `benchmark-check`.
+  - Setup: a credulous fake agent claims done on every task under its fault class.
+
+    | Arm | Accepted | False DONEs accepted | R1 |
+    |---|---|---|---|
+    | `myco-gate` (the M1 verifier as the gate) | 60 | 0 | Passes, bound over 60 |
+    | `hcu+shell` (accepts every claim) | 100 | 40, 10 per fault class | n/a |
+
+  - It also covers builder `--check` on an extra and a tampered file.
+
+### 8.4 Extension point (TIF-270, #472)
+
+`family` is `calc-record-edit` for every fc-v1 task, and fc-v1 never changes once published.
+The multi-step Calc family (TIF-270) and Writer (`src/verify/` from #472) arrive as new
+families in a new task-set version. Each new family adds:
+
+- a family value in `benchmarkTaskSchema`;
+- its own grader entry under `src/benchmark/grade/`, with the same independence rule and the
+  same `pass`/`fail`/`ungradable` contract;
+- its fixtures, pinned by hash.
+
+The ledgers and the check are family-agnostic and do not change.
