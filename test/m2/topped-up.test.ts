@@ -22,6 +22,8 @@ import {
   input,
   manifest,
   r1Trials,
+  r2Manifest,
+  r2Trials,
   refuted,
   type Trial,
   trial,
@@ -173,5 +175,123 @@ describe("#506 round 3 N2: hcu+shell rows in an R1 pack are outside the task-set
     );
     expect(r.errors.filter((e) => e.startsWith("R1 task set"))).toEqual([]);
     expect(r.r1?.pass).toBe(true);
+  });
+});
+
+describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned checks", () => {
+  /** A harness-faulted attempt of the live row `live`, under its own key. */
+  const attemptOf = (
+    live: BenchmarkArmRow,
+    key: string,
+    over: Partial<BenchmarkArmRow> = {},
+    harnessClass: "timeout" | "sshd" = "timeout",
+  ): SupersededAttempt => ({
+    schema: "myco.m2.superseded/1",
+    replacedBy: live.trialKey,
+    reason: "lost to the harness; re-run in place",
+    arm: {
+      ...live,
+      trialKey: key,
+      claim: "no-claim",
+      gate: live.gate === null ? null : { called: false, verdict: null },
+      accepted: false,
+      persistedSha256: null,
+      cause: { kind: "harness", detail: "harness fault" },
+      ...over,
+    },
+    ops: {
+      schema: "myco.m2.trial-ops/1",
+      trialKey: key,
+      hostLoad1mStart: 1,
+      harnessClass,
+      faultLanded: live.faultClass === "none" ? null : true,
+    },
+  });
+  const live = () => r1Trials()[LIVE]!.arm;
+
+  it("D1: an uncertain verdict is an outcome and is never replaced", () => {
+    const r = check([
+      attemptOf(live(), "g61-a1", { claim: "done", gate: { called: true, verdict: "uncertain" } }),
+    ]);
+    expect(
+      has(r, /superseded g61-a1: a gate verdict \(uncertain\) is an outcome, never replaced/),
+    ).toBe(true);
+    expect(r.ok).toBe(false);
+  });
+
+  it("D2 (lead 13:42Z): a superseded attempt's cost counts in R7's numerator; a null cost makes it unmeasured", () => {
+    const trials = r2Trials();
+    const g0 = trials[0]!.arm;
+    const base = checkPack({ ...input(trials, r2Manifest()), superseded: [] });
+    const gate0 = base.r7?.arms.find((a) => a.arm === "myco-gate");
+    expect(gate0).toMatchObject({ trials: 30, supersededAttempts: 0, verified: 20 });
+    expect(gate0?.modelUsd.total).toBeCloseTo(15, 9);
+    // The verifier's probe: one superseded attempt that cost $100.
+    const spent = attemptOf(g0, "g0-a1", { cost: { modelUsd: 100, wallClockS: 10, vmS: 5 } });
+    const r = checkPack({ ...input(trials, r2Manifest()), superseded: [spent] });
+    expect(r.errors).toEqual([]);
+    const gate = r.r7?.arms.find((a) => a.arm === "myco-gate");
+    expect(gate).toMatchObject({ trials: 30, supersededAttempts: 1, verified: 20 });
+    expect(gate?.modelUsd.total).toBeCloseTo(115, 9);
+    expect(gate?.modelUsd.perVerified).toBeCloseTo(115 / 20, 9);
+    // R2 is untouched: still 30 pairs.
+    expect(r.r2?.pairs).toBe(30);
+    // A null cost on the attempt: unmeasured, never 0.
+    const unmeasured = attemptOf(g0, "g0-a1", { cost: { modelUsd: null, wallClockS: 10, vmS: 5 } });
+    const n = checkPack({ ...input(trials, r2Manifest()), superseded: [unmeasured] });
+    const nGate = n.r7?.arms.find((a) => a.arm === "myco-gate");
+    expect(nGate?.modelUsd).toEqual({ total: null, nullRows: 1, perVerified: null });
+    expect(n.r7?.reasons).toContain("myco-gate: modelUsd unmeasured on 1 rows");
+  });
+
+  it.each([
+    ["fixtureSha256", { fixtureSha256: "c".repeat(64) }],
+    ["instructionSha256", { instructionSha256: "d".repeat(64) }],
+    ["plannerModelId", { plannerModelId: "claude-haiku-5-5" }],
+    ["outputCeiling", { outputCeiling: 1024 }],
+  ] as const)("D3/D5: a replacement whose %s differs is another trial", (field, over) => {
+    const r = check([attemptOf(live(), "g61-a1", over)]);
+    expect(has(r, new RegExp(`replacement g61 is another trial \\(${field} differs\\)`))).toBe(
+      true,
+    );
+  });
+
+  it("D4: an attempt on an unsatisfiable task is never topped up", () => {
+    const g90 = r1Trials()[90]!.arm;
+    const a = attemptOf(g90, "g90-a1", { gate: { called: false, verdict: null } });
+    const r = check([a]);
+    expect(
+      has(r, /superseded g90-a1: task fc-v1-\d+ is unsatisfiable; re-pack, never top up/),
+    ).toBe(true);
+  });
+
+  it("D3: counts attempts by their own harness class", () => {
+    const r = check([attemptOf(live(), "g61-a1", {}, "sshd")]);
+    expect(r.errors).toEqual([]);
+    expect(r.superseded).toEqual({ count: 1, byHarnessClass: { sshd: 1 } });
+  });
+
+  it("D3: a tail cycle is refused and the walk ends", () => {
+    const a = attemptOf(live(), "a");
+    const r = check([
+      { ...a, replacedBy: "b" },
+      { ...attemptOf(live(), "b"), replacedBy: "c" },
+      { ...attemptOf(live(), "c"), replacedBy: "b" },
+    ]);
+    expect(has(r, /superseded a: its replacement chain loops at b/)).toBe(true);
+  });
+
+  it("D3: duplicates count once; an ops row for another key; a non-harness cause with a class", () => {
+    const dup = check([attemptOf(live(), "g61-a1"), attemptOf(live(), "g61-a1")]);
+    expect(dup.superseded.count).toBe(1);
+    const a = attemptOf(live(), "g61-a1");
+    const wrongOps = check([{ ...a, ops: { ...a.ops, trialKey: "g61-zz" } }]);
+    expect(has(wrongOps, /superseded g61-a1: its trial-ops row is for g61-zz/)).toBe(true);
+    const agent = check([
+      attemptOf(live(), "g61-a1", { cause: { kind: "agent", detail: "wrong cell" } }),
+    ]);
+    expect(
+      has(agent, /only a harness fault may be replaced \(cause agent, harness class timeout\)/),
+    ).toBe(true);
   });
 });

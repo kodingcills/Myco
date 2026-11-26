@@ -118,8 +118,12 @@ export const m2TrialOpsSchema: JsonSchema = {
  * link to the trial that replaced it (`replacedBy`: a trialKey in `arm.jsonl`, or another
  * superseded attempt that was itself re-run). Only harness faults may be replaced: never a
  * refuted, accepted, unregistrable or agent-caused attempt (a step-budget stop is the agent's
- * outcome). An invalid-target trial the harness lost is not replaced: it must be unregistrable
- * whatever the harness did, so such a pack is re-packed, not topped up.
+ * outcome). An attempt on an unsatisfiable task (fc-v1 invalid-target) is never replaced: it
+ * must be unregistrable whatever the harness did, so such a pack is re-packed, not topped up
+ * (`checkPack` refuses it). Superseded attempts are in no R1/R2/R3 count, but their cost fields
+ * count in R7's numerator (lead ruling 2026-11-26 13:42Z). Their trial-ops rows are not
+ * load-gated or checked for `faultLanded` (a `load` harness fault is itself a reason to
+ * re-run), and an attempt carries no grade row: it was never graded.
  */
 export const m2SupersededSchema: JsonSchema = {
   type: "object",

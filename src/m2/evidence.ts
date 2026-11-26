@@ -46,9 +46,11 @@
  *    gate's own refusal: verdict `refuted` or `uncertain`) over eligible trials the
  *    grader does not pass, each with an exact Clopper-Pearson 95% interval;
  *  - R7's cost per verified task, per arm and per cost field: the field summed over ALL
- *    of the arm's trials (failed attempts cost money too) divided by the verified tasks
- *    (accepted DONE the grader passes). A null cost is never counted as 0: one null row
- *    makes that field unmeasured for the arm.
+ *    of the arm's trials (failed attempts cost money too), and over its superseded attempts
+ *    (`superseded.jsonl`: harness-faulted attempts re-run in place; lead ruling 2026-11-26
+ *    13:42Z), divided by the verified tasks (accepted DONE the grader passes). A null cost
+ *    is never counted as 0: one null row, trial or superseded attempt, makes that field
+ *    unmeasured for the arm. Superseded attempts are in no other count.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -66,7 +68,7 @@ import {
   checkBenchmark,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
-import { bindToTaskSet } from "../benchmark/taskset-binding.ts";
+import { bindToTaskSet, knownTaskSet } from "../benchmark/taskset-binding.ts";
 import { M2_FAULT_CLASSES } from "../faults/security/classes.ts";
 import { clopperPearson, wilson } from "../foundry/stats.ts";
 
@@ -236,6 +238,12 @@ export interface CostField {
 export interface R7Arm {
   readonly arm: Arm;
   readonly trials: number;
+  /**
+   * Superseded attempts of this arm (`superseded.jsonl`): out of every count but R7's cost
+   * numerator, which sums them with the trials (lead ruling 2026-11-26 13:42Z: the money was
+   * spent). A null cost on one makes that field unmeasured, never 0.
+   */
+  readonly supersededAttempts: number;
   readonly verified: number;
   readonly modelUsd: CostField;
   readonly wallClockS: CostField;
@@ -282,7 +290,11 @@ export interface SupersededAttempt {
   readonly ops: TrialOps;
 }
 
-/** The fields a replacement must share with the attempt it replaces: the same trial, re-run. */
+/**
+ * The fields a replacement must share with the attempt it replaces: the same trial, re-run on
+ * the same model settings (#511 round 1, D5: a re-run on another planner or output ceiling
+ * would be a retry on a different setting).
+ */
 const SAME_TRIAL = [
   "arm",
   "taskSetVersion",
@@ -290,6 +302,8 @@ const SAME_TRIAL = [
   "faultClass",
   "fixtureSha256",
   "instructionSha256",
+  "plannerModelId",
+  "outputCeiling",
 ] as const;
 
 /**
@@ -301,7 +315,7 @@ function checkSuperseded(
   input: readonly unknown[],
   armRows: readonly BenchmarkArmRow[],
   errors: string[],
-): PackResult["superseded"] {
+): { summary: PackResult["superseded"]; attempts: readonly SupersededAttempt[] } {
   const live = new Map(armRows.map((r) => [r.trialKey, r]));
   const attempts = new Map<string, SupersededAttempt>();
   input.forEach((e, i) => {
@@ -326,8 +340,15 @@ function checkSuperseded(
         `${who}: only a harness fault may be replaced (cause ${a.arm.cause?.kind ?? "none"}, harness class ${a.ops.harnessClass ?? "none"})`,
       );
     if (a.arm.accepted) errors.push(`${who}: an accepted DONE is never replaced`);
-    if (a.arm.gate?.verdict === "refuted" || a.arm.gate?.verdict === "verified")
+    // Any verdict is an outcome: verified and refuted, and uncertain too (a detection under the
+    // 03:13Z rule, #511 round 1 D1). Only a trial the gate never judged may be re-run.
+    if (a.arm.gate !== null && a.arm.gate.verdict !== null)
       errors.push(`${who}: a gate verdict (${a.arm.gate.verdict}) is an outcome, never replaced`);
+    // An unsatisfiable task (fc-v1 invalid-target) must be unregistrable whatever the harness
+    // did, so such a pack is re-packed, not topped up (#511 round 1, D4).
+    const task = knownTaskSet(a.arm.taskSetVersion)?.find((t) => t.taskId === a.arm.taskId);
+    if (task !== undefined && !task.satisfiable)
+      errors.push(`${who}: task ${a.arm.taskId} is unsatisfiable; re-pack, never top up`);
     if (a.arm.gate?.unregistrable === true)
       errors.push(`${who}: an unregistrable trial is never replaced`);
     const next = live.get(a.replacedBy) ?? attempts.get(a.replacedBy)?.arm;
@@ -338,10 +359,11 @@ function checkSuperseded(
         if (next[f] !== a.arm[f])
           errors.push(`${who}: its replacement ${a.replacedBy} is another trial (${f} differs)`);
     }
-    // The chain must reach arm.jsonl without a cycle.
+    // The chain must reach arm.jsonl without a cycle. Bounded by the number of attempts too,
+    // so the walk always ends.
     const seen = new Set([key]);
     let at = a.replacedBy;
-    while (!live.has(at)) {
+    for (let steps = 0; !live.has(at) && steps <= attempts.size; steps++) {
       const step = attempts.get(at);
       if (step === undefined) break;
       if (seen.has(at)) {
@@ -354,7 +376,7 @@ function checkSuperseded(
     if (a.ops.harnessClass !== null)
       byHarnessClass[a.ops.harnessClass] = (byHarnessClass[a.ops.harnessClass] ?? 0) + 1;
   }
-  return { count: attempts.size, byHarnessClass };
+  return { summary: { count: attempts.size, byHarnessClass }, attempts: [...attempts.values()] };
 }
 
 const exact = (numerator: number, denominator: number): ExactRate => {
@@ -540,7 +562,11 @@ export function checkPack(input: PackInput): PackResult {
   if (input.ops.length === 0) errors.push("ops ledger is empty");
   const armKeys = new Set(armRows.map((r) => r.trialKey));
   for (const key of ops.keys()) if (!armKeys.has(key)) errors.push(`ops row ${key} has no arm row`);
-  const superseded = checkSuperseded(input.superseded ?? [], armRows, errors);
+  const { summary: superseded, attempts: supersededAttempts } = checkSuperseded(
+    input.superseded ?? [],
+    armRows,
+    errors,
+  );
 
   const accounting = { nonVerified: 0, agent: 0, oracle: 0, harness: 0 };
   const byHarnessClass: Record<string, number> = {};
@@ -748,15 +774,27 @@ export function checkPack(input: PackInput): PackResult {
     const arms: R7Arm[] = (["hcu+shell", "myco-gate"] as const).map((arm) => {
       const rows = byArm(arm);
       const verified = rows.filter((r) => success(r, grades.get(r.trialKey))).length;
+      // Cost of ALL attempts: the trials and the superseded attempts they replaced (lead
+      // ruling 13:42Z). Verified counts only the trials.
+      const spent = [
+        ...rows,
+        ...supersededAttempts.filter((a) => a.arm.arm === arm).map((a) => a.arm),
+      ];
       const fields = {
-        modelUsd: costField(rows, "modelUsd", verified),
-        wallClockS: costField(rows, "wallClockS", verified),
-        vmS: costField(rows, "vmS", verified),
+        modelUsd: costField(spent, "modelUsd", verified),
+        wallClockS: costField(spent, "wallClockS", verified),
+        vmS: costField(spent, "vmS", verified),
       };
       if (verified === 0) reasons.push(`${arm}: no verified task`);
       for (const [name, f] of Object.entries(fields))
         if (f.nullRows > 0) reasons.push(`${arm}: ${name} unmeasured on ${f.nullRows} rows`);
-      return { arm, trials: rows.length, verified, ...fields };
+      return {
+        arm,
+        trials: rows.length,
+        supersededAttempts: spent.length - rows.length,
+        verified,
+        ...fields,
+      };
     });
     r7 = { pass: false, reasons, arms };
   }
