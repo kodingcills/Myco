@@ -17,9 +17,11 @@
  * exact argv. The policy then:
  *
  * - **scopes every path to the trial's own workspace.** Each path is made absolute against
- *   the workspace, resolved through symlinks (`realpath`; for a path that does not exist
- *   yet, its parent), and must lie inside the workspace's resolved root. A path that leaves
- *   it, by `..`, an absolute host path, or a symlink, is denied. Writes are narrower still:
+ *   the workspace, resolved through symlinks as the kernel resolves it (`realpath(3)` on the
+ *   unnormalised spelling, so a `..` after a symlinked directory goes where the kernel goes;
+ *   for a path that does not exist yet, its parent), and must lie inside the workspace's
+ *   resolved root. The script route then runs the resolved operands, not the spelling. A
+ *   path that leaves it, by `..`, an absolute host path, or a symlink, is denied. Writes are narrower still:
  *   only the trial document and the scratch directory.
  * - **denies by default any shell command it cannot parse safely** (`parseShellCommand`).
  *   There is no shell interpreter: a command string is tokenised into an argv by a strict
@@ -42,7 +44,7 @@
  */
 
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 export type RouteName = "api" | "script" | "gui";
 
@@ -200,6 +202,8 @@ export interface ShellPlan {
   readonly args: readonly string[];
   readonly reads: readonly string[];
   readonly writes: readonly string[];
+  /** Indices into `args` of the path operands (non-soffice programs); the policy rewrites them. */
+  readonly operands: readonly number[];
 }
 
 /** Map a parsed argv to what it reads and writes, or a denial code. */
@@ -215,10 +219,11 @@ export function planShellArgv(
   if (rule.shape) {
     const io = rule.shape(args);
     return io
-      ? { ok: true, plan: { program, args, reads: io.reads, writes: io.writes } }
+      ? { ok: true, plan: { program, args, reads: io.reads, writes: io.writes, operands: [] } }
       : { ok: false, code: "OPERAND_SHAPE" };
   }
   const operands: string[] = [];
+  const operandIndex: number[] = [];
   for (let k = 0; k < args.length; k++) {
     const arg = args[k] as string;
     if (arg.startsWith("-")) {
@@ -232,12 +237,13 @@ export function planShellArgv(
       continue;
     }
     operands.push(arg);
+    operandIndex.push(k);
   }
   if (operands.length < rule.minOperands || operands.length > rule.maxOperands)
     return { ok: false, code: "OPERAND_SHAPE" };
   // `ls` with no operand lists the working directory, which is the workspace.
   const reads = operands.length === 0 && program === "ls" ? ["."] : operands;
-  return { ok: true, plan: { program, args, reads, writes: [] } };
+  return { ok: true, plan: { program, args, reads, writes: [], operands: operandIndex } };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -267,17 +273,24 @@ export function resolveScoped(raw: string, workspace: string): string | null {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > 1024) return null;
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are refused, not matched.
   if (/[\u0000-\u001f]/.test(raw)) return null;
-  const absolute = isAbsolute(raw) ? resolve(raw) : resolve(workspace, raw);
+  // No lexical normalisation: the kernel resolves `..` AFTER following a symlink, so
+  // `scratch/link-to-dir/../x` names a file next to the link's TARGET, not next to the link.
+  // `path.resolve` (and Node's JS `realpathSync`, which calls it) would collapse the `..`
+  // first and scope a different file than the one a program opens. `existsSync` and
+  // `realpathSync.native` hand the spelling to the kernel unchanged.
+  const absolute = isAbsolute(raw) ? raw : `${workspace}${sep}${raw}`;
   try {
     if (existsSync(absolute)) {
-      const real = realpathSync(absolute);
+      const real = realpathSync.native(absolute);
       const st = statSync(real);
       if (st.isFile() && st.nlink > 1) return null;
       return real;
     }
+    const name = basename(absolute);
+    if (name === "." || name === "..") return null;
     const parent = dirname(absolute);
     if (!existsSync(parent)) return null;
-    return join(realpathSync(parent), basename(absolute));
+    return join(realpathSync.native(parent), name);
   } catch {
     return null;
   }
@@ -311,6 +324,8 @@ export function workspacePolicy(scope: WorkspaceScope): ActionPolicy {
       let writes: readonly string[] = request.writes;
       let argv: readonly string[] | undefined;
       let soffice: ShellPlan | null = null;
+      // A non-soffice program, and where its operands start in `reads`.
+      let program: { plan: ShellPlan; offset: number } | null = null;
       if (request.route === "script") {
         const hasArgv = request.argv !== undefined;
         const hasCommand = request.command !== undefined;
@@ -327,6 +342,7 @@ export function workspacePolicy(scope: WorkspaceScope): ActionPolicy {
         const planned = planShellArgv(argv);
         if (!planned.ok) return { allow: false, code: planned.code };
         soffice = planned.plan.program === "soffice" ? planned.plan : null;
+        if (soffice === null) program = { plan: planned.plan, offset: reads.length };
         // The argv decides what the command touches, not the caller's lists.
         reads = [...reads, ...planned.plan.reads];
         writes = [...writes, ...planned.plan.writes];
@@ -349,6 +365,15 @@ export function workspacePolicy(scope: WorkspaceScope): ActionPolicy {
         if (path !== document && !within(path, scratch))
           return { allow: false, code: "WRITE_NOT_ALLOWED" };
         resolvedWrites.push(path);
+      }
+      if (program !== null) {
+        // Every program runs on the resolved absolute operands the loop above scoped, never
+        // the agent's spelling of them (which the kernel may resolve differently).
+        const args = [...program.plan.args];
+        program.plan.operands.forEach((k, j) => {
+          args[k] = resolvedReads[program.offset + j] as string;
+        });
+        argv = [program.plan.program, ...args];
       }
       if (soffice !== null) {
         // The conversion reads the trial document and nothing else, and soffice gets the

@@ -43,6 +43,13 @@ describe("fast-path doc", () => {
     expect(DOC).not.toContain("--outdir <scratch…> <file>`");
   });
 
+  it("states kernel-faithful path resolution and resolved operands (E1)", () => {
+    expect(DOC).toContain("no lexical `..` collapsing first");
+    expect(DOC).toContain("a `..` after a symlinked directory are `PATH_OUTSIDE_WORKSPACE`");
+    expect(DOC).toContain("Every program then runs on the resolved absolute operands");
+    expect(DOC).toContain("bounded to 4,096 characters");
+  });
+
   it("the UNO API script's docstring matches what it calls (N1)", () => {
     const py = readFileSync(join(ROOT, "scripts/linux/calc_uno_api.py"), "utf8");
     expect(py).not.toContain("setFormula");

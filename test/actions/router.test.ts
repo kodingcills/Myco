@@ -359,8 +359,16 @@ describe("requests and results", () => {
     const out = createActionRouter({ policy: allow, executors: routes, now: clock }).act({
       kind: "doc.export-csv",
     }).output as string;
-    expect(out.startsWith("x".repeat(MAX_OUTPUT))).toBe(true);
-    expect(out).toContain("[truncated 10 chars]");
+    // Exact: the first MAX_OUTPUT characters and the truncation note, nothing more.
+    expect(out).toBe(`${"x".repeat(MAX_OUTPUT)}\n[truncated 10 chars]`);
+    expect(out.length).toBe(MAX_OUTPUT + "\n[truncated 10 chars]".length);
+    expect(MAX_OUTPUT).toBe(4096); // docs/product/fast-path.md states this number
+    const exact = [fake("script", { result: { ok: true, output: "y".repeat(MAX_OUTPUT) } })];
+    expect(
+      createActionRouter({ policy: allow, executors: exact, now: clock }).act({
+        kind: "doc.export-csv",
+      }).output,
+    ).toBe("y".repeat(MAX_OUTPUT));
   });
 
   it("summarizes routes, fallbacks and denials for the run record", () => {

@@ -201,7 +201,11 @@ describe("workspacePolicy: scoping", () => {
     const d = workspacePolicy(scope).check(
       req({ route: "script", kind: "shell.run", command: "cat doc/doc.xlsx" }),
     );
-    expect(d).toMatchObject({ allow: true, argv: ["cat", "doc/doc.xlsx"] });
+    // The argv to run carries the resolved absolute operand, not the agent's spelling.
+    expect(d).toMatchObject({
+      allow: true,
+      argv: ["cat", join(realpathSync(ws), "doc", "doc.xlsx")],
+    });
   });
 
   it.each([
@@ -275,6 +279,29 @@ describe("workspacePolicy: scoping", () => {
       ),
     ).toEqual({ allow: false, code: "PATH_OUTSIDE_WORKSPACE" });
     expect(workspacePolicy(scope).check(req({ reads: ["scratch/hl"] }))).toEqual({
+      allow: false,
+      code: "PATH_OUTSIDE_WORKSPACE",
+    });
+  });
+
+  it("resolveScoped follows the kernel: `..` after a symlinked directory, `file/..` (E1)", () => {
+    const realRoot = realpathSync(root);
+    // `scratch/dirlink -> trials/run-b`: the kernel's `dirlink/..` is `trials`, not `scratch`.
+    expect(resolveScoped("scratch/dirlink/..", ws)).toBe(join(realRoot, "trials"));
+    expect(resolveScoped("scratch/dirlink/../..", ws)).toBe(realRoot);
+    // A file is not a directory: `doc.xlsx/..` and `doc.xlsx/.` do not exist for the kernel,
+    // so they must not resolve to the file's directory or to the file itself.
+    expect(resolveScoped("doc/doc.xlsx/..", ws)).toBeNull();
+    expect(resolveScoped("doc/doc.xlsx/.", ws)).toBeNull();
+    const policy = workspacePolicy(scope);
+    expect(policy.check(req({ reads: ["scratch/dirlink/../run-a/doc/doc.xlsx"] }))).toMatchObject({
+      allow: true,
+    });
+    expect(policy.check(req({ reads: ["scratch/dirlink/../.."] }))).toEqual({
+      allow: false,
+      code: "PATH_OUTSIDE_WORKSPACE",
+    });
+    expect(policy.check(req({ writes: ["doc/doc.xlsx/."] }))).toEqual({
       allow: false,
       code: "PATH_OUTSIDE_WORKSPACE",
     });

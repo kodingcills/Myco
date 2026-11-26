@@ -11,6 +11,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -70,6 +71,42 @@ describe("script route scoping with planted markers", () => {
     ).toBe(true);
   });
 
+  it("every program runs on the resolved absolute operands, not the agent's spelling", () => {
+    const policy = workspacePolicy(scope);
+    const realWs = realpathSync(ws);
+    expect(
+      policy.check({
+        route: "script",
+        kind: "shell.run",
+        reads: [],
+        writes: [],
+        command: "head -n 2 scratch/../scratch/notes.txt",
+      }),
+    ).toMatchObject({
+      allow: true,
+      argv: ["head", "-n", "2", join(realWs, "scratch", "notes.txt")],
+    });
+    expect(
+      policy.check({
+        route: "script",
+        kind: "shell.run",
+        reads: [],
+        writes: [],
+        command: "ls -la",
+      }),
+    ).toMatchObject({ allow: true, argv: ["ls", "-la"] });
+    // A `..` into a symlinked directory that stays inside the workspace runs where the
+    // kernel would have gone, which is the scoped path.
+    symlinkSync(join(ws, "doc"), join(ws, "scratch", "docdir"));
+    const r = router();
+    expect(
+      r.act({ kind: "shell.run", command: "cat scratch/docdir/../scratch/notes.txt" }),
+    ).toMatchObject({
+      ok: true,
+      output: `${INSIDE}\n`,
+    });
+  });
+
   it("no hostile command runs, no marker is touched or returned", () => {
     const before = markers.map((m) => ({ bytes: readFileSync(m), mtime: statSync(m).mtimeMs }));
     const r = router();
@@ -94,6 +131,14 @@ describe("script route scoping with planted markers", () => {
       "python3 -c 'print(open(\"../run-b/doc/marker.txt\").read())'",
       "cp ../run-b/doc/marker.txt scratch/stolen.txt",
       "ln -s ../run-b scratch/x",
+      // E1 (round 2): `..` after a planted directory symlink. The kernel resolves `..`
+      // after following the link, so these name files next to the link's TARGET.
+      "cat scratch/otherdir/../../host-marker.txt",
+      "sha256sum scratch/otherdir/../../host-marker.txt",
+      "ls scratch/otherdir/..",
+      "ls -la scratch/otherdir/../..",
+      "head -n 1 scratch/otherdir/../doc/marker.txt",
+      "cat scratch/otherdir/doc/../../../host-marker.txt",
       `soffice --headless --convert-to csv --outdir scratch ${markers[1]}`,
       `soffice --headless --convert-to csv --outdir ${root} doc/doc.xlsx`,
     ];

@@ -108,7 +108,7 @@ The local policy (`workspacePolicy`) is narrower than O is expected to be:
 
 | Rule | Enforcement |
 |---|---|
-| Paths stay in the trial's workspace | Each path is resolved through symlinks (`realpath`, or its parent's for a new file) and must lie under the workspace's resolved root. `..`, absolute host paths, another trial's workspace and symlinks out are `PATH_OUTSIDE_WORKSPACE`. |
+| Paths stay in the trial's workspace | Each path is resolved through symlinks the way the kernel resolves it (`realpath(3)` on the spelling as given, or its parent's for a new file; no lexical `..` collapsing first, so `link-to-dir/..` is the link target's parent) and must lie under the workspace's resolved root. `..`, absolute host paths, another trial's workspace, symlinks out and a `..` after a symlinked directory are `PATH_OUTSIDE_WORKSPACE`. Every program then runs on the resolved absolute operands the policy checked, never the agent's spelling. |
 | Hard links are refused | A regular file with more than one hard link is `PATH_OUTSIDE_WORKSPACE`: `realpath` cannot see where its other names live. |
 | Writes are narrower | Only the trial document and the scratch directory (`WRITE_NOT_ALLOWED` otherwise). |
 | Shell text that cannot be parsed safely is denied | No shell interpreter. A strict reader accepts bare words and `'…'`/`"…"` words without escapes; any of `` | ; & $ ` < > ( ) { } [ ] * ? ~ ! # \ % ^ ``, a control character (newline included), an unterminated or glued quote, or an oversized command is `UNPARSEABLE_COMMAND`. Nothing is sanitised. |
