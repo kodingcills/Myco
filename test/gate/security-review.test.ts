@@ -305,7 +305,7 @@ function symbolBody(ref: string): string {
   for (const [i, segment] of segments.entries()) {
     const candidates =
       i === 0 && !segment.startsWith('"')
-        ? source.statements.flatMap((statement) =>
+        ? source.statements.flatMap((statement): ts.Node[] =>
             ts.isVariableStatement(statement)
               ? statement.declarationList.declarations.filter((d) => matchesSegment(d, segment))
               : matchesSegment(statement, segment)
