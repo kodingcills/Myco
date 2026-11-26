@@ -48,6 +48,7 @@ import { GATE_SERVER_CLASS, runGatedTrial } from "../gate/gated-trial.ts";
 import { type AgentLaunchPlan, auditAgentLaunch } from "../integrity/launch.ts";
 import type { CaptureInput } from "../integrity/vault.ts";
 import { newVaultKey, VerdictVault } from "../integrity/vault.ts";
+import { AB_EXPERIMENT, loadPrereg, realRunRefusals } from "./ab-prereg.ts";
 import { backoffS, configSha256, correctionPolicy, type PilotConfig } from "./config.ts";
 import { estimateCost, type TokenUsage } from "./cost.ts";
 import { trialLaunchPlan } from "./launch.ts";
@@ -271,6 +272,14 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     throw new Error(
       "a live pilot run needs liveLaunchSha256 equal to the approved plan's configSha256 (the CLI's --plan-sha256)",
     );
+  // A live A/B arm (any config carrying corrections or an experiment) is a real A/B trial:
+  // the A/B's real-run preconditions are re-checked here from the committed files, so a
+  // caller that hands `runPilot` an arm config and its own sha256 still cannot start one.
+  if (!simulated && (config.experiment !== undefined || config.corrections !== undefined)) {
+    const problems = liveExperimentRefusals(config, opts.repoRoot, opts.published);
+    if (problems.length > 0)
+      throw new Error(`refusing a live corrections A/B trial: ${problems.join("; ")}`);
+  }
   if (/docs[\\/]research[\\/]experiments/.test(outDir))
     throw new Error(
       "a pilot run directory is never under docs/research/experiments (evidence packs are assembled there by review, not written by the runner)",
@@ -746,4 +755,30 @@ export function exportRun(
   writeFileSync(join(exportDir, "arm.jsonl"), jsonl(armRows));
   writeFileSync(join(exportDir, "faulted-attempts.jsonl"), jsonl(superseded));
   return { armRows };
+}
+
+/**
+ * Why a live run of an A/B arm config cannot start: the config must name the corrections A/B
+ * of the committed pre-registration, and `realRunRefusals` (pre-registration committed, the
+ * lead's GO, the gate can read the format, #518's vocabulary, #546) must be empty.
+ */
+export function liveExperimentRefusals(
+  config: PilotConfig,
+  repoRoot: string,
+  published: readonly BenchmarkTask[],
+): string[] {
+  const exp = config.experiment;
+  if (exp === undefined)
+    return ["a config with corrections set is an A/B arm and needs its experiment"];
+  if (exp.name !== AB_EXPERIMENT) return [`unknown experiment ${String(exp.name)}`];
+  if (exp.stage !== 0 && exp.stage !== 1) return [`unknown A/B stage ${String(exp.stage)}`];
+  let loaded: ReturnType<typeof loadPrereg>;
+  try {
+    loaded = loadPrereg(repoRoot);
+  } catch (error) {
+    return [(error as Error).message];
+  }
+  if (exp.preregSha256 !== loaded.markdownSha256)
+    return ["the config names another pre-registration than the committed one"];
+  return realRunRefusals(repoRoot, loaded, exp.stage, published);
 }

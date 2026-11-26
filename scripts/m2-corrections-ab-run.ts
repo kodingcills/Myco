@@ -18,8 +18,10 @@
  * `simulate` runs one stage on the fake transport (virtual clock, chunk budget honoured, so
  * pause/resume can be practised). `launch` never starts a real trial in this change: it prints
  * the plan, checks every real-run precondition and refuses with the reasons.
- * Exit: 0 ok / complete, 1 failed, 2 usage, 3 refused, 4 paused / incomplete / halted.
+ * Exit: 0 ok / complete, 1 failed, 2 usage, 3 refused, 4 paused / incomplete / halted, or
+ * (`analyze`) analysis pending: the pack passed its checks but #547 is not here to analyse it.
  */
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   AB_DRY_RUN_PLANNER,
@@ -35,10 +37,10 @@ import {
   exportAbPack,
   incidentStatus,
   launchPlanDiff,
+  liveAbRefusals,
   loadPrereg,
   PREREG_JSON,
   PREREG_MD,
-  realRunRefusals,
   runAbStage,
   sha256File,
   stageProgress,
@@ -103,12 +105,30 @@ function printPlan(stage: AbStage) {
 try {
   switch (command) {
     case "prereg-hash": {
-      const loaded = loadPrereg(ROOT);
+      // Both hashes always print, so a disagreement shows which file changed (never just a throw).
+      const md = sha256File(join(ROOT, PREREG_MD));
+      const js = sha256File(join(ROOT, PREREG_JSON));
+      let pinned: unknown = null;
+      try {
+        pinned = (
+          JSON.parse(readFileSync(join(ROOT, PREREG_JSON), "utf8")) as { markdownSha256?: unknown }
+        ).markdownSha256;
+      } catch {
+        // An unparseable JSON pins nothing: reported as a disagreement below.
+      }
+      let problem: string | null = null;
+      try {
+        loadPrereg(ROOT);
+      } catch (error) {
+        problem = (error as Error).message;
+      }
       json({
-        [PREREG_MD]: sha256File(join(ROOT, PREREG_MD)),
-        [PREREG_JSON]: sha256File(join(ROOT, PREREG_JSON)),
-        jsonPinsMarkdown: loaded.prereg.markdownSha256 === loaded.markdownSha256,
+        [PREREG_MD]: md,
+        [PREREG_JSON]: js,
+        jsonPinsMarkdown: pinned === md,
+        ...(problem === null ? {} : { jsonPinnedMarkdownSha256: pinned, problem }),
       });
+      process.exitCode = problem === null ? 0 : 1;
       break;
     }
     case "plan":
@@ -176,8 +196,9 @@ try {
       const r = analyzeAbPack(need("--pack"), ROOT, flag("--stage0-pack"));
       out(`${r.command}\n`);
       json(r);
+      // analysis-pending: the pack passed, but nothing was analysed, so never exit 0.
       process.exitCode =
-        r.status === "refused" ? 3 : r.status === "analysed" ? (r.exitCode ?? 1) : 0;
+        r.status === "refused" ? 3 : r.status === "analysed" ? (r.exitCode ?? 1) : 4;
       break;
     }
     case "ack-incident": {
@@ -198,12 +219,17 @@ try {
       }
       const stage = stageFlag();
       need("--out");
-      const { sha, loaded, published } = printPlan(stage);
-      const refusals = realRunRefusals(ROOT, loaded, stage, published);
-      if (!rest.includes("--launch-real-trials") || flag("--plan-sha256") !== sha)
-        refusals.unshift(
-          "a real run needs --launch-real-trials and --plan-sha256 <the planSha256 printed above>",
-        );
+      const { loaded, published } = printPlan(stage);
+      // The same preconditions runAbStage applies to any live run (one source of truth).
+      const pinnedPlan = flag("--plan-sha256");
+      const refusals = liveAbRefusals({
+        repoRoot: ROOT,
+        loaded,
+        stage,
+        published,
+        launchRealTrials: rest.includes("--launch-real-trials"),
+        ...(pinnedPlan === undefined ? {} : { liveLaunchSha256: pinnedPlan }),
+      });
       refusals.push(
         "no live driver is wired: the VM-side capture is a later, lead-approved step, so this change cannot start real trials",
       );

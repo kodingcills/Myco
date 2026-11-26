@@ -243,6 +243,7 @@ npx tsx scripts/m2-corrections-ab-run.ts check-pack packs/ab-stage0
 npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage0
 npx tsx scripts/m2-corrections-ab-run.ts export --out runs/ab --stage 1 --to packs/ab-stage1
 npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage1 --stage0-pack packs/ab-stage0
+# analyze exits 4 while #547 is absent ("analysis-pending"): the pack passed, nothing was analysed.
 
 # Real Stage 0, then Stage 1 (later, after the GO). In this change it prints the plan, lists
 # every unmet precondition and refuses (exit 3).
@@ -251,13 +252,18 @@ npx tsx scripts/m2-corrections-ab-run.ts launch --stage 0 --out runs/ab \
 ```
 
 `analyze` checks the pack first: the manifest, the markers, the labels, identical arm configs,
-and the recorded pre-registration sha256 against the committed file. It refuses on any error
+one grade per row, every gate miss the rows show tied to its incident record (see below), and
+the recorded pre-registration sha256 against the repository's file (a real run also requires
+it committed). It refuses on any error
 (exit 3). Then it prints and runs #547's exact command, with `--prereg-file` and
 `--prereg-declared`, so #547 checks the hash too.
 
 ### Before a real run
 
-`launch` refuses, naming each reason, until all of these hold:
+`launch` refuses, naming each reason, until all of these hold. The same preconditions (1-5,
+including the explicit flag and the printed plan's sha256) are applied inside the runner
+itself (`runAbStage`, `liveAbRefusals`) before any live trial, and `runPilot` re-checks 1-4
+from each A/B arm config (`liveExperimentRefusals`), so no caller can skip them:
 
 1. The pre-registration (both files) is committed and unchanged from HEAD.
 2. The lead's GO is committed as `docs/benchmark/corrections-ab-go.json`, with the stage(s) in
@@ -288,6 +294,14 @@ A gate miss is a trial the gate VERIFIED whose independent grade is not pass. Th
 grades every decided trial as soon as it is decided, in both arms. A trial decided but never
 graded, for example after a crash, is graded on the next invocation before anything else runs.
 
+The record is crash-safe. For each decided trial the runner writes the incident record first
+(atomically), then the boot-class record, and the grade last; a grade on disk means everything
+before it is on disk. On every invocation it also re-derives gate misses from the rows (each
+gate-VERIFIED row whose grade is not pass) and writes any missing incident record before
+anything runs, so a crash at any point leaves the run halted. `export` and `check-pack` derive
+the misses from the rows too (never from a flag), and refuse a miss without its record. Stage 1
+also re-derives Stage 0's misses from its rows, not only from its incident files.
+
 1. On a gate miss the runner halts the whole run (exit 4, status `halted`). It writes
    `runs/ab/stage<N>/incidents/incident-<trialKey>.json`: arm, trial, task, gate verdict,
    grader status and version, the persisted document's sha256 and the rule.
@@ -303,6 +317,7 @@ graded, for example after a crash, is graded on the next invocation before anyth
      --operator "<name>" --statement "<what was reviewed and where it is filed>"
    ```
 
-4. The incident stays in the export (`incidents/`, `ab-pack.json`), and #547 reports the pack
+4. The incident stays in the export (`incidents/`, `ab-pack.json` `incidents` and
+   `gateMisses`), and #547 reports the pack
    as `halted`. It is never counted as data. A Stage 0 gate miss blocks Stage 1 even after the
    ack: only a lead decision, recorded in code, reopens it.

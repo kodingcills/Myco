@@ -5,10 +5,18 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkBenchmark } from "../../src/benchmark/check.ts";
+import { type BenchmarkArmRow, checkBenchmark } from "../../src/benchmark/check.ts";
 import { gradeRow } from "../../src/benchmark/grade/row.ts";
 import { anchorPathFor, verifyAttemptLedger } from "../../src/m2/attempt-ledger.ts";
 import { packProvenanceErrors } from "../../src/m2/provenance.ts";
@@ -23,27 +31,37 @@ import {
   armConfig,
   bundleGrader,
   checkAbPack,
+  compareLaunchPlans,
   diffArmConfigs,
   evidenceRefusals,
   exportAbPack,
   type GradeFn,
+  type HookContext,
   incidentStatus,
   launchPlanDiff,
+  liveAbRefusals,
   loadPrereg,
   PREREG_JSON,
   PREREG_MD,
   R1AttemptSink,
+  type RecordStep,
   realRunRefusals,
+  recordDecided,
   runAbStage,
   stageRoot,
   stageTasks,
 } from "../../src/pilot/ab.ts";
 import { abDryRun } from "../../src/pilot/ab-dry-run.ts";
-import { PILOT_MODEL } from "../../src/pilot/config.ts";
+import { configSha256, PILOT_MODEL, type PilotConfig } from "../../src/pilot/config.ts";
 import { fakeDriver, virtualClock } from "../../src/pilot/dry-run.ts";
 import { correctionsArgs } from "../../src/pilot/launch.ts";
 import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
-import { HarnessFault, type PilotDriver } from "../../src/pilot/runner.ts";
+import {
+  HarnessFault,
+  liveExperimentRefusals,
+  type PilotDriver,
+  runPilot,
+} from "../../src/pilot/runner.ts";
 import { PUBLISHED, config as pilotCfg, ROOT, SOURCES, tmp } from "./helpers.ts";
 
 const LOADED = loadPrereg(ROOT);
@@ -65,6 +83,8 @@ function run(
     maxChunks?: number;
     planner?: string;
     liveLaunchSha256?: string;
+    launchRealTrials?: boolean;
+    crashPoint?: (step: RecordStep, trialKey: string) => void;
   } = {},
 ) {
   const clock = virtualClock(0);
@@ -83,6 +103,8 @@ function run(
     load1m: () => 0.25,
     ...(extra.grader === undefined ? {} : { grader: extra.grader }),
     ...(extra.liveLaunchSha256 === undefined ? {} : { liveLaunchSha256: extra.liveLaunchSha256 }),
+    ...(extra.launchRealTrials === undefined ? {} : { launchRealTrials: extra.launchRealTrials }),
+    ...(extra.crashPoint === undefined ? {} : { crashPoint: extra.crashPoint }),
   });
 }
 
@@ -108,6 +130,49 @@ function missGrader(): GradeFn & { injected: string | null } {
   fn.injected = null;
   return fn;
 }
+
+/**
+ * Like `missGrader`, but deterministic across invocations: the first trial it would pass is
+ * failed, and that same trial is failed again whenever it is re-graded (as a real grader on
+ * the same bytes would), so a resume after a crash sees the same miss.
+ */
+function stickyMissGrader(): GradeFn & { injected: string | null } {
+  const inner = missGrader();
+  const fn = ((task, persisted, trialKey) => {
+    if (inner.injected === trialKey) {
+      inner.injected = null;
+      const g = inner(task, persisted, trialKey);
+      inner.injected = trialKey;
+      return g.status === "pass" ? inner(task, persisted, trialKey) : g;
+    }
+    return inner(task, persisted, trialKey);
+  }) as GradeFn & { injected: string | null };
+  Object.defineProperty(fn, "injected", { get: () => inner.injected });
+  return fn;
+}
+
+class Crash extends Error {}
+
+/** A resume after a gate miss must not proceed: either it halts or it refuses outright. */
+async function resumeOutcome(p: Promise<{ status: string; reason: string | null }>) {
+  try {
+    const r = await p;
+    return r.status === "halted" ? `halted: ${r.reason}` : r.status;
+  } catch (error) {
+    if (error instanceof AbRefusal) return `refused: ${error.message}`;
+    throw error;
+  }
+}
+
+const ack = (root: string, id: string) => {
+  const st = incidentStatus(root).find((i) => i.id === id);
+  if (st === undefined) throw new Error(`no incident ${id}`);
+  return ackIncident(root, id, {
+    operator: "test operator",
+    statement: "reviewed the record; injected test failure, no gate defect",
+    incidentSha256: st.sha256,
+  });
+};
 
 describe("corrections A/B pre-registration", () => {
   it("is committed in two forms, the JSON pinning the markdown's sha256", () => {
@@ -411,6 +476,225 @@ describe("gate-miss halt (fail-closed)", () => {
   });
 });
 
+describe("gate-miss record is crash-safe and re-derived from the rows (D1)", () => {
+  const steps: RecordStep[] = ["graded", "incident", "trial-record", "grade"];
+  for (const step of steps)
+    it(`a crash at "${step}" of recording a gate miss leaves the run halted on resume`, {
+      timeout: 60_000,
+    }, async () => {
+      const out = tmp(`myco-ab-crash-${step}-`);
+      const grader = stickyMissGrader();
+      // The runner dies at `step` while recording the injected miss.
+      const crashPoint = (s: RecordStep, key: string) => {
+        if (s === step && key === grader.injected) throw new Crash(`crash at ${s}`);
+      };
+      await expect(run(out, 0, { grader, crashPoint })).rejects.toThrow(Crash);
+      const key = grader.injected as string;
+      expect(key).not.toBeNull();
+      const root = stageRoot(out, 0);
+      // Resume (same deterministic grader): never complete, never past the miss.
+      const first = await resumeOutcome(run(out, 0, { grader }));
+      expect(first).toMatch(/^(halted|refused): .*integrity incident/);
+      const again = await resumeOutcome(run(out, 0, { grader }));
+      expect(again).toMatch(/^(halted|refused): .*integrity incident/);
+      // One incident record for the trial, unacknowledged; no record duplicated.
+      const inc = incidentStatus(root);
+      expect(inc.map((i) => i.id)).toEqual([`incident-${key}`]);
+      expect(inc[0]?.acknowledged).toBe(false);
+      const arm = JSON.parse(readFileSync(inc[0]?.path as string, "utf8")).arm as string;
+      const count = (f: string) =>
+        jsonl(join(root, arm, f)).filter((r) => r.trialKey === key).length;
+      expect(count("grades.jsonl")).toBeLessThanOrEqual(1);
+      expect(count("ab-trials.jsonl")).toBeLessThanOrEqual(1);
+      // Only an operator ack lets it continue; then it completes with the miss on record,
+      // each record exactly once.
+      ack(root, `incident-${key}`);
+      expect(await run(out, 0, { grader })).toMatchObject({ status: "complete" });
+      expect(count("grades.jsonl")).toBe(1);
+      expect(count("ab-trials.jsonl")).toBe(1);
+      expect(jsonl(join(root, arm, "grades.jsonl")).find((g) => g.trialKey === key)?.status).toBe(
+        "fail",
+      );
+      expect(incidentStatus(root)).toHaveLength(1);
+      const pack = join(out, "pack");
+      const m = exportAbPack(out, 0, pack, ROOT);
+      expect(m.gateMisses).toEqual([{ arm, trialKey: key, incident: `incident-${key}` }]);
+      expect(checkAbPack(pack, ROOT)).toMatchObject({ ok: true });
+    });
+
+  it("an incident lost after its grade was written is re-derived on resume and halts", {
+    timeout: 60_000,
+  }, async () => {
+    const out = tmp("myco-ab-lost-");
+    const grader = missGrader();
+    expect((await run(out, 0, { grader })).status).toBe("halted");
+    const root = stageRoot(out, 0);
+    // The verifier's probe: the on-disk state of a crash between grade and incident.
+    rmSync(join(root, "incidents"), { recursive: true });
+    const r = await run(out, 0);
+    expect(r.status).toBe("halted");
+    expect(r.reason).toMatch(
+      new RegExp(`integrity incident, the gate VERIFIED ${grader.injected}`),
+    );
+    const [inc] = incidentStatus(root);
+    expect(inc).toMatchObject({ id: `incident-${grader.injected}`, acknowledged: false });
+    expect(JSON.parse(readFileSync(inc?.path as string, "utf8")).rule).toMatch(
+      /re-derived on resume/,
+    );
+    await expect(run(out, 0)).rejects.toThrow(/unacknowledged integrity incident/);
+  });
+
+  it("a malformed incident record can never be acknowledged and keeps the run halted", {
+    timeout: 60_000,
+  }, async () => {
+    const out = tmp("myco-ab-badinc-");
+    const grader = missGrader();
+    await run(out, 0, { grader });
+    const root = stageRoot(out, 0);
+    const [inc] = incidentStatus(root);
+    writeFileSync(inc?.path as string, "{}\n");
+    const st = incidentStatus(root)[0];
+    expect(st?.problem).toMatch(/not a valid gate-miss incident record/);
+    expect(() =>
+      ackIncident(root, st?.id as string, {
+        operator: "test operator",
+        statement: "reviewed the record in full",
+        incidentSha256: st?.sha256 as string,
+      }),
+    ).toThrow(/not a valid gate-miss incident record/);
+    await expect(run(out, 0)).rejects.toThrow(/unacknowledged integrity incident/);
+  });
+
+  it("export and check-pack re-derive gate misses from the rows, never trusting a flag", {
+    timeout: 60_000,
+  }, async () => {
+    const out = tmp("myco-ab-derive-");
+    const grader = missGrader();
+    await run(out, 0, { grader });
+    const root = stageRoot(out, 0);
+    const key = grader.injected as string;
+    ack(root, `incident-${key}`);
+    expect(await run(out, 0)).toMatchObject({ status: "complete" });
+    const good = join(out, "pack");
+    expect(exportAbPack(out, 0, good, ROOT).gateMisses).toHaveLength(1);
+    expect(checkAbPack(good, ROOT)).toMatchObject({ ok: true });
+
+    // Export: a miss in the rows with its incident record gone is refused.
+    const lost = tmp("myco-ab-derive-lost-");
+    cpSync(out, lost, { recursive: true });
+    rmSync(join(stageRoot(lost, 0), "incidents"), { recursive: true });
+    expect(() => exportAbPack(lost, 0, join(lost, "pack2"), ROOT)).toThrow(
+      new RegExp(`${key} is a gate miss .* no valid incident record`),
+    );
+
+    // check-pack: strip the incident and every flag naming it; the rows still show the miss.
+    const strip = join(tmp("myco-ab-strip-"), "pack");
+    cpSync(good, strip, { recursive: true });
+    rmSync(join(strip, "incidents"), { recursive: true });
+    const m = JSON.parse(readFileSync(join(strip, "ab-pack.json"), "utf8"));
+    m.incidents = [];
+    m.gateMisses = [];
+    writeFileSync(join(strip, "ab-pack.json"), JSON.stringify(m));
+    const c = checkAbPack(strip, ROOT);
+    expect(c.ok).toBe(false);
+    expect(c.errors.join("; ")).toMatch(
+      new RegExp(`${key} is a gate miss .* no valid incident record in the pack`),
+    );
+
+    // check-pack: a grade turned from pass to fail on a VERIFIED row is a miss with no record.
+    const flip = join(tmp("myco-ab-flip-"), "pack");
+    cpSync(good, flip, { recursive: true });
+    let flipped: string | null = null;
+    for (const arm of ["on", "off"]) {
+      const rows = jsonl(join(flip, arm, "arm.jsonl"));
+      const gpath = join(flip, arm, "grades.jsonl");
+      const grades = jsonl(gpath);
+      const victim = rows.find(
+        (r) =>
+          (r.gate as { verdict?: string } | null)?.verdict === "verified" &&
+          r.trialKey !== key &&
+          grades.find((g) => g.trialKey === r.trialKey)?.status === "pass",
+      );
+      if (victim === undefined || flipped !== null) continue;
+      flipped = victim.trialKey as string;
+      writeFileSync(
+        gpath,
+        grades
+          .map((g) => (g.trialKey === flipped ? { ...g, status: "fail" } : g))
+          .map((g) => `${JSON.stringify(g)}\n`)
+          .join(""),
+      );
+    }
+    expect(flipped).not.toBeNull();
+    const f = checkAbPack(flip, ROOT);
+    expect(f.ok).toBe(false);
+    expect(f.errors.join("; ")).toMatch(new RegExp(`${flipped} is a gate miss`));
+    expect(f.errors.join("; ")).toMatch(/gateMisses is not what the rows show/);
+
+    // check-pack: a dropped grade (a row with no grade) is refused, never read as a pass.
+    const drop = join(tmp("myco-ab-drop-"), "pack");
+    cpSync(good, drop, { recursive: true });
+    const g0 = jsonl(join(drop, "on", "grades.jsonl"));
+    writeFileSync(
+      join(drop, "on", "grades.jsonl"),
+      g0
+        .slice(1)
+        .map((g) => `${JSON.stringify(g)}\n`)
+        .join(""),
+    );
+    expect(checkAbPack(drop, ROOT).errors.join("; ")).toMatch(
+      /on: \d+ grade\(s\) for \d+ row\(s\)/,
+    );
+
+    // check-pack: a listed incident whose record differs from the manifest's sha256.
+    const edit = join(tmp("myco-ab-edit-"), "pack");
+    cpSync(good, edit, { recursive: true });
+    const ip = join(edit, "incidents", `incident-${key}.json`);
+    const rec = JSON.parse(readFileSync(ip, "utf8"));
+    writeFileSync(ip, JSON.stringify({ ...rec, at: "1970-01-01T00:00:00.000Z" }));
+    expect(checkAbPack(edit, ROOT).errors.join("; ")).toMatch(
+      /not listed in ab-pack.json with its sha256/,
+    );
+  });
+
+  it("Stage 1 needs a complete Stage 0, and is refused when Stage 0's rows show a miss", {
+    timeout: 60_000,
+  }, async () => {
+    const out = tmp("myco-ab-s1-");
+    await expect(run(out, 1)).rejects.toThrow(/Stage 1 starts only after Stage 0 is complete/);
+    expect(await run(out, 0, { maxChunks: 1 })).toMatchObject({ status: "paused" });
+    await expect(run(out, 1)).rejects.toThrow(/Stage 1 starts only after Stage 0 is complete/);
+    expect(await run(out, 0)).toMatchObject({ status: "complete" });
+    // A Stage 0 grade flipped to fail on a VERIFIED row, with no incident file at all.
+    const root = stageRoot(out, 0);
+    let flipped = false;
+    for (const arm of ["on", "off"]) {
+      if (flipped) break;
+      const verified = new Set(
+        [...loadLedger(join(root, arm, PROGRESS_FILE)).byTask.values()]
+          .flat()
+          .filter((r) => r.end?.outcome === "decided" && r.end.armRow?.gate?.verdict === "verified")
+          .map((r) => r.start.trialKey),
+      );
+      const gpath = join(root, arm, "grades.jsonl");
+      const grades = jsonl(gpath);
+      const victim = grades.find((g) => verified.has(g.trialKey as string) && g.status === "pass");
+      if (victim === undefined) continue;
+      flipped = true;
+      writeFileSync(
+        gpath,
+        grades
+          .map((g) => (g === victim ? { ...g, status: "fail" } : g))
+          .map((g) => `${JSON.stringify(g)}\n`)
+          .join(""),
+      );
+    }
+    expect(flipped).toBe(true);
+    expect(existsSync(join(root, "incidents"))).toBe(false);
+    await expect(run(out, 1)).rejects.toThrow(/rows show 1 gate miss/);
+  });
+});
+
 describe("pacing, resume, #518 ledger and anchor", () => {
   it("runs one chunk per invocation, resumes, and writes every attempt to #518's ledger", {
     timeout: 60_000,
@@ -578,7 +862,7 @@ describe("experiment-only: never R1 evidence, the OFF arm included", () => {
     writeFileSync(join(pack, "ab-pack.json"), JSON.stringify(m));
     const c = checkAbPack(pack, ROOT);
     expect(c.ok).toBe(false);
-    expect(c.errors.join("; ")).toMatch(/pre-registration sha256 1{64} is not the committed/);
+    expect(c.errors.join("; ")).toMatch(/pre-registration sha256 1{64} is not the repository's/);
     const cli = spawnSync(
       "npx",
       ["tsx", "scripts/m2-corrections-ab-run.ts", "analyze", "--pack", pack],
@@ -588,6 +872,89 @@ describe("experiment-only: never R1 evidence, the OFF arm included", () => {
       },
     );
     expect(cli.status).toBe(3);
+  });
+});
+
+describe("check-pack refuses each tampered pack (survivors M4, M6, M8, M9; N4)", () => {
+  it("unlabelled rows, the prereg JSON sha, the SIMULATED and EXPERIMENT markers", {
+    timeout: 60_000,
+  }, async () => {
+    const out = tmp("myco-ab-tamper-");
+    await run(out, 0);
+    const good = join(out, "pack");
+    exportAbPack(out, 0, good, ROOT);
+    expect(checkAbPack(good, ROOT)).toMatchObject({ ok: true });
+    const variant = (name: string, mutate: (pack: string) => void) => {
+      const pack = join(tmp(`myco-ab-${name}-`), "pack");
+      cpSync(good, pack, { recursive: true });
+      mutate(pack);
+      const c = checkAbPack(pack, ROOT);
+      expect(c.ok, name).toBe(false);
+      return c.errors.join("; ");
+    };
+    expect(
+      variant("unlabelled", (p) => {
+        const rows = jsonl(join(p, "off", "arm.jsonl"));
+        const { experiment: _e, ...first } = rows[0] as Record<string, unknown>;
+        writeFileSync(
+          join(p, "off", "arm.jsonl"),
+          [first, ...rows.slice(1)].map((r) => `${JSON.stringify(r)}\n`).join(""),
+        );
+      }),
+    ).toMatch(/off: 1 row\(s\) without the experiment label/);
+    expect(
+      variant("jsonsha", (p) => {
+        const m = JSON.parse(readFileSync(join(p, "ab-pack.json"), "utf8"));
+        m.prereg.jsonSha256 = "2".repeat(64);
+        writeFileSync(join(p, "ab-pack.json"), JSON.stringify(m));
+      }),
+    ).toMatch(/corrections-ab-prereg\.json sha256 is not the repository's/);
+    expect(variant("nosim", (p) => rmSync(join(p, "SIMULATED")))).toMatch(
+      /simulated pack without its SIMULATED marker/,
+    );
+    expect(variant("noexp", (p) => rmSync(join(p, "EXPERIMENT")))).toMatch(/no EXPERIMENT marker/);
+    // N4: `analyze` on a pack that passes, with #547 absent, is pending: never exit 0.
+    const cli = spawnSync(
+      "npx",
+      ["tsx", "scripts/m2-corrections-ab-run.ts", "analyze", "--pack", good],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+    expect(cli.status).toBe(existsSync(join(ROOT, "scripts/m2-corrections-ab.ts")) ? 0 : 4);
+  });
+
+  it("launch plans: extra args only as the gate's own --corrections pair (survivor M3)", () => {
+    const plan = (servers: Record<string, string[]>) => ({
+      argv: ["claude"],
+      mcpConfigPath: "/x/mcp.json",
+      mcpServers: Object.fromEntries(
+        Object.entries(servers).map(([n, args]) => [n, { command: "node", args, env: {} }]),
+      ),
+    });
+    const off = plan({ "myco-gate": ["gate.js"], other: ["o.js"] });
+    expect(
+      compareLaunchPlans(
+        plan({ "myco-gate": ["gate.js", "--corrections", "f"], other: ["o.js"] }),
+        off,
+      ),
+    ).toEqual([]);
+    expect(
+      compareLaunchPlans(
+        plan({ "myco-gate": ["gate.js"], other: ["o.js", "--corrections", "f"] }),
+        off,
+      ).join(),
+    ).toMatch(/server other's args differ/);
+    expect(
+      compareLaunchPlans(
+        plan({ "myco-gate": ["gate.js", "--verbose", "1"], other: ["o.js"] }),
+        off,
+      ).join(),
+    ).toMatch(/server myco-gate's args differ/);
+    expect(
+      compareLaunchPlans(
+        plan({ "myco-gate": ["gate.js", "--corrections"], other: ["o.js"] }),
+        off,
+      ).join(),
+    ).toMatch(/server myco-gate's args differ/);
   });
 });
 
@@ -631,22 +998,159 @@ describe("real runs are gated", () => {
     expect(r.stderr).toMatch(/no live driver is wired/);
   });
 
-  it("a live driver needs the approved plan sha, and a live trial needs a recorded cold reset", {
-    timeout: 60_000,
-  }, async () => {
-    // A transport labelled live but fake: no model is called; the runner cannot tell.
+  /** A transport labelled live but fake (no model is called), counting transports started. */
+  function countingLive(): PilotDriver & { started: number } {
     const inner = fakeDriver();
-    const live: PilotDriver = { simulated: false, transport: (ctx) => inner.transport(ctx) };
-    const out = tmp("myco-ab-live-");
-    await expect(
-      run(out, 0, { driver: live, planner: PILOT_MODEL, liveLaunchSha256: "x" }),
-    ).rejects.toThrow(/abPlanSha256/);
-    const r = await run(out, 0, {
-      driver: live,
-      planner: PILOT_MODEL,
-      liveLaunchSha256: abPlanSha256(LOADED, 0, PUBLISHED),
+    const d = {
+      simulated: false,
+      started: 0,
+      transport: (ctx: Parameters<PilotDriver["transport"]>[0]) => {
+        d.started++;
+        return inner.transport(ctx);
+      },
+    };
+    return d;
+  }
+
+  it("runAbStage refuses every live run before any trial while a precondition is unmet (D2)", async () => {
+    const sha = abPlanSha256(LOADED, 0, PUBLISHED);
+    const cases: [string, Parameters<typeof run>[2], RegExp][] = [
+      ["no flag, no sha", {}, /--launch-real-trials/],
+      ["flag, wrong sha", { launchRealTrials: true, liveLaunchSha256: "x" }, /abPlanSha256/],
+      ["sha, no flag", { liveLaunchSha256: sha }, /--launch-real-trials/],
+      // Explicit flag and the printed plan's sha: still refused on the real-run preconditions.
+      ["flag and sha", { launchRealTrials: true, liveLaunchSha256: sha }, /no lead GO/],
+      [
+        "fault injection on a live run",
+        { launchRealTrials: true, liveLaunchSha256: sha, crashPoint: () => {} },
+        /simulated runs only/,
+      ],
+    ];
+    for (const [name, extra, want] of cases) {
+      const live = countingLive();
+      const out = tmp("myco-ab-live-");
+      const p = run(out, 0, { ...extra, driver: live, planner: PILOT_MODEL });
+      await expect(p, name).rejects.toThrow(AbRefusal);
+      await expect(p, name).rejects.toThrow(want);
+      await expect(p, name).rejects.toThrow(/no trial started/);
+      expect(live.started, name).toBe(0);
+      expect(existsSync(stageRoot(out, 0)), name).toBe(false);
+    }
+    // Every refusal names each unmet real-run precondition, Stage 0 included.
+    const all = liveAbRefusals({
+      repoRoot: ROOT,
+      loaded: LOADED,
+      stage: 0,
+      published: PUBLISHED,
+      launchRealTrials: true,
+      liveLaunchSha256: sha,
+    }).join("\n");
+    expect(all).toMatch(/no lead GO/);
+    expect(all).toMatch(/#546's cold-boot guard is not merged/);
+    expect(all).toMatch(/#518's attempt-event vocabulary/);
+    expect(all).not.toMatch(/abPlanSha256|--launch-real-trials/);
+  });
+
+  it("runPilot itself refuses a live A/B arm config even with its own sha256 (defense in depth)", async () => {
+    const clock = virtualClock(0);
+    for (const arm of ["on", "off"] as const) {
+      const cfg = armConfig(LOADED, 0, arm, PUBLISHED);
+      const live = countingLive();
+      const out = tmp("myco-ab-direct-");
+      await expect(
+        runPilot({
+          config: cfg,
+          published: PUBLISHED,
+          outDir: out,
+          repoRoot: ROOT,
+          oracleSources: SOURCES,
+          driver: live,
+          plannerModelId: PILOT_MODEL,
+          sleep: clock.sleep,
+          now: clock.now,
+          liveLaunchSha256: configSha256(cfg),
+        }),
+      ).rejects.toThrow(/refusing a live corrections A\/B trial: .*no lead GO/);
+      expect(live.started).toBe(0);
+      expect(existsSync(join(out, PROGRESS_FILE))).toBe(false);
+    }
+    // Corrections without an experiment, or a forged experiment, is refused too.
+    const base = armConfig(LOADED, 0, "on", PUBLISHED);
+    const { experiment: _e, ...noExp } = base;
+    expect(liveExperimentRefusals(noExp, ROOT, PUBLISHED).join()).toMatch(/needs its experiment/);
+    expect(
+      liveExperimentRefusals(
+        {
+          ...base,
+          experiment: { ...base.experiment, preregSha256: "0".repeat(64) },
+        } as PilotConfig,
+        ROOT,
+        PUBLISHED,
+      ).join(),
+    ).toMatch(/another pre-registration/);
+    expect(
+      liveExperimentRefusals(
+        { ...base, experiment: { name: "other", stage: 0, preregSha256: LOADED.markdownSha256 } },
+        ROOT,
+        PUBLISHED,
+      ).join(),
+    ).toMatch(/unknown experiment/);
+  });
+
+  it("realRunRefusals refuses an uncommitted pre-registration", () => {
+    const root = tmp("myco-ab-uncommitted-");
+    mkdirSync(join(root, "docs", "benchmark"), { recursive: true });
+    cpSync(join(ROOT, PREREG_MD), join(root, PREREG_MD));
+    cpSync(join(ROOT, PREREG_JSON), join(root, PREREG_JSON));
+    const r = realRunRefusals(root, LOADED, 0, PUBLISHED).join("\n");
+    expect(r).toMatch(
+      /pre-registration: docs\/benchmark\/corrections-ab-prereg\.md is not committed/,
+    );
+    expect(realRunRefusals(ROOT, LOADED, 0, PUBLISHED).join("\n")).not.toMatch(/pre-registration:/);
+  });
+
+  it("a live trial needs a recorded cold reset (recordDecided's boot-class halt)", () => {
+    const armDir = join(tmp("myco-ab-boot-"), "stage0", "on");
+    mkdirSync(armDir, { recursive: true });
+    const task = PUBLISHED.find((t) => t.taskId === stageTasks(LOADED, 0, PUBLISHED)[0]);
+    if (task === undefined) throw new Error("no task");
+    const grader: GradeFn = (t, _p, key) =>
+      gradeRow(key, t.taskId, {
+        graderVersion: "test",
+        status: "fail",
+        reasons: ["test"],
+        fixtureSha256: t.fixtureSha256,
+        persistedSha256: null,
+        target: null,
+        targetSatisfied: false,
+        mismatches: [],
+        mismatchCount: 0,
+      } as unknown as Parameters<typeof gradeRow>[2]);
+    const ctx = (live: boolean): HookContext => ({
+      stageRoot: dirname(armDir),
+      armDir,
+      stage: 0,
+      arm: "on",
+      grader,
+      live,
+      now: () => 0,
+      load1m: () => 0,
     });
-    expect(r.status).toBe("halted");
-    expect(r.reason).toMatch(/boot class is unrecorded/);
+    const armRow = {
+      accepted: false,
+      persistedSha256: null,
+      gate: { called: true, verdict: "refuted" },
+    };
+    const decided = (key: string, resetBootClass: "cold" | "fast" | null) => ({
+      task,
+      trialKey: key,
+      armRow: armRow as unknown as BenchmarkArmRow,
+      persisted: null,
+      resetBootClass,
+    });
+    expect(recordDecided(ctx(true), decided("k-null", null))).toMatch(/boot class is unrecorded/);
+    expect(recordDecided(ctx(true), decided("k-fast", "fast"))).toMatch(/boot class is fast/);
+    expect(recordDecided(ctx(true), decided("k-cold", "cold"))).toBeNull();
+    expect(recordDecided(ctx(false), decided("k-sim", null))).toBeNull();
   });
 });

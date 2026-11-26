@@ -25,6 +25,12 @@
  *    decided; a trial the gate VERIFIED that the grader does not pass halts the whole run
  *    and writes an integrity-incident record. Nothing resumes until an operator acknowledges
  *    it with an ack file naming the record's sha256 (`ackIncident`; never automatic).
+ *    Crash-safe: the incident is written (atomically) BEFORE the grade, every invocation
+ *    re-derives misses from the rows and writes any missing record before anything runs, and
+ *    export, check-pack and Stage 1 re-derive misses from the rows, never trusting a flag.
+ *  - REAL RUNS: `runAbStage` refuses a live run before any trial unless the explicit flag, the
+ *    printed plan's sha256 and every `realRunRefusals` precondition hold (`liveAbRefusals`);
+ *    `runPilot` re-checks the preconditions from each arm config (`liveExperimentRefusals`).
  *  - EXPERIMENT ONLY: every arm row, the OFF arm included, carries `experiment`, and every
  *    pack an `EXPERIMENT` marker: refused by `checkBenchmark(..., { evidence: true })` and the
  *    M2 pack CLI (`src/m2/provenance.ts`). A simulated run is also `SIMULATED`.
@@ -43,28 +49,34 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { loadavg } from "node:os";
-import { dirname, extname, join, resolve } from "node:path";
-import { HARNESS_CLASSES, m2TrialOpsSchema } from "../../schemas/m2-evidence.ts";
+import { dirname, join, resolve } from "node:path";
 import { type BenchmarkArmRow, checkBenchmark } from "../benchmark/check.ts";
-import { GATE_STATE_FILE } from "../benchmark/gated-rows.ts";
 import { grade } from "../benchmark/grade/grade.ts";
 import { type BenchmarkGradeRow, gradeRow } from "../benchmark/grade/row.ts";
 import type { BenchmarkTask } from "../benchmark/taskset.ts";
 import { AttemptLedgerWriter, anchorPathFor, verifyAttemptLedger } from "../m2/attempt-ledger.ts";
 import { EXPERIMENT_FILE } from "../m2/provenance.ts";
 import {
-  canonicalJson,
-  checkPacing,
-  configSha256,
-  type PacingConfig,
-  type PilotConfig,
-  pilotConfig,
-} from "./config.ts";
+  AB_EXPERIMENT,
+  type AbStage,
+  ANALYSIS_MODULE,
+  ANALYSIS_SCRIPT,
+  type LoadedPrereg,
+  loadPrereg,
+  PREREG_JSON,
+  PREREG_MD,
+  r1Nameable,
+  realRunRefusals,
+  sha256File,
+  stageTasks,
+} from "./ab-prereg.ts";
+import { canonicalJson, configSha256, type PilotConfig, pilotConfig } from "./config.ts";
 import { trialLaunchPlan } from "./launch.ts";
-import { loadLedger, PILOT_HARNESS_CLASSES, PROGRESS_FILE } from "./ledger.ts";
+import { loadLedger, PROGRESS_FILE } from "./ledger.ts";
 import { publishedTasks } from "./reviewed.ts";
 import {
   type AttemptSink,
@@ -78,24 +90,34 @@ import {
   SIMULATED_PLANNER_PREFIX,
 } from "./runner.ts";
 
-export const AB_EXPERIMENT = "corrections-ab";
-export const PREREG_MD = "docs/benchmark/corrections-ab-prereg.md";
-export const PREREG_JSON = "docs/benchmark/corrections-ab-prereg.json";
-/** The lead's GO for real trials: a committed file. Absent until the lead gives it. */
-export const LEAD_GO_FILE = "docs/benchmark/corrections-ab-go.json";
-export const PREREG_SCHEMA = "myco.pilot.corrections-ab-prereg/1" as const;
+export {
+  AB_EXPERIMENT,
+  type AbPrereg,
+  type AbStage,
+  type AbStagePrereg,
+  ANALYSIS_MODULE,
+  ANALYSIS_SCRIPT,
+  LEAD_GO_FILE,
+  type LoadedPrereg,
+  loadPrereg,
+  PREREG_JSON,
+  PREREG_MD,
+  PREREG_SCHEMA,
+  preregCommitProblems,
+  r1Nameable,
+  realRunRefusals,
+  sha256File,
+  stageTasks,
+} from "./ab-prereg.ts";
+
 export const AB_PACK_SCHEMA = "myco.pilot.corrections-ab-pack/1" as const;
 export const AB_RUN_SCHEMA = "myco.pilot.corrections-ab-run/1" as const;
 export const INCIDENT_SCHEMA = "myco.pilot.ab-integrity-incident/1" as const;
 export const ACK_SCHEMA = "myco.pilot.ab-incident-ack/1" as const;
 export const AB_EVIDENCE_USE = "experiment-only (never R1 evidence)" as const;
-/** #547's analysis CLI. Present once #547 merges; until then `analyzeAbPack` says pending. */
-export const ANALYSIS_SCRIPT = "scripts/m2-corrections-ab.ts";
-export const ANALYSIS_MODULE = "src/m2/corrections-ab.ts";
 export const AB_DRY_RUN_PLANNER = "simulated:corrections-ab-dry-run";
 
 export type AbArm = "on" | "off";
-export type AbStage = 0 | 1;
 export const AB_ARMS: readonly AbArm[] = ["on", "off"];
 
 /** Thrown for a refusal the operator must act on (exit 3 in the CLI), never a bug. */
@@ -104,149 +126,10 @@ export class AbRefusal extends Error {
 }
 
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
-export const sha256File = (path: string) => sha256(readFileSync(path));
 
 // ---------------------------------------------------------------------------------------------
-// Pre-registration
+// Schedule, arm configs
 // ---------------------------------------------------------------------------------------------
-
-export interface AbStagePrereg {
-  readonly role: string;
-  readonly taskSet: "pilot-30" | "fc-v1";
-  readonly pairs: number;
-  readonly k: 1;
-  readonly seed: string;
-  readonly effectClaim: boolean;
-}
-
-export interface AbPrereg {
-  readonly schema: typeof PREREG_SCHEMA;
-  readonly experiment: typeof AB_EXPERIMENT;
-  readonly markdown: string;
-  readonly markdownSha256: string;
-  readonly hypothesis: string;
-  readonly primaryMetric: string;
-  readonly successBar: string;
-  readonly stages: { readonly "0": AbStagePrereg; readonly "1": AbStagePrereg };
-  readonly test: {
-    readonly name: string;
-    readonly sided: "one-sided";
-    readonly alpha: number;
-    readonly miss: string;
-    readonly report: readonly string[];
-  };
-  readonly pacing: {
-    readonly trial: PacingConfig;
-    readonly chunkPairs: number;
-    readonly interChunkPauseS: number;
-    readonly chunksPerInvocation: number;
-  };
-  readonly stoppingRule: readonly string[];
-  readonly failClosed: string;
-  readonly analysis: { readonly command: string; readonly module: string; readonly pr: number };
-  readonly realRuns: string;
-}
-
-export interface LoadedPrereg {
-  readonly prereg: AbPrereg;
-  /** sha256 of the committed markdown: what packs record and #547 compares. */
-  readonly markdownSha256: string;
-  readonly jsonSha256: string;
-}
-
-/** Load and validate the committed pre-registration; throws with every problem named. */
-export function loadPrereg(repoRoot: string): LoadedPrereg {
-  const mdPath = join(repoRoot, PREREG_MD);
-  const jsonPath = join(repoRoot, PREREG_JSON);
-  const markdownSha256 = sha256File(mdPath);
-  const jsonSha256 = sha256File(jsonPath);
-  const p = JSON.parse(readFileSync(jsonPath, "utf8")) as AbPrereg;
-  const problems: string[] = [];
-  if (p.schema !== PREREG_SCHEMA) problems.push(`schema is not ${PREREG_SCHEMA}`);
-  if (p.experiment !== AB_EXPERIMENT) problems.push(`experiment is not ${AB_EXPERIMENT}`);
-  if (p.markdown !== PREREG_MD) problems.push(`markdown is not ${PREREG_MD}`);
-  if (p.markdownSha256 !== markdownSha256)
-    problems.push(
-      `markdownSha256 ${p.markdownSha256} is not the committed ${PREREG_MD}'s ${markdownSha256}`,
-    );
-  const s0 = p.stages?.["0"];
-  const s1 = p.stages?.["1"];
-  if (s0?.taskSet !== "pilot-30" || s0.pairs !== 30 || s0.k !== 1 || s0.effectClaim !== false)
-    problems.push("Stage 0 must be the pilot's 30 tasks, k 1, 30 pairs, no effect claim");
-  if (s1?.taskSet !== "fc-v1" || s1.pairs !== 100 || s1.k !== 1 || s1.effectClaim !== true)
-    problems.push("Stage 1 must be fc-v1, k 1, 100 pairs, the confirmatory effect claim");
-  for (const [n, s] of [
-    ["0", s0],
-    ["1", s1],
-  ] as const)
-    if (typeof s?.seed !== "string" || !/^[A-Za-z0-9._:-]{8,64}$/.test(s.seed))
-      problems.push(`Stage ${n} needs a seed of 8-64 safe characters`);
-  if (s0?.seed === s1?.seed) problems.push("Stage 1's seed must be fresh (not Stage 0's)");
-  if (p.test?.sided !== "one-sided" || p.test.alpha !== 0.05)
-    problems.push("the primary test must be one-sided at alpha 0.05");
-  if (!/sign test/i.test(p.test?.name ?? ""))
-    problems.push("the primary test must be the exact sign test");
-  if (!/never the gate/i.test(p.primaryMetric ?? ""))
-    problems.push("the primary metric must be grader-verified, never the gate");
-  if (!(p.analysis?.command ?? "").includes(ANALYSIS_SCRIPT))
-    problems.push(`the analysis command must be ${ANALYSIS_SCRIPT} (#547)`);
-  const pc = p.pacing;
-  try {
-    checkPacing(pc.trial);
-  } catch (error) {
-    problems.push((error as Error).message);
-  }
-  if (!Number.isInteger(pc?.chunkPairs) || pc.chunkPairs < 1 || pc.chunkPairs > 50)
-    problems.push("pacing.chunkPairs must be an integer in [1, 50]");
-  if (!Number.isInteger(pc?.interChunkPauseS) || pc.interChunkPauseS < 0)
-    problems.push("pacing.interChunkPauseS must be a non-negative integer");
-  if (!Number.isInteger(pc?.chunksPerInvocation) || pc.chunksPerInvocation < 1)
-    problems.push("pacing.chunksPerInvocation must be a positive integer");
-  if (problems.length > 0)
-    throw new Error(`invalid corrections A/B pre-registration: ${problems.join("; ")}`);
-  return { prereg: p, markdownSha256, jsonSha256 };
-}
-
-/**
- * Problems with the pre-registration's commit state: both files tracked by git and unchanged
- * from HEAD. A real run refuses unless this is empty ("committed BEFORE any run").
- */
-export function preregCommitProblems(repoRoot: string): string[] {
-  const out: string[] = [];
-  for (const f of [PREREG_MD, PREREG_JSON]) {
-    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", f], { cwd: repoRoot });
-    if (tracked.status !== 0) {
-      out.push(`${f} is not committed`);
-      continue;
-    }
-    const clean = spawnSync("git", ["diff", "--quiet", "HEAD", "--", f], { cwd: repoRoot });
-    if (clean.status !== 0) out.push(`${f} differs from the committed copy`);
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Tasks, schedule, arm configs
-// ---------------------------------------------------------------------------------------------
-
-/** The stage's task ids: Stage 0 the pilot's 30 (`pilotConfig`), Stage 1 all of fc-v1. */
-export function stageTasks(
-  loaded: LoadedPrereg,
-  stage: AbStage,
-  published: readonly BenchmarkTask[],
-): string[] {
-  const s = loaded.prereg.stages[`${stage}`];
-  const ids =
-    s.taskSet === "pilot-30"
-      ? [...pilotConfig(published).trials]
-      : published
-          .filter((t) => t.taskSetVersion === "fc-v1")
-          .map((t) => t.taskId)
-          .sort();
-  if (ids.length !== s.pairs)
-    throw new Error(`Stage ${stage} selects ${ids.length} tasks, pre-registered at ${s.pairs}`);
-  return ids;
-}
 
 /** A deterministic integer in [0, n) from `seed` and a counter (sha256, no Math.random). */
 function seededInt(seed: string, counter: number, n: number): number {
@@ -352,8 +235,23 @@ export function launchPlanDiff(
 ): string[] {
   const ids = { runId: "ab-plan-check", trialKey: "ab-plan-check" };
   const dir = resolve(repoRoot, "runs", "ab-plan-check");
-  const a = trialLaunchPlan(on, task, ids, dir, repoRoot);
-  const b = trialLaunchPlan(off, task, ids, dir, repoRoot);
+  return compareLaunchPlans(
+    trialLaunchPlan(on, task, ids, dir, repoRoot),
+    trialLaunchPlan(off, task, ids, dir, repoRoot),
+  );
+}
+
+type LaunchPlanShape = Pick<ReturnType<typeof trialLaunchPlan>, "argv" | "mcpConfigPath"> & {
+  readonly mcpServers: Readonly<
+    Record<
+      string,
+      { readonly command: string; readonly args: readonly string[]; readonly env?: unknown }
+    >
+  >;
+};
+
+/** The problems between the ON (`a`) and OFF (`b`) launch plans of one task (pure). */
+export function compareLaunchPlans(a: LaunchPlanShape, b: LaunchPlanShape): string[] {
   const out: string[] = [];
   if (canonicalJson(a.argv) !== canonicalJson(b.argv)) out.push("the agent argv differs");
   if (a.mcpConfigPath !== b.mcpConfigPath) out.push("the MCP config path differs");
@@ -407,6 +305,53 @@ export interface IncidentStatus {
   readonly problem: string | null;
 }
 
+export const incidentId = (trialKey: string) => `incident-${trialKey}`;
+
+/** The incident record at `path`, or null unless it is a well-formed gate-miss record for its id. */
+export function readIncident(path: string, id: string): IntegrityIncident | null {
+  try {
+    const r = JSON.parse(readFileSync(path, "utf8")) as IntegrityIncident;
+    if (r.schema !== INCIDENT_SCHEMA || r.kind !== "gate-miss" || r.gateVerdict !== "verified")
+      return null;
+    if (typeof r.trialKey !== "string" || incidentId(r.trialKey) !== id) return null;
+    if ((r.arm !== "on" && r.arm !== "off") || (r.stage !== 0 && r.stage !== 1)) return null;
+    return r;
+  } catch {
+    return null;
+  }
+}
+
+/** The valid incident record for a trial under `incidentsRoot`, if one matches arm and stage. */
+function incidentFor(
+  dir: string,
+  trialKey: string,
+  arm: AbArm,
+  stage: AbStage,
+): { readonly path: string; readonly record: IntegrityIncident } | null {
+  const id = incidentId(trialKey);
+  const path = join(dir, `${id}.json`);
+  if (!existsSync(path)) return null;
+  const record = readIncident(path, id);
+  return record !== null && record.arm === arm && record.stage === stage ? { path, record } : null;
+}
+
+/**
+ * The gate misses in a set of arm rows and their grades, derived from the rows alone (never
+ * from a flag or an incident file): every row the gate VERIFIED whose grade is not `pass`. A
+ * verified row with no grade at all counts as a miss too (fail closed).
+ */
+export function gateMissesFromRows(
+  rows: readonly {
+    readonly trialKey: string;
+    readonly gate?: { readonly verdict?: string | null } | null;
+  }[],
+  grades: ReadonlyMap<string, { readonly status: string }>,
+): string[] {
+  return rows
+    .filter((r) => r.gate?.verdict === "verified" && grades.get(r.trialKey)?.status !== "pass")
+    .map((r) => r.trialKey);
+}
+
 /** Every incident under the stage root and whether a valid operator ack file covers it. */
 export function incidentStatus(stageRoot: string): IncidentStatus[] {
   const dir = incidentsDir(stageRoot);
@@ -420,7 +365,10 @@ export function incidentStatus(stageRoot: string): IncidentStatus[] {
       const sha = sha256File(path);
       const ackPath = join(dir, `${id}.ack.json`);
       let problem: string | null = null;
-      if (!existsSync(ackPath)) problem = "no operator ack file";
+      if (readIncident(path, id) === null)
+        problem =
+          "not a valid gate-miss incident record (repair it by hand; it cannot be acknowledged as is)";
+      else if (!existsSync(ackPath)) problem = "no operator ack file";
       else {
         try {
           const ack = JSON.parse(readFileSync(ackPath, "utf8")) as Record<string, unknown>;
@@ -462,6 +410,8 @@ export function ackIncident(
 ): string {
   const st = incidentStatus(stageRoot).find((i) => i.id === id);
   if (st === undefined) throw new AbRefusal(`no incident ${id} under ${incidentsDir(stageRoot)}`);
+  if (readIncident(st.path, id) === null)
+    throw new AbRefusal(`${st.path} is not a valid gate-miss incident record: refused`);
   if (ack.incidentSha256 !== st.sha256)
     throw new AbRefusal(
       `incident ${id}'s sha256 is ${st.sha256}, not ${ack.incidentSha256}: read the record first`,
@@ -510,11 +460,6 @@ export const AB_TRIALS_FILE = "ab-trials.jsonl";
 export const R1_LEDGER_FILE = "attempts.jsonl";
 /** Faulted attempts whose pilot class #518's vocabulary cannot name (see `R1AttemptSink`). */
 export const R1_UNCLASSIFIED_FILE = "attempts-unclassified.jsonl";
-
-/** The pilot harness classes #518's attempt-event schema can name (today only `timeout`). */
-export function r1Nameable(pilotClass: string): boolean {
-  return (HARNESS_CLASSES as readonly string[]).includes(pilotClass);
-}
 
 /**
  * #518's attempt ledger for one arm directory: `<armDir>/attempts.jsonl`, chained, with its
@@ -601,7 +546,8 @@ interface AbTrialRecord {
   readonly gateVerdict: string | null;
 }
 
-interface HookContext {
+/** What recording a decided trial needs (exported for the crash and boot-class unit tests). */
+export interface HookContext {
   readonly stageRoot: string;
   readonly armDir: string;
   readonly stage: AbStage;
@@ -610,85 +556,197 @@ interface HookContext {
   readonly live: boolean;
   readonly now: () => number;
   readonly load1m: () => number;
+  readonly crashPoint?: ((step: RecordStep, trialKey: string) => void) | undefined;
+}
+
+/** The steps of recording a decided trial, in write order (for crash-point tests). */
+export type RecordStep = "graded" | "incident" | "trial-record" | "grade";
+
+/** Write a file atomically (temp + rename): a crash leaves the old state or the whole file. */
+function writeAtomic(path: string, text: string): void {
+  const tmp = join(dirname(path), `.${Date.now()}-${process.pid}.tmp`);
+  writeFileSync(tmp, text, { flag: "wx" });
+  renameSync(tmp, path);
 }
 
 /**
- * Record a decided trial's grade and boot class, and decide whether it halts the run: a gate
- * miss (an integrity incident, recorded first) or, on a live run, a reset that is not a
- * recorded cold boot.
+ * Write the gate-miss incident for one trial unless a valid one is already there (a resume
+ * after a crash re-derives it; it never rewrites a record an operator may have read).
+ * Returns the record's path and whether an operator has acknowledged it.
  */
-function recordDecided(
+function ensureIncident(
   ctx: HookContext,
-  d: Pick<DecidedTrial, "task" | "trialKey" | "armRow" | "persisted"> & {
-    readonly resetBootClass: "cold" | "fast" | null;
-  },
-): string | null {
-  const g = ctx.grader(d.task, d.persisted, d.trialKey);
-  appendFileSync(join(ctx.armDir, GRADES_FILE), `${JSON.stringify(g)}\n`);
-  const rec: AbTrialRecord = {
-    schema: "myco.pilot.ab-trial/1",
-    trialKey: d.trialKey,
-    arm: ctx.arm,
-    stage: ctx.stage,
-    resetBootClass: d.resetBootClass,
-    hostLoad1mStart: Math.max(0, ctx.load1m()),
-    graderStatus: g.status,
-    gateVerdict: d.armRow.gate?.verdict ?? null,
-  };
-  appendFileSync(join(ctx.armDir, AB_TRIALS_FILE), `${JSON.stringify(rec)}\n`);
-  if (d.armRow.gate?.verdict === "verified" && g.status !== "pass") {
+  d: { readonly trialKey: string; readonly taskId: string; readonly armRow: BenchmarkArmRow },
+  g: BenchmarkGradeRow,
+  how: "on decision" | "re-derived on resume",
+): { readonly path: string; readonly acknowledged: boolean } {
+  const dir = incidentsDir(ctx.stageRoot);
+  const prior = incidentFor(dir, d.trialKey, ctx.arm, ctx.stage);
+  if (prior === null) {
+    const path = join(dir, `${incidentId(d.trialKey)}.json`);
+    if (existsSync(path))
+      // A file there that is not this trial's valid record: never overwritten, never ackable.
+      return { path, acknowledged: false };
     const incident: IntegrityIncident = {
       schema: INCIDENT_SCHEMA,
       kind: "gate-miss",
       stage: ctx.stage,
       arm: ctx.arm,
       trialKey: d.trialKey,
-      taskId: d.task.taskId,
+      taskId: d.taskId,
       gateVerdict: "verified",
       accepted: d.armRow.accepted,
-      graderStatus: g.status,
+      graderStatus: g.status === "ungradable" ? "ungradable" : "fail",
       graderVersion: g.graderVersion,
       persistedSha256: d.armRow.persistedSha256,
       at: new Date(ctx.now()).toISOString(),
-      rule: "fail-closed: a gate miss (gate VERIFIED, grader fails) is an integrity incident; the run halts and nothing resumes until an operator acknowledges this record",
+      rule: `fail-closed: a gate miss (gate VERIFIED, grader fails) is an integrity incident; the run halts and nothing resumes until an operator acknowledges this record (recorded ${how})`,
     };
-    mkdirSync(incidentsDir(ctx.stageRoot), { recursive: true });
-    const path = join(incidentsDir(ctx.stageRoot), `incident-${d.trialKey}.json`);
-    writeFileSync(path, `${JSON.stringify(incident, null, 2)}\n`, { flag: "wx" });
-    return `HALTED: integrity incident, the gate VERIFIED ${d.trialKey} and the independent grader says ${g.status}; record ${path}. Nothing resumes until an operator acknowledges it (ack-incident).`;
+    mkdirSync(dir, { recursive: true });
+    writeAtomic(path, `${JSON.stringify(incident, null, 2)}\n`);
   }
-  if (ctx.live && d.resetBootClass !== "cold")
-    return `HALTED: ${d.trialKey}'s reset boot class is ${d.resetBootClass ?? "unrecorded"}, not a recorded cold boot (#546's guard); review before resuming`;
+  const path = join(dir, `${incidentId(d.trialKey)}.json`);
+  const st = incidentStatus(ctx.stageRoot).find((i) => i.path === path);
+  return { path, acknowledged: st?.acknowledged === true };
+}
+
+const missReason = (trialKey: string, status: string, path: string) =>
+  `HALTED: integrity incident, the gate VERIFIED ${trialKey} and the independent grader says ${status}; record ${path}. Nothing resumes until an operator acknowledges it (ack-incident).`;
+
+/**
+ * Record a decided trial and decide whether it halts the run. Crash-safe by write order: the
+ * gate-miss incident (if any) is written FIRST, then the boot-class record, and the grade LAST,
+ * so a grade on disk always means everything before it is on disk. A crash before the grade
+ * leaves the trial ungraded and `reconcileGrades` re-records it (keeping an existing incident);
+ * `reconcileGrades` also re-derives misses from the grades already written, so even a state
+ * where a grade exists without its incident halts on resume.
+ */
+export function recordDecided(
+  ctx: HookContext,
+  d: Pick<DecidedTrial, "task" | "trialKey" | "armRow" | "persisted"> & {
+    readonly resetBootClass: "cold" | "fast" | null;
+  },
+): string | null {
+  const crash = (step: RecordStep) => ctx.crashPoint?.(step, d.trialKey);
+  const g = ctx.grader(d.task, d.persisted, d.trialKey);
+  crash("graded");
+  const miss = d.armRow.gate?.verdict === "verified" && g.status !== "pass";
+  let halt: string | null = null;
+  if (miss) {
+    const inc = ensureIncident(ctx, { ...d, taskId: d.task.taskId }, g, "on decision");
+    if (!inc.acknowledged) halt = missReason(d.trialKey, g.status, inc.path);
+  }
+  crash("incident");
+  const trialsPath = join(ctx.armDir, AB_TRIALS_FILE);
+  const prior = readJsonl(trialsPath).find(
+    (r) => (r as { trialKey?: string }).trialKey === d.trialKey,
+  ) as AbTrialRecord | undefined;
+  const resetBootClass = prior?.resetBootClass ?? d.resetBootClass;
+  if (prior === undefined) {
+    const rec: AbTrialRecord = {
+      schema: "myco.pilot.ab-trial/1",
+      trialKey: d.trialKey,
+      arm: ctx.arm,
+      stage: ctx.stage,
+      resetBootClass,
+      hostLoad1mStart: Math.max(0, ctx.load1m()),
+      graderStatus: g.status,
+      gateVerdict: d.armRow.gate?.verdict ?? null,
+    };
+    appendFileSync(trialsPath, `${JSON.stringify(rec)}\n`);
+  }
+  crash("trial-record");
+  appendFileSync(join(ctx.armDir, GRADES_FILE), `${JSON.stringify(g)}\n`);
+  crash("grade");
+  if (halt !== null) return halt;
+  if (ctx.live && resetBootClass !== "cold")
+    return `HALTED: ${d.trialKey}'s reset boot class is ${resetBootClass ?? "unrecorded"}, not a recorded cold boot (#546's guard); review before resuming`;
   return null;
 }
 
+/** The decided trials in an arm's progress ledger, with their arm rows. */
+function decidedTrials(
+  armDir: string,
+): { readonly trialKey: string; readonly taskId: string; readonly armRow: BenchmarkArmRow }[] {
+  const state = loadLedger(join(armDir, PROGRESS_FILE));
+  const out: { trialKey: string; taskId: string; armRow: BenchmarkArmRow }[] = [];
+  if (state.header === null) return out;
+  for (const list of state.byTask.values())
+    for (const rec of list)
+      if (rec.end?.outcome === "decided" && rec.end.armRow !== null)
+        out.push({
+          trialKey: rec.start.trialKey,
+          taskId: rec.start.taskId,
+          armRow: rec.end.armRow,
+        });
+  return out;
+}
+
+const gradesByKey = (armDir: string) =>
+  new Map(
+    (readJsonl(join(armDir, GRADES_FILE)) as BenchmarkGradeRow[]).map((g) => [g.trialKey, g]),
+  );
+
 /**
- * Grade decided trials that have no grade yet (the runner died between deciding a trial and
- * grading it), from the saved document. Returns the first halt reason, if any.
+ * Bring an arm's records up to date with its progress ledger before anything else runs:
+ *  - a decided trial with no grade (the runner died before its grade was written) is recorded
+ *    now from the saved document, which writes its incident if it is a miss;
+ *  - every graded trial is re-checked from the rows: a gate-VERIFIED trial whose grade is not
+ *    `pass` and that has no valid incident record gets one now (re-derived) and halts.
+ * Returns the first halt reason, if any.
  */
 function reconcileGrades(ctx: HookContext, published: readonly BenchmarkTask[]): string | null {
-  const state = loadLedger(join(ctx.armDir, PROGRESS_FILE));
-  if (state.header === null) return null;
-  const graded = new Set(
-    readJsonl(join(ctx.armDir, GRADES_FILE)).map((g) => (g as { trialKey: string }).trialKey),
-  );
   const byId = new Map(published.map((t) => [t.taskId, t]));
+  const grades = gradesByKey(ctx.armDir);
   let halt: string | null = null;
-  for (const list of state.byTask.values())
-    for (const rec of list) {
-      if (rec.end?.outcome !== "decided" || rec.end.armRow === null) continue;
-      if (graded.has(rec.start.trialKey)) continue;
-      const doc = join(ctx.armDir, "trials", rec.start.trialKey, "doc.csv");
-      const why = recordDecided(ctx, {
-        task: byId.get(rec.start.taskId) as BenchmarkTask,
-        trialKey: rec.start.trialKey,
-        armRow: rec.end.armRow,
+  for (const t of decidedTrials(ctx.armDir)) {
+    const g = grades.get(t.trialKey);
+    if (g === undefined) {
+      const task = byId.get(t.taskId);
+      if (task === undefined)
+        throw new Error(`decided trial ${t.trialKey}: unknown task ${t.taskId}`);
+      const doc = join(ctx.armDir, "trials", t.trialKey, "doc.csv");
+      halt ??= recordDecided(ctx, {
+        task,
+        trialKey: t.trialKey,
+        armRow: t.armRow,
         persisted: existsSync(doc) ? readFileSync(doc) : null,
         resetBootClass: null,
       });
-      halt ??= why;
+      continue;
     }
+    if (gateMissesFromRows([t.armRow], grades).length === 0) continue;
+    const inc = ensureIncident(ctx, t, g, "re-derived on resume");
+    if (!inc.acknowledged) halt ??= missReason(t.trialKey, g.status, inc.path);
+  }
   return halt;
+}
+
+/**
+ * A stage's gate misses re-derived from its run directory (decided rows and their grades),
+ * plus decided trials with no grade yet: what Stage 1's precondition reads, never the
+ * incident files alone.
+ */
+export function stageGateMisses(
+  outRoot: string,
+  stage: AbStage,
+): { readonly misses: readonly string[]; readonly ungraded: readonly string[] } {
+  const root = stageRoot(outRoot, stage);
+  const misses: string[] = [];
+  const ungraded: string[] = [];
+  for (const arm of AB_ARMS) {
+    const armDir = join(root, arm);
+    const rows = decidedTrials(armDir);
+    const grades = gradesByKey(armDir);
+    ungraded.push(...rows.filter((r) => !grades.has(r.trialKey)).map((r) => r.trialKey));
+    misses.push(
+      ...gateMissesFromRows(
+        rows.filter((r) => grades.has(r.trialKey)).map((r) => ({ ...r, gate: r.armRow.gate })),
+        grades,
+      ),
+    );
+  }
+  return { misses, ungraded };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -714,6 +772,45 @@ export interface AbRunOptions {
   readonly load1m?: () => number;
   /** Live only: the plan sha the operator approved (`abPlanSha256`), passed on per arm. */
   readonly liveLaunchSha256?: string;
+  /** Live only: the operator's explicit `--launch-real-trials`. */
+  readonly launchRealTrials?: boolean;
+  /**
+   * Fault injection for tests (simulated runs only; ignored, and refused, on a live run):
+   * called at each step of recording a decided trial, so a test can throw there to stand in
+   * for the runner dying between two writes.
+   */
+  readonly crashPoint?: (step: RecordStep, trialKey: string) => void;
+}
+
+/**
+ * Why a LIVE A/B run cannot start: the explicit flag, the printed plan's sha256, and every
+ * `realRunRefusals` precondition (pre-registration committed, the lead's GO, the gate can read
+ * the tasks' format, #518's vocabulary, #546's cold-boot guard). Empty only when all hold.
+ * `runPilot` re-checks the same preconditions from each arm config (`liveExperimentRefusals`).
+ */
+export function liveAbRefusals(
+  opts: Pick<
+    AbRunOptions,
+    | "repoRoot"
+    | "loaded"
+    | "stage"
+    | "published"
+    | "liveLaunchSha256"
+    | "launchRealTrials"
+    | "crashPoint"
+  >,
+): string[] {
+  const out: string[] = [];
+  if (opts.launchRealTrials !== true)
+    out.push("a live A/B run needs the explicit --launch-real-trials flag (launchRealTrials)");
+  if (opts.liveLaunchSha256 !== abPlanSha256(opts.loaded, opts.stage, opts.published))
+    out.push(
+      "a live A/B run needs liveLaunchSha256 equal to the printed plan's abPlanSha256 (the CLI's --plan-sha256)",
+    );
+  if (opts.crashPoint !== undefined)
+    out.push("fault injection (crashPoint) is for simulated runs only");
+  out.push(...realRunRefusals(opts.repoRoot, opts.loaded, opts.stage, opts.published));
+  return out;
 }
 
 export interface AbRunResult {
@@ -811,8 +908,13 @@ export function checkedArmConfigs(
   const on = armConfig(loaded, stage, "on", published);
   const off = armConfig(loaded, stage, "off", published);
   const problems = diffArmConfigs(on, off);
-  const first = published.find((t) => t.taskId === on.trials[0]);
-  if (first !== undefined) problems.push(...launchPlanDiff(on, off, first, repoRoot));
+  // Every task of the stage, not just the first: a plan may depend on the task.
+  const byId = new Map(published.map((t) => [t.taskId, t]));
+  for (const id of on.trials) {
+    const task = byId.get(id);
+    if (task === undefined) problems.push(`task ${id} is not published`);
+    else problems.push(...launchPlanDiff(on, off, task, repoRoot).map((p) => `${id}: ${p}`));
+  }
   if (problems.length > 0)
     throw new AbRefusal(
       `the A/B arms are not identical apart from corrections: ${problems.join("; ")}`,
@@ -827,10 +929,14 @@ export async function runAbStage(opts: AbRunOptions): Promise<AbRunResult> {
   const log = opts.log ?? (() => {});
   const simulated = opts.plannerModelId.startsWith(SIMULATED_PLANNER_PREFIX);
   const root = stageRoot(opts.outRoot, stage);
-  if (!simulated && opts.liveLaunchSha256 !== abPlanSha256(loaded, stage, published))
-    throw new AbRefusal(
-      "a live A/B run needs liveLaunchSha256 equal to the approved plan's abPlanSha256 (the CLI's --plan-sha256)",
-    );
+  // 0. A live run: every real-run precondition, before anything is written or started.
+  if (!simulated) {
+    const refusals = liveAbRefusals(opts);
+    if (refusals.length > 0)
+      throw new AbRefusal(
+        `refusing a live corrections A/B run (no trial started):\n${refusals.map((r) => `  - ${r}`).join("\n")}`,
+      );
+  }
   mkdirSync(root, { recursive: true });
 
   // 1. Nothing resumes over an unacknowledged incident; Stage 1 needs a clean Stage 0.
@@ -841,9 +947,14 @@ export async function runAbStage(opts: AbRunOptions): Promise<AbRunResult> {
       throw new AbRefusal(
         `Stage 1 starts only after Stage 0 is complete in ${opts.outRoot} (${s0.decided}/${s0.expected} trials decided)`,
       );
-    if (s0.incidents > 0)
+    const derived = stageGateMisses(opts.outRoot, 0);
+    if (derived.ungraded.length > 0)
       throw new AbRefusal(
-        `Stage 1 starts only after a Stage 0 with zero gate misses; Stage 0 recorded ${s0.incidents} integrity incident(s) (a lead decision, not an ack, reopens this)`,
+        `Stage 1 starts only after every Stage 0 trial is graded; ${derived.ungraded.length} are not (${derived.ungraded[0]}): resume Stage 0 first`,
+      );
+    if (s0.incidents > 0 || derived.misses.length > 0)
+      throw new AbRefusal(
+        `Stage 1 starts only after a Stage 0 with zero gate misses; Stage 0 recorded ${s0.incidents} integrity incident(s) and its rows show ${derived.misses.length} gate miss(es) (a lead decision, not an ack, reopens this)`,
       );
   }
 
@@ -903,6 +1014,7 @@ export async function runAbStage(opts: AbRunOptions): Promise<AbRunResult> {
         arm,
         grader,
         live: !simulated,
+        crashPoint: simulated ? opts.crashPoint : undefined,
         now,
         load1m: opts.load1m ?? (() => loadavg()[0] ?? 0),
       };
@@ -1011,7 +1123,15 @@ export interface AbPackManifest {
     Record<AbArm, { events: number; anchorEntries: number; unclassifiedFaultEnds: number }>
   >;
   readonly incidents: readonly { id: string; sha256: string; acknowledged: boolean }[];
+  /** The gate misses re-derived from the rows at export, each tied to its incident record. */
+  readonly gateMisses: readonly AbGateMiss[];
   readonly analysis: string;
+}
+
+export interface AbGateMiss {
+  readonly arm: AbArm;
+  readonly trialKey: string;
+  readonly incident: string;
 }
 
 /**
@@ -1040,6 +1160,7 @@ export function exportAbPack(
   };
   const configs: Partial<Record<AbArm, PilotConfig>> = {};
   const ledgerOf: Partial<Record<AbArm, AbPackManifest["attemptLedgers"][AbArm]>> = {};
+  const gateMisses: AbGateMiss[] = [];
   mkdirSync(packDir, { recursive: true });
   for (const arm of AB_ARMS) {
     const armDir = join(root, arm);
@@ -1054,6 +1175,15 @@ export function exportAbPack(
       join(dest, GRADES_FILE),
       armRows.map((r) => `${JSON.stringify(byKey.get(r.trialKey))}\n`).join(""),
     );
+    // Gate misses re-derived from the rows themselves: each needs its valid incident record.
+    for (const key of gateMissesFromRows(armRows, byKey)) {
+      const inc = incidentFor(incidentsDir(root), key, arm, stage);
+      if (inc === null)
+        throw new AbRefusal(
+          `${arm}: ${key} is a gate miss (gate VERIFIED, grader ${byKey.get(key)?.status}) with no valid incident record: resume the run to record it; refusing the pack`,
+        );
+      gateMisses.push({ arm, trialKey: key, incident: incidentId(key) });
+    }
     const state = loadLedger(join(armDir, PROGRESS_FILE));
     const cfgFromLedger = state.header?.configSha256;
     if (cfgFromLedger !== header.configSha256[arm])
@@ -1112,6 +1242,7 @@ export function exportAbPack(
     scheduleSha256: header.scheduleSha256,
     attemptLedgers: ledgerOf as AbPackManifest["attemptLedgers"],
     incidents,
+    gateMisses,
     analysis: analysisCommand(packDir, stage),
   };
   writeFileSync(join(packDir, "ab-pack.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -1170,7 +1301,9 @@ export function analysisCommand(packDir: string, stage: AbStage, stage0Pack?: st
 
 /**
  * This runner's own pack check (the interface #547 also enforces): the manifest, the markers,
- * the pre-registration hash against the COMMITTED files, labelled rows, identical arm configs.
+ * the pre-registration hash against the repository's files (a real run also requires them
+ * committed: `realRunRefusals`), labelled rows, identical arm configs, and every gate miss the
+ * rows show tied to its incident record.
  */
 export function checkAbPack(
   packDir: string,
@@ -1189,10 +1322,12 @@ export function checkAbPack(
   const jsonSha = sha256File(join(repoRoot, PREREG_JSON));
   if (m.prereg?.markdownSha256 !== mdSha)
     errors.push(
-      `the pack's recorded pre-registration sha256 ${String(m.prereg?.markdownSha256)} is not the committed ${PREREG_MD}'s ${mdSha}: refused`,
+      `the pack's recorded pre-registration sha256 ${String(m.prereg?.markdownSha256)} is not the repository's ${PREREG_MD} (${mdSha}): refused`,
     );
   if (m.prereg?.jsonSha256 !== jsonSha)
-    errors.push(`the pack's recorded ${PREREG_JSON} sha256 is not the committed file's: refused`);
+    errors.push(
+      `the pack's recorded ${PREREG_JSON} sha256 is not the repository's file's: refused`,
+    );
   const cfg = (arm: AbArm) => {
     const p = join(packDir, arm, "run-config.json");
     return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as PilotConfig) : null;
@@ -1212,12 +1347,48 @@ export function checkAbPack(
         errors.push(`${arm}: run-config.json is not the config the run recorded`);
     }
   }
+  const derived: AbGateMiss[] = [];
+  const listed = new Map((m.incidents ?? []).map((i) => [i.id, i]));
   for (const arm of AB_ARMS) {
     const rows = readJsonl(join(packDir, arm, "arm.jsonl")) as BenchmarkArmRow[];
     const unlabelled = rows.filter((r) => r.experiment !== experimentLabel(m.stage)).length;
     if (rows.length === 0) errors.push(`${arm}: no arm rows`);
     if (unlabelled > 0) errors.push(`${arm}: ${unlabelled} row(s) without the experiment label`);
+    // Gate misses, re-derived from the pack's rows and grades (never from a flag): each needs
+    // its incident record in the pack, listed in the manifest with that file's sha256.
+    const grades = readJsonl(join(packDir, arm, GRADES_FILE)) as BenchmarkGradeRow[];
+    const byKey = new Map(grades.map((g) => [g.trialKey, g]));
+    const ungraded = rows.filter((r) => !byKey.has(r.trialKey)).length;
+    if (ungraded > 0 || grades.length !== rows.length)
+      errors.push(
+        `${arm}: ${grades.length} grade(s) for ${rows.length} row(s) (${ungraded} row(s) ungraded)`,
+      );
+    for (const key of gateMissesFromRows(rows, byKey)) {
+      const id = incidentId(key);
+      derived.push({ arm, trialKey: key, incident: id });
+      const path = join(packDir, "incidents", `${id}.json`);
+      const rec = existsSync(path) ? readIncident(path, id) : null;
+      if (rec === null || rec.arm !== arm || rec.stage !== m.stage)
+        errors.push(
+          `${arm}: ${key} is a gate miss (gate VERIFIED, grader ${byKey.get(key)?.status ?? "none"}) with no valid incident record in the pack`,
+        );
+      else if (listed.get(id)?.sha256 !== sha256File(path))
+        errors.push(
+          `${arm}: ${key}'s incident record is not listed in ab-pack.json with its sha256`,
+        );
+    }
   }
+  for (const i of m.incidents ?? []) {
+    const path = join(packDir, "incidents", `${i.id}.json`);
+    if (!existsSync(path) || sha256File(path) !== i.sha256)
+      errors.push(
+        `ab-pack.json lists incident ${i.id}, but the pack's record is missing or differs`,
+      );
+  }
+  if (canonicalJson(m.gateMisses ?? null) !== canonicalJson(derived))
+    errors.push(
+      `ab-pack.json's gateMisses is not what the rows show (${derived.length} gate miss(es))`,
+    );
   return { ok: errors.length === 0, errors, stage: m.stage };
 }
 
@@ -1277,61 +1448,6 @@ export function analyzeAbPack(packDir: string, repoRoot: string, stage0Pack?: st
     errors: r.status === 0 ? [] : [r.stderr.trim().split("\n").slice(-3).join(" ")],
     result,
   };
-}
-
-// ---------------------------------------------------------------------------------------------
-// Real-run gating
-// ---------------------------------------------------------------------------------------------
-
-/**
- * Why a REAL A/B run cannot start now. Empty only when every precondition holds; the CLI also
- * refuses afterwards because no live driver is wired (the VM-side capture is a later step).
- *  - the pre-registration is committed and unchanged;
- *  - the lead's GO is committed (`LEAD_GO_FILE`) for this stage and pre-registration;
- *  - the gate can read the tasks' persisted format (fc-v1 persists xlsx; the gate reads CSV
- *    until the xlsx replacement for #503 lands);
- *  - #546's cold-boot guard is merged (the trial-ops schema has `resetBootClass`).
- */
-export function realRunRefusals(
-  repoRoot: string,
-  loaded: LoadedPrereg,
-  stage: AbStage,
-  published: readonly BenchmarkTask[],
-): string[] {
-  const out = preregCommitProblems(repoRoot).map((p) => `pre-registration: ${p}`);
-  const goPath = join(repoRoot, LEAD_GO_FILE);
-  if (!existsSync(goPath))
-    out.push(`no lead GO: ${LEAD_GO_FILE} is not committed (real runs wait for the lead's GO)`);
-  else {
-    const go = JSON.parse(readFileSync(goPath, "utf8")) as Record<string, unknown>;
-    if (go.preregSha256 !== loaded.markdownSha256 || !(go.stages as unknown[])?.includes(stage))
-      out.push(`${LEAD_GO_FILE} does not approve Stage ${stage} of this pre-registration`);
-    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", LEAD_GO_FILE], {
-      cwd: repoRoot,
-    });
-    if (tracked.status !== 0) out.push(`${LEAD_GO_FILE} is not committed`);
-  }
-  const gateFormat = extname(GATE_STATE_FILE).slice(1);
-  const ids = new Set(stageTasks(loaded, stage, published));
-  const formats = [
-    ...new Set(published.filter((t) => ids.has(t.taskId)).map((t) => t.persistedFormat)),
-  ];
-  const unreadable = formats.filter((f) => f !== gateFormat);
-  if (unreadable.length > 0)
-    out.push(
-      `the gate cannot read the task format: Stage ${stage}'s tasks persist ${unreadable.join(", ")} and the gate reads ${gateFormat} only (${GATE_STATE_FILE}); real runs wait for the xlsx gate replacement for #503`,
-    );
-  const unnameable = PILOT_HARNESS_CLASSES.filter((c) => !r1Nameable(c));
-  if (unnameable.length > 0)
-    out.push(
-      `#518's attempt-event vocabulary cannot name the pilot's harness faults (${unnameable.join(", ")}): real runs wait until it does (TO FILE), so every attempt's end is in #518's ledger`,
-    );
-  const props = (m2TrialOpsSchema as { properties?: Record<string, unknown> }).properties ?? {};
-  if (!Object.hasOwn(props, "resetBootClass"))
-    out.push(
-      "#546's cold-boot guard is not merged (the trial-ops schema has no resetBootClass): real runs wait for it",
-    );
-  return out;
 }
 
 /** The evidence refusal for a pack's arm, through the shared check (`evidence: true`). */
