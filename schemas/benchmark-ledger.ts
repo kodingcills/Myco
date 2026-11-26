@@ -188,3 +188,71 @@ export const benchmarkGradeRequestSchema: JsonSchema = {
     },
   },
 };
+
+/**
+ * Published task row (`benchmark/false-completion/<version>/tasks.jsonl`, TIF-267 part 2).
+ * Closed. Carries the grader's inputs (fixture by hash, intent, column types) and the
+ * agent's instruction text; no expected end state is stored, the grader derives it.
+ */
+const columnType: JsonSchema = {
+  type: "string",
+  enum: ["key", "text", "integer", "date", "currency"],
+};
+export const benchmarkTaskSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema",
+    "taskSetVersion",
+    "taskId",
+    "family",
+    "faultClass",
+    "inDemo",
+    "satisfiable",
+    "instruction",
+    "instructionSha256",
+    "intent",
+    "columnTypes",
+    "fixtureSeed",
+    "fixtureFile",
+    "fixtureSha256",
+    "persistedFormat",
+  ],
+  properties: {
+    schema: { const: "myco.benchmark.task/1" },
+    taskSetVersion: { type: "string", minLength: 1, maxLength: 64 },
+    taskId,
+    family: { type: "string", enum: ["calc-record-edit"] },
+    faultClass: { type: "string", pattern: "^[a-z0-9-]{1,64}$" },
+    inDemo: { type: "boolean" },
+    satisfiable: { type: "boolean" },
+    instruction: { type: "string", minLength: 1, maxLength: 500 },
+    instructionSha256: sha256Hex,
+    intent: {
+      type: "object",
+      additionalProperties: false,
+      required: ["rowKey", "column", "newValue"],
+      properties: {
+        rowKey: { type: "string", minLength: 1 },
+        column: { type: "string", minLength: 1 },
+        newValue: { type: "string" },
+      },
+    },
+    columnTypes: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "name", "qty", "joined", "salary"],
+      properties: {
+        id: columnType,
+        name: columnType,
+        qty: columnType,
+        joined: columnType,
+        salary: columnType,
+      },
+    },
+    fixtureSeed: { type: "string", minLength: 1, maxLength: 64 },
+    fixtureFile: { type: "string", pattern: "^fixtures/[0-9a-f]{64}\\.csv$" },
+    fixtureSha256: sha256Hex,
+    persistedFormat: { type: "string", enum: ["xlsx"] },
+  },
+};
