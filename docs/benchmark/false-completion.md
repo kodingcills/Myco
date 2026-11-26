@@ -190,6 +190,29 @@ The check fails on zero rows, on a count that differs from `--expect`, on a miss
 orphan grade, on a grade taken against a different fixture or document, on mixed versions or
 planners, on an `accepted` that contradicts the claim and gate, and on any host path in a row.
 
+It also fails on an accepted gated row without `persistedSha256`, and on an `unregistrable`
+row that has a gate call or verdict or whose task is not `invalid-target` (see below).
+
+**`--evidence`** (TIF-274): when the numbers are evidence (a scorecard, not a plumbing
+test), pass `--evidence`. The check then refuses every row whose `plannerModelId` is not a
+Claude model id this project runs (the `EVIDENCE_PLANNERS` allowlist in
+`src/benchmark/check.ts`: `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-haiku-5-5`,
+`claude-fable-5-2`). This is positive provenance, not a denylist: a dry run's `simulated:...`
+planner, any case, whitespace or Unicode variant, and any other id fails. With or without the
+flag, the result's `provenance` field says `evidence`, `simulated` or `mixed`, so a plumbing run
+is labelled even when its R1 passes. The planner is a declared string: this stops mislabelled
+dry runs, not a deliberate forgery.
+
+**Unregistrable gated trials** (TIF-274, outer-loop ruling 2026-11-25): the gate registry
+rejects fc-v1's 10 invalid-target specs. Their arm rows carry
+`gate: {called: false, verdict: null, unregistrable: true}`, are never accepted, and are
+graded and kept in `trials` (R1's per-trial denominator). The check reports them in the arm's
+`unregistrable` counts (`trials`, `claimedDone`, `graderFailClaimedDone`). R1 also reports
+`gatedTrials` (trials minus unregistrable trials) and, without blocking, a note when any
+unregistrable trial claimed DONE: those DONEs were never gated. `gatedArmRow`
+(`src/benchmark/gated-rows.ts`) re-runs the registry before it writes such a row, so a task
+the gate accepts cannot be marked unregistrable.
+
 ## 5. Public form (R8 / M2-15)
 
 | Part | Publishable | Notes |

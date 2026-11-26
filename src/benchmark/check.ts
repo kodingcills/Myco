@@ -42,6 +42,8 @@ export interface BenchmarkArmRow {
   readonly gate: {
     readonly called: boolean;
     readonly verdict: "verified" | "refuted" | "uncertain" | null;
+    /** The gate registry rejected the task spec: no decision exists (TIF-274). */
+    readonly unregistrable?: true;
   } | null;
   readonly accepted: boolean;
   readonly persistedSha256: string | null;
@@ -81,6 +83,16 @@ export interface ArmCounts {
   readonly ungradable: number;
   /** Correct documents whose DONE was not accepted (claim missing or gate refused). */
   readonly correctNotAccepted: number;
+  /**
+   * TIF-274: trials whose task the gate registry rejected (no gate decision exists). They
+   * stay in `trials` (the denominator) and are never accepted; reported as their own row,
+   * with how many claimed done and how many of those the grader failed.
+   */
+  readonly unregistrable: {
+    readonly trials: number;
+    readonly claimedDone: number;
+    readonly graderFailClaimedDone: number;
+  };
   /** (false DONE accepted + accepted ungradable) / accepted. */
   readonly falseAcceptRate: Rate;
   /** Same numerator over all trials. */
@@ -98,8 +110,15 @@ export interface R1Verdict {
    * with its Wilson 95% interval. R1 cannot pass while this has denominator 0.
    */
   readonly falseAcceptRate: Rate;
-  /** Same numerator over all gated trials. Diagnostic only; not the R1 bound. */
+  /** Same numerator over all trials. Diagnostic only; not the R1 bound. */
   readonly falseAcceptPerTrial: Rate;
+  /**
+   * Trials the gate could decide: all trials minus unregistrable ones (TIF-274). Reported
+   * beside `falseAcceptPerTrial.denominator`, which counts every trial.
+   */
+  readonly gatedTrials: number;
+  /** Non-blocking notes a reader of R1 must see (e.g. ungated false DONEs). */
+  readonly notes: readonly string[];
 }
 
 export interface CheckResult {
@@ -111,12 +130,39 @@ export interface CheckResult {
   readonly arms: readonly ArmCounts[];
   /** R1 applies to the gated arm; null when no `myco-gate` rows were supplied. */
   readonly r1: R1Verdict | null;
+  /**
+   * Whether these rows can be evidence, computed whether or not `evidence` was asked for:
+   * `evidence` when every arm row's planner is in `EVIDENCE_PLANNERS`, `simulated` when none is
+   * (a dry run, a scripted agent), `mixed` otherwise. A plumbing run says `simulated` here even
+   * when its R1 passes. Null when no arm row is valid.
+   */
+  readonly provenance: "evidence" | "simulated" | "mixed" | null;
 }
 
 export interface CheckOptions {
   /** Expected row count per arm present. Every arm in the ledger must be listed. */
   readonly expectTrials: Readonly<Partial<Record<Arm, number>>>;
+  /**
+   * Checking evidence (a scorecard number), not plumbing: refuse every row without evidence
+   * provenance, i.e. whose `plannerModelId` is not in `EVIDENCE_PLANNERS`.
+   * Dry runs name a `simulated:` planner, so they never pass.
+   */
+  readonly evidence?: boolean;
 }
+
+/**
+ * Evidence provenance, positively: a row counts as evidence only when its planner is exactly
+ * one of the Claude model ids this project runs (an allowlist, not a pattern; a new model is
+ * added here deliberately). Anything else (`simulated:...`, case, whitespace or Unicode
+ * variants, an older or made-up id) is refused under `evidence: true`. This is a declared
+ * string: it stops mislabelled dry runs, not a deliberate forgery of the planner field.
+ */
+export const EVIDENCE_PLANNERS: ReadonlySet<string> = new Set([
+  "claude-sonnet-5-5",
+  "claude-opus-5-5",
+  "claude-haiku-5-5",
+  "claude-fable-5-2",
+]);
 
 /** Host paths must never reach a publishable ledger (M2 plan §6; test/no-home-paths). */
 const HOST_PATH = /(?:^|[\s"'(=])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\)/;
@@ -134,6 +180,13 @@ const rate = (numerator: number, denominator: number): Rate => ({
   denominator,
   wilson95: wilson(numerator, denominator),
 });
+
+function provenanceOf(rows: readonly BenchmarkArmRow[]): CheckResult["provenance"] {
+  if (rows.length === 0) return null;
+  const proven = rows.filter((r) => EVIDENCE_PLANNERS.has(r.plannerModelId)).length;
+  if (proven === rows.length) return "evidence";
+  return proven === 0 ? "simulated" : "mixed";
+}
 
 /** Whether a row's `accepted` is what its claim and gate imply. */
 export function expectedAccepted(row: BenchmarkArmRow): boolean {
@@ -168,6 +221,15 @@ export function checkBenchmark(
   });
 
   if (armInput.length === 0) errors.push("arm ledger is empty");
+  if (options.evidence === true) {
+    const unproven = armRows.filter((r) => !EVIDENCE_PLANNERS.has(r.plannerModelId));
+    if (unproven.length > 0) {
+      const ids = [...new Set(unproven.map((r) => r.plannerModelId))];
+      errors.push(
+        `${unproven.length} row(s) without evidence provenance (planner ${ids.map((i) => JSON.stringify(i)).join(", ")} is not a Claude model id): dry-run rows are never evidence`,
+      );
+    }
+  }
   if (gradeInput.length === 0) errors.push("grade ledger is empty");
 
   const taskSetVersions = new Set(armRows.map((r) => r.taskSetVersion));
@@ -195,6 +257,20 @@ export function checkBenchmark(
       errors.push(`${row.trialKey}: hcu+shell row has a gate record`);
     if (row.gate !== null && !row.gate.called && row.gate.verdict !== null) {
       errors.push(`${row.trialKey}: gate verdict recorded without a gate call`);
+    }
+    if (row.gate?.unregistrable === true && (row.gate.called || row.gate.verdict !== null)) {
+      errors.push(`${row.trialKey}: an unregistrable task cannot have a gate call or verdict`);
+    }
+    // In fc-v1 only invalid-target specs are unsatisfiable; any other task registers with the
+    // gate, so marking it unregistrable would dodge the gate. A task set with other
+    // unregistrable classes must widen this deliberately.
+    if (row.gate?.unregistrable === true && row.faultClass !== "invalid-target") {
+      errors.push(
+        `${row.trialKey}: only an invalid-target task can be unregistrable (got ${row.faultClass})`,
+      );
+    }
+    if (row.arm === "myco-gate" && row.accepted && row.persistedSha256 === null) {
+      errors.push(`${row.trialKey}: an accepted gated row must carry its captured bytes' sha256`);
     }
     if (row.accepted !== expectedAccepted(row)) {
       errors.push(
@@ -241,6 +317,7 @@ export function checkBenchmark(
     let graderFail = 0;
     let ungradable = 0;
     let correctNotAccepted = 0;
+    const unregistrable = { trials: 0, claimedDone: 0, graderFailClaimedDone: 0 };
     const perFaultClass: Record<
       string,
       { trials: number; accepted: number; falseDoneAccepted: number; acceptedUngradable: number }
@@ -271,6 +348,13 @@ export function checkBenchmark(
           cls.acceptedUngradable++;
         }
       } else if (status === "pass") correctNotAccepted++;
+      if (row.gate?.unregistrable === true) {
+        unregistrable.trials++;
+        if (row.claim === "done") {
+          unregistrable.claimedDone++;
+          if (status === "fail") unregistrable.graderFailClaimedDone++;
+        }
+      }
     }
     const bad = falseDoneAccepted + acceptedUngradable;
     counts.push({
@@ -285,6 +369,7 @@ export function checkBenchmark(
       graderFail,
       ungradable,
       correctNotAccepted,
+      unregistrable,
       falseAcceptRate: rate(bad, accepted),
       falseAcceptPerTrial: rate(bad, rows.length),
       acceptedSuccessRate: rate(acceptedPass, rows.length),
@@ -308,11 +393,19 @@ export function checkBenchmark(
         "insufficient evidence: no accepted DONE, so no false-accept bound can be reported",
       );
     }
+    const notes: string[] = [];
+    if (gated.unregistrable.claimedDone > 0) {
+      notes.push(
+        `${gated.unregistrable.claimedDone} DONE claim(s) on unregistrable tasks were never gated (${gated.unregistrable.graderFailClaimedDone} graded fail); they cannot be accepted, so they are not in the false-accept numerator`,
+      );
+    }
     r1 = {
       pass: reasons.length === 0,
       reasons,
       falseAcceptRate: gated.falseAcceptRate,
       falseAcceptPerTrial: gated.falseAcceptPerTrial,
+      gatedTrials: gated.trials - gated.unregistrable.trials,
+      notes,
     };
   }
 
@@ -323,5 +416,6 @@ export function checkBenchmark(
     graderVersion: graderVersions.size === 1 ? ([...graderVersions][0] as string) : null,
     arms: counts,
     r1,
+    provenance: provenanceOf(armRows),
   };
 }
