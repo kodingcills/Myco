@@ -5,7 +5,10 @@
  *  - every capability I-M keeps each required part (what it is and is not, surface, arms,
  *    task set, primary metric, pre-registered bar, guardrails);
  *  - the McNemar critical-value table is the exact one-sided binomial tail it claims;
- *  - the pre-registration rule and the measurement constraints keep their binding lines.
+ *  - the pre-registration rule (§3), the measurement constraints (§4), the sequencing (§5),
+ *    and the grader-independence and gate-separation rules (§1.1, §1.2) are pinned whole;
+ *    every other binding paragraph (cost numerator, fixed sequence, K halt, M store rule,
+ *    L-infra, L time attribution) is pinned as a whole paragraph, not by its heading.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -361,5 +364,153 @@ describe("capability spec: repo facts it cites", () => {
     expect(tasks.length).toBe(100);
     expect(tasks.filter((t) => t.satisfiable).length).toBe(90);
     expect(tasks.filter((t) => t.faultClass === "invalid-target").length).toBe(10);
+  });
+});
+
+/**
+ * Whitespace-normalised text of FLAT from `start` up to (not including) the first `end` after it.
+ * Empty when either marker is missing, so a pin never passes vacuously.
+ */
+function between(start: string, end: string): string {
+  const i = FLAT.indexOf(start);
+  if (i < 0) return "";
+  const j = FLAT.indexOf(end, i + start.length);
+  return j < 0 ? "" : FLAT.slice(i, j);
+}
+
+/**
+ * Round-3 (verifier round 2): binding lines are pinned WHOLE, not by their bold heading, so a
+ * flip of the substance underneath a heading fails. §3, §4 and §5 are pinned in full; any edit
+ * to them (including an added stale-sequencing sentence) is a deliberate test change.
+ */
+describe("capability spec: binding paragraphs pinned whole (round 3)", () => {
+  it("§3 pre-registration rule, items 1-5, is pinned in full", () => {
+    expect(flat(topSection(3))).toBe(
+      [
+        "## 3. Pre-registration rule",
+        "1. **Frozen before measurement.** Before a track's first measurement run, one commit on `main` holds its pre-registration: the bar (the track's section here, as ratified), the task set version and its manifest SHA-256, the seeds (assignment, bootstrap, task build), the step budget, the model id, and the analysis script with its SHA-256. The proposed location is `docs/product/capability-prereg/<track>-v<k>/prereg.json`; its SHA-256 over canonical JSON is the **pre-registration hash**.",
+        "2. **Packs record the hash.** Every capability pack records the pre-registration hash and the commit it was frozen in. The analysis refuses a pack whose hash does not match a committed pre-registration.",
+        "3. **Changes after the first run** make a new version (`v<k+1>`). Runs under the old version stay committed and are reported under it; they are never re-analysed under the new bar.",
+        "4. **Experiment rows, not R1 evidence.** Capability-arm packs are experiment rows. They never count as R1 evidence unless the lead rules otherwise. Their `arm` values are not `myco-gate`, so the existing R1 path does not read them, and the R1 evidence rules (`src/benchmark/taskset-binding.ts`, `src/m2/evidence.ts`) are unchanged by this spec. `myco.benchmark.arm-row/1` allows only `myco-gate` and `hcu+shell` today, so each track adds its arm values (and the same-harness baseline arm it pairs with) as a reviewed schema change, and the check refuses those values under `--require-r1` and `--evidence`.",
+        "5. **Simulated rows never count.** A row whose planner is not a model id (scripted agents, dry runs, L-infra) is never evidence for a capability bar.",
+        "",
+      ].join(" "),
+    );
+  });
+
+  it("§4 measurement constraints are pinned in full", () => {
+    expect(flat(topSection(4))).toBe(
+      [
+        "## 4. Measurement constraints",
+        "- **The critical path comes first (Tiffany, 2026-11-26 10:46 ET).** The order is: integrity fixes, then the trial run (R1, the `hcu+shell` head-to-head, the corrections A/B on Ultra), then the 90 s demo. Capability work never delays those steps and never takes VM time from them.",
+        "- **Claude Ultra only.** Every measured run uses the Claude Ultra plan: $0 Anthropic API, no Messages-API calls. Costs are token-derived estimates (§1.4).",
+        "- **No runs until GO.** No measurement run starts until the integrity fixes land (#518's attempt ledger, the xlsx replacement for #503, the #494 tests-only follow-up) and the lead gives GO for that track.",
+        "- **Codex is gated.** No Codex arm or Codex-run measurement without the lead's approval.",
+        "- **VM work is local and single-owner,** under the VM lock (`scripts/vm-session.sh`). Linux path first wherever the capability allows (L is Linux-only at first).",
+        "- **Gate guarantees are not weakened:** the gate stays bound to one trial, fails closed, keeps codes-only agent-facing reasons, and stays CSV-only for Calc until the xlsx replacement lands. Capability arms graded on fc-v1's `xlsx` documents use the grader, not the gate.",
+        "- **No public leaderboard.** Results stay in the repo's evidence packs.",
+        "",
+      ].join(" "),
+    );
+  });
+
+  it("§5 sequencing is pinned in full (no paraphrased stale sequencing can be added)", () => {
+    expect(flat(topSection(5))).toBe(
+      [
+        "## 5. Sequencing",
+        "1. **Build I-M now, in parallel.** Every capability (I-V; N-V and data capture are in the part-2 spec) is M2 scope (ruling of 2026-11-26 10:41 ET). Each track builds its tools and their separation tests and freezes its pre-registration now, alongside the other M2 tracks, without touching their files.",
+        "2. **Measure only after GO,** and never ahead of the critical path or with VM time it needs (§4).",
+        "3. **Each capability is its own Tier 2 track** with its own PR, a 3-round review cap, and its own pre-registration. A track that hits the cap stops and goes back to the lead.",
+        "4. **Dependencies:** every track's measurement needs its baseline arm (C1 or `hcu+shell`) ported to the Ultra (Claude Code) harness (§1.3). The capability tracks reuse the Ultra `hcu+shell` harness the trial run's head-to-head needs, and do not build a second one. C1 has no Ultra harness, so I's primary arm (`C1+I` vs `C1`) cannot be measured until C1 is ported onto that same harness; the port never takes VM time from the trial run. K needs the multi-step instruction renderer and grader entry; L needs the disposable Linux desktop and L-infra's zero-contamination result; M's measurement uses the best shown base surface, so it is measured after I's (and J's, if shown). These order measurement, not building.",
+        "",
+      ].join(" "),
+    );
+  });
+
+  it("§1.1 grader independence and the verified-task definition are pinned in full", () => {
+    expect(between("### 1.1 ", "### 1.2 ")).toBe(
+      [
+        "### 1.1 The grader decides; the gate does not",
+        "- **The primary metric of every track is graded by the independent grader** (`src/benchmark/grade/`, `false-completion-grader/1` or its successor entry for a new family). The grader shares no code with the gate (import-graph test), reads only the captured persisted bytes against the pinned pristine fixture and intent, and never sees a claim or a verdict (`docs/benchmark/public/grading-protocol.md` §§1-4).",
+        "- **The gate's verdict is never the measurement.** Where a capability uses the gate at runtime (K's corrections, M's store rule), the gate is part of the treatment, and the grader still grades the outcome.",
+        "- **A verified task** in this spec is R7's success (`src/m2/evidence.ts`: `row.accepted && grade.status === \"pass\"`) applied to capability rows: the row is accepted and the grader graded the captured document `pass`. Today `expectedAccepted` (`src/benchmark/check.ts`) keys on the arm name, not on gate use: only `hcu+shell` is accepted on a done claim alone, and every other arm needs a gate `verified`. A gate-less capability row such as `C1+I` would therefore read as not accepted under today's code, so the schema change in §3 item 4 must also extend `expectedAccepted` so that gate-less capability arms are accepted on a done claim alone. The two cases it must then implement:",
+        "- **Gate-less rows** (the §1.3 default, as in `hcu+shell`): accepted means the agent claimed done, so a verified task is a done claim that the grader graded `pass`.",
+        "- **Gated rows** (both arms of K, M's learn phase, and any gate-present variant): accepted means the agent claimed done **and** the gate's verdict was `verified`, so a verified task is a done claim the gate verified and the grader graded `pass`. A grader `pass` that the gate refuted or left uncertain is not verified; it is reported as \"correct, not accepted\". The gate can only withhold a verified task, never grant one the grader did not pass.",
+        'A `pass` without a done claim is "correct, not claimed" and is not verified. `ungradable` is never verified.',
+        "- **Per-trial persisted-bytes capture** is the harness's, after the agent stops, exactly as for the existing arms (grading protocol §2). No capability tool runs or sees the capture.",
+        "",
+      ].join(" "),
+    );
+  });
+
+  it("§1.2 gate separation is pinned in full", () => {
+    expect(between("### 1.2 ", "### 1.3 ")).toBe(
+      [
+        "### 1.2 Capability tools stay separate from the gate",
+        "Every capability ships its agent-facing tools in a server that is not `myco-gate` (proposed name: `myco-cap`, served to Claude Code as `mcp__myco-cap__<tool>`). These rules hold for every tool in this spec, and each track's tests must pin them:",
+        "1. **The gate request is unchanged.** `myco.gate/v1` still takes only `taskId`, `runId` and `claim`. No capability adds a request field. Any future gate input needs its own explicitly scoped, reviewed change, as #514's corrections did. A track test asserts that `ORACLE_INPUT_FIELDS` and the request schema in `src/gate/api.ts` are byte-unchanged by the track.",
+        "2. **No oracle internals reach the agent.** A capability tool never returns expected values, the pristine fixture (its bytes, values or digest), the sealed digest, oracle source or spec beyond the instruction's fields, the task metadata fields the task-set card marks \"not shown\", host paths, or secrets. It reads only what the agent could already reach in the guest: the live app and the files under the session's guest read root.",
+        "3. **The gate's verdict cannot be influenced by a capability tool.** No capability tool writes to the evidence root, the sealed vault, the registry or the audit log. Each tool is classified in `src/integrity/surface.ts` (reach `guest` or `agent-local`, never a host-write reach), and the TIF-266 isolation test (R4) must still pass with the tool added. A track test runs the gate over the same captured bytes with and without the capability server attached and asserts identical results.",
+        "4. **Import boundary.** Capability modules import nothing from `src/gate/` oracle, registry, sealed or corrections code, `src/benchmark/grade/`, `src/tasks/intent.ts` (`groundTruth`), the fixture generator, or any manifest; a test enforces it the way `test/baseline/hcu-shell/import-boundary.test.ts` does.",
+        "5. **Agent-facing errors carry codes only**, as the gate's do.",
+        "",
+      ].join(" "),
+    );
+  });
+
+  it.each([
+    [
+      "R7 cost numerator (§1.4)",
+      "| Cost per verified task",
+      "| False done",
+      "| Cost per verified task | token-derived cost ESTIMATE over ALL trials (failed, refuted and superseded attempts included) / verified tasks | Secondary, R7's rule | ",
+    ],
+    [
+      "fixed-sequence family-wise rule (§1.5)",
+      "- **Several bar components",
+      '- **"Not shown"',
+      "- **Several bar components are tested in a fixed sequence** at alpha 0.05 each: a later component is tested only if every earlier one is shown. This keeps the family-wise error at 0.05 per track. Tracks are not pooled. ",
+    ],
+    [
+      "K halts on the first gate miss",
+      "- **Any gate miss halts",
+      "- **K's contrast",
+      "- **Any gate miss halts the K run.** A gate miss is a `verified` verdict on an attempt the grader grades `fail` or `ungradable`. On the first one, the harness stops the batch, the pack is reported as halted with that trial, and the track goes back to the lead. ",
+    ],
+    [
+      "M store rule",
+      "**Store rule.**",
+      "**Arms.** Skills-on",
+      "**Store rule.** The harness stores a skill only when the trial's gate verdict was `verified` and accepted, after the capture. `refuted` and `uncertain` runs are never stored. The store is append-only, and each skill keeps its source `trialKey` and gate verdict host-side, never shown to the agent. ",
+    ],
+    [
+      "L-infra quantity",
+      "1. **L-infra",
+      "2. **L-agent",
+      "1. **L-infra (no model, not agent evidence).** The Linux path's deterministic scripted agent runs fc-v1's satisfiable tasks at N = 1, 2, 4 and 8, with a unique canary value seeded into each desktop. Must show 0 contamination events over at least 200 trials before any model run. These rows are simulated and never count as evidence of agent capability. ",
+    ],
+    [
+      "L per-trial time attribution",
+      "**Per-trial time attribution:**",
+      "**Guardrails.** Contamination",
+      "**Per-trial time attribution:** each trial is attributed its desktop-occupancy time (start, reset, run, capture and teardown) divided by N, and batch wall-clock that no trial occupies (stragglers at a batch's end) is spread over that batch's trials in proportion to their attributed time, so the attributed times sum to the batch wall-clock. A resample's throughput is its verified tasks divided by the sum of its attributed times. ",
+    ],
+    [
+      "expectedAccepted attribution",
+      "Today `expectedAccepted`",
+      "- **Gate-less rows**",
+      "Today `expectedAccepted` (`src/benchmark/check.ts`) keys on the arm name, not on gate use: only `hcu+shell` is accepted on a done claim alone, and every other arm needs a gate `verified`. A gate-less capability row such as `C1+I` would therefore read as not accepted under today's code, so the schema change in §3 item 4 must also extend `expectedAccepted` so that gate-less capability arms are accepted on a done claim alone. The two cases it must then implement: ",
+    ],
+  ])("pins the %s paragraph whole", (_name, start, end, whole) => {
+    expect(between(start, end)).toBe(whole);
+  });
+
+  it("the expectedAccepted claim is true of today's check: a gate-less non-hcu+shell arm is not accepted", () => {
+    const row = (fields: object) => fields as unknown as BenchmarkArmRow;
+    expect(expectedAccepted(row({ arm: "C1+I", claim: "done" }))).toBe(false);
+    expect(
+      expectedAccepted(row({ arm: "C1+I", claim: "done", gate: { called: false, verdict: null } })),
+    ).toBe(false);
+    expect(expectedAccepted(row({ arm: "hcu+shell", claim: "done" }))).toBe(true);
   });
 });

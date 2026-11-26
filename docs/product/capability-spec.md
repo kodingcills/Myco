@@ -38,8 +38,12 @@ learning, parallelism, and executing intent as code.
   grades the outcome.
 - **A verified task** in this spec is R7's success (`src/m2/evidence.ts`:
   `row.accepted && grade.status === "pass"`) applied to capability rows: the row is accepted
-  and the grader graded the captured document `pass`. What makes a row accepted depends on
-  whether the arm calls the gate (`expectedAccepted`, `src/benchmark/check.ts`):
+  and the grader graded the captured document `pass`. Today `expectedAccepted`
+  (`src/benchmark/check.ts`) keys on the arm name, not on gate use: only `hcu+shell` is
+  accepted on a done claim alone, and every other arm needs a gate `verified`. A gate-less
+  capability row such as `C1+I` would therefore read as not accepted under today's code, so the
+  schema change in §3 item 4 must also extend `expectedAccepted` so that gate-less capability
+  arms are accepted on a done claim alone. The two cases it must then implement:
   - **Gate-less rows** (the §1.3 default, as in `hcu+shell`): accepted means the agent claimed
     done, so a verified task is a done claim that the grader graded `pass`.
   - **Gated rows** (both arms of K, M's learn phase, and any gate-present variant): accepted
@@ -361,7 +365,11 @@ including desktop start, reset and teardown.
 3. Throughput scaling: the one-sided 95% lower bound of throughput(N = 4) / throughput(N = 1)
    is at least 2.8 (scaling efficiency 0.7). The bound is a paired bootstrap over tasks,
    10,000 resamples, with a pre-registered seed (§1.5); the point estimate alone never meets
-   the bar.
+   the bar. **Per-trial time attribution:** each trial is attributed its desktop-occupancy
+   time (start, reset, run, capture and teardown) divided by N, and batch wall-clock that no
+   trial occupies (stragglers at a batch's end) is spread over that batch's trials in
+   proportion to their attributed time, so the attributed times sum to the batch wall-clock. A
+   resample's throughput is its verified tasks divided by the sum of its attributed times.
 
 **Guardrails.** Contamination checks: each captured document is scanned for every other trial's canary;
 every row's `fixtureSha256` is its task's; `runId`s and evidence roots are disjoint; each gate
