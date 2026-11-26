@@ -65,7 +65,7 @@ const SWTPM = [LAUNCHER, "/Applications/UTM.app/Contents/Frameworks/swtpm.0.fram
  * builder for a wizard-default Windows 11 ARM64 VM (HVF, NVMe, virtio-ramfb,
  * TPM, SPICE). Host paths are placeholders.
  */
-const VM_DATA = "/Users/u/Library/Containers/com.utmapp.UTM/Data/Documents/myco-win11.utm/Data";
+const VM_DATA = "/Volumes/vms/myco-win11.utm/Data";
 const DISK = "drive4D2F3A10-1B2C-4D5E-8F90-A1B2C3D4E5F6";
 function utmDefaultArgv(): string[] {
   return [
