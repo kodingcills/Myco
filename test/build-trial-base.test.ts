@@ -296,7 +296,7 @@ describe("guest-maintenance.ps1 signatures stage", () => {
 });
 
 /**
- * Idle stage (lead ruling 2026-11-26 05:37Z): exactly two always-running tasks
+ * Idle stage (lead ruling 2026-11-26 05:37Z): exactly three not-counted tasks (two always-running, plus WDI\\ResolutionHost on cold boots, lead ruling 20:3xZ)
  * are not counted, matched by full path with no wildcards. Build run 2 had them
  * running in all 115 samples (and the deadline line). Every other \Microsoft\Windows task still has to
  * be idle, and the stage fails closed (exit 1) at the 60 min deadline.
@@ -316,13 +316,15 @@ describe("guest-maintenance.ps1 idle stage", () => {
     expect(end).toBeGreaterThan(start);
   });
 
-  it("does not count exactly the two tasks, by full path, with no wildcards", () => {
+  it("does not count exactly the three tasks, by full path, with no wildcards", () => {
     const m = stage.match(/\$notCounted = @\(([^)]*)\)/);
     expect(m).not.toBeNull();
     const paths = [...(m?.[1] ?? "").matchAll(/'([^']*)'/g)].map((x) => x[1]);
     expect(paths).toEqual([
       "\\Microsoft\\Windows\\Multimedia\\SystemSoundsService",
       "\\Microsoft\\Windows\\Wininet\\CacheTask",
+      // Lead ruling 2026-11-26 20:3xZ (trial-base-v3, cold boot): see the script comment.
+      "\\Microsoft\\Windows\\WDI\\ResolutionHost",
     ]);
     // Nothing else between the parentheses (no unquoted or extra entries).
     expect((m?.[1] ?? "").replace(/'[^']*'/g, "").replace(/[\s,]/g, "")).toBe("");
@@ -338,9 +340,9 @@ describe("guest-maintenance.ps1 idle stage", () => {
     expect(stage).toMatch(/if \(\$counted\.Count -eq 0 -and \$cpu -lt 15\) \{ \$quiet\+\+ \}/);
   });
 
-  // Round 2 (verifier D1, mutant I8): the counted set is exactly "running minus the two", with no
+  // Round 2 (verifier D1, mutant I8): the counted set is exactly "running minus the not-counted tasks", with no
   // further filter that could drop every task.
-  it("counts exactly the running tasks minus the two, with no extra filter", () => {
+  it("counts exactly the running tasks minus the not-counted tasks, with no extra filter", () => {
     const lines = stage
       .split("\n")
       .map((l) => l.trim())
