@@ -169,7 +169,7 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp] | readonly [string, RegEx
     /bytes\.length > STATE_FILE_LIMIT[\s\S]*cause: "unreadable"/,
   ],
   ["sealed.ts › sealedEvidenceReader › read", /if \(bytes\.length > STATE_FILE_LIMIT\)/],
-  ["vault.ts › VerdictVault › readChecked", /readFileSync\(path\)/],
+  ["vault.ts › VerdictVault › readChecked", /readRegularNoBlock\(path, \{ maxBytes: VAULT_READ_LIMIT_BYTES/],
   // H-07, H-08
   ["api.ts › ID", /\^\[A-Za-z0-9\]\[A-Za-z0-9\._-\]\{0,127\}\$/],
   ["sealed.ts › sealedEvidenceReader › read", /openForTrial\(vault, binding, runId\)/],

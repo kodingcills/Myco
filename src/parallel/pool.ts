@@ -15,7 +15,10 @@
  *     its workspace and env, and lay down the task's fixture.
  *  5. Run the existing gated path unchanged (`runGatedTrial`): launch audit, seal into a
  *     vault of this trial only (own root, own key, the desktop's root as the agent root),
- *     the gate bound to `{ runId, receipt }`, the agent, stop, capture, verdict.
+ *     the gate bound to `{ runId, receipt }`, the agent, stop, capture, verdict. The vault
+ *     seals the pool's oracle snapshot (read once before the first trial,
+ *     `snapshotOracleSources`), and reads every file without blocking; a seal that did not
+ *     hash the snapshot's bytes withholds the count (`oracle-source`).
  *  6. Scan the desktop's private tree for every OTHER trial's marker, then destroy it and
  *     check the destroy report (no process left, root removed).
  *  7. Write the trial's evidence (record, agent output) to its own evidence root.
@@ -37,7 +40,7 @@
  * as evidence (it has no ledger row and no cost; R7 does not apply).
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -53,14 +56,15 @@ import {
   type Stats,
 } from "node:fs";
 import { open as openAsync } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { GateResult } from "../gate/api.ts";
 import type { TaskRegistry } from "../gate/gate.ts";
 import { runGatedTrial } from "../gate/gated-trial.ts";
 import { GATE_TOOL, handleLine, SERVER_NAME } from "../gate/mcp-server.ts";
 import { type AgentLaunchPlan, mcpConfigJson } from "../integrity/launch.ts";
 import { rtSessionIdFor } from "../integrity/surface.ts";
-import { newVaultKey, VerdictVault } from "../integrity/vault.ts";
+import { readRegularNoBlock } from "../integrity/nonblocking-read.ts";
+import { newVaultKey, VaultError, VerdictVault } from "../integrity/vault.ts";
 import { generateFixture } from "../tasks/fixture.ts";
 import type { AgentContext, CalcSpec, ScriptedDesktopAgent } from "./agents.ts";
 import {
@@ -101,7 +105,12 @@ export interface PoolOptions {
    */
   readonly extraHide?: readonly string[];
   readonly tasks: TaskRegistry;
-  /** Absolute paths of the oracle's sources, hashed at seal. */
+  /**
+   * Absolute paths of the oracle's sources. The pool reads each ONCE, before the first
+   * trial, into a snapshot under the run root (`snapshotOracleSources`), and every trial's
+   * vault seals and checks the snapshot copies: these paths are never read again during
+   * the pool, so an agent that replaces one (with a FIFO, say) cannot reach the harness.
+   */
   readonly oracleSources: readonly string[];
   /** Called after a desktop exists, before the agent: test hook (barriers, probes). */
   readonly onDesktop?: (runId: string, desktop: TrialDesktop) => Promise<void> | void;
@@ -121,6 +130,7 @@ export type Disqualifier =
   | "agent-error"
   | "capture-refused"
   | "evidence-refused"
+  | "oracle-source"
   | "harness-error";
 
 export interface TrialRecord {
@@ -157,6 +167,8 @@ export interface PoolReport {
   readonly requirements: IsolationRequirements;
   readonly peakConcurrent: number;
   readonly wallMs: number;
+  /** The oracle sources as read once before the first trial: path and sha256. */
+  readonly oracleSources: readonly { readonly source: string; readonly sha256: string }[];
   readonly trials: readonly TrialRecord[];
   readonly verifiedCount: number;
   readonly contaminatedCount: number;
@@ -500,6 +512,97 @@ export async function writeHarnessFile(
 }
 
 // ---------------------------------------------------------------------------------------
+// oracle sources
+// ---------------------------------------------------------------------------------------
+
+/** An oracle source larger than this is refused at snapshot time (sources are small). */
+export const ORACLE_SOURCE_LIMIT_BYTES = 16 * 1024 * 1024;
+/** A trial's `seal.json` larger than this is not read back (manifests are small). */
+const SEAL_READ_LIMIT_BYTES = 1024 * 1024;
+
+export interface OracleSnapshot {
+  /** The path the operator named (never read again during the pool). */
+  readonly source: string;
+  /** The pool's copy, which every trial's vault seals and checks. */
+  readonly path: string;
+  readonly sha256: string;
+}
+
+const sha256Hex = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+
+/**
+ * Read each oracle source ONCE, before any trial starts, and copy it into a fresh dir under
+ * the run root (#541 R3-1). On `linux-plain` an agent can replace any host path its uid can
+ * write, the repo checkout included; a plain read of a FIFO there freezes the whole pool.
+ *
+ * - each source is read with `readRegularNoBlock` (no blocking open, no symlink, regular
+ *   file only, at most `ORACLE_SOURCE_LIMIT_BYTES`); a refusal refuses the pool, with a code,
+ *   before anything runs;
+ * - the copies are written with `writeHarnessFile` (exclusive, no-follow, non-blocking) into
+ *   a dir with an unguessable name, and their sha256 are kept in harness memory;
+ * - the operator's paths are never read again during the pool.
+ *
+ * The snapshot dir is under the run root, so on `linux-plain` it is still reachable by a
+ * same-uid agent (declared). That cannot hang the pool: the vault reads it without blocking
+ * (`readRegularNoBlock`), and `sealMatchesSnapshot` withholds the count of any trial whose
+ * seal did not hash exactly these bytes.
+ */
+export async function snapshotOracleSources(
+  sources: readonly string[],
+  runRootReal: string,
+): Promise<OracleSnapshot[]> {
+  const problems: string[] = [];
+  const read: { source: string; bytes: Buffer }[] = [];
+  for (const source of sources) {
+    if (!isAbsolute(source)) {
+      problems.push(`oracle source ${JSON.stringify(source)}: not-absolute`);
+      continue;
+    }
+    const r = readRegularNoBlock(source, { maxBytes: ORACLE_SOURCE_LIMIT_BYTES });
+    if (!r.ok) problems.push(`oracle source ${JSON.stringify(source)}: ${r.code}`);
+    else read.push({ source, bytes: r.bytes });
+  }
+  if (problems.length > 0) throw new PoolRefused(problems);
+  const dir = join(runRootReal, `oracle-${randomBytes(12).toString("hex")}`);
+  mkdirSync(dir, { mode: 0o700 });
+  const out: OracleSnapshot[] = [];
+  for (const [i, { source, bytes }] of read.entries()) {
+    const name = `${i}-${basename(source)}`;
+    await writeHarnessFile(dir, name, bytes);
+    out.push({ source, path: join(dir, name), sha256: sha256Hex(bytes) });
+  }
+  return out;
+}
+
+/**
+ * Whether the trial's seal hashed exactly the snapshot's bytes. Reads the vault's
+ * `seal.json` without blocking, checks it is the file the receipt names (its sha256 is the
+ * receipt's `sealDigest`), and compares its oracle sources to the snapshot. Any refusal or
+ * difference is `false`: the trial is not counted (`oracle-source`). The gate already
+ * refuses a verdict when a source changed between seal and verdict; this closes the window
+ * before the seal (another trial replacing a snapshot copy before this trial sealed).
+ */
+export function sealMatchesSnapshot(
+  sealPath: string,
+  sealDigest: string,
+  snapshot: readonly OracleSnapshot[],
+): boolean {
+  const r = readRegularNoBlock(sealPath, { maxBytes: SEAL_READ_LIMIT_BYTES });
+  if (!r.ok || sha256Hex(r.bytes) !== sealDigest) return false;
+  let sources: unknown;
+  try {
+    sources = (JSON.parse(r.bytes.toString("utf8")) as { oracle?: { sources?: unknown } }).oracle
+      ?.sources;
+  } catch {
+    return false;
+  }
+  if (sources === null || typeof sources !== "object") return false;
+  const got = sources as Record<string, unknown>;
+  if (Object.keys(got).length !== snapshot.length) return false;
+  return snapshot.every((s) => got[s.path] === s.sha256);
+}
+
+// ---------------------------------------------------------------------------------------
 // the pool
 // ---------------------------------------------------------------------------------------
 
@@ -543,6 +646,9 @@ export async function runPool(
   // Harness writes go through realpaths taken before any agent runs (writeHarnessFile).
   const runRootReal = realpathSync(runRoot);
   const evidenceReal = join(runRootReal, "evidence");
+  // Read once, before any trial: the operator's paths are never read again (#541 R3-1).
+  const oracle = await snapshotOracleSources(opts.oracleSources, runRootReal);
+  const oracleSources = oracle.map((o) => o.path);
   const registry = new RunIdRegistry(opts.lockDir ?? join(runRoot, "locks"));
   const hide = [
     ...new Set([
@@ -659,7 +765,7 @@ export async function runPool(
         taskId: spec.taskId,
         tasks: opts.tasks,
         plan,
-        oracleSources: opts.oracleSources,
+        oracleSources,
         transport: {
           async runAgent(audited, gate) {
             if (audited.mcpConfigPath !== join(homeReal, "mcp.json"))
@@ -733,6 +839,9 @@ export async function runPool(
         return;
       }
       w.record.gate = outcome.result;
+      const sealPath = join(runRootReal, "vaults", spec.runId, spec.runId, "seal.json");
+      if (!sealMatchesSnapshot(sealPath, outcome.receipt.sealDigest, oracle))
+        w.disqualifiers.add("oracle-source");
       await writeHarnessFile(evidenceDir, "agent-output.txt", output);
       // Scan the live desktop tree before it is destroyed.
       const scan = scanTree(desktop.paths.root, markers);
@@ -744,6 +853,8 @@ export async function runPool(
       else if (e instanceof HarnessWriteRefused) w.disqualifiers.add("evidence-refused");
       else if (e instanceof CaptureRefused) w.disqualifiers.add("capture-refused");
       else if (e instanceof TrialBreach) w.disqualifiers.add("resource-cap");
+      else if (e instanceof VaultError && e.code === "not-regular")
+        w.disqualifiers.add("oracle-source");
       else if (desktop?.breach()) w.disqualifiers.add("resource-cap");
       else w.disqualifiers.add(phase === "setup" ? "harness-error" : "agent-error");
       w.record.error = e instanceof Error ? e.message : String(e);
@@ -833,6 +944,7 @@ export async function runPool(
     requirements: opts.requirements,
     peakConcurrent: peak,
     wallMs: Date.now() - started,
+    oracleSources: oracle.map((o) => ({ source: o.source, sha256: o.sha256 })),
     trials: records,
     verifiedCount: records.filter((r) => r.countedVerified).length,
     contaminatedCount: records.filter((r) => r.disqualifiers.includes("contaminated")).length,
