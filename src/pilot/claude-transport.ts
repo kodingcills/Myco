@@ -87,7 +87,9 @@ export function classOfStatus(status: number): PilotHarnessClass {
 }
 
 /**
- * Text fallback, only for output that carries no structured class. Subscription limit
+ * Text fallback, only for a run that did NOT complete normally (no result event, an error
+ * result, a non-zero exit) and carries no structured class; never for a clean result, whose
+ * text is the agent's (fc-v1 fixtures hold qty values 401, 403 and 429). Subscription limit
  * wording varies by plan and version ("usage limit reached", "5-hour limit reached ∙ resets
  * 3pm", "Weekly limit reached", "Opus limit reached", "out of extra usage", API 429/529
  * bodies), so the vocabulary is broad; `test/pilot/claude-transport.test.ts` pins it.
@@ -169,8 +171,9 @@ function structuredClass(messages: readonly Record<string, unknown>[]): PilotHar
  * Classify the process outcome; throws `HarnessFault` for every harness-side or uncertain
  * outcome. Returns the agent's report only for a clean result: `type: "result"`, subtype
  * `success`, `is_error` false, exit status 0, and no structured error on any message. A clean
- * result whose final message makes no claim and reads as a limit or login message is a
- * harness fault too (an unflagged limit message is not an agent outcome).
+ * result is always the agent's outcome (a missing `DONE`/`NOT DONE` line is "no claim"); the
+ * text fallback runs only on runs that did not complete normally (no result event, an error
+ * result, a non-zero or null exit, a structured error) and on their stderr.
  */
 export function interpretResult(stdout: string, stderr: string, code: number | null): AgentReport {
   const { result, messages } = parseOutput(stdout);
@@ -200,12 +203,11 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
       `claude returned an error result (subtype ${String(r.subtype)}, exit ${String(code)}${cls === null ? ", unclassified" : ""})`,
     );
   }
-  const claim = parseClaim(text);
-  if (claim === "no-claim") {
-    const cls = classOfText(text);
-    if (cls !== null) fault(cls, `the final message is a ${cls} message with no claim`);
-  }
-  return { claim, usage };
+  // A run that completed normally is the agent's outcome, whatever its text says. The text
+  // vocabulary above is broad (bare 401/403/429, "billing", "quota", "credential", "<word>
+  // limit") and matches ordinary task content, so it is NEVER applied here: a missing claim is
+  // "no claim", decided and never re-run (verifier round 2, D4).
+  return { claim: parseClaim(text), usage };
 }
 
 export function claudeDriver(opts: ClaudeDriverOptions): PilotDriver {

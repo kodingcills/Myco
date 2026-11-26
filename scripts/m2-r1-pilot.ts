@@ -17,10 +17,10 @@
  */
 import { join, resolve } from "node:path";
 import { configSha256, type PacingConfig } from "../src/pilot/config.ts";
-import { COST_BASIS, estimatedCostPerVerified } from "../src/pilot/cost.ts";
+import { COST_BASIS } from "../src/pilot/cost.ts";
 import { fakeDriver, PILOT_DRY_RUN_PLANNER, virtualClock } from "../src/pilot/dry-run.ts";
 import { preflightRefusal, subscriptionPreflight, trialLaunchPlan } from "../src/pilot/launch.ts";
-import { ledgerRows, loadLedger, PROGRESS_FILE } from "../src/pilot/ledger.ts";
+import { loadLedger, PROGRESS_FILE, pilotStatus } from "../src/pilot/ledger.ts";
 import { loadReviewedConfig, publishedTasks } from "../src/pilot/reviewed.ts";
 import { exportRun, runPilot } from "../src/pilot/runner.ts";
 
@@ -112,22 +112,7 @@ try {
       const dir = flag("--out");
       if (dir === undefined) throw new UsageError("status needs --out DIR");
       const state = loadLedger(join(dir, PROGRESS_FILE));
-      const { armRows, faulted, costs } = ledgerRows(state);
-      const verified = armRows.filter((r) => r.accepted).length;
-      out(
-        `${JSON.stringify(
-          {
-            simulated: state.header?.simulated ?? null,
-            decided: armRows.length,
-            faultedAttempts: faulted.length,
-            acceptedByGate: verified,
-            costEstimate: estimatedCostPerVerified(costs, verified),
-            note: "acceptedByGate is not graded; R7 uses verified = accepted AND graded pass (benchmark-check)",
-          },
-          null,
-          2,
-        )}\n`,
-      );
+      out(`${JSON.stringify(pilotStatus(state), null, 2)}\n`);
       break;
     }
     case "export": {

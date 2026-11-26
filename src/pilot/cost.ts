@@ -86,7 +86,8 @@ export function estimatedCostPerVerified(
   readonly total: number | null;
   readonly perVerified: number | null;
 } {
-  const total = estimates.some((e) => e === null)
+  // Anything but a finite non-negative number is unmeasured: null, never counted as 0.
+  const total = estimates.some((e) => typeof e !== "number" || !Number.isFinite(e) || e < 0)
     ? null
     : estimates.reduce<number>((s, e) => s + (e as number), 0);
   return {

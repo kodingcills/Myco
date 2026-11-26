@@ -28,7 +28,7 @@
  */
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import type { BenchmarkArmRow } from "../benchmark/check.ts";
-import type { CostEstimate } from "./cost.ts";
+import { type CostEstimate, estimatedCostPerVerified } from "./cost.ts";
 
 export const HEADER_SCHEMA = "myco.pilot.header/1" as const;
 export const ATTEMPT_SCHEMA = "myco.pilot.attempt/1" as const;
@@ -264,6 +264,33 @@ export function taskStatus(
   return { kind: "open", nextAttempt: attempts.length + 1, supersedes: last.start.trialKey };
 }
 
+/**
+ * One attempt's measured estimate, or null. A missing cost, a missing or null
+ * `estimatedModelUsd`, or anything that is not a finite non-negative number is UNMEASURED:
+ * null, never 0, so one such attempt makes R7's numerator null (verifier round 2, D5).
+ */
+export function measuredUsd(cost: CostEstimate | null | undefined): number | null {
+  const v: unknown = cost?.estimatedModelUsd;
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+}
+
+/**
+ * What `m2-r1-pilot.ts status` prints. `costEstimate.total` is R7's numerator (every attempt,
+ * faulted ones included); null when any attempt is unmeasured.
+ */
+export function pilotStatus(state: LedgerState) {
+  const { armRows, faulted, costs } = ledgerRows(state);
+  const acceptedByGate = armRows.filter((r) => r.accepted).length;
+  return {
+    simulated: state.header?.simulated ?? null,
+    decided: armRows.length,
+    faultedAttempts: faulted.length,
+    acceptedByGate,
+    costEstimate: estimatedCostPerVerified(costs, acceptedByGate),
+    note: "acceptedByGate is not graded; R7 uses verified = accepted AND graded pass (benchmark-check)",
+  };
+}
+
 /** The final arm rows (one per decided trial) and every faulted attempt, for the checks. */
 export function ledgerRows(state: LedgerState): {
   readonly armRows: BenchmarkArmRow[];
@@ -276,7 +303,7 @@ export function ledgerRows(state: LedgerState): {
   for (const list of state.byTask.values())
     for (const rec of list) {
       if (rec.end === null) continue;
-      costs.push(rec.end.cost?.estimatedModelUsd ?? null);
+      costs.push(measuredUsd(rec.end.cost));
       if (rec.end.outcome === "decided" && rec.end.armRow !== null) armRows.push(rec.end.armRow);
       else faulted.push(rec.end);
     }

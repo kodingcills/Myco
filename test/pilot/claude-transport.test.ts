@@ -11,18 +11,22 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { scriptedDocument } from "../../src/benchmark/r1-dryrun.ts";
 import { mcpConfigJson } from "../../src/integrity/launch.ts";
 import {
+  classOfStatus,
   classOfText,
   claudeDriver,
   interpretResult,
   parseClaim,
   type SpawnFn,
 } from "../../src/pilot/claude-transport.ts";
-import { CHILD_ENV_ALLOWLIST } from "../../src/pilot/config.ts";
+import { CHILD_ENV_ALLOWLIST, configSha256 } from "../../src/pilot/config.ts";
+import { virtualClock } from "../../src/pilot/dry-run.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
-import { HarnessFault } from "../../src/pilot/runner.ts";
-import { config, PUBLISHED, ROOT, tmp } from "./helpers.ts";
+import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
+import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
+import { config, PUBLISHED, ROOT, SOURCES, tmp } from "./helpers.ts";
 
 interface Call {
   command: string;
@@ -137,7 +141,7 @@ describe("headless Claude Code transport (fake spawn)", () => {
     }
   };
 
-  it("classifies each limit and login message from the round-1 verdict as a harness fault, flagged or not", () => {
+  it("classifies each limit and login message from the round-1 verdict as a harness fault on a run that did not complete normally", () => {
     const probes: [string, string][] = [
       ["Claude AI usage limit reached|1700000000", "rate-limit"],
       ["Sonnet limit reached · resets 3pm", "rate-limit"],
@@ -147,11 +151,66 @@ describe("headless Claude Code transport (fake spawn)", () => {
     ];
     for (const [text, cls] of probes) {
       expect(faultOf(() => interpretResult(result(text, { is_error: true }), "", 1))).toBe(cls);
-      // The same text on a result Claude Code did not flag as an error, with no claim.
-      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe(cls);
+      // An unflagged result from a process that exited non-zero did not complete normally.
+      expect(faultOf(() => interpretResult(result(text), "", 1))).toBe(cls);
       // And as bare stderr with no JSON result at all.
       expect(faultOf(() => interpretResult("", text, 1))).toBe(cls);
+      // A CLEAN, completed result is the agent's outcome even with this text (round 2, D4).
+      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe("none");
+      expect(interpretResult(result(text), "", 0).claim).toBe("no-claim");
     }
+  });
+
+  // Verifier round 2, D4: the text fallback never applies to a clean, completed run. Each
+  // probe from the verdict, plus fixture-shaped text (fc-v1 holds qty 401, 403 and 429).
+  it("a clean completed run with no claim is the agent's outcome, whatever its text (round 2, D4)", () => {
+    const probes = [
+      "I updated the billing totals in column C.",
+      "Fixed the quota column. Done.",
+      "Done — the weekly limit column is fixed.",
+      "The pay period resets on Mon 3 March.",
+      "The cell was locked (forbidden). I stopped.",
+      "I set the credential column to blank.",
+      "I looked at EMP-0055: its qty is 429. I could not save the file.",
+      "Row EMP-0127 has qty 401; I left it unchanged.",
+      "EMP-0090 qty 403 is now 430.",
+      "Set the API key column header and the OAuth flag; usage limit noted in B4.",
+      "Claude AI usage limit reached|1700000000",
+      "Invalid API key · Please run /login",
+    ];
+    for (const text of probes) {
+      expect([text, faultOf(() => interpretResult(result(text), "", 0))]).toEqual([text, "none"]);
+      expect([text, interpretResult(result(text), "", 0).claim]).toEqual([text, "no-claim"]);
+    }
+    // The fallback still fires when the same run did NOT complete normally.
+    expect(faultOf(() => interpretResult(result(probes[6] as string), "", 1))).toBe("rate-limit");
+    expect(faultOf(() => interpretResult(result(probes[7] as string), "", 1))).toBe("auth");
+  });
+
+  // Verifier round 2, V-B and V-C: auth outranks rate-limit in the structured class, and
+  // HTTP 403 is auth (both pause, which is the safe direction for a lost or refused login).
+  it("structured auth outranks rate-limit, and 403 is auth (round 2, V-B, V-C)", () => {
+    expect(classOfStatus(403)).toBe("auth");
+    expect(classOfStatus(401)).toBe("auth");
+    expect(classOfStatus(429)).toBe("rate-limit");
+    expect(classOfStatus(500)).toBe("error-result");
+    const both = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      JSON.stringify([
+        { type: "assistant", message: { content: [] }, ...a },
+        { type: "assistant", message: { content: [] }, ...b },
+        JSON.parse(result("API Error", { is_error: true })),
+      ]);
+    expect(
+      faultOf(() =>
+        interpretResult(both({ error: "rate_limit" }, { api_error_status: 403 }), "", 1),
+      ),
+    ).toBe("auth");
+    expect(
+      faultOf(() =>
+        interpretResult(both({ api_error_status: 429 }, { error: "authentication_failed" }), "", 1),
+      ),
+    ).toBe("auth");
+    expect(faultOf(() => interpretResult(both({ api_error_status: 403 }, {}), "", 1))).toBe("auth");
   });
 
   it("classifies from structured fields first: the error class and the API status", () => {
@@ -310,5 +369,66 @@ describe("headless Claude Code transport (fake spawn)", () => {
     controller.abort();
     await expect(running).rejects.toMatchObject({ harnessClass: "timeout" });
     expect(fake.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+});
+
+// Verifier round 2, D4 end to end: `runPilot` with the live `claudeDriver` and a fake spawn (no
+// `claude`, no model, no VM). A clean first attempt with no claim and fixture-shaped text is
+// decided as the agent's outcome: never re-run, never a rate-limit backoff, never an auth pause.
+describe("runPilot with claudeDriver: a clean no-claim attempt is decided once (round 2, D4)", () => {
+  const runOne = async (firstText: string) => {
+    const base = config();
+    const cfg = { ...base, trials: base.trials.slice(0, 1) };
+    const outputs = [result(firstText), result("Fixed it.\nDONE")];
+    let calls = 0;
+    const spawn: SpawnFn = (command, args, options) => {
+      const out = outputs[Math.min(calls++, outputs.length - 1)] as string;
+      return fakeSpawn(out).spawn(command, args, options);
+    };
+    const driver = claudeDriver({
+      spawn,
+      command: "claude",
+      env: { PATH: "/bin", HOME: "/h" },
+      envAllowlist: CHILD_ENV_ALLOWLIST,
+      capture: async (ctx) => ({
+        "persisted/doc.csv": new TextEncoder().encode(scriptedDocument(ctx.task)),
+      }),
+      killGraceMs: 5,
+    });
+    const dir = tmp();
+    const clock = virtualClock();
+    const r = await runPilot({
+      config: cfg,
+      published: PUBLISHED,
+      outDir: dir,
+      repoRoot: ROOT,
+      oracleSources: SOURCES,
+      driver,
+      plannerModelId: cfg.model,
+      liveLaunchSha256: configSha256(cfg),
+      sleep: clock.sleep,
+      now: clock.now,
+    });
+    const attempts = [...loadLedger(join(dir, PROGRESS_FILE)).byTask.values()].flat();
+    return { r, attempts, calls };
+  };
+
+  it("qty 429 in a clean final message: decided on attempt 1, not a rate-limit re-run", async () => {
+    const { r, attempts, calls } = await runOne(
+      "I looked at EMP-0055: its qty is 429. I could not save the file.",
+    );
+    expect(r).toMatchObject({ status: "complete", ran: 1, faulted: 0 });
+    expect(calls).toBe(1);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.end).toMatchObject({ outcome: "decided", harnessClass: null });
+  });
+
+  it("qty 401 in a clean final message: decided, the run does not pause on auth", async () => {
+    const { r, attempts, calls } = await runOne("Row EMP-0127 has qty 401; I left it unchanged.");
+    expect(r.status).not.toBe("paused");
+    expect(r).toMatchObject({ status: "complete", ran: 1, faulted: 0 });
+    expect(calls).toBe(1);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.end).toMatchObject({ outcome: "decided", harnessClass: null });
   });
 });

@@ -47,6 +47,14 @@ Rate-limit and `auth` faults never spend `maxAttemptsPerTrial`: they back off an
 resume re-runs the trial. So a limit spell on the shared subscription can never strand a trial,
 and recovering from one needs no config change (and so no new run directory).
 
+`error-result` (an error result the classifier cannot name, including a limit message worded in
+a way the vocabulary does not know) **does** spend `maxAttemptsPerTrial`, with no backoff. That
+is bounded (3 attempts, `interTrialDelayS` apart) and safe for the data, but it can exhaust a
+trial. Recovering an `exhausted` trial: there is no in-place reset; start a **new run
+directory** (`--out` to a fresh path) once the cause is understood, and keep the old directory
+as the record of the faulted attempts. If the cause was an unrecognised limit message, add its
+wording to `RATE_LIMIT_TEXT` (with a test) before the new run.
+
 At the defaults, 30 trials take at least 43.5 minutes of spacing (29 gaps of 90 s) plus the
 trials themselves.
 The subscription's limits are not published per minute; if builder or verifier sessions
@@ -65,8 +73,11 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   assistant message's `error` class such as `rate_limit` / `authentication_failed`,
   `api_error_status`, the result `subtype` and `is_error`, the exit status) and a tested text
   vocabulary only as a fallback (`src/pilot/claude-transport.ts`). Any error result it cannot
-  name is `error-result`: a harness fault, never an agent outcome. A clean result whose final
-  message makes no claim and reads as a limit or login message is a harness fault too. Under the
+  name is `error-result`: a harness fault, never an agent outcome. The text vocabulary is
+  applied **only** to runs that did not complete normally (no result event, an error result,
+  a non-zero or null exit, a structured error) and to their stderr, never to a clean result:
+  fc-v1's fixtures hold values such as qty 401, 403 and 429, so a clean result with no
+  `DONE`/`NOT DONE` line is the agent's "no claim", decided and never re-run. Under the
   topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
   its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
   in `supersedes`. Its cost counts toward R7.
@@ -96,9 +107,12 @@ faulted ones included); the denominator is the graded verified count from `bench
    merged. Until then `launch` refuses.
 2. No API-path credential is configured. The runner checks variable **names only** and refuses
    to start if any is set: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
-   the Bedrock / Vertex / Foundry / federation variables, `CLAUDE_CODE_USE_*`, and
+   the Bedrock / Vertex / Foundry / federation variables (`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`), and
    `MYCO_ANTHROPIC_KEY_FILE` (full list: `API_CREDENTIAL_NAMES` in `src/pilot/launch.ts`).
    Check names the same way, never values: `env | cut -d= -f1 | grep -E '^(ANTHROPIC|CLAUDE_CODE_USE)'`.
+   That grep is a coarse look and also lists harmless names (for example
+   `CLAUDE_CODE_USE_CCR_V2`); what counts is the runner's own list, `API_CREDENTIAL_NAMES`,
+   which `launch` checks and refuses on.
 3. Claude Code is logged in to the subscription on this machine (`claude` uses that session;
    the agent's environment carries only `HOME`, `PATH`, `USER`, `LOGNAME`, `LANG`, `TERM` and
    `TMPDIR`).

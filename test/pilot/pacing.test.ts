@@ -7,7 +7,12 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { fakeDriver, virtualClock } from "../../src/pilot/dry-run.ts";
-import { ledgerRows, loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
+import {
+  BUDGET_EXEMPT_CLASSES,
+  ledgerRows,
+  loadLedger,
+  PROGRESS_FILE,
+} from "../../src/pilot/ledger.ts";
 import { HarnessFault, PAUSE_FILE, type PilotDriver } from "../../src/pilot/runner.ts";
 import { dryRun, tmp } from "./helpers.ts";
 
@@ -196,6 +201,45 @@ describe("pilot pacing (track E)", () => {
     const again = await dryRun(dir);
     expect(again.result.exhausted).toEqual(["fc-v1-002"]);
     expect(attemptsOf(dir).get("fc-v1-002")).toHaveLength(3);
+  });
+
+  // Verifier round 2, V-D: an unclassified error result is NOT budget-exempt (it spends the
+  // attempt budget; only rate-limit and auth do not), so it cannot loop on the subscription.
+  it("an unclassified error-result spends the attempt budget (round 2, V-D)", async () => {
+    expect(BUDGET_EXEMPT_CLASSES.has("error-result")).toBe(false);
+    const dir = tmp();
+    let n = 0;
+    const driver = fakeDriver({
+      beforeAgent: (ctx) => {
+        if (ctx.task.taskId !== "fc-v1-003") return;
+        // Fail fast (a plain error stops the run) instead of looping if the budget is not spent.
+        if (++n > 5) throw new Error("error-result did not spend the attempt budget");
+        throw new HarnessFault("error-result", "unnamed");
+      },
+    });
+    const { result } = await dryRun(dir, { driver });
+    expect(result.status).toBe("incomplete");
+    expect(result.exhausted).toEqual(["fc-v1-003"]);
+    expect(attemptsOf(dir).get("fc-v1-003")).toHaveLength(3);
+  });
+
+  // Verifier round 2, V-I: "in a row" means a decided trial resets the count. Two trials each
+  // hit 3 rate limits and then decide: 6 limits in total, never 4 in a row, so no pause.
+  it("a decided trial resets the consecutive rate-limit count (round 2, V-I)", async () => {
+    const dir = tmp();
+    const seen = new Map<string, number>();
+    const driver = fakeDriver({
+      beforeAgent: (ctx) => {
+        if (ctx.task.taskId !== "fc-v1-001" && ctx.task.taskId !== "fc-v1-002") return;
+        const n = (seen.get(ctx.task.taskId) ?? 0) + 1;
+        seen.set(ctx.task.taskId, n);
+        if (n <= 3) throw new HarnessFault("rate-limit", "usage limit");
+      },
+    });
+    const { result } = await dryRun(dir, { driver, pacing: { maxConsecutiveRateLimits: 4 } });
+    expect(result).toMatchObject({ status: "complete", ran: 30, faulted: 6 });
+    expect(attemptsOf(dir).get("fc-v1-001")).toHaveLength(4);
+    expect(attemptsOf(dir).get("fc-v1-002")).toHaveLength(4);
   });
 
   it("an exception that is not a HarnessFault stops the run instead of being retried", async () => {
