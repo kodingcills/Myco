@@ -295,7 +295,12 @@ regenerates pristine from `fixtureSeed`, as before. All of it is operator-side: 
 request carries only `taskId`, `runId` and `claim`, and every fixture field name in a
 request is `ORACLE_INPUT_REJECTED`. On the vault path a fixture swapped after sealing is
 already refused by the vault's own integrity check (`integrity:sealed-file-hash`); the
-digest check is what makes a sealed fixture trustworthy on any reader.
+digest check is what makes a sealed fixture trustworthy on any reader. On the mock path the
+fixture file sits in the run directory, which the agent can write, so there the digest is
+the only thing that makes it safe. The vault reader's `readFixture` runs the vault's
+integrity checks itself, not only through `read`. An agent that tampers with the fixture can
+turn a refute into `uncertain` `FIXTURE_MISMATCH` (or `FIXTURE_UNREADABLE` if it deletes the
+file); that is never accepted, and the code records the tamper.
 `calc-multi-step` refuses these fields for now (its retry restores checkpoints from the
 seed).
 
@@ -308,7 +313,11 @@ is optional. Empty rows after the last row with content (blank lines, CRLF blank
 `,,,,` rows at the end) hold no content and change nothing, just as a trailing empty
 column (`x,` on every line) does; the independent grader rules the same way (round-3 D2;
 `test/gate/calc-gate-grader-agreement.test.ts` pins the agreement over the round-2
-verifier's probe set).
+verifier's probe set). A trailing row **with** content is a cell the agent added, so it is
+refuted (`DOCUMENT_COLLATERAL`) and the grader fails it: `,,x,,` at the end, a blank line
+then an `x` row, `,,,,` then `,,x,,`. A cell holding only whitespace (a space or a tab) is
+content to both the gate and the grader (neither trims), so a trailing `, ,,,` row is
+refuted too. The agreement test pins all of these (follow-up to #485, round-3 S-1).
 
 *Known false refutes.* Two documents the grader passes are refuted by the gate, and are
 pinned as such in the agreement test: a cell written as an RFC 4180 quoted field (`"4242"`;
@@ -534,6 +543,12 @@ refuted reasons carry no cell value (neither a fixture value nor the requested o
    the result has no checkpoints) and runs the agent once more from step k + 1, then
    captures and asks the gate again;
 4. takes the last gate result as the trial's verdict. There is no third attempt.
+
+The retry checkpoint comes only from the gate's result. Nothing the agent returns or claims
+picks it, and a `lastVerified` that is not a non-negative integer restarts from the pristine
+fixture (`retryCheckpoint`). A retry from a checkpoint the gate did not verify would hand the
+agent steps it never did, so it is refused; `test/gate/calc-multistep.test.ts` ("R6: retry
+through the real gate") pins this through the real gate.
 
 `retryBudget: 0` runs the same loop without step 3: R6's paired no-retry arm. The trial
 record keeps every attempt's checkpoint, verdicts, reason codes and the digest of the
