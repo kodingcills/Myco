@@ -49,6 +49,8 @@ import { writerFixture } from "../../src/tasks/writer-doc-edit.ts";
 import { writeDocx, writeZip, type ZipEntryInput } from "../../src/tasks/writer-docgen.ts";
 import { COLUMN_TYPES } from "./calc-probes.ts";
 import { tempRoot, writeState } from "./helpers.ts";
+import { ACCEPTED, MALFORMED, probeWorkbook } from "./xlsx-malformed-probes.ts";
+import { WRITERS_MANIFEST } from "./xlsx-writer-files.ts";
 
 const SEED = "xlsx-seed";
 const INTENT = { rowKey: "EMP-0003", column: "qty", newValue: "4242" };
@@ -673,6 +675,119 @@ describe("round-2 hardening pins (D4, D5)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Round 3, D6: cell and string structure is an allowlist; everything else fails closed
+// ---------------------------------------------------------------------------
+
+describe("cell and string structure: an allowlist, everything else refused (round 3, D6)", () => {
+  const writerTask = xlsxTask({
+    fixtureSeed: WRITERS_MANIFEST.seed,
+    ...WRITERS_MANIFEST.edit,
+    persistedFormat: "xlsx",
+  });
+
+  it.each(ACCEPTED.map((p) => [p.name, p] as const))(
+    "accepted shape reads and verifies: %s",
+    async (_name, probe) => {
+      const bytes = probeWorkbook(probe);
+      expect(readXlsxDocument(bytes).cells.C4).toBe("4242");
+      expect((await check(bytes, writerTask)).verdict).toBe("verified");
+    },
+  );
+
+  it.each(MALFORMED.map((p) => [p.name, p] as const))(
+    "refused with a code, never verified: %s",
+    async (_name, probe) => {
+      const bytes = probeWorkbook(probe);
+      expect(read(bytes)).toBe(probe.code);
+      const result = await check(bytes, writerTask);
+      expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["STATE_CORRUPT"] });
+      expect(result.reasons).toEqual([
+        `could not look: persisted document is not a readable xlsx document (${probe.code})`,
+      ]);
+    },
+  );
+
+  it("holds all eight round-2 probes (c01, c02, c05, c12, c15, c16, k02, k03)", () => {
+    const named = MALFORMED.filter((p) => p.grader !== undefined).map((p) => p.name.slice(0, 3));
+    expect(named).toEqual(["c01", "c02", "c05", "c12", "c15", "c16", "k02", "k03"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 3, D7: pins for the round-2 mutation survivors V1, V8, V10 (V5: xlsx-inflate-bound)
+// ---------------------------------------------------------------------------
+
+/**
+ * A stored `xl/junk.bin` first, its central and local sizes stretched by `extra` bytes into
+ * the next entry's local header (its CRC set to match), so the archive reads cleanly unless
+ * the overlap check refuses it.
+ */
+function junkOverlapping(extra: number): Uint8Array {
+  const junk = new Uint8Array([1, 2, 3]);
+  const bytes = writeZip([
+    { name: "xl/junk.bin", data: junk, store: true },
+    ...xlsxEntriesFromCsv(EXACT_CSV),
+  ]);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const junkData = 30 + "xl/junk.bin".length;
+  expect(view.getUint32(junkData + junk.length, true)).toBe(0x04034b50);
+  const size = junk.length + extra;
+  const crc = crc32(bytes.subarray(junkData, junkData + size)) >>> 0;
+  view.setUint32(14, crc, true);
+  view.setUint32(18, size, true);
+  view.setUint32(22, size, true);
+  const cd = view.getUint32(bytes.length - 22 + 16, true);
+  expect(view.getUint32(cd, true)).toBe(0x02014b50);
+  view.setUint32(cd + 16, crc, true);
+  view.setUint32(cd + 20, size, true);
+  view.setUint32(cd + 24, size, true);
+  return bytes;
+}
+
+describe("round-3 pins for the round-2 mutation survivors (D7)", () => {
+  it("V1: adjacent entries read; an overlap of exactly one byte is XLSX_ZIP_MALFORMED", () => {
+    expect(read(junkOverlapping(0))).toBe("no error");
+    expect(read(junkOverlapping(1))).toBe("XLSX_ZIP_MALFORMED");
+  });
+
+  it('V8: a duplicate raw attribute (<c t="s" t="n">) is XLSX_XML_MALFORMED, not last-wins', async () => {
+    const bytes = withSheetXml((xml) =>
+      xml.replace(`<c r="${TARGET}" t="n">`, `<c r="${TARGET}" t="s" t="n">`),
+    );
+    expect(read(bytes)).toBe("XLSX_XML_MALFORMED");
+    // Last-wins would read t="n" and the exact value: through the gate it must not verify.
+    expect((await check(bytes)).verdict).toBe("uncertain");
+    // The control: the same cell with t written once reads.
+    expect(entryText(XLSX_MAIN_SHEET)).toContain(`<c r="${TARGET}" t="n">`);
+    expect(read(EXACT)).toBe("no error");
+  });
+
+  const withDecl = (decl: string) =>
+    exactWith({
+      [XLSX_MAIN_SHEET]: entryText(XLSX_MAIN_SHEET).replace(/^<\?xml[^?]*\?>/, decl),
+    });
+
+  it("V10: only a UTF-8 (or encoding-less) XML declaration is accepted", () => {
+    expect(read(withDecl('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'))).toBe(
+      "no error",
+    );
+    expect(read(withDecl("<?xml version='1.0' encoding='utf-8'?>"))).toBe("no error");
+    expect(read(withDecl('<?xml version="1.0"?>'))).toBe("no error");
+    for (const decl of [
+      '<?xml version="1.0" encoding="ISO-8859-1"?>',
+      '<?xml version="1.0" encoding="windows-1252"?>',
+      '<?xml version="1.0" encoding="UTF-16"?>',
+      '<?xml version="1.0" encoding="utf8"?>',
+      '<?xml version="1.0" standalone="yes" encoding="UTF-8"?>',
+      '<?xml version="1.0" x="encoding=\'utf-8\'" encoding="latin1"?>',
+      "<?xml encoding='UTF-8'?>",
+    ]) {
+      expect([decl, read(withDecl(decl))]).toEqual([decl, "XLSX_XML_UNSUPPORTED"]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Every documented refusal, one row each (docs/gate/api.md, "Hardened reading")
 // ---------------------------------------------------------------------------
 
@@ -1003,17 +1118,23 @@ function one(cell: XlsxCell, date1904 = false): string | undefined {
 }
 
 describe("the cell model", () => {
-  it("strings: shared, inline, rich text runs (phonetic runs skipped), exact whitespace", () => {
+  it("strings: shared, inline, rich text runs, exact whitespace (phonetic runs refused)", () => {
     expect(one({ kind: "text", text: "Ada Ito" })).toBe("Ada Ito");
     expect(one({ kind: "text", text: "  padded ", inline: true })).toBe("  padded ");
     expect(one({ kind: "text", text: "" })).toBeUndefined();
     const sheet = entryText(XLSX_MAIN_SHEET).replace(
       /<c r="A1" t="s"><v>\d+<\/v><\/c>/,
-      '<c r="A1" t="inlineStr"><is><r><rPr><b/></rPr><t>id</t></r><r><t xml:space="preserve"> x</t></r><rPh sb="0" eb="1"><t>ignored</t></rPh></is></c>',
+      '<c r="A1" t="inlineStr"><is><r><rPr><b/></rPr><t>id</t></r><r><t xml:space="preserve"> x</t></r></is></c>',
     );
     expect(
       readXlsxDocument(writeXlsx(exactCells(), { patch: { [XLSX_MAIN_SHEET]: sheet } })).cells.A1,
     ).toBe("id x");
+    // Round 3 (D6): a phonetic run is outside the allowlist. The grader reads its text and
+    // LibreOffice skips it, so the gate cannot know which reading is right: refused.
+    const phonetic = sheet.replace("</is>", '<rPh sb="0" eb="1"><t>ignored</t></rPh></is>');
+    expect(read(writeXlsx(exactCells(), { patch: { [XLSX_MAIN_SHEET]: phonetic } }))).toBe(
+      "XLSX_XML_UNSUPPORTED",
+    );
   });
 
   it("numbers render per format, exactly", () => {

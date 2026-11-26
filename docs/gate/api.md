@@ -364,7 +364,7 @@ the stored value is exactly the value the text denotes:
 
 | Stored cell | In the cell model |
 |---|---|
-| shared, inline (rich runs concatenated, phonetic runs skipped) or formula-string text | the text, exactly (no trimming, no `_xHHHH_` unescaping); empty text is an empty cell |
+| shared, inline (rich runs concatenated) or formula-string text | the text, exactly (no trimming, no `_xHHHH_` unescaping); empty text is an empty cell |
 | number, General or `@` format | shortest round-trip decimal: `451` |
 | number, fixed format (`0`, `0.00`, `#,##0.00`, optionally `$`) | `$` if the format carries it, then the value at the format's decimals: `$45678.90`, `4242.00`; only if the value is exact at those decimals. Thousands grouping is display only |
 | number, date format (any day order) | the ISO day `YYYY-MM-DD`, in the workbook's 1900 or 1904 date system |
@@ -378,8 +378,36 @@ carry U+0000; the CSV path splits rows on line feeds). Parity is pinned by
 collateral table over every column type, rebuilt as the equivalent workbook, gets the same
 verdict, reason codes and reasons on both paths. The same file executes the soundness claim
 over every workbook it builds (the agreement and typed tables, an xlsx-only table of
-formula, string, boolean and namespace probes, and the committed third-party workbooks):
-the gate never verifies a workbook the independent grader fails.
+formula, string, boolean and namespace probes, the committed third-party workbooks, and the
+round-3 structure probes below): the gate never verifies a workbook the independent grader
+fails, and whenever it verifies, the grader passes (one named exception, where the grader's
+reader cannot look: prefixed roots, below).
+
+*Cell and string structure (round 3, D6).* Round 2 read malformed structure by guessing:
+it skipped elements inside `<v>` or `<t>`, took the first `<t>` of a run, and ignored a
+`<v>` beside an `<is>`. Some of those workbooks verified while the grader failed them.
+The gate no longer guesses how an app would read a malformed file. It accepts only the
+shapes LibreOffice and openpyxl write, and refuses anything else with a code (`uncertain`,
+never `verified`):
+
+| Element | Accepted shape |
+|---|---|
+| `sheetData` | `row*`; `row` holds `c*` |
+| `c` | attributes `r`, `s`, `t` only; children `f?`, `v?`, `is?`, in that order, at most one each |
+| `v`, `f`, `t` | text only (any child element is refused); `t` may carry `xml:space` (`preserve` or `default`) |
+| `is` (inline string) | only on a `t="inlineStr"` cell, with no `f` or `v`; an `inlineStr` cell never has a `v` |
+| `is`, `si` (shared string) | exactly one `t`, or one or more `r`; no other children, no attributes, never empty |
+| `r` (rich run) | an optional `rPr`, then exactly one `t` |
+| `rPr` | run-property elements (`b`, `i`, `sz`, `color`, …), each empty |
+| `sst` | `si*` |
+| shared-string index | a canonical decimal (no sign, leading zero or space) within the table |
+
+An unknown element (including phonetic runs `rPh` and `phoneticPr`, `extLst`, and any element
+in another namespace) is `XLSX_XML_UNSUPPORTED`. A known element out of place, text where
+only elements belong, an unexpected attribute, or a bad index is `XLSX_CELL_MALFORMED`.
+`test/gate/xlsx-malformed-probes.ts` holds the round-2 verifier's eight probes (c01, c02, c05,
+c12, c15, c16, k02, k03) and 48 more, each built on LibreOffice's own exact workbook. Each
+one is refused with its code, through the gate. Seven accepted shapes still verify.
 
 *Formulas (round 2, D2).* Reading a formula from its cached `<v>` let a lying cache verify
 (`<f>1+1</f><v>4242</v>`). The gate still never evaluates a formula, and now never verifies
@@ -440,9 +468,9 @@ fails if a code is added to `XlsxErrorCode` without one):
 | embedded objects | `XLSX_EMBEDDED_OBJECT` |
 | a relationship target that climbs above the package | `XLSX_UNSAFE_PART` |
 | a DTD or an entity declaration | `XLSX_DTD` |
-| malformed XML: mismatched tags, an undeclared entity, non-UTF-8, an unbound namespace prefix, duplicate expanded attribute names, a tag the tokenizer cannot match (an unterminated tag with a million attributes is caught here, never a stack overflow) | `XLSX_XML_MALFORMED` |
-| CDATA, processing instructions, nesting deeper than 64 (`XLSX_LIMITS.maxXmlDepth`), any element inside `sheetData` that is not a known SpreadsheetML element in the main namespace (a route to hidden cells), a sheet hidden outside `<sheets>` | `XLSX_XML_UNSUPPORTED` |
-| a cell without a reference, a duplicate cell, a reference off the grid, a shared-string index out of range | `XLSX_CELL_MALFORMED` |
+| malformed XML: mismatched tags, an undeclared entity, bytes that are not UTF-8, an unbound namespace prefix, a duplicate attribute (raw or expanded name), a tag the tokenizer cannot match (an unterminated tag with a million attributes is caught here, never a stack overflow) | `XLSX_XML_MALFORMED` |
+| an XML declaration other than version plus optional UTF-8 `encoding` and `standalone` (a non-UTF-8 encoding), CDATA, processing instructions, nesting deeper than 64 (`XLSX_LIMITS.maxXmlDepth`), an unknown element in cell or string structure (`sheetData`, `sst`; `rPh`, `extLst`, any other namespace: a route to hidden cells), a sheet hidden outside `<sheets>` | `XLSX_XML_UNSUPPORTED` |
+| a cell without a reference, a duplicate cell, a reference off the grid, a shared-string index that is out of range or not a canonical decimal, any cell or string structure outside the accepted shapes above | `XLSX_CELL_MALFORMED` |
 | a formula with no cached value | `XLSX_FORMULA_UNCACHED` |
 | a cell style index that is not a number or is past `cellXfs`, a `numFmt` without a code or an integer id, an `xf` whose `numFmtId` is not a number | `XLSX_STYLE_MALFORMED` |
 | an unknown built-in number format | `XLSX_NUMFMT_UNSUPPORTED` |
@@ -463,6 +491,21 @@ never verifies a workbook the grader fails):
 - A workbook whose SpreadsheetML roots carry a prefix (`<x:workbook>`) reads on the gate;
   the grader's reader expects unprefixed roots and calls it ungradable (pinned in
   `xlsx-parity.test.ts`). Not a false pass: the grader cannot look.
+- An integer target in a fixed-decimals cell (`4242` with format `0.00`) renders as
+  `4242.00`, which is not the requested text, so it is refuted (`TARGET_MISMATCH`); the
+  grader compares the number and passes it.
+- openpyxl writes every formula with an empty cache (`<f>…</f><v></v>`). An empty cache is a
+  cached empty value, not a missing one, so such a cell is refuted (`TARGET_MISMATCH` or
+  `DOCUMENT_COLLATERAL`), not `uncertain` `XLSX_FORMULA_UNCACHED`. That code is for a formula
+  with no `<v>` at all.
+- LibreOffice writes `workbookPr dateCompatibility="false"`. The gate ignores it and reads
+  serials in the 1900 system with the phantom 1900-02-29, as the grader does (serial 59 is
+  1900-02-28 on both). An app that honours the flag may show serials below 61 (before
+  1900-03-01) one day apart. That is reachable only if a task asks for a date before
+  1900-03-01; no fixture or fc-v1 task does (fixture dates start in 2020). Listed under TO
+  FILE.
+- Cell or string structure outside the accepted shapes is `uncertain`; the grader reads some
+  of it (c01 and c02, an `inlineStr` cell with a stray `<v>`, pass there).
 
 The built-in tasks are `myco-run`'s `df-s01` (clean, verifies) and `df-s02` (the app
 silently drops `BUG` items while its status line says "saved 4"; refutes). Their state

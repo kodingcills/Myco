@@ -442,7 +442,13 @@ const OPEN_TAG = new RegExp(
 );
 const CLOSE_TAG = new RegExp(`</(${NAME})\\s*>`, "y");
 const ATTR = new RegExp(`(${NAME})\\s*=\\s*(?:"([^"<]*)"|'([^'<]*)')`, "g");
-const XML_DECL = /^<\?xml\s[^?]*\?>/;
+/**
+ * The XML declaration, by its grammar: a version, then optionally `encoding` (UTF-8 only)
+ * and `standalone`. Any other declaration (a non-UTF-8 encoding, unknown pseudo-attributes)
+ * is refused.
+ */
+const XML_DECL =
+  /^<\?xml\s+version\s*=\s*(["'])1\.[0-9]+\1(?:\s+encoding\s*=\s*(["'])utf-8\2)?(?:\s+standalone\s*=\s*(["'])(?:yes|no)\3)?\s*\?>/i;
 
 /** Parse one XML part. UTF-8 only; no DTD, CDATA or processing instructions. */
 export function parseXml(bytes: Uint8Array): XmlElement {
@@ -455,9 +461,9 @@ export function parseXml(bytes: Uint8Array): XmlElement {
   for (const ch of text) {
     if (!isXmlChar(ch.codePointAt(0) as number)) fail("XLSX_XML_MALFORMED");
   }
+  // A declaration outside the grammar is not consumed here, so the tokenizer meets it as a
+  // processing instruction and refuses it (XLSX_XML_UNSUPPORTED) below.
   const decl = XML_DECL.exec(text);
-  if (decl && !/encoding\s*=\s*["']utf-8["']|^<\?xml(?![^?]*encoding)/i.test(decl[0]))
-    fail("XLSX_XML_UNSUPPORTED");
   let i = decl ? decl[0].length : 0;
 
   interface Building {
@@ -561,11 +567,6 @@ function countNamed(element: XmlElement, local: string): number {
     n += countNamed(c, local);
   }
   return n;
-}
-
-/** Text content of an element: its direct text children, concatenated. */
-function textOf(element: XmlElement): string {
-  return element.children.filter((c): c is string => typeof c === "string").join("");
 }
 
 // ---------------------------------------------------------------------------
@@ -862,22 +863,176 @@ function readStyles(xml: XmlElement | undefined): NumberClass[] {
   });
 }
 
-/** Text of a shared-string item or inline string: `<t>`, or the `<t>` of each run. */
-function stringItem(item: XmlElement): string {
-  let out = "";
-  for (const c of item.children) {
+// ---------------------------------------------------------------------------
+// Cell and string structure: an allowlist of the shapes real writers produce (round 3, D6).
+// Anything else is refused with a code; the reader never guesses how an app would read it.
+// ---------------------------------------------------------------------------
+
+/** SpreadsheetML elements the cell reader knows; a known one out of place is malformed. */
+const KNOWN_CELL_ELEMENTS: ReadonlySet<string> = new Set([
+  "row",
+  "c",
+  "f",
+  "v",
+  "is",
+  "t",
+  "r",
+  "rPr",
+]);
+/** Run-property children (formatting only; no content). */
+const RUN_PROPERTIES: ReadonlySet<string> = new Set([
+  "b",
+  "i",
+  "u",
+  "sz",
+  "color",
+  "rFont",
+  "family",
+  "scheme",
+  "strike",
+  "vertAlign",
+  "charset",
+  "outline",
+  "shadow",
+  "condense",
+  "extend",
+]);
+const NO_ATTRS: ReadonlySet<string> = new Set();
+/** The attributes LibreOffice and openpyxl write on `<c>` (no `cm`, `vm`, `ph`). */
+const CELL_ATTRS: ReadonlySet<string> = new Set(["r", "s", "t"]);
+const TEXT_ATTRS: ReadonlySet<string> = new Set(["xml:space"]);
+
+/** An element where the allowlist has no place for it: unknown, or known but misplaced. */
+function misplaced(element: XmlElement): never {
+  fail(KNOWN_CELL_ELEMENTS.has(element.local) ? "XLSX_CELL_MALFORMED" : "XLSX_XML_UNSUPPORTED");
+}
+
+/** Only namespace declarations and the `allowed` attributes may appear on `element`. */
+function onlyAttrs(element: XmlElement, allowed: ReadonlySet<string>): void {
+  for (const key of element.attrs.keys()) {
+    if (key === "xmlns" || key.startsWith("xmlns:")) continue;
+    if (!allowed.has(key)) fail("XLSX_CELL_MALFORMED");
+  }
+}
+
+/**
+ * The element children of a structural element (one that holds elements, not text). Text
+ * between them must be whitespace; an element in another namespace is unsupported.
+ */
+function structuralChildren(element: XmlElement): XmlElement[] {
+  const out: XmlElement[] = [];
+  for (const c of element.children) {
     if (typeof c === "string") {
-      if (c.trim() !== "") fail("XLSX_CELL_MALFORMED");
+      if (!/^[ \t\r\n]*$/.test(c)) fail("XLSX_CELL_MALFORMED");
       continue;
     }
-    if (c.ns !== item.ns) fail("XLSX_XML_UNSUPPORTED");
-    if (c.local === "t") out += textOf(c);
-    else if (c.local === "r") {
-      const t = child(c, "t");
-      if (t) out += textOf(t);
-    } else if (c.local !== "rPh" && c.local !== "phoneticPr") fail("XLSX_XML_UNSUPPORTED");
+    if (c.ns !== NS.main) fail("XLSX_XML_UNSUPPORTED");
+    out.push(c);
   }
   return out;
+}
+
+/** The text of a text-only element (`<v>`, `<t>`, `<f>`): any element child is malformed. */
+function textOnly(element: XmlElement): string {
+  let out = "";
+  for (const c of element.children) {
+    if (typeof c !== "string") fail("XLSX_CELL_MALFORMED");
+    out += c;
+  }
+  return out;
+}
+
+/** `<t>`: text only, with at most `xml:space`. */
+function textElement(t: XmlElement): string {
+  onlyAttrs(t, TEXT_ATTRS);
+  const space = t.attrs.get("xml:space");
+  if (space !== undefined && space !== "preserve" && space !== "default")
+    fail("XLSX_CELL_MALFORMED");
+  return textOnly(t);
+}
+
+/** `<rPr>`: run-property elements only, each empty (formatting attributes, no content). */
+function checkRunProperties(rPr: XmlElement): void {
+  onlyAttrs(rPr, NO_ATTRS);
+  for (const p of structuralChildren(rPr)) {
+    if (!RUN_PROPERTIES.has(p.local)) fail("XLSX_XML_UNSUPPORTED");
+    if (structuralChildren(p).length > 0) fail("XLSX_CELL_MALFORMED");
+  }
+}
+
+/**
+ * Text of a shared-string item (`<si>`) or inline string (`<is>`). Exactly two shapes are
+ * accepted: one `<t>`, or one or more runs `<r>` each holding an optional `<rPr>` then
+ * exactly one `<t>` (concatenated). Anything else (an empty item, several `<t>`, a mix of
+ * `<t>` and `<r>`, phonetic runs, an unknown element) is refused.
+ */
+function stringItem(item: XmlElement): string {
+  onlyAttrs(item, NO_ATTRS);
+  const kids = structuralChildren(item);
+  if (kids.length === 0) fail("XLSX_CELL_MALFORMED");
+  const first = kids[0] as XmlElement;
+  if (first.local === "t") {
+    if (kids.length !== 1) misplaced(kids[1] as XmlElement);
+    return textElement(first);
+  }
+  let out = "";
+  for (const run of kids) {
+    if (run.local !== "r") misplaced(run);
+    onlyAttrs(run, NO_ATTRS);
+    const parts = structuralChildren(run);
+    let at = 0;
+    if (parts[at]?.local === "rPr") checkRunProperties(parts[at++] as XmlElement);
+    const t = parts[at++];
+    if (t === undefined) fail("XLSX_CELL_MALFORMED");
+    if (t.local !== "t") misplaced(t);
+    if (at !== parts.length) misplaced(parts[at] as XmlElement);
+    out += textElement(t);
+  }
+  return out;
+}
+
+/** The shared-string table: `<sst>` holds `<si>` items only, each checked like `<is>`. */
+function sharedStrings(sst: XmlElement): string[] {
+  return structuralChildren(sst).map((si) => (si.local === "si" ? stringItem(si) : misplaced(si)));
+}
+
+/** A cell's parts, after its shape has been checked. */
+interface CellParts {
+  readonly t: string;
+  readonly f: XmlElement | undefined;
+  readonly v: string | undefined;
+  readonly is: XmlElement | undefined;
+}
+
+/**
+ * `<c>`: attributes `r`, `s`, `t` only; children `<f>?`, `<v>?`, `<is>?`, in that order, at
+ * most one each. `<is>` only on an `inlineStr` cell with no `<f>` or `<v>`, and no `<v>` on
+ * an `inlineStr` cell.
+ */
+function cellParts(c: XmlElement): CellParts {
+  onlyAttrs(c, CELL_ATTRS);
+  const t = c.attrs.get("t") ?? "n";
+  let f: XmlElement | undefined;
+  let v: string | undefined;
+  let is: XmlElement | undefined;
+  let stage = 0;
+  for (const k of structuralChildren(c)) {
+    const order = k.local === "f" ? 1 : k.local === "v" ? 2 : k.local === "is" ? 3 : 0;
+    if (order === 0) misplaced(k);
+    if (order <= stage) fail("XLSX_CELL_MALFORMED");
+    stage = order;
+    if (order === 1) {
+      textOnly(k);
+      f = k;
+    } else if (order === 2) {
+      onlyAttrs(k, NO_ATTRS);
+      v = textOnly(k);
+    } else is = k;
+  }
+  if (is !== undefined && (t !== "inlineStr" || f !== undefined || v !== undefined))
+    fail("XLSX_CELL_MALFORMED");
+  if (t === "inlineStr" && v !== undefined) fail("XLSX_CELL_MALFORMED");
+  return { t, f, v, is };
 }
 
 const MAX_COL = 16_384;
@@ -895,51 +1050,6 @@ function parseCellRef(ref: string): [number, number] {
 }
 
 const NUMBER = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
-const ALLOWED_IN_SHEET_DATA = new Set([
-  "row",
-  "c",
-  "v",
-  "f",
-  "is",
-  "t",
-  "r",
-  "rPr",
-  "rPh",
-  "phoneticPr",
-]);
-/** Run-property children (formatting only; no content). */
-const RUN_PROPERTIES = new Set([
-  "b",
-  "i",
-  "u",
-  "sz",
-  "color",
-  "rFont",
-  "family",
-  "scheme",
-  "strike",
-  "vertAlign",
-  "charset",
-  "outline",
-  "shadow",
-  "condense",
-  "extend",
-]);
-
-/**
- * Refuse anything inside sheetData the cell reader does not understand (no hidden cells):
- * every element must be a known SpreadsheetML element in the main namespace, whatever its
- * prefix. An element of any other namespace (`mc:AlternateContent`, an extension) is refused.
- */
-function checkSheetDataTree(element: XmlElement, inRunProperties = false): void {
-  for (const c of element.children) {
-    if (typeof c === "string") continue;
-    const ok = inRunProperties ? RUN_PROPERTIES.has(c.local) : ALLOWED_IN_SHEET_DATA.has(c.local);
-    if (!ok || c.ns !== NS.main) fail("XLSX_XML_UNSUPPORTED");
-    checkSheetDataTree(c, inRunProperties || c.local === "rPr");
-  }
-}
-
 function readSheetCells(
   sheet: XmlElement,
   shared: readonly string[],
@@ -949,27 +1059,20 @@ function readSheetCells(
   const sheetDataList = elements(sheet, "sheetData");
   if (sheetDataList.length !== 1) fail("XLSX_NOT_WORKBOOK");
   const sheetData = sheetDataList[0] as XmlElement;
-  checkSheetDataTree(sheetData);
   const cells: Record<string, string> = {};
   const seen = new Set<string>();
-  for (const node of sheetData.children) {
-    if (typeof node === "string") {
-      if (node.trim() !== "") fail("XLSX_CELL_MALFORMED");
-      continue;
-    }
-    if (node.local !== "row") fail("XLSX_CELL_MALFORMED");
-    const rowAttr = node.attrs.get("r");
-    for (const c of node.children) {
-      if (typeof c === "string") {
-        if (c.trim() !== "") fail("XLSX_CELL_MALFORMED");
-        continue;
-      }
-      if (c.local !== "c") fail("XLSX_CELL_MALFORMED");
+  // sheetData -> row* -> c*: every element below is checked against the allowlist, so no
+  // cell can hide in an element the reader skips.
+  for (const row of structuralChildren(sheetData)) {
+    if (row.local !== "row") misplaced(row);
+    const rowAttr = row.attrs.get("r");
+    for (const c of structuralChildren(row)) {
+      if (c.local !== "c") misplaced(c);
       const ref = c.attrs.get("r");
       if (ref === undefined) fail("XLSX_CELL_MALFORMED");
-      const [row, col] = parseCellRef(ref);
-      if (rowAttr !== undefined && String(row + 1) !== rowAttr) fail("XLSX_CELL_MALFORMED");
-      const key = cellRef(row, col);
+      const [r, col] = parseCellRef(ref);
+      if (rowAttr !== undefined && String(r + 1) !== rowAttr) fail("XLSX_CELL_MALFORMED");
+      const key = cellRef(r, col);
       if (seen.has(key)) fail("XLSX_CELL_MALFORMED");
       seen.add(key);
       const value = cellValue(c, shared, styles, system);
@@ -991,32 +1094,27 @@ function cellValue(
   styles: readonly NumberClass[],
   system: 1900 | 1904,
 ): string {
-  const formula = elements(c, "f")[0];
-  const value = literalValue(c, shared, styles, system);
-  if (formula === undefined) return value;
-  const fAttrs = [...formula.attrs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `${MARKERS.formula}${JSON.stringify([fAttrs, textOf(formula), c.attrs.get("t") ?? "n", value])}`;
+  const parts = cellParts(c);
+  const value = literalValue(c, parts, shared, styles, system);
+  if (parts.f === undefined) return value;
+  const fAttrs = [...parts.f.attrs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `${MARKERS.formula}${JSON.stringify([fAttrs, textOnly(parts.f), parts.t, value])}`;
 }
+
+/** A shared-string index: a canonical decimal (no sign, no leading zero, no space). */
+const SHARED_INDEX = /^(?:0|[1-9][0-9]{0,8})$/;
 
 /** A cell's value as a literal: its stored (for a formula, cached) value, rendered. */
 function literalValue(
   c: XmlElement,
+  { t, f, v, is }: CellParts,
   shared: readonly string[],
   styles: readonly NumberClass[],
   system: 1900 | 1904,
 ): string {
-  const t = c.attrs.get("t") ?? "n";
-  const formulas = elements(c, "f");
-  const vs = elements(c, "v");
-  const inline = elements(c, "is");
-  if (formulas.length > 1 || vs.length > 1 || inline.length > 1) fail("XLSX_CELL_MALFORMED");
-  for (const node of c.children) {
-    if (typeof node === "string" && node.trim() !== "") fail("XLSX_CELL_MALFORMED");
-  }
-  const v = vs[0] === undefined ? undefined : textOf(vs[0]);
   // A formula with no cached value: the gate cannot know what the document holds without
   // evaluating it, which it never does.
-  if (formulas.length === 1 && v === undefined) fail("XLSX_FORMULA_UNCACHED");
+  if (f !== undefined && v === undefined) fail("XLSX_FORMULA_UNCACHED");
   const sRaw = c.attrs.get("s") ?? "0";
   if (!/^\d{1,6}$/.test(sRaw)) fail("XLSX_STYLE_MALFORMED");
   const style = styles[Number(sRaw)];
@@ -1024,13 +1122,13 @@ function literalValue(
   switch (t) {
     case "s": {
       if (v === undefined) return "";
-      if (!/^\d{1,9}$/.test(v)) fail("XLSX_CELL_MALFORMED");
+      if (!SHARED_INDEX.test(v)) fail("XLSX_CELL_MALFORMED");
       const text = shared[Number(v)];
       if (text === undefined) fail("XLSX_CELL_MALFORMED");
       return text;
     }
     case "inlineStr":
-      return inline[0] === undefined ? "" : stringItem(inline[0]);
+      return is === undefined ? "" : stringItem(is);
     case "str":
       return v ?? "";
     case "b":
@@ -1125,7 +1223,7 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
     return parseXml(b);
   };
   const sstXml = part(sharedRel[0]);
-  const shared = sstXml ? elements(rootIn(sstXml, NS.main, "sst"), "si").map(stringItem) : [];
+  const shared = sstXml ? sharedStrings(rootIn(sstXml, NS.main, "sst")) : [];
   const stylesXml = part(stylesRel[0]);
   const styles = readStyles(stylesXml ? rootIn(stylesXml, NS.main, "styleSheet") : undefined);
 

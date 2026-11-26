@@ -27,6 +27,7 @@ import { generateFixture } from "../../src/tasks/fixture.ts";
 import { groundTruth } from "../../src/tasks/intent.ts";
 import { AGREE, COLUMN_TYPES, KNOWN_DIVERGENCES, SEED } from "./calc-probes.ts";
 import { tempRoot, writeState } from "./helpers.ts";
+import { ACCEPTED, MALFORMED, probeWorkbook } from "./xlsx-malformed-probes.ts";
 import { WRITERS_MANIFEST, writerBytes } from "./xlsx-writer-files.ts";
 
 interface Intent {
@@ -327,6 +328,24 @@ describe("xlsx-only probes (formulas never verify; namespaces resolve)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Round 3, D6: malformed cell and string structure never verifies
+// ---------------------------------------------------------------------------
+
+describe("malformed cell and string structure is never verified (round 3, D6)", () => {
+  it.each(MALFORMED.filter((p) => p.grader !== undefined).map((p) => [p.name, p] as const))(
+    "%s: the gate is uncertain where round 2 verified it",
+    async (_name, probe) => {
+      const bytes = probeWorkbook(probe);
+      const result = await gateResult(WRITERS_MANIFEST.edit, "xlsx", bytes);
+      expect(result.verdict).toBe("uncertain");
+      expect(result.reasonCodes).toEqual(["STATE_CORRUPT"]);
+      // Pinned: what the independent grader makes of the same bytes (its own reader).
+      expect(graderXlsx(WRITERS_MANIFEST.edit, bytes)).toBe(probe.grader);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // The soundness claim, executed over every workbook above and the writers' files
 // ---------------------------------------------------------------------------
 
@@ -352,12 +371,42 @@ describe("soundness: whenever the gate verifies a workbook, the grader passes th
       WRITERS_MANIFEST.edit,
       writerBytes(name),
     ]),
+    ...ACCEPTED.map((p): [string, Intent, Uint8Array] => [
+      `structure, accepted: ${p.name}`,
+      WRITERS_MANIFEST.edit,
+      probeWorkbook(p),
+    ]),
+    ...MALFORMED.map((p): [string, Intent, Uint8Array] => [
+      `structure, malformed: ${p.name}`,
+      WRITERS_MANIFEST.edit,
+      probeWorkbook(p),
+    ]),
   ];
 
-  it("the table holds every probe (23 agreement, 22 typed, 13 xlsx-only, 8 writer files)", () => {
-    expect(all.length).toBe(23 + TYPED.length + XLSX_ONLY.length + 8);
+  it("the table holds every probe (agreement, typed, xlsx-only, writer files, D6 structure)", () => {
+    expect(all.length).toBe(
+      23 + TYPED.length + XLSX_ONLY.length + 8 + ACCEPTED.length + MALFORMED.length,
+    );
     expect(TYPED.length).toBe(22);
     expect(XLSX_ONLY.length).toBe(13);
+    expect(ACCEPTED.length).toBe(7);
+    expect(MALFORMED.length).toBe(56);
+    // All eight round-2 D6 probes are in it.
+    expect(MALFORMED.filter((p) => p.grader !== undefined)).toHaveLength(8);
+  });
+
+  it("whenever the gate verifies, the grader passes (one named exception: the grader cannot look)", async () => {
+    const verifiedNotPassed: string[] = [];
+    const verifiedMalformed: string[] = [];
+    for (const [name, intent, bytes] of all) {
+      if ((await gateResult(intent, "xlsx", bytes)).verdict !== "verified") continue;
+      if (name.startsWith("structure, malformed: ")) verifiedMalformed.push(name);
+      if (graderXlsx(intent, bytes) !== "pass") verifiedNotPassed.push(name);
+    }
+    expect(verifiedMalformed).toEqual([]);
+    // The single exception is a correct, exact workbook the grader's reader cannot parse
+    // (prefixed roots; ungradable, never fail). Documented, TO FILE.
+    expect(verifiedNotPassed).toEqual(["xlsx-only: prefixed <x:workbook> and <x:worksheet>"]);
   });
 
   it("no workbook is verified by the gate and failed by the grader", async () => {
