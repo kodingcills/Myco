@@ -124,7 +124,7 @@ cmd_set() {
     trap vm_lock_release EXIT
   fi
   # UTM refuses a configuration update unless the VM is stopped. The next
-  # reset-trial-vm.sh restores clean-base and boots it, so stopping is safe.
+  # reset-trial-vm.sh restores a snapshot and boots it, so stopping is safe.
   utm -e 'stop vm by force' >/dev/null 2>&1 || true
   for _ in $(seq 1 "$STOP_TIMEOUT"); do
     [ "$(utm_status)" = stopped ] && break
