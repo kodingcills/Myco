@@ -1,14 +1,16 @@
 # Gate API and `myco-gate` MCP: security review (M2 scope add, track H)
 
-**Status:** review of `origin/main` at `9f8ce5e` (2026-11-26), which includes #514
-(agent-safe corrections) and #511 (topped-up runs), and this track's #520 (H-01 frame cap,
-`b174eea`), #522 (H-07 input fuzz tests, `db9c5a2`) and #521 (H-06 sealed size cap,
-`9f8ce5e`), plus #512 (`myco init`, no gate file). Round 1 reviewed `12c35ea` and round 2
-`d632628`; every file:line below was re-read on `9f8ce5e`, and `test/gate/security-review.test.ts` pins every one to the code, both ends
-of each range. Each finding has an id (`H-NN`), a severity, its location, an exploit sketch
-and a decision: **fixed** or **tested** (a PR on this track has merged, named with its merge
-commit), **fix now** or **test now** (an open PR on this track), **fix next** (unlocked, no
-PR yet; listed as TO FILE), or **defer** (listed as TO FILE, with the smallest future seam).
+**Status:** review of `origin/main` at `05a465b` (2026-11-26), which includes #514
+(agent-safe corrections) and #511 (topped-up runs), and all four of this track's fix and
+test PRs: #520 (H-01 frame cap, `b174eea`), #522 (H-07 input fuzz tests, `db9c5a2`), #521
+(H-06 sealed size cap, `9f8ce5e`) and #523 (H-08 per-caller isolation tests, `05a465b`),
+plus #512 (`myco init`, no gate file). Round 1 reviewed `12c35ea` and round 2 `d632628`;
+every file:line below was re-read on `05a465b`, and `test/gate/security-review.test.ts`
+pins every one to the code, both ends of each range. Each finding has an id (`H-NN`), a
+severity, its location, an exploit sketch and a decision: **fixed** or **tested** (a PR on
+this track has merged, named with its merge commit), **fix next** (unlocked, no PR yet;
+listed as TO FILE), or **defer** (listed as TO FILE, with the smallest future seam). No
+track-H PR is open.
 
 **Scope.** The gate API (`src/gate/api.ts`, `src/gate/gate.ts`), the `myco-gate` MCP server
 (`src/gate/mcp-server.ts`), the CLI (`src/gate/cli.ts`, `scripts/myco-gate.ts`), the sealed
@@ -25,7 +27,7 @@ JSON reaches the gate only through `myco-gate mcp` (H-01, H-07, H-09).
 defaults stay. The authn/authz section below is design only. The secret guard and the
 harness hooks are not touched.
 
-**Coordination.** #514, #511, #520, #521 and #522 have merged, so `cli.ts`, `mcp-server.ts`,
+**Coordination.** #514, #511, #520, #521, #522 and #523 have merged, so `cli.ts`, `mcp-server.ts`,
 `multistep.ts`, `gated-trial.ts`, `sealed.ts`, `scripts/myco-gate.ts`,
 `src/gate/stdio-frame.ts`, `test/gate/input-fuzz.test.ts` and `test/m2/*` are locked by no PR. These open PRs still own
 files a fix would touch, and this track does not edit them:
@@ -147,7 +149,7 @@ issue.
 | H-05 | Low | No per-trial check limit and no queue bound in `myco-gate mcp` | defer: TO FILE (`gate.ts`/`api.ts` locked by #503) |
 | H-06 | Low | Sealed reader does not enforce `STATE_FILE_LIMIT` | **fixed** (#521, merged `9f8ce5e`, gate side); vault side TO FILE 4 |
 | H-07 | Info | Input fuzzing: malformed JSON-RPC, wrong types, unicode/NUL/path tricks, duplicate and prototype keys | **tested** (#522, merged `db9c5a2`) |
-| H-08 | Info | Per-caller isolation across run ids and lookalike ids; case-folding aliasing of operator ids | **test now** (#523); operator rule now, check TO FILE |
+| H-08 | Info | Per-caller isolation across run ids and lookalike ids; case-folding aliasing of operator ids | **tested** (#523, merged `05a465b`); operator rule now, check TO FILE 8 |
 | H-09 | Info | A deeply nested JSON-RPC `id` makes `handleLine` throw (answered `-32603`) | tested (#522, merged `db9c5a2`); fix next (unlocked): TO FILE 6 |
 | H-10 | Hosting | Vault keyed by `runId` alone (#508 TO FILE 1) | defer |
 | H-11 | Hosting | Seal receipt only in harness memory (#508 TO FILE 2) | defer |
@@ -338,21 +340,22 @@ closed, with a code and never `verified`:
 round-1 verifier's surviving mutants (the `m` flag on the id regex; `serveStdio`'s catch
 writing nothing) are killed on main by those tests (the round-2 verifier re-ran both).
 
-### H-08: Per-caller isolation (Info; test now)
+### H-08: Per-caller isolation (Info; tested by #523, merged)
 
 - **Where:** the assignment check, `gate.ts:712-721`. The sealed reader refuses any run id
   but the binding's on its own (`sealed.ts:102` via `openForTrial`).
 - **Existing coverage:** `test/gate/gate.test.ts:654-750` (cross-run, cross-task, symlinked
   runs) and `test/gate/sealed-gate.test.ts:334-395` (another trial's run id or receipt).
-- **Gap:** no test pins the "two callers, one evidence root" picture as such. Two gates
+- **Gap (before #523):** no test pinned the "two callers, one evidence root" picture as such. Two gates
   bound to two runs share a root, and each must never cause a read of the other's run,
   whatever the request says: lookalike ids (case, a trailing dot, a prefix or suffix,
   unicode lookalikes) and interleaved concurrent calls included. Mutating the operator's
   assignment object after `createGate` must not rebind the gate (`gate.ts:615` copies it).
-  **Decision:** a tests-only PR (#523) with a reader spy asserting zero reads outside the
+  **Decision (done):** the tests-only #523 (merged, `05a465b`) pins this in
+  `test/gate/caller-isolation.test.ts`, with a reader spy asserting zero reads outside the
   caller's own run. Unicode lookalikes never reach the assignment check: `isSafeId` rejects
   them first (`INVALID_REQUEST`, nothing read). The round-1 verifier's surviving mutant
-  (the `gate.ts:615` copy removed) is killed by #523's tests.
+  (the `gate.ts:615` copy removed) is killed by those tests.
 - **Operator-side aliasing (from #523's verifier).** On a case-folding filesystem (macOS
   APFS by default, Windows NTFS), two *operator-assigned* run ids that differ only in case
   (`run-a`, `RUN-A`), or on Windows only by a trailing dot (`r1`, `r1.`; `isSafeId` allows

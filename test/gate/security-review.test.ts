@@ -32,7 +32,7 @@ const DOC = readFileSync(repo("docs/security/gate-api-review.md"), "utf8");
 const FLAT = DOC.replace(/\s+/g, " ");
 
 /**
- * PRs the doc cites that are on `origin/main` (checked at `9f8ce5e`), with their merge
+ * PRs the doc cites that are on `origin/main` (checked at `05a465b`), with their merge
  * commits. `track` marks this track's own fix and test PRs, which the doc must call merged.
  */
 const MERGED = [
@@ -43,13 +43,17 @@ const MERGED = [
   { pr: 520, sha: "b174eea", track: true },
   { pr: 522, sha: "db9c5a2", track: true },
   { pr: 521, sha: "9f8ce5e", track: true },
+  { pr: 523, sha: "05a465b", track: true },
 ] as const;
 
 /**
  * This track's open PRs, each with a file it adds that is not on main. When one merges, its
  * file lands and the tripwire below fails until the doc stops calling it open.
  */
-const OPEN = [{ pr: 523, witness: "test/gate/caller-isolation.test.ts" }] as const;
+const OPEN: ReadonlyArray<{ readonly pr: number; readonly witness: string }> = [
+  // Empty at 05a465b: #520, #521, #522 and #523 have all merged. A new open track-H PR the
+  // doc cites goes here, with a file it adds (e.g. { pr: 5NN, witness: "test/gate/x.test.ts" }).
+];
 
 /**
  * Open PRs off this track that the doc cites for their file locks: #503 (xlsx), #513 (watch
@@ -355,11 +359,11 @@ describe("the security review's file:line refs hold on main (D1)", () => {
     expect(DOC).not.toMatch(/`:\d/);
   });
 
-  it("re-anchors the status line past #514, #511, #520, #521, #522 and #512", () => {
+  it("re-anchors the status line past #514, #511, #520, #521, #522, #523 and #512", () => {
     expect(DOC).not.toMatch(
-      /\*\*Status:\*\* review of `origin\/main` at `(12c35ea|d632628|08f487f)`/,
+      /\*\*Status:\*\* review of `origin\/main` at `(12c35ea|d632628|08f487f|9f8ce5e)`/,
     );
-    expect(DOC).toMatch(/\*\*Status:\*\* review of `origin\/main` at `9f8ce5e`/);
+    expect(DOC).toMatch(/\*\*Status:\*\* review of `origin\/main` at `05a465b`/);
     expect(FLAT).toContain("which includes #514 (agent-safe corrections) and #511");
     const status = FLAT.slice(0, FLAT.indexOf("**Scope.**"));
     // #508 is the starting list, not a merge the review is anchored past.
@@ -437,18 +441,23 @@ describe("the security review names no merged PR as open or pending (D1')", () =
     },
   );
 
-  it.each(OPEN)(
-    "#$pr, which the doc treats as open, has not merged: $witness is not on this tree",
-    ({ pr, witness }) => {
-      // Tripwire: when this PR merges, its new file lands, this fails, and the doc's
-      // "fix now"/"test now"/coordination text for it must become "fixed"/"tested (merged)".
+  it("open track-H PRs the doc cites have not merged (tripwire: their witness file is absent)", () => {
+    for (const { pr, witness } of OPEN) {
+      // When the PR merges, its new file lands, this fails, and the doc's "fix now"/"test
+      // now"/coordination text for it must become "fixed"/"tested (merged)".
       expect(
         existsSync(fileURLToPath(repo(witness))),
         `#${pr} has merged (${witness} exists): update docs/security/gate-api-review.md, then move #${pr} to MERGED here`,
       ).toBe(false);
       expect(FLAT).toContain(`#${pr}`);
-    },
-  );
+    }
+  });
+
+  it("no track-H PR is left as 'fix now' or 'test now' (all merged at 05a465b)", () => {
+    expect(OPEN).toEqual([]);
+    expect(FLAT).not.toMatch(/\*\*(fix|test) now\*\*/);
+    expect(FLAT).toContain("No track-H PR is open.");
+  });
 
   it("every PR the doc mentions is classified as merged, open or reference-only", () => {
     const known = new Set<number>([...MERGED, ...OPEN].map(({ pr }) => pr));
