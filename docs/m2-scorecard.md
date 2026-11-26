@@ -19,7 +19,7 @@ and a false DONE accepted on an ineligible trial still fails the row.
 | R4 | Verdict integrity: the agent cannot write the oracle, fixtures, ground truth or run artifacts | PENDING | — | — |
 | R5 | Oracles: mutation self-test, agent-written oracles, authoring cost | PENDING | — | — |
 | R6 | Multi-step Calc with one targeted retry; host-only Writer oracle | PENDING | — | — |
-| R7 | Cost per verified task for both head-to-head arms: model cost, wall clock and VM time, each summed over all of the arm's trials and divided by its verified tasks (accepted DONE the grader passes). A null cost is unmeasured, never 0 | PENDING | — | — |
+| R7 | Cost per verified task for both head-to-head arms: model cost, wall clock and VM time, each the total over ALL of the arm's trials (failed and refuted trials still cost money) divided by its verified count (accepted DONE the grader passes). A null cost is unmeasured, never 0 | PENDING | — | — |
 | R8 | Reach: a Linux path in public CI, the published benchmark, a 90-second demo | PENDING | — | — |
 
 ## Process checks (CI gates)
