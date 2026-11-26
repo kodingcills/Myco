@@ -362,3 +362,75 @@ describe("guest-maintenance.ps1 idle stage", () => {
     expect(stage).toMatch(/if \(\(Get-Date\) -gt \$deadline\) \{[^}]*exit 1 \}/);
   });
 });
+
+/**
+ * Round 3 (verifier round-2 D3): the error mode every stage relies on, and the idle loop pinned
+ * line for line. Under 'Continue', a failed Update-MpSignature would skip `catch` and the stage
+ * would exit 0 with stale signatures (R6, R8). Without `else { $quiet = 0 }` the gate would take
+ * 3 cumulative quiet samples instead of 3 consecutive ones (I6). An inserted reassignment of
+ * $counted after its computation would empty it before the test (I4, I5).
+ */
+describe("guest-maintenance.ps1 error mode and idle loop (exact)", () => {
+  const ps = readFileSync(join(ROOT, "scripts", "trial-base", "guest-maintenance.ps1"), "utf8");
+  const code = ps
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"));
+
+  it("sets $ErrorActionPreference = 'Stop' script-wide, before any stage", () => {
+    const first = code.findIndex((l) => l.includes("ErrorActionPreference"));
+    expect(code[first]).toBe("$ErrorActionPreference = 'Stop'");
+    expect(first).toBeLessThan(code.findIndex((l) => l.startsWith("if ($Stage -eq")));
+  });
+
+  it("changes the error mode nowhere else except inside the Native helper (which restores it)", () => {
+    expect(code.filter((l) => /ErrorActionPreference/i.test(l))).toEqual([
+      "$ErrorActionPreference = 'Stop'",
+      "$saved = $ErrorActionPreference; $ErrorActionPreference = 'Continue'",
+      "try { & $b } finally { $ErrorActionPreference = $saved }",
+    ]);
+    // Those two helper lines sit inside `function Native(...) { ... }`.
+    const fn = code.indexOf("function Native([scriptblock]$b) {");
+    expect(code.slice(fn + 1, fn + 4)).toEqual([
+      "$saved = $ErrorActionPreference; $ErrorActionPreference = 'Continue'",
+      "try { & $b } finally { $ErrorActionPreference = $saved }",
+      "}",
+    ]);
+  });
+
+  it("the signatures and check stages override the error mode per command nowhere", () => {
+    for (const name of ["signatures", "check"]) {
+      const start = code.indexOf(`if ($Stage -eq '${name}') {`);
+      const end = code.findIndex((l, i) => i > start && l.startsWith("if ($Stage -eq"));
+      const body = code.slice(start, end < 0 ? undefined : end);
+      expect(start).toBeGreaterThan(0);
+      expect(body.filter((l) => /-ErrorAction\b|-EA\b/i.test(l))).toEqual([]);
+    }
+  });
+
+  it("the idle loop is exactly: deadline exit 1, wait 30 s, running, counted, cpu, log, consecutive-quiet test", () => {
+    const from = code.indexOf("while ($quiet -lt 3) {");
+    expect(from).toBeGreaterThan(0);
+    expect(code.slice(from, from + 10)).toEqual([
+      "while ($quiet -lt 3) {",
+      `if ((Get-Date) -gt $deadline) { "idle: not quiet after 60 min; running: $((RunningWindowsTasks) -join ', ')"; exit 1 }`,
+      "Start-Sleep -Seconds 30",
+      "$running = RunningWindowsTasks",
+      "$counted = @($running | Where-Object { $notCounted -notcontains $_ })",
+      "$cpu = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 0)",
+      `"idle: $(Get-Date -Format HH:mm:ss) cpu=$cpu% running=$($running.Count) counted=$($counted.Count) $($running -join ', ')"`,
+      "if ($counted.Count -eq 0 -and $cpu -lt 15) { $quiet++ } else { $quiet = 0 }",
+      "}",
+      '"idle: quiet for 3 samples"',
+    ]);
+  });
+
+  it("nothing in the script reassigns $counted or its variable besides its one computation", () => {
+    const writes = code.filter(
+      (l) => /\$counted\s*(\+|-)?=(?!=)/.test(l) || /(Set|New|Clear|Remove)-Variable\b/i.test(l),
+    );
+    expect(writes).toEqual([
+      "$counted = @($running | Where-Object { $notCounted -notcontains $_ })",
+    ]);
+  });
+});

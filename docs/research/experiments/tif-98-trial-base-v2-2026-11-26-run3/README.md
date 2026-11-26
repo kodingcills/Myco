@@ -57,7 +57,9 @@ and passed the readiness re-check.
 
 Snapshot memory state, read from UTM's `snapshots.plist` (`HasState`) for this VM. The raw
 `plutil -p` and `qemu-img snapshot -l -U` output is in `snapshot-metadata.txt` (captured
-read-only after the round-1 review; no snapshot changed since run 3):
+read-only after the round-1 review; no snapshot changed since run 3). UTM records
+`trial-base-v2` as created at 06:01:57Z, one second before the build's `done` line
+(06:01:58Z):
 
 | snapshot | HasState | UTM state size |
 |---|---|---|
