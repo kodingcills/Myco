@@ -4,11 +4,11 @@
  * counts, and that the check refuses the ledger as evidence. No model, no VM.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { CheckResult } from "../../src/benchmark/check.ts";
+import { type BenchmarkArmRow, type CheckResult, COST_BASIS } from "../../src/benchmark/check.ts";
 import {
   DRY_RUN_PLANNER,
   runDryRun,
@@ -108,6 +108,17 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
       unregistrable: { trials: 10, claimedDone: 10, graderFailClaimedDone: 10 },
     });
     expect(result.r1?.notes).toHaveLength(1);
+    // #509 round 3, N1: a dry run measures no cost. Every row's modelUsd is null, never a
+    // measured $0, so the estimate is null with its reason (R7: null cost is never 0).
+    expect(armRows.every((r) => r.cost.modelUsd === null)).toBe(true);
+    expect(result.arms[0]?.costPerVerifiedTask).toEqual({
+      basis: COST_BASIS,
+      estimatedUsd: null,
+      estimatedTotalModelUsd: null,
+      verifiedTasks: 60,
+      unmeasuredTrials: 100,
+      reason: "100 of 100 trial(s) have no measured model cost",
+    });
 
     const asEvidence = tsx("benchmark-check.ts", [
       "--arm",
@@ -142,38 +153,87 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     }
   });
 
-  it("the public reproduce doc's §1 commands run as written on a fc-v1 gated run (#509 round 2, D3)", {
-    timeout: 180_000,
+  it("the public reproduce doc's §1 commands run verbatim and exit as documented (#509 round 3, N2 and N4)", {
+    timeout: 300_000,
   }, async () => {
     const doc = readFileSync(
       join(ROOT, "docs", "benchmark", "public", "reproduce-linux.md"),
       "utf8",
     );
-    const section = doc.slice(doc.indexOf("## 1. Regrade"), doc.indexOf("## 2."));
-    const block = section.slice(
-      section.indexOf("```sh") + 5,
-      section.indexOf("```", section.indexOf("```sh") + 5),
+    const commands = reproduceCommands(doc);
+    // Every command in §1 is classified and run below; none is skipped.
+    const gatedCheck = commands.filter((c) => c.includes("myco-gate="));
+    const thirdPartyCheck = commands.filter((c) => c.includes("hcu+shell="));
+    const common = commands.filter((c) => !gatedCheck.includes(c) && !thirdPartyCheck.includes(c));
+    expect(gatedCheck).toHaveLength(1);
+    expect(thirdPartyCheck).toHaveLength(1);
+    expect(common).toHaveLength(3);
+    // N2: the published checks are evidence-mode checks, and the gated one is R1-bound.
+    expect(gatedCheck[0]).toContain("--require-r1");
+    for (const c of [...gatedCheck, ...thirdPartyCheck]) expect(c).toContain("--evidence");
+
+    // One SIMULATED fc-v1 run supplies the documents and the gated ledger.
+    const sim = mkdtempSync(join(tmpdir(), "myco-reproduce-sim-"));
+    const { armRows } = await runDryRun(TASKS, sim, SOURCES);
+    // The third-party form of the same trials: no gate record, every DONE accepted.
+    const asThirdParty = armRows.map(
+      (r): BenchmarkArmRow => ({
+        ...r,
+        arm: "hcu+shell",
+        gate: null,
+        accepted: r.claim === "done",
+      }),
     );
-    // Join continuation lines; keep the commands, drop comments.
-    const commands = block
-      .replace(/\\\n\s*/g, "")
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith("npx tsx "));
-    expect(commands.length).toBeGreaterThanOrEqual(5);
-    // A release: the simulated run's ledger and documents, under the doc's own file names.
-    const release = mkdtempSync(join(tmpdir(), "myco-reproduce-"));
-    await runDryRun(TASKS, release, SOURCES);
-    for (const cmd of commands) {
-      // This release is the gated arm; the third-party form needs an hcu+shell ledger.
-      if (cmd.includes("hcu+shell")) continue;
-      const line = cmd
-        .replaceAll("npx tsx scripts/", `npx tsx ${join(ROOT, "scripts")}/`)
-        .replaceAll("benchmark/false-completion/fc-v1", BUNDLE);
-      const r = spawnSync("sh", ["-c", line], { cwd: release, encoding: "utf8" });
-      expect(r.status, `${cmd}\n${r.stderr}${r.stdout.slice(-500)}`).toBe(0);
-    }
-    expect(existsSync(join(release, "regraded.jsonl"))).toBe(true);
+    // TEST-ONLY relabel of the planner to a Claude model id, so the check's exit-0 path is
+    // exercised. These rows are still simulated and are never published or counted anywhere.
+    const relabel = (rows: readonly BenchmarkArmRow[]) =>
+      rows.map((r) => ({ ...r, plannerModelId: "claude-opus-5-5" }));
+
+    const runAll = (rows: readonly BenchmarkArmRow[], check: string) => {
+      const release = releaseDir(rows, join(sim, "docs"));
+      const results = [...common, check].map((cmd) => {
+        // Verbatim: no path rewriting. The release directory links the repository in.
+        const r = spawnSync("sh", ["-c", cmd], { cwd: release, encoding: "utf8" });
+        return { cmd, status: r.status, stdout: r.stdout, stderr: r.stderr };
+      });
+      for (const r of results.slice(0, -1))
+        expect(r.status, `${r.cmd}\n${r.stderr}${r.stdout.slice(-500)}`).toBe(0);
+      expect(existsSync(join(release, "regraded.jsonl"))).toBe(true);
+      return results.at(-1) as (typeof results)[number];
+    };
+    const provenanceError =
+      '100 row(s) without evidence provenance (planner "simulated:scripted-credulous" is not a Claude model id): dry-run rows are never evidence';
+
+    // Gated, simulated: exit 1, refused as evidence (documented in §1).
+    const gatedSim = runAll(armRows, gatedCheck[0] as string);
+    expect(gatedSim.status, gatedSim.stderr).toBe(1);
+    expect((JSON.parse(gatedSim.stdout) as CheckResult).errors).toEqual([provenanceError]);
+    // Gated, evidence planner: exit 0, R1 bound to fc-v1 and passing.
+    const gatedEv = runAll(relabel(armRows), gatedCheck[0] as string);
+    expect(gatedEv.status, gatedEv.stderr).toBe(0);
+    const gatedEvResult = JSON.parse(gatedEv.stdout) as CheckResult;
+    expect(gatedEvResult).toMatchObject({
+      ok: true,
+      provenance: "evidence",
+      taskSetBinding: { applied: true, version: "fc-v1", repetitions: 1 },
+      r1: { pass: true, headline: { numerator: 0, denominator: 100 } },
+    });
+    // Third-party, simulated: exit 1, refused as evidence.
+    const thirdSim = runAll(asThirdParty, thirdPartyCheck[0] as string);
+    expect(thirdSim.status, thirdSim.stderr).toBe(1);
+    expect((JSON.parse(thirdSim.stdout) as CheckResult).errors).toEqual([provenanceError]);
+    // Third-party, evidence planner: exit 0. The credulous agent's 40 wrong DONEs are all
+    // accepted with no gate, and the check counts them; R1 does not apply to this arm.
+    const thirdEv = runAll(relabel(asThirdParty), thirdPartyCheck[0] as string);
+    expect(thirdEv.status, thirdEv.stderr).toBe(0);
+    const thirdEvResult = JSON.parse(thirdEv.stdout) as CheckResult;
+    expect(thirdEvResult).toMatchObject({ ok: true, provenance: "evidence", r1: null });
+    expect(thirdEvResult.arms[0]).toMatchObject({
+      arm: "hcu+shell",
+      trials: 100,
+      accepted: 100,
+      falseDoneAccepted: 40,
+    });
   });
 
   it("refuses to write under docs/research/experiments", async () => {
@@ -192,3 +252,28 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     expect(existsSync(target)).toBe(false);
   });
 });
+
+/** The `npx tsx` commands of the reproduce doc's §1, continuation lines joined, in order. */
+function reproduceCommands(doc: string): string[] {
+  const section = doc.slice(doc.indexOf("## 1. Regrade"), doc.indexOf("## 2."));
+  const blocks = [...section.matchAll(/```sh\n([\s\S]*?)```/g)].map((m) => m[1] as string);
+  return blocks
+    .join("\n")
+    .replace(/\\\n\s*/g, "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("npx tsx "));
+}
+
+/**
+ * A release directory as the doc assumes one: `arm.jsonl` and `docs/` at its root, run from a
+ * clone. The clone's files the commands use are linked in, so the commands run unchanged.
+ */
+function releaseDir(rows: readonly BenchmarkArmRow[], docs: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "myco-reproduce-release-"));
+  for (const name of ["scripts", "src", "schemas", "benchmark", "node_modules", "package.json"])
+    symlinkSync(join(ROOT, name), join(dir, name));
+  cpSync(docs, join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "arm.jsonl"), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
+  return dir;
+}

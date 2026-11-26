@@ -1,9 +1,8 @@
 # Reproduce on Linux
 
 Two things you can do on any Linux machine, with no VM, no account, no API key and no model.
-**Draft.** These steps have not yet been run end to end against fc-v1 on Linux. Each command
-below exists in the repo, and the ones in §1 run in CI on the fake app. Treat §2 as a recipe
-to validate, not a tested procedure.
+§1 is tested: every command in it runs verbatim in CI (see the end of §1). §2 is a recipe
+that has not been run end to end against fc-v1; treat it as a procedure to validate.
 
 Prerequisites, from [`docs/product/linux-path.md`](../../product/linux-path.md) §1: `git`,
 Node 24 or later, pnpm 10. §2 also needs LibreOffice Calc and its Python-UNO bridge.
@@ -16,33 +15,64 @@ pnpm install --frozen-lockfile
 
 ## 1. Regrade a published result (Node only, no LibreOffice)
 
-Given a release's `arm.jsonl`, its `docs/` directory of saved documents and its `grades.jsonl`:
+Run these from a clone, in a directory that holds a release's `arm.jsonl` and its `docs/`
+directory of saved documents (named `<trialKey>.csv` or `<trialKey>.xlsx`). The release's own
+`grades.jsonl` is what you compare against at the end.
 
 ```sh
-# 1. The bundle is the published one
+# 1. The bundle is the published one. Exit 0; exit 1 on any changed, missing or extra file
 npx tsx scripts/benchmark-verify-bundle.ts benchmark/false-completion/fc-v1
 
-# 2. Rebuild the grade requests from the bundle and the published documents
+# 2. Rebuild the grade requests from the bundle and the published documents.
+#    Exit 0; exit 1, writing nothing, if it refuses any row or path. --out must not exist yet
 npx tsx scripts/benchmark-make-requests.ts --bundle benchmark/false-completion/fc-v1 \
   --arm arm.jsonl --docs docs --out work
 
-# 3. Grade again, independently of the release's grades
+# 3. Grade again, independently of the release's grades.
+#    Exit 0 (an unreadable document grades ungradable); exit 1 on an empty or invalid request file
 npx tsx scripts/benchmark-grade.ts work/requests.jsonl > regraded.jsonl
-
-# 4. Recompute the counts; compare with the release's check output.
-#    Myco's gated arm on fc-v1: 100 trials, 10 of them unregistrable (the invalid-target tasks)
-npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades regraded.jsonl \
-  --expect myco-gate=100 --expect-unregistrable myco-gate=10 --require-r1
-#    A third-party arm with no gate
-npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades regraded.jsonl --expect hcu+shell=100
 ```
 
-For the gated arm, `--require-r1` binds the rows to the published task set: exactly fc-v1's 100
-tasks (or a whole number of runs of them), each with its own fixture and instruction hashes,
-and the 10 invalid-target tasks unregistrable. Without `--require-r1` (or `--evidence`) the
-check still counts, but its result says `taskSetBinding.applied: false` and R1 does not pass.
-`test/benchmark/r1-dryrun.test.ts` runs the commands above, as written, on a simulated fc-v1
-run.
+Then recompute the counts, in evidence mode, with the form for the arm the release is for.
+
+**Myco's gated arm** on fc-v1: 100 trials, 10 of them unregistrable (the invalid-target tasks).
+
+```sh
+npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades regraded.jsonl \
+  --expect myco-gate=100 --expect-unregistrable myco-gate=10 --require-r1 --evidence
+```
+
+**A third-party arm** with no gate (the `hcu+shell` arm):
+
+```sh
+npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades regraded.jsonl \
+  --expect hcu+shell=100 --evidence
+```
+
+The check prints its result as JSON. It exits:
+- **0** when the ledgers are consistent and every row has evidence provenance, and, for the
+  gated arm, R1 passes;
+- **1** when the ledgers are inconsistent, empty or miscounted; when any row lacks evidence
+  provenance (a simulated dry run is refused with "dry-run rows are never evidence"); or,
+  for the gated arm, when R1 does not pass;
+- **2** on a usage error, including `--require-r1` on the gated arm without
+  `--expect-unregistrable`.
+
+`--evidence` admits a row only when its planner is one of the Claude model ids listed in
+`EVIDENCE_PLANNERS` (`src/benchmark/check.ts`). For the gated arm, `--require-r1` and
+`--evidence` each bind the rows to the published task set: exactly fc-v1's 100 tasks (or a
+whole number of runs of them), each with its own fixture and instruction hashes, and the 10
+invalid-target tasks unregistrable. Without either flag the check still counts, but its
+result says `taskSetBinding.applied: false` and R1 does not pass.
+
+**Tested.** `test/benchmark/r1-dryrun.test.ts` extracts every command in this section's code
+blocks and runs each one verbatim, with no path rewriting, from a release directory that links
+in the clone. The release is a SIMULATED fc-v1 run (a scripted agent, no model):
+- steps 1-3 exit 0;
+- both check commands exit 1 on it, with the provenance refusal above;
+- with the planner relabelled to a Claude model id (inside the test only), the gated check
+  exits 0 with R1 bound and passing, and the third-party check, given the same trials with
+  no gate record, exits 0.
 
 Your `regraded.jsonl` should equal the release's `grades.jsonl` row for row (same grader
 version, same hashes, same status). The check output should match the published numbers. Any
@@ -59,8 +89,8 @@ checks that your harness, capture and ledger are right before you spend anything
 A model-driven agent needs your own computer-use harness; the capture and ledger steps are the
 same.
 
-1. **Check prerequisites.** `pnpm myco-linux --check` must print `ok` for both `soffice` and
-   `python-uno`.
+1. **Check prerequisites.** `pnpm myco-linux --check` must exit 0: it prints the `soffice`
+   version and `ok` for `python-uno`, and exits 1 naming whichever is missing.
 2. **Open the fixture as a workbook.** For a task, convert its fixture to `.xlsx` with a
    throwaway profile, as the Linux path does:
 
@@ -82,7 +112,8 @@ same.
    (`rowKey`, `column`) located in the fixture. Your agent must see only the task's
    `instruction`.
 4. **Capture.** Copy the saved workbook, unchanged, to `docs/<trialKey>.xlsx`, and write the
-   arm row with its SHA-256 (`docs/benchmark/false-completion.md` §4 lists the fields).
+   arm row with its SHA-256 (`docs/benchmark/false-completion.md` §4 lists the fields). If the
+   arm has no measured cost, write `cost.modelUsd: null`, never 0.
 5. **Grade and check** as in §1.
 
 **Fault classes on this path.** Headless Calc has no window to steal focus from and no
@@ -96,5 +127,7 @@ Linux desktop session you drive yourself).
 - **Myco's gated arm.** The gate runs over MCP beside a live agent, with a sealed verdict
   vault (`src/gate/`). Reproducing a gated result means re-running the check on its published
   ledgers (§1). Re-running the gate itself needs Myco's harness.
-- **Timing and model cost.** Published costs come from the arm's own measured rows. An
-  unmeasured cost is reported as null, never 0.
+- **Timing and model cost.** Published costs are a **token-derived estimate** at frozen
+  per-token rates, **not billed USD**, taken from the arm's own rows (the check labels them
+  with `costPerVerifiedTask.basis`). An unmeasured cost is reported as null, never 0, and one
+  null row makes the arm's estimate null.
