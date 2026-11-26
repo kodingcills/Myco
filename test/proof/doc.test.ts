@@ -73,7 +73,13 @@ describe("docs/architecture/replayable-proof.md matches the code", () => {
     expect(DOC).not.toContain("No secret, absolute host path, username or vault key may be");
     expect(DOC).toContain("`--user-file`");
     const limits = DOC.slice(DOC.indexOf("**Limits.**"), DOC.indexOf("Planted-marker tests"));
-    for (const item of ["plain prose", "**POSIX** path outside the home roots", "`x_CORP\\user`"])
+    for (const item of [
+      "plain prose",
+      "**POSIX** path outside the home roots",
+      "`x_CORP\\user`",
+      "`dest://nas/homes/First Last`",
+      "bracketed IPv6",
+    ])
       expect(limits, item).toContain(item);
     // Each documented UNC form is caught.
     for (const form of [
@@ -82,6 +88,11 @@ describe("docs/architecture/replayable-proof.md matches the code", () => {
       "\\\\nas/homes/Plantfirst ZqPLANTEDlast/x",
       "//nas/Plantfirst ZqPLANTEDlast/x",
       "smb://nas/homes/Plantfirst ZqPLANTEDlast/x",
+      "FileSystem::\\\\nas\\homes\\Plantfirst ZqPLANTEDlast",
+      "file://nas/homes/Plantfirst ZqPLANTEDlast/x",
+      "file://///nas/homes/Plantfirst ZqPLANTEDlast",
+      "file:///srv/Plantfirst ZqPLANTEDlast/x",
+      "\\\\nas\\homes\\ZqPLANTEDlast, Plantfirst",
       "desktop-7\\Plantfirst ZqPLANTEDlast",
       "zqplantedguest@DESKTOP-7 ~ %",
     ])

@@ -8,7 +8,8 @@
  *     values first (secrets, vault keys, host paths), then generic shapes
  *     (home roots `Users`/`home`/`root`/`Documents and Settings`/`DOCUME~N` after any
  *     non-alphanumeric character, with spaces allowed in the user segment; UNC paths in every
- *     separator and prefix form and network file URLs, with spaces allowed in every segment;
+ *     separator and prefix form, also after a `:` (`FileSystem::\\nas\a`), and network file
+ *     URLs including `file://host/...`, with spaces allowed in every segment;
  *     Windows drive paths, also with spaced segments; absolute POSIX paths, `~user` homes,
  *     `var/folders`, `file:` URLs, key-shaped tokens; then the account-name shapes
  *     `DOMAIN\user` and `user@host`, and registered account names in any letter case). A
@@ -108,6 +109,13 @@ const FILE_URL = /\bfile:\/\/[^\s"'`<>]*/gi;
  * not a path. Over-matching (the rest of a sentence) is redacted, never leaked.
  */
 const USER_SEG = String.raw`[^\s"<>|\\/:*?;=,+\[\]][^\r\n\t"<>|\\/:*?;=,+\[\]]*`;
+/**
+ * A share or folder segment outside the home roots (UNC, network URL, drive path). A Windows
+ * folder or share name MAY contain `, ; = + [ ]` (`\\nas\homes\Last, First`), so unlike
+ * `USER_SEG` (account names cannot) the segment runs on through them, to the next separator,
+ * line break or tab, or a character no Windows file name may contain (`" < > | : * ?`).
+ */
+const FOLDER_SEG = String.raw`[^\s"<>|\\/:*?][^\r\n\t"<>|\\/:*?]*`;
 /** A later path segment: no whitespace. */
 const PATH_SEG = String.raw`[^\s"'\`<>|\\/]+`;
 /**
@@ -136,23 +144,34 @@ const HOME_ROOT = new RegExp(
  *  - the Win32 long-path and device prefixes `\\?\` and `\\.\` (the lone `?` or `.` is the
  *    "host", then `UNC`, the server and the share are ordinary segments; `\\?\C:\Users\a` is
  *    caught by the home-root shape, which runs first, and the drive shape);
- *  - a URL scheme's `://` never matches (`:` may not precede), so `https://host/x` stays; the
- *    network file schemes are caught by `NET_URL` below.
+ *  - after a `:` (#548 R2-D1): PowerShell prints `FileSystem::\\nas\homes\First Last`. Only a
+ *    slash pair directly after a URL scheme (`letters:`) is excluded, so `https://host/x`
+ *    stays; a run of backslashes is never a scheme separator and matches after any `:`. The
+ *    network file schemes (`file://host/...` included) are caught by `NET_URL` below;
+ *  - a separator may not precede, so a run of separators is taken whole from its start;
+ *  - share and folder segments use `FOLDER_SEG`, so `\\nas\homes\Last, First` is caught.
  */
 const UNC_SPACED = new RegExp(
-  String.raw`(?<![A-Za-z0-9._:-])[\\/]{2,}(?:[?.]|[^\s\\/"<>|:*?]+)(?:[\\/]+${USER_SEG})+`,
+  String.raw`(?<![A-Za-z0-9._\\/-])(?:(?<![A-Za-z0-9+.-]:)[\\/]{2,}|\\\\[\\/]*)(?:[?.]|[^\s\\/"<>|:*?]+)(?:[\\/]+${FOLDER_SEG})+`,
   "g",
 );
-/** Network file URLs (`smb://nas/homes/First Last/x`): every segment may carry spaces. */
+/**
+ * Network file URLs (`smb://nas/homes/First Last/x`, `file://nas/homes/First Last/x`): every
+ * segment may carry spaces, and any run of separators may follow the colon (`file://///nas`,
+ * `file:///srv/First Last`; with `file:///C:/...` the drive is read as the host).
+ */
 const NET_URL = new RegExp(
-  String.raw`(?<![A-Za-z0-9+.-])(?:smb|cifs|afp|nfs|webdav|davs?|s?ftps?):\/\/[^\s\\/"<>|*?]+(?:[\\/]+${USER_SEG})*`,
+  String.raw`(?<![A-Za-z0-9+.-])(?:file|smb|cifs|afp|nfs|webdav|davs?|s?ftps?):[\\/]{2,}[^\s\\/"<>|*?]+(?:[\\/]+${FOLDER_SEG})*`,
   "gi",
 );
 /**
  * Windows drive paths with spaces in any segment (D3: `D:\Profiles\First Last\x` outside the
  * home roots). The space-free `WINDOWS_ABS` below still catches the rest.
  */
-const WINDOWS_SPACED = new RegExp(String.raw`[A-Za-z]:[\\/]${USER_SEG}(?:[\\/]+${USER_SEG})*`, "g");
+const WINDOWS_SPACED = new RegExp(
+  String.raw`[A-Za-z]:[\\/]${FOLDER_SEG}(?:[\\/]+${FOLDER_SEG})*`,
+  "g",
+);
 const VAR_FOLDERS = /(?<![A-Za-z0-9])var[\\/]+folders(?:[\\/]+[^\s"'`<>|\\/]+)*/gi;
 
 /**

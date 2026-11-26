@@ -23,6 +23,7 @@ import type {
   VerdictBody,
   VerifyResult,
 } from "./bundle.ts";
+import { recordSha256, runGenesis } from "./bundle.ts";
 import { EMPTY_REDACTION, findLeaks, type RedactionContext } from "./redact.ts";
 
 export function escapeHtml(text: string): string {
@@ -78,7 +79,8 @@ function detail(r: ProofRecord): string {
 export class ProofReportError extends Error {}
 
 /**
- * Render a verified bundle. Throws when `verification.ok` is false, or when the rendered
+ * Render a verified bundle. Throws when `verification.ok` is false, when `verification` was
+ * not produced for this bundle's records (`sameChain`), or when the rendered
  * HTML carries anything `findLeaks` (with `redaction`) refuses.
  */
 export function renderProofReport(
@@ -88,6 +90,10 @@ export function renderProofReport(
 ): string {
   if (!verification.ok)
     throw new ProofReportError("refusing to render a bundle that does not verify");
+  if (!sameChain(bundle, verification))
+    throw new ProofReportError(
+      "refusing to render: the verification result does not belong to this bundle",
+    );
   const html = renderHtml(bundle, verification);
   const leaks = findLeaks(html, redaction);
   if (leaks.length > 0)
@@ -97,6 +103,22 @@ export function renderProofReport(
       ].join(", ")}`,
     );
   return html;
+}
+
+/**
+ * True when `verification` was produced for this bundle's exact records: its head names the
+ * same record count, and the chain recomputed from the run header over these records ends at
+ * that head. A passing result for another bundle, or for these records before an edit, fails.
+ */
+function sameChain(bundle: ProofBundle, verification: VerifyResult): boolean {
+  const head = verification.head;
+  if (head === undefined || head.records !== bundle.records.length) return false;
+  let prev = runGenesis(bundle.run);
+  for (const r of bundle.records) {
+    if (r.prevSha256 !== prev) return false;
+    prev = recordSha256(r);
+  }
+  return prev === head.headSha256;
 }
 
 function renderHtml(bundle: ProofBundle, verification: VerifyResult): string {

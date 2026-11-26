@@ -129,13 +129,21 @@ outside them is a stated limit (item 5), not a guarantee.
      `build-/home/a`, `/Users\a` and drive-relative `C:Users\a` are all caught.
    - **The user segment after a home root may contain spaces** (`C:\Users\First Last\x`), as
      may every segment of a Windows drive path (`D:\Profiles\First Last\x`), of a UNC path
-     after the host, and of a network file URL. A segment runs to the next separator and stops
-     only at a character no account name may contain. **The UNC shape covers the whole
+     after the host, and of a network file URL. A user segment runs to the next separator and
+     stops only at a character no account name may contain. A share or folder segment (drive,
+     UNC, network URL) also runs on through `, ; = + [ ]`, which a Windows folder or share name
+     may contain (`\\nas\homes\Last, First`), and stops at a separator, a line break, a tab or
+     one of `" < > | : * ?`. **The UNC shape covers the whole
      class:** `\\nas\homes\First Last`, either or mixed separators (`\\nas/homes/a`,
      `//nas/a`), the long-path and device prefixes (`\\?\UNC\nas\a`, `\\.\UNC\nas\a`,
-     `\\?\C:\Users\a`), double-escaped backslashes, and every encoded form of each. A URL
-     scheme's `://` is not a UNC host (`https://host/x` stays); the network file schemes
-     `smb`, `cifs`, `afp`, `nfs`, `webdav`, `dav(s)` and `(s)ftp(s)` are caught. These
+     `\\?\C:\Users\a`), double-escaped backslashes, a UNC path after a `:` such as
+     PowerShell's provider-qualified path (`FileSystem::\\nas\homes\First Last`, as
+     `Get-Location` prints it), and every encoded form of each. A slash pair directly after a
+     URL scheme (`letters:`) is not a UNC host, so `https://host/x` stays; the network file
+     schemes `file`, `smb`, `cifs`, `afp`, `nfs`, `webdav`, `dav(s)` and `(s)ftp(s)` are caught
+     with spaces in every segment and any run of separators after the colon
+     (`file://nas/homes/First Last/x`, `file://///nas/homes/First Last`,
+     `file:///srv/First Last/x`). These
      whitespace-tolerant shapes run **before** the drive, backslash and POSIX shapes, which stop
      at whitespace: run after them, the part before the space is replaced and the surname is
      left with no root to flag it. For the same reason, a string whose **decoded** form holds
@@ -167,12 +175,15 @@ outside them is a stated limit (item 5), not a guarantee.
      name written in plain prose (`logged in as Alice`) or after a prompt with no `@`;
    - a spaced folder in a **POSIX** path outside the home roots (`/srv/First Last/x` keeps
      `Last/x`): only home roots, Windows drive, UNC and network-URL segments may span spaces;
+   - a URL whose scheme is not one of the network file schemes above
+     (`dest://nas/homes/First Last`): it is read as an ordinary URL and not flagged;
    - a `DOMAIN\user` with `_`, `:`, `.`, `-` or a separator directly before the domain
      (`x_CORP\user`), and a `user@host` whose host does not start with a letter
      (`a@10.0.0.1`);
-   - obfuscated forms (a soft hyphen inside `Users`, a fullwidth `／`, a tab inside
-     `Documents and Settings`), and paths outside the home roots behind a character the generic
-     shape skips (`run.../tmp/x/y`).
+   - obfuscated or invalid forms (a soft hyphen inside `Users`, a fullwidth `／`, a tab inside
+     `Documents and Settings` or inside a UNC folder name, a bracketed IPv6 "UNC" host), and
+     paths outside the home roots behind a character the generic shape skips
+     (`run.../tmp/x/y`).
    These are hardening items for the shared scanner (TO FILE).
 
 Planted-marker tests (`test/proof/redaction.test.ts`) plant fake secrets, key shapes, a vault
@@ -192,6 +203,12 @@ scanner once #542 merges, with a parity test over the bypass corpus.
 `report` writes one static HTML file: no script, no link, no image, no remote URL, a
 `default-src 'none'` CSP, and every value HTML-escaped. Replay is read-only and needs no
 server, so there is nothing to bind to loopback.
+
+The renderer takes a bundle and a verification result. It renders only a passing result
+that belongs to that bundle: the result's head must name the same record count, and the chain
+recomputed from the bundle's run header over its records must end at that head. A passing
+result for another bundle, or for these records before an edit, is refused. The CLI always
+passes the result of verifying the same bytes.
 
 ## Dependencies
 

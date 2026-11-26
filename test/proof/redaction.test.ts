@@ -20,7 +20,7 @@ import {
   type RedactionContext,
   redactText,
 } from "../../src/proof/redact.ts";
-import { ProofReportError, renderProofReport } from "../../src/proof/report.ts";
+import { renderProofReport } from "../../src/proof/report.ts";
 import { clone, NO_CTX, rechain, sampleRun } from "./fixture.ts";
 
 const j = (...parts: string[]) => parts.join("");
@@ -378,12 +378,17 @@ describe("every registered literal kind is scanned (not only the vault key)", ()
 describe("the report is an output in its own right: its HTML is scanned", () => {
   // A verification result the verifier would never produce for this bundle: the report's
   // own scan is the last line, independent of the verifier.
-  const forgedOk = {
-    ok: true,
-    errors: [],
-    evidenceRecomputed: [],
-    evidenceDigestOnly: [],
-  } as const;
+  // It carries the bundle's own head, so the renderer's binding check (the result belongs to
+  // this bundle) passes and only the HTML scan is under test.
+  const forgedOk = (b: ProofBundle) =>
+    ({
+      ok: true,
+      errors: [],
+      head: b.head,
+      evidenceRecomputed: [],
+      evidenceDigestOnly: [],
+    }) as const;
+  const render = (b: ProofBundle, ctx?: RedactionContext) => renderProofReport(b, forgedOk(b), ctx);
   const withSummary = (summary: string): ProofBundle => {
     const b = clone(exportProofBundle(sampleRun(), NO_CTX));
     (b.records[1]?.body as { summary: string }).summary = summary;
@@ -391,14 +396,12 @@ describe("the report is an output in its own right: its HTML is scanned", () => 
   };
 
   it("a path in the rendered HTML stops the report (P3)", () => {
-    expect(() => renderProofReport(withSummary(`see\t${MAC_HOME}x`), forgedOk)).toThrow(
-      ProofReportError,
-    );
+    expect(() => render(withSummary(`see\t${MAC_HOME}x`))).toThrow(/unredacted/);
   });
 
   it("a path that the HTML escaping turns into entities is still found", () => {
     const value = `see ${MAC_HOME.replace(/\//g, "&#47;")}x`;
-    expect(() => renderProofReport(withSummary(value), forgedOk)).toThrow(/unredacted/);
+    expect(() => render(withSummary(value))).toThrow(/unredacted/);
   });
 
   it("R2-D1: a home root after a skipped leading character stops the report", () => {
@@ -409,17 +412,30 @@ describe("the report is an output in its own right: its HTML is scanned", () => 
       j("/", "Users\\", USER, "\\x"),
       j("C:", "Users\\", USER, "\\x"),
     ])
-      expect(() => renderProofReport(withSummary(value), forgedOk), value).toThrow(
-        ProofReportError,
-      );
+      expect(() => render(withSummary(value)), value).toThrow(/unredacted/);
   });
 
   it("a registered literal passed to the renderer stops the report", () => {
     const b = withSummary(`x ${SECRET_VALUE}`);
-    expect(() => renderProofReport(b, forgedOk)).not.toThrow();
-    expect(() => renderProofReport(b, forgedOk, { ...NO_CTX, secrets: [SECRET_VALUE] })).toThrow(
-      ProofReportError,
-    );
+    expect(() => render(b)).not.toThrow();
+    expect(() => render(b, { ...NO_CTX, secrets: [SECRET_VALUE] })).toThrow(/unredacted/);
+  });
+
+  it("#548 nit, closed: a passing result for ANOTHER bundle does not render this one", () => {
+    const good = withSummary("clean summary");
+    const other = withSummary("another clean summary");
+    // A real passing result, but for `other`: the heads differ.
+    const otherOk = verifyProofBundle(serializeProofBundle(other));
+    expect(otherOk.ok).toBe(true);
+    expect(() => renderProofReport(good, otherOk)).toThrow(/does not belong/);
+    // A head that matches but records edited after verification: the chain is recomputed.
+    const edited = clone(good);
+    (edited.records[1]?.body as { summary: string }).summary = "edited after verify";
+    expect(() => renderProofReport(edited, forgedOk(good))).toThrow(/does not belong/);
+    // A result with no head at all.
+    const { head: _h, ...noHead } = forgedOk(good);
+    expect(() => renderProofReport(good, noHead)).toThrow(/does not belong/);
+    expect(() => render(good)).not.toThrow();
   });
 });
 
@@ -499,6 +515,27 @@ const SPACED: ReadonlyArray<readonly [string, string, readonly string[]]> = [
   [
     "8.3 short name of Documents and Settings with a spaced user",
     j("C:\\DOCUME~1\\", FIRST, " ", LAST, "\\x"),
+    [FIRST, LAST],
+  ],
+  // #548 R2-D2: home roots with no drive letter, so the drive shape cannot mask them.
+  [
+    "Documents and Settings under a WSL mount, spaced user",
+    j("/mnt/c/Documents and Settings/", FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  [
+    "rootless Documents and Settings, spaced user",
+    j("cd \\Documents and Settings\\", FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  [
+    "rootless 8.3 Documents and Settings, spaced user",
+    j("cd \\DOCUME~1\\", FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  [
+    "relative 8.3 Documents and Settings, spaced user",
+    j("..\\DOCUME~1\\", FIRST, " ", LAST),
     [FIRST, LAST],
   ],
   ["8.3 short user folder", j("C:\\", "Users\\", "ZQPLAN~1", "\\x"), ["ZQPLAN~1"]],
@@ -802,6 +839,72 @@ const UNC_CLASS: ReadonlyArray<readonly [string, string, readonly string[]]> = [
   ["D3 percent-encoded DOMAIN\\user, spaced", j("desktop-7%5C", FIRST, " ", LAST), [FIRST, LAST]],
   ["D3 user@host prompt", j(GUEST, "@DESKTOP-7 ~ %"), [GUEST]],
   ["D3 user@host:path from scp", j("scp a ", GUEST, "@nas.local:x"), [GUEST]],
+  // #548 R2-D1 (a): a UNC path after PowerShell's provider qualifier `::` (Get-Location).
+  [
+    "R2-D1 PowerShell FileSystem:: provider path, spaced user",
+    j(
+      "Microsoft.PowerShell.Core",
+      BS,
+      "FileSystem::",
+      BS,
+      BS,
+      "nas",
+      BS,
+      "homes",
+      BS,
+      FIRST,
+      " ",
+      LAST,
+    ),
+    [FIRST, LAST],
+  ],
+  [
+    "R2-D1 PowerShell prompt on a UNC directory, spaced user",
+    j("PS FileSystem::", BS, BS, "nas", BS, "homes", BS, FIRST, " ", LAST, BS, "x> dir"),
+    [FIRST, LAST],
+  ],
+  [
+    "R2-D1 UNC after a non-letter label and a colon",
+    j("log 5:", BS, BS, "nas", BS, "homes", BS, FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  // #548 R2-D1 (b): the file:// URL form of a UNC path, and its spaced variants.
+  [
+    "R2-D1 file://server/share URL, spaced user",
+    j("open file://nas/homes/", FIRST, " ", LAST, "/x"),
+    [FIRST, LAST],
+  ],
+  [
+    "R2-D1 file://///server/share URL (five slashes), spaced user",
+    j("open file://///nas/homes/", FIRST, " ", LAST, "/x"),
+    [FIRST, LAST],
+  ],
+  [
+    "R2-D1 FILE:// in upper case with backslashes, spaced user",
+    j("FILE:", BS, BS, "nas", BS, "homes", BS, FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  [
+    "R2-D1 percent-encoded file:// URL, spaced user",
+    j("file://nas/homes/", FIRST, "%20", LAST, "/x"),
+    [FIRST, LAST],
+  ],
+  // #548 round-2 nit, closed: a share or folder name may contain `,` (Last, First).
+  [
+    "UNC folder named Last, First",
+    j(BS, BS, "nas", BS, "homes", BS, LAST, ", ", FIRST),
+    [FIRST, LAST],
+  ],
+  [
+    "smb URL folder named Last, First",
+    j("smb://nas/homes/", LAST, ", ", FIRST, "/x"),
+    [FIRST, LAST],
+  ],
+  [
+    "drive folder named Last, First",
+    j("cd D:", BS, "Profiles", BS, LAST, ", ", FIRST),
+    [FIRST, LAST],
+  ],
 ];
 
 describe("#548 D1-D3: the UNC class, encoded UNC and account-name forms", () => {
@@ -824,14 +927,28 @@ describe("#548 D1-D3: the UNC class, encoded UNC and account-name forms", () => 
       "a // comment, and // another",
       "text/csv, myco.gate/v1, react@18, @types/node",
       "ratio 1//2",
+      "https:\\/\\/example.org\\/a\\/b",
+      "see https://example.org/x and a::b",
     ])
       expect(findLeaks(ok), ok).toEqual([]);
+  });
+
+  it("R2-D1: a file:// URL with a run of slashes is replaced whole, in one placeholder", () => {
+    for (const slashes of ["//", "///", "/////"])
+      expect(
+        redactText(j("open file:", slashes, "nas/homes/", FIRST, " ", LAST, "/x"), NO_CTX),
+      ).toBe(`open ${PLACEHOLDER.hostPath}`);
   });
 
   it("a literal word\\nword escape is read as DOMAIN\\user and over-redacted, never leaked", () => {
     const value = "line\\nnext";
     expect(findLeaks(value).map((l) => l.kind)).toContain("username");
     expect(redactText(value, NO_CTX)).toBe(PLACEHOLDER.username);
+  });
+
+  it("limit, pinned: an unlisted URL scheme with a spaced folder is not flagged", () => {
+    // Stated in the doc's Limits; if this starts failing, the limit was closed: update the doc.
+    expect(findLeaks(j("dest://nas/homes/", FIRST, " ", LAST))).toEqual([]);
   });
 
   it("D3 limit, pinned: a POSIX spaced folder outside the home roots keeps the surname", () => {
@@ -878,6 +995,43 @@ describe("#548 D1/D3 through the real CLI: export -> verify -> report", () => {
       "@DESKTOP-7 ~ %",
     );
     const words = [FIRST, LAST, BOB, SMITH, GUEST];
+    const bundle = join(dir, "b.json");
+    const exp = cliRun(["export", writeRun(dir, value), "--out", bundle]);
+    expect(exp.code).toBe(0);
+    absentFrom(exp.out, words);
+    absentFrom(readFileSync(bundle, "utf8"), words);
+    const ver = cliRun(["verify", bundle]);
+    expect(ver.code).toBe(0);
+    absentFrom(ver.out, words);
+    const html = join(dir, "r.html");
+    const rep = cliRun(["report", bundle, "--out", html]);
+    expect(rep.code).toBe(0);
+    absentFrom(rep.out, words);
+    absentFrom(readFileSync(html, "utf8"), words);
+  });
+
+  it("#548 R2-D1: the verifier's round-2 probe (FileSystem:: and file://) leaves no user word", () => {
+    const dir = mkdtempSync(join(tmpdir(), "proof-548r2-"));
+    const value = j(
+      "pwd -> Microsoft.PowerShell.Core",
+      BS,
+      "FileSystem::",
+      BS,
+      BS,
+      "nas",
+      BS,
+      "homes",
+      BS,
+      FIRST,
+      " ",
+      LAST,
+      " ; start file://nas/homes/",
+      BOB,
+      " ",
+      SMITH,
+      "/x.csv",
+    );
+    const words = [FIRST, LAST, BOB, SMITH];
     const bundle = join(dir, "b.json");
     const exp = cliRun(["export", writeRun(dir, value), "--out", bundle]);
     expect(exp.code).toBe(0);
