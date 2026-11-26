@@ -14,7 +14,13 @@ import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runInSandbox, type SandboxResult, SDK_DIR } from "../../src/plugins/host/sandbox.ts";
+import {
+  fsizeBlocks,
+  fsizeUnit,
+  runInSandbox,
+  type SandboxResult,
+  SDK_DIR,
+} from "../../src/plugins/host/sandbox.ts";
 import { PLUGIN_SPEC } from "../../src/plugins/sdk/protocol.ts";
 import { cleanupPlugins, makePlugin, tempDir, utf8 } from "./helpers.ts";
 
@@ -615,7 +621,8 @@ describe("the child refuses a free-text code itself (V6, defence in depth)", () 
  */
 describe("D3: plugin output is bounded on the host disk during the call", () => {
   const CAP = 4096;
-  /** What the kernel may let through: the cap rounded up to the next 512-byte block. */
+  /** What the kernel may let through: the cap plus at most one shell block (512 bytes, or 1024
+   * where `/bin/sh` counts 1024-byte blocks, as macOS's bash 3.2 does). */
   const HARD_BOUND = CAP + 1024;
   const MIB = 1024 * 1024;
 
@@ -687,9 +694,9 @@ process.stdout.write(JSON.stringify({ maxSize, maxAlloc, seen }) + "\n");
     };
   }
 
-  const verifyWith = (source: string, timeoutMs: number) => {
+  const verifyWith = (source: string, timeoutMs: number, cap = CAP) => {
     const p = makePlugin(source, {
-      caps: { timeoutMs, memoryMb: 64, maxInputBytes: 65536, maxOutputBytes: CAP },
+      caps: { timeoutMs, memoryMb: 64, maxInputBytes: 65536, maxOutputBytes: cap },
     });
     return () =>
       runInSandbox(p.target, {
@@ -718,6 +725,26 @@ export default { oracle() { return { status: "refuted", code: "X" }; } };`;
     expect(w.maxSize).toBeGreaterThan(CAP); // the plugin did push past the cap ...
     expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND); // ... and the kernel stopped it there
     expect(w.maxAlloc).toBeLessThanOrEqual(HARD_BOUND + 64 * 1024);
+    expect(w.leftover).toEqual([]);
+  }, 30_000);
+
+  // E1 (verifier round 1 on #558): the kernel limit follows THIS call's cap, not the
+  // detection probe's (4096). At the 256-byte manifest floor a limit of max(cap, 4096) would let
+  // 4608 bytes reach the disk; at the 1 MiB ceiling the limit must still be cap + one block.
+  it.each([
+    ["the 256-byte manifest floor", 256],
+    ["the 1 MiB manifest ceiling", MIB],
+  ])("at %s the disk holds at most the cap plus one block", async (_label, cap) => {
+    const unit = fsizeUnit();
+    expect([512, 1024]).toContain(unit);
+    const limit = fsizeBlocks(cap, unit as number) * (unit as number);
+    const w = await watched(verifyWith(HOOK_64MIB, 5000, cap));
+    expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+    expect(w.seen).toBeGreaterThan(0);
+    expect(w.maxSize).toBeGreaterThan(cap); // the plugin did push past the cap ...
+    expect(w.maxSize).toBeLessThanOrEqual(limit); // ... to this call's kernel limit, no further
+    expect(limit - cap).toBeLessThanOrEqual(unit as number);
+    expect(w.maxSize).toBeLessThanOrEqual(cap + 1024);
     expect(w.leftover).toEqual([]);
   }, 30_000);
 
