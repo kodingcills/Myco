@@ -30,6 +30,13 @@
  * the same explicit acknowledgement the CLI demands, enforced here so no caller can start a
  * real trial by calling `runPilot` directly. A `PAUSE` file in the
  * run directory, or `requestStop()`, stops new starts after in-flight trials finish.
+ *
+ * Corrections A/B mode (`src/pilot/ab.ts`) uses the same runner through optional hooks, all
+ * absent for the R1 pilot: a trial-key prefix, a chunk of task ids to run this invocation
+ * (`only`), the #518 attempt ledger (`attemptSink`), an experiment label on every arm row,
+ * extra PAUSE files, and `afterDecided`, called after each decided trial before the next
+ * start: a non-null reason HALTS the whole run (status `halted`; the gate-miss rule). The
+ * config's `corrections` key turns the gate's corrections on for the harness's own check.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -41,7 +48,8 @@ import { GATE_SERVER_CLASS, runGatedTrial } from "../gate/gated-trial.ts";
 import { type AgentLaunchPlan, auditAgentLaunch } from "../integrity/launch.ts";
 import type { CaptureInput } from "../integrity/vault.ts";
 import { newVaultKey, VerdictVault } from "../integrity/vault.ts";
-import { backoffS, configSha256, type PilotConfig } from "./config.ts";
+import { AB_EXPERIMENT, loadPrereg, realRunRefusals } from "./ab-prereg.ts";
+import { backoffS, configSha256, correctionPolicy, type PilotConfig } from "./config.ts";
 import { estimateCost, type TokenUsage } from "./cost.ts";
 import { trialLaunchPlan } from "./launch.ts";
 import {
@@ -80,6 +88,12 @@ export interface AgentReport {
   /** The agent's final claim, read from its transcript by the harness. */
   readonly claim: "done" | "not-done" | "no-claim";
   readonly usage: TokenUsage | null;
+  /**
+   * The trial reset's boot class, as #546's cold-boot guard measures it (`cold`: a full cold
+   * boot; `fast`: the first start after a UTM config write). Absent when the transport does
+   * not measure it (the pilot). The corrections A/B records it for every decided trial.
+   */
+  readonly resetBootClass?: "cold" | "fast";
 }
 
 /**
@@ -98,6 +112,30 @@ export interface PilotDriver {
   transport(ctx: AttemptContext): PilotTransport;
 }
 
+/**
+ * #518's attempt ledger, as the runner sees it (`src/pilot/ab.ts` wraps
+ * `AttemptLedgerWriter` and its host-side anchor). Every attempt start and end is written
+ * through it as the attempt runs; `recoverCrash` closes an attempt the runner died in.
+ */
+export interface AttemptSink {
+  start(a: { readonly trialKey: string; readonly taskId: string }): void;
+  end(
+    trialKey: string,
+    result: { outcome: "completed" } | { outcome: "harness-fault"; harnessClass: string },
+  ): void;
+  recoverCrash(a: { readonly trialKey: string; readonly taskId: string }): void;
+}
+
+/** What `afterDecided` sees: one decided trial, after its ledger end was appended. */
+export interface DecidedTrial {
+  readonly task: BenchmarkTask;
+  readonly trialKey: string;
+  readonly armRow: BenchmarkArmRow;
+  /** The captured persisted bytes the gate decided on, or null if none were captured. */
+  readonly persisted: Uint8Array | null;
+  readonly report: AgentReport;
+}
+
 export interface PilotRunOptions {
   readonly config: PilotConfig;
   /** The published task set (the pilot's tasks are looked up in it by id). */
@@ -113,10 +151,26 @@ export interface PilotRunOptions {
   readonly log?: (line: string) => void;
   /** Required for a live driver: the `configSha256` of the plan the operator approved. */
   readonly liveLaunchSha256?: string;
+  /** Trial keys are `<prefix>-<taskId>-a<n>`. Default `r1p`. */
+  readonly trialKeyPrefix?: string;
+  /** Run only these trials this invocation, in this order (an A/B chunk). Default: all. */
+  readonly only?: readonly string[];
+  /** #518's attempt ledger. Absent for the R1 pilot (it writes its own progress file only). */
+  readonly attemptSink?: AttemptSink;
+  /** Merged into every arm row the runner writes (the A/B's experiment-only label). */
+  readonly armRowLabel?: Pick<BenchmarkArmRow, "experiment">;
+  /** More PAUSE files honoured like `<outDir>/PAUSE`. */
+  readonly pauseFiles?: readonly string[];
+  /**
+   * Called after each decided trial, before the worker takes another: a non-null return
+   * halts the whole run (no new starts; status `halted`). A throw is a harness bug (fatal).
+   */
+  readonly afterDecided?: (d: DecidedTrial) => string | null;
 }
 
 export interface PilotRunResult {
-  readonly status: "complete" | "paused" | "incomplete";
+  /** `halted`: `afterDecided` stopped the run (the A/B's gate-miss rule). */
+  readonly status: "complete" | "paused" | "incomplete" | "halted";
   readonly reason: string | null;
   /** Trials decided by this invocation and skipped as already recorded. */
   readonly ran: number;
@@ -218,6 +272,14 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     throw new Error(
       "a live pilot run needs liveLaunchSha256 equal to the approved plan's configSha256 (the CLI's --plan-sha256)",
     );
+  // A live A/B arm (any config carrying corrections or an experiment) is a real A/B trial:
+  // the A/B's real-run preconditions are re-checked here from the committed files, so a
+  // caller that hands `runPilot` an arm config and its own sha256 still cannot start one.
+  if (!simulated && (config.experiment !== undefined || config.corrections !== undefined)) {
+    const problems = liveExperimentRefusals(config, opts.repoRoot, opts.published);
+    if (problems.length > 0)
+      throw new Error(`refusing a live corrections A/B trial: ${problems.join("; ")}`);
+  }
   if (/docs[\\/]research[\\/]experiments/.test(outDir))
     throw new Error(
       "a pilot run directory is never under docs/research/experiments (evidence packs are assembled there by review, not written by the runner)",
@@ -229,6 +291,16 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     if (t === undefined) throw new Error(`pilot task ${id} is not in the published task set`);
     return t;
   });
+  const prefix = opts.trialKeyPrefix ?? "r1p";
+  if (!/^[a-z0-9-]{1,32}$/.test(prefix)) throw new Error(`bad trial-key prefix ${prefix}`);
+  const label = (row: BenchmarkArmRow): BenchmarkArmRow =>
+    opts.armRowLabel === undefined ? row : { ...row, ...opts.armRowLabel };
+  const inConfig = new Set(config.trials);
+  for (const id of opts.only ?? [])
+    if (!inConfig.has(id)) throw new Error(`chunk task ${id} is not one of the config's trials`);
+  const runnable =
+    opts.only === undefined ? tasks : opts.only.map((id) => byId.get(id) as BenchmarkTask);
+  const policy = correctionPolicy(config);
 
   mkdirSync(join(outDir, "trials"), { recursive: true });
   const release = acquireLock(outDir);
@@ -267,16 +339,12 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
       if (st.kind !== "crashed") continue;
       const cost = estimateCost(config.model, null);
-      const armRow = harnessFaultRow(
-        task,
-        st.attempt.start.trialKey,
-        opts.plannerModelId,
-        "crash",
-        {
+      const armRow = label(
+        harnessFaultRow(task, st.attempt.start.trialKey, opts.plannerModelId, "crash", {
           modelUsd: null,
           wallClockS: null,
           vmS: null,
-        },
+        }),
       );
       const end = {
         trialKey: st.attempt.start.trialKey,
@@ -287,6 +355,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
         cost,
       };
       ledger.end(end);
+      opts.attemptSink?.recoverCrash({ trialKey: st.attempt.start.trialKey, taskId: task.taskId });
       const list = attempts.get(task.taskId) as AttemptRecord[];
       list[list.length - 1] = {
         start: st.attempt.start,
@@ -313,7 +382,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     let faulted = 0;
     const exhausted: string[] = [];
     const queue: BenchmarkTask[] = [];
-    for (const task of tasks) {
+    for (const task of runnable) {
       const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
       if (st.kind === "done") skipped++;
       else if (st.kind === "exhausted") exhausted.push(task.taskId);
@@ -323,15 +392,17 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     let nextStartAt = 0;
     let consecutiveRateLimits = 0;
     let stop: string | null = null;
+    let halted: string | null = null;
     let fatal: unknown = null;
-    const pauseRequested = () => existsSync(join(outDir, PAUSE_FILE));
+    const pauseRequested = () =>
+      [join(outDir, PAUSE_FILE), ...(opts.pauseFiles ?? [])].some((p) => existsSync(p));
 
     const runAttempt = async (
       task: BenchmarkTask,
     ): Promise<"decided" | "faulted" | "exhausted"> => {
       const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
       if (st.kind !== "open") return "exhausted";
-      const trialKey = `r1p-${task.taskId}-a${st.nextAttempt}`;
+      const trialKey = `${prefix}-${task.taskId}-a${st.nextAttempt}`;
       const runId = trialKey;
       const trialDir = join(outDir, "trials", trialKey);
       mkdirSync(trialDir, { recursive: true });
@@ -355,6 +426,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
         supersedes: st.supersedes,
       };
       ledger.start(startLine);
+      opts.attemptSink?.start({ trialKey, taskId: task.taskId });
       const record: AttemptRecord = {
         start: {
           schema: "myco.pilot.attempt/1",
@@ -409,19 +481,21 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
           await transport.captureAfterStop();
           const rep = inner.report();
           const cost = estimateCost(config.model, rep.usage);
-          armRow = gatedArmRow(
-            {
-              ...common,
-              outcome: { status: "unregistrable", reason: reg.reason },
-              agentClaim: rep.claim,
-              persisted: persistedOf(),
-              cost: {
-                modelUsd: cost.estimatedModelUsd,
-                wallClockS: (now() - t0) / 1000,
-                vmS: null,
+          armRow = label(
+            gatedArmRow(
+              {
+                ...common,
+                outcome: { status: "unregistrable", reason: reg.reason },
+                agentClaim: rep.claim,
+                persisted: persistedOf(),
+                cost: {
+                  modelUsd: cost.estimatedModelUsd,
+                  wallClockS: (now() - t0) / 1000,
+                  vmS: null,
+                },
               },
-            },
-            opts.published,
+              opts.published,
+            ),
           );
           ledger.end({
             trialKey,
@@ -440,24 +514,27 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
             plan,
             oracleSources: opts.oracleSources,
             transport,
+            ...(policy === undefined ? {} : { corrections: policy }),
           });
           if (outcome.status === "refused")
             throw new Error(`${trialKey}: the launch audit refused the plan inside runGatedTrial`);
           const rep = inner.report();
           const cost = estimateCost(config.model, rep.usage);
-          armRow = gatedArmRow(
-            {
-              ...common,
-              outcome,
-              agentClaim: rep.claim,
-              persisted: persistedOf(),
-              cost: {
-                modelUsd: cost.estimatedModelUsd,
-                wallClockS: (now() - t0) / 1000,
-                vmS: null,
+          armRow = label(
+            gatedArmRow(
+              {
+                ...common,
+                outcome,
+                agentClaim: rep.claim,
+                persisted: persistedOf(),
+                cost: {
+                  modelUsd: cost.estimatedModelUsd,
+                  wallClockS: (now() - t0) / 1000,
+                  vmS: null,
+                },
               },
-            },
-            opts.published,
+              opts.published,
+            ),
           );
           ledger.end({
             trialKey,
@@ -468,6 +545,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
             cost,
           });
         }
+        opts.attemptSink?.end(trialKey, { outcome: "completed" });
         const doc = persistedOf();
         if (doc !== null) writeFileSync(join(trialDir, "doc.csv"), doc);
         list[list.length - 1] = {
@@ -484,6 +562,17 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
             at: new Date(now()).toISOString(),
           },
         };
+        const why = opts.afterDecided?.({
+          task,
+          trialKey,
+          armRow,
+          persisted: doc,
+          report: inner.report(),
+        });
+        if (why !== undefined && why !== null) {
+          halted ??= why;
+          stop ??= why;
+        }
         return "decided";
       } catch (error) {
         const fault =
@@ -494,11 +583,13 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
               : null;
         if (fault === null) throw error; // A harness bug: stop; resume closes it as a crash.
         const cost = estimateCost(config.model, fault.usage);
-        const armRow = harnessFaultRow(task, trialKey, opts.plannerModelId, fault.harnessClass, {
-          modelUsd: cost.estimatedModelUsd,
-          wallClockS: (now() - t0) / 1000,
-          vmS: null,
-        });
+        const armRow = label(
+          harnessFaultRow(task, trialKey, opts.plannerModelId, fault.harnessClass, {
+            modelUsd: cost.estimatedModelUsd,
+            wallClockS: (now() - t0) / 1000,
+            vmS: null,
+          }),
+        );
         const end = {
           trialKey,
           outcome: "harness-fault" as const,
@@ -508,6 +599,10 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
           cost,
         };
         ledger.end(end);
+        opts.attemptSink?.end(trialKey, {
+          outcome: "harness-fault",
+          harnessClass: fault.harnessClass,
+        });
         list[list.length - 1] = {
           start: record.start,
           end: {
@@ -591,7 +686,14 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       ),
     );
     if (fatal !== null) throw fatal;
-    const status = stop !== null ? "paused" : exhausted.length > 0 ? "incomplete" : "complete";
+    const status =
+      halted !== null
+        ? "halted"
+        : stop !== null
+          ? "paused"
+          : exhausted.length > 0
+            ? "incomplete"
+            : "complete";
     return {
       status,
       reason:
@@ -653,4 +755,30 @@ export function exportRun(
   writeFileSync(join(exportDir, "arm.jsonl"), jsonl(armRows));
   writeFileSync(join(exportDir, "faulted-attempts.jsonl"), jsonl(superseded));
   return { armRows };
+}
+
+/**
+ * Why a live run of an A/B arm config cannot start: the config must name the corrections A/B
+ * of the committed pre-registration, and `realRunRefusals` (pre-registration committed, the
+ * lead's GO, the gate can read the format, #518's vocabulary, #546) must be empty.
+ */
+export function liveExperimentRefusals(
+  config: PilotConfig,
+  repoRoot: string,
+  published: readonly BenchmarkTask[],
+): string[] {
+  const exp = config.experiment;
+  if (exp === undefined)
+    return ["a config with corrections set is an A/B arm and needs its experiment"];
+  if (exp.name !== AB_EXPERIMENT) return [`unknown experiment ${String(exp.name)}`];
+  if (exp.stage !== 0 && exp.stage !== 1) return [`unknown A/B stage ${String(exp.stage)}`];
+  let loaded: ReturnType<typeof loadPrereg>;
+  try {
+    loaded = loadPrereg(repoRoot);
+  } catch (error) {
+    return [(error as Error).message];
+  }
+  if (exp.preregSha256 !== loaded.markdownSha256)
+    return ["the config names another pre-registration than the committed one"];
+  return realRunRefusals(repoRoot, loaded, exp.stage, published);
 }
