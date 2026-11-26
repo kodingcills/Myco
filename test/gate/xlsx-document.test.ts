@@ -1378,7 +1378,10 @@ describe("the cell model", () => {
     expect(serialDay(61, 1900)).toBe("1900-03-01");
     expect(serialDay(1, 1900)).toBe("1900-01-01");
     expect(serialDay(2_958_465, 1900)).toBe("9999-12-31");
-    expect(serialDay(0, 1904)).toBe("1904-01-01");
+    // 1904 serial 0 is no day (the grader's bound is serial >= 1 in both systems: D3 VE).
+    expect(serialDay(0, 1904)).toBeNull();
+    expect(serialDay(1, 1904)).toBe("1904-01-02");
+    expect(serialDay(2_957_003, 1904)).toBe("9999-12-31");
   });
 
   it("booleans and errors equal no expected cell", () => {

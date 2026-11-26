@@ -34,9 +34,14 @@
  * default for these values.
  */
 import { cellRef } from "../core/filepersist.ts";
-import { DATA_COLUMNS, generateFixture } from "../tasks/fixture.ts";
+import { DATA_COLUMNS, FIXTURE_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import { groundTruth, isAutoCorrectImmune, locateInFixture } from "../tasks/intent.ts";
-import { looksLikeZip, readXlsxDocument, XlsxError } from "./xlsx-document.ts";
+import {
+  looksLikeZip,
+  type NumberColumnType,
+  readXlsxDocument,
+  XlsxError,
+} from "./xlsx-document.ts";
 
 /** A saved sheet as the gate reads it: non-empty cells by A1 ref. */
 export interface ParsedDocument {
@@ -68,6 +73,37 @@ export type PersistedFormat = (typeof PERSISTED_FORMATS)[number];
 /** A saved document in the cell model, and how many sheets it holds (CSV: always 1). */
 export interface SavedDocument extends ParsedDocument {
   readonly sheetCount: number;
+  /**
+   * xlsx only: every literal number cell, by A1 ref, with the column types it can stand for
+   * (`numberDomain`, xlsx-document.ts). CSV has no stored kind: every cell is text.
+   */
+  readonly numbers?: Readonly<Record<string, readonly NumberColumnType[]>>;
+}
+
+/**
+ * True when a saved document holds a stored number in a column whose type does not accept
+ * it (verdict 7205644970, D3 VA-VD): a number in a text or key column, a non-integer or
+ * date-styled number in an integer column, a number not date-styled as a real day in a date
+ * column, a number that is not a `$` amount in a currency column. The independent grader
+ * fails every such cell (it compares a stored number by its column's type), while the text
+ * the gate renders for it can equal the expected text, so the family refuses a document it
+ * would otherwise verify (`XLSX_NUMBER_DOMAIN`); a document the text comparison already
+ * refutes stays refuted. A column's type is the fixture schema's
+ * type for the column's header in the expected document; a column with no known header is
+ * a text column, as the grader treats it.
+ */
+export function numberDomainRefusal(
+  doc: SavedDocument,
+  expected: ReadonlyMap<string, string>,
+): boolean {
+  for (const [ref, domain] of Object.entries(doc.numbers ?? {})) {
+    const letters = /^([A-Z]+)[0-9]+$/.exec(ref)?.[1];
+    if (letters === undefined) return true;
+    const header = expected.get(`${letters}1`);
+    const type = FIXTURE_COLUMNS.find((c) => c.name === header)?.type ?? "text";
+    if (type === "text" || type === "key" || !domain.includes(type)) return true;
+  }
+  return false;
 }
 
 /** The saved bytes are not a readable document of the declared format. `code` only. */

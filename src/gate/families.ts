@@ -45,6 +45,7 @@ import {
   PERSISTED_FORMATS,
   type PersistedFormat,
   pristineCells,
+  numberDomainRefusal,
   readSavedDocument,
   type SavedDocument,
   targetRef,
@@ -306,6 +307,14 @@ export const calcRecordEditFamily: OracleFamily = {
     const diff = diffDocument(cells, expected, new Set([target]));
     const sheets = sheetSetReason(doc);
     if (diff.targets.length === 0 && diff.collateral.length === 0 && sheets === undefined) {
+      // Every cell's text matches, but a stored number whose column type does not accept
+      // it fails the grader whatever text it renders to (verdict 7205644970, D3 VA-VD):
+      // refused, never verified (fail closed). Only the verify path changes: a document the
+      // text comparison already refutes stays refuted (R1's evidence rules are unchanged).
+      if (numberDomainRefusal(doc, expected))
+        throw new StateCorruptError(
+          "persisted document is not a readable xlsx document (XLSX_NUMBER_DOMAIN)",
+        );
       return {
         status: "verified",
         reasons: [

@@ -68,6 +68,15 @@
  * Markers start with U+0000 followed by a line feed. Neither can occur in a cell the gate
  * expects: XML 1.0 cannot carry U+0000, and the CSV path splits rows on line feeds.
  *
+ * Stored kind (verdict 7205644970, D3 VA-VD). Rendering a number to text loses that it was a
+ * number, and the independent grader compares a stored number by its column's type: it
+ * matches only an integer column (digits, not date-styled), a date column (an ISO day,
+ * date-styled) or a currency column (`$` amount, not date-styled), never a text or key
+ * column. So the reader also returns, for every literal number cell, the column types its
+ * rendered text can stand for (`numberDomain`, `XlsxDocument.numbers`); the family refuses a
+ * number cell in any other column (XLSX_NUMBER_DOMAIN, `numberDomainRefusal` in
+ * calc-document.ts). Re-derived here from the grader's documented semantics, never imported.
+ *
  * Sheets: the reader returns the first worksheet's cells and the number of sheets in the
  * workbook. The fixture is one sheet; the family refutes any other sheet set
  * (SHEET_SET_MISMATCH).
@@ -841,7 +850,9 @@ export function serialDay(serial: number, system: 1900 | 1904): string | null {
   if (!Number.isInteger(serial) || serial > MAX_SERIAL[system]) return null;
   let epoch: number;
   if (system === 1904) {
-    if (serial < 0) return null;
+    // Serial 0 (1904-01-01 by a plain count) is no day here: the grader's bound is serial
+    // >= 1 in both systems (verdict 7205644970, D3 VE), so 0 is the impossible-date marker.
+    if (serial < 1) return null;
     epoch = Date.UTC(1904, 0, 1);
   } else {
     if (serial < 1 || serial === 60) return null;
@@ -874,6 +885,35 @@ export function renderNumber(value: number, cls: NumberClass, system: 1900 | 190
     case "unrendered":
       return MARKERS.numberFormat;
   }
+}
+
+/** The column types under which the independent grader can match a stored number. */
+export type NumberColumnType = "integer" | "date" | "currency";
+
+/**
+ * The column types a stored number, rendered as `text` in a style of class `cls`, can stand
+ * for, given that the gate verifies only when `text` equals the expected cell (so the
+ * expected text IS `text`). Each rule is the grader's acceptance for that column type,
+ * re-derived (never imported):
+ *  - integer: not date-styled, `text` is an optional minus and digits, and the stored value
+ *    is exactly that integer;
+ *  - date: date-styled and `text` is an ISO day (the gate renders a date-styled number to an
+ *    ISO day only from a whole serial that `serialDay` maps to that day);
+ *  - currency: not date-styled, `text` is `$` then an optional minus and a decimal, and the
+ *    stored value is exactly that amount.
+ * A text or key column accepts no stored number, so it is never in the result.
+ */
+export function numberDomain(
+  text: string,
+  value: number,
+  cls: NumberClass,
+): readonly NumberColumnType[] {
+  if (cls.kind === "date") return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(text) ? ["date"] : [];
+  const domain: NumberColumnType[] = [];
+  if (/^-?[0-9]+$/.test(text) && Number(text) === value) domain.push("integer");
+  const amount = /^\$(-?[0-9]+(?:\.[0-9]+)?)$/.exec(text);
+  if (amount !== null && Number(amount[1]) === value) domain.push("currency");
+  return domain;
 }
 
 /**
@@ -1126,11 +1166,15 @@ function readSheetCells(
   shared: readonly string[],
   styles: readonly NumberClass[],
   system: 1900 | 1904,
-): Record<string, string> {
+): {
+  cells: Record<string, string>;
+  numbers: Record<string, readonly NumberColumnType[]>;
+} {
   const sheetDataList = elements(sheet, "sheetData");
   if (sheetDataList.length !== 1) fail("XLSX_NOT_WORKBOOK");
   const sheetData = sheetDataList[0] as XmlElement;
   const cells: Record<string, string> = {};
+  const numbers: Record<string, readonly NumberColumnType[]> = {};
   const seen = new Set<string>();
   let [minR, minC, maxR, maxC] = [Infinity, Infinity, -1, -1];
   // sheetData -> row* -> c*: every element below sheetData is checked against the cell
@@ -1156,8 +1200,10 @@ function readSheetCells(
         Math.max(maxR, r),
         Math.max(maxC, col),
       ];
-      const value = cellValue(c, shared, styles, system);
+      const sink: NumberSink = {};
+      const value = cellValue(c, shared, styles, system, sink);
       if (value !== "") cells[key] = value;
+      if (sink.domain !== undefined) numbers[key] = sink.domain;
     }
   }
   // <dimension> must be the range LibreOffice writes for these cells ("A1" when there are
@@ -1173,7 +1219,12 @@ function readSheetCells(
           : `${cellRef(minR, minC)}:${cellRef(maxR, maxC)}`;
     if ((dims[0] as XmlElement).attrs.get("ref") !== want) fail("XLSX_CELL_MALFORMED");
   }
-  return cells;
+  return { cells, numbers };
+}
+
+/** Set by `literalValue` for a literal (not formula) number cell: see `numberDomain`. */
+interface NumberSink {
+  domain?: readonly NumberColumnType[];
 }
 
 /**
@@ -1187,9 +1238,12 @@ function cellValue(
   shared: readonly string[],
   styles: readonly NumberClass[],
   system: 1900 | 1904,
+  sink: NumberSink,
 ): string {
   const parts = cellParts(c);
-  const value = literalValue(c, parts, shared, styles, system);
+  // A formula's cached number is no literal (the grader never matches a formula cell), so
+  // only a formula-free cell reports its stored kind.
+  const value = literalValue(c, parts, shared, styles, system, parts.f === undefined ? sink : {});
   if (parts.f === undefined) return value;
   const fAttrs = [...parts.f.attrs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `${MARKERS.formula}${JSON.stringify([fAttrs, textOnly(parts.f), parts.t, value])}`;
@@ -1205,6 +1259,7 @@ function literalValue(
   shared: readonly string[],
   styles: readonly NumberClass[],
   system: 1900 | 1904,
+  sink: NumberSink,
 ): string {
   // A formula with no cached value: the gate cannot know what the document holds without
   // evaluating it, which it never does.
@@ -1245,7 +1300,10 @@ function literalValue(
       if (!Number.isFinite(value)) fail("XLSX_CELL_MALFORMED");
       // The canonical spelling only (LibreOffice writes `4242`, never `04242` or `4.242E3`).
       if (String(value) !== v) fail("XLSX_CELL_MALFORMED");
-      return renderNumber(value, style ?? { kind: "general" }, system);
+      const cls = style ?? { kind: "general" };
+      const text = renderNumber(value, cls, system);
+      sink.domain = numberDomain(text, value, cls);
+      return text;
     }
     default:
       fail("XLSX_CELL_MALFORMED");
@@ -1260,6 +1318,11 @@ function literalValue(
 export interface XlsxDocument {
   /** Non-empty cells of the first worksheet, by A1 ref, in the CSV path's cell model. */
   readonly cells: Readonly<Record<string, string>>;
+  /**
+   * Every literal number cell of the first worksheet, by A1 ref: the column types its
+   * rendered text can stand for (`numberDomain`; empty: none, so any column refuses it).
+   */
+  readonly numbers: Readonly<Record<string, readonly NumberColumnType[]>>;
   /** Sheets in the workbook (worksheets, chart sheets, dialog sheets). */
   readonly sheetCount: number;
 }
@@ -1379,12 +1442,12 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
   const styles = readStyles(part(stylesRel[0], "styleSheet"));
 
   const sheetXml = part(first, "worksheet") as XmlElement;
-  const cells = readSheetCells(sheetXml, shared, styles, system);
+  const { cells, numbers } = readSheetCells(sheetXml, shared, styles, system);
   // The element tree of every part, pinned (see xlsx-tree.ts). The readers above walk down
   // from each root and see only the paths they read; the independent grader regex-scans the
   // whole text of a part. Without this pin, a decoy nested inside an element the readers
   // skip would be read by the grader and never by the gate (round 1, D1 V1-V5). It runs
   // last so the readers' own, more specific codes win where both refuse.
   pinTrees(parts);
-  return { cells, sheetCount: sheets.length };
+  return { cells, numbers, sheetCount: sheets.length };
 }
