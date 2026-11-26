@@ -8,6 +8,7 @@
 import { appendFileSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import type { GateResult } from "./api.ts";
+import { correctionsEnabled } from "./corrections.ts";
 import { renderDemo, runMockDemo } from "./demo.ts";
 import {
   buildRegistry,
@@ -39,6 +40,9 @@ operator options (check, mcp):
   --tasks <file>         extra tasks: { "tasks": [ { id, family, stateFile, spec } ] }
   --no-builtin           do not register the built-in myco-run tasks (df-s01, df-s02)
   --audit <file>         append every decision as one JSON line (fails closed if unwritable)
+  --corrections <ids>    agent-safe corrections for these task families (comma-separated:
+                         calc-record-edit, calc-multi-step); off when absent. R1
+                         evidence refuses rows recorded with corrections on
   --json                 check: print the GateResult as JSON
 
 exit (check): 0 verified, 1 refuted, 2 uncertain, 3 usage
@@ -64,6 +68,7 @@ const VALUE_FLAGS = new Set([
   "--out",
   "--transport",
   "--family",
+  "--corrections",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--no-builtin"]);
 
@@ -111,17 +116,29 @@ function operatorGate(flags: Flags, stderr: Writable) {
   if (entries.length === 0)
     throw new UsageError("no tasks registered (--no-builtin without --tasks)");
   const audit = str(flags, "--audit");
-  return createGate({
-    tasks: buildRegistry(entries),
+  const corrections = str(flags, "--corrections");
+  const policy =
+    corrections === undefined
+      ? undefined
+      : { families: corrections.split(",").filter((id) => id !== "") };
+  const tasks = buildRegistry(entries);
+  const gate = createGate({
+    tasks,
     reader: fileEvidenceReader(root),
     assignment: { taskId: task, runId: run },
     onDiagnostic: (diagnostic) => writeDiagnostic(stderr, diagnostic),
+    ...(policy === undefined ? {} : { corrections: policy }),
     ...(audit === undefined
       ? {}
       : {
           onDecision: (result: GateResult) => appendFileSync(audit, `${JSON.stringify(result)}\n`),
         }),
   });
+  // createGate has validated the policy; whether it covers the assigned task decides the
+  // agent-facing MCP instructions (N1).
+  const assigned = tasks.get(task);
+  const correcting = assigned !== undefined && correctionsEnabled(policy, assigned);
+  return { gate, correcting };
 }
 
 class UsageError extends Error {}
@@ -154,7 +171,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     switch (command) {
       case "check": {
         // The operator's own call: the request is the assignment.
-        const gate = operatorGate(flags, io.stderr);
+        const { gate } = operatorGate(flags, io.stderr);
         const task = str(flags, "--task") as string;
         const run = str(flags, "--run") as string;
         const claim = str(flags, "--claim");
@@ -166,13 +183,13 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
         io.stdout.write(
           flags.has("--json")
             ? `${JSON.stringify(result, null, 2)}\n`
-            : `${result.verdict}${result.accepted ? " (accepted)" : " (not accepted)"}: ${result.reasonCodes.join(", ")}\n${result.reasons.map((r) => `  - ${r}\n`).join("")}`,
+            : `${result.verdict}${result.accepted ? " (accepted)" : " (not accepted)"}: ${result.reasonCodes.join(", ")}\n${result.reasons.map((r) => `  - ${r}\n`).join("")}${(result.corrections ?? []).map((c) => `  correction: ${JSON.stringify(c)}\n`).join("")}`,
         );
         return exitFor(result);
       }
       case "mcp": {
-        const gate = operatorGate(flags, io.stderr);
-        await serveStdio(gate, io.stdin, io.stdout);
+        const { gate, correcting } = operatorGate(flags, io.stderr);
+        await serveStdio(gate, io.stdin, io.stdout, { corrections: correcting });
         return 0;
       }
       case "demo": {
@@ -207,7 +224,8 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
   } catch (error) {
     if (
       error instanceof UsageError ||
-      (error instanceof Error && /^invalid gate (task registry|assignment)/.test(error.message))
+      (error instanceof Error &&
+        /^invalid gate (task registry|assignment|corrections)/.test(error.message))
     ) {
       io.stderr.write(`myco-gate: ${error.message}\n`);
       return EXIT_USAGE;

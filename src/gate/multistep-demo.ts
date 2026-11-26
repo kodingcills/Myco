@@ -127,7 +127,7 @@ export interface MsReport {
 export type MsFrameObserver = (runId: string, state: AppState) => void;
 
 /** The scripted agent: open the guest sheet in the fake app, make its edits, save, stop. */
-async function scriptedAgent(
+export async function scriptedAgent(
   guestFile: string,
   edits: readonly CellEdit[],
   frame?: (state: AppState) => void,
