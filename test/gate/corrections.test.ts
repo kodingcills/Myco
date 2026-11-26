@@ -43,7 +43,7 @@ import {
   type GateDiagnostic,
   type TaskEntry,
 } from "../../src/gate/gate.ts";
-import { GATE_TOOL, handleLine } from "../../src/gate/mcp-server.ts";
+import { CORRECTIONS_INSTRUCTIONS, GATE_TOOL, handleLine } from "../../src/gate/mcp-server.ts";
 import { MS_SPEC } from "../../src/gate/multistep-demo.ts";
 import { generateFixture } from "../../src/tasks/fixture.ts";
 import { CALC_SPEC, tempRoot, writeState } from "./helpers.ts";
@@ -486,6 +486,69 @@ function cliIo() {
   });
   return { stdin: new PassThrough(), stdout, stderr, out: () => out, err: () => err };
 }
+
+// #514 round 1, N1: the MCP instructions announce corrections only when they are on for the
+// assigned task, so an R1 (corrections off) agent sees exactly the pre-corrections text.
+describe("MCP instructions mention corrections only when they are on (N1)", () => {
+  const INIT = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2025-06-18" },
+  });
+  const instructionsOf = (line: string) =>
+    String((JSON.parse(line) as { result: { instructions: string } }).result.instructions);
+  const anyGate = () =>
+    createGate({
+      tasks: buildRegistry([recordEntry()]),
+      reader: fileEvidenceReader(tempRoot()),
+      assignment: { taskId: TASK, runId: RUN },
+    });
+
+  it("handleLine: off by default, appended when on", async () => {
+    const off = instructionsOf((await handleLine(anyGate(), INIT)) ?? "");
+    expect(off).toContain('verdict "verified"');
+    expect(off.toLowerCase()).not.toContain("correction");
+    const on = instructionsOf((await handleLine(anyGate(), INIT, { corrections: true })) ?? "");
+    expect(on).toBe(off + CORRECTIONS_INSTRUCTIONS);
+  });
+
+  async function mcpInstructions(extra: string[]): Promise<string> {
+    const tasks = join(tempRoot(), "tasks.json");
+    writeFileSync(tasks, JSON.stringify({ tasks: [recordEntry()] }));
+    const io = cliIo();
+    io.stdin.end(`${INIT}\n`);
+    const code = await main(
+      [
+        "mcp",
+        "--evidence-root",
+        tempRoot(),
+        "--tasks",
+        tasks,
+        "--no-builtin",
+        "--task",
+        TASK,
+        "--run",
+        RUN,
+        ...extra,
+      ],
+      io,
+    );
+    expect(code).toBe(0);
+    return instructionsOf(io.out().trim());
+  }
+
+  it("CLI mcp: only a policy that covers the assigned task's family announces corrections", async () => {
+    expect(await mcpInstructions([])).not.toContain(CORRECTIONS_INSTRUCTIONS);
+    expect(await mcpInstructions(["--corrections", "calc-record-edit"])).toContain(
+      CORRECTIONS_INSTRUCTIONS,
+    );
+    // A valid policy for another family: corrections are off for this task, so no mention.
+    expect(await mcpInstructions(["--corrections", "calc-multi-step"])).not.toContain(
+      CORRECTIONS_INSTRUCTIONS,
+    );
+  });
+});
 
 describe("2. leakage: planted markers never reach agent-facing output", () => {
   // The operator's side, with a marker everywhere the agent must not see.

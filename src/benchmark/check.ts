@@ -202,7 +202,8 @@ export interface CheckOptions {
   readonly expectUnregistrable?: Readonly<Partial<Record<Arm, number>>>;
   /**
    * Checking evidence (a scorecard number), not plumbing: refuse every row without evidence
-   * provenance, i.e. whose `plannerModelId` is not in `EVIDENCE_PLANNERS`.
+   * provenance, i.e. whose `plannerModelId` is not in `EVIDENCE_PLANNERS`, and every row
+   * whose gate had corrections on (`correctionsOnError`).
    * Dry runs name a `simulated:` planner, so they never pass.
    */
   readonly evidence?: boolean;
@@ -231,6 +232,21 @@ export const EVIDENCE_PLANNERS: ReadonlySet<string> = new Set([
   "claude-haiku-5-5",
   "claude-fable-5-2",
 ]);
+
+/**
+ * R1 evidence is measured with the gate's agent-safe corrections OFF (M2 scope add B; #514
+ * round 1, D1). A row whose gate had corrections on ran a different gate (it hands the agent
+ * typed notes and invites a retry), so it never counts as evidence: `checkBenchmark` refuses
+ * it under `evidence: true`, and `checkPack` refuses it in an R1 pack. No lead ruling allows
+ * corrections in R1 evidence; one would have to change this code. Rows without the field
+ * (written before corrections existed) are off.
+ */
+export function correctionsOnError(rows: readonly BenchmarkArmRow[]): string | null {
+  const on = rows.filter((r) => r.gate?.corrections === "on");
+  if (on.length === 0) return null;
+  const keys = on.slice(0, 5).map((r) => r.trialKey);
+  return `${on.length} row(s) with gate corrections on (${keys.join(", ")}${on.length > 5 ? ", ..." : ""}): R1 evidence runs keep corrections off, so these rows are never evidence`;
+}
 
 /** Host paths must never reach a publishable ledger (M2 plan §6; test/no-home-paths). */
 const HOST_PATH = /(?:^|[\s"'(=])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\)/;
@@ -301,6 +317,8 @@ export function checkBenchmark(
         `${unproven.length} row(s) without evidence provenance (planner ${ids.map((i) => JSON.stringify(i)).join(", ")} is not a Claude model id): dry-run rows are never evidence`,
       );
     }
+    const corrected = correctionsOnError(armRows);
+    if (corrected !== null) errors.push(corrected);
   }
   if (gradeInput.length === 0) errors.push("grade ledger is empty");
 

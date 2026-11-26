@@ -588,7 +588,9 @@ explicitly scoped channel. It does not loosen the codes-only rule anywhere else:
 corrections on, every other field of every result (`verdict`, `accepted`, `reasonCodes`,
 `reasons`, `evidenceRefs`, `oracle`, `checkpoints`) is exactly what it is with corrections
 off; the only difference is the extra `corrections` array on the two admissible paths below
-(pinned by `test/gate/corrections.test.ts`, section 5, on every reason path).
+(pinned by `test/gate/corrections.test.ts`, section 5, on every reason path). The MCP
+server's `initialize` instructions mention corrections only when they are on for the
+assigned task; with them off the agent-facing text is unchanged.
 
 **Off by default, opt-in per task family.** The operator enables it with
 `GateConfig.corrections = { families: [...] }` (CLI: `--corrections calc-record-edit,calc-multi-step`;
@@ -596,11 +598,15 @@ off; the only difference is the extra `corrections` array on the two admissible 
 `calc-multi-step` (version 1), CSV only. A policy naming another family (`todo-items`, an
 unknown id), a family version the correction code does not mirror, or a non-CSV
 `persistedFormat` makes the gate refuse to start, because a correction must come from the
-same rule the oracle used. **R1 evidence runs keep corrections off** unless the lead rules
-otherwise, and every myco-gate arm row whose gate was called records the setting as
+same rule the oracle used. **R1 evidence is measured with corrections off, and this is
+enforced.** Every myco-gate arm row whose gate was called records the setting as
 `gate.corrections: "off" | "on"` (`schemas/benchmark-ledger.ts`; written from
 `runGatedTrial`'s outcome, and a result that carries corrections on a row that says "off" is
-refused by `gatedArmRow`).
+refused by `gatedArmRow`). `checkBenchmark(..., { evidence: true })` (CLI: `--evidence`) and
+the M2 pack check for an R1 pack refuse any row recorded `"on"` (`correctionsOnError`,
+`src/benchmark/check.ts`), so a corrected run can never pass as R1 evidence. There is no lead
+ruling allowing corrections in R1 evidence; allowing it would take a code change. A row
+written before the field existed reads as off.
 
 ### When a result carries corrections
 
@@ -614,7 +620,8 @@ Only when all of these hold (`correctionsAdmissible`, `src/gate/corrections.ts`)
 
 Every other path carries none: request rejections (`INVALID_REQUEST`, `UNKNOWN_FIELD`,
 `ORACLE_INPUT_REJECTED`, `UNSUPPORTED_API_VERSION`), `ASSIGNMENT_MISMATCH` (nothing is read),
-`UNKNOWN_TASK`, `STATE_UNREADABLE` (including the sealed gate's "before capture" answer),
+`UNKNOWN_TASK`, `STATE_UNREADABLE` (including the sealed gate's "before capture" answer; pinned with
+corrections on by `test/benchmark/gated-rows-corrections.test.ts`),
 `STATE_CORRUPT`, `FIXTURE_UNREADABLE`, `FIXTURE_MISMATCH`, `ORACLE_ERROR`,
 `ORACLE_INVALID_OUTPUT`, `ORACLE_UNCERTAIN`, `AUDIT_FAILED`, and `ORACLE_PASS`.
 
@@ -648,8 +655,11 @@ else is never emitted. Adding a kind is additive (`v1`), like a reason code.
 It may reveal only:
 
 - **what the task instruction already gave the agent**: the target's record, column and the
-  value it was told to write (`src/tasks/task-text.ts` states all three), and a multi-step
-  task's step number;
+  value it was told to write (`src/tasks/task-text.ts` states all three for a single-edit
+  task), and a multi-step task's step number. `task-text.ts` renders single-edit tasks only
+  and there is no multi-step instruction renderer yet, so for multi-step tasks this is a
+  requirement on that renderer (state each step's record, column, value and number), to be
+  pinned by a test when it lands;
 - **what the agent can observe in its own saved document**: a target cell's A1 address and
   what that cell now holds, whether the saved document is the one it was given, and the
   addresses of non-target cells its save changed.
@@ -676,7 +686,10 @@ host capture of persisted bytes, the request still takes only `taskId`/`runId`/`
 (echoing a correction as a `corrections` field is `UNKNOWN_FIELD`; as `expected` it is
 `ORACLE_INPUT_REJECTED`; in the claim it is recorded and ignored), and the gate is still
 bound to one trial (another task or run is `ASSIGNMENT_MISMATCH`, with no correction).
-Repeated calls within an attempt describe the same capture, so they add nothing.
+Repeated calls within an attempt describe the same capture, so they add nothing. This holds
+for the sealed gate and the harness-capture paths (the bytes are captured once, after the
+agent stops). On the mock/development `fileEvidenceReader` path it holds only while the
+evidence file is not rewritten between calls; that path is not evidence.
 
 ### How corrections are built (trust)
 

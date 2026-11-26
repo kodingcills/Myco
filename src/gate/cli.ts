@@ -8,6 +8,7 @@
 import { appendFileSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import type { GateResult } from "./api.ts";
+import { correctionsEnabled } from "./corrections.ts";
 import { renderDemo, runMockDemo } from "./demo.ts";
 import {
   buildRegistry,
@@ -40,8 +41,8 @@ operator options (check, mcp):
   --no-builtin           do not register the built-in myco-run tasks (df-s01, df-s02)
   --audit <file>         append every decision as one JSON line (fails closed if unwritable)
   --corrections <ids>    agent-safe corrections for these task families (comma-separated:
-                         calc-record-edit, calc-multi-step); off when absent. Never on
-                         for R1 evidence runs unless the lead rules otherwise
+                         calc-record-edit, calc-multi-step); off when absent. R1
+                         evidence refuses rows recorded with corrections on
   --json                 check: print the GateResult as JSON
 
 exit (check): 0 verified, 1 refuted, 2 uncertain, 3 usage
@@ -116,20 +117,28 @@ function operatorGate(flags: Flags, stderr: Writable) {
     throw new UsageError("no tasks registered (--no-builtin without --tasks)");
   const audit = str(flags, "--audit");
   const corrections = str(flags, "--corrections");
-  return createGate({
-    tasks: buildRegistry(entries),
+  const policy =
+    corrections === undefined
+      ? undefined
+      : { families: corrections.split(",").filter((id) => id !== "") };
+  const tasks = buildRegistry(entries);
+  const gate = createGate({
+    tasks,
     reader: fileEvidenceReader(root),
     assignment: { taskId: task, runId: run },
     onDiagnostic: (diagnostic) => writeDiagnostic(stderr, diagnostic),
-    ...(corrections === undefined
-      ? {}
-      : { corrections: { families: corrections.split(",").filter((id) => id !== "") } }),
+    ...(policy === undefined ? {} : { corrections: policy }),
     ...(audit === undefined
       ? {}
       : {
           onDecision: (result: GateResult) => appendFileSync(audit, `${JSON.stringify(result)}\n`),
         }),
   });
+  // createGate has validated the policy; whether it covers the assigned task decides the
+  // agent-facing MCP instructions (N1).
+  const assigned = tasks.get(task);
+  const correcting = assigned !== undefined && correctionsEnabled(policy, assigned);
+  return { gate, correcting };
 }
 
 class UsageError extends Error {}
@@ -162,7 +171,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     switch (command) {
       case "check": {
         // The operator's own call: the request is the assignment.
-        const gate = operatorGate(flags, io.stderr);
+        const { gate } = operatorGate(flags, io.stderr);
         const task = str(flags, "--task") as string;
         const run = str(flags, "--run") as string;
         const claim = str(flags, "--claim");
@@ -179,8 +188,8 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
         return exitFor(result);
       }
       case "mcp": {
-        const gate = operatorGate(flags, io.stderr);
-        await serveStdio(gate, io.stdin, io.stdout);
+        const { gate, correcting } = operatorGate(flags, io.stderr);
+        await serveStdio(gate, io.stdin, io.stdout, { corrections: correcting });
         return 0;
       }
       case "demo": {

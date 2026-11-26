@@ -10,8 +10,11 @@
  *
  * What a correction may reveal (and nothing else):
  *  - what the task instruction already gave the agent: the target's record, column and the
- *    value it was told to write (`src/tasks/task-text.ts` states all three), and the step
- *    number of a multi-step task;
+ *    value it was told to write (`src/tasks/task-text.ts` states all three for a single-edit
+ *    task), and the step number of a multi-step task. The repo has no multi-step instruction
+ *    renderer yet, so for multi-step tasks this is a requirement on that future renderer (it
+ *    must state each step's record, column, value and number), not yet an executed claim;
+ *    pin it with a test when the renderer lands (#514 round 1, N2);
  *  - what the agent can observe in its own saved document: the A1 address of a target cell,
  *    what that cell now holds, whether the saved document is the one it was given, and the
  *    addresses of non-target cells its save changed.
@@ -34,9 +37,11 @@
  * every correction passes `sealCorrections`, which rebuilds each one field by field from
  * the operator's spec (closed schema; any unknown kind or field drops all of them).
  *
- * Opt-in per family (`GateConfig.corrections`), off by default: R1 evidence runs leave it
- * off unless the lead rules otherwise, and R1 arm rows record whether it was on
- * (`schemas/benchmark-ledger.ts`, `gate.corrections`).
+ * Opt-in per family (`GateConfig.corrections`), off by default. R1 evidence is measured with
+ * it off: arm rows record whether it was on (`schemas/benchmark-ledger.ts`,
+ * `gate.corrections`), and a row with it on is refused as evidence (`correctionsOnError` in
+ * `src/benchmark/check.ts`, used by `checkBenchmark(..., { evidence: true })` and the M2 R1
+ * pack check).
  *
  * Independence: gate code. Nothing here is imported by `src/benchmark/grade/`.
  */

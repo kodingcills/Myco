@@ -69,9 +69,10 @@ export interface GatedTrialOptions {
   readonly onDiagnostic?: GateConfig["onDiagnostic"];
   readonly onIntegrity?: (violations: readonly IntegrityViolation[]) => void;
   /**
-   * Agent-safe corrections (M2 scope add B), off when absent. R1 evidence runs leave this
-   * off unless the lead rules otherwise; the outcome's `corrections` records the setting
-   * so the arm row can (`src/benchmark/gated-rows.ts`).
+   * Agent-safe corrections (M2 scope add B), off when absent. The outcome's `corrections`
+   * records the setting so the arm row can (`src/benchmark/gated-rows.ts`), and R1 evidence
+   * refuses a row recorded "on" (`correctionsOnError`, `src/benchmark/check.ts`). This
+   * function has no notion of an evidence run, so the ledger check is the enforcement point.
    */
   readonly corrections?: GateConfig["corrections"];
 }
