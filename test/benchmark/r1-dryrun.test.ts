@@ -97,7 +97,8 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     }
     const refutedByGate = armRows.filter((r) => r.gate?.verdict === "refuted").length;
     expect(refutedByGate).toBe(30);
-    expect(result.r1?.pass).toBe(true);
+    expect(result.r1).toMatchObject({ pass: true, gatedTrials: 90 });
+    expect(result.r1?.notes).toHaveLength(1);
 
     const asEvidence = tsx("benchmark-check.ts", [
       "--arm",
@@ -110,7 +111,7 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     ]);
     expect(asEvidence.status).toBe(1);
     expect((JSON.parse(asEvidence.stdout) as CheckResult).errors).toContain(
-      "100 simulated row(s): dry-run rows are never evidence",
+      '100 row(s) without evidence provenance (planner "simulated:scripted-credulous" is not a Claude model id): dry-run rows are never evidence',
     );
   });
 

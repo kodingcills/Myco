@@ -2,7 +2,8 @@
  * TIF-274 (M2-12) dry run, SIMULATED: the R1 plumbing over the whole fc-v1 task set with no
  * model and no VM. Never evidence: every row's `plannerModelId` is `simulated:scripted-credulous`,
  * the run directory carries a `SIMULATED` marker, and `checkBenchmark(..., { evidence: true })`
- * refuses the ledger.
+ * refuses the ledger (that planner is not a Claude model id, so the rows lack evidence
+ * provenance).
  *
  * What is real: the gate (`runGatedTrial` on a sealed vault, the `calc-record-edit` family),
  * the registry (invalid-target tasks come back `unregistrable`), the arm-row mapping, the
@@ -107,15 +108,18 @@ export async function runDryRun(
   const armRows: BenchmarkArmRow[] = [];
   for (const task of tasks) {
     const trialKey = `dry-${task.taskId}`;
+    const runId = `run-${task.taskId}`;
     const doc = scriptedDocument(task);
     const persisted = new TextEncoder().encode(doc);
     writeFileSync(join(dir, "docs", `${trialKey}.csv`), doc);
     const common = {
-      task,
+      taskId: task.taskId,
       trialKey,
+      runId,
       agentClaim: "done" as const,
       instruction: task.instruction,
       persisted,
+      persistedFormat: "csv" as const,
       plannerModelId: DRY_RUN_PLANNER,
       outputCeiling: null,
       cost: { modelUsd: null, wallClockS: null, vmS: null },
@@ -123,13 +127,13 @@ export async function runDryRun(
     const reg = registerTask(task);
     if (!reg.ok) {
       armRows.push(
-        gatedArmRow({ ...common, outcome: { status: "unregistrable", reason: reg.reason } }),
+        gatedArmRow({ ...common, outcome: { status: "unregistrable", reason: reg.reason } }, tasks),
       );
       continue;
     }
     const outcome = await runGatedTrial({
       vault,
-      runId: `run-${task.taskId}`,
+      runId,
       taskId: task.taskId,
       tasks: reg.registry,
       plan: plan(work),
@@ -141,7 +145,9 @@ export async function runDryRun(
         },
       },
     });
-    armRows.push(gatedArmRow({ ...common, outcome }));
+    if (outcome.status === "refused")
+      throw new Error(`${trialKey}: the launch audit refused the dry-run plan`);
+    armRows.push(gatedArmRow({ ...common, outcome }, tasks));
   }
   writeFileSync(join(dir, "arm.jsonl"), `${armRows.map((r) => JSON.stringify(r)).join("\n")}\n`);
   return { dir, armRows };
