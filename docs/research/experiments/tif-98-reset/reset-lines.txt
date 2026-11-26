@@ -1,0 +1,51 @@
+before run 1: wait-guest-ready: first ssh answer after 145s (guest CPU 274s)
+before run 1: reset-trial-vm: timing stop=1 restore=2 start=3 ready=199 clock=14 total=219
+before run 1: reset-trial-vm: ready on 'clean-base'
+before run 2: wait-guest-ready: first ssh answer after 143s (guest CPU 272s)
+before run 2: reset-trial-vm: timing stop=1 restore=3 start=3 ready=182 clock=8 total=197
+before run 2: reset-trial-vm: ready on 'clean-base'
+before run 3: wait-guest-ready: first ssh answer after 159s (guest CPU 281s)
+before run 3: reset-trial-vm: timing stop=1 restore=2 start=3 ready=194 clock=10 total=210
+before run 3: reset-trial-vm: ready on 'clean-base'
+before run 4: wait-guest-ready: first ssh answer after 145s (guest CPU 281s)
+before run 4: reset-trial-vm: timing stop=0 restore=2 start=3 ready=209 clock=12 total=226
+before run 4: reset-trial-vm: ready on 'clean-base'
+before-2 run 1: wait-guest-ready: first ssh answer after 143s (guest CPU 284s)
+before-2 run 1: reset-trial-vm: timing stop=0 restore=2 start=3 ready=181 clock=9 total=195
+before-2 run 1: reset-trial-vm: ready on 'clean-base'
+before-2 run 2: wait-guest-ready: first ssh answer after 155s (guest CPU 295s)
+before-2 run 2: reset-trial-vm: timing stop=1 restore=2 start=3 ready=193 clock=6 total=205
+before-2 run 2: reset-trial-vm: ready on 'clean-base'
+after run 1: wait-guest-ready: first ssh answer after 145s (guest CPU 271s)
+after run 1: reset-trial-vm: timing stop=0 restore=3 start=3 ready=183 clock=14 total=203
+after run 1: reset-trial-vm: ready on 'clean-base'
+after run 2: wait-guest-ready: first ssh answer after 139s (guest CPU 269s)
+after run 2: reset-trial-vm: timing stop=1 restore=2 start=3 ready=168 clock=11 total=185
+after run 2: reset-trial-vm: ready on 'clean-base'
+after run 3: wait-guest-ready: first ssh answer after 134s (guest CPU 264s)
+after run 3: reset-trial-vm: timing stop=0 restore=1 start=3 ready=180 clock=16 total=200
+after run 3: reset-trial-vm: ready on 'clean-base'
+recovered run 1: wait-guest-ready: first ssh answer after 163s (guest CPU 278s)
+recovered run 1: reset-trial-vm: timing stop=1 restore=2 start=3 ready=211 clock=10 total=227
+recovered run 1: reset-trial-vm: host swap used 4523 of 6144 MB
+recovered run 1: reset-trial-vm: ready on 'clean-base'
+cycles run 1: wait-guest-ready: first ssh answer after 152s (guest CPU 278s)
+cycles run 1: reset-trial-vm: timing stop=1 restore=3 start=3 ready=195 clock=11 total=213
+cycles run 1: reset-trial-vm: host swap used 4459 of 6144 MB
+cycles run 1: reset-trial-vm: ready on 'clean-base'
+cycles run 2: wait-guest-ready: first ssh answer after 183s (guest CPU 314s)
+cycles run 2: reset-trial-vm: timing stop=1 restore=1 start=3 ready=231 clock=18 total=254
+cycles run 2: reset-trial-vm: host swap used 4459 of 6144 MB
+cycles run 2: reset-trial-vm: ready on 'clean-base'
+cycles run 3: wait-guest-ready: first ssh answer after 166s (guest CPU 288s)
+cycles run 3: reset-trial-vm: timing stop=0 restore=2 start=3 ready=199 clock=9 total=213
+cycles run 3: reset-trial-vm: host swap used 4435 of 6144 MB
+cycles run 3: reset-trial-vm: ready on 'clean-base'
+cycles run 4: wait-guest-ready: first ssh answer after 156s (guest CPU 283s)
+cycles run 4: reset-trial-vm: timing stop=1 restore=2 start=3 ready=198 clock=10 total=214
+cycles run 4: reset-trial-vm: host swap used 4419 of 6144 MB
+cycles run 4: reset-trial-vm: ready on 'clean-base'
+cycles run 5: wait-guest-ready: first ssh answer after 159s (guest CPU 285s)
+cycles run 5: reset-trial-vm: timing stop=1 restore=2 start=3 ready=202 clock=12 total=220
+cycles run 5: reset-trial-vm: host swap used 4419 of 6144 MB
+cycles run 5: reset-trial-vm: ready on 'clean-base'
