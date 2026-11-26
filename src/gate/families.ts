@@ -16,8 +16,14 @@ import { parseStore } from "../discovery/live-runner.ts";
 import { persistedStoreOracle } from "../discovery/s0-sequence.ts";
 import { calcRecordEditVerifier, intentFor, validateIntent } from "../tasks/calc-record-edit.ts";
 import type { CalcRecordEditParams } from "../tasks/intent.ts";
+import { errorCode } from "./reasons.ts";
 
-/** Thrown by `decide` when the persisted bytes do not parse as the family's format. */
+/**
+ * Thrown by `decide` when the persisted bytes do not parse as the family's format. The
+ * message reaches the agent ("could not look: <message>"), so it must not carry a host
+ * path or a raw error message; put the underlying error in `cause`, which the gate hands
+ * to the operator only (`GateConfig.onDiagnostic`).
+ */
 export class StateCorruptError extends Error {
   override readonly name = "StateCorruptError";
 }
@@ -67,7 +73,7 @@ export const todoItemsFamily: OracleFamily = {
       store = parseStore(utf8(bytes));
     } catch (error) {
       if (error instanceof StateCorruptError) throw error;
-      throw new StateCorruptError(`store does not parse: ${String(error)}`);
+      throw new StateCorruptError(`store does not parse (${errorCode(error)})`, { cause: error });
     }
     return persistedStoreOracle({ items: [...store.items] }, { items: [...items] });
   },
