@@ -182,3 +182,50 @@ describe("T2: a date token outside the first section of a format code", () => {
       expect([id, classifyFormat(code).kind === "date"]).toEqual([id, ecmaDateIds.has(Number(id))]);
   });
 });
+
+describe('T1: an empty <v></v> (Number("") is 0 to the grader)', () => {
+  // Verbatim from the verdict's repro.
+  const t1 = loWith({
+    [SHEET1]: editOnce(
+      editOnce(loText(SHEET1), '<dimension ref="A1:E76"/>', '<dimension ref="A1:F76"/>'),
+      '<c r="E2" s="2" t="s"><v>7</v></c>',
+      '<c r="E2" s="2" t="s"><v>7</v></c><c r="F2" s="0" t="n"><v></v></c>',
+    ),
+  });
+
+  it("verbatim: F2 t=n <v></v> is 0 to the grader; the gate refuses", async () => {
+    expect(graderOn(t1)).toBe("fail");
+    await expectRefused(t1, "XLSX_CELL_MALFORMED");
+  });
+
+  /** F2 added after E2 with the given cell XML (and the dimension widened to F). */
+  const withF2 = (cell: string) =>
+    loWith({
+      [SHEET1]: editOnce(
+        editOnce(loText(SHEET1), '<dimension ref="A1:E76"/>', '<dimension ref="A1:F76"/>'),
+        '<c r="E2" s="2" t="s"><v>7</v></c>',
+        `<c r="E2" s="2" t="s"><v>7</v></c>${cell}`,
+      ),
+    });
+
+  it.each([
+    ['untyped, <v></v> (the verdict\'s "or with no t")', '<c r="F2" s="0"><v></v></c>'],
+    ["t=n, <v> </v>", '<c r="F2" s="0" t="n"><v> </v></c>'],
+    ["t=n, <v>\\n</v>", '<c r="F2" s="0" t="n"><v>\n</v></c>'],
+    ["t=n, <v>\\t</v>", '<c r="F2" s="0" t="n"><v>\t</v></c>'],
+  ])("%s: the grader is fooled, the gate refuses", async (_label, cell) => {
+    const bytes = withF2(cell);
+    expect(graderOn(bytes)).toBe("fail");
+    await expectRefused(bytes, "XLSX_CELL_MALFORMED");
+  });
+
+  it.each([
+    ["t=e", '<c r="F2" s="0" t="e"><v></v></c>'],
+    ["t=b", '<c r="F2" s="0" t="b"><v></v></c>'],
+    ["t=s", '<c r="F2" s="0" t="s"><v></v></c>'],
+    ["t=str with a formula", '<c r="F2" s="0" t="str"><f>""</f><v></v></c>'],
+    ["t=e, whitespace", '<c r="F2" s="0" t="e"><v> </v></c>'],
+  ])("every other cell type: an empty or blank <v> is refused too (%s)", async (_label, cell) => {
+    await expectRefused(withF2(cell), "XLSX_CELL_MALFORMED");
+  });
+});

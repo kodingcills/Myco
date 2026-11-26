@@ -1073,7 +1073,7 @@ interface CellParts {
 /**
  * `<c>`: attributes `r`, `s`, `t` only; children `<f>?`, `<v>?`, `<is>?`, in that order, at
  * most one each. `<is>` only on an `inlineStr` cell with no `<f>` or `<v>`, and no `<v>` on
- * an `inlineStr` cell.
+ * an `inlineStr` cell. A `<v>` is never empty or whitespace-only.
  */
 function cellParts(c: XmlElement): CellParts {
   onlyAttrs(c, CELL_ATTRS);
@@ -1093,6 +1093,11 @@ function cellParts(c: XmlElement): CellParts {
     } else if (order === 2) {
       onlyAttrs(k, NO_ATTRS);
       v = textOnly(k);
+      // An empty or whitespace-only <v> (LibreOffice never writes one; the pre-scan refuses
+      // only a self-closing <v/>). A whole-text reader takes Number("") or Number(" ") as 0
+      // where the gate would read an empty cell (round 2 verdict, D2 T1): refused in every
+      // cell type, so no reading of it is ever needed.
+      if (/^[ \t\r\n]*$/.test(v)) fail("XLSX_CELL_MALFORMED");
     } else is = k;
   }
   if (is !== undefined && (t !== "inlineStr" || f !== undefined || v !== undefined))
@@ -1234,7 +1239,7 @@ function literalValue(
       // day here and verified it while the grader called the cell ungradable: refused.
       return fail("XLSX_CELL_MALFORMED");
     case "n": {
-      if (v === undefined || v === "") return "";
+      if (v === undefined) return "";
       if (!NUMBER.test(v)) fail("XLSX_CELL_MALFORMED");
       const value = Number(v);
       if (!Number.isFinite(value)) fail("XLSX_CELL_MALFORMED");
