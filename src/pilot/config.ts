@@ -200,6 +200,33 @@ export interface PilotConfig {
   readonly systemTemplate: string;
   /** Child-process environment: only these variable NAMES are passed to `claude`. */
   readonly childEnvAllowlist: readonly string[];
+  /**
+   * Corrections ON/OFF A/B only (`src/pilot/ab.ts`): whether this arm's gate hands the agent
+   * agent-safe corrections (#514) for `AB_CORRECTION_FAMILIES`. Absent on the R1 pilot config
+   * (corrections off, as R1 evidence requires). The A/B's two arm configs differ in this key
+   * and nothing else (`diffArmConfigs`).
+   */
+  readonly corrections?: "on" | "off";
+  /** Corrections A/B only: which experiment, stage and pre-registration this arm belongs to. */
+  readonly experiment?: {
+    readonly name: string;
+    readonly stage: number;
+    readonly preregSha256: string;
+  };
+}
+
+/**
+ * The task families the A/B's ON arm turns corrections on for: fc-v1 is all
+ * `calc-record-edit`. Passed to the gate as `--corrections` (the trial's MCP server) and as
+ * `GateConfig.corrections` (the harness's own post-stop check), only when `corrections` is on.
+ */
+export const AB_CORRECTION_FAMILIES: readonly string[] = ["calc-record-edit"];
+
+/** The gate policy a config asks for: undefined (off) unless `corrections` is "on". */
+export function correctionPolicy(
+  config: Pick<PilotConfig, "corrections">,
+): { readonly families: readonly string[] } | undefined {
+  return config.corrections === "on" ? { families: AB_CORRECTION_FAMILIES } : undefined;
 }
 
 /** Names passed through to the agent process (values are never read by the harness). */
