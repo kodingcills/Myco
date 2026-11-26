@@ -108,9 +108,7 @@ export function detectNetworkIsolation(
     }
   }
   if (platform === "darwin") {
-    // `sandbox-exec` itself sets variables before it execs (macOS CI showed a non-empty env in
-    // the plugin), so `env -i` empties the environment again right before `node`.
-    const prefix = ["/usr/bin/sandbox-exec", "-p", SEATBELT_PROFILE, "/usr/bin/env", "-i"];
+    const prefix = ["/usr/bin/sandbox-exec", "-p", SEATBELT_PROFILE];
     if (works(prefix)) return Object.freeze({ kind: "seatbelt", prefix: Object.freeze(prefix) });
   }
   return Object.freeze({ kind: "none" });

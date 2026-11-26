@@ -96,6 +96,11 @@ try {
   process.exit(EXIT_BAD_REQUEST);
 }
 
+// macOS: CoreFoundation sets `__CF_USER_TEXT_ENCODING` inside this process at startup under
+// Seatbelt (the host passes no variable; macOS CI showed it). Remove that one OS-set name so
+// the plugin sees an empty environment; anything else would still show in the `env` probe.
+Reflect.deleteProperty(process.env, "__CF_USER_TEXT_ENCODING");
+
 // From here on plugin code may run. Keep the one stream the child needs, then take all three
 // away from the plugin: a throwing getter, non-configurable, so it cannot be put back.
 const out = process.stdout;
