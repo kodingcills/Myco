@@ -175,8 +175,94 @@ export interface GateResult {
    * (TIF-270). Verdicts only: no expected value is ever exposed or accepted.
    */
   readonly checkpoints?: CheckpointSummary;
+  /**
+   * Agent-safe corrections (TIF-265 follow-up, M2 scope add B): present only when the
+   * operator enabled corrections for the task's family (`GateConfig.corrections`, off by
+   * default), the verdict is `refuted` (ORACLE_FAIL) or `uncertain` (STATE_MISSING), and the
+   * case is a supported one. A closed schema the gate builds from its own comparison, never
+   * oracle text. It reveals only what the task instruction gave the agent (the target's
+   * record, column and requested value) and what the agent can observe in its own saved
+   * document (what a target cell holds, which cells it changed). It never changes the
+   * verdict, the reason codes, the reasons or the retry budget. See docs/gate/api.md,
+   * "Corrections".
+   */
+  readonly corrections?: readonly Correction[];
   readonly checkedAt: string;
 }
+
+/** The closed set of correction kinds (docs/gate/api.md, "Corrections"). */
+export const CORRECTION_KINDS = [
+  "target_value_mismatch",
+  "target_unchanged",
+  "document_not_saved",
+  "collateral_change",
+] as const;
+export type CorrectionKind = (typeof CORRECTION_KINDS)[number];
+
+/** Fields every target correction carries: the cell and what the instruction asked for. */
+interface TargetCorrectionFields {
+  /** Multi-step tasks only: the step (1-based) whose target this is. */
+  readonly step?: number;
+  /** The target cell's A1 address in the saved document. */
+  readonly cell: string;
+  /** The record and column the instruction named. */
+  readonly record: string;
+  readonly column: string;
+  /** The value the instruction told the agent to write. */
+  readonly expected: string;
+}
+
+/**
+ * A target cell holds a value other than the requested one, and other than what it held
+ * when the agent was given the document. `observed` is what the agent's saved document
+ * holds there (null: the cell is empty), at most `CORRECTION_VALUE_LIMIT` characters;
+ * `observedTruncated` is true when it was cut.
+ */
+export interface TargetValueMismatch extends TargetCorrectionFields {
+  readonly kind: "target_value_mismatch";
+  readonly observed: string | null;
+  readonly observedTruncated?: true;
+}
+
+/**
+ * A target cell still holds what it held when the agent was given the document. The value
+ * is deliberately absent: it is the pristine fixture's.
+ */
+export interface TargetUnchanged extends TargetCorrectionFields {
+  readonly kind: "target_unchanged";
+}
+
+/**
+ * The saved document does not show the work: `no_saved_file` (the persisted state was not
+ * found after the agent stopped) or `saved_file_unchanged` (the saved document is,
+ * cell for cell, the document the agent was given).
+ */
+export interface DocumentNotSaved {
+  readonly kind: "document_not_saved";
+  readonly evidence: "no_saved_file" | "saved_file_unchanged";
+}
+
+/**
+ * Cells the task does not target differ from the document the agent was given (changed,
+ * cleared or added). Addresses only, at most `CORRECTION_CELL_LIMIT` of them, and how many
+ * more there are: never a value, neither the pristine one nor the agent's.
+ */
+export interface CollateralChange {
+  readonly kind: "collateral_change";
+  readonly cells: readonly string[];
+  readonly more: number;
+}
+
+export type Correction =
+  | TargetValueMismatch
+  | TargetUnchanged
+  | DocumentNotSaved
+  | CollateralChange;
+
+/** Longest `observed` value a correction carries. */
+export const CORRECTION_VALUE_LIMIT = 200;
+/** Most collateral addresses a correction lists (the rest are counted in `more`). */
+export const CORRECTION_CELL_LIMIT = 10;
 
 /** The request fields the API defines. */
 const ALLOWED_FIELDS = new Set(["apiVersion", "taskId", "runId", "claim"]);
