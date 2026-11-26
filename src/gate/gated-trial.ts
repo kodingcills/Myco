@@ -43,7 +43,9 @@ export const GATE_SERVER_CLASS = {
 export interface GatedTrialTransport {
   /**
    * Start the agent with exactly `plan` (the object that was audited) and give it `gate` as
-   * its `myco-gate` server. Resolve only after the agent process and its servers exited.
+   * its `myco-gate` server. Write `mcpConfigJson(plan)` to `plan.mcpConfigPath` first (the
+   * audit pinned the argv's one `--mcp-config` to that path, but does not read the file).
+   * Resolve only after the agent process and its servers exited.
    */
   runAgent(plan: AgentLaunchPlan, gate: Gate): Promise<void>;
   /**
@@ -85,7 +87,11 @@ function frozenPlan(plan: AgentLaunchPlan): AgentLaunchPlan {
       args: Object.freeze([...server.args]),
       env: Object.freeze({ ...server.env }),
     });
-  return Object.freeze({ argv: Object.freeze([...plan.argv]), mcpServers: Object.freeze(servers) });
+  return Object.freeze({
+    argv: Object.freeze([...plan.argv]),
+    mcpServers: Object.freeze(servers),
+    mcpConfigPath: plan.mcpConfigPath,
+  });
 }
 
 export async function runGatedTrial(opts: GatedTrialOptions): Promise<GatedTrialOutcome> {
