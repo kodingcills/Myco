@@ -15,11 +15,10 @@ quotes none.
 |---|---|---|
 | Gate CLI: `myco-gate demo`, `myco-gate check` | `src/gate/` | yes |
 | Live watch view: `myco-watch` (frames + verdict timeline) | [#513](https://github.com/kodingcills/Myco/pull/513) | no (lands with #513) |
-| Structured corrections: `myco-gate check --corrections` | [#514](https://github.com/kodingcills/Myco/pull/514) | no (lands with #514) |
+| Structured corrections: `myco-gate check --corrections` | `src/gate/` ([#514](https://github.com/kodingcills/Myco/pull/514)) | yes |
 | One-command setup: `myco init` | [#512](https://github.com/kodingcills/Myco/pull/512) | no (lands with #512) |
 
-Until #513 lands, record the terminal half of every beat and skip the watch view. Until #514
-lands, beat 5 has no correction line; the refuted verdict and its reason codes still show.
+Until #513 lands, record the terminal half of every beat and skip the watch view.
 
 ## Operator commands
 
@@ -34,7 +33,9 @@ pnpm myco-gate demo --transport mock --out "$OUT/todo"  # exit 0
 pnpm myco-gate check --evidence-root "$OUT/todo/evidence" --task df-s02 --run demo-df-s02 --claim "All 4 items added and saved."  # exit 1
 pnpm myco-gate demo --transport mock --family calc-multi-step --out "$OUT/calc"  # exit 0
 pnpm myco-gate check --evidence-root "$OUT/calc/evidence" --tasks "$OUT/calc/tasks.json" --no-builtin --task calc-ms-demo --run ms-slip-then-repair-no-retry --claim "All 3 edits saved."  # exit 1
+pnpm myco-gate check --evidence-root "$OUT/calc/evidence" --tasks "$OUT/calc/tasks.json" --no-builtin --task calc-ms-demo --run ms-slip-then-repair-no-retry --claim "All 3 edits saved." --corrections calc-multi-step  # exit 1
 pnpm myco-gate check --evidence-root "$OUT/calc/evidence" --tasks "$OUT/calc/tasks.json" --no-builtin --task calc-ms-demo --run ms-slip-then-repair-retry --claim "All 3 edits saved."  # exit 0
+pnpm exec vitest run test/gate/corrections-loop.test.ts  # exit 0
 ```
 
 A refuted verdict exits 1 on purpose: `check` exits 0 verified, 1 refuted, 2 uncertain.
@@ -44,8 +45,6 @@ A refuted verdict exits 1 on purpose: `check` exits 0 verified, 1 refuted, 2 unc
 ```sh
 pnpm myco-watch --demo todo-items  # lands with #513; serves http://127.0.0.1:8740/ (use --port 0 if 8740 is taken)
 pnpm myco-watch --demo calc-multi-step  # lands with #513; same page, the multi-step Calc runs
-pnpm myco-gate check --evidence-root "$OUT/calc/evidence" --tasks "$OUT/calc/tasks.json" --no-builtin --task calc-ms-demo --run ms-slip-then-repair-no-retry --claim "All 3 edits saved." --corrections calc-multi-step  # lands with #514; exit 1, plus one correction line
-pnpm exec vitest run test/gate/corrections-loop.test.ts  # lands with #514; the agent acts on the correction and is verified on the retry
 /path/to/Myco/bin/myco init --dry-run --project /path/to/your/project  # lands with #512; plans the project's .mcp.json and .codex/config.toml, writes nothing
 ```
 
@@ -64,9 +63,9 @@ below), terminal on the right.
 | 2 | 0:06–0:18 | 12 | Watch view, run `demo-df-s02`. Frame: the todo app reads `saved 4 item(s)`. Timeline: two entries, both on screen by the time you select the run (the demo finishes in about a second). Call 1: `refuted`, not accepted, `ORACLE_FAIL`. Call 2, marked `retry`: `uncertain`, not accepted, `ORACLE_INPUT_REJECTED` (the demo's tamper case, beat 3). | "This agent added four items and says they're all saved. The app agrees. The gate reads the saved file instead, and says refuted." | Select `demo-df-s02` in the run menu. Point at call 1 only; leave call 2 for beat 3. Do not select `demo-df-s01`: its call 2 is a different case (`ASSIGNMENT_MISMATCH`). |
 | 3 | 0:18–0:32 | 14 | Terminal: `refuted (not accepted): ORACLE_FAIL, CLAIM_RECORDED` and `not persisted: bug: login page crashes on save, BUG: token expires too early`. Then the watch view's call 2: `retry`, `uncertain`, `ORACLE_INPUT_REJECTED`. | "Two items never reached the file: a false completion, not marked done. On its retry the agent hands the gate the missing items itself. The gate takes only ids and a claim: uncertain, not accepted." | The first two `main` lines above, then point at call 2 in the timeline. |
 | 4 | 0:32–0:44 | 12 | Watch view (`pnpm myco-watch --demo calc-multi-step`, lands with #513), run `ms-slip-then-repair-retry`. Frames: the agent edits three cells in a spreadsheet and saves. Timeline: attempt 1, `refuted`, `TARGET_MISMATCH`, checkpoint 1 verified, 2–3 refuted. | "Now a three-step spreadsheet edit. Step one landed. Step two did not." | Restart the watch view on the Calc demo; select `ms-slip-then-repair-retry`. Run the third and fourth `main` lines. |
-| 5 | 0:44–0:56 | 12 | Terminal: `step 2: TARGET_MISMATCH: cell C4 (record EMP-0003, column qty) does not hold the requested value`, then `correction: {"kind":"target_value_mismatch","step":2,"cell":"C4","record":"EMP-0003","column":"qty","expected":"4242","observed":"4224"}`. | "With corrections switched on, the gate says which cell and what was asked: C4 should be 4242, and the saved file has 4224. It only repeats what the task already said and what the agent's own file holds." | The `--corrections` line (lands with #514). |
+| 5 | 0:44–0:56 | 12 | Terminal: `step 2: TARGET_MISMATCH: cell C4 (record EMP-0003, column qty) does not hold the requested value`, then `correction: {"kind":"target_value_mismatch","step":2,"cell":"C4","record":"EMP-0003","column":"qty","expected":"4242","observed":"4224"}`. | "With corrections switched on, the gate says which cell and what was asked: C4 should be 4242, and the saved file has 4224. It only repeats what the task already said and what the agent's own file holds." | The fifth `main` line (`--corrections`). |
 | 6 | 0:56–1:08 | 12 | Watch view: attempt 2 starts from checkpoint 1, so for one frame steps 2 and 3 are undone (C4 back to `415`; step 1's edit stays). Then C4 reads `4242`, step 3 is redone and the agent saves. Timeline entry for the new call is marked `retry`. | "One retry, from the last verified step. The agent fixes the cell in the app and saves again. Only the app changes the file." | Nothing; the frames play. |
-| 7 | 1:08–1:18 | 10 | Timeline: attempt 2, `verified`, accepted, `ORACLE_PASS`, all three checkpoints verified. Terminal: `verified (accepted): ORACLE_PASS, CLAIM_RECORDED`. | "The gate re-checks the saved file. All three steps hold, and nothing else in the sheet changed. Verified." | The fifth `main` line. |
+| 7 | 1:08–1:18 | 10 | Timeline: attempt 2, `verified`, accepted, `ORACLE_PASS`, all three checkpoints verified. Terminal: `verified (accepted): ORACLE_PASS, CLAIM_RECORDED`. | "The gate re-checks the saved file. All three steps hold, and nothing else in the sheet changed. Verified." | The sixth `main` line. |
 | 8 | 1:18–1:30 | 12 | Terminal: `/path/to/Myco/bin/myco init --dry-run --project /path/to/your/project` output (lands with #512), ending `DRY RUN: nothing written.`, then the line "mock run, not evidence; M1 results: docs/m1-scorecard.md". | "The agent only ever sends a task id, a run id and its claim. The verdict comes from the saved file. To point your own agent at the gate, run `myco init`." | The pending `myco init` line above (lands with #512). |
 
 Total: 6 + 12 + 14 + 12 + 12 + 12 + 10 + 12 = 90 seconds.
@@ -76,7 +75,7 @@ Total: 6 + 12 + 14 + 12 + 12 + 12 + 10 + 12 = 90 seconds.
 - **Beat 6 is a scripted repair.** In the watch demo the second attempt is the mock agent's
   scripted fix of C4; it does not read the correction. The loop where an agent receives the
   correction, fixes the cell and is verified on the retry is
-  `test/gate/corrections-loop.test.ts` (lands with #514), which drives a spawned
+  `test/gate/corrections-loop.test.ts` (the seventh `main` line), which drives a spawned
   `myco-gate mcp --corrections calc-multi-step`. Do not narrate beat 6 as "the agent read the
   correction" until the watch demo runs that loop.
 - **Corrections are off by default** and are not allowed in R1 evidence (#514 enforces this).

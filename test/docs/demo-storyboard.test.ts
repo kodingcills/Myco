@@ -1,8 +1,8 @@
 /**
  * docs/product/demo-storyboard.md and the README's "Getting started": every operator command is
  * either runnable on main (and is run here, with its stated exit code) or marked "lands with
- * #<PR>". No VM, no model, no network: the commands are the mock gate demo and
- * `myco-gate check` on its output.
+ * #<PR>". No VM, no model, no network: the commands are the mock gate demo, `myco-gate check`
+ * on its output, and the corrections-loop test (#514, merged).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -13,7 +13,7 @@ import { afterAll, describe, expect, it } from "vitest";
 const ROOT = join(import.meta.dirname, "..", "..");
 const DOC = readFileSync(join(ROOT, "docs/product/demo-storyboard.md"), "utf8");
 const README = readFileSync(join(ROOT, "README.md"), "utf8");
-const PENDING_PRS = new Set(["512", "513", "514"]);
+const PENDING_PRS = new Set(["512", "513"]);
 const PENDING = /# \(?lands with #(\d+)/;
 
 function shellLines(markdown: string): string[] {
@@ -80,7 +80,7 @@ describe("demo storyboard commands", () => {
     for (const line of runnable) expect(line, line).toMatch(/ # exit \d+$/);
     // Flags that exist only on the pending branches never appear in a runnable line.
     for (const line of [...runnable, ...readmeRunnable])
-      expect(line).not.toMatch(/myco-watch|--corrections|myco init/);
+      expect(line).not.toMatch(/myco-watch|myco init/);
   });
 
   it("never tells the operator to run a relative bin/myco (it targets the Myco checkout)", () => {
@@ -127,6 +127,7 @@ describe("demo storyboard commands", () => {
       "not persisted: bug: login page crashes on save, BUG: token expires too early",
       "step 2: TARGET_MISMATCH: cell C4 (record EMP-0003, column qty) does not hold the requested value",
       "verified (accepted): ORACLE_PASS, CLAIM_RECORDED",
+      'correction: {"kind":"target_value_mismatch","step":2,"cell":"C4","record":"EMP-0003","column":"qty","expected":"4242","observed":"4224"}',
     ];
     for (const text of quoted) {
       expect(stdout).toContain(text);
