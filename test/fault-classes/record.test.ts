@@ -443,7 +443,7 @@ describe("the CLI", () => {
 });
 
 describe("the committed mock pack", () => {
-  const pack = join(ROOT, "docs/research/experiments/m2-10-fault-classes-mock");
+  const pack = join(ROOT, "docs/research/experiments/mock-m2-10-fault-classes");
   const read = (name: string) => readFileSync(join(pack, name), "utf8");
 
   it("passes the check with its expected row count", () => {
