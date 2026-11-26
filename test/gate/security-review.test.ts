@@ -32,7 +32,7 @@ const DOC = readFileSync(repo("docs/security/gate-api-review.md"), "utf8");
 const FLAT = DOC.replace(/\s+/g, " ");
 
 /**
- * PRs the doc cites that are on `origin/main` (checked at `08f487f`), with their merge
+ * PRs the doc cites that are on `origin/main` (checked at `9f8ce5e`), with their merge
  * commits. `track` marks this track's own fix and test PRs, which the doc must call merged.
  */
 const MERGED = [
@@ -42,16 +42,14 @@ const MERGED = [
   { pr: 514, sha: "9388442", track: false },
   { pr: 520, sha: "b174eea", track: true },
   { pr: 522, sha: "db9c5a2", track: true },
+  { pr: 521, sha: "9f8ce5e", track: true },
 ] as const;
 
 /**
  * This track's open PRs, each with a file it adds that is not on main. When one merges, its
  * file lands and the tripwire below fails until the doc stops calling it open.
  */
-const OPEN = [
-  { pr: 521, witness: "test/gate/sealed-size-cap.test.ts" },
-  { pr: 523, witness: "test/gate/caller-isolation.test.ts" },
-] as const;
+const OPEN = [{ pr: 523, witness: "test/gate/caller-isolation.test.ts" }] as const;
 
 /**
  * Open PRs off this track that the doc cites for their file locks: #503 (xlsx), #513 (watch
@@ -109,7 +107,7 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["mcp-server.ts:100-106", /structuredContent: result/],
   ["cli.ts:106-142", /function operatorGate/],
   ["api.ts:356-363", /unknown request field\(s\): \$\{unknown\.join/],
-  ["sealed.ts:138-155", /export function createSealedGate/],
+  ["sealed.ts:148-165", /export function createSealedGate/],
   ["gate.ts:712-721", /taskId !== assignment\.taskId \|\| runId !== assignment\.runId/],
   ["gate.ts:676-690", /await config\.onDecision\(result\)/],
   // D4: CLI scope
@@ -138,14 +136,15 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["multistep.ts:71", /retryBudget: 0 \| 1/],
   ["multistep.ts:111-112", /retryBudget must be 0 or 1/],
   ["mcp-server.ts:191", /chain = chain\.then\(/],
-  ["sealed.ts:81", /BEFORE_CAPTURE/],
-  ["sealed.ts:105-110", /no sealed capture yet/],
+  ["sealed.ts:82", /BEFORE_CAPTURE/],
+  ["sealed.ts:106-111", /no sealed capture yet/],
   // H-06
-  ["sealed.ts:116-123", /return \{ ok: true, bytes: persisted\[stateFile\]/],
+  ["sealed.ts:117-133", /bytes\.length > STATE_FILE_LIMIT[\s\S]*cause: "unreadable"/],
+  ["sealed.ts:127", /if \(bytes\.length > STATE_FILE_LIMIT\)/],
   ["vault.ts:632", /readFileSync\(path\)/],
   // H-07, H-08
   ["api.ts:314-319", /\^\[A-Za-z0-9\]\[A-Za-z0-9\._-\]\{0,127\}\$/],
-  ["sealed.ts:101", /openForTrial\(vault, binding, runId\)/],
+  ["sealed.ts:102", /openForTrial\(vault, binding, runId\)/],
   ["gate.ts:615", /const assignment = \{ \.\.\.config\.assignment \}/],
   ["gate.ts:342-352", /const segments = \[runId, \.\.\.stateFile\.split/],
   ["vault.ts:313", /existsSync\(dir\)/],
@@ -196,7 +195,7 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
   ["mcp-server.ts:100-106", "return {", "},"],
   ["cli.ts:106-142", "function operatorGate(flags: Flags, stderr: Writable) {", "}"],
   ["api.ts:356-363", "const unknown = keys.filter((key) => !ALLOWED_FIELDS.has(key));", "};"],
-  ["sealed.ts:138-155", "export function createSealedGate(config: SealedGateConfig): Gate {", "}"],
+  ["sealed.ts:148-165", "export function createSealedGate(config: SealedGateConfig): Gate {", "}"],
   ["gate.ts:712-721", "if (taskId !== assignment.taskId || runId !== assignment.runId) {", "}"],
   [
     "gate.ts:676-690",
@@ -225,15 +224,11 @@ const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
     "throw new Error(`retryBudget must be 0 or 1, got $\u007bString(options.retryBudget)}`);",
   ],
   [
-    "sealed.ts:105-110",
+    "sealed.ts:106-111",
     "const early = codes.length > 0 && codes.every((code) => BEFORE_CAPTURE.has(code));",
     '? `no sealed capture yet: the gate decides from the host capture taken after the agent stops ($\u007bcodes.join(", ")})`',
   ],
-  [
-    "sealed.ts:116-123",
-    "const { persisted } = opened.inputs;",
-    "return { ok: true, bytes: persisted[stateFile] as Uint8Array };",
-  ],
+  ["sealed.ts:117-133", "const { persisted } = opened.inputs;", "return { ok: true, bytes };"],
   ["api.ts:314-319", "const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;", "}"],
   [
     "gate.ts:342-352",
@@ -360,9 +355,11 @@ describe("the security review's file:line refs hold on main (D1)", () => {
     expect(DOC).not.toMatch(/`:\d/);
   });
 
-  it("re-anchors the status line past #514, #511, #520, #522 and #512", () => {
-    expect(DOC).not.toMatch(/\*\*Status:\*\* review of `origin\/main` at `(12c35ea|d632628)`/);
-    expect(DOC).toMatch(/\*\*Status:\*\* review of `origin\/main` at `08f487f`/);
+  it("re-anchors the status line past #514, #511, #520, #521, #522 and #512", () => {
+    expect(DOC).not.toMatch(
+      /\*\*Status:\*\* review of `origin\/main` at `(12c35ea|d632628|08f487f)`/,
+    );
+    expect(DOC).toMatch(/\*\*Status:\*\* review of `origin\/main` at `9f8ce5e`/);
     expect(FLAT).toContain("which includes #514 (agent-safe corrections) and #511");
     const status = FLAT.slice(0, FLAT.indexOf("**Scope.**"));
     // #508 is the starting list, not a merge the review is anchored past.
@@ -473,6 +470,13 @@ describe("the security review names no merged PR as open or pending (D1')", () =
     const h16 = FLAT.slice(FLAT.indexOf("### H-16:"), FLAT.indexOf("### H-17:"));
     expect(h16).toContain("strips the evidence root before it names a path (`gate.ts:283-286`)");
     expect(h16).toContain("`errorCode`, `reasons.ts:22`");
+  });
+
+  it("H-06 says the sealed size cap has landed (#521), and the vault side stays deferred", () => {
+    expect(FLAT).toContain("**fixed** (#521, merged `9f8ce5e`, gate side); vault side TO FILE 4");
+    expect(DOC).toMatch(/^### H-06: .*\(Low; fixed by #521 gate side, merged\)$/m);
+    expect(FLAT).not.toContain("Capped at 16 MiB on the mock path only");
+    expect(FLAT).toContain("`test/gate/sealed-size-cap.test.ts` pins it");
   });
 
   it("the H-01/H-07/H-09 decisions say the merged work has landed", () => {

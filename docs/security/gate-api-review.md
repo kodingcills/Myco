@@ -1,10 +1,10 @@
 # Gate API and `myco-gate` MCP: security review (M2 scope add, track H)
 
-**Status:** review of `origin/main` at `08f487f` (2026-11-26), which includes #514
+**Status:** review of `origin/main` at `9f8ce5e` (2026-11-26), which includes #514
 (agent-safe corrections) and #511 (topped-up runs), and this track's #520 (H-01 frame cap,
-`b174eea`) and #522 (H-07 input fuzz tests, `db9c5a2`), plus #512 (`myco init`, no gate
-file). Round 1 reviewed `12c35ea` and round 2 `d632628`; every file:line below was re-read
-on `08f487f`, and `test/gate/security-review.test.ts` pins every one to the code, both ends
+`b174eea`), #522 (H-07 input fuzz tests, `db9c5a2`) and #521 (H-06 sealed size cap,
+`9f8ce5e`), plus #512 (`myco init`, no gate file). Round 1 reviewed `12c35ea` and round 2
+`d632628`; every file:line below was re-read on `9f8ce5e`, and `test/gate/security-review.test.ts` pins every one to the code, both ends
 of each range. Each finding has an id (`H-NN`), a severity, its location, an exploit sketch
 and a decision: **fixed** or **tested** (a PR on this track has merged, named with its merge
 commit), **fix now** or **test now** (an open PR on this track), **fix next** (unlocked, no
@@ -25,16 +25,15 @@ JSON reaches the gate only through `myco-gate mcp` (H-01, H-07, H-09).
 defaults stay. The authn/authz section below is design only. The secret guard and the
 harness hooks are not touched.
 
-**Coordination.** #514, #511, #520 and #522 have merged, so `cli.ts`, `mcp-server.ts`,
-`multistep.ts`, `gated-trial.ts`, `scripts/myco-gate.ts`, `src/gate/stdio-frame.ts`,
-`test/gate/input-fuzz.test.ts` and `test/m2/*` are locked by no PR. These open PRs still own
+**Coordination.** #514, #511, #520, #521 and #522 have merged, so `cli.ts`, `mcp-server.ts`,
+`multistep.ts`, `gated-trial.ts`, `sealed.ts`, `scripts/myco-gate.ts`,
+`src/gate/stdio-frame.ts`, `test/gate/input-fuzz.test.ts` and `test/m2/*` are locked by no PR. These open PRs still own
 files a fix would touch, and this track does not edit them:
 
 | PR | Files this track must not edit |
 |---|---|
 | #503 xlsx replacement (`claude/tif-274-gate-xlsx-t1bdii`) | `src/gate/api.ts`, `gate.ts`, `families.ts`, `calc-document.ts`, `docs/gate/api.md`, `test/gate/gate.test.ts` |
 | #518 (attempt ledger) | `schemas/m2-evidence.ts`, `src/m2/evidence.ts` |
-| #521 (H-06 on this track) | `src/gate/sealed.ts` |
 
 So `mcp-server.ts` is fixable now. A finding whose fix belongs in a file #503 owns stays
 **deferred** and is listed as TO FILE. The H-09 fix in `mcp-server.ts` flips the `-32603`
@@ -76,8 +75,9 @@ PR, with no ordering condition left.
 - **Wire → MCP server**: newline-delimited JSON-RPC on stdin (`serveStdio`,
   `mcp-server.ts:180-206`). No network listener exists, and none is added here.
 - **Persisted state → oracle**: bytes the agent's app wrote, read after stop (sealed path)
-  or live (mock/dev path). Capped at 16 MiB on the mock path only (`gate.ts:178`, `gate.ts:377`).
-  See H-06.
+  or live (mock/dev path). Capped at 16 MiB on both paths: the mock reader (`gate.ts:178`,
+  `gate.ts:377`) and, since #521, the sealed reader (`sealed.ts:127`). The vault still hashes
+  a capture of any size (H-06, deferred part).
 - **Gate → agent**: the whole `GateResult` (`api.ts:151-191`), returned by `callTool` as
   `structuredContent` and as text (`mcp-server.ts:100-106`). Reasons are "not a stable
   contract" but must stay free of host paths and of free text the agent did not already
@@ -107,7 +107,7 @@ Nothing below is built. This records the shape current work must not close off.
    request set is the guarantee: the agent cannot claim an identity.
 2. **Authorization is a binding lookup, operator-side.** The adapter maps
    `(caller.tenantId, runId)` to a stored `(binding, receipt, task)` (H-11) and builds a
-   gate per request with `createSealedGate` (`sealed.ts:138-155`). It never uses
+   gate per request with `createSealedGate` (`sealed.ts:148-165`). It never uses
    `fileEvidenceReader` or the CLI path (#508 item 8). Two outcomes for a `runId` the
    caller's tenant does not own:
    - The lookup fails. The adapter answers with a transport-level 404/403 *before any gate
@@ -145,7 +145,7 @@ issue.
 | H-03 | Info | `claim` is echoed verbatim into the result and the audit log | defer: document for consumers |
 | H-04 | Low | `corrections[].observed` (merged with #514) carries document free text into agent context | TO FILE on main |
 | H-05 | Low | No per-trial check limit and no queue bound in `myco-gate mcp` | defer: TO FILE (`gate.ts`/`api.ts` locked by #503) |
-| H-06 | Low | Sealed reader does not enforce `STATE_FILE_LIMIT` | **fix now** (#521, gate side); vault side TO FILE |
+| H-06 | Low | Sealed reader does not enforce `STATE_FILE_LIMIT` | **fixed** (#521, merged `9f8ce5e`, gate side); vault side TO FILE 4 |
 | H-07 | Info | Input fuzzing: malformed JSON-RPC, wrong types, unicode/NUL/path tricks, duplicate and prototype keys | **tested** (#522, merged `db9c5a2`) |
 | H-08 | Info | Per-caller isolation across run ids and lookalike ids; case-folding aliasing of operator ids | **test now** (#523); operator rule now, check TO FILE |
 | H-09 | Info | A deeply nested JSON-RPC `id` makes `handleLine` throw (answered `-32603`) | tested (#522, merged `db9c5a2`); fix next (unlocked): TO FILE 6 |
@@ -272,7 +272,7 @@ issue.
   in memory. readline keeps reading while the chain grows. A bounded queue (pause the input
   past N pending lines, or answer `-32000 busy`) belongs with the check limit.
 - **Why only Low today:** the gated path is not exposed. Before capture the sealed reader
-  answers `uncertain` `STATE_UNREADABLE` (`sealed.ts:81`, `sealed.ts:105-110`), so mid-run
+  answers `uncertain` `STATE_UNREADABLE` (`sealed.ts:82`, `sealed.ts:106-111`), so mid-run
   probing of a gated trial learns nothing. After stop, only the harness checks. The queue
   needs a client that writes faster than the gate answers, which is the agent's own MCP
   client.
@@ -288,20 +288,21 @@ issue.
   `serveStdio` with the H-01 move. Hosted, the adapter adds a per-credential rate limit on
   top. TO FILE 3.
 
-### H-06: Sealed reader does not enforce `STATE_FILE_LIMIT` (Low; fix now, gate side)
+### H-06: Sealed reader does not enforce `STATE_FILE_LIMIT` (Low; fixed by #521 gate side, merged)
 
-- **Where:** the mock reader refuses a state file over 16 MiB (`gate.ts:178`, `gate.ts:377`). The
-  sealed reader returns the captured bytes with no size check (`sealed.ts:116-123`), so the
-  oracle parses whatever the capture holds.
+- **Where (before #521):** the mock reader refuses a state file over 16 MiB (`gate.ts:178`,
+  `gate.ts:377`). The sealed reader returned the captured bytes with no size check, so the
+  oracle parsed whatever the capture held.
 - **Exploit sketch:** the agent makes its app save a 1 GiB "document". The capture copies it.
   The vault hashes it (`vault.ts:632`). The family oracle then parses 1 GiB of CSV or JSON on
   the harness: minutes of CPU and several GiB of heap. The mock path would have said
   `STATE_UNREADABLE` at once. The same input gives different behaviour on the two paths,
   which is a parity defect as well as a resource one.
-- **Fix (this track, #521):** `sealedEvidenceReader` returns `unreadable` (so the result is
-  `uncertain` `STATE_UNREADABLE`) when the captured state file is over `STATE_FILE_LIMIT`,
-  before the oracle sees it. This is a small edit to `sealed.ts`, which no other open PR
-  touches.
+- **Fix (merged with #521, `9f8ce5e`):** `sealedEvidenceReader` returns `unreadable` (so the
+  result is `uncertain` `STATE_UNREADABLE`) when the captured state file is over
+  `STATE_FILE_LIMIT`, before the oracle sees it (`sealed.ts:117-133`, the check at
+  `sealed.ts:127`). Its reason names the limit, not a path. `test/gate/sealed-size-cap.test.ts`
+  pins it.
 - **Deferred part:** the vault still reads the whole captured file to hash it. The full fix
   caps artifact size at `vault.capture` (fail closed: no capture, no verdict). TO FILE 4.
 
@@ -340,7 +341,7 @@ writing nothing) are killed on main by those tests (the round-2 verifier re-ran 
 ### H-08: Per-caller isolation (Info; test now)
 
 - **Where:** the assignment check, `gate.ts:712-721`. The sealed reader refuses any run id
-  but the binding's on its own (`sealed.ts:101` via `openForTrial`).
+  but the binding's on its own (`sealed.ts:102` via `openForTrial`).
 - **Existing coverage:** `test/gate/gate.test.ts:654-750` (cross-run, cross-task, symlinked
   runs) and `test/gate/sealed-gate.test.ts:334-395` (another trial's run id or receipt).
 - **Gap:** no test pins the "two callers, one evidence root" picture as such. Two gates
