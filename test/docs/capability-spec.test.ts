@@ -7,8 +7,12 @@
  *  - the McNemar critical-value table is the exact one-sided binomial tail it claims;
  *  - the pre-registration rule (§3), the measurement constraints (§4), the sequencing (§5),
  *    and the grader-independence and gate-separation rules (§1.1, §1.2) are pinned whole;
- *    every other binding paragraph (cost numerator, fixed sequence, K halt, M store rule,
- *    L-infra, L time attribution) is pinned as a whole paragraph, not by its heading.
+ *  - the paragraphs enumerated below (cost numerator, fixed sequence, K halt, M store rule,
+ *    L-infra, L time attribution) are pinned as whole paragraphs, not by their headings;
+ *  - the binding sentences in BINDING_SENTENCES (budgets, seed, no exclusions, reporting,
+ *    "not shown", the ratio bar, and the evidence, leak, store and isolation guardrails) are
+ *    pinned verbatim.
+ * Paragraphs and sentences not listed here are NOT pinned by this file.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -512,5 +516,43 @@ describe("capability spec: binding paragraphs pinned whole (round 3)", () => {
       expectedAccepted(row({ arm: "C1+I", claim: "done", gate: { called: false, verdict: null } })),
     ).toBe(false);
     expect(expectedAccepted(row({ arm: "hcu+shell", claim: "done" }))).toBe(true);
+  });
+});
+
+/**
+ * Binding sentences pinned verbatim (whitespace-insensitive). Each one is a rule a later pack is
+ * judged by: a budget, the seed, the denominator, reporting, the bar, or a guardrail. Weakening
+ * any of them must fail this test (coordinator fix after the round-3 verifier, comment 7199097887).
+ */
+const BINDING_SENTENCES = [
+  // §1.3 arms, budgets, seed, exclusions
+  "Unless a track says otherwise: step budget 30 (C1's), no wall-clock budget, retry budget 0, one scored attempt per trial.",
+  "Capability tools spend the same budget, so they buy no extra turns.",
+  "The order of (task, arm) trials comes from a pre-registered seed.",
+  "A harness fault stays in the denominator and is reported by cause",
+  // §1.4 reporting
+  "Every count states its denominator and a Wilson 95% interval.",
+  // §1.5 statistics
+  "the bar compares the one-sided 95% upper bound of capability/baseline with 1.0.",
+  "or the pack's pre-registration hash does not match (§3).",
+  // I guardrails
+  "False DONEs on the 10 invalid-target tasks are no higher in `C1+I` than in `C1`.",
+  "any hit is a breach and the run is void",
+  // J gate separation
+  "No route reaches the host, the evidence root or the network.",
+  // K recovery and evidence
+  "Rollback never restores a state the agent did not produce or was not given",
+  "so even a row relabelled `myco-gate` is refused as R1 evidence by the existing check",
+  // L isolation
+  "each gate answers only its own trial (`ASSIGNMENT_MISMATCH` for any other)",
+  // M store and leak rules
+  "never fixture values, gate digests, oracle internals, host paths or secrets.",
+  "The agent cannot write the store; only the harness writes it.",
+  "Zero stored skills from a non-`verified` gate verdict (checked against the gate audit log).",
+] as const;
+
+describe("binding sentences are pinned verbatim", () => {
+  it.each(BINDING_SENTENCES)("the doc still says: %s", (sentence) => {
+    expect(FLAT).toContain(flat(sentence));
   });
 });
