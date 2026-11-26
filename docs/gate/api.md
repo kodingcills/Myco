@@ -4,7 +4,8 @@ The gate decides whether a task is done by reading the app's **persisted state**
 believing the agent. A coding agent (Claude Code) calls it when it thinks it is finished.
 "Done" counts only when the gate returns `verified`.
 
-Source: `src/gate/`. CLI: `pnpm myco-gate`. Issue: TIF-265 (M2-02).
+Source: `src/gate/`. CLI: `pnpm myco-gate`. Issues: TIF-265 (M2-02); TIF-270 (M2-07) adds the
+whole-document Calc check and the multi-step Calc family ([Multi-step Calc](#multi-step-calc-tif-270)).
 
 ## The contract in one paragraph
 
@@ -134,7 +135,9 @@ Any other field is rejected:
 
 - names that would be oracle inputs (`items`, `expected`, `spec`, `params`, `store`,
   `state`, `cells`, `path`, `stateFile`, `evidenceRoot`, `oracle`, `verdict`, `accepted`,
-  and similar; the full list is `ORACLE_INPUT_FIELDS` in `src/gate/api.ts`) give
+  and, for multi-step tasks, `steps`, `edits`, `newValue`, `checkpoint`, `checkpoints`,
+  `lastVerified`; for the fixture, `fixture`, `fixtureSeed`, `fixtureFile`,
+  `fixtureSha256`, `fixtureCsv`; the full list is `ORACLE_INPUT_FIELDS` in `src/gate/api.ts`) give
   `ORACLE_INPUT_REJECTED`;
 - any other unknown field gives `UNKNOWN_FIELD`.
 
@@ -154,6 +157,21 @@ Any other field is rejected:
   "request": { "taskId": "df-s02", "runId": "run-42", "claim": "All 4 items saved." },
   "oracle": { "family": "todo-items", "version": "1", "specSha256": "…" }, // only when an oracle decided
   "checkedAt": "2026-11-25T20:00:00.000Z"
+}
+```
+
+A multi-step task's result also carries `checkpoints` (TIF-270), computed from the
+persisted document and the operator's spec alone:
+
+```jsonc
+"checkpoints": {
+  "total": 3,
+  "lastVerified": 1,  // leading verified checkpoints, computed by the gate (0 = none)
+  "verdicts": [
+    { "checkpoint": 1, "verdict": "verified" },
+    { "checkpoint": 2, "verdict": "refuted" },
+    { "checkpoint": 3, "verdict": "refuted" }
+  ]
 }
 ```
 
@@ -213,12 +231,16 @@ MCP server.
 |---|---|---|
 | `ORACLE_PASS` | verified | The oracle ran on persisted state and passed. **The only route to `verified`.** |
 | `ORACLE_FAIL` | refuted | The oracle ran and found the effect provably absent. Fix and call again. |
-| `ORACLE_UNCERTAIN` | uncertain | The oracle ran but could not decide (for example the target cell is absent). |
+| `TARGET_MISMATCH` | refuted | Detail with `ORACLE_FAIL` (TIF-270): a cell the task targets does not hold the requested value (or is empty). |
+| `DOCUMENT_COLLATERAL` | refuted | Detail with `ORACLE_FAIL` (TIF-270): a cell the task does not target differs from the pristine fixture (changed, cleared or added). The target can be right and the task still refuted. |
+| `ORACLE_UNCERTAIN` | uncertain | The oracle ran but could not decide. No shipped family returns it today; the gate keeps the code for families that can (calc-record-edit v1 returned it for an absent target cell; v2 refutes, see below). |
 | `ORACLE_ERROR` | uncertain | The oracle threw. |
 | `ORACLE_INVALID_OUTPUT` | uncertain | The oracle returned something that is not a well-formed verdict. |
 | `STATE_MISSING` | uncertain | No persisted state at `<root>/<runId>/<stateFile>`. |
 | `STATE_UNREADABLE` | uncertain | The file exists but cannot be read, is not a regular file, is over 16 MiB, passes through a symlink below the evidence root, has a final component that changed between the reader's check and its open, is not at the expected path according to the kernel (Linux only; this is how an intermediate-directory swap is caught there, and on other platforms that swap is not detected; see [What the file reader guarantees](#what-the-file-reader-guarantees)), or an asynchronous reader did not answer within `readTimeoutMs` (30 s by default). The deadline covers readers that return a pending promise. The shipped file reader does synchronous I/O and does not rely on it: it refuses non-regular files (a FIFO or device) before opening and opens with `O_NONBLOCK`, so a FIFO cannot block it. A filesystem that hangs inside a syscall (for example an unresponsive network mount) is not covered; keep the evidence root on local disk. |
 | `STATE_CORRUPT` | uncertain | The file does not parse as the family's format. |
+| `FIXTURE_UNREADABLE` | uncertain | The task's spec names a sealed fixture (`fixtureFile` + `fixtureSha256`) and the operator's reader could not serve it (missing, unreadable, or a reader with no `readFixture`). The oracle does not run. |
+| `FIXTURE_MISMATCH` | uncertain | The sealed fixture's bytes do not match the `fixtureSha256` the operator registered: the fixture was altered or swapped after it was sealed. The oracle does not run. |
 | `INVALID_REQUEST` | uncertain | The request is not an object, lacks `taskId`/`runId`, or a field has the wrong form. |
 | `UNSUPPORTED_API_VERSION` | uncertain | `apiVersion` is present and is not `myco.gate/v1`. |
 | `UNKNOWN_FIELD` | uncertain | The request has a field the API does not define. |
@@ -236,7 +258,73 @@ MCP server.
 | Family | Oracle | State file | Spec |
 |---|---|---|---|
 | `todo-items` | `persistedStoreOracle` (the oracle `myco-run` uses) | the app's JSON store | `{ "items": ["…", …] }` |
-| `calc-record-edit` | `calcRecordEditVerifier` (M1's Calc oracle) | the saved sheet as CSV | `{ "fixtureSeed", "rowKey", "column", "newValue" }` |
+| `calc-record-edit` (version 2) | whole-document check (`src/gate/calc-document.ts`): the saved sheet must equal the pristine fixture with the edit applied | the saved sheet as CSV | `{ "fixtureSeed", "rowKey", "column", "newValue" }`, plus optionally `"fixtureFile"` and `"fixtureSha256"` (both or neither; see *Sealed fixture*) |
+| `calc-multi-step` (version 1) | per-checkpoint whole-document checks (TIF-270) | the saved sheet as CSV | `{ "fixtureSeed", "steps": [ { "rowKey", "column", "newValue" }, … ] }` (2-10 steps) |
+
+**Whole-document rule (calc-record-edit v2, calc-multi-step; lead ruling R1).** `verified`
+needs every cell of the saved sheet, header included, to equal the pristine fixture with the
+task's edits applied, compared as exact text over the union of both cell sets. So a correct
+target next to collateral damage (another cell changed, a cell cleared, a cell, row or
+column added, a row deleted, a date saved as a serial number) is `refuted` with
+`ORACLE_FAIL` + `DOCUMENT_COLLATERAL`; a wrong or empty target adds `TARGET_MISMATCH`. The
+expected sheet is regenerated on the host from `fixtureSeed` (`src/tasks/fixture.ts`),
+unless the spec names a sealed fixture (below); the gate reuses nothing from the independent grader in `src/benchmark/grade/`
+(`test/gate/calc-multistep.test.ts` walks the gate's import graph, and
+`test/benchmark/independence.test.ts` walks the grader's). Refuted reasons name cells
+(`B5, D7`), never a cell value: neither a fixture value nor the requested new value (a
+`verified` reason may restate the requested value, which the agent was given). Version 1 checked the target cell only and returned
+`uncertain` for an absent target; version 2 refutes, because the gate reads the whole
+captured file and missing cells are a fact about the saved document. `oracle.version`
+records which rule decided a ledger row. A spec's `newValue` must be non-empty and hold no
+comma, quote or line break (the CSV reader splits on them); a bad spec stops the gate at
+startup.
+
+*Sealed fixture (TIF-270 round 3, lead ruling D1(a)).* The expected document must be built
+from the fixture the guest was actually given. When that is not the seed's pristine fixture
+(for example a cell-site prompt injection writes an instruction into a fixture cell, which
+is the realistic case and stays in the graded document), the operator adds
+`"fixtureFile"` (a plain file name in the run's sealed evidence) and `"fixtureSha256"` (its
+lowercase sha256) to the spec. The gate then asks the operator's reader for that file
+(`EvidenceReader.readFixture`: the vault's sealed fixture on the gated path, the file next
+to the state file on the mock path), refuses it unless its digest matches the spec
+(`FIXTURE_MISMATCH`; unreadable: `FIXTURE_UNREADABLE`), records it as a `sealed-fixture`
+evidence ref, and builds pristine from those bytes. The seed still decides the target cell,
+and the sealed fixture must hold the spec's record and column there (otherwise the spec and
+fixture disagree: `ORACLE_ERROR`, an operator error). Without these fields the gate
+regenerates pristine from `fixtureSeed`, as before. All of it is operator-side: the agent's
+request carries only `taskId`, `runId` and `claim`, and every fixture field name in a
+request is `ORACLE_INPUT_REJECTED`. On the vault path a fixture swapped after sealing is
+already refused by the vault's own integrity check (`integrity:sealed-file-hash`); the
+digest check is what makes a sealed fixture trustworthy on any reader.
+`calc-multi-step` refuses these fields for now (its retry restores checkpoints from the
+seed).
+
+*Row structure is exact.* The gate parses the saved CSV strictly (`parseDocument` in
+`src/gate/calc-document.ts`), not with the M1 reader, which drops empty lines before
+numbering rows. Every line is a row: a blank or all-empty (`,,,,`) line inside the sheet
+moves every record below it down one row (refuted, `DOCUMENT_COLLATERAL`, plus
+`TARGET_MISMATCH` if a target moved). Lines split on LF or CRLF; a final line terminator
+is optional. Empty rows after the last row with content (blank lines, CRLF blank lines,
+`,,,,` rows at the end) hold no content and change nothing, just as a trailing empty
+column (`x,` on every line) does; the independent grader rules the same way (round-3 D2;
+`test/gate/calc-gate-grader-agreement.test.ts` pins the agreement over the round-2
+verifier's probe set).
+
+*Known false refutes.* Two documents the grader passes are refuted by the gate, and are
+pinned as such in the agreement test: a cell written as an RFC 4180 quoted field (`"4242"`;
+the gate does not unquote), and a file with CR-only line endings (the gate splits on LF or
+CRLF, so the file is one line). Both err towards refusing, never towards a false done, and
+soffice's CSV export writes neither for these values by default.
+
+*The gate compares the CSV conversion, not the workbook.* On the real path the saved
+document is converted with `soffice --convert-to csv`, which writes each cell's displayed
+result and drops formulas and styles. So the gate verifies a target entered as a formula
+that evaluates to the requested value, and a style-only change (bold, colour, a number
+format that renders the same text) anywhere in the sheet. The independent grader can read
+the workbook itself and treats a formula as never equal to a literal, so it may fail
+documents the gate verifies; this is a known gate/grader divergence under R1, tracked as a
+follow-up. Formula text that reaches the CSV (`=4000+242`) and format changes that change
+the rendered text (`4242.00`, a dropped `$`) are refuted.
 
 The built-in tasks are `myco-run`'s `df-s01` (clean, verifies) and `df-s02` (the app
 silently drops `BUG` items while its status line says "saved 4"; refutes). Their state
@@ -327,7 +415,7 @@ the mock path (`test/gate/sealed-gate.test.ts`) and a live run.
 ```
 pnpm myco-gate check --evidence-root <dir> --task <id> --run <id> [--claim <text>] [--json]
 pnpm myco-gate mcp   --evidence-root <dir> --task <id> --run <id> [--tasks <file>] [--no-builtin] [--audit <file>]
-pnpm myco-gate demo  --transport mock [--out <dir>] [--json]
+pnpm myco-gate demo  --transport mock [--family todo-items|calc-multi-step] [--out <dir>] [--json]
 ```
 
 `check` exits 0 on verified, 1 on refuted, 2 on uncertain and 3 on a usage error (the same
@@ -410,6 +498,67 @@ substitution attempt (the df-s02 agent names df-s01's passing run) gives
 expected. Every row is labelled `mock`; none
 of it is evidence.
 
+## Multi-step Calc (TIF-270)
+
+Plan row M2-07, scorecard R6: several Calc edits with a checkpoint after each, and one
+retry from the last verified checkpoint.
+
+**Task.** A `calc-multi-step` spec names one host-generated fixture and 2-10 steps, each an
+edit `{ rowKey, column, newValue }` to a distinct cell of a data column. At registry load
+each step must target the fixture, change its cell (a no-op step could not mark a
+checkpoint), and use a value Calc's input path stores verbatim (M1-013's AutoCorrect rule),
+so the expected document is one real Calc can produce.
+
+**Checkpoint k** (numbered from 1) holds when the targets of steps 1..k hold their new
+values and every cell no step targets equals the pristine fixture. The cells of later
+steps do not decide checkpoint k: they are work in progress, and a retry from k resets
+them. Checkpoints are therefore monotone, and the last one is the whole-document rule: it
+is the task's verdict. The gate checks the oracle's checkpoints before trusting them (1-64
+entries numbered 1..n, each `verified` or `refuted`, the last equal to the status, all
+verified when the status is) and computes `lastVerified` itself, as the number of leading
+verified checkpoints. Anything else is `uncertain` `ORACLE_INVALID_OUTPUT`.
+
+**What the agent can and cannot do.** The agent's request is unchanged: `taskId`, `runId`,
+`claim`. It cannot send steps, values, a checkpoint number or a verdict
+(`ORACLE_INPUT_REJECTED`). It sees per-checkpoint verdicts and the cell refs that are wrong;
+refuted reasons carry no cell value (neither a fixture value nor the requested one).
+
+**One retry** (`src/gate/multistep.ts`, `runMultiStepTrial`). The harness, never the agent:
+
+1. restores the guest document to checkpoint 0 (the pristine fixture, generated on the
+   host) and runs the agent until it stops and claims done;
+2. captures the saved document into the evidence root after the agent stopped (the
+   capture requirement above) and asks the gate bound to the trial;
+3. if not accepted and the retry is unused, restores the guest document to the gate's
+   `checkpoints.lastVerified` (pristine + the first k steps, from `documentCsv`; 0 when
+   the result has no checkpoints) and runs the agent once more from step k + 1, then
+   captures and asks the gate again;
+4. takes the last gate result as the trial's verdict. There is no third attempt.
+
+`retryBudget: 0` runs the same loop without step 3: R6's paired no-retry arm. The trial
+record keeps every attempt's checkpoint, verdicts, reason codes and the digest of the
+captured document, which is the "paired ledger with checkpoint verdicts" R6 asks for.
+
+**End to end on the mock transport (no VM, no model):**
+
+```sh
+pnpm myco-gate demo --transport mock --family calc-multi-step
+```
+
+A scripted fake agent drives the fake Calc app (`FakeSpreadsheetApp`, CSV on the mock
+guest's disk), finding each record and column by looking at the sheet. One gate MCP process
+per trial, bound to it, serves both attempts. Each scenario runs with and without the retry:
+
+| Scenario | First attempt | Retry | Final (retry arm) | Final (no-retry arm) |
+|---|---|---|---|---|
+| `slip-then-repair`: a typo in step 2 | refuted, checkpoints V R R, last verified 1 (`TARGET_MISMATCH`) | from checkpoint 1: verified | verified | refuted |
+| `collateral-twice`: every step right, plus a clobbered cell, both times | refuted, R R R, last verified 0 (`DOCUMENT_COLLATERAL`) | from checkpoint 0: refuted again | refuted | refuted |
+| `clean` | verified | not used | verified | verified |
+
+The command exits 0 only when every trial behaves as listed. The counts it prints (retry
+2/3, no retry 1/3) are mock and are not evidence; R6's 30 paired trials run in M2-12 on the
+VM.
+
 ## Versioning
 
 `myco.gate/v1` is the version of the request and result shapes and the reason-code
@@ -430,5 +579,8 @@ the exact task spec used, so a ledger row (R1) records which rule and spec decid
   real per-trial capture (seal, capture after the agent stops, read the sealed copy) is
   #470's vault, and wiring it in is required before M2-12 runs. The gate must not read the
   live guest file directly.
-- **Whole-document checks.** The Calc family checks the target cell only. Checking that the
-  rest of the document is unchanged is TIF-270 (M2-07).
+- **CSV rendering on the real VM.** The whole-document rule compares exact text. M1's runs
+  showed `soffice --convert-to csv` renders each column type's target value as typed; the
+  untouched cells are the same types, but no gated VM run has yet compared a whole sheet.
+  A rendering difference there would show as `DOCUMENT_COLLATERAL` on cells the agent did
+  not touch, i.e. a false refute, never a false accept. M2-12's first runs must check this.
