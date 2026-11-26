@@ -226,9 +226,11 @@ describe("rows keyed to a published fc-v1 task (TIF-267 part 2)", () => {
       faultClass: "focus-change",
       fixtureSha256: row.fixtureSha256,
       instructionSha256: sha(row.instruction),
-      fixtureFile: `fixtures/${row.fixtureSha256}.csv`,
+      // Deliberately not the obvious defaults (`fixtures/<sha>.csv`, the standard column
+      // map), so a row that ignored the task's values would fail, not pass by coincidence.
+      fixtureFile: "fixtures/task-042.csv",
       intent: { rowKey: "EMP-0023", column: "qty", newValue: "9733" },
-      columnTypes: { id: "key", name: "text", qty: "integer", joined: "date", salary: "currency" },
+      columnTypes: { id: "key", name: "text", qty: "text", joined: "date", salary: "text" },
     };
     return { row, task };
   }
@@ -268,6 +270,11 @@ describe("rows keyed to a published fc-v1 task (TIF-267 part 2)", () => {
     [
       "another value",
       { intent: { rowKey: "EMP-0023", column: "qty", newValue: "9734" } },
+      /are not the task's intent/,
+    ],
+    [
+      "another column",
+      { intent: { rowKey: "EMP-0023", column: "salary", newValue: "9733" } },
       /are not the task's intent/,
     ],
   ])("refuses a trial that ran %s", async (_label, change, pattern) => {

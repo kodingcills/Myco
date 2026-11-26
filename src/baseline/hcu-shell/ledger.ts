@@ -201,7 +201,9 @@ export interface PublishedTask {
 /**
  * Refuse a trial that did not run the published task. `make-requests` refuses such a row
  * later anyway (it pins `fixtureSha256` and `instructionSha256`); refusing here keeps a
- * mislabelled row from ever being written. Three things must match:
+ * mislabelled row from ever being written. This cannot detect a relabelled task object
+ * (`taskSetVersion`, `faultClass`, `taskId`): the arm reads no files, so only `make-requests`,
+ * which checks rows against the bundle, catches that. Three things must match:
  *  - the fixture placed in the guest (`row.fixtureSha256`) is the task's fixture;
  *  - the instruction the planner saw hashes to the task's `instructionSha256` (R2 parity);
  *  - the trial's params are the task's intent.

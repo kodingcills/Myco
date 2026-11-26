@@ -95,8 +95,13 @@ a row.
 They also refuse a trial that did not run the task, before any row is written. The trial's
 fixture hash, its instruction hash and its params must equal the task's `fixtureSha256`,
 `instructionSha256` and intent. The published `make-requests` CLI pins the same hashes, so a
-mislabelled row is caught twice. The arm still imports nothing from `src/benchmark/` and
-reads no files: the task row is the caller's.
+trial that ran the wrong fixture, instruction or params is caught twice.
+
+A relabel of the task object itself (its `taskSetVersion`, `faultClass` or `taskId`) is
+caught once, by `make-requests`, which checks the row against the bundle. The arm reads no
+files, so it cannot check the task row against the bundle. Because no two fc-v1 tasks share a
+(fixture, instruction) hash pair, a trial whose hashes match identifies exactly one task. The
+arm still imports nothing from `src/benchmark/`; the task row is the caller's.
 
 `test/baseline/hcu-shell/e2e.test.ts` runs the whole chain on fakes, over the **fc-v1 demo
 subset** (30 tasks, R2's paired count, including 3 invalid-target tasks).
