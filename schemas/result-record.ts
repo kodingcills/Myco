@@ -1,3 +1,4 @@
+import { handoffLogSchema } from "./handoff.ts";
 import type { JsonSchema } from "./validate.ts";
 
 /**
@@ -171,6 +172,8 @@ export const resultRecordSchema: JsonSchema = {
         simulated: { type: "boolean" },
         dryRun: { type: "boolean" },
         economics: { $ref: "#/$defs/Economics" },
+        // Track N: the trial's human handoffs (myco.handoff.log/1). Optional; absent = none.
+        handoffs: handoffLogSchema,
       },
     },
     // ADR-0012 session record: runtime-layer summary, no verdict. `verdict` is
@@ -192,6 +195,8 @@ export const resultRecordSchema: JsonSchema = {
         checks: { type: "array", items: { $ref: "#/$defs/CheckVerdict" } },
         unresolvedState: { type: "string" },
         economics: { $ref: "#/$defs/Economics" },
+        // Track N: the trial's human handoffs (myco.handoff.log/1). Optional; absent = none.
+        handoffs: handoffLogSchema,
       },
     },
   },
