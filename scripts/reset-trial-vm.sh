@@ -9,12 +9,17 @@
 # and PR #28's rejection). The disk-only path uses a plain qemu-img restore and
 # has not exhibited it.
 #
-# Known tradeoff: a cold reset costs ~190-260 s on this Mac (TIF-98, measured
-# 2026-11-25; earlier notes said ~21 s warm / ~165 s fresh), versus the live
-# path's ~7 s. We pay it for a reset that cannot wedge. Where the time goes:
-# docs/eval-runbook.md §3.1.
+# Known tradeoff: a cold reset costs 140-163 s onto trial-base-v2 and 204-222 s
+# onto clean-base on this Mac (TIF-98, same-session bench 2026-11-26), versus the
+# live path's ~7 s. We pay it for a reset that cannot wedge. Where the time goes:
+# docs/eval-runbook.md §3.1 and §3.5.
 #
-# usage: reset-trial-vm.sh [snapshot]   (default clean-base)
+# usage: reset-trial-vm.sh [snapshot]
+#   The snapshot defaults to trial-base-v2, the maintenance-quiet trial base
+#   (TIF-98, runbook §3.5). MYCO_TRIAL_SNAPSHOT changes the default, for drivers
+#   that call this with no argument (scripts/m1-sweep.sh, m1-corrupt-suite.sh):
+#   MYCO_TRIAL_SNAPSHOT=clean-base rolls a whole sweep back to clean-base. An
+#   explicit argument wins over both. Every name must pass the allowlist below.
 set -euo pipefail
 
 source "$(dirname "$0")/vm-lock.sh"
@@ -23,7 +28,7 @@ if ! vm_lock_owned_by_parent; then
   trap vm_lock_release EXIT
 fi
 
-SNAPSHOT=${1:-clean-base}
+SNAPSHOT=${1:-${MYCO_TRIAL_SNAPSHOT:-trial-base-v2}}
 # Where vm.sh lives. Override with MYCO_VM_SCRIPTS to point at a stub.
 #
 # Footgun this guards: a test that means to stub but forgets to export the

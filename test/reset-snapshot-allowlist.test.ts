@@ -50,6 +50,8 @@ function run(
       MYCO_VM_LOCK_OWNER: "",
       MYCO_STOP_TIMEOUT: "2",
       MYCO_SSH_WAIT_TIMEOUT: "2",
+      // Never inherit the host's choice of default snapshot.
+      MYCO_TRIAL_SNAPSHOT: "",
       ...opts.env,
     },
   });
@@ -70,12 +72,39 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     },
   );
 
-  // Guards against the default silently changing away from clean-base.
-  it("defaults to clean-base when no snapshot is given", () => {
+  // TIF-98: the default trial snapshot is trial-base-v2; clean-base stays selectable.
+  // Guards against the default silently changing again.
+  it("defaults to trial-base-v2 when no snapshot is given", () => {
     const r = run();
     expect(r.status).toBe(0);
-    expect(r.calls).toContain("vm.sh restore clean-base");
+    expect(r.calls).toContain("vm.sh restore trial-base-v2");
+    expect(r.calls).not.toContain("vm.sh restore clean-base");
+    expect(r.stdout).toContain("ready on 'trial-base-v2'");
   });
+
+  it("MYCO_TRIAL_SNAPSHOT=clean-base rolls the default back to clean-base", () => {
+    const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: "clean-base" } });
+    expect(r.status).toBe(0);
+    expect(r.calls).toContain("vm.sh restore clean-base");
+    expect(r.stdout).toContain("ready on 'clean-base'");
+  });
+
+  it("an explicit argument wins over MYCO_TRIAL_SNAPSHOT", () => {
+    const r = run("cua-c1-base", { env: { MYCO_TRIAL_SNAPSHOT: "clean-base" } });
+    expect(r.status).toBe(0);
+    expect(r.calls).toContain("vm.sh restore cua-c1-base");
+    expect(r.calls).not.toContain("vm.sh restore clean-base");
+  });
+
+  it.each(["trial-base-v3", "clean-base;true", "../clean-base"])(
+    "MYCO_TRIAL_SNAPSHOT=%j is held to the same allowlist, without touching the VM",
+    (name) => {
+      const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: name } });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("refusing to restore unexpected snapshot");
+      expect(r.calls).toBe("");
+    },
+  );
 
   // Guards the refuse-anything-else behaviour: a refused name must exit non-zero,
   // say why, and never call into the VM at all (no kill, no restore).
@@ -133,5 +162,26 @@ describe("reset-trial-vm.sh guest egress check (TIF-275)", () => {
     expect(r.status).toBe(0);
     expect(r.stderr).toContain("WARNING MYCO_GUEST_EGRESS=open");
     expect(r.calls).not.toContain("guest-egress.sh");
+  });
+});
+
+// TIF-98: the callers that follow the default really do follow it.
+describe("trial drivers use the default trial snapshot", () => {
+  const read = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
+
+  it.each(["scripts/m1-sweep.sh", "scripts/m1-corrupt-suite.sh"])(
+    "%s resets with no snapshot argument, so the default and MYCO_TRIAL_SNAPSHOT apply",
+    (driver) => {
+      const calls = read(driver).match(/bash scripts\/reset-trial-vm\.sh[^\n]*/g) ?? [];
+      expect(calls.length).toBeGreaterThan(0);
+      for (const c of calls) expect(c).toMatch(/^bash scripts\/reset-trial-vm\.sh >>/);
+    },
+  );
+
+  it("scripts/reset-bench.sh benches trial-base-v2 unless MYCO_BENCH_SNAPSHOT says otherwise", () => {
+    // Split so the shell ${...} is not read as a JS template placeholder.
+    expect(read("scripts/reset-bench.sh")).toContain(
+      "SNAPSHOT=$" + "{MYCO_BENCH_SNAPSHOT:-trial-base-v2}",
+    );
   });
 });
