@@ -112,6 +112,24 @@ describe("D2: a formula-derived host path never reaches the agent", () => {
     expect(reply.data.rows[0][0].display.length).toBeLessThanOrEqual(STATE_CAPS.maxCellTextChars);
   });
 
+  it("a UI name holding a withheld path with spaces is redacted whole, not withheld", async () => {
+    const service = createStateService({
+      backend: rawBackend({
+        tree: {
+          role: "frame",
+          name: `${TRIAL}/agent/saved.xlsx — LibreOffice Calc`,
+          childCount: 0,
+        },
+        nodes: 1,
+        truncated: false,
+      }),
+      withheld: [TRIAL],
+    });
+    const reply: Json = await service.call("state_ui_tree", {});
+    expect(reply.ok).toBe(true);
+    expect(reply.data.tree.name).toBe("[path] — LibreOffice Calc");
+  });
+
   it("sheet names in the reply are scrubbed too", async () => {
     const service = createStateService({
       backend: rawBackend({
