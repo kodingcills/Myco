@@ -95,8 +95,12 @@ cmd_status() {
 cmd_set() {
   local want=$1 got pf
   source "$(dirname "$0")/vm-lock.sh"
-  vm_lock_acquire guest-egress.sh || exit "$?"
-  trap vm_lock_release EXIT
+  # Under scripts/vm-session.sh (or a sweep driver) the parent already holds
+  # the lock and this process inherited it: accept it, as reset-trial-vm.sh does.
+  if ! vm_lock_owned_by_parent; then
+    vm_lock_acquire guest-egress.sh || exit "$?"
+    trap vm_lock_release EXIT
+  fi
   # UTM refuses a configuration update unless the VM is stopped. The next
   # reset-trial-vm.sh restores clean-base and boots it, so stopping is safe.
   utm -e 'stop vm by force' >/dev/null 2>&1 || true
