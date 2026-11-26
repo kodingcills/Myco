@@ -16,7 +16,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -571,6 +571,171 @@ describe("#559 round 2 (prepared): arms, the container backstop, strict h- idemp
         w.filter((x) => canonicalJson(closed).includes(x)),
         name,
       ).toEqual([]);
+    }
+  });
+});
+
+describe("identity strings are leaks (lead ruling 21:52Z): bare username, host name, configured identity", () => {
+  // The real host values, read now and never printed: assertions compare booleans only.
+  const realUser = (() => {
+    try {
+      return userInfo().username;
+    } catch {
+      return "";
+    }
+  })();
+  const realHost = hostname().split(".")[0] ?? "";
+  const GENERIC = new Set([
+    "root",
+    "user",
+    "runner",
+    "admin",
+    "ubuntu",
+    "node",
+    "nobody",
+    "vscode",
+    "codespace",
+  ]);
+  const userCounts =
+    realUser.length >= 3 &&
+    !GENERIC.has(realUser.toLowerCase()) &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(realUser);
+  const hostCounts =
+    realHost.length >= 4 &&
+    realHost.toLowerCase() !== "localhost" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(realHost);
+  const variants = (v: string) => [v, v.toUpperCase(), v.toLowerCase()];
+
+  /** A positive candidate with `v` in one closed field (gate bindings kept consistent). */
+  const placements: [string, (v: string) => ExportCandidate][] = [
+    [
+      "task id",
+      (v) => {
+        const c = candidate("ok", {
+          task: { ...candidate("ok").episode.task, id: v },
+        } as Partial<EpisodeDraft>);
+        return { ...c, gate: { ...c.gate!, request: { ...c.gate!.request, taskId: v } } };
+      },
+    ],
+    [
+      "run id",
+      (v) => {
+        const c = candidate("ok", { runId: v });
+        return { ...c, gate: { ...c.gate!, request: { ...c.gate!.request, runId: v } } };
+      },
+    ],
+    ["trial key", (v) => candidate("ok", { trialKey: `t-${v}-1` })],
+    ["key name", (v) => candidate("ok", { actions: [{ kind: "key", keys: v }] })],
+    ["app name", (v) => candidate("ok", { actions: [{ kind: "launch", app: v }] })],
+    [
+      "desktop backend",
+      (v) => ({ ...candidate("ok"), desktop: { ...candidate("ok").desktop, backend: v } }),
+    ],
+    [
+      "desktop image",
+      (v) => ({ ...candidate("ok"), desktop: { ...candidate("ok").desktop, image: v } }),
+    ],
+  ];
+  /** Export one candidate; the refusal (code, message) or null, plus every written byte. */
+  function attempt(c: ExportCandidate, hygiene: object = HYGIENE) {
+    const base = mkdtempSync(join(tmpdir(), "myco-u-id-"));
+    const dir = join(base, "ds");
+    try {
+      exportDataset([c], { outDir: dir, hygiene });
+      return { refused: null as ExportRefused | null, written: everyFile(dir) };
+    } catch (e) {
+      if (e instanceof ExportRefused) return { refused: e, written: "" };
+      throw e;
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }
+
+  it("the real host username, in every closed field and every case, refuses the export (even under a planted identity)", () => {
+    if (!userCounts) return; // a generic or short account (CI's `runner`): its home paths are paths
+    for (const v of variants(realUser))
+      for (const [name, put] of placements) {
+        const r = attempt(put(v));
+        expect(r.refused?.code === "LEAK", name).toBe(true);
+        expect(r.refused?.detail === "username", name).toBe(true);
+        expect(
+          (r.refused?.message ?? "").toLowerCase().includes(realUser.toLowerCase()),
+          name,
+        ).toBe(false);
+      }
+  });
+
+  it("the real host name refuses the export the same way", () => {
+    if (!hostCounts) return;
+    for (const v of variants(realHost)) {
+      const r = attempt(placements[0]![1](v));
+      expect(r.refused?.code === "LEAK" && r.refused?.detail === "hostname").toBe(true);
+      expect((r.refused?.message ?? "").toLowerCase().includes(realHost.toLowerCase())).toBe(false);
+    }
+  });
+
+  it("configured identity strings (an identity file): an alias is refused in any case; a full name with a space never appears", () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-u-idf-"));
+    try {
+      const file = join(base, "identity.txt");
+      const alias = ["qzplant", "alias"].join("");
+      const full = ["Qzfirst", " ", "Plantlast"].join("");
+      writeFileSync(file, `# configured identity\n${alias}\n${full}\n`);
+      for (const v of variants(alias)) {
+        const r = attempt(placements[0]![1](v), { ...HYGIENE, identityFile: file });
+        expect(r.refused?.code === "LEAK" && r.refused?.detail === "identity").toBe(true);
+      }
+      // Without the file the alias is just a closed id: written as is.
+      expect(attempt(placements[0]![1](alias)).refused).toBeNull();
+      for (const v of variants(full)) {
+        const r = attempt(
+          candidate(`I am ${v}`, { actions: [{ kind: "key", keys: v.slice(0, 64) }] }),
+          {
+            identity: { user: "nobody-u", host: "nohost-u" },
+          },
+        );
+        expect(r.refused).toBeNull();
+        expect(r.written.toLowerCase().includes(v.toLowerCase())).toBe(false);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("validateContainer refuses a hand-edited container carrying a configured identity", () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-u-idv-"));
+    try {
+      const file = join(base, "identity.txt");
+      const alias = ["qzplant", "other"].join("");
+      writeFileSync(file, `${alias}\n`);
+      const dir = join(base, "ds");
+      exportDataset([candidate("ok")], { outDir: dir, hygiene: HYGIENE });
+      const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
+      record.desktop.image = alias.toUpperCase();
+      const line = canonicalJson(record);
+      writeFileSync(join(dir, "records.jsonl"), `${line}\n`);
+      const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+      m.records[0] = { ...m.records[0], sha256: sha(line) };
+      m.files["records.jsonl"] = sha(`${line}\n`);
+      writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
+      expect(validateContainer(dir, HYGIENE)).toEqual([]);
+      expect(validateContainer(dir, { ...HYGIENE, identityFile: file })).toEqual([
+        "records.jsonl#1: LEAK identity at $.desktop.image",
+      ]);
+      // This machine's account, under a caller that names another identity: still refused.
+      if (userCounts) {
+        record.desktop.image = realUser.toLowerCase();
+        const line2 = canonicalJson(record);
+        writeFileSync(join(dir, "records.jsonl"), `${line2}\n`);
+        m.records[0] = { ...m.records[0], sha256: sha(line2) };
+        m.files["records.jsonl"] = sha(`${line2}\n`);
+        writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
+        const problems = validateContainer(dir, HYGIENE);
+        expect(problems.includes("records.jsonl#1: LEAK username at $.desktop.image")).toBe(true);
+        expect(problems.some((p) => p.toLowerCase().includes(realUser.toLowerCase()))).toBe(false);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
     }
   });
 });

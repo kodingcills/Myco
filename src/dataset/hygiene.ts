@@ -29,7 +29,8 @@ export type LeakKind =
   | "hostname"
   | "planted-marker"
   | "forbidden-string"
-  | "secret-shaped";
+  | "secret-shaped"
+  | "identity";
 
 /** The canary #542's tests plant in env, home, fixtures, the vault and oracle config. */
 export const PLANTED_MARKER = ["PLANTED", "FAKE", "MARKER"].join("_");
@@ -53,6 +54,13 @@ export interface HygieneOptions {
   readonly hostIdentity?: boolean;
   /** The identity to scan for instead of this machine's (tests plant one; CI's is generic). */
   readonly identity?: HostIdentity;
+  /**
+   * A file of configured identity strings (a full name, another account), one per line, `#`
+   * comments and blank lines ignored, each at least 3 characters: kind `identity`, matched
+   * case-insensitively by word (lead ruling 2026-11-26 21:52Z). Never switched off by
+   * `hostIdentity: false`.
+   */
+  readonly identityFile?: string;
 }
 
 /**
@@ -220,6 +228,11 @@ function machineIdentity(): HostIdentity {
 
 function identityPatterns(options: HygieneOptions): Array<[LeakKind, RegExp]> {
   const out: Array<[LeakKind, RegExp]> = [];
+  if (options.identityFile !== undefined)
+    for (const line of readFileSync(options.identityFile, "utf8").split(/\r?\n/)) {
+      const s = line.trim();
+      if (s.length >= 3 && !s.startsWith("#")) out.push(["identity", wordPattern(s)]);
+    }
   if (options.hostIdentity === false) return out;
   const { user, host: fullHost } = options.identity ?? machineIdentity();
   if (user.length >= 3 && !GENERIC_ACCOUNTS.has(user.toLowerCase())) {

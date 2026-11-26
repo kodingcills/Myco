@@ -586,7 +586,17 @@ export function exportDataset(
     ["records.jsonl", exported.map((r) => `${r.rawLine}\n`).join("")],
     ...blobFiles.map((file) => [file, blobs.get(file)!] as const),
   ];
-  const leak = firstLeak(rawOutputs, options.hygiene) ?? firstLeak(outputs, options.hygiene);
+  // Identity strings (lead ruling 21:52Z): whatever hygiene the caller passes, what is written is
+  // always scanned for THIS machine's account and host name (read now, from os) and the
+  // configured identity file, case-insensitively, the closed id and token fields included.
+  const enforced: HygieneOptions =
+    options.hygiene?.identityFile === undefined
+      ? {}
+      : { identityFile: options.hygiene.identityFile };
+  const leak =
+    firstLeak(rawOutputs, options.hygiene) ??
+    firstLeak(outputs, options.hygiene) ??
+    firstLeak(outputs, enforced);
   if (leak !== null) throw new ExportRefused("LEAK", leak.where, leak.kind);
 
   // Write to a sibling temp directory and rename, so a failed write leaves no partial export.
@@ -618,6 +628,17 @@ const CONTAINER_ENTRIES = new Set(["manifest.json", "records.jsonl", "schema.jso
  */
 export function validateContainer(dir: string, hygiene?: HygieneOptions): string[] {
   const problems: string[] = [];
+  const enforced: HygieneOptions =
+    hygiene?.identityFile === undefined ? {} : { identityFile: hygiene.identityFile };
+  const leaksOf = (value: unknown) => {
+    const seen = new Set<string>();
+    return [...scanForLeaks(value, hygiene), ...scanForLeaks(value, enforced)].filter((l) => {
+      const k = `${l.kind}@${l.path}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  };
   for (const entry of readdirSync(dir)) {
     if (entry === "blobs") problems.push("blobs/ is present: the container is digest-only");
     else if (!CONTAINER_ENTRIES.has(entry))
@@ -686,13 +707,14 @@ export function validateContainer(dir: string, hygiene?: HygieneOptions): string
       );
     for (const path of openEpisodeStrings(episode))
       problems.push(`${record.episode.file}: OPEN_STRING at ${path}`);
-    // The cleanliness backstop: the exporter's own leak scan over what was written.
-    for (const leak of scanForLeaks(episode, hygiene))
+    // The cleanliness backstop: the exporter's own leak scan over what was written, plus this
+    // machine's identity and the identity file, always (lead ruling 21:52Z).
+    for (const leak of leaksOf(episode))
       problems.push(`${record.episode.file}: LEAK ${leak.kind} at ${leak.path}`);
-    for (const leak of scanForLeaks(record, hygiene))
+    for (const leak of leaksOf(record))
       problems.push(`records.jsonl#${i + 1}: LEAK ${leak.kind} at ${leak.path}`);
   }
-  for (const leak of scanForLeaks(manifest, hygiene))
+  for (const leak of leaksOf(manifest))
     problems.push(`manifest.json: LEAK ${leak.kind} at ${leak.path}`);
   let files: string[] = [];
   try {

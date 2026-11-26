@@ -185,6 +185,13 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
   Steps (actions and observations), the claim, the gate verdict (codes only), the
   independent grader's ground truth, harness metadata, provenance and the `simulated` flag
   live here, and only here.
+- **Identity strings are leaks** (lead ruling 2026-11-26 21:52Z). Whatever hygiene options the
+  caller passes, everything written is also scanned for this machine's account name and host
+  name (read at export time from `os`) and for each line of `hygiene.identityFile` (a full name,
+  another account). Matching is case-insensitive and by word, the closed id and token fields and
+  the record's desktop facts included. One match refuses the export (`LEAK`, kind `username`,
+  `hostname` or `identity`, with a location, never the value). `validateContainer` applies the
+  same scan.
 - **No blobs** (digest-only, lead ruling 2026-11-26 20:3xZ): the persisted document each exported
   episode graded is referenced by the sha256, byte count and content-addressed name its
   `state` / `persisted` / `text/csv` observation carries (#542 requires the observation), and is
