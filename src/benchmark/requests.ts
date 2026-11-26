@@ -3,16 +3,21 @@
  *
  * This is how any arm, ours or a third party's, gets graded: the requests carry the task's
  * fixture and intent from the published bundle and the arm's saved document, and nothing
- * the arm claimed. The arm row is used only to find the task and the document; its
- * `fixtureSha256` must match the task's, so a row cannot point the grader at a different
- * fixture.
+ * the arm claimed. The arm row is used only to find the task and the document. Its
+ * `taskSetVersion`, `faultClass`, `fixtureSha256` and `instructionSha256` must all match
+ * the task's, so a row cannot point the grader at a different fixture, nor publish a result
+ * under another task-set version or relabel a trial's fault class.
  */
+import { isAbsolute, relative, resolve } from "node:path";
 import type { BenchmarkTask } from "./taskset.ts";
 
 export interface ArmRowRef {
   readonly trialKey: string;
   readonly taskId: string;
+  readonly taskSetVersion: string;
+  readonly faultClass: string;
   readonly fixtureSha256: string;
+  readonly instructionSha256: string;
 }
 
 export interface GradeRequest {
@@ -30,6 +35,14 @@ export class RequestBuildError extends Error {
   override name = "RequestBuildError";
 }
 
+/** The row fields that must equal the task's, in the order they are checked. */
+const PINNED_FIELDS = [
+  "taskSetVersion",
+  "faultClass",
+  "fixtureSha256",
+  "instructionSha256",
+] as const;
+
 /**
  * One request per arm row. `documentFor(trialKey)` returns the saved document's file name
  * (relative to the request directory, e.g. `docs/t1.xlsx`) and its format, or null if the
@@ -45,10 +58,12 @@ export function buildRequests(
     const task = byId.get(row.taskId);
     if (task === undefined)
       throw new RequestBuildError(`${row.trialKey}: unknown taskId ${row.taskId}`);
-    if (row.fixtureSha256 !== task.fixtureSha256) {
-      throw new RequestBuildError(
-        `${row.trialKey}: arm row fixture does not match task ${task.taskId}`,
-      );
+    for (const field of PINNED_FIELDS) {
+      if (row[field] !== task[field]) {
+        throw new RequestBuildError(
+          `${row.trialKey}: arm row ${field} ${JSON.stringify(row[field])} does not match task ${task.taskId} (${JSON.stringify(task[field])})`,
+        );
+      }
     }
     const doc = documentFor(row.trialKey);
     return {
@@ -62,4 +77,18 @@ export function buildRequests(
       columnTypes: task.columnTypes,
     };
   });
+}
+
+/**
+ * Resolve `name` under `root` and refuse it unless it stays strictly inside `root`. Every
+ * path make-requests reads or writes goes through this, after the rows are validated, so a
+ * file name built from untrusted input cannot leave its directory.
+ */
+export function pathInside(root: string, name: string): string {
+  const full = resolve(root, name);
+  const rel = relative(resolve(root), full);
+  if (rel === "" || isAbsolute(rel) || rel.split(/[\\/]/)[0] === "..") {
+    throw new RequestBuildError(`path ${JSON.stringify(name)} escapes ${root}`);
+  }
+  return full;
 }

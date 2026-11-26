@@ -280,7 +280,19 @@ npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades grades.jsonl --expec
 ```
 
 `make-requests` takes the fixture and intent from the bundle and only the document from the
-arm. An arm row whose `fixtureSha256` differs from its task's is refused.
+arm. The arm file is untrusted input:
+
+- every row must validate against the closed arm-row schema, so a `trialKey` cannot carry
+  `..`, an absolute path or a path separator;
+- a row whose `taskSetVersion`, `faultClass`, `fixtureSha256` or `instructionSha256`
+  differs from its task's is refused, so a result cannot be published under another
+  task-set version or with relabelled fault classes;
+- every path it reads or writes is asserted to stay inside `--bundle`, `--docs` or `--out`;
+- on any refusal it exits 1 having written nothing.
+
+`npx tsx scripts/benchmark-verify-bundle.ts <bundle dir>` checks a copy of the bundle against
+its own `manifest.json` (missing, differing or unlisted files), using Node built-ins only.
+The fault-class harness notes ship in the bundle README.
 
 ### 8.3 Proof
 
@@ -293,7 +305,10 @@ arm. An arm row whose `fixtureSha256` differs from its task's is refused.
   - every satisfiable task: the honest document passes and the pristine document fails;
   - every unsatisfiable task fails as unsatisfiable;
   - no host path in the bundle;
-  - the request builder.
+  - the request builder, including the per-field refusals and `pathInside`.
+- **`test/benchmark/make-requests-cli.test.ts`:** the CLI refuses `../`, absolute and
+  separator `trialKey`s and relabelled rows with exit 1 and no file written, and a missing
+  document reaches the grader as `persistedFile: null` and grades `ungradable`.
 - **`test/benchmark/taskset-fake-run.test.ts`:** a fake run over all 100 tasks, end to end
   through `make-requests`, `benchmark-grade` and `benchmark-check`.
   - Setup: a credulous fake agent claims done on every task under its fault class.
@@ -303,7 +318,8 @@ arm. An arm row whose `fixtureSha256` differs from its task's is refused.
     | `myco-gate` (the M1 verifier as the gate) | 60 | 0 | Passes, bound over 60 |
     | `hcu+shell` (accepts every claim) | 100 | 40, 10 per fault class | n/a |
 
-  - It also covers builder `--check` on an extra and a tampered file.
+  - It also covers builder `--check` on an extra and a tampered file, and
+    `benchmark-verify-bundle.ts` on a tampered, a missing and an extra file.
 
 ### 8.4 Extension point (TIF-270, #472)
 

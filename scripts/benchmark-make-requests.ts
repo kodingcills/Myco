@@ -8,12 +8,22 @@
  * the saved documents under <work>/docs/, so every request path is relative and inside the
  * work directory (the grader refuses anything else). A trial with no saved document gets
  * `persistedFile: null` and grades `ungradable`.
+ *
+ * The arm file is untrusted input. Every row is validated against the closed arm-row schema
+ * and checked against its task before any path is built, and every path read or written is
+ * asserted to stay inside --bundle, --docs or --out. On any refusal it exits 1 having
+ * written nothing.
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { benchmarkTaskSchema } from "../schemas/benchmark-ledger.ts";
+import { dirname } from "node:path";
+import { benchmarkArmRowSchema, benchmarkTaskSchema } from "../schemas/benchmark-ledger.ts";
 import { validateSchema } from "../schemas/validate.ts";
-import { type ArmRowRef, buildRequests } from "../src/benchmark/requests.ts";
+import {
+  type ArmRowRef,
+  buildRequests,
+  pathInside,
+  RequestBuildError,
+} from "../src/benchmark/requests.ts";
 import type { BenchmarkTask } from "../src/benchmark/taskset.ts";
 
 const args = process.argv.slice(2);
@@ -33,43 +43,69 @@ const armPath = opt("--arm");
 const docs = opt("--docs");
 const out = opt("--out");
 
-const jsonl = (p: string) =>
-  readFileSync(p, "utf8")
-    .split("\n")
-    .filter((l) => l.trim() !== "")
-    .map((l) => JSON.parse(l) as unknown);
-
-const tasks = jsonl(join(bundle, "tasks.jsonl")).map((t, i) => {
-  const issues = validateSchema(t, benchmarkTaskSchema);
-  if (issues.length > 0) {
-    process.stderr.write(
-      `tasks.jsonl line ${i + 1}: ${issues.map((s) => `${s.path} ${s.message}`).join("; ")}\n`,
-    );
-    process.exit(1);
-  }
-  return t as BenchmarkTask;
-});
-const rows = jsonl(armPath) as ArmRowRef[];
-if (rows.length === 0) {
-  process.stderr.write("arm ledger is empty\n");
+function fail(message: string): never {
+  process.stderr.write(`${message}\n`);
   process.exit(1);
 }
 
-mkdirSync(join(out, "fixtures"), { recursive: true });
-mkdirSync(join(out, "docs"), { recursive: true });
-const requests = buildRequests(tasks, rows, (trialKey) => {
-  for (const format of ["xlsx", "csv"] as const) {
-    const src = join(docs, `${trialKey}.${format}`);
-    if (existsSync(src)) {
-      copyFileSync(src, join(out, "docs", `${trialKey}.${format}`));
-      return { file: `docs/${trialKey}.${format}`, format };
+const jsonl = (p: string, label: string) =>
+  readFileSync(p, "utf8")
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map((l, i) => {
+      try {
+        return JSON.parse(l) as unknown;
+      } catch {
+        return fail(`${label} line ${i + 1}: not JSON`);
+      }
+    });
+
+const validated = <T>(rows: unknown[], schema: typeof benchmarkTaskSchema, label: string): T[] =>
+  rows.map((row, i) => {
+    const issues = validateSchema(row, schema);
+    if (issues.length > 0)
+      fail(`${label} line ${i + 1}: ${issues.map((s) => `${s.path} ${s.message}`).join("; ")}`);
+    return row as T;
+  });
+
+const copies: { src: string; dst: string }[] = [];
+let requests: ReturnType<typeof buildRequests>;
+try {
+  const tasks = validated<BenchmarkTask>(
+    jsonl(pathInside(bundle, "tasks.jsonl"), "tasks.jsonl"),
+    benchmarkTaskSchema,
+    "tasks.jsonl",
+  );
+  const rows = validated<ArmRowRef>(jsonl(armPath, "arm"), benchmarkArmRowSchema, "arm");
+  if (rows.length === 0) fail("arm ledger is empty");
+  requests = buildRequests(tasks, rows, (trialKey) => {
+    for (const format of ["xlsx", "csv"] as const) {
+      const name = `${trialKey}.${format}`;
+      const src = pathInside(docs, name);
+      if (existsSync(src)) {
+        copies.push({ src, dst: pathInside(out, `docs/${name}`) });
+        return { file: `docs/${name}`, format };
+      }
     }
+    return null;
+  });
+  for (const req of requests) {
+    copies.push({
+      src: pathInside(bundle, req.fixtureFile),
+      dst: pathInside(out, req.fixtureFile),
+    });
   }
-  return null;
-});
-for (const req of requests) copyFileSync(join(bundle, req.fixtureFile), join(out, req.fixtureFile));
-writeFileSync(
-  join(out, "requests.jsonl"),
-  `${requests.map((r) => JSON.stringify(r)).join("\n")}\n`,
-);
-process.stdout.write(`wrote ${requests.length} requests to ${join(out, "requests.jsonl")}\n`);
+} catch (e) {
+  if (e instanceof RequestBuildError) fail(`RequestBuildError: ${e.message}`);
+  throw e;
+}
+
+// Nothing is written until every row and every path has been checked.
+for (const { src, dst } of copies) {
+  mkdirSync(dirname(dst), { recursive: true });
+  copyFileSync(src, dst);
+}
+const requestsPath = pathInside(out, "requests.jsonl");
+mkdirSync(dirname(requestsPath), { recursive: true });
+writeFileSync(requestsPath, `${requests.map((r) => JSON.stringify(r)).join("\n")}\n`);
+process.stdout.write(`wrote ${requests.length} requests to ${requestsPath}\n`);

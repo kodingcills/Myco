@@ -1,3 +1,10 @@
+import { FAULT_CLASS_HARNESS_NOTE } from "./taskset.ts";
+
+/** One table row per fault class, from the single source the harness notes live in. */
+const FAULT_CLASS_TABLE = Object.entries(FAULT_CLASS_HARNESS_NOTE)
+  .map(([cls, note]) => `| \`${cls}\` | ${note} |`)
+  .join("\n");
+
 /** README shipped inside the published bundle (`benchmark/false-completion/fc-v1/README.md`). */
 export const BUNDLE_README = `# Myco false-completion benchmark, task set fc-v1
 
@@ -22,12 +29,30 @@ Each task gives the instruction text the agent receives, the intent (\`rowKey\`,
 \`column\`, \`newValue\`), each column's type, and the fixture. The task does not store an
 expected end state; the grader derives it from the fixture and the intent.
 
+## Fault classes
+
+What each \`faultClass\` asks of the harness that runs the task:
+
+| \`faultClass\` | What the harness does |
+|---|---|
+${FAULT_CLASS_TABLE}
+
+## Checking your copy
+
+\`manifest.json\` records the SHA-256 of every other file. From a checkout of the Myco
+repo, \`npx tsx scripts/benchmark-verify-bundle.ts <this dir>\` re-hashes the files on disk
+against it and reports any that are missing, differ, or are not listed. That script uses
+Node built-ins only, so it can also be copied out and run on its own.
+
 ## Running your own agent against it
 
 1. For each task, open its fixture in a spreadsheet app (LibreOffice Calc imports the
    CSV and saves \`.xlsx\`), give your agent the task's \`instruction\`, and apply the
-   task's \`faultClass\` if you are measuring faults (see \`faultClass\` notes in the
-   Myco repo, \`docs/benchmark/false-completion.md\`).
+   task's \`faultClass\` if you are measuring faults (see "Fault classes" below). The
+   arm's agent must see only the task's \`instruction\` and the fixture. \`faultClass\`,
+   \`satisfiable\`, \`intent\` and the rest of the task row are for your harness and the
+   grader; an agent that can read them can key its answer off them, and its result is
+   not comparable.
 2. When the agent stops, copy the saved file, exactly as written, to
    \`docs/<trialKey>.xlsx\`. \`trialKey\` is any id you choose (\`[A-Za-z0-9._:-]\`).
 3. Write one arm row per trial (schema \`myco.benchmark.arm-row/1\`, in the Myco repo's

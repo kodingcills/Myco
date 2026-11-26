@@ -218,3 +218,37 @@ describe("bundle builder --check", () => {
     expect(tampered.stderr).toMatch(new RegExp(`differs ${fixture}`));
   });
 });
+
+describe("bundle verify-bundle (manifest-only, for an outsider holding only the bundle)", () => {
+  it("passes on an exact copy and fails on a tampered, missing or extra file", {
+    timeout: 60_000,
+  }, () => {
+    const copy = mkdtempSync(join(tmpdir(), "myco-fc-v1-verify-"));
+    cpSync(BUNDLE, copy, { recursive: true });
+    const ok = tsx("benchmark-verify-bundle.ts", [copy]);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(ok.stdout).toMatch(/matches its manifest \(42 files \+ manifest\.json\)/);
+
+    const fixture = (tasks[0] as BenchmarkTask).fixtureFile;
+    const original = readFileSync(join(copy, fixture));
+    const flipped = Buffer.from(original);
+    flipped[flipped.length - 2] = (flipped[flipped.length - 2] as number) ^ 1;
+    writeFileSync(join(copy, fixture), flipped);
+    const tampered = tsx("benchmark-verify-bundle.ts", [copy]);
+    expect(tampered.status).toBe(1);
+    expect(tampered.stderr).toMatch(new RegExp(`differs ${fixture}`));
+
+    rmSync(join(copy, fixture));
+    const missing = tsx("benchmark-verify-bundle.ts", [copy]);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toMatch(new RegExp(`missing ${fixture}`));
+    writeFileSync(join(copy, fixture), original);
+
+    writeFileSync(join(copy, "notes.txt"), "x");
+    const extra = tsx("benchmark-verify-bundle.ts", [copy]);
+    expect(extra.status).toBe(1);
+    expect(extra.stderr).toMatch(/extra notes\.txt/);
+    rmSync(join(copy, "notes.txt"));
+    expect(tsx("benchmark-verify-bundle.ts", [copy]).status).toBe(0);
+  });
+});

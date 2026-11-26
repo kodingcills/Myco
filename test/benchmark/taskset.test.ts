@@ -1,15 +1,22 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { benchmarkTaskSchema } from "../../schemas/benchmark-ledger.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import { BUNDLE_README } from "../../src/benchmark/bundle-readme.ts";
 import { GRADER_VERSION, grade } from "../../src/benchmark/grade/grade.ts";
-import { buildRequests, RequestBuildError } from "../../src/benchmark/requests.ts";
+import {
+  type ArmRowRef,
+  buildRequests,
+  pathInside,
+  RequestBuildError,
+} from "../../src/benchmark/requests.ts";
 import {
   type BenchmarkTask,
   buildTaskSet,
+  FAULT_CLASS_HARNESS_NOTE,
   FC_V1_COMPOSITION,
   FC_V1_FAULT_CLASSES,
   renderBundle,
@@ -161,14 +168,22 @@ describe("fc-v1 task set", () => {
 
 describe("grade requests from arm rows", () => {
   const [t1, t2] = committedTasks as [BenchmarkTask, BenchmarkTask];
+  const ref = (
+    task: BenchmarkTask,
+    trialKey: string,
+    over: Partial<ArmRowRef> = {},
+  ): ArmRowRef => ({
+    trialKey,
+    taskId: task.taskId,
+    taskSetVersion: task.taskSetVersion,
+    faultClass: task.faultClass,
+    fixtureSha256: task.fixtureSha256,
+    instructionSha256: task.instructionSha256,
+    ...over,
+  });
   it("takes fixture and intent from the task, and only the document from the arm", () => {
-    const reqs = buildRequests(
-      committedTasks,
-      [
-        { trialKey: "a", taskId: t1.taskId, fixtureSha256: t1.fixtureSha256 },
-        { trialKey: "b", taskId: t2.taskId, fixtureSha256: t2.fixtureSha256 },
-      ],
-      (key) => (key === "a" ? { file: "docs/a.xlsx", format: "xlsx" } : null),
+    const reqs = buildRequests(committedTasks, [ref(t1, "a"), ref(t2, "b")], (key) =>
+      key === "a" ? { file: "docs/a.xlsx", format: "xlsx" } : null,
     );
     expect(reqs[0]).toMatchObject({
       trialKey: "a",
@@ -181,19 +196,63 @@ describe("grade requests from arm rows", () => {
 
   it("refuses an unknown task and a row that points at another fixture", () => {
     expect(() =>
-      buildRequests(
-        committedTasks,
-        [{ trialKey: "a", taskId: "fc-v1-999", fixtureSha256: t1.fixtureSha256 }],
-        () => null,
-      ),
+      buildRequests(committedTasks, [ref(t1, "a", { taskId: "fc-v1-999" })], () => null),
     ).toThrow(/unknown taskId fc-v1-999/);
+    expect(() =>
+      buildRequests(committedTasks, [ref(t1, "a", { fixtureSha256: "0".repeat(64) })], () => null),
+    ).toThrow(/arm row fixtureSha256 .* does not match task fc-v1-001/);
+  });
+
+  it("refuses a row whose taskSetVersion is not the task's (fc-v1 row labelled fc-v2)", () => {
+    expect(() =>
+      buildRequests(committedTasks, [ref(t1, "a", { taskSetVersion: "fc-v2" })], () => null),
+    ).toThrow(/arm row taskSetVersion "fc-v2" does not match task fc-v1-001 \("fc-v1"\)/);
+  });
+
+  it("refuses a row whose faultClass is relabelled (invalid-target relabelled none)", () => {
+    const invalid = committedTasks.find((t) => t.faultClass === "invalid-target") as BenchmarkTask;
+    expect(() =>
+      buildRequests(committedTasks, [ref(invalid, "a", { faultClass: "none" })], () => null),
+    ).toThrow(/arm row faultClass "none" does not match task fc-v1-091 \("invalid-target"\)/);
+    // and the reverse direction, a fault task hidden as a clean one
+    expect(() =>
+      buildRequests(committedTasks, [ref(t1, "a", { faultClass: "kill-app" })], () => null),
+    ).toThrow(/arm row faultClass "kill-app" does not match/);
+  });
+
+  it("refuses a row whose instructionSha256 is not the task's (R2 parity)", () => {
     expect(() =>
       buildRequests(
         committedTasks,
-        [{ trialKey: "a", taskId: t1.taskId, fixtureSha256: "0".repeat(64) }],
+        [ref(t1, "a", { instructionSha256: t2.instructionSha256 })],
         () => null,
       ),
-    ).toThrow(RequestBuildError);
+    ).toThrow(/arm row instructionSha256 .* does not match task fc-v1-001/);
+  });
+
+  it("pathInside keeps names inside their root and refuses escapes", () => {
+    const root = join(tmpdir(), "myco-root");
+    expect(pathInside(root, "docs/a.csv")).toBe(join(root, "docs", "a.csv"));
+    expect(pathInside(root, "...csv")).toBe(join(root, "...csv"));
+    for (const bad of [
+      "../escape.csv",
+      "docs/../../escape.csv",
+      "/etc/escape.csv",
+      "",
+      ".",
+      "..",
+    ]) {
+      expect(() => pathInside(root, bad), bad).toThrow(RequestBuildError);
+    }
+  });
+
+  it("the bundle README carries every fault-class harness note and the agent-visibility rule", () => {
+    const readme = readFileSync(join(BUNDLE, "README.md"), "utf8");
+    for (const [cls, note] of Object.entries(FAULT_CLASS_HARNESS_NOTE)) {
+      expect(readme, cls).toContain(`| \`${cls}\` | ${note} |`);
+    }
+    expect(readme).toMatch(/agent must see only the task's `instruction` and the fixture/);
+    expect(readme).toContain("scripts/benchmark-verify-bundle.ts");
   });
 
   it("the bundle directory exists where the README says", () => {
