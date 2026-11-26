@@ -3,7 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+  # labeled/unlabeled: adding `tier-2` (or `full-ci`) to a PR starts a new run, which
+  # cancels the narrower one, so a label added after a targeted run still forces the
+  # full suite before merge (test audit, docs/ci.md "Targeted CI").
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 # Least privilege (TIF-241): no job writes to the repo, PRs, or checks via the API.
 # actions/cache and actions/upload-artifact use the runner's own Actions runtime
@@ -19,6 +23,37 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Test audit (TIF-265 follow-up): decides which steps of each job run, from the PR's
+  # changed paths, labels and stated tier. Required jobs never skip at the job level:
+  # they always start, report under their unchanged names, and run everything when this
+  # job fails or is skipped (fail safe). Path classes: scripts/ci-plan.py, docs/ci.md.
+  plan:
+    name: ci plan (path classes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      linux_path: ${{ steps.plan.outputs.linux_path }}
+      m2: ${{ steps.plan.outputs.m2 }}
+      launcher: ${{ steps.plan.outputs.launcher }}
+      doc_tests: ${{ steps.plan.outputs.doc_tests }}
+      smoke: ${{ steps.plan.outputs.smoke }}
+      scanners: ${{ steps.plan.outputs.scanners }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Plan
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/ci-plan.py
+
   # TIF-206: a key must never reach the repo. Scans only the commits this PR or push
   # adds (older history predates the scanner), with findings REDACTED in the log.
   # Allow a reviewed synthetic fixture inline with a `gitleaks:allow` comment.
@@ -76,6 +111,10 @@ jobs:
         run: python -m unittest discover -s test/ci-hygiene -v
 
   check:
+    needs: plan
+    # Never skipped at the job level: a skipped matrix job reports as
+    # "check (${{ matrix.os }})", which would leave the required checks pending.
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -87,8 +126,35 @@ jobs:
     # cancelled by GitHub; re-run it by hand (docs/ci.md, TIF-256).
     timeout-minutes: 15
     steps:
+      - name: CI plan
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
+          PLAN_LAUNCHER: ${{ needs.plan.outputs.launcher }}
+          PLAN_SCANNERS: ${{ needs.plan.outputs.scanners }}
+        run: |
+          # Fail safe: only a successful plan naming a known narrow mode narrows anything.
+          # `case` matches the whole value; `grep -x` would accept any one line of it.
+          mode="$PLAN_MODE"
+          case "$mode" in full | targeted | docs) known=yes ;; *) known=no ;; esac
+          if [ "$PLAN_RESULT" != "success" ] || [ "$known" != yes ]; then
+            echo "plan job '$PLAN_RESULT' (mode '$mode'): running the full suite (fail safe)"
+            mode=full
+          fi
+          # A narrow mode must run the directory-scanning guards; with none listed, it cannot.
+          if [ "$mode" != full ] && [ -z "$PLAN_SCANNERS" ]; then
+            echo "plan mode '$mode' lists no directory-scanning tests: running the full suite (fail safe)"
+            mode=full
+          fi
+          launcher=true
+          if [ "$PLAN_LAUNCHER" = "false" ]; then launcher=false; fi
+          echo "MODE=$mode" >> "$GITHUB_ENV"
+          echo "LAUNCHER=$launcher" >> "$GITHUB_ENV"
+          echo "mode: $mode, launcher: $launcher"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          # targeted mode diffs against the PR base (`vitest run --changed`).
+          fetch-depth: ${{ env.MODE == 'targeted' && '0' || '1' }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -98,16 +164,47 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Typecheck
+        if: env.MODE != 'docs'
         run: pnpm typecheck
       - name: Lint
+        if: env.MODE != 'docs'
         run: pnpm lint
       - name: Test
+        if: env.MODE == 'full'
         run: pnpm test
+      - name: Test (targeted, files related to the change)
+        if: env.MODE == 'targeted'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: pnpm exec vitest run --changed "$BASE_SHA" --passWithNoTests --exclude test/discovery/s0-live-launcher.test.ts
+      # `pnpm test` runs the launcher test alone in a forked pool; `--changed` excludes it,
+      # so a narrow mode reruns it the same way when test/discovery/ changed or it is a
+      # directory-scanning test (it lists its run directory, so today: always).
+      - name: Test (s0 launcher, forked)
+        if: env.MODE != 'full' && env.LAUNCHER == 'true'
+        run: pnpm exec vitest run --pool=forks --no-file-parallelism test/discovery/s0-live-launcher.test.ts
+      # Directory-scanning guards (grader independence, hidden split, home paths, ...)
+      # never import what they scan, so `--changed` cannot select them: always run them.
+      - name: Test (core smoke, directory-scanning tests and doc tests)
+        if: env.MODE != 'full'
+        env:
+          SMOKE: ${{ needs.plan.outputs.smoke }}
+          SCANNERS: ${{ needs.plan.outputs.scanners }}
+          DOC_TESTS: ${{ needs.plan.outputs.doc_tests }}
+        run: |
+          # shellcheck disable=SC2086 # space-separated file lists, written by scripts/ci-plan.py
+          pnpm exec vitest run $SMOKE $SCANNERS $DOC_TESTS
+      - name: Schema validate
+        if: env.MODE == 'targeted'
+        run: pnpm schema-validate
       - name: Build
+        if: env.MODE != 'docs'
         run: pnpm build
 
   agent:
     name: myco-agent tests (${{ matrix.os }})
+    needs: plan
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -125,9 +222,25 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+      - name: CI plan
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          # Fail safe: skip only on a successful plan naming a narrow mode; a failed or
+          # skipped plan, or an empty or unknown mode, runs the tests.
+          case "$PLAN_MODE" in targeted | docs) narrow=yes ;; *) narrow=no ;; esac
+          if [ "$PLAN_RESULT" = "success" ] && [ "$narrow" = yes ]; then
+            echo "RUN=false" >> "$GITHUB_ENV"
+            echo "plan mode '$PLAN_MODE': agent/ is untouched (it is a full-suite path class); not run"
+          else
+            echo "RUN=true" >> "$GITHUB_ENV"
+          fi
       - name: Install
+        if: env.RUN == 'true'
         run: pip install -e . pytest
       - name: Test
+        if: env.RUN == 'true'
         run: pytest -v
 
   # TIF-119: the in-guest agent's file-grant confinement (RT-015 read, RT-017 write)
@@ -136,31 +249,54 @@ jobs:
   # and fails if the file_grant test count is zero, so the gap cannot silently return.
   runtime-agent-linux:
     name: runtime guest agent tests (ubuntu-latest)
+    needs: plan
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: runtime
     steps:
+      - name: CI plan
+        working-directory: .
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          # Fail safe: skip only on a successful plan naming a narrow mode; a failed or
+          # skipped plan, or an empty or unknown mode, runs the tests.
+          case "$PLAN_MODE" in targeted | docs) narrow=yes ;; *) narrow=no ;; esac
+          if [ "$PLAN_RESULT" = "success" ] && [ "$narrow" = yes ]; then
+            echo "RUN=false" >> "$GITHUB_ENV"
+            echo "plan mode '$PLAN_MODE': runtime/ is untouched (it is a full-suite path class); not run"
+          else
+            echo "RUN=true" >> "$GITHUB_ENV"
+          fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
       - name: Native deps (xa11y-linux links libxkbcommon)
+        if: env.RUN == 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev pkg-config
       # Pinned to a commit on dtolnay/rust-toolchain's master branch (its README asks
       # SHA pins to come from master); with a SHA the toolchain must be named.
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master branch commit
+        if: env.RUN == 'true'
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: env.RUN == 'true'
         with:
           workspaces: runtime
       - name: Test myco-rt-agent
+        if: env.RUN == 'true'
         # pipefail: a job-level `defaults.run` makes the shell `bash -e` without
         # pipefail, so `| tee` swallowed a compile failure (first run of this job).
         run: |
           set -o pipefail
           cargo test -p myco-rt-agent 2>&1 | tee /tmp/agent-test.log
       - name: Confinement tests actually ran
+        if: env.RUN == 'true'
         run: |
           set -euo pipefail
           n=$(grep -cE '^test file_grant::.* \.\.\. ok$' /tmp/agent-test.log || true)
@@ -171,11 +307,13 @@ jobs:
       # MCP-surface tests. Build the agent explicitly so the transport tests never
       # spawn a stale cached binary.
       - name: Test transport (real agent over the wire), core, mcp
+        if: env.RUN == 'true'
         run: |
           set -o pipefail
           cargo build -p myco-rt-agent
           cargo test -p myco-rt-transport -p myco-rt-core -p myco-rt-mcp 2>&1 | tee /tmp/host-test.log
       - name: Wire round trip actually ran
+        if: env.RUN == 'true'
         run: |
           set -euo pipefail
           for t in file_write_over_control_channel_round_trips_through_the_agent agent_refuses_an_oversize_write_on_its_own file_read_over_control_channel_requires_grant; do
@@ -188,6 +326,10 @@ jobs:
   # guest load gate record. Host only: no VM, no model, no secrets. Not a required check.
   m2-scorecard:
     name: m2 evidence and scorecard
+    needs: plan
+    # Not required: skipped at the job level when the plan says no M2 path changed.
+    # Fail safe: runs unless a successful plan names a narrow mode and says m2 is false.
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs') || needs.plan.outputs.m2 != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -216,6 +358,10 @@ jobs:
   # suite fail instead of skip if LibreOffice or Python-UNO is missing.
   linux-path:
     name: linux path (ubuntu-latest)
+    needs: plan
+    # Not required: skipped at the job level unless a Linux-path or init path changed.
+    # Fail safe: runs unless a successful plan names a narrow mode and says linux_path is false.
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs') || needs.plan.outputs.linux_path != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -232,8 +378,10 @@ jobs:
         run: npm install -g pnpm@10
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Install LibreOffice Calc and Python-UNO
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno
+      # libreoffice-writer: the cross-app suite (track P, test/linux/cross-app-libreoffice.test.ts)
+      # drives a real headless Writer too.
+      - name: Install LibreOffice Calc, Writer and Python-UNO
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-writer python3-uno
       - name: Prerequisites
         run: pnpm myco-linux --check
       - name: Linux path tests (real Calc; must not skip)

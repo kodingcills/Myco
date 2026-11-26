@@ -79,7 +79,12 @@ describe("a truncated model reply is a harness fault, not an agent decision", ()
       usage: USAGE,
       content: [{ type: "text", text: '{"claim":"done"}' }],
     });
-    await expect(planner.act("edit the cell", shot)).resolves.toBeDefined();
+    // The decision must survive, not just "something resolved": `resolves.toBeDefined()`
+    // passed with the end_turn reply's decision dropped (test audit, mutation M2).
+    const out = await planner.act("edit the cell", shot);
+    expect(out.decision).toBe("done");
+    expect(out.calls).toHaveLength(1);
+    expect(out.calls[0]?.usage).toMatchObject({ prompt: 500, completion: 256 });
   });
 
   it("asks for enough output that a real answer is not clipped", async () => {

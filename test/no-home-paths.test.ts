@@ -24,6 +24,9 @@ const ALLOWED: Record<string, string> = {
   "agent/bootstrap/deploy-to-vm.sh": "Windows guest path (C: drive, VM user)",
   // The scp target for the base-build maintenance script: same guest `myco` user (TIF-98).
   "scripts/build-trial-base.sh": "Windows guest path (C: drive, VM user)",
+  // Evidence copy of the experiment script as run: its scp target is the guest's `myco` user (TIF-98).
+  "docs/research/experiments/tif-98-fast-reset-2026-11-26/scripts/fastreset-pass1-2.sh":
+    "Windows guest path (C: drive, VM user)",
   // Uses the literal `<you>` placeholder; the file is owned by another open PR.
   "docs/eval-runbook.md": "placeholder account name `<you>`",
   // Quoted error output whose account part was already elided to `...`.

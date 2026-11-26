@@ -111,11 +111,24 @@ export const HARNESS_CLASSES = [
  * unfaulted trial (`faultClass: "none"`). A fault that never landed makes the trial
  * ineligible for R1 and R3 (eval-runbook, M1 corrupt suite: "a fault that never landed is
  * also ineligible").
+ * `resetBootClass` and `resetGuestCpuFirstSshS` (required) record the trial reset's boot
+ * (TIF-98). A trial whose reset was not a full cold boot (`fast`: the first start after a UTM
+ * configuration write) did not start from the same guest state. The evidence check fails it,
+ * as it fails a trial started over the load gate, and it recomputes the class from the
+ * recorded guest CPU against COLD_MIN_GUEST_CPU, so a relabelled row cannot pass.
  */
 export const m2TrialOpsSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["schema", "trialKey", "hostLoad1mStart", "harnessClass", "faultLanded"],
+  required: [
+    "schema",
+    "trialKey",
+    "hostLoad1mStart",
+    "harnessClass",
+    "faultLanded",
+    "resetBootClass",
+    "resetGuestCpuFirstSshS",
+  ],
   properties: {
     schema: { const: "myco.m2.trial-ops/1" },
     trialKey: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
@@ -124,6 +137,12 @@ export const m2TrialOpsSchema: JsonSchema = {
       anyOf: [{ type: "string", enum: [...HARNESS_CLASSES] }, { type: "null" }],
     },
     faultLanded: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+    // TIF-98 cold-boot check, from the trial's `reset-trial-vm: boot class=... first_ssh_s=...
+    // guest_cpu_first_ssh_s=...` line and its `timing ... total=` line. The class and the CPU are
+    // required (#546 round 1 D1): no trial-ops rows predate the check, so none is excused.
+    resetBootClass: { type: "string", enum: ["cold", "fast"] },
+    resetGuestCpuFirstSshS: { type: "number", minimum: 0 },
+    resetTotalS: { type: "number", minimum: 0 },
   },
 };
 
