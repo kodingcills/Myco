@@ -66,6 +66,7 @@ import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
 import { bindToTaskSet } from "../benchmark/taskset-binding.ts";
 import { M2_FAULT_CLASSES } from "../faults/security/classes.ts";
 import { clopperPearson, wilson } from "../foundry/stats.ts";
+import { crossCheckAttempts, verifyAttemptLedger } from "./attempt-ledger.ts";
 
 /** Guest load gate: no trial starts at host 1-minute load >= this (eval-runbook §7.3). */
 export const LOAD_GATE = 10;
@@ -95,6 +96,8 @@ export interface PackManifest {
   /** How many of `expectTrials` are unregistrable (required for myco-gate with R1). */
   readonly expectUnregistrable?: Readonly<Partial<Record<Arm, number>>>;
   readonly expectPairs: number | null;
+  /** The attempt ledger's pinned head (required for R1 packs; `attempts.jsonl`). */
+  readonly attempts?: { readonly events: number; readonly headSha256: string };
   readonly runs: { readonly path: string; readonly expect: number } | null;
 }
 
@@ -129,6 +132,8 @@ export interface PackInput {
   readonly arm: readonly unknown[];
   readonly grades: readonly unknown[];
   readonly ops: readonly unknown[];
+  /** The append-only attempt ledger (`attempts.jsonl`), when the pack has one. */
+  readonly attempts?: readonly unknown[];
   /** Errors found while reading the pack (missing file, malformed JSON line). */
   readonly readErrors: readonly string[];
   /** validate-live over the manifest's run directories; null when not run. */
@@ -484,6 +489,34 @@ export function checkPack(input: PackInput): PackResult {
       );
   }
 
+  // The append-only attempt ledger (TIF-274, lead ruling 14:35Z): required for R1 evidence,
+  // and checked whenever a pack carries or pins one. Every attempt it recorded must be
+  // disclosed, every disclosed trial must be a recorded attempt, and a disclosed harness fault
+  // must match a recorded one (`src/m2/attempt-ledger.ts`).
+  const wantsLedger =
+    manifest !== null &&
+    (manifest.rows.includes("R1") ||
+      manifest.attempts !== undefined ||
+      input.attempts !== undefined);
+  if (wantsLedger) {
+    if (input.attempts === undefined) errors.push("attempts.jsonl: missing (the attempt ledger)");
+    else {
+      const ledger = verifyAttemptLedger(input.attempts);
+      errors.push(...ledger.errors);
+      const disclosed = armRows.map((r) => ({
+        trialKey: r.trialKey,
+        taskId: r.taskId,
+        arm: r.arm,
+        harnessClass: ops.get(r.trialKey)?.harnessClass ?? null,
+      }));
+      errors.push(
+        ...crossCheckAttempts(ledger.events, disclosed, manifest?.attempts, ledger.head).map(
+          (e) => `attempt ledger: ${e}`,
+        ),
+      );
+    }
+  }
+
   const byArm = (arm: Arm) => armRows.filter((r) => r.arm === arm);
   const gated = byArm("myco-gate");
   const shell = byArm("hcu+shell");
@@ -735,7 +768,7 @@ export function readPack(
       readErrors.push("pack.json: not JSON");
     }
   }
-  const known = new Set(["pack.json", "arm.jsonl", "grades.jsonl", "ops.jsonl"]);
+  const known = new Set(["pack.json", "arm.jsonl", "grades.jsonl", "ops.jsonl", "attempts.jsonl"]);
   const runsPath =
     manifest !== null && typeof manifest === "object" && "runs" in manifest
       ? ((manifest as { runs: { path?: unknown } | null }).runs?.path ?? null)
@@ -754,5 +787,16 @@ export function readPack(
       ? validateRuns(join(dir, m.runs.path), m.runs.expect)
       : { ok: false, detail: "runs.path is not a plain directory name" };
   }
-  return { manifest, arm, grades, ops, readErrors, runs };
+  const attemptsPath = join(dir, "attempts.jsonl");
+  return {
+    manifest,
+    arm,
+    grades,
+    ops,
+    ...(existsSync(attemptsPath)
+      ? { attempts: readJsonl(attemptsPath, "attempts.jsonl", readErrors) }
+      : {}),
+    readErrors,
+    runs,
+  };
 }

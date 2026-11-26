@@ -21,6 +21,7 @@ import { runGatedTrial } from "../gate/gated-trial.ts";
 import { GATE_TOOL } from "../gate/mcp-server.ts";
 import type { AgentLaunchPlan } from "../integrity/launch.ts";
 import { newVaultKey, VerdictVault } from "../integrity/vault.ts";
+import { AttemptLedgerWriter } from "../m2/attempt-ledger.ts";
 import { DATA_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import type { BenchmarkArmRow } from "./check.ts";
 import { gatedArmRow, registerTask } from "./gated-rows.ts";
@@ -85,8 +86,8 @@ export interface DryRunResult {
 }
 
 /**
- * Run the dry run over `tasks`, writing `<dir>/SIMULATED`, `<dir>/arm.jsonl` and
- * `<dir>/docs/<trialKey>.csv`. `oracleSources` are the gate family's source files (hashed at
+ * Run the dry run over `tasks`, writing `<dir>/SIMULATED`, `<dir>/arm.jsonl`,
+ * `<dir>/attempts.jsonl` (the append-only attempt ledger) and `<dir>/docs/<trialKey>.csv`. `oracleSources` are the gate family's source files (hashed at
  * seal). The caller grades with `make-requests` + the grader and checks with the check.
  */
 export async function runDryRun(
@@ -109,8 +110,11 @@ export async function runDryRun(
     agentRoots: [join(work, "agent")],
   });
   const armRows: BenchmarkArmRow[] = [];
+  // The append-only attempt ledger (TIF-274): every attempt is logged as it starts and ends.
+  const attempts = new AttemptLedgerWriter(join(dir, "attempts.jsonl"));
   for (const task of tasks) {
     const trialKey = `dry-${task.taskId}`;
+    attempts.start({ trialKey, taskId: task.taskId, arm: "myco-gate" });
     const runId = `run-${task.taskId}`;
     const doc = scriptedDocument(task);
     const persisted = new TextEncoder().encode(doc);
@@ -132,6 +136,7 @@ export async function runDryRun(
       armRows.push(
         gatedArmRow({ ...common, outcome: { status: "unregistrable", reason: reg.reason } }, tasks),
       );
+      attempts.end(trialKey, { outcome: "completed" });
       continue;
     }
     const outcome = await runGatedTrial({
@@ -151,6 +156,7 @@ export async function runDryRun(
     if (outcome.status === "refused")
       throw new Error(`${trialKey}: the launch audit refused the dry-run plan`);
     armRows.push(gatedArmRow({ ...common, outcome }, tasks));
+    attempts.end(trialKey, { outcome: "completed" });
   }
   writeFileSync(join(dir, "arm.jsonl"), `${armRows.map((r) => JSON.stringify(r)).join("\n")}\n`);
   return { dir, armRows };

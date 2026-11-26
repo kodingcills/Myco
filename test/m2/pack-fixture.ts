@@ -7,6 +7,13 @@ import { join } from "node:path";
 import { type BenchmarkArmRow, expectedAccepted } from "../../src/benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../../src/benchmark/grade/row.ts";
 import { type BenchmarkTask, buildTaskSet } from "../../src/benchmark/taskset.ts";
+import {
+  ATTEMPT_EVENT_SCHEMA,
+  type AttemptEvent,
+  eventSha256,
+  GENESIS_SHA256,
+  type LedgerHead,
+} from "../../src/m2/attempt-ledger.ts";
 import type { PackInput, PackManifest, TrialOps } from "../../src/m2/evidence.ts";
 
 const FIX = "a".repeat(64);
@@ -162,15 +169,59 @@ export function manifest(over: Partial<PackManifest> = {}): PackManifest {
   return m;
 }
 
+/**
+ * The attempt ledger an honest runner writes for `trials`, in order: a start and an end per
+ * trial, the end a `harness-fault` exactly where the trial-ops row names a harness class.
+ */
+export function ledgerFor(trials: readonly Trial[]): { events: AttemptEvent[]; head: LedgerHead } {
+  const events: AttemptEvent[] = [];
+  let prev = GENESIS_SHA256;
+  const push = (e: Omit<AttemptEvent, "schema" | "seq" | "prevSha256">) => {
+    const event: AttemptEvent = {
+      schema: ATTEMPT_EVENT_SCHEMA,
+      seq: events.length,
+      prevSha256: prev,
+      ...e,
+    };
+    events.push(event);
+    prev = eventSha256(event);
+  };
+  for (const t of trials) {
+    const who = { trialKey: t.arm.trialKey, taskId: t.arm.taskId, arm: t.arm.arm };
+    push({ kind: "start", ...who });
+    push(
+      t.ops.harnessClass === null
+        ? { kind: "end", ...who, outcome: "completed" }
+        : { kind: "end", ...who, outcome: "harness-fault", harnessClass: t.ops.harnessClass },
+    );
+  }
+  return { events, head: { events: events.length, headSha256: prev } };
+}
+
+const isR1 = (m: unknown) =>
+  m !== null &&
+  typeof m === "object" &&
+  Array.isArray((m as { rows?: unknown }).rows) &&
+  (m as { rows: unknown[] }).rows.includes("R1");
+
+/**
+ * A pack input. An R1 pack gets the honest runner's attempt ledger, and its manifest the head
+ * pin, unless the manifest already pins one (tests that forge a ledger pass their own).
+ */
 export function input(trials: Trial[], m: unknown = manifest()): PackInput {
-  return {
-    manifest: m,
+  const base = {
     arm: trials.map((t) => t.arm),
     grades: trials.map((t) => t.grade),
     ops: trials.map((t) => t.ops),
     readErrors: [],
     runs: null,
   };
+  // No ledger for a non-R1 pack, or for an empty one (a 0-event head cannot be pinned).
+  if (!isR1(m) || trials.length === 0) return { manifest: m, ...base };
+  const { events, head } = ledgerFor(trials);
+  const pinned =
+    (m as { attempts?: unknown }).attempts === undefined ? { ...(m as object), attempts: head } : m;
+  return { manifest: pinned, ...base, attempts: events };
 }
 
 /**
@@ -233,7 +284,9 @@ export function writePack(
 ): string {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "pack.json"), `${JSON.stringify(m, null, 2)}\n`);
+  const { manifest: pinned, attempts } = input(trials, m);
+  if (attempts !== undefined) writeFileSync(join(dir, "attempts.jsonl"), jsonl(attempts));
+  writeFileSync(join(dir, "pack.json"), `${JSON.stringify(pinned, null, 2)}\n`);
   writeFileSync(join(dir, "arm.jsonl"), jsonl(trials.map((t) => t.arm)));
   writeFileSync(join(dir, "grades.jsonl"), jsonl(trials.map((t) => t.grade)));
   writeFileSync(join(dir, "ops.jsonl"), jsonl(trials.map((t) => t.ops)));

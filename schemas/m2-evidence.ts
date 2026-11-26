@@ -9,7 +9,10 @@ import type { JsonSchema } from "./validate.ts";
  *  - `arm.jsonl`   arm rows, `myco.benchmark.arm-row/1` (schemas/benchmark-ledger.ts);
  *  - `grades.jsonl` grade rows, `myco.benchmark.grade-row/1`, from the independent grader;
  *  - `ops.jsonl`   one trial-ops row per arm row (below): the process record the M2 plan
- *                  §2.2 keeps as a CI gate instead of a scorecard row.
+ *                  §2.2 keeps as a CI gate instead of a scorecard row;
+ *  - `attempts.jsonl` the append-only, hash-chained attempt ledger (below): one `start` and
+ *                  one `end` event per attempt, written by the runner as the attempt happens.
+ *                  Required for an R1 pack; `pack.json` pins its head (`attempts`).
  *
  * The check is `src/m2/evidence.ts`; the scorecard check `scripts/m2-scorecard-check.py`
  * quotes what it recomputes.
@@ -50,6 +53,19 @@ export const m2PackManifestSchema: JsonSchema = {
       type: "object",
       additionalProperties: false,
       properties: { "myco-gate": { type: "integer", minimum: 0 } },
+    },
+    /**
+     * The attempt ledger's head (TIF-274): how many events `attempts.jsonl` holds and the
+     * sha256 of its last event. Pinned so a truncated tail is refused. Required for R1 packs.
+     */
+    attempts: {
+      type: "object",
+      additionalProperties: false,
+      required: ["events", "headSha256"],
+      properties: {
+        events: positiveInt,
+        headSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+      },
     },
     /** R2: the expected number of task pairs across the two arms; null otherwise. */
     expectPairs: { anyOf: [positiveInt, { type: "null" }] },
@@ -104,5 +120,31 @@ export const m2TrialOpsSchema: JsonSchema = {
       anyOf: [{ type: "string", enum: [...HARNESS_CLASSES] }, { type: "null" }],
     },
     faultLanded: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+  },
+};
+
+/**
+ * One event of the append-only attempt ledger (`attempts.jsonl`; TIF-274, lead ruling
+ * 2026-11-26 14:35Z). The runner appends a `start` event when an attempt begins and an `end`
+ * event when it ends, so every attempt (harness-faulted and superseded ones included) is on
+ * record before anyone decides what to keep. Each event names the sha256 of the previous
+ * event's canonical JSON (`prevSha256`; 64 zeros for the first), so an edit, a deletion or a
+ * reordering breaks the chain. `outcome` (and, for a harness fault, `harnessClass`) is on
+ * `end` events only.
+ */
+export const m2AttemptEventSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema", "seq", "prevSha256", "kind", "trialKey", "taskId", "arm"],
+  properties: {
+    schema: { const: "myco.m2.attempt-event/1" },
+    seq: { type: "integer", minimum: 0 },
+    prevSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    kind: { type: "string", enum: ["start", "end"] },
+    trialKey: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+    taskId: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+    arm: { type: "string", enum: ["myco-gate", "hcu+shell"] },
+    outcome: { type: "string", enum: ["completed", "harness-fault"] },
+    harnessClass: { type: "string", enum: [...HARNESS_CLASSES] },
   },
 };
