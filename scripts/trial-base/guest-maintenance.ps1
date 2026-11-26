@@ -21,6 +21,14 @@ $ProgressPreference = 'SilentlyContinue'
 $maintKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'
 $wuPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
 
+# Windows PowerShell 5.1 turns a native command's stderr into an error record
+# under `2>&1`, which $ErrorActionPreference = 'Stop' then throws on. Native
+# tools (ngen, MSchedExe) are judged by their exit codes instead.
+function Native([scriptblock]$b) {
+  $saved = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { & $b } finally { $ErrorActionPreference = $saved }
+}
+
 function NgenExes {
   Get-ChildItem 'C:\Windows\Microsoft.NET' -Directory -Filter 'Framework*' |
     ForEach-Object { Join-Path $_.FullName 'v4.0.30319\ngen.exe' } |
@@ -42,7 +50,7 @@ if ($Stage -eq 'state') {
   $info = $tasks | ForEach-Object { $_ | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue }
   $neverRun = @($info | Where-Object { -not $_.LastRunTime -or $_.LastRunTime.Year -lt 2000 }).Count
   $ngen = foreach ($n in NgenExes) {
-    $out = (& $n queue status 2>&1 | Out-String).Trim()
+    $out = (Native { & $n queue status 2>&1 } | Out-String).Trim()
     [ordered]@{ ngen = $n.Substring(11); queue_status = $out }
   }
   $mk = Get-ItemProperty -LiteralPath $maintKey -ErrorAction SilentlyContinue
@@ -96,11 +104,12 @@ if ($Stage -eq 'ngen') {
   $rc = 0
   foreach ($n in NgenExes) {
     "== $n executeQueuedItems"
-    & $n executeQueuedItems 2>&1 | Out-String | Write-Output
-    "exit=$LASTEXITCODE"
-    if ($LASTEXITCODE -ne 0) { $rc = 1 }
+    Native { & $n executeQueuedItems 2>&1 } | Out-String | Write-Output
+    $code = $LASTEXITCODE
+    "exit=$code"
+    if ($code -ne 0) { $rc = 1 }
     "== $n queue status (after)"
-    & $n queue status 2>&1 | Out-String | Write-Output
+    Native { & $n queue status 2>&1 } | Out-String | Write-Output
   }
   exit $rc
 }
@@ -110,8 +119,8 @@ if ($Stage -eq 'idle') {
   # \Microsoft\Windows task has been running and the guest CPU has stayed low
   # for 3 consecutive 30 s samples; give up (exit 1) after 60 minutes.
   $msched = "$env:windir\System32\MSchedExe.exe"
-  if (Test-Path -LiteralPath $msched) { & $msched Start; "idle: Automatic Maintenance started" } else { "idle: MSchedExe.exe not present; idle tasks only" }
-  & "$env:windir\System32\rundll32.exe" advapi32.dll,ProcessIdleTasks
+  if (Test-Path -LiteralPath $msched) { Native { & $msched Start }; "idle: Automatic Maintenance started" } else { "idle: MSchedExe.exe not present; idle tasks only" }
+  Native { & "$env:windir\System32\rundll32.exe" advapi32.dll,ProcessIdleTasks }
   $quiet = 0; $deadline = (Get-Date).AddMinutes(60)
   while ($quiet -lt 3) {
     if ((Get-Date) -gt $deadline) { "idle: not quiet after 60 min; running: $((RunningWindowsTasks) -join ', ')"; exit 1 }
