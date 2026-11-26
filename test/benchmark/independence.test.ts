@@ -74,3 +74,29 @@ describe("benchmark grader independence (TIF-267)", () => {
     ]);
   });
 });
+
+describe("the corrections A/B analysis never reaches gate code (#547 round 1, D7)", () => {
+  const AB = join(ROOT, "src", "m2", "corrections-ab.ts");
+  const GATE = join(ROOT, "src", "gate");
+  const VERIFY = join(ROOT, "src", "verify");
+
+  it("its transitive imports stay out of src/gate/ and src/verify/, and launch no process", () => {
+    const reached = [...walk(AB).keys()];
+    expect(reached).toContain(join(GRADER, "row.ts"));
+    const violations = reached.filter(
+      (m) => m.startsWith(`${GATE}/`) || m.startsWith(`${VERIFY}/`),
+    );
+    expect(violations.map((m) => relative(ROOT, m))).toEqual([]);
+    const launchers = [...walk(AB)].flatMap(([mod, specs]) =>
+      specs
+        .filter((s) => /child_process/.test(s))
+        .map((s) => `${relative(ROOT, mod)} imports ${s}`),
+    );
+    expect(launchers).toEqual([]);
+  });
+
+  it("the check bites: a gate module among the reached files is reported", () => {
+    const reached = [join(GATE, "gate.ts"), join(GRADER, "row.ts")];
+    expect(reached.filter((m) => m.startsWith(`${GATE}/`))).toHaveLength(1);
+  });
+});

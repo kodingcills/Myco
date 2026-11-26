@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { BenchmarkArmRow } from "../../src/benchmark/check.ts";
+import { type BenchmarkArmRow, checkBenchmark } from "../../src/benchmark/check.ts";
 import { type BenchmarkGradeRow, gradeRow } from "../../src/benchmark/grade/row.ts";
 import { type BenchmarkTask, buildTaskSet } from "../../src/benchmark/taskset.ts";
 import {
@@ -21,8 +21,11 @@ import {
   type AbInput,
   checkCorrectionsAb,
   newcombePairedCi,
+  STAGE0_TASK_IDS,
   signTestOneSided,
 } from "../../src/m2/corrections-ab.ts";
+import { checkPack } from "../../src/m2/evidence.ts";
+import { input as packInput, r1Trials } from "./pack-fixture.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const TASKS = buildTaskSet().tasks;
@@ -30,6 +33,7 @@ const DEMO = TASKS.filter((t) => t.inDemo);
 const H = (n: number) => n.toString(16).padStart(64, "0");
 
 type Outcome = "verified" | "refuted" | "false-done";
+const stageOf = (tasks: readonly BenchmarkTask[]): 0 | 1 => (tasks.every((t) => t.inDemo) ? 0 : 1);
 
 /** One arm's ledgers: a row per task, its outcome chosen by `outcome(task, i)`. */
 function armLedger(
@@ -56,6 +60,14 @@ function armLedger(
       claim: "done" as const,
       persistedSha256: H(i + 1),
       cost: { modelUsd: null, wallClockS: null, vmS: null },
+      // The experiment marker: Stage 0 when every task is a pilot task, else Stage 1; one seed
+      // per run.
+      experiment: {
+        id: "corrections-ab" as const,
+        stage: stageOf(tasks),
+        arm: side,
+        seed: `${stageOf(tasks) === 0 ? "s0" : "s1"}-${side}`,
+      },
     };
     const corrections = side;
     const row: BenchmarkArmRow = !t.satisfiable
@@ -445,14 +457,32 @@ describe("arm identity, pairing rules and provenance", () => {
     );
   });
 
-  it("dry-run rows are refused as evidence and accepted as plumbing", () => {
-    const on = armLedger("on", TASKS, () => "refuted", { plannerModelId: "simulated:x" });
-    const off = armLedger("off", TASKS, () => "refuted", { plannerModelId: "simulated:x" });
-    expect(checkCorrectionsAb(ab({ on, off }), { stage: 1 }).ok).toBe(true);
-    const ev = checkCorrectionsAb(ab({ on, off }), { stage: 1, evidence: true });
-    expect(ev.ok).toBe(false);
-    expect(ev.errors.join("\n")).toMatch(
-      /corrections-ON: 100 row\(s\) without evidence provenance/,
+  it("Stage 1 refuses simulated planners outright; Stage 0 accepts them as plumbing unless asked for evidence", () => {
+    const sim = { plannerModelId: "simulated:x" };
+    const on = armLedger("on", TASKS, () => "refuted", sim);
+    const off = armLedger("off", TASKS, () => "refuted", sim);
+    const simConfigs = {
+      on: { ...config("on"), plannerModelId: "simulated:x" },
+      off: { ...config("off"), plannerModelId: "simulated:x" },
+    };
+    const r1 = checkCorrectionsAb(ab({ on, off }, { runConfigs: simConfigs }), { stage: 1 });
+    expect(r1.ok).toBe(false);
+    expect(r1.effect).toBe("none");
+    expect(r1.errors.join("\n")).toMatch(
+      /corrections-ON: 100 row\(s\) without evidence provenance: .*\(Stage 1 is confirmatory\)/,
+    );
+    const s0on = armLedger("on", DEMO, () => "refuted", sim);
+    const s0off = armLedger("off", DEMO, () => "refuted", sim);
+    const plumbing = checkCorrectionsAb(ab({ on: s0on, off: s0off }, { runConfigs: simConfigs }), {
+      stage: 0,
+    });
+    expect(plumbing.errors).toEqual([]);
+    const asEvidence = checkCorrectionsAb(
+      ab({ on: s0on, off: s0off }, { runConfigs: simConfigs }),
+      { stage: 0, evidence: true },
+    );
+    expect(asEvidence.errors.join("\n")).toMatch(
+      /corrections-ON: 30 row\(s\) without evidence provenance/,
     );
   });
 });
@@ -521,4 +551,245 @@ describe("the CLI", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 90_000);
+});
+
+describe("#547 round 1 fixes", () => {
+  it("D1: an A/B ledger, the OFF arm included, is refused as R1 evidence and in any M2 pack", () => {
+    const { off } = stage1();
+    const r = checkBenchmark(off.arm, off.grades, {
+      expectTrials: { "myco-gate": 100 },
+      expectUnregistrable: { "myco-gate": 10 },
+      bindTaskSet: true,
+      evidence: true,
+    });
+    expect(r.errors.join("\n")).toMatch(
+      /100 row\(s\) from an experiment run \(corrections-ab; .*\): experiment-only, never evidence/,
+    );
+    const pack = packInput(r1Trials());
+    const marked = {
+      ...pack,
+      arm: (pack.arm as BenchmarkArmRow[]).map((r) => ({
+        ...r,
+        experiment: {
+          id: "corrections-ab" as const,
+          stage: 1 as const,
+          arm: "off" as const,
+          seed: "s1-off",
+        },
+      })),
+    };
+    expect(checkPack(marked).errors.join("\n")).toMatch(/experiment-only, never evidence/);
+    expect(checkPack(pack).errors).toEqual([]);
+  });
+
+  it("D1: the A/B refuses rows that do not carry its marker for this stage and arm", () => {
+    const { on, off } = stage1();
+    const strip = (a: AbArm, i: number): AbArm => ({
+      ...a,
+      arm: (a.arm as BenchmarkArmRow[]).map((r, k) => {
+        if (k !== i) return r;
+        const { experiment: _e, ...rest } = r;
+        return rest;
+      }),
+    });
+    expect(
+      checkCorrectionsAb(ab({ on: strip(on, 0), off }), { stage: 1 }).errors.join("\n"),
+    ).toMatch(
+      /corrections-ON: 1 row\(s\) not marked as corrections-ab Stage 1, arm on \(on-fc-v1-001\)/,
+    );
+    const wrongArm: AbArm = {
+      ...off,
+      arm: (off.arm as BenchmarkArmRow[]).map((r, k) =>
+        k === 0 && r.experiment ? { ...r, experiment: { ...r.experiment, arm: "on" as const } } : r,
+      ),
+    };
+    expect(checkCorrectionsAb(ab({ on, off: wrongArm }), { stage: 1 }).errors.join("\n")).toMatch(
+      /corrections-OFF: 1 row\(s\) not marked as corrections-ab Stage 1, arm off/,
+    );
+    const wrongStage: AbArm = {
+      ...off,
+      arm: (off.arm as BenchmarkArmRow[]).map((r, k) =>
+        k === 0 && r.experiment ? { ...r, experiment: { ...r.experiment, stage: 0 as const } } : r,
+      ),
+    };
+    expect(
+      checkCorrectionsAb(ab({ on, off: wrongStage }), { stage: 1 }).errors.join("\n"),
+    ).toMatch(/corrections-OFF: 1 row\(s\) not marked as corrections-ab Stage 1, arm off/);
+    const twoSeeds: AbArm = {
+      ...off,
+      arm: (off.arm as BenchmarkArmRow[]).map((r, k) =>
+        k === 0 && r.experiment ? { ...r, experiment: { ...r.experiment, seed: "other" } } : r,
+      ),
+    };
+    expect(checkCorrectionsAb(ab({ on, off: twoSeeds }), { stage: 1 }).errors.join("\n")).toMatch(
+      /corrections-OFF: one run, one seed \(got 2\)/,
+    );
+  });
+
+  it("D2: a Stage-0 trial re-ledgered under a new key is refused by its seed, in either arm", () => {
+    const { on, off } = stage1();
+    // A Stage-1 OFF row that is really a Stage-0 trial: new key, Stage-0 seed.
+    const reusedOff: AbArm = {
+      ...off,
+      arm: (off.arm as BenchmarkArmRow[]).map((r, k) =>
+        k === 0 && r.experiment ? { ...r, experiment: { ...r.experiment, seed: "s0-off" } } : r,
+      ),
+    };
+    const r = checkCorrectionsAb(ab({ on, off: reusedOff }), { stage: 1 });
+    expect(r.errors.join("\n")).toMatch(
+      /1 Stage-1 trial\(s\) reuse Stage-0 trials \(off-fc-v1-001\)/,
+    );
+    // An OFF-arm reuse by key is refused too (the ON arm is not the only one scanned).
+    const reusedKey = checkCorrectionsAb(
+      ab(stage1(), {
+        stage0: { on: STAGE0.on, off: [...STAGE0.off, { trialKey: "off-fc-v1-002" }] },
+      }),
+      { stage: 1 },
+    );
+    expect(reusedKey.errors.join("\n")).toMatch(/reuse Stage-0 trials \(off-fc-v1-002\)/);
+    // Stage-0 ledgers must be Stage-0 rows.
+    const notStage0 = checkCorrectionsAb(
+      ab(stage1(), {
+        stage0: {
+          on: STAGE0.on.map((r) => ({ ...r, experiment: { ...r.experiment, stage: 1 } })),
+          off: STAGE0.off,
+        },
+      }),
+      { stage: 1 },
+    );
+    expect(notStage0.errors).toContain("the Stage-0 ledgers hold rows not marked as Stage 0");
+  });
+
+  it("D3: the run configs must record retry budget, pacing, planner and ceiling, and match the rows", () => {
+    const bare = checkCorrectionsAb(
+      ab(stage1(), { runConfigs: { on: { corrections: "on" }, off: { corrections: "off" } } }),
+      { stage: 1 },
+    );
+    expect(bare.ok).toBe(false);
+    expect(bare.errors).toContain(
+      "the ON run config does not record retryBudget, pacing, plannerModelId, outputCeiling",
+    );
+    expect(bare.errors).toContain(
+      "the OFF run config does not record retryBudget, pacing, plannerModelId, outputCeiling",
+    );
+    const lying = checkCorrectionsAb(
+      ab(stage1(), {
+        runConfigs: {
+          on: { ...config("on"), plannerModelId: "claude-opus-5-5" },
+          off: { ...config("off"), plannerModelId: "claude-opus-5-5" },
+        },
+      }),
+      { stage: 1 },
+    );
+    expect(lying.errors.join("\n")).toMatch(
+      /corrections-ON: rows ran another planner or output ceiling than the run config records/,
+    );
+  });
+
+  it("D4: both arms must be graded by the same grader version", () => {
+    const { on, off } = stage1();
+    const regraded: AbArm = {
+      ...off,
+      grades: (off.grades as BenchmarkGradeRow[]).map((g) => ({
+        ...g,
+        graderVersion: "false-completion-grader/2",
+      })),
+    };
+    expect(checkCorrectionsAb(ab({ on, off: regraded }), { stage: 1 }).errors).toContain(
+      "the arms were graded by different graders: false-completion-grader/1, false-completion-grader/2",
+    );
+  });
+
+  it("D6: Stage 0 is exactly the pilot's 30 tasks", () => {
+    expect(STAGE0_TASK_IDS.size).toBe(30);
+    // The pilot's strata (#524 PILOT_STRATA): the first 18 clean tasks and first 3 per fault class.
+    const byClass = (cls: string) =>
+      TASKS.filter((t) => t.faultClass === cls)
+        .map((t) => t.taskId)
+        .sort();
+    const pilot = new Set([
+      ...byClass("none").slice(0, 18),
+      ...["kill-app", "delayed-save", "focus-change", "invalid-target"].flatMap((c) =>
+        byClass(c).slice(0, 3),
+      ),
+    ]);
+    expect([...STAGE0_TASK_IDS].sort()).toEqual([...pilot].sort());
+    // 30 non-pilot tasks, marked as Stage 0, are refused.
+    const others = TASKS.filter((t) => !t.inDemo).slice(0, 30);
+    const mark = (a: AbArm, side: "on" | "off"): AbArm => ({
+      ...a,
+      arm: (a.arm as BenchmarkArmRow[]).map((r) => ({
+        ...r,
+        experiment: {
+          id: "corrections-ab" as const,
+          stage: 0 as const,
+          arm: side,
+          seed: `s0x-${side}`,
+        },
+      })),
+    });
+    const r = checkCorrectionsAb(
+      ab({
+        on: mark(
+          armLedger("on", others, () => "refuted"),
+          "on",
+        ),
+        off: mark(
+          armLedger("off", others, () => "refuted"),
+          "off",
+        ),
+      }),
+      { stage: 0 },
+    );
+    expect(r.errors.join("\n")).toMatch(
+      /corrections-ON: Stage 0 is the pilot's 30 tasks \(30 outside, 30 missing\)/,
+    );
+  });
+
+  it("V2: a Stage-0 row with a forged fixture hash fails the per-row binding", () => {
+    const on = armLedger("on", DEMO, () => "verified");
+    const off = armLedger("off", DEMO, () => "verified", {});
+    const forged: AbArm = {
+      ...off,
+      arm: (off.arm as BenchmarkArmRow[]).map((r, k) =>
+        k === 0 ? { ...r, fixtureSha256: "a".repeat(64) } : r,
+      ),
+      grades: (off.grades as BenchmarkGradeRow[]).map((g, k) =>
+        k === 0 ? { ...g, fixtureSha256: "a".repeat(64) } : g,
+      ),
+    };
+    expect(checkCorrectionsAb(ab({ on, off: forged }), { stage: 0 }).errors.join("\n")).toMatch(
+      /corrections-OFF task set: .*fixtureSha256 is not task .*'s published fixture/,
+    );
+  });
+
+  it("V7: a gate-verified trial the grader could not grade is a gate miss too", () => {
+    const { off } = stage1();
+    const on = armLedger("on", TASKS, (_t, i) => (i === 0 ? "verified" : "refuted"));
+    const ungradable: AbArm = {
+      ...on,
+      grades: (on.grades as BenchmarkGradeRow[]).map((g, k) =>
+        k === 0
+          ? {
+              ...g,
+              status: "ungradable" as const,
+              reasons: ["x"],
+              target: null,
+              targetSatisfied: null,
+            }
+          : g,
+      ),
+    };
+    const r = checkCorrectionsAb(ab({ on: ungradable, off }), { stage: 1 });
+    expect(r.halted).toBe(true);
+    expect(r.integrityIncidents).toEqual([
+      {
+        arm: "on",
+        trialKey: "on-fc-v1-001",
+        taskId: "fc-v1-001",
+        accepted: true,
+        grade: "ungradable",
+      },
+    ]);
+  });
 });

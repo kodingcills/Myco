@@ -56,6 +56,13 @@ export interface BenchmarkArmRow {
     readonly wallClockS: number | null;
     readonly vmS: number | null;
   };
+  /** Only on rows from an experiment run (the corrections A/B); such rows are never evidence. */
+  readonly experiment?: {
+    readonly id: "corrections-ab";
+    readonly stage: 0 | 1;
+    readonly arm: "on" | "off";
+    readonly seed: string;
+  };
 }
 
 /**
@@ -241,6 +248,18 @@ export const EVIDENCE_PLANNERS: ReadonlySet<string> = new Set([
  * corrections in R1 evidence; one would have to change this code. Rows without the field
  * (written before corrections existed) are off.
  */
+/**
+ * Rows from an experiment run (the corrections ON/OFF A/B, both arms, the OFF arm included)
+ * are experiment-only: `checkBenchmark` refuses them under `evidence: true`, and `checkPack`
+ * refuses them in every pack (#547 round 1, D1). The label is enforced here, not only written.
+ */
+export function experimentRowsError(rows: readonly BenchmarkArmRow[]): string | null {
+  const marked = rows.filter((r) => r.experiment !== undefined);
+  if (marked.length === 0) return null;
+  const keys = marked.slice(0, 5).map((r) => r.trialKey);
+  return `${marked.length} row(s) from an experiment run (${marked[0]?.experiment?.id}; ${keys.join(", ")}${marked.length > 5 ? ", ..." : ""}): experiment-only, never evidence`;
+}
+
 export function correctionsOnError(rows: readonly BenchmarkArmRow[]): string | null {
   const on = rows.filter((r) => r.gate?.corrections === "on");
   if (on.length === 0) return null;
@@ -319,6 +338,8 @@ export function checkBenchmark(
     }
     const corrected = correctionsOnError(armRows);
     if (corrected !== null) errors.push(corrected);
+    const experimental = experimentRowsError(armRows);
+    if (experimental !== null) errors.push(experimental);
   }
   if (gradeInput.length === 0) errors.push("grade ledger is empty");
 

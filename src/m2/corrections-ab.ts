@@ -18,13 +18,23 @@
  *    arm, halts the run as an INTEGRITY INCIDENT, with its own record (`integrityIncidents`),
  *    never counted as data.
  *  - **Identical arms:** the analysis refuses to run unless both arms ran identically apart
- *    from corrections: the same instruction and fixture hashes, planner and output ceiling per
- *    pair (from the rows), and the same run configuration (retry budget, pacing and the rest,
- *    from the runner's recorded config, which must differ only in `corrections`).
+ *    from corrections: each arm bound to the same published tasks (so per pair the same
+ *    instruction and fixture hashes), the same planner and output ceiling per pair, the same
+ *    grader version, and the same recorded run configuration. The config must record retry
+ *    budget, pacing, planner and output ceiling (`REQUIRED_CONFIG_KEYS`), state the planner and
+ *    ceiling the rows actually ran, and differ between the arms only in `corrections`.
+ *  - **Marked rows, fresh seeds:** every row carries `experiment: {id: "corrections-ab", stage,
+ *    arm, seed}`, one seed per run. Stage 1 refuses any trial whose key or seed appears in the
+ *    Stage-0 ledgers, so a reused trial cannot slip through under a new key.
+ *  - **Stage 0's tasks** are exactly the pilot's 30 (`STAGE0_TASK_IDS`), each once.
+ *  - **Simulated planners:** refused in Stage 1 outright (it is confirmatory), and in Stage 0
+ *    when asked for evidence.
  *  - **Pre-registration:** the sha256 of the committed pre-registration file must equal the
  *    one the pack declares (required for Stage 1; checked for Stage 0 when given).
- *  - **Never R1 evidence:** both arms, the OFF arm included, are experiment-only
- *    (`evidenceUse`); the R1 evidence path refuses corrections-ON rows by its own rule.
+ *  - **Never R1 evidence:** both arms, the OFF arm included, are experiment-only. That is
+ *    enforced, not only labelled: the `experiment` marker on every row makes
+ *    `checkBenchmark(..., { evidence: true })` and the M2 pack check refuse the rows
+ *    (`experimentRowsError` in `src/benchmark/check.ts`).
  *
  * Success is a verified task: an accepted DONE the independent grader passes. The grader never
  * sees corrections (its inputs are the bundle and the saved document).
@@ -36,6 +46,7 @@ import {
   type Rate,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
+import { buildTaskSet } from "../benchmark/taskset.ts";
 import { bindToTaskSet } from "../benchmark/taskset-binding.ts";
 import { wilson } from "../foundry/stats.ts";
 
@@ -144,7 +155,29 @@ export function newcombePairedCi(
 }
 
 const corrections = (r: BenchmarkArmRow) => (r.gate?.corrections === "on" ? "on" : "off");
-const pairKey = (r: BenchmarkArmRow) => `${r.taskId}|${r.fixtureSha256}|${r.faultClass}`;
+/**
+ * Pairs are by task. Each arm is bound to the published task set (fixture, fault class and
+ * instruction hashes are the task's own), so the task id fixes the rest (#547 round 1, V1/V8).
+ */
+const pairKey = (r: BenchmarkArmRow) => r.taskId;
+
+/**
+ * Stage 0's tasks: the pilot's 30, fc-v1's demo subset (the first 18 clean tasks and the first
+ * 3 of each fault class, by task id; the same selection as #524's `PILOT_STRATA`).
+ */
+export const STAGE0_TASK_IDS: ReadonlySet<string> = new Set(
+  buildTaskSet()
+    .tasks.filter((t) => t.inDemo)
+    .map((t) => t.taskId),
+);
+
+/** The run-config keys the parity check requires present in both arms (#547 round 1, D3). */
+export const REQUIRED_CONFIG_KEYS = [
+  "retryBudget",
+  "pacing",
+  "plannerModelId",
+  "outputCeiling",
+] as const;
 
 /** JSON with object keys sorted, so two configs compare by content, not key order. */
 function canonical(value: unknown): string {
@@ -204,6 +237,16 @@ export function checkCorrectionsAb(
   if (cfgOn.corrections !== "on") errors.push('the ON run config does not say corrections: "on"');
   if (cfgOff.corrections !== "off")
     errors.push('the OFF run config does not say corrections: "off"');
+  for (const [name, cfg] of [
+    ["ON", cfgOn],
+    ["OFF", cfgOff],
+  ] as const) {
+    const missing = REQUIRED_CONFIG_KEYS.filter(
+      (k) => !Object.hasOwn(cfg, k) || cfg[k] === undefined,
+    );
+    if (missing.length > 0)
+      errors.push(`the ${name} run config does not record ${missing.join(", ")}`);
+  }
   const { corrections: _a, ...restOn } = cfgOn;
   const { corrections: _b, ...restOff } = cfgOff;
   if (canonical(restOn) !== canonical(restOff)) {
@@ -226,15 +269,24 @@ export function checkCorrectionsAb(
     if (input.stage0 === undefined)
       errors.push("Stage 1 needs the Stage-0 ledgers (to exclude their trials)");
     else {
-      const used = new Set(
-        [...input.stage0.on, ...input.stage0.off].map((r) => (r as BenchmarkArmRow).trialKey),
+      // A trial's identity is its key AND its run's seed: a Stage-0 trial re-ledgered under a
+      // new key still carries its Stage-0 seed (#547 round 1, D2).
+      const s0 = [...input.stage0.on, ...input.stage0.off] as BenchmarkArmRow[];
+      const usedKeys = new Set(s0.map((r) => r.trialKey));
+      const usedSeeds = new Set(
+        s0.flatMap((r) => (r.experiment === undefined ? [] : [r.experiment.seed])),
       );
-      const reused = [...input.on.arm, ...input.off.arm]
-        .map((r) => (r as BenchmarkArmRow).trialKey)
-        .filter((k) => used.has(k));
+      if (s0.some((r) => r.experiment?.stage !== 0))
+        errors.push("the Stage-0 ledgers hold rows not marked as Stage 0");
+      const s1 = [...input.on.arm, ...input.off.arm] as BenchmarkArmRow[];
+      const reused = s1.filter(
+        (r) =>
+          usedKeys.has(r.trialKey) ||
+          (r.experiment !== undefined && usedSeeds.has(r.experiment.seed)),
+      );
       if (reused.length > 0)
         errors.push(
-          `${reused.length} Stage-1 trial(s) reuse Stage-0 trials (${reused[0]}): Stage-0 rows are excluded`,
+          `${reused.length} Stage-1 trial(s) reuse Stage-0 trials (${reused[0]?.trialKey}): Stage-0 rows are excluded`,
         );
     }
   }
@@ -256,7 +308,41 @@ export function checkCorrectionsAb(
     if (opts.stage === 0 && rows.length > 0) {
       const binding = bindToTaskSet(rows, { exactMultiset: false });
       errors.push(...binding.errors.map((e) => `corrections-${name} task set: ${e}`));
+      // Stage 0 is exactly the pilot's 30 tasks, each once (#547 round 1, D6).
+      const ids = rows.map((r) => r.taskId);
+      const outside = ids.filter((id) => !STAGE0_TASK_IDS.has(id));
+      const missing = [...STAGE0_TASK_IDS].filter((id) => !ids.includes(id));
+      if (outside.length > 0 || missing.length > 0)
+        errors.push(
+          `corrections-${name}: Stage 0 is the pilot's ${STAGE0_TASK_IDS.size} tasks (${outside.length} outside, ${missing.length} missing)`,
+        );
     }
+    // Every row carries the experiment marker for this stage and arm, one seed per run
+    // (#547 round 1, D1/D2): unmarked rows could pass as R1 evidence.
+    const unmarked = rows.filter(
+      (r) =>
+        r.experiment === undefined ||
+        r.experiment.stage !== opts.stage ||
+        r.experiment.arm !== side,
+    );
+    if (unmarked.length > 0)
+      errors.push(
+        `corrections-${name}: ${unmarked.length} row(s) not marked as corrections-ab Stage ${opts.stage}, arm ${side} (${unmarked[0]?.trialKey})`,
+      );
+    const seeds = new Set(
+      rows.flatMap((r) => (r.experiment === undefined ? [] : [r.experiment.seed])),
+    );
+    if (seeds.size > 1) errors.push(`corrections-${name}: one run, one seed (got ${seeds.size})`);
+    // The recorded config states the planner and ceiling the rows ran (#547 round 1, D3).
+    const cfg = side === "on" ? cfgOn : cfgOff;
+    if (
+      rows.some(
+        (r) => r.plannerModelId !== cfg.plannerModelId || r.outputCeiling !== cfg.outputCeiling,
+      )
+    )
+      errors.push(
+        `corrections-${name}: rows ran another planner or output ceiling than the run config records`,
+      );
     if (rows.some((r) => r.arm !== "myco-gate"))
       errors.push(
         `corrections-${name}: the A/B compares the gate with itself, every row is myco-gate`,
@@ -268,11 +354,13 @@ export function checkCorrectionsAb(
       errors.push(
         `corrections-${name}: ${wrong.length} row(s) ran with corrections ${side === "on" ? "off" : "on"} (${wrong[0]?.trialKey})`,
       );
-    if (opts.evidence === true) {
+    // Stage 1 is confirmatory: simulated planners are refused outright, flag or no flag
+    // (#547 round 1, D5). Stage 0 refuses them only when asked for evidence.
+    if (opts.stage === 1 || opts.evidence === true) {
       const unproven = rows.filter((r) => !EVIDENCE_PLANNERS.has(r.plannerModelId));
       if (unproven.length > 0)
         errors.push(
-          `corrections-${name}: ${unproven.length} row(s) without evidence provenance: dry-run rows are never evidence`,
+          `corrections-${name}: ${unproven.length} row(s) without evidence provenance: dry-run rows are never evidence${opts.stage === 1 ? " (Stage 1 is confirmatory)" : ""}`,
         );
     }
     const grades = new Map(
@@ -297,9 +385,16 @@ export function checkCorrectionsAb(
           grade: g ?? "missing",
         });
     }
-    return { by, verified };
+    const graderVersions = new Set(
+      (input[side].grades as readonly BenchmarkGradeRow[]).map((g) => g.graderVersion),
+    );
+    return { by, verified, graderVersions };
   });
   const [onArm, offArm] = arms as [(typeof arms)[number], (typeof arms)[number]];
+  // One grader for both arms (#547 round 1, D4).
+  const graders = new Set([...onArm.graderVersions, ...offArm.graderVersions]);
+  if (graders.size > 1)
+    errors.push(`the arms were graded by different graders: ${[...graders].sort().join(", ")}`);
 
   let both = 0;
   let onOnly = 0;
@@ -312,8 +407,6 @@ export function checkCorrectionsAb(
       errors.push(`corrections-ON ${a.trialKey} has no OFF pair`);
       continue;
     }
-    if (a.instructionSha256 !== b.instructionSha256)
-      errors.push(`pair ${a.taskId}: the two arms were given different instructions`);
     if (a.plannerModelId !== b.plannerModelId || a.outputCeiling !== b.outputCeiling)
       errors.push(`pair ${a.taskId}: the two arms ran different model settings`);
     paired++;

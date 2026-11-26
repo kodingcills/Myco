@@ -67,6 +67,7 @@ import {
   type CheckResult,
   checkBenchmark,
   correctionsOnError,
+  experimentRowsError,
   UNBOUND_R1,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
@@ -555,6 +556,10 @@ export function checkPack(input: PackInput): PackResult {
       const corrected = correctionsOnError(gatedRows);
       if (corrected !== null) errors.push(`R1: ${corrected}`);
     }
+    // Experiment rows (the corrections A/B, both arms) are never evidence for any row of any
+    // pack (#547 round 1, D1).
+    const experimental = experimentRowsError(armRows);
+    if (experimental !== null) errors.push(experimental);
     if (gatedRows.length > 0 && (isR1 || unreg > 0 || (split ?? 0) > 0)) {
       const binding = bindToTaskSet(gatedRows, { exactMultiset: isR1 });
       errors.push(...binding.errors.map((e) => (isR1 ? `R1 task set: ${e}` : `task set: ${e}`)));

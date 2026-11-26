@@ -457,15 +457,23 @@ npx tsx scripts/m2-corrections-ab.ts --stage 0|1 \
 - **A gate miss** is a trial the gate VERIFIED that the grader fails, in either arm. It halts the run
   as an integrity incident, recorded in `integrityIncidents`. It is never data.
 - **Preconditions.** The analysis refuses to run unless:
-  - both arms ran identically apart from corrections. Per pair, the instruction and fixture
-    hashes, planner and output ceiling must match. Per run, the recorded configs (retry budget,
-    pacing and the rest) may differ only in `corrections`;
-  - each arm is bound to fc-v1;
+  - both arms ran identically apart from corrections:
+    - each arm is bound to the same published tasks, so the instruction and fixture hashes
+      match per pair;
+    - the planner, output ceiling and grader version are the same;
+    - the recorded run configs must record retry budget, pacing, planner and output ceiling,
+      must state what the rows actually ran, and may differ only in `corrections`;
+  - every row carries `experiment: {id: "corrections-ab", stage, arm, seed}`, with one seed per
+    run. Stage 1 refuses any trial whose key or seed appears in the Stage-0 ledgers, so a reused
+    trial cannot slip through under a new key;
+  - Stage 0 is exactly the pilot's 30 tasks (fc-v1's demo subset), each once;
+  - Stage 1 has no simulated planner (it is confirmatory, so this holds with or without
+    `--evidence`);
   - for Stage 1, the hash of the committed pre-registration file equals the one the pack
     declares.
 - **Two runs, two ledgers.** An unregistrable or refused row never called the gate, so the arm is
   the ledger a row came from. Every gate-called ON row says `corrections: "on"`, and no OFF row
   does.
-- **Never R1 evidence.** Both arms, the OFF arm included, are experiment-only (`evidenceUse`). The R1
-  evidence path refuses corrections-ON rows by its own rule. Under `--evidence`, dry-run rows are
-  refused.
+- **Never R1 evidence.** Both arms, the OFF arm included, are experiment-only, and this is
+  enforced. Because every A/B row carries the `experiment` marker, `checkBenchmark(..., { evidence:
+  true })` and the M2 pack check refuse such rows (`experimentRowsError`).
