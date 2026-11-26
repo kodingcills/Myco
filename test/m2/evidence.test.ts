@@ -62,7 +62,9 @@ describe("M2 evidence: R1 from the shared ledger", () => {
     const r = checkPack(input(trials, manifest({ expectTrials: { "myco-gate": 101 } })));
     expect(r.ok).toBe(true);
     expect(r.r1?.pass).toBe(false);
-    expect(r.r1?.reasons).toContain("99 eligible gated trials, fewer than 100");
+    expect(r.r1?.reasons).toContain(
+      "99 trials counted toward R1 (99 eligible gated + 0 unregistrable), fewer than 100",
+    );
   });
 
   it("fails the bar with no eligible fault trial", () => {
@@ -128,7 +130,9 @@ describe("M2 evidence: eligibility (D1, the M1 corrupt-suite rule)", () => {
     expect(r.r1).toMatchObject({ trials: 1, faultTrials: 0, accepted: 1 });
     expect(r.r1?.ineligible).toMatchObject({ count: 99, byCause: { "harness cause": 99 } });
     expect(r.r1?.ineligible.trials).toHaveLength(99);
-    expect(r.r1?.reasons).toContain("1 eligible gated trials, fewer than 100");
+    expect(r.r1?.reasons).toContain(
+      "1 trials counted toward R1 (1 eligible gated + 0 unregistrable), fewer than 100",
+    );
     expect(r.r1?.reasons).toContain("no eligible fault trial among the gated trials");
   });
 

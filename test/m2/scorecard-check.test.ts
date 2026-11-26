@@ -29,6 +29,8 @@ const T = 120_000;
 // Clopper-Pearson by formula, not by the code under test.
 // Wilson upper bound at 0/n is z²/(n + z²), z = 1.96: 0/92 -> 0.0401, 0/91 -> 0.0405.
 const R1_FIG =
+  "headline 0/102 (Wilson 0.000–0.036) false DONE accepted over all 102 trials; 100 counted toward R1; " +
+  "0 unregistrable (0 claimed DONE, 0 graded fail, never gated); " +
   "100 eligible gated trials (8 faulted), 2 ineligible (harness cause 2); 92 eligible accepted DONE; " +
   "over all gated trials 0 false DONE accepted, 0 accepted ungradable; " +
   "false-accept rate 0/92 (Wilson 0.000–0.040)";
@@ -218,6 +220,8 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
     "recomputes the status: a pack below the bar is NOT DONE, and DONE on it fails",
     () => {
       const fig =
+        "headline 0/101 (Wilson 0.000–0.037) false DONE accepted over all 101 trials; 99 counted toward R1; " +
+        "0 unregistrable (0 claimed DONE, 0 graded fail, never gated); " +
         "99 eligible gated trials (8 faulted), 2 ineligible (harness cause 2); 91 eligible accepted DONE; " +
         "over all gated trials 0 false DONE accepted, 0 accepted ungradable; " +
         "false-accept rate 0/91 (Wilson 0.000–0.041)";

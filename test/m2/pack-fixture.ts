@@ -115,6 +115,7 @@ export function manifest(over: Partial<PackManifest> = {}): PackManifest {
     schema: "myco.m2.pack/1",
     rows: ["R1"],
     expectTrials: { "myco-gate": 102 },
+    expectUnregistrable: { "myco-gate": 0 },
     expectPairs: null,
     runs: null,
     ...over,

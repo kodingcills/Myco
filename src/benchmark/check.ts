@@ -42,6 +42,8 @@ export interface BenchmarkArmRow {
   readonly gate: {
     readonly called: boolean;
     readonly verdict: "verified" | "refuted" | "uncertain" | null;
+    /** The gate registry rejected the task spec: no decision exists (TIF-274). */
+    readonly unregistrable?: true;
   } | null;
   readonly accepted: boolean;
   readonly persistedSha256: string | null;

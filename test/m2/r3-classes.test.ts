@@ -195,6 +195,7 @@ describe("cause precedence for trials with more than one cause (N6)", () => {
     };
     const ops = { ...t.ops, faultLanded: false };
     const peel: [BenchmarkArmRow, string][] = [
+      [{ ...all, gate: { called: false, verdict: null, unregistrable: true } }, "unregistrable"],
       [all, "harness cause"],
       [{ ...all, cause: t.arm.cause }, "gate not called"],
       [{ ...all, cause: t.arm.cause, gate: { called: true, verdict: null } }, "no verdict"],
