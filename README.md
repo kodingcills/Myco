@@ -10,6 +10,24 @@ Agents can already touch desktop software. The unsolved problem is *trust* — k
 
 ---
 
+## Getting started
+
+Needs Node ≥ 24 and pnpm 10 (details in [Setup](#setup)). No VM and no model for any step here.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm myco-gate demo --transport mock     # an agent claims "saved"; the gate checks the saved file
+pnpm myco-watch --demo calc-multi-step   # (lands with #513) the same, in a local page: desktop frames + verdict timeline
+bin/myco init --dry-run                  # (lands with #512) from your project: wire the gate into Claude Code and Codex
+```
+
+The demo exits 0 and prints `DEMO: PASS`; its verdicts are mock, not evidence. Run
+`bin/myco init` without `--dry-run` to write the gate's MCP entry to your project's
+`.mcp.json` and `.codex/config.toml` (lands with #512). A 90-second walkthrough with the
+exact commands is in [docs/product/demo-storyboard.md](docs/product/demo-storyboard.md).
+
+---
+
 ## M1 results
 
 M1 was signed off on 2026-11-25 ([#444](https://github.com/kodingcills/Myco/pull/444)). All 8
