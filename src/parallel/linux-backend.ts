@@ -10,7 +10,14 @@
  * What `linux-plain` gives each trial, and the report says exactly this:
  *   - a private root (workspace, HOME, TMPDIR, XDG dirs) no other trial is given;
  *   - one process group per exec, killed (with its Xvfb) at destroy;
- *   - Xvfb on a display Xvfb picks itself (`-displayfd`), so trials never share one;
+ *   - Xvfb on a display Xvfb picks itself (`-displayfd`), so trials never share one, with
+ *     its own random MIT-MAGIC-COOKIE-1 (`-auth`, `XAUTHORITY` in that trial's env only):
+ *     a client without that cookie (e.g. another trial connecting to this trial's socket
+ *     in the shared `/tmp/.X11-unix`, or on the abstract socket) is refused. The cookie
+ *     file lives in the trial's own root, which another trial running as the same user
+ *     CAN read on `linux-plain` (nothing is hidden), so this stops a blind cross-trial
+ *     connect, not a trial that goes looking for the cookie: that residual is covered by
+ *     the count rule (`shared-host-dirs`), like every other `linux-plain` shared surface;
  *   - an env built from an allowlist (PATH, LANG) plus its own dirs: no host env var (and
  *     so no host secret) reaches a trial;
  *   - a watchdog that samples the trial's processes from /proc every 200 ms and destroys
@@ -28,7 +35,8 @@
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   BackendProbe,
@@ -63,6 +71,32 @@ function hostEnv(): Record<string, string> {
     if (value !== undefined) env[name] = value;
   }
   return env;
+}
+
+/** The X auth protocol every desktop's Xvfb requires. */
+export const X_AUTH_NAME = "MIT-MAGIC-COOKIE-1";
+
+/**
+ * An Xauthority file with one entry: family Wild (any address) and an empty display
+ * number (any display), so it is valid before `-displayfd` tells us the display. The X
+ * server loads every entry of its `-auth` file; Xlib picks a Wild entry with an empty
+ * number for any display.
+ */
+export function xauthorityEntry(cookie: Buffer): Buffer {
+  const field = (b: Buffer) => {
+    const len = Buffer.alloc(2);
+    len.writeUInt16BE(b.length);
+    return Buffer.concat([len, b]);
+  };
+  const family = Buffer.alloc(2);
+  family.writeUInt16BE(0xffff);
+  return Buffer.concat([
+    family,
+    field(Buffer.alloc(0)),
+    field(Buffer.alloc(0)),
+    field(Buffer.from(X_AUTH_NAME, "latin1")),
+    field(cookie),
+  ]);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -393,9 +427,25 @@ export function linuxBackend(options: LinuxBackendOptions = {}): DesktopBackend 
       let xvfb: ChildProcess | undefined;
       let display: IsolationReport["display"] = { kind: "none" };
       if (spec.display === "xvfb") {
+        // A fresh cookie per trial: without it any process on the host (another trial
+        // included) could connect to this display, read its screen and inject input.
+        const xauth = join(paths.home, ".Xauthority");
+        writeFileSync(xauth, xauthorityEntry(randomBytes(16)), { mode: 0o600, flag: "wx" });
+        base.XAUTHORITY = xauth;
         xvfb = spawn(
           opts.xvfb,
-          ["-displayfd", "3", "-nolisten", "tcp", "-screen", "0", "1280x800x24"],
+          [
+            "-displayfd",
+            "3",
+            "-auth",
+            xauth,
+            "-noreset",
+            "-nolisten",
+            "tcp",
+            "-screen",
+            "0",
+            "1280x800x24",
+          ],
           {
             env: hostEnv(),
             detached: true,

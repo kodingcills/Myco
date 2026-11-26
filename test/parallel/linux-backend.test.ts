@@ -150,6 +150,34 @@ function accepts(path: string): Promise<boolean> {
   });
 }
 
+/**
+ * A raw X11 connection setup, run INSIDE a trial's desktop (the attacker's position):
+ * argv = [socketPath, cookieFile | ""]. A leading "@" means the abstract socket. Prints
+ * the server's first reply byte: 0 Failed, 1 Success, 2 Authenticate; "error" otherwise.
+ */
+const X11_PROBE = `
+const net = require("node:net");
+const fs = require("node:fs");
+const [sockArg, cookieFile] = process.argv.slice(1);
+const path = sockArg.startsWith("@") ? "\\0" + sockArg.slice(1) : sockArg;
+let name = Buffer.alloc(0), data = Buffer.alloc(0);
+if (cookieFile) {
+  const f = fs.readFileSync(cookieFile);
+  let o = 2;
+  const field = () => { const n = f.readUInt16BE(o); const b = f.subarray(o + 2, o + 2 + n); o += 2 + n; return b; };
+  field(); field(); name = field(); data = field();
+}
+const pad = (b) => Buffer.concat([b, Buffer.alloc((4 - (b.length % 4)) % 4)]);
+const head = Buffer.alloc(12);
+head.write("l", 0, "latin1"); head.writeUInt16LE(11, 2); head.writeUInt16LE(0, 4);
+head.writeUInt16LE(name.length, 6); head.writeUInt16LE(data.length, 8);
+const s = net.connect(path);
+s.on("connect", () => s.write(Buffer.concat([head, pad(name), pad(data)])));
+s.once("data", (d) => { console.log(String(d[0])); s.destroy(); });
+s.on("error", () => { console.log("error"); });
+setTimeout(() => { console.log("timeout"); process.exit(0); }, 5000).unref();
+`;
+
 describe.skipIf(!LINUX)("linux-plain desktop (no namespaces)", () => {
   const backend = linuxBackend();
 
@@ -422,6 +450,40 @@ describe.skipIf(!LINUX)("linux-plain desktop (no namespaces)", () => {
       }
       for (const sock of sockets) expect(await accepts(sock)).toBe(false);
     },
+  );
+
+  it.skipIf(!XVFB && !REQUIRED)(
+    "B2: a trial cannot connect to another trial's X display (per-trial cookie)",
+    async () => {
+      // A is the attacker, B the victim. A's own processes connect to B's socket on the
+      // shared /tmp/.X11-unix (and on the abstract socket) with no cookie and with A's
+      // own cookie: both are refused. B's own client, with B's cookie, is accepted, so the
+      // refusal is the cookie and not a dead server.
+      const a = await backend.create(spec("xa-attacker", { display: "xvfb" }));
+      const b = await backend.create(spec("xb-victim", { display: "xvfb" }));
+      try {
+        const nB = String(b.isolation.display.id).slice(1);
+        const nA = String(a.isolation.display.id).slice(1);
+        const probe = async (d: typeof a, sock: string, cookie: string) =>
+          (await d.exec(process.execPath, ["-e", X11_PROBE, sock, cookie])).stdout.trim();
+        const xauthA = (await a.exec("sh", ["-c", 'printf %s "$XAUTHORITY"'])).stdout;
+        const xauthB = (await b.exec("sh", ["-c", 'printf %s "$XAUTHORITY"'])).stdout;
+        expect(xauthA).toMatch(/xa-attacker\/home\/\.Xauthority$/);
+        expect(xauthB).toMatch(/xb-victim\/home\/\.Xauthority$/);
+        for (const sock of [`/tmp/.X11-unix/X${nB}`, `@/tmp/.X11-unix/X${nB}`]) {
+          expect(await probe(a, sock, "")).toBe("0");
+          expect(await probe(a, sock, xauthA)).toBe("0");
+          expect(await probe(b, sock, xauthB)).toBe("1");
+        }
+        // And symmetric: the victim's display is not special.
+        expect(await probe(b, `/tmp/.X11-unix/X${nA}`, "")).toBe("0");
+        expect(await probe(a, `/tmp/.X11-unix/X${nA}`, xauthA)).toBe("1");
+      } finally {
+        await a.destroy();
+        await b.destroy();
+      }
+    },
+    30_000,
   );
 
   it("process-group teardown kills background processes too", async () => {
