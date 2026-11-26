@@ -15,6 +15,7 @@
  */
 import { createHash } from "node:crypto";
 import type { ReasonCode } from "../gate/api.ts";
+import { buildRegistry, type TaskRegistry } from "../gate/gate.ts";
 import type { GatedTrialOutcome } from "../gate/gated-trial.ts";
 import type { BenchmarkArmRow } from "./check.ts";
 import type { BenchmarkTask } from "./taskset.ts";
@@ -30,6 +31,8 @@ export interface GatedTrialRecord {
   /** What `runGatedTrial` returned (only the fields the row needs are read). */
   readonly outcome:
     | Pick<Extract<GatedTrialOutcome, { status: "refused" }>, "status">
+    /** The gate registry rejected the task spec, so there is no gate (see `registerTask`). */
+    | { readonly status: "unregistrable"; readonly reason: string }
     | {
         readonly status: "decided";
         readonly result: Pick<
@@ -91,6 +94,19 @@ export function gatedArmRow(rec: GatedTrialRecord): BenchmarkArmRow {
     };
   }
 
+  if (rec.outcome.status === "unregistrable") {
+    // No gate decision exists, so nothing can let a "done" through. The agent still ran and
+    // its document is still graded: on an fc-v1 invalid-target task, a "done" is the core
+    // false-done case, and the row stays in R1's denominator as its own outcome.
+    return {
+      ...base,
+      claim: rec.agentClaim,
+      gate: { called: false, verdict: null, unregistrable: true },
+      accepted: false,
+      cause: { kind: "oracle", detail: "unregistrable: the gate registry rejected the task spec" },
+    };
+  }
+
   const { verdict, accepted: gateAccepted, reasonCodes } = rec.outcome.result;
   if (gateAccepted !== (verdict === "verified")) {
     throw new Error(
@@ -121,4 +137,34 @@ export function gatedArmRow(rec: GatedTrialRecord): BenchmarkArmRow {
 
 export function isSimulated(row: Pick<BenchmarkArmRow, "plannerModelId">): boolean {
   return row.plannerModelId.startsWith(SIMULATED_PREFIX);
+}
+
+/** One gate registry entry for an fc-v1 calc-record-edit task. */
+export function gateEntryFor(
+  task: Pick<BenchmarkTask, "taskId" | "fixtureSeed" | "intent">,
+  stateFile = "doc.csv",
+) {
+  return {
+    id: task.taskId,
+    family: "calc-record-edit",
+    stateFile,
+    spec: { fixtureSeed: task.fixtureSeed, ...task.intent },
+  };
+}
+
+/**
+ * Register one fc-v1 task with the gate, or report it unregistrable. The gate's registry
+ * validation is not loosened here (gate integrity, Tier 2): a rejection becomes its own
+ * outcome for the arm row instead.
+ */
+export function registerTask(
+  task: Pick<BenchmarkTask, "taskId" | "fixtureSeed" | "intent">,
+):
+  | { readonly ok: true; readonly registry: TaskRegistry }
+  | { readonly ok: false; readonly reason: string } {
+  try {
+    return { ok: true, registry: buildRegistry([gateEntryFor(task)]) };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
 }

@@ -42,6 +42,8 @@ export interface BenchmarkArmRow {
   readonly gate: {
     readonly called: boolean;
     readonly verdict: "verified" | "refuted" | "uncertain" | null;
+    /** The gate registry rejected the task spec: no decision exists (TIF-274). */
+    readonly unregistrable?: true;
   } | null;
   readonly accepted: boolean;
   readonly persistedSha256: string | null;
@@ -81,6 +83,16 @@ export interface ArmCounts {
   readonly ungradable: number;
   /** Correct documents whose DONE was not accepted (claim missing or gate refused). */
   readonly correctNotAccepted: number;
+  /**
+   * TIF-274: trials whose task the gate registry rejected (no gate decision exists). They
+   * stay in `trials` (the denominator) and are never accepted; reported as their own row,
+   * with how many claimed done and how many of those the grader failed.
+   */
+  readonly unregistrable: {
+    readonly trials: number;
+    readonly claimedDone: number;
+    readonly graderFailClaimedDone: number;
+  };
   /** (false DONE accepted + accepted ungradable) / accepted. */
   readonly falseAcceptRate: Rate;
   /** Same numerator over all trials. */
@@ -206,6 +218,9 @@ export function checkBenchmark(
     if (row.gate !== null && !row.gate.called && row.gate.verdict !== null) {
       errors.push(`${row.trialKey}: gate verdict recorded without a gate call`);
     }
+    if (row.gate?.unregistrable === true && (row.gate.called || row.gate.verdict !== null)) {
+      errors.push(`${row.trialKey}: an unregistrable task cannot have a gate call or verdict`);
+    }
     if (row.accepted !== expectedAccepted(row)) {
       errors.push(
         `${row.trialKey}: accepted=${row.accepted} contradicts claim=${row.claim} and gate`,
@@ -251,6 +266,7 @@ export function checkBenchmark(
     let graderFail = 0;
     let ungradable = 0;
     let correctNotAccepted = 0;
+    const unregistrable = { trials: 0, claimedDone: 0, graderFailClaimedDone: 0 };
     const perFaultClass: Record<
       string,
       { trials: number; accepted: number; falseDoneAccepted: number; acceptedUngradable: number }
@@ -281,6 +297,13 @@ export function checkBenchmark(
           cls.acceptedUngradable++;
         }
       } else if (status === "pass") correctNotAccepted++;
+      if (row.gate?.unregistrable === true) {
+        unregistrable.trials++;
+        if (row.claim === "done") {
+          unregistrable.claimedDone++;
+          if (status === "fail") unregistrable.graderFailClaimedDone++;
+        }
+      }
     }
     const bad = falseDoneAccepted + acceptedUngradable;
     counts.push({
@@ -295,6 +318,7 @@ export function checkBenchmark(
       graderFail,
       ungradable,
       correctNotAccepted,
+      unregistrable,
       falseAcceptRate: rate(bad, accepted),
       falseAcceptPerTrial: rate(bad, rows.length),
       acceptedSuccessRate: rate(acceptedPass, rows.length),

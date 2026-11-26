@@ -12,7 +12,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { benchmarkArmRowSchema } from "../../schemas/benchmark-ledger.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import { checkBenchmark, expectedAccepted } from "../../src/benchmark/check.ts";
-import { type GatedTrialRecord, gatedArmRow, isSimulated } from "../../src/benchmark/gated-rows.ts";
+import {
+  type GatedTrialRecord,
+  gatedArmRow,
+  isSimulated,
+  registerTask,
+} from "../../src/benchmark/gated-rows.ts";
 import { grade } from "../../src/benchmark/grade/grade.ts";
 import { gradeRow } from "../../src/benchmark/grade/row.ts";
 import type { BenchmarkTask } from "../../src/benchmark/taskset.ts";
@@ -267,6 +272,33 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
     return `${rows.map((r) => r.join(",")).join("\n")}\n`;
   }
 
+  function baseRecord(task: BenchmarkTask, doc: string): Omit<GatedTrialRecord, "outcome"> {
+    return {
+      task,
+      trialKey: `r1-${task.taskId}`,
+      agentClaim: "done",
+      instruction: task.instruction,
+      persisted: new TextEncoder().encode(doc),
+      plannerModelId: "simulated:scripted",
+      outputCeiling: null,
+      cost: { modelUsd: null, wallClockS: null, vmS: null },
+    };
+  }
+
+  function gradeOf(task: BenchmarkTask, doc: string, trialKey: string) {
+    return gradeRow(
+      trialKey,
+      task.taskId,
+      grade({
+        fixtureCsv: readFileSync(join(BUNDLE, task.fixtureFile)),
+        fixtureSha256: task.fixtureSha256,
+        persisted: { format: "csv", bytes: new TextEncoder().encode(doc) },
+        intent: task.intent,
+        columnTypes: task.columnTypes,
+      }),
+    );
+  }
+
   it("honest, unsaved and uncaptured trials map to rows the grader and check agree with", {
     timeout: 60_000,
   }, async () => {
@@ -331,20 +363,69 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
     ).toBe(false);
   });
 
-  it("finding: the gate registry refuses fc-v1's invalid-target tasks (they cannot be gated as specified)", () => {
+  it("an invalid-target task is unregistrable: its own outcome, graded, kept in R1's denominator", {
+    timeout: 60_000,
+  }, async () => {
     const invalid = TASKS.filter((t) => t.faultClass === "invalid-target");
     expect(invalid).toHaveLength(10);
     for (const task of invalid) {
-      expect(() =>
-        buildRegistry([
-          {
-            id: task.taskId,
-            family: "calc-record-edit",
-            stateFile: "doc.csv",
-            spec: { fixtureSeed: task.fixtureSeed, ...task.intent },
-          },
-        ]),
-      ).toThrow(/spec does not target the fixture/);
+      const reg = registerTask(task);
+      expect(reg.ok, task.taskId).toBe(false);
+      if (!reg.ok) expect(reg.reason).toMatch(/spec does not target the fixture/);
     }
+    // One honest gated trial and one unregistrable trial whose agent claims done anyway.
+    const ok = TASKS.find((t) => t.faultClass === "none") as BenchmarkTask;
+    const bad = invalid[0] as BenchmarkTask;
+    const okOutcome = await gatedTrial(ok, honest(ok));
+    const reg = registerTask(bad);
+    if (reg.ok) throw new Error("expected unregistrable");
+    const pristine = generateFixture(bad.fixtureSeed).csv;
+    const rows = [
+      gatedArmRow({ ...baseRecord(ok, honest(ok)), outcome: okOutcome }),
+      gatedArmRow({
+        ...baseRecord(bad, pristine),
+        outcome: { status: "unregistrable", reason: reg.reason },
+      }),
+    ];
+    expect(rows[1]).toMatchObject({
+      claim: "done",
+      gate: { called: false, verdict: null, unregistrable: true },
+      accepted: false,
+      cause: { kind: "oracle", detail: "unregistrable: the gate registry rejected the task spec" },
+    });
+    for (const row of rows) {
+      expect(validateSchema(row, benchmarkArmRowSchema)).toEqual([]);
+      expect(expectedAccepted(row)).toBe(row.accepted);
+    }
+    const grades = [
+      gradeOf(ok, honest(ok), rows[0]?.trialKey as string),
+      gradeOf(bad, pristine, rows[1]?.trialKey as string),
+    ];
+    expect(grades[1]?.status).toBe("fail");
+    const result = checkBenchmark(rows, grades, { expectTrials: { "myco-gate": 2 } });
+    expect(result.errors).toEqual([]);
+    expect(result.arms[0]).toMatchObject({
+      trials: 2,
+      accepted: 1,
+      falseDoneAccepted: 0,
+      unregistrable: { trials: 1, claimedDone: 1, graderFailClaimedDone: 1 },
+    });
+    expect(result.r1?.falseAcceptPerTrial.denominator).toBe(2);
+    expect(result.r1?.pass).toBe(true);
+  });
+
+  it("the check refuses an unregistrable row that claims a gate call or verdict", () => {
+    const bad = TASKS.find((t) => t.faultClass === "invalid-target") as BenchmarkTask;
+    const row = gatedArmRow({
+      ...baseRecord(bad, "x"),
+      outcome: { status: "unregistrable", reason: "r" },
+    });
+    const forged = {
+      ...row,
+      gate: { called: true, verdict: "refuted" as const, unregistrable: true as const },
+    };
+    const g = gradeOf(bad, "x", row.trialKey);
+    const r = checkBenchmark([forged], [g], { expectTrials: { "myco-gate": 1 } });
+    expect(r.errors.join("\n")).toMatch(/unregistrable task cannot have a gate call or verdict/);
   });
 });
