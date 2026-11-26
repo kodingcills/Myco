@@ -57,8 +57,10 @@ describe("benchmark grader independence (TIF-267)", () => {
   });
 
   it("never names a gate module or a process launcher", () => {
+    // `state/` and `myco-state`: capability track I's live-state tools (src/state/) are an
+    // agent aid, never a grading input.
     const forbidden =
-      /uno-verifier|filepersist|tasks\/(intent|fixture|calc-record-edit)|core\/verify|child_process|soffice|execFile|spawn\(/;
+      /uno-verifier|filepersist|tasks\/(intent|fixture|calc-record-edit)|core\/verify|child_process|soffice|execFile|spawn\(|state\/|myco-state/;
     for (const file of graderFiles) {
       const code = readFileSync(file, "utf8").replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, "");
       expect(code, relative(ROOT, file)).not.toMatch(forbidden);
@@ -98,14 +100,31 @@ describe("benchmark grader independence (TIF-267)", () => {
   });
 });
 
-describe("the corrections A/B analysis never reaches gate code (#547 round 1, D7)", () => {
+describe("the corrections A/B analysis never reaches gate-side code (#547 D7; O1 follow-up)", () => {
   const AB = join(ROOT, "src", "m2", "corrections-ab.ts");
+  const BENCH = join(ROOT, "src", "benchmark");
+  /** The A/B module and the shared binding path it imports (R1's check binds through it too). */
+  const ENTRIES = [
+    AB,
+    join(BENCH, "check.ts"),
+    join(BENCH, "taskset-binding.ts"),
+    join(BENCH, "published-tasks.ts"),
+  ];
   const GATE = join(ROOT, "src", "gate");
   const VERIFY = join(ROOT, "src", "verify");
-  /** The guard itself: every module the walk reaches under src/gate/ or src/verify/. */
+  /** The task generators the gate also imports (O1), and the module that runs them. */
+  const TASKS_DIR = join(ROOT, "src", "tasks");
+  const GENERATOR = join(BENCH, "taskset.ts");
+  /** The guard itself: every module the walk reaches that is gate-side. */
   const gateSide = (entry: string) =>
     [...walk(entry).keys()]
-      .filter((m) => m.startsWith(`${GATE}/`) || m.startsWith(`${VERIFY}/`))
+      .filter(
+        (m) =>
+          m.startsWith(`${GATE}/`) ||
+          m.startsWith(`${VERIFY}/`) ||
+          m.startsWith(`${TASKS_DIR}/`) ||
+          m === GENERATOR,
+      )
       .map((m) => relative(ROOT, m));
   /** Every child_process import the walk reaches. */
   const launchers = (entry: string) =>
@@ -115,13 +134,21 @@ describe("the corrections A/B analysis never reaches gate code (#547 round 1, D7
         .map((s) => `${relative(ROOT, mod)} imports ${s}`),
     );
 
-  it("its transitive imports stay out of src/gate/ and src/verify/, and launch no process", () => {
-    expect([...walk(AB).keys()]).toContain(join(GRADER, "row.ts"));
-    expect(gateSide(AB)).toEqual([]);
-    expect(launchers(AB)).toEqual([]);
+  it("its transitive imports stay out of src/gate/, src/verify/, src/tasks/ and the task generator, and launch no process", () => {
+    expect([...walk(AB).keys()]).toEqual(
+      expect.arrayContaining([
+        join(GRADER, "row.ts"),
+        join(BENCH, "taskset-binding.ts"),
+        join(BENCH, "published-tasks.ts"),
+      ]),
+    );
+    for (const entry of ENTRIES) {
+      expect(gateSide(entry), relative(ROOT, entry)).toEqual([]);
+      expect(launchers(entry), relative(ROOT, entry)).toEqual([]);
+    }
   });
 
-  it("the check bites: the same walk and predicates report a planted gate, verify or launcher import (#547 R2-D6)", () => {
+  it("the check bites: the same walk and predicates report each planted gate-side or launcher import (#547 R2-D6)", () => {
     const dir = mkdtempSync(join(tmpdir(), "ab-bite-"));
     try {
       const planted = join(dir, "planted.ts");
@@ -131,10 +158,18 @@ describe("the corrections A/B analysis never reaches gate code (#547 round 1, D7
         `import { x } from "${rel(join(GRADER, "row.ts"))}";\n` +
           `import "${rel(join(GATE, "corrections.ts"))}";\n` +
           `import "${rel(join(VERIFY, "uno-verifier.ts"))}";\n` +
-          `import "node:child_process";\nexport { x };\n`,
+          `import type { T } from "${rel(join(TASKS_DIR, "intent.ts"))}";\n` +
+          `import { buildTaskSet } from "${rel(GENERATOR)}";\n` +
+          `import "node:child_process";\nexport { x, buildTaskSet };\nexport type { T };\n`,
       );
       expect(gateSide(planted)).toEqual(
-        expect.arrayContaining(["src/gate/corrections.ts", "src/verify/uno-verifier.ts"]),
+        expect.arrayContaining([
+          "src/gate/corrections.ts",
+          "src/verify/uno-verifier.ts",
+          "src/tasks/intent.ts",
+          "src/tasks/fixture.ts",
+          "src/benchmark/taskset.ts",
+        ]),
       );
       expect(launchers(planted)).toContain(`${relative(ROOT, planted)} imports node:child_process`);
     } finally {
