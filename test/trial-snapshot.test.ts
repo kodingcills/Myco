@@ -247,10 +247,16 @@ describe("the drivers use it", () => {
     const byStatus = Object.fromEntries(
       echoed.map((row) => [row.match(/\\"status\\": \\"([a-z-]+)\\"/)?.[1], row]),
     );
-    expect(byStatus["param-error"]).toMatch(/\\"snapshot\\": null\}/);
-    expect(byStatus["reset-failed"]).toMatch(/\\"snapshot\\": null\}/);
-    expect(byStatus["deploy-failed"]).toMatch(/\\"snapshot\\": \\"\$TS_READY\\"\}/);
-    expect(byStatus["token-failed"]).toMatch(/\\"snapshot\\": \\"\$TS_READY\\"\}/);
+    // #546 round 1 nit 1: every echoed row also carries the reset boot record. No reset ran on
+    // param-error / reset-failed, so it is forced null; the others carry this trial's TS_BOOT.
+    expect(byStatus["param-error"]).toMatch(/\\"snapshot\\": null, \$\(ts_boot_json ""\)\}/);
+    expect(byStatus["reset-failed"]).toMatch(/\\"snapshot\\": null, \$\(ts_boot_json ""\)\}/);
+    expect(byStatus["deploy-failed"]).toMatch(
+      /\\"snapshot\\": \\"\$TS_READY\\", \$\(ts_boot_json "\$TS_BOOT"\)\}/,
+    );
+    expect(byStatus["token-failed"]).toMatch(
+      /\\"snapshot\\": \\"\$TS_READY\\", \$\(ts_boot_json "\$TS_BOOT"\)\}/,
+    );
   });
 
   it("m1-corrupt-suite.sh passes the ready snapshot on every row it records", () => {
@@ -475,5 +481,96 @@ describe("ts_pin with a deleted pin", () => {
         '{"snapshot": "trial-base-v2"}\n{"snapshot": "clean-base"}\n',
       );
     expect(ts('ts_pin "$OUT" "$OUT/trials.jsonl" trial-base-v2', {}, mixed).status).toBe(11);
+  });
+});
+
+// #546 round 1: ts_boot_json, and the three surviving mutants v07, v08, v10.
+describe("reset boot record, round 2", () => {
+  it("ts_boot_json prints the record as JSON members, null for anything malformed", () => {
+    const j = (v: string) => JSON.parse(`{${ts(`ts_boot_json "${v}"`).stdout}}`);
+    expect(j("cold:143:291:205:2")).toEqual({
+      resetBootClass: "cold",
+      resetFirstSshS: 143,
+      resetGuestCpuFirstSshS: 291,
+      resetTotalS: 205,
+      resetBootAttempts: 2,
+    });
+    for (const bad of ["", "cold:1:2", "warm:1:2:3:4", "cold:a:2:3:4"]) {
+      expect(j(bad)).toEqual({
+        resetBootClass: null,
+        resetFirstSshS: null,
+        resetGuestCpuFirstSshS: null,
+        resetTotalS: null,
+        resetBootAttempts: null,
+      });
+    }
+  });
+
+  it("v07: TS_BOOT stays empty when the reset printed a boot line but no timing line", () => {
+    const out = mkdtempSync(join(tmpdir(), "myco-ts-boot-nototal-"));
+    const p = join(out, "reset.sh");
+    writeFileSync(
+      p,
+      `#!/bin/bash\necho "reset-trial-vm: boot class=cold first_ssh_s=143 guest_cpu_first_ssh_s=291 attempts=1"\necho "reset-trial-vm: ready on 'trial-base-v2'"\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    expect(
+      ts('ts_reset trial-base-v2 "$OUT/p.log"; echo "boot=$TS_BOOT"', { MYCO_RESET_SCRIPT: p })
+        .stdout,
+    ).toBe("boot=");
+  });
+
+  const corrupt = (boot: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-corrupt-boot2-"));
+    const manifest = join(dir, "params.json");
+    writeFileSync(manifest, JSON.stringify(corruptionPlan()));
+    return JSON.parse(
+      spawnSync(
+        "python3",
+        [
+          join(ROOT, "scripts", "m1-corrupt-suite-record.py"),
+          "--record",
+          manifest,
+          "0",
+          "deploy-failed",
+          `--reset-boot=${boot}`,
+        ],
+        {
+          encoding: "utf8",
+        },
+      ).stdout,
+    );
+  };
+
+  it("v08: the corrupt-suite writer refuses an unknown class", () => {
+    expect(corrupt("warm:1:2:3:4").resetBootClass).toBeNull();
+    expect(corrupt("fast:13:4:26:1").resetBootClass).toBe("fast");
+  });
+
+  it("v10: the writers refuse non-digit measurements", () => {
+    expect(corrupt("cold:a:291:205:1").resetBootClass).toBeNull();
+    const dir = mkdtempSync(join(tmpdir(), "myco-sweep-boot2-"));
+    const fp = join(dir, "fp.json");
+    writeFileSync(fp, "{}");
+    const row = JSON.parse(
+      spawnSync(
+        "python3",
+        [
+          join(ROOT, "scripts", "m1-sweep-record.py"),
+          "3",
+          "seed-b",
+          "EMP-0001",
+          "qty",
+          "1",
+          join(dir, "none.json"),
+          fp,
+          "yes",
+          "trial-base-v2",
+          "cold:143:2x1:205:1",
+        ],
+        { encoding: "utf8" },
+      ).stdout,
+    );
+    expect(row.resetBootClass).toBeNull();
   });
 });

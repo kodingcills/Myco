@@ -83,6 +83,12 @@ import {
 
 /** Guest load gate: no trial starts at host 1-minute load >= this (eval-runbook §7.3). */
 export const LOAD_GATE = 10;
+/**
+ * TIF-98 cold-boot floor: a trial reset is a full cold boot only when the guest had used at
+ * least this many CPU seconds by its first ssh answer (measured: fast 4-23 s, cold 272-312 s;
+ * scripts/reset-trial-vm.sh's default and floor).
+ */
+export const COLD_MIN_GUEST_CPU = 100;
 /** R1: "about 100 gated trials" (M2 plan §2.1). */
 export const R1_MIN_TRIALS = 100;
 /** R2: 30 paired trials (the demo-row count). */
@@ -120,9 +126,9 @@ export interface TrialOps {
   readonly hostLoad1mStart: number;
   readonly harnessClass: string | null;
   readonly faultLanded: boolean | null;
-  /** TIF-98: the trial reset's boot class; absent on packs recorded before the cold-boot check. */
-  readonly resetBootClass?: "cold" | "fast";
-  readonly resetGuestCpuFirstSshS?: number;
+  /** TIF-98: the trial reset's boot class and its guest CPU at the first ssh answer. */
+  readonly resetBootClass: "cold" | "fast";
+  readonly resetGuestCpuFirstSshS: number;
   readonly resetTotalS?: number;
 }
 
@@ -283,8 +289,6 @@ export interface CauseAccounting {
   readonly harness: number;
   readonly byHarnessClass: Readonly<Record<string, number>>;
   readonly maxHostLoad1m: number | null;
-  /** Trial-ops rows with no `resetBootClass` (recorded before the TIF-98 cold-boot check). */
-  readonly bootClassUnrecorded: number;
 }
 
 export interface PackResult {
@@ -611,7 +615,6 @@ export function checkPack(input: PackInput): PackResult {
   const accounting = { nonVerified: 0, agent: 0, oracle: 0, harness: 0 };
   const byHarnessClass: Record<string, number> = {};
   let maxLoad: number | null = null;
-  let bootClassUnrecorded = 0;
   for (const row of armRows) {
     const o = ops.get(row.trialKey);
     if (o === undefined) {
@@ -624,11 +627,16 @@ export function checkPack(input: PackInput): PackResult {
         `${row.trialKey}: started at host 1-minute load ${o.hostLoad1mStart} >= ${LOAD_GATE} (guest load gate)`,
       );
     // TIF-98: only a full cold boot is the shared starting state. A fast boot (the first start
-    // after a UTM configuration write) skips most of Windows' boot work on the same disk.
-    if (o.resetBootClass === undefined) bootClassUnrecorded++;
-    else if (o.resetBootClass !== "cold")
+    // after a UTM configuration write) skips most of Windows' boot work on the same disk. The
+    // class is checked, and recomputed from the recorded guest CPU against the committed
+    // constant, so a row labelled cold with a fast boot's CPU fails too (#546 round 1 D2).
+    if (o.resetBootClass !== "cold")
       errors.push(
         `${row.trialKey}: its reset was a ${o.resetBootClass} boot, not a full cold boot (TIF-98 cold-boot check)`,
+      );
+    else if (o.resetGuestCpuFirstSshS < COLD_MIN_GUEST_CPU)
+      errors.push(
+        `${row.trialKey}: labelled cold but its reset's guest CPU at the first ssh answer was ${o.resetGuestCpuFirstSshS} s < ${COLD_MIN_GUEST_CPU} s (TIF-98 cold-boot check)`,
       );
     const verified = success(row, grades.get(row.trialKey));
     if (!verified) {
@@ -918,7 +926,7 @@ export function checkPack(input: PackInput): PackResult {
     errors,
     manifest,
     benchmark,
-    causes: { ...accounting, byHarnessClass, maxHostLoad1m: maxLoad, bootClassUnrecorded },
+    causes: { ...accounting, byHarnessClass, maxHostLoad1m: maxLoad },
     r1: settle(r1),
     r2: settle(r2),
     r3: settle(r3),

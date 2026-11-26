@@ -117,3 +117,16 @@ ts_reset() {
   fi
   return 0
 }
+
+# ts_boot_json <class:first_ssh_s:guest_cpu_s:total_s:attempts or empty>
+#   The reset boot record as JSON members for a hand-written row, null when absent
+#   (#546 round 1 nit 1: every row carries the keys).
+ts_boot_json() {
+  local v=${1:-} c f g t a
+  IFS=: read -r c f g t a <<< "$v"
+  if [ -n "$v" ] && [[ "$c" =~ ^(cold|fast)$ ]] && [[ "$f$g$t$a" =~ ^[0-9]+$ ]] && [ -n "$a" ]; then
+    printf '"resetBootClass": "%s", "resetFirstSshS": %s, "resetGuestCpuFirstSshS": %s, "resetTotalS": %s, "resetBootAttempts": %s' "$c" "$f" "$g" "$t" "$a"
+  else
+    printf '"resetBootClass": null, "resetFirstSshS": null, "resetGuestCpuFirstSshS": null, "resetTotalS": null, "resetBootAttempts": null'
+  fi
+}

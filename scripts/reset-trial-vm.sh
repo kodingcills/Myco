@@ -163,6 +163,14 @@ GATE=$(gate_script)
 [ -x "$GATE" ] || die "readiness gate not found: '$GATE' (expected the in-repo scripts/wait-guest-ready.sh, or one via MYCO_VM_SCRIPTS). Refusing to skip the boot check."
 COLD_MIN_GUEST_CPU=${MYCO_COLD_MIN_GUEST_CPU:-100}
 [[ "$COLD_MIN_GUEST_CPU" =~ ^[0-9]+$ ]] || die "MYCO_COLD_MIN_GUEST_CPU='$COLD_MIN_GUEST_CPU' is not a whole number of seconds"
+# The override stays inside the measured gap (fast 4-23 s, cold 272-312 s over 37 boots), with a
+# hard floor of 100 s: a lower value could relabel a fast boot as cold (#546 round 1 D2).
+if [ "$COLD_MIN_GUEST_CPU" -lt 100 ] || [ "$COLD_MIN_GUEST_CPU" -gt 271 ]; then
+  die "MYCO_COLD_MIN_GUEST_CPU=$COLD_MIN_GUEST_CPU is outside 100-271 s (the measured gap between fast and cold boots, TIF-98)"
+fi
+# A stop by request after a fast boot waits longer than the initial force-stop: Windows took
+# 18 s in pass 4, and a slower shutdown should not turn into a force-stopped retry (round 1 nit 3).
+FAST_STOP_TIMEOUT=${MYCO_FAST_STOP_TIMEOUT:-120}
 GATE_ERR=$(mktemp "${TMPDIR:-/tmp}/reset-gate.XXXXXX")
 trap 'rm -f "$GATE_ERR"; if [ "$RESET_OWNS_LOCK" = 1 ]; then vm_lock_release; fi' EXIT
 BOOT_ATTEMPT=0
@@ -190,7 +198,7 @@ while :; do
   fi
   echo "reset-trial-vm: fast boot (guest CPU ${FIRST_SSH_CPU}s at the first ssh answer, under ${COLD_MIN_GUEST_CPU}s): not a full cold boot (a UTM config write just before a reset does this, TIF-98); stopping by request and booting once more" >&2
   "$VM_SCRIPTS/vm.sh" stop >/dev/null 2>&1 || true
-  for _ in $(seq 1 "$STOP_TIMEOUT"); do [ "$(status)" = stopped ] && break; sleep 1; done
+  for _ in $(seq 1 "$FAST_STOP_TIMEOUT"); do [ "$(status)" = stopped ] && break; sleep 1; done
   if [ "$(status)" != stopped ]; then
     "$VM_SCRIPTS/vm.sh" kill >/dev/null 2>&1 || true
     for _ in $(seq 1 "$STOP_TIMEOUT"); do [ "$(status)" = stopped ] && break; sleep 1; done

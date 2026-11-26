@@ -194,7 +194,7 @@ describe("row7-compare null snapshots and boot class", () => {
   it("accepts cold rows and null on an unverified row, and counts rows recorded before the check", () => {
     expect(
       call("boot", {
-        0: { resetBootClass: "cold", status: "verified" },
+        0: { resetBootClass: "cold", resetGuestCpuFirstSshS: 280, status: "verified" },
         1: { resetBootClass: null, status: "reset-failed" },
         2: { status: "verified" },
         3: { status: "refuted" },
@@ -208,5 +208,35 @@ describe("row7-compare null snapshots and boot class", () => {
     expect(body).toContain("boots = check_boot_class(v3)");
     expect(body.indexOf("check_boot_class(v3)")).toBeLessThan(body.indexOf("pairs = Counter()"));
     expect(body).toContain("boot class unrecorded on {boots['bootClassUnrecorded']} Myco rows");
+  });
+});
+
+// #546 round 1 D2: the join recomputes the class from the recorded CPU.
+describe("row7-compare boot class recomputed from CPU", () => {
+  const boot = (myco: Record<number, object>) =>
+    py(
+      [
+        `myco = {int(k): v for k, v in json.loads(${JSON.stringify(JSON.stringify(myco))}).items()}`,
+        "try:",
+        "    print(json.dumps(row7.check_boot_class(myco)))",
+        "except SystemExit as e:",
+        "    print(json.dumps(str(e)))",
+      ].join("\n"),
+    );
+
+  it("refuses a fast boot labelled cold, and a cold label with no CPU", () => {
+    expect(
+      boot({ 0: { resetBootClass: "cold", resetGuestCpuFirstSshS: 4, status: "verified" } }),
+    ).toContain("labelled cold");
+    expect(boot({ 0: { resetBootClass: "cold", status: "refuted" } })).toContain("labelled cold");
+  });
+
+  it("puts the floor at exactly 100 s", () => {
+    expect(boot({ 0: { resetBootClass: "cold", resetGuestCpuFirstSshS: 100 } })).toEqual({
+      bootClassUnrecorded: 0,
+    });
+    expect(boot({ 0: { resetBootClass: "cold", resetGuestCpuFirstSshS: 99 } })).toContain(
+      "labelled cold",
+    );
   });
 });

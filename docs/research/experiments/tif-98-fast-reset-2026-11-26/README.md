@@ -60,15 +60,18 @@ the TPM or firmware variables UTM keeps beside the disk.
 
 `summary.md` comes from `python3 scripts/reset-boot-summary.py $(cat summary-inputs.txt)`.
 It covers every boot in this directory, and every committed reset log from 2026-11-26 (the
-#494 build runs, the run-3 bench, the parity run and TIF-218):
+#494 build runs, the run-3 bench, the parity run, TIF-218 and the #529 default-switch proofs):
 
 | class | boots | first ssh s | guest CPU at first ssh s |
 |---|---|---|---|
-| cold | 24 | 122-169 | 272-312 |
-| fast | 11 | 13-19 | 4-23 |
+| cold | 25 | 122-169 | 272-312 |
+| fast | 12 | 13-19 | 4-23 |
 
 The guard calls a boot cold when its guest CPU at the first ssh answer is at least **100 s**.
-That is 77 s above the highest fast boot and 172 s below the lowest cold one.
+That is 77 s above the highest fast boot and 172 s below the lowest cold one. The override
+(`MYCO_COLD_MIN_GUEST_CPU`) is bounded to 100-271 s, so it can never relabel a fast boot as cold,
+and the R1 evidence check and `row7-compare.py` recompute the class from the recorded guest CPU
+against the same 100 s.
 
 Observation, no claim beyond it: two build steps were fast boots. Build run 3's step 1 (right
 after `guest-egress.sh allow`) and its boot-in-place after `deny` both followed config writes.

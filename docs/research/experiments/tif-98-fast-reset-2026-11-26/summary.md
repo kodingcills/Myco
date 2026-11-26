@@ -35,10 +35,12 @@
 | ../tif-218-load-gate-2026-11-26/reset-v2-action-2.log | 1 | 169 | 289 | 188 | cold |
 | ../tif-218-load-gate-2026-11-26/reset-v2-action-3.log | 1 | 158 | 286 | 175 | cold |
 | ../tif-218-load-gate-2026-11-26/reset-v2-idle.log | 1 | 158 | 295 | 177 | cold |
+| ../tif-98-default-switch-2026-11-26/01-default-reset.log | 1 | 132 | 276 | 151 | cold |
+| ../tif-98-default-switch-2026-11-26/05-round2-ts-reset.log | 1 | 14 | 4 | 27 | fast |
 
 Threshold: cold when guest CPU at the first ssh answer >= 100 s.
 
 | class | boots | first ssh s min-max | guest CPU s min-max |
 |---|---|---|---|
-| cold | 24 | 122-169 | 272-312 |
-| fast | 11 | 13-19 | 4-23 |
+| cold | 25 | 122-169 | 272-312 |
+| fast | 12 | 13-19 | 4-23 |

@@ -74,6 +74,8 @@ ESCAPE_KEYS = ("esc", "escape")
 BASE_FAMILY = {"clean-base": "clean-base", "cua-c1-base": "clean-base", "trial-base-v2": "trial-base-v2"}
 BASELINE_SNAPSHOT = "cua-c1-base"  # src/baseline/c1-trial.ts RESET_SNAPSHOT
 LEGACY_MYCO_SNAPSHOT = "clean-base"
+# TIF-98 cold-boot floor (scripts/reset-trial-vm.sh default and floor; src/m2/evidence.ts).
+COLD_MIN_GUEST_CPU = 100
 
 
 def check_same_base(myco: dict, baseline: dict) -> dict:
@@ -123,6 +125,14 @@ def check_boot_class(myco: dict) -> dict:
             continue
         if cls != "cold":
             raise SystemExit(f"index {i}: the Myco row's reset was a {cls!r} boot, not a full cold boot (TIF-98)")
+        # Recompute from the recorded CPU against the committed floor, so a fast boot labelled
+        # cold (or a cold label with no measurement) cannot pass (#546 round 1 D2).
+        cpu = row.get("resetGuestCpuFirstSshS")
+        if not isinstance(cpu, int) or cpu < COLD_MIN_GUEST_CPU:
+            raise SystemExit(
+                f"index {i}: labelled cold but its reset's guest CPU at the first ssh answer is {cpu!r}, "
+                f"not >= {COLD_MIN_GUEST_CPU} s (TIF-98)"
+            )
     return {"bootClassUnrecorded": len(unrecorded)}
 
 

@@ -23,3 +23,5 @@ pass4-guard/02-guarded-reset.log
 ../tif-218-load-gate-2026-11-26/reset-v2-action-2.log
 ../tif-218-load-gate-2026-11-26/reset-v2-action-3.log
 ../tif-218-load-gate-2026-11-26/reset-v2-idle.log
+../tif-98-default-switch-2026-11-26/01-default-reset.log
+../tif-98-default-switch-2026-11-26/05-round2-ts-reset.log
