@@ -63,12 +63,12 @@ describe("capability spec part 2: structure", () => {
     for (const part of REQUIRED_PARTS) expect(text, part).toContain(part);
   });
 
-  it.each(["N", "P", "R"])("capability %s's bar is an exact McNemar test", (id) => {
+  it.each(["N", "P", "R", "T", "V"])("capability %s's bar is an exact McNemar test", (id) => {
     expect(barOf(section(id))).toMatch(/Exact one-sided McNemar.*p ≤ 0\.05/s);
     expect(barOf(section(id))).toContain("at least 5 discordant");
   });
 
-  it.each(["O", "V"])("capability %s's bar has a non-inferiority component", (id) => {
+  it.each(["O", "U"])("capability %s's bar has a non-inferiority component", (id) => {
     expect(barOf(section(id))).toContain("non-inferior");
   });
 
@@ -165,6 +165,26 @@ describe("capability spec part 2: binding content per track", () => {
   });
 });
 
+describe("capability spec part 2: builder alignment", () => {
+  it.each([
+    ["N", "#528"],
+    ["P", "#535"],
+    ["Q", "#533"],
+    ["R", "#532"],
+    ["S", "#536"],
+    ["T", "#537"],
+    ["U", "#531"],
+    ["V", "#534"],
+  ])("capability %s aligns with builder PR %s", (id, pr) => {
+    expect(section(id)).toContain(`**Builder alignment (${pr}).**`);
+  });
+
+  it("Q adopts #533's 300-case tamper battery and keeps the property bar", () => {
+    expect(section("Q")).toContain("at least **300** cases");
+    expect(section("Q")).toContain("this spec keeps the property bar as Q's acceptance bar");
+  });
+});
+
 describe("capability spec part 2: zero-event bound table", () => {
   const rows = [...RAW.matchAll(/^ {2}\| (\d+) \| (0\.\d{4}) \|$/gm)];
 
@@ -182,7 +202,7 @@ describe("capability spec part 2: zero-event bound table", () => {
   it("every bound quoted in a bar matches its row", () => {
     const table = new Map(rows.map(([, n, b]) => [Number(n), b]));
     expect(barOf(section("O"))).toContain(`zero-event bound ${table.get(60)}`);
-    expect(barOf(section("U"))).toContain(`zero-event bound ${table.get(500)}`);
+    expect(barOf(section("U"))).toContain(`zero- event bound ${table.get(200)}`);
   });
 });
 
