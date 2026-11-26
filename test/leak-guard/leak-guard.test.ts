@@ -113,7 +113,7 @@ describe("leak guard: the repo and every writer are clean (CI gate, fail closed)
       return p;
     });
     expect(formatFindings(result.findings)).toBe("");
-    expect(result.producers).toEqual(["episode-export", "dataset-export"]);
+    expect(result.producers).toEqual(["episode-export", "dataset-export", "outward-helper"]);
     for (const name of result.producers) expect(counts.get(name) ?? 0).toBeGreaterThan(0);
   });
 });

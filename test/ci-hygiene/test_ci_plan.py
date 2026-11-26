@@ -282,6 +282,7 @@ SMOKE_PINNED = (
     "test/oracle-selftest/selftest.test.ts",
     "test/leak-guard/leak-guard.test.ts",
     "test/leak-guard/detect.property.test.ts",
+    "test/leak-guard/routing.test.ts",
 )
 
 

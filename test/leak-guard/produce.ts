@@ -27,6 +27,7 @@ import { EpisodeRecorder } from "../../src/episode/recorder.ts";
 import { EpisodeStore } from "../../src/episode/store.ts";
 import type { Identity } from "../../src/leak-guard/detect.ts";
 import { type Finding, scanDir, scanLog } from "../../src/leak-guard/scan.ts";
+import { id, oneOf, text, writeOutward, writeOutwardBlob } from "../../src/leak-guard/serialize.ts";
 import { draft, HOST } from "../episode/helpers.ts";
 
 export interface Produced {
@@ -159,7 +160,36 @@ const datasetExport: Producer = {
   },
 };
 
-export const PRODUCERS: readonly Producer[] = [episodeExport, datasetExport];
+/**
+ * The shared helper itself (src/leak-guard/serialize.ts), fed agent-style free text that
+ * holds this machine's own repo path: the closed output must carry only its digest.
+ */
+const outwardHelper: Producer = {
+  name: "outward-helper",
+  run(scratch) {
+    const out = join(scratch, "bundle");
+    const format = {
+      name: "leak-guard-fixture",
+      schema: {
+        tag: "myco.leak-guard.fixture/1",
+        fields: { "$.id": id, "$.kind": oneOf("note"), "$.text": text },
+      },
+    };
+    writeOutward(join(out, "bundle.json"), format, {
+      id: "fixture-1",
+      kind: "note",
+      text: `agent typed: cd ${scratch} && ls ${import.meta.dirname}`,
+    });
+    const ref = writeOutwardBlob(
+      join(out, "blobs"),
+      new TextEncoder().encode("id,v\nA,1\n"),
+      "csv",
+    );
+    return { outDir: out, log: `wrote bundle.json and ${ref.file}` };
+  },
+};
+
+export const PRODUCERS: readonly Producer[] = [episodeExport, datasetExport, outwardHelper];
 
 export interface ProducerScan {
   readonly findings: Finding[];
