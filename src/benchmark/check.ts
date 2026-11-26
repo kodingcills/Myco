@@ -55,6 +55,12 @@ export interface BenchmarkArmRow {
   };
 }
 
+/**
+ * What the cost figures are: estimates from token counts at frozen per-token rates, not
+ * billed dollars (trials run on the Claude subscription; $0 Anthropic API).
+ */
+export const COST_BASIS = "token-derived estimate at frozen rates; not billed USD" as const;
+
 /** A count with its denominator and a Wilson 95% interval (null when n = 0). */
 export interface Rate {
   readonly numerator: number;
@@ -94,14 +100,18 @@ export interface ArmCounts {
     readonly graderFailClaimedDone: number;
   };
   /**
-   * Model cost per verified task: the arm's total `cost.modelUsd` over every trial, divided
-   * by the trials whose DONE was accepted AND graded pass by the independent grader. Measured
-   * rows only: if any trial's cost is unmeasured (null) the metric is null and `reason` says
-   * so (an unmeasured cost is never 0, R7); likewise with no verified task.
+   * ESTIMATED model cost per verified task: the arm's total `cost.modelUsd` over every trial,
+   * divided by the trials whose DONE was accepted AND graded pass by the independent grader.
+   * `cost.modelUsd` is token-derived at frozen rates, never a bill: trials run on the Claude
+   * subscription ($0 Anthropic API, Tiffany 2026-11-26 05:19 ET), so `basis` says so in the
+   * JSON itself. Measured rows only: if any trial's cost is unmeasured (null) the metric is
+   * null and `reason` says so (an unmeasured cost is never 0, R7); likewise with no verified
+   * task.
    */
   readonly costPerVerifiedTask: {
-    readonly usd: number | null;
-    readonly totalModelUsd: number | null;
+    readonly basis: typeof COST_BASIS;
+    readonly estimatedUsd: number | null;
+    readonly estimatedTotalModelUsd: number | null;
     readonly verifiedTasks: number;
     readonly unmeasuredTrials: number;
     readonly reason: string | null;
@@ -303,6 +313,15 @@ export function checkBenchmark(
         `${row.trialKey}: only an invalid-target task can be unregistrable (got ${row.faultClass})`,
       );
     }
+    // The other direction (#509 round 1): the gate's registry rejects every fc-v1
+    // invalid-target spec, so a gated arm row on one claims a gate decision that cannot exist.
+    if (
+      row.arm === "myco-gate" &&
+      row.faultClass === "invalid-target" &&
+      row.gate?.unregistrable !== true
+    ) {
+      errors.push(`${row.trialKey}: an invalid-target task cannot be gated (it is unregistrable)`);
+    }
     if (row.arm === "myco-gate" && row.accepted && row.persistedSha256 === null) {
       errors.push(`${row.trialKey}: an accepted gated row must carry its captured bytes' sha256`);
     }
@@ -433,8 +452,9 @@ export function checkBenchmark(
       correctNotAccepted,
       unregistrable,
       costPerVerifiedTask: {
-        usd: costReason === null ? modelUsd / acceptedPass : null,
-        totalModelUsd: unmeasuredTrials === 0 ? modelUsd : null,
+        basis: COST_BASIS,
+        estimatedUsd: costReason === null ? modelUsd / acceptedPass : null,
+        estimatedTotalModelUsd: unmeasuredTrials === 0 ? modelUsd : null,
         verifiedTasks: acceptedPass,
         unmeasuredTrials,
         reason: costReason,

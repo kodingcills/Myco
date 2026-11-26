@@ -218,21 +218,30 @@ harness faults included: accepted, false DONE accepted, accepted ungradable) and
 claimed DONE (those DONEs were never gated). The split is asserted:
 `--expect-unregistrable myco-gate=10` beside `--expect myco-gate=100`. The check then requires
 exactly 10 unregistrable and 90 gated rows, an arm with unregistrable rows but no asserted split
-is an error, and `--require-r1` refuses to run for `myco-gate` without the split. A short run
-therefore fails the check instead of shrinking the denominator. The over-accepted
+is an error, and `--require-r1` refuses to run for `myco-gate` without the split. **The split
+is self-declared here** (pending #506): the numbers come from the operator's command line, so
+a short or relabelled run passes when the operator asserts matching numbers (for example
+`--expect myco-gate=90 --expect-unregistrable myco-gate=0`). The binding to the published task
+set (fc-v1: 100 tasks, 10 invalid-target) is #506's pack check; this check will reuse it once
+#506 merges. Until then a short run fails only when the asserted numbers are right. A gated
+row on an invalid-target task is refused here in both directions. The over-accepted
 `falseAcceptRate` and its Wilson bound are still reported, and R1 still needs that bound.
 This check counts rows; the "about 100" bar itself is the M2 evidence-pack check's
-(`src/m2/evidence.ts`, outer-loop confirmation 2026-11-26 09:45Z): eligible gated trials (a
+(`src/m2/evidence.ts`, pending #506; outer-loop confirmation 2026-11-26 09:45Z): eligible gated trials (a
 usable verdict on a DONE claim, the 03:13Z rule) plus unregistrable trials. A harness fault or
 other ineligible gated trial never counts toward it, so it cannot fill the bar.
 
-**Cost per verified task** (per arm, in the check's output): the arm's total `cost.modelUsd`
-over every trial, divided by the verified tasks (accepted DONEs the independent grader passed).
-It uses measured rows only. If any trial's cost is unmeasured (`null`), `usd` and
-`totalModelUsd` are null and `reason` says how many trials are unmeasured. An unmeasured cost
-is never counted as 0. With no verified task, `usd` is null with that reason. Under
-`--evidence`, simulated rows are refused as above, so the metric is never computed from a dry
-run as evidence. `gatedArmRow`
+**Estimated cost per verified task** (per arm, in the check's output): the arm's total
+`cost.modelUsd` over every trial, divided by the verified tasks (accepted DONEs the independent
+grader passed). It is an **estimate**: `cost.modelUsd` is derived from token counts at frozen
+per-token rates, and trials run on the Claude subscription ($0 Anthropic API, Tiffany
+2026-11-26 05:19 ET), so nothing is billed. The output says so in `basis` ("token-derived
+estimate at frozen rates; not billed USD"), and the fields are `estimatedUsd` and
+`estimatedTotalModelUsd`. It uses measured rows only. If any trial's cost is unmeasured
+(`null`), both are null and `reason` says how many trials are unmeasured. An unmeasured cost is
+never counted as 0. With no verified task, `estimatedUsd` is null with that reason. Under
+`--evidence` the metric is still computed and printed, but a ledger with simulated rows is
+refused (`ok: false`), so a dry run's figure can never pass as evidence. `gatedArmRow`
 (`src/benchmark/gated-rows.ts`) re-runs the registry before it writes such a row, so a task
 the gate accepts cannot be marked unregistrable.
 

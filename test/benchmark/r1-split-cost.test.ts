@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type BenchmarkArmRow, checkBenchmark } from "../../src/benchmark/check.ts";
+import { type BenchmarkArmRow, COST_BASIS, checkBenchmark } from "../../src/benchmark/check.ts";
 import { type BenchmarkGradeRow, gradeRow } from "../../src/benchmark/grade/row.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
@@ -186,8 +186,9 @@ describe("cost per verified task", () => {
     const r = checkBenchmark(rows, grades, opts);
     // 5 trials x $0.50 = $2.50 over 2 verified tasks.
     expect(r.arms[0]?.costPerVerifiedTask).toEqual({
-      usd: 1.25,
-      totalModelUsd: 2.5,
+      basis: COST_BASIS,
+      estimatedUsd: 1.25,
+      estimatedTotalModelUsd: 2.5,
       verifiedTasks: 2,
       unmeasuredTrials: 0,
       reason: null,
@@ -198,7 +199,7 @@ describe("cost per verified task", () => {
     const { rows, grades } = ledger();
     grades[1] = grade(rows[1] as BenchmarkArmRow, "fail");
     const c = checkBenchmark(rows, grades, opts).arms[0]?.costPerVerifiedTask;
-    expect(c).toMatchObject({ usd: 2.5, verifiedTasks: 1 });
+    expect(c).toMatchObject({ estimatedUsd: 2.5, verifiedTasks: 1 });
   });
 
   it("is null, and says so, when any trial's cost is unmeasured (never counted as 0)", () => {
@@ -206,8 +207,9 @@ describe("cost per verified task", () => {
     rows[4] = unreg("u2", { cost: { modelUsd: null, wallClockS: 9, vmS: null } });
     const c = checkBenchmark(rows, grades, opts).arms[0]?.costPerVerifiedTask;
     expect(c).toEqual({
-      usd: null,
-      totalModelUsd: null,
+      basis: COST_BASIS,
+      estimatedUsd: null,
+      estimatedTotalModelUsd: null,
       verifiedTasks: 2,
       unmeasuredTrials: 1,
       reason: "1 of 5 trial(s) have no measured model cost",
@@ -222,8 +224,8 @@ describe("cost per verified task", () => {
       expectUnregistrable: { "myco-gate": 1 },
     }).arms[0]?.costPerVerifiedTask;
     expect(c).toMatchObject({
-      usd: null,
-      totalModelUsd: 1,
+      estimatedUsd: null,
+      estimatedTotalModelUsd: 1,
       verifiedTasks: 0,
       reason: "no verified task (accepted DONE graded pass)",
     });
@@ -245,10 +247,61 @@ describe("cost per verified task", () => {
     const grades = [grade(shell[0] as BenchmarkArmRow), grade(shell[1] as BenchmarkArmRow, "fail")];
     const r = checkBenchmark(shell, grades, { expectTrials: { "hcu+shell": 2 } });
     expect(r.errors).toEqual([]);
-    expect(r.arms[0]?.costPerVerifiedTask.usd).toBeCloseTo(0.6, 12);
+    expect(r.arms[0]?.costPerVerifiedTask.estimatedUsd).toBeCloseTo(0.6, 12);
     const sim = shell.map((s) => ({ ...s, plannerModelId: "simulated:x" }));
     const ev = checkBenchmark(sim, grades, { expectTrials: { "hcu+shell": 2 }, evidence: true });
     expect(ev.ok).toBe(false);
     expect(ev.errors.join("\n")).toMatch(/without evidence provenance/);
+  });
+});
+
+describe("#509 round 1: what the check does and does not bind (D1, D2)", () => {
+  it("labels the cost figures as a token-derived estimate, never billed USD", () => {
+    expect(COST_BASIS).toBe("token-derived estimate at frozen rates; not billed USD");
+    const { rows, grades } = ledger();
+    const r = checkBenchmark(rows, grades, {
+      expectTrials: { "myco-gate": 5 },
+      expectUnregistrable: { "myco-gate": 2 },
+    });
+    const c = r.arms[0]?.costPerVerifiedTask as Record<string, unknown>;
+    expect(c.basis).toBe(COST_BASIS);
+    expect(Object.keys(c)).not.toContain("usd");
+    expect(Object.keys(c)).not.toContain("totalModelUsd");
+  });
+
+  it("refuses a gated row on an invalid-target task", () => {
+    const { rows, grades } = ledger();
+    rows[2] = refuted("g3", { faultClass: "invalid-target" });
+    const r = checkBenchmark(rows, grades, {
+      expectTrials: { "myco-gate": 5 },
+      expectUnregistrable: { "myco-gate": 2 },
+    });
+    expect(r.errors).toContain("g3: an invalid-target task cannot be gated (it is unregistrable)");
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  // The verifier's three short-run probes. The split here is self-declared (pending #506's
+  // task-set binding), so these pass today when the operator asserts matching numbers. They
+  // are pinned so the gap is visible, and flip to failures when the binding is reused.
+  it("KNOWN GAP pending #506: a short run passes when the operator asserts matching numbers", () => {
+    const { rows, grades } = ledger();
+    const gatedOnly = checkBenchmark(rows.slice(0, 3), grades.slice(0, 3), {
+      expectTrials: { "myco-gate": 3 },
+      expectUnregistrable: { "myco-gate": 0 },
+    });
+    expect(gatedOnly.r1?.pass).toBe(true);
+    const oneShort = checkBenchmark(rows.slice(1), grades.slice(1), {
+      expectTrials: { "myco-gate": 4 },
+      expectUnregistrable: { "myco-gate": 2 },
+    });
+    expect(oneShort.r1?.pass).toBe(true);
+    const relabelled = rows.map((r) =>
+      r.trialKey === "u2" ? refuted("u2", { faultClass: "none" }) : r,
+    );
+    const relabel = checkBenchmark(relabelled, grades, {
+      expectTrials: { "myco-gate": 5 },
+      expectUnregistrable: { "myco-gate": 1 },
+    });
+    expect(relabel.errors).toEqual([]);
   });
 });
