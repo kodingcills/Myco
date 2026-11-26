@@ -170,6 +170,7 @@ SMOKE = (
     # TIF-98: the shared leak guard runs on every PR, whatever the plan mode.
     "test/leak-guard/leak-guard.test.ts",
     "test/leak-guard/detect.property.test.ts",
+    "test/leak-guard/routing.test.ts",
 )
 
 # `pnpm test` runs this file on its own in a forked pool, so `vitest run --changed`
