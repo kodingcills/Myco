@@ -5,8 +5,12 @@
  * `--audit`) configure the gate; only `check`'s `--task`, `--run` and `--claim` are the
  * request, and they go through the same parser an MCP call goes through.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { writeDemoEpisodes, writeMultiStepDemoEpisodes } from "../episode/demo.ts";
+import { EpisodeStore, type WriteResult } from "../episode/store.ts";
 import type { GateResult } from "./api.ts";
 import { correctionsEnabled } from "./corrections.ts";
 import { renderDemo, runMockDemo } from "./demo.ts";
@@ -196,12 +200,31 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
         if (str(flags, "--transport") !== "mock") {
           throw new UsageError("demo needs --transport mock (the live path is M2-12)");
         }
-        const out = str(flags, "--out");
-        const opts = out === undefined ? {} : { outDir: out };
         const family = str(flags, "--family") ?? "todo-items";
+        if (family !== "todo-items" && family !== "calc-multi-step") {
+          throw new UsageError(`demo --family must be todo-items or calc-multi-step`);
+        }
+        // One out dir for the demo and its SIMULATED episodes (docs/data/episode-format.md).
+        const outDir = str(flags, "--out") ?? mkdtempSync(join(tmpdir(), "myco-gate-demo-"));
+        const opts = { outDir };
+        // Data capture never changes the demo's outcome: a store error is reported, not raised.
+        const episodes = (write: (store: EpisodeStore) => WriteResult[]) => {
+          try {
+            const results = write(EpisodeStore.open(join(outDir, "episodes"), { simulated: true }));
+            const refused = results.filter((r) => r.status === "refused").length;
+            io.stderr.write(
+              `episodes: ${results.length - refused} simulated episode(s) saved to ${join(outDir, "episodes")}, ${refused} refused\n`,
+            );
+          } catch (error) {
+            io.stderr.write(
+              `episodes: not saved (${error instanceof Error ? error.message : String(error)})\n`,
+            );
+          }
+        };
         if (family === "calc-multi-step") {
           // TIF-270: multi-step Calc with one retry from the last verified checkpoint.
           const report = await runMultiStepMockDemo(opts);
+          episodes((store) => writeMultiStepDemoEpisodes(report, store));
           io.stdout.write(
             flags.has("--json")
               ? `${JSON.stringify(report, null, 2)}\n`
@@ -209,10 +232,8 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
           );
           return report.ok ? 0 : 1;
         }
-        if (family !== "todo-items") {
-          throw new UsageError(`demo --family must be todo-items or calc-multi-step`);
-        }
         const report = await runMockDemo(opts);
+        episodes((store) => writeDemoEpisodes(report, store));
         io.stdout.write(
           flags.has("--json") ? `${JSON.stringify(report, null, 2)}\n` : renderDemo(report),
         );

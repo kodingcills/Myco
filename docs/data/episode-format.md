@@ -1,0 +1,218 @@
+# Episode format: `myco.episode/1`
+
+This is the canonical record of one attempt at one task, saved when the attempt ends.
+Each episode holds the task, the agent's actions, what was observed, the gate's verdict,
+the ground truth, harness metadata and provenance. It is versioned, closed (unknown fields
+are refused), clean by construction, and exportable as a reproducible dataset.
+
+The code lives in:
+
+- `schemas/episode.ts`: the closed JSON Schema for the episode, the store and the dataset manifest.
+- `src/episode/types.ts`: the TypeScript types.
+- `src/episode/validate.ts`: the full contract (`validateEpisode`).
+- `src/episode/clean.ts`: the redaction pass and the refusal scan.
+- `src/episode/recorder.ts`: what a transport records into while an attempt runs.
+- `src/episode/store.ts`: the local store.
+- `src/episode/export.ts` and `src/episode/cli.ts`: export, validate and import.
+- Writer hooks: `src/episode/gated.ts`, `src/episode/dry-run.ts` and `src/episode/demo.ts`.
+
+The CLI is `npx tsx scripts/myco-episodes.ts`.
+
+## 1. Schema
+
+The schema is closed at every level (`additionalProperties: false`), on every action
+variant and every observation variant too. Adding a field, or adding an enum value that old
+readers would refuse, makes a new version (`myco.episode/2`).
+
+| Field | Content |
+|---|---|
+| `schema` | `"myco.episode/1"` |
+| `episodeId` | sha256 of the canonical JSON (sorted keys) of the episode without this field. Episodes are content-addressed. |
+| `outcome` | `verified`, `refuted`, `uncertain`, `harness-fault`, `launch-refused` or `unregistrable` |
+| `simulated` | `false` only for a real model on a real gated trial (§3) |
+| `task` | `id`, `family`, `taskSetVersion`, `faultClass`, `instruction` (redacted text, or null), `instructionSha256`, `fixtureSha256` |
+| `actions` | `capture` (`recorded` / `not-recorded`), `truncated`, `items`: at most 1000 typed actions, numbered `seq` 0..n-1. The kinds are `click`, `type`, `key`, `scroll`, `launch`, `wait`, `shell`, `gate-check` and `observe`. Each one carries `atMs` (ms since start, or null). |
+| `observations` | `capture`, `withheld` (count of dropped observations), `items`: at most 500. A `screenshot` is a PNG file. A `state` is the `persisted` document, a `ui-tree` or `app-state`, stored as a CSV or JSON file. A `ui-status` is text of at most 200 chars. Files are content-addressed: `blobs/<sha256>.<ext>`, with the hash and byte count recorded. |
+| `agentClaim` | `done`, `not-done` or `no-claim` |
+| `gate` | null, or `verdict`, `accepted`, `reasonCodes` (stable `myco.gate/v1` codes; null when the path does not see them) and `oracle` (`family`, `version`, `specSha256`, or null). Gate prose (`reasons`) is never captured. |
+| `groundTruth` | Either the **independent grader**'s result (`src/benchmark/grade`): `graderVersion`, `status` (pass / fail / ungradable), `targetSatisfied`, `mismatchCount`, `fixtureSha256` and `persistedSha256`. Or `{ source: "none", reason }`, where the reason is `no-independent-grader`, `harness-fault` or `agent-never-ran`. The gate's verdict is never ground truth. |
+| `harness` | `arm`, `plannerModelId`, `outputCeiling`, `corrections` (on / off), `flags` (`policy`, `handoff`, `assisted`: each a boolean, or null for not applicable), `timing` (`startedAt`, `endedAt`, `wallClockS`, `vmS`), `cost` and `fault` (`class`, `code`, or null). `cost` is `basis` (always *"token-derived estimate at frozen rates; not billed USD"*), `estimateUsd`, `inputTokens` and `outputTokens`. |
+| `provenance` | `source` (`gated-trial`, `m2-dry-run`, `demo-mock` or `demo-multistep-mock`), `runId`, `trialKey`, `attemptLedger` (the #518 ledger head, or null) and `writer` (`myco.episode-writer/1`) |
+
+Every timestamp and number field is nullable, and null means *not measured*. A cost is
+never 0 for an unmeasured run.
+
+## 2. Guarantees (`validateEpisode`, fail closed)
+
+The schema alone is not the contract. `validateEpisode` also refuses an episode when any of
+these rules fails. Each rule has its own test, and each was mutation-proved (see the PR body).
+
+- **Content id.** `episodeId` is the hash of the content.
+- **Order.** Actions and observations are numbered in order. An observation can only follow
+  an action that exists. A `not-recorded` capture has no items.
+- **Outcome.** The outcome is `harness-fault` exactly when a harness fault is recorded. An
+  outcome of `verified`, `refuted` or `uncertain` needs the gate's same verdict. `accepted`
+  is true exactly when the verdict is `verified`. A `launch-refused` or `unregistrable`
+  episode has no gate decision.
+- **Ground truth.** A harness-faulted attempt is never graded as an agent outcome. A grade
+  is bound to the captured `persisted` document and to the task's fixture by hash. A grade
+  with no document is `ungradable`.
+- **Simulated label.** `simulated: false` requires a `gated-trial` source and a Claude model
+  planner id (the same list as R1's `EVIDENCE_PLANNERS`).
+- **Cost.** A non-null `estimateUsd` needs both token counts. The estimate is
+  token-derived, never billed USD.
+- **Cleanliness and blobs.** The cleanliness scan (§4) runs over every string. Every blob
+  must be present and must hash to its name and size. A blob no episode references is
+  refused.
+
+## 3. Writer hooks: which runs are saved
+
+| Path on main | Hook | Label |
+|---|---|---|
+| Gated trial (`runGatedTrial`) | `runGatedTrialWithEpisode` (wraps the call and the transport; the gate is untouched) | real or simulated, by planner |
+| M2 R1 dry run (`scripts/m2-r1-dryrun.ts`) | `writeDryRunEpisodes`, writes to `<out>/episodes` automatically | simulated |
+| `myco-gate demo --transport mock` (todo-items, calc-multi-step) | `writeDemoEpisodes` / `writeMultiStepDemoEpisodes`, writes to `<out>/episodes` | simulated |
+
+How each ending is labelled:
+
+- **Verified / refuted / uncertain.** The gate's post-stop verdict, labelled as such.
+  `uncertain` is its own label, never a success or a failure.
+- **Harness fault.** Saved and labelled `harness-fault` with a class, never as an agent
+  outcome. This covers four cases:
+  - the transport threw (`transport-error`);
+  - the capture threw (`capture-error`);
+  - the gate decided with a harness reason code (`gate-harness-code`). These are the codes
+    `src/benchmark/gated-rows.ts` classes as harness: `STATE_MISSING`, `STATE_UNREADABLE`,
+    `AUDIT_FAILED`, `FIXTURE_UNREADABLE` and `FIXTURE_MISMATCH`;
+  - the caller declared a fault from its trial-ops row, with an M2 harness class.
+- **Launch refused.** The launch audit refused the plan, so the agent never ran.
+- **Unregistrable.** The gate's registry rejected the task spec (fc-v1 invalid-target).
+
+Writing an episode never changes a trial's outcome or its exit code. A refused episode is
+logged in the store's `refused.jsonl` by issue code only, and the result is returned.
+
+**Simulated rows never mix with real ones.** A store is real or simulated, fixed in
+`STORE.json` when the store is created, and it refuses episodes of the other kind. An export
+is real or simulated and refuses a store of the other kind. `validate` refuses a dataset
+whose manifest label disagrees with any episode in it. The dry-run and demo hooks refuse a
+real store outright.
+
+What each path cannot see:
+
+- **The dry run** reads arm rows. They carry the verdict but not the reason codes, so
+  `gate.reasonCodes` is null. The scripted agent's actions are `not-recorded`.
+- **The demos** expose no actions. Their families have no independent grader, so ground
+  truth is `no-independent-grader`.
+- **The gated hook** records actions and frames only if the transport records them into
+  the `EpisodeRecorder` it is given.
+
+## 4. Clean by construction: what is never captured
+
+The schema has **no field** for any of the following, and the writers copy named fields only:
+
+- environment variables or an env dump;
+- the launch plan's argv, MCP server commands or their env;
+- secrets, keys, tokens or credential files;
+- absolute host paths, the home directory, the username or the temp directory;
+- vault internals: the vault root, the seal, the receipt (`SealReceipt`), the HMAC key or
+  the sealed fixtures;
+- oracle source or oracle source paths; the hashes of the oracle sources stay in the vault;
+- gate prose (`reasons`), since agent-facing output carries codes only;
+- the raw Sai ledger and anything under `scripts/sai/`. A store refuses to live under
+  `scripts/sai/`, `~/.myco/secrets` or `docs/research/experiments/`, and any stray file in a
+  store (a planted ledger, say) fails the read and the export.
+
+Two passes run on top of that:
+
+1. **Redaction** (`redactText`) runs on free text the agent produced or saw: typed text,
+   shell commands, UI status and the instruction. The home directory, the temp directory,
+   `/<user>` and absolute POSIX, Windows, UNC and `~/` paths become placeholders.
+2. **Refusal** (`cleanIssues`, `blobIssues`) runs on every string and every blob of the
+   finished episode. Any of these refuses the episode:
+   - the planted canary `PLANTED_FAKE_MARKER`;
+   - an absolute path;
+   - a key-shaped string (`sk-ant-`, `sk-`, `ghp_`, `github_pat_`, `AKIA`, `xox?-`, `AIza`,
+     `glpat-`, `hf_`, JWTs, `-----BEGIN … PRIVATE KEY`, `Bearer …`);
+   - a host identifier.
+
+   Secrets and markers are never scrubbed: one that reaches an episode means a leak path
+   exists, and a scrubber guessing a key's extent can leave a piece behind. A structured
+   state document that fails the scan is **withheld** (counted in `withheld`), never altered.
+
+**Screenshots** pass only through a `FrameRedactor`, which applies the live watch view's
+rules (#513, `src/watch/sanitize-frame.ts`: `sanitizePng` re-encodes the frame from its
+pixels, and `frameLeaks` scans the bytes). Until #513 lands there is no redactor on main,
+so every screenshot is withheld and counted. The adapter, *(lands with #513)*, is:
+
+```ts
+const frameRedactor: FrameRedactor = {
+  redact(png) {
+    const clean = sanitizePng(Buffer.from(png));
+    return clean !== null && !frameLeaks(clean, true, hostNeedles()) ? clean : null;
+  },
+};
+```
+
+What this cannot do: pixels are the frame. A screenshot shows what was on the guest's screen.
+
+## 5. Store, export, validate, import
+
+```text
+<store>/STORE.json             { "schema": "myco.episode-store/1", "simulated": true|false }
+<store>/episodes/<id>.json     canonical JSON (sorted keys), one episode
+<store>/blobs/<sha256>.<ext>   content-addressed screenshots and state
+<store>/refused.jsonl          refusals: source, run id, issue codes only
+```
+
+```sh
+npx tsx scripts/myco-episodes.ts export --from <store> [--from <store> ...] --out <dir> --simulated \
+  [--task-set fc-v1] [--arm myco-gate] [--outcome refuted] [--since 2026-11-01] [--until 2026-11-30]
+npx tsx scripts/myco-episodes.ts validate --dataset <dir>      # or --store <dir>
+npx tsx scripts/myco-episodes.ts import --dataset <dir> --into <store>
+```
+
+Exit codes: 0 means OK, 1 means invalid or refused, 3 means a usage error.
+
+A dataset is `manifest.json` plus `episodes/` and only the `blobs/` the selected episodes
+reference. The manifest (`myco.episode-dataset/1`) holds:
+
+- the schema version;
+- the real/simulated label;
+- the normalised filter;
+- counts by outcome, arm, task set, family and source;
+- every file's path, sha256 and size;
+- `datasetSha256`, one hash over the file list;
+- provenance: the number of distinct runs and the attempt-ledger heads.
+
+The manifest has no timestamps and no host paths. Export is deterministic: the same stores
+and filter give a byte-identical dataset, whatever order the stores are given in. Export
+validates every source episode first and fails closed. `validate` recomputes everything and
+refuses:
+
+- an unlisted, missing or edited file;
+- a non-canonical episode file;
+- a wrong count;
+- an episode outside the filter;
+- an unreferenced blob;
+- a mislabelled dataset.
+
+`import` validates the dataset first, then writes into a store of the same kind.
+
+## 6. How tracks U and Q consume it
+
+Tracks U and Q build in parallel. This format is canonical, and their files are not edited
+here. Each switch-over is listed under *TO FILE* in the PR.
+
+- **U (Linux scale dataset export).** Write episodes with
+  `EpisodeStore.open(dir, { simulated })` and `store.record(draft, blobs)`, or wrap the Linux
+  trial loop in `runGatedTrialWithEpisode` with an `EpisodeRecorder` handed to the
+  transport. Export with `myco-episodes export`. Do not define a parallel row format: map any
+  Linux-specific field onto `harness`, `task` or `observations`, or propose `myco.episode/2`.
+  Linux runs against a model are real only with a Claude planner id. Scripted or fake Linux
+  agents are `simulated: true`.
+- **Q (replayable proof).** Read the ordered `actions.items` (typed, `seq`-numbered, with
+  `atMs`) and the content-addressed `observations` as the replay script and its checkpoints.
+  Pin a replay to `episodeId` and, for a dataset, to `datasetSha256`. Check
+  `validateDataset(dir)` (or `myco-episodes validate`) before replaying. Bind to the attempt
+  ledger through `provenance.attemptLedger` (lands with #518). A replay must not treat
+  `groundTruth` as the gate's output, or the gate's verdict as ground truth.
