@@ -2,7 +2,15 @@
  * Track J: the Linux routes' own checks, hermetically (fake python, fake soffice, fake
  * actuator; no LibreOffice). A route's success is read from what it produced, never assumed.
  */
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -113,6 +121,61 @@ describe("script route", () => {
     const home = (result.output ?? "").split("\n")[1]?.split(",")[1] ?? "";
     expect(home).toMatch(/myco-fastpath-home-/);
     expect(home.startsWith(scope.workspace)).toBe(false);
+  });
+
+  it("the program's environment is exactly PATH, HOME and LANG (no harness variable)", () => {
+    // Names only (never values): the fake soffice writes its environment's variable names
+    // as the "CSV". `/bin/sh` itself adds PWD, the workspace it was started in.
+    const soffice = fakeBin(
+      "soffice-env",
+      'mkdir -p "$5"; /usr/bin/env | cut -d= -f1 | sort > "$5/doc.csv"',
+    );
+    const result = exportWith(soffice);
+    expect(result).toMatchObject({ ok: true, route: "script" });
+    expect(result.output).toBe("HOME\nLANG\nPATH\nPWD\n");
+  });
+
+  it("only stdout comes back from a shell.run program; stderr never does", () => {
+    const bin = join(root, "fakebin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "cat"), "#!/bin/sh\necho STDOUT-OK\necho STDERR-MARKER-9 >&2\n");
+    chmodSync(join(bin, "cat"), 0o755);
+    writeFileSync(join(scope.scratch, "x.txt"), "x\n");
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}:${saved ?? "/usr/bin:/bin"}`;
+    try {
+      const router = createActionRouter({
+        policy: workspacePolicy(scope),
+        executors: [shellScriptRoute({ scope })],
+      });
+      const result = router.act({ kind: "shell.run", command: "cat scratch/x.txt" });
+      expect(result).toMatchObject({ ok: true, route: "script", output: "STDOUT-OK\n" });
+      expect(JSON.stringify([result, router.log()])).not.toContain("STDERR-MARKER-9");
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+
+  it("soffice receives the resolved absolute document, never the agent's spelling", () => {
+    const log = join(root, "soffice-args.txt");
+    const soffice = fakeBin(
+      "soffice-args",
+      `echo "$@" > ${log}; mkdir -p "$5"; echo a > "$5/doc.csv"`,
+    );
+    const router = createActionRouter({
+      policy: workspacePolicy(scope),
+      executors: [shellScriptRoute({ scope, soffice })],
+    });
+    expect(
+      router.act({
+        kind: "shell.run",
+        command: "soffice --headless --convert-to csv --outdir scratch/o ./doc/../doc/doc.xlsx",
+      }),
+    ).toMatchObject({ ok: true, output: "converted" });
+    const ws = realpathSync(scope.workspace);
+    expect(readFileSync(log, "utf8").trim()).toBe(
+      `--headless --convert-to csv --outdir ${ws}/scratch/o ${ws}/doc/doc.xlsx`,
+    );
   });
 
   it("soffice exiting 0 without producing the file is a failed route", () => {

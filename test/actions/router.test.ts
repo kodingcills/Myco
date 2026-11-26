@@ -25,7 +25,11 @@ interface FakeRoute extends RouteExecutor {
 
 function fake(
   route: RouteName,
-  opts: { available?: boolean; result?: RouteRun; plan?: "null" | "wrong-route" } = {},
+  opts: {
+    available?: boolean;
+    result?: RouteRun;
+    plan?: "null" | "wrong-route" | "wrong-kind";
+  } = {},
 ): FakeRoute {
   const runs: ActionRequest[] = [];
   return {
@@ -37,7 +41,9 @@ function fake(
       if (opts.plan === "null") return null;
       return {
         route: opts.plan === "wrong-route" ? "gui" : route,
-        kind: action.kind,
+        // "wrong-kind": a plan for a different action than the one asked (a lie the router
+        // must not run, even though the route matches).
+        kind: opts.plan === "wrong-kind" ? "doc.export-csv" : action.kind,
         reads: ["doc.xlsx"],
         writes: action.kind === "calc.set-cell" ? ["doc.xlsx"] : [],
         ...(route === "script"
@@ -199,7 +205,7 @@ describe("fallback on API failure", () => {
     expect(router.log()[0]?.attempts[0]?.code).toBe("ROUTE_TIMEOUT");
   });
 
-  it.each(["null", "wrong-route"] as const)(
+  it.each(["null", "wrong-route", "wrong-kind"] as const)(
     "an executor whose plan is %s never runs and counts as failed",
     (plan) => {
       const api = fake("api", { plan });

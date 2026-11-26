@@ -28,6 +28,28 @@ describe("fast-path doc", () => {
     expect(DOC).toContain(line);
   });
 
+  it("describes the surface the launch plan actually has (D3)", () => {
+    expect(DOC).toContain("**What is built here is the cap-only surface, not yet `hcu+shell+J`.**");
+    expect(DOC).toContain('launches Claude Code with `--tools ""`');
+    expect(DOC).not.toContain("Its surface is the paired baseline's surface plus");
+  });
+
+  it("states the soffice rule the policy enforces (D1)", () => {
+    expect(DOC).toContain(
+      "`soffice --headless --convert-to csv --outdir <scratch…> <the trial document>`",
+    );
+    expect(DOC).toContain("so `--accept=…` is `OPERAND_SHAPE`");
+    expect(DOC).toContain("soffice runs with the resolved absolute paths");
+    expect(DOC).not.toContain("--outdir <scratch…> <file>`");
+  });
+
+  it("the UNO API script's docstring matches what it calls (N1)", () => {
+    const py = readFileSync(join(ROOT, "scripts/linux/calc_uno_api.py"), "utf8");
+    expect(py).not.toContain("setFormula");
+    for (const call of ["detectNumberFormat(", "convertStringToNumber(", "setValue(", "setString("])
+      expect(py).toContain(call);
+  });
+
   it("states the route preference the code uses", () => {
     expect(ROUTE_PREFERENCE).toEqual(["api", "script", "gui"]);
     expect(ROUTE_TABLE["calc.set-cell"]).toEqual(["api", "gui"]);

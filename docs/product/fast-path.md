@@ -109,9 +109,10 @@ The local policy (`workspacePolicy`) is narrower than O is expected to be:
 | Rule | Enforcement |
 |---|---|
 | Paths stay in the trial's workspace | Each path is resolved through symlinks (`realpath`, or its parent's for a new file) and must lie under the workspace's resolved root. `..`, absolute host paths, another trial's workspace and symlinks out are `PATH_OUTSIDE_WORKSPACE`. |
+| Hard links are refused | A regular file with more than one hard link is `PATH_OUTSIDE_WORKSPACE`: `realpath` cannot see where its other names live. |
 | Writes are narrower | Only the trial document and the scratch directory (`WRITE_NOT_ALLOWED` otherwise). |
 | Shell text that cannot be parsed safely is denied | No shell interpreter. A strict reader accepts bare words and `'…'`/`"…"` words without escapes; any of `` | ; & $ ` < > ( ) { } [ ] * ? ~ ! # \ % ^ ``, a control character (newline included), an unterminated or glued quote, or an oversized command is `UNPARSEABLE_COMMAND`. Nothing is sanitised. |
-| Only listed programs | `ls`, `cat`, `head`, `wc`, `sha256sum` with listed flags, and exactly `soffice --headless --convert-to csv --outdir <scratch…> <file>`. No interpreter, no `sh -c`, no `cp`/`ln`/`rm`, no absolute program paths (`PROGRAM_NOT_ALLOWED`, `FLAG_NOT_ALLOWED`, `OPERAND_SHAPE`). |
+| Only listed programs | `ls`, `cat`, `head`, `wc`, `sha256sum` with listed flags, and exactly `soffice --headless --convert-to csv --outdir <scratch…> <the trial document>`. An operand that starts with `-` is a flag and must be listed (so `--accept=…` is `OPERAND_SHAPE`); the soffice source must resolve to the trial document itself, and soffice runs with the resolved absolute paths, never the agent's spelling. No interpreter, no `sh -c`, no `cp`/`ln`/`rm`, no absolute program paths (`PROGRAM_NOT_ALLOWED`, `FLAG_NOT_ALLOWED`, `OPERAND_SHAPE`). |
 | The argv decides | For the script route, the paths the argv names are what is checked, whatever else the request lists. |
 | Codes only | The agent sees codes (`PATH_OUTSIDE_WORKSPACE`, …), never resolved paths or the layout. Only stdout comes back, bounded to 4,096 characters; stderr never does. |
 
@@ -122,6 +123,10 @@ Known limits, stated rather than hidden:
   path), so it cannot swap a path between check and use. A guest-side router on Windows
   must re-check resolved paths after the call, as `hcu+shell` does
   (`checkResolvedAccesses`).
+- **`ls -l` shows a symlink's target string.** A symlink planted in the workspace before
+  the trial (the agent cannot create one) is listed with its target path by `ls -l`. That
+  leaks a host path string, not access: reading through the link is still
+  `PATH_OUTSIDE_WORKSPACE`.
 - **soffice profile.** The API and GUI routes start soffice with a throwaway profile in the
   system temp directory. It is harness-owned, outside the workspace, and removed after the
   call; the agent cannot address it.
@@ -135,9 +140,18 @@ Every guard has a test that fails when the guard is removed (§7).
 
 `FAST_PATH_ARM_SPEC` (`src/actions/arm.ts`): id `fast-path`, the capability spec's
 `hcu+shell+J`. It pairs with the two baseline arms, `hcu+shell` and `screenshot-only` (C1).
-Its surface is the paired baseline's surface plus `mcp__myco-cap__act` and
-`mcp__myco-cap__act_script`; nothing else changes (task, instruction, model, step budget,
-output ceiling).
+**What is built here is the cap-only surface, not yet `hcu+shell+J`.** `fastPathLaunchPlan`
+launches Claude Code with `--tools ""` (no built-in tool, so no host shell) and exactly two
+tools, `mcp__myco-cap__act` and `mcp__myco-cap__act_script`. On the Linux path that is the
+whole arm: `act` reaches the GUI route (the Linux actuator, standing in for HCU) as a
+fallback, and `act_script` is the policy-confined shell. The launch audit is tested on this
+plan only.
+
+The spec's `hcu+shell+J`, the paired baseline's surface plus the two `myco-cap` tools with
+nothing else changed (task, instruction, model, step budget, output ceiling), needs the
+HCU channel and the guest-side router (§6). It is not built or audited here, and the bar's
+primary comparison (§5) cannot run until it is: that combined plan, and its launch audit,
+are a blocker on measurement (`FAST_PATH_ARM_SPEC.blocker`; TO FILE).
 
 Rows (`myco.capability.fast-path-row/1`) carry the route log without action payloads (no
 agent text, no paths), steps, wall time, the gate verdict and the grade, `verified` (a done

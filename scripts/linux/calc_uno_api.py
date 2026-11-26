@@ -4,10 +4,12 @@ through LibreOffice's UNO object model and store the document.
 
 Unlike `calc_actuator.py` (the GUI-equivalent route, which types through
 Calc's input path with `.uno:EnterString`), this script calls the document
-API directly: `XCell.setFormula` on the target cell, then `XStorable.store`.
-`setFormula` applies Calc's own input recognition for numbers, dates and
-currency in the document's locale, so the stored cell matches what a typed
-entry would have produced for the fc-v1 column types.
+API directly: the document's number formatter recognises the text
+(`detectNumberFormat` + `convertStringToNumber`), the cell gets
+`XCell.setValue` with that format when Calc reads it as a number, date or
+currency in the document's locale, and `XCell.setString` otherwise; then
+`XStorable.store`. So the stored cell matches what a typed entry would have
+produced for the fc-v1 column types. No formula is ever set.
 
 It prints one JSON object describing what it did. It never decides whether the
 task succeeded: completion is the gate's decision from the persisted bytes, and

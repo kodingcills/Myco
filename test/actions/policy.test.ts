@@ -3,13 +3,22 @@
  * deny for shell commands that cannot be parsed safely, a program allowlist, and
  * workspace scoping through symlinks.
  */
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   parseShellCommand,
   planShellArgv,
+  resolveScoped,
   type WorkspaceScope,
   workspacePolicy,
 } from "../../src/actions/policy.ts";
@@ -99,6 +108,21 @@ describe("planShellArgv: program allowlist", () => {
     [["head", "-n"], "OPERAND_SHAPE"],
     [["soffice", "--headless", "--convert-to", "xlsx", "--outdir", "o", "d"], "OPERAND_SHAPE"],
     [["soffice", "--headless", "macro:///Standard.Module1.Main"], "OPERAND_SHAPE"],
+    // D1: an option in an operand slot is an option soffice acts on, never a path.
+    [
+      ["soffice", "--headless", "--convert-to", "csv", "--outdir", "o", "--accept=pipe,name=x"],
+      "OPERAND_SHAPE",
+    ],
+    [
+      ["soffice", "--headless", "--convert-to", "csv", "--outdir", "o", "--terminate_after_init"],
+      "OPERAND_SHAPE",
+    ],
+    [["soffice", "--headless", "--convert-to", "csv", "--outdir", "-o", "d"], "OPERAND_SHAPE"],
+    // Every literal of the shape is checked: one wrong token is OPERAND_SHAPE.
+    [["soffice", "--headless", "--convert-to", "csv", "--accept", "o", "d"], "OPERAND_SHAPE"],
+    [["soffice", "--headless", "--convert-to", "csv", "--outdir=o", "o", "d"], "OPERAND_SHAPE"],
+    [["soffice", "--invisible", "--convert-to", "csv", "--outdir", "o", "d"], "OPERAND_SHAPE"],
+    [["soffice", "--headless", "--print-to", "csv", "--outdir", "o", "d"], "OPERAND_SHAPE"],
     [["soffice", "--convert-to", "csv", "--outdir", "o", "d", "--headless"], "OPERAND_SHAPE"],
   ])("%j is %s", (argv, code) => {
     expect(planShellArgv(argv)).toEqual({ ok: false, code });
@@ -194,6 +218,20 @@ describe("workspacePolicy: scoping", () => {
       { command: "soffice --headless --convert-to csv --outdir /tmp doc/doc.xlsx" },
       "PATH_OUTSIDE_WORKSPACE",
     ],
+    // D1, against the real policy: the verifier's acceptor-pipe repro, and any source other
+    // than the trial document (another workspace file, a macro URL with no slash).
+    [
+      {
+        command: "soffice --headless --convert-to csv --outdir scratch --accept=pipe,name=evilpipe",
+      },
+      "OPERAND_SHAPE",
+    ],
+    [
+      { command: "soffice --headless --convert-to csv --outdir scratch --terminate_after_init" },
+      "OPERAND_SHAPE",
+    ],
+    [{ command: "soffice --headless --convert-to csv --outdir scratch scratch" }, "OPERAND_SHAPE"],
+    [{ command: "soffice --headless --convert-to csv --outdir scratch macro:x" }, "OPERAND_SHAPE"],
     [{ command: "ls", argv: ["ls"] }, "BAD_REQUEST"],
     [{}, "BAD_REQUEST"],
     [{ argv: [1] }, "BAD_REQUEST"],
@@ -201,6 +239,52 @@ describe("workspacePolicy: scoping", () => {
     expect(
       workspacePolicy(scope).check(req({ route: "script", kind: "shell.run", ...over })),
     ).toEqual({ allow: false, code });
+  });
+
+  it("soffice runs with the resolved absolute paths, never the agent's spelling", () => {
+    const d = workspacePolicy(scope).check(
+      req({
+        route: "script",
+        kind: "shell.run",
+        command: "soffice --headless --convert-to csv --outdir scratch/o ./doc/doc.xlsx",
+      }),
+    );
+    const real = realpathSync(ws);
+    expect(d).toEqual({
+      allow: true,
+      code: "ALLOWED",
+      reads: [join(real, "doc", "doc.xlsx")],
+      writes: [join(real, "scratch", "o")],
+      argv: [
+        "soffice",
+        "--headless",
+        "--convert-to",
+        "csv",
+        "--outdir",
+        join(real, "scratch", "o"),
+        join(real, "doc", "doc.xlsx"),
+      ],
+    });
+  });
+
+  it("a hard link to a file outside the workspace is refused (N2)", () => {
+    linkSync(join(root, "trials", "run-b", "doc", "doc.xlsx"), join(ws, "scratch", "hl"));
+    expect(
+      workspacePolicy(scope).check(
+        req({ route: "script", kind: "shell.run", command: "cat scratch/hl" }),
+      ),
+    ).toEqual({ allow: false, code: "PATH_OUTSIDE_WORKSPACE" });
+    expect(workspacePolicy(scope).check(req({ reads: ["scratch/hl"] }))).toEqual({
+      allow: false,
+      code: "PATH_OUTSIDE_WORKSPACE",
+    });
+  });
+
+  it("resolveScoped refuses control characters and keeps a new path's full name (N4)", () => {
+    expect(resolveScoped("doc/doc.xlsx\n", ws)).toBeNull();
+    expect(resolveScoped("scratch/new\tfile", ws)).toBeNull();
+    expect(resolveScoped("/myco-no-such-file-71c3", ws)).toBe("/myco-no-such-file-71c3");
+    expect(resolveScoped("scratch/new.csv", ws)).toBe(join(realpathSync(ws), "scratch", "new.csv"));
   });
 
   it("a non-script route carrying a command is malformed", () => {

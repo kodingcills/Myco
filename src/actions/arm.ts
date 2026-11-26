@@ -65,7 +65,9 @@ export const FAST_PATH_ARM_SPEC = {
   blocker:
     "built offline on the Linux path (track J); measurement needs the integrity fixes " +
     "(#518, the xlsx gate replacement, the #494 follow-up), the lead's GO, Claude Ultra, " +
-    "and, for the Windows Calc tasks, a guest-side router under the VM lock",
+    "and, for the Windows Calc tasks, a guest-side router under the VM lock; the launch " +
+    'plan built here is cap-only (`--tools ""` plus the two myco-cap tools), and the ' +
+    "spec's hcu+shell+J plan (the hcu+shell surface plus those tools) is not built or audited",
   evidence: false as const,
 } as const;
 
@@ -113,7 +115,11 @@ export interface FastPathPlanOptions extends FastPathPin {
   readonly capArgs?: readonly string[];
 }
 
-/** The fast-path agent's launch plan: no built-ins, `myco-cap`'s two tools only. */
+/**
+ * The fast-path agent's launch plan: no built-ins, `myco-cap`'s two tools only. This is the
+ * cap-only surface, NOT the spec's `hcu+shell+J` (the paired baseline's surface plus these
+ * two tools): that combined plan is not built here (see `FAST_PATH_ARM_SPEC.blocker`).
+ */
 export function fastPathLaunchPlan(options: FastPathPlanOptions): AgentLaunchPlan {
   return {
     mcpConfigPath: options.mcpConfigPath,

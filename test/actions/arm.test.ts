@@ -44,6 +44,22 @@ describe("fast-path launch audit", () => {
     expect(audit.effective).toEqual(["mcp__myco-cap__act", "mcp__myco-cap__act_script"]);
   });
 
+  it("the plan built here is cap-only (D3): no built-in tool, no HCU, no host shell", () => {
+    const p = plan();
+    const at = p.argv.indexOf("--tools");
+    expect(at).toBeGreaterThan(-1);
+    expect(p.argv[at + 1]).toBe("");
+    expect(p.argv.slice(p.argv.indexOf("--allowedTools") + 1)).toEqual([
+      "mcp__myco-cap__act",
+      "mcp__myco-cap__act_script",
+    ]);
+    expect(Object.keys(p.mcpServers)).toEqual([CAP_SERVER]);
+    // ...so it is NOT the spec's hcu+shell+J surface, and the arm says that blocks measurement.
+    expect(FAST_PATH_ARM_SPEC.blocker).toContain("launch plan built here is cap-only");
+    expect(FAST_PATH_ARM_SPEC.blocker).toContain("hcu+shell+J plan");
+    expect(FAST_PATH_ARM_SPEC.blocker).toContain("not built or audited");
+  });
+
   it.each([
     ["no env", {}],
     ["only the run id", { [CAP_RUN_ENV]: "run-1" }],

@@ -30,14 +30,19 @@
  * - **allows only listed programs, with listed flags** (`SHELL_PROGRAMS`). The read side
  *   of a coding agent's shell (`ls`, `cat`, `head`, `wc`, `sha256sum`) and one write:
  *   `soffice --headless --convert-to csv --outdir <scratch> <document>`. Every operand is a
- *   path and goes through the scoping rule above.
+ *   path and goes through the scoping rule above: an operand that starts with `-` is a
+ *   flag, never an operand, and must be listed. For soffice the source operand must resolve
+ *   to the trial document itself, and the argv the route runs carries the resolved absolute
+ *   paths, never the agent's spelling (so no option, `macro:` or other URL reaches soffice).
+ * - **refuses a regular file with more than one hard link.** `realpath` cannot see where
+ *   a hard link's other names live, so such a file is treated as outside the workspace.
  *
  * Agent-facing results carry codes only (`PolicyCode`), never the resolved path or the
  * workspace layout.
  */
 
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type RouteName = "api" | "script" | "gui";
 
@@ -173,13 +178,18 @@ export const SHELL_PROGRAMS: Readonly<Record<string, ProgramRule>> = {
     flags: [],
     minOperands: 0,
     maxOperands: 0,
-    // soffice --headless --convert-to csv --outdir OUT DOC   (exactly this shape)
+    // soffice --headless --convert-to csv --outdir OUT DOC   (exactly this shape). OUT and
+    // DOC are operands: one that starts with `-` is an option soffice would act on
+    // (`--accept=...` opens a UNO acceptor), so it is refused here. The policy also requires
+    // DOC to resolve to the trial document and runs the resolved paths (`workspacePolicy`).
     shape: (args) =>
       args.length === 6 &&
       args[0] === "--headless" &&
       args[1] === "--convert-to" &&
       args[2] === "csv" &&
-      args[3] === "--outdir"
+      args[3] === "--outdir" &&
+      !(args[4] as string).startsWith("-") &&
+      !(args[5] as string).startsWith("-")
         ? { reads: [args[5] as string], writes: [args[4] as string] }
         : null,
   },
@@ -249,7 +259,9 @@ function within(path: string, root: string): boolean {
 
 /**
  * Resolve `raw` against the workspace through symlinks. A path that does not exist yet
- * resolves by its parent directory (which must exist); null when neither resolves.
+ * resolves by its parent directory (which must exist); null when neither resolves, and null
+ * for a regular file with more than one hard link (its other names are invisible to
+ * `realpath`, so it cannot be scoped).
  */
 export function resolveScoped(raw: string, workspace: string): string | null {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > 1024) return null;
@@ -257,10 +269,15 @@ export function resolveScoped(raw: string, workspace: string): string | null {
   if (/[\u0000-\u001f]/.test(raw)) return null;
   const absolute = isAbsolute(raw) ? resolve(raw) : resolve(workspace, raw);
   try {
-    if (existsSync(absolute)) return realpathSync(absolute);
+    if (existsSync(absolute)) {
+      const real = realpathSync(absolute);
+      const st = statSync(real);
+      if (st.isFile() && st.nlink > 1) return null;
+      return real;
+    }
     const parent = dirname(absolute);
     if (!existsSync(parent)) return null;
-    return join(realpathSync(parent), absolute.slice(parent.length + 1));
+    return join(realpathSync(parent), basename(absolute));
   } catch {
     return null;
   }
@@ -293,6 +310,7 @@ export function workspacePolicy(scope: WorkspaceScope): ActionPolicy {
       let reads: readonly string[] = request.reads;
       let writes: readonly string[] = request.writes;
       let argv: readonly string[] | undefined;
+      let soffice: ShellPlan | null = null;
       if (request.route === "script") {
         const hasArgv = request.argv !== undefined;
         const hasCommand = request.command !== undefined;
@@ -308,6 +326,7 @@ export function workspacePolicy(scope: WorkspaceScope): ActionPolicy {
         }
         const planned = planShellArgv(argv);
         if (!planned.ok) return { allow: false, code: planned.code };
+        soffice = planned.plan.program === "soffice" ? planned.plan : null;
         // The argv decides what the command touches, not the caller's lists.
         reads = [...reads, ...planned.plan.reads];
         writes = [...writes, ...planned.plan.writes];
@@ -330,6 +349,14 @@ export function workspacePolicy(scope: WorkspaceScope): ActionPolicy {
         if (path !== document && !within(path, scratch))
           return { allow: false, code: "WRITE_NOT_ALLOWED" };
         resolvedWrites.push(path);
+      }
+      if (soffice !== null) {
+        // The conversion reads the trial document and nothing else, and soffice gets the
+        // resolved absolute paths: no spelling of the agent's reaches its argument parser.
+        const source = resolveScoped(soffice.reads[0] as string, root);
+        const outdir = resolveScoped(soffice.writes[0] as string, root);
+        if (source !== document || outdir === null) return { allow: false, code: "OPERAND_SHAPE" };
+        argv = ["soffice", ...soffice.args.slice(0, 4), outdir, source];
       }
       return argv === undefined
         ? { allow: true, code: "ALLOWED", reads: resolvedReads, writes: resolvedWrites }
