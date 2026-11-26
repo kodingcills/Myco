@@ -345,7 +345,7 @@ ln -s '${victim}' /workspace/record.csv 2>/dev/null
 ln -s / /workspace/rootlink 2>/dev/null
 ls /workspace/rootlink/ | tr '\n' ' '; echo
 find / -xdev -name sealed.json 2>/dev/null
-find / -name 'record.csv' -not -path '/proc/*' 2>/dev/null
+find / \( -path /proc -o -path /usr -o -path /lib -o -path /lib32 -o -path /lib64 -o -path /libx32 -o -path /bin -o -path /sbin -o -path /etc \) -prune -o -name 'record.csv' -print 2>/dev/null
 echo ATTACK-DONE
 `;
 }
@@ -386,7 +386,10 @@ describe.skipIf(!probe.available)("strict-linux-ns: in namespaces", () => {
     writeFileSync(victim, "B-ORIGINAL,1\n");
     const before = snapshot(run, [a.paths.workspace]);
 
-    const r = await a.exec("/bin/sh", ["-c", attackScript(run)], { timeoutMs: 60_000 });
+    // The read-only system binds are pruned from the searches: on a CI runner /usr alone is
+    // many GB, and the run root cannot be under a system bind (checkSpec refuses that).
+    const r = await a.exec("/bin/sh", ["-c", attackScript(run)], { timeoutMs: 45_000 });
+    expect(r.timedOut).toBe(false);
     expect(r.stdout).toContain("ATTACK-DONE");
     // Mounts are locked: nothing unmounted, remounted or bound from the agent's seat.
     expect(r.stdout).not.toMatch(/^UMOUNTED|^REMOUNTED|^BOUND|NESTED-REMOUNTED/m);
