@@ -22,6 +22,18 @@ and a false DONE accepted on an ineligible trial still fails the row.
 | R7 | Cost per verified task for both head-to-head arms: model cost, wall clock and VM time, each the total over ALL of the arm's trials (failed and refuted trials still cost money) divided by its verified count (accepted DONE the grader passes). A null cost is unmeasured, never 0 | PENDING | — | — |
 | R8 | Reach: a Linux path in public CI, the published benchmark, a 90-second demo | PENDING | — | — |
 
+## Experiment row (experiment-only, never R1 evidence)
+
+The corrections ON/OFF A/B is kept apart from R1-R8 (plan §2.1a). It is not an M2 pass criterion,
+and it is not counted in the status line above. Its evidence is a separate pack kind,
+`myco.m2.ab-pack/1` (`schemas/m2-ab-pack.ts`), that can never list an R row, and its rows are
+never R1 evidence, in either arm. Status is PENDING with no evidence, PLUMBING for a Stage-0 pack
+(effect claim null), and REPORTED for a Stage-1 pack. A halted or failing pack cannot be cited.
+
+| # | Criterion | Status | Evidence | Recomputed |
+|---|---|---|---|---|
+| AB | Corrections ON/OFF A/B, experiment-only. Stage 0: 30 pairs on the pilot's tasks, plumbing only, effect claim null. Stage 1: 100 pairs per arm on fc-v1, a one-sided exact sign test on the discordant pairs at alpha 0.05, with the discordant counts and a 95% CI on the paired difference. A miss reads "corrections not shown to help", never a fail | PENDING | — | — |
+
 ## Process checks (CI gates)
 
 The plan's §2.2 keeps the process-only rows as CI gates. `scripts/m2-evidence-check.ts --all`
