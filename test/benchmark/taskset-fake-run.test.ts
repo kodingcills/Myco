@@ -85,10 +85,12 @@ async function fakeTrial(task: BenchmarkTask, docPath: string): Promise<void> {
 function tsx(
   script: string,
   args: string[],
+  timeout?: number,
 ): { status: number | null; stdout: string; stderr: string } {
   const r = spawnSync("npx", ["tsx", join(ROOT, "scripts", script), ...args], {
     cwd: ROOT,
     encoding: "utf8",
+    timeout,
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
@@ -293,4 +295,38 @@ describe("bundle verify-bundle (manifest-only, for an outsider holding only the 
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(new RegExp(`not a regular file ${fixture}`));
   });
+});
+
+describe("verify-bundle refuses a listed path that is not a regular file (N-g, M18')", () => {
+  it("refuses a directory at a listed path with a refusal line, not an EISDIR crash", {
+    timeout: 60_000,
+  }, () => {
+    const copy = mkdtempSync(join(tmpdir(), "myco-fc-v1-verify-dir-"));
+    cpSync(BUNDLE, copy, { recursive: true });
+    const fixture = (tasks[0] as BenchmarkTask).fixtureFile;
+    rmSync(join(copy, fixture));
+    mkdirSync(join(copy, fixture));
+    const r = tsx("benchmark-verify-bundle.ts", [copy]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(new RegExp(`not a regular file ${fixture}`));
+    expect(r.stderr).not.toMatch(/EISDIR/);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a FIFO at a listed path instead of blocking on it",
+    {
+      timeout: 60_000,
+    },
+    () => {
+      const copy = mkdtempSync(join(tmpdir(), "myco-fc-v1-verify-fifo-"));
+      cpSync(BUNDLE, copy, { recursive: true });
+      const fixture = (tasks[0] as BenchmarkTask).fixtureFile;
+      rmSync(join(copy, fixture));
+      spawnSync("mkfifo", [join(copy, fixture)]);
+      // Without the regular-file check, reading the FIFO would block until the timeout.
+      const r = tsx("benchmark-verify-bundle.ts", [copy], 30_000);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(new RegExp(`not a regular file ${fixture}`));
+    },
+  );
 });
