@@ -1,6 +1,7 @@
 /**
  * `myco-gate` MCP server (TIF-265): the gate as one MCP tool over stdio
- * (newline-delimited JSON-RPC 2.0), for Claude Code.
+ * (newline-delimited JSON-RPC 2.0), for Claude Code or any other MCP client
+ * (docs/gate/clients.md).
  *
  * This is a separate server from the actuator (`runtime/crates/myco-rt-mcp`, server name
  * `myco-rt`). The actuator's tools act on the desktop; this server has exactly one tool,
