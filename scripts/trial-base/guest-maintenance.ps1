@@ -93,8 +93,30 @@ if ($Stage -eq 'state') {
 }
 
 if ($Stage -eq 'signatures') {
+  # Right after boot Windows may already be updating signatures by itself, and
+  # Update-MpSignature then fails with HRESULT 0x80070652
+  # (ERROR_INSTALL_ALREADY_RUNNING; seen 2026-11-26, run 1). Only for that
+  # HRESULT: wait 60 s and retry, until an attempt succeeds or the signature
+  # version changes (the other install finished), for at most 25 minutes in
+  # total. At the deadline, fail closed (exit 1). Any other error fails at once,
+  # as before. Defender itself is not touched: this only waits.
   $before = (Get-MpComputerStatus).AntivirusSignatureVersion
-  Update-MpSignature
+  $deadline = (Get-Date).AddMinutes(25)
+  $attempt = 0
+  while ($true) {
+    $attempt++
+    try { Update-MpSignature; break }
+    catch {
+      # -2147023278 is 0x80070652 as a signed Int32 (Exception.HResult).
+      $busy = ($_.FullyQualifiedErrorId -like 'HRESULT 0x80070652,*') -or ($_.Exception.HResult -eq -2147023278)
+      if (-not $busy) { throw }
+      "signatures: attempt ${attempt}: another install is in progress (HRESULT 0x80070652)"
+    }
+    if ((Get-Date) -gt $deadline) { "signatures: FAIL still 0x80070652 after 25 min ($attempt attempts); version $before"; exit 1 }
+    Start-Sleep -Seconds 60
+    $now = (Get-MpComputerStatus).AntivirusSignatureVersion
+    if ($now -ne $before) { "signatures: the other install moved the version to $now"; break }
+  }
   $after = Get-MpComputerStatus
   "signatures: $before -> $($after.AntivirusSignatureVersion) (last updated $(Iso $after.AntivirusSignatureLastUpdated))"
   exit 0

@@ -204,3 +204,50 @@ describe("build-trial-base.sh", () => {
     expect(r.calls.some((x) => x.includes("vm.sh snapshot "))).toBe(false);
   });
 });
+
+/**
+ * The guest half cannot run here (no PowerShell on the host or in CI), so this
+ * pins the `signatures` stage's retry contract in its source (run 1 on
+ * 2026-11-26 failed on HRESULT 0x80070652, another install in progress):
+ * retry only on that HRESULT, rethrow anything else, stop early when the
+ * signature version moves, and fail closed (exit 1) at a deadline of 20-30 min.
+ */
+describe("guest-maintenance.ps1 signatures stage", () => {
+  const ps = readFileSync(join(ROOT, "scripts", "trial-base", "guest-maintenance.ps1"), "utf8");
+  const start = ps.indexOf("if ($Stage -eq 'signatures') {");
+  const end = ps.indexOf("if ($Stage -eq", start + 1);
+  const stage = ps
+    .slice(start, end)
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+  const catchBlock = stage.slice(stage.indexOf("catch {"), stage.indexOf("Start-Sleep"));
+
+  it("is found", () => {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+  });
+
+  it("retries Update-MpSignature in a loop, only on 0x80070652, rethrowing anything else", () => {
+    expect(stage).toMatch(/while \(\$true\) \{[\s\S]*try \{ Update-MpSignature; break \}/);
+    expect(catchBlock).toContain("'HRESULT 0x80070652,*'");
+    expect(catchBlock).toContain("-eq -2147023278");
+    expect(catchBlock).toMatch(/if \(-not \$busy\) \{ throw \}/);
+    expect(stage).toMatch(/Start-Sleep -Seconds \d+/);
+  });
+
+  it("stops waiting when the signature version moves", () => {
+    const loop = stage.slice(stage.indexOf("Start-Sleep"));
+    expect(loop).toMatch(/\$now = \(Get-MpComputerStatus\)\.AntivirusSignatureVersion/);
+    expect(loop).toMatch(/if \(\$now -ne \$before\) \{[^}]*break \}/);
+  });
+
+  it("fails closed at a bounded deadline of 20-30 minutes", () => {
+    const m = stage.match(/\$deadline = \(Get-Date\)\.AddMinutes\((\d+)\)/);
+    expect(m).not.toBeNull();
+    const minutes = Number(m?.[1]);
+    expect(minutes).toBeGreaterThanOrEqual(20);
+    expect(minutes).toBeLessThanOrEqual(30);
+    expect(stage).toMatch(/if \(\(Get-Date\) -gt \$deadline\) \{[^}]*exit 1 \}/);
+  });
+});
