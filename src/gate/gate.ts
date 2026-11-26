@@ -65,6 +65,13 @@ export interface GateTask {
   readonly id: string;
   readonly family: OracleFamily;
   readonly stateFile: string;
+  /**
+   * Every persisted file the gate reads for this task, `stateFile` first (capability track
+   * P). `buildRegistry` sets it to `[stateFile]` unless the family declares `stateFiles`;
+   * absent reads as `[stateFile]` (a multi-file family then lacks its files and its oracle
+   * fails closed with ORACLE_ERROR).
+   */
+  readonly stateFiles?: readonly string[];
   readonly spec: unknown;
   readonly specSha256: string;
   readonly title?: string;
@@ -100,6 +107,24 @@ export function specDigest(spec: unknown): string {
   return sha256(canonical(spec));
 }
 
+/** At most this many persisted files per task (a cross-app task of 10 steps reads 22). */
+export const MAX_STATE_FILES = 32;
+
+/**
+ * Validate a family's `stateFiles` list for a task: safe relative paths, no repeats, the
+ * task's `stateFile` among them, at most MAX_STATE_FILES. Returns the list or a problem.
+ */
+function stateFilesProblem(listed: unknown, stateFile: string): readonly string[] | string {
+  if (!Array.isArray(listed) || listed.length === 0 || listed.length > MAX_STATE_FILES)
+    return `the family must list 1-${MAX_STATE_FILES} state files`;
+  if (!listed.every((file) => typeof file === "string" && isSafeRelativePath(file)))
+    return "the family listed a state file that is not a safe relative path";
+  if (new Set(listed).size !== listed.length) return "the family listed a state file twice";
+  if (!listed.includes(stateFile))
+    return `stateFile must be one of the family's state files (${listed.join(", ")})`;
+  return listed as string[];
+}
+
 /** Build the registry, validating every entry. Throws with every problem listed. */
 export function buildRegistry(
   entries: readonly TaskEntry[],
@@ -129,10 +154,20 @@ export function buildRegistry(
       continue;
     }
     const spec = structuredClone(entry.spec);
+    let stateFiles: string[] = [entry.stateFile];
+    if (family.stateFiles) {
+      const listed = stateFilesProblem(family.stateFiles(spec), entry.stateFile);
+      if (typeof listed === "string") {
+        problems.push(`${where}: ${listed}`);
+        continue;
+      }
+      stateFiles = [entry.stateFile, ...listed.filter((file) => file !== entry.stateFile)];
+    }
     out.set(entry.id, {
       id: entry.id,
       family,
       stateFile: entry.stateFile,
+      stateFiles,
       spec,
       specSha256: specDigest(spec),
       ...(entry.title === undefined ? {} : { title: entry.title }),
@@ -752,6 +787,30 @@ export function createGate(config: GateConfig): Gate {
         bytes: read.bytes.length,
       },
     ];
+    // A multi-file family (capability track P): every other listed file, in order, through
+    // the same reader with the same rules. Any one missing or unreadable is `uncertain`
+    // before an oracle runs; the refs keep what was read so far for the audit.
+    const states = new Map<string, Uint8Array>([[task.stateFile, read.bytes]]);
+    for (const file of (task.stateFiles ?? [task.stateFile]).slice(1)) {
+      const more = await readWithin(() => config.reader.read(runId, file), readTimeoutMs, diagnose);
+      if (!more.ok) {
+        return finish({
+          verdict: "uncertain",
+          codes: [more.cause === "missing" ? "STATE_MISSING" : "STATE_UNREADABLE"],
+          reasons: [`could not look: ${more.detail}`],
+          request,
+          refs,
+        });
+      }
+      refs.push({
+        kind: "persisted-state",
+        runId,
+        path: file,
+        sha256: sha256(more.bytes),
+        bytes: more.bytes.length,
+      });
+      states.set(file, more.bytes);
+    }
 
     // The sealed fixture (TIF-270 round 3): when the operator's spec names one, the expected
     // document is built from it, not regenerated from the seed. The bytes come from the
@@ -812,7 +871,11 @@ export function createGate(config: GateConfig): Gate {
         read.bytes,
         structuredClone(task.spec),
         `${runId}/${task.stateFile}`,
-        fixture === undefined ? {} : { fixture: new Uint8Array(fixture) },
+        {
+          ...(fixture === undefined ? {} : { fixture: new Uint8Array(fixture) }),
+          // Fresh copies: an oracle that mutates its input cannot change the evidence refs.
+          states: new Map([...states].map(([file, bytes]) => [file, new Uint8Array(bytes)])),
+        },
       );
       // Inside the try: a throwing getter on the output is an oracle error, and the
       // result keeps its request and evidence refs.

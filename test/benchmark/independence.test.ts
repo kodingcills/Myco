@@ -57,12 +57,36 @@ describe("benchmark grader independence (TIF-267)", () => {
   });
 
   it("never names a gate module or a process launcher", () => {
+    // `state/` and `myco-state`: capability track I's live-state tools (src/state/) are an
+    // agent aid, never a grading input.
     const forbidden =
-      /uno-verifier|filepersist|tasks\/(intent|fixture|calc-record-edit)|core\/verify|child_process|soffice|execFile|spawn\(/;
+      /uno-verifier|filepersist|tasks\/(intent|fixture|calc-record-edit)|core\/verify|child_process|soffice|execFile|spawn\(|state\/|myco-state/;
     for (const file of graderFiles) {
       const code = readFileSync(file, "utf8").replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, "");
       expect(code, relative(ROOT, file)).not.toMatch(forbidden);
     }
+  });
+
+  it("cross-app (track P): the grader has its own readers for the new format, sharing nothing with the gate", () => {
+    // The cross-app grader and its plain-text report reader are walked like every grader
+    // module above; this pins that they exist and name no gate or task-definition module.
+    for (const name of ["cross-app.ts", "report-text.ts"]) {
+      const file = join(GRADER, name);
+      expect(graderFiles).toContain(file);
+      const code = readFileSync(file, "utf8").replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, "");
+      expect(code, name).not.toMatch(/from\s+["'][^"']*(gate\/|tasks\/|oracle-selftest\/)/);
+    }
+  });
+
+  it("cross-app (track P): the gate's cross-app family never reaches the grader", () => {
+    const gateFiles = ["cross-app.ts", "cross-app-demo.ts", "families.ts", "gate.ts"].map((f) =>
+      join(ROOT, "src", "gate", f),
+    );
+    const reached: string[] = [];
+    for (const file of gateFiles)
+      for (const mod of walk(file).keys())
+        if (mod.startsWith(join(ROOT, "src", "benchmark"))) reached.push(relative(ROOT, mod));
+    expect(reached).toEqual([]);
   });
 
   it("the walker catches a gate import (bite check)", () => {

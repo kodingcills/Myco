@@ -1,7 +1,9 @@
-# Myco false-completion benchmark: public package (draft)
+# Myco false-completion benchmark: public package
 
-**Status: draft, docs only (Tier 0).** It holds no results. No number may appear here until
-real runs exist and their ledgers are published with them (M2 plan R8).
+**Status: ready to publish beside results; no results yet.** No number may appear here until
+real runs exist and their ledgers are published with them (M2 plan R8); until then each place
+a result will go says **RESULTS PENDING**. There is no leaderboard and no hosted service:
+every step runs locally from a clone, under Apache-2.0.
 
 The benchmark asks one question about a computer-use agent: **when it says "done", is the
 saved document actually right?** Every trial is judged by an independent grader that reads
@@ -24,8 +26,10 @@ README for running a third-party arm.
 When there are real runs, a release adds the following, and nothing else:
 - the arm ledgers (`myco.benchmark.arm-row/1`) and grade ledgers (`myco.benchmark.grade-row/1`);
 - the saved documents the grader read, named by trial;
-- the check's output, recomputable from those files with the commands in
-  [Reproduce on Linux](reproduce-linux.md) §1.
+- the check's output, run in evidence mode (`--evidence`, and `--require-r1` for the gated
+  arm), recomputable from those files with the commands in
+  [Reproduce on Linux](reproduce-linux.md) §1. Its cost figures are a token-derived estimate,
+  not billed USD.
 
 Traces, run directories, host paths, VM details and model output are never part of it
 (`docs/benchmark/false-completion.md` §5).
