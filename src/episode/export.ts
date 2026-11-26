@@ -36,7 +36,12 @@ import {
   joinedIdentity,
   openStrings,
 } from "./closed.ts";
-import { type IdentityOptions, identityEntries } from "./identity.ts";
+import {
+  heldIdentity,
+  type IdentityEntry,
+  type IdentityOptions,
+  identityEntries,
+} from "./identity.ts";
 import { blobsFor, EpisodeStore, readStoreDir } from "./store.ts";
 import type { Episode, EpisodeOutcome } from "./types.ts";
 import { canonicalJson, sha256Hex, validateEpisode } from "./validate.ts";
@@ -149,12 +154,32 @@ export function validateFilter(f: EpisodeFilter): void {
   if (issues.length > 0)
     throw new Error(`invalid filter: ${issues.map((i) => `${i.path} ${i.message}`).join("; ")}`);
   if (f.outcome !== null && !(EPISODE_OUTCOMES as readonly string[]).includes(f.outcome))
-    throw new Error(`invalid filter outcome ${f.outcome}`);
+    throw new Error("invalid filter: outcome is not an episode outcome");
   // The filter is written to the manifest: its strings are closed too (never free text).
   if (f.taskSetVersion !== null && !/^[A-Za-z0-9._-]{1,64}$/.test(f.taskSetVersion))
     throw new Error("invalid filter: taskSetVersion is not a closed task-set id");
   if (f.arm !== null && !ARM_GRAMMAR.test(f.arm))
     throw new Error("invalid filter: arm is not a closed arm id");
+}
+
+/**
+ * Identity strings in a filter's written strings (folded, identity.ts: any case, joined forms),
+ * by class and path, never value. The filter is written to the manifest, so the export refuses on
+ * one and `validateDataset` reports one (#556 round 3, B1).
+ */
+export function filterIdentityIssues(
+  f: EpisodeFilter,
+  entries: readonly IdentityEntry[],
+): { readonly class: string; readonly path: string }[] {
+  return (
+    [
+      ["$.filter.taskSetVersion", f.taskSetVersion],
+      ["$.filter.arm", f.arm],
+    ] as const
+  ).flatMap(([path, v]) => {
+    const hit = typeof v === "string" ? heldIdentity(v, entries) : undefined;
+    return hit === undefined ? [] : [{ class: hit[0], path }];
+  });
 }
 
 export function exportDataset(options: {
@@ -171,21 +196,11 @@ export function exportDataset(options: {
   const host = options.host ?? currentHost();
   // Identity strings (lead ruling 21:52Z): read now, from os and the identity file.
   const entries = identityEntries(options.identity);
-  // The filter's strings are written to the manifest: an identity in one (joined forms too,
-  // case-insensitive) refuses the export.
-  const filterIdentity = (
-    [
-      ["$.taskSetVersion", filter.taskSetVersion],
-      ["$.arm", filter.arm],
-    ] as const
-  ).flatMap(([path, v]) => {
-    const hit =
-      v === null ? undefined : entries.find(([, e]) => v.toLowerCase().includes(e.toLowerCase()));
-    return hit === undefined ? [] : [{ class: hit[0], path }];
-  });
+  // The filter's strings are written to the manifest: an identity in one refuses the export.
+  const filterIdentity = filterIdentityIssues(filter, entries);
   if (filterIdentity.length > 0)
     throw new Error(
-      `export refused: the filter carries an identity string (${filterIdentity[0]?.class} at ${filterIdentity[0]?.path.replace(/^\$/, "$.filter")})`,
+      `export refused: the filter carries an identity string (${filterIdentity[0]?.class} at ${filterIdentity[0]?.path})`,
     );
   if (options.stores.length === 0) throw new Error("export: name at least one store");
   const byId = new Map<string, Episode>();
@@ -270,6 +285,15 @@ export function validateDataset(
   const schemaIssues = validateSchema(manifest, episodeDatasetManifestSchema);
   if (schemaIssues.length > 0)
     return schemaIssues.map((i) => `manifest ${i.path}: ${i.keyword} ${i.message}`);
+  // The manifest's filter is checked as the exporter checks it (#556 round 3, B1): its closed
+  // grammars and the identity check. A hand-edited filter cannot carry a path or an identity.
+  try {
+    validateFilter(manifest.filter);
+  } catch (e) {
+    problems.push(`manifest filter: ${(e as Error).message}`);
+  }
+  for (const i of filterIdentityIssues(manifest.filter, entries))
+    problems.push(`manifest filter: IDENTITY ${i.class} at ${i.path}`);
 
   const listed = new Map(manifest.files.map((f) => [f.path, f]));
   const onDisk = new Set<string>();

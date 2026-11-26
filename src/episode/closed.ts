@@ -39,7 +39,7 @@ import {
   EPISODE_SOURCES,
 } from "../../schemas/episode.ts";
 import { REASON_CODES } from "../gate/api.ts";
-import type { IdentityEntry } from "./identity.ts";
+import { heldIdentity, type IdentityEntry } from "./identity.ts";
 import type { Episode } from "./types.ts";
 import { episodeIdOf } from "./validate.ts";
 
@@ -69,7 +69,7 @@ export function exportDigest(raw: string): string {
 export type Treatment =
   | { readonly kind: "text" }
   | { readonly kind: "id" }
-  | { readonly kind: "token" }
+  | { readonly kind: "token"; readonly vocabulary: RegExp }
   | {
       readonly kind: "closed";
       readonly grammar: RegExp;
@@ -79,7 +79,20 @@ export type Treatment =
 
 const text: Treatment = { kind: "text" };
 const id: Treatment = { kind: "id" };
-const token: Treatment = { kind: "token" };
+/**
+ * F1 (lead ruling 2026-11-26 22:18Z): agent-produced key and app names go out verbatim ONLY when
+ * they are in a closed vocabulary; anything else is digested (`h-<60 hex>`: the schema caps both
+ * fields at 64 characters, so the 64-hex form does not fit).
+ *
+ * KNOWN_KEYS: a key or a key combination, up to three modifiers then one named key, any case
+ * (`ctrl+s`, `Return`, `F5`, `ctrl+shift+Tab`).
+ */
+export const KNOWN_KEYS =
+  /^(?:(?:ctrl|control|alt|option|shift|cmd|meta|super)\+){0,3}(?:[a-z0-9]|f(?:[1-9]|1[0-2])|enter|return|escape|esc|tab|space|backspace|delete|del|insert|home|end|pageup|pagedown|up|down|left|right)$/i;
+/** REGISTERED_APPS: the app ids a launch action may name (the LibreOffice apps the gate drives). */
+export const REGISTERED_APPS = /^(?:localc|lowriter|soffice|libreoffice|scalc|swriter)$/;
+const keyName: Treatment = { kind: "token", vocabulary: KNOWN_KEYS };
+const appId: Treatment = { kind: "token", vocabulary: REGISTERED_APPS };
 const closed = (grammar: RegExp): Treatment => ({ kind: "closed", grammar });
 const oneOf = (...values: readonly string[]): Treatment => ({
   kind: "closed",
@@ -119,8 +132,8 @@ export const FIELD_TREATMENT: Readonly<Record<string, Treatment>> = {
   ),
   "$.actions.items[].button": oneOf("left", "right", "middle"),
   "$.actions.items[].text": text,
-  "$.actions.items[].keys": token,
-  "$.actions.items[].app": token,
+  "$.actions.items[].keys": keyName,
+  "$.actions.items[].app": appId,
   "$.actions.items[].command": text,
   "$.actions.items[].claim": oneOf("done", "not-done", "no-claim"),
   "$.observations.capture": oneOf("recorded", "not-recorded"),
@@ -128,7 +141,12 @@ export const FIELD_TREATMENT: Readonly<Record<string, Treatment>> = {
   "$.observations.items[].mediaType": oneOf("image/png", "text/csv", "application/json"),
   "$.observations.items[].label": oneOf("persisted", "ui-tree", "app-state"),
   "$.observations.items[].sha256": digest,
-  "$.observations.items[].file": closed(/^blobs\/[0-9a-f]{64}\.(?:png|csv|json)$/),
+  // A content-addressed name (hex): exempt from the identity check, like a digest (#556 r3, S1).
+  "$.observations.items[].file": {
+    kind: "closed",
+    grammar: /^blobs\/[0-9a-f]{64}\.(?:png|csv|json)$/,
+    exempt: true,
+  },
   "$.observations.items[].text": text,
   "$.agentClaim": oneOf("done", "not-done", "no-claim"),
   "$.gate.verdict": oneOf("verified", "refuted", "uncertain"),
@@ -174,9 +192,9 @@ export class ExportInputError extends Error {
 /** `$.actions.items[3].text` -> `$.actions.items[].text`. */
 export const templateOf = (path: string) => path.replace(/\[\d+\]/g, "[]");
 
-/** Whether `value` holds an identity string anywhere (case-insensitive; joined forms included). */
+/** Whether `value` holds an identity string anywhere (folded, identity.ts: joined forms included). */
 const holds = (value: string, joined: readonly IdentityEntry[]) =>
-  joined.some(([, v]) => value.toLowerCase().includes(v.toLowerCase()));
+  heldIdentity(value, joined) !== undefined;
 
 function treat(path: string, value: string, joined: readonly IdentityEntry[]): string {
   const t = FIELD_TREATMENT[templateOf(path)];
@@ -188,10 +206,14 @@ function treat(path: string, value: string, joined: readonly IdentityEntry[]): s
       return HASHED.test(value) ? value : `h-${exportDigest(value)}`;
     // An id or token that would be kept verbatim but holds an identity string (even joined,
     // `<Name>2`) is digested instead (lead ruling 21:52Z).
+    // An already-hashed id or token is closed and carries nothing: kept as is (#556 r3, S2), so a
+    // re-export is byte-identical even when an identity's letters occur in the hash.
     case "id":
+      if (HASHED.test(value)) return value;
       return CLOSED_ID.test(value) && !holds(value, joined) ? value : `h-${exportDigest(value)}`;
     case "token":
-      return CLOSED_TOKEN.test(value) && !holds(value, joined)
+      if (HASHED_SHORT.test(value)) return value;
+      return t.vocabulary.test(value) && !holds(value, joined)
         ? value
         : `h-${exportDigest(value).slice(0, 60)}`;
     case "closed":
@@ -237,7 +259,7 @@ export function openStrings(ep: unknown): string[] {
           : t.kind === "id"
             ? CLOSED_ID.test(node) || HASHED.test(node)
             : t.kind === "token"
-              ? CLOSED_TOKEN.test(node) || HASHED_SHORT.test(node)
+              ? t.vocabulary.test(node) || HASHED_SHORT.test(node)
               : t.grammar.test(node));
       if (!ok) out.push(path);
     } else if (Array.isArray(node)) {
@@ -266,9 +288,9 @@ export function joinedIdentity(
       const t = FIELD_TREATMENT[templateOf(path)];
       if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) return;
       if (HASHED.test(node) || HASHED_SHORT.test(node)) return;
-      const lower = node.toLowerCase();
-      for (const [cls, v] of joined)
-        if (lower.includes(v.toLowerCase())) out.push({ class: cls, path });
+      // Every identity this string holds (folded: joined forms, full case folding; identity.ts).
+      for (const entry of joined)
+        if (heldIdentity(node, [entry]) !== undefined) out.push({ class: entry[0], path });
     } else if (Array.isArray(node)) {
       for (const [i, item] of node.entries()) visit(item, `${path}[${i}]`);
     } else if (node !== null && typeof node === "object") {

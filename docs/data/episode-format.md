@@ -211,6 +211,8 @@ refuses:
 - an episode outside the filter;
 - any `blobs/` entry (a dataset is digest-only);
 - an episode with any string outside its field's closed grammar (`OPEN_STRING`, below);
+- a manifest filter that fails the export's own filter check (its closed grammars) or carries an
+  identity string (`manifest filter: …`, below);
 - a mislabelled dataset.
 
 `import` validates the dataset first, then writes into a store of the same kind. An episode that
@@ -229,7 +231,7 @@ the closed-schema pattern of #553:
 | Closed value | enums, digests, timestamps, blob file names, reason codes, versions, fault codes, and the arm (a known arm, `myco-gate` or `hcu+shell`, optionally with a `:variant` of lower-case letters, digits and hyphens, such as the multi-step demo's `myco-gate:retry`) | as is when it matches its grammar; anything else **refuses the export**, naming the field, never the value |
 | Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`), else `h-<sha256>` |
 | Free text | `task.instruction`, typed text, shell commands, UI status | always `h-<sha256>` of the raw value |
-| Short free token | key names, app names (schema cap 64) | as is when it is a closed token (no space, no separator), else `h-<60 hex>` |
+| Key and app names (F1, lead ruling 22:18Z) | `keys`, `app` (schema cap 64) | as is ONLY from a closed vocabulary: a known key or key combination (`KNOWN_KEYS`: up to three modifiers plus a named key, any case) or a registered app id (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`); anything else `h-<60 hex>` (the 64-hex form does not fit the cap) |
 
 The digest is sha256 under the domain tag `myco.episode.export-text/1`, unsalted, so equal
 values stay equal (one run's episodes share a hashed `runId`). A digest does not reveal its
@@ -247,26 +249,35 @@ exported episode as a backstop. It is no longer what keeps a path out.
 
 **Identity strings are leaks** (lead ruling 2026-11-26 21:52Z; `src/episode/identity.ts`). A host
 username, the host name, or a configured identity string (a full name, another account) never
-leaves the machine verbatim, in any case, whether alone, in a path or joined to other text
-(`<name>_trial`, `<Name>2`, `xx<name>`, `<name>Trial`):
+leaves the machine verbatim, in any case, whether alone, in a path or joined to other text:
 - free text is always digested;
 - an id or token field that holds one (`task.id`, `runId`, `trialKey`, `plannerModelId`, key and
   app names) is digested;
-- any other closed pattern field that holds one (a task family, a task-set id, a version), or the
-  export filter, refuses the export, naming the JSON path and the class, never the value;
-- `validateDataset` refuses a hand-edited dataset carrying one.
+- any other closed pattern field that holds one (task family, task-set id, fault class, oracle
+  family and version, grader version, the arm, a fault code), or the export filter (task set and
+  arm), refuses the export, naming the JSON path and the class, never the value;
+- `validateDataset` refuses a hand-edited dataset carrying one, its manifest filter included.
 
-The scope matches the shared leak guard (#560):
+The sources and thresholds are the shared leak guard's (#560):
 - the account name (`os.userInfo().username`), at least 3 characters and not a generic account
   (`root`, `user`, `runner`, `admin`, `ubuntu`, `node`, `nobody`, `vscode`, `codespace`, #560's
   list);
 - the host name's first DNS label (`os.hostname()`), at least 4 characters, not `localhost`;
-- each line of an optional identity file (`--identity-file <file>`), at least 3 characters.
+- each line of an optional identity file (`--identity-file <file>`; CRLF and a byte-order mark
+  accepted; an unreadable file refuses without naming its path), at least 3 characters.
 
-Matching is case-insensitive substring over every string kept verbatim. Enum values and digests
-are exempt, because a match there could only be a false refusal. The host values are read at
-export time from `os` and always checked. On a CI runner the account is the generic `runner`, so
-CI exercises the check with planted identities.
+The host values are read from `os` at export and validate time and are ALWAYS merged into what the
+caller passes (#553). Fake host facts, or a short or generic extra name, never switch them off.
+
+Matching is stricter than #560's word match: full Unicode case folding (NFKC, then upper, then
+lower case: `ß`/`ẞ` become `ss`, `ı`/`İ` become `i`), then letters and digits only, by
+substring. So joined forms are caught (`<name>_trial`, `<Name>2`, `xx<name>`, `<name>Trial`), a
+spaced full name matches `FirstLast`, `first.last`, `first_last` and `First-Last`, and `GROSS`
+matches a configured `Groß`. Enum values, digests and content-addressed blob names are exempt,
+because a match there could only be a false refusal. An already-hashed id or token is kept as is,
+so a re-export stays byte-identical. On a CI runner the account is the generic `runner`, so CI
+proves the check with planted identities in every field and with an os-mocked test
+(`test/episode/identity-os.test.ts`).
 
 **Blobs are digest-only** (lead ruling 2026-11-26 20:3xZ). Screenshots and CSV/JSON state leave
 the machine only as the sha256, byte count and content-addressed name their observation already
