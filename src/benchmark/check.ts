@@ -116,6 +116,11 @@ export interface CheckResult {
 export interface CheckOptions {
   /** Expected row count per arm present. Every arm in the ledger must be listed. */
   readonly expectTrials: Readonly<Partial<Record<Arm, number>>>;
+  /**
+   * Checking evidence (a scorecard number), not plumbing: refuse any simulated row
+   * (`plannerModelId` starting `simulated:`, written by dry runs).
+   */
+  readonly evidence?: boolean;
 }
 
 /** Host paths must never reach a publishable ledger (M2 plan §6; test/no-home-paths). */
@@ -168,6 +173,11 @@ export function checkBenchmark(
   });
 
   if (armInput.length === 0) errors.push("arm ledger is empty");
+  if (options.evidence === true) {
+    const simulated = armRows.filter((r) => r.plannerModelId.startsWith("simulated:")).length;
+    if (simulated > 0)
+      errors.push(`${simulated} simulated row(s): dry-run rows are never evidence`);
+  }
   if (gradeInput.length === 0) errors.push("grade ledger is empty");
 
   const taskSetVersions = new Set(armRows.map((r) => r.taskSetVersion));

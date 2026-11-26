@@ -15,12 +15,14 @@ const args = process.argv.slice(2);
 let armPath: string | undefined;
 let gradesPath: string | undefined;
 let requireR1 = false;
+let evidence = false;
 const expectTrials: Partial<Record<Arm, number>> = {};
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--arm") armPath = args[++i];
   else if (a === "--grades") gradesPath = args[++i];
   else if (a === "--require-r1") requireR1 = true;
+  else if (a === "--evidence") evidence = true;
   else if (a === "--expect") {
     const [arm, n] = (args[++i] ?? "").split("=");
     if ((arm !== "myco-gate" && arm !== "hcu+shell") || !/^[1-9][0-9]*$/.test(n ?? "")) {
@@ -45,6 +47,9 @@ const readJsonl = (p: string) =>
     .filter((l) => l.trim() !== "")
     .map((l) => JSON.parse(l) as unknown);
 
-const result = checkBenchmark(readJsonl(armPath), readJsonl(gradesPath), { expectTrials });
+const result = checkBenchmark(readJsonl(armPath), readJsonl(gradesPath), {
+  expectTrials,
+  evidence,
+});
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 process.exit(!result.ok || (requireR1 && result.r1?.pass !== true) ? 1 : 0);
