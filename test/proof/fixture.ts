@@ -4,7 +4,8 @@
  * unmerged code.
  */
 import type { ProofBundle, ProofRecord, ProofRunInput } from "../../src/proof/bundle.ts";
-import { recordSha256 } from "../../src/proof/bundle.ts";
+import { recordSha256, runGenesis } from "../../src/proof/bundle.ts";
+import { episodeIdOf } from "../../src/proof/episode-ref.ts";
 import {
   ATTEMPT_EVENT_SCHEMA,
   GENESIS_SHA256,
@@ -97,6 +98,81 @@ export function sampleRun(): ProofRunInput {
   };
 }
 
+/**
+ * A whole `myco.episode/1` record in #542's shape (src/episode/types.ts @ b5048469), for the
+ * run `sampleRun()` describes. Q reads only `EPISODE_FIELDS_USED`; the rest is here so the
+ * id and digest are computed over a realistic record.
+ */
+export function sampleEpisode(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const ledger = sampleLedger();
+  const body: Record<string, unknown> = {
+    schema: "myco.episode/1",
+    outcome: "refuted",
+    simulated: true,
+    task: {
+      id: "df-s02",
+      family: "todo-store",
+      taskSetVersion: null,
+      faultClass: "silent-drop",
+      instruction: null,
+      instructionSha256: null,
+      fixtureSha256: null,
+    },
+    actions: {
+      capture: "recorded",
+      truncated: false,
+      items: [
+        { seq: 0, atMs: null, kind: "type", text: "buy milk" },
+        { seq: 1, atMs: null, kind: "key", keys: "Return" },
+        { seq: 2, atMs: null, kind: "click", x: 210, y: 284, button: "left" },
+        { seq: 3, atMs: null, kind: "gate-check", claim: "done" },
+      ],
+    },
+    observations: { capture: "not-recorded", withheld: 0, items: [] },
+    agentClaim: "done",
+    gate: {
+      verdict: "refuted",
+      accepted: false,
+      reasonCodes: ["ORACLE_FAIL", "CLAIM_RECORDED"],
+      oracle: null,
+    },
+    groundTruth: { source: "none", reason: "no-independent-grader" },
+    harness: {
+      arm: "myco-gate",
+      plannerModelId: null,
+      outputCeiling: null,
+      corrections: "off",
+      flags: { policy: true, handoff: true, assisted: null },
+      timing: { startedAt: null, endedAt: null, wallClockS: null, vmS: null },
+      cost: {
+        basis: "token-derived estimate at frozen rates; not billed USD",
+        estimateUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+      },
+      fault: null,
+    },
+    provenance: {
+      source: "demo-mock",
+      runId: "run-1",
+      trialKey: "t-ours",
+      attemptLedger: {
+        schema: "myco.m2.attempt-event/1",
+        events: ledger.head.events,
+        headSha256: ledger.head.headSha256,
+      },
+      writer: "myco.episode-writer/1",
+    },
+    ...over,
+  };
+  return { ...body, episodeId: episodeIdOf(body) };
+}
+
+/** `sampleRun()` with its episode attached. */
+export function sampleRunWithEpisode(): ProofRunInput {
+  return { ...sampleRun(), episode: sampleEpisode() };
+}
+
 export const NO_CTX: RedactionContext = {
   secrets: [],
   vaultKeys: [],
@@ -112,7 +188,7 @@ export function clone<T>(v: T): T {
 /** Re-chain records and re-pin the head, as a forger who controls the whole bundle would. */
 export function rechain(bundle: ProofBundle): ProofBundle {
   const records: ProofRecord[] = [];
-  let prev = GENESIS_SHA256;
+  let prev = runGenesis(bundle.run);
   for (const r of bundle.records) {
     const next = { ...r, seq: records.length, prevSha256: prev };
     records.push(next);

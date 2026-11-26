@@ -91,7 +91,9 @@ function eventShapeErrors(value: unknown): string[] {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return ["not an object"];
   const e = value as Record<string, unknown>;
   const out: string[] = [];
-  for (const key of Object.keys(e)) if (!EVENT_KEYS.has(key)) out.push(`unknown field "${key}"`);
+  // The unknown key's NAME is never echoed: a key can carry a path or a secret.
+  const unknown = Object.keys(e).filter((key) => !EVENT_KEYS.has(key)).length;
+  if (unknown > 0) out.push(`${unknown} unknown field(s)`);
   if (e.schema !== ATTEMPT_EVENT_SCHEMA) out.push("schema");
   if (!Number.isInteger(e.seq) || (e.seq as number) < 0) out.push("seq");
   if (typeof e.prevSha256 !== "string" || !HEX64.test(e.prevSha256)) out.push("prevSha256");
@@ -107,7 +109,7 @@ function eventShapeErrors(value: unknown): string[] {
   if (e.kind === "start" && (e.outcome !== undefined || e.harnessClass !== undefined))
     out.push("a start event has no outcome or harness class");
   if (e.kind === "end") {
-    if (e.outcome === undefined) out.push("an end event has an outcome");
+    if (e.outcome === undefined) out.push("an end event must have an outcome");
     if ((e.outcome === "harness-fault") !== (e.harnessClass !== undefined))
       out.push("an end event has a harness class exactly when its outcome is harness-fault");
   }

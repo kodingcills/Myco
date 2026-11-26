@@ -6,6 +6,10 @@
  * 'none'` so a browser fetches nothing even if a value slipped through. Every value is
  * HTML-escaped. A bundle that does not verify is never rendered (fail closed): a report of
  * an unverified bundle would look like proof.
+ *
+ * The rendered HTML is itself scanned for leaks (`findLeaks`, every decoded form, HTML
+ * entities included) before it is returned. A leak throws and no report is produced: the
+ * report is an output in its own right, not only a view of a scanned bundle.
  */
 import type {
   ActionBody,
@@ -19,6 +23,7 @@ import type {
   VerdictBody,
   VerifyResult,
 } from "./bundle.ts";
+import { EMPTY_REDACTION, findLeaks, type RedactionContext } from "./redact.ts";
 
 export function escapeHtml(text: string): string {
   return text
@@ -72,10 +77,29 @@ function detail(r: ProofRecord): string {
 
 export class ProofReportError extends Error {}
 
-/** Render a verified bundle. Throws when `verification.ok` is false. */
-export function renderProofReport(bundle: ProofBundle, verification: VerifyResult): string {
+/**
+ * Render a verified bundle. Throws when `verification.ok` is false, or when the rendered
+ * HTML carries anything `findLeaks` (with `redaction`) refuses.
+ */
+export function renderProofReport(
+  bundle: ProofBundle,
+  verification: VerifyResult,
+  redaction: RedactionContext = EMPTY_REDACTION,
+): string {
   if (!verification.ok)
     throw new ProofReportError("refusing to render a bundle that does not verify");
+  const html = renderHtml(bundle, verification);
+  const leaks = findLeaks(html, redaction);
+  if (leaks.length > 0)
+    throw new ProofReportError(
+      `refusing to write a report that carries ${leaks.length} unredacted value(s): ${[
+        ...new Set(leaks.map((l) => l.kind)),
+      ].join(", ")}`,
+    );
+  return html;
+}
+
+function renderHtml(bundle: ProofBundle, verification: VerifyResult): string {
   const e = escapeHtml;
   const rows = bundle.records
     .map(
@@ -87,6 +111,15 @@ export function renderProofReport(bundle: ProofBundle, verification: VerifyResul
     bundle.ledger === null
       ? "<p>No attempt ledger in this bundle.</p>"
       : `<p>Attempt ledger: ${bundle.ledger.events.length} events, head <code>${e(verification.ledgerHead?.headSha256 ?? "")}</code> (recomputed).</p>`;
+  const ref = bundle.run.episode;
+  const episode =
+    ref === null
+      ? "<p>No episode record referenced (a run written before <code>myco.episode/1</code>).</p>"
+      : `<p>Episode <code>${e(ref.episodeId)}</code>, sha256 <code>${e(ref.sha256)}</code> (${
+          verification.episodeChecked === true
+            ? "recomputed and cross-checked"
+            : "reference only: not checked here"
+        }).</p>`;
   const simulated = bundle.run.simulated
     ? `<p class="sim">SIMULATED RUN: scripted or mock. Not evidence; never counted.</p>`
     : "";
@@ -111,6 +144,7 @@ code,pre{font:12px ui-monospace,monospace;white-space:pre-wrap;word-break:break-
 <h1>Proof bundle: run ${e(bundle.run.runId)}</h1>
 <p>Task ${e(bundle.run.taskId)}${bundle.run.arm === undefined ? "" : `, arm ${e(bundle.run.arm)}`}.</p>
 ${simulated}
+${episode}
 <p class="ok">Verified: every record hash, chain link and inline evidence digest was recomputed. Head <code>${e(bundle.head.headSha256)}</code> (${bundle.head.records} records).</p>
 <p>Digest-only evidence not recomputed here: ${verification.evidenceDigestOnly.map(e).join(", ") || "none"}.</p>
 <p class="claim">${e(bundle.claim)}</p>

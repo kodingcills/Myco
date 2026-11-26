@@ -3,17 +3,25 @@
  *
  * A proof bundle (`myco.proof.bundle/1`) is ONE self-contained JSON file:
  *  - `run`: the run and task ids, the arm, and whether it was simulated (a simulated bundle
- *    is never evidence; the verifier and the report say so);
+ *    is never evidence; the verifier and the report say so), and `episode`: a reference
+ *    (id + digest) to the attempt's canonical `myco.episode/1` record (#542), or null for a
+ *    run written before episodes exist. The bundle is a CONTAINER over the episode, not a
+ *    competing per-attempt record: with the episode at hand the verifier recomputes its id
+ *    and digest and refuses any `run` field that disagrees with it (`episode-ref.ts`);
  *  - `records`: the ordered run, hash-chained. Each record is `{seq, prevSha256, kind, body}`
- *    and `prevSha256` is the sha256 of the previous record's canonical JSON (64 zeros for the
- *    first): the same construction as the attempt ledger (#518). Kinds:
+ *    and `prevSha256` is the sha256 of the previous record's canonical JSON: the attempt
+ *    ledger's construction (#518), except that the first record's `prevSha256` is the sha256
+ *    of the canonical `run` header (`runGenesis`), so the run's ids, arm, `simulated` flag and
+ *    episode reference are covered by the chain and by the head. Kinds:
  *      action      what the agent or harness did (redacted summary);
  *      evidence    a digest (sha256 + bytes) of an artifact; text may be inlined, frames never;
  *      verdict     a myco.gate/v1 verdict: verdict, accepted, reason CODES (no free text);
  *      checkpoint  a per-checkpoint verdict of a multi-step task;
  *      handoff     a handoff between agents or sessions (shape lands with track N);
  *      policy      a policy decision (allow / deny / ask + code; shape lands with track O);
- *      ledger-anchor  binds the run to its attempt-ledger events and the ledger head;
+ *      ledger-anchor  binds the run to ONE trial of the attempt ledger: the trial's start and
+ *                     end events (same trial key, the run's task and the run's arm) and the
+ *                     ledger head. It does not bind the run id: the ledger has none;
  *  - `ledger`: the attempt ledger's events, verbatim, so the verifier can recompute it;
  *  - `head`: record count and the last record's hash;
  *  - `claim`: a FIXED statement of what the bundle proves. The verifier refuses any other
@@ -31,15 +39,21 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { type JsonSchema, validateSchema } from "../../schemas/validate.ts";
 import { GATE_API_VERSION, REASON_CODES } from "../gate/api.ts";
+import { EPISODE_SCHEMA, type EpisodeRef, projectEpisode } from "./episode-ref.ts";
 import {
   canonicalJson,
-  GENESIS_SHA256,
   type LedgerEvent,
   type LedgerHead,
   sha256Hex,
   verifyLedgerChain,
 } from "./ledger.ts";
-import { findLeaks, type RedactionContext, redactDeep, redactText } from "./redact.ts";
+import {
+  findLeaks,
+  findLeaksDeep,
+  type RedactionContext,
+  redactDeep,
+  redactText,
+} from "./redact.ts";
 
 export const PROOF_BUNDLE_SCHEMA = "myco.proof.bundle/1" as const;
 
@@ -157,6 +171,8 @@ export interface ProofBundle {
     readonly taskId: string;
     readonly arm?: string;
     readonly simulated: boolean;
+    /** The attempt's canonical episode (#542), by id and digest; null before episodes exist. */
+    readonly episode: EpisodeRef | null;
   };
   readonly records: readonly ProofRecord[];
   readonly ledger: { readonly events: readonly LedgerEvent[] } | null;
@@ -167,6 +183,8 @@ export interface ProofBundle {
 // Schemas (closed: an unknown field anywhere is a refusal)
 
 const ID = "^[A-Za-z0-9._:-]{1,128}$";
+/** Arms may carry `+` (`hcu+shell`, the ledger's second arm). */
+const ARM = "^[A-Za-z0-9._:+-]{1,128}$";
 const HEX64 = "^[0-9a-f]{64}$";
 const CODE = "^[A-Z][A-Z0-9_]{1,63}$";
 /** Relative path: no leading slash, no drive letter, no `..` segment, no backslash. */
@@ -278,12 +296,27 @@ const bundleSchema: JsonSchema = {
     run: {
       type: "object",
       additionalProperties: false,
-      required: ["runId", "taskId", "simulated"],
+      required: ["runId", "taskId", "simulated", "episode"],
       properties: {
         runId: { type: "string", pattern: ID },
         taskId: { type: "string", pattern: ID },
-        arm: { type: "string", pattern: ID },
+        arm: { type: "string", pattern: ARM },
         simulated: { type: "boolean" },
+        episode: {
+          anyOf: [
+            { type: "null" },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["schema", "episodeId", "sha256"],
+              properties: {
+                schema: { const: EPISODE_SCHEMA },
+                episodeId: { type: "string", pattern: HEX64 },
+                sha256: { type: "string", pattern: HEX64 },
+              },
+            },
+          ],
+        },
       },
     },
     records: {
@@ -328,6 +361,14 @@ export function recordSha256(record: ProofRecord): string {
   return sha256Hex(canonicalJson(record));
 }
 
+/**
+ * The first record's `prevSha256`: the sha256 of the canonical `run` header, tagged with
+ * the bundle schema. Editing any `run` field (for example `simulated`) breaks the chain.
+ */
+export function runGenesis(run: ProofBundle["run"]): string {
+  return sha256Hex(canonicalJson({ schema: PROOF_BUNDLE_SCHEMA, run }));
+}
+
 // ---------------------------------------------------------------------------------------
 // Export
 
@@ -361,6 +402,11 @@ export interface ProofRunInput {
     readonly head: LedgerHead;
     readonly trialKey: string;
   };
+  /**
+   * The attempt's `myco.episode/1` record (#542), parsed. The bundle carries only its id and
+   * digest; the run fields must agree with it (the exporter refuses otherwise).
+   */
+  readonly episode?: unknown;
 }
 
 export class ProofExportError extends Error {
@@ -427,9 +473,12 @@ function stepBody(step: ProofStep, ctx: RedactionContext): { kind: RecordKind; b
   }
 }
 
-function chain(items: ReadonlyArray<{ kind: RecordKind; body: RecordBody }>): ProofRecord[] {
+function chain(
+  run: ProofBundle["run"],
+  items: ReadonlyArray<{ kind: RecordKind; body: RecordBody }>,
+): ProofRecord[] {
   const out: ProofRecord[] = [];
-  let prev = GENESIS_SHA256;
+  let prev = runGenesis(run);
   for (const item of items) {
     const record: ProofRecord = {
       seq: out.length,
@@ -475,23 +524,34 @@ export function exportProofBundle(input: ProofRunInput, ctx: RedactionContext): 
     });
     ledger = { events };
   }
-  const records = chain(items);
+  let episode: EpisodeRef | null = null;
+  if (input.episode !== undefined) {
+    const projected = projectEpisode(input.episode);
+    if (!projected.ok) throw new ProofExportError("PROOF_EPISODE", projected.errors.join("; "));
+    episode = projected.projection.ref;
+  }
+  const run: ProofBundle["run"] = {
+    runId: input.runId,
+    taskId: input.taskId,
+    ...(input.arm === undefined ? {} : { arm: input.arm }),
+    simulated: input.simulated,
+    episode,
+  };
+  const records = chain(run, items);
   const last = records.at(-1);
   if (last === undefined) throw new ProofExportError("PROOF_EMPTY", "a run with no records");
   const bundle: ProofBundle = {
     schema: PROOF_BUNDLE_SCHEMA,
     claim: PROOF_CLAIM,
-    run: {
-      runId: input.runId,
-      taskId: input.taskId,
-      ...(input.arm === undefined ? {} : { arm: input.arm }),
-      simulated: input.simulated,
-    },
+    run,
     records,
     ledger,
     head: { records: records.length, headSha256: recordSha256(last) },
   };
-  const result = verifyProofBundle(serializeProofBundle(bundle), { redaction: ctx });
+  const result = verifyProofBundle(serializeProofBundle(bundle), {
+    redaction: ctx,
+    ...(input.episode === undefined ? {} : { episode: input.episode }),
+  });
   if (!result.ok)
     throw new ProofExportError(
       result.errors[0]?.code ?? "PROOF_INVALID",
@@ -521,6 +581,11 @@ export interface VerifyOptions {
   readonly evidenceDir?: string;
   /** Extra literals that must not appear (the verifying host's own context). */
   readonly redaction?: RedactionContext;
+  /**
+   * The attempt's `myco.episode/1` record, parsed. When given, its id and digest are
+   * recomputed against `run.episode` and the projected `run` fields are cross-checked.
+   */
+  readonly episode?: unknown;
 }
 
 export interface VerifyResult {
@@ -533,6 +598,8 @@ export interface VerifyResult {
   readonly evidenceRecomputed: readonly string[];
   /** Evidence ids that are digest-only and were not recomputed (no `evidenceDir`). */
   readonly evidenceDigestOnly: readonly string[];
+  /** True when the referenced episode was given and cross-checked. */
+  readonly episodeChecked?: boolean;
 }
 
 /** Resolve a bundle-relative evidence path inside `dir`, refusing escapes (symlinks too). */
@@ -566,17 +633,25 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
     ...extra,
   });
 
-  // Redaction first, on the raw text: a leaked value is refused whatever else is wrong.
-  const leaks = findLeaks(text, options.redaction);
+  // Redaction first: a leaked value is refused whatever else is wrong. Every PARSED string
+  // value and key is scanned, each in every decoded form, so a path behind a JSON escape
+  // (`\t`, `\/`, `\u002f`), percent-encoding or an HTML entity cannot hide. Text that does
+  // not parse is scanned as text.
+  let parsed: unknown;
+  let parseOk = true;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parseOk = false;
+  }
+  const leaks = parseOk
+    ? findLeaksDeep(parsed, options.redaction)
+    : findLeaks(text, options.redaction);
   if (leaks.length > 0) {
     const kinds = [...new Set(leaks.map((l) => l.kind))].join(", ");
     fail("PROOF_REDACTION", `the bundle carries ${leaks.length} unredacted value(s): ${kinds}`);
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  if (!parseOk) {
     fail("PROOF_SCHEMA", "not JSON");
     return done();
   }
@@ -589,8 +664,8 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
   if (bundle.claim !== PROOF_CLAIM)
     fail("PROOF_CLAIM", "the claim is not the fixed tamper-evidence statement (no stronger claim)");
 
-  // The record chain.
-  let prev = GENESIS_SHA256;
+  // The record chain, seeded with the run header.
+  let prev = runGenesis(bundle.run);
   let chainOk = true;
   for (let i = 0; i < bundle.records.length; i++) {
     const r = bundle.records[i] as ProofRecord;
@@ -604,7 +679,9 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
     if (r.prevSha256 !== prev) {
       fail(
         "PROOF_CHAIN",
-        `record ${i}: the hash chain breaks (an edited, removed or reordered record)`,
+        i === 0
+          ? "record 0: the hash chain breaks (an edited run header, or an edited or removed first record)"
+          : `record ${i}: the hash chain breaks (an edited, removed or reordered record)`,
       );
       chainOk = false;
       break;
@@ -710,15 +787,47 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
         fail("PROOF_LEDGER_ANCHOR", "the trial ends before it starts");
       else if (s.taskId !== bundle.run.taskId || en.taskId !== bundle.run.taskId)
         fail("PROOF_LEDGER_ANCHOR", "the ledger's trial is for another task");
+      else if (bundle.run.arm === undefined)
+        fail("PROOF_LEDGER_ANCHOR", "a run anchored to a ledger trial must state its arm");
+      else if (s.arm !== bundle.run.arm || en.arm !== bundle.run.arm)
+        fail("PROOF_LEDGER_ANCHOR", "the ledger's trial is for another arm");
     }
     if (options.expectLedgerHead !== undefined && head.headSha256 !== options.expectLedgerHead)
       fail("PROOF_ANCHOR_MISMATCH", "the ledger head differs from the out-of-band head");
+  }
+
+  // The canonical episode this bundle is a container over.
+  let episodeChecked = false;
+  const ref = bundle.run.episode;
+  if (options.episode !== undefined) {
+    if (ref === null) fail("PROOF_EPISODE", "an episode was given but the bundle references none");
+    else {
+      const projected = projectEpisode(options.episode);
+      if (!projected.ok) for (const m of projected.errors) fail("PROOF_EPISODE", m);
+      else {
+        const p = projected.projection;
+        if (p.ref.episodeId !== ref.episodeId || p.ref.sha256 !== ref.sha256)
+          fail("PROOF_EPISODE", "the episode's id or digest differs from the bundle's reference");
+        if (p.runId !== bundle.run.runId)
+          fail("PROOF_EPISODE", "run.runId differs from the episode");
+        if (p.taskId !== bundle.run.taskId)
+          fail("PROOF_EPISODE", "run.taskId differs from the episode");
+        if (p.arm !== bundle.run.arm) fail("PROOF_EPISODE", "run.arm differs from the episode");
+        if (p.simulated !== bundle.run.simulated)
+          fail("PROOF_EPISODE", "run.simulated differs from the episode");
+        const anchor = anchors[0]?.body as LedgerAnchorBody | undefined;
+        if (p.trialKey !== null && anchor !== undefined && anchor.trialKey !== p.trialKey)
+          fail("PROOF_EPISODE", "the anchored ledger trial differs from the episode's trial");
+        episodeChecked = true;
+      }
+    }
   }
 
   return done({
     head: bundle.head,
     ...(ledgerHead === undefined ? {} : { ledgerHead }),
     simulated: bundle.run.simulated,
+    episodeChecked,
   });
 }
 

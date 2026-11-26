@@ -3,17 +3,23 @@
  *
  *   npx tsx scripts/proof.ts export RUN.json --out BUNDLE.json [--forbid-file F]
  *   npx tsx scripts/proof.ts verify BUNDLE.json [--expect-head H] [--expect-ledger-head H]
- *                                   [--evidence-dir D] [--forbid-file F]
+ *                                   [--evidence-dir D] [--episode E] [--forbid-file F]
  *   npx tsx scripts/proof.ts report BUNDLE.json --out REPORT.html [verify flags]
  *
  * RUN.json is a `ProofRunInput` (see bundle.ts) with two file conveniences: an evidence
  * step may give `contentFile` (relative to RUN.json) instead of `content`, and `ledger` may
- * give `attemptsFile` (an `attempts.jsonl`, relative to RUN.json) instead of `lines`.
- * `--forbid-file` names a file of extra literals to redact and refuse, one per line (for
- * example vault key names); its contents are never printed.
+ * give `attemptsFile` (an `attempts.jsonl`, relative to RUN.json) instead of `lines`, and
+ * `episodeFile` (the attempt's `myco.episode/1` JSON, relative to RUN.json) names the
+ * episode the bundle references. `--episode E` makes verify/report cross-check it.
+ * `--forbid-file` names a file of extra literals to redact and refuse, one per line; its
+ * contents are never printed. Export registers no secret VALUES of its own: it redacts the
+ * host's home, temp and checkout directories and account name, the generic secret and path
+ * shapes, and every `--forbid-file` line (redacted as `[redacted:vault-key]`, whatever the
+ * line is: put secret values there too).
  *
  * Exit codes: 0 ok; 1 refused (verification failed, export refused, report not written);
- * 2 usage. Output is JSON on stdout; it never echoes a redacted value.
+ * 2 usage. Output is JSON on stdout; it never echoes a redacted value, and is itself scanned
+ * before it is printed (a leak there prints only the error codes).
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
@@ -29,8 +35,8 @@ import {
   verifyProofBundle,
 } from "./bundle.ts";
 import { parseLedgerJsonl } from "./ledger.ts";
-import type { RedactionContext } from "./redact.ts";
-import { renderProofReport } from "./report.ts";
+import { findLeaks, type RedactionContext } from "./redact.ts";
+import { ProofReportError, renderProofReport } from "./report.ts";
 
 export interface CliIo {
   readonly out: (text: string) => void;
@@ -70,10 +76,18 @@ function parseFlags(args: readonly string[]): { positional: string[]; flags: Map
 
 class UsageError extends Error {}
 
-const KNOWN: Record<string, readonly string[]> = {
+/** Each command's flags (exported so the doc test can pin the documented usage). */
+export const KNOWN: Record<string, readonly string[]> = {
   export: ["--out", "--forbid-file"],
-  verify: ["--expect-head", "--expect-ledger-head", "--evidence-dir", "--forbid-file"],
-  report: ["--out", "--expect-head", "--expect-ledger-head", "--evidence-dir", "--forbid-file"],
+  verify: ["--expect-head", "--expect-ledger-head", "--evidence-dir", "--episode", "--forbid-file"],
+  report: [
+    "--out",
+    "--expect-head",
+    "--expect-ledger-head",
+    "--evidence-dir",
+    "--episode",
+    "--forbid-file",
+  ],
 };
 
 function readForbid(path: string | undefined): string[] {
@@ -91,8 +105,34 @@ function verifyOptions(flags: Map<string, string>, forbid: readonly string[]): V
       ? { expectLedgerHead: flags.get("--expect-ledger-head") }
       : {}),
     ...(flags.has("--evidence-dir") ? { evidenceDir: flags.get("--evidence-dir") } : {}),
-    redaction: { secrets: [], vaultKeys: [...forbid], hostPaths: [], usernames: [] },
+    ...(flags.has("--episode")
+      ? { episode: JSON.parse(readFileSync(flags.get("--episode") as string, "utf8")) }
+      : {}),
+    redaction: forbidRedaction(forbid),
   };
+}
+
+function forbidRedaction(forbid: readonly string[]): RedactionContext {
+  return { secrets: [], vaultKeys: [...forbid], hostPaths: [], usernames: [] };
+}
+
+/**
+ * Print a JSON result, after scanning it: if anything in it would leak, print only the
+ * error codes (never a message, never a value).
+ */
+export function emit(io: CliIo, value: unknown, ctx: RedactionContext, pretty = false): void {
+  const text = JSON.stringify(value, null, pretty ? 2 : undefined);
+  if (findLeaks(text, ctx).length === 0) {
+    io.out(`${text}\n`);
+    return;
+  }
+  const v = value as { ok?: unknown; code?: unknown; errors?: Array<{ code?: unknown }> };
+  const codes = [
+    ...(typeof v.code === "string" ? [v.code] : []),
+    ...(v.errors ?? []).map((e) => String(e.code)),
+    "PROOF_OUTPUT_REDACTED",
+  ];
+  io.out(`${JSON.stringify({ ok: false, codes })}\n`);
 }
 
 type RawStep =
@@ -103,6 +143,7 @@ function loadRunInput(path: string): ProofRunInput {
   const base = dirname(resolve(path));
   const raw = JSON.parse(readFileSync(path, "utf8")) as Omit<ProofRunInput, "steps" | "ledger"> & {
     steps: RawStep[];
+    episodeFile?: string;
     ledger?: {
       attemptsFile?: string;
       lines?: unknown[];
@@ -132,12 +173,23 @@ function loadRunInput(path: string): ProofRunInput {
     }
     ledger = { lines: lines ?? [], head: raw.ledger.head, trialKey: raw.ledger.trialKey };
   }
-  const { ledger: _raw, ...run } = raw;
-  return { ...run, steps, ...(ledger === undefined ? {} : { ledger }) };
+  const { ledger: _raw, episodeFile, ...run } = raw;
+  const episode =
+    episodeFile === undefined
+      ? undefined
+      : (JSON.parse(readFileSync(within(episodeFile), "utf8")) as unknown);
+  return {
+    ...run,
+    steps,
+    ...(ledger === undefined ? {} : { ledger }),
+    ...(episode === undefined ? {} : { episode }),
+  };
 }
 
 export function main(argv: readonly string[], io: CliIo): number {
   const [command, ...rest] = argv;
+  // Every line this CLI prints is scanned with the host's own context first.
+  let outCtx: RedactionContext = hostRedaction();
   try {
     if (command === undefined || !(command in KNOWN))
       throw new UsageError("usage: proof.ts export|verify|report ...");
@@ -148,32 +200,37 @@ export function main(argv: readonly string[], io: CliIo): number {
     const input = positional[0] as string;
     if (!existsSync(input)) throw new UsageError(`no such file: ${command} input`);
     const forbid = readForbid(flags.get("--forbid-file"));
+    outCtx = hostRedaction(forbid);
 
     if (command === "export") {
       const out = flags.get("--out");
       if (out === undefined) throw new UsageError("export needs --out");
       const bundle = exportProofBundle(loadRunInput(input), hostRedaction(forbid));
       writeFileSync(out, serializeProofBundle(bundle));
-      io.out(
-        `${JSON.stringify({ ok: true, head: bundle.head, records: bundle.records.length })}\n`,
-      );
+      emit(io, { ok: true, head: bundle.head, records: bundle.records.length }, outCtx);
       return 0;
     }
 
     const text = readFileSync(input, "utf8");
-    const result = verifyProofBundle(text, verifyOptions(flags, forbid));
+    const options = verifyOptions(flags, forbid);
+    const result = verifyProofBundle(text, options);
     if (command === "verify") {
-      io.out(`${JSON.stringify(result, null, 2)}\n`);
+      emit(io, result, outCtx, true);
       return result.ok ? 0 : 1;
     }
     const out = flags.get("--out");
     if (out === undefined) throw new UsageError("report needs --out");
     if (!result.ok) {
-      io.out(`${JSON.stringify(result, null, 2)}\n`);
+      emit(io, result, outCtx, true);
       return 1;
     }
-    writeFileSync(out, renderProofReport(JSON.parse(text) as ProofBundle, result));
-    io.out(`${JSON.stringify({ ok: true, head: result.head })}\n`);
+    const html = renderProofReport(
+      JSON.parse(text) as ProofBundle,
+      result,
+      options.redaction ?? forbidRedaction(forbid),
+    );
+    writeFileSync(out, html);
+    emit(io, { ok: true, head: result.head }, outCtx);
     return 0;
   } catch (error) {
     if (error instanceof UsageError) {
@@ -181,7 +238,11 @@ export function main(argv: readonly string[], io: CliIo): number {
       return 2;
     }
     if (error instanceof ProofExportError) {
-      io.out(`${JSON.stringify({ ok: false, code: error.code, message: error.message })}\n`);
+      emit(io, { ok: false, code: error.code, message: error.message }, outCtx);
+      return 1;
+    }
+    if (error instanceof ProofReportError) {
+      emit(io, { ok: false, code: "PROOF_REPORT_REFUSED", message: error.message }, outCtx);
       return 1;
     }
     io.err(`proof: ${error instanceof Error ? error.name : "error"}\n`);

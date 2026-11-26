@@ -13,7 +13,7 @@ import {
   serializeProofBundle,
   verifyProofBundle,
 } from "../../src/proof/bundle.ts";
-import { type LedgerEvent, ledgerEventSha256 } from "../../src/proof/ledger.ts";
+import { type LedgerEvent, ledgerEventSha256, verifyLedgerChain } from "../../src/proof/ledger.ts";
 import {
   buildLedger,
   clone,
@@ -314,10 +314,61 @@ describe("tamper cases: every edit, gap, reorder and truncation is refused", () 
     expect(codes(both)).toContain("PROOF_EVIDENCE");
   });
 
-  it("an absolute evidence path is refused by the schema", () => {
+  it("an escaping (..) evidence path is refused by the schema", () => {
     const b = rechain(
       mutate((x) => {
         (x.records[6]?.body as { path: string }).path = "../outside/x.json";
+      }),
+    );
+    expect(codes(b)).toContain("PROOF_SCHEMA");
+  });
+
+  it("an absolute evidence path (POSIX or drive letter) is refused by the schema", () => {
+    for (const path of ["/abs/x.json", "C:/x.json", "c:x.json"]) {
+      const b = rechain(
+        mutate((x) => {
+          (x.records[6]?.body as { path: string }).path = path;
+        }),
+      );
+      expect(codes(b), path).toContain("PROOF_SCHEMA");
+    }
+  });
+
+  it("the run header is chained: flipping simulated, the arm or the ids is refused", () => {
+    for (const edit of [
+      (r: Record<string, unknown>) => {
+        r.simulated = false;
+      },
+      (r: Record<string, unknown>) => {
+        r.arm = "hcu+shell";
+      },
+      (r: Record<string, unknown>) => {
+        r.runId = "run-2";
+      },
+    ]) {
+      const b = mutate((x) => edit(x.run as Record<string, unknown>));
+      // The chain break is the first error (the arm and id edits also trip their bindings).
+      expect(codes(b)[0]).toBe("PROOF_CHAIN");
+    }
+    expect(codes(mutate((x) => ((x.run as Record<string, unknown>).simulated = false)))).toEqual([
+      "PROOF_CHAIN",
+    ]);
+    // Re-chained, it is a whole-bundle regeneration: only the out-of-band head sees it.
+    const honest = bundle();
+    const forged = rechain(
+      mutate((x) => {
+        (x.run as Record<string, unknown>).simulated = false;
+      }),
+    );
+    expect(codes(forged, { expectHead: honest.head.headSha256 })).toEqual([
+      "PROOF_ANCHOR_MISMATCH",
+    ]);
+  });
+
+  it("a verdict that is not myco.gate/v1 is refused, even re-chained", () => {
+    const b = rechain(
+      mutate((x) => {
+        (x.records[8]?.body as { gateApi: string }).gateApi = "myco.gate/v2";
       }),
     );
     expect(codes(b)).toContain("PROOF_SCHEMA");
@@ -489,6 +540,86 @@ describe("the attempt ledger (#518 format) inside the bundle", () => {
     expect(() =>
       exportProofBundle({ ...sampleRun(), ledger: { ...l, trialKey: "t-ours" } }, NO_CTX),
     ).toThrow(/another task/);
+  });
+});
+
+describe("the run's arm and the ledger trial's arm", () => {
+  const hcuLedger = () =>
+    buildLedger([
+      { kind: "start", trialKey: "t-ours", taskId: "df-s02", arm: "hcu+shell" },
+      { kind: "end", trialKey: "t-ours", taskId: "df-s02", arm: "hcu+shell", outcome: "completed" },
+    ]);
+
+  it("an hcu+shell run exports and verifies (the arm may carry +)", () => {
+    const b = exportProofBundle(
+      { ...sampleRun(), arm: "hcu+shell", ledger: { ...hcuLedger(), trialKey: "t-ours" } },
+      NO_CTX,
+    );
+    expect(b.run.arm).toBe("hcu+shell");
+    expect(verify(b).ok).toBe(true);
+  });
+
+  it("a run whose arm differs from its ledger trial's arm is refused (export and verify)", () => {
+    expect(() =>
+      exportProofBundle(
+        { ...sampleRun(), arm: "myco-gate", ledger: { ...hcuLedger(), trialKey: "t-ours" } },
+        NO_CTX,
+      ),
+    ).toThrow(/another arm/);
+    const forged = rechain(
+      mutate((x) => {
+        (x.run as Record<string, unknown>).arm = "hcu+shell";
+      }),
+    );
+    expect(codes(forged)).toEqual(["PROOF_LEDGER_ANCHOR"]);
+  });
+
+  it("a ledger-anchored run that states no arm is refused", () => {
+    const { arm: _a, ...run } = sampleRun();
+    expect(() => exportProofBundle(run, NO_CTX)).toThrow(/must state its arm/);
+  });
+});
+
+describe("ledger event rules (#518's documented schema)", () => {
+  type In = Parameters<typeof buildLedger>[0][number];
+  const chainOf = (events: readonly Record<string, unknown>[]) =>
+    verifyLedgerChain(buildLedger(events as unknown as In[]).lines).errors;
+  const start = { kind: "start", trialKey: "t", taskId: "df-s02", arm: "myco-gate" };
+  const end = { ...start, kind: "end", outcome: "completed" };
+
+  it("a well-formed start/end pair passes (control)", () => {
+    expect(chainOf([start, end])).toEqual([]);
+    expect(chainOf([start, { ...end, outcome: "harness-fault", harnessClass: "timeout" }])).toEqual(
+      [],
+    );
+  });
+
+  it("an arm outside the ledger's arms is refused", () => {
+    expect(chainOf([{ ...start, arm: "other-arm" }])).toEqual(["ledger event 0: arm"]);
+  });
+
+  it("a start event that carries an outcome is refused", () => {
+    expect(chainOf([{ ...start, outcome: "completed" }])).toEqual([
+      "ledger event 0: a start event has no outcome or harness class",
+    ]);
+  });
+
+  it("an end event without an outcome is refused", () => {
+    const { outcome: _o, ...bare } = end;
+    expect(chainOf([start, bare])).toEqual(["ledger event 1: an end event must have an outcome"]);
+  });
+
+  it("a harness class exactly when the outcome is harness-fault", () => {
+    const msg =
+      "ledger event 1: an end event has a harness class exactly when its outcome is harness-fault";
+    expect(chainOf([start, { ...end, harnessClass: "timeout" }])).toEqual([msg]);
+    expect(chainOf([start, { ...end, outcome: "harness-fault" }])).toEqual([msg]);
+  });
+
+  it("an unknown field is refused without echoing its name", () => {
+    const errors = chainOf([{ ...start, PLANTEDKEYNAME: 1 }]);
+    expect(errors).toEqual(["ledger event 0: 1 unknown field(s)"]);
+    expect(JSON.stringify(errors)).not.toContain("PLANTED");
   });
 });
 
