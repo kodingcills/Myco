@@ -1,0 +1,117 @@
+idle: Automatic Maintenance started
+idle: 23:20:32 cpu=32% running=11 \Microsoft\Windows\Device Information\Device User, \Microsoft\Windows\DiskCleanup\SilentCleanup, \Microsoft\Windows\Management\Provisioning\Logon, \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Servicing\StartComponentCleanup, \Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance, \Microsoft\Windows\Windows Defender\Windows Defender Cleanup, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Windows Defender\Windows Defender Verification, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:21:03 cpu=49% running=6 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Servicing\StartComponentCleanup, \Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:21:35 cpu=36% running=5 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:22:06 cpu=38% running=5 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:22:38 cpu=38% running=5 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:23:09 cpu=34% running=5 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:23:41 cpu=85% running=7 \Microsoft\Windows\Flighting\FeatureConfig\ReconcileFeatures, \Microsoft\Windows\Flighting\OneSettings\RefreshCache, \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:24:12 cpu=47% running=5 \Microsoft\Windows\Flighting\FeatureConfig\ReconcileFeatures, \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:24:44 cpu=37% running=5 \Microsoft\Windows\Flighting\OneSettings\RefreshCache, \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:25:15 cpu=37% running=5 \Microsoft\Windows\Flighting\FeatureConfig\ReconcileFeatures, \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:25:47 cpu=45% running=4 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:26:18 cpu=71% running=4 \Microsoft\Windows\Maintenance\WinSAT, \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:26:50 cpu=80% running=4 \Microsoft\Windows\Maintenance\WinSAT, \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:27:22 cpu=75% running=4 \Microsoft\Windows\Maintenance\WinSAT, \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:27:54 cpu=43% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:28:26 cpu=6% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:28:57 cpu=6% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:29:29 cpu=5% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:30:00 cpu=0% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:30:32 cpu=3% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:31:03 cpu=7% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:31:35 cpu=5% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:32:06 cpu=3% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:32:38 cpu=17% running=3 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask, \Microsoft\Windows\WlanSvc\CDSSync
+idle: 23:33:09 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:33:40 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:34:12 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:34:43 cpu=6% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:35:15 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:35:46 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:36:18 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:36:49 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:37:21 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:37:52 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:38:23 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:38:55 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:39:26 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:39:57 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:40:29 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:41:00 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:41:32 cpu=0% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:42:03 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:42:34 cpu=5% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:43:06 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:43:37 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:44:08 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:44:40 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:45:11 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:45:43 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:46:14 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:46:45 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:47:17 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:47:48 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:48:20 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:48:51 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:49:22 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:49:54 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:50:25 cpu=5% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:50:57 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:51:28 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:51:59 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:52:31 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:53:02 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:53:33 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:54:05 cpu=0% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:54:36 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:55:08 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:55:39 cpu=6% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:56:10 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:56:42 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:57:13 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:57:44 cpu=5% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:58:16 cpu=5% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:58:47 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:59:18 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 23:59:50 cpu=6% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:00:21 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:00:52 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:01:24 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:01:55 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:02:27 cpu=0% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:02:58 cpu=6% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:03:29 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:04:01 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:04:32 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:05:03 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:05:35 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:06:06 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:06:37 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:07:09 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:07:40 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:08:12 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:08:43 cpu=5% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:09:14 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:09:46 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:10:17 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:10:49 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:11:20 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:11:51 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:12:23 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:12:54 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:13:25 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:13:57 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:14:28 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:15:00 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:15:31 cpu=0% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:16:02 cpu=1% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:16:34 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:17:05 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:17:36 cpu=19% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:18:08 cpu=5% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:18:39 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:19:11 cpu=2% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:19:42 cpu=4% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: 00:20:13 cpu=3% running=2 \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask
+idle: not quiet after 60 min; running: \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\Wininet\CacheTask

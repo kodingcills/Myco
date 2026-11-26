@@ -1,0 +1,8 @@
+Update-MpSignature : Virus and spyware definitions update was completed with errors.
+At C:\Users\myco\trial-base-maintenance.ps1:97 char:3
++   Update-MpSignature
++   ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (MSFT_MpSignature:ROOT\Microsoft\...SFT_MpSignature)  
+   [Update-MpSignature], CimException
+    + FullyQualifiedErrorId : HRESULT 0x80070652,Update-MpSignature
+ 
