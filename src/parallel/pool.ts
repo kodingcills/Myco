@@ -43,8 +43,10 @@ import {
   readdirSync,
   readSync,
   realpathSync,
-  writeFileSync,
+  renameSync,
+  rmSync,
 } from "node:fs";
+import { open as openAsync } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { GateResult } from "../gate/api.ts";
 import type { TaskRegistry } from "../gate/gate.ts";
@@ -112,6 +114,7 @@ export type Disqualifier =
   | "timeout"
   | "agent-error"
   | "capture-refused"
+  | "evidence-refused"
   | "harness-error";
 
 export interface TrialRecord {
@@ -377,6 +380,105 @@ export function captureRegularFile(workspaceReal: string, rel: string): Buffer {
 }
 
 // ---------------------------------------------------------------------------------------
+// harness writes
+// ---------------------------------------------------------------------------------------
+
+/** Why a harness write was refused; every code fails the trial (or the pool) closed. */
+export type HarnessWriteRefusal = "outside-dir" | "exists" | "not-regular" | "open" | "timeout";
+// "not-regular" is used by the pool report's replace step only.
+
+export class HarnessWriteRefused extends Error {
+  constructor(
+    readonly code: HarnessWriteRefusal,
+    readonly path: string,
+    message: string,
+  ) {
+    super(`${code}: ${message} (${path})`);
+    this.name = "HarnessWriteRefused";
+  }
+}
+
+/** A harness write that has not finished in this long is abandoned and refused. */
+export const HARNESS_WRITE_TIMEOUT_MS = 10_000;
+
+/**
+ * Write a file the harness owns (marker, fixture, MCP config, agent output, record, pool
+ * report) into a dir an agent may be able to reach. On `linux-plain` every such dir is
+ * reachable by every trial, and a plain `writeFileSync` on a FIFO planted there blocks
+ * the whole event loop forever (round-3 B1): every trial, timeout and watchdog freezes.
+ *
+ * - `dirReal` must still be its own realpath (the harness took it before any agent ran),
+ *   so a dir swapped for a symlink is refused rather than written through;
+ * - the file is created `O_CREAT | O_EXCL | O_NOFOLLOW | O_NONBLOCK`: every harness file
+ *   is written exactly once, so ANY pre-existing entry (FIFO, socket, symlink, dir, a
+ *   regular file an agent planted) is refused at once (`exists`), and nothing is ever
+ *   opened that could block (`O_EXCL` means this call created the file: it is a fresh
+ *   regular file, so no `fstat` re-check is needed);
+ * - the whole write runs off the event loop (libuv threadpool) and is raced against a
+ *   hard timeout, so even a write that somehow stalls cannot freeze the pool.
+ */
+export async function writeHarnessFile(
+  dirReal: string,
+  name: string,
+  data: string | Uint8Array,
+  timeoutMs: number = HARNESS_WRITE_TIMEOUT_MS,
+): Promise<void> {
+  const path = join(dirReal, name);
+  if (dirname(path) !== dirReal)
+    throw new HarnessWriteRefused("outside-dir", path, "name must be a single component");
+  let real: string;
+  try {
+    real = realpathSync(dirReal);
+  } catch {
+    throw new HarnessWriteRefused("outside-dir", path, "target dir is missing");
+  }
+  if (real !== dirReal)
+    throw new HarnessWriteRefused("outside-dir", path, "target dir was swapped");
+  const write = async (): Promise<void> => {
+    let fh: Awaited<ReturnType<typeof openAsync>>;
+    try {
+      fh = await openAsync(
+        path,
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_EXCL |
+          constants.O_NOFOLLOW |
+          constants.O_NONBLOCK,
+        0o600,
+      );
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      throw new HarnessWriteRefused(
+        code === "EEXIST" ? "exists" : "open",
+        path,
+        `cannot create (${code ?? "error"})`,
+      );
+    }
+    try {
+      await fh.writeFile(data);
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  };
+  const writing = write();
+  writing.catch(() => {}); // a write abandoned at the timeout must not crash the process later
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      writing,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new HarnessWriteRefused("timeout", path, `not written in ${timeoutMs} ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
 // the pool
 // ---------------------------------------------------------------------------------------
 
@@ -417,6 +519,9 @@ export async function runPool(
     evidence: join(runRoot, "evidence"),
   };
   for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true, mode: 0o700 });
+  // Harness writes go through realpaths taken before any agent runs (writeHarnessFile).
+  const runRootReal = realpathSync(runRoot);
+  const evidenceReal = join(runRootReal, "evidence");
   const registry = new RunIdRegistry(opts.lockDir ?? join(runRoot, "locks"));
   const hide = [
     ...new Set([
@@ -501,12 +606,19 @@ export async function runPool(
       const task = opts.tasks.get(spec.taskId);
       if (!task) throw new Error("task vanished");
       const calc = task.spec as CalcSpec;
+      // The dirs the harness writes into must really be inside the trial's own root (a
+      // dir swapped for a symlink before this point would redirect every write).
+      const rootReal = realpathSync(desktop.paths.root);
       const workspaceReal = realpathSync(desktop.paths.workspace);
-      writeFileSync(join(desktop.paths.workspace, MARKER_FILE), `${marker}\n`);
-      writeFileSync(
-        join(desktop.paths.workspace, task.stateFile),
-        generateFixture(calc.fixtureSeed).csv,
-      );
+      const homeReal = realpathSync(desktop.paths.home);
+      for (const [what, real] of [
+        ["workspace", workspaceReal],
+        ["home", homeReal],
+      ] as const)
+        if (!real.startsWith(`${rootReal}/`))
+          throw new HarnessWriteRefused("outside-dir", real, `trial ${what} is outside its root`);
+      await writeHarnessFile(workspaceReal, MARKER_FILE, `${marker}\n`);
+      await writeHarnessFile(workspaceReal, task.stateFile, generateFixture(calc.fixtureSeed).csv);
       await opts.onDesktop?.(spec.runId, desktop);
 
       const vault = new VerdictVault({
@@ -514,8 +626,8 @@ export async function runPool(
         key: newVaultKey(),
         agentRoots: [root],
       });
-      const plan = trialPlan(spec.runId, join(desktop.paths.home, "mcp.json"));
-      const evidenceDir = join(dirs.evidence, spec.runId);
+      const plan = trialPlan(spec.runId, join(homeReal, "mcp.json"));
+      const evidenceDir = join(evidenceReal, spec.runId);
       mkdirSync(evidenceDir, { mode: 0o700 });
       const live = desktop;
       let output = "";
@@ -529,7 +641,9 @@ export async function runPool(
         oracleSources: opts.oracleSources,
         transport: {
           async runAgent(audited, gate) {
-            writeFileSync(audited.mcpConfigPath, mcpConfigJson(audited));
+            if (audited.mcpConfigPath !== join(homeReal, "mcp.json"))
+              throw new Error("audited MCP config path moved");
+            await writeHarnessFile(homeReal, "mcp.json", mcpConfigJson(audited));
             const ctx: AgentContext = {
               desktop: live,
               taskId: spec.taskId,
@@ -598,7 +712,7 @@ export async function runPool(
         return;
       }
       w.record.gate = outcome.result;
-      writeFileSync(join(evidenceDir, "agent-output.txt"), output);
+      await writeHarnessFile(evidenceDir, "agent-output.txt", output);
       // Scan the live desktop tree before it is destroyed.
       const scan = scanTree(desktop.paths.root, markers);
       if (!scan.complete) w.disqualifiers.add("scan-incomplete");
@@ -606,6 +720,7 @@ export async function runPool(
       for (const id of scan.found) if (id !== spec.runId) w.record.foreignMarkers.push(id);
     } catch (e) {
       if (e instanceof TrialTimeout) w.disqualifiers.add("timeout");
+      else if (e instanceof HarnessWriteRefused) w.disqualifiers.add("evidence-refused");
       else if (e instanceof CaptureRefused) w.disqualifiers.add("capture-refused");
       else if (e instanceof TrialBreach) w.disqualifiers.add("resource-cap");
       else if (desktop?.breach()) w.disqualifiers.add("resource-cap");
@@ -648,7 +763,7 @@ export async function runPool(
   const records: TrialRecord[] = [];
   for (const spec of trials) {
     const w = working.get(spec.runId) as Working;
-    const evidenceDir = join(dirs.evidence, spec.runId);
+    const evidenceDir = join(evidenceReal, spec.runId);
     for (const where of [evidenceDir, join(dirs.vaults, spec.runId)]) {
       const scan = scanTree(where, markers);
       if (!scan.complete) w.disqualifiers.add("scan-incomplete");
@@ -670,20 +785,24 @@ export async function runPool(
       if (other !== w && other.record.foreignMarkers.includes(spec.runId))
         w.disqualifiers.add("leaked");
     if (w.record.gate && !w.record.ownMarkerSeen) w.disqualifiers.add("own-marker-missing");
-    const disqualifiers = [...w.disqualifiers].sort();
-    const record: TrialRecord = {
-      ...w.record,
-      foreignMarkers: [...w.record.foreignMarkers].sort(),
-      disqualifiers,
-      countedVerified:
-        w.record.gate?.verdict === "verified" &&
-        w.record.gate.accepted === true &&
-        disqualifiers.length === 0,
-    };
+    const evidenceDir = join(evidenceReal, spec.runId);
+    try {
+      mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
+    } catch {
+      // Something planted there; writeHarnessFile below refuses it with a code.
+    }
+    // The record on disk is written as counted only if the write itself succeeds; a
+    // refused write (anything planted at record.json, a swapped dir) withholds the count.
+    let record = finalRecord(w);
+    try {
+      await writeHarnessFile(evidenceDir, "record.json", `${JSON.stringify(record, null, 2)}\n`);
+    } catch (e) {
+      if (!(e instanceof HarnessWriteRefused)) throw e;
+      w.disqualifiers.add("evidence-refused");
+      w.record.error = w.record.error ?? e.message;
+      record = finalRecord(w);
+    }
     records.push(record);
-    const evidenceDir = join(dirs.evidence, spec.runId);
-    mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
-    writeFileSync(join(evidenceDir, "record.json"), `${JSON.stringify(record, null, 2)}\n`);
   }
   const report: PoolReport = {
     schema: POOL_SCHEMA,
@@ -697,6 +816,64 @@ export async function runPool(
     verifiedCount: records.filter((r) => r.countedVerified).length,
     contaminatedCount: records.filter((r) => r.disqualifiers.includes("contaminated")).length,
   };
-  writeFileSync(join(runRoot, "pool-report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  await writePoolReport(runRootReal, `${JSON.stringify(report, null, 2)}\n`);
   return report;
+}
+
+/**
+ * The pool report may replace one from an earlier run in a reused run root, so it is not
+ * created in place: it is written to a fresh, unguessable name (`writeHarnessFile`, never
+ * blocking) and `rename`d over `pool-report.json`. `rename` never opens its target. A
+ * target that is anything but a regular file (a planted FIFO, socket, symlink or dir) is
+ * refused, and a refusal rejects the whole run (`HarnessWriteRefused`): no report, no count.
+ */
+async function writePoolReport(runRootReal: string, text: string): Promise<void> {
+  const target = join(runRootReal, "pool-report.json");
+  const tmp = `pool-report.${randomBytes(12).toString("hex")}.tmp`;
+  await writeHarnessFile(runRootReal, tmp, text);
+  try {
+    let pre: ReturnType<typeof lstatSync> | undefined;
+    try {
+      pre = lstatSync(target);
+    } catch {
+      pre = undefined;
+    }
+    if (pre && !pre.isFile())
+      throw new HarnessWriteRefused(
+        "not-regular",
+        target,
+        "pool report target is not a regular file",
+      );
+    try {
+      renameSync(join(runRootReal, tmp), target);
+    } catch (e) {
+      throw new HarnessWriteRefused(
+        "open",
+        target,
+        `cannot replace (${(e as NodeJS.ErrnoException).code ?? "error"})`,
+      );
+    }
+  } catch (e) {
+    rmSync(join(runRootReal, tmp), { force: true });
+    throw e;
+  }
+}
+
+/** The record as reported: counted only when the gate verified and nothing disqualifies. */
+function finalRecord(w: Working): TrialRecord {
+  const disqualifiers = [...w.disqualifiers].sort();
+  return {
+    ...w.record,
+    foreignMarkers: [...w.record.foreignMarkers].sort(),
+    disqualifiers,
+    countedVerified: countedVerified(w.record.gate, disqualifiers),
+  };
+}
+
+/** The one count rule: the gate said verified AND accepted, and no disqualifier applies. */
+export function countedVerified(
+  gate: GateResult | null,
+  disqualifiers: readonly Disqualifier[],
+): boolean {
+  return gate?.verdict === "verified" && gate.accepted === true && disqualifiers.length === 0;
 }

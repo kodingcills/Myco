@@ -14,23 +14,119 @@
  *   tsx special-file-child.ts pool <run-root> fifo|dir|socket
  *     runs one trial on the fake backend whose agent replaces its state file with that
  *     special file, and prints {"disqualifiers":[...],"counted":bool,"error":"..."}
+ *   tsx special-file-child.ts evidence <run-root> <site> fifo|file|dirlink
+ *     round-3 B1: two trials, an attacker and an honest sibling, on the fake backend. Before
+ *     the harness writes <site> (marker | fixture | mcp | agent-output | record |
+ *     pool-report), something is planted at that path: a FIFO, a regular file, or (dirlink)
+ *     the target's dir swapped for a symlink. Prints
+ *     {"trials":{runId:{disqualifiers,counted,error}},"rejected":code|null}
  */
 
-import { closeSync, fstatSync, realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
+import { basename, dirname, join } from "node:path";
 import type { ScriptedDesktopAgent } from "../../src/parallel/agents.ts";
-import { claimFor } from "../../src/parallel/agents.ts";
+import { claimFor, scriptedFileAgent } from "../../src/parallel/agents.ts";
 import { STRICT_REQUIREMENTS } from "../../src/parallel/backend.ts";
 import {
   CaptureRefused,
   captureRegularFile,
+  HarnessWriteRefused,
+  MARKER_FILE,
   openNoBlock,
   runPool,
 } from "../../src/parallel/pool.ts";
 import { CALC_ORACLE_SOURCES, L_TASK_ID, lTaskRegistry } from "../../src/parallel/throughput.ts";
 import { fakeBackend } from "./fake-backend.ts";
 
-const [mode, a, b] = process.argv.slice(2);
+const [mode, a, b, c] = process.argv.slice(2);
+
+/** Plant `kind` at `path` (whose parent exists). */
+function plant(path: string, kind: string): void {
+  if (kind === "fifo") {
+    if (spawnSync("mkfifo", [path]).status !== 0) throw new Error("mkfifo failed");
+  } else if (kind === "file") {
+    writeFileSync(path, "planted\n");
+  } else if (kind === "dirlink") {
+    // Swap the target's dir for a symlink to a decoy dir two levels up (outside the trial's
+    // root): a write must not go through it.
+    const dir = dirname(path);
+    const decoy = join(dirname(dirname(dir)), `${basename(dirname(dir))}-${basename(dir)}.decoy`);
+    renameSync(dir, decoy);
+    symlinkSync(decoy, dir);
+  } else throw new Error(`unknown kind ${kind}`);
+}
+
+async function evidence(runRootArg: string, site: string, kind: string): Promise<void> {
+  mkdirSync(runRootArg, { recursive: true });
+  const runRoot = realpathSync(runRootArg);
+  const honest = scriptedFileAgent("honest");
+  const attacker: ScriptedDesktopAgent = {
+    id: `plants-${site}`,
+    simulated: true,
+    async run(ctx) {
+      const done = await honest.run(ctx);
+      const ev = join(runRoot, "evidence", ctx.runId);
+      if (site === "agent-output") plant(join(ev, "agent-output.txt"), kind);
+      if (site === "record") plant(join(ev, "record.json"), kind);
+      if (site === "pool-report") plant(join(runRoot, "pool-report.json"), kind);
+      return done;
+    },
+  };
+  const backend = fakeBackend({
+    afterCreate(runId, paths) {
+      if (runId !== "attacker") return;
+      if (site === "marker") plant(join(paths.workspace, MARKER_FILE), kind);
+      if (site === "fixture") plant(join(paths.workspace, "sheet.csv"), kind);
+      if (site === "mcp") plant(join(paths.home, "mcp.json"), kind);
+    },
+  });
+  let rejected: string | null = null;
+  const trials: Record<string, unknown> = {};
+  try {
+    const report = await runPool(
+      {
+        backend,
+        caps: {
+          maxConcurrent: 2,
+          memoryMbPerTrial: 64,
+          cpusPerTrial: 1,
+          cpuSecondsPerTrial: 60,
+          trialTimeoutMs: 5_000,
+          memoryBudgetMb: 1024,
+          cpuBudget: 2,
+        },
+        requirements: STRICT_REQUIREMENTS,
+        runRoot,
+        tasks: lTaskRegistry(),
+        oracleSources: CALC_ORACLE_SOURCES,
+      },
+      [
+        { runId: "attacker", taskId: L_TASK_ID, agent: attacker },
+        { runId: "honest", taskId: L_TASK_ID, agent: honest },
+      ],
+    );
+    for (const t of report.trials)
+      trials[t.runId] = {
+        disqualifiers: t.disqualifiers,
+        counted: t.countedVerified,
+        error: t.error ?? null,
+      };
+  } catch (e) {
+    if (!(e instanceof HarnessWriteRefused)) throw e;
+    rejected = e.code;
+  }
+  process.stdout.write(`${JSON.stringify({ trials, rejected })}\n`);
+}
 
 async function main(): Promise<void> {
   if (mode === "capture") {
@@ -102,6 +198,7 @@ async function main(): Promise<void> {
     );
     return;
   }
+  if (mode === "evidence") return evidence(a as string, b as string, c as string);
   throw new Error(`unknown mode ${String(mode)}`);
 }
 

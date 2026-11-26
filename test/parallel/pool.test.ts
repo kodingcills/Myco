@@ -23,6 +23,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { GateResult } from "../../src/gate/api.ts";
 import {
   type AgentBehaviour,
   claimFor,
@@ -35,12 +36,14 @@ import {
   CAPTURE_LIMIT_BYTES,
   CaptureRefused,
   captureRegularFile,
+  countedVerified,
   MARKER_ENV,
   MARKER_FILE,
   type PoolOptions,
   PoolRefused,
   runPool,
   type TrialSpec,
+  writeHarnessFile,
 } from "../../src/parallel/pool.ts";
 import {
   CALC_ORACLE_SOURCES,
@@ -634,6 +637,165 @@ describe.skipIf(process.platform === "win32")(
     );
   },
 );
+
+interface EvidenceOutcome {
+  trials: Record<string, { disqualifiers: string[]; counted: boolean; error: string | null }>;
+  rejected: string | null;
+}
+
+function evidenceChild(site: string, kind: string): EvidenceOutcome {
+  const short = mkdtempSync(join(tmpdir(), "mpe-"));
+  try {
+    const r = spawnSync(TSX, [CHILD, "evidence", join(short, "r"), site, kind], {
+      encoding: "utf8",
+      timeout: HARD_LIMIT_MS,
+      killSignal: "SIGKILL",
+    });
+    if (r.error || r.status !== 0)
+      throw new Error(
+        `child did not finish (status ${String(r.status)}, signal ${String(r.signal)}): ${r.stderr}`,
+      );
+    return JSON.parse(r.stdout.trim().split("\n").pop() ?? "{}") as EvidenceOutcome;
+  } finally {
+    rmSync(short, { recursive: true, force: true });
+  }
+}
+
+describe.skipIf(process.platform === "win32")(
+  "B1: harness writes (marker, fixture, MCP config, evidence, pool report): fail closed, never hang",
+  () => {
+    // Each case runs the real pool in a child under a hard KILL limit, with an attacker
+    // trial and an honest sibling. A blocking write would freeze the child's event loop
+    // (every trial, timeout and watchdog with it) and be killed: a test failure.
+    const trialSites = [
+      ["marker", []],
+      ["fixture", []],
+      ["mcp", []],
+      ["agent-output", ["own-marker-missing"]],
+      ["record", []],
+    ] as const;
+    it.each(
+      trialSites.flatMap(([site, extra]) => [
+        [site, "fifo", "exists", extra],
+        [site, "file", "exists", extra],
+      ]),
+    )(
+      "%s: a planted %s is refused (%s), the trial is not counted, the honest sibling is",
+      (site, kind, code, extra) => {
+        const out = evidenceChild(site, kind);
+        expect(out.rejected).toBeNull();
+        expect(out.trials.attacker?.disqualifiers).toEqual(["evidence-refused", ...extra].sort());
+        expect(out.trials.attacker?.counted).toBe(false);
+        expect(out.trials.attacker?.error).toMatch(new RegExp(`^${code}:`));
+        expect(out.trials.honest).toEqual({ disqualifiers: [], counted: true, error: null });
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+
+    it.each([
+      ["marker", "outside-dir: trial workspace is outside its root", []],
+      ["mcp", "outside-dir: trial home is outside its root", []],
+      ["agent-output", "outside-dir: target dir was swapped", ["own-marker-missing"]],
+    ] as const)(
+      "%s: a target dir swapped for a symlink is refused, never written through",
+      (site, message, extra) => {
+        const out = evidenceChild(site, "dirlink");
+        expect(out.trials.attacker?.disqualifiers).toEqual(["evidence-refused", ...extra].sort());
+        expect(out.trials.attacker?.counted).toBe(false);
+        expect(out.trials.attacker?.error?.startsWith(message)).toBe(true);
+        expect(out.trials.honest?.counted).toBe(true);
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+
+    it(
+      "record: a refused record.json withholds the count even though the gate verified",
+      () => {
+        // The attacker saved honestly, so only the refused record write can withhold it.
+        const out = evidenceChild("record", "fifo");
+        expect(out.trials.attacker?.disqualifiers).toEqual(["evidence-refused"]);
+        expect(out.trials.attacker?.counted).toBe(false);
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+
+    it.each([
+      ["fifo", "not-regular"],
+      ["dirlink", "outside-dir"],
+    ] as const)(
+      "pool-report.json: a planted %s rejects the whole run (%s), at once",
+      (kind, code) => {
+        expect(evidenceChild("pool-report", kind)).toEqual({ trials: {}, rejected: code });
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+
+    it(
+      "pool-report.json from an earlier run (a regular file) is replaced, not refused",
+      () => {
+        const out = evidenceChild("pool-report", "file");
+        expect(out.rejected).toBeNull();
+        expect(out.trials.honest?.counted).toBe(true);
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+  },
+);
+
+describe("writeHarnessFile", () => {
+  it("creates a fresh 0600 regular file and refuses a second write", async () => {
+    const dir = realpathSync(base);
+    await writeHarnessFile(dir, "f.txt", "one");
+    expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("one");
+    expect(lstatSync(join(dir, "f.txt")).mode & 0o777).toBe(0o600);
+    await expect(writeHarnessFile(dir, "f.txt", "two")).rejects.toMatchObject({
+      name: "HarnessWriteRefused",
+      code: "exists",
+    });
+    expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("one");
+  });
+
+  it("refuses a symlink at the target without writing through it", async () => {
+    const dir = realpathSync(base);
+    writeFileSync(join(dir, "victim"), "victim");
+    symlinkSync(join(dir, "victim"), join(dir, "link"));
+    await expect(writeHarnessFile(dir, "link", "x")).rejects.toMatchObject({ code: "exists" });
+    expect(readFileSync(join(dir, "victim"), "utf8")).toBe("victim");
+  });
+
+  it("refuses a dir that is not its own realpath, and a name with a slash", async () => {
+    const dir = realpathSync(base);
+    mkdirSync(join(dir, "real"));
+    symlinkSync(join(dir, "real"), join(dir, "alias"));
+    await expect(writeHarnessFile(join(dir, "alias"), "f", "x")).rejects.toMatchObject({
+      code: "outside-dir",
+    });
+    await expect(writeHarnessFile(dir, "real/f", "x")).rejects.toMatchObject({
+      code: "outside-dir",
+    });
+    expect(existsSync(join(dir, "real", "f"))).toBe(false);
+  });
+
+  it("gives up on a write that outlasts its hard timeout, with a code", async () => {
+    const dir = realpathSync(base);
+    await expect(
+      writeHarnessFile(dir, "big", Buffer.alloc(128 * 1024 * 1024, 1), 1),
+    ).rejects.toMatchObject({ code: "timeout" });
+  });
+});
+
+describe("countedVerified (the one count rule)", () => {
+  const gate = (over: Partial<GateResult>): GateResult =>
+    ({ verdict: "verified", accepted: true, ...over }) as GateResult;
+  it("needs verified AND accepted AND no disqualifier", () => {
+    expect(countedVerified(gate({}), [])).toBe(true);
+    expect(countedVerified(gate({ accepted: false }), [])).toBe(false);
+    expect(countedVerified(gate({ accepted: undefined as unknown as boolean }), [])).toBe(false);
+    expect(countedVerified(gate({ verdict: "refuted" as GateResult["verdict"] }), [])).toBe(false);
+    expect(countedVerified(gate({}), ["shared-host-dirs"])).toBe(false);
+    expect(countedVerified(null, [])).toBe(false);
+  });
+});
 
 describe("a backend that leaves other trials' roots writable is never counted", () => {
   it("best-effort lets the trial run, the gate may say verified, but it is not counted", async () => {

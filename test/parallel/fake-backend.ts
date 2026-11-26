@@ -34,6 +34,11 @@ export interface FakeControls {
   breach?: (runId: string) => CapBreach | undefined;
   destroy?: (runId: string) => Partial<DestroyReport>;
   createDelayMs?: number;
+  /**
+   * Runs right after the desktop's dirs exist, before the pool writes anything into them:
+   * stands in for a concurrent trial (or a `setsid` daemon) planting files there.
+   */
+  afterCreate?: (runId: string, paths: { workspace: string; home: string }) => void;
 }
 
 export interface FakeBackend extends DesktopBackend {
@@ -62,6 +67,7 @@ export function fakeBackend(controls: FakeControls = {}): FakeBackend {
         home: join(spec.root, "home"),
       };
       for (const p of [paths.workspace, paths.tmp, paths.home]) mkdirSync(p, { recursive: true });
+      controls.afterCreate?.(spec.runId, paths);
       backend.live.add(spec.runId);
       backend.created.push(spec.runId);
       backend.peakLive = Math.max(backend.peakLive, backend.live.size);
