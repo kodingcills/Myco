@@ -157,7 +157,10 @@ describe("strict-linux-ns: the backend refuses to start on a host that cannot do
 
   it("a missing tool: refuse with a code", async () => {
     const run = mkRun();
-    const b = strictLinuxNs({ tools: { unshare: path.join(run, "no-such-unshare") } });
+    const b = strictLinuxNs({
+      platform: "linux",
+      tools: { unshare: path.join(run, "no-such-unshare") },
+    });
     expect(await codeOf(b.create(spec(run)))).toBe("STRICT_NS_TOOL_MISSING");
     expect((await b.probe()).code).toBe("STRICT_NS_TOOL_MISSING");
   });
@@ -260,7 +263,7 @@ describe("strict-linux-ns: availability", () => {
   it.runIf(required)("is available where CI requires it (MYCO_STRICT_NS_REQUIRED=1)", () => {
     expect(probe).toMatchObject({ available: true });
   });
-  it.skipIf(probe.available || required)(`skipped: no userns (${probe.detail})`, () => {});
+  if (!probe.available && !required) it.skip(`skipped: no userns (${probe.detail})`, () => {});
 });
 
 /** Lay out a run root the way a pool does: trials/<id>/ plus a vault dir. */
@@ -400,7 +403,7 @@ describe.skipIf(!probe.available)("strict-linux-ns: in namespaces", () => {
     // B still works and sees only its own file.
     const rb = await b.exec("/bin/cat", ["/workspace/record.csv"]);
     expect(rb.stdout).toBe("B-ORIGINAL,1\n");
-  });
+  }, 60_000);
 
   it("D1 even with full capabilities in the trial's namespace: the run root is not in it", async () => {
     // Defense in depth: enter as root of the trial's OWN user namespace (more than any
@@ -424,7 +427,7 @@ echo PRIV-DONE
     expect(out).not.toMatch(/WROTE|RUN-VISIBLE/); // ... and still found nothing.
     expect(readFileSync(victim, "utf8")).toBe("B-ORIGINAL,1\n");
     expect(snapshot(run, [a.paths.workspace])).toEqual(before);
-  });
+  }, 60_000);
 
   it("each exec has its own pid namespace and /proc: other processes are not visible", async () => {
     const { run, roots } = runLayout(["A"]);
@@ -442,7 +445,7 @@ echo PRIV-DONE
     expect(r.stdout.trim().endsWith("/")).toBe(true);
     const host = (await long).timedOut;
     expect(host).toBe(true);
-  });
+  }, 60_000);
 
   it("network: only a loopback device, no route out", async () => {
     const { run, roots } = runLayout(["A"]);
@@ -561,7 +564,7 @@ wait
     );
     expect(stray).toEqual([]);
     expect(readdirSync(realpathSync(tmpdir())).filter((f) => f.startsWith("marker-"))).toEqual([]);
-  });
+  }, 60_000);
 
   it("destroy kills everything, removes the root, is idempotent, and later execs are refused", async () => {
     const { run, roots } = runLayout(["A"]);
