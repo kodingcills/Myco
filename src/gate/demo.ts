@@ -20,6 +20,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { mcpStdio } from "../baseline/mcp-stdio.ts";
+import type { DesktopObservation } from "../discovery/live-runner.ts";
 import { MockDesktop } from "../discovery/mock-desktop.ts";
 import { runTask } from "../discovery/run-tasks.ts";
 import type { GateResult, ReasonCode } from "./api.ts";
@@ -94,21 +95,36 @@ export const SCENARIOS: readonly DemoScenario[] = [
   },
 ];
 
+/**
+ * Optional observer of the mock desktop after each agent action (the live watch view's frame
+ * series, src/watch). Read-only: it sees the observation, never the gate or the evidence.
+ */
+export type DemoFrameObserver = (runId: string, observation: DesktopObservation) => void;
+
 /** The fake agent: drive the mock app through the task, then report what the UI said. */
-async function fakeAgentRun(taskId: string, evidenceRoot: string, runId: string): Promise<string> {
+async function fakeAgentRun(
+  taskId: string,
+  evidenceRoot: string,
+  runId: string,
+  onFrame?: DemoFrameObserver,
+): Promise<string> {
   const task = runTask(taskId);
   const desktop = new MockDesktop();
   const session = await desktop.create();
-  await desktop.act(session, {
+  const act = async (action: Parameters<MockDesktop["act"]>[1]) => {
+    await desktop.act(session, action);
+    onFrame?.(runId, await desktop.observe());
+  };
+  await act({
     kind: "launch",
     command: task.launch.command,
     args: task.launch.args,
   });
   for (const item of task.items) {
-    await desktop.act(session, { kind: "typeTextGlobal", text: item });
-    await desktop.act(session, { kind: "keyPress", keys: "Return" });
+    await act({ kind: "typeTextGlobal", text: item });
+    await act({ kind: "keyPress", keys: "Return" });
   }
-  await desktop.act(session, { kind: "clickAt", x: 210, y: 284 });
+  await act({ kind: "clickAt", x: 210, y: 284 });
   const status = (await desktop.observe()).statusText;
   // Harness, not agent: materialize the mock guest's disk where the gate reads it.
   const storeFile = join(evidenceRoot, runId, task.storePath);
@@ -203,7 +219,9 @@ async function callBoundGate(
   }
 }
 
-export async function runMockDemo(options: { readonly outDir?: string } = {}): Promise<DemoReport> {
+export async function runMockDemo(
+  options: { readonly outDir?: string; readonly onFrame?: DemoFrameObserver } = {},
+): Promise<DemoReport> {
   const outDir = options.outDir ?? mkdtempSync(join(tmpdir(), "myco-gate-demo-"));
   const evidenceRoot = join(outDir, "evidence");
   const auditLog = join(outDir, "gate-decisions.jsonl");
@@ -214,7 +232,7 @@ export async function runMockDemo(options: { readonly outDir?: string } = {}): P
     if (!uiStatus.has(scenario.runId)) {
       uiStatus.set(
         scenario.runId,
-        await fakeAgentRun(scenario.taskId, evidenceRoot, scenario.runId),
+        await fakeAgentRun(scenario.taskId, evidenceRoot, scenario.runId, options.onFrame),
       );
     }
   }
