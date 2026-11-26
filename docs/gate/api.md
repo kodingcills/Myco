@@ -50,10 +50,11 @@ On the gated path this is **required**, not advice (outer-loop ruling, 2026-11-2
   to another run's file placed inside this run. The per-platform detail is in
   [What the file reader guarantees](#what-the-file-reader-guarantees). Making the root
   unwritable from the agent's whole tool surface is TIF-266's job.
-- TIF-266 (#470) builds this capture as seal → capture → read the sealed copies. Until #470
-  is wired in, `fileEvidenceReader` over a harness-filled directory is the stand-in, and it
-  is fit only for the mock path. **Wiring the gate's reader to #470's sealed per-trial
-  capture is a required follow-up before any M2-12 run.**
+- TIF-266 (#470) builds this capture as seal → capture → read the sealed copies, and the
+  gate reads it through `sealedEvidenceReader` / `createSealedGate` (`src/gate/sealed.ts`;
+  see [The gate on the sealed vault](#the-gate-on-the-sealed-vault)). `fileEvidenceReader`
+  over a harness-filled directory (`--evidence-root`) is the **mock-path and development
+  stand-in only**: it checks paths, not provenance, and no gated run may use it.
 
 ### What the file reader guarantees
 
@@ -279,7 +280,7 @@ not in the registry. `readTimeoutMs` (default 30000) bounds a reader that return
 
 `EvidenceReader` is an interface: `read(runId, stateFile)` returns the bytes, or
 `missing` / `unreadable`. A bound gate only ever calls it with the assigned run id.
-For M2-12 it must be backed by #470's sealed per-trial host capture, never by a live read of the guest.
+A gated run uses `sealedEvidenceReader` (below), never a live read of the guest.
 
 ### How this lines up with TIF-266 (#470)
 
@@ -290,12 +291,36 @@ id to the calling agent's own trial. Here, the operator binds the gate to that s
 receipt and serve only that run. The agent still sends only `taskId` and `runId`, and a
 different run id never reaches the reader.
 
-`src/integrity/gate.ts` (#470's seam) is not on the gate's path yet. Its reasons do not
-yet meet the rule in [Agent-facing reasons never carry host paths or raw error
-messages](#agent-facing-reasons-never-carry-host-paths-or-raw-error-messages) (its "oracle
-threw" uses the error message, and some vault violations carry `String(error)` or an
-absolute vault path), so a vault-backed reader must map its violations to path-free
-details before M2-12 wires it in.
+### The gate on the sealed vault
+
+`createSealedGate({ tasks, vault, binding: { runId, receipt }, taskId })` builds the gate
+for one sealed trial (TIF-274 prerequisite). Its assignment run id is the binding's run id,
+and its reader is `sealedEvidenceReader`:
+
+- It opens the vault only through `openForTrial(vault, binding, runId)`
+  (`src/integrity/gate.ts`): for `binding.runId`, with `binding.receipt`, and only when
+  the request names exactly that run. A run id other than the binding's is refused there
+  too (`integrity:run-not-bound`), below the gate's own ASSIGNMENT_MISMATCH check. A
+  receipt that is the audit opt-out, missing or malformed is refused at runtime
+  (`integrity:receipt-missing` / `integrity:receipt-malformed`).
+- It returns only `captured/persisted/<task stateFile>`: bytes the harness copied on the
+  host after the agent stopped, hash-checked in the same read. No other persisted file is
+  readable through it.
+- The sealed ground truth is `gateGroundTruth(task)` (task id, family and version, state
+  file, spec). If the gate's registry task differs from what was sealed, the read is
+  refused, so the oracle never decides from an unsealed spec.
+- Every failure is `uncertain` STATE_UNREADABLE (or STATE_MISSING when the capture lacks
+  the state file). Agent-facing details carry `integrity:<code>` only; the full violations,
+  which can name host paths, go to the operator through `onIntegrity`.
+- **Before capture, every check is `uncertain`** ("no sealed capture yet"): the gate decides
+  only from the capture taken after the agent stops. A mid-run "done → refuted → retry"
+  loop needs a checkpointed capture, which is a follow-up.
+
+`runGatedTrial` (`src/gate/gated-trial.ts`) is the gated harness path that ties it
+together: audit the agent's launch plan (`auditAgentLaunch`, `src/integrity/launch.ts`),
+seal, start the agent with the same frozen plan, mark it stopped, capture, then the
+harness's own check on the same gate. The transport is the only part that differs between
+the mock path (`test/gate/sealed-gate.test.ts`) and a live run.
 
 ## CLI
 
