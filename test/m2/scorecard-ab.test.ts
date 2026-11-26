@@ -24,6 +24,13 @@ const S0_FIG =
 const S1_FIG =
   "Stage 1: 100 pairs; both 50, ON only 12, OFF only 3, neither 35; one-sided sign test p = 0.0176; " +
   "95% CI on the paired difference 0.016–0.162; corrections help; experiment-only, never R1 evidence";
+/**
+ * The miss: 0 discordant pairs, so the one-sided sign test gives P(X >= 0) = 1; both arms are
+ * 50/100, the two Wilson intervals coincide and phi = 1, so Newcombe's paired interval is 0 to 0.
+ */
+const NULL_FIG =
+  "Stage 1: 100 pairs; both 50, ON only 0, OFF only 0, neither 50; one-sided sign test p = 1; " +
+  "95% CI on the paired difference 0.000–0.000; corrections not shown to help; experiment-only, never R1 evidence";
 const AB_PENDING = "| PENDING | — | — |";
 
 let root = "";
@@ -37,6 +44,19 @@ beforeAll(() => {
   const sat = AB_TASKS.filter((t) => t.satisfiable).map((t) => t.taskId);
   const on = abArm("on", 1, AB_TASKS, (t) => (t.taskId === sat[0] ? "false-done" : "refuted"));
   writeAbPack("m2-ab-halted", { stage: 1, arms: { on, off }, preregRepoFile: prereg }, root);
+  // A Stage-1 miss: both arms verify the same 50 tasks (no discordant pair).
+  const same = new Set(
+    AB_TASKS.filter((t) => t.faultClass === "none")
+      .map((t) => t.taskId)
+      .slice(0, 50),
+  );
+  const tie = (side: "on" | "off") =>
+    abArm(side, 1, AB_TASKS, (t) => (same.has(t.taskId) ? "verified" : "refuted"));
+  writeAbPack(
+    "m2-ab-null",
+    { stage: 1, arms: { on: tie("on"), off: tie("off") }, preregRepoFile: prereg },
+    root,
+  );
   writePack("m2-fx-r1", r1Trials(), manifest(), root);
 }, T);
 
@@ -117,6 +137,26 @@ describe("the scorecard's experiment row AB", () => {
       expect(wrongP.errors.join("\n")).toMatch(/AB recomputed figures/);
       const plumbing = check(setAb("PLUMBING", "m2-ab-s1", S1_FIG));
       expect(plumbing.errors.join("\n")).toMatch(/the doc says PLUMBING, the pack gives REPORTED/);
+    },
+    T,
+  );
+
+  it(
+    "a Stage-1 miss is REPORTED as 'corrections not shown to help', never as 'corrections help'",
+    () => {
+      const ok = check(setAb("REPORTED", "m2-ab-null", NULL_FIG));
+      expect(ok.errors).toEqual([]);
+      expect(ok.status).toBe(0);
+      expect(ok.stdout).toMatch(/experiment row AB: REPORTED/);
+      const spun = check(
+        setAb(
+          "REPORTED",
+          "m2-ab-null",
+          NULL_FIG.replace("corrections not shown to help", "corrections help"),
+        ),
+      );
+      expect(spun.status).not.toBe(0);
+      expect(spun.errors.join("\n")).toMatch(/AB recomputed figures/);
     },
     T,
   );
