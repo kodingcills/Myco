@@ -35,6 +35,7 @@ jobs:
       mode: ${{ steps.plan.outputs.mode }}
       linux_path: ${{ steps.plan.outputs.linux_path }}
       m2: ${{ steps.plan.outputs.m2 }}
+      launcher: ${{ steps.plan.outputs.launcher }}
       doc_tests: ${{ steps.plan.outputs.doc_tests }}
       smoke: ${{ steps.plan.outputs.smoke }}
     steps:
@@ -128,14 +129,21 @@ jobs:
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
           PLAN_MODE: ${{ needs.plan.outputs.mode }}
+          PLAN_LAUNCHER: ${{ needs.plan.outputs.launcher }}
         run: |
+          # Fail safe: only a successful plan naming a known narrow mode narrows anything.
+          # `case` matches the whole value; `grep -x` would accept any one line of it.
           mode="$PLAN_MODE"
-          if [ "$PLAN_RESULT" != "success" ] || ! echo "$mode" | grep -qxE 'full|targeted|docs'; then
-            echo "plan job $PLAN_RESULT (mode '$mode'): running the full suite (fail safe)"
+          case "$mode" in full | targeted | docs) known=yes ;; *) known=no ;; esac
+          if [ "$PLAN_RESULT" != "success" ] || [ "$known" != yes ]; then
+            echo "plan job '$PLAN_RESULT' (mode '$mode'): running the full suite (fail safe)"
             mode=full
           fi
+          launcher=true
+          if [ "$PLAN_LAUNCHER" = "false" ]; then launcher=false; fi
           echo "MODE=$mode" >> "$GITHUB_ENV"
-          echo "mode: $mode"
+          echo "LAUNCHER=$launcher" >> "$GITHUB_ENV"
+          echo "mode: $mode, launcher: $launcher"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # targeted mode diffs against the PR base (`vitest run --changed`).
@@ -162,6 +170,11 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: pnpm exec vitest run --changed "$BASE_SHA" --passWithNoTests --exclude test/discovery/s0-live-launcher.test.ts
+      # `pnpm test` runs the launcher test alone in a forked pool; `--changed` excludes it,
+      # so targeted mode reruns it the same way when src/discovery/ or test/discovery/ changed.
+      - name: Test (s0 launcher, forked, when discovery changed)
+        if: env.MODE == 'targeted' && env.LAUNCHER == 'true'
+        run: pnpm exec vitest run --pool=forks --no-file-parallelism test/discovery/s0-live-launcher.test.ts
       - name: Test (core smoke and doc tests)
         if: env.MODE != 'full'
         env:
@@ -203,7 +216,10 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           PLAN_MODE: ${{ needs.plan.outputs.mode }}
         run: |
-          if [ "$PLAN_RESULT" = "success" ] && [ "$PLAN_MODE" != "full" ]; then
+          # Fail safe: skip only on a successful plan naming a narrow mode; a failed or
+          # skipped plan, or an empty or unknown mode, runs the tests.
+          case "$PLAN_MODE" in targeted | docs) narrow=yes ;; *) narrow=no ;; esac
+          if [ "$PLAN_RESULT" = "success" ] && [ "$narrow" = yes ]; then
             echo "RUN=false" >> "$GITHUB_ENV"
             echo "plan mode '$PLAN_MODE': agent/ is untouched (it is a full-suite path class); not run"
           else
@@ -235,7 +251,10 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           PLAN_MODE: ${{ needs.plan.outputs.mode }}
         run: |
-          if [ "$PLAN_RESULT" = "success" ] && [ "$PLAN_MODE" != "full" ]; then
+          # Fail safe: skip only on a successful plan naming a narrow mode; a failed or
+          # skipped plan, or an empty or unknown mode, runs the tests.
+          case "$PLAN_MODE" in targeted | docs) narrow=yes ;; *) narrow=no ;; esac
+          if [ "$PLAN_RESULT" = "success" ] && [ "$narrow" = yes ]; then
             echo "RUN=false" >> "$GITHUB_ENV"
             echo "plan mode '$PLAN_MODE': runtime/ is untouched (it is a full-suite path class); not run"
           else
@@ -298,7 +317,8 @@ jobs:
     name: m2 evidence and scorecard
     needs: plan
     # Not required: skipped at the job level when the plan says no M2 path changed.
-    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.mode == 'full' || needs.plan.outputs.m2 == 'true') }}
+    # Fail safe: runs unless a successful plan names a narrow mode and says m2 is false.
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs') || needs.plan.outputs.m2 != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -329,7 +349,8 @@ jobs:
     name: linux path (ubuntu-latest)
     needs: plan
     # Not required: skipped at the job level unless a Linux-path or init path changed.
-    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.mode == 'full' || needs.plan.outputs.linux_path == 'true') }}
+    # Fail safe: runs unless a successful plan names a narrow mode and says linux_path is false.
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs') || needs.plan.outputs.linux_path != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

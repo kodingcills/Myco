@@ -18,10 +18,16 @@ Fail safe: anything not positively classified as safe to narrow forces `full`.
   - any event other than `pull_request` (pushes to main always run everything)
   - the `tier-2` or `full-ci` label
   - a PR title or a body line that states Tier 2 ("Tier: 2", "**Tier 2**", ...)
-  - a changed path in a Tier 2 or tooling class (TIER2 / TOOLING below)
-  - a changed file of a kind the planner does not know (yaml, json, py, sh,
-    fixtures, binaries ...): vitest cannot see fs-read dependencies
-  - a doc that src/ or scripts/ names (a script may check it)
+  - a changed path in a Tier 2 or tooling class (TIER2 / TOOLING below; all of
+    scripts/ and src/benchmark/ are Tier 2)
+  - TypeScript outside the NARROWABLE_TS allowlist (a new src/ subtree included)
+  - TypeScript a spawned script can reach: any scripts/**/*.ts imports it
+    (transitively), or a file some source names outside an import reaches it, or
+    some source names its file name outside an import (a spawn or an fs read that
+    vitest's import graph cannot see)
+  - a changed file of any other kind (yaml, json, py, sh, html, css, fixtures,
+    binaries ...): vitest cannot see fs-read dependencies
+  - a doc that a non-test source names (a script may check it)
   - a diff that could not be computed, or one over MAX_FILES files
 
 Standard library only. `python3 scripts/ci-plan.py --help` for local use.
@@ -40,9 +46,11 @@ from dataclasses import dataclass, field
 MAX_FILES = 300
 FULL_LABELS = {"tier-2", "full-ci"}
 
-# Tier 2 per CONTRIBUTING.md "Review tiers": scoring and verdicts, trial cleanup and
-# recovery, VM and guest control, locks, spend caps, secrets, schemas, evidence numbers.
-# Guard tests are listed too: a change to a guard's test is Tier 2 as well.
+# Tier 2 per CONTRIBUTING.md "Review tiers": scoring and verdicts, the gate and its
+# evidence, benchmark grading and R1 evidence rules, trial cleanup and recovery, VM and
+# guest control, locks, spend caps, secrets, schemas, evidence numbers. Guard tests are
+# listed too: a change to a guard's test is Tier 2 as well. Every prefix here must match
+# a tracked file (test_ci_plan.py checks), so a dead entry cannot claim coverage.
 TIER2 = (
     "schemas/",
     "src/core/",
@@ -53,17 +61,18 @@ TIER2 = (
     "src/integration/",
     "src/faults/",
     "src/m2/",
-    "src/pilot/",
+    "src/benchmark/",
     "src/oracle-selftest/",
-    "src/benchmark/grade/",
     "src/foundry/grader/",
     "src/foundry/oracles/",
     "src/foundry/hidden-split/",
     "src/foundry/guard.ts",
     "src/baseline/secret-file.ts",
-    "src/baseline/spend-ceiling",
-    "src/baseline/run-lock",
-    "scripts/spend-ceiling.ts",
+    # The run lock and the spend-ceiling enforcement live in sweep.ts.
+    "src/baseline/sweep.ts",
+    # Every script, whatever its language: tests run scripts as subprocesses (tsx, bash,
+    # python), which vitest's import graph cannot follow, so `--changed` misses them.
+    "scripts/",
     "agent/",
     "runtime/",
     "foundry/",
@@ -76,6 +85,11 @@ TIER2 = (
     "test/oracle-selftest/",
     "test/fault-classes/",
     "test/m2/",
+    "test/benchmark/",
+    "test/baseline/run-lock.test.ts",
+    "test/baseline/spend-ceiling.test.ts",
+    "test/baseline/secret-file.test.ts",
+    "test/evidence.test.ts",
     "test/faults.test.ts",
     "test/vm-lock.test.ts",
     "test/run-live-vm-lock.test.ts",
@@ -94,15 +108,27 @@ TOOLING = (
     "biome.json",
     "test/setup/",
     "test/ci-hygiene/",
-    "scripts/ci-plan.py",
-    "scripts/ci-hygiene",
     "viewer/package.json",
     "viewer/vite",
     "viewer/tsconfig",
 )
 
-# Roots whose TypeScript the vitest module graph sees, so `--changed` can follow them.
-TS_ROOTS = ("src/", "test/", "scripts/", "viewer/src/", "viewer/test/")
+# The only TypeScript that may be narrowed with `vitest run --changed`: an explicit
+# allowlist. TypeScript anywhere else (a new src/ subtree included) forces `full`. Even
+# here, a file a spawned script can reach, or that any source names as a file outside an
+# import, forces `full` (see spawn_reach / named_outside_imports).
+NARROWABLE_TS = (
+    "src/baseline/",
+    "src/discovery/",
+    "src/fake/",
+    "src/foundry/",
+    "src/linux/",
+    "src/setup/",
+    "src/tasks/",
+    "test/",
+    "viewer/src/",
+    "viewer/test/",
+)
 TS_EXT = (".ts", ".tsx", ".mts")
 
 # Always run in targeted and docs mode: fast (about 5 s together) and they cover the
@@ -123,6 +149,11 @@ SMOKE = (
     "test/oracle-selftest/selftest.test.ts",
 )
 
+# `pnpm test` runs this file on its own in a forked pool, so `vitest run --changed`
+# excludes it; targeted mode reruns it the same way when one of these paths changes.
+LAUNCHER_TEST = "test/discovery/s0-live-launcher.test.ts"
+LAUNCHER_PATHS = ("src/discovery/", "test/discovery/")
+
 LINUX_PATH = (
     "src/linux/",
     "scripts/linux/",
@@ -132,9 +163,12 @@ LINUX_PATH = (
     "scripts/myco-init.ts",
     "test/init/",
 )
-M2 = ("src/m2/", "scripts/m2-", "test/m2/", "docs/research/experiments/m2-")
+M2 = ("src/m2/", "scripts/m2-", "test/m2/")
 
 TIER2_STATEMENT = re.compile(r"^[\s>*_#-]*tier[\s*_]*[:=\-]?[\s*_]*2\b", re.IGNORECASE | re.MULTILINE)
+
+
+SELF = "scripts/ci-plan.py"
 
 
 @dataclass
@@ -143,6 +177,7 @@ class Plan:
     reasons: list[str] = field(default_factory=list)
     linux_path: bool = True
     m2: bool = True
+    launcher: bool = True
     doc_tests: list[str] = field(default_factory=list)
 
     def outputs(self) -> dict[str, str]:
@@ -151,6 +186,7 @@ class Plan:
             "reason": "; ".join(self.reasons)[:900],
             "linux_path": str(self.linux_path).lower(),
             "m2": str(self.m2).lower(),
+            "launcher": str(self.launcher).lower(),
             "doc_tests": " ".join(self.doc_tests),
             "smoke": " ".join(SMOKE),
         }
@@ -161,18 +197,85 @@ def starts(path: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def classify(path: str) -> str:
-    """One of: tier2, tooling, docs, ts, viewer, unknown."""
+    """By path alone, one of: tier2, tooling, docs, ts, unknown. Only docs and ts can be
+    narrowed; plan() still forces full for a ts file a spawned script can reach."""
     if starts(path, TIER2):
         return "tier2"
     if starts(path, TOOLING):
         return "tooling"
     if path.endswith(".md"):
         return "docs"
-    if starts(path, TS_ROOTS) and path.endswith(TS_EXT):
+    if starts(path, NARROWABLE_TS) and path.endswith(TS_EXT):
         return "ts"
-    if path.startswith("viewer/") and not path.startswith("viewer/public/"):
-        return "viewer"
     return "unknown"
+
+
+# Module specifiers: static and dynamic imports, re-exports, require(). vitest follows
+# these, so a file named only here is safe to narrow; a file named anywhere else is not.
+IMPORT_SPEC = re.compile(r"""(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)(["'])([^"'\n]+)\2""")
+
+
+def strip_imports(text: str) -> str:
+    return IMPORT_SPEC.sub(lambda m: m.group(1) + m.group(2) + m.group(2), text)
+
+
+def named_outside_imports(path: str, sources: dict[str, str]) -> str | None:
+    """The first source (other than the file itself) that names `path`'s file name outside
+    an import: a spawn, an fs read, a copied fixture. vitest cannot see that dependency."""
+    base = os.path.basename(path)
+    pat = re.compile(r"(?<![\w.-])" + re.escape(base) + r"(?![\w-])")
+    for src, text in sorted(sources.items()):
+        if src in (path, SELF):
+            continue
+        if base in text and pat.search(strip_imports(text)):
+            return src
+    return None
+
+
+def resolve_import(importer: str, spec: str, files: set[str]) -> str | None:
+    if not spec.startswith("."):
+        return None
+    target = os.path.normpath(os.path.join(os.path.dirname(importer), spec))
+    stem, ext = os.path.splitext(target)
+    candidates = [target]
+    if ext in (".js", ".mjs", ".cjs", ".jsx"):
+        candidates += [stem + ".ts", stem + ".mts", stem + ".tsx"]
+    candidates += [target + ".ts", target + "/index.ts"]
+    for c in candidates:
+        if c in files:
+            return c
+    return None
+
+
+def spawn_reach(sources: dict[str, str]) -> dict[str, str]:
+    """Every source file a subprocess could load, mapped to the entry point that reaches
+    it. Entry points: every TypeScript file under scripts/, and every TypeScript file a
+    source names outside an import (a test that runs `tsx src/x.ts`). Reached through
+    relative imports, transitively."""
+    files = set(sources)
+    ts_files = sorted(f for f in files if f.endswith(TS_EXT))
+    by_base: dict[str, list[str]] = {}
+    for f in ts_files:
+        by_base.setdefault(os.path.basename(f), []).append(f)
+    entries: dict[str, str] = {f: f for f in ts_files if f.startswith("scripts/")}
+    names = re.compile(r"(?<![\w.-])([\w.-]+\.(?:ts|mts|tsx))(?![\w-])")
+    for src, text in sorted(sources.items()):
+        if src == SELF:
+            continue
+        for name in set(names.findall(strip_imports(text))):
+            for f in by_base.get(name, ()):
+                if f != src:
+                    entries.setdefault(f, f"{f} (named by {src})")
+    reach = dict(entries)
+    queue = list(entries)
+    while queue:
+        cur = queue.pop()
+        for m in IMPORT_SPEC.finditer(sources.get(cur, "")):
+            dep = resolve_import(cur, m.group(3), files)
+            if dep and dep not in reach:
+                reach[dep] = reach[cur]
+                queue.append(dep)
+    return reach
 
 
 GENERIC_DOC_NAMES = {"README.md", "index.md", "CHANGELOG.md"}
@@ -193,12 +296,18 @@ def names_doc(doc: str, text: str) -> bool:
     return bool(parent) and parent in text
 
 
+def is_test_file(path: str) -> bool:
+    return path.startswith(("test/", "viewer/test/")) and path.endswith(TS_EXT)
+
+
 def doc_references(doc: str, sources: dict[str, str]) -> tuple[list[str], list[str]]:
-    """Test files and non-test files whose text names the doc."""
+    """Test files (root vitest can run them) and other files whose text names the doc."""
     tests, others = [], []
     for path, text in sources.items():
+        if path == SELF:
+            continue
         if names_doc(doc, text):
-            (tests if path.startswith("test/") else others).append(path)
+            (tests if is_test_file(path) else others).append(path)
     return sorted(tests), sorted(others)
 
 
@@ -240,6 +349,18 @@ def plan(
         return p
 
     srcs = sources if sources is not None else {}
+    ts_changed = [f for f, c in classes.items() if c == "ts"]
+    if ts_changed:
+        reach = spawn_reach(srcs)
+        for f in ts_changed:
+            if f in reach:
+                p.reasons.append(f"{f} is reachable from a spawned script: {reach[f]}")
+                return p
+            named = named_outside_imports(f, srcs)
+            if named:
+                p.reasons.append(f"{f} is named outside an import by {named} (spawned or read)")
+                return p
+
     doc_tests: set[str] = set()
     for doc in (f for f, c in classes.items() if c == "docs"):
         tests, others = doc_references(doc, srcs)
@@ -250,6 +371,7 @@ def plan(
 
     p.linux_path = any(starts(f, LINUX_PATH) for f in files)
     p.m2 = any(starts(f, M2) for f in files)
+    p.launcher = any(starts(f, LAUNCHER_PATHS) for f in files)
     p.doc_tests = sorted(doc_tests)
     if all(c == "docs" for c in classes.values()):
         p.mode = "docs"
@@ -263,21 +385,24 @@ def plan(
     return p
 
 
+SOURCE_ROOTS = ("test", "src", "scripts", "schemas", "viewer/src", "viewer/test", "viewer/e2e", "agent", "runtime")
+SOURCE_EXT = (".ts", ".tsx", ".mts", ".py", ".sh", ".js", ".mjs", ".rs")
+SKIP_DIRS = {"node_modules", "__pycache__", "target", ".venv", "dist"}
+
+
 def read_sources(root: str) -> dict[str, str]:
     out: dict[str, str] = {}
-    for top in ("test", "src", "scripts", "schemas"):
-        for dirpath, _dirs, names in os.walk(os.path.join(root, top)):
-            if "node_modules" in dirpath or "__pycache__" in dirpath:
-                continue
-            for name in names:
-                if not name.endswith((".ts", ".tsx", ".py", ".sh", ".mts", ".js")):
-                    continue
-                path = os.path.join(dirpath, name)
-                try:
-                    with open(path, encoding="utf-8") as fh:
-                        out[os.path.relpath(path, root)] = fh.read()
-                except (OSError, UnicodeDecodeError):
-                    continue
+    paths = [os.path.join(root, "package.json")]
+    for top in SOURCE_ROOTS:
+        for dirpath, dirs, names in os.walk(os.path.join(root, top)):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            paths += [os.path.join(dirpath, n) for n in names if n.endswith(SOURCE_EXT)]
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                out[os.path.relpath(path, root).replace(os.sep, "/")] = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
     return out
 
 
@@ -327,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write(f"### CI plan: `{result.mode}`\n\n- {outputs['reason']}\n")
-            fh.write(f"- linux path: {outputs['linux_path']}, m2: {outputs['m2']}\n")
+            fh.write(f"- linux path: {outputs['linux_path']}, m2: {outputs['m2']}, launcher: {outputs['launcher']}\n")
             if result.doc_tests:
                 fh.write(f"- doc tests: {outputs['doc_tests']}\n")
             if files is not None:

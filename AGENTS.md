@@ -24,7 +24,7 @@ Single-context layout: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs
 
 While iterating, run only the tests for your area (per-area commands: `CONTRIBUTING.md`, "Targeted tests per area"; the rule: `docs/coordination/CONTRIBUTING-agents.md`, "Targeted testing"). The quickest is `pnpm exec vitest run --changed origin/main`. Run the full `pnpm test` once before opening a PR.
 
-CI narrows itself too (`docs/ci.md`, "Targeted CI"): docs-only and low-tier PRs run the related tests plus a core smoke set; pushes to `main` and every Tier 2 PR run everything. A PR is Tier 2 for CI when its body has a `Tier: 2` line, it has the `tier-2` label, or it touches a Tier 2 or tooling path. If you raise a PR's tier, add the `tier-2` label: that starts a full run.
+CI narrows itself too (`docs/ci.md`, "Targeted CI"): docs-only and low-tier PRs run the related tests plus a core smoke set; pushes to `main` and every Tier 2 PR run everything. A PR is Tier 2 for CI when its body has a `Tier: 2` line, it has the `tier-2` label, or it touches a Tier 2 or tooling path (all of `scripts/` and `src/benchmark/` among them) or a file a script can reach. If you raise a PR's tier, add the `tier-2` label: that starts a full run.
 
 ### Secrets (TIF-206, enforced)
 

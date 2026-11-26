@@ -51,9 +51,19 @@ modes.
 
 | Mode | When | `check` runs | agent, runtime jobs |
 | --- | --- | --- | --- |
-| `full` | Pushes to `main`; any Tier 2 signal (below); any changed path in a Tier 2 or tooling class; any file kind the planner does not know (yaml, json, py, sh, fixtures); a doc that `src/` or `scripts/` names; a diff it cannot compute, or over 300 files | typecheck, lint, `pnpm test`, build: exactly what it ran before the planner existed | run |
-| `targeted` | Only `.md` docs and TypeScript under `src/`, `test/`, `scripts/`, `viewer/` outside the full-suite classes | typecheck, lint, `vitest run --changed <PR base>` (changed test files and every test importing a changed module), the core smoke set, the doc tests, `pnpm schema-validate`, build | steps skipped, job green |
-| `docs` | Only `.md` docs, none of them named by `src/` or `scripts/` | the core smoke set plus the test files that name a changed doc | steps skipped, job green |
+| `full` | Pushes to `main`; any Tier 2 signal (below); any changed path in a Tier 2 or tooling class; TypeScript outside the narrowable allowlist (below); a TypeScript file a script can reach or a source names outside an import (below); any other file kind (yaml, json, py, sh, html, css, fixtures); a doc that a non-test source names; a diff it cannot compute, or over 300 files | typecheck, lint, `pnpm test`, build: exactly what it ran before the planner existed | run |
+| `targeted` | Only `.md` docs and narrowable TypeScript (below) | typecheck, lint, `vitest run --changed <PR base>` (changed test files and every test importing a changed module), the forked s0 launcher test when `src/discovery/` or `test/discovery/` changed, the core smoke set, the doc tests, `pnpm schema-validate`, build | steps skipped, job green |
+| `docs` | Only `.md` docs, none of them named by a non-test source | the core smoke set plus the test files that name a changed doc | steps skipped, job green |
+
+**Narrowable TypeScript** is an allowlist, so a new directory runs everything until it is
+listed: `src/{baseline,discovery,fake,foundry,linux,setup,tasks}/`, `test/`, `viewer/src/`
+and `viewer/test/`, minus every Tier 2 path. Even there, `vitest run --changed` only sees
+imports. A test that runs a script as a subprocess (`tsx`, `bash`, `python`), or reads a
+file by name, is invisible to it. So the planner also forces `full` for a changed file that
+any `scripts/**/*.ts` reaches through imports (transitively), that a file named outside an
+import reaches, or whose file name any source mentions outside an import. In practice
+almost every `src/` file is reachable from a script, so most `src/` changes run the full
+suite; test-only changes and modules only tests import are what targeted mode narrows.
 
 **The secret scan always runs.** It does not depend on the plan.
 
@@ -61,24 +71,32 @@ modes.
 jobs are never skipped at the job level. A skipped matrix job reports as
 `check (${{ matrix.os }})`, which would leave `check (macos-latest)` pending forever. Each
 required job starts, reads the plan in its first step, and skips only its own later
-steps. If the plan job fails or is skipped, every required job runs in full.
-`test/ci-hygiene/test_ci_plan.py` (run by `ci hygiene (workflows)`) fails if a required
-name changes, if a required job gains a job-level condition, or if the fallback to full
-is missing.
+steps. If the plan job fails, is skipped or cancelled, or its mode is empty or anything
+but `full`, `targeted` or `docs`, every required job runs in full; the agent and runtime
+jobs skip their steps only on a successful plan whose mode is exactly `targeted` or
+`docs`. `test/ci-hygiene/test_ci_plan.py` (run by `ci hygiene (workflows)`) executes each
+job's `CI plan` step with every combination of plan result and mode (including empty,
+garbage and multi-line modes), evaluates every step's `if:` and the side jobs' job-level
+`if:`, and fails if a required name changes, a required job gains a job-level condition,
+a fallback does not reach full, or a mode runs the wrong steps.
 
 **Tier 2 always gets the full suite.** Any one of these forces `full`:
 
 - the `tier-2` label (or `full-ci`);
 - a PR title or a body line that states the tier as 2 (`Tier: 2`, `**Tier 2.**`, `Tier 2 (locks)`),
   as `.github/PULL_REQUEST_TEMPLATE.md` asks every PR to;
-- a changed path in a Tier 2 class: `schemas/`, `src/{core,verify,gate,integrity,win,integration,faults,m2,pilot,oracle-selftest}/`,
-  `src/benchmark/grade/`, `src/foundry/{grader,oracles,hidden-split}/`, `src/foundry/guard.ts`,
-  the secret-file, spend-ceiling and run-lock modules, `agent/`, `runtime/`, `foundry/`,
+- a changed path in a Tier 2 class: `schemas/`, `src/{core,verify,gate,integrity,win,integration,faults,m2,benchmark,oracle-selftest}/`,
+  `src/foundry/{grader,oracles,hidden-split}/`, `src/foundry/guard.ts`,
+  `src/baseline/secret-file.ts`, `src/baseline/sweep.ts` (the run lock and the
+  spend-ceiling enforcement), all of `scripts/`, `agent/`, `runtime/`, `foundry/`,
   `benchmark/`, `docs/research/`, the scorecards, and the guard tests
-  (`test/{gate,integrity,oracle-selftest,fault-classes,m2}/`, faults, VM-lock, scorecard);
+  (`test/{gate,integrity,oracle-selftest,fault-classes,m2,benchmark}/`,
+  `test/baseline/{run-lock,spend-ceiling,secret-file}.test.ts`, evidence, faults, VM-lock,
+  scorecard). The test file checks that every tracked file under `src/{gate,integrity,benchmark,m2,core}/`,
+  `schemas/`, `scripts/`, `.github/`, `agent/` and `runtime/` forces `full`, and that every
+  listed prefix matches a tracked file;
 - a changed tooling path: `.github/`, `.githooks/`, `package.json`, the lockfile,
-  `tsconfig*`, `vitest.config.ts`, `biome.json`, `test/setup/`, `test/ci-hygiene/`, the CI
-  scripts.
+  `tsconfig*`, `vitest.config.ts`, `biome.json`, `test/setup/`, `test/ci-hygiene/`.
 
 The workflow also runs on `labeled` and `unlabeled`. Adding `tier-2` after a targeted run
 starts a new run, which cancels the old one, so the required checks go back to pending
@@ -90,11 +108,10 @@ raises a PR's tier adds the label.
 evidence, faults, no-home-paths, recovery, runner, verify, the baseline import graph, the
 gate, the integrity isolation suite and the R5 oracle self-test.
 
-The `linux path` and `m2 evidence and scorecard` jobs are not required. They run in
-`full` mode, and in the other modes only when their own paths change (`src/linux/`,
-`scripts/linux*`, `src/setup/`, `scripts/myco-init.ts`, `test/{linux,init}/`;
-`src/m2/`, `scripts/m2-*`, `test/m2/`, `docs/research/experiments/m2-*`). `viewer-perf`
-is unchanged.
+The `linux path` and `m2 evidence and scorecard` jobs are not required. They run unless
+a successful plan names a narrow mode and says their paths are untouched (`src/linux/`,
+`src/setup/`, `test/{linux,init}/`; `test/m2/`). Their other paths (`scripts/`, `src/m2/`)
+are Tier 2, so a change there runs everything. `viewer-perf` is unchanged.
 
 See what the planner would do for your branch:
 

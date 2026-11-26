@@ -58,7 +58,7 @@ once before you open the PR. CI does the same split: see
 | You changed | Run |
 |---|---|
 | anything (what CI's targeted mode runs) | `pnpm exec vitest run --changed origin/main` |
-| one file or one test | `pnpm exec vitest run test/benchmark/taskset.test.ts`, `pnpm exec vitest run -t "accepts a battery row"`, `pnpm exec vitest related src/baseline/planner.ts` |
+| one file or one test | `pnpm exec vitest run test/benchmark/taskset.test.ts`, `pnpm exec vitest run -t "accepts a battery row"`, `pnpm exec vitest related --run src/baseline/planner.ts` (without `--run` it watches) |
 | `src/gate/`, `src/integrity/` | `pnpm exec vitest run test/gate test/integrity` |
 | `src/benchmark/` | `pnpm exec vitest run test/benchmark` |
 | `src/baseline/` | `pnpm exec vitest run test/baseline` |
@@ -69,7 +69,7 @@ once before you open the PR. CI does the same split: see
 | `src/linux/`, `src/setup/`, `myco init` (needs `libreoffice-calc python3-uno`) | `MYCO_LINUX_PATH_REQUIRED=1 pnpm exec vitest run test/linux test/init` |
 | `schemas/` | `pnpm schema-validate` and `pnpm exec vitest run test/evidence.test.ts` |
 | M1 scorecard or its evidence | `python3 scripts/scorecard-check.py && python3 scripts/check-scorecard-links.py` |
-| `viewer/` | `pnpm --filter viewer typecheck && pnpm --filter viewer lint && pnpm exec vitest run viewer/test` |
+| `viewer/` | `pnpm --filter viewer typecheck && pnpm --filter viewer lint && pnpm exec vitest run viewer/test` (the viewer's `lint` is its theme check, not a linter; `pnpm lint` at the root lints it) |
 | `.github/workflows/`, `scripts/ci-*` | `python3 scripts/ci-hygiene-check.py && python3 -m unittest discover -s test/ci-hygiene -v`, then `actionlint` |
 | `agent/` | `cd agent && pip install -e . pytest && pytest -v` |
 | `runtime/` | `cd runtime && cargo test -p myco-rt-agent` (its confinement tests run only on Linux) |
