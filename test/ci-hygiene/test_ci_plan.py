@@ -800,7 +800,14 @@ class Workflow(unittest.TestCase):
 
     def test_check_runs_the_right_steps_in_each_mode(self):
         # Verifier round 1 M2 and M9: a targeted or smoke step whose `if:` is never true.
-        common = {"CI plan", "actions/checkout", "actions/setup-node", "Install pnpm", "Install dependencies"}
+        common = {
+            "CI plan",
+            "actions/checkout",
+            "actions/setup-node",
+            "Install pnpm",
+            "Install dependencies",
+            "Allow user namespaces (plugin sandbox network layer)",
+        }
         want = {
             "full": common | {"Typecheck", "Lint", "Test", "Build"},
             "targeted": common
