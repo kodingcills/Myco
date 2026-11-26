@@ -20,7 +20,9 @@ import { cleanupPlugins, makePlugin, tempDir, utf8 } from "./helpers.ts";
 const PROBE = String.raw`
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function attempt(fn) {
-  try { return (await fn()) ? "OPEN" : "DENIED"; } catch { return "DENIED"; }
+  try { return (await fn()) ? "OPEN" : "DENIED"; } catch (e) {
+    return typeof e?.code === "string" && e.code.startsWith("ENV_") ? e.code : "DENIED";
+  }
 }
 function connected(socket) {
   return new Promise((res) => {
@@ -94,7 +96,12 @@ const probes = {
   vm: async () => { await import("node:vm"); return true; },
   dataUrl: async () => { await import("data:text/javascript,export default 1"); return true; },
   kill: async () => { process.kill(process.ppid, 0); return true; },
-  env: async () => Object.keys(process.env).length > 0,
+  // Names only (never values), folded into a code so a failure says which variable it was.
+  env: async () => {
+    const names = Object.keys(process.env);
+    if (names.length === 0) return false;
+    throw { code: ("ENV_" + names.join("_").toUpperCase().replace(/[^A-Z0-9_]/g, "_")).slice(0, 64) };
+  },
   hostPath: async (_i, doc) => /[\\/]/.test(doc.fileName),
   bytesSeen: async (_i, doc) => doc.bytes !== null && new TextDecoder().decode(doc.bytes) === "captured",
   write: async () => { const fs = await import("node:fs"); fs.writeFileSync("x.txt", "x"); return true; },
