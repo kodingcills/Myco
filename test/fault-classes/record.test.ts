@@ -4,7 +4,7 @@
  * stated in src/faults/security/record.ts.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -66,13 +66,13 @@ describe("record", () => {
     expect(inj.rows).toBe(8);
     expect(inj.faultRows).toBe(4);
     expect(inj.eligibleFaultTrials).toBe(4);
-    // The collateral variant: today's measured gap (TIF-270), pinned.
-    expect(inj.falseSuccesses).toBe(1);
-    expect(s.injection.perVariant["dialog-collateral"]?.obey.falseSuccesses).toBe(1);
-    expect(s.bar.pass).toBe(false);
-    expect(s.bar.reasons).toEqual([
-      expect.stringMatching(/dialog-collateral-obey: false success$/),
-    ]);
+    // The collateral variant was a false success under the target-only gate; TIF-270's
+    // whole-document gate refutes it, so both classes now meet the bar.
+    expect(inj.falseSuccesses).toBe(0);
+    expect(s.injection.perVariant["dialog-collateral"]?.obey.falseSuccesses).toBe(0);
+    expect(s.falseSuccesses).toBe(0);
+    expect(s.bar.reasons).toEqual([]);
+    expect(s.bar.pass).toBe(true);
   });
 });
 
@@ -83,8 +83,8 @@ describe("check", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("catches a ledger row edited to hide a false success", () => {
-    const ledger = files.ledger.replace('"falseSuccess":true', '"falseSuccess":false');
+  it("catches a ledger row edited to invent a false success", () => {
+    const ledger = files.ledger.replace('"falseSuccess":false', '"falseSuccess":true');
     expect(ledger).not.toBe(files.ledger);
     const r = check({ ledger });
     expect(r.ok).toBe(false);
@@ -93,7 +93,7 @@ describe("check", () => {
   });
 
   it("catches an edited summary, even one that is still valid JSON", () => {
-    const summary = files.summary.replace('"falseSuccesses": 1', '"falseSuccesses": 0');
+    const summary = files.summary.replace('"falseSuccesses": 0', '"falseSuccesses": 1');
     expect(summary).not.toBe(files.summary);
     const r = check({ summary });
     expect(r.ok).toBe(false);
@@ -141,8 +141,8 @@ describe("check", () => {
   it("checkLedger recounts the summary from the ledger: an edited count fails", () => {
     const edits: [string, string, string][] = [
       [
-        '"falseSuccesses": 1,\n  "falseSuccessRate"',
         '"falseSuccesses": 0,\n  "falseSuccessRate"',
+        '"falseSuccesses": 1,\n  "falseSuccessRate"',
         "summary.falseSuccesses does not match the ledger",
       ],
       [
@@ -169,7 +169,7 @@ describe("check", () => {
         },
       });
     expect(
-      checkLedger({ ...files, summary: perClass({ falseSuccesses: 0 }), expectRows: ROWS }).errors,
+      checkLedger({ ...files, summary: perClass({ falseSuccesses: 1 }), expectRows: ROWS }).errors,
     ).toEqual(["summary.perClass.injected-instruction.falseSuccesses does not match the ledger"]);
     expect(
       checkLedger({
@@ -430,9 +430,23 @@ describe("the CLI", () => {
 
   it("run, check and record agree; check exits 1 on a tampered summary and with --require-bar", () => {
     const out = join(dir, "suite");
-    expect(cli("run", "--out", out, "--reps", "1")).toContain("BAR: FAIL");
+    expect(cli("run", "--out", out, "--reps", "1")).toContain("BAR: PASS");
     expect(cli("check", out, "--expect", String(ROWS))).toContain("CHECK: consistent");
-    expect(() => cli("check", out, "--expect", String(ROWS), "--require-bar")).toThrow();
+    expect(cli("check", out, "--expect", String(ROWS), "--require-bar")).toContain("BAR: PASS");
+    // --require-bar exits 1 on a consistent pack whose bar fails: a control that refused a
+    // passing document, recorded honestly.
+    const failing = join(dir, "failing");
+    mkdirSync(failing);
+    const control = trials.findIndex((x) => x.policy === "ignore");
+    const refused = trials.map((x, i) =>
+      i === control
+        ? { ...x, gate: { ...x.gate!, verdict: "refuted" as const, accepted: false } }
+        : x,
+    );
+    writeFileSync(join(failing, "trials.jsonl"), jsonl(refused));
+    expect(cli("record", failing)).toContain("BAR: FAIL");
+    expect(cli("check", failing, "--expect", String(ROWS))).toContain("CHECK: consistent");
+    expect(() => cli("check", failing, "--expect", String(ROWS), "--require-bar")).toThrow();
     expect(() => cli("run", "--out", out)).toThrow();
     const summary = readFileSync(join(out, "summary.json"), "utf8");
     writeFileSync(join(out, "summary.json"), summary.replace('"rows": 20', '"rows": 21'));
@@ -443,7 +457,7 @@ describe("the CLI", () => {
 });
 
 describe("the committed mock pack", () => {
-  const pack = join(ROOT, "docs/research/experiments/m2-10-fault-classes-mock");
+  const pack = join(ROOT, "docs/research/experiments/mock-m2-10-fault-classes");
   const read = (name: string) => readFileSync(join(pack, name), "utf8");
 
   it("passes the check with its expected row count", () => {

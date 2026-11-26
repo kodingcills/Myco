@@ -25,6 +25,8 @@ const FORBIDDEN = [
   /\/src\/baseline\/sweep\.ts$/,
   // TIF-267's independent grader and its check: the arm must not share code with them.
   /\/src\/benchmark\//,
+  // Myco's gate (M2-02): the competitor arm must not share code with the arm it is compared to.
+  /\/src\/gate\//,
   /\.json$/,
 ];
 
@@ -75,6 +77,9 @@ describe("hcu+shell import boundary", () => {
         (!path.startsWith("/") && !ALLOWED_EXTERNAL.has(path)),
     );
     expect(hits).toEqual([]);
+  });
+  it("forbids Myco's gate (canary)", () => {
+    expect(FORBIDDEN.some((re) => re.test(resolve("src/gate/api.ts")))).toBe(true);
   });
   it("would catch a ground-truth import (canary)", () => {
     const hits = reachable(resolve("src/baseline/sweep.ts")).filter((path) =>
