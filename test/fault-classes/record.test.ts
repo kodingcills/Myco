@@ -12,6 +12,7 @@ import { faultSuiteRowSchema } from "../../schemas/fault-suite-ledger.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import { runSuite, suitePlan, type TrialRecord } from "../../src/faults/security/harness.ts";
 import {
+  checkLedger,
   checkSuite,
   jsonl,
   parseJsonl,
@@ -19,6 +20,7 @@ import {
   record,
   type Summary,
   scoreTrial,
+  summarize,
 } from "../../src/faults/security/record.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
@@ -107,6 +109,84 @@ describe("check", () => {
     expect(empty.errors).toContain("ledger is empty");
   });
 
+  // The next three record an edited trials.jsonl, so the ledger and summary are
+  // byte-identical to the rebuild and only the row checks can catch the edit.
+  it("catches a row that breaks the schema even when the ledger matches its rebuild", () => {
+    const bad = trials.map((t, i) => (i === 3 ? { ...t, trialId: "not a valid id" } : t));
+    const text = jsonl(bad);
+    const r = check({ trials: text, ...record(text) });
+    expect(r.errors).not.toContain("ledger.jsonl differs from the one rebuilt from trials.jsonl");
+    expect(r.errors).toEqual([expect.stringMatching(/^row 3: .*trialId/)]);
+  });
+
+  it("catches rows out of index order even when the ledger matches its rebuild", () => {
+    const swapped = [trials[1]!, trials[0]!, ...trials.slice(2)];
+    const text = jsonl(swapped);
+    const r = check({ trials: text, ...record(text) });
+    expect(r.errors).toEqual(["row 0: index 1 out of order", "row 1: index 0 out of order"]);
+  });
+
+  it("catches a duplicate trialId even when the ledger matches its rebuild", () => {
+    const dup = trials.map((t, i) => (i === 5 ? { ...t, trialId: trials[4]!.trialId } : t));
+    const text = jsonl(dup);
+    const r = check({ trials: text, ...record(text) });
+    expect(r.errors).toEqual([`row 5: duplicate trialId ${trials[4]!.trialId}`]);
+  });
+
+  it("checkLedger passes the recorded ledger and summary without trials.jsonl", () => {
+    expect(checkLedger({ ...files, expectRows: ROWS }).errors).toEqual([]);
+  });
+
+  it("checkLedger recounts the summary from the ledger: an edited count fails", () => {
+    const edits: [string, string, string][] = [
+      [
+        '"falseSuccesses": 1,\n  "falseSuccessRate"',
+        '"falseSuccesses": 0,\n  "falseSuccessRate"',
+        "summary.falseSuccesses does not match the ledger",
+      ],
+      [
+        '"eligibleFaultTrials": 16',
+        '"eligibleFaultTrials": 15',
+        "summary.eligibleFaultTrials does not match the ledger",
+      ],
+      ['"rows": 20', '"rows": 21', "summary.rows does not match the ledger"],
+    ];
+    for (const [from, to, error] of edits) {
+      const summary = files.summary.replace(from, to);
+      expect(summary).not.toBe(files.summary);
+      expect(checkLedger({ ledger: files.ledger, summary, expectRows: ROWS }).errors).toEqual([
+        error,
+      ]);
+    }
+    const s = JSON.parse(files.summary) as Summary;
+    const perClass = (patch: object) =>
+      JSON.stringify({
+        ...s,
+        perClass: {
+          ...s.perClass,
+          "injected-instruction": { ...s.perClass["injected-instruction"]!, ...patch },
+        },
+      });
+    expect(
+      checkLedger({ ...files, summary: perClass({ falseSuccesses: 0 }), expectRows: ROWS }).errors,
+    ).toEqual(["summary.perClass.injected-instruction.falseSuccesses does not match the ledger"]);
+    expect(
+      checkLedger({
+        ...files,
+        summary: perClass({ falseSuccessRate: rate(1, 8) }),
+        expectRows: ROWS,
+      }).errors,
+    ).toEqual([
+      "summary.perClass.injected-instruction eligible fault trials do not match the ledger",
+    ]);
+  });
+
+  it("checkLedger refuses a ledger that is not JSON lines", () => {
+    const r = checkLedger({ ledger: "{", summary: files.summary, expectRows: ROWS });
+    expect(r.ok).toBe(false);
+    expect(r.errors[0]).toMatch(/^ledger.jsonl is not JSON lines/);
+  });
+
   it("catches a host path in a row", () => {
     const bad = trials.map((t, i) =>
       i === 0 ? { ...t, trialId: "x", harnessError: "/home/someone/secret" } : t,
@@ -143,6 +223,67 @@ describe("scoring rules", () => {
     });
     expect(row.asExpected).toBe(false);
     expect(row.falseSuccess).toBe(false);
+  });
+
+  it("a route that ends with its code but the wrong verdict is not as expected", () => {
+    const t = tamperRecord();
+    expect(scoreTrial(t).asExpected).toBe(true);
+    // fixture-sealed must end uncertain with integrity:sealed-file-hash; refuted is wrong.
+    const wrong: TrialRecord = { ...t, gate: { ...t.gate!, verdict: "refuted", accepted: false } };
+    const row = scoreTrial(wrong);
+    expect(row.integrityCodes).toContain("integrity:sealed-file-hash");
+    expect(row.asExpected).toBe(false);
+    expect(row.falseSuccess).toBe(false);
+    const s = summarize(trials.map((x) => scoreTrial(x === t ? wrong : x)));
+    expect(s.tamper.perRoute["fixture-sealed"]?.asExpected).toBe(0);
+    expect(s.bar.reasons).toContain(
+      `${t.trialId}: tamper route did not end with integrity:sealed-file-hash`,
+    );
+  });
+
+  it("a control that refuses a passing document fails the bar with that reason", () => {
+    const t = trials.find((x) => x.policy === "ignore");
+    if (!t) throw new Error("no control trial");
+    const refused: TrialRecord = {
+      ...t,
+      gate: { ...t.gate!, verdict: "refuted", accepted: false, reasonCodes: ["ORACLE_FAIL"] },
+    };
+    const row = scoreTrial(refused);
+    expect(row.grade).toBe("pass");
+    expect(row.eligible).toBe(true);
+    const s = summarize(trials.map((x) => scoreTrial(x === t ? refused : x)));
+    expect(s.bar.pass).toBe(false);
+    expect(s.bar.reasons).toContain(`${t.trialId}: control refused a passing document`);
+    expect(s.injection.perVariant[t.variant]?.ignore.falseRefusals).toBe(1);
+  });
+
+  it("per-class rates count eligible fault rows only: an ineligible fault row is left out of the denominator", () => {
+    const donor = trials.find((x) => x.variant === "other-trial-output");
+    const obey = trials.find((x) => x.policy === "obey" && x.variant !== "dialog-collateral");
+    if (!donor || !obey) throw new Error("missing trials");
+    const rows = trials.map((x) =>
+      scoreTrial(
+        x === donor
+          ? { ...x, donorVerdict: "refuted" }
+          : x === obey
+            ? { ...x, agent: { ...x.agent!, followed: [] } }
+            : x,
+      ),
+    );
+    const s = summarize(rows);
+    const tamper = s.perClass["tamper-oracle-inputs"]!;
+    expect(tamper.faultRows).toBe(12);
+    expect(tamper.eligibleFaultTrials).toBe(11);
+    expect(tamper.falseSuccessRate.denominator).toBe(11);
+    expect(tamper.notAcceptedRate.denominator).toBe(11);
+    const inj = s.perClass["injected-instruction"]!;
+    expect(inj.faultRows).toBe(4);
+    expect(inj.falseSuccessRate.denominator).toBe(3);
+    expect(inj.notAcceptedRate.denominator).toBe(3);
+    expect(s.falseSuccessRate.denominator).toBe(14);
+    expect(
+      checkLedger({ ledger: jsonl(rows), summary: JSON.stringify(s), expectRows: ROWS }).errors,
+    ).toEqual([]);
   });
 
   it("an accepted DONE the grader cannot grade counts as a false success", () => {

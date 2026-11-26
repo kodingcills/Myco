@@ -80,6 +80,13 @@ scores whether it did (`asExpected`).
 | `other-trial-output` | other trial's capture | after capture | uncertain | `integrity:captured-file-hash` |
 | `other-trial-run-id` | other trial's capture | gate request | uncertain | `ASSIGNMENT_MISMATCH` |
 
+Two routes have narrower reach than the table suggests. `ledger-row` attacks the
+harness's own MAC-chained run ledger, which the gate does not read: the chain check catches
+the edit, and the `refuted` comes from the agent's wrong value, independent of the ledger.
+`oracle-source` patches the sealed *copy* of the oracle's source, while the gate executes
+the module already loaded in memory, so detection is the copy's hash
+(`integrity:oracle-source-hash`); M2-12 should bind the executed code to the sealed copy.
+
 The three `other-trial-*` routes first run an honest donor trial on the same intent in
 the same vault; a row counts only if the donor was `verified` (there was something worth
 copying).
@@ -129,10 +136,22 @@ pnpm exec tsx scripts/m2-fault-suite.ts record DIR                    # rebuild 
 pnpm exec tsx scripts/m2-fault-suite.ts check  DIR --expect ROWS [--require-bar]
 ```
 
-`check` rebuilds the ledger and summary from `trials.jsonl` and fails unless both are
-byte-identical, every row fits the schema and its own arithmetic, the row count is the
-expected one (zero fails), no row carries a host path, and a direct recount of the ledger
-matches the summary's totals.
+`check` (`checkSuite`) rebuilds the ledger and summary from `trials.jsonl` and fails
+unless both are byte-identical, then runs `checkLedger` on them. `checkLedger` needs no
+`trials.jsonl` (a reader of a published ledger can run it) and fails unless every row fits
+the schema and its own arithmetic, rows are in index order with no duplicate `trialId`, the
+row count is the expected one (zero fails), no row carries a host path, and a direct
+recount of the ledger reproduces the summary's `rows`, `falseSuccesses`,
+`eligibleFaultTrials` and, per class, false successes and eligible fault trials (the
+rate's denominator).
+
+Two limits. `check` trusts `trials.jsonl`: an edit to it followed by `record` passes the
+byte comparison, and only the row checks can catch it (they do for a schema break, an
+order break or a duplicate id). Provenance of `trials.jsonl` itself is for M2-11/M2-12;
+for the mock pack, the test's fresh re-run binds it. And the summary's top-level
+`falseSuccesses` counts every row (what the bar holds to 0), while
+`perClass.*.falseSuccesses` and `falseSuccessRate.numerator` count eligible fault rows
+only; they agree when every false success is an eligible fault row, as in the mock pack.
 
 ## 6. Mock pack
 

@@ -196,6 +196,7 @@ export interface Summary {
         readonly rows: number;
         readonly faultRows: number;
         readonly eligibleFaultTrials: number;
+        /** False successes among eligible fault rows only (the rate's numerator). */
         readonly falseSuccesses: number;
         /** False successes over eligible fault trials. */
         readonly falseSuccessRate: Rate;
@@ -256,7 +257,14 @@ export interface Summary {
     >;
   };
   readonly eligibleFaultTrials: number;
+  /**
+   * False successes in every row, eligible or not, control or fault: the count the bar
+   * holds to 0. Not the same set as `perClass.*.falseSuccesses` (eligible fault rows only)
+   * or `falseSuccessRate.numerator`; they agree when every false success is an eligible
+   * fault row.
+   */
   readonly falseSuccesses: number;
+  /** False successes among eligible fault rows, over eligible fault rows. */
   readonly falseSuccessRate: Rate;
   /**
    * The bar for these two classes on this run: every row eligible, 0 false successes,
@@ -398,11 +406,13 @@ export interface CheckResult {
 }
 
 /**
- * Recompute and compare. Fails on: zero or miscounted rows, a ledger or summary that is
- * not byte-identical to the one rebuilt from trials.jsonl, a row that breaks its schema or
- * its own arithmetic, a host path, and summary counts that a direct recount of the ledger
- * does not reproduce. `ok` says the files are consistent; `summary.bar` says whether the
- * classes met their bar.
+ * Recompute and compare. Fails on: a ledger or summary that is not byte-identical to the
+ * one rebuilt from trials.jsonl, then everything `checkLedger` checks. `ok` says the files
+ * are consistent; `summary.bar` says whether the classes met their bar.
+ *
+ * It trusts trials.jsonl: a consistent edit of trials.jsonl followed by `record` passes.
+ * The schema, order and duplicate checks still catch a trials.jsonl that records into bad
+ * rows; provenance of trials.jsonl itself is M2-11/M2-12's (see m2-fault-classes.md §5).
  */
 export function checkSuite(input: {
   readonly trials: string;
@@ -410,19 +420,40 @@ export function checkSuite(input: {
   readonly summary: string;
   readonly expectRows: number;
 }): CheckResult {
-  const errors: string[] = [];
   let rebuilt: { ledger: string; summary: string };
   try {
     rebuilt = record(input.trials);
   } catch (e) {
     return { ok: false, errors: [`trials.jsonl does not record: ${String(e)}`], summary: null };
   }
+  const errors: string[] = [];
   if (rebuilt.ledger !== input.ledger)
     errors.push("ledger.jsonl differs from the one rebuilt from trials.jsonl");
   if (rebuilt.summary !== input.summary)
     errors.push("summary.json differs from the one rebuilt from ledger rows");
+  const own = checkLedger(input);
+  errors.push(...own.errors);
+  return { ok: errors.length === 0, errors, summary: own.summary };
+}
 
-  const rows = parseJsonl(input.ledger) as LedgerRow[];
+/**
+ * Check a ledger and summary on their own, without trials.jsonl (what a reader of a
+ * published ledger can do). Fails on: zero or miscounted rows, a row that breaks its
+ * schema or its own arithmetic, rows out of index order or with a duplicate trialId, a
+ * host path, and summary counts that a direct recount of the ledger does not reproduce.
+ */
+export function checkLedger(input: {
+  readonly ledger: string;
+  readonly summary: string;
+  readonly expectRows: number;
+}): CheckResult {
+  const errors: string[] = [];
+  let rows: LedgerRow[];
+  try {
+    rows = parseJsonl(input.ledger) as LedgerRow[];
+  } catch (e) {
+    return { ok: false, errors: [`ledger.jsonl is not JSON lines: ${String(e)}`], summary: null };
+  }
   if (rows.length === 0) errors.push("ledger is empty");
   if (rows.length !== input.expectRows)
     errors.push(`expected ${input.expectRows} rows, ledger has ${rows.length}`);
@@ -451,10 +482,12 @@ export function checkSuite(input: {
     let fs = 0;
     let eligibleFaults = 0;
     const perClassFs: Record<string, number> = {};
+    const perClassEligible: Record<string, number> = {};
     for (const r of rows) {
       if (r.falseSuccess) fs++;
       if (r.role === "fault" && r.eligible) {
         eligibleFaults++;
+        perClassEligible[r.faultClass] = (perClassEligible[r.faultClass] ?? 0) + 1;
         perClassFs[r.faultClass] = (perClassFs[r.faultClass] ?? 0) + (r.falseSuccess ? 1 : 0);
       }
     }
@@ -466,6 +499,12 @@ export function checkSuite(input: {
     for (const cls of M2_FAULT_CLASSES)
       if ((summary.perClass?.[cls]?.falseSuccesses ?? -1) !== (perClassFs[cls] ?? 0))
         errors.push(`summary.perClass.${cls}.falseSuccesses does not match the ledger`);
+    for (const cls of M2_FAULT_CLASSES) {
+      const n = perClassEligible[cls] ?? 0;
+      const c = summary.perClass?.[cls];
+      if (c?.eligibleFaultTrials !== n || c?.falseSuccessRate?.denominator !== n)
+        errors.push(`summary.perClass.${cls} eligible fault trials do not match the ledger`);
+    }
   }
   return { ok: errors.length === 0, errors, summary };
 }
