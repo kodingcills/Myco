@@ -16,14 +16,16 @@
  *  - the gate result is this trial's: the seal receipt, `result.request.runId` and
  *    `result.request.taskId` name this run and task, and the oracle decided on this task's
  *    spec (`oracle.specSha256`);
- *  - the bytes the row hashes (and the grader grades) are the bytes the gate decided on (the
- *    `persisted-state` evidence ref), in the one format the gate family reads (CSV);
+ *  - when the gate read a document (a `persisted-state` evidence ref), the bytes the row hashes
+ *    (and the grader grades) are those bytes, in the one format the gate family reads (CSV);
+ *    when the gate found no state (`STATE_MISSING`), the record captured none either;
  *  - an `unregistrable` outcome is re-checked: the task really is rejected by the registry;
  *  - the row is schema-valid.
  *
  * Dry runs: a dry run names a non-model planner (`simulated:...`), and
  * `checkBenchmark(..., { evidence: true })` refuses every row whose planner is not a Claude
- * model id (`EVIDENCE_PLANNER` in `check.ts`). Simulated rows are plumbing tests, never evidence.
+ * model id (`EVIDENCE_PLANNERS` in `check.ts`), and the result's `provenance` labels them
+ * `simulated` either way. Simulated rows are plumbing tests, never evidence.
  */
 import { createHash } from "node:crypto";
 import { benchmarkArmRowSchema } from "../../schemas/benchmark-ledger.ts";
@@ -140,6 +142,8 @@ function bindDecision(
   if (state === undefined) {
     if (result.verdict === "verified")
       throw new Error(`${who} verified without a persisted-state evidence ref`);
+    if (result.reasonCodes.includes("STATE_MISSING") && rec.persisted !== null)
+      throw new Error(`${who} found no persisted state, but the record carries captured bytes`);
     return;
   }
   if (state.runId !== rec.runId || state.path !== GATE_STATE_FILE)

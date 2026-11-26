@@ -16,7 +16,7 @@ import {
   type BenchmarkArmRow,
   type CheckResult,
   checkBenchmark,
-  EVIDENCE_PLANNER,
+  EVIDENCE_PLANNERS,
   expectedAccepted,
 } from "../../src/benchmark/check.ts";
 import {
@@ -273,6 +273,63 @@ describe("gatedArmRow binds the gate result to this trial (#496 D1-D3, D5)", () 
       { outcome: { ...o, result: { ...o.result, evidenceRefs: [] } } },
       /verified without a persisted-state evidence ref/,
     ],
+    [
+      "two persisted-state refs",
+      {
+        outcome: {
+          ...o,
+          result: {
+            ...o.result,
+            evidenceRefs: [...o.result.evidenceRefs, ...o.result.evidenceRefs],
+          },
+        },
+      },
+      /names 2 persisted states/,
+    ],
+    [
+      "a persisted-state ref for another run",
+      {
+        outcome: {
+          ...o,
+          result: {
+            ...o.result,
+            evidenceRefs: o.result.evidenceRefs.map((r) => ({ ...r, runId: "run-9" })),
+          },
+        },
+      },
+      /read run-9\/doc.csv, not run-1\/doc.csv/,
+    ],
+    [
+      "a persisted-state ref for another file",
+      {
+        outcome: {
+          ...o,
+          result: {
+            ...o.result,
+            evidenceRefs: o.result.evidenceRefs.map((r) => ({ ...r, path: "other.csv" })),
+          },
+        },
+      },
+      /read run-1\/other.csv, not run-1\/doc.csv/,
+    ],
+    [
+      "a decision from another gate family",
+      {
+        outcome: {
+          ...o,
+          result: {
+            ...o.result,
+            oracle: { ...(o.result.oracle as NonNullable<typeof o.result.oracle>), family: "x" },
+          },
+        },
+      },
+      /came from family x, not calc-record-edit/,
+    ],
+    [
+      "captured bytes when the gate found no persisted state",
+      { outcome: decided("uncertain", ["STATE_MISSING"], null) },
+      /found no persisted state, but the record carries captured bytes/,
+    ],
     // D3: format and published-task parity.
     ["an xlsx document (the gate reads CSV only)", { persistedFormat: "xlsx" }, /reads CSV only/],
     ["a task not in the published set", { taskId: "fc-v1-999" }, /appears 0 times/],
@@ -301,6 +358,11 @@ describe("gatedArmRow binds the gate result to this trial (#496 D1-D3, D5)", () 
     expect(row().faultClass).toBe("none");
     const dup = [...TASKS, T1];
     expect(() => gatedArmRow(record(), dup)).toThrow(/appears 2 times/);
+    // A published task whose instruction hash is not its instruction's.
+    const forgedHash = TASKS.map((t) =>
+      t.taskId === T1.taskId ? { ...t, instructionSha256: "0".repeat(64) } : t,
+    );
+    expect(() => gatedArmRow(record(), forgedHash)).toThrow(/instruction is not task fc-v1-001's/);
   });
 
   it("an invalid-target task is re-checked against the registry and may be unregistrable", () => {
@@ -331,6 +393,14 @@ describe("evidence provenance (#496 D4)", () => {
     "claude-sonnet-5-5 ",
     "Claude-sonnet-5-5",
     "claude-sonnet",
+    // #496 round 2: substrings of a real id, and ids the old pattern let through.
+    "simulated:claude-sonnet-5-5",
+    "claude-sonnet-5-5:simulated",
+    "xclaude-sonnet-5-5",
+    "claude-sonnet-0",
+    "claude-sonnet-05-05",
+    "claude-opus-1-2-3-4-5-6-7-8-9",
+    "claude-sonnet-4-5-20250929",
   ])("refuses planner %j as evidence, and accepts it as plumbing", (planner) => {
     const r = row({ plannerModelId: planner });
     expect(checkBenchmark([r], [g(r)], { expectTrials: { "myco-gate": 1 } }).ok).toBe(true);
@@ -342,10 +412,26 @@ describe("evidence provenance (#496 D4)", () => {
     expect(asEvidence.errors.join("\n")).toMatch(/1 row\(s\) without evidence provenance/);
     expect(asEvidence.r1?.pass).toBe(false);
   });
+
+  it("labels the result's provenance whether or not evidence was asked for (#496 D-r2-1)", () => {
+    const sim = row({ plannerModelId: "simulated:scripted" });
+    const real = { ...row(), trialKey: "real-1" };
+    const plumbing = checkBenchmark([sim], [g(sim)], { expectTrials: { "myco-gate": 1 } });
+    expect(plumbing).toMatchObject({ ok: true, provenance: "simulated" });
+    expect(plumbing.r1?.pass).toBe(true);
+    expect(checkBenchmark([real], [g(real)], { expectTrials: { "myco-gate": 1 } }).provenance).toBe(
+      "evidence",
+    );
+    expect(
+      checkBenchmark([sim, real], [g(sim), g(real)], { expectTrials: { "myco-gate": 2 } })
+        .provenance,
+    ).toBe("mixed");
+    expect(checkBenchmark([], [], { expectTrials: {} }).provenance).toBeNull();
+  });
   it.each(["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2", "claude-haiku-5-5"])(
     "accepts the Claude model id %j as evidence",
     (planner) => {
-      expect(EVIDENCE_PLANNER.test(planner)).toBe(true);
+      expect(EVIDENCE_PLANNERS.has(planner)).toBe(true);
       const r = row({ plannerModelId: planner });
       const res = checkBenchmark([r], [g(r)], { expectTrials: { "myco-gate": 1 }, evidence: true });
       expect(res.errors).toEqual([]);
@@ -376,6 +462,7 @@ describe("evidence provenance (#496 D4)", () => {
         );
       const plumbing = run([]);
       expect(plumbing.status, plumbing.stderr).toBe(0);
+      expect((JSON.parse(plumbing.stdout) as CheckResult).provenance).toBe("simulated");
       const evidence = run(["--evidence"]);
       expect(evidence.status).toBe(1);
       expect((JSON.parse(evidence.stdout) as CheckResult).errors.join("\n")).toMatch(
@@ -684,12 +771,18 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
       { ...baseRecord(bad, "x"), outcome: { status: "unregistrable", reason: "r" } },
       TASKS,
     );
-    const forged = {
-      ...row,
-      gate: { called: true, verdict: "refuted" as const, unregistrable: true as const },
-    };
     const g = gradeOf(bad, "x", row.trialKey);
-    const r = checkBenchmark([forged], [g], { expectTrials: { "myco-gate": 1 } });
-    expect(r.errors.join("\n")).toMatch(/unregistrable task cannot have a gate call or verdict/);
+    // A call alone, a verdict alone, and both: each is refused by the unregistrable rule
+    // itself (#496 round 2 V7: the call-only forgery is not caught by any other rule).
+    for (const gate of [
+      { called: true, verdict: null, unregistrable: true as const },
+      { called: false, verdict: "refuted" as const, unregistrable: true as const },
+      { called: true, verdict: "refuted" as const, unregistrable: true as const },
+    ]) {
+      const r = checkBenchmark([{ ...row, gate }], [g], { expectTrials: { "myco-gate": 1 } });
+      expect(r.errors.join("\n"), JSON.stringify(gate)).toMatch(
+        /unregistrable task cannot have a gate call or verdict/,
+      );
+    }
   });
 });
