@@ -98,8 +98,8 @@ describe("D2: a formula-derived host path never reaches the agent", () => {
   it("scrubs POSIX, Windows, UNC and home paths in cell text", () => {
     expect(scrubPaths("see /etc/passwd now")).toBe("see [path] now");
     expect(scrubPaths('"/srv/v/x"')).toBe('"[path]"');
-    expect(scrubPaths("C:\\Users\\u\\gt.json")).toBe("[path]");
-    expect(scrubPaths("C:/Users/u/gt.json")).toBe("[path]");
+    expect(scrubPaths("D:\\trials\\gt.json")).toBe("[path]");
+    expect(scrubPaths("D:/trials/run-1/gt.json")).toBe("[path]");
     expect(scrubPaths("\\\\srv\\share\\x")).toBe("[path]");
     expect(scrubPaths("~/secrets/k")).toBe("[path]");
     expect(scrubPaths("[path]/saved.xlsx — Calc")).toBe("[path] — Calc");
