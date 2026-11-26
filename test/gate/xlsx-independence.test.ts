@@ -19,6 +19,9 @@ const GRADER = join(BENCHMARK, "grade");
 
 const GATE_XLSX_ENTRIES = [
   join(GATE, "xlsx-document.ts"),
+  // The raw-byte pre-scan and the fixed part names (this PR), entries in their own right.
+  join(GATE, "xlsx-prescan.ts"),
+  join(GATE, "xlsx-parts.ts"),
   join(GATE, "calc-document.ts"),
   join(GATE, "families.ts"),
 ];
@@ -66,7 +69,26 @@ describe("gate xlsx path and grader xlsx path are independent (TIF-274 prerequis
     const reached = new Set<string>();
     for (const e of GATE_XLSX_ENTRIES) for (const m of reach(e, disk)) reached.add(m);
     expect(reached).toContain(join(GATE, "xlsx-document.ts"));
+    // The reader imports both new modules, so the walk from the reader covers them too.
+    const fromReader = [...reach(join(GATE, "xlsx-document.ts"), disk)];
+    expect(fromReader).toContain(join(GATE, "xlsx-prescan.ts"));
+    expect(fromReader).toContain(join(GATE, "xlsx-parts.ts"));
   });
+
+  it.each(["xlsx-prescan.ts", "xlsx-parts.ts"])(
+    "%s imports nothing at all (pure byte and name checks)",
+    (file) => {
+      expect([...disk(join(GATE, file)).matchAll(IMPORT)]).toEqual([]);
+    },
+  );
+
+  it.each(["xlsx-prescan.ts", "xlsx-parts.ts"])(
+    "bite: %s importing the grader's sheet.ts is reported",
+    (file) => {
+      const source = overlay(join(GATE, file), 'import "../benchmark/grade/sheet.ts";');
+      expect(crossings([join(GATE, file)], BENCHMARK, source)).not.toEqual([]);
+    },
+  );
 
   it("the gate's xlsx path reaches nothing under src/benchmark/", () => {
     expect(crossings(GATE_XLSX_ENTRIES, BENCHMARK, disk)).toEqual([]);
