@@ -74,6 +74,8 @@ function gatedPlan(runId: string, extraTools: readonly string[] = []): AgentLaun
       "-p",
       "add the items, save, then call the gate",
       "--strict-mcp-config",
+      "--tools",
+      "",
       "--mcp-config",
       join(base, "mcp.json"),
       "--permission-mode",

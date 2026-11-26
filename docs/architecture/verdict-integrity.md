@@ -159,11 +159,13 @@ import { gateForTrial, gatedVerdict, VerdictVault, type TrialBinding } from "src
 // (TIF-265: `myco-gate mcp --run <runId> --task <taskId>`), with that trial's receipt:
 const binding: TrialBinding = { runId, receipt };       // receipt = vault.seal(runId, …)
 
-// the gate's verdict for an agent request carrying `requestedRunId`:
-gateForTrial(vault, binding, requestedRunId, oracle)  // → Verdict (M1 three-valued type)
+// the gate's verdict for an agent request carrying `requestedRunId` (agent-facing:
+// reasons are `integrity:<code>` only, or the fixed "could not look: oracle threw"; the
+// full violations and the oracle's error go to the operator through the optional hooks):
+gateForTrial(vault, binding, requestedRunId, oracle, { onIntegrity, onOracleError })  // → Verdict
 //   requestedRunId !== binding.runId  → uncertain, integrity:run-not-bound
 
-// lower level; the receipt is REQUIRED:
+// lower level, operator-side (reasons can name host paths); the receipt is REQUIRED:
 gatedVerdict(vault, runId, receipt, oracle)
 vault.checkIntegrity(runId, receipt)  // → { ok: true, sealDigest } | { ok: false, violations[] }
 // oracle: (inputs: VerdictInputs) => Verdict, where inputs = { sealDigest, groundTruth, fixtures, persisted }
@@ -195,8 +197,8 @@ The verdict type is the M1 `Verdict` (`src/core/verify.ts`). The surface test st
 
 The TIF-265 gate now reads through this seam: `createSealedGate` / `sealedEvidenceReader`
 (`src/gate/sealed.ts`) call `openForTrial(vault, binding, requestedRunId)`, which refuses a
-run id other than the binding's and a receipt that fails `receiptProblem` before opening
-the vault. `gatedVerdict` and `gateForTrial` apply the same runtime receipt check, so
+run id other than the binding's and a receipt that fails `readReceipt` before opening
+the vault; the receipt is read once and the checked snapshot opens the vault (#484 N-a). `gatedVerdict` and `gateForTrial` apply the same runtime receipt check, so
 `AUDIT_WITHOUT_RECEIPT` passed by a cast is `receipt-missing` and a malformed receipt
 object is `receipt-malformed` (#470 N1, N2). See docs/gate/api.md, "The gate on the sealed
 vault".
@@ -204,8 +206,17 @@ vault".
 The surface audit now runs on the launched agent's plan, not a fixed list (#470 F2):
 `runGatedTrial` (`src/gate/gated-trial.ts`) audits an `AgentLaunchPlan` (argv and MCP
 servers with their env) with `auditAgentLaunch` (`src/integrity/launch.ts`) before sealing,
-and starts the agent with that same frozen object. The audit reads `--allowedTools` from
-the argv, refuses widening or unknown flags and unclassified servers, and derives
+and starts the agent with that same frozen object. The audit parses the argv the way Claude
+Code's parser does: `--allowedTools`, `--disallowedTools`, `--tools`, `--mcp-config` and
+`--add-dir` are variadic (several values after one flag, repeatable, or one `--flag=value`),
+so no value passes as the prompt or as a separate flag, and a value that looks like a flag
+fails closed (#484 F1). It audits the effective tool surface, not only `--allowedTools`:
+Claude Code's built-in tools are set separately by `--tools` (absent or `default` = every
+default built-in, `""` = none), so the effective surface is the built-ins `--tools` enables
+plus the granted MCP tools, minus whole-tool `--disallowedTools` rules, and a launch whose
+effective surface exceeds the granted list is refused; a gated launch passes `--tools ""`
+(#484 F2). It also refuses more than one `--mcp-config` value, widening or unknown flags
+and unclassified servers, and derives
 `mycoRtSessionPinned` from the `myco-rt` server's real `MYCO_RT_SESSION_ID`, which must
 equal `rtSessionIdFor(runId)` (#470 N3). It does not see permission rules loaded from
 Claude Code settings files: the live driver must launch with those sources off.

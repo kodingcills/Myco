@@ -32,6 +32,7 @@ import {
   gatedVerdict,
   gateForTrial,
   integrityReasons,
+  ORACLE_THREW_REASON,
   type SealedOracle,
   type TrialBinding,
 } from "../../src/integrity/gate.ts";
@@ -546,6 +547,85 @@ describe("the gate binds the agent's run id to its own trial (V5)", () => {
     }
     // The well-formed receipt still opens it.
     expect(gatedVerdict(vault, "run-0", good, oracle).status).toBe("verified");
+  });
+
+  // #484 N-a: the receipt is read once; the checked snapshot is what opens the vault.
+  it("each receipt field is read exactly once, and the checked value is the one used", () => {
+    const { ctx } = trial({ agentValue: params.newValue, runId: "run-0" });
+    const good = ctx.receipt;
+    // Well-formed and right on the first read; another trial's run id on any later read.
+    const shifty = () => {
+      const reads = { runId: 0, sealDigest: 0 };
+      const receipt = {
+        get runId() {
+          reads.runId += 1;
+          return reads.runId === 1 ? good.runId : "run-9";
+        },
+        get sealDigest() {
+          reads.sealDigest += 1;
+          return reads.sealDigest === 1 ? good.sealDigest : "0".repeat(64);
+        },
+      } as SealReceipt;
+      return { receipt, reads };
+    };
+    const a = shifty();
+    expect(gatedVerdict(vault, "run-0", a.receipt, oracle).status).toBe("verified");
+    expect(a.reads).toEqual({ runId: 1, sealDigest: 1 });
+    const b = shifty();
+    const binding = { runId: "run-0", receipt: b.receipt };
+    expect(gateForTrial(vault, binding, "run-0", oracle).status).toBe("verified");
+    expect(b.reads).toEqual({ runId: 1, sealDigest: 1 });
+  });
+
+  // #484 N-b: gateForTrial is agent-facing, so its reasons are codes only.
+  it("no absolute path or error text reaches gateForTrial's reasons", () => {
+    const { ctx } = trial({ agentValue: params.newValue, runId: "run-0" });
+    const binding = { runId: "run-0", receipt: ctx.receipt };
+    // An edited oracle source and a widened run dir: both violations name host paths.
+    overwrite(oracleSources[0]!, "// edited\n");
+    chmodSync(ctx.runDir, 0o755);
+    try {
+      const seen: string[] = [];
+      const v = gateForTrial(vault, binding, "run-0", oracle, {
+        onIntegrity: (violations) => seen.push(...integrityReasons(violations)),
+      });
+      expect(v.status).toBe("uncertain");
+      expect(v.reasons.length).toBeGreaterThan(0);
+      for (const reason of v.reasons) expect(reason).toMatch(/^integrity:[a-z-]+$/);
+      expect(v.reasons.join("\n")).not.toContain(base);
+      expect(v.reasons.join("\n")).not.toContain(ROOT);
+      // The operator still gets the full violations, paths included.
+      expect(seen.join("\n")).toContain(base);
+      // The operator-side entry point keeps them.
+      expect(gatedVerdict(vault, "run-0", ctx.receipt, oracle).reasons.join("\n")).toContain(base);
+    } finally {
+      chmodSync(ctx.runDir, 0o700);
+    }
+  });
+
+  it("an oracle that throws gives the fixed reason, not its message", () => {
+    const { ctx } = trial({ agentValue: params.newValue, runId: "run-0" });
+    const binding = { runId: "run-0", receipt: ctx.receipt };
+    const thrown = new Error(`cannot open ${join(base, "host", "secret.csv")}`);
+    const errors: unknown[] = [];
+    const v = gateForTrial(
+      vault,
+      binding,
+      "run-0",
+      () => {
+        throw thrown;
+      },
+      { onOracleError: (e) => errors.push(e) },
+    );
+    expect(v).toEqual({ status: "uncertain", reasons: [ORACLE_THREW_REASON] });
+    expect(errors).toEqual([thrown]);
+    // A throwing diagnostics hook never changes the verdict.
+    const quiet = gateForTrial(vault, binding, "run-0", oracle, {
+      onIntegrity: () => {
+        throw new Error("hook");
+      },
+    });
+    expect(quiet.status).toBe("verified");
   });
 
   it("a binding without a run id refuses every request", () => {

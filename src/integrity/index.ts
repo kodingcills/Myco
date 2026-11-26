@@ -1,10 +1,13 @@
 export {
+  type GateForTrialOptions,
   gatedVerdict,
   gateForTrial,
   INTEGRITY_REASON_PREFIX,
   integrityCodes,
   integrityReasons,
+  ORACLE_THREW_REASON,
   openForTrial,
+  readReceipt,
   receiptProblem,
   type SealedOracle,
   type TrialBinding,
@@ -16,6 +19,8 @@ export {
   type LaunchAudit,
   type LaunchAuditOptions,
   type McpServerLaunch,
+  type ParsedAgentArgv,
+  parseAgentArgv,
 } from "./launch.ts";
 export {
   appendChainedRow,
