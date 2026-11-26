@@ -1,0 +1,7 @@
+$ scripts/guest-egress.sh status
+utm isolate-from-host: true
+utm network config: nics=1;mode=emulated;isolate=true;pfs=1;pf=TCP|127.0.0.1|2222||22
+running guest network: ok: user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22
+$ scripts/guest-egress.sh verify
+guest-egress: egress closed: one restricted user netdev, no guestfwd, hostfwd exactly tcp:127.0.0.1:2222-:22; UTM config matches
+exit=0
