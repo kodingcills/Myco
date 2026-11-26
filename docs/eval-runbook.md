@@ -392,10 +392,18 @@ port 8765 through `ssh -L`, since the agent listens on the guest's loopback.
 | guest → internet (DNS, HTTP(S), NTP, Windows Update, activation, PyPI) | **nothing** | slirp `restrict=on` |
 | guest → host (`10.0.2.2`) | **nothing** | slirp `restrict=on` |
 
-**Every reset checks it.** After the boot gate, `scripts/reset-trial-vm.sh` runs
-`scripts/guest-egress.sh verify`. That passes only if the running QEMU's `-netdev` carries
-`restrict=on`, read from the live process. No guest, two guests, or a netdev without the option
-all **fail the reset**:
+**Every reset and every deploy checks it.** After the boot gate, `scripts/reset-trial-vm.sh`
+runs `scripts/guest-egress.sh verify`, and `agent/bootstrap/deploy-to-vm.sh` runs it before it
+copies anything. The deploy refuses outright under `MYCO_GUEST_EGRESS=open`. `verify` accepts
+exactly one configuration:
+
+- **In the live QEMU process:** exactly one `-netdev`, of type `user`, with `restrict=on`, no
+  `guestfwd` or other options, and hostfwd rules of exactly `tcp:127.0.0.1:2222-:22`. There
+  must be no `-nic`, `-net`, `-readconfig` or `-set`.
+- **In UTM:** one emulated NIC with "isolate from host" on and that one port forward.
+
+Anything else fails, including a second NIC, a `0.0.0.0` bind, an extra forward, or anything it
+cannot read or parse. `docs/security/guest-egress.md` lists every case. A failing reset prints:
 
 ```
 reset-trial-vm: guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)
@@ -404,8 +412,8 @@ reset-trial-vm: guest egress is not closed: refusing to call this guest ready. R
 Commands (each takes the VM lock where it changes anything; check `lsof` first as always):
 
 ```bash
-scripts/guest-egress.sh status   # read-only: UTM flag + the running guest's netdev
-scripts/guest-egress.sh verify   # exit 0 only if the running guest is restricted
+scripts/guest-egress.sh status   # read-only: UTM flag and network config, the live netdev check
+scripts/guest-egress.sh verify   # exit 0 only if the live guest AND UTM match the allowlist exactly
 scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
 scripts/guest-egress.sh deny     # set the flag (force-stops the VM; reset afterwards)
 scripts/guest-egress.sh allow    # clear it: base-image maintenance ONLY

@@ -67,14 +67,30 @@ This choice over the alternatives:
 - `scripts/reset-trial-vm.sh` runs `scripts/guest-egress.sh verify` after the boot gate and
   before calling the guest ready, on **every** reset. The reset is the entry point of every
   trial and every deploy.
-- `verify` passes only on positive evidence: exactly one running guest process, identified
-  by argv[0] (`QEMULauncher` or a qemu binary), whose `-netdev` is a `user` netdev with
-  `restrict=on` as a whole comma-separated option. Every other case fails the reset:
-  - no guest, or two guests;
-  - an unreadable process table;
-  - `restrict=off`, or a missing option;
-  - the string embedded inside another option;
-  - a different netdev type.
+- The deploy (`agent/bootstrap/deploy-to-vm.sh`) runs the same `verify` before anything
+  touches the guest. It refuses outright under `MYCO_GUEST_EGRESS=open`, so the agent's token
+  never enters a guest whose egress is not proven closed, even after a maintenance reset or
+  a guest started by hand.
+- `verify` accepts exactly **one** configuration. It checks two sources, and both must
+  match:
+  - **The live QEMU command line.** There must be exactly one running guest process,
+    identified by argv[0] (`QEMULauncher` running a qemu binary, or a qemu binary). Every
+    `-netdev`, `-nic` and `-net` is parsed, in both the single- and double-dash spellings.
+    The guest must have exactly one `-netdev` and no `-nic` or `-net`. `-readconfig` and
+    `-set` are refused, because they can add network configuration the command line does
+    not show. The netdev must be `user` and may carry only `id`, `restrict` and `hostfwd`, so
+    a `guestfwd` or any other option is refused. Every `restrict` must be `on`; a later
+    `restrict=off` would win in QEMU. The set of `hostfwd` rules must be exactly
+    `{tcp:127.0.0.1:2222-:22}`, so a `0.0.0.0` or empty bind, an extra forward, or no forward
+    is refused.
+  - **UTM's configuration.** There must be exactly one NIC, in emulated mode, with "isolate
+    from host" on and exactly one port forward: TCP `127.0.0.1:2222` → guest `:22`. This is
+    compared as one exact string.
+
+  Anything it cannot read or parse is a failure. That includes an unreadable process table,
+  an unreadable UTM, an option without `=`, an escaped comma, a `-netdev=` form, and a
+  `-netdev` with no value. `test/guest-egress.test.ts` has a negative case for each, and a
+  mutation that removes each rule fails at least one of them (PR #482, round 2).
 - The UTM setting is a persistent VM property, not something each reset applies. If anyone
   clears it, in the GUI or with `guest-egress.sh allow`, the next reset refuses the guest
   instead of trusting it.
@@ -90,13 +106,13 @@ This choice over the alternatives:
 reset with the check, a deploy with offline wheels, `session_info`, the guest's Python
 imports, a refused guest-side `pip download`, and a mock-transport run. Host-side tests:
 `test/guest-egress.test.ts`, `test/reset-snapshot-allowlist.test.ts` (egress cases) and
-`test/deploy-copy-retry.test.ts` (wheel cases).
+`test/deploy-copy-retry.test.ts` (wheel cases, and the deploy's egress refusal).
 
 ## Residual risks and limits
 
-- **The inbound forward is the remaining surface.** It binds host `127.0.0.1` only, so the
-  LAN cannot reach the guest, but any local process on the host can try SSH. The guest is
-  key-only.
+- **The inbound forward is the remaining surface.** `verify` requires it to bind host
+  `127.0.0.1` only, on every reset and deploy, so the LAN cannot reach the guest. Any local
+  process on the host can still try SSH. The guest is key-only.
 - **What a host-side agent sends to the guest is out of scope.** A guest that a host-side
   agent drives can still receive data the host sends it. This control limits what the
   guest can send **out**.
@@ -104,6 +120,7 @@ imports, a refused guest-side `pip download`, and a mock-transport run. Host-sid
   directory share and clipboard sharing are SPICE channels, not IP, so `restrict=on` does
   not cover them. Trials don't use them. Whether the guest has the SPICE tools that would
   activate them was not checked, so disabling both in UTM is a follow-up.
-- **IPv6 was not probed separately.** slirp's `restrict=on` applies to all guest traffic.
+- **IPv6 was not probed.** QEMU documents `restrict=on` as isolating the guest from all
+  outside traffic, but no IPv6 target is in the probe. Adding one is a follow-up.
 - **The Windows clock no longer syncs over NTP.** The reset's clock resync over `ssh`
   already covers trials.

@@ -11,8 +11,8 @@
 # So the allowlist is: inbound SSH from the host only; outbound nothing.
 #
 # usage:
-#   guest-egress.sh status    read-only: the UTM flag and, if a guest runs, its netdev
-#   guest-egress.sh verify    exit 0 only if the RUNNING guest's netdev has restrict=on
+#   guest-egress.sh status    read-only: the live netdev check and the UTM network config
+#   guest-egress.sh verify    exit 0 only if the running guest AND UTM match the allowlist exactly
 #   guest-egress.sh deny      set "isolate from host" (stops the VM; takes the VM lock)
 #   guest-egress.sh allow     clear it, for base-image maintenance only (takes the lock)
 #   guest-egress.sh probe     from inside the guest, try the internet and the host; JSON
@@ -20,14 +20,23 @@
 # Exit codes: 0 ok; 1 a check failed (egress open, or could not prove it closed);
 # 2 usage or environment; 10 the VM lock is held.
 #
-# Fails closed: `verify` succeeds only on positive evidence, the literal
-# `restrict=on` in the live QEMU netdev argument. A missing process, an
-# unreadable argv or a netdev without it is a failure, never a pass.
+# `verify` accepts exactly ONE configuration and refuses everything else
+# (TIF-275 round 2, verifier D1-D3):
+#   live QEMU argv: exactly one guest process; exactly one `-netdev` and no
+#     `-nic`/`-net` (either spelling); no `-readconfig`/`-set`, which could
+#     add network config the argv does not show; the netdev is `user` with
+#     only the options id, restrict, hostfwd; every `restrict` is `on`; the
+#     hostfwd set is exactly {tcp:127.0.0.1:2222-:22}. So a second NIC, any
+#     `guestfwd`, a 0.0.0.0 bind or an extra forward is refused.
+#   UTM config: exactly one NIC, emulated, isolate-from-host true, exactly one
+#     port forward TCP 127.0.0.1:2222 -> guest :22 (compared as one string).
+# Anything that cannot be read or parsed is a failure, never a pass.
 set -uo pipefail
 
 NAME=${VM_NAME:-myco-win11}
 VSSH=${MYCO_VSSH:-$HOME/VMs/myco-win11/scripts/vssh}
 STOP_TIMEOUT=${MYCO_STOP_TIMEOUT:-30}
+EXPECTED_UTM='nics=1;mode=emulated;isolate=true;pfs=1;pf=TCP|127.0.0.1|2222||22'
 
 die() { echo "guest-egress: $*" >&2; exit "${2:-1}"; }
 
@@ -41,55 +50,117 @@ utm_flag() {
 
 utm_status() { utm -e 'return status of vm' 2>/dev/null | tr -d '\r'; }
 
-# The live guest's `-netdev` argument, one line, or nothing. Identity is by
-# argv[0] basename (QEMULauncher for UTM, or a bare qemu binary), as in
-# scripts/vm-state.sh, plus a `-netdev` option: a `pgrep -f qemu-...` or an
-# editor with the name in its argv must never count as a guest. More than one
-# guest is ambiguous: report nothing, so `verify` fails closed.
-live_netdev() {
-  local table out
-  table=$(ps -Ao command= 2>/dev/null) || return 1
-  [ -n "$table" ] || return 1
-  out=$(printf '%s\n' "$table" | awk '{
-    n = split($1, a, "/"); base = a[n]
-    if (base != "QEMULauncher" && base != "qemu-system-aarch64" && base != "qemu-aarch64-softmmu") next
-    for (i = 2; i < NF; i++) if ($i == "-netdev") { print $(i + 1); found++; break }
-  } END { if (found != 1) exit 1 }') || return 1
-  printf '%s\n' "$out"
+# Every NIC and every port forward UTM holds for the VM, as one line, e.g.
+#   nics=1;mode=emulated;isolate=true;pfs=1;pf=TCP|127.0.0.1|2222||22
+# Empty if UTM cannot be read.
+utm_net_config() {
+  utm -e 'set config to configuration of vm' \
+      -e 'set nics to network interfaces of config' \
+      -e 'set out to "nics=" & (length of nics)' \
+      -e 'repeat with nic in nics' \
+      -e 'set out to out & ";mode=" & (mode of nic as text) & ";isolate=" & (isolate from host of nic as text)' \
+      -e 'set pfs to port forwards of nic' \
+      -e 'set out to out & ";pfs=" & (length of pfs)' \
+      -e 'repeat with p in pfs' \
+      -e 'set out to out & ";pf=" & (protocol of p as text) & "|" & (host address of p) & "|" & (host port of p) & "|" & (guest address of p) & "|" & (guest port of p)' \
+      -e 'end repeat' -e 'end repeat' -e 'return out' 2>/dev/null | tr -d '\r'
 }
 
-# restrict=on as its own comma-separated option of a user-mode netdev.
-netdev_restricted() {
-  case "$1" in
-    user,*) ;;
-    *) return 1 ;;
-  esac
-  printf '%s' "$1" | tr ',' '\n' | grep -qx 'restrict=on'
+# The live check. Reads the process table on stdin; prints "ok: <netdev>" and
+# exits 0, or prints "FAIL: <reason>" and exits 1.
+LIVE_CHECK=$(cat <<'PY'
+import sys
+
+EXPECTED_HOSTFWD = ["tcp:127.0.0.1:2222-:22"]
+QEMU = {"qemu-system-aarch64", "qemu-aarch64-softmmu"}
+ALLOWED_KEYS = {"id", "restrict", "hostfwd"}
+
+def fail(msg):
+    print("FAIL: " + msg)
+    sys.exit(1)
+
+def base(tok):
+    return tok.rsplit("/", 1)[-1]
+
+guests = []
+for line in sys.stdin:
+    toks = line.split()
+    if not toks:
+        continue
+    b0 = base(toks[0])
+    # A guest is a qemu binary, or UTM's QEMULauncher running one (UTM's
+    # swtpm also runs under QEMULauncher and is not a guest).
+    if b0 in QEMU or (b0 == "QEMULauncher" and any(base(t) in QEMU for t in toks[1:])):
+        guests.append(toks)
+if len(guests) != 1:
+    fail(f"expected exactly one running guest, found {len(guests)}")
+toks = guests[0]
+
+net_opts = {"-netdev": [], "-nic": [], "-net": []}
+for i, t in enumerate(toks):
+    flag = t[1:] if t.startswith("--") else t
+    if flag in ("-readconfig", "-set"):
+        fail(f"{t} can add network configuration the command line does not show")
+    for name in net_opts:
+        if flag == name:
+            if i + 1 >= len(toks):
+                fail(f"{t} without a value")
+            net_opts[name].append(toks[i + 1])
+        elif flag.startswith(name + "="):
+            fail(f"unparseable network option {t!r}")
+if net_opts["-nic"] or net_opts["-net"]:
+    fail(f"-nic/-net present ({len(net_opts['-nic'])} -nic, {len(net_opts['-net'])} -net): only one -netdev is allowed")
+if len(net_opts["-netdev"]) != 1:
+    fail(f"expected exactly one -netdev, found {len(net_opts['-netdev'])}")
+nd = net_opts["-netdev"][0]
+if ",," in nd:
+    fail(f"unparseable netdev (escaped comma): {nd}")
+parts = nd.split(",")
+if parts[0] != "user":
+    fail(f"netdev is not user-mode: {nd}")
+opts = {}
+for p in parts[1:]:
+    k, eq, v = p.partition("=")
+    if not eq or not k:
+        fail(f"unparseable netdev option {p!r} in {nd}")
+    if k not in ALLOWED_KEYS:
+        fail(f"netdev option {k}= is not allowed ({'guest-initiated channel' if k == 'guestfwd' else 'not in the allowlist'}): {nd}")
+    opts.setdefault(k, []).append(v)
+if len(opts.get("id", [])) != 1:
+    fail(f"expected exactly one id= in {nd}")
+restrict = opts.get("restrict", [])
+if not restrict or any(v != "on" for v in restrict):
+    fail(f"restrict=on missing or overridden in {nd}")
+if sorted(opts.get("hostfwd", [])) != EXPECTED_HOSTFWD:
+    fail(f"hostfwd set is {opts.get('hostfwd', [])}, want exactly {EXPECTED_HOSTFWD}: {nd}")
+print("ok: " + nd)
+PY
+)
+
+# "ok: ..." or "FAIL: ..." for the running guest.
+live_check() {
+  local table
+  table=$(ps -Ao command= 2>/dev/null) || { echo "FAIL: could not read the process table"; return 1; }
+  [ -n "$table" ] || { echo "FAIL: empty process table"; return 1; }
+  printf '%s\n' "$table" | python3 -c "$LIVE_CHECK"
 }
 
 cmd_verify() {
-  local nd
-  nd=$(live_netdev) || true
-  [ -n "$nd" ] || die "no single running guest whose netdev could be read; cannot prove egress is closed (TIF-275)"
-  if netdev_restricted "$nd"; then
-    echo "guest-egress: running guest is restricted (netdev has restrict=on); egress closed, inbound ssh forward only"
-    return 0
-  fi
-  die "running guest's netdev has no restrict=on: guest egress is OPEN. Run 'scripts/guest-egress.sh deny' and reset (TIF-275, runbook §3.4)"
+  local live cfg
+  live=$(live_check) || die "live guest network is not the allowlist: ${live#FAIL: }. Run 'scripts/guest-egress.sh deny' and reset (TIF-275, runbook §3.4)"
+  cfg=$(utm_net_config)
+  [ -n "$cfg" ] || die "could not read UTM's network configuration; cannot prove egress is closed (TIF-275)"
+  [ "$cfg" = "$EXPECTED_UTM" ] || die "UTM network configuration is not the allowlist: got '$cfg', want '$EXPECTED_UTM' (TIF-275, runbook §3.4)"
+  echo "guest-egress: egress closed: one restricted user netdev, no guestfwd, hostfwd exactly tcp:127.0.0.1:2222-:22; UTM config matches"
 }
 
 cmd_status() {
-  local flag nd
-  flag=$(utm_flag)
-  echo "utm isolate-from-host: ${flag:-unreadable}"
-  nd=$(live_netdev) || true
-  if [ -z "$nd" ]; then
-    echo "running guest netdev: none (no single guest running)"
-  elif netdev_restricted "$nd"; then
-    echo "running guest netdev: restricted (restrict=on)"
-  else
-    echo "running guest netdev: OPEN (no restrict=on)"
-  fi
+  local live cfg
+  echo "utm isolate-from-host: $(utm_flag | sed 's/^$/unreadable/')"
+  cfg=$(utm_net_config)
+  echo "utm network config: ${cfg:-unreadable}"
+  live=$(live_check) || true
+  echo "running guest network: $live"
 }
 
 cmd_set() {

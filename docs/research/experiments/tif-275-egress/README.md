@@ -1,7 +1,9 @@
 # TIF-275 (M2-13): guest egress default-deny, evidence
 
 Run 2026-11-25/26 on `myco-win11` (UTM 5.0.9, QEMU user-mode networking) with the TIF-275
-code. Every VM step ran behind the `lsof` lock check and the host load gate (under 10 for 3
+code. The `.log` files are force-added: the repo's `.gitignore` excludes `*.log`. Sections 1–5
+were recorded with the round-1 `verify`, so `2-egress-status.log` shows that version's output
+format. Section 6 is the round-2 `verify` against the same live guest. Every VM step ran behind the `lsof` lock check and the host load gate (under 10 for 3
 minutes). No model API was called. Host paths are replaced with `<repo>` / `~`.
 
 ## 1. Before: the guest reached everything (positive control)
@@ -58,7 +60,8 @@ The only allowed path is host → guest SSH. Everything Myco does rides it:
   verified`, `DEPLOY OK`. The wheels came from the host. The guest installed them with `pip
   --no-index --require-hashes`.
 - **`session_info`** (`5-session-info.json`): `{"session_id":1,"window_station":"WinSta0",
-  "desktop":"Default"}`, which is the agent RPC over `ssh -L`.
+  "desktop":"Default","user":"MYCO-WIN11\\myco"}` (the guest account), which is the agent RPC
+  over `ssh -L`.
 - **Guest Python imports** (`7a-guest-imports.log`): the offline-installed packages import in
   LibreOffice's Python, with the pinned versions.
 
@@ -68,6 +71,19 @@ The only allowed path is host → guest SSH. Everything Myco does rides it:
 `artifacts: VALID`, exit 0. The mock transport uses no guest by design ("contract double, no
 guest"), so this shows the host pipeline is unaffected. Sections 2–4 above are the
 guest-side proof.
+
+## 6. Round 2: the exact-allowlist `verify` on the live guest
+
+`9-round2-verify-live.txt` shows `status` and `verify` from the round-2 script against the same
+running guest:
+
+- the UTM network config is `nics=1;mode=emulated;isolate=true;pfs=1;pf=TCP|127.0.0.1|2222||22`;
+- the live check is `ok: user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22`;
+- `verify` exits 0.
+
+The refusal cases (a second NIC, `guestfwd`, a `0.0.0.0` bind, an extra forward, a missing
+`restrict=on`, unparseable input, and UTM drift) are host-side tests in
+`test/guest-egress.test.ts`, each with a mutation shown to be caught.
 
 ## Reproduce
 

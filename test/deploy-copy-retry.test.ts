@@ -40,6 +40,7 @@ let src = "";
 let guest = "";
 let cfg = "";
 let wheels = "";
+let egressStub = "";
 
 const AGENT_DIR_REL = "C/Program Files/Myco/agent";
 
@@ -180,6 +181,7 @@ function runDeploy(extra: Record<string, string> = {}): Promise<DeployRun> {
         MYCO_AGENT_PORT: "65531",
         MYCO_DEPLOY_COPY_BACKOFF: "0",
         MYCO_GUEST_WHEELS: wheels,
+        MYCO_EGRESS_SCRIPT: egressStub,
         ...extra,
       },
     });
@@ -231,6 +233,11 @@ beforeEach(() => {
   wheels = join(dir, "wheels-in");
   mkdirSync(wheels);
   writeFileSync(join(wheels, "pkg-1-py3-none-any.whl"), "not a real wheel\n");
+  // TIF-275: the deploy verifies guest egress first; a passing stub by default.
+  egressStub = join(dir, "egress-ok.sh");
+  writeFileSync(egressStub, `#!/bin/bash\necho "$1" >> "${join(dir, "egress.calls")}"\nexit 0\n`, {
+    mode: 0o755,
+  });
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -717,5 +724,44 @@ exit 0
     const calls = readFileSync(log, "utf8").trim().split("\n");
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain("--no-index");
+  });
+});
+
+// TIF-275 round 2 (verifier N3): no agent or token enters a guest whose egress
+// is not verified closed.
+describe("deploy refuses a guest with egress not verified closed (TIF-275)", () => {
+  it("verifies egress before touching the guest", { timeout: SLOW }, async () => {
+    installStubs({ scpDrops: 0 });
+    const r = await runDeploy();
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(dir, "egress.calls"), "utf8").trim()).toBe("verify");
+  });
+
+  it("refuses, before any copy, when the egress check fails", { timeout: SLOW }, async () => {
+    installStubs({ scpDrops: 0 });
+    const failing = join(dir, "egress-open.sh");
+    writeFileSync(failing, "#!/bin/bash\nexit 1\n", { mode: 0o755 });
+    const r = await runDeploy({ MYCO_EGRESS_SCRIPT: failing });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("guest egress is not verified closed");
+    expect(r.scpCalls).toBe(0);
+  });
+
+  it("refuses when the egress check is missing", { timeout: SLOW }, async () => {
+    installStubs({ scpDrops: 0 });
+    const r = await runDeploy({ MYCO_EGRESS_SCRIPT: join(dir, "nope.sh") });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("egress check not found");
+    expect(r.scpCalls).toBe(0);
+  });
+
+  it("refuses outright under MYCO_GUEST_EGRESS=open (maintenance mode)", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const r = await runDeploy({ MYCO_GUEST_EGRESS: "open" });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("MYCO_GUEST_EGRESS=open");
+    expect(r.scpCalls).toBe(0);
   });
 });
