@@ -22,13 +22,27 @@ import type { OracleReport } from "./run.ts";
 /**
  * Frozen rates for `claude-sonnet-5-5`, micros (millionths of a USD) per token. The same
  * numbers `src/baseline/planner.ts` uses (`input * 2 + output * 10`, $2 / $10 per MTok);
- * `test/oracle-selftest/authoring.test.ts` pins them against that file's `MAX_CALL_MICROS`.
+ * `test/oracle-selftest/authoring.test.ts` pins them against that file's `SONNET`, its
+ * `MAX_CALL_MICROS`, and the cost its planner books for one call.
  */
 export const FROZEN_RATES = {
   model: "claude-sonnet-5-5",
   inputMicros: 2,
   outputMicros: 10,
 } as const;
+
+/** Cost in USD of token totals at the frozen rates (integer micros, then one division). */
+function tokensUsd(input: number, output: number): number {
+  return (input * FROZEN_RATES.inputMicros + output * FROZEN_RATES.outputMicros) / 1_000_000;
+}
+
+function assertPriced(model: string): void {
+  if (model !== FROZEN_RATES.model) {
+    throw new AuthoringError(
+      `no frozen rate for model ${model}; only ${FROZEN_RATES.model} is priced`,
+    );
+  }
+}
 
 export interface CallUsage {
   readonly model: string;
@@ -68,11 +82,7 @@ export class AuthoringError extends Error {
 export function costUsd(calls: readonly CallUsage[]): number {
   let micros = 0;
   for (const c of calls) {
-    if (c.model !== FROZEN_RATES.model) {
-      throw new AuthoringError(
-        `no frozen rate for model ${c.model}; only ${FROZEN_RATES.model} is priced`,
-      );
-    }
+    assertPriced(c.model);
     if (
       !Number.isInteger(c.inputTokens) ||
       !Number.isInteger(c.outputTokens) ||
@@ -116,6 +126,8 @@ export class AuthoringRecorder {
     },
     private readonly clockMs: () => number,
   ) {
+    // Refused up front, not at finish(): a session that cannot be priced must not run.
+    assertPriced(meta.authorModelId);
     this.#started = clockMs();
   }
 
@@ -129,6 +141,10 @@ export class AuthoringRecorder {
     this.#calls.push(usage);
   }
 
+  /**
+   * A session with zero calls records `costUsd: 0` and zero tokens: that is a measured zero
+   * (the recorder saw every call, and there were none), not an unmeasured null counted as 0.
+   */
   finish(selfTest: OracleReport | null): AuthoringRecord {
     if (this.#finished) throw new AuthoringError("session already finished");
     this.#finished = true;
@@ -185,14 +201,39 @@ export function assertRecord(record: unknown): asserts record is AuthoringRecord
   if (issues.length > 0)
     throw new AuthoringError(issues.map((i) => `${i.path} ${i.message}`).join("; "));
   const r = record as AuthoringRecord;
-  if (
-    r.author === "hand" &&
-    (r.authorModelId !== null || r.costUsd !== null || r.modelCalls !== null)
-  ) {
-    throw new AuthoringError("a hand-authored record carries no model, calls or cost");
+  if (r.author === "hand") {
+    if (
+      r.authorModelId !== null ||
+      r.costUsd !== null ||
+      r.modelCalls !== null ||
+      r.tokens.input !== null ||
+      r.tokens.output !== null
+    ) {
+      throw new AuthoringError("a hand-authored record carries no model, calls, tokens or cost");
+    }
+    // A scripted stand-in for a person is not a hand-written oracle.
+    if (r.simulated) throw new AuthoringError("a hand-authored record cannot be simulated");
+    return;
   }
-  if (r.author === "agent" && r.authorModelId === null)
+  if (r.authorModelId === null)
     throw new AuthoringError("an agent-authored record names its model");
+  assertPriced(r.authorModelId);
+  // The cost must be the one the frozen rates give for the recorded usage: a persisted record
+  // is evidence only if its cost can be recomputed from its tokens.
+  if (r.costUsd !== null) {
+    if (r.tokens.input === null || r.tokens.output === null || r.modelCalls === null) {
+      throw new AuthoringError("a priced agent record carries its calls and tokens");
+    }
+    const expected = tokensUsd(r.tokens.input, r.tokens.output);
+    if (r.costUsd !== expected) {
+      throw new AuthoringError(
+        `costUsd ${r.costUsd} is not the frozen-rate cost of its tokens (${expected})`,
+      );
+    }
+  }
+  if (r.modelCalls === 0 && ((r.tokens.input ?? 0) > 0 || (r.tokens.output ?? 0) > 0)) {
+    throw new AuthoringError("a session with no model calls used no tokens");
+  }
 }
 
 /** Per author kind: counts, self-test pass rate, and cost/time over the measured records only. */
@@ -201,18 +242,32 @@ export interface AuthoringSummary {
   readonly sessions: number;
   readonly selfTested: number;
   readonly selfTestPassed: number;
+  /**
+   * R7 (as `src/m2/evidence.ts` applies it): one unmeasured session makes the total and mean
+   * unmeasured (null). `measured` and `unmeasured` say how many sessions are which.
+   */
   readonly cost: {
     readonly measured: number;
+    readonly unmeasured: number;
     readonly totalUsd: number | null;
     readonly meanUsd: number | null;
   };
-  readonly wallClock: { readonly measured: number; readonly meanS: number | null };
+  readonly wallClock: {
+    readonly measured: number;
+    readonly unmeasured: number;
+    readonly meanS: number | null;
+  };
 }
 
+/**
+ * Summarize authoring records. With `evidence: true`, simulated records are refused (an error)
+ * AND left out of the summaries, an agent session with an unmeasured cost is an error, and
+ * `ok` is false on any error: read the summaries as evidence only when `ok` is true.
+ */
 export function summarizeAuthoring(
   records: readonly unknown[],
   opts: { evidence?: boolean } = {},
-): { summaries: AuthoringSummary[]; errors: string[] } {
+): { ok: boolean; summaries: AuthoringSummary[]; errors: string[] } {
   const errors: string[] = [];
   const valid: AuthoringRecord[] = [];
   records.forEach((r, i) => {
@@ -229,16 +284,23 @@ export function summarizeAuthoring(
     if (ids.has(r.sessionId)) errors.push(`duplicate sessionId ${r.sessionId}`);
     ids.add(r.sessionId);
   }
+  let counted = valid;
   if (opts.evidence === true) {
     const simulated = valid.filter((r) => r.simulated).length;
     if (simulated > 0)
       errors.push(`${simulated} simulated record(s): dry-run records are never evidence`);
+    counted = valid.filter((r) => !r.simulated);
+    const unpriced = counted.filter((r) => r.author === "agent" && r.costUsd === null).length;
+    if (unpriced > 0)
+      errors.push(`${unpriced} agent session(s) with an unmeasured cost: R5 measures model cost`);
   }
   const summaries = (["hand", "agent"] as const).map((author): AuthoringSummary => {
-    const of = valid.filter((r) => r.author === author);
+    const of = counted.filter((r) => r.author === author);
     const costs = of.flatMap((r) => (r.costUsd === null ? [] : [r.costUsd]));
     const times = of.flatMap((r) => (r.wallClockS === null ? [] : [r.wallClockS]));
     const total = costs.reduce((a, b) => a + b, 0);
+    const allCosts = costs.length > 0 && costs.length === of.length;
+    const allTimes = times.length > 0 && times.length === of.length;
     return {
       author,
       sessions: of.length,
@@ -246,14 +308,16 @@ export function summarizeAuthoring(
       selfTestPassed: of.filter((r) => r.selfTest?.pass === true).length,
       cost: {
         measured: costs.length,
-        totalUsd: costs.length === 0 ? null : total,
-        meanUsd: costs.length === 0 ? null : total / costs.length,
+        unmeasured: of.length - costs.length,
+        totalUsd: allCosts ? total : null,
+        meanUsd: allCosts ? total / costs.length : null,
       },
       wallClock: {
         measured: times.length,
-        meanS: times.length === 0 ? null : times.reduce((a, b) => a + b, 0) / times.length,
+        unmeasured: of.length - times.length,
+        meanS: allTimes ? times.reduce((a, b) => a + b, 0) / times.length : null,
       },
     };
   });
-  return { summaries, errors };
+  return { ok: errors.length === 0, summaries, errors };
 }
