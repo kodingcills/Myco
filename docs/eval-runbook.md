@@ -397,13 +397,19 @@ runs `scripts/guest-egress.sh verify`, and `agent/bootstrap/deploy-to-vm.sh` run
 copies anything. The deploy refuses outright under `MYCO_GUEST_EGRESS=open`. `verify` accepts
 exactly one configuration:
 
-- **In the live QEMU process:** exactly one `-netdev`, of type `user`, with `restrict=on`, no
-  `guestfwd` or other options, and hostfwd rules of exactly `tcp:127.0.0.1:2222-:22`. There
-  must be no `-nic`, `-net`, `-readconfig` or `-set`.
+- **In the live QEMU process**, whose argv is read exactly from the kernel (`KERN_PROCARGS2`),
+  not from `ps`:
+  - no argv element may contain whitespace, and `-nodefaults` must be present;
+  - exactly one `-netdev`, of type `user`, with `restrict=on`, no `guestfwd` or other options,
+    and hostfwd rules of exactly `tcp:127.0.0.1:2222-:22`;
+  - no `-nic`, `-net`, `-readconfig`, `-set`, `-qmp`, `-monitor` or `-gdb`;
+  - no `-object filter-*`, and no `netdev=` except the one NIC device's;
+  - chardevs only UTM's own (`spiceport`, `spicevmc`, `pty`, the swtpm unix socket), and
+    `-serial`/`-parallel` only `chardev:<id>`.
 - **In UTM:** one emulated NIC with "isolate from host" on and that one port forward.
 
-Anything else fails, including a second NIC, a `0.0.0.0` bind, an extra forward, or anything it
-cannot read or parse. `docs/security/guest-egress.md` lists every case. A failing reset prints:
+Anything else fails, including a second NIC, a `0.0.0.0` bind, an extra forward, a filter or a
+TCP chardev, or anything it cannot read or parse. `docs/security/guest-egress.md` lists every case. A failing reset prints:
 
 ```
 reset-trial-vm: guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)
@@ -415,6 +421,7 @@ Commands (each takes the VM lock where it changes anything; check `lsof` first a
 scripts/guest-egress.sh status   # read-only: UTM flag and network config, the live netdev check
 scripts/guest-egress.sh verify   # exit 0 only if the live guest AND UTM match the allowlist exactly
 scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
+python3 -I scripts/guest_egress_check.py argv   # the running guest's exact argv (argv only, no environment)
 scripts/guest-egress.sh deny     # set the flag (force-stops the VM; reset afterwards)
 scripts/guest-egress.sh allow    # clear it: base-image maintenance ONLY
 ```

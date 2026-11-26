@@ -85,6 +85,22 @@ The refusal cases (a second NIC, `guestfwd`, a `0.0.0.0` bind, an extra forward,
 `restrict=on`, unparseable input, and UTM drift) are host-side tests in
 `test/guest-egress.test.ts`, each with a mutation shown to be caught.
 
+## 7. Round 3: exact argv, `-nodefaults`, no tunnels past slirp
+
+`10-round3-verify-live.txt` shows the round-3 `verify` against the same live guest (exit 0),
+plus facts read from its exact argv through `KERN_PROCARGS2`:
+
+- 104 elements, 0 containing whitespace;
+- `-nodefaults` present as its own element;
+- no `-object`, `-qmp` or `-monitor`;
+- chardevs only `spiceport`, `spicevmc`, `pty` and the swtpm unix socket;
+- `-serial chardev:term0`.
+
+That is UTM's default launch, and it is exactly what the D5 chardev allowlist permits. The
+refusal cases (filters, other netdev references, TCP/UDP/telnet/socket backends, `-qmp` and
+`-monitor`, an element with whitespace, a missing `-nodefaults`, malformed procargs buffers)
+are host-side tests in `test/guest-egress.test.ts`, each with a mutation shown to be caught.
+
 ## Reproduce
 
 ```bash

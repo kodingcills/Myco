@@ -73,24 +73,51 @@ This choice over the alternatives:
   a guest started by hand.
 - `verify` accepts exactly **one** configuration. It checks two sources, and both must
   match:
-  - **The live QEMU command line.** There must be exactly one running guest process,
-    identified by argv[0] (`QEMULauncher` running a qemu binary, or a qemu binary). Every
-    `-netdev`, `-nic` and `-net` is parsed, in both the single- and double-dash spellings.
-    The guest must have exactly one `-netdev` and no `-nic` or `-net`. `-readconfig` and
-    `-set` are refused, because they can add network configuration the command line does
-    not show. The netdev must be `user` and may carry only `id`, `restrict` and `hostfwd`, so
-    a `guestfwd` or any other option is refused. Every `restrict` must be `on`; a later
-    `restrict=off` would win in QEMU. The set of `hostfwd` rules must be exactly
-    `{tcp:127.0.0.1:2222-:22}`, so a `0.0.0.0` or empty bind, an extra forward, or no forward
-    is refused.
+  - **The live QEMU command line, read exactly.** `scripts/guest_egress_check.py` reads each
+    candidate process's argv from the kernel (`sysctl` `KERN_PROCARGS2`), not from `ps`.
+    `ps` joins argv with spaces, so `-name "x -netdev user,…,restrict=on"` would look like a
+    real netdev while QEMU added its default, unrestricted NIC (round 3, D6). Only the argv
+    strings are decoded; the environment block after them is never decoded or printed.
+    - **Process:** exactly one guest process, identified by argv[0] (`QEMULauncher` running a
+      qemu binary, or a qemu binary).
+    - **Shape:** no argv element may contain whitespace, and `-nodefaults` must be present as
+      its own element. Without it QEMU adds a default NIC.
+    - **Network options:** every `-netdev`, `-nic` and `-net` is parsed, single- and
+      double-dash. There must be exactly one `-netdev` and no `-nic` or `-net`.
+      `-readconfig`, `-set`, `-qmp`, `-monitor` and `-gdb` are refused.
+    - **The netdev:** it must be `user`, with only `id`, `restrict` and `hostfwd`, so a
+      `guestfwd` or any other option is refused. Every `restrict` must be `on`. The `hostfwd`
+      set must be exactly `{tcp:127.0.0.1:2222-:22}`.
+    - **Nothing else on the netdev's packets** (round 3, D5). `-object filter-*`
+      (redirector, mirror, dump, …) attaches before slirp and can tunnel past `restrict=on`,
+      so it is refused. So is any `-object` naming a netdev, and any `netdev=` reference
+      other than the single NIC `-device`'s.
+    - **No host-network channel** (round 3, D5). Chardevs are limited to the ones UTM's
+      default launch uses, confirmed on the live guest on 2026-11-26: `spiceport`,
+      `spicevmc`, `pty`, and the swtpm unix socket `socket,id=chrtpm0,path=<VM-UUID>.swtpm`.
+      Anything else is refused: `socket` with `host=` or `port=`, `udp`, another unix
+      socket. `-serial` and `-parallel` may only be `chardev:<id>` or `none`, so `tcp:`,
+      `udp:` and `telnet:` are refused. That also covers a `virtserialport` on a host socket,
+      whose chardev is refused.
   - **UTM's configuration.** There must be exactly one NIC, in emulated mode, with "isolate
     from host" on and exactly one port forward: TCP `127.0.0.1:2222` → guest `:22`. This is
     compared as one exact string.
 
-  Anything it cannot read or parse is a failure. That includes an unreadable process table,
-  an unreadable UTM, an option without `=`, an escaped comma, a `-netdev=` form, and a
-  `-netdev` with no value. `test/guest-egress.test.ts` has a negative case for each, and a
-  mutation that removes each rule fails at least one of them (PR #482, round 2).
+  Anything it cannot read or parse is a failure. That includes:
+  - an unreadable process list, an unreadable UTM, and a process whose argv cannot be read
+    for a fixture run;
+  - a malformed or truncated procargs buffer;
+  - an option without `=`, an escaped comma, a `-netdev=` form, and a `-netdev` with no
+    value.
+
+  `test/guest-egress.test.ts` has a negative case for each rule, fed fixed `KERN_PROCARGS2`
+  byte buffers. A mutation that removes each rule fails at least one test (PR #482, rounds
+  2–3).
+- **What `verify` cannot see.** It checks what QEMU was started with and what UTM is
+  configured to start. Two things are outside it:
+  - Changes made at run time through a QMP monitor. UTM's QMP is a SPICE port, not a host
+    socket, and `-qmp`/`-monitor` are refused.
+  - Anything inside QEMU or UTM themselves.
 - The UTM setting is a persistent VM property, not something each reset applies. If anyone
   clears it, in the GUI or with `guest-egress.sh allow`, the next reset refuses the guest
   instead of trusting it.
