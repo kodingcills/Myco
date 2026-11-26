@@ -3,6 +3,7 @@ import {
   type BenchmarkArmRow,
   checkBenchmark,
   expectedAccepted,
+  UNBOUND_R1,
 } from "../../src/benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../../src/benchmark/grade/row.ts";
 import { wilson } from "../../src/foundry/stats.ts";
@@ -81,8 +82,10 @@ describe("benchmark check: R1", () => {
     const r = checkBenchmark(rows, grades, { expectTrials: { "myco-gate": 4 } });
     expect(r.errors).toEqual([]);
     expect(r.ok).toBe(true);
-    expect(r.r1?.pass).toBe(true);
-    expect(r.r1?.reasons).toEqual([]);
+    // Unbound (no bindTaskSet): the arithmetic passes, but R1 is never claimed (#509 r2 D2).
+    expect(r.r1?.pass).toBe(false);
+    expect(r.r1?.reasons).toEqual([UNBOUND_R1]);
+    expect(r.taskSetBinding).toEqual({ applied: false, version: null, repetitions: null });
     expect(r.r1?.falseAcceptRate).toEqual({ numerator: 0, denominator: 2, wilson95: wilson(0, 2) });
     expect(r.r1?.falseAcceptPerTrial).toEqual({
       numerator: 0,
@@ -117,7 +120,7 @@ describe("benchmark check: R1", () => {
     });
     expect(r.ok).toBe(true);
     expect(r.r1?.pass).toBe(false);
-    expect(r.r1?.reasons).toEqual(["1 false DONE accepted"]);
+    expect(r.r1?.reasons).toEqual(["1 false DONE accepted", UNBOUND_R1]);
     expect(r.arms[0]?.falseAcceptRate).toEqual({
       numerator: 1,
       denominator: 2,
@@ -140,7 +143,7 @@ describe("benchmark check: R1", () => {
     const r = checkBenchmark(rows, [gradeOf(rows[0]!, "pass"), gradeOf(rows[1]!, "fail")], {
       expectTrials: { "myco-gate": 2 },
     });
-    expect(r.r1?.pass).toBe(true);
+    expect(r.r1?.reasons).toEqual([UNBOUND_R1]);
     expect(r.arms[0]?.falseDoneAccepted).toBe(0);
   });
 
@@ -157,6 +160,7 @@ describe("benchmark check: R1", () => {
     expect(r.r1?.pass).toBe(false);
     expect(r.r1?.reasons).toEqual([
       "insufficient evidence: no accepted DONE, so no false-accept bound can be reported",
+      UNBOUND_R1,
     ]);
     expect(r.r1?.falseAcceptRate).toEqual({ numerator: 0, denominator: 0, wilson95: null });
     expect(r.r1?.falseAcceptPerTrial).toEqual({

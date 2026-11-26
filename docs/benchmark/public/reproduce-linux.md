@@ -29,9 +29,20 @@ npx tsx scripts/benchmark-make-requests.ts --bundle benchmark/false-completion/f
 # 3. Grade again, independently of the release's grades
 npx tsx scripts/benchmark-grade.ts work/requests.jsonl > regraded.jsonl
 
-# 4. Recompute the counts; compare with the release's check output
-npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades regraded.jsonl --expect <arm>=<n>
+# 4. Recompute the counts; compare with the release's check output.
+#    Myco's gated arm on fc-v1: 100 trials, 10 of them unregistrable (the invalid-target tasks)
+npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades regraded.jsonl \
+  --expect myco-gate=100 --expect-unregistrable myco-gate=10 --require-r1
+#    A third-party arm with no gate
+npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades regraded.jsonl --expect hcu+shell=100
 ```
+
+For the gated arm, `--require-r1` binds the rows to the published task set: exactly fc-v1's 100
+tasks (or a whole number of runs of them), each with its own fixture and instruction hashes,
+and the 10 invalid-target tasks unregistrable. Without `--require-r1` (or `--evidence`) the
+check still counts, but its result says `taskSetBinding.applied: false` and R1 does not pass.
+`test/benchmark/r1-dryrun.test.ts` runs the commands above, as written, on a simulated fc-v1
+run.
 
 Your `regraded.jsonl` should equal the release's `grades.jsonl` row for row (same grader
 version, same hashes, same status). The check output should match the published numbers. Any
