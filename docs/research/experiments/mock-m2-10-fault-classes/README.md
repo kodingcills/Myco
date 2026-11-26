@@ -7,13 +7,13 @@ evidence: R3 needs M1's classes too and the live runs (M2-12). Design:
 Made with:
 
 ```
-pnpm exec tsx scripts/m2-fault-suite.ts run --out docs/research/experiments/m2-10-fault-classes-mock --reps 2
+pnpm exec tsx scripts/m2-fault-suite.ts run --out docs/research/experiments/mock-m2-10-fault-classes --reps 2
 ```
 
 Recompute and check (exit 0 means the files are consistent; the bar is reported separately):
 
 ```
-pnpm exec tsx scripts/m2-fault-suite.ts check docs/research/experiments/m2-10-fault-classes-mock --expect 40
+pnpm exec tsx scripts/m2-fault-suite.ts check docs/research/experiments/mock-m2-10-fault-classes --expect 40
 ```
 
 `test/fault-classes/record.test.ts` runs the same check and re-runs the plan, which must

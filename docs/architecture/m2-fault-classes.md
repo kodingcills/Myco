@@ -155,7 +155,7 @@ only; they agree when every false success is an eligible fault row, as in the mo
 
 ## 6. Mock pack
 
-`docs/research/experiments/m2-10-fault-classes-mock/` holds one run of `--reps 2` (40 rows).
+`docs/research/experiments/mock-m2-10-fault-classes/` holds one run of `--reps 2` (40 rows).
 `test/fault-classes/record.test.ts` checks it and re-runs the plan, which must write the
 same `trials.jsonl` byte for byte. Its numbers are in that folder's README.
 
