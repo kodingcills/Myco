@@ -241,14 +241,6 @@ export const EVIDENCE_PLANNERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * R1 evidence is measured with the gate's agent-safe corrections OFF (M2 scope add B; #514
- * round 1, D1). A row whose gate had corrections on ran a different gate (it hands the agent
- * typed notes and invites a retry), so it never counts as evidence: `checkBenchmark` refuses
- * it under `evidence: true`, and `checkPack` refuses it in an R1 pack. No lead ruling allows
- * corrections in R1 evidence; one would have to change this code. Rows without the field
- * (written before corrections existed) are off.
- */
-/**
  * Rows from an experiment run (the corrections ON/OFF A/B, both arms, the OFF arm included)
  * are experiment-only: `checkBenchmark` refuses them under `evidence: true`, and `checkPack`
  * refuses them in every pack (#547 round 1, D1). The label is enforced here, not only written.
@@ -260,6 +252,14 @@ export function experimentRowsError(rows: readonly BenchmarkArmRow[]): string | 
   return `${marked.length} row(s) from an experiment run (${marked[0]?.experiment?.id}; ${keys.join(", ")}${marked.length > 5 ? ", ..." : ""}): experiment-only, never evidence`;
 }
 
+/**
+ * R1 evidence is measured with the gate's agent-safe corrections OFF (M2 scope add B; #514
+ * round 1, D1). A row whose gate had corrections on ran a different gate (it hands the agent
+ * typed notes and invites a retry), so it never counts as evidence: `checkBenchmark` refuses
+ * it under `evidence: true`, and `checkPack` refuses it in an R1 pack. No lead ruling allows
+ * corrections in R1 evidence; one would have to change this code. Rows without the field
+ * (written before corrections existed) are off.
+ */
 export function correctionsOnError(rows: readonly BenchmarkArmRow[]): string | null {
   const on = rows.filter((r) => r.gate?.corrections === "on");
   if (on.length === 0) return null;

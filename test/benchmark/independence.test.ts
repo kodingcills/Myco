@@ -5,8 +5,9 @@
  * if it leaves `src/benchmark/grade/`, or reaches a process launcher (the gate's persisted
  * check runs `soffice`).
  */
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
@@ -79,24 +80,43 @@ describe("the corrections A/B analysis never reaches gate code (#547 round 1, D7
   const AB = join(ROOT, "src", "m2", "corrections-ab.ts");
   const GATE = join(ROOT, "src", "gate");
   const VERIFY = join(ROOT, "src", "verify");
-
-  it("its transitive imports stay out of src/gate/ and src/verify/, and launch no process", () => {
-    const reached = [...walk(AB).keys()];
-    expect(reached).toContain(join(GRADER, "row.ts"));
-    const violations = reached.filter(
-      (m) => m.startsWith(`${GATE}/`) || m.startsWith(`${VERIFY}/`),
-    );
-    expect(violations.map((m) => relative(ROOT, m))).toEqual([]);
-    const launchers = [...walk(AB)].flatMap(([mod, specs]) =>
+  /** The guard itself: every module the walk reaches under src/gate/ or src/verify/. */
+  const gateSide = (entry: string) =>
+    [...walk(entry).keys()]
+      .filter((m) => m.startsWith(`${GATE}/`) || m.startsWith(`${VERIFY}/`))
+      .map((m) => relative(ROOT, m));
+  /** Every child_process import the walk reaches. */
+  const launchers = (entry: string) =>
+    [...walk(entry)].flatMap(([mod, specs]) =>
       specs
         .filter((s) => /child_process/.test(s))
         .map((s) => `${relative(ROOT, mod)} imports ${s}`),
     );
-    expect(launchers).toEqual([]);
+
+  it("its transitive imports stay out of src/gate/ and src/verify/, and launch no process", () => {
+    expect([...walk(AB).keys()]).toContain(join(GRADER, "row.ts"));
+    expect(gateSide(AB)).toEqual([]);
+    expect(launchers(AB)).toEqual([]);
   });
 
-  it("the check bites: a gate module among the reached files is reported", () => {
-    const reached = [join(GATE, "gate.ts"), join(GRADER, "row.ts")];
-    expect(reached.filter((m) => m.startsWith(`${GATE}/`))).toHaveLength(1);
+  it("the check bites: the same walk and predicates report a planted gate, verify or launcher import (#547 R2-D6)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ab-bite-"));
+    try {
+      const planted = join(dir, "planted.ts");
+      const rel = (p: string) => relative(dir, p).split(sep).join("/");
+      writeFileSync(
+        planted,
+        `import { x } from "${rel(join(GRADER, "row.ts"))}";\n` +
+          `import "${rel(join(GATE, "corrections.ts"))}";\n` +
+          `import "${rel(join(VERIFY, "uno-verifier.ts"))}";\n` +
+          `import "node:child_process";\nexport { x };\n`,
+      );
+      expect(gateSide(planted)).toEqual(
+        expect.arrayContaining(["src/gate/corrections.ts", "src/verify/uno-verifier.ts"]),
+      );
+      expect(launchers(planted)).toContain(`${relative(ROOT, planted)} imports node:child_process`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

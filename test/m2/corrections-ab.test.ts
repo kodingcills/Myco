@@ -25,7 +25,7 @@ import {
   signTestOneSided,
 } from "../../src/m2/corrections-ab.ts";
 import { checkPack } from "../../src/m2/evidence.ts";
-import { input as packInput, r1Trials } from "./pack-fixture.ts";
+import { input as packInput, r1Trials, r3Manifest, r3Trials } from "./pack-fixture.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const TASKS = buildTaskSet().tasks;
@@ -791,5 +791,93 @@ describe("#547 round 1 fixes", () => {
         grade: "ungradable",
       },
     ]);
+  });
+});
+
+describe("#547 round 2 fixes", () => {
+  /** A Stage-1 run with exactly `onOnly` ON-only and `offOnly` OFF-only pairs; the rest fail in both. */
+  function split(onOnly: number, offOnly: number) {
+    const ids = TASKS.filter((t) => t.satisfiable).map((t) => t.taskId);
+    const onWins = new Set(ids.slice(0, onOnly));
+    const offWins = new Set(ids.slice(onOnly, onOnly + offOnly));
+    return {
+      on: armLedger("on", TASKS, (t) => (onWins.has(t.taskId) ? "verified" : "refuted")),
+      off: armLedger("off", TASKS, (t) => (offWins.has(t.taskId) ? "verified" : "refuted")),
+    };
+  }
+
+  it("R2-D5: the effect threshold is p < 0.05, exercised on both sides of alpha", () => {
+    // Independent reference values (exact binomial tails, Python `fractions`).
+    const cases = [
+      { onOnly: 9, offOnly: 3, p: 299 / 4096, effect: "corrections-not-shown-to-help" },
+      { onOnly: 8, offOnly: 2, p: 7 / 128, effect: "corrections-not-shown-to-help" },
+      { onOnly: 10, offOnly: 3, p: 189 / 4096, effect: "corrections-help" },
+      { onOnly: 9, offOnly: 2, p: 67 / 2048, effect: "corrections-help" },
+    ] as const;
+    for (const c of cases) {
+      const r = checkCorrectionsAb(ab(split(c.onOnly, c.offOnly)), { stage: 1 });
+      expect(r.errors, `${c.onOnly}/${c.offOnly}`).toEqual([]);
+      expect(r.discordant).toEqual({
+        onOnly: c.onOnly,
+        offOnly: c.offOnly,
+        total: c.onOnly + c.offOnly,
+      });
+      expect(r.signTestOneSidedP).toBeCloseTo(c.p, 12);
+      expect(r.effect, `${c.onOnly}/${c.offOnly}, p = ${c.p}`).toBe(c.effect);
+    }
+  });
+
+  it("R2-D1: a Stage-1 row carrying the Stage-0 ON seed is refused, in either arm", () => {
+    const { on, off } = stage1();
+    const reseed = (a: AbArm, seed: string): AbArm => ({
+      ...a,
+      arm: (a.arm as BenchmarkArmRow[]).map((r) =>
+        r.experiment ? { ...r, experiment: { ...r.experiment, seed } } : r,
+      ),
+    });
+    // The whole ON run re-ledgered under new keys but the Stage-0 ON seed.
+    const reusedOn = checkCorrectionsAb(ab({ on: reseed(on, "s0-on"), off }), { stage: 1 });
+    expect(reusedOn.ok).toBe(false);
+    expect(reusedOn.errors.join("\n")).toMatch(
+      /100 Stage-1 trial\(s\) reuse Stage-0 trials \(on-fc-v1-001/,
+    );
+    // And the Stage-0 ON seed in the OFF arm (the seed set spans both Stage-0 ledgers).
+    const crossed = checkCorrectionsAb(ab({ on, off: reseed(off, "s0-on") }), { stage: 1 });
+    expect(crossed.errors.join("\n")).toMatch(/100 Stage-1 trial\(s\) reuse Stage-0 trials \(off-/);
+  });
+
+  it("R2-D2: a Stage-0 gate miss halts the run too, with its own record", () => {
+    const on = armLedger("on", DEMO, () => "verified");
+    const off = armLedger("off", DEMO, (_t, i) => (i === 0 ? "false-done" : "verified"));
+    const r = checkCorrectionsAb(ab({ on, off }), { stage: 0 });
+    expect(r.halted).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.effect).toBe("none");
+    expect(r.integrityIncidents).toEqual([
+      expect.objectContaining({ arm: "off", accepted: true, grade: "fail" }),
+    ]);
+    expect(r.errors.join("\n")).toMatch(
+      /INTEGRITY INCIDENT: the gate verified 1 trial\(s\) the grader fails \(corrections ON 0, OFF 1\)/,
+    );
+  });
+
+  it("R2-D3: checkPack refuses marked rows in a non-R1 pack too (R3)", () => {
+    const pack = packInput(r3Trials(), r3Manifest());
+    expect(checkPack(pack).errors).toEqual([]);
+    const marked = {
+      ...pack,
+      arm: (pack.arm as BenchmarkArmRow[]).map((r) => ({
+        ...r,
+        experiment: {
+          id: "corrections-ab" as const,
+          stage: 1 as const,
+          arm: "on" as const,
+          seed: "s1-on",
+        },
+      })),
+    };
+    expect(checkPack(marked).errors.join("\n")).toMatch(
+      /35 row\(s\) from an experiment run \(corrections-ab; .*\): experiment-only, never evidence/,
+    );
   });
 });
