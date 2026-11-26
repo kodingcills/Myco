@@ -45,6 +45,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  type Stats,
 } from "node:fs";
 import { open as openAsync } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -205,7 +206,7 @@ interface ScanResult {
  * reported as a regular file) to stand in, deterministically, for a file the trial swaps
  * between the `lstat` and the `open`: what is then opened must still never block.
  */
-export type LstatProbe = (path: string) => ReturnType<typeof lstatSync>;
+export type LstatProbe = (path: string) => Stats;
 
 /** Which markers occur in the regular files under `dir` (symlinks are not followed). */
 export function scanTree(
@@ -217,7 +218,7 @@ export function scanTree(
   let budget = SCAN_LIMIT_BYTES;
   let complete = true;
   const walk = (path: string) => {
-    let st: ReturnType<typeof lstatSync>;
+    let st: Stats;
     try {
       st = lstat(path);
     } catch {
@@ -360,7 +361,7 @@ export function captureRegularFile(
       "outside-workspace",
       "state file's directory is outside the workspace",
     );
-  let pre: ReturnType<typeof lstatSync>;
+  let pre: Stats;
   try {
     pre = lstat(path);
   } catch {
