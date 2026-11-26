@@ -6,6 +6,7 @@
  * `validateDataset` refuses a dataset carrying an open string. Before this change the same
  * corpus put a planted username into 123 of 145 exported datasets.
  */
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -378,5 +379,32 @@ describe("validateDataset refuses an open string; the filter is closed", () => {
         filter: filter({ taskSetVersion: "a b" }),
       }),
     ).toThrow(/taskSetVersion is not a closed task-set id/);
+  });
+});
+
+describe("blobs are digest-only (lead ruling 2026-11-26 20:3xZ)", () => {
+  it("a captured document the byte scan lets through never reaches the dataset; only its digest and size do", () => {
+    // A long-path UNC form the store's blob scan does not flag (so the store keeps the document).
+    const words = ["QzPLANTEDblobfirst", "QzPLANTEDbloblast"];
+    const csv = new TextEncoder().encode(
+      `id,v\nA,${["\\\\?\\UNC\\nas\\homes\\", words[0], " ", words[1]].join("")}\n`,
+    );
+    const root = join(dir("al-blob"), "s");
+    const store = EpisodeStore.open(root, { simulated: true, host: HOST });
+    const rec = new EpisodeRecorder({ host: HOST });
+    rec.action({ kind: "type", text: "x" });
+    expect(rec.state("persisted", "text/csv", csv, 0)).toBe(true);
+    const snap = rec.snapshot();
+    expect(
+      store.record(draft({ actions: snap.actions, observations: snap.observations }), snap.blobs)
+        .status,
+    ).toBe("written");
+    const out = join(dir("al-blobout"), "ds");
+    const m = exportDataset({ stores: [root], out, simulated: true, host: HOST });
+    const text = dataset(out);
+    expect(words.filter((w) => text.includes(w))).toEqual([]);
+    expect(m.counts.blobs).toBe(0);
+    expect(text).toContain(createHash("sha256").update(csv).digest("hex"));
+    expect(validateDataset(out, HOST)).toEqual([]);
   });
 });

@@ -189,8 +189,8 @@ npx tsx scripts/myco-episodes.ts import --dataset <dir> --into <store>
 
 Exit codes: 0 means OK, 1 means invalid or refused, 3 means a usage error.
 
-A dataset is `manifest.json` plus `episodes/` and only the `blobs/` the selected episodes
-reference. The manifest (`myco.episode-dataset/1`) holds:
+A dataset is `manifest.json` plus `episodes/`. It carries **no blobs**: screenshots and
+CSV/JSON state are digest-only (§5.1), so `counts.blobs` (blobs carried) is always 0. The manifest (`myco.episode-dataset/1`) holds:
 
 - the schema version;
 - the real/simulated label;
@@ -209,13 +209,15 @@ refuses:
 - a non-canonical episode file;
 - a wrong count;
 - an episode outside the filter;
-- an unreferenced blob;
+- any `blobs/` entry (a dataset is digest-only);
 - a mislabelled dataset.
 
 - an episode with any string outside its field's closed grammar (`OPEN_STRING`, below).
 
-`import` validates the dataset first, then writes into a store of the same kind. Importing a
-dataset and exporting the store again gives the same dataset, byte for byte.
+`import` validates the dataset first, then writes into a store of the same kind. An episode that
+references a blob cannot be restored from a digest-only dataset, so the store refuses it
+(`BLOB_MISSING`). Blob-free episodes round-trip: importing them and exporting the store again
+gives the same dataset, byte for byte.
 
 ### 5.1 What leaves the machine: the closed allowlist (TIF-265)
 
@@ -244,9 +246,14 @@ change. For example, `C:\Users\First Last\x` was stored as `<path> Last\x`, and 
 cleanliness scan cannot see a path in what is left. The scan (§4) still runs over every
 exported episode as a backstop. It is no longer what keeps a path out.
 
-Cost: a dataset carries no agent text (typed text, commands and UI status are digests). Blobs
-(screenshots behind the frame redactor, CSV/JSON state behind the byte scan) are exported as
-before, pending the lead's ruling on whether they too go digest-only under #553's rule.
+**Blobs are digest-only** (lead ruling 2026-11-26 20:3xZ). Screenshots and CSV/JSON state leave
+the machine only as the sha256, byte count and content-addressed name their observation already
+carries, never as bytes: a captured document can hold a host path the byte scan misses (a
+long-path UNC form, say), and a screenshot can show one. Redacted screenshots behind the frame
+redactor may come later, in their own reviewed change with a fuzz over frame text.
+
+Cost: a dataset carries no agent text (typed text, commands and UI status are digests) and no
+screenshots or documents (digests and sizes only).
 
 ## 6. How tracks U and Q consume it
 
