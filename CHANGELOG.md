@@ -9,6 +9,16 @@ versioned releases yet; entries are grouped by milestone. License: [Apache-2.0](
 
 ### Added
 
+- `myco-state` (capability track I): a separate, read-only MCP server that gives an agent
+  the live app's structured state instead of pixels. Its tools read sheets and used ranges,
+  cells (values and formulas as Calc holds them), the document's save state, and a bounded
+  accessibility-tree summary. The Linux headless Calc backend is shipped; the backend seam
+  is ready for a Windows/UIA backend. The server is bound to one trial, takes no path, caps
+  every reply and returns codes only. It is not part of the gate, and it is not proof of
+  completion. Launch plans for the `structured-state`, `screenshot-only` and `hcu+shell`
+  arms are audited by the extended launch audit. Their rows never count as R1 evidence
+  ([docs/state/tools.md](docs/state/tools.md), [security](docs/state/security.md),
+  [measurement plan](docs/state/measurement-plan.md)).
 - `myco init` (`bin/myco init`, `pnpm myco init`): one-command setup. Checks the Linux
   desktop path, starts the gate once and checks it fails closed, then writes the `myco-gate`
   MCP entry for Claude Code and Codex into the project (refuses HOME as the project, never

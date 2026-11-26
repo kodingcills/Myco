@@ -27,6 +27,11 @@
  * - `host-shell`   runs host commands (or spawns an agent that can).
  * - `network`      host-side network fetches (not a write path; denied to keep the surface
  *                  closed and auditable).
+ * - `app-state`    reads the agent's OWN live app/document for its own trial, read-only,
+ *                  through a server the harness bound to that trial (capability track I,
+ *                  `myco-state`, `src/state/`). Takes no path, trial or run argument. Not in
+ *                  the default `MCP_SERVERS`: only a capability-arm audit classifies it
+ *                  (`STATE_SERVER_CLASS`), so the R1 gated harness keeps refusing it.
  */
 
 export type Reach =
@@ -37,7 +42,8 @@ export type Reach =
   | "host-write-fixed"
   | "host-fs"
   | "host-shell"
-  | "network";
+  | "network"
+  | "app-state";
 
 export interface ToolClass {
   readonly reach: Reach;
@@ -109,12 +115,45 @@ export const CLAUDE_CODE_BUILTINS: Readonly<Record<string, ToolClass>> = {
   TodoWrite: { reach: "agent-local", note: "the agent's own todo list" },
 };
 
+/**
+ * The structured-state server (`myco-state`, capability track I), served as
+ * `mcp__myco-state__<tool>`. NOT in `MCP_SERVERS`: pass `STATE_SERVER_CLASS` as an extra
+ * server, which only the capability-arm audit does (`src/state/arms.ts`).
+ * test/state/arms.test.ts pins these names to the server's own tool list.
+ */
+export const MYCO_STATE_MCP_TOOLS: Readonly<Record<string, ToolClass>> = {
+  state_list_sheets: {
+    reach: "app-state",
+    note: "sheet names and used ranges of the trial's open document",
+  },
+  state_read_range: { reach: "app-state", note: "bounded cell read of the trial's open document" },
+  state_document_status: { reach: "app-state", note: "the trial's open document's save state" },
+  state_ui_tree: { reach: "app-state", note: "bounded a11y tree of the trial's app window" },
+};
+
+export const STATE_SERVER_NAME = "myco-state";
+export const STATE_SERVER_CLASS: Readonly<Record<string, Readonly<Record<string, ToolClass>>>> = {
+  [STATE_SERVER_NAME]: MYCO_STATE_MCP_TOOLS,
+};
+
+/** The env var that binds a `myco-state` server to one trial (`STATE_ENV.runId` in src/state/cli.ts). */
+export const MYCO_STATE_RUN_ENV = "MYCO_STATE_RUN_ID";
+/** The env var naming the trial's live soffice UNO pipe (`STATE_ENV.pipe`). */
+export const MYCO_STATE_PIPE_ENV = "MYCO_STATE_UNO_PIPE";
+/** The only env keys a `myco-state` server may be launched with. */
+export const MYCO_STATE_ENV_KEYS: readonly string[] = [
+  MYCO_STATE_RUN_ENV,
+  MYCO_STATE_PIPE_ENV,
+  "MYCO_STATE_WITHHELD",
+  "MYCO_PYTHON",
+];
+
 /** MCP servers by the name a harness registers them under. */
 export const MCP_SERVERS: Readonly<Record<string, Readonly<Record<string, ToolClass>>>> = {
   "myco-rt": MYCO_RT_MCP_TOOLS,
 };
 
-const ALLOWED: ReadonlySet<Reach> = new Set<Reach>(["guest", "gate", "agent-local"]);
+const ALLOWED: ReadonlySet<Reach> = new Set<Reach>(["guest", "gate", "agent-local", "app-state"]);
 
 export interface SurfaceViolation {
   readonly tool: string;
@@ -169,7 +208,7 @@ export function classifyTool(name: string, opts: AuditOptions = {}): ToolClass |
 
 /**
  * Audit the exact list of tools a gated run grants the agent. Fails closed on unknown
- * tools and on any reach outside guest / gate / agent-local.
+ * tools and on any reach outside guest / gate / agent-local / app-state.
  */
 export function auditToolSurface(
   granted: readonly string[],

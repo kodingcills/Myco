@@ -1,0 +1,370 @@
+/**
+ * `myco-state` MCP server (capability track I): read-only structured app state over stdio
+ * (newline-delimited JSON-RPC 2.0). docs/state/tools.md is the tool reference and
+ * docs/state/security.md the security model.
+ *
+ * A separate server from the gate (`myco-gate`, `myco.gate/v1`, one tool) and from the
+ * actuator (`myco-rt`). Nothing here is added to the gate's surface, and the gate never
+ * calls this server: its verdict comes only from the persisted bytes it captures itself.
+ *
+ * Every reply is checked here, whatever the backend returned (defense in depth):
+ *  - the request parser is strict (`parseStateRequest`): unknown tools and fields, bad
+ *    ranges and out-of-range limits get a code;
+ *  - the backend's data is re-checked against the caps (cell count and shape, string
+ *    lengths, tree depth, node count and width); a reply over a cap is refused
+ *    (BACKEND_ERROR), never passed through;
+ *  - UI-tree names have path-like text replaced (window titles carry file names);
+ *  - the serialized reply must fit `maxReplyBytes` (OUTPUT_TOO_LARGE) and must not contain
+ *    any of the harness's `withheld` strings, e.g. the trial dir, vault root or fixture dir
+ *    (OUTPUT_WITHHELD);
+ *  - a backend that throws gives BACKEND_ERROR; the error text goes to the operator's
+ *    `onDiagnostic` only, never to the agent.
+ *
+ * JSON-RPC rules mirror the gate's `handleLine`: parse error -32700 and keep serving; batch
+ * -32600; unknown method -32601; a notification gets no reply.
+ */
+import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
+import {
+  LIVE_STATE_NOTICE,
+  parseStateRequest,
+  STATE_API_VERSION,
+  STATE_CAPS,
+  STATE_INPUT_SCHEMAS,
+  STATE_TOOLS,
+  type StateCode,
+  type StateRequest,
+  type StateToolName,
+} from "./api.ts";
+import type { BackendResult, StateBackend, UiNode } from "./backend.ts";
+
+export const STATE_SERVER_NAME = "myco-state";
+export const STATE_SERVER_VERSION = "0.1.0";
+export const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"] as const;
+
+export const STATE_INSTRUCTIONS =
+  "Read-only structured state of the app you are working in: sheets, cells (values and " +
+  "formulas as the app holds them), the document's save state, and a bounded UI tree. Use it " +
+  "to check what the app actually holds instead of guessing from the screen. It reads only " +
+  "your own open document and cannot change anything. It is live state, not proof: an edit " +
+  "you see here is not saved until the document status says modified=false after you save, " +
+  "and only the completion gate decides whether the task is done.";
+
+const DESCRIPTIONS: Readonly<Record<StateToolName, string>> = {
+  state_list_sheets:
+    "List the open document's sheets with each sheet's used range (A1). Read-only live state.",
+  state_read_range: `Read a cell or range (A1, at most ${STATE_CAPS.maxCells} cells): each cell's kind, value, displayed text and formula as the app holds them now. Read-only live state; not proof the document was saved.`,
+  state_document_status:
+    "The open document's save state: modified (unsaved edits present), read-only, sheet count, active sheet. Read-only.",
+  state_ui_tree: `A bounded summary of the app window's accessibility tree (depth <= ${STATE_CAPS.maxTreeDepth}, nodes <= ${STATE_CAPS.maxTreeNodes}, ${STATE_CAPS.maxChildrenPerNode} children per node). Read-only.`,
+};
+
+export function stateToolDefinitions(): object[] {
+  return Object.values(STATE_TOOLS).map((name) => ({
+    name,
+    title: name.replace(/_/g, " "),
+    description: DESCRIPTIONS[name],
+    inputSchema: STATE_INPUT_SCHEMAS[name],
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }));
+}
+
+export type StateReply =
+  | {
+      readonly api: typeof STATE_API_VERSION;
+      readonly ok: true;
+      readonly tool: StateToolName;
+      readonly backend: StateBackend["kind"];
+      readonly notice: typeof LIVE_STATE_NOTICE;
+      readonly data: unknown;
+    }
+  | {
+      readonly api: typeof STATE_API_VERSION;
+      readonly ok: false;
+      readonly tool: StateToolName | null;
+      readonly code: StateCode;
+    };
+
+export interface StateServiceOptions {
+  /** The backend bound to this trial's live document. */
+  readonly backend: StateBackend;
+  /**
+   * Strings that must never appear in a reply (host paths of the trial dir, vault, fixture,
+   * oracle config, other trials). A reply containing one is replaced by OUTPUT_WITHHELD.
+   */
+  readonly withheld?: readonly string[];
+  /** Operator-side diagnostics (never shown to the agent). */
+  readonly onDiagnostic?: (event: { tool: string; detail: string }) => void;
+}
+
+export interface StateService {
+  call(tool: unknown, args: unknown): Promise<StateReply>;
+}
+
+const PATHLIKE =
+  /file:\/\/\S*|[A-Za-z]:\\\S*|\\\\[^\s\\]+\\\S*|~\/\S*|(?<![\w.])\/(?:[^\s/]+\/)+[^\s/]*/g;
+
+/** Replace path-like substrings (absolute POSIX/Windows paths, file URLs, UNC, ~/) with `[path]`. */
+export function scrubPaths(text: string): string {
+  return text.replace(PATHLIKE, "[path]");
+}
+
+function refuse(tool: StateToolName | null, code: StateCode): StateReply {
+  return { api: STATE_API_VERSION, ok: false, tool, code };
+}
+
+/** Every string in `value` is at most `limit` characters. */
+function stringsWithin(value: unknown, limit: number): boolean {
+  if (typeof value === "string") return value.length <= limit;
+  if (Array.isArray(value)) return value.every((v) => stringsWithin(v, limit));
+  if (typeof value === "object" && value !== null)
+    return Object.values(value).every((v) => stringsWithin(v, limit));
+  return true;
+}
+
+function checkTree(
+  node: UiNode,
+  depth: number,
+  limits: { maxDepth: number; maxNodes: number },
+  count: { n: number },
+): UiNode | null {
+  count.n += 1;
+  if (count.n > limits.maxNodes || depth > limits.maxDepth) return null;
+  if (typeof node.role !== "string" || typeof node.name !== "string") return null;
+  const children = node.children ?? [];
+  if (!Array.isArray(children) || children.length > STATE_CAPS.maxChildrenPerNode) return null;
+  const out: UiNode[] = [];
+  for (const child of children) {
+    const checked = checkTree(child, depth + 1, limits, count);
+    if (checked === null) return null;
+    out.push(checked);
+  }
+  return {
+    role: node.role.slice(0, STATE_CAPS.maxNameChars),
+    name: scrubPaths(node.name).slice(0, STATE_CAPS.maxNameChars),
+    childCount: Number.isInteger(node.childCount) ? node.childCount : 0,
+    ...(node.childrenOmitted ? { childrenOmitted: node.childrenOmitted } : {}),
+    ...(node.children ? { children: out } : {}),
+  };
+}
+
+/**
+ * Check the backend's data for `request` against the caps. Returns the data to send
+ * (UI names scrubbed) or null when the backend broke a bound (fail closed).
+ */
+function checkData(request: StateRequest, data: unknown): unknown | null {
+  if (typeof data !== "object" || data === null) return null;
+  if (!stringsWithin(data, STATE_CAPS.maxCellTextChars)) return null;
+  switch (request.tool) {
+    case "state_read_range": {
+      const rows = (data as { rows?: unknown }).rows;
+      const [c0, r0, c1, r1] = request.range;
+      if (!Array.isArray(rows) || rows.length !== r1 - r0 + 1) return null;
+      if (!rows.every((row) => Array.isArray(row) && row.length === c1 - c0 + 1)) return null;
+      return data;
+    }
+    case "state_list_sheets": {
+      const sheets = (data as { sheets?: unknown }).sheets;
+      if (!Array.isArray(sheets) || sheets.length > STATE_CAPS.maxSheets) return null;
+      if (!stringsWithin(sheets, STATE_CAPS.maxNameChars)) return null;
+      return data;
+    }
+    case "state_document_status":
+      return data;
+    case "state_ui_tree": {
+      const tree = (data as { tree?: unknown }).tree;
+      if (typeof tree !== "object" || tree === null) return null;
+      const count = { n: 0 };
+      const checked = checkTree(tree as UiNode, 0, request, count);
+      if (checked === null) return null;
+      return {
+        tree: checked,
+        nodes: count.n,
+        truncated: (data as { truncated?: unknown }).truncated === true,
+      };
+    }
+  }
+}
+
+async function dispatch(
+  backend: StateBackend,
+  request: StateRequest,
+): Promise<BackendResult<unknown>> {
+  switch (request.tool) {
+    case "state_list_sheets":
+      return backend.listSheets();
+    case "state_document_status":
+      return backend.documentStatus();
+    case "state_read_range":
+      return backend.readRange(request.sheet, request.range);
+    case "state_ui_tree":
+      return backend.uiTree({ maxDepth: request.maxDepth, maxNodes: request.maxNodes });
+  }
+}
+
+export function createStateService(options: StateServiceOptions): StateService {
+  const withheld = (options.withheld ?? []).filter((s) => s.length >= 4);
+  const diag = (tool: string, detail: string) => options.onDiagnostic?.({ tool, detail });
+  return {
+    async call(tool, args) {
+      const parsed = parseStateRequest(tool, args);
+      const name =
+        typeof tool === "string" && !parsed.ok && parsed.code === "UNKNOWN_TOOL"
+          ? null
+          : (tool as StateToolName);
+      if (!parsed.ok) return refuse(name, parsed.code);
+      const request = parsed.value;
+      let result: BackendResult<unknown>;
+      try {
+        result = await dispatch(options.backend, request);
+      } catch (error) {
+        diag(request.tool, error instanceof Error ? error.message : String(error));
+        return refuse(request.tool, "BACKEND_ERROR");
+      }
+      if (!result.ok) return refuse(request.tool, result.code);
+      const data = checkData(request, result.data);
+      if (data === null) {
+        diag(request.tool, "backend reply broke a cap or shape check");
+        return refuse(request.tool, "BACKEND_ERROR");
+      }
+      const reply: StateReply = {
+        api: STATE_API_VERSION,
+        ok: true,
+        tool: request.tool,
+        backend: options.backend.kind,
+        notice: LIVE_STATE_NOTICE,
+        data,
+      };
+      const text = JSON.stringify(reply);
+      if (Buffer.byteLength(text, "utf8") > STATE_CAPS.maxReplyBytes)
+        return refuse(request.tool, "OUTPUT_TOO_LARGE");
+      if (withheld.some((s) => text.includes(s) || text.includes(JSON.stringify(s).slice(1, -1)))) {
+        diag(request.tool, "reply contained a withheld string");
+        return refuse(request.tool, "OUTPUT_WITHHELD");
+      }
+      return reply;
+    },
+  };
+}
+
+type RpcResult = { ok: true; result: unknown } | { ok: false; code: number; message: string };
+
+function rpc(id: unknown, outcome: RpcResult): string {
+  return JSON.stringify(
+    outcome.ok
+      ? { jsonrpc: "2.0", id, result: outcome.result }
+      : { jsonrpc: "2.0", id, error: { code: outcome.code, message: outcome.message } },
+  );
+}
+
+async function callTool(
+  service: StateService,
+  params: Record<string, unknown>,
+): Promise<RpcResult> {
+  if (typeof params.name !== "string")
+    return { ok: false, code: -32602, message: "missing tool name" };
+  const reply = await service.call(params.name, params.arguments);
+  if (!reply.ok && reply.code === "UNKNOWN_TOOL")
+    return { ok: false, code: -32602, message: "unknown tool" };
+  return {
+    ok: true,
+    result: {
+      content: [{ type: "text", text: JSON.stringify(reply) }],
+      structuredContent: reply,
+      isError: !reply.ok,
+    },
+  };
+}
+
+/** Handle one wire line. Returns the reply line, or undefined for notifications. */
+export async function handleStateLine(
+  service: StateService,
+  line: string,
+): Promise<string | undefined> {
+  let message: unknown;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return rpc(null, { ok: false, code: -32700, message: "parse error" });
+  }
+  if (Array.isArray(message))
+    return rpc(null, { ok: false, code: -32600, message: "batch requests are not supported" });
+  if (typeof message !== "object" || message === null)
+    return rpc(null, { ok: false, code: -32600, message: "invalid request" });
+  const request = message as Record<string, unknown>;
+  const hasId = Object.hasOwn(request, "id");
+  const id = hasId ? request.id : null;
+  if (request.jsonrpc !== "2.0" || typeof request.method !== "string")
+    return hasId ? rpc(id, { ok: false, code: -32600, message: "invalid request" }) : undefined;
+  const params =
+    typeof request.params === "object" && request.params !== null && !Array.isArray(request.params)
+      ? (request.params as Record<string, unknown>)
+      : {};
+  let outcome: RpcResult;
+  switch (request.method) {
+    case "initialize": {
+      const requested = params.protocolVersion;
+      const protocolVersion =
+        typeof requested === "string" &&
+        (PROTOCOL_VERSIONS as readonly string[]).includes(requested)
+          ? requested
+          : PROTOCOL_VERSIONS[0];
+      outcome = {
+        ok: true,
+        result: {
+          protocolVersion,
+          capabilities: { tools: {} },
+          serverInfo: { name: STATE_SERVER_NAME, version: STATE_SERVER_VERSION },
+          instructions: STATE_INSTRUCTIONS,
+        },
+      };
+      break;
+    }
+    case "notifications/initialized":
+      return undefined;
+    case "ping":
+      outcome = { ok: true, result: {} };
+      break;
+    case "tools/list":
+      outcome = { ok: true, result: { tools: stateToolDefinitions() } };
+      break;
+    case "tools/call":
+      outcome = await callTool(service, params);
+      break;
+    default:
+      outcome = { ok: false, code: -32601, message: "method not found" };
+  }
+  return hasId ? rpc(id, outcome) : undefined;
+}
+
+/** Serve until `input` ends; one request at a time, replies in request order. */
+export function serveStateStdio(
+  service: StateService,
+  input: Readable,
+  output: Writable,
+): Promise<void> {
+  const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
+  let chain = Promise.resolve();
+  return new Promise((resolveDone) => {
+    lines.on("line", (line) => {
+      if (line.trim().length === 0) return;
+      chain = chain.then(async () => {
+        let out: string | undefined;
+        try {
+          out = await handleStateLine(service, line);
+        } catch {
+          out = rpc(null, { ok: false, code: -32603, message: "internal error" });
+        }
+        if (out !== undefined) output.write(`${out}\n`);
+      });
+    });
+    lines.on("close", () => {
+      void chain.then(() => resolveDone());
+    });
+  });
+}
