@@ -1,10 +1,11 @@
 /**
  * Pins `docs/security/gate-api-review.md` (track H) to main. The review is the record the
- * H fix PRs cite by finding id and file:line, so a stale ref or a missing finding is a
+ * H fix PRs cite by finding id and code ref, so a stale ref or a missing finding is a
  * defect (#519 round 1, D1-D4; round 2, D1'). Four layers:
  *
- *  1. Every file:line the doc cites names a line that holds what the doc says is there, and
- *     both ends of every range are pinned. A code move breaks this test, not the doc silently.
+ *  1. Every code ref is `file › symbol`, and the symbol's body holds what the doc says is
+ *     there. Renaming or deleting the symbol, or moving the cited code out of it, breaks this
+ *     test; an unrelated edit to the same file does not (line refs broke on every one).
  *  1b. No PR that has merged is described as open, lock-holding or pending, and this track's
  *     open PRs carry a tripwire that fails when they merge (round 2, D1').
  *  2. The round-1 refs anchored to `12c35ea`, and the claims round 1 got wrong ("codes
@@ -18,6 +19,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { calcRecordEditFamily } from "../../src/gate/families.ts";
 import { buildRegistry, createGate, fileEvidenceReader } from "../../src/gate/gate.ts";
@@ -96,267 +98,362 @@ const FILES: Record<string, string> = {
   "input-fuzz.test.ts": "test/gate/input-fuzz.test.ts",
 };
 
-/** Doc ref, then what the cited line range must contain. */
-const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
-  // Threat model and authz design
-  ["gate.ts:465-468", /export interface Assignment/],
-  ["gate.ts:474", /readonly assignment: Assignment/],
-  ["gate.ts:483", /readonly onDecision\?/],
-  ["api.ts:136-145", /export interface GateRequest/],
-  ["api.ts:354-416", /export function parseGateRequest/],
-  ["mcp-server.ts:180-206", /export function serveStdio/],
-  ["gate.ts:213", /STATE_FILE_LIMIT = 16 \* 1024 \* 1024/],
-  ["gate.ts:412", /opened\.size > STATE_FILE_LIMIT/],
-  ["api.ts:161-201", /export interface GateResult/],
-  ["mcp-server.ts:100-106", /structuredContent: result/],
-  ["cli.ts:110-146", /function operatorGate/],
-  ["api.ts:370-377", /unknown request field\(s\): \$\{unknown\.join/],
-  ["sealed.ts:148-165", /export function createSealedGate/],
-  ["gate.ts:747-756", /taskId !== assignment\.taskId \|\| runId !== assignment\.runId/],
-  ["gate.ts:711-725", /await config\.onDecision\(result\)/],
-  // D4: CLI scope
-  ["cli.ts:79-92", /function parseFlags\(argv/],
-  ["cli.ts:176-186", /gate\.check\(\{\s*taskId: task,\s*runId: run/],
-  ["cli.ts:118-119", /loadTasksFile\(tasksFile\)/],
-  // H-01 (fixed by #520, merged)
-  ["stdio-frame.ts:26", /export const MAX_FRAME_BYTES = 1024 \* 1024;/],
-  ["stdio-frame.ts:32", /OVERSIZED_FRAME_LINE = '\{"id":null\}'/],
-  ["myco-gate.ts:21", /boundFrames\(process\.stdin/],
-  ["mcp-server.ts:186", /createInterface\(/],
-  ["mcp-server.ts:111-174", /export async function handleLine/],
-  ["api.ts:401", /record\.claim\.length > CLAIM_LIMIT/],
-  // H-02
-  ["mcp-server.ts:87", /unknown tool: \$\{params\.name\}/],
-  ["mcp-server.ts:171", /method not found: \$\{request\.method\}/],
-  // H-03
-  ["api.ts:398-407", /claim is longer than/],
-  ["cli.ts:138", /appendFileSync\(audit/],
-  ["api.ts:143", /never read by the oracle/],
-  // H-04
-  ["corrections.ts:241-246", /chars\.slice\(0, CORRECTION_VALUE_LIMIT\)/],
-  // H-05
-  ["gate.ts:941-953", /async check\(raw\)/],
-  ["cli.ts:194-198", /serveStdio\(gate, io\.stdin, io\.stdout/],
-  ["multistep.ts:71", /retryBudget: 0 \| 1/],
-  ["multistep.ts:111-112", /retryBudget must be 0 or 1/],
-  ["mcp-server.ts:191", /chain = chain\.then\(/],
-  ["sealed.ts:82", /BEFORE_CAPTURE/],
-  ["sealed.ts:106-111", /no sealed capture yet/],
-  // H-06
-  ["sealed.ts:117-133", /bytes\.length > STATE_FILE_LIMIT[\s\S]*cause: "unreadable"/],
-  ["sealed.ts:127", /if \(bytes\.length > STATE_FILE_LIMIT\)/],
-  ["vault.ts:641", /readFileSync\(path\)/],
-  // H-07, H-08
-  ["api.ts:328-333", /\^\[A-Za-z0-9\]\[A-Za-z0-9\._-\]\{0,127\}\$/],
-  ["sealed.ts:102", /openForTrial\(vault, binding, runId\)/],
-  ["gate.ts:650", /const assignment = \{ \.\.\.config\.assignment \}/],
-  ["gate.ts:377-387", /const segments = \[runId, \.\.\.stateFile\.split/],
-  ["vault.ts:322", /existsSync\(dir\)/],
-  // H-09
-  ["mcp-server.ts:195-198", /code: -32603/],
-  ["input-fuzz.test.ts:348-380", /H-09: a deeply nested JSON-RPC id is -32603[\s\S]*code: -32603/],
-  // H-10..H-15
-  ["vault.ts:303-305", /join\(this\.root, runId\)/],
-  ["vault.ts:98-102", /export interface SealReceipt/],
-  ["ledger.ts:41-53", /export function appendChainedRow/],
-  ["vault.ts:251-262", /export interface VaultOptions/],
-  ["vault.ts:95", /sourceFiles: readonly string\[\]/],
-  ["sealed.ts:20-21", /Agent-facing details carry `integrity:<code>` only/],
-  ["gate.test.ts:654-750", /function spyReader[\s\S]*invalid gate assignment/],
-  ["sealed-gate.test.ts:334-395", /naming an earlier honest trial is ASSIGNMENT_MISMATCH/],
-  ["vault.ts:328-331", /oracle source \$\{path\} is not absolute/],
-  ["gate.ts:470-499", /export interface GateConfig/],
-  // H-16
-  ["gate.ts:930", /reasons: \[\.\.\.valid\.reasons\]/],
-  ["families.ts:189-190", /TARGET_MISMATCH: cell \$\{ref\}/],
-  ["calc-document.ts:210-212", /DOCUMENT_COLLATERAL: \$\{collateral\.length\}/],
-  ["families.ts:312", /persisted as \$\{JSON\.stringify\(newValue\)\}/],
-  ["gate.ts:776", /could not look: \$\{read\.detail\}/],
-  ["gate.ts:318-325", /descriptor path check/],
-  ["gate.ts:900", /could not look: \$\{corrupt\.message\}/],
-  ["gate.ts:197-201", /must name paths relative to the run/],
-  ["gate.ts:318-321", /const shown = actual\.startsWith\(`\$\{realRoot\}\/`\)/],
-  ["reasons.ts:22", /export function errorCode\(error: unknown\): string/],
-  ["gate.ts:404", /open failed: \$\{errorCode\(error\)\}/],
-  ["gate.ts:440", /read failed: \$\{errorCode\(error\)\}/],
-  ["gate.ts:661-669", /function diagnose\([\s\S]*errorCode\(error\)/],
-  // H-17
-  ["gate.ts:839-845", /kind: "sealed-fixture",[\s\S]*path: sealed\.file,[\s\S]*sha256: digest/],
-];
+/**
+ * Files the doc may cite by symbol without a pin, each with why. Every other `›` ref must
+ * name a file in FILES, so a typo'd or unknown filename fails instead of passing unpinned.
+ */
+const UNPINNED_FILES: Readonly<Record<string, string>> = {
+  "src/watch/page.ts": "on #513's branch, not on main; cited for what that branch will add",
+};
 
 /**
- * Both ends of every cited range, as the exact trimmed text of its first and last line. An
- * anchor regex matches anywhere inside its range, so on its own it survives a one-line shift
- * (round-2 verifier mutation V6: one line inserted at the top of `calc-document.ts`). Pinning
- * the ends makes any shift, or a range that grew or shrank, fail here.
+ * Doc ref, then what the named symbol's body must contain. A ref is `file › symbol`, and
+ * `›` steps into a nested symbol (`gate.ts › createGate › decide`). A symbol is a function,
+ * class, interface, type, enum, const/let or method name; a quoted segment is a
+ * `describe`/`it` title prefix in a test file; `(module comment)` is the file's leading doc
+ * comment. One symbol can back several claims, each with its own regex. The regex must
+ * match the symbol's code with comments blanked; a third element `"comment"` marks a claim
+ * about a comment, which must then match only inside one.
  */
-const RANGE_ENDS: ReadonlyArray<readonly [string, string, string]> = [
-  ["gate.ts:465-468", "export interface Assignment {", "}"],
-  ["api.ts:136-145", "export interface GateRequest {", "}"],
-  ["api.ts:354-416", "export function parseGateRequest(raw: unknown): ParsedRequest {", "}"],
-  ["mcp-server.ts:180-206", "export function serveStdio(", "}"],
-  ["api.ts:161-201", "export interface GateResult {", "}"],
-  ["mcp-server.ts:100-106", "return {", "},"],
-  ["cli.ts:110-146", "function operatorGate(flags: Flags, stderr: Writable) {", "}"],
-  ["api.ts:370-377", "const unknown = keys.filter((key) => !ALLOWED_FIELDS.has(key));", "};"],
-  ["sealed.ts:148-165", "export function createSealedGate(config: SealedGateConfig): Gate {", "}"],
-  ["gate.ts:747-756", "if (taskId !== assignment.taskId || runId !== assignment.runId) {", "}"],
+const ANCHORS: ReadonlyArray<readonly [string, RegExp] | readonly [string, RegExp, "comment"]> = [
+  // Threat model and authz design
+  ["gate.ts › Assignment", /export interface Assignment/],
+  ["gate.ts › GateConfig", /readonly assignment: Assignment/],
+  ["gate.ts › GateConfig", /readonly onDecision\?/],
+  ["api.ts › GateRequest", /export interface GateRequest/],
+  ["api.ts › parseGateRequest", /export function parseGateRequest/],
+  ["mcp-server.ts › serveStdio", /export function serveStdio/],
+  ["gate.ts › STATE_FILE_LIMIT", /STATE_FILE_LIMIT = 16 \* 1024 \* 1024/],
+  ["gate.ts › fileEvidenceReader › read", /opened\.size > STATE_FILE_LIMIT/],
+  ["api.ts › GateResult", /export interface GateResult/],
+  ["mcp-server.ts › callTool", /structuredContent: result/],
+  ["cli.ts › operatorGate", /function operatorGate/],
+  ["api.ts › parseGateRequest", /unknown request field\(s\): \$\{unknown\.join/],
+  ["sealed.ts › createSealedGate", /export function createSealedGate/],
   [
-    "gate.ts:711-725",
-    "if (!config.onDecision) return result;",
-    '`decision log write failed: $\u007bdiagnose("decision-log", error)}`,',
+    "gate.ts › createGate › decide",
+    /taskId !== assignment\.taskId \|\| runId !== assignment\.runId/,
   ],
-  ["cli.ts:79-92", "function parseFlags(argv: readonly string[]): Flags | string {", "}"],
-  ["cli.ts:176-186", 'case "check": {', "});"],
+  ["gate.ts › createGate › finish", /await config\.onDecision\(result\)/],
+  // D4: CLI scope
+  ["cli.ts › parseFlags", /function parseFlags\(argv/],
+  ["cli.ts › main", /gate\.check\(\{\s*taskId: task,\s*runId: run/],
+  ["cli.ts › operatorGate", /loadTasksFile\(tasksFile\)/],
+  // H-01 (fixed by #520, merged)
+  ["stdio-frame.ts › MAX_FRAME_BYTES", /export const MAX_FRAME_BYTES = 1024 \* 1024;/],
+  ["stdio-frame.ts › OVERSIZED_FRAME_LINE", /OVERSIZED_FRAME_LINE = '\{"id":null\}'/],
+  ["myco-gate.ts › stdin", /boundFrames\(process\.stdin/],
+  ["mcp-server.ts › serveStdio", /createInterface\(/],
+  ["mcp-server.ts › handleLine", /export async function handleLine/],
+  ["api.ts › parseGateRequest", /record\.claim\.length > CLAIM_LIMIT/],
+  // H-02
+  ["mcp-server.ts › callTool", /unknown tool: \$\{params\.name\}/],
+  ["mcp-server.ts › handleLine", /method not found: \$\{request\.method\}/],
+  // H-03
+  ["api.ts › parseGateRequest", /claim is longer than/],
+  ["cli.ts › operatorGate", /appendFileSync\(audit/],
+  ["api.ts › GateRequest", /never read by the oracle/, "comment"],
+  // H-04
+  ["corrections.ts › documentCorrections", /chars\.slice\(0, CORRECTION_VALUE_LIMIT\)/],
+  // H-05
+  ["gate.ts › createGate › check", /async check\(raw\)/],
+  ["cli.ts › main", /serveStdio\(gate, io\.stdin, io\.stdout/],
+  ["multistep.ts › MultiStepTrialRecord", /retryBudget: 0 \| 1/],
+  ["multistep.ts › runMultiStepTrial", /retryBudget must be 0 or 1/],
+  ["mcp-server.ts › serveStdio", /chain = chain\.then\(/],
+  ["sealed.ts › BEFORE_CAPTURE", /BEFORE_CAPTURE = new Set/],
+  ["sealed.ts › sealedEvidenceReader › read", /no sealed capture yet/],
+  // H-06
   [
-    "cli.ts:118-119",
-    'const tasksFile = str(flags, "--tasks");',
-    "if (tasksFile !== undefined) entries.push(...loadTasksFile(tasksFile));",
+    "sealed.ts › sealedEvidenceReader › read",
+    /bytes\.length > STATE_FILE_LIMIT[\s\S]*cause: "unreadable"/,
   ],
-  ["mcp-server.ts:111-174", "export async function handleLine(", "}"],
-  ["api.ts:398-407", 'if (record.claim !== undefined && typeof record.claim !== "string") {', "};"],
+  ["sealed.ts › sealedEvidenceReader › read", /if \(bytes\.length > STATE_FILE_LIMIT\)/],
+  ["vault.ts › VerdictVault › readChecked", /readFileSync\(path\)/],
+  // H-07, H-08
+  ["api.ts › ID", /\^\[A-Za-z0-9\]\[A-Za-z0-9\._-\]\{0,127\}\$/],
+  ["sealed.ts › sealedEvidenceReader › read", /openForTrial\(vault, binding, runId\)/],
+  ["gate.ts › createGate", /const assignment = \{ \.\.\.config\.assignment \}/],
+  ["gate.ts › fileEvidenceReader", /const segments = \[runId, \.\.\.stateFile\.split/],
+  ["vault.ts › VerdictVault › seal", /existsSync\(dir\)/],
+  // H-09
+  ["mcp-server.ts › serveStdio", /\} catch \{[\s\S]*code: -32603/],
   [
-    "corrections.ts:241-246",
-    "const truncated = chars.length > CORRECTION_VALUE_LIMIT;",
-    "...(truncated ? { observedTruncated: true as const } : {}),",
+    'input-fuzz.test.ts › "H-09: a deeply nested JSON-RPC id"',
+    /-32603 from serveStdio[\s\S]*code: -32603/,
   ],
-  ["gate.ts:941-953", "async check(raw) {", "},"],
-  ["cli.ts:194-198", 'case "mcp": {', "}"],
+  // H-10..H-15
+  ["vault.ts › VerdictVault › runDir", /join\(this\.root, runId\)/],
+  ["vault.ts › SealReceipt", /export interface SealReceipt/],
+  ["ledger.ts › appendChainedRow", /export function appendChainedRow/],
+  ["vault.ts › VaultOptions", /export interface VaultOptions/],
+  ["vault.ts › SealInput", /sourceFiles: readonly string\[\]/],
+  ["sealed.ts › (module comment)", /Agent-facing details carry `integrity:<code>` only/, "comment"],
   [
-    "multistep.ts:111-112",
-    "if (options.retryBudget !== 0 && options.retryBudget !== 1)",
-    "throw new Error(`retryBudget must be 0 or 1, got $\u007bString(options.retryBudget)}`);",
-  ],
-  [
-    "sealed.ts:106-111",
-    "const early = codes.length > 0 && codes.every((code) => BEFORE_CAPTURE.has(code));",
-    '? `no sealed capture yet: the gate decides from the host capture taken after the agent stops ($\u007bcodes.join(", ")})`',
-  ],
-  ["sealed.ts:117-133", "const { persisted } = opened.inputs;", "return { ok: true, bytes };"],
-  ["api.ts:328-333", "const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;", "}"],
-  [
-    "gate.ts:377-387",
-    "export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): EvidenceReader {",
-    "const first = walk(absoluteRoot, segments, where, hooks.beforeLstat);",
-  ],
-  ["mcp-server.ts:195-198", "} catch {", "}"],
-  [
-    "input-fuzz.test.ts:348-380",
-    'it("H-09: a deeply nested JSON-RPC id is -32603 from serveStdio, and the next request is served", async () => {',
-    "expect(spy.reads).toBe(2);",
-  ],
-  ["vault.ts:303-305", "private runDir(runId: string): string {", "return join(this.root, runId);"],
-  [
-    "vault.ts:98-102",
-    "/** Held in harness memory from seal to verdict; the agent never sees it. */",
-    "}",
-  ],
-  ["ledger.ts:41-53", "export function appendChainedRow(", "}"],
-  ["vault.ts:251-262", "export interface VaultOptions {", "}"],
-  [
-    "sealed.ts:20-21",
-    "* Agent-facing details carry `integrity:<code>` only (#478/#480): a violation's path can be",
-    "* an absolute host path. The full violations go to the operator through `onIntegrity`.",
-  ],
-  [
-    "gate.test.ts:654-750",
-    'describe("gate: the assignment binds the gate to one trial (round 1 D1)", () => {',
-    "});",
-  ],
-  [
-    "sealed-gate.test.ts:334-395",
-    "describe(\"the agent's run id never selects another trial's sealed bytes\", () => {",
-    "});",
-  ],
-  [
-    "vault.ts:328-331",
-    "for (const path of input.oracle.sourceFiles) {",
-    "sources[path] = sha256(readFileSync(path));",
-  ],
-  ["gate.ts:470-499", "export interface GateConfig {", "}"],
-  [
-    "families.ts:189-190",
-    "function targetReason(ref: string, edit: CellEdit): string {",
-    "return `TARGET_MISMATCH: cell $\u007bref} ($\u007bwhere(edit)}) does not hold the requested value`;",
+    'gate.test.ts › "gate: the assignment binds the gate to one trial"',
+    /function spyReader[\s\S]*invalid gate assignment/,
   ],
   [
-    "calc-document.ts:210-212",
-    "export function collateralReason(collateral: readonly string[]): string {",
-    "}",
+    "sealed-gate.test.ts › \"the agent's run id never selects another trial's sealed bytes\"",
+    /naming an earlier honest trial is ASSIGNMENT_MISMATCH/,
   ],
+  ["vault.ts › VerdictVault › seal", /oracle source \$\{path\} is not absolute/],
+  ["gate.ts › GateConfig", /export interface GateConfig/],
+  // H-16
+  ["gate.ts › createGate › decide", /reasons: \[\.\.\.valid\.reasons\]/],
+  ["families.ts › targetReason", /TARGET_MISMATCH: cell \$\{ref\}/],
+  ["calc-document.ts › collateralReason", /DOCUMENT_COLLATERAL: \$\{collateral\.length\}/],
+  ["families.ts › calcRecordEditFamily › decide", /persisted as \$\{JSON\.stringify\(newValue\)\}/],
+  ["gate.ts › createGate › decide", /could not look: \$\{read\.detail\}/],
+  ["gate.ts › bindDescriptorPath", /descriptor path check/],
+  ["gate.ts › createGate › decide", /could not look: \$\{corrupt\.message\}/],
+  ["gate.ts › EvidenceReader", /must name paths relative to the run/, "comment"],
+  ["gate.ts › bindDescriptorPath", /const shown = actual\.startsWith\(`\$\{realRoot\}\/`\)/],
+  ["reasons.ts › errorCode", /export function errorCode\(error: unknown\): string/],
+  ["gate.ts › fileEvidenceReader › read", /open failed: \$\{errorCode\(error\)\}/],
+  ["gate.ts › fileEvidenceReader › read", /read failed: \$\{errorCode\(error\)\}/],
+  ["gate.ts › createGate › diagnose", /function diagnose\([\s\S]*errorCode\(error\)/],
+  // H-17
   [
-    "gate.ts:318-325",
-    "// Report the path relative to the root: reasons reach the agent, host paths need not.",
-    "detail: `$\u007bwhere}: the opened file is at $\u007bshown}, not at $\u007bwhere} (descriptor path check)`,",
+    "gate.ts › createGate › decide",
+    /kind: "sealed-fixture",[\s\S]*path: sealed\.file,[\s\S]*sha256: digest/,
   ],
-  [
-    "gate.ts:197-201",
-    '* `detail` of a failed outcome reaches the agent (as "could not look: <detail>"), so it',
-    "*/",
-  ],
-  [
-    "gate.ts:318-321",
-    "// Report the path relative to the root: reasons reach the agent, host paths need not.",
-    ': "a path outside the evidence root";',
-  ],
-  [
-    "gate.ts:661-669",
-    'function diagnose(stage: GateDiagnostic["stage"], error: unknown): string {',
-    "}",
-  ],
-  ["gate.ts:839-845", "const digest = sha256(got.bytes);", "bytes: got.bytes.length,"],
 ];
 
-function lineAt(ref: string, which: "first" | "last"): string {
-  const match = /^([\w.-]+\.ts):(\d+)-(\d+)$/.exec(ref);
-  if (!match) throw new Error(`not a range ${ref}`);
-  const [, name, from, to] = match as unknown as [string, string, string, string];
-  const file = FILES[name];
-  if (!file) throw new Error(`no file for ${name}`);
-  const lines = readFileSync(repo(file), "utf8").split("\n");
-  return (lines[Number(which === "first" ? from : to) - 1] ?? "").trim();
+/** `file › symbol` refs in the doc, optionally under a `src/…/` or `test/…/` path. */
+const SYMBOL_REF =
+  /`((?:[\w.-]+\/)*)([\w.-]+\.ts)((?: › (?:[\w$]+|"[^"`]+"|\(module comment\)))+)`/g;
+
+/** The name a declaration introduces, or a test block's title. */
+function declaredName(node: ts.Node): string | undefined {
+  // An overload signature has no body: the implementation is the declaration.
+  if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && !node.body) {
+    return undefined;
+  }
+  if (
+    (ts.isFunctionDeclaration(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isInterfaceDeclaration(node) ||
+      ts.isTypeAliasDeclaration(node) ||
+      ts.isEnumDeclaration(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isVariableDeclaration(node)) &&
+    node.name &&
+    ts.isIdentifier(node.name)
+  ) {
+    return node.name.text;
+  }
+  if (
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    ["describe", "it", "test"].includes(node.expression.text) &&
+    node.arguments[0] &&
+    ts.isStringLiteralLike(node.arguments[0])
+  ) {
+    return JSON.stringify(node.arguments[0].text);
+  }
+  return undefined;
 }
 
-function cited(ref: string): string {
-  const match = /^([\w.-]+\.ts):(\d+)(?:-(\d+))?$/.exec(ref);
-  if (!match) throw new Error(`bad ref ${ref}`);
-  const [, name, from, to] = match as unknown as [string, string, string, string | undefined];
-  const file = FILES[name];
-  if (!file) throw new Error(`no file for ${name}`);
-  const lines = readFileSync(repo(file), "utf8").split("\n");
-  const first = Number(from);
-  const last = to === undefined ? first : Number(to);
-  expect(last, `${ref}: past the end of ${file}`).toBeLessThanOrEqual(lines.length);
-  return lines.slice(first - 1, last).join("\n");
+function matchesSegment(node: ts.Node, segment: string): boolean {
+  const name = declaredName(node);
+  if (name === undefined) return false;
+  // A quoted segment is a title prefix: `"H-09: a deeply nested"` names that `it` block.
+  return segment.startsWith('"') ? name.startsWith(segment.slice(0, -1)) : name === segment;
 }
 
-describe("the security review's file:line refs hold on main (D1)", () => {
-  it.each(ANCHORS)("%s holds %s", (ref, anchor) => {
-    expect(DOC, `the doc no longer cites ${ref}`).toContain(ref);
-    expect(cited(ref)).toMatch(anchor);
+/**
+ * The nodes under `root` that `segment` names. A name is looked up among `root`'s own
+ * members: the search does not enter another named declaration (a local `seal` inside
+ * `VerdictVault › verify` is not `VerdictVault › seal`). A quoted test title is searched at
+ * any depth.
+ */
+function findNamed(root: ts.Node, segment: string): ts.Node[] {
+  const found: ts.Node[] = [];
+  const anyDepth = segment.startsWith('"');
+  const visit = (node: ts.Node) => {
+    if (matchesSegment(node, segment)) found.push(node);
+    else if (anyDepth || declaredName(node) === undefined) ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(root, visit);
+  return found;
+}
+
+/**
+ * `text` with every comment blanked to spaces (newlines kept), so offsets still line up.
+ * Comments are found in the trivia before each token in the AST, so `//` or `/*` inside
+ * a string or template literal is code, not a comment.
+ */
+const BLANKED = new Map<string, string>();
+function blankComments(source: ts.SourceFile): string {
+  const cached = BLANKED.get(source.fileName);
+  if (cached !== undefined) return cached;
+  const text = source.getFullText();
+  // UTF-16 units, as TypeScript's offsets count them (a spread would split by code point).
+  const chars = text.split("");
+  const blank = (pos: number, end: number) => {
+    for (let i = pos; i < end; i++) if (chars[i] !== "\n") chars[i] = " ";
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isJSDoc(node)) return;
+    const children = node.getChildren(source);
+    if (children.length === 0 || node.kind === ts.SyntaxKind.EndOfFileToken) {
+      // Trivia before a token holds comments on the previous token's line ("trailing", in
+      // TypeScript's terms) and comments on later lines ("leading"): blank both.
+      ts.forEachTrailingCommentRange(text, node.getFullStart(), blank);
+      ts.forEachLeadingCommentRange(text, node.getFullStart(), blank);
+    }
+    for (const child of children) visit(child);
+  };
+  visit(source);
+  // A source with no code at all (or a file comment) leaves trivia on the first token only.
+  ts.forEachLeadingCommentRange(text, 0, blank);
+  const blanked = chars.join("");
+  BLANKED.set(source.fileName, blanked);
+  return blanked;
+}
+
+/** The node's [start, end) from its leading `/** … *\/` comment, if any, to its end. */
+function bodyRange(source: ts.SourceFile, node: ts.Node): readonly [number, number] {
+  // A const's doc comment and `export` sit on its statement, not its declaration.
+  const outer =
+    ts.isVariableDeclaration(node) && ts.isVariableStatement(node.parent.parent)
+      ? node.parent.parent
+      : node;
+  const text = source.getFullText();
+  const docs = (ts.getLeadingCommentRanges(text, outer.getFullStart()) ?? []).filter((range) =>
+    text.startsWith("/**", range.pos),
+  );
+  const start = docs.at(-1)?.pos ?? outer.getStart(source);
+  return [start, outer.getEnd()];
+}
+
+/** A symbol's text: `full` with its comments, `code` with them blanked. */
+interface SymbolBody {
+  readonly full: string;
+  readonly code: string;
+}
+
+/**
+ * Resolves `file › a › b` to the text of symbol `b` inside `a`. Each step must name exactly
+ * one declaration: the first among the file's top-level statements (any depth for a quoted
+ * test title), later ones among the previous step's members.
+ */
+function symbolBody(ref: string): SymbolBody {
+  const [name, ...segments] = ref.split(" › ");
+  const file = FILES[name ?? ""];
+  if (!file || segments.length === 0) throw new Error(`bad ref ${ref}`);
+  const path = fileURLToPath(repo(file));
+  expect(existsSync(path), `${ref}: ${file} does not exist`).toBe(true);
+  const text = readFileSync(path, "utf8");
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  if (segments.length === 1 && segments[0] === "(module comment)") {
+    const first = ts.getLeadingCommentRanges(text, 0)?.[0];
+    expect(first && text.startsWith("/**", first.pos), `${ref}: no module comment`).toBe(true);
+    const full = text.slice(first?.pos, first?.end);
+    return { full, code: "" };
+  }
+  let node: ts.Node = source;
+  for (const [i, segment] of segments.entries()) {
+    const candidates =
+      i === 0 && !segment.startsWith('"')
+        ? source.statements.flatMap((statement): ts.Node[] =>
+            ts.isVariableStatement(statement)
+              ? statement.declarationList.declarations.filter((d) => matchesSegment(d, segment))
+              : matchesSegment(statement, segment)
+                ? [statement]
+                : [],
+          )
+        : findNamed(node, segment);
+    expect(candidates.length, `${ref}: ${segment} is declared ${candidates.length} times`).toBe(1);
+    node = candidates[0] as ts.Node;
+  }
+  const [start, end] = bodyRange(source, node);
+  return { full: text.slice(start, end), code: blankComments(source).slice(start, end) };
+}
+
+/** Every `file › symbol` ref the doc makes into FILES, with any directory prefix dropped. */
+const DOC_REFS = [...DOC.matchAll(SYMBOL_REF)]
+  .filter(([, , name]) => (name ?? "") in FILES)
+  .map(([, , name, path]) => `${name}${path}`);
+
+describe("the security review's symbol refs hold on main (D1)", () => {
+  it.each(ANCHORS)("%s holds %s", (ref, anchor, where?: "comment") => {
+    expect(DOC_REFS, `the doc no longer cites ${ref}`).toContain(ref);
+    const body = symbolBody(ref);
+    // Code by default: a comment that merely mentions the code does not count. An anchor
+    // that cites a comment says so, and must then match inside a comment.
+    if (where === "comment") {
+      expect(body.full).toMatch(anchor);
+      expect(body.code).not.toMatch(anchor);
+    } else {
+      expect(body.code).toMatch(anchor);
+    }
   });
 
-  it.each(RANGE_ENDS)("%s starts and ends where the doc says (V6)", (ref, first, last) => {
-    expect(lineAt(ref, "first"), `${ref}: first line moved`).toBe(first);
-    expect(lineAt(ref, "last"), `${ref}: last line moved`).toBe(last);
-  });
-
-  it("every cited range has both ends pinned", () => {
-    const ended = new Set(RANGE_ENDS.map(([ref]) => ref));
-    const ranges = ANCHORS.map(([ref]) => ref).filter((ref) => /:\d+-\d+$/.test(ref));
-    expect(ranges.filter((ref) => !ended.has(ref))).toEqual([]);
-    expect([...ended].filter((ref) => !ranges.includes(ref))).toEqual([]);
-  });
-
-  it("every ref the doc makes into these files is pinned above", () => {
+  it("every symbol ref the doc makes into these files is pinned above", () => {
     const pinned = new Set(ANCHORS.map(([ref]) => ref));
-    const refs = [...DOC.matchAll(/([\w.-]+\.ts):(\d+(?:-\d+)?)/g)]
-      .map(([, name, lines]) => `${name}:${lines}`)
-      .filter((ref) => (ref.split(":")[0] ?? "") in FILES);
-    expect(refs.length).toBeGreaterThan(50);
-    expect(refs.filter((ref) => !pinned.has(ref))).toEqual([]);
-    // A bare `:NNN` ref would dodge the sweep: every ref names its file.
+    expect(new Set(DOC_REFS).size).toBeGreaterThan(40);
+    expect(DOC_REFS.filter((ref) => !pinned.has(ref))).toEqual([]);
+  });
+
+  it("every symbol ref names a pinned file, or one allowlisted as unpinned", () => {
+    const unknown: string[] = [];
+    const cited = new Set<string>();
+    for (const [ref, dir = "", name = ""] of DOC.matchAll(SYMBOL_REF)) {
+      const full = `${dir}${name}`;
+      if (full in UNPINNED_FILES) {
+        cited.add(full);
+        continue;
+      }
+      // A directory prefix must be the pinned file's own path, not just end in its name.
+      const pinned = FILES[name];
+      if (!pinned || (dir !== "" && pinned !== full)) unknown.push(ref);
+    }
+    expect(unknown).toEqual([]);
+    // An allowlist entry the doc no longer cites is stale.
+    expect([...cited].sort()).toEqual(Object.keys(UNPINNED_FILES).sort());
+  });
+
+  it("no line-number ref is left: every code ref is by symbol", () => {
+    // Line refs broke on every unrelated edit to a gate file (#519 after #534, #542, #535).
+    expect(DOC).not.toMatch(/\.ts:\d/);
+    // A bare `:NNN` ref would name no file at all.
     expect(DOC).not.toMatch(/`:\d/);
+    // A `›` ref the sweep above cannot parse would dodge it.
+    const parsed = [...DOC.matchAll(SYMBOL_REF)].length;
+    expect(DOC.match(/`[^`]*› [^`]*`/g)?.length ?? 0).toBe(parsed);
+  });
+
+  it("anchors match code: every comment is blanked, and only comments", () => {
+    const sub = "$" + "{1}"; // a template substitution, spelled so it is not one here
+    const text = [
+      "/** doc A */",
+      "function f() {",
+      // A character outside the BMP is two UTF-16 units: offsets after it must still line up.
+      '  const a = g("\u{1F344}", // trailing B',
+      "    // own-line C",
+      `    "// in a string", \`/* in a template ${sub} */\`); /* block D */`,
+      "  return a; }",
+      "// end E",
+    ].join("\n");
+    const code = blankComments(ts.createSourceFile("blank-probe.ts", text, ts.ScriptTarget.Latest));
+    expect(code).toHaveLength(text.length);
+    expect(code.split("\n")).toHaveLength(text.split("\n").length);
+    for (const comment of ["doc A", "trailing B", "own-line C", "block D", "end E"]) {
+      expect(code).not.toContain(comment);
+    }
+    expect(code.replace(/\s+/g, " ").trim()).toBe(
+      `function f() { const a = g("\u{1F344}", "// in a string", \`/* in a template ${sub} */\`); return a; }`,
+    );
+  });
+
+  it("the resolver rejects a symbol that is not declared, or declared twice", () => {
+    expect(() => symbolBody("gate.ts › noSuchSymbol")).toThrow(/declared 0 times/);
+    expect(() => symbolBody("gate.ts › createGate › noSuchSymbol")).toThrow(/declared 0 times/);
+    // A local `const seal` in another method is not a member of the class.
+    expect(() => symbolBody("vault.ts › VerdictVault › seal")).not.toThrow();
+    expect(() => symbolBody('gate.test.ts › "gate: "')).toThrow(/declared \d{2,} times/);
   });
 
   it("re-anchors the status line past #514, #511, #520, #521, #522, #523 and #512", () => {
@@ -378,12 +475,12 @@ describe("the security review's file:line refs hold on main (D1)", () => {
       "mcp-server.ts:65",
       "mcp-server.ts:162-166",
       "mcp-server.ts:154-175",
-      "api.ts:280-287",
-      "api.ts:280-288",
-      "api.ts:311",
-      "api.ts:238-243",
-      "api.ts:264-330",
-      "api.ts:308-327",
+      "api.ts:270-277",
+      "api.ts:270-278",
+      "api.ts:301",
+      "api.ts:228-233",
+      "api.ts:254-316",
+      "api.ts:298-313",
       "gate.ts:599",
       "gate.ts:673-682",
       "gate.ts:639-654",
@@ -477,8 +574,10 @@ describe("the security review names no merged PR as open or pending (D1')", () =
 
   it("H-16's 'no host path' cites the enforcement, not only the rule's doc comment", () => {
     const h16 = FLAT.slice(FLAT.indexOf("### H-16:"), FLAT.indexOf("### H-17:"));
-    expect(h16).toContain("strips the evidence root before it names a path (`gate.ts:318-321`)");
-    expect(h16).toContain("`errorCode`, `reasons.ts:22`");
+    expect(h16).toContain(
+      "strips the evidence root before it names a path (`gate.ts › bindDescriptorPath`)",
+    );
+    expect(h16).toContain("`errorCode`, `reasons.ts › errorCode`");
   });
 
   it("H-06 says the sealed size cap has landed (#521), and the vault side stays deferred", () => {
@@ -541,7 +640,7 @@ describe("the security review records what round 1 missed", () => {
     expect(FLAT).not.toContain("about 250 times");
     expect(FLAT).toContain("about 43 times the largest valid request");
     expect(FLAT).toContain(
-      "`ASSIGNMENT_MISMATCH` (`gate.ts:747-756`) also echoes the agent's task and run ids",
+      "`ASSIGNMENT_MISMATCH` (`gate.ts › createGate › decide`) also echoes the agent's task and run ids",
     );
   });
 });
