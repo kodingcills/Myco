@@ -19,3 +19,21 @@ or changed.
 
 The 151 s total falls within the trial-base-v2 range from the same-session bench
 (140–163 s, `../tif-98-trial-base-v2-2026-11-26-run3/`).
+
+## Round 2: the drivers' reset path, against the real reset
+
+Started at 2026-11-26T16:25:47Z (`round2-started.txt`). It ran under `vm-session.sh`, with
+`MYCO_TRIAL_SNAPSHOT` and `MYCO_COMPARISON_RUN` unset, and called the same functions the M1
+drivers now use (`scripts/trial-snapshot.sh`):
+
+| step | result | file |
+|---|---|---|
+| `SNAP=$(ts_resolve)` | `trial-base-v2` | `06-round2-ts-result.txt` |
+| `ts_reset "$SNAP" …` | `rc=0 snap=trial-base-v2 ready=trial-base-v2`: the parser read the real `ready on 'trial-base-v2'` line; total 27 s | `05-round2-ts-reset.log`, `06-round2-ts-result.txt` |
+| `guest-egress.sh verify` | `egress closed … UTM config matches` | `07-round2-egress-verify.log` |
+| `guest-egress.sh probe` | all 5 targets failed | `08-round2-probe.json` |
+| `vm.sh stop`, by request | VM stopped, lock released; snapshots unchanged | — |
+
+This reset's 27 s total is recorded as measured. It is outside the same-session bench range
+(140-163 s) and like the fast resets #494 recorded and left unexplained (its TO FILE item 3). This
+evidence does not explain it.
