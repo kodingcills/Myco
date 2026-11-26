@@ -38,6 +38,7 @@ jobs:
       launcher: ${{ steps.plan.outputs.launcher }}
       doc_tests: ${{ steps.plan.outputs.doc_tests }}
       smoke: ${{ steps.plan.outputs.smoke }}
+      scanners: ${{ steps.plan.outputs.scanners }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -130,6 +131,7 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           PLAN_MODE: ${{ needs.plan.outputs.mode }}
           PLAN_LAUNCHER: ${{ needs.plan.outputs.launcher }}
+          PLAN_SCANNERS: ${{ needs.plan.outputs.scanners }}
         run: |
           # Fail safe: only a successful plan naming a known narrow mode narrows anything.
           # `case` matches the whole value; `grep -x` would accept any one line of it.
@@ -137,6 +139,11 @@ jobs:
           case "$mode" in full | targeted | docs) known=yes ;; *) known=no ;; esac
           if [ "$PLAN_RESULT" != "success" ] || [ "$known" != yes ]; then
             echo "plan job '$PLAN_RESULT' (mode '$mode'): running the full suite (fail safe)"
+            mode=full
+          fi
+          # A narrow mode must run the directory-scanning guards; with none listed, it cannot.
+          if [ "$mode" != full ] && [ -z "$PLAN_SCANNERS" ]; then
+            echo "plan mode '$mode' lists no directory-scanning tests: running the full suite (fail safe)"
             mode=full
           fi
           launcher=true
@@ -171,18 +178,22 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: pnpm exec vitest run --changed "$BASE_SHA" --passWithNoTests --exclude test/discovery/s0-live-launcher.test.ts
       # `pnpm test` runs the launcher test alone in a forked pool; `--changed` excludes it,
-      # so targeted mode reruns it the same way when src/discovery/ or test/discovery/ changed.
-      - name: Test (s0 launcher, forked, when discovery changed)
-        if: env.MODE == 'targeted' && env.LAUNCHER == 'true'
+      # so a narrow mode reruns it the same way when test/discovery/ changed or it is a
+      # directory-scanning test (it lists its run directory, so today: always).
+      - name: Test (s0 launcher, forked)
+        if: env.MODE != 'full' && env.LAUNCHER == 'true'
         run: pnpm exec vitest run --pool=forks --no-file-parallelism test/discovery/s0-live-launcher.test.ts
-      - name: Test (core smoke and doc tests)
+      # Directory-scanning guards (grader independence, hidden split, home paths, ...)
+      # never import what they scan, so `--changed` cannot select them: always run them.
+      - name: Test (core smoke, directory-scanning tests and doc tests)
         if: env.MODE != 'full'
         env:
           SMOKE: ${{ needs.plan.outputs.smoke }}
+          SCANNERS: ${{ needs.plan.outputs.scanners }}
           DOC_TESTS: ${{ needs.plan.outputs.doc_tests }}
         run: |
           # shellcheck disable=SC2086 # space-separated file lists, written by scripts/ci-plan.py
-          pnpm exec vitest run $SMOKE $DOC_TESTS
+          pnpm exec vitest run $SMOKE $SCANNERS $DOC_TESTS
       - name: Schema validate
         if: env.MODE == 'targeted'
         run: pnpm schema-validate

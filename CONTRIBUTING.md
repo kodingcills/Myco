@@ -74,9 +74,11 @@ once before you open the PR. CI does the same split: see
 | `agent/` | `cd agent && pip install -e . pytest && pytest -v` |
 | `runtime/` | `cd runtime && cargo test -p myco-rt-agent` (its confinement tests run only on Linux) |
 | docs only | `pnpm exec vitest run test/no-home-paths.test.ts`, plus any test that names the doc |
+| the directory-scanning guards CI always runs on a narrow PR | `pnpm exec vitest run $(python3 scripts/ci-plan.py --event pull_request --files docs/new-note.md \| sed -n 's/^scanners=//p')` |
 
 `python3 scripts/ci-plan.py --event pull_request --files $(git diff --name-only origin/main...HEAD)`
-prints which CI mode your branch gets and the smoke set it runs. A Tier 2 PR always gets
+prints which CI mode your branch gets, the smoke set and the directory-scanning tests it
+runs. Any change under `src/` or `viewer/src/` gets the full suite. A Tier 2 PR always gets
 the full suite in CI: state `Tier: 2` in the body, as the template asks, or add the
 `tier-2` label.
 

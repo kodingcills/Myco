@@ -9,8 +9,17 @@ Modes, strongest first:
 
   full      everything, exactly as before this planner existed
   targeted  typecheck + lint + build, the vitest files related to the change
-            (`vitest run --changed <base>`), the core smoke set, schema-validate
-  docs      the core smoke set plus the test files that name a changed doc
+            (`vitest run --changed <base>`), the core smoke set, every
+            directory-scanning test, schema-validate
+  docs      the core smoke set, every directory-scanning test, and the test files
+            that name a changed doc
+
+Only test-only and docs-only changes are ever narrowed. Every change under src/ or
+viewer/src/ runs the full suite (verifier round 2 D7: guard tests that scan a source
+directory, such as the hcu+shell import boundary and the hidden-split leak check, never
+import the module they guard, so `vitest run --changed` cannot find them). And because a
+guard can scan test/ or docs/ too, every directory-scanning test (see scanning_tests)
+runs in targeted and docs mode, whatever changed.
 
 Fail safe: anything not positively classified as safe to narrow forces `full`.
 `full` is forced by
@@ -20,7 +29,8 @@ Fail safe: anything not positively classified as safe to narrow forces `full`.
   - a PR title or a body line that states Tier 2 ("Tier: 2", "**Tier 2**", ...)
   - a changed path in a Tier 2 or tooling class (TIER2 / TOOLING below; all of
     scripts/ and src/benchmark/ are Tier 2)
-  - TypeScript outside the NARROWABLE_TS allowlist (a new src/ subtree included)
+  - any change under src/ or viewer/src/ (SOURCE)
+  - TypeScript outside the NARROWABLE_TS allowlist (test/ and viewer/test/)
   - TypeScript a spawned script can reach: any scripts/**/*.ts imports it
     (transitively), or a file some source names outside an import reaches it, or
     some source names its file name outside an import (a spawn or an fs read that
@@ -29,6 +39,7 @@ Fail safe: anything not positively classified as safe to narrow forces `full`.
     binaries ...): vitest cannot see fs-read dependencies
   - a doc that a non-test source names (a script may check it)
   - a diff that could not be computed, or one over MAX_FILES files
+  - no test sources could be read (the directory-scanning set would be empty)
 
 Standard library only. `python3 scripts/ci-plan.py --help` for local use.
 """
@@ -89,6 +100,16 @@ TIER2 = (
     "test/baseline/run-lock.test.ts",
     "test/baseline/spend-ceiling.test.ts",
     "test/baseline/secret-file.test.ts",
+    # Directory-scanning guards (verifier round 2 D7): grader independence, the hidden
+    # split, required instructions, the probe directory, home paths, claim isolation.
+    "test/baseline/hcu-shell/import-boundary.test.ts",
+    "test/baseline/import-graph.test.ts",
+    "test/baseline/instruction-required.test.ts",
+    "test/baseline/probe-directory.test.ts",
+    "test/foundry/split.test.ts",
+    "test/foundry/hidden-split.test.ts",
+    "test/no-home-paths.test.ts",
+    "test/claim-isolation.test.ts",
     "test/evidence.test.ts",
     "test/faults.test.ts",
     "test/vm-lock.test.ts",
@@ -113,27 +134,23 @@ TOOLING = (
     "viewer/tsconfig",
 )
 
-# The only TypeScript that may be narrowed with `vitest run --changed`: an explicit
-# allowlist. TypeScript anywhere else (a new src/ subtree included) forces `full`. Even
-# here, a file a spawned script can reach, or that any source names as a file outside an
-# import, forces `full` (see spawn_reach / named_outside_imports).
+# Product source: every change here runs the full suite (verifier round 2 D7). Guard
+# tests read these trees with readdirSync/globSync/ts.createSourceFile instead of
+# importing them, so no import graph links a source file to the guard that checks it.
+SOURCE = ("src/", "viewer/src/")
+
+# The only TypeScript that may be narrowed with `vitest run --changed`: test files and
+# test helpers. Even here, a file a spawned script can reach, or that any source names as
+# a file outside an import, forces `full` (see spawn_reach / named_outside_imports).
 NARROWABLE_TS = (
-    "src/baseline/",
-    "src/discovery/",
-    "src/fake/",
-    "src/foundry/",
-    "src/linux/",
-    "src/setup/",
-    "src/tasks/",
     "test/",
-    "viewer/src/",
     "viewer/test/",
 )
 TS_EXT = (".ts", ".tsx", ".mts")
 
 # Always run in targeted and docs mode: fast (about 5 s together) and they cover the
 # evidence schema, claim isolation, gate integrity, verifier, recovery, faults and the
-# R5 oracle self-test. Kept in sync with docs/ci.md.
+# R5 oracle self-test. Kept in sync with docs/ci.md (test_ci_plan.py pins both).
 SMOKE = (
     "test/claim-isolation.test.ts",
     "test/eval.test.ts",
@@ -179,6 +196,7 @@ class Plan:
     m2: bool = True
     launcher: bool = True
     doc_tests: list[str] = field(default_factory=list)
+    scanners: list[str] = field(default_factory=list)
 
     def outputs(self) -> dict[str, str]:
         return {
@@ -189,6 +207,7 @@ class Plan:
             "launcher": str(self.launcher).lower(),
             "doc_tests": " ".join(self.doc_tests),
             "smoke": " ".join(SMOKE),
+            "scanners": " ".join(self.scanners),
         }
 
 
@@ -197,12 +216,14 @@ def starts(path: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def classify(path: str) -> str:
-    """By path alone, one of: tier2, tooling, docs, ts, unknown. Only docs and ts can be
-    narrowed; plan() still forces full for a ts file a spawned script can reach."""
+    """By path alone, one of: tier2, tooling, source, docs, ts, unknown. Only docs and ts
+    can be narrowed; plan() still forces full for a ts file a spawned script can reach."""
     if starts(path, TIER2):
         return "tier2"
     if starts(path, TOOLING):
         return "tooling"
+    if starts(path, SOURCE):
+        return "source"
     if path.endswith(".md"):
         return "docs"
     if starts(path, NARROWABLE_TS) and path.endswith(TS_EXT):
@@ -278,6 +299,58 @@ def spawn_reach(sources: dict[str, str]) -> dict[str, str]:
     return reach
 
 
+# A directory listing or a tree walk, in any language a test can run: node fs, globs, the
+# TypeScript compiler's readDirectory, Python's os.walk/listdir/scandir/glob/pathlib, git's
+# file listings, and find/rg/grep run as a subprocess.
+SCAN_API = re.compile(
+    r"\b(?:readdirSync|readdir|opendirSync|opendir|globSync|glob|readDirectory|listdir|scandir|rglob|iterdir)\b"
+    r"|\bos\.walk\b|\bls-files\b|\bls-tree\b|[\"'](?:find|rg|grep)[\"']"
+)
+TEST_FILE = re.compile(r"\.test\.(?:ts|tsx|mts)$")
+SPAWNED_NAME = re.compile(r"(?<![\w.-])([\w.-]+\.(?:ts|mts|tsx|py|sh))(?![\w-])")
+SPAWN_ROOTS = ("scripts/", "schemas/")
+
+
+def scanning_tests(sources: dict[str, str]) -> list[str]:
+    """Every test file (test/, viewer/test/) that lists or walks a directory, itself or
+    through what it loads: its relative imports, transitively, and any scripts/ or
+    schemas/ file it names outside an import (a script it spawns), with that script's own
+    imports and spawns. A guard that scans src/, test/ or docs/ never imports what it
+    scans, so `vitest run --changed` cannot select it; targeted and docs mode run all of
+    these instead. Mechanical on purpose: a new scanning test joins without a list edit."""
+    files = set(sources)
+    by_base: dict[str, list[str]] = {}
+    for f in files:
+        if f.startswith(SPAWN_ROOTS):
+            by_base.setdefault(os.path.basename(f), []).append(f)
+    scans = {f for f, text in sources.items() if f != SELF and SCAN_API.search(text)}
+    memo: dict[str, bool] = {}
+
+    def reaches_scan(start: str) -> bool:
+        seen, queue = {start}, [start]
+        while queue:
+            cur = queue.pop()
+            if cur in scans or memo.get(cur):
+                return True
+            text = sources.get(cur, "")
+            deps = [resolve_import(cur, m.group(3), files) for m in IMPORT_SPEC.finditer(text)]
+            for name in set(SPAWNED_NAME.findall(strip_imports(text))):
+                deps += by_base.get(name, [])
+            for dep in deps:
+                if dep and dep != SELF and dep not in seen:
+                    seen.add(dep)
+                    queue.append(dep)
+        return False
+
+    out = []
+    for f in sorted(files):
+        if is_test_file(f) and TEST_FILE.search(f):
+            memo[f] = reaches_scan(f)
+            if memo[f]:
+                out.append(f)
+    return out
+
+
 GENERIC_DOC_NAMES = {"README.md", "index.md", "CHANGELOG.md"}
 
 
@@ -341,7 +414,7 @@ def plan(
         return p
 
     classes = {f: classify(f) for f in files}
-    forcing = [f for f, c in classes.items() if c in ("tier2", "tooling", "unknown")]
+    forcing = [f for f, c in classes.items() if c in ("tier2", "tooling", "source", "unknown")]
     if forcing:
         shown = ", ".join(f"{f} ({classes[f]})" for f in forcing[:5])
         more = f" and {len(forcing) - 5} more" if len(forcing) > 5 else ""
@@ -349,6 +422,9 @@ def plan(
         return p
 
     srcs = sources if sources is not None else {}
+    if not any(is_test_file(f) for f in srcs):
+        p.reasons.append("no test sources read (the directory-scanning guard set would be empty)")
+        return p
     ts_changed = [f for f, c in classes.items() if c == "ts"]
     if ts_changed:
         reach = spawn_reach(srcs)
@@ -371,7 +447,9 @@ def plan(
 
     p.linux_path = any(starts(f, LINUX_PATH) for f in files)
     p.m2 = any(starts(f, M2) for f in files)
-    p.launcher = any(starts(f, LAUNCHER_PATHS) for f in files)
+    scanners = scanning_tests(srcs)
+    p.launcher = any(starts(f, LAUNCHER_PATHS) for f in files) or LAUNCHER_TEST in scanners
+    p.scanners = [f for f in scanners if f not in SMOKE and f != LAUNCHER_TEST]
     p.doc_tests = sorted(doc_tests)
     if all(c == "docs" for c in classes.values()):
         p.mode = "docs"
@@ -453,6 +531,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write(f"### CI plan: `{result.mode}`\n\n- {outputs['reason']}\n")
             fh.write(f"- linux path: {outputs['linux_path']}, m2: {outputs['m2']}, launcher: {outputs['launcher']}\n")
+            fh.write(f"- directory-scanning tests: {len(result.scanners)}\n")
             if result.doc_tests:
                 fh.write(f"- doc tests: {outputs['doc_tests']}\n")
             if files is not None:

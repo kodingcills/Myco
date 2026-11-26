@@ -42,7 +42,11 @@ REQUIRED = {
     "secret scan (gitleaks)",
 }
 
+# One directory-scanning guard test: the planner refuses to narrow when it can find none.
+GUARD = {"test/guard.test.ts": 'readdirSync(join(ROOT, "src"), { recursive: true })'}
+
 SOURCES = {
+    **GUARD,
     "test/baseline/task-text.test.ts": 'readFileSync(join(process.cwd(), "docs/architecture/m1.md"))',
     "scripts/check-scorecard-links.py": "open('docs/eval-runbook.md')",
 }
@@ -52,9 +56,13 @@ def pr(files, labels=(), title="", body=""):
     return cp.plan("pull_request", list(files), list(labels), title, body, SOURCES)
 
 
+def with_guard(files, sources):
+    return cp.plan("pull_request", list(files), [], "", "", {**GUARD, **sources})
+
+
 def classify_reason(p):
     """The class named in a full-suite path-class reason, e.g. 'tier2'."""
-    m = re.search(r"\((tier2|tooling|unknown)\)", " ".join(p.reasons))
+    m = re.search(r"\((tier2|tooling|source|unknown)\)", " ".join(p.reasons))
     return m.group(1) if m else None
 
 
@@ -79,13 +87,22 @@ class Decisions(unittest.TestCase):
     def test_generic_doc_names_need_their_directory(self):
         # A nested README.md is named only when its directory is named too...
         sources = {"scripts/x.ts": 'join(dir, "README.md")'}
-        p = cp.plan("pull_request", ["docs/gate/README.md"], [], "", "", sources)
+        p = with_guard(["docs/gate/README.md"], sources)
         self.assertEqual((p.mode, p.doc_tests), ("docs", []))
         sources = {"scripts/x.ts": 'join("docs", "gate", "README.md")'}
-        self.assertEqual(cp.plan("pull_request", ["docs/gate/README.md"], [], "", "", sources).mode, "full")
+        self.assertEqual(with_guard(["docs/gate/README.md"], sources).mode, "full")
         # ...while the root README.md's full path is its basename, so naming it counts.
         sources = {"scripts/x.ts": 'join(dir, "README.md")'}
-        self.assertEqual(cp.plan("pull_request", ["README.md"], [], "", "", sources).mode, "full")
+        self.assertEqual(with_guard(["README.md"], sources).mode, "full")
+
+    def test_a_doc_a_script_names_only_by_basename_forces_full(self):
+        # Verifier round 2 O7: with the basename branch gone, these dropped to `docs`.
+        sources = {"scripts/x.ts": 'join(ROOT, "docs", "architecture", "runtime.md")'}
+        p = with_guard(["docs/architecture/runtime.md"], sources)
+        self.assertEqual(p.mode, "full")
+        self.assertIn("scripts/x.ts", p.reasons[0])
+        self.assertTrue(cp.names_doc("docs/architecture/runtime.md", 'join("docs", "architecture", "runtime.md")'))
+        self.assertFalse(cp.names_doc("docs/architecture/runtime.md", 'join("docs", "architecture")'))
 
     def test_a_doc_a_script_reads_forces_full(self):
         self.assertEqual(pr(["docs/eval-runbook.md"]).mode, "full")
@@ -125,10 +142,28 @@ class Decisions(unittest.TestCase):
             self.assertEqual(pr([f]).mode, "full", f)
 
     def test_typescript_outside_the_allowlist_forces_full(self):
-        # A new src/ subtree, or TypeScript outside any known root, is never narrowed.
-        for f in ("src/newarea/x.ts", "examples/x.ts", "x.ts", "viewer/e2e/viewer.pw.ts", "src/x.ts"):
-            self.assertEqual(pr([f]).mode, "full", f)
-        self.assertEqual(pr(["src/tasks/intent.ts"]).mode, "targeted")
+        # TypeScript outside test/ and viewer/test/ is never narrowed.
+        for f in ("examples/x.ts", "x.ts", "viewer/e2e/viewer.pw.ts"):
+            self.assertEqual((pr([f]).mode, cp.classify(f)), ("full", "unknown"), f)
+        self.assertEqual(pr(["test/tasks/intent.test.ts"]).mode, "targeted")
+        self.assertEqual(pr(["viewer/test/x.test.ts"]).mode, "targeted")
+
+    def test_every_source_change_forces_full(self):
+        # Verifier round 2 D7: guard tests scan src/ instead of importing it, so no
+        # src/ or viewer/src/ change is narrowed, a new subtree or file included.
+        for f in (
+            "src/tasks/intent.ts",
+            "src/baseline/hcu-shell/ledger.ts",
+            "src/baseline/hcu-shell/zz-new.ts",
+            "src/foundry/baseline/compare.ts",
+            "src/newarea/x.ts",
+            "src/x.ts",
+            "src/x.json",
+            "viewer/src/main.ts",
+            "viewer/src/zz-new.tsx",
+        ):
+            p = pr([f])
+            self.assertEqual((p.mode, classify_reason(p)), ("full", "source"), f)
 
     def test_viewer_non_typescript_forces_full(self):
         # vitest cannot see an html or css dependency.
@@ -149,15 +184,17 @@ class Decisions(unittest.TestCase):
             self.assertEqual(pr([f]).mode, "full", f)
 
     def test_tier2_signals_force_full(self):
-        self.assertEqual(pr(["src/tasks/intent.ts"], labels=["tier-2"]).mode, "full")
-        self.assertEqual(pr(["src/tasks/intent.ts"], labels=["full-ci"]).mode, "full")
+        t = "test/tasks/intent.test.ts"
+        self.assertEqual(pr([t]).mode, "targeted")
+        self.assertEqual(pr([t], labels=["tier-2"]).mode, "full")
+        self.assertEqual(pr([t], labels=["full-ci"]).mode, "full")
         for body in ("Tier: 2", "**Tier 2**", "## Tier\nTier 2 (locks)", "- tier 2"):
-            self.assertEqual(pr(["src/tasks/intent.ts"], body=body).mode, "full", body)
-        self.assertEqual(pr(["src/tasks/intent.ts"], title="Tier 2: x").mode, "full")
+            self.assertEqual(pr([t], body=body).mode, "full", body)
+        self.assertEqual(pr([t], title="Tier 2: x").mode, "full")
 
     def test_tier1_body_stays_targeted(self):
         body = "Tier 1. A rewrite touching a guard's test would be Tier 2."
-        self.assertEqual(pr(["src/tasks/intent.ts"], body=body).mode, "targeted")
+        self.assertEqual(pr(["test/tasks/intent.test.ts"], body=body).mode, "targeted")
 
     def test_tier2_machine_paths(self):
         for f in (
@@ -184,26 +221,32 @@ class Decisions(unittest.TestCase):
         self.assertEqual(cp.plan("workflow_dispatch", ["docs/a.md"], [], "", "", SOURCES).mode, "full")
         self.assertEqual(cp.plan("pull_request", None, [], "", "", SOURCES).mode, "full")
         self.assertEqual(cp.plan("pull_request", [], [], "", "", SOURCES).mode, "full")
-        many = [f"src/tasks/f{i}.ts" for i in range(cp.MAX_FILES + 1)]
+        many = [f"test/tasks/f{i}.test.ts" for i in range(cp.MAX_FILES + 1)]
         self.assertEqual(pr(many).mode, "full")
+        self.assertEqual(pr(many[: cp.MAX_FILES]).mode, "targeted")
 
     def test_side_jobs_follow_their_paths(self):
         self.assertTrue(pr(["src/linux/calc.ts"]).linux_path)
         self.assertTrue(pr(["test/init/init.test.ts"]).linux_path)
-        self.assertFalse(pr(["src/tasks/intent.ts"]).linux_path)
-        self.assertFalse(pr(["src/tasks/intent.ts"]).m2)
+        self.assertTrue(pr(["test/linux/x.test.ts"]).linux_path)
+        self.assertFalse(pr(["test/tasks/intent.test.ts"]).linux_path)
+        self.assertFalse(pr(["test/tasks/intent.test.ts"]).m2)
         # Full mode keeps every side job on (the job-level ifs read the mode too).
         self.assertTrue(pr(["scripts/m2-r1-dryrun.ts"]).m2)
         self.assertTrue(pr(["scripts/m2-r1-dryrun.ts"]).linux_path)
         # D6: the forked launcher test reruns in targeted mode when discovery changes.
         self.assertTrue(pr(["test/discovery/s0-live-launcher.test.ts"]).launcher)
         self.assertTrue(pr(["test/discovery/replay.test.ts"]).launcher)
-        self.assertFalse(pr(["src/tasks/intent.ts"]).launcher)
+        self.assertFalse(pr(["test/tasks/intent.test.ts"]).launcher)
         self.assertEqual(pr(["test/discovery/replay.test.ts"]).outputs()["launcher"], "true")
-        self.assertEqual(pr(["src/tasks/intent.ts"]).outputs()["launcher"], "false")
-        sources = {"test/discovery/x.test.ts": 'import { d } from "../../src/discovery/decision.ts";'}
-        p = cp.plan("pull_request", ["src/discovery/decision.ts"], [], "", "", sources)
+        self.assertEqual(pr(["test/tasks/intent.test.ts"]).outputs()["launcher"], "false")
+        # src/discovery/ is source: full, which runs the launcher with `pnpm test`.
+        self.assertEqual(pr(["src/discovery/decision.ts"]).mode, "full")
+        # The launcher lists its run directory, so when it is a scanning test it always runs.
+        sources = {cp.LAUNCHER_TEST: "readdirSync(runDir)"}
+        p = with_guard(["test/tasks/intent.test.ts"], sources)
         self.assertEqual((p.mode, p.launcher), ("targeted", True))
+        self.assertNotIn(cp.LAUNCHER_TEST, p.scanners)
 
     def test_bad_base_sha_means_unknown_diff(self):
         self.assertIsNone(cp.changed_files("", REPO_ROOT))
@@ -212,6 +255,32 @@ class Decisions(unittest.TestCase):
     def test_smoke_files_exist(self):
         for f in cp.SMOKE:
             self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, f)), f)
+
+    def test_smoke_set_is_pinned_and_documented(self):
+        # Verifier round 2 O9: dropping test/gate/gate.test.ts from SMOKE survived.
+        self.assertEqual(cp.SMOKE, SMOKE_PINNED)
+        with open(os.path.join(REPO_ROOT, "docs", "ci.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        section = text.split("**Core smoke set**", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(tuple(re.findall(r"`(test/[^`]+)`", section)), SMOKE_PINNED)
+        p = pr(["test/tasks/intent.test.ts"])
+        self.assertEqual(p.outputs()["smoke"], " ".join(SMOKE_PINNED))
+
+
+SMOKE_PINNED = (
+    "test/claim-isolation.test.ts",
+    "test/eval.test.ts",
+    "test/evidence.test.ts",
+    "test/faults.test.ts",
+    "test/no-home-paths.test.ts",
+    "test/recovery.test.ts",
+    "test/runner.test.ts",
+    "test/verify.test.ts",
+    "test/baseline/import-graph.test.ts",
+    "test/gate/gate.test.ts",
+    "test/integrity/isolation.test.ts",
+    "test/oracle-selftest/selftest.test.ts",
+)
 
 
 # Every file under these roots must force the full suite (the brief: gate, integrity,
@@ -252,7 +321,7 @@ class PathClassesAgainstTheRepo(unittest.TestCase):
     def test_no_dead_prefixes(self):
         # Verifier round 1 D5: a prefix that matches no tracked file claims coverage it
         # does not give (src/pilot/, src/baseline/run-lock, ...).
-        for name in ("TIER2", "TOOLING", "NARROWABLE_TS", "LINUX_PATH", "M2", "LAUNCHER_PATHS", "SMOKE"):
+        for name in ("TIER2", "TOOLING", "SOURCE", "NARROWABLE_TS", "LINUX_PATH", "M2", "LAUNCHER_PATHS", "SMOKE"):
             for prefix in getattr(cp, name):
                 self.assertTrue(any(f.startswith(prefix) for f in self.files), f"{name}: {prefix}")
         self.assertIn(cp.LAUNCHER_TEST, self.files)
@@ -305,37 +374,39 @@ class SpawnedDependencies(unittest.TestCase):
     """Verifier round 1 D2: a test that runs a script as a subprocess is invisible to
     vitest's import graph, so a change it alone covers must force the full suite."""
 
+    # src/ is always full now, so the narrowable files these rules guard are test helpers.
     SOURCES = {
-        "scripts/run-thing.ts": 'import { go } from "../src/tasks/runner.ts";\ngo();\n',
-        "src/tasks/runner.ts": 'import { helper } from "./helper.ts";\nexport const go = helper;\n',
-        "src/tasks/helper.ts": "export const helper = () => 1;\n",
-        "src/tasks/spawned.ts": "console.log(1);\n",
-        "src/tasks/plain.ts": "export const plain = 1;\n",
-        "test/tasks/spawn.test.ts": 'spawnSync("tsx", [join(ROOT, "src", "tasks", "spawned.ts")]);\n',
-        "test/tasks/plain.test.ts": 'import { plain } from "../../src/tasks/plain.ts";\n',
+        **GUARD,
+        "scripts/run-thing.ts": 'import { go } from "../test/tasks/runner.ts";\ngo();\n',
+        "test/tasks/runner.ts": 'import { helper } from "./helper.ts";\nexport const go = helper;\n',
+        "test/tasks/helper.ts": "export const helper = () => 1;\n",
+        "test/tasks/spawned.ts": "console.log(1);\n",
+        "test/tasks/plain.ts": "export const plain = 1;\n",
+        "test/tasks/spawn.test.ts": 'spawnSync("tsx", [join(ROOT, "test", "tasks", "spawned.ts")]);\n',
+        "test/tasks/plain.test.ts": 'import { plain } from "./plain.ts";\n',
     }
 
     def plan(self, files):
         return cp.plan("pull_request", files, [], "", "", self.SOURCES)
 
     def test_a_module_a_script_imports_transitively_forces_full(self):
-        for f in ("src/tasks/runner.ts", "src/tasks/helper.ts"):
+        for f in ("test/tasks/runner.ts", "test/tasks/helper.ts"):
             p = self.plan([f])
             self.assertEqual(p.mode, "full", f)
             self.assertIn("spawned script", p.reasons[0])
             self.assertIn("scripts/run-thing.ts", p.reasons[0])
 
     def test_a_file_a_test_names_outside_an_import_forces_full(self):
-        p = self.plan(["src/tasks/spawned.ts"])
+        p = self.plan(["test/tasks/spawned.ts"])
         self.assertEqual(p.mode, "full")
         self.assertIn("test/tasks/spawn.test.ts", p.reasons[0])
 
     def test_a_deleted_file_a_test_still_names_forces_full(self):
-        sources = {k: v for k, v in self.SOURCES.items() if k != "src/tasks/spawned.ts"}
-        self.assertEqual(cp.plan("pull_request", ["src/tasks/spawned.ts"], [], "", "", sources).mode, "full")
+        sources = {k: v for k, v in self.SOURCES.items() if k != "test/tasks/spawned.ts"}
+        self.assertEqual(cp.plan("pull_request", ["test/tasks/spawned.ts"], [], "", "", sources).mode, "full")
 
     def test_a_module_only_imported_stays_targeted(self):
-        self.assertEqual(self.plan(["src/tasks/plain.ts"]).mode, "targeted")
+        self.assertEqual(self.plan(["test/tasks/plain.ts"]).mode, "targeted")
         self.assertEqual(self.plan(["test/tasks/plain.test.ts"]).mode, "targeted")
 
     def test_import_specifiers_resolve_like_node(self):
@@ -368,6 +439,135 @@ class SpawnedDependencies(unittest.TestCase):
             self.assertEqual(cp.plan("pull_request", [dep], [], "", "", srcs).mode, "full", dep)
 
 
+# Directory-scanning guards that must run on every PR, whatever it changes. Each reads a
+# tree (src/, test/, docs/, the git index) instead of importing what it checks.
+REPO_GUARDS = (
+    "test/baseline/hcu-shell/import-boundary.test.ts",  # hcu+shell arm never reaches grader code
+    "test/foundry/split.test.ts",  # EF-002: nothing outside the hidden roots imports them
+    "test/foundry/hidden-split.test.ts",
+    "test/baseline/instruction-required.test.ts",
+    "test/baseline/probe-directory.test.ts",
+    "test/benchmark/independence.test.ts",  # grader independence
+    "test/no-home-paths.test.ts",
+    "test/claim-isolation.test.ts",
+    "test/baseline/secret-file.test.ts",
+    "test/sai/harness.test.ts",
+)
+
+# The verifier's own detector, written independently of scripts/ci-plan.py SCAN_API.
+DIRECT_SCAN = re.compile(r"readdirSync|readdir\(|globSync|opendirSync|ls-files|os\.walk|os\.listdir")
+
+
+class DirectoryScanningGuards(unittest.TestCase):
+    """Verifier round 2 D7: a grader-independence violation passed targeted CI, because the
+    guard scans a directory and never imports the module it guards."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srcs = cp.read_sources(REPO_ROOT)
+        cls.files = tracked_files()
+        cls.scanners = set(cp.scanning_tests(cls.srcs))
+        # Probe paths built at run time, so no source names them (naming one forces full).
+        tag = "zz" + "probe" + str(os.getpid())
+        cls.new_test = f"test/tasks/{tag}.test.ts"
+        cls.new_doc = f"docs/{tag}.md"
+
+    def real(self, files):
+        return cp.plan("pull_request", files, [], "", "", self.srcs)
+
+    def test_the_three_d7_probes_run_the_full_suite(self):
+        # 1. ledger.ts imports knownTaskSet (TIF-267 grader code); 2. a new hcu-shell file
+        # imports src/tasks/intent.ts; 3. compare.ts re-exports the blind oracle.
+        for files in (
+            ["src/baseline/hcu-shell/ledger.ts"],
+            ["src/baseline/hcu-shell/peek.ts"],
+            ["src/foundry/baseline/compare.ts"],
+            ["src/baseline/hcu-shell/ledger.ts", "docs/product/vision.md"],
+        ):
+            p = self.real(files)
+            self.assertEqual(p.mode, "full", files)
+            self.assertIn("(source)", p.reasons[0], files)
+
+    def test_every_tracked_source_file_runs_the_full_suite(self):
+        bad = [f for f in self.files if f.startswith(("src/", "viewer/src/")) and cp.classify(f) not in ("tier2", "source")]
+        self.assertEqual(bad, [])
+
+    def test_repo_guards_are_found_and_their_changes_are_tier2(self):
+        for g in REPO_GUARDS:
+            self.assertIn(g, self.files, g)
+            self.assertTrue(g in self.scanners or g in cp.SMOKE, g)
+        for g in REPO_GUARDS[:8]:
+            self.assertEqual(cp.classify(g), "tier2", g)
+
+    def test_every_test_that_lists_a_directory_is_a_scanner(self):
+        # Kills a narrowed SCAN_API: every test file that directly lists a directory, by
+        # an independent detector, must be selected.
+        direct = [
+            f
+            for f, text in self.srcs.items()
+            if cp.is_test_file(f) and cp.TEST_FILE.search(f) and DIRECT_SCAN.search(text)
+        ]
+        self.assertGreater(len(direct), 15)
+        self.assertEqual(sorted(set(direct) - self.scanners), [])
+
+    def test_a_test_only_change_runs_every_scanning_guard(self):
+        p = self.real([self.new_test])
+        self.assertEqual(p.mode, "targeted", p.reasons)
+        ran = set(cp.SMOKE) | set(p.scanners) | ({cp.LAUNCHER_TEST} if p.launcher else set())
+        self.assertEqual(sorted(self.scanners - ran), [])
+        for g in REPO_GUARDS:
+            self.assertIn(g, ran, g)
+        self.assertEqual(p.outputs()["scanners"], " ".join(p.scanners))
+
+    def test_a_docs_only_change_runs_every_scanning_guard(self):
+        p = self.real([self.new_doc])
+        self.assertEqual(p.mode, "docs", p.reasons)
+        ran = set(cp.SMOKE) | set(p.scanners)
+        for g in REPO_GUARDS:
+            self.assertIn(g, ran, g)
+
+    def test_scanners_are_found_through_imports_and_spawned_scripts(self):
+        sources = {
+            "test/a.test.ts": 'import { list } from "./helpers/list.ts";\n',
+            "test/helpers/list.ts": 'export const list = (d) => fs.readdirSync(d);\n',
+            "test/b.test.ts": 'spawnSync("python3", [join(ROOT, "scripts", "scan-docs.py")]);\n',
+            "scripts/scan-docs.py": "for root, _, names in os.walk('docs'): pass\n",
+            "test/c.test.ts": 'execFileSync("git", ["ls-files", "-z"]);\n',
+            "test/d.test.ts": 'import { x } from "../src/x.ts";\n',
+            "src/x.ts": 'export const x = globSync("**/*.ts");\n',
+            "test/e.test.ts": 'import { plain } from "./plain.ts";\n',
+            "test/plain.ts": "export const plain = 1;\n",
+            "viewer/test/f.test.ts": 'await readdir(folder, { withFileTypes: true });\n',
+            "test/helpers/list.test.helper.ts": "readdirSync(x)\n",
+        }
+        self.assertEqual(
+            cp.scanning_tests(sources),
+            ["test/a.test.ts", "test/b.test.ts", "test/c.test.ts", "test/d.test.ts", "viewer/test/f.test.ts"],
+        )
+        p = cp.plan("pull_request", ["test/e.test.ts"], [], "", "", sources)
+        self.assertEqual(p.mode, "targeted")
+        self.assertEqual(p.scanners, ["test/a.test.ts", "test/b.test.ts", "test/c.test.ts", "test/d.test.ts", "viewer/test/f.test.ts"])
+        p = cp.plan("pull_request", ["docs/zz.md"], [], "", "", sources)
+        self.assertEqual((p.mode, len(p.scanners)), ("docs", 5))
+
+    def test_docs_a_source_names_only_by_basename_run_the_full_suite(self):
+        # Verifier round 2 O7, against the real repo.
+        for doc in (
+            "docs/architecture/m2-fault-classes.md",
+            "docs/architecture/runtime.md",
+            "docs/env/vm-toolchain/README.md",
+            "viewer/DEVIATIONS.md",
+        ):
+            self.assertIn(doc, self.files, doc)
+            self.assertEqual(self.real([doc]).mode, "full", doc)
+
+    def test_no_readable_test_sources_runs_the_full_suite(self):
+        for sources in ({}, None, {"scripts/x.ts": "x"}):
+            p = cp.plan("pull_request", ["docs/zz.md"], [], "", "", sources)
+            self.assertEqual(p.mode, "full", sources)
+            self.assertIn("no test sources", p.reasons[0])
+
+
 class Sources(unittest.TestCase):
     def test_read_sources_covers_viewer_agent_and_runtime(self):
         srcs = cp.read_sources(REPO_ROOT)
@@ -384,9 +584,9 @@ class Sources(unittest.TestCase):
     def test_the_planner_naming_a_doc_does_not_force_full(self):
         # Round 1 nit: the planner's own docstring made README.md "named by a script".
         sources = {cp.SELF: "README.md CONTRIBUTING.md docs/x/guide.md"}
-        self.assertEqual(cp.plan("pull_request", ["docs/x/guide.md"], [], "", "", sources).mode, "docs")
+        self.assertEqual(with_guard(["docs/x/guide.md"], sources).mode, "docs")
         sources["scripts/other.py"] = "docs/x/guide.md"
-        self.assertEqual(cp.plan("pull_request", ["docs/x/guide.md"], [], "", "", sources).mode, "full")
+        self.assertEqual(with_guard(["docs/x/guide.md"], sources).mode, "full")
 
 
 # A small evaluator for the GitHub expression subset ci.yml uses in `if:` (contexts,
@@ -502,6 +702,10 @@ def check_names(jobs):
     return names
 
 
+LAUNCHER_STEP = "Test (s0 launcher, forked)"
+SMOKE_STEP = "Test (core smoke, directory-scanning tests and doc tests)"
+
+
 class Workflow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -542,9 +746,10 @@ class Workflow(unittest.TestCase):
     def plan_step(self, key):
         return next(s for s in self.jobs[key]["steps"] if s.get("name") == "CI plan")
 
-    def check_env(self, result, mode, launcher="true"):
+    def check_env(self, result, mode, launcher="true", scanners="test/guard.test.ts"):
         step = self.plan_step("check")
-        return run_step(step, {"PLAN_RESULT": result, "PLAN_MODE": mode, "PLAN_LAUNCHER": launcher})
+        env = {"PLAN_RESULT": result, "PLAN_MODE": mode, "PLAN_LAUNCHER": launcher, "PLAN_SCANNERS": scanners}
+        return run_step(step, env)
 
     def steps_that_run(self, key, env):
         ran = []
@@ -562,6 +767,15 @@ class Workflow(unittest.TestCase):
                 env = self.check_env(result, mode)
                 ok = result == "success" and mode in ("full", "targeted", "docs")
                 self.assertEqual(env["MODE"], mode if ok else "full", (result, mode))
+
+    def test_check_runs_full_when_a_narrow_plan_lists_no_scanning_tests(self):
+        # D7 fail safe: a narrow mode that cannot run the directory-scanning guards does
+        # not narrow.
+        self.assertEqual(self.plan_step("check")["env"]["PLAN_SCANNERS"], "${{ needs.plan.outputs.scanners }}")
+        for mode in ("targeted", "docs"):
+            self.assertEqual(self.check_env("success", mode, scanners="")["MODE"], "full", mode)
+            self.assertEqual(self.check_env("success", mode)["MODE"], mode, mode)
+        self.assertEqual(self.check_env("success", "full", scanners="")["MODE"], "full")
 
     def test_check_launcher_is_on_unless_the_plan_says_false(self):
         for value, want in (("false", "false"), ("true", "true"), ("", "true"), ("garbage", "true")):
@@ -594,18 +808,20 @@ class Workflow(unittest.TestCase):
                 "Typecheck",
                 "Lint",
                 "Test (targeted, files related to the change)",
-                "Test (s0 launcher, forked, when discovery changed)",
-                "Test (core smoke and doc tests)",
+                LAUNCHER_STEP,
+                SMOKE_STEP,
                 "Schema validate",
                 "Build",
             },
-            "docs": common | {"Test (core smoke and doc tests)"},
+            "docs": common | {LAUNCHER_STEP, SMOKE_STEP},
         }
         for mode, names in want.items():
             env = self.check_env("success", mode)
             self.assertEqual(set(self.steps_that_run("check", env)), names, mode)
-        env = self.check_env("success", "targeted", "false")
-        self.assertNotIn("Test (s0 launcher, forked, when discovery changed)", self.steps_that_run("check", env))
+        for mode in ("targeted", "docs"):
+            env = self.check_env("success", mode, "false")
+            self.assertNotIn(LAUNCHER_STEP, self.steps_that_run("check", env), mode)
+            self.assertIn(SMOKE_STEP, self.steps_that_run("check", env), mode)
         # A failed plan runs exactly what full mode runs.
         self.assertEqual(
             self.steps_that_run("check", self.check_env("failure", "docs")),
@@ -617,16 +833,17 @@ class Workflow(unittest.TestCase):
         t = steps["Test (targeted, files related to the change)"]
         self.assertIn('--changed "$BASE_SHA"', t["run"])
         self.assertEqual(t["env"]["BASE_SHA"], "${{ github.event.pull_request.base.sha }}")
-        smoke = steps["Test (core smoke and doc tests)"]
-        self.assertIn("pnpm exec vitest run $SMOKE $DOC_TESTS", smoke["run"])
+        smoke = steps[SMOKE_STEP]
+        self.assertIn("pnpm exec vitest run $SMOKE $SCANNERS $DOC_TESTS", smoke["run"])
         self.assertEqual(smoke["env"]["SMOKE"], "${{ needs.plan.outputs.smoke }}")
+        self.assertEqual(smoke["env"]["SCANNERS"], "${{ needs.plan.outputs.scanners }}")
         self.assertEqual(smoke["env"]["DOC_TESTS"], "${{ needs.plan.outputs.doc_tests }}")
         # The launcher rerun is the same command `pnpm test` uses for that file.
         with open(os.path.join(REPO_ROOT, "package.json"), encoding="utf-8") as fh:
             import json
 
             test_script = json.load(fh)["scripts"]["test"]
-        launcher = steps["Test (s0 launcher, forked, when discovery changed)"]["run"]
+        launcher = steps[LAUNCHER_STEP]["run"]
         self.assertIn(launcher.removeprefix("pnpm exec "), test_script)
         self.assertIn(cp.LAUNCHER_TEST, launcher)
         self.assertIn(f"--exclude {cp.LAUNCHER_TEST}", t["run"])

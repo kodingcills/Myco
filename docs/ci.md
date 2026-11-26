@@ -51,19 +51,35 @@ modes.
 
 | Mode | When | `check` runs | agent, runtime jobs |
 | --- | --- | --- | --- |
-| `full` | Pushes to `main`; any Tier 2 signal (below); any changed path in a Tier 2 or tooling class; TypeScript outside the narrowable allowlist (below); a TypeScript file a script can reach or a source names outside an import (below); any other file kind (yaml, json, py, sh, html, css, fixtures); a doc that a non-test source names; a diff it cannot compute, or over 300 files | typecheck, lint, `pnpm test`, build: exactly what it ran before the planner existed | run |
-| `targeted` | Only `.md` docs and narrowable TypeScript (below) | typecheck, lint, `vitest run --changed <PR base>` (changed test files and every test importing a changed module), the forked s0 launcher test when `src/discovery/` or `test/discovery/` changed, the core smoke set, the doc tests, `pnpm schema-validate`, build | steps skipped, job green |
-| `docs` | Only `.md` docs, none of them named by a non-test source | the core smoke set plus the test files that name a changed doc | steps skipped, job green |
+| `full` | Pushes to `main`; any Tier 2 signal (below); any changed path in a Tier 2 or tooling class; **any change under `src/` or `viewer/src/`**; TypeScript outside `test/` and `viewer/test/`; a test file a script can reach or a source names outside an import (below); any other file kind (yaml, json, py, sh, html, css, fixtures); a doc that a non-test source names; a diff it cannot compute, or over 300 files; no readable test sources | typecheck, lint, `pnpm test`, build: exactly what it ran before the planner existed | run |
+| `targeted` | Only `.md` docs and TypeScript under `test/` or `viewer/test/` | typecheck, lint, `vitest run --changed <PR base>` (the changed test files and every test importing them), the forked s0 launcher test, the core smoke set, **every directory-scanning test**, the doc tests, `pnpm schema-validate`, build | steps skipped, job green |
+| `docs` | Only `.md` docs, none of them named by a non-test source | the forked s0 launcher test, the core smoke set, **every directory-scanning test**, and the test files that name a changed doc | steps skipped, job green |
 
-**Narrowable TypeScript** is an allowlist, so a new directory runs everything until it is
-listed: `src/{baseline,discovery,fake,foundry,linux,setup,tasks}/`, `test/`, `viewer/src/`
-and `viewer/test/`, minus every Tier 2 path. Even there, `vitest run --changed` only sees
-imports. A test that runs a script as a subprocess (`tsx`, `bash`, `python`), or reads a
-file by name, is invisible to it. So the planner also forces `full` for a changed file that
-any `scripts/**/*.ts` reaches through imports (transitively), that a file named outside an
-import reaches, or whose file name any source mentions outside an import. In practice
-almost every `src/` file is reachable from a script, so most `src/` changes run the full
-suite; test-only changes and modules only tests import are what targeted mode narrows.
+**Only test-only and docs-only changes are narrowed.** Every change under `src/` or
+`viewer/src/` runs the full suite. The reason (verifier round 2, D7): guard tests such as
+`test/baseline/hcu-shell/import-boundary.test.ts` (the hcu+shell arm never reaches grader
+code) and `test/foundry/split.test.ts` (nothing outside the hidden roots imports the
+oracles) read a source directory with `readdirSync` or `globSync`; they never import the
+module they guard, so `vitest run --changed` cannot find them, and a grader-independence
+violation in `src/baseline/hcu-shell/ledger.ts` passed targeted CI. Narrowable TypeScript is
+therefore just `test/` and `viewer/test/`, minus every Tier 2 path. Even there,
+`vitest run --changed` only sees imports, so the planner forces `full` for a changed file
+that any `scripts/**/*.ts` reaches through imports, that a file named outside an import
+reaches, or whose file name any source mentions outside an import (a spawned helper such
+as `test/gate/fifo-child.ts`).
+
+**Directory-scanning tests always run.** A guard can scan `test/` or `docs/` too
+(`test/no-home-paths.test.ts`, `test/baseline/probe-directory.test.ts`), so targeted and
+docs mode run every test file that lists or walks a directory, found mechanically by
+`scanning_tests()` in `scripts/ci-plan.py`: the test itself, a helper it imports (any
+depth), or a `scripts/` or `schemas/` file it spawns calls `readdir`, `readdirSync`,
+`opendir`, `glob`, `globSync`, `readDirectory`, Python's `os.walk`/`listdir`/`scandir`/
+`glob`/`rglob`/`iterdir`, `git ls-files`/`ls-tree`, or runs `find`, `rg` or `grep`. A new
+scanning test joins with no list edit. Today that is about 65 files, about 2 minutes
+locally. The plan job exports them as `scanners`; if a narrow plan lists none, `check`
+runs the full suite. The test file pins every known repo guard (grader independence, the
+hidden split, required instructions, the probe directory, home paths, claim isolation,
+secret hygiene) into that set, and checks it against an independent detector.
 
 **The secret scan always runs.** It does not depend on the plan.
 
@@ -91,8 +107,10 @@ a fallback does not reach full, or a mode runs the wrong steps.
   spend-ceiling enforcement), all of `scripts/`, `agent/`, `runtime/`, `foundry/`,
   `benchmark/`, `docs/research/`, the scorecards, and the guard tests
   (`test/{gate,integrity,oracle-selftest,fault-classes,m2,benchmark}/`,
-  `test/baseline/{run-lock,spend-ceiling,secret-file}.test.ts`, evidence, faults, VM-lock,
-  scorecard). The test file checks that every tracked file under `src/{gate,integrity,benchmark,m2,core}/`,
+  `test/baseline/{run-lock,spend-ceiling,secret-file}.test.ts`, the directory-scanning
+  guards `test/baseline/{hcu-shell/import-boundary,import-graph,instruction-required,probe-directory}.test.ts`,
+  `test/foundry/{split,hidden-split}.test.ts`, no-home-paths, claim isolation, evidence,
+  faults, VM-lock, scorecard). The test file checks that every tracked file under `src/{gate,integrity,benchmark,m2,core}/`,
   `schemas/`, `scripts/`, `.github/`, `agent/` and `runtime/` forces `full`, and that every
   listed prefix matches a tracked file;
 - a changed tooling path: `.github/`, `.githooks/`, `package.json`, the lockfile,
@@ -104,14 +122,11 @@ until the full suite passes. A body edit alone does not start a run; the stated 
 effect at the next push, or add the label. **When unsure, add `tier-2`.** A reviewer who
 raises a PR's tier adds the label.
 
-**Core smoke set** (about 5 s, in `scripts/ci-plan.py` `SMOKE`): claim isolation, eval,
-evidence, faults, no-home-paths, recovery, runner, verify, the baseline import graph, the
-gate, the integrity isolation suite and the R5 oracle self-test.
+**Core smoke set** (about 5 s, `SMOKE` in `scripts/ci-plan.py`; the test file pins this list and the code to each other): `test/claim-isolation.test.ts`, `test/eval.test.ts`, `test/evidence.test.ts`, `test/faults.test.ts`, `test/no-home-paths.test.ts`, `test/recovery.test.ts`, `test/runner.test.ts`, `test/verify.test.ts`, `test/baseline/import-graph.test.ts`, `test/gate/gate.test.ts`, `test/integrity/isolation.test.ts`, `test/oracle-selftest/selftest.test.ts`.
 
 The `linux path` and `m2 evidence and scorecard` jobs are not required. They run unless
-a successful plan names a narrow mode and says their paths are untouched (`src/linux/`,
-`src/setup/`, `test/{linux,init}/`; `test/m2/`). Their other paths (`scripts/`, `src/m2/`)
-are Tier 2, so a change there runs everything. `viewer-perf` is unchanged.
+a successful plan names a narrow mode and says their paths are untouched (`test/{linux,init}/`;
+`test/m2/`). Their other paths (`src/`, `scripts/`) always run everything. `viewer-perf` is unchanged.
 
 See what the planner would do for your branch:
 
