@@ -30,7 +30,9 @@
  *   `mcp__<server>__…` tool whose server is not in the plan;
  * - when the plan starts a `myco-state` server (capability track I), checks its binding: its
  *   environment must pin `MYCO_STATE_RUN_ID` to this trial's run id and name a harness-issued
- *   UNO pipe, carry no other keys than `MYCO_STATE_ENV_KEYS`, and its args must end in `mcp`.
+ *   UNO pipe, carry a non-empty withheld list of absolute host paths
+ *   (`stateWithheldListValid`), carry no other keys than `MYCO_STATE_ENV_KEYS`, and its args
+ *   must end in `mcp` with no flag anywhere.
  *   The server is classified only when the caller passes `STATE_SERVER_CLASS` (the
  *   capability-arm audit does; the R1 gated harness does not, so it refuses the server);
  * - derives `mycoRtSessionPinned` from the `myco-rt` server's real environment
@@ -53,10 +55,12 @@ import {
   MYCO_STATE_ENV_KEYS,
   MYCO_STATE_PIPE_ENV,
   MYCO_STATE_RUN_ENV,
+  MYCO_STATE_WITHHELD_ENV,
   rtSessionIdFor,
   STATE_SERVER_NAME,
   type SurfaceAudit,
   type SurfaceViolation,
+  stateWithheldListValid,
   type ToolClass,
 } from "./surface.ts";
 
@@ -340,7 +344,8 @@ const STATE_PIPE = /^myco-state-[a-z0-9-]{8,64}$/;
 
 /**
  * A `myco-state` server in the plan must be bound to this trial: run id pinned, a
- * harness-issued pipe, no other env keys, args ending in `mcp`. Fail closed on any other.
+ * harness-issued pipe, a non-empty withheld list, no other env keys, args ending in `mcp`
+ * with no flag. Fail closed on any other.
  */
 function stateBindingViolations(plan: AgentLaunchPlan, runId: string): SurfaceViolation[] {
   if (!Object.hasOwn(plan.mcpServers, STATE_SERVER_NAME)) return [];
@@ -358,8 +363,16 @@ function stateBindingViolations(plan: AgentLaunchPlan, runId: string): SurfaceVi
   const pipe = Object.hasOwn(env, MYCO_STATE_PIPE_ENV) ? (env[MYCO_STATE_PIPE_ENV] ?? "") : "";
   if (!STATE_PIPE.test(pipe))
     violation(`${MYCO_STATE_PIPE_ENV} is not a harness-issued myco-state pipe name`);
-  if (server.args.at(-1) !== "mcp" || server.args.some((a) => looksLikeOption(a)))
-    violation("server args must end in `mcp` and carry no flags");
+  const withheld = Object.hasOwn(env, MYCO_STATE_WITHHELD_ENV)
+    ? env[MYCO_STATE_WITHHELD_ENV]
+    : undefined;
+  if (!stateWithheldListValid(withheld))
+    violation(
+      `${MYCO_STATE_WITHHELD_ENV} must list the trial's host paths (a JSON array of 1-64 absolute paths)`,
+    );
+  if (server.args.at(-1) !== "mcp") violation("server args must end in `mcp`");
+  if (server.args.some((a) => looksLikeOption(a)))
+    violation("server args must carry no flags (e.g. --inspect)");
   return out;
 }
 

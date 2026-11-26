@@ -14,7 +14,8 @@ versioned releases yet; entries are grouped by milestone. License: [Apache-2.0](
   cells (values and formulas as Calc holds them), the document's save state, and a bounded
   accessibility-tree summary. The Linux headless Calc backend is shipped; the backend seam
   is ready for a Windows/UIA backend. The server is bound to one trial, takes no path, caps
-  every reply and returns codes only. It is not part of the gate, and it is not proof of
+  every reply and returns codes only. A mandatory withheld list and path scrubbing keep
+  host paths (for example from `=CELL("filename")`) out of every reply. It is not part of the gate, and it is not proof of
   completion. Launch plans for the `structured-state`, `screenshot-only` and `hcu+shell`
   arms are audited by the extended launch audit. Their rows never count as R1 evidence
   ([docs/state/tools.md](docs/state/tools.md), [security](docs/state/security.md),

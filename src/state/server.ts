@@ -13,10 +13,17 @@
  *  - the backend's data is re-checked against the caps (cell count and shape, string
  *    lengths, tree depth, node count and width); a reply over a cap is refused
  *    (BACKEND_ERROR), never passed through;
- *  - UI-tree names have path-like text replaced (window titles carry file names);
+ *  - host paths, two layers (docs/state/security.md, "Host paths"):
+ *     1. the backend's raw cell, sheet and status strings must not contain any of the
+ *        harness's `withheld` strings (trial dir, vault root, fixture dir; also their
+ *        file-URL-encoded form), checked BEFORE scrubbing so a partial scrub cannot hide
+ *        one (OUTPUT_WITHHELD); UI-tree names have withheld strings redacted instead;
+ *     2. every string the agent sees (cell display, value and formula, sheet names, UI
+ *        names) has path-like text replaced by `[path]`, so a formula such as
+ *        `=CELL("filename")` cannot surface a host path the list does not name; a cell
+ *        changed this way carries `pathScrubbed: true`;
  *  - the serialized reply must fit `maxReplyBytes` (OUTPUT_TOO_LARGE) and must not contain
- *    any of the harness's `withheld` strings, e.g. the trial dir, vault root or fixture dir
- *    (OUTPUT_WITHHELD);
+ *    a withheld string in any form (OUTPUT_WITHHELD);
  *  - a backend that throws gives BACKEND_ERROR; the error text goes to the operator's
  *    `onDiagnostic` only, never to the agent.
  *
@@ -106,12 +113,90 @@ export interface StateService {
   call(tool: unknown, args: unknown): Promise<StateReply>;
 }
 
+/**
+ * Path-like text. A file URL runs to the next quote or line end (Calc's `CELL("filename")`
+ * gives `'file:///dir with spaces/x.xlsx'#$Sheet1`, and a file URL can carry spaces once
+ * decoded). An absolute POSIX path must not follow a word character, `.`, `)`, `]` or `/`,
+ * so dates (`2024/06/21`), formula division (`=(A1)/(B1)/2`) and web URLs are left alone.
+ * A redacted withheld prefix followed by more path (`[path]/saved.xlsx`) is one path.
+ */
 const PATHLIKE =
-  /file:\/\/\S*|[A-Za-z]:\\\S*|\\\\[^\s\\]+\\\S*|~\/\S*|(?<![\w.])\/(?:[^\s/]+\/)+[^\s/]*/g;
+  /\[path\][\\/][^\s'"]*|\bfile:\/\/[^'"\r\n]*|(?<![A-Za-z])[A-Za-z]:[\\/]\S*|\\\\[^\s\\]+\\\S*|~\/\S*|(?<![\w.)\]/])\/(?:[^\s/'"]+\/)+[^\s/'"]*/gi;
 
 /** Replace path-like substrings (absolute POSIX/Windows paths, file URLs, UNC, ~/) with `[path]`. */
 export function scrubPaths(text: string): string {
   return text.replace(PATHLIKE, "[path]");
+}
+
+/** `text` cut to `limit` UTF-16 units without splitting a surrogate pair. */
+function cutTo(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const end = /[\uD800-\uDBFF]/.test(text.charAt(limit - 1)) ? limit - 1 : limit;
+  return text.slice(0, end);
+}
+
+/** Every form of a withheld string that could appear in a reply. */
+function withheldForms(values: readonly string[]): string[] {
+  const forms = new Set<string>();
+  for (const v of values) {
+    if (v.length < 4) continue;
+    forms.add(v);
+    forms.add(JSON.stringify(v).slice(1, -1));
+    forms.add(encodeURI(v.replace(/\\/g, "/")));
+  }
+  return [...forms];
+}
+
+function containsAny(value: unknown, forms: readonly string[]): boolean {
+  if (typeof value === "string") return forms.some((f) => value.includes(f));
+  if (Array.isArray(value)) return value.some((v) => containsAny(v, forms));
+  if (typeof value === "object" && value !== null)
+    return Object.values(value).some((v) => containsAny(v, forms));
+  return false;
+}
+
+function redact(text: string, forms: readonly string[]): string {
+  let out = text;
+  for (const f of forms) out = out.split(f).join("[path]");
+  return out;
+}
+
+/** Scrub every string in `value` (cut back to `limit` if `[path]` made one longer). */
+function scrubDeep(value: unknown, limit: number): { value: unknown; changed: boolean } {
+  if (typeof value === "string") {
+    const scrubbed = scrubPaths(value);
+    return scrubbed === value
+      ? { value, changed: false }
+      : { value: cutTo(scrubbed, limit), changed: true };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const out = value.map((v) => {
+      const r = scrubDeep(v, limit);
+      changed ||= r.changed;
+      return r.value;
+    });
+    return { value: out, changed };
+  }
+  if (typeof value === "object" && value !== null) {
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      const r = scrubDeep(v, limit);
+      changed ||= r.changed;
+      out[k] = r.value;
+    }
+    return { value: out, changed };
+  }
+  return { value, changed: false };
+}
+
+/** Scrub one cell; a cell whose text changed says so (`pathScrubbed: true`). */
+function scrubCell(cell: unknown): unknown {
+  const { value, changed } = scrubDeep(cell, STATE_CAPS.maxCellTextChars);
+  return changed && typeof value === "object" && value !== null && !Array.isArray(value)
+    ? { ...value, pathScrubbed: true }
+    : value;
 }
 
 function refuse(tool: StateToolName | null, code: StateCode): StateReply {
@@ -132,6 +217,7 @@ function checkTree(
   depth: number,
   limits: { maxDepth: number; maxNodes: number },
   count: { n: number },
+  forms: readonly string[],
 ): UiNode | null {
   count.n += 1;
   if (count.n > limits.maxNodes || depth > limits.maxDepth) return null;
@@ -140,52 +226,70 @@ function checkTree(
   if (!Array.isArray(children) || children.length > STATE_CAPS.maxChildrenPerNode) return null;
   const out: UiNode[] = [];
   for (const child of children) {
-    const checked = checkTree(child, depth + 1, limits, count);
+    const checked = checkTree(child, depth + 1, limits, count, forms);
     if (checked === null) return null;
     out.push(checked);
   }
   return {
     role: node.role.slice(0, STATE_CAPS.maxNameChars),
-    name: scrubPaths(node.name).slice(0, STATE_CAPS.maxNameChars),
+    name: cutTo(scrubPaths(redact(node.name, forms)), STATE_CAPS.maxNameChars),
     childCount: Number.isInteger(node.childCount) ? node.childCount : 0,
     ...(node.childrenOmitted ? { childrenOmitted: node.childrenOmitted } : {}),
     ...(node.children ? { children: out } : {}),
   };
 }
 
+type Checked =
+  | { ok: true; data: unknown }
+  | { ok: false; code: "BACKEND_ERROR" | "OUTPUT_WITHHELD" };
+
 /**
- * Check the backend's data for `request` against the caps. Returns the data to send
- * (UI names scrubbed) or null when the backend broke a bound (fail closed).
+ * Check the backend's data for `request` against the caps and the withheld list, then scrub
+ * path-like text. BACKEND_ERROR when the backend broke a bound (fail closed),
+ * OUTPUT_WITHHELD when its raw strings carry a withheld string.
  */
-function checkData(request: StateRequest, data: unknown): unknown | null {
-  if (typeof data !== "object" || data === null) return null;
-  if (!stringsWithin(data, STATE_CAPS.maxCellTextChars)) return null;
+function checkData(request: StateRequest, data: unknown, forms: readonly string[]): Checked {
+  const broken = { ok: false, code: "BACKEND_ERROR" } as const;
+  if (typeof data !== "object" || data === null) return broken;
+  if (!stringsWithin(data, STATE_CAPS.maxCellTextChars)) return broken;
+  if (request.tool !== "state_ui_tree" && containsAny(data, forms))
+    return { ok: false, code: "OUTPUT_WITHHELD" };
   switch (request.tool) {
     case "state_read_range": {
       const rows = (data as { rows?: unknown }).rows;
       const [c0, r0, c1, r1] = request.range;
-      if (!Array.isArray(rows) || rows.length !== r1 - r0 + 1) return null;
-      if (!rows.every((row) => Array.isArray(row) && row.length === c1 - c0 + 1)) return null;
-      return data;
+      if (!Array.isArray(rows) || rows.length !== r1 - r0 + 1) return broken;
+      if (!rows.every((row) => Array.isArray(row) && row.length === c1 - c0 + 1)) return broken;
+      const { rows: _rows, ...rest } = data as Record<string, unknown>;
+      return {
+        ok: true,
+        data: {
+          ...(scrubDeep(rest, STATE_CAPS.maxNameChars).value as object),
+          rows: rows.map((row: unknown[]) => row.map(scrubCell)),
+        },
+      };
     }
     case "state_list_sheets": {
       const sheets = (data as { sheets?: unknown }).sheets;
-      if (!Array.isArray(sheets) || sheets.length > STATE_CAPS.maxSheets) return null;
-      if (!stringsWithin(sheets, STATE_CAPS.maxNameChars)) return null;
-      return data;
+      if (!Array.isArray(sheets) || sheets.length > STATE_CAPS.maxSheets) return broken;
+      if (!stringsWithin(sheets, STATE_CAPS.maxNameChars)) return broken;
+      return { ok: true, data: scrubDeep(data, STATE_CAPS.maxNameChars).value };
     }
     case "state_document_status":
-      return data;
+      return { ok: true, data: scrubDeep(data, STATE_CAPS.maxNameChars).value };
     case "state_ui_tree": {
       const tree = (data as { tree?: unknown }).tree;
-      if (typeof tree !== "object" || tree === null) return null;
+      if (typeof tree !== "object" || tree === null) return broken;
       const count = { n: 0 };
-      const checked = checkTree(tree as UiNode, 0, request, count);
-      if (checked === null) return null;
+      const checked = checkTree(tree as UiNode, 0, request, count, forms);
+      if (checked === null) return broken;
       return {
-        tree: checked,
-        nodes: count.n,
-        truncated: (data as { truncated?: unknown }).truncated === true,
+        ok: true,
+        data: {
+          tree: checked,
+          nodes: count.n,
+          truncated: (data as { truncated?: unknown }).truncated === true,
+        },
       };
     }
   }
@@ -208,7 +312,7 @@ async function dispatch(
 }
 
 export function createStateService(options: StateServiceOptions): StateService {
-  const withheld = (options.withheld ?? []).filter((s) => s.length >= 4);
+  const forms = withheldForms(options.withheld ?? []);
   const diag = (tool: string, detail: string) => options.onDiagnostic?.({ tool, detail });
   return {
     async call(tool, args) {
@@ -227,11 +331,17 @@ export function createStateService(options: StateServiceOptions): StateService {
         return refuse(request.tool, "BACKEND_ERROR");
       }
       if (!result.ok) return refuse(request.tool, result.code);
-      const data = checkData(request, result.data);
-      if (data === null) {
-        diag(request.tool, "backend reply broke a cap or shape check");
-        return refuse(request.tool, "BACKEND_ERROR");
+      const checked = checkData(request, result.data, forms);
+      if (!checked.ok) {
+        diag(
+          request.tool,
+          checked.code === "OUTPUT_WITHHELD"
+            ? "reply contained a withheld string"
+            : "backend reply broke a cap or shape check",
+        );
+        return refuse(request.tool, checked.code);
       }
+      const data = checked.data;
       const reply: StateReply = {
         api: STATE_API_VERSION,
         ok: true,
@@ -243,7 +353,7 @@ export function createStateService(options: StateServiceOptions): StateService {
       const text = JSON.stringify(reply);
       if (Buffer.byteLength(text, "utf8") > STATE_CAPS.maxReplyBytes)
         return refuse(request.tool, "OUTPUT_TOO_LARGE");
-      if (withheld.some((s) => text.includes(s) || text.includes(JSON.stringify(s).slice(1, -1)))) {
+      if (forms.some((f) => text.includes(f))) {
         diag(request.tool, "reply contained a withheld string");
         return refuse(request.tool, "OUTPUT_WITHHELD");
       }

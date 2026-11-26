@@ -119,7 +119,7 @@ export const CLAUDE_CODE_BUILTINS: Readonly<Record<string, ToolClass>> = {
  * The structured-state server (`myco-state`, capability track I), served as
  * `mcp__myco-state__<tool>`. NOT in `MCP_SERVERS`: pass `STATE_SERVER_CLASS` as an extra
  * server, which only the capability-arm audit does (`src/state/arms.ts`).
- * test/state/arms.test.ts pins these names to the server's own tool list.
+ * test/state/state-arms.test.ts pins these names to the server's own tool list.
  */
 export const MYCO_STATE_MCP_TOOLS: Readonly<Record<string, ToolClass>> = {
   state_list_sheets: {
@@ -140,13 +140,45 @@ export const STATE_SERVER_CLASS: Readonly<Record<string, Readonly<Record<string,
 export const MYCO_STATE_RUN_ENV = "MYCO_STATE_RUN_ID";
 /** The env var naming the trial's live soffice UNO pipe (`STATE_ENV.pipe`). */
 export const MYCO_STATE_PIPE_ENV = "MYCO_STATE_UNO_PIPE";
+/** The env var listing the host paths no state reply may contain (`STATE_ENV.withheld`). */
+export const MYCO_STATE_WITHHELD_ENV = "MYCO_STATE_WITHHELD";
 /** The only env keys a `myco-state` server may be launched with. */
 export const MYCO_STATE_ENV_KEYS: readonly string[] = [
   MYCO_STATE_RUN_ENV,
   MYCO_STATE_PIPE_ENV,
-  "MYCO_STATE_WITHHELD",
+  MYCO_STATE_WITHHELD_ENV,
   "MYCO_PYTHON",
 ];
+
+/**
+ * A usable withheld list: a JSON array of 1 to 64 absolute host paths (POSIX `/…`, a drive
+ * `C:\…`, or UNC `\\…`), each at least 4 characters with no line break. Mandatory for a
+ * `myco-state` server: it is the layer that keeps the trial, vault and fixture dirs out of
+ * every reply. The server's own check (`withheldListFrom` in src/state/api.ts) is the same
+ * rule, spelled there because no state module imports integrity code;
+ * test/state/state-arms.test.ts holds both to one case table.
+ */
+export function stateWithheldListValid(raw: string | undefined): boolean {
+  if (raw === undefined) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  return (
+    Array.isArray(parsed) &&
+    parsed.length >= 1 &&
+    parsed.length <= 64 &&
+    parsed.every(
+      (p) =>
+        typeof p === "string" &&
+        p.length >= 4 &&
+        !/[\r\n]/.test(p) &&
+        (p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\")),
+    )
+  );
+}
 
 /** MCP servers by the name a harness registers them under. */
 export const MCP_SERVERS: Readonly<Record<string, Readonly<Record<string, ToolClass>>>> = {

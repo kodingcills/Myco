@@ -4,10 +4,12 @@
  * The harness starts one per trial, from the launch plan (`src/state/arms.ts`), with:
  *   MYCO_STATE_RUN_ID     the trial's run id (the launch audit checks it equals the trial's);
  *   MYCO_STATE_UNO_PIPE   the trial's live soffice UNO pipe (`statePipeFor(runId)`);
- *   MYCO_STATE_WITHHELD   optional JSON array of host strings no reply may contain.
+ *   MYCO_STATE_WITHHELD   JSON array of the trial's host paths no reply may contain
+ *                         (mandatory: 1-64 absolute paths; `withheldListFrom`).
  * It takes no other argument and no path. Missing or malformed binding: exit 2, no server.
  */
 import type { Readable, Writable } from "node:stream";
+import { withheldListFrom } from "./api.ts";
 import { linuxUnoBackend, UNO_PIPE_NAME } from "./linux/uno.ts";
 import { createStateService, serveStateStdio } from "./server.ts";
 
@@ -27,16 +29,6 @@ export interface StateCliIo {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
-function withheldFrom(raw: string | undefined): string[] | null {
-  if (raw === undefined || raw === "") return [];
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) && parsed.every((s) => typeof s === "string") ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 export async function main(argv: readonly string[], io: StateCliIo): Promise<number> {
   if (argv.length !== 1 || argv[0] !== "mcp") {
     io.stderr.write("usage: myco-state mcp   (binding comes from the harness environment)\n");
@@ -44,7 +36,7 @@ export async function main(argv: readonly string[], io: StateCliIo): Promise<num
   }
   const runId = io.env[STATE_ENV.runId] ?? "";
   const pipe = io.env[STATE_ENV.pipe] ?? "";
-  const withheld = withheldFrom(io.env[STATE_ENV.withheld]);
+  const withheld = withheldListFrom(io.env[STATE_ENV.withheld]);
   if (!STATE_RUN_ID.test(runId) || !UNO_PIPE_NAME.test(pipe) || withheld === null) {
     io.stderr.write("myco-state: not bound to a trial (run id / pipe / withheld list invalid)\n");
     return 2;

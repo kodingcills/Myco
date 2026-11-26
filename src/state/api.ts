@@ -252,3 +252,31 @@ export function parseStateRequest(tool: unknown, args: unknown): Parsed<StateReq
     }
   }
 }
+
+/**
+ * The harness's withheld list (`MYCO_STATE_WITHHELD`): a JSON array of 1 to 64 absolute host
+ * paths (POSIX `/…`, a drive `C:\…`, or UNC `\\…`), each at least 4 characters with no line
+ * break. Returns the list, or null when it is missing or unusable: the server refuses to
+ * start without one (docs/state/security.md, "Host paths"). Same rule as the launch audit's
+ * `stateWithheldListValid` (src/integrity/surface.ts), spelled here so no state module
+ * imports integrity code; test/state/state-arms.test.ts holds both to one case table.
+ */
+export function withheldListFrom(raw: string | undefined): string[] | null {
+  if (raw === undefined) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 64) return null;
+  for (const p of parsed)
+    if (
+      typeof p !== "string" ||
+      p.length < 4 ||
+      /[\r\n]/.test(p) ||
+      !(p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\"))
+    )
+      return null;
+  return parsed as string[];
+}

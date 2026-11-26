@@ -91,7 +91,9 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
   let base: string;
   let layout: Record<string, string>;
   beforeAll(() => {
-    base = mkdtempSync(join(tmpdir(), "myco-state-e2e-"));
+    // Spaces in the host path, like the round-1 verifier's probe: a file URL or path with
+    // spaces must not slip past the scrubber or the withheld list.
+    base = mkdtempSync(join(tmpdir(), "myco state e2e-"));
     layout = {
       runs: join(base, "runs"),
       vault: join(base, "vault"),
@@ -231,9 +233,24 @@ describe.skipIf(!available)("structured state against a live headless Calc", () 
         trace.modifiedAfterSave = (await client.tool("state_document_status")).data.modified;
         expect(trace.modifiedAfterSave).toBe(false);
       }
+      // The UI tree is "where available" (docs/state/tools.md): a headless soffice without an
+      // accessibility implementation answers UI_TREE_UNAVAILABLE, a code, never a crash. Any
+      // other outcome fails, and the message carries the code and the operator's diagnostics.
       const tree = await client.tool("state_ui_tree", { maxDepth: 2, maxNodes: 20 });
-      expect(tree.ok).toBe(true);
-      expect(tree.data.nodes).toBeLessThanOrEqual(20);
+      trace.treeCode = tree.ok ? "ok" : tree.code;
+      expect(
+        trace.treeCode,
+        `state_ui_tree gave ${JSON.stringify(trace.treeCode)}; server stderr: ${client.stderr.join("").slice(-1500)}`,
+      ).toMatch(/^(ok|UI_TREE_UNAVAILABLE)$/);
+      if (tree.ok) expect(tree.data.nodes).toBeLessThanOrEqual(20);
+
+      // A formula that surfaces the document's host path (round-1 D2): the reply never
+      // carries it. The trial dir is on the mandatory withheld list, so the raw read is
+      // refused before any scrubbing; the bytes on the wire are checked below as well.
+      expect(live.type("H2", '=CELL("filename")').ok).toBe(true);
+      const probe = await client.tool("state_read_range", { range: "H2" });
+      trace.cellFilename = probe.ok ? probe.data.rows[0][0] : probe.code;
+      expect(trace.cellFilename, JSON.stringify(trace.cellFilename)).toBe("OUTPUT_WITHHELD");
       // A hostile call: the server answers with a code, nothing else.
       expect(
         await client.tool("state_read_range", { range: "A1", path: join(vaultRoot, "x") }),

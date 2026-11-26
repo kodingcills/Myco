@@ -99,11 +99,21 @@ export function linuxUnoBackend(options: LinuxUnoBackendOptions): StateBackend {
       child.on("close", () => {
         const last = stdout.trim().split("\n").pop() ?? "";
         try {
-          const parsed = JSON.parse(last) as { ok?: unknown; data?: unknown; code?: unknown };
+          const parsed = JSON.parse(last) as {
+            ok?: unknown;
+            data?: unknown;
+            code?: unknown;
+            diag?: unknown;
+          };
           if (parsed.ok === true && typeof parsed.data === "object" && parsed.data !== null)
             return finish({ ok: true, data: parsed.data as T });
-          if (parsed.ok === false && isStateCode(parsed.code))
+          if (parsed.ok === false && isStateCode(parsed.code)) {
+            // The reader's diag is an exception class name only; the operator sees it, the
+            // agent never does (its reply carries the code alone).
+            if (typeof parsed.diag === "string" && /^[A-Za-z0-9_.]{1,80}$/.test(parsed.diag))
+              options.onDiagnostic?.(`reader ${request.op}: ${parsed.code} (${parsed.diag})`);
             return finish({ ok: false, code: parsed.code });
+          }
         } catch {
           // fall through
         }

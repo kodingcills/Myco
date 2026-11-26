@@ -7,7 +7,7 @@ there, performs ONE read operation and prints one JSON object on stdout:
 
   {"ok": true, "data": {...}}         or         {"ok": false, "code": "CODE"}
 
-Rules this script keeps (test/state/state-reader-static.test.ts enforces the first two):
+Rules this script keeps (test/state/state-scope.test.ts enforces the first two):
 
 - it only reads: no setter, no dispatch, no store, no close, no load;
 - it takes no file path: the document is the one already open in the trial's soffice,
@@ -93,10 +93,29 @@ def a1(col, row):
     return "%s%d" % (col_name(col), row + 1)
 
 
+def utf16_units(text):
+    """Length as the TS server counts it (JavaScript `string.length`: UTF-16 code units)."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
 def clip(text, limit):
-    if len(text) <= limit:
+    """Cut `text` to at most `limit` UTF-16 code units, never inside a surrogate pair.
+
+    The server re-checks every string against the same cap in UTF-16 units; counting code
+    points here would let a cell of astral characters (emoji) pass the reader and fail the
+    server's re-check, so the whole range read would be refused (BACKEND_ERROR).
+    """
+    if utf16_units(text) <= limit:
         return text, False
-    return text[:limit], True
+    out = []
+    units = 0
+    for ch in text:
+        width = 2 if ord(ch) > 0xFFFF else 1
+        if units + width > limit:
+            break
+        out.append(ch)
+        units += width
+    return "".join(out), True
 
 
 def sheet_of(doc, ref):
@@ -252,7 +271,12 @@ def op_ui_tree(doc, req):
                 "childCount": max(0, ctx.getAccessibleChildCount())}
 
     # Breadth-first, so the node budget covers the top levels before any deep branch.
-    tree = make(root)
+    try:
+        tree = make(root)
+    except Exception:
+        # No accessibility implementation behind the window (e.g. a headless build without
+        # the a11y bridge): the tree is "where available", so this is a code, not a crash.
+        raise Refusal("UI_TREE_UNAVAILABLE")
     count = 1
     queue = [(root, tree, 0)]
     head = 0

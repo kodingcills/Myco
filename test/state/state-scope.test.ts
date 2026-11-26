@@ -182,6 +182,7 @@ describe("myco-state CLI binding", () => {
   const good = {
     MYCO_STATE_RUN_ID: "run-a",
     MYCO_STATE_UNO_PIPE: "myco-state-0123456789abcdef-a1b2c3d4e5f6",
+    MYCO_STATE_WITHHELD: JSON.stringify(["/srv/myco/trials/run-a"]),
   };
   const run = async (argv: string[], env: Record<string, string>) => {
     const stdin = new PassThrough();
@@ -203,6 +204,17 @@ describe("myco-state CLI binding", () => {
       [["mcp"], { ...good, MYCO_STATE_UNO_PIPE: "/tmp/sock" }],
       [["mcp"], { ...good, MYCO_STATE_UNO_PIPE: "pipe,name=other" }],
       [["mcp"], { ...good, MYCO_STATE_WITHHELD: "{not json" }],
+      // The withheld list is mandatory (D2, round 1): missing, empty or non-path refuses.
+      [
+        ["mcp"],
+        {
+          MYCO_STATE_RUN_ID: good.MYCO_STATE_RUN_ID,
+          MYCO_STATE_UNO_PIPE: good.MYCO_STATE_UNO_PIPE,
+        },
+      ],
+      [["mcp"], { ...good, MYCO_STATE_WITHHELD: "" }],
+      [["mcp"], { ...good, MYCO_STATE_WITHHELD: "[]" }],
+      [["mcp"], { ...good, MYCO_STATE_WITHHELD: JSON.stringify(["runs"]) }],
       [["mcp", "--doc", "/tmp/x.xlsx"], good],
       [["mcp", join(dirs.vault, "ground-truth.json")], good],
       [[], good],

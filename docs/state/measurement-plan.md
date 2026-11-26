@@ -34,7 +34,9 @@ before any trial runs.
      pre-registered seed).
 - **Guardrails.** False DONEs on the invalid-target tasks are no higher than the baseline's.
   No recorded state-tool output contains a host path, a digest, or any withheld string; any
-  hit voids the run.
+  hit voids the run. (The server already refuses withheld strings and scrubs path-like
+  text: [security.md, Host paths](security.md#host-paths). This guardrail checks the
+  recorded output independently.)
 - **"Not shown"** is reported as such, with the numbers. It is never rounded to a win.
 
 ## Parity the wiring enforces now

@@ -29,7 +29,7 @@ MYCO_STATE_RUN_ID=<run id> MYCO_STATE_UNO_PIPE=<pipe> pnpm myco-state mcp
 |---|---|---|
 | `MYCO_STATE_RUN_ID` | harness | The trial this server is bound to. The launch audit checks it equals the trial's run id. |
 | `MYCO_STATE_UNO_PIPE` | harness | The UNO pipe of the trial's live soffice (`statePipeFor(runId)`, shape `myco-state-<hex>-<hex>`). Not a path. |
-| `MYCO_STATE_WITHHELD` | harness, optional | JSON array of host strings (trial dir, vault, fixture, oracle config) that no reply may contain. |
+| `MYCO_STATE_WITHHELD` | harness, required | JSON array of 1 to 64 absolute host paths (trial dir, vault, fixture, oracle config, other trials) that no reply may contain. The server does not start without it. |
 | `MYCO_PYTHON` | operator, optional | Python with LibreOffice's UNO bridge (default `python3`). |
 
 `myco-state` takes no argument except `mcp`. With a missing or malformed binding, or any
@@ -78,7 +78,8 @@ Returns `rows`: one array per row, one entry per cell.
 | `display` | The text the app shows for the cell. |
 | `formula` | For a formula cell, the formula as the app holds it (`=C2*2`). |
 | `formulaResult` | For a formula cell: `number`, `text` or `error`. |
-| `truncated` | Present when `display` or `formula` was longer than 512 characters and was cut. |
+| `truncated` | Present when `display` or `formula` was longer than 512 characters (UTF-16 code units, as JavaScript counts them; an emoji is 2) and was cut. |
+| `pathScrubbed` | Present when path-like text in `display`, `value` or `formula` was replaced with `[path]` (for example the result of `=CELL("filename")`). |
 
 ### `state_document_status`
 
@@ -112,8 +113,9 @@ children, because a spreadsheet table has millions.
 
 `childrenOmitted` says why a node's children are missing or incomplete: `depth`, `nodes`
 or `width`. Path-like text in names (window titles carry file names) is replaced with
-`[path]`. When the backend has no accessibility tree, the tool returns
-`UI_TREE_UNAVAILABLE`.
+`[path]`. The tree is available only where the backend has an accessibility
+implementation behind the window; where it does not (some headless LibreOffice builds),
+the tool returns `UI_TREE_UNAVAILABLE`.
 
 ## Replies and codes
 

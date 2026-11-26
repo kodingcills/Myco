@@ -19,7 +19,7 @@
  *
  * Rows from these arms are capability measurements, never R1 evidence: their schema is
  * `myco.capability.arm-row/1`, not the benchmark ledger's, they carry `r1Evidence: false`,
- * and the benchmark check refuses them (test/state/arms.test.ts).
+ * and the benchmark check refuses them (test/state/state-arms.test.ts).
  */
 import { join } from "node:path";
 import {
@@ -32,6 +32,7 @@ import {
   MYCO_RT_SESSION_ENV,
   MYCO_STATE_PIPE_ENV,
   MYCO_STATE_RUN_ENV,
+  MYCO_STATE_WITHHELD_ENV,
   rtSessionIdFor,
   STATE_SERVER_CLASS,
   STATE_SERVER_NAME,
@@ -92,7 +93,11 @@ export interface CapabilityArmPlanInput {
   readonly stateServer?: { readonly command: string; readonly args: readonly string[] };
   /** The trial's live soffice pipe (`statePipeFor(runId)`); structured-state only. */
   readonly statePipe?: string;
-  /** Host strings no state reply may contain (trial dir, vault, fixture, oracle config). */
+  /**
+   * Host paths no state reply may contain (trial dir, vault, fixture, oracle config).
+   * Mandatory for structured-state: at least one absolute path (the launch audit refuses a
+   * plan without it).
+   */
   readonly withheld?: readonly string[];
 }
 
@@ -109,15 +114,15 @@ export function capabilityArmPlan(input: CapabilityArmPlanInput): AgentLaunchPla
   if (input.arm === "structured-state") {
     if (!input.stateServer || !input.statePipe)
       throw new Error("structured-state arm needs the state server command and the trial's pipe");
+    if (!input.withheld || input.withheld.length === 0)
+      throw new Error("structured-state arm needs the withheld host paths (trial dir, vault, …)");
     servers[STATE_SERVER_NAME] = {
       command: input.stateServer.command,
       args: [...input.stateServer.args],
       env: {
         [MYCO_STATE_RUN_ENV]: input.runId,
         [MYCO_STATE_PIPE_ENV]: input.statePipe,
-        ...(input.withheld && input.withheld.length > 0
-          ? { MYCO_STATE_WITHHELD: JSON.stringify(input.withheld) }
-          : {}),
+        [MYCO_STATE_WITHHELD_ENV]: JSON.stringify(input.withheld),
       },
     };
   }
@@ -191,8 +196,9 @@ export const CAPABILITY_COST_BASIS =
 
 /**
  * One capability-measurement row. Never R1 evidence: a different schema from the benchmark
- * ledger (`myco.benchmark.arm-row/1`), an arm name the ledger does not accept, and
- * `r1Evidence: false` as a literal type.
+ * ledger (`myco.benchmark.arm-row/1`, which `checkBenchmark` refuses it on), a
+ * `capabilityTrack` and `r1Evidence` fields the ledger's schema refuses, and `r1Evidence:
+ * false` as a literal type. (Its arm name alone is not the barrier: the ledger accepts `hcu+shell`.)
  */
 export interface CapabilityArmRow {
   readonly schema: "myco.capability.arm-row/1";

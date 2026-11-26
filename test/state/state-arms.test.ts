@@ -23,8 +23,9 @@ import {
   MYCO_STATE_ENV_KEYS,
   MYCO_STATE_MCP_TOOLS,
   STATE_SERVER_CLASS,
+  stateWithheldListValid,
 } from "../../src/integrity/surface.ts";
-import { STATE_TOOL_NAMES } from "../../src/state/api.ts";
+import { STATE_TOOL_NAMES, withheldListFrom } from "../../src/state/api.ts";
 import {
   auditCapabilityArmLaunch,
   CAPABILITY_ARM_TOOLS,
@@ -195,6 +196,41 @@ describe("the audit refuses each mutation (mutation table)", () => {
       },
     ],
     [
+      "server args carry a flag before mcp (--inspect)",
+      ss,
+      (m) => {
+        m.mcpServers[STATE_SERVER_NAME].args = ["--inspect", "mcp"];
+      },
+    ],
+    [
+      "server args carry a flag mid-way (tsx --inspect x.ts mcp)",
+      ss,
+      (m) => {
+        m.mcpServers[STATE_SERVER_NAME].args = ["tsx", "--inspect", "/opt/x.ts", "mcp"];
+      },
+    ],
+    [
+      "withheld list missing",
+      ss,
+      (m) => {
+        delete m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_WITHHELD;
+      },
+    ],
+    [
+      "withheld list empty",
+      ss,
+      (m) => {
+        m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_WITHHELD = "[]";
+      },
+    ],
+    [
+      "withheld list of non-paths",
+      ss,
+      (m) => {
+        m.mcpServers[STATE_SERVER_NAME].env.MYCO_STATE_WITHHELD = JSON.stringify(["runs"]);
+      },
+    ],
+    [
       "server args do not end in mcp",
       ss,
       (m) => {
@@ -220,6 +256,78 @@ describe("the audit refuses each mutation (mutation table)", () => {
     const audit = auditCapabilityArmLaunch(mutate(plan(arm), change), { arm, runId: RUN });
     expect(audit.ok).toBe(false);
     expect(audit.violations.length).toBeGreaterThan(0);
+  });
+
+  // Each binding rule refuses on its own (not only via another rule that also fires).
+  const binding: Array<
+    [string, (env: Record<string, string>, args: string[]) => string[], RegExp]
+  > = [
+    ["a flag before mcp", (_e, a) => ["--inspect", ...a], /no flags/],
+    ["a flag mid-way", (_e, a) => [a[0] ?? "", "--inspect", ...a.slice(1)], /no flags/],
+    [
+      "no withheld list",
+      (e, a) => {
+        delete e.MYCO_STATE_WITHHELD;
+        return a;
+      },
+      /MYCO_STATE_WITHHELD/,
+    ],
+    [
+      "an empty withheld list",
+      (e, a) => {
+        e.MYCO_STATE_WITHHELD = "[]";
+        return a;
+      },
+      /MYCO_STATE_WITHHELD/,
+    ],
+  ];
+  it.each(binding)("the state binding names the rule for %s", (_name, change, detail) => {
+    const p = mutate(plan(ss), (m) => {
+      const server = m.mcpServers[STATE_SERVER_NAME];
+      server.args = change(server.env, server.args);
+    });
+    const audit = auditCapabilityArmLaunch(p, { arm: ss, runId: RUN });
+    expect(audit.ok).toBe(false);
+    expect(audit.violations.map((v) => v.detail)).toEqual([expect.stringMatching(detail)]);
+  });
+
+  it("the plan builder refuses a structured-state plan with no withheld paths", () => {
+    for (const withheld of [undefined, []])
+      expect(() =>
+        capabilityArmPlan({
+          arm: ss,
+          runId: RUN,
+          instruction: "x",
+          configDir: CONFIG,
+          stateServer: { command: "npx", args: ["tsx", "/opt/x.ts", "mcp"] },
+          statePipe: PIPE,
+          withheld,
+        }),
+      ).toThrow(/withheld/);
+  });
+});
+
+describe("the audit and the server read the withheld list by one rule", () => {
+  const cases: Array<[string | undefined, boolean]> = [
+    [undefined, false],
+    ["", false],
+    ["{not json", false],
+    ["{}", false],
+    ["[]", false],
+    ['"/srv/x"', false],
+    ['["runs"]', false],
+    ['["/ab"]', false],
+    ['["/srv/x\n"]', false],
+    ["[1]", false],
+    [JSON.stringify(Array.from({ length: 65 }, (_, i) => `/srv/t${i}`)), false],
+    ['["/srv/x"]', true],
+    [JSON.stringify(["C:\\trials\\run-1", "D:/vault"]), true],
+    [JSON.stringify(["\\\\srv\\share"]), true],
+    [JSON.stringify(Array.from({ length: 64 }, (_, i) => `/srv/t${i}`)), true],
+  ];
+  it.each(cases)("%s -> %s", (raw, valid) => {
+    expect(stateWithheldListValid(raw)).toBe(valid);
+    expect(withheldListFrom(raw) !== null).toBe(valid);
   });
 });
 
@@ -310,7 +418,13 @@ describe("capability arm rows are never R1 evidence", () => {
   it("the benchmark check refuses them, even as plumbing", () => {
     const result = checkBenchmark(rows, [], { expectTrials: {} as never, evidence: true });
     expect(result.ok).toBe(false);
-    expect(result.errors.length).toBeGreaterThan(0);
+    // The schema itself refuses every row (an empty grade ledger alone would also fail).
+    rows.forEach((_r, i) => {
+      expect(result.errors).toContain(
+        `arm row ${i}: $.schema expected const "myco.benchmark.arm-row/1", got "myco.capability.arm-row/1"`,
+      );
+      expect(result.errors).toContain(`arm row ${i}: $ unexpected property "r1Evidence"`);
+    });
     expect(result.provenance === "evidence").toBe(false);
   });
 });
