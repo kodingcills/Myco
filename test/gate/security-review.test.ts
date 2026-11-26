@@ -426,13 +426,14 @@ describe("the security review's symbol refs hold on main (D1)", () => {
   });
 
   it("anchors match code: every comment is blanked, and only comments", () => {
+    const sub = "$" + "{1}"; // a template substitution, spelled so it is not one here
     const text = [
       "/** doc A */",
       "function f() {",
       // A character outside the BMP is two UTF-16 units: offsets after it must still line up.
       '  const a = g("\u{1F344}", // trailing B',
       "    // own-line C",
-      '    "// in a string", `/* in a template ${1} */`); /* block D */',
+      `    "// in a string", \`/* in a template ${sub} */\`); /* block D */`,
       "  return a; }",
       "// end E",
     ].join("\n");
@@ -443,7 +444,7 @@ describe("the security review's symbol refs hold on main (D1)", () => {
       expect(code).not.toContain(comment);
     }
     expect(code.replace(/\s+/g, " ").trim()).toBe(
-      'function f() { const a = g("\u{1F344}", "// in a string", `/* in a template ${1} */`); return a; }',
+      `function f() { const a = g("\u{1F344}", "// in a string", \`/* in a template ${sub} */\`); return a; }`,
     );
   });
 
