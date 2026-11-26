@@ -55,7 +55,6 @@ import {
   closedMediaType,
   HEX64,
   HEX64_SOURCE,
-  LEDGER_ID_SOURCE,
   MEDIA_TYPE_SOURCE,
   type TextRef,
   textDigest,
@@ -278,7 +277,8 @@ export const BODY_SCHEMAS: Record<RecordKind, JsonSchema> = {
     additionalProperties: false,
     required: ["trialKey", "startSeq", "endSeq", "ledgerEvents", "ledgerHeadSha256"],
     properties: {
-      trialKey: { type: "string", pattern: LEDGER_ID_SOURCE },
+      // From the ledger, narrowed to the proof's closed id grammar (`ledger.ts`).
+      trialKey: ID,
       startSeq: { type: "integer", minimum: 0 },
       endSeq: { type: "integer", minimum: 0 },
       ledgerEvents: { type: "integer", minimum: 1 },

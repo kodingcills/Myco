@@ -8,6 +8,13 @@
  * (`^[A-Za-z0-9._:-]{1,128}$`: no separator, no whitespace, no escape). A ledger that fails
  * #518's check is refused, so nothing outside that schema is ever carried.
  *
+ * #518's id grammar admits `:` and a leading `.`/`-`, so it can spell a drive-relative path
+ * (`C:<user>`) or `..`. A bundle carries the ids verbatim (they are under the chain), so they
+ * cannot be hashed: instead Q NARROWS them. Every `trialKey` and `taskId` must also match the
+ * proof's `CLOSED_ID` (starts alphanumeric; letters, digits, `.`, `_`, `-`; no `:`), or the
+ * ledger is refused, on export and on verify (#553 r2 field re-audit). No real ledger id uses
+ * `:` (the runners write `r1p-<task>-a<n>`, `dry-<task>`, `demo-<i>-<task>`).
+ *
  * #518's messages may quote a value (its schema validator does); this module never passes
  * them on. A refusal says only which event failed and how many issues it had.
  *
@@ -17,6 +24,7 @@
  */
 import { createHash } from "node:crypto";
 import { type AttemptEvent, type LedgerHead, verifyAttemptLedger } from "../m2/attempt-ledger.ts";
+import { CLOSED_ID } from "./closed.ts";
 
 export type { AttemptEvent as LedgerEvent, LedgerHead } from "../m2/attempt-ledger.ts";
 export { ATTEMPT_EVENT_SCHEMA, eventSha256, GENESIS_SHA256 } from "../m2/attempt-ledger.ts";
@@ -47,7 +55,14 @@ export function verifyLedgerChain(lines: readonly unknown[]): {
   readonly errors: readonly string[];
 } {
   const { events, head, errors } = verifyAttemptLedger(lines);
-  if (errors.length === 0) return { events, head, errors: [] };
+  if (errors.length === 0) {
+    const narrowed = events.flatMap((e, i) =>
+      CLOSED_ID.test(e.trialKey) && CLOSED_ID.test(e.taskId)
+        ? []
+        : [`ledger event ${i} has an id outside the proof's closed id grammar`],
+    );
+    return { events, head, errors: narrowed };
+  }
   const failing = new Map<number, number>();
   for (const m of errors) {
     const at = /^attempt event (\d+):/.exec(m);

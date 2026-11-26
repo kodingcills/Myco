@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { JsonSchema } from "../../schemas/validate.ts";
 import { validateEpisode } from "../../src/episode/validate.ts";
+import { verifyAttemptLedger } from "../../src/m2/attempt-ledger.ts";
 import { findLeaks } from "../../src/proof/backstop.ts";
 import {
   BODY_SCHEMAS,
@@ -352,6 +353,54 @@ describe("the structural replacements themselves", () => {
     const r = verifyProofBundle(serializeProofBundle(rechain(f)));
     expect(r.errors.map((e) => e.code)).toContain("PROOF_SCHEMA");
     expect(JSON.stringify(r)).not.toContain("qzjdoe");
+  });
+
+  it("re-audit: a ledger id #518 admits but that spells a path (C:<user>, ..) is refused, export and verify", () => {
+    for (const bad of ["C:qzjdoe", "..", "-C:qzjdoe", "a:qzjdoe"]) {
+      for (const field of ["trialKey", "taskId"] as const) {
+        const ledger = buildLedger([
+          { kind: "start", trialKey: "t-ours", taskId: "df-s02", arm: "myco-gate", [field]: bad },
+          {
+            kind: "end",
+            trialKey: "t-ours",
+            taskId: "df-s02",
+            arm: "myco-gate",
+            outcome: "completed",
+            [field]: bad,
+          },
+        ]);
+        // #518's own check accepts it: the narrowing is Q's.
+        expect(verifyAttemptLedger(ledger.lines).errors, `${field}=${bad}`).toEqual([]);
+        const run: ProofRunInput = {
+          ...sampleRun(),
+          ...(field === "taskId" ? { taskId: bad } : {}),
+          ledger: {
+            lines: ledger.lines,
+            head: ledger.head,
+            trialKey: field === "trialKey" ? bad : "t-ours",
+          },
+        };
+        let message = "";
+        try {
+          exportProofBundle(run, NO_CTX);
+        } catch (e) {
+          message = (e as Error).message;
+        }
+        expect(message, `${field}=${bad}`).toMatch(/^PROOF_LEDGER_CHAIN: .*closed id grammar/);
+        expect(message).not.toContain("qzjdoe");
+        // A forger who swaps such a ledger into an honest bundle is refused too.
+        const f = clone(exportProofBundle(sampleRun(), NO_CTX)) as unknown as {
+          ledger: { events: unknown[] };
+        };
+        f.ledger.events = ledger.lines;
+        const r = verifyProofBundle(serializeProofBundle(rechain(f as never)));
+        expect(
+          r.errors.map((e) => e.code),
+          `${field}=${bad}`,
+        ).toContain("PROOF_LEDGER_CHAIN");
+        expect(JSON.stringify(r)).not.toContain("qzjdoe");
+      }
+    }
   });
 
   it("a planted path in a hashed id still binds: the verdict's runId equals the run's", () => {

@@ -151,7 +151,7 @@ The exporter does not look at what a string says. It looks at which field it is 
 | media type | as is only when it is a member of the **closed enum** `MEDIA_TYPES` (`application/json`, `image/jpeg`, `image/png`, `text/csv`, `text/plain`), else **hashed**; never a grammar (a `type/subtype` grammar admits `srv/<user>`) | `evidence.mediaType` |
 | text | **always hashed**: a `TextRef` `{sha256, chars}`, the digest of the raw value and its length | `action.summary`, `handoff.summary`, `evidence.path` |
 | artifact | **never written**: its sha256 and byte count only | `evidence.content` |
-| ledger | verbatim, because every field is closed under #518's schema (ids in #518's grammar `^[A-Za-z0-9._:-]{1,128}$`, enums, integers, digests); a ledger that fails #518's check is refused | `ledger.lines`; `ledger.trialKey` (the input) is only used to find the trial: the anchor's trial key is taken from the ledger, never from the input |
+| ledger | verbatim, because every field is closed under #518's schema (enums, integers, digests, and ids in #518's grammar `^[A-Za-z0-9._:-]{1,128}$`), NARROWED by Q: every `trialKey` and `taskId` must also match the closed id grammar above (no `:`, starts alphanumeric), since #518's grammar can spell `C:<user>` or `..`; a ledger that fails #518's check or the narrowing is refused, on export and verify | `ledger.lines`; `ledger.trialKey` (the input) is only used to find the trial: the anchor's trial key is taken from the ledger, never from the input |
 | episode | **never written**: its id and digest only | `episode` |
 
 **Hashed, not placeholdered.** Every replacement is a digest: no field uses a fixed placeholder,
