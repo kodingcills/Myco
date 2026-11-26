@@ -115,10 +115,13 @@ faulted trial, the fault landed. Ineligible trials are counted and listed by cau
 trial still fails R1. R1's bar there is at least **100 trials counted toward R1 = eligible
 gated trials + unregistrable trials**; a harness-faulted trial never counts toward the 100.
 A trial lost to a harness fault is **re-run in place**: its row is replaced, never appended,
-and the faulted attempt is kept on record, linked to its replacement, with its cost still
-counted in the pack's cost row R7, which sums superseded attempts. `costPerVerifiedTask` in
-`scripts/benchmark-check.ts` reads `arm.jsonl` only and never includes a replaced attempt
-(lead ruling 2026-11-26 12:22Z; the pack check enforces it once #511 merges, **pending**).
+and the faulted attempt is kept whole in the pack's `superseded.jsonl` with its reason and a
+`replacedBy` link to its replacement. Only a harness fault the gate never judged may be
+replaced: never a gate verdict, an accepted DONE or an unregistrable trial. A superseded
+attempt is in no R1, R2 or R3 count, but its cost still counts in the pack's cost row R7,
+which sums superseded attempts. `costPerVerifiedTask` in `scripts/benchmark-check.ts` reads
+`arm.jsonl` only and never includes a replaced attempt (lead rulings 2026-11-26 12:22Z and
+13:42Z; the M2 pack check enforces this, #511).
 
 **Detection (R3).** Over the gated arm's eligible faulted trials, per fault class:
 - false successes: accepted DONEs the grader does not pass, over eligible trials;

@@ -24,8 +24,9 @@ what you compare against at the end.
 
 Set `RELEASE_FILES` to the directory you unpacked the release into (the one holding
 `arm.jsonl` and `docs/`), then run this from the clone root (`myco` above). It makes a new,
-empty release directory with `mktemp -d`, links the clone's code into it, copies the release
-in and moves you there. Each step runs only if the one before it succeeded. It checks the
+empty release directory under `$TMPDIR` (or `/tmp`) with `mktemp -d` and an explicit
+template, which GNU and BSD `mktemp` (Linux and macOS) read the same way, links the clone's
+code into it, copies the release in and moves you there. Each step runs only if the one before it succeeded. It checks the
 release and the clone before it creates anything, so an unset `RELEASE_FILES`, a release
 without `arm.jsonl` or `docs/`, or a directory that is not the clone root stops it with a
 non-zero exit, nothing created, and you stay where you were:
@@ -33,7 +34,7 @@ non-zero exit, nothing created, and you stay where you were:
 ```sh
 test -f "${RELEASE_FILES:?set RELEASE_FILES to the unpacked release}/arm.jsonl" \
   && test -d "$RELEASE_FILES/docs" && test -f scripts/benchmark-grade.ts \
-  && RELEASE=$(mktemp -d) \
+  && RELEASE=$(mktemp -d "${TMPDIR:-/tmp}/myco-release.XXXXXX") \
   && ln -s "$PWD/scripts" "$PWD/src" "$PWD/schemas" "$PWD/benchmark" \
     "$PWD/node_modules" "$PWD/package.json" "$RELEASE/" \
   && cp "$RELEASE_FILES/arm.jsonl" "$RELEASE/" && cp -R "$RELEASE_FILES/docs" "$RELEASE/docs" \
@@ -55,7 +56,8 @@ test ! -e .git || { echo "not a release directory: see §1 setup" >&2; false; } 
 
 # 3. Grade again, independently of the release's grades.
 #    Exit 0 (an unreadable document grades ungradable); exit 1 on an empty or invalid request
-#    file, or when step 2 wrote none
+#    file, or when step 2 wrote none (in a clone: an ENOENT error naming work/requests.jsonl,
+#    and the shell's redirect leaves an empty regraded.jsonl behind)
 npx tsx scripts/benchmark-grade.ts work/requests.jsonl > regraded.jsonl
 ```
 
@@ -97,11 +99,14 @@ result says `taskSetBinding.applied: false` and R1 does not pass.
 blocks and runs each one verbatim, with no path rewriting. It runs the setup block from the
 clone root, with `RELEASE_FILES` naming an unpacked SIMULATED fc-v1 run (a scripted agent, no
 model), and runs the rest in the release directory the setup made:
+- the setup makes one new release directory under `$TMPDIR`; CI runs this on Linux and
+  macOS;
 - the setup exits non-zero, creating nothing, when `RELEASE_FILES` is unset, when it names
   a directory without `docs/`, and when run outside the clone root;
 - steps 1-3 exit 0;
-- step 2 run in a clone instead exits 1 with "not a release directory", and step 3 then
-  exits 1, so a reader who skips the setup gets an error, never 100 ungradable grades;
+- step 2 run in a clone instead exits 1 with "not a release directory", whether the clone's
+  `.git` is a directory or a worktree's `.git` file, and step 3 then exits 1, so a reader who
+  skips the setup gets an error, never 100 ungradable grades;
 - the gated check without `--expect-unregistrable` exits 2;
 - both check commands exit 1 on it, with the provenance refusal above;
 - with the planner relabelled to a Claude model id (inside the test only), the gated check

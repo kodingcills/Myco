@@ -126,16 +126,19 @@ R1 is the gated arm's bar: zero false DONEs accepted on fc-v1, with a bound.
   check (`src/m2/evidence.ts`), not by `scripts/benchmark-check.ts`, whose R1 is bound to
   fc-v1 but applies no eligibility rule.
 - **Harness faults never count** toward the 100. A harness-faulted trial is still reported by
-  cause. On main it stays in the headline's denominator; once #511 merges (**pending**), a
-  re-run replaces it there, as the next item describes.
+  cause, and it stays in the headline's denominator until it is re-run; a re-run replaces it
+  there, as the next item describes.
 - **Topped-up runs are re-run in place.** A trial lost to a harness fault is re-run as the same
-  trial: its row is replaced, never appended, and the faulted attempt is kept on record with
-  its reason, linked to its replacement. Only harness faults may be replaced; a refuted,
-  unregistrable or step-budget outcome never is. The replaced attempt's cost still counts in
-  the M2 pack's cost row (R7, which sums superseded attempts); `scripts/benchmark-check.ts`'s
-  cost per verified task sees only `arm.jsonl`, so it never includes a replaced attempt (lead
-  rulings 2026-11-26 12:22Z and 13:42Z). The pack check enforces this once #511 merges
-  (**pending**).
+  trial: its row in `arm.jsonl` is replaced, never appended, and the faulted attempt is kept
+  whole in the pack's `superseded.jsonl` with its reason and a `replacedBy` link to its
+  replacement. Only harness faults may be replaced; a gate verdict (`verified`, `refuted` or
+  `uncertain`), an accepted DONE, an unregistrable trial, a gated trial on an unsatisfiable
+  task, or a step-budget outcome never is. A superseded attempt is in no R1, R2 or R3 count.
+  Its cost still counts in the M2 pack's cost row (R7, which sums superseded attempts);
+  `scripts/benchmark-check.ts`'s cost per verified task sees only `arm.jsonl`, so it never
+  includes a replaced attempt (lead rulings 2026-11-26 12:22Z and 13:42Z). The M2 evidence
+  pack check (`src/m2/evidence.ts`, #511) enforces these rules and refuses a pack that breaks
+  them.
 - **The headline** is false DONEs accepted (plus accepted ungradable) over **all 100 trials**,
   unregistrable ones included, with the gated and unregistrable rows each on their own line.
 - **Bound to fc-v1.** The rows must be exactly fc-v1, run a whole number of times, each task

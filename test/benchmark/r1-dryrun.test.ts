@@ -11,6 +11,8 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -199,9 +201,14 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     const relabel = (rows: readonly BenchmarkArmRow[]) =>
       rows.map((r) => ({ ...r, plannerModelId: "claude-opus-5-5" }));
 
-    /** The doc's setup block, verbatim, from the clone root; mktemp lands under a fresh TMPDIR. */
+    /**
+     * The doc's setup block, verbatim, from the clone root. Its mktemp template names
+     * `$TMPDIR`, so the release directory lands under this fresh TMPDIR on GNU and BSD
+     * mktemp alike (#517 round 2, D1: a bare `mktemp -d` ignored TMPDIR on macOS).
+     */
     const runSetup = (releaseFiles: string | undefined, cwd = ROOT) => {
       const tmp = mkdtempSync(join(tmpdir(), "myco-reproduce-tmp-"));
+      expect(readdirSync(tmp)).toEqual([]);
       const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: tmp };
       delete env.RELEASE_FILES;
       if (releaseFiles !== undefined) env.RELEASE_FILES = releaseFiles;
@@ -213,7 +220,12 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
       const s = runSetup(published);
       expect(s.status, s.stderr).toBe(0);
       const release = /^release directory: (.+)$/m.exec(s.stdout)?.[1] as string;
-      expect(release.startsWith(s.tmp)).toBe(true);
+      // The setup made exactly one new directory, directly under its TMPDIR. Real paths, so
+      // macOS's /var -> /private/var link (and any logical $PWD) compares equal.
+      const made = readdirSync(s.tmp);
+      expect(made).toHaveLength(1);
+      expect(made[0]).toMatch(/^myco-release\./);
+      expect(realpathSync(release)).toBe(realpathSync(join(s.tmp, made[0] as string)));
       const results = [...common, check].map((cmd) => {
         // Verbatim: no path rewriting. The setup linked the clone's code in.
         const r = spawnSync("sh", ["-c", cmd], { cwd: release, encoding: "utf8" });
@@ -259,6 +271,24 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     expect(existsSync(join(clone, "work"))).toBe(false);
     const noRequests = spawnSync("sh", ["-c", grade], { cwd: clone, encoding: "utf8" });
     expect(noRequests.status).toBe(1);
+    // What the doc's step 3 comment says the reader sees there (#517 round 2, nit 3).
+    expect(noRequests.stderr).toContain("ENOENT");
+    expect(noRequests.stderr).toContain("work/requests.jsonl");
+    expect(statSync(join(clone, "regraded.jsonl")).size).toBe(0);
+    // A git worktree's `.git` is a file, not a directory; the guard refuses it too
+    // (#517 round 2, nit 1: `test ! -d .git` would let it through).
+    const worktree = mkdtempSync(join(tmpdir(), "myco-reproduce-worktree-"));
+    writeFileSync(join(worktree, ".git"), "gitdir: /elsewhere/.git/worktrees/w\n");
+    for (const name of LINKED) symlinkSync(join(ROOT, name), join(worktree, name));
+    cpSync(join(clone, "docs"), join(worktree, "docs"), { recursive: true });
+    cpSync(join(clone, "arm.jsonl"), join(worktree, "arm.jsonl"));
+    const refusedWorktree = spawnSync("sh", ["-c", makeRequests], {
+      cwd: worktree,
+      encoding: "utf8",
+    });
+    expect(refusedWorktree.status, refusedWorktree.stderr).toBe(1);
+    expect(refusedWorktree.stderr).toContain("not a release directory");
+    expect(existsSync(join(worktree, "work"))).toBe(false);
     // The guard is what makes it loud: the same make-requests without it exits 0 there.
     const unguarded = makeRequests.slice(makeRequests.indexOf("npx tsx "));
     expect(unguarded).not.toContain(".git");
@@ -306,7 +336,11 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     for (const claim of [
       "- the setup exits non-zero, creating nothing, when `RELEASE_FILES` is unset, when it names a directory without `docs/`, and when run outside the clone root;",
       "- steps 1-3 exit 0;",
-      '- step 2 run in a clone instead exits 1 with "not a release directory", and step 3 then exits 1,',
+      "- step 2 run in a clone instead exits 1 with \"not a release directory\", whether the clone's `.git` is a directory or a worktree's `.git` file, and step 3 then exits 1,",
+      "- the setup makes one new release directory under `$TMPDIR`;",
+      "(in a clone: an ENOENT error naming work/requests.jsonl,",
+      "and the shell's redirect leaves an empty regraded.jsonl behind)",
+      'RELEASE=$(mktemp -d "${TMPDIR:-/tmp}/myco-release.XXXXXX")',
       "- the gated check without `--expect-unregistrable` exits 2;",
       "- both check commands exit 1 on it, with the provenance refusal above;",
       "- **2** on a usage error, including `--require-r1` on the gated arm without `--expect-unregistrable`.",
@@ -344,6 +378,9 @@ function reproduceSection(doc: string): { setup: string; commands: string[] } {
   const setups = blocks.filter((b) => b.includes("mktemp"));
   expect(setups).toHaveLength(1);
   const setup = setups[0] as string;
+  // An explicit template under TMPDIR: GNU and BSD mktemp both honour it, so the test's
+  // "creating nothing" checks look where the setup would create (#517 round 2, D1).
+  expect(setup).toContain('mktemp -d "${TMPDIR:-/tmp}/myco-release.XXXXXX"');
   // The setup links exactly the files the test's fake clone links.
   for (const name of LINKED) expect(setup).toContain(`"$PWD/${name}"`);
   const commands = blocks

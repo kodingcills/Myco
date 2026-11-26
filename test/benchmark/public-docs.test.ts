@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { m2SupersededSchema } from "../../schemas/m2-evidence.ts";
 import {
   type BenchmarkArmRow,
   COST_BASIS,
@@ -99,10 +100,38 @@ describe("public benchmark package matches the code", () => {
       "One run of fc-v1 reaches 100 only if all 90 of its gated trials are eligible",
     );
     expect(card).toContain("but applies no eligibility rule");
-    // Nit 3: the denominator sentence carries #511's pending qualifier.
+    // The denominator sentence, now that #511 (topped-up runs) is on main.
     expect(card).toContain(
-      "On main it stays in the headline's denominator; once #511 merges (**pending**)",
+      "it stays in the headline's denominator until it is re-run; a re-run replaces it there",
     );
+    // Binding ruling: harness faults never count toward the 100 (#517 round 2, nit 2).
+    expect(card).toContain("**Harness faults never count** toward the 100.");
+    expect(protocol).toContain("a harness-faulted trial never counts toward the 100");
+  });
+
+  it("describes #511's topped-up runs as on main, and nothing from the open #518 (#517 round 2, D2)", () => {
+    const flatCard = card.replace(/\s+/g, " ");
+    const flatProtocol = protocol.replace(/\s+/g, " ");
+    // #511 is merged: no doc calls it pending or future.
+    for (const doc of [card, protocol, reproduce, readme]) {
+      const flat = doc.replace(/\s+/g, " ");
+      expect(flat).not.toMatch(/#511[^.]*\bpending\b/i);
+      expect(flat).not.toMatch(/once #511 merges/i);
+      // #518 (attempt ledger) is still open: nothing describes it as on main.
+      expect(flat).not.toContain("#518");
+      expect(flat).not.toMatch(/attempt ledger/i);
+    }
+    // What main's pack check does (src/m2/evidence.ts checkSuperseded, m2SupersededSchema).
+    expect(flatCard).toContain(
+      "The M2 evidence pack check (`src/m2/evidence.ts`, #511) enforces these rules and refuses a pack that breaks them.",
+    );
+    expect(flatProtocol).toContain("the M2 pack check enforces this, #511");
+    for (const flat of [flatCard, flatProtocol]) {
+      expect(flat).toContain("`superseded.jsonl`");
+      expect(flat).toContain("`replacedBy` link");
+      expect(flat).toContain("is in no R1, R2 or R3 count");
+    }
+    expect(m2SupersededSchema.properties).toHaveProperty("replacedBy");
   });
 
   it("publishes no results and claims no leaderboard or hosted service", () => {
