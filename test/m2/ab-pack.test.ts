@@ -582,6 +582,9 @@ describe("#554 round 1 fixes", () => {
         writeFileSync(join(root, "docs", "benchmark", "swap.md"), "# a different design\n");
         renameSync(join(root, "docs", "benchmark", "swap.md"), where.real);
         expect(preregSha256(where)).toBeNull();
+        // And a pre-registration left unread (null hash) never passes on its own.
+        const unread = checkAbPack({ ...input, preregCommittedSha256: null });
+        expect(unread.ok).toBe(false);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
