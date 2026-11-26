@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type ScriptedDesktopAgent, scriptedFileAgent } from "../../src/parallel/agents.ts";
 import { STRICT_REQUIREMENTS } from "../../src/parallel/backend.ts";
-import { renderReport } from "../../src/parallel/cli.ts";
+import { main, renderReport } from "../../src/parallel/cli.ts";
 import { behaviourFor, EXPECTED_VERDICT, runThroughput } from "../../src/parallel/throughput.ts";
 import { fakeBackend, STRONG } from "./fake-backend.ts";
 
@@ -118,4 +118,25 @@ describe("throughput harness ($0, scripted agents)", () => {
       "wrong-row": "refuted",
     });
   });
+});
+
+describe("myco-parallel exit codes (docs §1: 0 / 1 / 3)", () => {
+  it("3 on a usage error, 0 on --help", async () => {
+    const lines: string[] = [];
+    expect(await main(["--bogus"], (t) => lines.push(t))).toBe(3);
+    expect(await main(["--help"], (t) => lines.push(t))).toBe(0);
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "1 under the strict default on linux-plain (every trial refused), 0 when weak is allowed",
+    async () => {
+      const quiet = () => {};
+      const common = ["--n", "1", "--trials", "2", "--agent", "file", "--display", "none"];
+      expect(await main([...common, "--out", join(base, "strict")], quiet)).toBe(1);
+      expect(
+        await main([...common, "--allow-weak-isolation", "--out", join(base, "weak")], quiet),
+      ).toBe(0);
+    },
+    60_000,
+  );
 });

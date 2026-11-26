@@ -61,6 +61,21 @@ describe("run ids collide by their case-folded form", () => {
     expect(() => assertDistinctFolded(["Run-A.", "run-a"])).toThrow(/bad-run-id/);
     for (const ok of ["run-a", "a.b", "console", "nul-1", "com10", "lpt-1", "run.v2"])
       expect(checkRunId(ok)).toBe(ok);
+    // Trailing space, lookalikes (Cyrillic a, Kelvin sign, zero-width space, fullwidth),
+    // NFD and NTFS stream / short-name forms: all outside the ASCII rule.
+    for (const bad of [
+      "run-a ",
+      "run-a. .",
+      "run-\u0430",
+      "\u212Aey",
+      "run\u200Ba",
+      "\uFF52\uFF55\uFF4E",
+      "cafe\u0301",
+      "caf\u00E9",
+      "run-a::$DATA",
+      "RUN-A~1",
+    ])
+      expect(() => checkRunId(bad)).toThrow(/^bad-run-id:/);
     // Second line: even if a trailing dot got past the rule, it folds onto the bare id.
     expect(foldRunId("Run-A.")).toBe(foldRunId("run-a"));
   });

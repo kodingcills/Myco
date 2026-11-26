@@ -14,6 +14,11 @@
  *   tsx special-file-child.ts pool <run-root> fifo|dir|socket
  *     runs one trial on the fake backend whose agent replaces its state file with that
  *     special file, and prints {"disqualifiers":[...],"counted":bool,"error":"..."}
+ *   tsx special-file-child.ts swapped-capture <workspace-dir> <rel>
+ *   tsx special-file-child.ts swapped-scan <dir>
+ *     round-3 B3: the same, but the pre-open lstat LIES (reports the FIFO at <rel>/<dir>
+ *     as a small regular file), standing in for a swap between the lstat and the open.
+ *     Prints {"refused":"<code>"} / {"bytes":n} or {"complete":bool}
  *   tsx special-file-child.ts evidence <run-root> <site> fifo|file|dirlink
  *     round-3 B1: two trials, an attacker and an honest sibling, on the fake backend. Before
  *     the harness writes <site> (marker | fixture | mcp | agent-output | record |
@@ -26,6 +31,7 @@ import { spawnSync } from "node:child_process";
 import {
   closeSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   realpathSync,
   renameSync,
@@ -44,6 +50,7 @@ import {
   MARKER_FILE,
   openNoBlock,
   runPool,
+  scanTree,
 } from "../../src/parallel/pool.ts";
 import { CALC_ORACLE_SOURCES, L_TASK_ID, lTaskRegistry } from "../../src/parallel/throughput.ts";
 import { fakeBackend } from "./fake-backend.ts";
@@ -196,6 +203,32 @@ async function main(): Promise<void> {
     process.stdout.write(
       `${JSON.stringify({ disqualifiers: t?.disqualifiers, counted: t?.countedVerified, error: t?.error })}\n`,
     );
+    return;
+  }
+  if (mode === "swapped-capture" || mode === "swapped-scan") {
+    // Report every non-dir as a 10-byte regular file, as if lstat ran before the swap.
+    const liar = (p: string) => {
+      const st = lstatSync(p);
+      if (st.isDirectory()) return st;
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, {
+        size: 10,
+        isFile: () => true,
+        isFIFO: () => false,
+        isSymbolicLink: () => false,
+      }) as typeof st;
+    };
+    if (mode === "swapped-scan") {
+      const r = scanTree(a as string, new Map([["x", "MYCO-L-MARK-x"]]), liar);
+      process.stdout.write(`${JSON.stringify({ complete: r.complete })}\n`);
+      return;
+    }
+    try {
+      const bytes = captureRegularFile(realpathSync(a as string), b as string, liar);
+      process.stdout.write(`${JSON.stringify({ bytes: bytes.length })}\n`);
+    } catch (e) {
+      if (!(e instanceof CaptureRefused)) throw e;
+      process.stdout.write(`${JSON.stringify({ refused: e.code })}\n`);
+    }
     return;
   }
   if (mode === "evidence") return evidence(a as string, b as string, c as string);

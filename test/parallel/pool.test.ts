@@ -638,6 +638,74 @@ describe.skipIf(process.platform === "win32")(
   },
 );
 
+describe.skipIf(process.platform === "win32")(
+  "B3: a file swapped for a FIFO between the lstat and the open (lying lstat)",
+  () => {
+    it(
+      "capture re-checks on the fd: refused not-regular, at once",
+      () => {
+        const ws = join(base, "ws-swap");
+        mkdirSync(ws);
+        spawnSync("mkfifo", [join(ws, "sheet.csv")]);
+        expect(child(["swapped-capture", ws, "sheet.csv"])).toEqual({ refused: "not-regular" });
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+
+    it(
+      "the marker scan opens without blocking and marks the tree incomplete",
+      () => {
+        const dir = join(base, "scan-swap");
+        mkdirSync(dir);
+        spawnSync("mkfifo", [join(dir, "f")]);
+        expect(child(["swapped-scan", dir]) as unknown).toEqual({ complete: false });
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+  },
+);
+
+describe("B3: capture codes and malformed isolation reports", () => {
+  it("a symlinked state file is refused with the code symlink", () => {
+    const ws = realpathSync(base);
+    writeFileSync(join(ws, "target.csv"), "a,b\n");
+    symlinkSync(join(ws, "target.csv"), join(ws, "sheet.csv"));
+    let code: string | undefined;
+    try {
+      captureRegularFile(ws, "sheet.csv");
+    } catch (e) {
+      if (e instanceof CaptureRefused) code = e.code;
+    }
+    expect(code).toBe("symlink");
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["a string", "false"],
+    ["null", null],
+  ])(
+    "a report whose hostDirsHidden is %s is never counted (shared-host-dirs)",
+    async (_, value) => {
+      const backend = fakeBackend({
+        isolation: () => ({ ...STRONG, hostDirsHidden: value as unknown as boolean }),
+      });
+      const report = await runPool(
+        options(backend, {
+          requirements: {
+            network: "best-effort",
+            privateTmp: "best-effort",
+            hideHostDirs: "best-effort",
+            display: "none",
+          },
+        }),
+        [trial("malformed", "honest")],
+      );
+      expect(report.trials[0]?.disqualifiers).toContain("shared-host-dirs");
+      expect(report.trials[0]?.countedVerified).toBe(false);
+    },
+  );
+});
+
 interface EvidenceOutcome {
   trials: Record<string, { disqualifiers: string[]; counted: boolean; error: string | null }>;
   rejected: string | null;

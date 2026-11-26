@@ -379,8 +379,11 @@ describe.skipIf(!LINUX)("linux-plain desktop (no namespaces)", () => {
         const r = await d.exec("sh", ["-c", "env | cut -d= -f1 | sort"]);
         const names = r.stdout.trim().split("\n");
         expect(names).not.toContain("MYCO_L_CANARY");
+        // Pinned literally (round-3 B3/V6): widening the allowlist must fail this test.
+        expect([...HOST_ENV_ALLOWLIST]).toEqual(["PATH", "LANG"]);
         const allowed = new Set<string>([
-          ...HOST_ENV_ALLOWLIST,
+          "PATH",
+          "LANG",
           "HOME",
           "TMPDIR",
           "LC_ALL",

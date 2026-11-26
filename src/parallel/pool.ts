@@ -200,15 +200,26 @@ interface ScanResult {
   readonly complete: boolean;
 }
 
+/**
+ * The pre-open `lstat` the scan and the capture use. A test may pass one that lies (a FIFO
+ * reported as a regular file) to stand in, deterministically, for a file the trial swaps
+ * between the `lstat` and the `open`: what is then opened must still never block.
+ */
+export type LstatProbe = (path: string) => ReturnType<typeof lstatSync>;
+
 /** Which markers occur in the regular files under `dir` (symlinks are not followed). */
-export function scanTree(dir: string, markers: ReadonlyMap<string, string>): ScanResult {
+export function scanTree(
+  dir: string,
+  markers: ReadonlyMap<string, string>,
+  lstat: LstatProbe = lstatSync,
+): ScanResult {
   const found = new Set<string>();
   let budget = SCAN_LIMIT_BYTES;
   let complete = true;
   const walk = (path: string) => {
     let st: ReturnType<typeof lstatSync>;
     try {
-      st = lstatSync(path);
+      st = lstat(path);
     } catch {
       return;
     }
@@ -332,7 +343,11 @@ export function openNoBlock(path: string): number {
  *
  * Nothing here can block: every refusal is immediate and carries a code.
  */
-export function captureRegularFile(workspaceReal: string, rel: string): Buffer {
+export function captureRegularFile(
+  workspaceReal: string,
+  rel: string,
+  lstat: LstatProbe = lstatSync,
+): Buffer {
   const path = join(workspaceReal, rel);
   let realParent: string;
   try {
@@ -347,7 +362,7 @@ export function captureRegularFile(workspaceReal: string, rel: string): Buffer {
     );
   let pre: ReturnType<typeof lstatSync>;
   try {
-    pre = lstatSync(path);
+    pre = lstat(path);
   } catch {
     throw new CaptureRefused("missing", "state file is missing");
   }
