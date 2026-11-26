@@ -253,6 +253,21 @@ everything that runs on a host or in CI. The **local VM owner** is the single ow
 shared Mac's VM: it runs every VM step, one at a time, under the VM lock. A track with both
 parts is split between them.
 
+### 7.0 Priority order (Tiffany, 10:46 ET; overrides the max-parallel pacing where they conflict)
+
+Builders keep going in parallel on every track, but one path is critical:
+
+1. **Integrity fixes** (§7.3).
+2. **The trial run, on Claude Ultra:** R1 false-done, the R2 head-to-head against `hcu+shell`, and the self-correcting loop ON/OFF A/B.
+3. **The 90-second demo** (R8, track F).
+
+Each step ships as soon as the integrity fixes land. No capability track (§7.4) may delay these steps or take VM time from them. The local VM owner runs capability-track VM work only when the critical path does not need the VM.
+
+Two more items were approved at the same time (10:47 ET):
+
+- **Data capture, from now on.** Every verified or refuted run is saved in a clean, versioned, exportable episode format: task, actions, screenshots and state, the oracle verdict, ground truth from the independent grader, and harness metadata. The format holds no secrets and never the raw Sai ledger. It is Tier 2 and is the canonical format that tracks U and Q consume.
+- **A test-quality and CI-targeting audit** by an independent auditor. It removes or rewrites meaningless tests, with proof for each. CI runs only the affected areas, and docs-only changes skip the test jobs. The full suite stays required for Tier 2 PRs and on main, and the required-check names do not change. Gate-integrity, oracle-mutation, fault-injection and security tests are never weakened.
+
 ### 7.1 Product tracks A–D (08:33 ET)
 
 | Track | Scope | PR | Owner |
