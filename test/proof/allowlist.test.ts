@@ -119,6 +119,9 @@ describe("property: an arbitrary host path planted in every input field never re
           message = (e as Error).message;
         }
         expect(message, `case ${i} ${field}: exported a non-closed value`).not.toBe("");
+        // Refused by the allowlist's own type check (or #518's ledger check), not only by the
+        // self-verify behind it.
+        expect(message, `case ${i} ${field}`).toMatch(/^PROOF_(INPUT|LEDGER_CHAIN|LEDGER_ANCHOR):/);
         expectAbsent(message, p.words, `case ${i} ${field} refusal`);
         refusals++;
       }
