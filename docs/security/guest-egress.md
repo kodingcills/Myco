@@ -178,6 +178,16 @@ This choice over the alternatives:
   requirement), then read back both the flag and the SSH port forward. If the forward
   changed, they fail.
 
+## Former open gaps D7–D9 (closed by the allowlist follow-up)
+
+PR #482 shipped with three gaps its round-3 verifier found (at `55af502e`):
+- **D7:** a JSON-form `-object` filter on `net0` to a `pty` or `spiceport`;
+- **D8:** `-qmp-pretty` / `--qmp-pretty`;
+- **D9:** an empty argv[0] shifted the environment into the decoded argv.
+
+The allowlist follow-up (TIF-275 follow-up, Linear pending) closes all three, as described
+above. Each has negative tests and a mutant shown caught.
+
 ## Evidence
 
 `docs/research/experiments/tif-275-egress/`: probes before and after, the live netdev, a
