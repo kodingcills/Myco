@@ -262,7 +262,7 @@ describe("D1: frame contents never reach a response unredacted", () => {
     });
     expect(sanitizePng(withText)).not.toBeNull();
     const corrupt = Buffer.from(withText);
-    corrupt[33 + 8] ^= 0xff; // first data byte of the tEXt chunk (after the 33-byte header)
+    corrupt[41] = (corrupt[41] as number) ^ 0xff; // first data byte of the tEXt chunk (after the 33-byte header)
     bad(corrupt);
     bad(clean().subarray(0, clean().length - 12)); // no IEND
     expect(sanitizePng(PNG)).not.toBeNull();
