@@ -13,9 +13,10 @@
  *    STRUCTURALLY before it is written, by what it is, never by what it looks like:
  *      - a text field (summary, path) becomes a `TextRef`: the sha256 of the raw value (so
  *        equality stays checkable) and its length in UTF-16 code units;
- *      - an id field whose value fails `CLOSED_ID` becomes `h-<sha256 of the raw value>`,
- *        which itself matches `CLOSED_ID`, so equality (a verdict's runId against the run's)
- *        is still checked;
+ *      - an id field whose value fails `CLOSED_ID` becomes its hashed form `h-<60hex>`
+ *        (`hashed.ts`: the first 240 bits of the tagged sha256 of the raw value), which
+ *        itself matches `CLOSED_ID`, so equality (a verdict's runId against the run's) is
+ *        still checked;
  *      - a field of an enum, boolean, integer or digest type that holds anything else is not
  *        guessed at: the exporter refuses the run (`PROOF_INPUT`, naming the field, never the
  *        value).
@@ -30,14 +31,20 @@
  * but a party who GUESSES the exact input (a likely path with a likely username) can confirm
  * the guess. That is the price of keeping equality checkable; it is stated in the doc.
  */
-import { createHash } from "node:crypto";
 import { REASON_CODES } from "../gate/api.ts";
+import { HASHED_SOURCE, hashedId, hashValue, RESERVED_PREFIX, textDigest } from "./hashed.ts";
 import type { IdentityGuard } from "./identity.ts";
 import { closedApp, closedSubject, closedTool, isClosedKeys } from "./vocab.ts";
 
 /** A closed id: starts alphanumeric, then letters, digits, `.`, `_`, `-`; at most 128. */
 export const CLOSED_ID_SOURCE = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$";
 export const CLOSED_ID = new RegExp(CLOSED_ID_SOURCE);
+/**
+ * The schema pattern of an emitted id field: the hashed form `h-<60hex>`, or a closed id
+ * that does not start with the reserved `h-` prefix (either case). The exporter hashes every
+ * other `h-` form (lead ruling 23:06Z), so a bundle carrying one was not written by it.
+ */
+export const EMITTED_ID_SOURCE = `^(?:${HASHED_SOURCE}|(?![hH]-)${CLOSED_ID_SOURCE.slice(1, -1)})$`;
 export const HEX64_SOURCE = "^[0-9a-f]{64}$";
 export const HEX64 = new RegExp(HEX64_SOURCE);
 /**
@@ -80,9 +87,9 @@ export const MEDIA_TYPES = [
 ] as const;
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 /** A member of `MEDIA_TYPES`, or the hashed form. */
-export const MEDIA_TYPE_SOURCE = `^(?:${MEDIA_TYPES.map(escapeRe).join("|")}|h-[0-9a-f]{64})$`;
+export const MEDIA_TYPE_SOURCE = `^(?:${MEDIA_TYPES.map(escapeRe).join("|")}|${HASHED_SOURCE})$`;
 /** A member of `POLICY_REASON_CODES`, or the hashed form. */
-export const POLICY_CODE_SOURCE = `^(?:${[...new Set(POLICY_REASON_CODES)].map(escapeRe).join("|")}|h-[0-9a-f]{64})$`;
+export const POLICY_CODE_SOURCE = `^(?:${[...new Set(POLICY_REASON_CODES)].map(escapeRe).join("|")}|${HASHED_SOURCE})$`;
 /**
  * The attempt ledger's own id grammar (#518, `schemas/m2-evidence.ts`): ledger events are
  * carried verbatim, so their trial keys and task ids keep #518's grammar. It is closed too:
@@ -90,13 +97,7 @@ export const POLICY_CODE_SOURCE = `^(?:${[...new Set(POLICY_REASON_CODES)].map(e
  */
 export const LEDGER_ID_SOURCE = "^[A-Za-z0-9._:-]{1,128}$";
 
-/** The domain tag every text digest is computed under (versioned: a change is reviewed). */
-export const TEXT_DIGEST_TAG = "myco.proof.text/1";
-
-/** sha256 of a raw value under the text tag. Equal inputs give equal digests. */
-export function textDigest(raw: string): string {
-  return createHash("sha256").update(`${TEXT_DIGEST_TAG}\u0000${raw}`, "utf8").digest("hex");
-}
+export { HASHED_SOURCE, hashedId, hashValue, isHashed, TEXT_DIGEST_TAG, textDigest } from "./hashed.ts";
 
 /** What a free-text or path field becomes. Never the text itself. */
 export interface TextRef {
@@ -108,11 +109,6 @@ export interface TextRef {
 
 export function textRef(raw: string): TextRef {
   return { sha256: textDigest(raw), chars: raw.length };
-}
-
-/** The hashed form of a value that is not a closed id. Matches `CLOSED_ID` itself. */
-export function hashedId(raw: string): string {
-  return `h-${textDigest(raw)}`;
 }
 
 /**
@@ -139,8 +135,7 @@ export interface Allowlist {
 }
 
 export function allowlist(guard: IdentityGuard): Allowlist {
-  const id = (raw: string) =>
-    CLOSED_ID.test(raw) && guard.hit(raw) === null ? raw : hashedId(raw);
+  const id = (raw: string) => (isPlainId(raw) && guard.hit(raw) === null ? raw : hashValue(raw));
   return {
     id,
     arm: (raw) => ((KNOWN_ARMS as readonly string[]).includes(raw) ? raw : id(raw)),
@@ -148,7 +143,7 @@ export function allowlist(guard: IdentityGuard): Allowlist {
     mediaType: closedMediaType,
     tool: closedTool,
     app: closedApp,
-    keys: (raw) => (isClosedKeys(raw) && guard.hit(raw) === null ? raw : hashedId(raw)),
+    keys: (raw) => (isClosedKeys(raw) && guard.hit(raw) === null ? raw : hashValue(raw)),
     subject: closedSubject,
   };
 }
@@ -158,7 +153,16 @@ export function allowlist(guard: IdentityGuard): Allowlist {
  * value (it uses `allowlist(guard).id`); verify uses `sameId` to compare.
  */
 export function closedId(raw: string): string {
-  return CLOSED_ID.test(raw) ? raw : hashedId(raw);
+  return isPlainId(raw) ? raw : hashValue(raw);
+}
+
+/**
+ * Whether an id may be written as is by grammar: it matches `CLOSED_ID` and does not start
+ * with the reserved `h-` prefix. An exact `h-<60hex>` is kept by `hashValue` instead; any
+ * other `h-` form is hashed (lead ruling 23:06Z).
+ */
+function isPlainId(raw: string): boolean {
+  return CLOSED_ID.test(raw) && !RESERVED_PREFIX.test(raw);
 }
 
 /**
@@ -172,12 +176,12 @@ export function sameId(raw: string, emitted: string | undefined): boolean {
 
 /** A policy code: as is when it is a member of `POLICY_REASON_CODES`, else hashed. */
 export function closedPolicyCode(raw: string): string {
-  return (POLICY_REASON_CODES as readonly string[]).includes(raw) ? raw : hashedId(raw);
+  return (POLICY_REASON_CODES as readonly string[]).includes(raw) ? raw : hashValue(raw);
 }
 
 /** A media type: as is when it is a member of `MEDIA_TYPES` (exact match), else hashed. */
 export function closedMediaType(raw: string): string {
-  return (MEDIA_TYPES as readonly string[]).includes(raw) ? raw : hashedId(raw);
+  return (MEDIA_TYPES as readonly string[]).includes(raw) ? raw : hashValue(raw);
 }
 
 /** The arms an arm field may carry as is (#518's ledger arms); any other value is an id. */
@@ -194,7 +198,7 @@ export function sameArm(raw: string, emitted: string | undefined): boolean {
 }
 
 /** The schema pattern of an arm field. */
-export const ARM_SOURCE = `^(?:myco-gate|hcu\\+shell|${CLOSED_ID_SOURCE.slice(1, -1)})$`;
+export const ARM_SOURCE = `^(?:myco-gate|hcu\\+shell|${EMITTED_ID_SOURCE.slice(1, -1)})$`;
 
 /**
  * Every field the exporter takes from a run, and what it becomes. The doc's table and the

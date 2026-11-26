@@ -1,7 +1,7 @@
 /**
  * Track Q, #562 F1 (lead ruling 22:18Z / 22:27Z): agent-produced key names and app ids, and
  * the tool and policy-subject names, go out verbatim only when they are in a CLOSED
- * VOCABULARY (`src/proof/vocab.ts`); anything else is `h-<64hex>`. Required tests: a known
+ * VOCABULARY (`src/proof/vocab.ts`); anything else is `h-<60hex>`. Required tests: a known
  * key or registered app passes; unknown, identity-like, path-like and near-miss values are
  * hashed; both vocabularies are mutation-proven (the pinned lists below, and the per-value
  * cases, each fail when a vocabulary is widened to a grammar or dropped).

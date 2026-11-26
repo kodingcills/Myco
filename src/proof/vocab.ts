@@ -4,7 +4,7 @@
  *
  * The ruling: agent-produced key names and app ids go out verbatim only when the value is in
  * a closed vocabulary (known key names; registered app ids). Anything else is hashed
- * (`h-<64hex>`). Why: a closed id GRAMMAR keeps any identifier-shaped value verbatim, for
+ * (`h-<60hex>`, `hashed.ts`). Why: a closed id GRAMMAR keeps any identifier-shaped value verbatim, for
  * example a foreign account name (`jsmith`), `Users.jsmith.Documents` or `com.apple.Safari`.
  * The identity guard (`identity.ts`) cannot catch those, because it only knows THIS
  * machine's identity strings. A vocabulary is a list of constants of this code, so nothing an
@@ -31,7 +31,7 @@
  * or digit is not a chord, so a sequence cannot spell a word letter by letter (`j s m i t h`
  * is hashed), and the chord limit bounds how many characters any sequence can carry.
  */
-import { hashedId } from "./closed.ts";
+import { HASHED_SOURCE, hashValue } from "./hashed.ts";
 
 /** Named keys (X keysym spellings, as the runtime's `keyPress` and #542's `key` action use). */
 export const KEY_NAMES = [
@@ -131,7 +131,7 @@ export const TOOL_NAMES = [
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 const alt = (list: readonly string[]): string => list.map(escapeRe).join("|");
-const HASHED = "h-[0-9a-f]{64}";
+const HASHED = HASHED_SOURCE;
 
 const MOD = `(?:${alt(KEY_MODIFIERS)})\\+`;
 const CHORD = `(?:(?:${MOD})*(?:${alt(KEY_NAMES)})|(?:${MOD})+[a-z0-9])`;
@@ -156,22 +156,22 @@ const isIn = (list: readonly string[], raw: string): boolean => list.includes(ra
 
 /** A tool name: as is when it is in `TOOL_NAMES`, else hashed. */
 export function closedTool(raw: string): string {
-  return isIn(TOOL_NAMES, raw) ? raw : hashedId(raw);
+  return isIn(TOOL_NAMES, raw) ? raw : hashValue(raw);
 }
 
 /** An app id: as is when it is in `REGISTERED_APPS`, else hashed. */
 export function closedApp(raw: string): string {
-  return isIn(REGISTERED_APPS, raw) ? raw : hashedId(raw);
+  return isIn(REGISTERED_APPS, raw) ? raw : hashValue(raw);
 }
 
 /** A policy subject: as is when it is a known tool or a registered app, else hashed. */
 export function closedSubject(raw: string): string {
-  return isIn(TOOL_NAMES, raw) || isIn(REGISTERED_APPS, raw) ? raw : hashedId(raw);
+  return isIn(TOOL_NAMES, raw) || isIn(REGISTERED_APPS, raw) ? raw : hashValue(raw);
 }
 
 /** A key sequence: as is when it is spelled from the key vocabulary, else hashed. */
 export function closedKeys(raw: string): string {
-  return isClosedKeys(raw) ? raw : hashedId(raw);
+  return isClosedKeys(raw) ? raw : hashValue(raw);
 }
 
 /** Every single vocabulary member: constants of this code, skipped by the identity scan. */

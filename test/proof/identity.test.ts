@@ -126,7 +126,7 @@ const NEUTRAL = "zq-neutral-value";
 // ---------------------------------------------------------------------------------------
 // Absence checks that never print a value
 
-const DIGEST = /^(?:h-)?[0-9a-f]{64}$/;
+const DIGEST = /^(?:h-[0-9a-f]{60}|[0-9a-f]{64})$/;
 
 function countCI(text: string, needle: string): number {
   const t = text.toLowerCase();

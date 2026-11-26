@@ -51,6 +51,8 @@ import {
   ARM_SOURCE,
   allowlist,
   CLOSED_ID_SOURCE,
+  EMITTED_ID_SOURCE,
+  HASHED_SOURCE,
   HEX64,
   HEX64_SOURCE,
   KNOWN_ARMS,
@@ -208,7 +210,10 @@ export interface ProofBundle {
 // Schemas: CLOSED. Every leaf is an enum, a boolean, an integer, a digest or a closed-grammar
 // string; an unknown field anywhere is a refusal. There is no free-text string type at all.
 
-const ID: JsonSchema = { type: "string", pattern: CLOSED_ID_SOURCE };
+/** An emitted id: a closed id, or the hashed form `h-<60hex>` (no other `h-` form). */
+const ID: JsonSchema = { type: "string", pattern: EMITTED_ID_SOURCE };
+/** A ledger id, carried verbatim (never hashed), narrowed to the closed id grammar. */
+const LEDGER_ID: JsonSchema = { type: "string", pattern: CLOSED_ID_SOURCE };
 const HEX: JsonSchema = { type: "string", pattern: HEX64_SOURCE };
 const TEXT_REF: JsonSchema = {
   type: "object",
@@ -300,7 +305,7 @@ export const BODY_SCHEMAS: Record<RecordKind, JsonSchema> = {
     required: ["trialKey", "startSeq", "endSeq", "ledgerEvents", "ledgerHeadSha256"],
     properties: {
       // From the ledger, narrowed to the proof's closed id grammar (`ledger.ts`).
-      trialKey: ID,
+      trialKey: LEDGER_ID,
       startSeq: { type: "integer", minimum: 0 },
       endSeq: { type: "integer", minimum: 0 },
       ledgerEvents: { type: "integer", minimum: 1 },
@@ -1171,7 +1176,11 @@ export const FORMAT_CONSTANTS: ReadonlySet<string> = new Set([
   ...VOCAB_CONSTANTS,
 ]);
 
-const DIGEST_FORM = /^(?:h-)?[0-9a-f]{64}$/;
+/**
+ * The two digest forms the identity scan skips: a hashed value (exactly `h-<60hex>`) and a
+ * full sha256 (exactly 64 hex). Anchored, so nothing can ride along.
+ */
+const DIGEST_FORM = new RegExp(`^(?:${HASHED_SOURCE}|[0-9a-f]{64})$`);
 
 /**
  * Every string value and key of a parsed bundle that carries an identity string or shape,

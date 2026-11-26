@@ -5,11 +5,11 @@
  * Structural, against a NEUTRAL output of the same shape: a string (value or key) that differs
  * from the neutral one at the same place is value-derived, and it must not contain any needle
  * in a folded normal form (`foldForCheck`: NFKC, full case folding, letters and digits
- * only), unless it is a digest (`h-<64hex>` or 64 hex). Comparing against the neutral output
+ * only), unless it is a digest (`h-<60hex>` or 64 hex). Comparing against the neutral output
  * keeps constants of the format (key names, the claim) out of the check, so this holds for
  * needles of any length, even a 2-character hostname.
  */
-const DIGEST = /^(?:h-)?[0-9a-f]{64}$/;
+const DIGEST = /^(?:h-[0-9a-f]{60}|[0-9a-f]{64})$/;
 
 /**
  * The checker's OWN normal form, independent of `identityNormal` (so a mutant of the code

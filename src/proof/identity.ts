@@ -9,7 +9,8 @@
  * to this guard, and:
  *
  *  - an id field whose value CONTAINS an identity string, case-insensitively, is digested
- *    (`h-<sha256>`), exactly as a value outside the grammar is (equality stays checkable);
+ *    (`h-<60hex>`, `hashed.ts`), exactly as a value outside the grammar is (equality stays
+ *    checkable);
  *  - a value that cannot be digested because it sits under another chain (the attempt
  *    ledger's ids, carried verbatim) refuses the export (`PROOF_IDENTITY`).
  *
