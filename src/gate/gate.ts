@@ -21,11 +21,15 @@ import {
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
+  type CheckpointSummary,
+  type CheckpointVerdict,
   type EvidenceRef,
   GATE_API_VERSION,
   type GateResult,
   type GateVerdict,
   isSafeId,
+  ORACLE_DETAIL_CODES,
+  type OracleDetailCode,
   parseGateRequest,
   type ReasonCode,
 } from "./api.ts";
@@ -151,6 +155,14 @@ export interface EvidenceReader {
    * only.
    */
   read(runId: string, stateFile: string): Promise<ReadOutcome>;
+  /**
+   * The operator's sealed fixture `file` for the run: the exact document the guest was given
+   * (TIF-270 round 3). Asked for only when the task's spec names one (`fixtureFile` +
+   * `fixtureSha256`); the gate checks the bytes against the spec's digest before any oracle
+   * sees them. A reader without this method cannot serve such a task (FIXTURE_UNREADABLE).
+   * Same `detail` rules as `read`.
+   */
+  readFixture?(runId: string, file: string): Promise<ReadOutcome>;
 }
 
 export const STATE_FILE_LIMIT = 16 * 1024 * 1024;
@@ -386,6 +398,11 @@ export function fileEvidenceReader(root: string, hooks: FileReaderHooks = {}): E
         closeSync(fd);
       }
     },
+    // Mock path: the sealed fixture lives beside the state file under the run's directory,
+    // read with the same walk. The gate's digest check is what makes it trustworthy.
+    readFixture(runId, file) {
+      return this.read(runId, file);
+    },
   };
 }
 
@@ -447,14 +464,71 @@ export interface Gate {
   check(raw: unknown): Promise<GateResult>;
 }
 
-/** Narrow an oracle's return value; anything malformed is not a verdict. */
+const MAX_CHECKPOINTS = 64;
+
+/**
+ * Narrow an oracle's return value; anything malformed is not a verdict. The TIF-270
+ * fields are checked for consistency too, so a buggy oracle cannot pair `verified` with a
+ * failure code or a refuted checkpoint:
+ *  - `codes`: only `ORACLE_DETAIL_CODES`, no repeats, and only on `refuted`;
+ *  - `checkpoints`: 1-64 entries numbered 1..n in order, each verified or refuted, with
+ *    the last one equal to the status (so `uncertain` never carries checkpoints) and every
+ *    one verified when the status is.
+ */
 function validOracleOutput(value: unknown): OracleOutput | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   if (typeof (value as { then?: unknown }).then === "function") return undefined;
-  const { status, reasons } = value as { status?: unknown; reasons?: unknown };
+  const { status, reasons, codes, checkpoints } = value as {
+    status?: unknown;
+    reasons?: unknown;
+    codes?: unknown;
+    checkpoints?: unknown;
+  };
   if (status !== "verified" && status !== "refuted" && status !== "uncertain") return undefined;
   if (!Array.isArray(reasons) || !reasons.every((r) => typeof r === "string")) return undefined;
-  return { status, reasons: [...reasons] };
+  let detail: OracleDetailCode[] | undefined;
+  if (codes !== undefined) {
+    if (!Array.isArray(codes) || status !== "refuted") return undefined;
+    if (!codes.every((code) => (ORACLE_DETAIL_CODES as readonly unknown[]).includes(code)))
+      return undefined;
+    if (new Set(codes).size !== codes.length) return undefined;
+    detail = [...(codes as OracleDetailCode[])];
+  }
+  let steps: CheckpointVerdict[] | undefined;
+  if (checkpoints !== undefined) {
+    if (
+      !Array.isArray(checkpoints) ||
+      checkpoints.length === 0 ||
+      checkpoints.length > MAX_CHECKPOINTS
+    )
+      return undefined;
+    steps = [];
+    for (const [index, entry] of checkpoints.entries()) {
+      if (typeof entry !== "object" || entry === null) return undefined;
+      const { checkpoint, verdict } = entry as { checkpoint?: unknown; verdict?: unknown };
+      if (checkpoint !== index + 1) return undefined;
+      if (verdict !== "verified" && verdict !== "refuted") return undefined;
+      steps.push({ checkpoint, verdict });
+    }
+    if (steps[steps.length - 1]?.verdict !== status) return undefined;
+    if (status === "verified" && steps.some((cp) => cp.verdict !== "verified")) return undefined;
+  }
+  return {
+    status,
+    reasons: [...reasons],
+    ...(detail ? { codes: detail } : {}),
+    ...(steps ? { checkpoints: steps } : {}),
+  };
+}
+
+/** The gate's own summary of an oracle's checkpoints: `lastVerified` is never taken on trust. */
+function summarize(checkpoints: readonly CheckpointVerdict[]): CheckpointSummary {
+  const firstRefuted = checkpoints.findIndex((cp) => cp.verdict !== "verified");
+  return {
+    total: checkpoints.length,
+    lastVerified: firstRefuted === -1 ? checkpoints.length : firstRefuted,
+    verdicts: checkpoints.map((cp) => ({ ...cp })),
+  };
 }
 
 /** The one place a `verified` verdict can come from. */
@@ -471,9 +545,7 @@ function verdictFromOracle(output: OracleOutput): { verdict: GateVerdict; code: 
 
 /** Read with a deadline; a hung reader becomes `unreadable`, never a pending call. */
 async function readWithin(
-  reader: EvidenceReader,
-  runId: string,
-  stateFile: string,
+  read: () => Promise<ReadOutcome>,
   timeoutMs: number,
   diagnose: (stage: GateDiagnostic["stage"], error: unknown) => string,
 ): Promise<ReadOutcome> {
@@ -489,7 +561,7 @@ async function readWithin(
     return await Promise.race([
       // Promise.resolve().then: a reader that throws synchronously is a reader error too.
       Promise.resolve()
-        .then(() => reader.read(runId, stateFile))
+        .then(read)
         .catch(
           (error): ReadOutcome => ({
             ok: false,
@@ -546,6 +618,7 @@ export function createGate(config: GateConfig): Gate {
     request: GateResult["request"];
     refs?: EvidenceRef[];
     oracle?: GateResult["oracle"];
+    checkpoints?: CheckpointSummary;
   }): Promise<GateResult> {
     const codes = [...parts.codes];
     if (parts.request.claim !== undefined) codes.push("CLAIM_RECORDED");
@@ -560,6 +633,7 @@ export function createGate(config: GateConfig): Gate {
       evidenceRefs: parts.refs ?? [],
       request: parts.request,
       ...(parts.oracle ? { oracle: parts.oracle } : {}),
+      ...(parts.oracle && parts.checkpoints ? { checkpoints: parts.checkpoints } : {}),
       checkedAt: now().toISOString(),
     };
     if (!config.onDecision) return result;
@@ -616,7 +690,11 @@ export function createGate(config: GateConfig): Gate {
       });
     }
 
-    const read = await readWithin(config.reader, runId, task.stateFile, readTimeoutMs, diagnose);
+    const read = await readWithin(
+      () => config.reader.read(runId, task.stateFile),
+      readTimeoutMs,
+      diagnose,
+    );
     if (!read.ok) {
       return finish({
         verdict: "uncertain",
@@ -634,6 +712,52 @@ export function createGate(config: GateConfig): Gate {
         bytes: read.bytes.length,
       },
     ];
+
+    // The sealed fixture (TIF-270 round 3): when the operator's spec names one, the expected
+    // document is built from it, not regenerated from the seed. The bytes come from the
+    // operator's reader, and must match the digest the operator registered in the spec, so
+    // nothing the agent writes can stand in for them. No request field reaches this step.
+    let fixture: Uint8Array | undefined;
+    const sealed = task.family.sealedFixture?.(task.spec);
+    if (sealed) {
+      const readFixture = config.reader.readFixture?.bind(config.reader);
+      const got: ReadOutcome = readFixture
+        ? await readWithin(() => readFixture(runId, sealed.file), readTimeoutMs, diagnose)
+        : {
+            ok: false,
+            cause: "unreadable",
+            detail: "this gate's evidence reader serves no sealed fixture",
+          };
+      if (!got.ok) {
+        return finish({
+          verdict: "uncertain",
+          codes: ["FIXTURE_UNREADABLE"],
+          reasons: [`could not look: sealed fixture ${sealed.file}: ${got.detail}`],
+          request,
+          refs,
+        });
+      }
+      const digest = sha256(got.bytes);
+      refs.push({
+        kind: "sealed-fixture",
+        runId,
+        path: sealed.file,
+        sha256: digest,
+        bytes: got.bytes.length,
+      });
+      if (digest !== sealed.sha256) {
+        return finish({
+          verdict: "uncertain",
+          codes: ["FIXTURE_MISMATCH"],
+          reasons: [
+            `could not look: sealed fixture ${sealed.file} does not match the digest the operator registered (altered or swapped after sealing)`,
+          ],
+          request,
+          refs,
+        });
+      }
+      fixture = got.bytes;
+    }
     const oracle = {
       family: task.family.id,
       version: task.family.version,
@@ -648,6 +772,7 @@ export function createGate(config: GateConfig): Gate {
         read.bytes,
         structuredClone(task.spec),
         `${runId}/${task.stateFile}`,
+        fixture === undefined ? {} : { fixture: new Uint8Array(fixture) },
       );
       // Inside the try: a throwing getter on the output is an oracle error, and the
       // result keeps its request and evidence refs.
@@ -686,7 +811,15 @@ export function createGate(config: GateConfig): Gate {
       });
     }
     const { verdict, code } = verdictFromOracle(valid);
-    return finish({ verdict, codes: [code], reasons: [...valid.reasons], request, refs, oracle });
+    return finish({
+      verdict,
+      codes: [code, ...(valid.codes ?? [])],
+      reasons: [...valid.reasons],
+      request,
+      refs,
+      oracle,
+      ...(valid.checkpoints ? { checkpoints: summarize(valid.checkpoints) } : {}),
+    });
   }
 
   return {

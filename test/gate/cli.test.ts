@@ -117,6 +117,7 @@ describe("myco-gate check", () => {
     [["mcp", "--evidence-root", "/x", "--task", "nope", "--run", "r"]],
     [["frobnicate"]],
     [["demo", "--transport", "live"]],
+    [["demo", "--transport", "mock", "--family", "writer"]],
     [[]],
   ])("usage error → exit 3: %j", async (argv) => {
     expect((await run(argv)).code).toBe(EXIT_USAGE);
