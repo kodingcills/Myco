@@ -1,0 +1,62 @@
+# TIF-275 follow-up: live allowlist check at head 67d3b6a2 (2026-11-26T07:21Z)
+#
+# Guest: a normal 'scripts/reset-trial-vm.sh clean-base' with egress denied, under
+# scripts/vm-session.sh. Read-only: nothing was written to the guest.
+#
+# $ scripts/guest-egress.sh verify-all    (exit 0)
+ok: user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22
+ok: UTM config matches
+#
+# $ python3 -I scripts/guest_egress_check.py names    (exit 0; option names only, never values)
+-L	allowed
+-S	allowed
+-spice	allowed
+-chardev	allowed
+-mon	allowed
+-nodefaults	allowed
+-vga	allowed
+-device	allowed
+-netdev	allowed
+-device	allowed
+-chardev	allowed
+-serial	allowed
+-cpu	allowed
+-smp	allowed
+-machine	allowed
+-accel	allowed
+-drive	allowed
+-drive	allowed
+-m	allowed
+-audio	allowed
+-audiodev	allowed
+-device	allowed
+-device	allowed
+-device	allowed
+-device	allowed
+-device	allowed
+-chardev	allowed
+-device	allowed
+-chardev	allowed
+-device	allowed
+-chardev	allowed
+-device	allowed
+-device	allowed
+-drive	allowed
+-device	allowed
+-drive	allowed
+-device	allowed
+-drive	allowed
+-device	allowed
+-device	allowed
+-chardev	allowed
+-device	allowed
+-chardev	allowed
+-device	allowed
+-chardev	allowed
+-name	allowed
+-uuid	allowed
+-rtc	allowed
+-device	allowed
+-chardev	allowed
+-tpmdev	allowed
+-device	allowed
