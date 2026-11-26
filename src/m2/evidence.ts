@@ -345,9 +345,14 @@ function checkSuperseded(
     // 03:13Z rule, #511 round 1 D1). Only a trial the gate never judged may be re-run.
     if (a.arm.gate !== null && a.arm.gate.verdict !== null)
       errors.push(`${who}: a gate verdict (${a.arm.gate.verdict}) is an outcome, never replaced`);
-    // An unsatisfiable task (fc-v1 invalid-target) must be unregistrable whatever the harness
-    // did, so such a pack is re-packed, not topped up (#511 round 1, D4).
-    const task = knownTaskSet(a.arm.taskSetVersion)?.find((t) => t.taskId === a.arm.taskId);
+    // On the gated arm an unsatisfiable task (fc-v1 invalid-target) must be unregistrable
+    // whatever the harness did, so such a pack is re-packed, not topped up (#511 round 1, D4).
+    // The rule is the binding's, which applies to myco-gate only; an hcu+shell trial on such a
+    // task has no gate and may be re-run like any other (#511 round 2, nit 2).
+    const task =
+      a.arm.arm === "myco-gate"
+        ? knownTaskSet(a.arm.taskSetVersion)?.find((t) => t.taskId === a.arm.taskId)
+        : undefined;
     if (task !== undefined && !task.satisfiable)
       errors.push(`${who}: task ${a.arm.taskId} is unsatisfiable; re-pack, never top up`);
     if (a.arm.gate?.unregistrable === true)

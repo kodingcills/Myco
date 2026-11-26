@@ -234,6 +234,10 @@ describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned check
     expect(gate).toMatchObject({ trials: 30, supersededAttempts: 1, verified: 20 });
     expect(gate?.modelUsd.total).toBeCloseTo(115, 9);
     expect(gate?.modelUsd.perVerified).toBeCloseTo(115 / 20, 9);
+    // The attempt is charged to its own arm only (#511 round 2, E1 / M7).
+    const shell = r.r7?.arms.find((a) => a.arm === "hcu+shell");
+    expect(shell).toMatchObject({ supersededAttempts: 0 });
+    expect(shell?.modelUsd.total).toBeCloseTo(15, 9);
     // R2 is untouched: still 30 pairs.
     expect(r.r2?.pairs).toBe(30);
     // A null cost on the attempt: unmeasured, never 0.
@@ -249,6 +253,9 @@ describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned check
     ["instructionSha256", { instructionSha256: "d".repeat(64) }],
     ["plannerModelId", { plannerModelId: "claude-haiku-5-5" }],
     ["outputCeiling", { outputCeiling: 1024 }],
+    ["faultClass", { faultClass: "delayed-save" }],
+    ["arm", { arm: "hcu+shell", gate: null }],
+    ["taskSetVersion", { taskSetVersion: "fc-v9" }],
   ] as const)("D3/D5: a replacement whose %s differs is another trial", (field, over) => {
     const r = check([attemptOf(live(), "g61-a1", over)]);
     expect(has(r, new RegExp(`replacement g61 is another trial \\(${field} differs\\)`))).toBe(
@@ -263,6 +270,28 @@ describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned check
     expect(
       has(r, /superseded g90-a1: task fc-v1-\d+ is unsatisfiable; re-pack, never top up/),
     ).toBe(true);
+  });
+
+  it("nit 2: an hcu+shell attempt on an invalid-target task may be re-run (no gate, no binding rule)", () => {
+    const inv = fcTasks("invalid-target")[0]!;
+    const shellLive = trial(
+      300,
+      {
+        ...fcRow(inv),
+        arm: "hcu+shell",
+        gate: null,
+        cause: { kind: "agent", detail: "claimed done" },
+      },
+      "fail",
+      { faultLanded: true },
+    );
+    const trials = [...r1Trials(), shellLive];
+    const r = checkPack({
+      ...input(trials, manifest({ expectTrials: { "myco-gate": 100, "hcu+shell": 1 } })),
+      superseded: [attemptOf(shellLive.arm, "s300-a1")],
+    });
+    expect(r.errors).toEqual([]);
+    expect(r.superseded.count).toBe(1);
   });
 
   it("D3: counts attempts by their own harness class", () => {
