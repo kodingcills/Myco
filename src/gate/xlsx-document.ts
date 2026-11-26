@@ -69,6 +69,12 @@
  */
 import { crc32, inflateRawSync } from "node:zlib";
 import { cellRef } from "../core/filepersist.ts";
+import {
+  checkPartNames,
+  checkRelationships,
+  type PartsCode,
+  type RawRelationship,
+} from "./xlsx-parts.ts";
 import { contentKindOf, type PrescanCode, prescanXmlPart } from "./xlsx-prescan.ts";
 
 // ---------------------------------------------------------------------------
@@ -129,7 +135,8 @@ export type XlsxErrorCode =
   | "XLSX_FORMULA_UNCACHED"
   | "XLSX_STYLE_MALFORMED"
   | "XLSX_NUMFMT_UNSUPPORTED"
-  | PrescanCode;
+  | PrescanCode
+  | PartsCode;
 
 export class XlsxError extends Error {
   override readonly name = "XlsxError";
@@ -638,8 +645,8 @@ function relationships(
   return out;
 }
 
-/** Refuse active or linked content anywhere in the package. */
-function refuseActiveContent(entries: ReadonlyMap<string, Uint8Array>): void {
+/** Refuse active or linked content anywhere in the package, by entry name (no parsing). */
+function refuseActiveNames(entries: ReadonlyMap<string, Uint8Array>): void {
   for (const name of entries.keys()) {
     const lower = name.toLowerCase();
     if (
@@ -651,6 +658,10 @@ function refuseActiveContent(entries: ReadonlyMap<string, Uint8Array>): void {
     if (lower.includes("/externallinks/")) fail("XLSX_EXTERNAL_LINK");
     if (lower.includes("/embeddings/")) fail("XLSX_EMBEDDED_OBJECT");
   }
+}
+
+/** Refuse an external relationship target in any relationships part (after the pre-scan). */
+function refuseExternalTargets(entries: ReadonlyMap<string, Uint8Array>): void {
   for (const name of entries.keys()) {
     if (!name.endsWith(".rels")) continue;
     // Parse every relationships part: an external target anywhere is refused.
@@ -659,6 +670,19 @@ function refuseActiveContent(entries: ReadonlyMap<string, Uint8Array>): void {
       if (rel.attrs.get("TargetMode") === "External") fail("XLSX_EXTERNAL_LINK");
     }
   }
+}
+
+/** A relationships part's relationships as written (no resolution), for xlsx-parts.ts. */
+function rawRelationships(bytes: Uint8Array | undefined): RawRelationship[] {
+  if (!bytes) return [];
+  const root = rootIn(parseXml(bytes), NS.pkgRel, "Relationships");
+  return elements(root, "Relationship").map((rel) => ({
+    id: rel.attrs.get("Id"),
+    type: rel.attrs.get("Type"),
+    target: rel.attrs.get("Target"),
+    extraAttributes: [...rel.attrs.keys()].filter((k) => !["Id", "Type", "Target"].includes(k))
+      .length,
+  }));
 }
 
 /** The content type the package declares for `part` (Override, else Default by extension). */
@@ -1173,13 +1197,17 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
   const entries = readZipEntries(bytes);
   const typesBytes = entries.get("[Content_Types].xml");
   if (!typesBytes) fail("XLSX_NOT_WORKBOOK");
-  refuseActiveContent(entries);
-  // Raw-byte pre-scan of EVERY XML part, before any XML parsing (see xlsx-prescan.ts).
+  refuseActiveNames(entries);
+  // LibreOffice's fixed part names only (see xlsx-parts.ts); no other entry is looked at.
+  const partsRefusal = checkPartNames(entries.keys());
+  if (partsRefusal) fail(partsRefusal);
+  // Raw-byte pre-scan of EVERY part, before any XML parsing (see xlsx-prescan.ts). Every
+  // entry the part-name check lets through is an XML part.
   for (const [name, data] of entries) {
-    if (!/\.(xml|rels)$/i.test(name)) continue;
     const refusal = prescanXmlPart(data, contentKindOf(name));
     if (refusal) fail(refusal);
   }
+  refuseExternalTargets(entries);
   const types = rootIn(parseXml(typesBytes), NS.types, "Types");
   for (const node of [...elements(types, "Override"), ...elements(types, "Default")]) {
     const ct = node.attrs.get("ContentType")?.toLowerCase() ?? "";
@@ -1218,6 +1246,14 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
     if (rel.type.endsWith("/macrosheet") || rel.type.endsWith("/xlMacrosheet")) fail("XLSX_MACROS");
     return rel;
   });
+  const relsRefusal = checkRelationships({
+    names: entries.keys(),
+    rootRels: rawRelationships(entries.get("_rels/.rels")),
+    workbookRels: rawRelationships(entries.get("xl/_rels/workbook.xml.rels")),
+    sheetIds: sheets.map((s) => s.attrs.get("r:id")),
+    overrides: elements(types, "Override").map((o) => o.attrs.get("PartName")),
+  });
+  if (relsRefusal) fail(relsRefusal);
   const first = sheetRels[0] as Relationship;
   if (first.type !== REL_TYPE.worksheet) fail("XLSX_NOT_WORKBOOK");
 

@@ -384,11 +384,19 @@ describe("package and XML faults fail closed", () => {
     ).toBe("XLSX_EXTERNAL_LINK");
   });
 
-  it("an external relationship anywhere is XLSX_EXTERNAL_LINK", () => {
-    const rels = `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/" TargetMode="External"/></Relationships>`;
+  it("an external relationship is XLSX_EXTERNAL_LINK; a worksheet relationships part is never allowed", () => {
+    const external = `<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/" TargetMode="External"/>`;
+    const wbRels = entryText("xl/_rels/workbook.xml.rels").replace(
+      "</Relationships>",
+      `${external}</Relationships>`,
+    );
+    expect(read(writeXlsx(exactCells(), { patch: { "xl/_rels/workbook.xml.rels": wbRels } }))).toBe(
+      "XLSX_EXTERNAL_LINK",
+    );
+    const rels = `<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${external}</Relationships>`;
     expect(
       read(writeXlsx(exactCells(), { patch: { "xl/worksheets/_rels/sheet1.xml.rels": rels } })),
-    ).toBe("XLSX_EXTERNAL_LINK");
+    ).toBe("XLSX_PART_UNEXPECTED");
   });
 
   it("an embedded object is XLSX_EMBEDDED_OBJECT", () => {
@@ -407,17 +415,30 @@ describe("package and XML faults fail closed", () => {
     );
   });
 
-  it("a zip that is not a workbook: a .docx is XLSX_CONTENT_TYPE, a bare zip XLSX_NOT_WORKBOOK", () => {
-    expect(read(writeDocx(writerFixture("xlsx-test")))).toBe("XLSX_CONTENT_TYPE");
+  it("a zip that is not a workbook: a .docx or a bare zip holds parts LibreOffice never writes", () => {
+    expect(read(writeDocx(writerFixture("xlsx-test")))).toBe("XLSX_PART_UNEXPECTED");
+    // No content types at all: not a workbook, before any part is looked at.
     expect(read(writeZip([{ name: "hello.txt", data: new TextEncoder().encode("hi") }]))).toBe(
       "XLSX_NOT_WORKBOOK",
     );
   });
 
   it("a workbook without its worksheet part is XLSX_NOT_WORKBOOK", () => {
+    // Its content-type override, left behind, names nothing: a decoy override.
     expect(read(writeXlsx(exactCells(), { patch: { [XLSX_MAIN_SHEET]: null } }))).toBe(
-      "XLSX_NOT_WORKBOOK",
+      "XLSX_PART_UNREFERENCED",
     );
+    const types = entryText("[Content_Types].xml").replace(
+      /<Override PartName="\/xl\/worksheets\/sheet1\.xml"[^>]*\/>/,
+      "",
+    );
+    expect(
+      read(
+        writeXlsx(exactCells(), {
+          patch: { [XLSX_MAIN_SHEET]: null, "[Content_Types].xml": types },
+        }),
+      ),
+    ).toBe("XLSX_NOT_WORKBOOK");
   });
 
   it("a half-written worksheet (valid zip, cut XML) is XLSX_PRESCAN_SYNTAX", () => {
@@ -764,7 +785,9 @@ function junkOverlapping(extra: number): Uint8Array {
 
 describe("round-3 pins for the round-2 mutation survivors (D7)", () => {
   it("V1: adjacent entries read; an overlap of exactly one byte is XLSX_ZIP_MALFORMED", () => {
-    expect(read(junkOverlapping(0))).toBe("no error");
+    // The zip layer itself (the part-name check then refuses xl/junk.bin as unexpected).
+    expect(codeOf(() => readZipEntries(junkOverlapping(0)))).toBe("no error");
+    expect(read(junkOverlapping(0))).toBe("XLSX_PART_UNEXPECTED");
     expect(read(junkOverlapping(1))).toBe("XLSX_ZIP_MALFORMED");
   });
 
@@ -948,8 +971,42 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
   ],
   [
     "another Office document (.docx)",
-    "XLSX_CONTENT_TYPE",
+    "XLSX_PART_UNEXPECTED",
     () => writeDocx(writerFixture("xlsx-test")),
+  ],
+  [
+    "a workbook part with a template content type",
+    "XLSX_CONTENT_TYPE",
+    () =>
+      writeXlsx(exactCells(), {
+        patch: {
+          "[Content_Types].xml": entryText("[Content_Types].xml").replace(
+            "spreadsheetml.sheet.main+xml",
+            "spreadsheetml.template.main+xml",
+          ),
+        },
+      }),
+  ],
+  [
+    "a relationship moved to a copy of the shared strings",
+    "XLSX_REL_TARGET",
+    () =>
+      writeXlsx(exactCells(), {
+        patch: {
+          "xl/_rels/workbook.xml.rels": entryText("xl/_rels/workbook.xml.rels").replace(
+            'Target="sharedStrings.xml"',
+            'Target="worksheets/sheet9.xml"',
+          ),
+        },
+      }),
+  ],
+  [
+    "a decoy part nothing references",
+    "XLSX_PART_UNREFERENCED",
+    () =>
+      writeXlsx(exactCells(), {
+        patch: { "xl/worksheets/sheet2.xml": entryText(XLSX_MAIN_SHEET) },
+      }),
   ],
   [
     "vbaProject.bin",
@@ -990,7 +1047,10 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
     () =>
       writeXlsx(exactCells(), {
         patch: {
-          "xl/worksheets/_rels/sheet1.xml.rels": `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="t" Target="https://example.invalid/" TargetMode="External"/></Relationships>`,
+          "xl/_rels/workbook.xml.rels": entryText("xl/_rels/workbook.xml.rels").replace(
+            "</Relationships>",
+            '<Relationship Id="rId99" Type="t" Target="https://example.invalid/" TargetMode="External"/></Relationships>',
+          ),
         },
       }),
   ],
@@ -1161,7 +1221,12 @@ describe("every documented refusal (docs/gate/api.md: each one is pinned here)",
           /"(XLSX_[A-Z0-9_]+)"/g,
         ),
       ].map((m) => m[1] as string);
-    const declared = [...codes(source, "XlsxErrorCode"), ...codes(prescan, "PrescanCode")].sort();
+    const parts = readFileSync(join(import.meta.dirname, "../../src/gate/xlsx-parts.ts"), "utf8");
+    const declared = [
+      ...codes(source, "XlsxErrorCode"),
+      ...codes(prescan, "PrescanCode"),
+      ...codes(parts, "PartsCode"),
+    ].sort();
     expect(declared.length).toBeGreaterThan(30);
     // XLSX_DTD is the parser's own refusal; the pre-scan refuses every DTD first
     // (XLSX_PRESCAN_DTD), so its row is the parser-level pin in "package and XML faults".

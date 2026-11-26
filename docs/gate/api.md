@@ -477,6 +477,9 @@ fails if a code is added to `XlsxErrorCode` without one):
 | external links: `xl/externalLinks/`, any `TargetMode="External"` relationship | `XLSX_EXTERNAL_LINK` |
 | embedded objects | `XLSX_EMBEDDED_OBJECT` |
 | a relationship target that climbs above the package | `XLSX_UNSAFE_PART` |
+| an entry at any name LibreOffice does not write (anything but `[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`, `xl/_rels/workbook.xml.rels`, `xl/worksheets/sheetN.xml`, `xl/styles.xml`, `xl/sharedStrings.xml`, `xl/theme/theme1.xml`, `docProps/core.xml`, `docProps/app.xml`): a worksheet relationships part, media, a `.docx`'s parts | `XLSX_PART_UNEXPECTED` |
+| a relationship of a type LibreOffice does not write, or whose `Target` is not the exact string it writes (`xl/workbook.xml`; `worksheets/sheetN.xml`, `styles.xml`, `sharedStrings.xml`, `theme/theme1.xml`; `docProps/core.xml`, `docProps/app.xml`), a second `officeDocument`, a duplicate id, two relationships to one part, an extra attribute, a `<sheet>` naming no worksheet relationship | `XLSX_REL_TARGET` |
+| a decoy: an entry no relationship references (a copy left at a canonical name, an extra worksheet no `<sheet>` names), a content-type override naming a part that is not there | `XLSX_PART_UNREFERENCED` |
 | any part's bytes, before parsing: an XML declaration other than LibreOffice's two (`<?xml version="1.0" encoding="UTF-8"?>`, with or without `standalone="yes"`), or none | `XLSX_PRESCAN_DECL` |
 | any part's bytes: `<!--` anywhere | `XLSX_PRESCAN_COMMENT` |
 | any part's bytes: `<![CDATA[` | `XLSX_PRESCAN_CDATA` |
