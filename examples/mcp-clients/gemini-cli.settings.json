@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "myco-gate": {
+      "command": "/path/to/Myco/node_modules/.bin/tsx",
+      "args": [
+        "/path/to/Myco/scripts/myco-gate.ts",
+        "mcp",
+        "--evidence-root",
+        "/path/to/evidence",
+        "--task",
+        "df-s01",
+        "--run",
+        "run-42",
+        "--audit",
+        "/path/to/gate-decisions.jsonl"
+      ],
+      "timeout": 30000,
+      "trust": false,
+      "includeTools": ["myco_gate_check"]
+    }
+  }
+}

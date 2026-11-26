@@ -556,10 +556,13 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
   afterEach(() => rmSync(base, { recursive: true, force: true }));
 
   const plan = (): AgentLaunchPlan => ({
+    mcpConfigPath: join(base, "mcp.json"),
     argv: [
       "-p",
       "edit the cell, save, then call the gate",
       "--strict-mcp-config",
+      "--tools",
+      "",
       "--mcp-config",
       join(base, "mcp.json"),
       "--permission-mode",
