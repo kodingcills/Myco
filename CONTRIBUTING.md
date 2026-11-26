@@ -44,6 +44,21 @@ pnpm test
 npx biome check .
 ```
 
+### Before you push: the leak guard (TIF-98)
+
+```sh
+pnpm leak-guard                    # tracked files + every outward writer's output and logs
+pnpm leak-guard --scan <dir>       # also scan a run's outputs or logs you produced
+```
+
+Run it before **every** push, and state the result in your PR comment ("leak-guard: PASS @
+`<sha8>`", or what it found and how you fixed it). It reports `file:line class` (username,
+home-path, hostname, key-shaped), never the matched value, and exits 1 on any finding. The
+same checks run in CI on every PR (`test/leak-guard/`, in the core smoke set). Never add an
+allowlist entry to make it pass: fix the leak. Code that writes an outward-bound dataset,
+episode export or bundle goes through `src/leak-guard/serialize.ts`; the routing lint
+(`test/leak-guard/routing.test.ts`) fails a writer that does not.
+
 `pnpm lint` already includes `biome check .`; running `npx biome check .` on its own gives a quick
 answer while you edit. The guest agent and runtime jobs are `cd agent && pip install -e . pytest &&
 pytest -v` and `cd runtime && cargo test -p myco-rt-agent`. [docs/ci.md](docs/ci.md) lists every
@@ -74,6 +89,7 @@ once before you open the PR. CI does the same split: see
 | `agent/` | `cd agent && pip install -e . pytest && pytest -v` |
 | `runtime/` | `cd runtime && cargo test -p myco-rt-agent` (its confinement tests run only on Linux) |
 | docs only | `pnpm exec vitest run test/no-home-paths.test.ts`, plus any test that names the doc |
+| `src/leak-guard/`, an outward writer, fixtures, anything before a push | `pnpm leak-guard` and `pnpm exec vitest run test/leak-guard` |
 | the directory-scanning guards CI always runs on a narrow PR | `pnpm exec vitest run $(python3 scripts/ci-plan.py --event pull_request --files docs/new-note.md \| sed -n 's/^scanners=//p')` |
 
 `python3 scripts/ci-plan.py --event pull_request --files $(git diff --name-only origin/main...HEAD)`

@@ -27,6 +27,10 @@ rule below comes from a specific failure on this repo, most of them on 2026-11-2
 > **Gates.** `<exact commands>`, plus: run `npx biome check .` **without a pipe** and
 > report its exit code.
 >
+> **Leak check (your own).** Run your own leak checks on the diff and on anything the PR
+> produces, in addition to the builder's stated `pnpm leak-guard` result. The guard is the
+> first line, not the only one (TIF-98, defense in depth).
+>
 > **Report PASS/FAIL**, evidence per item, defects at exact file and line.
 
 ## Why each rule exists
