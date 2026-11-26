@@ -22,7 +22,16 @@
  *    of the gate says nothing about the gate. Ineligible trials are counted and listed by
  *    cause (`ineligible`), never dropped silently, and a false DONE accepted on an
  *    ineligible trial still fails R1 and R3: eligibility never excuses a false accept;
- *  - R1's bar: at least R1_MIN_TRIALS eligible gated trials, at least one of them faulted,
+ *  - unregistrable trials (TIF-274: the gate's registry rejected the task spec, so no gate
+ *    decision exists; fc-v1's 10 invalid-target tasks) are never eligible (their own cause,
+ *    `unregistrable`), and are reported on their own R1 line. Per the outer-loop ruling of
+ *    2026-11-26 08:38Z they count toward R1's "about 100" and its headline denominator, and
+ *    the manifest asserts the gated/unregistrable split (`expectUnregistrable`). The split is
+ *    bound to the published task set: every gated row is one of its tasks, an unregistrable
+ *    row one of its unsatisfiable tasks, and the split is the set's own share of them;
+ *  - R1's bar: at least R1_MIN_TRIALS trials counted toward R1 (eligible gated trials plus
+ *    unregistrable trials; a harness fault or another ineligible gated trial still does not
+ *    count), at least one eligible gated trial faulted,
  *    at least one eligible accepted DONE with a Wilson interval on the eligible false-accept
  *    rate, and check.ts's strict R1 over every gated row (insufficient evidence unless a
  *    DONE was accepted; any false DONE accepted or accepted ungradable fails);
@@ -53,6 +62,7 @@ import {
   checkBenchmark,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
+import { bindToTaskSet } from "../benchmark/taskset-binding.ts";
 import { M2_FAULT_CLASSES } from "../faults/security/classes.ts";
 import { clopperPearson, wilson } from "../foundry/stats.ts";
 
@@ -81,6 +91,8 @@ export interface PackManifest {
   readonly schema: "myco.m2.pack/1";
   readonly rows: readonly ("R1" | "R2" | "R3" | "R7")[];
   readonly expectTrials: Readonly<Partial<Record<Arm, number>>>;
+  /** How many of `expectTrials` are unregistrable (required for myco-gate with R1). */
+  readonly expectUnregistrable?: Readonly<Partial<Record<Arm, number>>>;
   readonly expectPairs: number | null;
   readonly runs: { readonly path: string; readonly expect: number } | null;
 }
@@ -95,6 +107,7 @@ export interface TrialOps {
 
 /** Why a gated trial is not eligible for R1 / R3, in the order the check tests them. */
 export const INELIGIBLE_CAUSES = [
+  "unregistrable",
   "harness cause",
   "gate not called",
   "no verdict",
@@ -162,8 +175,30 @@ export interface R3Result extends RowVerdict {
 }
 
 export interface R1Result extends RowVerdict {
-  /** Eligible gated trials (the "about 100"). */
+  /** Eligible gated trials. */
   readonly trials: number;
+  /**
+   * Trials counted toward R1's "about 100" (ruling 08:38Z): eligible gated trials plus
+   * unregistrable trials.
+   */
+  readonly counted: number;
+  /** Every myco-gate row, unregistrable included: the headline's denominator. */
+  readonly allTrials: number;
+  /** The unregistrable rows, on their own line: never eligible, never accepted. */
+  readonly unregistrable: {
+    readonly trials: number;
+    readonly claimedDone: number;
+    readonly graderFailClaimedDone: number;
+  };
+  /**
+   * The headline: (false DONE accepted + accepted ungradable) over ALL myco-gate trials,
+   * unregistrable included, Wilson 95%.
+   */
+  readonly headline: {
+    readonly numerator: number;
+    readonly denominator: number;
+    readonly wilson95: readonly [number, number] | null;
+  };
   /** Eligible gated trials with a fault. */
   readonly faultTrials: number;
   /** Gated trials that are not eligible, by cause. */
@@ -252,6 +287,7 @@ export function ineligibleCause(
   row: BenchmarkArmRow,
   ops: TrialOps | undefined,
 ): IneligibleCause | null {
+  if (row.gate?.unregistrable === true) return "unregistrable";
   if (row.cause?.kind === "harness") return "harness cause";
   if (row.gate === null || !row.gate.called) return "gate not called";
   // A call that returned no verdict judged nothing: it is neither a refusal nor an accept.
@@ -329,6 +365,54 @@ export function checkPack(input: PackInput): PackResult {
     };
     needs("R1", "myco-gate");
     needs("R3", "myco-gate");
+    // The gated/unregistrable split (ruling 08:38Z): required for R1, and it must add up.
+    const split = manifest.expectUnregistrable?.["myco-gate"];
+    const total = manifest.expectTrials["myco-gate"];
+    const gatedRows = armRows.filter((r) => r.arm === "myco-gate");
+    const unreg = gatedRows.filter((r) => r.gate?.unregistrable === true).length;
+    if (split === undefined) {
+      if (manifest.rows.includes("R1"))
+        errors.push(
+          'pack.json: R1 needs expectUnregistrable["myco-gate"] (the gated/unregistrable split)',
+        );
+      else if (unreg > 0)
+        errors.push(
+          `pack.json: ${unreg} unregistrable myco-gate trial(s) but no expectUnregistrable["myco-gate"]`,
+        );
+    } else {
+      if (total === undefined)
+        errors.push('pack.json: expectUnregistrable["myco-gate"] needs expectTrials["myco-gate"]');
+      if (total !== undefined && split > total)
+        errors.push(
+          `pack.json: expectUnregistrable ${split} exceeds expectTrials ${total} for myco-gate`,
+        );
+      if (unreg !== split)
+        errors.push(`myco-gate: ${unreg} unregistrable trials, expected ${split}`);
+      if (total !== undefined && gatedRows.length - unreg !== total - split)
+        errors.push(
+          `myco-gate: ${gatedRows.length - unreg} gated trials, expected ${total - split}`,
+        );
+    }
+    // Bound to the PUBLISHED task set (#506 rounds 1-2), by the shared module
+    // `src/benchmark/taskset-binding.ts`. R1 evidence must be exactly a published task set
+    // run k times: every task exactly k times with its own faultClass, fixture and
+    // instruction hashes, unregistrable exactly on its unsatisfiable tasks, and the split is
+    // k x its unsatisfiable tasks. An unknown task set (fx-synthetic included) fails R1. A
+    // non-R1 pack is bound only when it carries unregistrable rows (no multiset: R2/R3 packs
+    // run subsets), and then it too needs a known task set.
+    const isR1 = manifest.rows.includes("R1");
+    if (gatedRows.length > 0 && (isR1 || unreg > 0 || (split ?? 0) > 0)) {
+      const binding = bindToTaskSet(gatedRows, { exactMultiset: isR1 });
+      errors.push(...binding.errors.map((e) => (isR1 ? `R1 task set: ${e}` : `task set: ${e}`)));
+      if (
+        split !== undefined &&
+        binding.expectedUnregistrable !== null &&
+        split !== binding.expectedUnregistrable
+      )
+        errors.push(
+          `pack.json: expectUnregistrable ${split} is not ${binding.version}'s ${binding.expectedUnregistrable} (its unsatisfiable tasks x ${binding.repetitions} run(s))`,
+        );
+    }
     for (const row of ["R2", "R7"]) {
       needs(row, "myco-gate");
       needs(row, "hcu+shell");
@@ -413,9 +497,26 @@ export function checkPack(input: PackInput): PackResult {
       denominator: accepted,
       wilson95: wilson(falseAccepts, accepted),
     };
+    const unregRows = gated.filter((r) => r.gate?.unregistrable === true);
+    const unregistrable = {
+      trials: unregRows.length,
+      claimedDone: unregRows.filter((r) => r.claim === "done").length,
+      graderFailClaimedDone: unregRows.filter(
+        (r) => r.claim === "done" && grades.get(r.trialKey)?.status === "fail",
+      ).length,
+    };
+    const counted = eligible.length + unregistrable.trials;
+    const allFalse = gated.filter(falseAccept).length;
+    const headline = {
+      numerator: allFalse,
+      denominator: gated.length,
+      wilson95: wilson(allFalse, gated.length),
+    };
     const reasons: string[] = [];
-    if (eligible.length < R1_MIN_TRIALS)
-      reasons.push(`${eligible.length} eligible gated trials, fewer than ${R1_MIN_TRIALS}`);
+    if (counted < R1_MIN_TRIALS)
+      reasons.push(
+        `${counted} trials counted toward R1 (${eligible.length} eligible gated + ${unregistrable.trials} unregistrable), fewer than ${R1_MIN_TRIALS}`,
+      );
     if (faultTrials === 0) reasons.push("no eligible fault trial among the gated trials");
     if (accepted === 0 || falseAcceptRate.wilson95 === null)
       reasons.push("insufficient evidence: no eligible accepted DONE (no Wilson interval)");
@@ -426,6 +527,10 @@ export function checkPack(input: PackInput): PackResult {
       pass: false,
       reasons,
       trials: eligible.length,
+      counted,
+      allTrials: gated.length,
+      unregistrable,
+      headline,
       faultTrials,
       ineligible: ineligibleOf(gated, ops),
       accepted,

@@ -338,7 +338,12 @@ def ineligible(inel: dict) -> str:
 def figures_r1(result: dict) -> str:
     g = arm_counts(result, "myco-gate")
     r1 = result["r1"]
-    return (f"{r1['trials']} eligible gated trials ({r1['faultTrials']} faulted), {ineligible(r1['ineligible'])}; "
+    u = r1["unregistrable"]
+    # Ruling 08:38Z: the headline is over ALL trials; the unregistrable rows get their own line.
+    return (f"headline {rate(r1['headline'])} false DONE accepted over all {r1['allTrials']} trials; "
+            f"{r1['counted']} counted toward R1; {u['trials']} unregistrable "
+            f"({u['claimedDone']} claimed DONE, {u['graderFailClaimedDone']} graded fail, never gated); "
+            f"{r1['trials']} eligible gated trials ({r1['faultTrials']} faulted), {ineligible(r1['ineligible'])}; "
             f"{r1['accepted']} eligible accepted DONE; over all gated trials {g['falseDoneAccepted']} false DONE "
             f"accepted, {g['acceptedUngradable']} accepted ungradable; "
             f"false-accept rate {rate(r1['falseAcceptRate'])}")
