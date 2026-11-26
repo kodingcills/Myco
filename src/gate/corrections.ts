@@ -98,7 +98,9 @@ const CORRECTABLE: ReadonlyMap<string, CorrectableFamily> = new Map<string, Corr
   [
     "calc-record-edit",
     {
-      version: "2",
+      // Version 3 adds the xlsx read path (TIF-274 prerequisite); its CSV rule is version
+      // 2's unchanged, and non-CSV tasks are refused below.
+      version: "3",
       targets(spec) {
         const { fixtureSeed, rowKey, column, newValue } = spec as RecordEditSpec;
         return [

@@ -72,15 +72,15 @@ PR, with no ordering condition left.
 ### Trust boundaries
 
 - **Agent → gate**: `myco.gate/v1` request (`taskId`, `runId`, optional `claim`,
-  `api.ts:126-135`). It is a closed set: any other key is `UNKNOWN_FIELD` or
-  `ORACLE_INPUT_REJECTED` (`parseGateRequest`, `api.ts:340-402`).
+  `api.ts:136-145`). It is a closed set: any other key is `UNKNOWN_FIELD` or
+  `ORACLE_INPUT_REJECTED` (`parseGateRequest`, `api.ts:354-416`).
 - **Wire → MCP server**: newline-delimited JSON-RPC on stdin (`serveStdio`,
   `mcp-server.ts:180-206`). No network listener exists, and none is added here.
 - **Persisted state → oracle**: bytes the agent's app wrote, read after stop (sealed path)
   or live (mock/dev path). Capped at 16 MiB on both paths: the mock reader (`gate.ts:213`,
   `gate.ts:412`) and, since #521, the sealed reader (`sealed.ts:127`). The vault still hashes
   a capture of any size (H-06, deferred part).
-- **Gate → agent**: the whole `GateResult` (`api.ts:151-191`), returned by `callTool` as
+- **Gate → agent**: the whole `GateResult` (`api.ts:161-201`), returned by `callTool` as
   `structuredContent` and as text (`mcp-server.ts:100-106`). Reasons are "not a stable
   contract" but must stay free of host paths and of free text the agent did not already
   author. What they do carry today is H-16; the evidence refs are H-17.
@@ -105,7 +105,7 @@ Nothing below is built. This records the shape current work must not close off.
    the connection (an API key checked by the adapter, or mTLS) and resolves it to an
    operator-side `caller = { tenantId, keyId }`. The `myco.gate/v1` request stays exactly
    `taskId`/`runId`/`claim`. `tenantId`, `caller` or anything like them in a request is
-   `UNKNOWN_FIELD` (`api.ts:356-363`), which is already the right behaviour. The closed
+   `UNKNOWN_FIELD` (`api.ts:370-377`), which is already the right behaviour. The closed
    request set is the guarantee: the agent cannot claim an identity.
 2. **Authorization is a binding lookup, operator-side.** The adapter maps
    `(caller.tenantId, runId)` to a stored `(binding, receipt, task)` (H-11) and builds a
@@ -169,7 +169,7 @@ issue.
   1 GiB. The MCP client forwards it as one line. The gate process holds the whole line in
   memory, then a parsed copy of it, until it hits the heap limit or a string-length limit
   and dies. Either way the trial has no gate. The `CLAIM_LIMIT` of 4000 is checked
-  only *after* the whole frame is buffered and parsed (`api.ts:387`). A frame with no
+  only *after* the whole frame is buffered and parsed (`api.ts:401`). A frame with no
   newline at all is buffered forever. Hosted, the same frame is a trivial unauthenticated
   DoS. (The round-1 verifier reproduced this against the real process: RSS rose until it
   died between 200 and 300 MiB with a 256 MiB heap cap.)
@@ -196,7 +196,7 @@ issue.
 ### H-02: Agent-controlled strings in agent-facing text (Low; MCP half fix next, `api.ts` half defer)
 
 - **Where:**
-  - `src/gate/api.ts:356-363`: the `UNKNOWN_FIELD` reason is
+  - `src/gate/api.ts:370-377`: the `UNKNOWN_FIELD` reason is
     `` `unknown request field(s): ${unknown.join(", ")}; ...` ``. It echoes every
     agent-chosen key name verbatim: no length bound (until H-01), no alphabet, NUL and bidi
     controls included.
@@ -225,12 +225,12 @@ issue.
 
 ### H-03: `claim` is echoed verbatim (Info; defer, document)
 
-- **Where:** `api.ts:384-393` (accepted when it is a string of at most 4000 UTF-16 units,
+- **Where:** `api.ts:398-407` (accepted when it is a string of at most 4000 UTF-16 units,
   any code points, NUL and lone surrogates included), echoed in `GateResult.request.claim`
   and written by `--audit` (`cli.ts:138`).
 - **Why it is only Info:** the claim is the agent's own text, returned to the agent, and
   recorded for audit by design ("recorded for the ledger, never read by the oracle",
-  `api.ts:133`). The gate never reads it into a verdict (`gate.test.ts` "the claim never
+  `api.ts:143`). The gate never reads it into a verdict (`gate.test.ts` "the claim never
   changes the verdict").
 - **Decision:** no change. Narrowing the accepted alphabet would narrow `v1` input and needs
   its own review. The rule for every consumer: `request.claim` is untrusted agent text.
@@ -321,7 +321,7 @@ closed, with a code and never `verified`:
 - **Unicode, NUL and path tricks in ids** (`../r`, `r/..`, `r\0`, `r\n`, `r `, `.r`, `r..x`,
   `/abs`, `C:\x`, fullwidth or Cyrillic lookalikes, NFKC-equivalent forms, 129-character
   ids): the id alphabet `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` plus the `..` rule
-  (`api.ts:314-319`) rejects every one with `INVALID_REQUEST`. JavaScript's `$` without the
+  (`api.ts:328-333`) rejects every one with `INVALID_REQUEST`. JavaScript's `$` without the
   `m` flag does not match before a trailing newline, so `r\n` is rejected too.
 - **Oversized claims:** over 4000 code units gives `INVALID_REQUEST` (rejected, not
   truncated).
@@ -403,7 +403,7 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 | H-12 | 3, concurrent-safe ledger | `ledger.ts:41-53` (read the head, then `appendFileSync`), `cli.ts:138` | One chain per (tenant, eval), appends serialised per chain (a lock file or a single writer); row format unchanged | Locally one serial process writes (`serveStdio` handles requests one at a time, `mcp-server.ts:180-206`), so no fork today |
 | H-13 | 4, per-tenant vault keys | `vault.ts:251-262` | A `keyId` in the seal manifest plus a key-lookup callback in `VaultOptions`; single-key default | Changes the manifest format; no second key exists |
 | H-14 | 5, host paths out of the seal manifest | `vault.ts:95`, `vault.ts:328-331` | Record oracle sources as `{ id, sha256 }` relative to a configured oracle root | Locally the paths never reach the agent: agent-facing error text carries `integrity:<code>` only (`sealed.ts:20-21`, `sealed-gate.test.ts` "its host path never reaches the agent") |
-| H-15 | 6, operator-bound caller identity | `gate.ts:470-499`, `api.ts:151-191` | Optional `GateConfig.caller`, echoed as optional `GateResult.caller` (additive `v1`); request unchanged | `gate.ts`/`api.ts` are locked by #503; no transport authenticates a caller yet |
+| H-15 | 6, operator-bound caller identity | `gate.ts:470-499`, `api.ts:161-201` | Optional `GateConfig.caller`, echoed as optional `GateResult.caller` (additive `v1`); request unchanged | `gate.ts`/`api.ts` are locked by #503; no transport authenticates a caller yet |
 
 ### H-16: Oracle reason text reaches the agent verbatim (Low; defer)
 
@@ -411,10 +411,10 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
   and `callTool` returns the whole `GateResult` to the agent as `structuredContent` and as
   text (`mcp-server.ts:100-106`). What reaches the agent:
   - Family-authored English. `TARGET_MISMATCH` names the cell, the record and the column
-    (`families.ts:160-161`).
+    (`families.ts:189-190`).
   - `DOCUMENT_COLLATERAL` lists the collateral cell addresses, the first few then a count
-    (`calc-document.ts:162-164`), **even with corrections off**.
-  - The verified reason echoes the requested `newValue` (`families.ts:246`).
+    (`calc-document.ts:210-212`), **even with corrections off**.
+  - The verified reason echoes the requested `newValue` (`families.ts:312`).
   - `could not look: ${read.detail}` (`gate.ts:776`), whose detail can name a path relative
     to the evidence root (the descriptor check, `gate.ts:318-325`).
   - `StateCorruptError` messages (`gate.ts:900`), family-written to be agent-facing.
@@ -483,7 +483,7 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 1. **H-02:** stop echoing agent strings in MCP error messages (`mcp-server.ts:87`,
    `mcp-server.ts:171`): unlocked, in one `mcp-server.ts` PR with item 6, no ordering
    condition. Stop echoing agent-chosen key names in the `UNKNOWN_FIELD` reason
-   (`api.ts:356-363`) after #503 merges.
+   (`api.ts:370-377`) after #503 merges.
 2. **H-04, on main:** escape or reject control and bidi characters in
    `corrections[].observed` (`corrections.ts:241-246`), pin it with a test, and document in
    `docs/gate/api.md` "Corrections" (after #503) that it is document data.
