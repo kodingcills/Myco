@@ -95,9 +95,17 @@ export function trackedFiles(repoRoot: string): string[] {
     .filter(Boolean);
 }
 
+const UTF8 = new TextDecoder("utf-8", { fatal: true });
+
 function readText(path: string): string {
-  // latin1 keeps every byte as one char, so a key inside a binary file is still seen.
-  return readFileSync(path).toString("latin1");
+  const bytes = readFileSync(path);
+  try {
+    return UTF8.decode(bytes);
+  } catch {
+    // Not UTF-8 (a binary): latin1 keeps every byte as one char, so an ASCII key or path
+    // inside a binary file is still seen.
+    return bytes.toString("latin1");
+  }
 }
 
 /** A leaking file NAME is withheld; the scan reports it as a finding of its own. */
@@ -137,7 +145,11 @@ export function scanTracked(
   const accounts = new Set(allowlist.accounts.map((a) => a.account));
   const usedAccounts = new Set<string>();
   const usedFileEntries = new Set<number>();
-  const base: DetectOptions = { identity, allowedAccounts: accounts };
+  const base: DetectOptions = {
+    identity,
+    allowedAccounts: accounts,
+    onAllowed: (a) => usedAccounts.add(a),
+  };
   for (const [n, file] of files.entries()) {
     const abs = join(repoRoot, file);
     if (!existsSync(abs)) continue; // deleted in the working tree, still in the index
@@ -158,23 +170,23 @@ export function scanTracked(
     const hits = scanText(text, { ...base, skipClasses: skip });
     for (const h of hits) findings.push({ file: name.shown, line: h.line, class: h.class });
     // Usage tracking (stale entries fail): would the file hit without the entry / accounts?
-    if (entryIdx >= 0 && scanText(text, base).some((h) => skip.has(h.class)))
+    if (
+      entryIdx >= 0 &&
+      scanText(text, { identity, allowedAccounts: accounts }).some((h) => skip.has(h.class))
+    )
       usedFileEntries.add(entryIdx);
-    if (accounts.size > 0) {
-      for (const a of accounts) {
-        if (usedAccounts.has(a) || !text.includes(a)) continue;
-        const without = new Set([...accounts].filter((x) => x !== a));
-        const strict = scanText(text, { ...base, allowedAccounts: without, skipClasses: skip });
-        if (strict.length > hits.length) usedAccounts.add(a);
-      }
-    }
   }
   // A full scan proves every allowlist entry still earns its place (a stale entry would
   // silently excuse the next real leak in that file, or of that account).
   if (only === undefined) {
     const stale = (what: string) =>
       findings.push({ file: `${ALLOWLIST_PATH} (${what} stale)`, line: 0, class: "allowlist" });
-    for (const i of allowlist.files.keys()) if (!usedFileEntries.has(i)) stale(`files[${i}]`);
+    // `username`/`hostname` entries depend on the machine running the scan (CI's account
+    // is generic), so only entries for host-independent classes can be proven stale.
+    const hostDependent = (e: AllowlistFile) =>
+      e.classes.every((c) => c === "username" || c === "hostname");
+    for (const [i, e] of allowlist.files.entries())
+      if (!usedFileEntries.has(i) && !hostDependent(e)) stale(`files[${i}]`);
     for (const [i, a] of allowlist.accounts.entries())
       if (!usedAccounts.has(a.account)) stale(`accounts[${i}]`);
   }

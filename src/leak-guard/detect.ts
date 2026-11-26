@@ -50,6 +50,8 @@ export interface DetectOptions {
   readonly allowedAccounts?: ReadonlySet<string>;
   /** Classes to skip entirely for this text (file-scoped allowlist entries). */
   readonly skipClasses?: ReadonlySet<LeakClass>;
+  /** Told which allowlisted account excused a home path (stale-entry tracking). */
+  readonly onAllowed?: (account: string) => void;
 }
 
 /**
@@ -102,8 +104,9 @@ const wordRe = (word: string, flags = "") =>
   new RegExp(`(?<![A-Za-z0-9])${escapeRe(word)}(?![A-Za-z0-9])`, flags);
 
 /**
- * Collapse every separator run (`/`, `\`, `\\`, `//`) to `/`, so `C:\\Users\\a`,
- * `C:/Users\a`, `\\?\C:\Users\a` and `\\host\c$\Users\a` all read as `.../Users/a`.
+ * Collapse every separator run (`/`, `\`, `\\`, `//`) to `/`, so a doubled-backslash drive
+ * path, a mixed-separator path, a `\\?\` path and a UNC admin-share path all read as
+ * `.../Users/<n>`.
  */
 const unifySeparators = (s: string) => s.replace(/[\\/]+/g, "/");
 
@@ -117,22 +120,35 @@ const unifySeparators = (s: string) => s.replace(/[\\/]+/g, "/");
 const HOME_ROOT = String.raw`(?:home|[Uu][Ss][Ee][Rr][Ss]|[Dd][Oo][Cc][Uu][Mm][Ee][Nn][Tt][Ss] [Aa][Nn][Dd] [Ss][Ee][Tt][Tt][Ii][Nn][Gg][Ss]|[Dd][Oo][Cc][Uu][Mm][Ee]~\d|[Uu][Ss][Ee][Rr][Ss]~\d)`;
 
 /**
- * An account segment: starts with a letter, digit or `_` (so `<you>`, `$USER`, `${USER}`,
- * `...` and `*` are not accounts), then name characters, with single inner spaces allowed
- * (`Jane Doe`). It ends at a separator, quote, bracket or end of text.
+ * An account segment: any characters (Unicode letters included: `José`, `Zoë`) up to a
+ * separator, whitespace, quote, backtick, bracket or URL/JSON punctuation. It must not START with
+ * `<`, `$`, `{`, `%`, `.`, `~`, `*`, `-` or `…`, so `<you>`, `$USER`, `${USER}`, `%USERNAME%`,
+ * `...`, `…` and `*` are placeholders, not accounts. Single inner spaces join words, so a spaced
+ * folder (`First Last`) is one account.
  */
-const ACCOUNT = "([A-Za-z0-9_][A-Za-z0-9_.~$-]*(?: [A-Za-z0-9_][A-Za-z0-9_.~$-]*)*)";
+const NAME_CHAR = `[^/\\\\\\s"'\`<>|:*?,;()\\[\\]{}&#=%]`;
+const NAME_START = String.raw`(?![<$%{.~*\u2026-])`;
+const ACCOUNT = `(${NAME_START}${NAME_CHAR}+(?: ${NAME_START}${NAME_CHAR}+)*)`;
 
 /**
- * `/<root>/<account>` not preceded by a name character (so `docs/home/x` and `my-home/x`
- * are relative and clean), and the account is followed by a separator or a non-name
- * character (or the end). A drive (`C:`) or UNC host before the root is just more text in
- * front of the `/`.
+ * `/<root>/<account>` at the end of an ABSOLUTE path: the path starts with `/` (or a drive)
+ * that is not glued to a name character, then any number of segments (`/var/home/<n>`,
+ * `\\srv\share\Users\<n>`, `\\?\UNC\...`). So `docs/home/x` and `my-home/x` are
+ * relative and clean. The account runs greedily to its first stop character, so a
+ * following separator is not required: a home path at the end of a string still leaks.
  */
+const SEGMENT = `[^/\\s"'\`<>|]+`;
 const HOME_PATH = new RegExp(
-  String.raw`(?<![A-Za-z0-9_.~-])/${HOME_ROOT}/${ACCOUNT}(?=$|[/"'\s<>|,;:)\]}&?#*])`,
-  "g",
+  String.raw`(?<![\p{L}\p{N}_.~-])(?:[A-Za-z]:)?(?:/${SEGMENT})*?/${HOME_ROOT}/${ACCOUNT}`,
+  "gu",
 );
+
+/**
+ * A web URL's scheme and host (`https://example.com`), replaced by a word before the home
+ * scan so `https://example.com/home/x` reads as a relative `URL/home/x`. `file:` URLs are
+ * host paths and are kept; a one-letter "scheme" is a drive (`C:`), also kept.
+ */
+const WEB_URL = /(?<![A-Za-z0-9+.-])(?!file:)[A-Za-z][A-Za-z0-9+.-]+:[\\/]{2}[^\\/\s"'<>]*/gi;
 
 /** Mac host shapes: a name, then `-MacBook`, `-MacBook-Pro`/`-Air`, `-iMac`, `-Mac-mini`/`-Studio`/`-Pro`. */
 const MAC_HOST =
@@ -183,22 +199,27 @@ export function classesIn(text: string, options: DetectOptions): LeakClass[] {
   return classesInCompiled(text, compile(options.identity), options);
 }
 
-function homePathHit(form: string, allowed: ReadonlySet<string>): boolean {
-  const unified = unifySeparators(form);
+function homePathHit(
+  form: string,
+  allowed: ReadonlySet<string>,
+  onAllowed?: (account: string) => void,
+): boolean {
+  const unified = unifySeparators(form.replace(WEB_URL, "URL"));
   for (const m of unified.matchAll(HOME_PATH)) {
-    // A spaced account (`Jane Doe`) is captured greedily, so prose after a placeholder
-    // (a placeholder account followed by ` is ...`) joins it: the hit is allowed when any leading run of words is an
-    // allowlisted account. Trailing dots are sentence punctuation, not part of a name.
+    // A spaced account (`First Last`) is captured greedily, so prose after a placeholder
+    // (a placeholder account followed by ` is ...`) joins it: the hit is allowed when a
+    // leading run of words is an allowlisted account. Trailing dots are punctuation.
     const words = (m[1] ?? "").split(" ");
-    const allowedPrefix = words.some((_w, i) =>
-      allowed.has(
+    const excuse = words
+      .map((_w, i) =>
         words
           .slice(0, i + 1)
           .join(" ")
           .replace(/\.+$/, ""),
-      ),
-    );
-    if (!allowedPrefix) return true;
+      )
+      .find((a) => allowed.has(a));
+    if (excuse === undefined) return true;
+    onAllowed?.(excuse);
   }
   return false;
 }
@@ -212,7 +233,7 @@ function classesInCompiled(text: string, c: Compiled, options: DetectOptions): L
   if (!skip.has("username") && c.users.some((re) => any((f) => re.test(f)))) out.push("username");
   if (
     !skip.has("home-path") &&
-    (any((f) => homePathHit(f, allowed)) ||
+    (any((f) => homePathHit(f, allowed, options.onAllowed)) ||
       c.paths.some((p) => any((f) => unifySeparators(f).includes(p))))
   )
     out.push("home-path");
