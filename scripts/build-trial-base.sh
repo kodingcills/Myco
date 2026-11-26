@@ -85,6 +85,14 @@ log "step 1: open egress for the maintenance window; restore and boot $FROM"
 EGRESS_OPENED=1
 bash "$EGRESS" allow > "$OUT/01-egress-allow.log" 2>&1 || die "guest-egress allow failed (see 01-egress-allow.log)"
 MYCO_GUEST_EGRESS=open bash "$RESET" "$FROM" > "$OUT/02-reset-open.log" 2>&1 || die "reset of $FROM failed (see 02-reset-open.log)"
+# TIF-98: every boot in the build must be a full cold boot. The reset classifies its own
+# boot (and cycles a fast one, the first start after `guest-egress.sh allow`); record it.
+BOOT_LINE=$(grep -E '^reset-trial-vm: boot class=' "$OUT/02-reset-open.log" | tail -n 1)
+echo "step 1 reset: ${BOOT_LINE:-no boot line}" >> "$OUT/boot-classes.log"
+case "$BOOT_LINE" in
+  "reset-trial-vm: boot class=cold "*) ;;
+  *) die "step 1 reset did not report a cold boot (see boot-classes.log)" ;;
+esac
 scp -q -F "$CFG" -o ConnectTimeout=10 "$REPO/scripts/trial-base/guest-maintenance.ps1" "myco-win11:C:/Users/myco/trial-base-maintenance.ps1" \
   || die "could not copy the maintenance script"
 
@@ -112,8 +120,26 @@ log "step 5: deny egress; boot in place; verify + probe"
 bash "$EGRESS" deny > "$OUT/11-egress-deny.log" 2>&1 || die "guest-egress deny failed"
 EGRESS_OPENED=0
 [ "$(status)" = stopped ] || die "VM not stopped after deny"
-"$VM/vm.sh" start >/dev/null || die "vm.sh start failed"
-bash "$GATE" 900 > "$OUT/12-boot-in-place.log" 2>&1 || die "guest did not come up after deny (see 12-boot-in-place.log)"
+# TIF-98: `deny` just rewrote UTM's config, so this boot in place (no reset, so no reset
+# guard) would be fast. Classify it the way reset-trial-vm.sh does, by the gate's guest CPU at
+# the first ssh answer: a fast boot gets a clean shutdown and one more start; a second fast
+# boot, or an unreadable line, stops the build before the snapshot.
+COLD_MIN_GUEST_CPU=${MYCO_COLD_MIN_GUEST_CPU:-100}
+boot_in_place() { # boot_in_place <attempt> <log>; sets BIP_CPU (empty if unreadable)
+  "$VM/vm.sh" start >/dev/null || die "vm.sh start failed"
+  bash "$GATE" 900 > "$2" 2>&1 || die "guest did not come up after deny (see $(basename "$2"))"
+  BIP_CPU=$(sed -nE 's/^wait-guest-ready: first ssh answer after [0-9]+s \(guest CPU ([0-9]+)s\).*/\1/p' "$2" | tail -n 1)
+  echo "step 5 boot in place, attempt $1: guest_cpu_first_ssh_s=${BIP_CPU:-unreadable}" >> "$OUT/boot-classes.log"
+  [ -n "$BIP_CPU" ] || die "cannot read the boot-in-place guest CPU at the first ssh answer (see $(basename "$2"))"
+}
+boot_in_place 1 "$OUT/12-boot-in-place.log"
+if [ "$BIP_CPU" -lt "$COLD_MIN_GUEST_CPU" ]; then
+  log "step 5: boot in place was fast (guest CPU ${BIP_CPU}s < ${COLD_MIN_GUEST_CPU}s); clean shutdown and one more start"
+  clean_shutdown || die "guest did not shut down cleanly after a fast boot in place"
+  boot_in_place 2 "$OUT/12b-boot-in-place-2.log"
+  [ "$BIP_CPU" -ge "$COLD_MIN_GUEST_CPU" ] || die "boot in place was fast again (guest CPU ${BIP_CPU}s); not snapshotting a guest that skipped its boot work"
+fi
+echo "step 5 boot in place: class=cold guest_cpu_first_ssh_s=$BIP_CPU" >> "$OUT/boot-classes.log"
 bash "$EGRESS" verify > "$OUT/13-egress-verify.log" 2>&1 || die "egress verify failed after deny"
 bash "$EGRESS" probe > "$OUT/14-probe-denied.json" 2>/dev/null || die "probe failed to run"
 python3 - "$OUT/14-probe-denied.json" <<'PY' || die "a probe target was reachable with egress denied (see 14-probe-denied.json)"
