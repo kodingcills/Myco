@@ -11,6 +11,7 @@ client-agnostic setup; the API itself (request, result, reason codes) is
 | Claude Code | wired and tested (`test/gate/mcp-server.test.ts`, the mock demo) |
 | Official MCP TypeScript client (`@modelcontextprotocol/sdk`, pinned) | tested in CI, no model (`test/gate/mcp-sdk-client.test.ts`) |
 | Plain shell (JSON-RPC lines on stdin) | tested in CI (`examples/mcp-clients/stdio-requests.jsonl`, replayed by the same test) |
+| OpenAI Codex CLI (`codex exec`) | **run** 2026-11-26, `codex-cli 0.168.0`: verified, refuted and ASSIGNMENT_MISMATCH returned end to end ([transcript](../../examples/mcp-clients/codex-transcript.md), [config](../../examples/mcp-clients/codex.config.md)) |
 | Oh My Pi, Gemini CLI, other MCP agents | example config only; **not run** (see the examples README for why) |
 
 ## 1. Launching the server
@@ -90,7 +91,9 @@ The result is the `GateResult` from [api.md](api.md#result), returned twice: as
   is then `uncertain`. Naming another task:
   `{"verdict":"uncertain","accepted":false,"reasonCodes":["ASSIGNMENT_MISMATCH"],"evidenceRefs":[],…}`.
 
-Gate on `reasonCodes`, not `reasons`: codes are stable; reasons are for people.
+Gate on `reasonCodes`, not `reasons`: codes are stable; reasons are for people. Do not
+gate on the client's error flag either: Codex CLI's `--json` events do not show
+`isError` at all (2026-11-26 run), so `accepted` and `reasonCodes` are what reach every client.
 
 ## 4. Plain JSON-RPC (no MCP client)
 

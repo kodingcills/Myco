@@ -23,7 +23,9 @@ No file has an `env` value: the server needs no environment variable, key or tok
 | [`gemini-cli.settings.json`](gemini-cli.settings.json) | Gemini CLI | merge `mcpServers` into `.gemini/settings.json` | **not run** (below) |
 | [`generic.mcp.json`](generic.mcp.json) | any client using the common `mcpServers` shape (`command`, `args`, `env`) | the client's MCP config | the same launch line is tested with the official SDK client |
 | [`stdio-requests.jsonl`](stdio-requests.jsonl) | no client: raw JSON-RPC lines | pipe to the server's stdin | tested (`test/gate/mcp-sdk-client.test.ts`) |
-| [`agent-transcript.md`](agent-transcript.md) | a non-Claude agent on a local model | – | **not run** |
+| [`codex.config.md`](codex.config.md) | OpenAI Codex CLI (`codex exec`) | `-c mcp_servers.myco-gate.*` overrides, or the same keys in a harness-owned Codex config | **run** 2026-11-26, `codex-cli 0.168.0`: verified / refuted / ASSIGNMENT_MISMATCH ([transcript](codex-transcript.md)) |
+| [`codex-transcript.md`](codex-transcript.md) | Codex CLI, the non-Claude MCP client | – | **run** (above) |
+| [`agent-transcript.md`](agent-transcript.md) | a non-Claude agent on a local model (Oh My Pi + Ollama) | – | **not run** |
 
 `test/gate/mcp-sdk-client.test.ts` also checks that every JSON config here launches the
 server with `mcp`, an evidence root, a task and a run, and carries no environment values.
@@ -37,10 +39,16 @@ Notes per client:
 - **Gemini CLI.** `trust: false` keeps Gemini CLI's per-call confirmation;
   `includeTools` limits it to the one gate tool. Gemini CLI itself needs a Google login or
   API key, which this change does not use (no credentials, 2026-11-26 ruling).
+- **Codex CLI.** Run on 2026-11-26 (`codex-cli 0.168.0`, its existing ChatGPT login; Codex
+  is approved only for this compatibility check). The MCP server config went in as `-c`
+  overrides with `--ignore-user-config`, so no user config was read or changed. Codex
+  called `myco_gate_check` and returned `verified` (df-s01), `refuted` (df-s02) and
+  `uncertain`/`ASSIGNMENT_MISMATCH` (naming another trial). Its `--json` events do not
+  show MCP `isError`, so gate on `accepted` and `reasonCodes`.
 - **Antigravity** and other MCP hosts that accept the `mcpServers` shape can use
   `generic.mcp.json`; none was run.
 
-## Why no agent was run
+## Why the local-model agent was not run
 
 The brief asked for a real non-Claude agent (Oh My Pi or another open MCP agent) driving a
 local Ollama model, with no account or key. In the cloud session that built this, the
@@ -49,4 +57,5 @@ network proxy refused both `ollama.com` (the Ollama download) and `registry.olla
 host)`. The builder's rules say to stop at a refusal and not work around it, so no other
 download route for Ollama or a model was tried, and no agent was run. Gemini CLI was not
 tried because it needs a login or key. The deterministic client test covers the protocol
-side; an agent run needs an environment that allows those hosts.
+side; an agent run needs an environment that allows those hosts. The non-Claude client
+check was later done with Codex CLI instead (above).
