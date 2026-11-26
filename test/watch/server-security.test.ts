@@ -258,6 +258,18 @@ describe("watch: path traversal on the frame route", () => {
       expect(r.body.includes(secretBytes), path).toBe(false);
       expect(r.body.includes(MARKER), path).toBe(false);
     }
+    // The first layer refuses encoded, query, backslash and dot-segment forms outright (400),
+    // before any route is matched; exact routing and the listing are the second and third.
+    for (const path of [
+      "/frames/%2e%2e/0",
+      "/frames/run-a/0?x=1",
+      "/frames/run-a\\..\\x",
+      "/frames/run-a/./0",
+      "/frames/run-a/../run-a/0",
+      "/api/state/..",
+      "/%2e%2e/etc/passwd",
+    ])
+      expect((await raw(s.port, path)).status, path).toBe(400);
     expect((await raw(s.port, "/frames/run-a/0")).body.equals(PNG)).toBe(true);
     expect((await raw(s.port, "/frames/run-a/1")).body.equals(PNG)).toBe(true);
     expect(s.state().runs).toEqual([{ runId: "run-a", frames: 2 }]);
