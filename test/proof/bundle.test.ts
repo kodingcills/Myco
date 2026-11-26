@@ -138,6 +138,13 @@ describe("tamper cases: every edit, gap, reorder and truncation is refused", () 
     expect(codes(b)).toContain("PROOF_TRUNCATED");
   });
 
+  it("R3-S2: only the pinned record count edited (head hash and records intact)", () => {
+    const b = mutate((x) => {
+      (x.head as { records: number }).records = 99;
+    });
+    expect(codes(b)).toEqual(["PROOF_TRUNCATED"]);
+  });
+
   it("gap: a record removed from the middle", () => {
     const b = mutate((x) => {
       x.records.splice(3, 1);

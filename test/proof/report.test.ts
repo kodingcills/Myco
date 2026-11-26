@@ -24,7 +24,10 @@ describe("static proof report", () => {
     expect(html).toContain("Tamper-evident, not tamper-proof");
     expect(html).toContain(b.head.headSha256);
     expect(html.match(/<tr><td>\d+<\/td>/g)).toHaveLength(b.records.length);
-    expect(html).toContain("REFUTED");
+    expect(html).toContain("What the gate said: <b>REFUTED</b>");
+    expect(html).toContain(
+      "whether it was right is the independent grader's call, not this bundle's",
+    );
     expect(html).toContain("ORACLE_FAIL");
   });
 

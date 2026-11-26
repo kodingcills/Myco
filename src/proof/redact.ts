@@ -5,18 +5,23 @@
  * path, a username or a vault key. Two layers, both fail closed:
  *  1. `redactText` rewrites every string the exporter puts in a bundle: registered literal
  *     values first (secrets, vault keys, host paths, usernames), then generic shapes
- *     (absolute POSIX, Windows and UNC paths, `~user` homes, home roots `Users`/`home`/`root`
- *     and `var/folders` after any non-alphanumeric character, `file:` URLs, key-shaped tokens). A token that still leaks once decoded (JSON escapes, percent-encoding, HTML
- *     entities) is replaced whole.
+ *     (home roots `Users`/`home`/`root`/`Documents and Settings`/`DOCUME~N` after any
+ *     non-alphanumeric character, with spaces allowed in the user segment, UNC paths,
+ *     absolute POSIX and Windows paths, `~user` homes, `var/folders`, `file:` URLs,
+ *     key-shaped tokens). A token that still leaks once decoded (JSON escapes,
+ *     percent-encoding, HTML entities) is replaced whole.
  *  2. The scanners refuse anything left:
  *     - `findLeaksDeep` scans every parsed string value AND every object key of a value
  *       (the verifier runs it over the parsed bundle);
- *     - `findLeaks` scans a text (the verifier runs it over the raw bundle text, and the
- *       report renderer over the final HTML before it returns it).
+ *     - `findLeaks` scans a text (the verifier runs it over the raw text only when it is not
+ *       valid JSON, since parsed JSON gets `findLeaksDeep`; the report renderer runs it over
+ *       the final HTML before it returns it).
  *     Each scanned string is also scanned in every decoded form (`decodedVariants`), so a
  *     path behind `\/`, `\t`, `\u002f`, `%2F` or `&#47;` is still found.
- *     Anything left is a refusal: the exporter throws, the verifier refuses, the report is
- *     not rendered. A redaction bug therefore stops the share; it does not leak.
+ *     Anything left that a scanner recognises is a refusal: the exporter throws, the
+ *     verifier refuses, the report is not rendered. A scanner cannot flag a fragment that no
+ *     longer looks like a path, so the whitespace-tolerant home-root and UNC shapes run first
+ *     and an encoded path with whitespace replaces the whole string (R3-D1).
  *
  * TO FILE: the episode writer (#542, `src/episode/clean.ts` / `validate.ts`) has its own
  * cleanliness scan. Once #542 merges, consolidate both onto one canonical scanner (with a
@@ -90,25 +95,56 @@ const TILDE_USER = /(?<![A-Za-z0-9._~-])~[A-Za-z_][A-Za-z0-9._-]*/g;
 /** `file:` URLs name host paths too. */
 const FILE_URL = /\bfile:\/\/[^\s"'`<>]*/gi;
 /**
+ * A user-folder segment after a home root. Spaces ARE allowed (R3-D1): a Windows account
+ * named "First Last" has the profile `C:\Users\First Last`, and a class that stops at the
+ * first space left the surname in the bundle. The segment runs to the next separator and stops
+ * only at characters no Windows or POSIX account name may contain (`" / \ [ ] : ; | = , + * ?
+ * < >`) or a line break / tab. It must start with a non-space so prose such as "home/ dir" is
+ * not a path. Over-matching (the rest of a sentence) is redacted, never leaked.
+ */
+const USER_SEG = String.raw`[^\s"<>|\\/:*?;=,+\[\]][^\r\n\t"<>|\\/:*?;=,+\[\]]*`;
+/** A later path segment: no whitespace. */
+const PATH_SEG = String.raw`[^\s"'\`<>|\\/]+`;
+/**
  * Home roots, with NO lookbehind deny-list (R2-D1). The POSIX shape above skips a path that
  * follows a letter, digit, `.`, `-` or `/`, and each of those was a bypass (`Saving.../home/a`,
- * `../../Users/a`, `v2/Users/a`, `build-/home/runner`). So any `Users`, `home` or `root`
- * followed by a separator and a segment, after any non-alphanumeric character or at the start,
- * is a host path, whatever precedes it and whatever the separators (`/Users\a`, drive-relative
- * `C:Users\a`). Likewise macOS per-user temp, `var/folders/`. Case-insensitive, since Windows
- * paths are. Over-matching (`src/home/x`) is accepted: it is redacted at export, never leaked.
+ * `../../Users/a`, `v2/Users/a`, `build-/home/runner`). So any home root followed by a
+ * separator and a segment, after any non-alphanumeric character or at the start, is a host
+ * path, whatever precedes it and whatever the separators (`/Users\a`, drive-relative
+ * `C:Users\a`). The roots are `Users`, `home`, `root`, Windows XP's `Documents and Settings`
+ * and its 8.3 short name `DOCUME~N` (R3-D1); an 8.3 user folder (`ALICEZ~1`) is an ordinary
+ * segment. Case-insensitive, since Windows paths are.
+ *
+ * ORDER MATTERS: these run BEFORE the drive, backslash and POSIX shapes, which stop at
+ * whitespace. Run after them, `C:\Users\Alice Zqplant` became `[redacted] Zqplant` and the
+ * root that would have caught the rest was already gone.
  */
-const HOME_ROOT =
-  /(?<![A-Za-z0-9])(?:users|home|root)[\\/]+[^\s"'`<>|\\/]+(?:[\\/]+[^\s"'`<>|\\/]+)*/gi;
+const HOME_ROOT = new RegExp(
+  String.raw`(?<![A-Za-z0-9])(?:users|home|root|documents and settings|docume~\d+)[\\/]+${USER_SEG}(?:[\\/]+${PATH_SEG})*`,
+  "gi",
+);
+/**
+ * UNC paths (`\\host\share\...`), with every segment after the host allowed to carry
+ * spaces: a share or folder is often named after its user (`\\nas\homes\First Last`).
+ */
+const UNC_SPACED = new RegExp(
+  String.raw`(?<![A-Za-z0-9._-])\\{2}[^\s\\/"<>|:*?]+(?:\\+${USER_SEG})+`,
+  "g",
+);
 const VAR_FOLDERS = /(?<![A-Za-z0-9])var[\\/]+folders(?:[\\/]+[^\s"'`<>|\\/]+)*/gi;
 
+/** The shapes whose match may span whitespace: a token-by-token rewrite cannot remove them. */
+const SPACE_SPANNING: readonly RegExp[] = [HOME_ROOT, UNC_SPACED];
+
 const PATH_SHAPES: readonly RegExp[] = [
+  // Whitespace-tolerant shapes first (see HOME_ROOT): they must see the whole path.
+  HOME_ROOT,
+  UNC_SPACED,
   FILE_URL,
   WINDOWS_ABS,
   BACKSLASH_ABS,
   POSIX_ABS,
   TILDE_USER,
-  HOME_ROOT,
   VAR_FOLDERS,
 ];
 
@@ -311,6 +347,11 @@ const KIND_PLACEHOLDER: Record<Leak["kind"], string> = {
  * replaced whole; if a leak still remains (it spans tokens), the whole string is replaced.
  */
 export function redactText(input: string, ctx: RedactionContext): string {
+  // A path that only appears once decoded and that contains whitespace (`C:\u005cUsers\u005c
+  // First Last`) cannot be rewritten in its plain form: a whitespace-stopping shape removes the
+  // part before the space, and the surname survives with no root left to flag it. Checked on
+  // the INPUT, before any rewrite: replace the whole string (R3-D1).
+  if (encodedSpaceSpanning(input)) return PLACEHOLDER.hostPath;
   let out = redactPlain(input, ctx);
   if (findLeaks(out, ctx).length === 0) return out;
   out = out.replace(/\S+/g, (token) => {
@@ -319,6 +360,19 @@ export function redactText(input: string, ctx: RedactionContext): string {
   });
   if (findLeaks(out, ctx).length === 0) return out;
   return PLACEHOLDER.secret;
+}
+
+/**
+ * True when a decoded form of `text` (not the plain form, which `redactPlain` rewrites whole)
+ * holds a home-root or UNC path that contains whitespace.
+ */
+function encodedSpaceSpanning(text: string): boolean {
+  for (const variant of decodedVariants(text))
+    if (variant !== text)
+      for (const re of SPACE_SPANNING)
+        for (const m of variant.matchAll(new RegExp(re.source, re.flags)))
+          if (/\s/.test(m[0])) return true;
+  return false;
 }
 
 /** Deep-redact every string (keys included) of a JSON-like value. */

@@ -118,11 +118,20 @@ No secret, absolute host path, username or vault key may be in a bundle or repor
      `\u002f`), percent-encoding (`%2F`) and HTML entities (`&#47;`), stacked up to three deep.
    - A path is not recognised by an allow-list of characters before it (any character left off
      such a list bypasses it). A generic absolute path is skipped only when it continues a word
-     or a relative path. **Home roots have no such exception:** `Users`, `home` or `root`
-     followed by a separator and a segment (either separator, any case), and `var/folders`, are
-     a host path after any non-alphanumeric character, so `.../home/a`, `../../Users/a`,
-     `v2/Users/a`, `build-/home/a`, `/Users\a` and drive-relative `C:Users\a` are all caught.
-     This over-matches (`src/home/x` is redacted too); it never under-matches.
+     or a relative path. **Home roots have no such exception:** `Users`, `home`, `root`,
+     `Documents and Settings` or its 8.3 name `DOCUME~N`, followed by a separator and a segment
+     (either separator, any case), and `var/folders`, are a host path after any
+     non-alphanumeric character, so `.../home/a`, `../../Users/a`, `v2/Users/a`,
+     `build-/home/a`, `/Users\a` and drive-relative `C:Users\a` are all caught.
+   - **The user segment after a home root may contain spaces** (`C:\Users\First Last\x`), as
+     may every segment of a UNC path after the host (`\\nas\homes\First Last`). It runs to
+     the next separator and stops only at a character no account name may contain. These
+     whitespace-tolerant shapes run **before** the drive, backslash and POSIX shapes, which stop
+     at whitespace: run after them, the part before the space is replaced and the surname is
+     left with no root to flag it. For the same reason, a string whose **decoded** form holds
+     such a path with whitespace in it (`C:\u005cUsers\u005cFirst Last`) is replaced whole.
+   - This over-matches (`src/home/x`, or the rest of a sentence after `C:\Users\`, is redacted
+     too). It is not a proof that nothing identifying can get through: see the limits below.
      Vendor key prefixes may follow anything but a letter.
 2. Evidence text is inlined only if redaction would leave it byte-identical, so an inline
    digest is always the original artifact's. Otherwise it is digest-only (`withheld:
@@ -131,8 +140,13 @@ No secret, absolute host path, username or vault key may be in a bundle or repor
    watch view has no merged pixel-redaction rules, and this track does not invent them.
 4. Every output is scanned before it is written: the bundle by the verifier (every parsed value
    and key), the report's final HTML by the renderer, and the CLI's own output. A leak that
-   survives step 1 stops the export or the report. It is never written. Leak reports name
-   kinds and offsets, never the value.
+   survives step 1 and that a scanner recognises stops the export or the report. It is never
+   written. Leak reports name kinds and offsets, never the value.
+5. **Limits.** The scanners recognise shapes and registered literals, so they cannot flag a
+   fragment that no longer looks like a path (which is why step 1's order matters). Not caught
+   today: obfuscated forms (a soft hyphen inside `Users`, a fullwidth `／`), paths outside the
+   home roots behind a character the generic shape skips (`run.../tmp/x/y`), and a name an
+   agent writes in plain prose. These are hardening items for the shared scanner (TO FILE).
 
 Planted-marker tests (`test/proof/redaction.test.ts`) plant fake secrets, key shapes, a vault
 key (plain and percent-encoded), a username and macOS, Linux and Windows home paths in every

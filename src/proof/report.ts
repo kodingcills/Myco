@@ -54,7 +54,7 @@ function detail(r: ProofRecord): string {
     }
     case "verdict": {
       const b = r.body as VerdictBody;
-      return `<b>${e(b.verdict.toUpperCase())}</b> (accepted: ${b.accepted}) codes: ${b.reasonCodes.map(e).join(", ")}; evidence: ${b.evidence.map(e).join(", ") || "none"}`;
+      return `What the gate said: <b>${e(b.verdict.toUpperCase())}</b> (accepted: ${b.accepted}; whether it was right is the independent grader's call, not this bundle's) codes: ${b.reasonCodes.map(e).join(", ")}; evidence: ${b.evidence.map(e).join(", ") || "none"}`;
     }
     case "checkpoint": {
       const b = r.body as CheckpointBody;

@@ -2,6 +2,9 @@
  * Track Q (replayable proof): planted-marker redaction tests. Every marker is built at run
  * time from parts, so no tracked file carries a key-shaped string or a real home path.
  */
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   exportProofBundle,
@@ -9,7 +12,7 @@ import {
   serializeProofBundle,
   verifyProofBundle,
 } from "../../src/proof/bundle.ts";
-import { emit } from "../../src/proof/cli.ts";
+import { emit, main } from "../../src/proof/cli.ts";
 import {
   findLeaks,
   findLeaksDeep,
@@ -443,5 +446,212 @@ describe("redactText's last resort", () => {
     const input = `x ${spaced.replace(" ", "&#32;")} y`;
     expect(findLeaks(input, ctx)).not.toEqual([]);
     expect(redactText(input, ctx)).toBe(PLACEHOLDER.secret);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Verifier round 3, R3-D1: a Windows home whose user folder contains a space, or that goes
+// through `Documents and Settings` (or its 8.3 name), or a UNC share named after a user.
+// Each case's user words are planted markers; NONE of them may survive in any output.
+const FIRST = j("Plant", "first");
+const LAST = j("Zq", "PLANTEDlast");
+const GUEST = j("zq", "PLANTEDguest");
+const SPACED: ReadonlyArray<readonly [string, string, readonly string[]]> = [
+  [
+    "R3-D1 probe: the verifier's own string",
+    j(
+      "saved C:\\",
+      "Users\\",
+      FIRST,
+      " ",
+      LAST,
+      "\\Desktop\\out.csv; old C:\\Documents and Settings\\",
+      GUEST,
+      "\\x",
+    ),
+    [FIRST, LAST, GUEST],
+  ],
+  ["space in a Windows user folder", j("C:\\", "Users\\", FIRST, " ", LAST, "\\x"), [FIRST, LAST]],
+  [
+    "space in a Windows user folder, forward slashes",
+    j("C:/", "Users/", FIRST, " ", LAST, "/x"),
+    [FIRST, LAST],
+  ],
+  [
+    "space in a user folder at the end of the string",
+    j("open C:\\", "Users\\", FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  ["two spaces in a user folder", j("C:\\", "Users\\", FIRST, " de ", LAST, "\\x"), [FIRST, LAST]],
+  [
+    "apostrophe and space in a user folder",
+    j("C:\\", "Users\\", FIRST, " O'", LAST, "\\x"),
+    [FIRST, LAST],
+  ],
+  ["Documents and Settings", j("C:\\Documents and Settings\\", GUEST, "\\x"), [GUEST]],
+  [
+    "Documents and Settings with a spaced user",
+    j("C:\\Documents and Settings\\", FIRST, " ", LAST, "\\Local Settings\\x"),
+    [FIRST, LAST],
+  ],
+  ["Documents and Settings, lower case", j("c:/documents and settings/", GUEST, "/x"), [GUEST]],
+  ["8.3 short name of Documents and Settings", j("C:\\DOCUME~1\\", GUEST, "\\x"), [GUEST]],
+  [
+    "8.3 short name of Documents and Settings with a spaced user",
+    j("C:\\DOCUME~1\\", FIRST, " ", LAST, "\\x"),
+    [FIRST, LAST],
+  ],
+  ["8.3 short user folder", j("C:\\", "Users\\", "ZQPLAN~1", "\\x"), ["ZQPLAN~1"]],
+  [
+    "UNC share named after a spaced user",
+    j("\\\\", "nas\\", FIRST, " ", LAST, "\\docs"),
+    [FIRST, LAST],
+  ],
+  [
+    "UNC homes share with a spaced user folder",
+    j("see \\\\", "nas\\homes\\", FIRST, " ", LAST, "\\x"),
+    [FIRST, LAST],
+  ],
+  [
+    "UNC admin share into a spaced profile",
+    j("\\\\", "pc\\c$\\", "Users\\", FIRST, " ", LAST, "\\x"),
+    [FIRST, LAST],
+  ],
+  [
+    "JSON \\u005c escapes around a spaced user (token-by-token rewrite would leak)",
+    j("C:\\u005c", "Users\\u005c", FIRST, " ", LAST, "\\u005cx"),
+    [FIRST, LAST],
+  ],
+  [
+    "percent-encoded backslashes around a spaced user",
+    j("C:%5C", "Users%5C", FIRST, " ", LAST, "%5Cx"),
+    [FIRST, LAST],
+  ],
+  [
+    "percent-encoded Documents and Settings",
+    j("C:%5CDocuments%20and%20Settings%5C", GUEST, "%5Cx"),
+    [GUEST],
+  ],
+  [
+    "HTML-entity backslashes around a spaced user",
+    j("C:&#92;", "Users&#92;", FIRST, " ", LAST, "&#92;x"),
+    [FIRST, LAST],
+  ],
+];
+
+const absentFrom = (text: string, words: readonly string[]) => {
+  for (const w of words) expect(text, `contains ${w.length}-char user word`).not.toContain(w);
+  expect(text).not.toContain("PLANTED");
+};
+
+describe("R3-D1: Windows homes with spaces, Documents and Settings, 8.3 and UNC", () => {
+  for (const [name, value, words] of SPACED) {
+    it(name, () => {
+      expect(findLeaks(value), "findLeaks").not.toEqual([]);
+      const redacted = redactText(value, NO_CTX);
+      expect(findLeaks(redacted), "redactText").toEqual([]);
+      absentFrom(redacted, words);
+      // Verifier: a hand-edited, re-chained bundle carrying the value is refused.
+      const b = clone(exportProofBundle(sampleRun(), NO_CTX));
+      (b.records[1]?.body as { summary: string }).summary = value;
+      expect(
+        verifyProofBundle(serializeProofBundle(rechain(b))).errors.map((e) => e.code),
+        "verifier",
+      ).toEqual(["PROOF_REDACTION"]);
+      // Exporter: no user word reaches the bundle.
+      const run = sampleRun();
+      const steps = [
+        { kind: "action" as const, actor: "harness" as const, tool: "shell", summary: value },
+        ...run.steps,
+      ];
+      const text = serializeProofBundle(exportProofBundle({ ...run, steps }, NO_CTX));
+      absentFrom(text, words);
+      expect(verifyProofBundle(text).ok).toBe(true);
+    });
+  }
+
+  it("ordinary prose next to the roots is not a path", () => {
+    for (const ok of [
+      "the home/ directory",
+      "users / admins",
+      "Documents and Settings were removed",
+    ])
+      expect(findLeaks(ok), ok).toEqual([]);
+  });
+});
+
+/** Run the real CLI in a fresh directory. */
+function cliRun(args: string[]): { code: number; out: string } {
+  let out = "";
+  const code = main(args, { out: (t) => (out += t), err: (t) => (out += t) });
+  return { code, out };
+}
+
+function writeRun(dir: string, summary: string): string {
+  const run = sampleRun();
+  const steps = [
+    { kind: "action", actor: "harness", tool: "shell", summary },
+    ...run.steps.filter((s) => !(s.kind === "evidence" && s.evidenceId === "ev-frame")),
+  ];
+  const path = join(dir, "RUN.json");
+  writeFileSync(path, JSON.stringify({ ...run, steps }));
+  return path;
+}
+
+describe("CLI export -> verify -> report: no user word in any output", () => {
+  it("R3-D1: the verifier's probe through the real CLI", () => {
+    const dir = mkdtempSync(join(tmpdir(), "proof-r3d1-"));
+    const value = (SPACED[0] as readonly [string, string, readonly string[]])[1];
+    const words = [FIRST, LAST, GUEST];
+    const bundle = join(dir, "b.json");
+    const exp = cliRun(["export", writeRun(dir, value), "--out", bundle]);
+    expect(exp.code).toBe(0);
+    absentFrom(exp.out, words);
+    absentFrom(readFileSync(bundle, "utf8"), words);
+    const ver = cliRun(["verify", bundle]);
+    expect(ver.code).toBe(0);
+    absentFrom(ver.out, words);
+    const html = join(dir, "r.html");
+    const rep = cliRun(["report", bundle, "--out", html]);
+    expect(rep.code).toBe(0);
+    absentFrom(rep.out, words);
+    absentFrom(readFileSync(html, "utf8"), words);
+  });
+
+  it("R3-S1: export redacts --forbid-file values and the host account name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "proof-r3s1-"));
+    const marker = j("forbidden", "-marker-", "PLANTED0006");
+    const forbid = join(dir, "forbid.txt");
+    writeFileSync(forbid, `${marker}\n`);
+    let account = "";
+    try {
+      account = userInfo().username;
+    } catch {
+      account = "";
+    }
+    // The host account appears as a bare word, which no generic shape catches: only the
+    // CLI's host redaction context removes it.
+    const summary =
+      account.length >= 3 ? `uses ${marker} as ${account} today` : `uses ${marker} today`;
+    const bundle = join(dir, "b.json");
+    const exp = cliRun([
+      "export",
+      writeRun(dir, summary),
+      "--out",
+      bundle,
+      "--forbid-file",
+      forbid,
+    ]);
+    expect(exp.code).toBe(0);
+    const text = readFileSync(bundle, "utf8");
+    expect(text).not.toContain(marker);
+    expect(text).toContain(PLACEHOLDER.vaultKey);
+    if (account.length >= 3) {
+      expect(text).toContain(`as ${PLACEHOLDER.username} today`);
+      expect(text).not.toMatch(
+        new RegExp(`as ${account.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} today`),
+      );
+    }
+    expect(cliRun(["verify", bundle, "--forbid-file", forbid]).code).toBe(0);
   });
 });

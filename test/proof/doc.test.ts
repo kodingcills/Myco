@@ -55,6 +55,17 @@ describe("docs/architecture/replayable-proof.md matches the code", () => {
         expect(findLeaks(`${lead}${root}plantuser05/x`), `${lead}${root}`).not.toEqual([]);
   });
 
+  it("R3-D1: spaced user segments are documented, and no completeness claim is made", () => {
+    expect(DOC).not.toContain("never under-matches");
+    expect(DOC).toContain("**The user segment after a home root may contain spaces**");
+    expect(DOC).toContain("It is not a proof that nothing identifying can get through");
+    expect(DOC).toContain("**Limits.**");
+    for (const root of ["C:\\Users\\", "C:\\Documents and Settings\\", "C:\\DOCUME~1\\"]) {
+      const value = `${root}Plantfirst ZqPLANTEDlast\\x`;
+      expect(findLeaks(value), root).not.toEqual([]);
+    }
+  });
+
   it("an unchecked episode reference is stated in the doc", () => {
     expect(DOC).toContain("**not\ncross-checked**");
     expect(DOC).toContain("episodeChecked: false");
