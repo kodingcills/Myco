@@ -52,6 +52,29 @@ jobs:
           echo "scanning $range"
           /tmp/gitleaks git --redact --no-banner --verbose --log-opts="$range" .
 
+  # M2-14 (plan label, Linear pending): enforce the workflow rules in docs/ci.md and
+  # docs/security/public-release-safety.md: no pull_request_target, GitHub-hosted runners
+  # only, no write token on workflow_run, read-only top-level permissions, no job
+  # widening them, and every action pinned to a full SHA with a version comment.
+  ci-hygiene:
+    name: ci hygiene (workflows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML (hash pinned)
+        run: |
+          pip install --require-hashes --only-binary :all: --no-deps -r scripts/ci-hygiene-requirements.txt
+      - name: Check workflows
+        run: python scripts/ci-hygiene-check.py
+      - name: Test the checker and the history scan
+        run: python -m unittest discover -s test/ci-hygiene -v
+
   check:
     strategy:
       fail-fast: false
