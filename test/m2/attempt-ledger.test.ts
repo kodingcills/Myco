@@ -16,7 +16,12 @@ import {
   eventSha256,
   verifyAttemptLedger,
 } from "../../src/m2/attempt-ledger.ts";
-import { checkPack, type PackResult, readPack } from "../../src/m2/evidence.ts";
+import {
+  checkPack,
+  type PackResult,
+  readPack,
+  type SupersededAttempt,
+} from "../../src/m2/evidence.ts";
 import {
   fcRow,
   fcTasks,
@@ -339,5 +344,86 @@ describe("the evidence check cross-checks the ledger against the pack", () => {
     const read = readPack(dir, () => ({ ok: true, detail: "not called" }));
     expect(read.attempts).toHaveLength(200);
     expect(checkPack(read).errors).toEqual([]);
+  });
+});
+
+describe("superseded attempts (#511) against the ledger", () => {
+  /** A harness-faulted attempt of g61 (kill-app), re-run in place as g61. */
+  const attempt = (key = "g61-a1"): SupersededAttempt => {
+    const t = harnessFault(0, fcRow(fcTasks("kill-app")[1]!));
+    return {
+      schema: "myco.m2.superseded/1",
+      replacedBy: "g61",
+      reason: "agent call timed out; re-run in place",
+      arm: { ...t.arm, trialKey: key },
+      ops: { ...t.ops, trialKey: key },
+    };
+  };
+  /** An R1 pack with superseded attempts and an explicit ledger. */
+  const withLedger = (superseded: SupersededAttempt[], events: AttemptEvent[]) => {
+    const trials = r1Trials();
+    const base = input(trials, manifest());
+    const c = rechain(events);
+    return checkPack({
+      ...base,
+      manifest: {
+        ...(base.manifest as object),
+        attempts: { events: c.events.length, headSha256: c.headSha256 },
+      },
+      superseded,
+      attempts: c.events,
+    });
+  };
+
+  it("an honest topped-up pack passes: the attempt is recorded, a harness fault, before its re-run", () => {
+    const r = checkPack(input(r1Trials(), manifest(), [attempt()]));
+    expect(r.errors).toEqual([]);
+    expect(r.r1?.pass).toBe(true);
+    expect(r.superseded.count).toBe(1);
+  });
+
+  it("refuses a superseded attempt the ledger never recorded", () => {
+    const r = withLedger([attempt()], ledgerFor(r1Trials()).events);
+    expect(has(r, /g61-a1: disclosed, but the attempt ledger has no complete attempt for it/)).toBe(
+      true,
+    );
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  it("refuses a superseded 'harness fault' the ledger recorded as completed", () => {
+    const a = attempt();
+    const recordedCompleted = { ...a, ops: { ...a.ops, harnessClass: null } };
+    const events = ledgerFor(r1Trials(), [recordedCompleted]).events;
+    const r = withLedger([a], events);
+    expect(
+      has(r, /g61-a1: the pack claims a harness fault \(timeout\) the ledger never recorded/),
+    ).toBe(true);
+  });
+
+  it("refuses a re-run that started before the attempt it replaces ended", () => {
+    const events = ledgerFor(r1Trials(), [attempt()]).events;
+    // Move g61's start ahead of g61-a1's end.
+    const a1End = events.findIndex((e) => e.trialKey === "g61-a1" && e.kind === "end");
+    const g61Start = events.findIndex((e) => e.trialKey === "g61" && e.kind === "start");
+    const moved = [...events];
+    const [start] = moved.splice(g61Start, 1);
+    moved.splice(a1End, 0, start!);
+    const r = withLedger([attempt()], moved);
+    expect(has(r, /g61-a1: its replacement g61 started before it ended/)).toBe(true);
+  });
+
+  it("refuses an attempt recorded in the ledger but overwritten and never disclosed", () => {
+    // The runner logged a refuted attempt g61-a0; the pack shows only the re-run g61 and does
+    // not disclose g61-a0 in superseded.jsonl.
+    const hidden = { ...attempt("g61-a0"), ops: { ...attempt("g61-a0").ops, harnessClass: null } };
+    const events = ledgerFor(r1Trials(), [hidden]).events;
+    const r = withLedger([], events);
+    expect(has(r, /attempt g61-a0: in the ledger but not disclosed/)).toBe(true);
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  it("#511 F1: a superseded attempt's reason must be non-empty", () => {
+    const r = checkPack(input(r1Trials(), manifest(), [{ ...attempt(), reason: "" }]));
+    expect(has(r, /^superseded row 0: .*reason/)).toBe(true);
   });
 });

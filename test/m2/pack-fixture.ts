@@ -169,11 +169,22 @@ export function manifest(over: Partial<PackManifest> = {}): PackManifest {
   return m;
 }
 
+/** The parts of a superseded attempt (#511) the ledger needs. */
+export interface SupersededLike {
+  readonly replacedBy: string;
+  readonly arm: Pick<BenchmarkArmRow, "trialKey" | "taskId" | "arm">;
+  readonly ops: Pick<TrialOps, "harnessClass">;
+}
+
 /**
  * The attempt ledger an honest runner writes for `trials`, in order: a start and an end per
  * trial, the end a `harness-fault` exactly where the trial-ops row names a harness class.
+ * Each superseded attempt is logged before the attempt that replaced it, oldest first.
  */
-export function ledgerFor(trials: readonly Trial[]): { events: AttemptEvent[]; head: LedgerHead } {
+export function ledgerFor(
+  trials: readonly Trial[],
+  superseded: readonly SupersededLike[] = [],
+): { events: AttemptEvent[]; head: LedgerHead } {
   const events: AttemptEvent[] = [];
   let prev = GENESIS_SHA256;
   const push = (e: Omit<AttemptEvent, "schema" | "seq" | "prevSha256">) => {
@@ -186,14 +197,27 @@ export function ledgerFor(trials: readonly Trial[]): { events: AttemptEvent[]; h
     events.push(event);
     prev = eventSha256(event);
   };
-  for (const t of trials) {
-    const who = { trialKey: t.arm.trialKey, taskId: t.arm.taskId, arm: t.arm.arm };
+  const log = (arm: SupersededLike["arm"], harnessClass: string | null) => {
+    const who = { trialKey: arm.trialKey, taskId: arm.taskId, arm: arm.arm };
     push({ kind: "start", ...who });
     push(
-      t.ops.harnessClass === null
+      harnessClass === null
         ? { kind: "end", ...who, outcome: "completed" }
-        : { kind: "end", ...who, outcome: "harness-fault", harnessClass: t.ops.harnessClass },
+        : { kind: "end", ...who, outcome: "harness-fault", harnessClass },
     );
+  };
+  const done = new Set<string>();
+  const predecessors = (key: string) => {
+    for (const a of superseded)
+      if (a.replacedBy === key && !done.has(a.arm.trialKey)) {
+        done.add(a.arm.trialKey);
+        predecessors(a.arm.trialKey);
+        log(a.arm, a.ops.harnessClass);
+      }
+  };
+  for (const t of trials) {
+    predecessors(t.arm.trialKey);
+    log(t.arm, t.ops.harnessClass);
   }
   return { events, head: { events: events.length, headSha256: prev } };
 }
@@ -208,7 +232,11 @@ const isR1 = (m: unknown) =>
  * A pack input. An R1 pack gets the honest runner's attempt ledger, and its manifest the head
  * pin, unless the manifest already pins one (tests that forge a ledger pass their own).
  */
-export function input(trials: Trial[], m: unknown = manifest()): PackInput {
+export function input(
+  trials: Trial[],
+  m: unknown = manifest(),
+  superseded?: readonly unknown[],
+): PackInput {
   const base = {
     arm: trials.map((t) => t.arm),
     grades: trials.map((t) => t.grade),
@@ -216,12 +244,13 @@ export function input(trials: Trial[], m: unknown = manifest()): PackInput {
     readErrors: [],
     runs: null,
   };
+  const withSuperseded = superseded === undefined ? base : { ...base, superseded };
   // No ledger for a non-R1 pack, or for an empty one (a 0-event head cannot be pinned).
-  if (!isR1(m) || trials.length === 0) return { manifest: m, ...base };
-  const { events, head } = ledgerFor(trials);
+  if (!isR1(m) || trials.length === 0) return { manifest: m, ...withSuperseded };
+  const { events, head } = ledgerFor(trials, (superseded ?? []) as readonly SupersededLike[]);
   const pinned =
     (m as { attempts?: unknown }).attempts === undefined ? { ...(m as object), attempts: head } : m;
-  return { manifest: pinned, ...base, attempts: events };
+  return { manifest: pinned, ...withSuperseded, attempts: events };
 }
 
 /**
@@ -281,11 +310,14 @@ export function writePack(
   trials: Trial[],
   m: unknown,
   root: string = mkdtempSync(join(tmpdir(), "m2-evidence-")),
+  superseded?: readonly unknown[],
 ): string {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  const { manifest: pinned, attempts } = input(trials, m);
+  const { manifest: pinned, attempts } = input(trials, m, superseded);
   if (attempts !== undefined) writeFileSync(join(dir, "attempts.jsonl"), jsonl(attempts));
+  if (superseded !== undefined && superseded.length > 0)
+    writeFileSync(join(dir, "superseded.jsonl"), jsonl([...superseded]));
   writeFileSync(join(dir, "pack.json"), `${JSON.stringify(pinned, null, 2)}\n`);
   writeFileSync(join(dir, "arm.jsonl"), jsonl(trials.map((t) => t.arm)));
   writeFileSync(join(dir, "grades.jsonl"), jsonl(trials.map((t) => t.grade)));

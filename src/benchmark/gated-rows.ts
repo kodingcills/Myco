@@ -58,7 +58,13 @@ export interface GatedTrialRecord {
         readonly result: Pick<
           GateResult,
           "verdict" | "accepted" | "reasonCodes" | "request" | "evidenceRefs" | "oracle"
-        >;
+        > &
+          Partial<Pick<GateResult, "corrections">>;
+        /**
+         * Whether the gate had agent-safe corrections on (`runGatedTrial`'s outcome; M2
+         * scope add B). Absent means off. Recorded on the row as `gate.corrections`.
+         */
+        readonly corrections?: "on" | "off";
       };
   /** The agent's final claim, read from its transcript by the harness. */
   readonly agentClaim: BenchmarkArmRow["claim"];
@@ -131,6 +137,8 @@ function bindDecision(
     if (result.oracle.specSha256 !== specDigest(gateEntryFor(task).spec))
       throw new Error(`${who} was decided on a different spec than task ${task.taskId}'s`);
   }
+  if (outcome.corrections !== "on" && (result.corrections?.length ?? 0) > 0)
+    throw new Error(`${who} carries corrections, but the record says corrections were off`);
   if (rec.persistedFormat !== "csv") {
     throw new Error(
       `${rec.trialKey}: the ${GATE_FAMILY} gate reads CSV only; it cannot have decided a ${rec.persistedFormat} document (a gate that reads xlsx is a separate Tier 2 change)`,
@@ -237,7 +245,14 @@ function rowFor(
       cause = { kind: "agent", detail: "agent reported not done" };
     else cause = { kind: "agent", detail: "agent made no claim" };
   }
-  return { ...base, claim: rec.agentClaim, gate: { called: true, verdict }, accepted, cause };
+  const corrections = rec.outcome.corrections ?? "off";
+  return {
+    ...base,
+    claim: rec.agentClaim,
+    gate: { called: true, verdict, corrections },
+    accepted,
+    cause,
+  };
 }
 
 function checked(trialKey: string, row: BenchmarkArmRow): BenchmarkArmRow {
