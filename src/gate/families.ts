@@ -4,7 +4,7 @@
  *
  *  - `todo-items`        : `persistedStoreOracle` (src/discovery/s0-sequence.ts), the oracle
  *                          `myco-run` uses; the store is parsed by the runner's `parseStore`.
- *  - `calc-record-edit`  : one Calc edit, over the CSV the app saved (`parseCsvSpreadsheet`).
+ *  - `calc-record-edit`  : one Calc edit, over the CSV the app saved (strict `parseDocument`).
  *                          Version 2 (TIF-270) checks the WHOLE document: it must equal the
  *                          pristine fixture with the edit applied (`calc-document.ts`).
  *                          Version 1 checked the target cell only.
@@ -17,7 +17,6 @@
  * the request, so the agent's claim and any agent-supplied value never reach it.
  * M2-08 (Writer) adds a family here.
  */
-import { parseCsvSpreadsheet } from "../core/filepersist.ts";
 import { parseStore } from "../discovery/live-runner.ts";
 import { persistedStoreOracle } from "../discovery/s0-sequence.ts";
 import type { CheckpointVerdict, OracleDetailCode } from "./api.ts";
@@ -27,8 +26,11 @@ import {
   collateralReason,
   diffDocument,
   expectedCells,
+  expectedRows,
   listRefs,
+  parseDocument,
   pristineCells,
+  rowsReason,
   targetRef,
 } from "./calc-document.ts";
 import { errorCode } from "./reasons.ts";
@@ -109,11 +111,13 @@ function where(edit: CellEdit): string {
   return `record ${edit.rowKey}, column ${edit.column}`;
 }
 
-/** Target reasons name the cell and what it holds now (the agent wrote it), never a fixture value. */
-function targetReason(ref: string, edit: CellEdit, actual: string | undefined): string {
-  return `TARGET_MISMATCH: cell ${ref} (${where(edit)}) does not hold the requested value; it ${
-    actual === undefined ? "is empty" : `holds ${JSON.stringify(actual)}`
-  }`;
+/**
+ * Target reasons name the cell and the record, never a value: not the requested new value
+ * (the agent was told it), and not what the cell holds now, which for an untouched cell is
+ * the pristine fixture value (round-2 D2).
+ */
+function targetReason(ref: string, edit: CellEdit): string {
+  return `TARGET_MISMATCH: cell ${ref} (${where(edit)}) does not hold the requested value`;
 }
 
 export interface CalcRecordEditSpec extends CellEdit {
@@ -130,14 +134,15 @@ export const calcRecordEditFamily: OracleFamily = {
     const problem = checkEdit(spec.fixtureSeed, spec, false);
     return problem === undefined ? undefined : `spec ${problem}`;
   },
-  decide(bytes, spec, ref) {
+  decide(bytes, spec) {
     const { fixtureSeed, rowKey, column, newValue } = spec as CalcRecordEditSpec;
     const edit = { rowKey, column, newValue };
-    const { cells } = parseCsvSpreadsheet(utf8(bytes), ref);
+    const { cells, rows } = parseDocument(utf8(bytes));
     const target = targetRef(fixtureSeed, edit);
     const expected = expectedCells(fixtureSeed, [edit]);
     const diff = diffDocument(cells, expected, new Set([target]));
-    if (diff.targets.length === 0 && diff.collateral.length === 0) {
+    const rowProblem = rowsReason(rows, expectedRows(fixtureSeed));
+    if (diff.targets.length === 0 && diff.collateral.length === 0 && rowProblem === undefined) {
       return {
         status: "verified",
         reasons: [
@@ -149,12 +154,11 @@ export const calcRecordEditFamily: OracleFamily = {
     const reasons: string[] = [];
     if (diff.targets.length > 0) {
       codes.push("TARGET_MISMATCH");
-      reasons.push(targetReason(target, edit, cells[target]));
+      reasons.push(targetReason(target, edit));
     }
-    if (diff.collateral.length > 0) {
-      codes.push("DOCUMENT_COLLATERAL");
-      reasons.push(collateralReason(diff.collateral));
-    }
+    if (diff.collateral.length > 0 || rowProblem !== undefined) codes.push("DOCUMENT_COLLATERAL");
+    if (diff.collateral.length > 0) reasons.push(collateralReason(diff.collateral));
+    if (rowProblem !== undefined) reasons.push(rowProblem);
     return { status: "refuted", reasons, codes };
   },
 };
@@ -198,16 +202,18 @@ export const calcMultiStepFamily: OracleFamily = {
     }
     return undefined;
   },
-  decide(bytes, spec, ref) {
+  decide(bytes, spec) {
     const { fixtureSeed, steps } = spec as CalcMultiStepSpec;
-    const { cells } = parseCsvSpreadsheet(utf8(bytes), ref);
+    const { cells, rows } = parseDocument(utf8(bytes));
     const pristine = pristineCells(fixtureSeed);
     const targets = steps.map((step) => targetRef(fixtureSeed, step));
     const { collateral } = diffDocument(cells, pristine, new Set(targets));
+    const rowProblem = rowsReason(rows, expectedRows(fixtureSeed));
+    const intact = collateral.length === 0 && rowProblem === undefined;
     const done = steps.map((step, j) => cells[targets[j] as string] === step.newValue);
     const checkpoints: CheckpointVerdict[] = steps.map((_, index) => {
       const k = index + 1;
-      const holds = collateral.length === 0 && done.slice(0, k).every(Boolean);
+      const holds = intact && done.slice(0, k).every(Boolean);
       return { checkpoint: k, verdict: holds ? "verified" : "refuted" };
     });
     if (checkpoints.every((cp) => cp.verdict === "verified")) {
@@ -226,13 +232,12 @@ export const calcMultiStepFamily: OracleFamily = {
       codes.push("TARGET_MISMATCH");
       for (const { step, j } of missed) {
         const target = targets[j] as string;
-        reasons.push(`step ${j + 1}: ${targetReason(target, step, cells[target])}`);
+        reasons.push(`step ${j + 1}: ${targetReason(target, step)}`);
       }
     }
-    if (collateral.length > 0) {
-      codes.push("DOCUMENT_COLLATERAL");
-      reasons.push(collateralReason(collateral));
-    }
+    if (!intact) codes.push("DOCUMENT_COLLATERAL");
+    if (collateral.length > 0) reasons.push(collateralReason(collateral));
+    if (rowProblem !== undefined) reasons.push(rowProblem);
     const failed = checkpoints.filter((cp) => cp.verdict === "refuted").map((cp) => cp.checkpoint);
     reasons.push(`checkpoints refuted: ${listRefs(failed.map(String))}`);
     return { status: "refuted", reasons, codes, checkpoints };

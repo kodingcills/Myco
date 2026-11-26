@@ -267,13 +267,34 @@ column added, a row deleted, a date saved as a serial number) is `refuted` with
 expected sheet is regenerated on the host from `fixtureSeed` (`src/tasks/fixture.ts`); the
 gate reuses nothing from the independent grader in `src/benchmark/grade/`
 (`test/gate/calc-multistep.test.ts` walks the gate's import graph, and
-`test/benchmark/independence.test.ts` walks the grader's). Collateral reasons name cells
-(`B5, D7`), never a fixture value. Version 1 checked the target cell only and returned
+`test/benchmark/independence.test.ts` walks the grader's). Refuted reasons name cells
+(`B5, D7`) and row counts, never a cell value: neither a fixture value nor the requested
+new value. Version 1 checked the target cell only and returned
 `uncertain` for an absent target; version 2 refutes, because the gate reads the whole
 captured file and missing cells are a fact about the saved document. `oracle.version`
 records which rule decided a ledger row. A spec's `newValue` must be non-empty and hold no
 comma, quote or line break (the CSV reader splits on them); a bad spec stops the gate at
 startup.
+
+*Row structure is exact.* The gate parses the saved CSV strictly (`parseDocument` in
+`src/gate/calc-document.ts`), not with the M1 reader, which drops empty lines before
+numbering rows. Every line is a row: a blank line inside the sheet moves every record
+below it down one row (refuted, `DOCUMENT_COLLATERAL`, plus `TARGET_MISMATCH` if a target
+moved), and the sheet must have exactly the header plus one row per fixture record, so a
+blank or all-empty row at the end is refuted too (`DOCUMENT_COLLATERAL`, reason "the saved
+sheet has N row(s) … the task's document has M"). One line terminator at the end of the
+file is allowed, LF or CRLF, as is none; a second one is a blank row. A trailing empty
+column (`x,` on every line) is accepted, because empty cells hold no content.
+
+*The gate compares the CSV conversion, not the workbook.* On the real path the saved
+document is converted with `soffice --convert-to csv`, which writes each cell's displayed
+result and drops formulas and styles. So the gate verifies a target entered as a formula
+that evaluates to the requested value, and a style-only change (bold, colour, a number
+format that renders the same text) anywhere in the sheet. The independent grader can read
+the workbook itself and treats a formula as never equal to a literal, so it may fail
+documents the gate verifies; this is a known gate/grader divergence under R1, tracked as a
+follow-up. Formula text that reaches the CSV (`=4000+242`) and format changes that change
+the rendered text (`4242.00`, a dropped `$`) are refuted.
 
 The built-in tasks are `myco-run`'s `df-s01` (clean, verifies) and `df-s02` (the app
 silently drops `BUG` items while its status line says "saved 4"; refutes). Their state
@@ -469,8 +490,8 @@ verified checkpoints. Anything else is `uncertain` `ORACLE_INVALID_OUTPUT`.
 
 **What the agent can and cannot do.** The agent's request is unchanged: `taskId`, `runId`,
 `claim`. It cannot send steps, values, a checkpoint number or a verdict
-(`ORACLE_INPUT_REJECTED`). It sees per-checkpoint verdicts, the cell refs that are wrong,
-and what a wrong target holds now; it never sees a fixture value.
+(`ORACLE_INPUT_REJECTED`). It sees per-checkpoint verdicts and the cell refs that are wrong;
+refuted reasons carry no cell value (neither a fixture value nor the requested one).
 
 **One retry** (`src/gate/multistep.ts`, `runMultiStepTrial`). The harness, never the agent:
 

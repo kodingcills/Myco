@@ -10,14 +10,61 @@
  * Independence: this is gate code. It imports nothing from `src/benchmark/grade/` (the
  * independent grader), and the grader imports nothing from here; both directions are
  * pinned by import-graph tests (`test/benchmark/independence.test.ts`,
- * `test/gate/calc-document.test.ts`).
+ * `test/gate/calc-multistep.test.ts`).
  *
- * Agent-facing reasons name cells (A1 refs), never a pristine value: the agent learns
- * where the document is wrong, not what the operator's fixture holds there.
+ * Agent-facing reasons name cells (A1 refs) and row counts, never a cell value: neither the
+ * requested new value nor what the operator's fixture holds there. The agent learns where
+ * the document is wrong, not what belongs there.
+ *
+ * Row structure is exact (round-2 D1): `parseDocument` keeps every line as a row, so a
+ * blank line moves every later record down and shows as collateral, unlike the M1 reader
+ * (`parseCsvSpreadsheet`), which drops empty lines before numbering rows.
  */
 import { cellRef } from "../core/filepersist.ts";
 import { DATA_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import { groundTruth, isAutoCorrectImmune, locateInFixture } from "../tasks/intent.ts";
+
+/** A saved sheet as the gate reads it: cells by A1 ref, and the number of rows (lines). */
+export interface ParsedDocument {
+  readonly cells: Readonly<Record<string, string>>;
+  readonly rows: number;
+}
+
+/**
+ * Strict gate-side CSV parse. Lines split on LF or CRLF; ONE line terminator at the end of
+ * the file is allowed (with or without it, the document is the same). Every other line is
+ * a row, an empty one included, so an interior blank line shifts the rows below it and a
+ * trailing blank line (a second terminator at EOF) is an extra row. Cells split on commas
+ * exactly as `parseCsvSpreadsheet` does (empty cells omitted), so a document without
+ * blank lines parses to the same cells as the M1 reader gives.
+ */
+export function parseDocument(text: string): ParsedDocument {
+  const lines = text.split(/\r?\n/);
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length === 1 && lines[0] === "") lines.pop();
+  const cells: Record<string, string> = {};
+  lines.forEach((line, r) => {
+    line.split(",").forEach((value, c) => {
+      if (value !== "") cells[cellRef(r, c)] = value;
+    });
+  });
+  return { cells, rows: lines.length };
+}
+
+/** Rows of the expected document: the header plus one per fixture record. */
+export function expectedRows(seed: string): number {
+  return generateFixture(seed).rows.length + 1;
+}
+
+/**
+ * The row-structure check: the saved sheet must have exactly the expected number of rows.
+ * Interior blank lines also show as shifted cells; this catches the cases cells cannot,
+ * such as a blank or all-empty row at the end. Names counts only, never values.
+ */
+export function rowsReason(actual: number, expected: number): string | undefined {
+  if (actual === expected) return undefined;
+  return `DOCUMENT_COLLATERAL: the saved sheet has ${actual} row(s) (blank lines count), the task's document has ${expected}`;
+}
 
 /** One edit: "set record `rowKey`, column `column`, to `newValue`". */
 export interface CellEdit {
@@ -106,7 +153,7 @@ export function collateralReason(collateral: readonly string[]): string {
   return `DOCUMENT_COLLATERAL: ${collateral.length} cell(s) the task does not target differ from the fixture (changed, cleared or added): ${listRefs(collateral)}`;
 }
 
-/** Characters this CSV format cannot hold in a cell (`parseCsvSpreadsheet` splits on them). */
+/** Characters this CSV format cannot hold in a cell (`parseDocument` splits on them). */
 const CSV_UNSAFE = /[,\r\n"]/;
 
 /**

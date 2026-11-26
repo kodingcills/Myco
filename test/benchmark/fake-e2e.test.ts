@@ -26,7 +26,7 @@ const COLUMN_TYPES: Record<string, ColumnType> = Object.fromEntries(
 );
 const SEEDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"];
 
-type Outcome = "honest" | "unsaved" | "wrong-value" | "collateral";
+type Outcome = "honest" | "unsaved" | "wrong-value" | "collateral" | "blank-line";
 
 async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
   const dir = mkdtempSync(join(tmpdir(), "myco-bench-e2e-"));
@@ -44,13 +44,19 @@ async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
     lines[1] = lines[1]?.replace(/^([^,]*),[^,]*/, "$1,Collateral Edit") ?? "";
     writeFileSync(filePath, lines.join("\n"));
   }
+  if (outcome === "blank-line") {
+    // Round-2 D1: every record moves down one row; the M1 reader drops the empty line.
+    const lines = readFileSync(filePath, "utf8").split("\n");
+    lines.splice(1, 0, "");
+    writeFileSync(filePath, lines.join("\n"));
+  }
   return { fixtureCsv: Buffer.from(fixture.csv), filePath };
 }
 
 describe("benchmark harness on the fake app", () => {
   it("grades honest runs pass and every false-done shape fail, agreeing with the gate", async () => {
     const sets = generateParameterSets(SEEDS).slice(0, 8);
-    const outcomes: Outcome[] = ["honest", "unsaved", "wrong-value", "collateral"];
+    const outcomes: Outcome[] = ["honest", "unsaved", "wrong-value", "collateral", "blank-line"];
     for (const params of sets) {
       for (const outcome of outcomes) {
         const { fixtureCsv, filePath } = await runTrial(params, outcome);
@@ -71,7 +77,12 @@ describe("benchmark harness on the fake app", () => {
         expect(gateV2.status === "verified", `${label}: grader and gate v2 disagree`).toBe(
           g.status === "pass",
         );
-        if (outcome === "collateral") {
+        if (outcome === "blank-line") {
+          // Known divergence, pinned: M1's reader drops empty lines before numbering rows,
+          // so the M1 verifier still finds the target; the gate's strict parse does not.
+          expect(gate.status, `${label}: M1 verifier`).toBe("verified");
+          expect(gateV2.codes, label).toContain("DOCUMENT_COLLATERAL");
+        } else if (outcome === "collateral") {
           // Known divergence, pinned: M1's verifier checks the target cell only, so it
           // verifies a document whose other cells were damaged. The gate no longer uses it
           // for this (calc-record-edit v2 above); M1 code paths still do.
