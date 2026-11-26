@@ -244,6 +244,12 @@ const REFUSED: readonly [string, string, ContentPartKind | undefined, PrescanCod
     "XLSX_PRESCAN_NAMESPACE",
   ],
   [
+    "a prefixed attribute on the root (mc:Ignorable)",
+    `${DECL}<sst xmlns="${MAIN}" mc:Ignorable="x14ac"></sst>`,
+    "sst",
+    "XLSX_PRESCAN_NAMESPACE",
+  ],
+  [
     "the wrong root element",
     `${DECL}<worksheet xmlns="${MAIN}" xmlns:r="${REL}"></worksheet>`,
     "workbook",
