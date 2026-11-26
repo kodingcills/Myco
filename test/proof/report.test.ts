@@ -8,7 +8,8 @@ import {
   serializeProofBundle,
   verifyProofBundle,
 } from "../../src/proof/bundle.ts";
-import { renderProofReport } from "../../src/proof/report.ts";
+import { textDigest } from "../../src/proof/closed.ts";
+import { escapeHtml, renderProofReport } from "../../src/proof/report.ts";
 import { clone, NO_CTX, sampleRun } from "./fixture.ts";
 
 function verified(run = sampleRun()) {
@@ -39,26 +40,30 @@ describe("static proof report", () => {
     expect(html).toContain("default-src 'none'");
   });
 
-  it("escapes hostile text", () => {
+  it("hostile text never reaches the report: a summary is shown as its digest only", () => {
     const run = sampleRun();
     const steps = [...run.steps];
-    steps[1] = {
-      kind: "action",
-      actor: "agent",
-      tool: "typeTextGlobal",
-      summary: `<script>alert(1)</script><img src=x onerror=1>`,
-    };
+    const hostile = `<script>alert(1)</script><img src=x onerror=1>`;
+    steps[1] = { kind: "action", actor: "agent", tool: "typeTextGlobal", summary: hostile };
     const { b, r } = verified({ ...run, steps });
     const html = renderProofReport(b, r);
-    expect(html).not.toContain("<script>alert");
-    expect(html).not.toContain("<img src=x");
-    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain("alert");
+    expect(html).not.toContain("onerror");
+    expect(html).toContain(`sha256 ${textDigest(hostile).slice(0, 16)}`);
+    expect(html).toContain(`(${hostile.length} chars; text not carried)`);
+  });
+
+  it("every value it does print is HTML-escaped (the claim's apostrophe, escapeHtml itself)", () => {
+    const { b, r } = verified();
+    const html = renderProofReport(b, r);
+    expect(html).toContain("attempt ledger&#39;s guarantee");
+    expect(escapeHtml(`<a href="x">'&`)).toBe("&lt;a href=&quot;x&quot;&gt;&#39;&amp;");
   });
 
   it("refuses to render a bundle that does not verify", () => {
     const { b } = verified();
     const t = clone(b);
-    (t.records[1]?.body as { summary: string }).summary = "edited";
+    (t.records[1]?.body as { summary: { chars: number } }).summary.chars = 99;
     const r = verifyProofBundle(serializeProofBundle(t));
     expect(r.ok).toBe(false);
     expect(() => renderProofReport(t, r)).toThrow(/does not verify/);

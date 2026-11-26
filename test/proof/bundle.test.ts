@@ -13,7 +13,7 @@ import {
   serializeProofBundle,
   verifyProofBundle,
 } from "../../src/proof/bundle.ts";
-import { type LedgerEvent, eventSha256, verifyLedgerChain } from "../../src/proof/ledger.ts";
+import { eventSha256, type LedgerEvent, verifyLedgerChain } from "../../src/proof/ledger.ts";
 import {
   buildLedger,
   clone,
@@ -70,7 +70,9 @@ describe("proof bundle round trip", () => {
         ["bytes", "evidenceId", "kind", "mediaType", "path", "sha256"].sort(),
       );
     }
-    const frame = evidence.find((r) => (r.body as { evidenceId: string }).evidenceId === "ev-frame");
+    const frame = evidence.find(
+      (r) => (r.body as { evidenceId: string }).evidenceId === "ev-frame",
+    );
     expect(frame?.body).toMatchObject({ bytes: 7 });
     expect(serializeProofBundle(bundle())).not.toContain("buy milk");
   });

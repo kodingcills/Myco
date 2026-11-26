@@ -3,17 +3,18 @@
  * format (seq, prevSha256 over canonical JSON, 64-zero genesis) so tests do not import
  * unmerged code.
  */
+
+import type { RedactionContext } from "../../src/proof/backstop.ts";
 import type { ProofBundle, ProofRecord, ProofRunInput } from "../../src/proof/bundle.ts";
 import { recordSha256, runGenesis } from "../../src/proof/bundle.ts";
 import { episodeIdOf } from "../../src/proof/episode-ref.ts";
 import {
   ATTEMPT_EVENT_SCHEMA,
+  eventSha256,
   GENESIS_SHA256,
   type LedgerEvent,
   type LedgerHead,
-  eventSha256,
 } from "../../src/proof/ledger.ts";
-import type { RedactionContext } from "../../src/proof/backstop.ts";
 
 type EventInput = Omit<LedgerEvent, "schema" | "seq" | "prevSha256">;
 
