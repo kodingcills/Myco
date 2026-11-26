@@ -130,6 +130,7 @@ issue.
 | H-06 | Low | Sealed reader does not enforce `STATE_FILE_LIMIT` | **fix now** (gate side); vault side TO FILE |
 | H-07 | Info | Input fuzzing: malformed JSON-RPC, wrong types, unicode/NUL/path tricks, duplicate and prototype keys | **test now** |
 | H-08 | Info | Per-caller isolation across run ids and lookalike ids | **test now** |
+| H-09 | Info | A deeply nested JSON-RPC `id` makes `handleLine` throw (answered `-32603`) | test now; fix deferred: TO FILE (locked file) |
 | H-10 | Hosting | Vault keyed by `runId` alone (#508 TO FILE 1) | defer |
 | H-11 | Hosting | Seal receipt only in harness memory (#508 TO FILE 2) | defer |
 | H-12 | Hosting | Ledger is single-writer (#508 TO FILE 3) | defer |
@@ -155,9 +156,10 @@ issue.
   #514 file. A frame over `MAX_FRAME_BYTES` (1 MiB, about 250 times the largest valid
   request) is dropped *while it streams*: at most the cap is ever held. It is replaced by a
   fixed in-band line that `handleLine` answers with `-32600 invalid request`, in order, and
-  the server keeps serving. Depth needs no separate cap: V8's `JSON.parse` is iterative (it
-  parses 10^6 levels of nesting without a stack overflow), the gate reads only top-level
-  keys, and the byte cap bounds depth anyway.
+  the server keeps serving. This is a byte cap, not a depth cap. V8's `JSON.parse` is
+  iterative (it parses 10^6 levels of nesting without a stack overflow) and the gate reads
+  only top-level keys. The one depth problem found is the echoed JSON-RPC `id` (H-09),
+  which needs its own fix.
 - **Smallest future seam:** after #514 merges, move the cap into `serveStdio` itself, so
   programmatic callers get it too. The constant and the splitter stay.
 
@@ -276,7 +278,8 @@ Probed by hand on `12c35ea`. Every case already fails closed, with a code and ne
 - **Prototype keys:** `__proto__`, `constructor` and `prototype` become own keys under
   `JSON.parse` and are `UNKNOWN_FIELD`. `Object.prototype` is not polluted.
 - **Deep nesting:** 10^6 levels parse without a stack overflow (V8 22.x). The gate reads
-  only top-level keys.
+  only top-level keys, so deep `arguments` give `UNKNOWN_FIELD` or `INVALID_REQUEST`. The
+  exception is the JSON-RPC `id`, which is echoed. See H-09.
 
 **Decision:** a tests-only PR pins all of these through `parseGateRequest`, `createGate` and
 the MCP `handleLine`. Each case asserts a code and `accepted: false`, and a sweep asserts
@@ -291,8 +294,24 @@ that `verified` appears only for the one well-formed, assigned request whose sta
 - **Gap:** no test pins the "two callers, one evidence root" picture as such. Two gates
   bound to two runs share a root, and each must never cause a read of the other's run,
   whatever the request says: lookalike ids (case, a trailing dot, a prefix or suffix,
-  unicode lookalikes) and interleaved concurrent calls included. **Decision:** a tests-only
-  PR with a reader spy asserting zero reads outside the caller's own run.
+  unicode lookalikes) and interleaved concurrent calls included. Mutating the operator's
+  assignment object after `createGate` must not rebind the gate (`gate.ts:599` copies it).
+  **Decision:** a tests-only PR with a reader spy asserting zero reads outside the caller's
+  own run.
+
+### H-09: A deeply nested JSON-RPC `id` reaches `serveStdio`'s catch (Info; test now, fix deferred)
+
+- **Where:** `mcp-server.ts` `handleLine` echoes `request.id` unchanged into `reply()`,
+  which calls `JSON.stringify`. An `id` nested about 5,000 or more levels deep parses fine
+  but overflows the stack when serialised. `handleLine` then throws, and `serveStdio`'s catch
+  (`mcp-server.ts:162-166`, commented "unreachable while the gate is total") answers
+  `-32603 internal error` with id null. Found by the H-07 fuzzing.
+- **Impact:** fail closed and contained. The server keeps serving, and any verdict the call
+  would have carried is never sent. Not agent-reachable through the tool's arguments: the MCP
+  client picks ids. A hosted adapter that echoes ids would hit the same thing.
+- **Fix (deferred; locked file):** JSON-RPC 2.0 allows only a string, a number or null as an
+  id. `handleLine` should answer any other id with `-32600` and id null, before running a
+  method. The H-07 test pins today's behaviour. **TO FILE.**
 
 ### H-10 to H-15: hosting items from #508 (defer)
 
@@ -332,4 +351,7 @@ there is real format work: it changes the seal manifest's shape).
 4. **H-06 (vault side):** cap captured artifact size in `vault.capture`, so the vault never
    reads an oversized file whole.
 5. **H-01 follow-up:** move the frame cap into `serveStdio` after #514 merges.
-6. **H-10 to H-15:** the six hosting seams in the table above (#508 TO FILE 1-6, unchanged).
+6. **H-09:** answer a JSON-RPC `id` that is not a string, number or null with `-32600`
+   (`mcp-server.ts` `handleLine`), and correct the "unreachable" comment on `serveStdio`'s
+   catch.
+7. **H-10 to H-15:** the six hosting seams in the table above (#508 TO FILE 1-6, unchanged).
