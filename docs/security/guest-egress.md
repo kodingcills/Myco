@@ -198,8 +198,20 @@ This choice over the alternatives:
     with no value.
 
   `test/guest-egress.test.ts` has a negative case for each rule, fed fixed `KERN_PROCARGS2`
-  byte buffers. A mutation that removes each rule fails at least one test (PR #482, rounds
-  2–3, and the allowlist follow-up).
+  byte buffers. **Mutation claim** (round 3, PR #488): every `raise Refused(…)` in
+  `scripts/guest_egress_check.py` was replaced with `pass`, one at a time, and the suite
+  run. Every replacement fails at least one test, except these six, which are not counted
+  as tested rules:
+  - the fixture-only "no procargs for pid" refusal, and the real-host `sysctl` failures
+    (`KERN_ARGMAX`, `KERN_PROCARGS2`): tests serve fixed buffers, so no test reaches them;
+  - the three process-listing refusals in `candidate_pids()` (listing failed, empty or
+    non-zero exit, a non-numeric pid): tests supply their own `ps`. The empty-listing case is
+    also backstopped by "expected exactly one running guest, found 0".
+
+  The two bare re-raises in `find_guest_argv()` (fixture mode, and an unparseable qemu
+  process) were mutated the same way and both fail tests. Rules that a later rule
+  backstops (an unterminated exec path, an empty value, JSON on a shape-checked option, a
+  known QEMU option off the list) count because their tests assert the rule's own message.
 - **What `verify` cannot see.** It checks what QEMU was started with and what UTM is
   configured to start. Two things are outside it:
   - Changes made at run time through a QMP monitor. UTM's QMP is a SPICE port reached

@@ -888,6 +888,23 @@ describe("round 3 V3: one negative case per rule that survived its own removal",
     a[nic] = "virtio-net-pci,mac=4A:50:C3:24:9B:33,netdev=n/0";
     refuse(a, "expected exactly one id= (a word) in the netdev");
   });
+  // Rules a later rule backstops: each test asserts the rule's own message, so
+  // removing the rule fails the test even though the input is still refused.
+  it("a buffer with no NUL at all is refused as an unterminated exec path", () => {
+    const b = Buffer.concat([Buffer.alloc(4), Buffer.from("/x/qemu-aarch64-softmmu-no-nul")]);
+    b.writeInt32LE(3, 0);
+    refuse(b, "procargs: unterminated exec path");
+  });
+  it("an empty option value is refused as empty", () => {
+    refuse(swap("-smp", null, "-smp", ""), "-smp with an empty value");
+  });
+  it("a JSON value on a shape-checked option is refused as JSON", () => {
+    refuse(swap("-name", "myco-win11", "-name", "{x}"), "-name in JSON form is refused");
+  });
+  it("a known QEMU option off the list is named, with its index", () => {
+    const a = utmDefaultArgv();
+    refuse([...a, "-hda", "x"], `-hda is not in the launch allowlist (argv[${a.length}])`);
+  });
   it("N3: a netdev with two ids", () => {
     refuse(
       swap("-netdev", GOOD_NETDEV, "-netdev", `${GOOD_NETDEV},id=net0`),
