@@ -210,9 +210,8 @@ refuses:
 - a wrong count;
 - an episode outside the filter;
 - any `blobs/` entry (a dataset is digest-only);
+- an episode with any string outside its field's closed grammar (`OPEN_STRING`, below);
 - a mislabelled dataset.
-
-- an episode with any string outside its field's closed grammar (`OPEN_STRING`, below).
 
 `import` validates the dataset first, then writes into a store of the same kind. An episode that
 references a blob cannot be restored from a digest-only dataset, so the store refuses it
@@ -227,7 +226,7 @@ the closed-schema pattern of #553:
 
 | Field kind | Fields | Exported as |
 |---|---|---|
-| Closed value | enums, digests, timestamps, blob file names, reason codes, versions, fault codes | as is when it matches its grammar; anything else **refuses the export**, naming the field, never the value |
+| Closed value | enums, digests, timestamps, blob file names, reason codes, versions, fault codes, and the arm (a known arm, `myco-gate` or `hcu+shell`, optionally with a `:variant` of lower-case letters, digits and hyphens, such as the multi-step demo's `myco-gate:retry`) | as is when it matches its grammar; anything else **refuses the export**, naming the field, never the value |
 | Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`), else `h-<sha256>` |
 | Free text | `task.instruction`, typed text, shell commands, UI status | always `h-<sha256>` of the raw value |
 | Short free token | key names, app names (schema cap 64) | as is when it is a closed token (no space, no separator), else `h-<60 hex>` |

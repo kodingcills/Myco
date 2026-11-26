@@ -29,7 +29,7 @@ import {
 } from "../../schemas/episode.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import { currentHost, type HostFacts } from "./clean.ts";
-import { closeEpisode, ExportInputError, openStrings } from "./closed.ts";
+import { ARM_GRAMMAR, closeEpisode, ExportInputError, openStrings } from "./closed.ts";
 import { blobsFor, EpisodeStore, readStoreDir } from "./store.ts";
 import type { Episode, EpisodeOutcome } from "./types.ts";
 import { canonicalJson, sha256Hex, validateEpisode } from "./validate.ts";
@@ -146,7 +146,7 @@ export function validateFilter(f: EpisodeFilter): void {
   // The filter is written to the manifest: its strings are closed too (never free text).
   if (f.taskSetVersion !== null && !/^[A-Za-z0-9._-]{1,64}$/.test(f.taskSetVersion))
     throw new Error("invalid filter: taskSetVersion is not a closed task-set id");
-  if (f.arm !== null && !/^[a-z0-9][a-z0-9+._-]{0,63}$/.test(f.arm))
+  if (f.arm !== null && !ARM_GRAMMAR.test(f.arm))
     throw new Error("invalid filter: arm is not a closed arm id");
 }
 

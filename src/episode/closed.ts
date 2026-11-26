@@ -47,6 +47,14 @@ export const CLOSED_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** A short closed token (key names, app names): no space, no separator, at most 64. */
 export const CLOSED_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
+/**
+ * The closed arm vocabulary (#556 round 1, D1): a known arm, optionally with a variant of
+ * lower-case letters, digits and hyphens (`myco-gate:retry`, written by the multi-step demo,
+ * src/episode/demo.ts). Never a path: a drive-relative form (`c:users.x`, `C:Users`) is refused,
+ * because `c` is not a known arm and a variant has no `.`, `/`, `\\` or upper case.
+ */
+export const KNOWN_ARMS = ["myco-gate", "hcu+shell"] as const;
+export const ARM_GRAMMAR = /^(?:myco-gate|hcu\+shell)(?::[a-z0-9][a-z0-9-]{0,31})?$/;
 const HASHED = /^h-[0-9a-f]{64}$/;
 const HASHED_SHORT = /^h-[0-9a-f]{60}$/;
 
@@ -131,7 +139,7 @@ export const FIELD_TREATMENT: Readonly<Record<string, Treatment>> = {
     "agent-never-ran",
     "document-withheld",
   ),
-  "$.harness.arm": closed(/^[a-z0-9][a-z0-9+._-]{0,63}$/),
+  "$.harness.arm": closed(ARM_GRAMMAR),
   "$.harness.plannerModelId": id,
   "$.harness.corrections": oneOf("on", "off"),
   "$.harness.timing.startedAt": closed(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/),

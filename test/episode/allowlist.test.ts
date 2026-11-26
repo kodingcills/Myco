@@ -11,17 +11,21 @@ import { readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ARM_GRAMMAR,
+  CLOSED_ID,
   closeEpisode,
   FIELD_TREATMENT,
   openStrings,
   templateOf,
 } from "../../src/episode/closed.ts";
+import { writeMultiStepDemoEpisodes } from "../../src/episode/demo.ts";
 import { exportDataset, NO_FILTER, validateDataset } from "../../src/episode/export.ts";
 import { EpisodeRecorder } from "../../src/episode/recorder.ts";
 import { EpisodeStore, readStoreDir } from "../../src/episode/store.ts";
 import type { Episode } from "../../src/episode/types.ts";
 import { canonicalJson, episodeIdOf, sha256Hex } from "../../src/episode/validate.ts";
-import { draft, HOST, scratch } from "./helpers.ts";
+import { runMultiStepMockDemo } from "../../src/gate/multistep-demo.ts";
+import { draft, fakeKey, HOST, scratch } from "./helpers.ts";
 import { makePathFuzzer } from "./path-fuzz.ts";
 import * as CORPUS from "./probe-corpus.ts";
 
@@ -319,17 +323,31 @@ describe("the field table covers every string path an episode can hold", () => {
   });
 });
 
+/** Hand-edit a dataset's first episode, re-addressing it and making every hash consistent. */
+function rewriteFirstEpisode(out: string, edit: (ep: Episode) => Episode): void {
+  const manifestPath = join(out, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const entry = manifest.files.find((f: { path: string }) => f.path.startsWith("episodes/"));
+  const ep = JSON.parse(readFileSync(join(out, entry.path), "utf8")) as Episode;
+  const { episodeId: _x, ...rest } = edit(ep);
+  const withId = { ...rest, episodeId: episodeIdOf(rest) } as Episode;
+  const bytes = Buffer.from(`${canonicalJson(withId)}\n`);
+  const path = `episodes/${withId.episodeId}.json`;
+  renameSync(join(out, entry.path), join(out, path));
+  writeFileSync(join(out, path), bytes);
+  Object.assign(entry, { path, sha256: sha256Hex(bytes), bytes: bytes.length });
+  manifest.files.sort((a: { path: string }, b: { path: string }) => (a.path < b.path ? -1 : 1));
+  manifest.datasetSha256 = sha256Hex(canonicalJson(manifest.files));
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 describe("validateDataset refuses an open string; the filter is closed", () => {
   it("a dataset hand-edited to carry plain text (hashes and id made consistent) is refused", () => {
     const r = exportWith("echo hello");
     expect(r.written).toBe(true);
     if (!r.written) return;
     expect(validateDataset(r.out, HOST)).toEqual([]);
-    const manifestPath = join(r.out, "manifest.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    const entry = manifest.files.find((f: { path: string }) => f.path.startsWith("episodes/"));
-    const ep = JSON.parse(readFileSync(join(r.out, entry.path), "utf8")) as Episode;
-    const edited = {
+    rewriteFirstEpisode(r.out, (ep) => ({
       ...ep,
       actions: {
         ...ep.actions,
@@ -337,17 +355,7 @@ describe("validateDataset refuses an open string; the filter is closed", () => {
           a.kind === "shell" ? { ...a, command: "cd Plain Text" } : a,
         ),
       },
-    } as Episode;
-    const { episodeId: _x, ...rest } = edited;
-    const withId = { ...rest, episodeId: episodeIdOf(rest) } as Episode;
-    const bytes = Buffer.from(`${canonicalJson(withId)}\n`);
-    const path = `episodes/${withId.episodeId}.json`;
-    renameSync(join(r.out, entry.path), join(r.out, path));
-    writeFileSync(join(r.out, path), bytes);
-    Object.assign(entry, { path, sha256: sha256Hex(bytes), bytes: bytes.length });
-    manifest.files.sort((a: { path: string }, b: { path: string }) => (a.path < b.path ? -1 : 1));
-    manifest.datasetSha256 = sha256Hex(canonicalJson(manifest.files));
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    }));
     const problems = validateDataset(r.out, HOST);
     expect(problems).toEqual([
       expect.stringMatching(
@@ -406,5 +414,103 @@ describe("blobs are digest-only (lead ruling 2026-11-26 20:3xZ)", () => {
     expect(m.counts.blobs).toBe(0);
     expect(text).toContain(createHash("sha256").update(csv).digest("hex"));
     expect(validateDataset(out, HOST)).toEqual([]);
+  });
+});
+
+describe("#556 round 1 fixes", () => {
+  it("D1: a multi-step demo store (arm myco-gate:retry / :no-retry) exports, and its arm is a valid filter", async () => {
+    const report = await runMultiStepMockDemo({ outDir: dir("al-ms") });
+    const root = join(dir("al-ms-store"), "s");
+    const store = EpisodeStore.open(root, { simulated: true, host: HOST });
+    const written = writeMultiStepDemoEpisodes(report, store);
+    expect(written.length).toBeGreaterThan(0);
+    expect(written.every((w) => w.status === "written")).toBe(true);
+    const out = join(dir("al-ms-out"), "ds");
+    const m = exportDataset({ stores: [root], out, simulated: true, host: HOST });
+    expect(Object.keys(m.counts.byArm).sort()).toEqual(["myco-gate:no-retry", "myco-gate:retry"]);
+    expect(validateDataset(out, HOST)).toEqual([]);
+    const only = join(dir("al-ms-f"), "ds");
+    const f = exportDataset({
+      stores: [root],
+      out: only,
+      simulated: true,
+      host: HOST,
+      filter: { ...NO_FILTER, arm: "myco-gate:retry" },
+    });
+    expect(Object.keys(f.counts.byArm)).toEqual(["myco-gate:retry"]);
+    expect(validateDataset(only, HOST)).toEqual([]);
+  }, 120_000);
+
+  it("D1: the arm vocabulary admits the known arms and variants, and refuses drive-relative and path forms", () => {
+    for (const ok of [
+      "myco-gate",
+      "hcu+shell",
+      "myco-gate:retry",
+      "myco-gate:no-retry",
+      "hcu+shell:v2",
+    ])
+      expect(ARM_GRAMMAR.test(ok), ok).toBe(true);
+    for (const bad of [
+      "c:users.x",
+      "C:Users",
+      "c:users",
+      "d:x",
+      "myco-gate:c:x",
+      "myco-gate:users.x",
+      "myco-gate:Users",
+      "myco-gate:..",
+      "hcu+shell:a/b",
+      "zq:plantuser05",
+      "plantuser05",
+    ])
+      expect(ARM_GRAMMAR.test(bad), bad).toBe(false);
+    const base = readStoreDirOrDraft();
+    expect(() => closeEpisode({ ...base, harness: { ...base.harness, arm: "c:users.x" } })).toThrow(
+      /^export refused: \$\.harness\.arm is not a closed value/,
+    );
+    // Fuzz: no fuzzed host path is ever an arm.
+    const next = makePathFuzzer(0x556);
+    for (let i = 0; i < 1000; i++) {
+      const v = next().value.slice(0, 64);
+      expect(ARM_GRAMMAR.test(v), `case ${i}: ${JSON.stringify(v)}`).toBe(false);
+    }
+  });
+
+  it("T1: the dataset backstop refuses a key-shaped id that fits CLOSED_ID (hashes made consistent)", () => {
+    const r = exportWith("echo hello");
+    expect(r.written).toBe(true);
+    if (!r.written) return;
+    const key = fakeKey();
+    expect(CLOSED_ID.test(key)).toBe(true);
+    rewriteFirstEpisode(r.out, (ep) => ({ ...ep, task: { ...ep.task, id: key } }));
+    expect(validateDataset(r.out, HOST)).toEqual([
+      expect.stringMatching(/: KEY_SHAPED at \$\.task\.id$/),
+    ]);
+  });
+
+  it("T2: free text that merely starts with h- is hashed, never kept (only an exact h-<64 hex> is)", () => {
+    const words = ["QzPLANTEDhfirst", "QzPLANTEDhlast"];
+    const base = readStoreDirOrDraft();
+    for (const text of [
+      `h-C:\\Users\\${words[0]} ${words[1]}`,
+      `h-${"a".repeat(64)} C:\\Users\\${words[0]} ${words[1]}`,
+      `h-${"a".repeat(63)}`,
+    ]) {
+      const closed = closeEpisode({ ...base, task: { ...base.task, instruction: text } });
+      expect(closed.task.instruction, text).toMatch(/^h-[0-9a-f]{64}$/);
+      expect(closed.task.instruction).not.toBe(text);
+      expect(words.filter((w) => canonicalJson(closed).includes(w))).toEqual([]);
+      // And an exported string that is only h-prefixed is open.
+      expect(openStrings({ ...closed, task: { ...closed.task, instruction: text } })).toEqual([
+        "$.task.instruction",
+      ]);
+    }
+    for (const [name, value, w] of PROBES.slice(0, 40)) {
+      const closed = closeEpisode({ ...base, task: { ...base.task, instruction: `h-${value}` } });
+      expect(
+        w.filter((x) => canonicalJson(closed).includes(x)),
+        name,
+      ).toEqual([]);
+    }
   });
 });
