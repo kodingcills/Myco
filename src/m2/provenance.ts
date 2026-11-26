@@ -17,8 +17,20 @@ import { EVIDENCE_PLANNERS } from "../benchmark/check.ts";
 /** The marker file every corrections A/B pack carries (`src/pilot/ab.ts`). */
 export const EXPERIMENT_FILE = "EXPERIMENT";
 
-/** Errors that make a pack directory not evidence, whatever its numbers say. */
-export function packProvenanceErrors(dir: string, arm: readonly unknown[]): string[] {
+/**
+ * Errors that make a pack directory not evidence, whatever its numbers say.
+ *
+ * `abPack` (#554): the pack is a scorecard A/B pack (`myco.m2.ab-pack/1`, `src/m2/ab-pack.ts`),
+ * experiment-only by its manifest and never citable for an R row. Its rows are experiment rows
+ * by definition, so the row-label refusal does not apply to it; the SIMULATED and EXPERIMENT
+ * markers (neither is part of its layout) and the planner allowlist still do. R packs never
+ * pass it.
+ */
+export function packProvenanceErrors(
+  dir: string,
+  arm: readonly unknown[],
+  opts: { readonly abPack?: boolean } = {},
+): string[] {
   const errors: string[] = [];
   if (existsSync(join(dir, "SIMULATED")))
     errors.push("the pack carries a SIMULATED marker: simulated rows are never evidence");
@@ -30,7 +42,7 @@ export function packProvenanceErrors(dir: string, arm: readonly unknown[]): stri
   const labelled = arm.filter(
     (r) => r !== null && typeof r === "object" && "experiment" in (r as object),
   ).length;
-  if (labelled > 0)
+  if (opts.abPack !== true && labelled > 0)
     errors.push(
       `${labelled} arm row(s) labelled experiment-only: experiment rows are never R1 evidence, the corrections-OFF arm included`,
     );
