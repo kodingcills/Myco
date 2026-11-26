@@ -272,6 +272,21 @@ describe("a tampered or missing sealed fixture is refused, and the oracle never 
     });
     expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["ORACLE_ERROR"] });
   });
+
+  // Round-3 nit (V2, follow-up to #485): through the gate this branch is unreachable (the gate
+  // answers FIXTURE_UNREADABLE first), so it is pinned on the family directly. A sealed spec
+  // without the sealed bytes must never fall back to the seed's pristine fixture.
+  it("decide refuses a sealed spec the gate gave no fixture bytes, rather than using the seed", () => {
+    const honestOnSeed = Buffer.from(honestEdit(PRISTINE));
+    // The same document IS verified against the seed, so a fallback would accept it.
+    expect(calcRecordEditFamily.decide(honestOnSeed, SEED_SPEC, "r").status).toBe("verified");
+    expect(() => calcRecordEditFamily.decide(honestOnSeed, SEALED_SPEC, "r")).toThrow(
+      /did not supply/,
+    );
+    expect(() => calcRecordEditFamily.decide(honestOnSeed, SEALED_SPEC, "r", {})).toThrow(
+      /did not supply/,
+    );
+  });
 });
 
 describe("the agent cannot supply or alter the fixture or its digest", () => {
