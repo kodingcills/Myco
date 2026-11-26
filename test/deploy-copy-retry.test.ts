@@ -39,6 +39,8 @@ let stubDir = "";
 let src = "";
 let guest = "";
 let cfg = "";
+let wheels = "";
+let egressStub = "";
 
 const AGENT_DIR_REL = "C/Program Files/Myco/agent";
 
@@ -178,6 +180,8 @@ function runDeploy(extra: Record<string, string> = {}): Promise<DeployRun> {
         VM_SSH_HOST: "myco-win11-stub",
         MYCO_AGENT_PORT: "65531",
         MYCO_DEPLOY_COPY_BACKOFF: "0",
+        MYCO_GUEST_WHEELS: wheels,
+        MYCO_EGRESS_SCRIPT: egressStub,
         ...extra,
       },
     });
@@ -224,6 +228,16 @@ beforeEach(() => {
   writeFileSync(join(src, "bootstrap", "MycoAgent.xml"), "<Task/>\n");
   writeFileSync(join(src, "bootstrap", "guest-deploy.ps1"), "# stub guest script\n");
   writeFileSync(join(src, "pyproject.toml"), "[project]\nname = 'myco-agent'\n");
+  writeFileSync(join(src, "bootstrap", "guest-requirements.txt"), "pkg==1 --hash=sha256:00\n");
+  // Pre-staged wheels (TIF-275), so no test ever reaches PyPI.
+  wheels = join(dir, "wheels-in");
+  mkdirSync(wheels);
+  writeFileSync(join(wheels, "pkg-1-py3-none-any.whl"), "not a real wheel\n");
+  // TIF-275: the deploy verifies guest egress first; a passing stub by default.
+  egressStub = join(dir, "egress-ok.sh");
+  writeFileSync(egressStub, `#!/bin/bash\necho "$1" >> "${join(dir, "egress.calls")}"\nexit 0\n`, {
+    mode: 0o755,
+  });
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -247,7 +261,7 @@ describe("deploy-to-vm copy phase (TIF-220)", () => {
     const r = await runDeploy();
     expect(r.stderr).not.toContain("refusing");
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("verified 6 files on the guest");
+    expect(r.stdout).toContain("verified 7 files on the guest");
     expect(r.stdout).toContain("DEPLOY OK");
     expect(r.stderr).not.toContain("copy attempt");
     // ps1, tree, token: one pass, no retries.
@@ -622,5 +636,132 @@ describe("deploy-to-vm host token file (row-8 H5)", () => {
     expect(readFileSync(out).equals(sent)).toBe(true);
     expect(readdirSync(outDir)).toEqual(["agent-token"]);
     expect(leaksToken(r, sent.toString("utf8"))).toBe(false);
+  });
+});
+
+// TIF-275: the guest has no internet, so its Python wheels come from the host
+// with the tree copy and are installed offline, hash-pinned.
+describe("guest wheels fetched on the host (TIF-275)", () => {
+  /** A fake `python3` that logs its argv; `--no-index` (cache) hits only if asked. */
+  function stubPython(cacheHit: boolean): string {
+    const log = join(dir, "python3.log");
+    writeFileSync(
+      join(stubDir, "python3"),
+      `#!/bin/bash
+echo "$*" >> "${log}"
+d=""; prev=""
+for a in "$@"; do [ "$prev" = "-d" ] && d="$a"; prev="$a"; done
+case " $* " in *" --no-index "*) [ "${cacheHit ? 1 : 0}" = 1 ] || exit 1 ;; esac
+echo fetched > "$d/pkg-1-py3-none-any.whl"
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    return log;
+  }
+
+  it("copies the staged wheels into the agent directory with the tree", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const r = await runDeploy();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("staged 1 wheels for the guest");
+    // Same three scp calls as before: the wheels ride the tree copy.
+    expect(r.scpCalls).toBe(3);
+    expect(guestFile("wheels/pkg-1-py3-none-any.whl")).toBe("not a real wheel\n");
+  });
+
+  it("refuses before touching the guest when the staged wheel dir is empty", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const empty = join(dir, "no-wheels");
+    mkdirSync(empty);
+    const r = await runDeploy({ MYCO_GUEST_WHEELS: empty });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("no .whl files");
+    expect(r.scpCalls).toBe(0);
+  });
+
+  it("refuses before touching the guest without the pinned requirements file", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    rmSync(join(src, "bootstrap", "guest-requirements.txt"));
+    const r = await runDeploy();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("guest-requirements.txt");
+    expect(r.scpCalls).toBe(0);
+  });
+
+  it("tries the host cache offline first, then PyPI, always hash-pinned for win_arm64", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const log = stubPython(false);
+    const cache = join(dir, "cache");
+    const r = await runDeploy({ MYCO_GUEST_WHEELS: "", MYCO_WHEEL_CACHE: cache });
+    expect(r.status).toBe(0);
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain("--no-index");
+    expect(calls[1]).not.toContain("--no-index");
+    for (const c of calls) {
+      expect(c).toContain("--require-hashes");
+      expect(c).toContain("--platform win_arm64");
+      expect(c).toContain("--only-binary=:all:");
+    }
+    // A fresh fetch is kept for the next deploy.
+    expect(readdirSync(cache)).toContain("pkg-1-py3-none-any.whl");
+  });
+
+  it("needs no network on a cache hit", { timeout: SLOW }, async () => {
+    installStubs({ scpDrops: 0 });
+    const log = stubPython(true);
+    const r = await runDeploy({ MYCO_GUEST_WHEELS: "", MYCO_WHEEL_CACHE: join(dir, "cache") });
+    expect(r.status).toBe(0);
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("--no-index");
+  });
+});
+
+// TIF-275 round 2 (verifier N3): no agent or token enters a guest whose egress
+// is not verified closed.
+describe("deploy refuses a guest with egress not verified closed (TIF-275)", () => {
+  it("verifies egress before touching the guest", { timeout: SLOW }, async () => {
+    installStubs({ scpDrops: 0 });
+    const r = await runDeploy();
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(dir, "egress.calls"), "utf8").trim()).toBe("verify");
+  });
+
+  it("refuses, before any copy, when the egress check fails", { timeout: SLOW }, async () => {
+    installStubs({ scpDrops: 0 });
+    const failing = join(dir, "egress-open.sh");
+    writeFileSync(failing, "#!/bin/bash\nexit 1\n", { mode: 0o755 });
+    const r = await runDeploy({ MYCO_EGRESS_SCRIPT: failing });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("guest egress is not verified closed");
+    expect(r.scpCalls).toBe(0);
+  });
+
+  it("refuses when the egress check is missing", { timeout: SLOW }, async () => {
+    installStubs({ scpDrops: 0 });
+    const r = await runDeploy({ MYCO_EGRESS_SCRIPT: join(dir, "nope.sh") });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("egress check not found");
+    expect(r.scpCalls).toBe(0);
+  });
+
+  it("refuses outright under MYCO_GUEST_EGRESS=open (maintenance mode)", {
+    timeout: SLOW,
+  }, async () => {
+    installStubs({ scpDrops: 0 });
+    const r = await runDeploy({ MYCO_GUEST_EGRESS: "open" });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("MYCO_GUEST_EGRESS=open");
+    expect(r.scpCalls).toBe(0);
   });
 });
