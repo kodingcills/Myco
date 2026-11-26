@@ -150,6 +150,16 @@ describe("the vault reader the gate reads through", () => {
     }
   });
 
+  it("a state file the vault did not capture is missing, not empty bytes", async () => {
+    const sink: string[] = [];
+    const out = await vaultReader(vault, { runId: "r1", receipt }, params, sink).read(
+      "r1",
+      "other.csv",
+    );
+    expect(out).toEqual({ ok: false, cause: "missing", detail: "other.csv was not captured" });
+    expect(sink).toEqual([]);
+  });
+
   it("an integrity failure's detail names codes, never a vault path", async () => {
     const other = vault.seal("r2", {
       groundTruth: params,
