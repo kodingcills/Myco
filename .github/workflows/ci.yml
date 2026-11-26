@@ -52,6 +52,29 @@ jobs:
           echo "scanning $range"
           /tmp/gitleaks git --redact --no-banner --verbose --log-opts="$range" .
 
+  # M2-14 (plan label, Linear pending): enforce the workflow rules in docs/ci.md and
+  # docs/security/public-release-safety.md: no pull_request_target, GitHub-hosted runners
+  # only, no write token on workflow_run, read-only top-level permissions, no job
+  # widening them, and every action pinned to a full SHA with a version comment.
+  ci-hygiene:
+    name: ci hygiene (workflows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML (hash pinned)
+        run: |
+          pip install --require-hashes --only-binary :all: --no-deps -r scripts/ci-hygiene-requirements.txt
+      - name: Check workflows
+        run: python scripts/ci-hygiene-check.py
+      - name: Test the checker and the history scan
+        run: python -m unittest discover -s test/ci-hygiene -v
+
   check:
     strategy:
       fail-fast: false
@@ -158,6 +181,45 @@ jobs:
           for t in file_write_over_control_channel_round_trips_through_the_agent agent_refuses_an_oversize_write_on_its_own file_read_over_control_channel_requires_grant; do
             grep -qE "^test tests::$t \.\.\. ok$" /tmp/host-test.log || { echo "::error::$t did not run and pass on Linux"; exit 1; }
           done
+
+  # TIF-269 (M2-06): the Linux path an outsider can run. A real headless
+  # LibreOffice Calc is driven by a scripted agent; Myco's oracle reads the saved
+  # workbook and must return verified / refuted / uncertain as each scenario
+  # expects, including the false completion (agent says done, file disagrees).
+  # No VM, no model, no secrets. MYCO_LINUX_PATH_REQUIRED=1 makes the real-Calc
+  # suite fail instead of skip if LibreOffice or Python-UNO is missing.
+  linux-path:
+    name: linux path (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MYCO_PYTHON: /usr/bin/python3
+      MYCO_LINUX_PATH_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install LibreOffice Calc and Python-UNO
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno
+      - name: Prerequisites
+        run: pnpm myco-linux --check
+      - name: Linux path tests (real Calc; must not skip)
+        run: pnpm exec vitest run test/linux
+      - name: Demo (every scenario must produce its expected verdict)
+        run: pnpm myco-linux --demo --out "$RUNNER_TEMP/myco-linux"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: linux-path-runs
+          path: ${{ runner.temp }}/myco-linux
+          if-no-files-found: ignore
 
   # Runs both verdict fixture sizes on main pushes and PRs labelled `perf`.
   # The hosted 10k check compares the median against calibrated runner caps.

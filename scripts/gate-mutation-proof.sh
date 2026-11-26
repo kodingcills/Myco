@@ -18,6 +18,20 @@
 #   mI: no dev/ino comparison between the walk and the descriptor (round 2 D-A).
 #   mJ: no second walk after the open (round 2 D-A).
 #   mK: the walk does not require a regular file (round 2 D-B).
+#   mL: no descriptor-path binding (/proc/self/fd) after the checks (TIF-265 follow-up,
+#       round-3 D-A'): the intermediate-swap pin tests fail on Linux.
+#   mM: the binding fails open when /proc/self/fd cannot be read (TIF-265 follow-up).
+#   mN: a descriptor path outside the evidence root fails open (TIF-265 follow-up round 2 D3).
+#   mO: the binding fails open when realpath(root) fails (round 2 D3).
+#   mP: a "(deleted)" suffix is stripped before the path compare (round 2 D3).
+#   mQ: the outside-root test accepts `startsWith(realRoot)` without the "/" (round 3 nit):
+#       a sibling <root>-evil is then reported as a path inside the root.
+#   mR: the descriptor path is compared by suffix, not exactly (round 3 D1): a borrowed run
+#       also named r (x/r, <root>-evil/r) then passes.
+#   mS: the open-failure reason carries Node's error message (with the host path) (round 3 D2).
+#   mT: the read-failure reason carries Node's error message (round 3 D2).
+# mL, mM, mN, mP, mQ and mR are caught only on Linux, where the binding applies; elsewhere
+# their tests skip. mO's test forces the binding on, and mS/mT's tests run everywhere.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -72,14 +86,36 @@ elif which == "mI":
           first.final.dev !== opened.dev ||
           first.final.ino !== opened.ino""", "          false")
 elif which == "mJ":
-    edit("src/gate/gate.ts", "const second = walk(absoluteRoot, segments, where);", "const second = first;")
+    edit("src/gate/gate.ts", "const second = walk(absoluteRoot, segments, where, hooks.beforeLstat);", "const second = first;")
 elif which == "mK":
     edit("src/gate/gate.ts", "if (last && !stat.isFile()) {", "if (false) {")
+elif which == "mL":
+    edit("src/gate/gate.ts", "        if (!bound.ok) return bound;\n", "")
+elif which == "mM":
+    edit("src/gate/gate.ts", "    actual = readlinkSync(join(hooks.procFdDir ?? \"/proc/self/fd\", String(fd)));\n  } catch (error) {\n", "    actual = readlinkSync(join(hooks.procFdDir ?? \"/proc/self/fd\", String(fd)));\n  } catch (error) {\n    if (error) return { ok: true };\n")
+elif which == "mN":
+    edit("src/gate/gate.ts", "  if (actual !== join(realRoot, ...segments)) {", "  if (actual !== join(realRoot, ...segments) && actual.startsWith(`${realRoot}/`)) {")
+elif which == "mO":
+    edit("src/gate/gate.ts", "    realRoot = realpathSync(absoluteRoot);\n  } catch (error) {\n", "    realRoot = realpathSync(absoluteRoot);\n  } catch (error) {\n    if (error) return { ok: true };\n")
+elif which == "mP":
+    edit("src/gate/gate.ts", "  if (actual !== join(realRoot, ...segments)) {", "  actual = actual.replace(/ \\(deleted\\)$/, \"\");\n  if (actual !== join(realRoot, ...segments)) {")
+elif which == "mQ":
+    edit("src/gate/gate.ts", "    const shown = actual.startsWith(`${realRoot}/`)", "    const shown = actual.startsWith(realRoot)")
+elif which == "mR":
+    edit("src/gate/gate.ts", "  if (actual !== join(realRoot, ...segments)) {", "  if (!actual.endsWith(join(...segments))) {")
+elif which == "mS":
+    edit("src/gate/gate.ts", "`${where}: open failed: ${errorCode(error)}`", "`open failed: ${String(error)}`")
+elif which == "mT":
+    edit("src/gate/gate.ts", "`${where}: read failed: ${errorCode(error)}`", "`read failed: ${String(error)}`")
 EOF
 }
 
 status=0
-for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK; do
+for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM mN mO mP mQ mR mS mT; do
+  if [[ "$mutant" =~ ^m[LMNPQR]$ ]] && [[ "$(uname -s)" != Linux ]]; then
+    echo "$mutant: skipped (the /proc/self/fd binding applies on Linux only)"
+    continue
+  fi
   mutate "$mutant"
   if npx vitest run test/gate --testTimeout=10000 >/dev/null 2>&1; then
     echo "$mutant: SURVIVED (no test failed)"

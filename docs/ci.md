@@ -14,10 +14,12 @@ nothing is skipped or fails for lack of one.
 | Workflow | Job (check name) | Runs on fork PRs | Required on `main` |
 | --- | --- | --- | --- |
 | `ci.yml` | `secret scan (gitleaks)` | yes | yes |
+| `ci.yml` | `ci hygiene (workflows)` | yes | no |
 | `ci.yml` | `check (ubuntu-latest)`, `check (macos-latest)` | yes | yes |
 | `ci.yml` | `myco-agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `myco-agent tests (macos-latest)` | yes | no |
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
+| `ci.yml` | `linux path (ubuntu-latest)` | yes | no |
 | `ci.yml` | `viewer verdict budget (…)` | only with the `perf` label | no |
 | `tif-170-race-diagnostics.yml` | `race x1` | only when the PR touches its paths | no |
 
@@ -25,12 +27,20 @@ nothing is skipped or fails for lack of one.
   (it matches upstream's `gitleaks_8.30.1_checksums.txt`). It scans only the commits
   the PR adds, with findings redacted in the log. Enable the same check locally with
   `git config core.hooksPath .githooks`.
+- **Linux path.** Installs LibreOffice Calc and Python-UNO from Ubuntu's archive, runs
+  `test/linux` with `MYCO_LINUX_PATH_REQUIRED=1` (a missing prerequisite fails the suite
+  instead of skipping it), then `pnpm myco-linux --demo`, which exits non-zero unless
+  every scenario gets its expected verdict. See `docs/product/linux-path.md` (TIF-269).
 - **Viewer verdict budget.** A timing gate that is noisy on shared runners, so it runs
   on pushes to `main` and on PRs a maintainer labels `perf`. Only people with triage
   access or above can add labels, and a labelled fork PR still runs under
   `pull_request`: same read-only token, no secrets.
 
 ## Security posture
+
+The `ci hygiene (workflows)` job enforces these rules with `scripts/ci-hygiene-check.py`;
+a workflow change that breaks one fails CI. Rule list and rationale:
+[docs/security/public-release-safety.md](security/public-release-safety.md) (M2-14).
 
 - **Least privilege.** Each workflow sets `permissions: contents: read` at the top
   level and no job widens it. Caching and artifact upload use the runner's Actions
@@ -116,6 +126,7 @@ costs one manual re-run.
 
 - **First-time contributors.** Depending on the repository's Actions setting, a fork
   PR from a first-time contributor waits for a maintainer to click "Approve and run".
+  Which setting to choose: [public-release-safety.md](security/public-release-safety.md#admin-action-for-tiffany-first-time-contributor-approval).
 - **`perf` label.** Add it to run the viewer verdict budget on a PR.
 - **TIF-170 race diagnostics.** Manual runs (`workflow_dispatch`, with `runs`,
   `rounds`, `launcher` inputs) need write access.
@@ -129,7 +140,9 @@ costs one manual re-run.
 - Locally, the `check` job is: `pnpm install --frozen-lockfile && pnpm typecheck &&
   pnpm lint && pnpm test && pnpm build`. The agent job: `cd agent && pip install -e .
   pytest && pytest -v`. The runtime job: `cd runtime && cargo test -p myco-rt-agent`
-  (its confinement tests run only on Linux).
+  (its confinement tests run only on Linux). The Linux path job, after installing
+  `libreoffice-calc python3-uno`: `MYCO_LINUX_PATH_REQUIRED=1 pnpm exec vitest run test/linux
+  && pnpm myco-linux --demo`.
 - Lint workflows with [actionlint](https://github.com/rhysd/actionlint) before
   pushing a workflow change, e.g. `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7`
   and then `actionlint` from the repo root. With shellcheck on `PATH` it also checks `run:`
