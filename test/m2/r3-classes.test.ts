@@ -195,6 +195,7 @@ describe("cause precedence for trials with more than one cause (N6)", () => {
     };
     const ops = { ...t.ops, faultLanded: false };
     const peel: [BenchmarkArmRow, string][] = [
+      [{ ...all, gate: { called: false, verdict: null, unregistrable: true } }, "unregistrable"],
       [all, "harness cause"],
       [{ ...all, cause: t.arm.cause }, "gate not called"],
       [{ ...all, cause: t.arm.cause, gate: { called: true, verdict: null } }, "no verdict"],
@@ -219,9 +220,16 @@ describe("cause precedence for trials with more than one cause (N6)", () => {
         "pass",
       ),
     );
-    const m = manifest({ rows: ["R1", "R3"], expectTrials: { "myco-gate": trials.length } });
+    const m = manifest({
+      rows: ["R1", "R3"],
+      expectTrials: { "myco-gate": trials.length },
+      expectUnregistrable: { "myco-gate": 0 },
+    });
     const r = checkPack(input(trials, m));
-    expect(r.errors).toEqual([]);
+    // A synthetic pack is never R1 evidence (#506 round 2, D3): that is its only error here.
+    expect(r.errors).toEqual([
+      'R1 task set: task set "fx-synthetic" is not a published task set this check knows',
+    ]);
     expect(r.r3?.ineligible).toMatchObject({ count: 2, byCause: { "harness cause": 2 } });
     expect(r.r3?.ineligible.trials.map((x) => x.trialKey)).toEqual(["g10", "g11"]);
     expect(r.r1?.ineligible).toMatchObject({
