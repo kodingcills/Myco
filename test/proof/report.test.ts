@@ -63,7 +63,7 @@ describe("static proof report", () => {
   it("refuses to render a bundle that does not verify", () => {
     const { b } = verified();
     const t = clone(b);
-    (t.records[1]?.body as { summary: { chars: number } }).summary.chars = 99;
+    (t.records[1]!.body as { summary: { chars: number } }).summary.chars = 99;
     const r = verifyProofBundle(serializeProofBundle(t));
     expect(r.ok).toBe(false);
     expect(() => renderProofReport(t, r)).toThrow(/does not verify/);

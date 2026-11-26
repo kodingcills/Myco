@@ -43,11 +43,11 @@ import { makePathFuzzer } from "./path-fuzz.ts";
 import { expectAbsent, exportVerifyReport, PLANTED_FIELDS, plantEverywhere } from "./plant.ts";
 
 /** Paths planted in every string field (library export -> verify -> report). */
-export const FUZZ_CASES = 600;
+const FUZZ_CASES = 600;
 /** Of those, how many also go through the real CLI (export -> verify -> report). */
-export const FUZZ_CLI_CASES = 40;
+const FUZZ_CLI_CASES = 40;
 /** Paths planted in each closed-type field (export must refuse, without echo). */
-export const FUZZ_CLOSED_CASES = 60;
+const FUZZ_CLOSED_CASES = 60;
 const SEED = 0x51533;
 
 describe("property: an arbitrary host path planted in every input field never reaches an output", {
@@ -146,7 +146,7 @@ const ledgerWith = (over: Record<string, unknown>): ProofRunInput => {
   );
   return { ...sampleRun(), ledger: { lines: l.lines, head: l.head, trialKey: "t-ours" } };
 };
-export const CLOSED_FIELD_PLANTS: ReadonlyArray<readonly [string, Plant]> = [
+const CLOSED_FIELD_PLANTS: ReadonlyArray<readonly [string, Plant]> = [
   ["run.simulated", (v) => ({ ...sampleRun(), simulated: v as never })],
   ["action.actor", (v) => withStep(1, { actor: v })],
   ["verdict.verdict", (v) => withStep(8, { verdict: v })],
