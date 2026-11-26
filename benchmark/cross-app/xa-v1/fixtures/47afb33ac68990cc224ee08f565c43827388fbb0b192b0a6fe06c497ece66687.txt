@@ -1,0 +1,6 @@
+Correction report
+Source: source.pdf
+Sheet: sheet.csv
+
+EMP-0105 joined:
+EMP-0156 salary:
