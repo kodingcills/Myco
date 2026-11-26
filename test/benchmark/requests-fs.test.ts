@@ -8,6 +8,7 @@
  * `writePlanned` creates every file exclusively, so a planted link is refused, not written
  * through. All file contents are fakes.
  */
+import { execFileSync } from "node:child_process";
 import {
   linkSync,
   lstatSync,
@@ -68,6 +69,34 @@ describe("destinationInside", () => {
 });
 
 describe("writePlanned", () => {
+  it("refuses an --out that is a symlink, even when called directly (N-h, X7)", () => {
+    const { w, outside, src } = world();
+    const linkedOut = join(w, "linked-out");
+    symlinkSync(outside, linkedOut);
+    expect(() => writePlanned(linkedOut, [{ src, dst: "docs/a.csv" }], "{}\n")).toThrow(
+      /--out .* is not a plain directory/,
+    );
+    expect(readdirSync(outside)).toEqual(["victim.csv"]);
+  });
+
+  it("reports a write-phase race as one RequestBuildError, not a raw fs error (N-i)", () => {
+    const { out, src } = world();
+    // Planning saw nothing at docs/a.csv; something appears there before the write.
+    mkdirSync(join(out, "docs"));
+    writeFileSync(join(out, "docs", "a.csv"), "fake-raced\n");
+    let thrown: unknown;
+    try {
+      writePlanned(out, [{ src, dst: "docs/a.csv" }], "{}\n");
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(RequestBuildError);
+    expect((thrown as Error).message).toBe(
+      "write refused for docs/a.csv: EEXIST (--out may be partial)",
+    );
+    expect(readFileSync(join(out, "docs", "a.csv"), "utf8")).toBe("fake-raced\n");
+  });
+
   it("refuses to copy through a planted symlink at the destination (COPYFILE_EXCL)", () => {
     const { out, outside, src } = world();
     mkdirSync(join(out, "docs"));
@@ -109,6 +138,18 @@ describe("writePlanned", () => {
 });
 
 describe("regularFileInside and assertFreshOut", () => {
+  it.skipIf(process.platform === "win32")("refuses a FIFO planted under the root (N-f)", () => {
+    const { w } = world();
+    const docs = join(w, "docs");
+    mkdirSync(docs);
+    execFileSync("mkfifo", [join(docs, "t1.xlsx")]);
+    for (const optional of [false, true]) {
+      expect(() => regularFileInside(docs, "t1.xlsx", { optional })).toThrow(
+        /t1\.xlsx is not a regular file/,
+      );
+    }
+  });
+
   it("returns a regular file, null for a missing optional one, and refuses links", () => {
     const { w, outside } = world();
     const root = join(w, "docs");
