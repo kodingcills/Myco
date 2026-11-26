@@ -367,6 +367,12 @@ const REFUSED: readonly [string, string, ContentPartKind | undefined, PrescanCod
     "worksheet",
     "XLSX_PRESCAN_SYNTAX",
   ],
+  [
+    "a value opened by a byte other than a double quote",
+    sheet('<row r=a4"/>'),
+    "worksheet",
+    "XLSX_PRESCAN_SYNTAX",
+  ],
   ["mismatched tags", sheet('<row r="4"></rows>'), "worksheet", "XLSX_PRESCAN_SYNTAX"],
   ["a cut part", sheet(C4).slice(0, 200), "worksheet", "XLSX_PRESCAN_SYNTAX"],
   ["text after the root", `${sheet(C4)}x`, "worksheet", "XLSX_PRESCAN_SYNTAX"],
