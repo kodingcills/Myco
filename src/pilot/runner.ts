@@ -158,7 +158,7 @@ export interface PilotRunOptions {
   /** #518's attempt ledger. Absent for the R1 pilot (it writes its own progress file only). */
   readonly attemptSink?: AttemptSink;
   /** Merged into every arm row the runner writes (the A/B's experiment-only label). */
-  readonly armRowLabel?: { readonly experiment: string };
+  readonly armRowLabel?: Pick<BenchmarkArmRow, "experiment">;
   /** More PAUSE files honoured like `<outDir>/PAUSE`. */
   readonly pauseFiles?: readonly string[];
   /**

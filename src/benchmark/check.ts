@@ -49,14 +49,19 @@ export interface BenchmarkArmRow {
     readonly corrections?: "off" | "on";
   } | null;
   readonly accepted: boolean;
-  /** Experiment-only label (the corrections A/B): never R1 evidence (`experimentRowError`). */
-  readonly experiment?: string;
   readonly persistedSha256: string | null;
   readonly cause: { readonly kind: "agent" | "oracle" | "harness"; readonly detail: string } | null;
   readonly cost: {
     readonly modelUsd: number | null;
     readonly wallClockS: number | null;
     readonly vmS: number | null;
+  };
+  /** Only on rows from an experiment run (the corrections A/B); such rows are never evidence. */
+  readonly experiment?: {
+    readonly id: "corrections-ab";
+    readonly stage: 0 | 1;
+    readonly arm: "on" | "off";
+    readonly seed: string;
   };
 }
 
@@ -236,6 +241,18 @@ export const EVIDENCE_PLANNERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Rows from an experiment run (the corrections ON/OFF A/B, both arms, the OFF arm included)
+ * are experiment-only: `checkBenchmark` refuses them under `evidence: true`, and `checkPack`
+ * refuses them in every pack (#547 round 1, D1). The label is enforced here, not only written.
+ */
+export function experimentRowsError(rows: readonly BenchmarkArmRow[]): string | null {
+  const marked = rows.filter((r) => r.experiment !== undefined);
+  if (marked.length === 0) return null;
+  const keys = marked.slice(0, 5).map((r) => r.trialKey);
+  return `${marked.length} row(s) from an experiment run (${marked[0]?.experiment?.id}; ${keys.join(", ")}${marked.length > 5 ? ", ..." : ""}): experiment-only, never evidence`;
+}
+
+/**
  * R1 evidence is measured with the gate's agent-safe corrections OFF (M2 scope add B; #514
  * round 1, D1). A row whose gate had corrections on ran a different gate (it hands the agent
  * typed notes and invites a retry), so it never counts as evidence: `checkBenchmark` refuses
@@ -248,19 +265,6 @@ export function correctionsOnError(rows: readonly BenchmarkArmRow[]): string | n
   if (on.length === 0) return null;
   const keys = on.slice(0, 5).map((r) => r.trialKey);
   return `${on.length} row(s) with gate corrections on (${keys.join(", ")}${on.length > 5 ? ", ..." : ""}): R1 evidence runs keep corrections off, so these rows are never evidence`;
-}
-
-/**
- * Experiment rows are never R1 evidence (corrections ON/OFF A/B, `src/pilot/ab.ts`). Every row
- * an experiment run writes carries `experiment`, the corrections-OFF arm included: the OFF
- * arm ran under the A/B's schedule, pacing and pre-registration, not as an R1 run, so it is
- * refused under `evidence: true` even though its gate had corrections off.
- */
-export function experimentRowError(rows: readonly BenchmarkArmRow[]): string | null {
-  const labelled = rows.filter((r) => r.experiment !== undefined);
-  if (labelled.length === 0) return null;
-  const names = [...new Set(labelled.map((r) => r.experiment))];
-  return `${labelled.length} experiment-only row(s) (${names.join(", ")}): experiment rows are never R1 evidence, the corrections-OFF arm included`;
 }
 
 /** Host paths must never reach a publishable ledger (M2 plan §6; test/no-home-paths). */
@@ -334,8 +338,8 @@ export function checkBenchmark(
     }
     const corrected = correctionsOnError(armRows);
     if (corrected !== null) errors.push(corrected);
-    const experiment = experimentRowError(armRows);
-    if (experiment !== null) errors.push(experiment);
+    const experimental = experimentRowsError(armRows);
+    if (experimental !== null) errors.push(experimental);
   }
   if (gradeInput.length === 0) errors.push("grade ledger is empty");
 

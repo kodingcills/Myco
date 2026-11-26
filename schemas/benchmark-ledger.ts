@@ -87,13 +87,6 @@ export const benchmarkArmRowSchema: JsonSchema = {
         },
       ],
     },
-    /**
-     * Experiment-only label (corrections ON/OFF A/B, `src/pilot/ab.ts`): set on EVERY row an
-     * experiment run writes, the OFF arm included. A labelled row is never R1 evidence:
-     * `checkBenchmark(..., { evidence: true })` and the M2 pack CLI's provenance check
-     * (`src/m2/provenance.ts`) refuse it. Absent on every R1 and pilot row.
-     */
-    experiment: { type: "string", pattern: "^[a-z0-9-]{1,32}/[a-z0-9-]{1,32}$" },
     /** Whether the run's "done" was let through. Must agree with claim + gate (the check enforces it). */
     accepted: { type: "boolean" },
     /** SHA-256 of the persisted document handed to the grader, or null if none was captured. */
@@ -119,6 +112,23 @@ export const benchmarkArmRowSchema: JsonSchema = {
       additionalProperties: false,
       required: ["modelUsd", "wallClockS", "vmS"],
       properties: { modelUsd: nullableNumber, wallClockS: nullableNumber, vmS: nullableNumber },
+    },
+    /**
+     * Present only on rows from an experiment run, never on evidence rows (TIF-274 / track B;
+     * #547). Today the one experiment is the corrections ON/OFF A/B: its stage, its arm, and
+     * the run's fresh seed (the identity a reused trial cannot shed by changing its key). The
+     * evidence check and the M2 pack check refuse every row that carries it.
+     */
+    experiment: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "stage", "arm", "seed"],
+      properties: {
+        id: { const: "corrections-ab" },
+        stage: { type: "integer", enum: [0, 1] },
+        arm: { type: "string", enum: ["on", "off"] },
+        seed: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+      },
     },
   },
 };

@@ -174,7 +174,15 @@ export function abSchedule(
 }
 
 export const trialKeyPrefix = (stage: AbStage, arm: AbArm) => `ab-s${stage}-${arm}`;
-export const experimentLabel = (stage: AbStage) => `${AB_EXPERIMENT}/stage-${stage}`;
+/**
+ * The experiment marker every arm row carries (#547's row shape, `BenchmarkArmRow.experiment`):
+ * the stage, the arm and the stage's pre-registered seed (one seed per run; Stage 1's is fresh).
+ */
+export const experimentMarker = (
+  stage: AbStage,
+  arm: AbArm,
+  seed: string,
+): NonNullable<BenchmarkArmRow["experiment"]> => ({ id: AB_EXPERIMENT, stage, arm, seed });
 
 /** One arm's runner config: the pilot config with the stage's trials, the arm and the stage. */
 export function armConfig(
@@ -1043,7 +1051,7 @@ export async function runAbStage(opts: AbRunOptions): Promise<AbRunResult> {
         trialKeyPrefix: trialKeyPrefix(stage, arm),
         only: chunk.tasks,
         attemptSink: new R1AttemptSink(armDir),
-        armRowLabel: { experiment: experimentLabel(stage) },
+        armRowLabel: { experiment: experimentMarker(stage, arm, s.seed) },
         pauseFiles,
         afterDecided: (d) =>
           recordDecided(ctx, {
@@ -1119,6 +1127,10 @@ export interface AbPackManifest {
   };
   readonly configSha256: { readonly on: string; readonly off: string };
   readonly scheduleSha256: string;
+  /** The stage's pre-registered seed: every row's `experiment.seed`. */
+  readonly seed: string;
+  /** The planner every row ran (the run header's). */
+  readonly plannerModelId: string;
   readonly attemptLedgers: Readonly<
     Record<AbArm, { events: number; anchorEntries: number; unclassifiedFaultEnds: number }>
   >;
@@ -1157,6 +1169,8 @@ export function exportAbPack(
     preregJsonSha256: string;
     configSha256: { on: string; off: string };
     scheduleSha256: string;
+    seed: string;
+    plannerModelId: string;
   };
   const configs: Partial<Record<AbArm, PilotConfig>> = {};
   const ledgerOf: Partial<Record<AbArm, AbPackManifest["attemptLedgers"][AbArm]>> = {};
@@ -1213,6 +1227,10 @@ export function exportAbPack(
       );
     configs[arm] = cfg;
     writeFileSync(join(packDir, arm, "run-config.json"), `${JSON.stringify(cfg, null, 2)}\n`);
+    writeFileSync(
+      join(packDir, arm, ANALYSIS_CONFIG_FILE),
+      `${JSON.stringify(analysisConfig(cfg, header.plannerModelId), null, 2)}\n`,
+    );
   }
   const diff = diffArmConfigs(configs.on, configs.off);
   if (diff.length > 0) throw new AbRefusal(`refusing the pack: ${diff.join("; ")}`);
@@ -1240,6 +1258,8 @@ export function exportAbPack(
     },
     configSha256: header.configSha256,
     scheduleSha256: header.scheduleSha256,
+    seed: header.seed,
+    plannerModelId: header.plannerModelId,
     attemptLedgers: ledgerOf as AbPackManifest["attemptLedgers"],
     incidents,
     gateMisses,
@@ -1256,6 +1276,23 @@ export function exportAbPack(
       "SIMULATED corrections A/B dry run. Fake transport, no model, no VM, $0. Never evidence.\n",
     );
   return manifest;
+}
+
+/** Each arm's run config in the shape #547's parity check reads (`--on-config`/`--off-config`). */
+export const ANALYSIS_CONFIG_FILE = "analysis-config.json";
+
+/**
+ * The arm's run config with the keys #547 requires recorded (`REQUIRED_CONFIG_KEYS`): the
+ * retry budget, the planner the rows ran and their output ceiling (the pilot sets none). Pure
+ * derivation from the runner's config, so the two arms still differ only in `corrections`.
+ */
+export function analysisConfig(cfg: PilotConfig, plannerModelId: string): Record<string, unknown> {
+  return {
+    ...cfg,
+    retryBudget: cfg.pacing.maxAttemptsPerTrial,
+    plannerModelId,
+    outputCeiling: null,
+  };
 }
 
 /** #547's CLI invocation for a pack (Stage 1 also names the Stage-0 pack). */
@@ -1277,9 +1314,9 @@ export function analysisArgs(packDir: string, stage: AbStage, stage0Pack?: strin
     "--off-grades",
     p("off", GRADES_FILE),
     "--on-config",
-    p("on", "run-config.json"),
+    p("on", ANALYSIS_CONFIG_FILE),
     "--off-config",
-    p("off", "run-config.json"),
+    p("off", ANALYSIS_CONFIG_FILE),
     ...(stage === 1
       ? [
           "--stage0-on-arm",
@@ -1345,13 +1382,18 @@ export function checkAbPack(
         errors.push(`${arm}: run-config.json names another pre-registration`);
       if (configSha256(c) !== m.configSha256?.[arm])
         errors.push(`${arm}: run-config.json is not the config the run recorded`);
+      const ap = join(packDir, arm, ANALYSIS_CONFIG_FILE);
+      const analysed = existsSync(ap) ? (JSON.parse(readFileSync(ap, "utf8")) as unknown) : null;
+      if (canonicalJson(analysed) !== canonicalJson(analysisConfig(c, m.plannerModelId)))
+        errors.push(`${arm}: ${ANALYSIS_CONFIG_FILE} is not derived from run-config.json`);
     }
   }
   const derived: AbGateMiss[] = [];
   const listed = new Map((m.incidents ?? []).map((i) => [i.id, i]));
   for (const arm of AB_ARMS) {
     const rows = readJsonl(join(packDir, arm, "arm.jsonl")) as BenchmarkArmRow[];
-    const unlabelled = rows.filter((r) => r.experiment !== experimentLabel(m.stage)).length;
+    const want = canonicalJson(experimentMarker(m.stage, arm, m.seed));
+    const unlabelled = rows.filter((r) => canonicalJson(r.experiment ?? null) !== want).length;
     if (rows.length === 0) errors.push(`${arm}: no arm rows`);
     if (unlabelled > 0) errors.push(`${arm}: ${unlabelled} row(s) without the experiment label`);
     // Gate misses, re-derived from the pack's rows and grades (never from a flag): each needs

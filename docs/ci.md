@@ -13,14 +13,15 @@ nothing is skipped or fails for lack of one.
 
 | Workflow | Job (check name) | Runs on fork PRs | Required on `main` |
 | --- | --- | --- | --- |
+| `ci.yml` | `ci plan (path classes)` | yes | no |
 | `ci.yml` | `secret scan (gitleaks)` | yes | yes |
 | `ci.yml` | `ci hygiene (workflows)` | yes | no |
 | `ci.yml` | `check (ubuntu-latest)`, `check (macos-latest)` | yes | yes |
 | `ci.yml` | `myco-agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `myco-agent tests (macos-latest)` | yes | no |
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
-| `ci.yml` | `linux path (ubuntu-latest)` | yes | no |
-| `ci.yml` | `m2 evidence and scorecard` | yes | no |
+| `ci.yml` | `linux path (ubuntu-latest)` | yes, when the plan says so | no |
+| `ci.yml` | `m2 evidence and scorecard` | yes, when the plan says so | no |
 | `ci.yml` | `viewer verdict budget (…)` | only with the `perf` label | no |
 | `tif-170-race-diagnostics.yml` | `race x1` | only when the PR touches its paths | no |
 
@@ -41,6 +42,97 @@ nothing is skipped or fails for lack of one.
   on pushes to `main` and on PRs a maintainer labels `perf`. Only people with triage
   access or above can add labels, and a labelled fork PR still runs under
   `pull_request`: same read-only token, no secrets.
+
+## Targeted CI (test audit, TIF-265 follow-up)
+
+The `ci plan (path classes)` job runs `scripts/ci-plan.py` on the PR's changed files,
+labels, title and body, and every other job reads its decision. It picks one of three
+modes.
+
+| Mode | When | `check` runs | agent, runtime jobs |
+| --- | --- | --- | --- |
+| `full` | Pushes to `main`; any Tier 2 signal (below); any changed path in a Tier 2 or tooling class; **any change under `src/` or `viewer/src/`**; TypeScript outside `test/` and `viewer/test/`; a test file a script can reach or a source names outside an import (below); any other file kind (yaml, json, py, sh, html, css, fixtures); a doc that a non-test source names; a diff it cannot compute, or over 300 files; no readable test sources | typecheck, lint, `pnpm test`, build: exactly what it ran before the planner existed | run |
+| `targeted` | Only `.md` docs and TypeScript under `test/` or `viewer/test/` | typecheck, lint, `vitest run --changed <PR base>` (the changed test files and every test importing them), the forked s0 launcher test, the core smoke set, **every directory-scanning test**, the doc tests, `pnpm schema-validate`, build | steps skipped, job green |
+| `docs` | Only `.md` docs, none of them named by a non-test source | the forked s0 launcher test, the core smoke set, **every directory-scanning test**, and the test files that name a changed doc | steps skipped, job green |
+
+**Only test-only and docs-only changes are narrowed.** Every change under `src/` or
+`viewer/src/` runs the full suite. The reason (verifier round 2, D7): guard tests such as
+`test/baseline/hcu-shell/import-boundary.test.ts` (the hcu+shell arm never reaches grader
+code) and `test/foundry/split.test.ts` (nothing outside the hidden roots imports the
+oracles) read a source directory with `readdirSync` or `globSync`; they never import the
+module they guard, so `vitest run --changed` cannot find them, and a grader-independence
+violation in `src/baseline/hcu-shell/ledger.ts` passed targeted CI. Narrowable TypeScript is
+therefore just `test/` and `viewer/test/`, minus every Tier 2 path. Even there,
+`vitest run --changed` only sees imports, so the planner forces `full` for a changed file
+that any `scripts/**/*.ts` reaches through imports, that a file named outside an import
+reaches, or whose file name any source mentions outside an import (a spawned helper such
+as `test/gate/fifo-child.ts`).
+
+**Directory-scanning tests always run.** A guard can scan `test/` or `docs/` too
+(`test/no-home-paths.test.ts`, `test/baseline/probe-directory.test.ts`), so targeted and
+docs mode run every test file that lists or walks a directory, found mechanically by
+`scanning_tests()` in `scripts/ci-plan.py`: the test itself, a helper it imports (any
+depth), or a `scripts/` or `schemas/` file it spawns calls `readdir`, `readdirSync`,
+`opendir`, `glob`, `globSync`, `readDirectory`, Python's `os.walk`/`listdir`/`scandir`/
+`glob`/`rglob`/`iterdir`, `git ls-files`/`ls-tree`, or runs `find`, `rg` or `grep`. A new
+scanning test joins with no list edit. Today that is about 65 files, about 2 minutes
+locally. The plan job exports them as `scanners`; if a narrow plan lists none, `check`
+runs the full suite. The test file pins every known repo guard (grader independence, the
+hidden split, required instructions, the probe directory, home paths, claim isolation,
+secret hygiene) into that set, and checks it against an independent detector.
+
+**The secret scan always runs.** It does not depend on the plan.
+
+**Required checks never hang.** The five required checks keep their names, and their
+jobs are never skipped at the job level. A skipped matrix job reports as
+`check (${{ matrix.os }})`, which would leave `check (macos-latest)` pending forever. Each
+required job starts, reads the plan in its first step, and skips only its own later
+steps. If the plan job fails, is skipped or cancelled, or its mode is empty or anything
+but `full`, `targeted` or `docs`, every required job runs in full; the agent and runtime
+jobs skip their steps only on a successful plan whose mode is exactly `targeted` or
+`docs`. `test/ci-hygiene/test_ci_plan.py` (run by `ci hygiene (workflows)`) executes each
+job's `CI plan` step with every combination of plan result and mode (including empty,
+garbage and multi-line modes), evaluates every step's `if:` and the side jobs' job-level
+`if:`, and fails if a required name changes, a required job gains a job-level condition,
+a fallback does not reach full, or a mode runs the wrong steps.
+
+**Tier 2 always gets the full suite.** Any one of these forces `full`:
+
+- the `tier-2` label (or `full-ci`);
+- a PR title or a body line that states the tier as 2 (`Tier: 2`, `**Tier 2.**`, `Tier 2 (locks)`),
+  as `.github/PULL_REQUEST_TEMPLATE.md` asks every PR to;
+- a changed path in a Tier 2 class: `schemas/`, `src/{core,verify,gate,integrity,win,integration,faults,m2,benchmark,oracle-selftest}/`,
+  `src/foundry/{grader,oracles,hidden-split}/`, `src/foundry/guard.ts`,
+  `src/baseline/secret-file.ts`, `src/baseline/sweep.ts` (the run lock and the
+  spend-ceiling enforcement), all of `scripts/`, `agent/`, `runtime/`, `foundry/`,
+  `benchmark/`, `docs/research/`, the scorecards, and the guard tests
+  (`test/{gate,integrity,oracle-selftest,fault-classes,m2,benchmark}/`,
+  `test/baseline/{run-lock,spend-ceiling,secret-file}.test.ts`, the directory-scanning
+  guards `test/baseline/{hcu-shell/import-boundary,import-graph,instruction-required,probe-directory}.test.ts`,
+  `test/foundry/{split,hidden-split}.test.ts`, no-home-paths, claim isolation, evidence,
+  faults, VM-lock, scorecard). The test file checks that every tracked file under `src/{gate,integrity,benchmark,m2,core}/`,
+  `schemas/`, `scripts/`, `.github/`, `agent/` and `runtime/` forces `full`, and that every
+  listed prefix matches a tracked file;
+- a changed tooling path: `.github/`, `.githooks/`, `package.json`, the lockfile,
+  `tsconfig*`, `vitest.config.ts`, `biome.json`, `test/setup/`, `test/ci-hygiene/`.
+
+The workflow also runs on `labeled` and `unlabeled`. Adding `tier-2` after a targeted run
+starts a new run, which cancels the old one, so the required checks go back to pending
+until the full suite passes. A body edit alone does not start a run; the stated tier takes
+effect at the next push, or add the label. **When unsure, add `tier-2`.** A reviewer who
+raises a PR's tier adds the label.
+
+**Core smoke set** (about 5 s, `SMOKE` in `scripts/ci-plan.py`; the test file pins this list and the code to each other): `test/claim-isolation.test.ts`, `test/eval.test.ts`, `test/evidence.test.ts`, `test/faults.test.ts`, `test/no-home-paths.test.ts`, `test/recovery.test.ts`, `test/runner.test.ts`, `test/verify.test.ts`, `test/baseline/import-graph.test.ts`, `test/gate/gate.test.ts`, `test/integrity/isolation.test.ts`, `test/oracle-selftest/selftest.test.ts`.
+
+The `linux path` and `m2 evidence and scorecard` jobs are not required. They run unless
+a successful plan names a narrow mode and says their paths are untouched (`test/{linux,init}/`;
+`test/m2/`). Their other paths (`src/`, `scripts/`) always run everything. `viewer-perf` is unchanged.
+
+See what the planner would do for your branch:
+
+```sh
+python3 scripts/ci-plan.py --event pull_request --files $(git diff --name-only origin/main...HEAD)
+```
 
 ## Security posture
 
@@ -161,7 +253,10 @@ test and make its child processes async (`spawn`), as
 - Maintainers (write access): "Re-run jobs" or "Re-run failed jobs" on the run page.
   A macOS job cancelled with no steps is a no-runner cancellation; see
   [macOS runner cancellations](#macos-runner-cancellations-tif-256).
-- Locally, the `check` job is: `pnpm install --frozen-lockfile && pnpm typecheck &&
+- Locally, the targeted `check` job is `pnpm exec vitest run --changed origin/main` plus
+  the smoke set `scripts/ci-plan.py` prints; per-area commands are in
+  [CONTRIBUTING.md](../CONTRIBUTING.md#targeted-tests-per-area).
+- Locally, the full `check` job is: `pnpm install --frozen-lockfile && pnpm typecheck &&
   pnpm lint && pnpm test && pnpm build`. The agent job: `cd agent && pip install -e .
   pytest && pytest -v`. The runtime job: `cd runtime && cargo test -p myco-rt-agent`
   (its confinement tests run only on Linux). The Linux path job, after installing

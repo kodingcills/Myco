@@ -22,6 +22,17 @@ import json
 import sys
 
 
+def reset_boot_fields(value):
+    """TIF-98: the reset's cold-boot record class:first_ssh_s:guest_cpu_s:total_s:attempts, as row fields.
+
+    Every row carries the keys; they are null when the driver passed no record."""
+    keys = ("resetBootClass", "resetFirstSshS", "resetGuestCpuFirstSshS", "resetTotalS", "resetBootAttempts")
+    parts = value.split(":") if value else []
+    if len(parts) != 5 or parts[0] not in ("cold", "fast") or not all(p.isdigit() for p in parts[1:]):
+        return dict.fromkeys(keys)
+    return dict(zip(keys, [parts[0]] + [int(p) for p in parts[1:]]))
+
+
 def record(argv):
     # `*rest` keeps the 7-arg call working: a fixed 7-tuple unpack raises
     # ValueError on the 8-arg call, which would write a traceback instead of a
@@ -37,6 +48,7 @@ def record(argv):
     rec = {
         "index": int(idx), "fixtureSeed": seed, "rowKey": rk, "column": cl,
         "typed": nv, "acPower": ac, "snapshot": snapshot,
+        **reset_boot_fields(rest[2] if len(rest) > 2 else ""),
     }
     try:
         d = json.load(open(out_path))
