@@ -43,7 +43,7 @@ trial's data.
 | Empty environment | `env: {}` on spawn | `env` probe |
 | Basename only | host strips directories; the wire parser refuses `/` and `\` in file names | `hostPath` probe; registry test with a capture path |
 | Time | `timeout: caps.timeoutMs`, `killSignal: SIGKILL` | hang test (`PLUGIN_TIMEOUT` well under the test's limit) |
-| Memory | `--max-old-space-size=caps.memoryMb` (heap) and a resident-memory watchdog in the child (`memoryMb` + 128 MiB runtime allowance), checked every 5 ms and before answering | heap-growth and 400 MiB `Buffer` tests |
+| Memory | `--max-old-space-size=caps.memoryMb` (heap) and a resident-memory watchdog in the child (`memoryMb` + 128 MiB runtime allowance), checked every 5 ms and before answering | heap-growth and 400 MiB `Buffer` tests; asynchronous ~600 MiB `Buffer` growth stopped by the watchdog interval |
 | Input size | host refuses documents over `maxInputBytes` and request envelopes over the matching bound before spawning | input test |
 | Output size | the answer file is refused over `caps.maxOutputBytes` after the child exits. Plugin code has no stdout, so the file holds only the child's answer | output test and its control |
 | Closed answers | closed parser: unknown keys, wrong op, unknown status, non-code `code` are all `PLUGIN_MALFORMED_OUTPUT`; the child also refuses a non-code `code` itself (exit 71, nothing written); a plugin cannot write its own answer line (`process.stdout` throws) | malformed-answer table; V6 child test; `protocol.test.ts` |

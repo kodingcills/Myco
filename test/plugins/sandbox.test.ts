@@ -78,6 +78,8 @@ const probes = {
   },
   fetch: async (i) => { await fetch("http://127.0.0.1:" + i.port + "/"); return true; },
   websocket: async () => typeof WebSocket !== "undefined",
+  // Presence only: reading the lazy WebSocket getter itself already fails in the child.
+  netGlobals: async () => ["fetch", "WebSocket", "EventSource"].some((n) => n in globalThis),
   builtin: async (i) => connected(process.getBuiltinModule("node:net").connect(i.port, "127.0.0.1")),
   builtinOs: async () => typeof process.getBuiltinModule("node:os").hostname === "function",
   dns: async () => { await import("node:dns"); return true; },
@@ -167,7 +169,17 @@ function codeOf(r: SandboxResult): string {
 const flush = () => new Promise((r) => setTimeout(r, 100));
 
 describe("plugin sandbox: no network", () => {
-  it.each(["net", "netBare", "http", "fetch", "websocket", "builtin", "dns", "binding"])(
+  it.each([
+    "net",
+    "netBare",
+    "http",
+    "fetch",
+    "websocket",
+    "netGlobals",
+    "builtin",
+    "dns",
+    "binding",
+  ])(
     "%s is denied and no connection reaches a local listener",
     async (name) => {
       const before = connections;
@@ -319,6 +331,16 @@ describe("plugin sandbox: caps and malformed plugins fail closed", () => {
     });
   };
   const BIG_READER = `export default { reader() { return { status: "ok", code: "OK", state: { kind: "text", text: "x".repeat(3000) } }; } };`;
+
+  // Off-heap growth while the hook awaits: ~600 MiB of Buffers over ~0.6 s, then it holds.
+  // Only the watchdog's interval sees it; without it the call runs to the time cap.
+  it("asynchronous off-heap growth is stopped by the watchdog: PLUGIN_MEMORY_EXCEEDED", () => {
+    const r = verify(
+      `export default { async oracle() { const keep = []; for (let i = 0; i < 30; i++) { keep.push(Buffer.alloc(20 * 1024 * 1024, 1)); await new Promise((r) => setTimeout(r, 20)); } globalThis.keep = keep; await new Promise(() => {}); } };`,
+      { timeoutMs: 4000 },
+    );
+    expect(r).toEqual({ ok: false, code: "PLUGIN_MEMORY_EXCEEDED" });
+  }, 20_000);
 
   it("an answer past the output cap: PLUGIN_OUTPUT_TOO_LARGE", () => {
     expect(read(BIG_READER, 2048)).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
