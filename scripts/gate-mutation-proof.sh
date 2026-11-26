@@ -30,6 +30,15 @@
 #       also named r (x/r, <root>-evil/r) then passes.
 #   mS: the open-failure reason carries Node's error message (with the host path) (round 3 D2).
 #   mT: the read-failure reason carries Node's error message (round 3 D2).
+#   mU: "reader threw" carries String(error) (TIF-265 follow-up 2).
+#   mV: "oracle threw" carries String(error) (follow-up 2).
+#   mW: "decision log write failed" carries String(error), i.e. the audit-log path (follow-up 2).
+#   mX: "gate error" carries String(error) (follow-up 2).
+#   mY: the todo-items family's "store does not parse" carries String(error) (follow-up 2).
+#   mZ: errorCode accepts any string `code` (a code holding a path passes through) (follow-up 2).
+#   mA: errorCode accepts any string `name` (follow-up 2).
+#   mB: a throwing onDiagnostic sink is not contained (follow-up 2).
+#   mC: a reader that throws synchronously escapes readWithin (follow-up 2).
 # mL, mM, mN, mP, mQ and mR are caught only on Linux, where the binding applies; elsewhere
 # their tests skip. mO's test forces the binding on, and mS/mT's tests run everywhere.
 set -euo pipefail
@@ -71,7 +80,7 @@ elif which == "m6":
 elif which == "m7":
     edit("src/gate/api.ts", '\n  "verdict",\n', "\n")
 elif which == "m8":
-    edit("src/gate/gate.ts", "await readWithin(config.reader, runId, task.stateFile, readTimeoutMs)", "await config.reader.read(runId, task.stateFile)")
+    edit("src/gate/gate.ts", "await readWithin(config.reader, runId, task.stateFile, readTimeoutMs, diagnose)", "await config.reader.read(runId, task.stateFile)")
 elif which == "m9":
     edit("src/gate/api.ts", "record.claim.length > CLAIM_LIMIT", "false")
 elif which == "mE":
@@ -107,11 +116,35 @@ elif which == "mS":
     edit("src/gate/gate.ts", "`${where}: open failed: ${errorCode(error)}`", "`open failed: ${String(error)}`")
 elif which == "mT":
     edit("src/gate/gate.ts", "`${where}: read failed: ${errorCode(error)}`", "`read failed: ${String(error)}`")
+elif which == "mU":
+    edit("src/gate/gate.ts", "`reader threw: ${diagnose(\"reader\", error)}`", "`reader threw: ${String(error)}`")
+elif which == "mV":
+    edit("src/gate/gate.ts", "`oracle threw: ${diagnose(\"oracle\", error)}`", "`oracle threw: ${String(error)}`")
+elif which == "mW":
+    edit("src/gate/gate.ts", "`decision log write failed: ${diagnose(\"decision-log\", error)}`", "`decision log write failed: ${String(error)}`")
+elif which == "mX":
+    edit("src/gate/gate.ts", "`gate error: ${diagnose(\"gate\", error)}`", "`gate error: ${String(error)}`")
+elif which == "mY":
+    edit("src/gate/families.ts", "`store does not parse (${errorCode(error)})`", "`store does not parse: ${String(error)}`")
+elif which == "mZ":
+    edit("src/gate/reasons.ts", "if (typeof code === \"string\" && CODE.test(code)) return code;", "if (typeof code === \"string\") return code;")
+elif which == "mA":
+    edit("src/gate/reasons.ts", "if (typeof name === \"string\" && NAME.test(name)) return name;", "if (typeof name === \"string\") return name;")
+elif which == "mB":
+    edit("src/gate/gate.ts", """    try {
+      config.onDiagnostic?.({ stage, code, error });
+    } catch {
+      // Diagnostics never change a verdict.
+    }""", "    config.onDiagnostic?.({ stage, code, error });")
+elif which == "mC":
+    edit("src/gate/gate.ts", """      Promise.resolve()
+        .then(() => reader.read(runId, stateFile))
+        .catch(""", "      reader.read(runId, stateFile).catch(")
 EOF
 }
 
 status=0
-for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM mN mO mP mQ mR mS mT; do
+for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM mN mO mP mQ mR mS mT mU mV mW mX mY mZ mA mB mC; do
   if [[ "$mutant" =~ ^m[LMNPQR]$ ]] && [[ "$(uname -s)" != Linux ]]; then
     echo "$mutant: skipped (the /proc/self/fd binding applies on Linux only)"
     continue
