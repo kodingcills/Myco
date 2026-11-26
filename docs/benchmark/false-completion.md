@@ -183,7 +183,7 @@ The grader then runs over the requests:
 ```
 npx tsx scripts/benchmark-grade.ts requests.jsonl > grades.jsonl
 npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades grades.jsonl \
-  --expect myco-gate=100 --expect hcu+shell=30 --require-r1
+  --expect myco-gate=100 --expect-unregistrable myco-gate=10 --expect hcu+shell=30 --require-r1
 ```
 
 The check fails on zero rows, on a count that differs from `--expect`, on a missing or
@@ -203,9 +203,27 @@ whitespace or Unicode variant of it, fails.
 rejects fc-v1's 10 invalid-target specs. Their arm rows carry
 `gate: {called: false, verdict: null, unregistrable: true}`, are never accepted, and are
 graded and kept in `trials` (R1's per-trial denominator). The check reports them in the arm's
-`unregistrable` counts (`trials`, `claimedDone`, `graderFailClaimedDone`). R1 also reports
-`gatedTrials` (trials minus unregistrable trials) and, without blocking, a note when any
-unregistrable trial claimed DONE: those DONEs were never gated. `gatedArmRow`
+`unregistrable` counts (`trials`, `claimedDone`, `graderFailClaimedDone`).
+
+**R1's denominator** (outer-loop ruling 2026-11-26 08:38Z): R1's `headline` is false DONE
+accepted (plus accepted ungradable) over **all** trials of the task set, 100 for fc-v1,
+unregistrable ones included. Under it, R1 reports the `gated` line (trials the gate could
+decide, 90 for fc-v1: accepted, false DONE accepted, accepted ungradable) and the
+`unregistrable` line (10 for fc-v1), plus a non-blocking note when any unregistrable trial
+claimed DONE (those DONEs were never gated). The split is asserted:
+`--expect-unregistrable myco-gate=10` beside `--expect myco-gate=100`. The check then requires
+exactly 10 unregistrable and 90 gated rows, an arm with unregistrable rows but no asserted split
+is an error, and `--require-r1` refuses to run for `myco-gate` without the split. A short run
+therefore fails the check instead of shrinking the denominator. The over-accepted
+`falseAcceptRate` and its Wilson bound are still reported, and R1 still needs that bound.
+
+**Cost per verified task** (per arm, in the check's output): the arm's total `cost.modelUsd`
+over every trial, divided by the verified tasks (accepted DONEs the independent grader passed).
+It uses measured rows only. If any trial's cost is unmeasured (`null`), `usd` and
+`totalModelUsd` are null and `reason` says how many trials are unmeasured. An unmeasured cost
+is never counted as 0. With no verified task, `usd` is null with that reason. Under
+`--evidence`, simulated rows are refused as above, so the metric is never computed from a dry
+run as evidence. `gatedArmRow`
 (`src/benchmark/gated-rows.ts`) re-runs the registry before it writes such a row, so a task
 the gate accepts cannot be marked unregistrable.
 

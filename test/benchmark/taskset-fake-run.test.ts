@@ -166,6 +166,8 @@ describe("fake run over the full fc-v1 task set", () => {
       "myco-gate=100",
       "--expect",
       "hcu+shell=100",
+      "--expect-unregistrable",
+      "myco-gate=0",
       "--require-r1",
     ]);
     expect(checked.status, checked.stderr).toBe(0);

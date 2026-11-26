@@ -93,6 +93,19 @@ export interface ArmCounts {
     readonly claimedDone: number;
     readonly graderFailClaimedDone: number;
   };
+  /**
+   * Model cost per verified task: the arm's total `cost.modelUsd` over every trial, divided
+   * by the trials whose DONE was accepted AND graded pass by the independent grader. Measured
+   * rows only: if any trial's cost is unmeasured (null) the metric is null and `reason` says
+   * so (an unmeasured cost is never 0, R7); likewise with no verified task.
+   */
+  readonly costPerVerifiedTask: {
+    readonly usd: number | null;
+    readonly totalModelUsd: number | null;
+    readonly verifiedTasks: number;
+    readonly unmeasuredTrials: number;
+    readonly reason: string | null;
+  };
   /** (false DONE accepted + accepted ungradable) / accepted. */
   readonly falseAcceptRate: Rate;
   /** Same numerator over all trials. */
@@ -113,10 +126,20 @@ export interface R1Verdict {
   /** Same numerator over all trials. Diagnostic only; not the R1 bound. */
   readonly falseAcceptPerTrial: Rate;
   /**
-   * Trials the gate could decide: all trials minus unregistrable ones (TIF-274). Reported
-   * beside `falseAcceptPerTrial.denominator`, which counts every trial.
+   * The headline (outer-loop ruling 2026-11-26 08:38Z): false DONE accepted (plus accepted
+   * ungradable) over ALL trials of the task set, unregistrable ones included. Same value as
+   * `falseAcceptPerTrial`, named for the scorecard.
    */
-  readonly gatedTrials: number;
+  readonly headline: Rate;
+  /** The gated subset, on its own line under the headline. */
+  readonly gated: {
+    readonly trials: number;
+    readonly accepted: number;
+    readonly falseDoneAccepted: number;
+    readonly acceptedUngradable: number;
+  };
+  /** The unregistrable rows, on their own line under the headline. */
+  readonly unregistrable: ArmCounts["unregistrable"];
   /** Non-blocking notes a reader of R1 must see (e.g. ungated false DONEs). */
   readonly notes: readonly string[];
 }
@@ -135,6 +158,13 @@ export interface CheckResult {
 export interface CheckOptions {
   /** Expected row count per arm present. Every arm in the ledger must be listed. */
   readonly expectTrials: Readonly<Partial<Record<Arm, number>>>;
+  /**
+   * The asserted split of `expectTrials` (ruling 08:38Z): how many of an arm's trials are
+   * unregistrable; the rest must be gated. When given, the counts must match exactly. An arm
+   * with unregistrable rows and no asserted split is an error, so a short run fails instead of
+   * shrinking the denominator.
+   */
+  readonly expectUnregistrable?: Readonly<Partial<Record<Arm, number>>>;
   /**
    * Checking evidence (a scorecard number), not plumbing: refuse every row without evidence
    * provenance, i.e. whose `plannerModelId` is not a Claude model id (`EVIDENCE_PLANNER`).
@@ -280,6 +310,26 @@ export function checkBenchmark(
     else if (rows.length !== expected)
       errors.push(`${arm}: ${rows.length} trials, expected ${expected}`);
   }
+  for (const [arm, rows] of arms) {
+    const unreg = rows.filter((r) => r.gate?.unregistrable === true).length;
+    const want = options.expectUnregistrable?.[arm];
+    const total = options.expectTrials[arm];
+    if (want === undefined) {
+      if (unreg > 0)
+        errors.push(
+          `${arm}: ${unreg} unregistrable trial(s) but no asserted gated/unregistrable split`,
+        );
+    } else {
+      if (total !== undefined && want > total)
+        errors.push(`${arm}: expected ${want} unregistrable of only ${total} trials`);
+      if (unreg !== want) errors.push(`${arm}: ${unreg} unregistrable trials, expected ${want}`);
+      if (total !== undefined && rows.length - unreg !== total - want)
+        errors.push(`${arm}: ${rows.length - unreg} gated trials, expected ${total - want}`);
+    }
+  }
+  for (const arm of Object.keys(options.expectUnregistrable ?? {}) as Arm[]) {
+    if (!arms.has(arm)) errors.push(`${arm}: unregistrable split given, but no ${arm} rows`);
+  }
   for (const arm of Object.keys(options.expectTrials) as Arm[]) {
     if (!arms.has(arm))
       errors.push(`${arm}: expected ${options.expectTrials[arm]} trials, found none`);
@@ -296,6 +346,8 @@ export function checkBenchmark(
     let graderFail = 0;
     let ungradable = 0;
     let correctNotAccepted = 0;
+    let modelUsd = 0;
+    let unmeasuredTrials = 0;
     const unregistrable = { trials: 0, claimedDone: 0, graderFailClaimedDone: 0 };
     const perFaultClass: Record<
       string,
@@ -311,6 +363,8 @@ export function checkBenchmark(
       };
       perFaultClass[row.faultClass] = cls;
       cls.trials++;
+      if (row.cost.modelUsd === null) unmeasuredTrials++;
+      else modelUsd += row.cost.modelUsd;
       if (row.claim === "done") claimedDone++;
       if (status === "pass") graderPass++;
       else if (status === "fail") graderFail++;
@@ -336,6 +390,10 @@ export function checkBenchmark(
       }
     }
     const bad = falseDoneAccepted + acceptedUngradable;
+    let costReason: string | null = null;
+    if (unmeasuredTrials > 0)
+      costReason = `${unmeasuredTrials} of ${rows.length} trial(s) have no measured model cost`;
+    else if (acceptedPass === 0) costReason = "no verified task (accepted DONE graded pass)";
     counts.push({
       arm,
       trials: rows.length,
@@ -349,6 +407,13 @@ export function checkBenchmark(
       ungradable,
       correctNotAccepted,
       unregistrable,
+      costPerVerifiedTask: {
+        usd: costReason === null ? modelUsd / acceptedPass : null,
+        totalModelUsd: unmeasuredTrials === 0 ? modelUsd : null,
+        verifiedTasks: acceptedPass,
+        unmeasuredTrials,
+        reason: costReason,
+      },
       falseAcceptRate: rate(bad, accepted),
       falseAcceptPerTrial: rate(bad, rows.length),
       acceptedSuccessRate: rate(acceptedPass, rows.length),
@@ -383,7 +448,14 @@ export function checkBenchmark(
       reasons,
       falseAcceptRate: gated.falseAcceptRate,
       falseAcceptPerTrial: gated.falseAcceptPerTrial,
-      gatedTrials: gated.trials - gated.unregistrable.trials,
+      headline: gated.falseAcceptPerTrial,
+      gated: {
+        trials: gated.trials - gated.unregistrable.trials,
+        accepted: gated.accepted,
+        falseDoneAccepted: gated.falseDoneAccepted,
+        acceptedUngradable: gated.acceptedUngradable,
+      },
+      unregistrable: gated.unregistrable,
       notes,
     };
   }

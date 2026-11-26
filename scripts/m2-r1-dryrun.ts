@@ -7,7 +7,8 @@
  *   npx tsx scripts/benchmark-make-requests.ts --bundle benchmark/false-completion/fc-v1 \
  *     --arm <dir>/arm.jsonl --docs <dir>/docs --out <dir>/work
  *   npx tsx scripts/benchmark-grade.ts <dir>/work/requests.jsonl > <dir>/grades.jsonl
- *   npx tsx scripts/benchmark-check.ts --arm <dir>/arm.jsonl --grades <dir>/grades.jsonl --expect myco-gate=100
+ *   npx tsx scripts/benchmark-check.ts --arm <dir>/arm.jsonl --grades <dir>/grades.jsonl \
+ *     --expect myco-gate=100 --expect-unregistrable myco-gate=10
  * Adding `--evidence` to the check refuses the ledger: simulated rows are never evidence.
  */
 import { readFileSync } from "node:fs";

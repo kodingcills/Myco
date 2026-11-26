@@ -415,14 +415,21 @@ describe("the check's unregistrable and capture rules", () => {
       gradeFor(rows[3] as BenchmarkArmRow, "fail"),
       gradeFor(rows[4] as BenchmarkArmRow, "fail"),
     ];
-    const res = checkBenchmark(rows, grades, { expectTrials: { "myco-gate": 5 } });
+    const res = checkBenchmark(rows, grades, {
+      expectTrials: { "myco-gate": 5 },
+      expectUnregistrable: { "myco-gate": 4 },
+    });
     expect(res.errors).toEqual([]);
     expect(res.arms[0]?.unregistrable).toEqual({
       trials: 4,
       claimedDone: 2,
       graderFailClaimedDone: 1,
     });
-    expect(res.r1).toMatchObject({ pass: true, gatedTrials: 1 });
+    expect(res.r1).toMatchObject({
+      pass: true,
+      headline: { denominator: 5 },
+      gated: { trials: 1, accepted: 1 },
+    });
     expect(res.r1?.falseAcceptPerTrial.denominator).toBe(5);
     expect(res.r1?.notes).toEqual([
       "2 DONE claim(s) on unregistrable tasks were never gated (1 graded fail); they cannot be accepted, so they are not in the false-accept numerator",
@@ -647,7 +654,10 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
       gradeOf(bad, pristine, rows[1]?.trialKey as string),
     ];
     expect(grades[1]?.status).toBe("fail");
-    const result = checkBenchmark(rows, grades, { expectTrials: { "myco-gate": 2 } });
+    const result = checkBenchmark(rows, grades, {
+      expectTrials: { "myco-gate": 2 },
+      expectUnregistrable: { "myco-gate": 1 },
+    });
     expect(result.errors).toEqual([]);
     expect(result.arms[0]).toMatchObject({
       trials: 2,
@@ -656,7 +666,7 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
       unregistrable: { trials: 1, claimedDone: 1, graderFailClaimedDone: 1 },
     });
     expect(result.r1?.falseAcceptPerTrial.denominator).toBe(2);
-    expect(result.r1).toMatchObject({ pass: true, gatedTrials: 1 });
+    expect(result.r1).toMatchObject({ pass: true, gated: { trials: 1 } });
     expect(result.r1?.notes).toHaveLength(1);
   });
 

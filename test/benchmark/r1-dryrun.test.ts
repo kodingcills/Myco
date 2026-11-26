@@ -68,6 +68,8 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
       join(dir, "grades.jsonl"),
       "--expect",
       "myco-gate=100",
+      "--expect-unregistrable",
+      "myco-gate=10",
       "--require-r1",
     ]);
     expect(checked.status, checked.stderr).toBe(0);
@@ -97,7 +99,12 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     }
     const refutedByGate = armRows.filter((r) => r.gate?.verdict === "refuted").length;
     expect(refutedByGate).toBe(30);
-    expect(result.r1).toMatchObject({ pass: true, gatedTrials: 90 });
+    expect(result.r1).toMatchObject({
+      pass: true,
+      headline: { numerator: 0, denominator: 100 },
+      gated: { trials: 90, accepted: 60, falseDoneAccepted: 0 },
+      unregistrable: { trials: 10, claimedDone: 10, graderFailClaimedDone: 10 },
+    });
     expect(result.r1?.notes).toHaveLength(1);
 
     const asEvidence = tsx("benchmark-check.ts", [
@@ -107,6 +114,8 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
       join(dir, "grades.jsonl"),
       "--expect",
       "myco-gate=100",
+      "--expect-unregistrable",
+      "myco-gate=10",
       "--evidence",
     ]);
     expect(asEvidence.status).toBe(1);
