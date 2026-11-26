@@ -2,10 +2,11 @@
  * docs/product/demo-storyboard.md and the README's "Getting started": every operator command is
  * either runnable on main (and is run here, with its stated exit code) or marked "lands with
  * #<PR>". No VM, no model, no network: the commands are the mock gate demo, `myco-gate check`
- * on its output, and the corrections-loop test (#514, merged).
+ * on its output, the corrections-loop test (#514, merged) and a `myco init --dry-run` into a
+ * scratch project with a scratch HOME (#512, merged).
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -15,7 +16,9 @@ import { SCENARIOS } from "../../src/gate/demo.js";
 const ROOT = join(import.meta.dirname, "..", "..");
 const DOC = readFileSync(join(ROOT, "docs/product/demo-storyboard.md"), "utf8");
 const README = readFileSync(join(ROOT, "README.md"), "utf8");
-const PENDING_PRS = new Set(["512", "513"]);
+const PENDING_PRS = new Set(["513"]);
+/** `# exit N`, or for `myco init` on Linux: `# exit 0 (1 on Linux without LibreOffice)`. */
+const EXIT = / # exit (\d+)( \(1 on Linux without LibreOffice\))?$/;
 const PENDING = /# \(?lands with #(\d+)/;
 
 function shellLines(markdown: string): string[] {
@@ -63,8 +66,11 @@ const runnable = lines.filter((l) => !pending.includes(l) && !setup.includes(l))
 
 const readmeLines = shellLines(section(README, "Getting started"));
 const readmePending = readmeLines.filter((l) => PENDING.test(l));
+/** README lines with a placeholder path: shown for the reader's own project, not run here. */
+const readmeTemplate = readmeLines.filter((l) => l.startsWith("/path/to/"));
 const readmeRunnable = readmeLines.filter(
-  (l) => !readmePending.includes(l) && !l.startsWith("pnpm install "),
+  (l) =>
+    !readmePending.includes(l) && !readmeTemplate.includes(l) && !l.startsWith("pnpm install "),
 );
 
 describe("demo storyboard commands", () => {
@@ -79,10 +85,13 @@ describe("demo storyboard commands", () => {
       const pr = PENDING.exec(line)?.[1] ?? "";
       expect(PENDING_PRS, line).toContain(pr);
     }
-    for (const line of runnable) expect(line, line).toMatch(/ # exit \d+$/);
-    // Flags that exist only on the pending branches never appear in a runnable line.
-    for (const line of [...runnable, ...readmeRunnable])
-      expect(line).not.toMatch(/myco-watch|myco init/);
+    for (const line of runnable) expect(line, line).toMatch(EXIT);
+    // The Linux allowance is only for `myco init`, whose Linux checks need LibreOffice.
+    for (const line of runnable.filter((l) => EXIT.exec(l)?.[2]))
+      expect(line).toMatch(/bin\/myco" init --dry-run /);
+    // Commands that exist only on the pending branches never appear in a runnable line.
+    for (const line of [...runnable, ...readmeRunnable]) expect(line).not.toMatch(/myco-watch/);
+    expect(readmeTemplate).toEqual([expect.stringMatching(/myco init --dry-run --project /)]);
   });
 
   it("never tells the operator to run a relative bin/myco (it targets the Myco checkout)", () => {
@@ -93,8 +102,13 @@ describe("demo storyboard commands", () => {
       const relative = [...text.matchAll(/(^|[^\w/.-])(\.\/)?bin\/myco\b/gm)].map((m) => m[0]);
       expect(relative, name).toEqual([]);
     }
-    for (const line of [...pending, ...readmePending].filter((l) => /myco init/.test(l)))
+    for (const line of readmeTemplate)
       expect(line).toMatch(/^\/path\/to\/Myco\/bin\/myco init --dry-run --project \S+ /);
+    // Every storyboard `myco init` keeps `--project` (without it, init configures the cwd).
+    const inits = [...DOC.matchAll(/[^\n`]*myco"? init[^\n`]*/g)].map((m) => m[0]);
+    expect(inits.length).toBeGreaterThanOrEqual(2);
+    for (const line of inits.filter((l) => /bin\/myco"? init/.test(l)))
+      expect(line, line).toMatch(/init --dry-run --project /);
   });
 
   it("the status table's pending rows are exactly the pending PRs", () => {
@@ -151,9 +165,23 @@ describe("demo storyboard commands", () => {
   it("runs every main-today command with its stated exit code and the quoted output", () => {
     let stdout = "";
     for (const line of runnable) {
-      const expected = Number(/ # exit (\d+)$/.exec(line)?.[1]);
-      const result = run(line, { OUT: out });
-      expect(result.status, `${line}\n${result.stderr}`).toBe(expected);
+      const [, code, linuxAllowance] = EXIT.exec(line) ?? [];
+      const isInit = /bin\/myco" init /.test(line);
+      const home = mkdtempSync(join(tmpdir(), "myco-storyboard-home-"));
+      const result = run(line, isInit ? { OUT: out, HOME: home } : { OUT: out });
+      const missingCalc =
+        process.platform === "linux" && /^ {2}MISSING {2}(soffice|python)/im.test(result.stdout);
+      const expected = linuxAllowance && missingCalc ? 1 : Number(code);
+      expect(result.status, `${line}\n${result.stdout}\n${result.stderr}`).toBe(expected);
+      if (isInit) {
+        // A dry run: the plan names both project files, and nothing lands anywhere.
+        expect(result.stdout).toContain("DRY RUN: nothing written.");
+        expect(result.stdout).toContain(join(out, "project", ".mcp.json"));
+        expect(result.stdout).toContain(join(out, "project", ".codex", "config.toml"));
+        expect(readdirSync(join(out, "project"))).toEqual([]);
+        expect(readdirSync(home)).toEqual([]);
+      }
+      rmSync(home, { recursive: true, force: true });
       stdout += result.stdout;
     }
     const quoted = [

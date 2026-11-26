@@ -16,7 +16,7 @@ quotes none.
 | Gate CLI: `myco-gate demo`, `myco-gate check` | `src/gate/` | yes |
 | Live watch view: `myco-watch` (frames + verdict timeline) | [#513](https://github.com/kodingcills/Myco/pull/513) | no (lands with #513) |
 | Structured corrections: `myco-gate check --corrections` | `src/gate/` ([#514](https://github.com/kodingcills/Myco/pull/514)) | yes |
-| One-command setup: `myco init` | [#512](https://github.com/kodingcills/Myco/pull/512) | no (lands with #512) |
+| One-command setup: `myco init` | `src/setup/` ([#512](https://github.com/kodingcills/Myco/pull/512)) | yes |
 
 Until #513 lands, record the terminal half of every beat and skip the watch view.
 
@@ -36,21 +36,26 @@ pnpm myco-gate check --evidence-root "$OUT/calc/evidence" --tasks "$OUT/calc/tas
 pnpm myco-gate check --evidence-root "$OUT/calc/evidence" --tasks "$OUT/calc/tasks.json" --no-builtin --task calc-ms-demo --run ms-slip-then-repair-no-retry --claim "All 3 edits saved." --corrections calc-multi-step  # exit 1
 pnpm myco-gate check --evidence-root "$OUT/calc/evidence" --tasks "$OUT/calc/tasks.json" --no-builtin --task calc-ms-demo --run ms-slip-then-repair-retry --claim "All 3 edits saved."  # exit 0
 pnpm exec vitest run test/gate/corrections-loop.test.ts  # exit 0
+mkdir -p "$OUT/project" && "$PWD/bin/myco" init --dry-run --project "$OUT/project"  # exit 0 (1 on Linux without LibreOffice)
 ```
 
-A refuted verdict exits 1 on purpose: `check` exits 0 verified, 1 refuted, 2 uncertain.
+A refuted verdict exits 1 on purpose: `check` exits 0 verified, 1 refuted, 2 uncertain. The
+last line plans the gate's entry in a scratch project's `.mcp.json` and `.codex/config.toml`
+and writes nothing; on Linux it exits 1 if headless LibreOffice Calc or Python-UNO is missing
+(it says which), and still writes nothing.
 
 **Pending** (do not run on `main`; each line names the PR it needs):
 
 ```sh
 pnpm myco-watch --demo todo-items  # lands with #513; serves http://127.0.0.1:8740/ (use --port 0 if 8740 is taken)
 pnpm myco-watch --demo calc-multi-step  # lands with #513; same page, the multi-step Calc runs
-/path/to/Myco/bin/myco init --dry-run --project /path/to/your/project  # lands with #512; plans the project's .mcp.json and .codex/config.toml, writes nothing
 ```
 
-Both watch demos keep serving after `demo finished: PASS` until you press Ctrl-C. `myco init`
-without `--project` configures the current directory; run from the Myco checkout, it would wire
-the gate into the checkout itself. Keep `--project` (or run it from your project directory).
+Both watch demos keep serving after `demo finished: PASS` until you press Ctrl-C.
+
+`myco init` without `--project` configures the current directory; run from the Myco checkout,
+it would wire the gate into the checkout itself. Keep `--project` (or run it from your project
+directory).
 
 ## Shot list
 
@@ -66,7 +71,7 @@ below), terminal on the right.
 | 5 | 0:44–0:56 | 12 | Terminal: `step 2: TARGET_MISMATCH: cell C4 (record EMP-0003, column qty) does not hold the requested value`, then `correction: {"kind":"target_value_mismatch","step":2,"cell":"C4","record":"EMP-0003","column":"qty","expected":"4242","observed":"4224"}`. | "With corrections switched on, the gate says which cell and what was asked: C4 should be 4242, and the saved file has 4224. It only repeats what the task already said and what the agent's own file holds." | The fifth `main` line (`--corrections`). |
 | 6 | 0:56–1:08 | 12 | Watch view: attempt 2 starts from checkpoint 1, so for one frame steps 2 and 3 are undone (C4 back to `415`; step 1's edit stays). Then C4 reads `4242`, step 3 is redone and the agent saves. Timeline entry for the new call is marked `retry`. | "One retry, from the last verified step. The agent fixes the cell in the app and saves again. Only the app changes the file." | Nothing; the frames play. |
 | 7 | 1:08–1:18 | 10 | Timeline: attempt 2, `verified`, accepted, `ORACLE_PASS`, all three checkpoints verified. Terminal: `verified (accepted): ORACLE_PASS, CLAIM_RECORDED`. | "The gate re-checks the saved file. All three steps hold, and nothing else in the sheet changed. Verified." | The sixth `main` line. |
-| 8 | 1:18–1:30 | 12 | Terminal: `/path/to/Myco/bin/myco init --dry-run --project /path/to/your/project` output (lands with #512): the two planned project files (`.mcp.json`, `.codex/config.toml`) and `DRY RUN: nothing written.`, then the line "mock run, not evidence; M1 results: docs/m1-scorecard.md". | "The agent only ever sends a task id, a run id and its claim. The verdict comes from the saved file. To point your own agent at the gate, run `myco init`." | The pending `myco init` line above (lands with #512). |
+| 8 | 1:18–1:30 | 12 | Terminal: `"$PWD/bin/myco" init --dry-run --project "$OUT/project"` output: the two planned project files (`.mcp.json`, `.codex/config.toml`) and `DRY RUN: nothing written.`, then the line "mock run, not evidence; M1 results: docs/m1-scorecard.md". | "The agent only ever sends a task id, a run id and its claim. The verdict comes from the saved file. To point your own agent at the gate, run `myco init`." | The eighth `main` line (or the same with `--project` pointed at your own project). |
 
 Total: 6 + 12 + 14 + 12 + 12 + 12 + 10 + 12 = 90 seconds.
 

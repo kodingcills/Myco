@@ -18,15 +18,15 @@ Needs Node ≥ 24 and pnpm 10 (details in [Setup](#setup)). No VM and no model f
 pnpm install --frozen-lockfile           # in the Myco checkout
 pnpm myco-gate demo --transport mock     # an agent claims "saved"; the gate checks the saved file
 pnpm myco-watch --demo calc-multi-step   # (lands with #513) the same, in a local page: desktop frames + verdict timeline
-/path/to/Myco/bin/myco init --dry-run --project /path/to/your/project   # (lands with #512) wire the gate into Claude Code and Codex
+/path/to/Myco/bin/myco init --dry-run --project /path/to/your/project   # wire the gate into Claude Code and Codex
 ```
 
 The demo exits 0 and prints `DEMO: PASS`; its verdicts are mock, not evidence. Drop
 `--dry-run` to write the gate's MCP entry to your project's `.mcp.json` and
-`.codex/config.toml` (lands with #512). `myco init` without `--project` configures the current
-directory, so run it from your project, not from the Myco checkout. On Linux, init also checks
-for headless LibreOffice Calc and Python-UNO and exits 1 if either is missing (the configs are
-still written). A 90-second walkthrough with the exact commands is in
+`.codex/config.toml`. `myco init` without `--project` configures the current directory, so run
+it from your project, not from the Myco checkout. On Linux, init also checks for headless
+LibreOffice Calc and Python-UNO and exits 1 if either is missing (the configs are still
+written); see [Quickstart: one command](#quickstart-one-command). A 90-second walkthrough with the exact commands is in
 [docs/product/demo-storyboard.md](docs/product/demo-storyboard.md).
 
 ---
