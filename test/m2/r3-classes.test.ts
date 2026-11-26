@@ -20,6 +20,15 @@ import { harnessFault, input, manifest, r3Trials, type Trial, trial } from "./pa
 // #489's committed fault-suite run (record.ts output; renamed from m2-10-fault-classes-mock
 // in the #487 sync so `m2-evidence-check --all` does not read it as a pack).
 const SUITE_LEDGER = "docs/research/experiments/mock-m2-10-fault-classes/ledger.jsonl";
+const SUITE_SUMMARY = "docs/research/experiments/mock-m2-10-fault-classes/summary.json";
+
+/** The fields of the run's summary.json (record.ts `summarise`) this test reads. */
+interface SuiteSummary {
+  perClass: Record<string, { faultRows: number }>;
+  eligibleFaultTrials: number;
+  falseSuccesses: number;
+  bar: { pass: boolean };
+}
 
 interface SuiteRow {
   index: number;
@@ -33,6 +42,7 @@ interface SuiteRow {
   accepted: boolean;
   grade: "pass" | "fail" | "ungradable" | null;
   eligible: boolean;
+  falseSuccess: boolean;
   cause: BenchmarkArmRow["cause"];
 }
 
@@ -87,23 +97,58 @@ describe("R3 security class names (D3)", () => {
       .map((l) => JSON.parse(l) as SuiteRow);
     for (const row of rows) expect(validateSchema(row, faultSuiteRowSchema)).toEqual([]);
     // Control rows (the agent ignored the injection) are not R3 fault trials.
-    const trials = rows.filter((r) => r.role === "fault").map(fromSuiteRow);
-    expect(trials.length).toBe(32);
+    const faultRows = rows.filter((r) => r.role === "fault");
+    const trials = faultRows.map(fromSuiteRow);
+
+    // Every expected number below comes from the run's own records (ledger rows and
+    // summary.json), never from a literal, so regenerating the mock run cannot leave this
+    // test asserting a stale run (round-2 D1: #485 regenerated it, 2/8 became 0/8). The
+    // ledger and the summary are first checked against each other.
+    const summary = JSON.parse(readFileSync(SUITE_SUMMARY, "utf8")) as SuiteSummary;
+    expect(rows.filter((r) => r.falseSuccess).length).toBe(summary.falseSuccesses);
+    // R3 splits the fault rows' false successes by eligibility (the suite's `eligible` is
+    // the pack's `faultLanded`).
+    const ledgerFalse = faultRows.filter((r) => r.eligible && r.falseSuccess).length;
+    const ledgerIneligibleFalse = faultRows.filter((r) => !r.eligible && r.falseSuccess).length;
+    expect(faultRows.filter((r) => r.eligible).length).toBe(summary.eligibleFaultTrials);
+    const ledgerClasses = [...R3_SECURITY_CLASSES]
+      .sort()
+      .map((cls) => [cls, faultRows.filter((r) => r.faultClass === cls).length]);
+    expect(ledgerClasses).toEqual(
+      [...R3_SECURITY_CLASSES].sort().map((cls) => [cls, summary.perClass[cls]?.faultRows]),
+    );
+    // Both classes are present in the run, so the test exercises both names.
+    for (const [, n] of ledgerClasses) expect(n).toBeGreaterThan(0);
+    expect(ledgerClasses.reduce((s, [, n]) => s + Number(n), 0)).toBe(trials.length);
+
     const m = manifest({ rows: ["R3"], expectTrials: { "myco-gate": trials.length } });
     const r = checkPack(input(trials, m));
     expect(r.errors).toEqual([]);
     expect(
       r.r3?.reasons.filter((x) => x.startsWith("no eligible trial of security class")),
     ).toEqual([]);
-    expect(r.r3!.classes.map((c) => [c.faultClass, c.trials])).toEqual([
-      ["injected-instruction", 8],
-      ["tamper-oracle-inputs", 24],
-    ]);
-    expect(r.r3).toMatchObject({ eligible: 32, ineligible: { count: 0 } });
-    // The mock run's 2 accepted injections on a failing document (its README: 2/8) are
-    // false successes here too, so R3 stays NOT DONE on this pack, for that reason only.
-    expect(r.r3?.reasons).toEqual(["2 false successes"]);
-    expect(r.r3?.pass).toBe(false);
+    // Class counts, checked against the run's ledger and summary above.
+    expect(r.r3!.classes.map((c) => [c.faultClass, c.trials])).toEqual(ledgerClasses);
+    expect(r.r3).toMatchObject({
+      eligible: summary.eligibleFaultTrials,
+      ineligible: { count: trials.length - summary.eligibleFaultTrials },
+    });
+    // The run's false successes (accepted DONE on a trial the grader does not pass) are R3's
+    // false successes too, and they are R3's only possible reasons on this pack: R3 passes
+    // exactly when the run recorded none.
+    expect(r.r3?.falseSuccesses).toBe(ledgerFalse);
+    expect(r.r3?.ineligibleFalseSuccesses).toBe(ledgerIneligibleFalse);
+    const expectedReasons = [
+      ...(ledgerFalse > 0 ? [`${ledgerFalse} false successes`] : []),
+      ...(ledgerIneligibleFalse > 0
+        ? [`${ledgerIneligibleFalse} false successes on ineligible trials`]
+        : []),
+    ];
+    expect(r.r3?.reasons).toEqual(expectedReasons);
+    expect(r.r3?.pass).toBe(expectedReasons.length === 0);
+    // The suite's own bar is stricter (it also fails on ineligible rows, off-route tamper
+    // results and refused controls), so a passing suite bar implies a passing R3.
+    if (summary.bar.pass) expect(r.r3?.pass).toBe(true);
   });
 
   it("the retired names fail closed (control for the test above)", () => {

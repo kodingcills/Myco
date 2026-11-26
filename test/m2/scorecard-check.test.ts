@@ -539,6 +539,19 @@ describe("m2-scorecard-check: the R7 definition is pinned exactly (N4, round 2 o
   const PLAN_NULL = "A null cost is unmeasured and never counts as 0";
   const inDoc = (sentence: string) => mutate(COMMITTED, DOC_NULL, `${sentence} ${DOC_NULL}`);
   const inPlan = (sentence: string) => mutate(PLAN, PLAN_NULL, `${sentence} ${PLAN_NULL}`);
+  const PLAN_R7_LINE = PLAN.split("\n").find((l) => l.startsWith("| **R7** |"))!;
+  const FAKE_R7 =
+    "| **R7** | **Cost per verified task** | Sum over verified rows only | Ledgers | Sums verified rows |";
+  const extraPlanR7 = (where: "after" | "before" | "duplicate") =>
+    mutate(
+      PLAN,
+      PLAN_R7_LINE,
+      where === "after"
+        ? `${PLAN_R7_LINE}\n${FAKE_R7}`
+        : where === "before"
+          ? `${FAKE_R7}\n${PLAN_R7_LINE}`
+          : `${PLAN_R7_LINE}\n${PLAN_R7_LINE}`,
+    );
   // Every rewrite from the round-1 verdict on #490 (the three #487 ones first). Each keeps all
   // of the old pinned phrases yet restricts the sum; a word list let 9 of them through.
   const rewrites: [string, string, string | undefined][] = [
@@ -627,6 +640,42 @@ describe("m2-scorecard-check: the R7 definition is pinned exactly (N4, round 2 o
       COMMITTED,
       mutate(PLAN, "| Per-trial cost fields in the ledgers |", "| Ledgers |"),
     ],
+    // Round-2 nit N-A: the plan must hold exactly one R7 row. A second row after (or before)
+    // the pinned one restates the definition unchecked; even an exact duplicate fails.
+    ["plan: a second R7 row after the pinned one", COMMITTED, extraPlanR7("after")],
+    ["plan: a second R7 row before the pinned one", COMMITTED, extraPlanR7("before")],
+    ["plan: the pinned R7 row duplicated verbatim", COMMITTED, extraPlanR7("duplicate")],
+    // Round-2 surviving mutants: Y1 (cell-count check removed; zip truncates), Y2 (a
+    // case-insensitive compare), Y3 (punctuation stripped by the normalisation).
+    [
+      "Y1 plan: an extra cell appended to the R7 row",
+      COMMITTED,
+      mutate(
+        PLAN,
+        "divides by the verified count |",
+        "divides by the verified count | verified rows only |",
+      ),
+    ],
+    [
+      "Y2 doc: case only, ALL -> all",
+      mutate(COMMITTED, "the total over ALL", "the total over all"),
+      undefined,
+    ],
+    [
+      "Y2 plan: case only, ALL -> all",
+      COMMITTED,
+      mutate(PLAN, "the total over ALL of the arm's", "the total over all of the arm's"),
+    ],
+    [
+      "Y3 doc: punctuation only, a trailing period",
+      mutate(COMMITTED, `${DOC_NULL} |`, `${DOC_NULL}. |`),
+      undefined,
+    ],
+    [
+      "Y3 plan: punctuation only, a trailing period",
+      COMMITTED,
+      mutate(PLAN, "never counts as 0 |", "never counts as 0. |"),
+    ],
   ];
 
   it(
@@ -643,6 +692,10 @@ describe("m2-scorecard-check: the R7 definition is pinned exactly (N4, round 2 o
           ),
         );
       }
+      // N-A names its cause.
+      expect(check(COMMITTED, extraPlanR7("duplicate")).mismatch.join("\n")).toMatch(
+        /the plan's R7 row differs from PLAN_R7_CANONICAL: expected exactly one \| \*\*R7\*\* \| row, found 2/,
+      );
       // Whitespace-only reflow of both texts: padding, doubled spaces, tabs. Still passes.
       const docLine = COMMITTED.split("\n").find((l) => l.startsWith("| R7 |"))!;
       const docReflow = COMMITTED.replace(

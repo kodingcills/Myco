@@ -29,8 +29,8 @@ constant the evidence check uses AND against the plan's row (docs/product/m2-pla
 §2.1), so the doc, the code and the plan cannot drift apart. R7's definition (the lead's
 ruling 02:52Z: the total over ALL of the arm's trials divided by its verified count, a null
 cost never 0) is pinned exactly: the R7 criterion cell must equal R7_CANONICAL_CRITERION and
-the plan's R7 row must equal PLAN_R7_CANONICAL, cell by cell, compared after collapsing
-whitespace only. Any other change to either text is a MISMATCH; a deliberate rewording means
+the plan's single R7 row (exactly one `| **R7** |` row) must equal PLAN_R7_CANONICAL, cell by
+cell, compared after collapsing whitespace only. Any other change to either text is a MISMATCH; a deliberate rewording means
 editing the canonical text here in the same change, where a reviewer sees it.
 
 Claims and the sweep work as in the M1 checker: `ok`, `MISMATCH`, `unchecked` (with a
@@ -384,9 +384,14 @@ FIGURES = {"R1": figures_r1, "R2": figures_r2, "R3": figures_r3, "R7": figures_r
 
 
 # -- claims -------------------------------------------------------------------------------
-def plan_row(plan: str, n: str) -> str:
+def plan_rows(plan: str, n: str) -> list[str]:
+    """Every plan line that starts a `| **Rn** |` table row, in order."""
     row = re.compile(rf"\|\s*\*\*{n}\*\*\s*\|")
-    return next((line for line in plan.splitlines() if row.match(line)), "")
+    return [line for line in plan.splitlines() if row.match(line)]
+
+
+def plan_row(plan: str, n: str) -> str:
+    return next(iter(plan_rows(plan, n)), "")
 
 
 def grab(pattern: str, text: str) -> str:
@@ -425,8 +430,13 @@ def check_bars(r: Report, const: dict, plan: str) -> None:
     r.check("R7", f"R7 definition ({R7_RULING_NOTE})", diff is None,
             "scripts/m2-scorecard-check.py R7_CANONICAL_CRITERION", cell.strip() or "| R7 |",
             detail="" if diff is None else f"the R7 criterion differs from the canonical text: {diff}")
-    plan_r7 = plan_cells(plan_row(plan, "R7"))
-    if len(plan_r7) != len(PLAN_R7_CANONICAL):
+    # Exactly one R7 row: a second one (say "sum over verified rows only") would restate the
+    # definition beside the pinned row, unchecked (round-2 nit N-A on #490).
+    r7_rows = plan_rows(plan, "R7")
+    plan_r7 = plan_cells(r7_rows[0]) if len(r7_rows) == 1 else []
+    if len(r7_rows) != 1:
+        pdiff = f"expected exactly one | **R7** | row, found {len(r7_rows)}"
+    elif len(plan_r7) != len(PLAN_R7_CANONICAL):
         pdiff = f"expected {len(PLAN_R7_CANONICAL)} cells after the id, found {len(plan_r7)}"
     else:
         pdiff = next((f"cell {k + 2}: {d}" for k, (got, want) in enumerate(zip(plan_r7, PLAN_R7_CANONICAL))
