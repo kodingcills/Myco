@@ -122,9 +122,7 @@ describe("M2 pack CLI refuses simulated rows (track E)", () => {
       .trim()
       .split("\n")
       .filter((line) => !line.startsWith("npm warn "));
-    expect(cliLines).toEqual([
-      expect.stringMatching(/^ERROR \S*m2-simulated: provenance: /),
-    ]);
+    expect(cliLines).toEqual([expect.stringMatching(/^ERROR \S*m2-simulated: provenance: /)]);
 
     // The check is about provenance only: the same rows under a Claude planner pass the CLI
     // (a declared string; this stops mislabelled dry runs, not a deliberate forgery).
