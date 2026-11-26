@@ -226,7 +226,10 @@ known task set (fc-v1: 100 tasks, 10 invalid-target): every task exactly k times
 own `faultClass`, `fixtureSha256` and `instructionSha256`, unregistrable exactly on its
 unsatisfiable tasks, and the asserted split equal to k x those tasks. So a short run
 (`--expect myco-gate=90 --expect-unregistrable myco-gate=0`), a run missing a task, a
-relabelled run, or a run on an unknown task set fails even when the typed numbers agree. The
+relabelled run, or a run on an unknown task set fails even when the typed numbers agree. Without
+`--require-r1` or `--evidence` the check still counts, but the result says
+`taskSetBinding.applied: false` and R1 does not pass (its reason says the binding was not
+applied), so an unbound run never reads as R1 evidence. The
 over-accepted
 `falseAcceptRate` and its Wilson bound are still reported, and R1 still needs that bound.
 This check counts rows; the "about 100" bar itself is the M2 evidence-pack check's

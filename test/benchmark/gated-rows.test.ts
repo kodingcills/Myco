@@ -18,6 +18,7 @@ import {
   checkBenchmark,
   EVIDENCE_PLANNERS,
   expectedAccepted,
+  UNBOUND_R1,
 } from "../../src/benchmark/check.ts";
 import {
   GATE_STATE_FILE,
@@ -418,7 +419,9 @@ describe("evidence provenance (#496 D4)", () => {
     const real = { ...row(), trialKey: "real-1" };
     const plumbing = checkBenchmark([sim], [g(sim)], { expectTrials: { "myco-gate": 1 } });
     expect(plumbing).toMatchObject({ ok: true, provenance: "simulated" });
-    expect(plumbing.r1?.pass).toBe(true);
+    // Unbound: R1 never passes, and the result says the binding was not applied.
+    expect(plumbing.r1?.reasons).toEqual([UNBOUND_R1]);
+    expect(plumbing.taskSetBinding?.applied).toBe(false);
     expect(checkBenchmark([real], [g(real)], { expectTrials: { "myco-gate": 1 } }).provenance).toBe(
       "evidence",
     );
@@ -512,8 +515,9 @@ describe("the check's unregistrable and capture rules", () => {
       claimedDone: 2,
       graderFailClaimedDone: 1,
     });
+    expect(res.r1?.reasons).toEqual([UNBOUND_R1]);
     expect(res.r1).toMatchObject({
-      pass: true,
+      pass: false,
       headline: { denominator: 5 },
       gated: { trials: 1, accepted: 1 },
     });
@@ -756,7 +760,8 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
       unregistrable: { trials: 1, claimedDone: 1, graderFailClaimedDone: 1 },
     });
     expect(result.r1?.falseAcceptPerTrial.denominator).toBe(2);
-    expect(result.r1).toMatchObject({ pass: true, gated: { trials: 1 } });
+    expect(result.r1?.reasons).toEqual([UNBOUND_R1]);
+    expect(result.r1).toMatchObject({ pass: false, gated: { trials: 1 } });
     expect(result.r1?.notes).toHaveLength(1);
   });
 

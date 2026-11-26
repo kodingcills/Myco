@@ -60,7 +60,14 @@ The check joins arm and grade rows by `trialKey` and refuses an inconsistent led
 - mixed task-set or grader versions;
 - an `accepted` that contradicts the claim and gate;
 - a host path in any row;
-- a row count that differs from the expected count (`--expect`), or zero rows.
+- a row count that differs from the expected count (`--expect`), or zero rows;
+- for the gated arm, a gated/unregistrable split that is missing or does not match the rows
+  (`--expect-unregistrable`);
+- for the gated arm under `--require-r1` or `--evidence`, rows that are not exactly the
+  published task set: a task missing or repeated, a fixture or instruction hash that is not
+  the task's, a relabelled fault class, an unregistrable row on a satisfiable task (or a gated
+  row on an unsatisfiable one), or an unknown task set. Unbound, the check reports
+  `taskSetBinding.applied: false` and R1 does not pass.
 
 For each arm it reports, every count with its denominator:
 

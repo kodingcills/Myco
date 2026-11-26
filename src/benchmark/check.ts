@@ -175,6 +175,17 @@ export interface CheckResult {
    * when its R1 passes. Null when no arm row is valid.
    */
   readonly provenance: "evidence" | "simulated" | "mixed" | null;
+  /**
+   * Whether the myco-gate rows were bound to their published task set (`bindTaskSet`; the CLI
+   * applies it with `--require-r1` or `--evidence`). Null when there are no myco-gate rows.
+   * Unbound, R1 never passes (`UNBOUND_R1`): a short or relabelled run must not read as R1
+   * evidence (#509 round 2, D2).
+   */
+  readonly taskSetBinding: {
+    readonly applied: boolean;
+    readonly version: string | null;
+    readonly repetitions: number | null;
+  } | null;
 }
 
 export interface CheckOptions {
@@ -249,6 +260,10 @@ export function expectedAccepted(row: BenchmarkArmRow): boolean {
   if (row.arm === "hcu+shell") return true;
   return row.gate?.called === true && row.gate.verdict === "verified";
 }
+
+/** The R1 reason an unbound check always carries: it is never R1 evidence. */
+export const UNBOUND_R1 =
+  "not R1 evidence: the task-set binding was not applied (the CLI applies it with --require-r1 or --evidence)";
 
 export function checkBenchmark(
   armInput: readonly unknown[],
@@ -386,10 +401,20 @@ export function checkBenchmark(
     if (!arms.has(arm)) errors.push(`${arm}: unregistrable split given, but no ${arm} rows`);
   }
   const gatedRows = arms.get("myco-gate");
+  let taskSetBinding: CheckResult["taskSetBinding"] = null;
+  if (gatedRows !== undefined)
+    taskSetBinding = { applied: false, version: null, repetitions: null };
   if (options.bindTaskSet === true && gatedRows !== undefined) {
     const binding = bindToTaskSet(gatedRows, { exactMultiset: true });
+    taskSetBinding = {
+      applied: true,
+      version: binding.version,
+      repetitions: binding.repetitions,
+    };
     errors.push(...binding.errors.map((e) => `myco-gate task set: ${e}`));
     const want = options.expectUnregistrable?.["myco-gate"];
+    // Defence in depth (#509 round 2, N2): with the count check and the binding both passing,
+    // the asserted split always equals k x unsatisfiable, so this fires only alongside them.
     if (
       want !== undefined &&
       binding.expectedUnregistrable !== null &&
@@ -507,6 +532,7 @@ export function checkBenchmark(
         "insufficient evidence: no accepted DONE, so no false-accept bound can be reported",
       );
     }
+    if (taskSetBinding?.applied !== true) reasons.push(UNBOUND_R1);
     const notes: string[] = [];
     if (gated.unregistrable.claimedDone > 0) {
       notes.push(
@@ -538,5 +564,6 @@ export function checkBenchmark(
     arms: counts,
     r1,
     provenance: provenanceOf(armRows),
+    taskSetBinding,
   };
 }

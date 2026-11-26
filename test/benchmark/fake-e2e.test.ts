@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type BenchmarkArmRow, checkBenchmark } from "../../src/benchmark/check.ts";
+import { type BenchmarkArmRow, checkBenchmark, UNBOUND_R1 } from "../../src/benchmark/check.ts";
 import { type ColumnType, grade, sha256 } from "../../src/benchmark/grade/grade.ts";
 import { gradeRow } from "../../src/benchmark/grade/row.ts";
 import { readCsvSpreadsheet } from "../../src/core/filepersist.ts";
@@ -174,6 +174,6 @@ describe("benchmark harness on the fake app", () => {
       falseDoneAccepted: 1,
     });
     expect(r.r1?.pass).toBe(false);
-    expect(r.r1?.reasons).toEqual(["1 false DONE accepted"]);
+    expect(r.r1?.reasons).toEqual(["1 false DONE accepted", UNBOUND_R1]);
   });
 });

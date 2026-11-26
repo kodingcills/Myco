@@ -142,10 +142,53 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     }
   });
 
+  it("the public reproduce doc's §1 commands run as written on a fc-v1 gated run (#509 round 2, D3)", {
+    timeout: 180_000,
+  }, async () => {
+    const doc = readFileSync(
+      join(ROOT, "docs", "benchmark", "public", "reproduce-linux.md"),
+      "utf8",
+    );
+    const section = doc.slice(doc.indexOf("## 1. Regrade"), doc.indexOf("## 2."));
+    const block = section.slice(
+      section.indexOf("```sh") + 5,
+      section.indexOf("```", section.indexOf("```sh") + 5),
+    );
+    // Join continuation lines; keep the commands, drop comments.
+    const commands = block
+      .replace(/\\\n\s*/g, "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("npx tsx "));
+    expect(commands.length).toBeGreaterThanOrEqual(5);
+    // A release: the simulated run's ledger and documents, under the doc's own file names.
+    const release = mkdtempSync(join(tmpdir(), "myco-reproduce-"));
+    await runDryRun(TASKS, release, SOURCES);
+    for (const cmd of commands) {
+      // This release is the gated arm; the third-party form needs an hcu+shell ledger.
+      if (cmd.includes("hcu+shell")) continue;
+      const line = cmd
+        .replaceAll("npx tsx scripts/", `npx tsx ${join(ROOT, "scripts")}/`)
+        .replaceAll("benchmark/false-completion/fc-v1", BUNDLE);
+      const r = spawnSync("sh", ["-c", line], { cwd: release, encoding: "utf8" });
+      expect(r.status, `${cmd}\n${r.stderr}${r.stdout.slice(-500)}`).toBe(0);
+    }
+    expect(existsSync(join(release, "regraded.jsonl"))).toBe(true);
+  });
+
   it("refuses to write under docs/research/experiments", async () => {
-    await expect(
-      runDryRun(TASKS.slice(0, 1), join(ROOT, "docs", "research", "experiments", "dry"), SOURCES),
-    ).rejects.toThrow(/never written under docs\/research\/experiments/);
-    expect(existsSync(join(ROOT, "docs", "research", "experiments", "dry"))).toBe(false);
+    // A temp root whose path contains docs/research/experiments, so a broken guard writes
+    // there and never into the repository (#509 round 2, N4).
+    const target = join(
+      mkdtempSync(join(tmpdir(), "myco-dry-guard-")),
+      "docs",
+      "research",
+      "experiments",
+      "dry",
+    );
+    await expect(runDryRun(TASKS.slice(0, 1), target, SOURCES)).rejects.toThrow(
+      /never written under docs\/research\/experiments/,
+    );
+    expect(existsSync(target)).toBe(false);
   });
 });

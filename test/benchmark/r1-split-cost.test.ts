@@ -9,7 +9,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type BenchmarkArmRow, COST_BASIS, checkBenchmark } from "../../src/benchmark/check.ts";
+import {
+  type BenchmarkArmRow,
+  type CheckResult,
+  COST_BASIS,
+  checkBenchmark,
+  UNBOUND_R1,
+} from "../../src/benchmark/check.ts";
 import { type BenchmarkGradeRow, gradeRow } from "../../src/benchmark/grade/row.ts";
 import { buildTaskSet } from "../../src/benchmark/taskset.ts";
 
@@ -110,8 +116,9 @@ describe("R1 over all trials with the split asserted (ruling 08:38Z)", () => {
       expectUnregistrable: { "myco-gate": 2 },
     });
     expect(r.errors).toEqual([]);
+    expect(r.r1?.reasons).toEqual([UNBOUND_R1]);
     expect(r.r1).toMatchObject({
-      pass: true,
+      pass: false,
       headline: { numerator: 0, denominator: 5 },
       gated: { trials: 3, accepted: 2, falseDoneAccepted: 0, acceptedUngradable: 0 },
       unregistrable: { trials: 2, claimedDone: 2, graderFailClaimedDone: 2 },
@@ -402,5 +409,112 @@ describe("#509 round 1: what the check does and does not bind (D1, D2)", () => {
       'myco-gate task set: task set "fc-v9" is not a published task set this check knows',
     );
     expect(unknown.r1?.pass).toBe(false);
+  });
+});
+
+describe("#509 round 2: unbound runs never read as R1 evidence; the ruled cost denominator", () => {
+  // D2: the round-1 short-run probes WITHOUT the binding (no --require-r1/--evidence). The
+  // arithmetic and the typed counts agree, so the ledger is consistent, but R1 must not pass
+  // and the result must say the binding was not applied.
+  const probes = (): [string, BenchmarkArmRow[], BenchmarkGradeRow[], number, number][] => {
+    const { rows, grades } = fcLedger();
+    const keep = rows.filter((r) => r.gate?.unregistrable !== true);
+    const i = rows.findIndex((r) => r.gate?.unregistrable === true);
+    const relabelled = rows.map((r, k) =>
+      k === i
+        ? refuted(r.trialKey, {
+            ...r,
+            faultClass: "none",
+            gate: { called: true, verdict: "refuted" },
+          })
+        : r,
+    );
+    return [
+      ["90/0", keep, grades.filter((g) => keep.some((k) => k.trialKey === g.trialKey)), 90, 0],
+      ["99/10", rows.slice(1), grades.slice(1), 99, 10],
+      ["relabelled 91+9 at 100/9", relabelled, grades, 100, 9],
+    ];
+  };
+  it.each(probes())(
+    "probe %s, unbound: consistent, but R1 does not pass and says why",
+    (_n, rows, grades, total, split) => {
+      const r = checkBenchmark(rows, grades, {
+        expectTrials: { "myco-gate": total },
+        expectUnregistrable: { "myco-gate": split },
+      });
+      expect(r.ok).toBe(true);
+      expect(r.taskSetBinding).toEqual({ applied: false, version: null, repetitions: null });
+      expect(r.r1?.pass).toBe(false);
+      expect(r.r1?.reasons).toContain(UNBOUND_R1);
+    },
+  );
+
+  it("the CLI without --require-r1 or --evidence prints an unbound result with no R1 pass", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-unbound-"));
+    try {
+      const { rows, grades } = fcLedger();
+      writeFileSync(
+        join(dir, "arm.jsonl"),
+        `${rows
+          .slice(1)
+          .map((r) => JSON.stringify(r))
+          .join("\n")}\n`,
+      );
+      writeFileSync(
+        join(dir, "g.jsonl"),
+        `${grades
+          .slice(1)
+          .map((r) => JSON.stringify(r))
+          .join("\n")}\n`,
+      );
+      const out = spawnSync(
+        "npx",
+        [
+          "tsx",
+          join(ROOT, "scripts", "benchmark-check.ts"),
+          "--arm",
+          join(dir, "arm.jsonl"),
+          "--grades",
+          join(dir, "g.jsonl"),
+          "--expect",
+          "myco-gate=99",
+          "--expect-unregistrable",
+          "myco-gate=10",
+        ],
+        { cwd: ROOT, encoding: "utf8" },
+      );
+      const result = JSON.parse(out.stdout) as CheckResult;
+      expect(result.taskSetBinding?.applied).toBe(false);
+      expect(result.r1?.pass).toBe(false);
+      expect(result.r1?.reasons).toContain(UNBOUND_R1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // D1: the denominator is VERIFIED tasks (accepted DONE AND grader pass), not grader passes.
+  it("a correct document whose DONE was refused is not a verified task", () => {
+    const { rows, grades } = ledger();
+    // g3 was refuted by the gate, but its document is correct: grader pass, not accepted.
+    const regraded = grades.map((g) =>
+      g.trialKey === "g3" ? grade(rows[2] as BenchmarkArmRow, "pass") : g,
+    );
+    const r = checkBenchmark(rows, regraded, {
+      expectTrials: { "myco-gate": 5 },
+      expectUnregistrable: { "myco-gate": 2 },
+    });
+    expect(r.arms[0]).toMatchObject({ graderPass: 3, acceptedPass: 2, correctNotAccepted: 1 });
+    // 5 trials x $0.50 = $2.50 over 2 verified tasks (not 3 grader passes).
+    expect(r.arms[0]?.costPerVerifiedTask).toMatchObject({ estimatedUsd: 1.25, verifiedTasks: 2 });
+  });
+
+  // N3: a mixed ledger (Claude rows and one simulated row) is refused under --evidence.
+  it("a ledger with one simulated row among Claude rows is refused as evidence", () => {
+    const { rows, grades } = fcLedger();
+    const mixed = rows.map((r, i) => (i === 0 ? { ...r, plannerModelId: "simulated:x" } : r));
+    const r = checkBenchmark(mixed, grades, { ...fcOpts(100, 10), evidence: true });
+    expect(r.provenance).toBe("mixed");
+    expect(r.errors.join("\n")).toMatch(/1 row\(s\) without evidence provenance/);
+    expect(r.r1?.pass).toBe(false);
   });
 });
