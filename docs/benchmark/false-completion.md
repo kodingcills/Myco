@@ -223,7 +223,8 @@ is bound to the published task set**, not to the typed numbers: with `--require-
 `--evidence` the check calls `src/benchmark/taskset-binding.ts`, the same module as the M2
 evidence-pack check (#506). The myco-gate rows must be exactly a whole number k of runs of a
 known task set (fc-v1: 100 tasks, 10 invalid-target): every task exactly k times, each with its
-own `faultClass`, `fixtureSha256` and `instructionSha256`, unregistrable exactly on its
+own `faultClass`, `fixtureSha256` and `instructionSha256` (read from the committed bundle,
+pinned by SHA-256 in `src/benchmark/published-tasks.ts`), unregistrable exactly on its
 unsatisfiable tasks, and the asserted split equal to k x those tasks. So a short run
 (`--expect myco-gate=90 --expect-unregistrable myco-gate=0`), a run missing a task, a
 relabelled run, or a run on an unknown task set fails even when the typed numbers agree. Without
@@ -477,3 +478,12 @@ npx tsx scripts/m2-corrections-ab.ts --stage 0|1 \
 - **Never R1 evidence.** Both arms, the OFF arm included, are experiment-only, and this is
   enforced. Because every A/B row carries the `experiment` marker, `checkBenchmark(..., { evidence:
   true })` and the M2 pack check refuse such rows (`experimentRowsError`).
+- **No gate-side code, the task binding included** (#547 O1 follow-up). The binding reads the
+  published task rows (ids, fault classes, fixture and instruction hashes) from the committed
+  `benchmark/false-completion/fc-v1/tasks.jsonl`, pinned by SHA-256 in
+  `src/benchmark/published-tasks.ts`. It does not rebuild them with `buildTaskSet`, which runs
+  the generators in `src/tasks/` that the gate also imports. `test/benchmark/independence.test.ts`
+  walks the A/B module and the shared binding path (`check.ts`, `taskset-binding.ts`,
+  `published-tasks.ts`). It fails if any of them reaches `src/gate/`, `src/verify/`,
+  `src/tasks/` or `src/benchmark/taskset.ts`, or a process launcher. The lead's rule: this lands
+  before any Stage 1 effect is reported.
