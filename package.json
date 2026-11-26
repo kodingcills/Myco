@@ -27,7 +27,8 @@
     "myco-watch": "tsx scripts/myco-watch.ts",
     "myco": "bash bin/myco",
     "myco-record": "tsx scripts/myco-record.ts",
-    "myco-handoff": "tsx scripts/myco-handoff.ts"
+    "myco-handoff": "tsx scripts/myco-handoff.ts",
+    "leak-guard": "tsx scripts/leak-guard.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",

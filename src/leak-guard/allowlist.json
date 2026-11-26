@@ -1,0 +1,74 @@
+{
+  "$comment": "TIF-98 leak guard allowlist (src/leak-guard/). Applies to TRACKED files only, never to produced outputs. 'accounts' are documented placeholder account names: a home path whose account segment is one of these is not a leak. 'files' skip whole leak classes in one file. Every entry needs a reason, and an entry that no longer suppresses anything fails the guard (stale). Do not add an entry to get a red guard green: fix the leak. Generic CI/sandbox accounts (user, runner, ubuntu, agent) are deliberately NOT account-level entries, because a real leak of a CI or cloud-sandbox checkout path uses exactly those names; they are file-scoped instead.",
+  "accounts": [
+    {
+      "account": "myco",
+      "reason": "The trial VM's own guest account (Windows C:\\Users\\myco, Linux /home/myco), created by agent/bootstrap and runtime/guest; never a host account."
+    },
+    {
+      "account": "x",
+      "reason": "Single-letter placeholder account in test inputs and doc examples of a home path."
+    },
+    {
+      "account": "op",
+      "reason": "Placeholder operator account in scheduler/session-info tests and docs/schedule examples."
+    },
+    {
+      "account": "someone",
+      "reason": "Placeholder account in tests that plant a home path to prove a scrubber or refusal."
+    },
+    {
+      "account": "me",
+      "reason": "Placeholder account in shell-tool and episode clean tests (planted home paths)."
+    },
+    {
+      "account": "episode-tester",
+      "reason": "The fixed fake host account test/episode/helpers.ts plants so episode tests never depend on the machine."
+    },
+    {
+      "account": "planted",
+      "reason": "Planted fake account in test/skills/record-markers.test.ts (the leak it must refuse)."
+    },
+    {
+      "account": "Public",
+      "reason": "Windows' built-in shared profile C:\\Users\\Public (the SAI fixture drop folder); not a person's account."
+    }
+  ],
+  "files": [
+    {
+      "file": "docs/research/eval-frameworks.md",
+      "classes": ["home-path"],
+      "reason": "Quotes OSWorld task JSON verbatim; OSWorld's VM account is literally named 'user', under the POSIX home root."
+    },
+    {
+      "file": "docs/baseline/screenshot-agent.md",
+      "classes": ["home-path"],
+      "reason": "Quotes OSWorld's task paths (VM account 'user') to explain why those tasks need their own image."
+    },
+    {
+      "file": "docs/coordination/m1-state.md",
+      "classes": ["home-path"],
+      "reason": "Same OSWorld task-path quote (VM account 'user') as docs/baseline/screenshot-agent.md (post-M1 benchmark note)."
+    },
+    {
+      "file": "docs/env/dogfood-runtime-runbook.md",
+      "classes": ["home-path"],
+      "reason": "Example read_root under the 'ubuntu' account of a stock Ubuntu cloud image, in a runtime API call."
+    },
+    {
+      "file": "test/baseline/hcu-shell/shell-tool.test.ts",
+      "classes": ["home-path"],
+      "reason": "Desktop-side document paths under the desktop's own 'agent' account that the shell tool must accept; not a host account."
+    },
+    {
+      "file": "test/benchmark/check.test.ts",
+      "classes": ["home-path"],
+      "reason": "A planted harness-fault detail (a CI 'runner' home path) the benchmark check must accept as text."
+    },
+    {
+      "file": "test/handoff/broker.test.ts",
+      "classes": ["home-path"],
+      "reason": "Planted host paths the handoff broker must flag (NOTE_HOST_PATH); the test's purpose is to contain them."
+    }
+  ]
+}
