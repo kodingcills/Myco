@@ -32,6 +32,8 @@ export const USAGE = `usage:
 
 operator options (check, mcp):
   --evidence-root <dir>  persisted state is read from <dir>/<runId>/<task stateFile>
+                         (mock-path and development stand-in only; a gated run reads
+                         the sealed capture, see docs/gate/api.md)
   --task <id> --run <id> the assignment: the one task and run this gate serves (mcp: the
                          agent's trial; any other task or run is ASSIGNMENT_MISMATCH)
   --tasks <file>         extra tasks: { "tasks": [ { id, family, stateFile, spec } ] }
