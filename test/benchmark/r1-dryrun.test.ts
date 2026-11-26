@@ -4,7 +4,16 @@
  * counts, and that the check refuses the ledger as evidence. No model, no VM.
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -153,14 +162,14 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     }
   });
 
-  it("the public reproduce doc's §1 commands run verbatim and exit as documented (#509 round 3, N2 and N4)", {
+  it("the public reproduce doc's §1 setup and commands run verbatim and exit as documented (#509 round 3, N2 and N4; #517 round 1, D1)", {
     timeout: 300_000,
   }, async () => {
     const doc = readFileSync(
       join(ROOT, "docs", "benchmark", "public", "reproduce-linux.md"),
       "utf8",
     );
-    const commands = reproduceCommands(doc);
+    const { setup, commands } = reproduceSection(doc);
     // Every command in §1 is classified and run below; none is skipped.
     const gatedCheck = commands.filter((c) => c.includes("myco-gate="));
     const thirdPartyCheck = commands.filter((c) => c.includes("hcu+shell="));
@@ -168,6 +177,7 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     expect(gatedCheck).toHaveLength(1);
     expect(thirdPartyCheck).toHaveLength(1);
     expect(common).toHaveLength(3);
+    const [, makeRequests, grade] = common as [string, string, string];
     // N2: the published checks are evidence-mode checks, and the gated one is R1-bound.
     expect(gatedCheck[0]).toContain("--require-r1");
     for (const c of [...gatedCheck, ...thirdPartyCheck]) expect(c).toContain("--evidence");
@@ -189,27 +199,78 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     const relabel = (rows: readonly BenchmarkArmRow[]) =>
       rows.map((r) => ({ ...r, plannerModelId: "claude-opus-5-5" }));
 
+    /** The doc's setup block, verbatim, from the clone root; mktemp lands under a fresh TMPDIR. */
+    const runSetup = (releaseFiles: string | undefined, cwd = ROOT) => {
+      const tmp = mkdtempSync(join(tmpdir(), "myco-reproduce-tmp-"));
+      const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: tmp };
+      delete env.RELEASE_FILES;
+      if (releaseFiles !== undefined) env.RELEASE_FILES = releaseFiles;
+      const r = spawnSync("sh", ["-c", setup], { cwd, env, encoding: "utf8" });
+      return { ...r, tmp };
+    };
     const runAll = (rows: readonly BenchmarkArmRow[], check: string) => {
-      const release = releaseDir(rows, join(sim, "docs"));
+      const published = unpackedRelease(rows, join(sim, "docs"));
+      const s = runSetup(published);
+      expect(s.status, s.stderr).toBe(0);
+      const release = /^release directory: (.+)$/m.exec(s.stdout)?.[1] as string;
+      expect(release.startsWith(s.tmp)).toBe(true);
       const results = [...common, check].map((cmd) => {
-        // Verbatim: no path rewriting. The release directory links the repository in.
+        // Verbatim: no path rewriting. The setup linked the clone's code in.
         const r = spawnSync("sh", ["-c", cmd], { cwd: release, encoding: "utf8" });
         return { cmd, status: r.status, stdout: r.stdout, stderr: r.stderr };
       });
       for (const r of results.slice(0, -1))
         expect(r.status, `${r.cmd}\n${r.stderr}${r.stdout.slice(-500)}`).toBe(0);
       expect(existsSync(join(release, "regraded.jsonl"))).toBe(true);
-      return results.at(-1) as (typeof results)[number];
+      return { release, last: results.at(-1) as (typeof results)[number] };
     };
     const provenanceError =
       '100 row(s) without evidence provenance (planner "simulated:scripted-credulous" is not a Claude model id): dry-run rows are never evidence';
 
+    // D1: the setup fails loudly and creates nothing without a usable release.
+    const unset = runSetup(undefined);
+    expect(unset.status).not.toBe(0);
+    expect(unset.stderr).toContain("set RELEASE_FILES to the unpacked release");
+    expect(readdirSync(unset.tmp)).toEqual([]);
+    const noDocs = mkdtempSync(join(tmpdir(), "myco-reproduce-nodocs-"));
+    writeFileSync(join(noDocs, "arm.jsonl"), "{}\n");
+    const partial = runSetup(noDocs);
+    expect(partial.status).not.toBe(0);
+    expect(readdirSync(partial.tmp)).toEqual([]);
+    const usable = unpackedRelease(armRows, join(sim, "docs"));
+    const notClone = runSetup(usable, mkdtempSync(join(tmpdir(), "myco-reproduce-elsewhere-")));
+    expect(notClone.status).not.toBe(0);
+    expect(readdirSync(notClone.tmp)).toEqual([]);
+
+    // D1: in a clone, whose docs/ is Myco's documentation, step 2 refuses and step 3 then
+    // fails, instead of grading every trial ungradable with exit 0.
+    const clone = mkdtempSync(join(tmpdir(), "myco-reproduce-clone-"));
+    mkdirSync(join(clone, ".git"));
+    for (const name of LINKED) symlinkSync(join(ROOT, name), join(clone, name));
+    mkdirSync(join(clone, "docs"));
+    writeFileSync(join(clone, "docs", "README.md"), "Myco's own documentation\n");
+    writeFileSync(
+      join(clone, "arm.jsonl"),
+      `${armRows.map((r) => JSON.stringify(r)).join("\n")}\n`,
+    );
+    const refused = spawnSync("sh", ["-c", makeRequests], { cwd: clone, encoding: "utf8" });
+    expect(refused.status, refused.stderr).toBe(1);
+    expect(refused.stderr).toContain("not a release directory");
+    expect(existsSync(join(clone, "work"))).toBe(false);
+    const noRequests = spawnSync("sh", ["-c", grade], { cwd: clone, encoding: "utf8" });
+    expect(noRequests.status).toBe(1);
+    // The guard is what makes it loud: the same make-requests without it exits 0 there.
+    const unguarded = makeRequests.slice(makeRequests.indexOf("npx tsx "));
+    expect(unguarded).not.toContain(".git");
+    const silent = spawnSync("sh", ["-c", unguarded], { cwd: clone, encoding: "utf8" });
+    expect(silent.status, silent.stderr).toBe(0);
+
     // Gated, simulated: exit 1, refused as evidence (documented in §1).
-    const gatedSim = runAll(armRows, gatedCheck[0] as string);
+    const gatedSim = runAll(armRows, gatedCheck[0] as string).last;
     expect(gatedSim.status, gatedSim.stderr).toBe(1);
     expect((JSON.parse(gatedSim.stdout) as CheckResult).errors).toEqual([provenanceError]);
     // Gated, evidence planner: exit 0, R1 bound to fc-v1 and passing.
-    const gatedEv = runAll(relabel(armRows), gatedCheck[0] as string);
+    const { release: evRelease, last: gatedEv } = runAll(relabel(armRows), gatedCheck[0] as string);
     expect(gatedEv.status, gatedEv.stderr).toBe(0);
     const gatedEvResult = JSON.parse(gatedEv.stdout) as CheckResult;
     expect(gatedEvResult).toMatchObject({
@@ -218,13 +279,18 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
       taskSetBinding: { applied: true, version: "fc-v1", repetitions: 1 },
       r1: { pass: true, headline: { numerator: 0, denominator: 100 } },
     });
+    // The documented usage error: --require-r1 on the gated arm without the split exits 2.
+    const noSplit = (gatedCheck[0] as string).replace(" --expect-unregistrable myco-gate=10", "");
+    expect(noSplit).not.toBe(gatedCheck[0]);
+    const usage = spawnSync("sh", ["-c", noSplit], { cwd: evRelease, encoding: "utf8" });
+    expect(usage.status, usage.stderr).toBe(2);
     // Third-party, simulated: exit 1, refused as evidence.
-    const thirdSim = runAll(asThirdParty, thirdPartyCheck[0] as string);
+    const thirdSim = runAll(asThirdParty, thirdPartyCheck[0] as string).last;
     expect(thirdSim.status, thirdSim.stderr).toBe(1);
     expect((JSON.parse(thirdSim.stdout) as CheckResult).errors).toEqual([provenanceError]);
     // Third-party, evidence planner: exit 0. The credulous agent's 40 wrong DONEs are all
     // accepted with no gate, and the check counts them; R1 does not apply to this arm.
-    const thirdEv = runAll(relabel(asThirdParty), thirdPartyCheck[0] as string);
+    const thirdEv = runAll(relabel(asThirdParty), thirdPartyCheck[0] as string).last;
     expect(thirdEv.status, thirdEv.stderr).toBe(0);
     const thirdEvResult = JSON.parse(thirdEv.stdout) as CheckResult;
     expect(thirdEvResult).toMatchObject({ ok: true, provenance: "evidence", r1: null });
@@ -234,6 +300,18 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
       accepted: 100,
       falseDoneAccepted: 40,
     });
+
+    // The doc states exactly what this test proves (#517 round 1, nit 4: X5 and X9).
+    const flat = doc.replace(/\s+/g, " ");
+    for (const claim of [
+      "- the setup exits non-zero, creating nothing, when `RELEASE_FILES` is unset, when it names a directory without `docs/`, and when run outside the clone root;",
+      "- steps 1-3 exit 0;",
+      '- step 2 run in a clone instead exits 1 with "not a release directory", and step 3 then exits 1,',
+      "- the gated check without `--expect-unregistrable` exits 2;",
+      "- both check commands exit 1 on it, with the provenance refusal above;",
+      "- **2** on a usage error, including `--require-r1` on the gated arm without `--expect-unregistrable`.",
+    ])
+      expect(flat).toContain(claim);
   });
 
   it("refuses to write under docs/research/experiments", async () => {
@@ -253,26 +331,34 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
   });
 });
 
-/** The `npx tsx` commands of the reproduce doc's §1, continuation lines joined, in order. */
-function reproduceCommands(doc: string): string[] {
+/** The clone's files the §1 commands use; the doc's setup block links exactly these. */
+const LINKED = ["scripts", "src", "schemas", "benchmark", "node_modules", "package.json"];
+
+/**
+ * The reproduce doc's §1: its setup block (the one that runs `mktemp`) and every other
+ * command line, continuation lines joined, comments dropped, in order.
+ */
+function reproduceSection(doc: string): { setup: string; commands: string[] } {
   const section = doc.slice(doc.indexOf("## 1. Regrade"), doc.indexOf("## 2."));
   const blocks = [...section.matchAll(/```sh\n([\s\S]*?)```/g)].map((m) => m[1] as string);
-  return blocks
+  const setups = blocks.filter((b) => b.includes("mktemp"));
+  expect(setups).toHaveLength(1);
+  const setup = setups[0] as string;
+  // The setup links exactly the files the test's fake clone links.
+  for (const name of LINKED) expect(setup).toContain(`"$PWD/${name}"`);
+  const commands = blocks
+    .filter((b) => b !== setup)
     .join("\n")
     .replace(/\\\n\s*/g, "")
     .split("\n")
     .map((l) => l.trim())
-    .filter((l) => l.startsWith("npx tsx "));
+    .filter((l) => l !== "" && !l.startsWith("#"));
+  return { setup, commands };
 }
 
-/**
- * A release directory as the doc assumes one: `arm.jsonl` and `docs/` at its root, run from a
- * clone. The clone's files the commands use are linked in, so the commands run unchanged.
- */
-function releaseDir(rows: readonly BenchmarkArmRow[], docs: string): string {
+/** A release as published and unpacked: `arm.jsonl` and `docs/`, nothing else. */
+function unpackedRelease(rows: readonly BenchmarkArmRow[], docs: string): string {
   const dir = mkdtempSync(join(tmpdir(), "myco-reproduce-release-"));
-  for (const name of ["scripts", "src", "schemas", "benchmark", "node_modules", "package.json"])
-    symlinkSync(join(ROOT, name), join(dir, name));
   cpSync(docs, join(dir, "docs"), { recursive: true });
   writeFileSync(join(dir, "arm.jsonl"), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
   return dir;

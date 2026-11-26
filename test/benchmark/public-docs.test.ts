@@ -6,7 +6,12 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { COST_BASIS, UNBOUND_R1 } from "../../src/benchmark/check.ts";
+import {
+  type BenchmarkArmRow,
+  COST_BASIS,
+  correctionsOnError,
+  UNBOUND_R1,
+} from "../../src/benchmark/check.ts";
 import { GRADER_VERSION } from "../../src/benchmark/grade/grade.ts";
 import { buildTaskSet, TASK_SET_VERSION } from "../../src/benchmark/taskset.ts";
 import { wilson } from "../../src/foundry/stats.ts";
@@ -69,6 +74,35 @@ describe("public benchmark package matches the code", () => {
     for (const doc of [card, protocol, reproduce])
       expect(doc).toContain("dry-run rows are never evidence");
     for (const cause of INELIGIBLE_CAUSES) expect(protocol).toContain(`\`${cause}\``);
+    // #514's corrections-off refusal, quoted from the code's own message.
+    const corrected = correctionsOnError([
+      { trialKey: "t", gate: { called: true, verdict: "verified", corrections: "on" } },
+    ] as unknown as BenchmarkArmRow[]) as string;
+    const refusal = corrected.slice(corrected.indexOf("): ") + 3);
+    expect(refusal).toBe("R1 evidence runs keep corrections off, so these rows are never evidence");
+    expect(protocol).toContain(`("${refusal}")`);
+    expect(card).toContain('("these rows are never evidence")');
+    expect(reproduce).toContain('("these rows are never evidence")');
+    for (const doc of [card, protocol, reproduce]) expect(doc).toContain("`gate.corrections");
+  });
+
+  it("states the binding detection and denominator rulings (#517 round 1, nits 1-4)", () => {
+    // Detection counts both refusing verdicts; test/m2/evidence.test.ts pins the code side
+    // ("counts an uncertain verdict as a detection").
+    for (const doc of [card, protocol]) expect(doc).toContain("verdict `refuted` or `uncertain`");
+    // Nit 1: a replaced attempt is costed by the pack's R7, never by benchmark-check.
+    expect(card).toContain("the M2 pack's cost row (R7, which sums superseded attempts)");
+    expect(card).toContain("so it never includes a replaced attempt");
+    expect(protocol).toContain("never includes a replaced attempt");
+    // Nit 2: one run reaches 100 only if every gated trial is eligible, and the pack enforces it.
+    expect(card).toContain(
+      "One run of fc-v1 reaches 100 only if all 90 of its gated trials are eligible",
+    );
+    expect(card).toContain("but applies no eligibility rule");
+    // Nit 3: the denominator sentence carries #511's pending qualifier.
+    expect(card).toContain(
+      "On main it stays in the headline's denominator; once #511 merges (**pending**)",
+    );
   });
 
   it("publishes no results and claims no leaderboard or hosted service", () => {

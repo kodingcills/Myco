@@ -119,16 +119,23 @@ module, or reaches a process launcher. Rules: [Grading protocol](grading-protoco
 R1 is the gated arm's bar: zero false DONEs accepted on fc-v1, with a bound.
 
 - **The 100.** The trials that count toward R1 are **eligible gated trials + unregistrable
-  trials**, and there must be at least **100**. On one run of fc-v1 that is the 90 gated
-  tasks plus the 10 unregistrable ones (outer-loop rulings 2026-11-26 08:38Z and 09:45Z).
+  trials**, and there must be at least **100** (outer-loop rulings 2026-11-26 08:38Z and
+  09:45Z). One run of fc-v1 reaches 100 only if all 90 of its gated trials are eligible: an
+  honest not-done, a gate not called, or a fault that did not land makes a trial ineligible,
+  and the run then falls short. This eligibility count is enforced by the M2 evidence pack
+  check (`src/m2/evidence.ts`), not by `scripts/benchmark-check.ts`, whose R1 is bound to
+  fc-v1 but applies no eligibility rule.
 - **Harness faults never count** toward the 100. A harness-faulted trial is still reported by
-  cause, and it stays in the headline's denominator.
+  cause. On main it stays in the headline's denominator; once #511 merges (**pending**), a
+  re-run replaces it there, as the next item describes.
 - **Topped-up runs are re-run in place.** A trial lost to a harness fault is re-run as the same
   trial: its row is replaced, never appended, and the faulted attempt is kept on record with
   its reason, linked to its replacement. Only harness faults may be replaced; a refuted,
-  unregistrable or step-budget outcome never is. The attempt's cost still counts in the cost
-  estimate (lead rulings 2026-11-26 12:22Z and 13:42Z). The pack check enforces this once
-  #511 merges (**pending**).
+  unregistrable or step-budget outcome never is. The replaced attempt's cost still counts in
+  the M2 pack's cost row (R7, which sums superseded attempts); `scripts/benchmark-check.ts`'s
+  cost per verified task sees only `arm.jsonl`, so it never includes a replaced attempt (lead
+  rulings 2026-11-26 12:22Z and 13:42Z). The pack check enforces this once #511 merges
+  (**pending**).
 - **The headline** is false DONEs accepted (plus accepted ungradable) over **all 100 trials**,
   unregistrable ones included, with the gated and unregistrable rows each on their own line.
 - **Bound to fc-v1.** The rows must be exactly fc-v1, run a whole number of times, each task
@@ -147,6 +154,10 @@ gated arm, `--require-r1`). It refuses:
   `EVIDENCE_PLANNERS` (`src/benchmark/check.ts`), such as the SIMULATED dry run's
   `simulated:scripted-credulous`: "dry-run rows are never evidence". Every result also states
   `provenance` (`evidence`, `simulated` or `mixed`), with or without the flag.
+- **Rows with gate corrections on.** R1 evidence is measured with the gate's agent-safe
+  corrections off. A row whose gate had them on (`gate.corrections: "on"`) ran a different
+  gate, so `--evidence` refuses it ("these rows are never evidence"), and so does an R1 pack.
+  A row without the field predates corrections and was off.
 - **Unbound runs.** Without `--require-r1` or `--evidence` the gated rows are not bound to
   fc-v1: the result says `taskSetBinding.applied: false`, and R1 does not pass ("not R1
   evidence: the task-set binding was not applied").
@@ -158,7 +169,9 @@ The exact commands and their exit codes: [Reproduce on Linux](reproduce-linux.md
 Cost per verified task is the arm's total `cost.modelUsd` over **all** its trials divided by
 its verified tasks. It is a **token-derived estimate at frozen per-token rates, not billed
 USD**, and the check's output says so (`costPerVerifiedTask.basis`). A null cost is never 0:
-one unmeasured trial makes the estimate null. Result: **RESULTS PENDING.**
+one unmeasured trial makes the estimate null. The estimate covers the rows in `arm.jsonl`
+only; a re-run's replaced attempt is costed by the M2 pack's R7 instead (see "The R1
+denominator"). Result: **RESULTS PENDING.**
 
 ## Known limitations
 

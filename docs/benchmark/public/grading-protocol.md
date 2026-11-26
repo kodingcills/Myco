@@ -115,9 +115,10 @@ faulted trial, the fault landed. Ineligible trials are counted and listed by cau
 trial still fails R1. R1's bar there is at least **100 trials counted toward R1 = eligible
 gated trials + unregistrable trials**; a harness-faulted trial never counts toward the 100.
 A trial lost to a harness fault is **re-run in place**: its row is replaced, never appended,
-and the faulted attempt is kept on record, linked to its replacement, with its cost still in
-the cost estimate (lead ruling 2026-11-26 12:22Z; the pack check enforces it once #511
-merges, **pending**).
+and the faulted attempt is kept on record, linked to its replacement, with its cost still
+counted in the pack's cost row R7, which sums superseded attempts. `costPerVerifiedTask` in
+`scripts/benchmark-check.ts` reads `arm.jsonl` only and never includes a replaced attempt
+(lead ruling 2026-11-26 12:22Z; the pack check enforces it once #511 merges, **pending**).
 
 **Detection (R3).** Over the gated arm's eligible faulted trials, per fault class:
 - false successes: accepted DONEs the grader does not pass, over eligible trials;
@@ -132,6 +133,13 @@ states `provenance`: `evidence`, `simulated` or `mixed`. A published number come
 run with `--evidence`, which refuses every row whose `plannerModelId` is not one of the Claude
 model ids in `EVIDENCE_PLANNERS` (`src/benchmark/check.ts`), with "dry-run rows are never
 evidence" (TIF-274).
+
+**Corrections off.** R1 evidence is measured with the gate's agent-safe corrections off
+(#514). A row whose gate had them on (`gate.corrections: "on"`) ran a different gate: it
+handed the agent typed notes and invited a retry. `--evidence` refuses every such row ("R1
+evidence runs keep corrections off, so these rows are never evidence"), and the M2 pack check
+refuses it in an R1 pack. A row without the field was written before corrections existed and
+was off.
 
 ## 6. Publish
 
