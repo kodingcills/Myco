@@ -203,6 +203,24 @@ describe("grade requests from arm rows", () => {
     ).toThrow(/arm row fixtureSha256 .* does not match task fc-v1-001/);
   });
 
+  it("refuses trialKeys that collide on a case-insensitive filesystem, and exact duplicates (N-l)", () => {
+    expect(() =>
+      buildRequests(committedTasks, [ref(t1, "Trial-1"), ref(t2, "trial-1")], () => null),
+    ).toThrow(/trialKey trial-1 collides with Trial-1 on a case-insensitive filesystem/);
+    expect(() =>
+      buildRequests(committedTasks, [ref(t1, "trial-1"), ref(t2, "trial-1")], () => null),
+    ).toThrow(/duplicate trialKey trial-1/);
+    // The refusal is in planning: the document lookup never runs for a colliding set.
+    let looked = 0;
+    expect(() =>
+      buildRequests(committedTasks, [ref(t1, "A"), ref(t2, "a")], () => {
+        looked++;
+        return null;
+      }),
+    ).toThrow(RequestBuildError);
+    expect(looked).toBe(0);
+  });
+
   it("refuses a row whose taskSetVersion is not the task's (fc-v1 row labelled fc-v2)", () => {
     expect(() =>
       buildRequests(committedTasks, [ref(t1, "a", { taskSetVersion: "fc-v2" })], () => null),
