@@ -1,8 +1,10 @@
 /**
  * End to end on the fake app (no VM, no paid API): real guarded-program runs and false
  * "done" runs, graded by the independent grader and joined by the check. Also cross-checks
- * the grader against the gate's own verifier: two independent implementations must agree
- * on every document, and the test fails loudly if they ever diverge.
+ * the grader against the gate's Calc oracle (`calc-record-edit` v2, whole document, TIF-270):
+ * two independent implementations must agree on every document, and the test fails loudly
+ * if they ever diverge. M1's target-only verifier is kept beside them, with its known
+ * collateral divergence pinned.
  */
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +16,7 @@ import { gradeRow } from "../../src/benchmark/grade/row.ts";
 import { readCsvSpreadsheet } from "../../src/core/filepersist.ts";
 import { runProgram } from "../../src/core/runner.ts";
 import { FakeSpreadsheetApp } from "../../src/fake/app.ts";
+import { calcRecordEditFamily } from "../../src/gate/families.ts";
 import { calcRecordEditVerifier, intentFor, programFor } from "../../src/tasks/calc-record-edit.ts";
 import { FIXTURE_COLUMNS, generateFixture } from "../../src/tasks/fixture.ts";
 import { type CalcRecordEditParams, generateParameterSets } from "../../src/tasks/intent.ts";
@@ -62,13 +65,19 @@ describe("benchmark harness on the fake app", () => {
         const gate = calcRecordEditVerifier.verify(readCsvSpreadsheet(filePath), intentFor(params));
         const label = `${params.fixtureSeed}/${params.rowKey}/${params.column} ${outcome}`;
         expect(g.status, label).toBe(outcome === "honest" ? "pass" : "fail");
+        // The gate's Calc oracle (whole document, TIF-270) agrees with the grader on every
+        // outcome, collateral damage included.
+        const gateV2 = calcRecordEditFamily.decide(new Uint8Array(persisted), params, "doc.csv");
+        expect(gateV2.status === "verified", `${label}: grader and gate v2 disagree`).toBe(
+          g.status === "pass",
+        );
         if (outcome === "collateral") {
-          // Known divergence, pinned: the gate checks the target cell only, so it verifies a
-          // document whose other cells were damaged. The independent grader fails it and
-          // still reports the target itself as satisfied. If the gate ever starts checking
-          // collateral cells, this assertion flips and the benchmark doc must be updated.
-          expect(gate.status, `${label}: gate`).toBe("verified");
+          // Known divergence, pinned: M1's verifier checks the target cell only, so it
+          // verifies a document whose other cells were damaged. The gate no longer uses it
+          // for this (calc-record-edit v2 above); M1 code paths still do.
+          expect(gate.status, `${label}: M1 verifier`).toBe("verified");
           expect(g.targetSatisfied, label).toBe(true);
+          expect(gateV2.codes, label).toEqual(["DOCUMENT_COLLATERAL"]);
         } else {
           expect(gate.status === "verified", `${label}: grader and gate disagree`).toBe(
             g.status === "pass",

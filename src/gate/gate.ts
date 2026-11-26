@@ -21,11 +21,15 @@ import {
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
+  type CheckpointSummary,
+  type CheckpointVerdict,
   type EvidenceRef,
   GATE_API_VERSION,
   type GateResult,
   type GateVerdict,
   isSafeId,
+  ORACLE_DETAIL_CODES,
+  type OracleDetailCode,
   parseGateRequest,
   type ReasonCode,
 } from "./api.ts";
@@ -437,14 +441,71 @@ export interface Gate {
   check(raw: unknown): Promise<GateResult>;
 }
 
-/** Narrow an oracle's return value; anything malformed is not a verdict. */
+const MAX_CHECKPOINTS = 64;
+
+/**
+ * Narrow an oracle's return value; anything malformed is not a verdict. The TIF-270
+ * fields are checked for consistency too, so a buggy oracle cannot pair `verified` with a
+ * failure code or a refuted checkpoint:
+ *  - `codes`: only `ORACLE_DETAIL_CODES`, no repeats, and only on `refuted`;
+ *  - `checkpoints`: 1-64 entries numbered 1..n in order, each verified or refuted, with
+ *    the last one equal to the status (so `uncertain` never carries checkpoints) and every
+ *    one verified when the status is.
+ */
 function validOracleOutput(value: unknown): OracleOutput | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   if (typeof (value as { then?: unknown }).then === "function") return undefined;
-  const { status, reasons } = value as { status?: unknown; reasons?: unknown };
+  const { status, reasons, codes, checkpoints } = value as {
+    status?: unknown;
+    reasons?: unknown;
+    codes?: unknown;
+    checkpoints?: unknown;
+  };
   if (status !== "verified" && status !== "refuted" && status !== "uncertain") return undefined;
   if (!Array.isArray(reasons) || !reasons.every((r) => typeof r === "string")) return undefined;
-  return { status, reasons: [...reasons] };
+  let detail: OracleDetailCode[] | undefined;
+  if (codes !== undefined) {
+    if (!Array.isArray(codes) || status !== "refuted") return undefined;
+    if (!codes.every((code) => (ORACLE_DETAIL_CODES as readonly unknown[]).includes(code)))
+      return undefined;
+    if (new Set(codes).size !== codes.length) return undefined;
+    detail = [...(codes as OracleDetailCode[])];
+  }
+  let steps: CheckpointVerdict[] | undefined;
+  if (checkpoints !== undefined) {
+    if (
+      !Array.isArray(checkpoints) ||
+      checkpoints.length === 0 ||
+      checkpoints.length > MAX_CHECKPOINTS
+    )
+      return undefined;
+    steps = [];
+    for (const [index, entry] of checkpoints.entries()) {
+      if (typeof entry !== "object" || entry === null) return undefined;
+      const { checkpoint, verdict } = entry as { checkpoint?: unknown; verdict?: unknown };
+      if (checkpoint !== index + 1) return undefined;
+      if (verdict !== "verified" && verdict !== "refuted") return undefined;
+      steps.push({ checkpoint, verdict });
+    }
+    if (steps[steps.length - 1]?.verdict !== status) return undefined;
+    if (status === "verified" && steps.some((cp) => cp.verdict !== "verified")) return undefined;
+  }
+  return {
+    status,
+    reasons: [...reasons],
+    ...(detail ? { codes: detail } : {}),
+    ...(steps ? { checkpoints: steps } : {}),
+  };
+}
+
+/** The gate's own summary of an oracle's checkpoints: `lastVerified` is never taken on trust. */
+function summarize(checkpoints: readonly CheckpointVerdict[]): CheckpointSummary {
+  const firstRefuted = checkpoints.findIndex((cp) => cp.verdict !== "verified");
+  return {
+    total: checkpoints.length,
+    lastVerified: firstRefuted === -1 ? checkpoints.length : firstRefuted,
+    verdicts: checkpoints.map((cp) => ({ ...cp })),
+  };
 }
 
 /** The one place a `verified` verdict can come from. */
@@ -536,6 +597,7 @@ export function createGate(config: GateConfig): Gate {
     request: GateResult["request"];
     refs?: EvidenceRef[];
     oracle?: GateResult["oracle"];
+    checkpoints?: CheckpointSummary;
   }): Promise<GateResult> {
     const codes = [...parts.codes];
     if (parts.request.claim !== undefined) codes.push("CLAIM_RECORDED");
@@ -550,6 +612,7 @@ export function createGate(config: GateConfig): Gate {
       evidenceRefs: parts.refs ?? [],
       request: parts.request,
       ...(parts.oracle ? { oracle: parts.oracle } : {}),
+      ...(parts.oracle && parts.checkpoints ? { checkpoints: parts.checkpoints } : {}),
       checkedAt: now().toISOString(),
     };
     if (!config.onDecision) return result;
@@ -676,7 +739,15 @@ export function createGate(config: GateConfig): Gate {
       });
     }
     const { verdict, code } = verdictFromOracle(valid);
-    return finish({ verdict, codes: [code], reasons: [...valid.reasons], request, refs, oracle });
+    return finish({
+      verdict,
+      codes: [code, ...(valid.codes ?? [])],
+      reasons: [...valid.reasons],
+      request,
+      refs,
+      oracle,
+      ...(valid.checkpoints ? { checkpoints: summarize(valid.checkpoints) } : {}),
+    });
   }
 
   return {

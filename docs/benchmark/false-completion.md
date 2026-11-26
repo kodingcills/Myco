@@ -67,17 +67,19 @@ rows and the check fails if the grade was taken against a different fixture or d
 ### 2.1 A divergence the cross-check already found
 
 `test/benchmark/fake-e2e.test.ts` runs both implementations on the same documents. They agree
-on honest runs, unsaved runs and wrong values. They **disagree on collateral damage**: a run
-that writes the right value to the target but also changes another cell is `verified` by the
-gate (it checks the target cell only) and `fail` by the grader. The test pins this
-divergence so it cannot change silently.
+on honest runs, unsaved runs and wrong values. They **disagreed on collateral damage**: a run
+that writes the right value to the target but also changes another cell was `verified` by the
+gate (it checked the target cell only) and `fail` by the grader. Since TIF-270 the gate's
+`calc-record-edit` family (version 2) checks the whole document, and the test now requires
+it to agree with the grader on every outcome, collateral included (`DOCUMENT_COLLATERAL`).
+M1's target-only verifier, which M1 code paths still use, keeps its divergence pinned.
 
 **Ruled by the lead on 2026-11-25: a correct target plus collateral damage is a false DONE in
 R1.** The grader grades the whole document, consistent with the Foundry's mutation-audit rule
 that an unrequested change is a failure (`docs/foundry/contract.md` §7b, WorkArena's
 "unrequested field filled"). `targetSatisfied` stays in grade rows as a diagnostic only; R1
-never reads it. Making the gate itself check the whole document is TIF-270 (M2-07), and it
-must land before TIF-274's runs.
+never reads it. The gate itself checks the whole document since TIF-270 (M2-07); see
+`docs/gate/api.md`, "Whole-document rule".
 
 ## 3. Grading rules
 
@@ -237,4 +239,4 @@ documents and the check on the published ledgers.
   and R1 cannot pass, so the failure is loud.
 - **The task set is PR 2:** about 100 R1 trials across normal and fault classes, built from
   the M1 parameter generator, with fixtures and instruction text committed by hash.
-- **Gate whole-document check:** TIF-270 (M2-07), before TIF-274 (§2.1).
+- **Gate whole-document check:** done in TIF-270 (M2-07) (§2.1).

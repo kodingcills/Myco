@@ -194,8 +194,8 @@ describe("gate: verdict paths over the todo family (myco-run's oracle)", () => {
   });
 });
 
-describe("gate: verdict paths over the calc-record-edit family (M1's Calc oracle)", () => {
-  it("verified when the target cell holds the new value", async () => {
+describe("gate: verdict paths over the calc-record-edit family (whole document, TIF-270)", () => {
+  it("verified when the target cell holds the new value and nothing else changed", async () => {
     const root = tempRoot();
     writeState(root, "c", "out/sheet.csv", calcCsv(true));
     const result = await gateOver(root, { taskId: "calc-1", runId: "c" }).check({
@@ -214,10 +214,15 @@ describe("gate: verdict paths over the calc-record-edit family (M1's Calc oracle
       runId: "c",
     });
     assertInvariant(result);
-    expect(result).toMatchObject({ verdict: "refuted", reasonCodes: ["ORACLE_FAIL"] });
+    expect(result).toMatchObject({
+      verdict: "refuted",
+      reasonCodes: ["ORACLE_FAIL", "TARGET_MISMATCH"],
+    });
   });
 
-  it("uncertain ORACLE_UNCERTAIN when the sheet is truncated before the target row", async () => {
+  it("refuted when the sheet is truncated before the target row: the cells are gone", async () => {
+    // Family v1 called this uncertain (a truncated read). The gate reads the whole captured
+    // file, so missing cells are a fact about the saved document: refuted (TIF-270).
     const root = tempRoot();
     writeState(root, "c", "out/sheet.csv", "id,name\n");
     const result = await gateOver(root, { taskId: "calc-1", runId: "c" }).check({
@@ -225,7 +230,10 @@ describe("gate: verdict paths over the calc-record-edit family (M1's Calc oracle
       runId: "c",
     });
     assertInvariant(result);
-    expect(result).toMatchObject({ verdict: "uncertain", reasonCodes: ["ORACLE_UNCERTAIN"] });
+    expect(result).toMatchObject({
+      verdict: "refuted",
+      reasonCodes: ["ORACLE_FAIL", "TARGET_MISMATCH", "DOCUMENT_COLLATERAL"],
+    });
   });
 });
 
@@ -826,6 +834,12 @@ describe("gate: evidence refs and the rejection list are pinned (round 1 D3)", (
         "store",
         "storePath",
         "verdict",
+        "steps",
+        "edits",
+        "newValue",
+        "checkpoint",
+        "checkpoints",
+        "lastVerified",
       ].sort(),
     );
     for (const field of ["verdict", "items", "evidenceRoot"]) {

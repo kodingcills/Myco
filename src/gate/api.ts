@@ -26,7 +26,8 @@ export type GateVerdict = "verified" | "refuted" | "uncertain";
 
 /**
  * Stable reason codes. Exactly one of the `ORACLE_*` or input/state codes explains the
- * verdict; `CLAIM_RECORDED` may accompany any of them.
+ * verdict; `CLAIM_RECORDED` may accompany any of them, and the detail codes
+ * `TARGET_MISMATCH` / `DOCUMENT_COLLATERAL` may accompany `ORACLE_FAIL` only.
  */
 export const REASON_CODES = [
   /** The oracle ran on persisted state and passed. The only code that goes with `verified`. */
@@ -71,9 +72,45 @@ export const REASON_CODES = [
   "AUDIT_FAILED",
   /** The agent's claim was recorded. Informational; it never changes the verdict. */
   "CLAIM_RECORDED",
+  /**
+   * Detail for ORACLE_FAIL (TIF-270): a cell the task targets does not hold the value the
+   * task asked for. Accompanies ORACLE_FAIL only, never another verdict.
+   */
+  "TARGET_MISMATCH",
+  /**
+   * Detail for ORACLE_FAIL (TIF-270): a cell the task does not target differs from the
+   * pristine fixture (changed, cleared or added): collateral damage. The whole document
+   * must equal pristine + intent, so a correct target with collateral damage is refuted.
+   */
+  "DOCUMENT_COLLATERAL",
 ] as const;
 
 export type ReasonCode = (typeof REASON_CODES)[number];
+
+/**
+ * Reason codes an oracle may attach to a `refuted` output to say why (TIF-270). The gate
+ * refuses any other code, and any of these on a non-refuted output, as malformed.
+ */
+export const ORACLE_DETAIL_CODES = ["TARGET_MISMATCH", "DOCUMENT_COLLATERAL"] as const;
+export type OracleDetailCode = (typeof ORACLE_DETAIL_CODES)[number];
+
+/** One checkpoint's verdict in a multi-step task (TIF-270). Checkpoints are numbered from 1. */
+export interface CheckpointVerdict {
+  readonly checkpoint: number;
+  readonly verdict: "verified" | "refuted";
+}
+
+/**
+ * Per-checkpoint verdicts for a multi-step task (TIF-270), computed by the oracle from the
+ * persisted document and the operator's spec alone. `lastVerified` is computed by the
+ * gate: the number of leading verified checkpoints (0 = none; the retry then starts from
+ * the pristine fixture). The final checkpoint's verdict is the task's verdict.
+ */
+export interface CheckpointSummary {
+  readonly total: number;
+  readonly lastVerified: number;
+  readonly verdicts: readonly CheckpointVerdict[];
+}
 
 /** What the agent sends. Every field except these is rejected. */
 export interface GateRequest {
@@ -119,6 +156,11 @@ export interface GateResult {
     /** sha256 of the canonical JSON of the operator's task spec. */
     readonly specSha256: string;
   };
+  /**
+   * Per-checkpoint verdicts, present only when a multi-step family's oracle decided
+   * (TIF-270). Verdicts only: no expected value is ever exposed or accepted.
+   */
+  readonly checkpoints?: CheckpointSummary;
   readonly checkedAt: string;
 }
 
@@ -153,6 +195,14 @@ export const ORACLE_INPUT_FIELDS: readonly string[] = [
   "verdict",
   "status",
   "accepted",
+  // Multi-step Calc (TIF-270): the steps, their expected values and the checkpoint
+  // verdicts are the operator's and the oracle's, never the agent's.
+  "steps",
+  "edits",
+  "newValue",
+  "checkpoint",
+  "checkpoints",
+  "lastVerified",
 ];
 
 /** Ids are path segments, so they are restricted to a safe alphabet and never `.`/`..`. */
