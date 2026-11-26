@@ -403,6 +403,16 @@ describe("the structural replacements themselves", () => {
     }
   });
 
+  it("re-audit: the anchor's trialKey schema is the closed id grammar, not #518's", () => {
+    const f = clone(exportProofBundle(sampleRun(), NO_CTX));
+    const anchor = f.records.find((r) => r.kind === "ledger-anchor");
+    if (anchor === undefined) throw new Error("fixture");
+    (anchor.body as { trialKey: string }).trialKey = "C:qzjdoe";
+    const r = verifyProofBundle(serializeProofBundle(rechain(f)));
+    expect(r.errors.map((e) => e.code)).toContain("PROOF_SCHEMA");
+    expect(JSON.stringify(r)).not.toContain("qzjdoe");
+  });
+
   it("a planted path in a hashed id still binds: the verdict's runId equals the run's", () => {
     const v = "\\\\nas\\homes\\Qzfirst Qzlast";
     const { bundle } = exportVerifyReport(plantEverywhere(v), ["Qzfirst", "Qzlast"]);
