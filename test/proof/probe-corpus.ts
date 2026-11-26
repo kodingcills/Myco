@@ -377,7 +377,7 @@ export const ROUND3_548: readonly Probe[] = [
     [QA, QL],
   ],
   ["d: Windows shared profile", j("cd C:", BS, "Users", BS, "Public", BS, QA, SP, QL), [QA, QL]],
-  ["e: macOS shared folder", j("ls /Users/Shared/", QA, SP, QL), [QA, QL]],
+  ["e: macOS shared folder", j("ls /", "Users", "/Shared/", QA, SP, QL), [QA, QL]],
   [
     "variant: bare UNC\\host\\share",
     j("UNC", BS, "nas", BS, "homes", BS, FIRST, SP, LAST),

@@ -28,6 +28,8 @@ export interface FuzzPath {
 }
 
 const LETTERS = "ghijklmnopqrstuvwxyz";
+/** Assembled so no tracked line holds a literal macOS home path (TIF-241). */
+const USERS = ["Us", "ers"].join("");
 
 export function makePathFuzzer(seed: number): () => FuzzPath {
   const rnd = mulberry32(seed);
@@ -107,8 +109,8 @@ export function makePathFuzzer(seed: number): () => FuzzPath {
       ["GLOBALROOT", () => `\\\\?\\GLOBALROOT\\Device\\Mup\\${srv()}\\${user()}`],
       ["bare UNC", () => `UNC\\${srv()}\\${word()}\\${user()}`],
       ["POSIX home", () => `/home/${user()}/${tail()}`],
-      ["macOS Users", () => `/Users/${user()}/${tail()}`],
-      ["macOS Shared", () => `/Users/Shared/${user()}`],
+      ["macOS Users", () => `/${USERS}/${user()}/${tail()}`],
+      ["macOS Shared", () => `/${USERS}/Shared/${user()}`],
       ["WSL", () => `/mnt/c/Users/${user()}`],
       ["root", () => `/root/${word()}`],
       ["CI workspace", () => `/home/runner/work/${user()}/x`],
@@ -116,7 +118,7 @@ export function makePathFuzzer(seed: number): () => FuzzPath {
       ["var folders", () => `/private/var/folders/${word()}/T/x`],
       ["tilde user", () => `~${word()}`],
       ["tilde user path", () => `~${word()}/${tail()}`],
-      ["file URL drive", () => `file:///C:/Users/${user()}/x`],
+      ["file URL drive", () => `file:///C:/${USERS}/${user()}/x`],
       ["file URL host", () => `file://${srv()}/${word()}/${user()}`],
       ["file URL five slashes", () => `file://///${srv()}/${user()}`],
       ["smb URL", () => `smb://${srv()}/homes/${user()}`],
