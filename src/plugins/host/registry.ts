@@ -31,6 +31,7 @@ import type {
   SelfTestCase,
 } from "../../oracle-selftest/types.ts";
 import {
+  MAX_SELFTEST_OUTPUT_BYTES,
   type OracleStatus,
   PLUGIN_SPEC,
   type PluginManifest,
@@ -275,9 +276,10 @@ export function registerPlugin(pluginDir: string): RegistrationResult {
       const got = runInSandbox(
         target,
         { spec: PLUGIN_SPEC, op: "selftest-cases" },
-        {
-          maxOutputBytes: 8 * 1024 * 1024,
-        },
+        // Self-test cases carry whole documents, so this one call has its own ceiling rather
+        // than the manifest's verdict cap; the kernel file-size limit follows it (8 MiB + one
+        // block on disk at most, E3 on #558).
+        { maxOutputBytes: MAX_SELFTEST_OUTPUT_BYTES },
       );
       if (!got.ok) throw new Refusal("SELFTEST_CASES_FAULT", [got.code]);
       if (got.response.op !== "selftest-cases")

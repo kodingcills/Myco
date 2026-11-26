@@ -31,7 +31,8 @@
  *    would take a file past the cap plus at most one shell block (512 or 1024 bytes, measured
  *    by `measureFsizeUnit`). The child can write only
  *    the answer file (the permission model denies every path write; `fs` is denied), so the
- *    host disk holds at most `maxOutputBytes + 1024` bytes of plugin output per call, whatever
+ *    host disk holds at most the per-request ceiling + one block (`maxOutputBytes + 1024`, or
+ *    8 MiB + 1024 for the registration call `selftest-cases`) of plugin output per call, whatever
  *    route the plugin finds to that file. Node ignores SIGXFSZ, so a write past the limit fails
  *    with EFBIG instead; the child is then stopped by its own error or the wall-clock kill, and
  *    the host reports `PLUGIN_OUTPUT_TOO_LARGE` whenever the file is over the cap. Core dumps

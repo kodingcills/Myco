@@ -22,7 +22,7 @@ import {
   SDK_DIR,
 } from "../../src/plugins/host/sandbox.ts";
 import { PLUGIN_SPEC } from "../../src/plugins/sdk/protocol.ts";
-import { cleanupPlugins, makePlugin, tempDir, utf8 } from "./helpers.ts";
+import { cleanupPlugins, makePlugin, tempDir, utf8, watchDisk } from "./helpers.ts";
 
 const PROBE = String.raw`
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -626,73 +626,7 @@ describe("D3: plugin output is bounded on the host disk during the call", () => 
   const HARD_BOUND = CAP + 1024;
   const MIB = 1024 * 1024;
 
-  const WATCHER = String.raw`
-const { readdirSync, statSync, existsSync } = require("node:fs");
-const { join } = require("node:path");
-const [root, stop] = process.argv.slice(1);
-let maxSize = 0, maxAlloc = 0, seen = 0;
-function walk(d) {
-  let es = [];
-  try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = join(d, e.name);
-    if (e.isDirectory()) { walk(p); continue; }
-    try {
-      const st = statSync(p);
-      if (e.name === "out.json") { seen++; maxSize = Math.max(maxSize, st.size); maxAlloc = Math.max(maxAlloc, st.blocks * 512); }
-    } catch {}
-  }
-}
-process.stdout.write("ready\n");
-const deadline = Date.now() + 30000;
-while (!existsSync(stop) && Date.now() < deadline) {
-  walk(root);
-  const t = Date.now() + 2; while (Date.now() < t) {}
-}
-process.stdout.write(JSON.stringify({ maxSize, maxAlloc, seen }) + "\n");
-`;
-
-  /** Runs one sandboxed call with its io directory under a watched TMPDIR. */
-  async function watched(run: () => SandboxResult) {
-    const root = tempDir("myco-plugin-d3-");
-    const stop = join(root, "..", `${root.split("/").pop()}.stop`);
-    const w = spawn(process.execPath, ["-e", WATCHER, root, stop], {
-      stdio: ["ignore", "pipe", "inherit"],
-    });
-    let out = "";
-    w.stdout?.on("data", (d) => {
-      out += d.toString("utf8");
-    });
-    await new Promise<void>((r) => {
-      const t = setInterval(() => {
-        if (out.includes("ready")) {
-          clearInterval(t);
-          r();
-        }
-      }, 5);
-    });
-    const prev = process.env.TMPDIR;
-    process.env.TMPDIR = root;
-    const started = Date.now();
-    let result: SandboxResult;
-    try {
-      result = run();
-    } finally {
-      if (prev === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = prev;
-    }
-    const ms = Date.now() - started;
-    writeFileSync(stop, "");
-    await new Promise<void>((r) => w.on("exit", () => r()));
-    rmSync(stop, { force: true });
-    const line = out.split("\n").find((l) => l.startsWith("{")) ?? "{}";
-    return {
-      result,
-      ms,
-      leftover: readdirSync(root),
-      ...(JSON.parse(line) as { maxSize: number; maxAlloc: number; seen: number }),
-    };
-  }
+  const watched = (run: () => SandboxResult) => watchDisk(run);
 
   const verifyWith = (source: string, timeoutMs: number, cap = CAP) => {
     const p = makePlugin(source, {

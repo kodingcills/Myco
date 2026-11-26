@@ -131,7 +131,7 @@ Any failure is `uncertain` with a host code (`codeSource: "host"`):
 | `PLUGIN_TIMEOUT` | wall clock over `timeoutMs` (SIGKILL) |
 | `PLUGIN_MEMORY_EXCEEDED` | heap over `memoryMb`, or resident memory over `memoryMb` + 128 MiB runtime allowance |
 | `PLUGIN_NO_NET_ISOLATION` | this host has no OS layer for plugin children (fail closed). On Ubuntu 24.04 and later, unprivileged user namespaces are blocked by AppArmor by default (`kernel.apparmor_restrict_unprivileged_userns=1`), so every plugin call there is `PLUGIN_NO_NET_ISOLATION` until an operator allows them (CI sets the sysctl to 0 on its ephemeral runners) |
-| `PLUGIN_OUTPUT_TOO_LARGE` | the answer file went over `maxOutputBytes`. The kernel's file-size limit stops it there while the child runs, so at most `maxOutputBytes` + 1024 bytes ever reach the host disk |
+| `PLUGIN_OUTPUT_TOO_LARGE` | the answer file went over `maxOutputBytes`. The kernel's file-size limit stops it there while the child runs, so at most the per-request ceiling plus one shell block (512 or 1024 bytes) ever reaches the host disk: `maxOutputBytes` + 1024 for every call, except the registration call `selftest-cases`, whose ceiling is 8 MiB because its cases carry whole documents (8 MiB + 1024) |
 | `PLUGIN_NO_HOOK` | the module lacks the hook, or has no default export |
 | `PLUGIN_THREW` | the hook or the module threw |
 | `PLUGIN_CRASH` | any other non-zero exit or signal |

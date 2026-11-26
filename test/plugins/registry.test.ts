@@ -17,7 +17,16 @@ import {
   runPluginOracle,
   runPluginReader,
 } from "../../src/plugins/host/registry.ts";
-import { cleanupPlugins, copyExample, EXAMPLE_DIR, makePlugin, utf8 } from "./helpers.ts";
+import { fsizeBlocks, fsizeUnit } from "../../src/plugins/host/sandbox.ts";
+import { MAX_SELFTEST_OUTPUT_BYTES } from "../../src/plugins/sdk/protocol.ts";
+import {
+  cleanupPlugins,
+  copyExample,
+  EXAMPLE_DIR,
+  makePlugin,
+  utf8,
+  watchDisk,
+} from "./helpers.ts";
 
 afterAll(cleanupPlugins);
 
@@ -166,6 +175,44 @@ describe("registration requires the R5 self-test for every claimed class", () =>
     () => {
       const r = registerPlugin(txtPlugin({ ext: ".md" }).dir);
       expect(r).toMatchObject({ ok: false, code: "SELFTEST_CASES_INVALID" });
+    },
+    T,
+  );
+
+  // E3 (verifier round 1 on #558): the registration self-test call runs under its own
+  // ceiling (8 MiB), not the manifest's maxOutputBytes, so its on-disk bound is that ceiling
+  // plus one shell block. A plugin with a 4096-byte cap that floods during selftest-cases gets
+  // past the verdict cap's bound and is stopped at the self-test one, then refused.
+  it(
+    "a flood during selftest-cases is stopped at the self-test ceiling plus one block",
+    async () => {
+      const p = makePlugin(`import { Writable } from "node:stream";
+const orig = Writable.prototype.write;
+export default {
+  oracle() { return { status: "verified", code: "OK" }; },
+  selftestCases() {
+    Writable.prototype.write = function (chunk, ...rest) {
+      const big = Buffer.alloc(1024 * 1024, 65);
+      for (let i = 0; i < 16; i++) orig.call(this, big);
+      return orig.call(this, chunk, ...rest);
+    };
+    return [];
+  },
+};`);
+      const unit = fsizeUnit() as number;
+      expect([512, 1024]).toContain(unit);
+      const w = await watchDisk(() => registerPlugin(p.dir));
+      expect(w.result).toMatchObject({
+        ok: false,
+        code: "SELFTEST_CASES_FAULT",
+        reasons: ["PLUGIN_OUTPUT_TOO_LARGE"],
+      });
+      expect(w.maxSize).toBeGreaterThan(4096 + 1024); // not the manifest cap's bound ...
+      expect(w.maxSize).toBeGreaterThan(MAX_SELFTEST_OUTPUT_BYTES); // ... the self-test ceiling's
+      expect(w.maxSize).toBeLessThanOrEqual(
+        fsizeBlocks(MAX_SELFTEST_OUTPUT_BYTES, unit) * unit, // and no further than one block past it
+      );
+      expect(w.leftover).toEqual([]);
     },
     T,
   );
