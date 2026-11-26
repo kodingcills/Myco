@@ -386,12 +386,18 @@ Markers begin with U+0000 and a line feed, which no expected cell can hold (XML 
 carry U+0000; the CSV path splits rows on line feeds). Parity is pinned by
 `test/gate/xlsx-parity.test.ts`: every probe of the agreement table, and a typed-edit and
 collateral table over every column type, rebuilt as the equivalent workbook, gets the same
-verdict, reason codes and reasons on both paths. The same file executes the soundness claim
+verdict, reason codes and reasons on both paths. The same file checks the soundness property
 over every workbook it builds (the agreement and typed tables, an xlsx-only table of
 formula, string, boolean and namespace probes, the committed third-party workbooks, and the
-round-3 structure probes below): the gate never verifies a workbook the independent grader
-fails, and whenever it verifies, the grader passes, with no exception (#503's one exception,
-a prefixed root the grader cannot read, is now refused by the raw-byte pre-scan).
+round-3 structure probes below): on each of them, if the gate verifies, the grader passes.
+#503's one exception, a prefixed root the grader cannot read, is refused by the raw-byte
+pre-scan. That property is TESTED, over those workbooks, round 1's decoy shapes
+(`test/gate/xlsx-decoys.test.ts`) and the 4,800 variants of
+`test/gate/xlsx-differential.test.ts`; it is not proved for every input. An earlier version
+of this section said "with no exception": round 1 of the gate-integrity PR found six shapes
+(decoys nested inside elements the reader skipped, and a decoy archive in the EOCD comment)
+that the gate verified and the grader failed. The element-tree pin and the byte-coverage
+rule below close them.
 
 *Raw-byte pre-scan and fixed part names (replaces #503, round 3 D8).* Before any XML is
 parsed, every entry must be one of LibreOffice's fixed part names and every part's bytes must
@@ -400,7 +406,14 @@ instructions, double-quoted attributes with single spaces and none before `>`, L
 exact root namespace declarations and no prefixes on cell, string or sheet elements, only the
 five predefined escapes in text and no reference in `<v>`, no text inside structure. After
 parsing, every relationship must be LibreOffice's own, at its exact target, and every part
-referenced (no decoy). Anything else is `uncertain` with a code, never `verified`. The
+referenced (no decoy). Every element of every pinned part (workbook, worksheets, shared
+strings, styles, content types, relationships) must sit at a path LibreOffice writes, from a
+per-parent allowlist of child names; a singleton child appears at most once; nothing sits
+inside a leaf (a `<Relationship>`, `<Override>`, `<Default>`, `<numFmt>`, `<v>` ...); docProps
+and the theme hold no element name either reader reads (`XLSX_TREE_ELEMENT`). In the zip, the
+EOCD is the last 22 bytes with no comment, and the entries, the central directory and the
+EOCD cover every byte of the file (`XLSX_ZIP_MALFORMED`). Anything else is `uncertain` with a
+code, never `verified`. The
 accepted grammar, the part allowlist and the evidence are in
 [`docs/gate/xlsx-byte-grammar.md`](xlsx-byte-grammar.md). openpyxl's files are outside it and
 are refused.
@@ -477,7 +490,7 @@ fails if a code is added to `XlsxErrorCode` without one):
 | Refused | Code |
 |---|---|
 | bytes that are not a zip (CSV saved as `.xlsx`, an OLE2 encrypted Office file, leading junk) | `XLSX_NOT_ZIP` |
-| leading junk that starts like a zip, trailing junk, a multi-disk archive, overlapping entries (a quine-style bomb reusing data), headers that disagree or run out of the file | `XLSX_ZIP_MALFORMED` |
+| leading junk that starts like a zip, trailing junk, an EOCD comment (any, even empty of signatures), bytes between or before entries that no local header, entry data or data descriptor covers, a data descriptor that does not repeat the central directory's CRC and sizes, a multi-disk archive, overlapping entries (a quine-style bomb reusing data), headers that disagree or run out of the file | `XLSX_ZIP_MALFORMED` |
 | ZIP64 records or markers | `XLSX_ZIP64` |
 | an inflated size that is not the declared one (bounded by `maxOutputLength`) or data that does not inflate | `XLSX_INFLATE_FAILED` |
 | a CRC that does not match | `XLSX_CRC_MISMATCH` |
@@ -494,6 +507,7 @@ fails if a code is added to `XlsxErrorCode` without one):
 | an entry at any name LibreOffice does not write (anything but `[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`, `xl/_rels/workbook.xml.rels`, `xl/worksheets/sheetN.xml`, `xl/styles.xml`, `xl/sharedStrings.xml`, `xl/theme/theme1.xml`, `docProps/core.xml`, `docProps/app.xml`): a worksheet relationships part, media, a `.docx`'s parts | `XLSX_PART_UNEXPECTED` |
 | a relationship of a type LibreOffice does not write, or whose `Target` is not the exact string it writes (`xl/workbook.xml`; `worksheets/sheetN.xml`, `styles.xml`, `sharedStrings.xml`, `theme/theme1.xml`; `docProps/core.xml`, `docProps/app.xml`), a second `officeDocument`, a duplicate id, two relationships to one part, an extra attribute, a `<sheet>` naming no worksheet relationship | `XLSX_REL_TARGET` |
 | a decoy: an entry no relationship references (a copy left at a canonical name, an extra worksheet no `<sheet>` names), a content-type override naming a part that is not there | `XLSX_PART_UNREFERENCED` |
+| an element of a pinned part at a path LibreOffice does not write (a `<sheetData>` in `<sheetPr>`, a `<workbookPr>` in `<fileVersion>`, a `<cellXfs>` in `<fonts>`, a `<numFmt>` in `<borders>`), any element inside a leaf (a `<Relationship>` in a `<Relationship>`), a second singleton (two `<numFmts>`), an element outside the root's namespace (`loext:extCalcPr` in the workbook's `<extLst>` aside); in docProps or the theme, any element named like one either reader reads (`sheetData`, `sheet`, `numFmt`, `Relationship`, ...). See [`docs/gate/xlsx-byte-grammar.md`](xlsx-byte-grammar.md), "Element tree" | `XLSX_TREE_ELEMENT` |
 | any part's bytes, before parsing: an XML declaration other than LibreOffice's two (`<?xml version="1.0" encoding="UTF-8"?>`, with or without `standalone="yes"`), or none | `XLSX_PRESCAN_DECL` |
 | any part's bytes: `<!--` anywhere | `XLSX_PRESCAN_COMMENT` |
 | any part's bytes: `<![CDATA[` | `XLSX_PRESCAN_CDATA` |

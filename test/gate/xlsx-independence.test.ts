@@ -22,6 +22,8 @@ const GATE_XLSX_ENTRIES = [
   // The raw-byte pre-scan and the fixed part names (this PR), entries in their own right.
   join(GATE, "xlsx-prescan.ts"),
   join(GATE, "xlsx-parts.ts"),
+  // The element-tree pin (round 2 of this PR): imports types only, from the gate.
+  join(GATE, "xlsx-tree.ts"),
   join(GATE, "calc-document.ts"),
   join(GATE, "families.ts"),
 ];
@@ -73,6 +75,13 @@ describe("gate xlsx path and grader xlsx path are independent (TIF-274 prerequis
     const fromReader = [...reach(join(GATE, "xlsx-document.ts"), disk)];
     expect(fromReader).toContain(join(GATE, "xlsx-prescan.ts"));
     expect(fromReader).toContain(join(GATE, "xlsx-parts.ts"));
+    expect(fromReader).toContain(join(GATE, "xlsx-tree.ts"));
+  });
+
+  it("bite: xlsx-tree.ts importing the grader's sheet.ts is reported", () => {
+    const file = join(GATE, "xlsx-tree.ts");
+    const source = overlay(file, 'import "../benchmark/grade/sheet.ts";');
+    expect(crossings([file], BENCHMARK, source)).not.toEqual([]);
   });
 
   it.each(["xlsx-prescan.ts", "xlsx-parts.ts"])(

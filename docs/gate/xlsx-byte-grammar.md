@@ -22,9 +22,15 @@ refuses it, with a code (`uncertain` `STATE_CORRUPT`, never `verified`).
 
 ## Order of checks (`readXlsxDocument`, `src/gate/xlsx-document.ts`)
 
-1. Zip layer (#503, unchanged): size, entry-count, ratio and total caps from the central
-   directory before anything inflates; traversal, duplicate, encrypted and ZIP64 refusal;
-   inflation bounded by the declared size, CRC checked.
+1. Zip layer: size, entry-count, ratio and total caps from the central directory before
+   anything inflates; traversal, duplicate, encrypted and ZIP64 refusal; inflation bounded
+   by the declared size, CRC checked (#503). Since round 2 of this PR, also **byte
+   coverage**: the EOCD is exactly the last 22 bytes and carries **no comment**; the entries
+   (local header, data, and the data descriptor LibreOffice writes after each, which must
+   repeat the central directory's CRC and sizes) tile `[0, cdOffset)` with no gap or
+   overlap; the central directory is `[cdOffset, eocd)`. No byte is left that no structure
+   covers, so no decoy archive can sit in a comment, in front, between entries or behind
+   (round 1, V6: the grader takes the last `PK\x05\x06` it finds). `XLSX_ZIP_MALFORMED`.
 2. Active content by entry name (macros, external links, embedded objects).
 3. **Part names** (`src/gate/xlsx-parts.ts`, `checkPartNames`): every entry is one of
    LibreOffice's fixed parts (below), or `XLSX_PART_UNEXPECTED`.
@@ -35,6 +41,8 @@ refuses it, with a code (`uncertain` `STATE_CORRUPT`, never `verified`).
    referenced, no decoy.
 7. #503's parsed-tree allowlist for cell and string structure (kept, behind the pre-scan),
    the cell model, cached values only.
+8. **Element tree** (`src/gate/xlsx-tree.ts`, `checkTree`; round 2 of this PR), over every
+   part, before anything is returned. See "Element tree" below.
 
 ## Part names (exactly what LibreOffice writes)
 
@@ -137,6 +145,42 @@ five shapes LibreOffice never writes that #503 verified: `t="str"` without a for
 `t="d"` cell, a number not in its canonical spelling (`04242`, `4.242E3`), a non-canonical
 style index (`s="00"`), and a `<dimension>` that is not the used range.
 
+## Element tree (round 2: closes round 1's V1-V5 and V7)
+
+The readers in steps 5-7 walk down from each root and see only the paths they read
+(`sheetData` as a direct child of `worksheet`, `cellXfs` of `styleSheet`, ...). The grader
+does not walk a tree: it regex-scans the whole text of a part and takes the first match (the
+last, for `<numFmt>` and per `Relationship` id). Round 1 showed decoys the grader read and
+the gate never saw: `<sheetData/>` inside `<sheetPr>` (V1), `<workbookPr date1904="true"/>`
+inside `<fileVersion>` (V2), `<cellXfs>` inside `<fonts>` (V3), `<numFmt>` inside
+`<borders>` (V4), a `<Relationship>` inside a `<Relationship>` (V5). Round 2 found one more
+while building its nested-decoy family: a SECOND `<numFmts>` or `<workbookPr>` at its
+canonical path (V7).
+
+So every element of every pinned part (workbook, worksheets, shared strings, styles, content
+types, relationships) must be at a path LibreOffice writes:
+
+- for each parent path, an allowlist of child local names (`LO_TREES`): LibreOffice 24.2's
+  tree in the committed fixtures, plus the cell and string shapes the cell reader accepts
+  (inline strings, rich-text runs, `<f>`) and the formatting-only leaves of a font, fill and
+  border record (bold, colour). None of the additions is a name either reader reads
+  structurally, and all are leaves;
+- a path that is not a key holds no element at all, so nothing can sit inside a
+  `<Relationship>`, `<Override>`, `<Default>`, `<numFmt>`, `<v>` or any other leaf;
+- a child not marked repeatable (`sheet`, `row`, `c`, `si`, `r`, `numFmt`, `font`, `fill`,
+  `border`, `xf`, `cellStyle`, `col`, `workbookView`, `sheetView`, `selection`, `ext`,
+  `Relationship`, `Override`, `Default`) appears at most once under its parent;
+- every element is in the root's namespace, except `loext:extCalcPr` in the workbook's
+  `<extLst>`.
+
+So each `sheetData`, `row`, `c`, `sheet`, `sheets`, `workbookPr`, `cellXfs`, `numFmts`,
+`numFmt`, `xf`, `si`, `Relationship`, `Override` and `Default` is at its canonical path, and
+each singleton is the only one of its name. docProps and the theme are not pinned (neither
+reader looks inside them) but may hold none of those names, or `t`, `v`, `f`, `is`, `r` or a
+part root's name, anywhere (`checkUnpinnedTree`). `XLSX_TREE_ELEMENT`. The pin runs last, so
+where an earlier reader check also refuses a shape, its more specific code is the one
+reported.
+
 ## Consequences
 
 - openpyxl files (single-quoted declarations, other root declarations) are refused. #503
@@ -144,7 +188,15 @@ style index (`s="00"`), and a `<dimension>` that is not the used range.
 - Our own generator (`src/tasks/calc-xlsxgen.ts`) now writes LibreOffice's worksheet root and
   the real `<dimension>`; its tab and CR text cells (`&#9;`, `&#13;`) are refused.
 - #503's one soundness exception (a prefixed root the grader cannot read, verified by the
-  gate) is gone: whenever the gate verifies, the grader passes, with no exception.
+  gate) is refused by the pre-scan.
+- What is claimed about soundness, and on what evidence. Round 1 of this PR claimed "whenever
+  the gate verifies, the grader passes, with no exception"; that was false (V1-V6, 107 of the
+  verifier's 1,584 generated variants). What is now enforced: the byte grammar, the fixed part
+  names and relationships, byte coverage with no EOCD comment, and the element tree above.
+  What is now tested: on every workbook the tests build (V1-V7 verbatim, P01-P53, the parity
+  tables, and the 4,800 variants of the differential test, including 400 nested decoys and
+  400 comment and coverage decoys over the four real LibreOffice fixtures), gate VERIFIED
+  implies grader PASS. That is evidence over those shapes, not a proof over all inputs.
 
 ## Evidence
 
@@ -152,6 +204,11 @@ style index (`s="00"`), and a `<dimension>` that is not the used range.
   per code, plus every part of every committed LibreOffice fixture accepted.
 - `test/gate/xlsx-parts.test.ts`: part names and relationships, unit and end to end.
 - `test/gate/xlsx-probes-503.test.ts`: #503's P01-P53, none verified.
-- `test/gate/xlsx-differential.test.ts`: 4,000 seeded variants of the real LibreOffice
-  workbooks over ten families; gate VERIFIED implies grader PASS on every one.
+- `test/gate/xlsx-differential.test.ts`: 4,800 seeded variants of the real LibreOffice
+  workbooks over twelve families (400 each), among them `nestedDecoys` and `commentDecoys`
+  (round 2); gate VERIFIED implies grader PASS on every one. Each family prints a `TALLY`
+  line; the two round-2 families also count the variants that fool the grader (live decoys).
+- `test/gate/xlsx-decoys.test.ts`: round 1's V1-V6 verbatim (and V7), each run through the
+  gate's real read path and the grader; the zip coverage rules; `checkTree` unit rows; the
+  `countNamed(workbook, "sheet")` and `dims.length > 1` guards pinned by their codes.
 - `test/gate/xlsx-lo-grammar.test.ts`: LibreOffice's own references.

@@ -31,6 +31,10 @@
  *  - XML: UTF-8 only, no DTD or entity declarations, no CDATA, no processing instructions,
  *    strict entity references, XML 1.0 characters only, well-formed nesting.
  *
+ *  - the element tree of every pinned part is pinned to LibreOffice's (xlsx-tree.ts): every
+ *    element at a path LibreOffice writes, singletons once, nothing inside a leaf; docProps
+ *    and the theme hold no element name either reader reads;
+ *
  *  - XML namespaces are resolved in scope (Namespaces in XML 1.0): a part's root and its
  *    elements are matched by namespace URI and local name, whatever prefix the writer chose
  *    and wherever it declared it (openpyxl declares `xmlns:r` on each `<sheet>`); an unbound
@@ -1093,8 +1097,11 @@ function readSheetCells(
   const cells: Record<string, string> = {};
   const seen = new Set<string>();
   let [minR, minC, maxR, maxC] = [Infinity, Infinity, -1, -1];
-  // sheetData -> row* -> c*: every element below is checked against the allowlist, so no
-  // cell can hide in an element the reader skips.
+  // sheetData -> row* -> c*: every element below sheetData is checked against the cell
+  // allowlist here. This covers only what is INSIDE this sheetData: a decoy <sheetData>,
+  // <row> or <c> elsewhere in the part (inside <sheetPr>, say: round 1, V1) is refused by
+  // the element-tree pin (xlsx-tree.ts, `pinTrees`), which runs over every part before
+  // readXlsxDocument returns.
   for (const row of structuralChildren(sheetData)) {
     if (row.local !== "row") misplaced(row);
     const rowAttr = row.attrs.get("r");

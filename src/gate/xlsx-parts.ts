@@ -25,8 +25,10 @@
  * any part, content-type override or worksheet relationship nothing references (a decoy;
  * XLSX_PART_UNREFERENCED) is refused. Codes only.
  *
- * Pure functions over names and plain relationship records: no XML here, so it cannot
- * diverge from the pre-scanned bytes the caller parsed.
+ * Pure functions over names and plain relationship records: no XML here. The records are the
+ * caller's view of each relationships part's DIRECT children only; a <Relationship> nested
+ * inside another (round 1, V5) is not in them, and is refused by the element-tree pin
+ * (xlsx-tree.ts: nothing may sit inside a <Relationship>, <Override> or <Default>).
  */
 
 export type PartsCode = "XLSX_PART_UNEXPECTED" | "XLSX_REL_TARGET" | "XLSX_PART_UNREFERENCED";

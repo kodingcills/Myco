@@ -895,6 +895,16 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
     },
   ],
   [
+    "an EOCD comment (round 2: where round 1's V6 hid a decoy archive)",
+    "XLSX_ZIP_MALFORMED",
+    () => {
+      const out = new Uint8Array(EXACT.length + 1);
+      out.set(EXACT);
+      new DataView(out.buffer).setUint16(EXACT.length - 2, 1, true);
+      return out;
+    },
+  ],
+  [
     "multi-disk archive",
     "XLSX_ZIP_MALFORMED",
     () => {
@@ -1220,6 +1230,19 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
         },
       }),
   ],
+  [
+    "an element at a path LibreOffice does not write (round 2: a <numFmt> inside <cellXfs>)",
+    "XLSX_TREE_ELEMENT",
+    () =>
+      xlsxFromCsv(EXACT_CSV, {
+        patch: {
+          "xl/styles.xml": entryText("xl/styles.xml").replace(
+            "</cellXfs>",
+            '<numFmt numFmtId="165" formatCode="0"/></cellXfs>',
+          ),
+        },
+      }),
+  ],
 ];
 
 describe("every documented refusal (docs/gate/api.md: each one is pinned here)", () => {
@@ -1246,10 +1269,12 @@ describe("every documented refusal (docs/gate/api.md: each one is pinned here)",
         ),
       ].map((m) => m[1] as string);
     const parts = readFileSync(join(import.meta.dirname, "../../src/gate/xlsx-parts.ts"), "utf8");
+    const tree = readFileSync(join(import.meta.dirname, "../../src/gate/xlsx-tree.ts"), "utf8");
     const declared = [
       ...codes(source, "XlsxErrorCode"),
       ...codes(prescan, "PrescanCode"),
       ...codes(parts, "PartsCode"),
+      ...codes(tree, "TreeCode"),
     ].sort();
     expect(declared.length).toBeGreaterThan(30);
     // XLSX_DTD is the parser's own refusal; the pre-scan refuses every DTD first

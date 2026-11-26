@@ -416,7 +416,7 @@ describe("soundness: whenever the gate verifies a workbook, the grader passes th
     expect(MALFORMED.filter((p) => p.grader !== undefined)).toHaveLength(8);
   });
 
-  it("whenever the gate verifies, the grader passes (no exception since the pre-scan)", async () => {
+  it("on every workbook in the table, if the gate verifies, the grader passes", async () => {
     const verifiedNotPassed: string[] = [];
     const verifiedMalformed: string[] = [];
     for (const [name, intent, bytes] of all) {
