@@ -17,7 +17,8 @@
  * between trial starts, so the pilot holds at most one of the subscription's concurrent
  * sessions and leaves the rest of its rate window to the builder and the verifier. On a
  * rate-limit signal the runner waits 5 min, doubling to at most 60 min, and pauses the whole
- * run (resumable) after 4 rate limits in a row. These are knobs, not guarantees: the
+ * run (resumable) after 4 rate limits in a row. A rate limit does not spend the trial's
+ * harness-fault attempt budget, so a limit spell never closes a trial. These are knobs, not guarantees: the
  * subscription's limits are not published per minute, so the runbook says how to tune them.
  */
 import { createHash } from "node:crypto";
@@ -45,7 +46,7 @@ export const PILOT_MODEL = "claude-sonnet-5-5";
 export interface PacingConfig {
   /** Trials in flight at once. */
   readonly concurrency: number;
-  /** Seconds between one trial start and the next (per worker slot). */
+  /** Seconds between one trial start and the next, across all workers (one global spacing). */
   readonly interTrialDelayS: number;
   /** First wait after a rate-limit signal, seconds; doubles each time in a row. */
   readonly rateLimitBackoffS: number;
@@ -55,7 +56,13 @@ export interface PacingConfig {
   readonly maxConsecutiveRateLimits: number;
   /** A trial running longer than this is stopped and recorded as a harness timeout. */
   readonly trialTimeoutS: number;
-  /** Attempts per trial (the first plus harness-fault re-runs); then the trial is left open. */
+  /**
+   * Attempts per trial that end in a harness fault other than a rate limit or a lost login
+   * (timeout, crash, spawn failure, transport error, unclassified error result). Once a trial
+   * has spent them it is closed for this run directory (`exhausted`) and the run reports
+   * `incomplete`. Rate-limit and auth faults never spend this budget (`BUDGET_EXEMPT_CLASSES`
+   * in `ledger.ts`): they back off and pause, and resume re-runs the trial.
+   */
   readonly maxAttemptsPerTrial: number;
 }
 

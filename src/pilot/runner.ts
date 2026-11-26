@@ -14,15 +14,21 @@
  *
  * Retries: never for an agent-side outcome. Any attempt that reached the gate's post-stop
  * check (any verdict), or is unregistrable, is final. Only a `HarnessFault` thrown by the
- * transport before a decision (rate limit, timeout, spawn failure, transport error) is
- * re-run, in place, as the next attempt of the same trial, linked by `supersedes`; the faulted
+ * transport before a decision (rate limit, lost login, unclassified error result, timeout,
+ * spawn failure, transport error) is re-run, in place, as the next attempt of the same trial, linked by `supersedes`; the faulted
  * attempt stays in the ledger with its arm row (cause `harness`) and its cost estimate, which
  * counts toward R7. Any other exception is a harness bug: the run stops and the open `start`
  * is closed as a `crash` on the next resume.
  *
  * Pacing: at most `concurrency` trials in flight; trial starts are spaced by
- * `interTrialDelayS`; a rate-limit fault holds every worker for the backoff, and after
- * `maxConsecutiveRateLimits` in a row the run pauses (exit, resumable). A `PAUSE` file in the
+ * `interTrialDelayS` across all workers; a rate-limit fault holds every worker for the backoff,
+ * and after `maxConsecutiveRateLimits` in a row the run pauses (exit, resumable). An `auth`
+ * fault (lost login) pauses at once. Neither spends the trial's `maxAttemptsPerTrial` budget
+ * (`BUDGET_EXEMPT_CLASSES`), so a limit spell never closes a trial: resume re-runs it.
+ *
+ * A live (non-simulated) driver also needs `liveLaunchSha256` equal to the config's sha256:
+ * the same explicit acknowledgement the CLI demands, enforced here so no caller can start a
+ * real trial by calling `runPilot` directly. A `PAUSE` file in the
  * run directory, or `requestStop()`, stops new starts after in-flight trials finish.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -39,11 +45,11 @@ import { backoffS, configSha256, type PilotConfig } from "./config.ts";
 import { estimateCost, type TokenUsage } from "./cost.ts";
 import { trialLaunchPlan } from "./launch.ts";
 import {
-  ATTEMPTS_FILE,
   AttemptLedger,
   type AttemptRecord,
   loadLedger,
   type PilotHarnessClass,
+  PROGRESS_FILE,
   taskStatus,
 } from "./ledger.ts";
 
@@ -105,6 +111,8 @@ export interface PilotRunOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => number;
   readonly log?: (line: string) => void;
+  /** Required for a live driver: the `configSha256` of the plan the operator approved. */
+  readonly liveLaunchSha256?: string;
 }
 
 export interface PilotRunResult {
@@ -124,23 +132,43 @@ export const SIMULATED_FILE = "SIMULATED";
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function acquireLock(outDir: string): () => void {
-  const path = join(outDir, LOCK_FILE);
-  if (existsSync(path)) {
-    const pid = Number(readFileSync(path, "utf8").trim());
-    let alive = false;
-    if (Number.isSafeInteger(pid) && pid > 0)
-      try {
-        process.kill(pid, 0);
-        alive = true;
-      } catch (error) {
-        alive = (error as NodeJS.ErrnoException).code === "EPERM";
-      }
-    if (alive)
-      throw new Error(`${path}: another pilot runner (pid ${pid}) holds this run directory`);
+function pidAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
-  writeFileSync(path, `${process.pid}\n`);
-  return () => rmSync(path, { force: true });
+}
+
+/**
+ * Take the run directory's lock with an exclusive create (`O_EXCL`, flag `wx`), so two runners
+ * started at the same instant cannot both hold it. A lock left by a dead runner is removed and
+ * the exclusive create retried once; a lock held by a live process is refused.
+ * `beforeCreate` is a test seam: it runs just before each create attempt.
+ */
+export function acquireLock(outDir: string, beforeCreate?: () => void): () => void {
+  const path = join(outDir, LOCK_FILE);
+  for (let attempt = 0; ; attempt++) {
+    beforeCreate?.();
+    try {
+      writeFileSync(path, `${process.pid}\n`, { flag: "wx" });
+      return () => rmSync(path, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    let pid = Number.NaN;
+    try {
+      pid = Number(readFileSync(path, "utf8").trim());
+    } catch {
+      // Removed between the create and the read: retry the create.
+    }
+    if (pidAlive(pid))
+      throw new Error(`${path}: another pilot runner (pid ${pid}) holds this run directory`);
+    if (attempt >= 1) throw new Error(`${path}: could not take the run directory's lock`);
+    rmSync(path, { force: true }); // A dead runner's stale lock.
+  }
 }
 
 /** The arm row for an attempt lost to a harness fault: no claim, no gate, cause harness. */
@@ -186,6 +214,10 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     );
   if (!simulated && opts.plannerModelId !== config.model)
     throw new Error(`planner ${opts.plannerModelId} is not the config's model ${config.model}`);
+  if (!simulated && opts.liveLaunchSha256 !== configSha256(config))
+    throw new Error(
+      "a live pilot run needs liveLaunchSha256 equal to the approved plan's configSha256 (the CLI's --plan-sha256)",
+    );
   if (/docs[\\/]research[\\/]experiments/.test(outDir))
     throw new Error(
       "a pilot run directory is never under docs/research/experiments (evidence packs are assembled there by review, not written by the runner)",
@@ -209,7 +241,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     if (!simulated && existsSync(join(outDir, SIMULATED_FILE)))
       throw new Error(`${outDir} holds a simulated run; a live pilot needs its own directory`);
 
-    const ledgerPath = join(outDir, ATTEMPTS_FILE);
+    const ledgerPath = join(outDir, PROGRESS_FILE);
     const state = loadLedger(ledgerPath);
     const sha = configSha256(config);
     if (state.header !== null) {
@@ -488,6 +520,8 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
         log(
           `${trialKey}: harness fault (${fault.harnessClass}); the attempt is kept and the trial re-runs in place`,
         );
+        if (fault.harnessClass === "auth")
+          stop = `paused: the agent's Claude Code session is not authenticated (${trialKey}); log in to the subscription and re-run the same command to resume`;
         if (fault.harnessClass === "rate-limit") {
           consecutiveRateLimits++;
           if (consecutiveRateLimits >= config.pacing.maxConsecutiveRateLimits)
@@ -563,7 +597,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       reason:
         stop ??
         (exhausted.length > 0
-          ? `${exhausted.length} trial(s) hit maxAttemptsPerTrial on harness faults: ${exhausted.join(", ")}`
+          ? `${exhausted.length} trial(s) hit maxAttemptsPerTrial on harness faults (rate limits and auth faults not counted): ${exhausted.join(", ")}`
           : null),
       ran,
       skipped,
@@ -587,7 +621,7 @@ export function exportRun(
   exportDir: string,
 ): { readonly armRows: BenchmarkArmRow[] } {
   if (existsSync(exportDir)) throw new Error(`${exportDir} exists: an export never overwrites`);
-  const state = loadLedger(join(outDir, ATTEMPTS_FILE));
+  const state = loadLedger(join(outDir, PROGRESS_FILE));
   if (state.header === null) throw new Error(`${outDir} has no pilot ledger`);
   mkdirSync(join(exportDir, "docs"), { recursive: true });
   if (state.header.simulated)

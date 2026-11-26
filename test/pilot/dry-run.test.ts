@@ -12,7 +12,7 @@ import { type CheckResult, COST_BASIS, checkBenchmark } from "../../src/benchmar
 import { checkPack } from "../../src/m2/evidence.ts";
 import { estimatedCostPerVerified } from "../../src/pilot/cost.ts";
 import { fakeDriver, PILOT_DRY_RUN_PLANNER } from "../../src/pilot/dry-run.ts";
-import { ATTEMPTS_FILE, ledgerRows, loadLedger } from "../../src/pilot/ledger.ts";
+import { ledgerRows, loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
 import { exportRun, HarnessFault, SIMULATED_FILE } from "../../src/pilot/runner.ts";
 import { dryRun, ROOT, tmp } from "./helpers.ts";
 
@@ -48,7 +48,7 @@ describe("SIMULATED pilot dry run (track E)", () => {
     const { result } = await dryRun(dir, { driver });
     expect(result).toMatchObject({ status: "complete", ran: 30, faulted: 1 });
     expect(readFileSync(join(dir, SIMULATED_FILE), "utf8")).toMatch(/Never evidence/);
-    expect(loadLedger(join(dir, ATTEMPTS_FILE)).header).toMatchObject({
+    expect(loadLedger(join(dir, PROGRESS_FILE)).header).toMatchObject({
       simulated: true,
       plannerModelId: PILOT_DRY_RUN_PLANNER,
     });
@@ -95,7 +95,7 @@ describe("SIMULATED pilot dry run (track E)", () => {
     });
     // R7: a token-derived ESTIMATE, labelled; the faulted attempt's cost counts too.
     expect(plumbing.arms[0]?.costPerVerifiedTask.basis).toBe(COST_BASIS);
-    const { costs } = ledgerRows(loadLedger(join(dir, ATTEMPTS_FILE)));
+    const { costs } = ledgerRows(loadLedger(join(dir, PROGRESS_FILE)));
     expect(costs).toHaveLength(31);
     const r7 = estimatedCostPerVerified(costs, 18);
     expect(r7.basis).toBe(COST_BASIS);

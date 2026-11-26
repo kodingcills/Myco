@@ -27,6 +27,31 @@ const cli = (args: string[], env: Record<string, string>) =>
 
 describe("subscription preflight (names only)", () => {
   it("refuses when any API-path credential name is configured, even empty", () => {
+    // Pinned independently of the list itself (verifier round 1, V3): dropping any name from
+    // API_CREDENTIAL_NAMES fails here instead of shrinking the loop below.
+    const expected = [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_BEDROCK_BASE_URL",
+      "ANTHROPIC_VERTEX_BASE_URL",
+      "ANTHROPIC_VERTEX_PROJECT_ID",
+      "ANTHROPIC_FOUNDRY_API_KEY",
+      "ANTHROPIC_FOUNDRY_RESOURCE",
+      "ANTHROPIC_FEDERATION_RULE_ID",
+      "ANTHROPIC_IDENTITY_TOKEN",
+      "ANTHROPIC_IDENTITY_TOKEN_FILE",
+      "ANTHROPIC_PROFILE",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "AWS_BEARER_TOKEN_BEDROCK",
+      "MYCO_ANTHROPIC_KEY_FILE",
+    ];
+    for (const name of expected) {
+      expect(API_CREDENTIAL_NAMES, name).toContain(name);
+      expect(subscriptionPreflight(["PATH", name]).configured, name).toEqual([name]);
+    }
     for (const name of API_CREDENTIAL_NAMES) {
       const r = subscriptionPreflight(["PATH", "HOME", name]);
       expect(r.ok, name).toBe(false);

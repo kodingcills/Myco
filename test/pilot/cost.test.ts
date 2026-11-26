@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { COST_BASIS, estimateCost, estimatedCostPerVerified } from "../../src/pilot/cost.ts";
 import { fakeDriver } from "../../src/pilot/dry-run.ts";
-import { ATTEMPTS_FILE } from "../../src/pilot/ledger.ts";
+import { PROGRESS_FILE } from "../../src/pilot/ledger.ts";
 import { dryRun, tmp } from "./helpers.ts";
 
 const usage = {
@@ -44,7 +44,7 @@ describe("pilot cost estimate (track E)", () => {
   it("no ledger line carries a billed field; a dry run without usage records null cost", async () => {
     const dir = tmp();
     await dryRun(dir, { driver: fakeDriver() });
-    const text = readFileSync(join(dir, ATTEMPTS_FILE), "utf8");
+    const text = readFileSync(join(dir, PROGRESS_FILE), "utf8");
     // No JSON key names a bill (the basis string says "not billed USD"; that is a value).
     expect(text).not.toMatch(/"[^"]*billed[^"]*":/i);
     const ends = text

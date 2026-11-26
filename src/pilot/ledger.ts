@@ -1,5 +1,11 @@
 /**
- * The pilot's host-side, append-only attempt ledger (`<out>/attempts.jsonl`).
+ * The pilot's host-side, append-only progress file (`<out>/pilot-progress.jsonl`): what the
+ * runner reads back to resume. It is deliberately NOT named `attempts.jsonl`: that name belongs
+ * to the R1 evidence attempt ledger (#518, `src/m2/attempt-ledger.ts`, a hash-chained
+ * `myco.m2.attempt-event/1` file pinned by `pack.json`), whose format this file does not
+ * follow. The two must never collide in one run directory (`test/pilot/resume.test.ts`). Once
+ * #518 lands, the runner must ALSO write every attempt through #518's writer for R1 evidence
+ * (TO FILE); this file stays the runner's own resume state.
  *
  * Every attempt is written twice: a `start` line before the agent is launched and an `end`
  * line after the trial is decided or faulted. Lines are only ever appended (`appendFileSync`);
@@ -30,12 +36,26 @@ export const ATTEMPT_SCHEMA = "myco.pilot.attempt/1" as const;
 /** Harness faults the pilot records. Only these may be re-run; agent outcomes never are. */
 export const PILOT_HARNESS_CLASSES = [
   "rate-limit",
+  "auth",
+  "error-result",
   "timeout",
   "crash",
   "spawn-failed",
   "transport-error",
 ] as const;
 export type PilotHarnessClass = (typeof PILOT_HARNESS_CLASSES)[number];
+
+/**
+ * Faults of the subscription, not of the trial: a rate or usage limit, or a lost login. The
+ * runner backs off and pauses on these instead of spending the trial's attempt budget, so a
+ * limit spell never closes a trial: `maxAttemptsPerTrial` counts only the other harness faults
+ * (verifier round 1, D1). Ledger growth stays bounded per invocation by the pause
+ * (`maxConsecutiveRateLimits` rate limits in a row; one `auth` fault pauses at once).
+ */
+export const BUDGET_EXEMPT_CLASSES: ReadonlySet<PilotHarnessClass> = new Set([
+  "rate-limit",
+  "auth",
+]);
 
 export interface HeaderLine {
   readonly schema: typeof HEADER_SCHEMA;
@@ -88,7 +108,9 @@ export interface LedgerState {
   readonly torn: boolean;
 }
 
-export const ATTEMPTS_FILE = "attempts.jsonl";
+export const PROGRESS_FILE = "pilot-progress.jsonl";
+/** The R1 evidence attempt ledger's file name (#518). The pilot runner never writes it. */
+export const R1_ATTEMPT_LEDGER_FILE = "attempts.jsonl";
 
 export function loadLedger(path: string): LedgerState {
   if (!existsSync(path)) return { header: null, byTask: new Map(), torn: false };
@@ -102,6 +124,8 @@ export function loadLedger(path: string): LedgerState {
   const fail = (i: number, why: string): never => {
     throw new Error(`${path}:${i + 1}: ${why}`);
   };
+  /** Index of the first line that is not a torn write: where the header must be. */
+  let headerAt = 0;
   for (let i = 0; i < lines.length; i++) {
     let parsed: unknown;
     try {
@@ -110,12 +134,19 @@ export function loadLedger(path: string): LedgerState {
       const last = i === lines.length - 1;
       const next = lines[i + 1];
       const closed = next?.includes('"event":"torn-previous-line"') === true;
-      if ((last && torn) || closed) continue; // A torn write, kept as is.
+      if ((last && torn) || closed) {
+        // A torn write, kept as is. A torn header (the crash hit line 1) moves the header slot
+        // past it and its closing marker: the re-written header is then the next line.
+        if (header === null && i === headerAt) headerAt = closed ? i + 2 : i + 1;
+        continue;
+      }
       fail(i, "malformed line");
     }
     const line = parsed as Record<string, unknown>;
-    if (i === 0 || (header === null && line.schema === HEADER_SCHEMA)) {
-      if (line.schema !== HEADER_SCHEMA || i !== 0) fail(i, "the first line must be the header");
+    if (header === null && i === headerAt - 1 && line.event === "torn-previous-line") continue;
+    if (i === headerAt || (header === null && line.schema === HEADER_SCHEMA)) {
+      if (line.schema !== HEADER_SCHEMA || i !== headerAt)
+        fail(i, "the first line must be the header");
       header = line as unknown as HeaderLine;
       continue;
     }
@@ -226,7 +257,10 @@ export function taskStatus(
   const last = attempts[attempts.length - 1] as AttemptRecord;
   if (last.end === null) return { kind: "crashed", attempt: last };
   if (last.end.outcome === "decided") return { kind: "done", final: last };
-  if (attempts.length >= maxAttempts) return { kind: "exhausted", attempts: attempts.length };
+  const spent = attempts.filter(
+    (a) => a.end !== null && !BUDGET_EXEMPT_CLASSES.has(a.end.harnessClass as PilotHarnessClass),
+  ).length;
+  if (spent >= maxAttempts) return { kind: "exhausted", attempts: spent };
   return { kind: "open", nextAttempt: attempts.length + 1, supersedes: last.start.trialKey };
 }
 

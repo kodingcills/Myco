@@ -37,13 +37,18 @@ CLI `scripts/m2-r1-pilot.ts`, reviewed config `benchmark/pilot/r1/config.json`, 
 | Knob | Default | Why |
 |---|---|---|
 | `concurrency` | 1 (max 3) | the pilot holds one subscription session; builder and verifier sessions keep the rest |
-| `interTrialDelayS` | 90 | spreads the pilot's use across the rate window instead of bursting |
+| `interTrialDelayS` | 90 | spreads the pilot's use across the rate window instead of bursting (one global spacing across all workers) |
 | `rateLimitBackoffS` / `rateLimitBackoffMaxS` | 300 / 3600 | on a rate- or usage-limit signal, every worker waits 5 min, doubling to 60 min |
-| `maxConsecutiveRateLimits` | 4 | then the run pauses (exit 4); re-run the same command later |
+| `maxConsecutiveRateLimits` | 4 | then the run pauses (exit 4); re-run the same command later. A lost login (`auth`) pauses at once |
 | `trialTimeoutS` | 1800 | a longer trial is stopped and recorded as a harness `timeout` |
-| `maxAttemptsPerTrial` | 3 | harness-fault re-runs per trial; then the trial is left open and the run reports `incomplete` |
+| `maxAttemptsPerTrial` | 3 | attempts per trial that end in a harness fault **other than** a rate limit or a lost login; once spent, the trial is closed for this run directory and the run reports `incomplete` |
 
-At the defaults, 30 trials take at least 45 minutes of spacing plus the trials themselves.
+Rate-limit and `auth` faults never spend `maxAttemptsPerTrial`: they back off and pause, and a
+resume re-runs the trial. So a limit spell on the shared subscription can never strand a trial,
+and recovering from one needs no config change (and so no new run directory).
+
+At the defaults, 30 trials take at least 43.5 minutes of spacing (29 gaps of 90 s) plus the
+trials themselves.
 The subscription's limits are not published per minute; if builder or verifier sessions
 start hitting limits, raise `--delay-s`. Override per invocation with `--concurrency N` and
 `--delay-s S`; an override changes the config hash, so it needs a new run directory.
@@ -51,10 +56,17 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
 ## Retries: what is and is not re-run
 
 - **Never re-run:** any attempt that reached the gate's post-stop check (verified, refuted
-  or uncertain), any unregistrable trial, any claim the agent made (done, not done, none),
-  and any result the agent itself produced, including an error result.
-- **Re-run in place:** only a harness fault before a decision: `rate-limit`, `timeout`,
-  `spawn-failed`, `transport-error`, or `crash` (the runner died mid-trial). Under the
+  or uncertain), any unregistrable trial, and any claim the agent made (done, not done, none)
+  in a **clean** Claude Code result: subtype `success`, `is_error` false, exit 0, no
+  structured error on any message.
+- **Re-run in place:** only a harness fault before a decision: `rate-limit` (backs off),
+  `auth` (pauses at once), `error-result`, `timeout`, `spawn-failed`, `transport-error`, or
+  `crash` (the runner died mid-trial). Classification reads structured fields first (the
+  assistant message's `error` class such as `rate_limit` / `authentication_failed`,
+  `api_error_status`, the result `subtype` and `is_error`, the exit status) and a tested text
+  vocabulary only as a fallback (`src/pilot/claude-transport.ts`). Any error result it cannot
+  name is `error-result`: a harness fault, never an agent outcome. A clean result whose final
+  message makes no claim and reads as a limit or login message is a harness fault too. Under the
   topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
   its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
   in `supersedes`. Its cost counts toward R7.
@@ -71,6 +83,12 @@ billed USD`. It is `null` when the tokens were not measured or the model is not 
 null is never counted as 0, and one null makes R7 unmeasured. R7 = the estimates of ALL
 attempts (faulted ones included) / verified (accepted DONE that the independent grader
 passes). There is no billed-USD field anywhere.
+
+Which number is R7: the numerator is `costEstimate.total` from `status` (every attempt,
+faulted ones included); the denominator is the graded verified count from `benchmark-check`.
+`status`'s own `perVerified` divides by `acceptedByGate` (not graded), and `benchmark-check`'s
+`costPerVerifiedTask` sums `arm.jsonl` only (it leaves out the faulted attempts in
+`faulted-attempts.jsonl`), so neither is R7 by itself.
 
 ## Preflight checklist (before a real launch)
 
@@ -127,14 +145,21 @@ Exit codes: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incom
   recorded; the command exits 4 (`paused`). Ctrl-C or a crash also works: the open attempt
   is closed as a `crash` on resume.
 - **Resume:** remove `PAUSE` and run the same command with the same `--out` and the same
-  pacing. The runner reads `<run dir>/attempts.jsonl`, skips every trial already decided,
+  pacing. The runner reads `<run dir>/pilot-progress.jsonl`, skips every trial already decided,
   re-runs open trials in place, and appends; it never rewrites a line and never writes a
   second row for a trial. A different config hash, mode or planner is refused (use a new run
   directory). A second runner on the same directory is refused while the first is alive
-  (`pilot.lock`; a dead runner's lock is taken over).
-- **The ledger.** `attempts.jsonl`: a header (config sha256, simulated or not, planner), then
-  a `start` line before each attempt and an `end` line after it. A torn last line from a crash
-  is closed with an appended `torn-previous-line` marker, never edited.
+  (`pilot.lock`, taken with an exclusive create; a dead runner's lock is taken over).
+- **The progress file.** `pilot-progress.jsonl`: a header (config sha256, simulated or not,
+  planner), then a `start` line before each attempt and an `end` line after it. A torn line
+  from a crash (the header included) is closed with an appended `torn-previous-line` marker,
+  never edited. It is deliberately **not** `attempts.jsonl`: that name is the R1 evidence
+  attempt ledger (#518, `src/m2/attempt-ledger.ts`, hash-chained and pinned by `pack.json`),
+  and the two formats are incompatible. Once #518 lands, the runner must also write every
+  attempt through #518's writer for R1 evidence; until then a pilot run directory carries no
+  R1 attempt ledger.
+- **Deadline.** A trial past `trialTimeoutS` gets SIGTERM, then SIGKILL 10 s later if it is
+  still running, and is recorded as a harness `timeout`.
 
 ## What counts as evidence
 

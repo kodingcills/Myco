@@ -20,7 +20,7 @@ import { configSha256, type PacingConfig } from "../src/pilot/config.ts";
 import { COST_BASIS, estimatedCostPerVerified } from "../src/pilot/cost.ts";
 import { fakeDriver, PILOT_DRY_RUN_PLANNER, virtualClock } from "../src/pilot/dry-run.ts";
 import { preflightRefusal, subscriptionPreflight, trialLaunchPlan } from "../src/pilot/launch.ts";
-import { ATTEMPTS_FILE, ledgerRows, loadLedger } from "../src/pilot/ledger.ts";
+import { ledgerRows, loadLedger, PROGRESS_FILE } from "../src/pilot/ledger.ts";
 import { loadReviewedConfig, publishedTasks } from "../src/pilot/reviewed.ts";
 import { exportRun, runPilot } from "../src/pilot/runner.ts";
 
@@ -111,7 +111,7 @@ try {
     case "status": {
       const dir = flag("--out");
       if (dir === undefined) throw new UsageError("status needs --out DIR");
-      const state = loadLedger(join(dir, ATTEMPTS_FILE));
+      const state = loadLedger(join(dir, PROGRESS_FILE));
       const { armRows, faulted, costs } = ledgerRows(state);
       const verified = armRows.filter((r) => r.accepted).length;
       out(

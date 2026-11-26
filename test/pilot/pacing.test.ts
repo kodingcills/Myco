@@ -7,11 +7,11 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { fakeDriver, virtualClock } from "../../src/pilot/dry-run.ts";
-import { ATTEMPTS_FILE, ledgerRows, loadLedger } from "../../src/pilot/ledger.ts";
+import { ledgerRows, loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
 import { HarnessFault, PAUSE_FILE, type PilotDriver } from "../../src/pilot/runner.ts";
 import { dryRun, tmp } from "./helpers.ts";
 
-const attemptsOf = (dir: string) => loadLedger(join(dir, ATTEMPTS_FILE)).byTask;
+const attemptsOf = (dir: string) => loadLedger(join(dir, PROGRESS_FILE)).byTask;
 
 describe("pilot pacing (track E)", () => {
   it("spaces trial starts by the inter-trial delay", async () => {
@@ -90,13 +90,68 @@ describe("pilot pacing (track E)", () => {
         throw new HarnessFault("rate-limit", "usage limit");
       },
     });
-    const { result } = await dryRun(dir, { driver: always, pacing: { maxAttemptsPerTrial: 10 } });
+    // Default pacing (no maxAttemptsPerTrial override): rate limits spend no attempt budget.
+    const { result } = await dryRun(dir, { driver: always });
     expect(result.status).toBe("paused");
     expect(result.reason).toMatch(/4 rate limits in a row/);
     expect(result.faulted).toBe(4);
-    const resumed = await dryRun(dir, { pacing: { maxAttemptsPerTrial: 10 } });
+    const resumed = await dryRun(dir);
     expect(resumed.result).toMatchObject({ status: "complete", ran: 30 });
-    expect(ledgerRows(loadLedger(join(dir, ATTEMPTS_FILE))).armRows).toHaveLength(30);
+    expect(ledgerRows(loadLedger(join(dir, PROGRESS_FILE))).armRows).toHaveLength(30);
+  });
+
+  it("under the default pacing a rate-limit spell never strands a trial: paused, then resume completes (round 1, D1)", async () => {
+    // The verifier's probe: default pacing (maxAttemptsPerTrial 3 < maxConsecutiveRateLimits 4),
+    // the first 4 attempts rate-limited. Rate limits do not spend the attempt budget.
+    const dir = tmp();
+    let n = 0;
+    const limited = fakeDriver({
+      beforeAgent: () => {
+        if (++n <= 4) throw new HarnessFault("rate-limit", "usage limit");
+      },
+    });
+    const first = await dryRun(dir, { driver: limited });
+    expect(first.result).toMatchObject({ status: "paused", faulted: 4, exhausted: [] });
+    const resumed = await dryRun(dir);
+    expect(resumed.result).toMatchObject({ status: "complete", ran: 30, exhausted: [] });
+    const rows = ledgerRows(loadLedger(join(dir, PROGRESS_FILE))).armRows;
+    expect(rows).toHaveLength(30);
+    const list = attemptsOf(dir).get("fc-v1-001") ?? [];
+    expect(list).toHaveLength(5);
+    expect(list.slice(0, 4).every((a) => a.end?.harnessClass === "rate-limit")).toBe(true);
+    expect(list[4]?.start.supersedes).toBe(list[3]?.start.trialKey);
+    expect(list[4]?.end?.outcome).toBe("decided");
+  });
+
+  it("rate limits interleaved with other faults: only the other faults spend the budget", async () => {
+    const dir = tmp();
+    const seq = ["rate-limit", "timeout", "rate-limit", "timeout", "rate-limit"] as const;
+    let n = 0;
+    const driver = fakeDriver({
+      beforeAgent: (ctx) => {
+        if (ctx.task.taskId === "fc-v1-001" && n < seq.length)
+          throw new HarnessFault(seq[n++] as (typeof seq)[number], "fault");
+      },
+    });
+    const { result } = await dryRun(dir, { driver });
+    expect(result).toMatchObject({ status: "complete", ran: 30, exhausted: [] });
+    expect(attemptsOf(dir).get("fc-v1-001")).toHaveLength(6);
+  });
+
+  it("an auth fault (lost login) pauses at once and spends no attempt; resume completes", async () => {
+    const dir = tmp();
+    let n = 0;
+    const driver = fakeDriver({
+      beforeAgent: () => {
+        if (++n === 2) throw new HarnessFault("auth", "Invalid API key · Please run /login");
+      },
+    });
+    const { result } = await dryRun(dir, { driver, pacing: { maxAttemptsPerTrial: 1 } });
+    expect(result.status).toBe("paused");
+    expect(result.reason).toMatch(/not authenticated/);
+    expect(result).toMatchObject({ ran: 1, faulted: 1, exhausted: [] });
+    const resumed = await dryRun(dir, { pacing: { maxAttemptsPerTrial: 1 } });
+    expect(resumed.result).toMatchObject({ status: "complete", ran: 29, skipped: 1 });
   });
 
   it("never re-runs an agent-side outcome: refuted, not-done and unregistrable trials run once", async () => {
@@ -112,7 +167,7 @@ describe("pilot pacing (track E)", () => {
     };
     await dryRun(dir, { driver });
     expect(driver.launched).toHaveLength(30);
-    const rows = ledgerRows(loadLedger(join(dir, ATTEMPTS_FILE))).armRows;
+    const rows = ledgerRows(loadLedger(join(dir, PROGRESS_FILE))).armRows;
     expect(rows).toHaveLength(30);
     for (const list of attemptsOf(dir).values()) expect(list).toHaveLength(1);
     expect(rows.every((r) => r.claim === "not-done" && !r.accepted)).toBe(true);
@@ -121,7 +176,7 @@ describe("pilot pacing (track E)", () => {
     const credulous = fakeDriver();
     await dryRun(dir2, { driver: credulous });
     expect(credulous.launched).toHaveLength(30);
-    const rows2 = ledgerRows(loadLedger(join(dir2, ATTEMPTS_FILE))).armRows;
+    const rows2 = ledgerRows(loadLedger(join(dir2, PROGRESS_FILE))).armRows;
     expect(rows2.filter((r) => r.gate?.verdict === "refuted")).toHaveLength(9);
     expect(rows2.filter((r) => r.gate?.unregistrable === true)).toHaveLength(3);
   });
