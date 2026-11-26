@@ -178,6 +178,10 @@ describe("capability spec part 2: binding content per track", () => {
     for (const [, x, m, b] of quoted) {
       expect(wilsonLower(Number(x), Number(m)).toFixed(3), `${x}/${m}`).toBe(b);
     }
+    // Component 2: #528's effect size, only after McNemar.
+    expect(barOnly(n)).toContain(
+      "2. Only if 1 is shown: the point difference in verified rate is at least 20 percentage points",
+    );
     // The primary and the needs-human count agree.
     expect(n).toContain(`Verified rate on the ${tasks?.[1]} needs-human tasks`);
   });
