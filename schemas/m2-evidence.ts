@@ -133,9 +133,10 @@ export const m2TrialOpsSchema: JsonSchema = {
  * event when it ends, so every attempt (harness-faulted and superseded ones included) is on
  * record before anyone decides what to keep. Each event names the sha256 of the previous
  * event's canonical JSON (`prevSha256`; 64 zeros for the first), so an edit, a deletion or a
- * reordering breaks the chain, and `pack.json` pins the head against truncation. This is
- * tamper-evidence against partial edits, not against regenerating the whole history: the pin
- * sits in the same pack (`src/m2/attempt-ledger.ts`). `outcome` (and, for a harness fault,
+ * reordering breaks the chain, `pack.json` pins the head against truncation, and an external
+ * anchor outside the pack records every head (below). Threat model: tamper-evidence against the
+ * checked agent, guest-side processes and accidental harness edits; not protection against a
+ * malicious pack author (`src/m2/attempt-ledger.ts`). `outcome` (and, for a harness fault,
  * `harnessClass`) is on `end` events only.
  */
 export const m2AttemptEventSchema: JsonSchema = {
@@ -181,5 +182,24 @@ export const m2SupersededSchema: JsonSchema = {
     arm: benchmarkArmRowSchema,
     /** The faulted attempt's own trial-ops row. */
     ops: m2TrialOpsSchema,
+  },
+};
+
+/**
+ * One line of the external attempt anchor (TIF-274, lead ruling on #518 D3). At each attempt
+ * end the runner appends the ledger's head (event count and chain head) to a host-side file
+ * OUTSIDE the pack (`<pack parent>/attempt-anchors/<pack name>.jsonl`) and outside anything
+ * the agent or the guest can reach. The evidence check requires every anchored head to match
+ * the ledger's own chain at that count, and the last one to equal the pack's pin, so a ledger
+ * rewritten and re-pinned inside the pack no longer agrees with its anchor.
+ */
+export const m2AttemptAnchorSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema", "events", "headSha256"],
+  properties: {
+    schema: { const: "myco.m2.attempt-anchor/1" },
+    events: positiveInt,
+    headSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
   },
 };

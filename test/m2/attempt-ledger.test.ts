@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   type AttemptEvent,
   AttemptLedgerWriter,
+  anchorPathFor,
   crossCheckAttempts,
   type DisclosedAttempt,
   eventSha256,
@@ -23,6 +24,7 @@ import {
   type SupersededAttempt,
 } from "../../src/m2/evidence.ts";
 import {
+  anchorFor,
   fcRow,
   fcTasks,
   harnessFault,
@@ -480,13 +482,105 @@ describe("#518 round 1: double ends, non-R1 triggers, end-vs-start, torn lines, 
     writeFileSync(path, `${readFileSync(path, "utf8")}{"schema":"myco.m2.att`);
     expect(() => new AttemptLedgerWriter(path)).toThrow(/line 2 is not JSON \(a torn write\?\)/);
   });
+});
 
-  it("STATED LIMIT (D3): a wholly regenerated ledger with a fresh pin is not detected", () => {
-    // Tamper-evidence, not rewrite resistance: the pin sits in the same pack. Pinned here so the
-    // limit is visible until an out-of-pack anchor exists (a lead decision).
+describe("the external anchor (lead ruling on #518 D3)", () => {
+  /** A fully rewritten history: g61's attempt removed and g61 dropped from the pack, re-chained. */
+  const rewrite = () => {
     const trials = r1Trials();
-    const regenerated = ledgerFor(trials);
-    const r = checkWith(trials, regenerated.events, regenerated.head);
-    expect(r.errors).toEqual([]);
+    const honest = ledgerFor(trials);
+    const kept = trials.filter((t) => t.arm.trialKey !== "g60");
+    const forged = ledgerFor(kept);
+    return { trials, honest, kept, forged };
+  };
+
+  it("a full rewrite + re-pin inside the pack is refused when the external anchor exists", () => {
+    const { honest, forged } = rewrite();
+    // The forger rewrites attempts.jsonl and re-pins pack.json; the host-side anchor keeps the
+    // honest heads. (The rows stay as the forger left them: here the honest 100.)
+    const base = input(r1Trials(), manifest());
+    const r = checkPack({
+      ...base,
+      manifest: { ...(base.manifest as object), attempts: forged.head },
+      attempts: forged.events,
+      anchor: anchorFor(honest.events),
+    });
+    expect(
+      has(
+        r,
+        /^attempt anchor: anchor line \d+: the ledger's head at \d+ events is not the anchored one/,
+      ),
+    ).toBe(true);
+    expect(has(r, /^attempt anchor: the pack's pinned head is not the last anchored head/)).toBe(
+      true,
+    );
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  it("an honest pack's anchor agrees; an R1 pack without an anchor is refused", () => {
+    const base = input(r1Trials(), manifest());
+    expect(checkPack(base).errors).toEqual([]);
+    const { anchor: _a, ...noAnchor } = base;
+    const r = checkPack(noAnchor);
+    expect(has(r, /^attempt anchor: missing/)).toBe(true);
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  it("refuses a truncated, reordered or schema-invalid anchor, and a pin ahead of the anchor", () => {
+    const base = input(r1Trials(), manifest());
+    const anchor = base.anchor as { events: number; headSha256: string }[];
+    const run = (a: unknown[]) => checkPack({ ...base, anchor: a });
+    expect(has(run(anchor.slice(0, -1)), /last anchored head is not the ledger's head/)).toBe(true);
+    expect(has(run([anchor[1], anchor[0], ...anchor.slice(2)]), /does not follow/)).toBe(true);
+    expect(has(run([{ ...anchor[0], extra: 1 }]), /^attempt anchor: anchor line 0: /)).toBe(true);
+    expect(has(run([]), /the external attempt anchor is empty/)).toBe(true);
+    const wrongHead = anchor.map((a, i) =>
+      i === anchor.length - 1 ? { ...a, headSha256: "f".repeat(64) } : a,
+    );
+    expect(has(run(wrongHead), /is not the anchored one/)).toBe(true);
+  });
+
+  it("readPack finds the anchor outside the pack, at its conventional path", () => {
+    const dir = writePack("m2-anchored", r1Trials(), manifest());
+    const path = anchorPathFor(dir);
+    expect(path.startsWith(dir)).toBe(false);
+    const read = readPack(dir, () => ({ ok: true, detail: "not called" }));
+    expect(read.anchor?.length).toBe(100);
+    expect(checkPack(read).errors).toEqual([]);
+  });
+});
+
+describe("the agent and the guest cannot reach the ledger or the anchor", () => {
+  it("the writer refuses a ledger or an anchor inside a forbidden root (the agent's workspace, the guest share)", () => {
+    const base = mkdtempSync(join(tmpdir(), "myco-reach-"));
+    const agent = join(base, "agent");
+    const pack = join(base, "pack");
+    expect(
+      () =>
+        new AttemptLedgerWriter(join(agent, "attempts.jsonl"), {
+          anchorPath: join(base, "anchors", "p.jsonl"),
+          forbiddenRoots: [agent],
+        }),
+    ).toThrow(/refusing to write attempts\.jsonl inside .*agent/);
+    expect(
+      () =>
+        new AttemptLedgerWriter(join(pack, "attempts.jsonl"), {
+          anchorPath: join(agent, "sub", "anchor.jsonl"),
+          forbiddenRoots: [agent],
+        }),
+    ).toThrow(/refusing to write anchor\.jsonl inside .*agent/);
+    // Outside every forbidden root: accepted, and the anchor gets a head per attempt end.
+    const anchorPath = join(base, "anchors", "p.jsonl");
+    const w = new AttemptLedgerWriter(join(base, "attempts.jsonl"), {
+      anchorPath,
+      forbiddenRoots: [agent],
+    });
+    w.start({ trialKey: "t1", taskId: "fc-v1-001", arm: "myco-gate" });
+    w.end("t1", { outcome: "completed" });
+    const lines = readFileSync(anchorPath, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines).toEqual([{ schema: "myco.m2.attempt-anchor/1", ...w.head() }]);
   });
 });

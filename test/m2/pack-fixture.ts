@@ -3,13 +3,16 @@
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type BenchmarkArmRow, expectedAccepted } from "../../src/benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../../src/benchmark/grade/row.ts";
 import { type BenchmarkTask, buildTaskSet } from "../../src/benchmark/taskset.ts";
 import {
+  ANCHOR_SCHEMA,
+  type AnchorEntry,
   ATTEMPT_EVENT_SCHEMA,
   type AttemptEvent,
+  anchorPathFor,
   eventSha256,
   GENESIS_SHA256,
   type LedgerHead,
@@ -222,6 +225,17 @@ export function ledgerFor(
   return { events, head: { events: events.length, headSha256: prev } };
 }
 
+/** The external anchor an honest runner appends: the ledger's head after every attempt end. */
+export function anchorFor(events: readonly AttemptEvent[]): AnchorEntry[] {
+  const out: AnchorEntry[] = [];
+  let head = GENESIS_SHA256;
+  events.forEach((e, i) => {
+    head = eventSha256(e);
+    if (e.kind === "end") out.push({ schema: ANCHOR_SCHEMA, events: i + 1, headSha256: head });
+  });
+  return out;
+}
+
 const isR1 = (m: unknown) =>
   m !== null &&
   typeof m === "object" &&
@@ -250,7 +264,7 @@ export function input(
   const { events, head } = ledgerFor(trials, (superseded ?? []) as readonly SupersededLike[]);
   const pinned =
     (m as { attempts?: unknown }).attempts === undefined ? { ...(m as object), attempts: head } : m;
-  return { manifest: pinned, ...withSuperseded, attempts: events };
+  return { manifest: pinned, ...withSuperseded, attempts: events, anchor: anchorFor(events) };
 }
 
 /**
@@ -314,8 +328,13 @@ export function writePack(
 ): string {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  const { manifest: pinned, attempts } = input(trials, m, superseded);
+  const { manifest: pinned, attempts, anchor } = input(trials, m, superseded);
   if (attempts !== undefined) writeFileSync(join(dir, "attempts.jsonl"), jsonl(attempts));
+  // The external anchor: outside the pack, at its conventional host-side path.
+  if (anchor !== undefined) {
+    mkdirSync(dirname(anchorPathFor(dir)), { recursive: true });
+    writeFileSync(anchorPathFor(dir), jsonl([...anchor]));
+  }
   if (superseded !== undefined && superseded.length > 0)
     writeFileSync(join(dir, "superseded.jsonl"), jsonl([...superseded]));
   writeFileSync(join(dir, "pack.json"), `${JSON.stringify(pinned, null, 2)}\n`);

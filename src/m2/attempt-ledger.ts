@@ -7,14 +7,16 @@
  * parsed, key-sorted event, not its raw bytes: whitespace or key order is not evidence), and
  * the pack's manifest pins the head (event count and last hash).
  *
- * What that gives, plainly: TAMPER-EVIDENCE against partial edits and truncation. Editing,
+ * THREAT MODEL (lead ruling on #518 D3): the adversary is the checked agent and any
+ * guest-side process; the harness that writes packs is trusted. Against that adversary, and
+ * against accidental drops or edits by the harness, the ledger is TAMPER-EVIDENT: editing,
  * deleting, inserting or reordering an event breaks the chain; cutting the tail no longer
- * matches the pin; and a partial forgery that is re-chained and re-pinned is still caught by
- * the cross-check below wherever it makes the ledger and the pack disagree. What it does NOT
- * give: resistance to regenerating the whole history. The chain is unkeyed and the pin sits in
- * the same pack, so whoever can write the pack can write a fresh, consistent ledger and pin it.
- * Rewrite resistance needs the head anchored outside the operator's write path (recorded
- * host-side before the pack is assembled, or signed); that is a lead decision, not built here.
+ * matches the pin; and the runner also appends each head to an EXTERNAL ANCHOR outside the
+ * pack and outside anything the agent or the guest can reach (`anchorPathFor`; the writer
+ * refuses to place the ledger or the anchor in a forbidden root), so a ledger regenerated and
+ * re-pinned inside the pack no longer agrees with its anchor. It is NOT protection against a
+ * malicious pack author, who controls the harness, the pack and the anchor alike. No keyed
+ * chain or published anchor here (TO FILE on TIF-274).
  *
  * The evidence check (`src/m2/evidence.ts`) then cross-checks the ledger against the pack:
  *  - every attempt in the ledger is disclosed (a pack row, or a superseded attempt), with the
@@ -24,14 +26,15 @@
  *    disclosed as anything else;
  *  - a superseded attempt ends before the trial that replaced it starts.
  *
- * What it cannot prove: that the runner itself wrote every event honestly, or that nobody
- * regenerated the whole ledger (above). It moves the trust from "the operator disclosed every
- * attempt" to "the runner logged every attempt as it ran", which is code we review. The ledger
- * records task, arm and outcome only: a row's verdict or document is not bound here.
+ * What it cannot prove: that the trusted harness logged honestly (it moves the trust from
+ * "the operator disclosed every attempt" to "the runner logged every attempt as it ran", which
+ * is code we review). The ledger records task, arm and outcome only: a row's verdict or
+ * document is not bound here.
  */
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { m2AttemptEventSchema } from "../../schemas/m2-evidence.ts";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { m2AttemptAnchorSchema, m2AttemptEventSchema } from "../../schemas/m2-evidence.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import type { Arm } from "../benchmark/check.ts";
 
@@ -221,9 +224,26 @@ export class AttemptLedgerWriter {
   #prev = GENESIS_SHA256;
   readonly #open = new Map<string, { taskId: string; arm: Arm }>();
   readonly #seen = new Set<string>();
+  readonly #anchorPath: string | undefined;
 
-  constructor(path: string) {
+  /**
+   * `anchorPath`: the external anchor, appended with the head at every attempt end.
+   * `forbiddenRoots`: directories the agent or the guest can reach (the agent's workspace,
+   * anything shared with the guest). The ledger and the anchor are refused inside any of them.
+   */
+  constructor(
+    path: string,
+    opts: { readonly anchorPath?: string; readonly forbiddenRoots?: readonly string[] } = {},
+  ) {
     this.#path = path;
+    this.#anchorPath = opts.anchorPath;
+    for (const target of [path, ...(opts.anchorPath === undefined ? [] : [opts.anchorPath])])
+      for (const root of opts.forbiddenRoots ?? [])
+        if (isInside(target, root))
+          throw new Error(
+            `refusing to write ${basename(target)} inside ${root}: the agent or the guest can reach it`,
+          );
+    if (opts.anchorPath !== undefined) mkdirSync(dirname(opts.anchorPath), { recursive: true });
     if (existsSync(path)) {
       const lines = readFileSync(path, "utf8")
         .split("\n")
@@ -279,9 +299,85 @@ export class AttemptLedgerWriter {
     if (open === undefined) throw new Error(`attempt ${trialKey} is not running`);
     this.#open.delete(trialKey);
     this.#append({ kind: "end", trialKey, ...open, ...result });
+    // The external anchor: the head as of this attempt's end, outside the pack.
+    if (this.#anchorPath !== undefined) {
+      const line: AnchorEntry = { schema: ANCHOR_SCHEMA, ...this.head() };
+      appendFileSync(this.#anchorPath, `${JSON.stringify(line)}\n`, { flag: "a" });
+    }
   }
 
   head(): LedgerHead {
     return { events: this.#seq, headSha256: this.#prev };
   }
+}
+
+export const ANCHOR_SCHEMA = "myco.m2.attempt-anchor/1" as const;
+
+/** One anchored head: the ledger as of an attempt's end. */
+export interface AnchorEntry extends LedgerHead {
+  readonly schema: typeof ANCHOR_SCHEMA;
+}
+
+/**
+ * Where a pack's external anchor lives: `<pack parent>/attempt-anchors/<pack name>.jsonl`,
+ * outside the pack directory (and not an `m2-*` directory, so it is not mistaken for a pack).
+ */
+export function anchorPathFor(packDir: string): string {
+  return join(dirname(resolve(packDir)), "attempt-anchors", `${basename(resolve(packDir))}.jsonl`);
+}
+
+/** Whether `target` resolves inside `root` (following symlinks where the paths exist). */
+function isInside(target: string, root: string): boolean {
+  const real = (p: string): string => {
+    let at = resolve(p);
+    const rest: string[] = [];
+    while (!existsSync(at) && dirname(at) !== at) {
+      rest.unshift(basename(at));
+      at = dirname(at);
+    }
+    return join(existsSync(at) ? realpathSync(at) : at, ...rest);
+  };
+  const rel = relative(real(root), real(target));
+  return rel === "" || !(rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel));
+}
+
+/**
+ * Check the external anchor against the verified ledger and the pack's pin: every anchored
+ * head must be the ledger's own chain head at that event count (counts strictly increasing),
+ * and the last must equal both the ledger's head and the pin. A ledger rewritten and re-pinned
+ * inside the pack changes those intermediate heads, so it no longer agrees with its anchor.
+ */
+export function verifyAnchor(
+  lines: readonly unknown[],
+  events: readonly AttemptEvent[],
+  pin: LedgerHead | undefined,
+): string[] {
+  const errors: string[] = [];
+  if (lines.length === 0) return ["the external attempt anchor is empty"];
+  const headAt = [GENESIS_SHA256];
+  for (const e of events) headAt.push(eventSha256(e));
+  let last: AnchorEntry | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    const issues = validateSchema(lines[i], m2AttemptAnchorSchema);
+    if (issues.length > 0) {
+      errors.push(...issues.map((s) => `anchor line ${i}: ${s.path} ${s.message}`));
+      return errors;
+    }
+    const a = lines[i] as AnchorEntry;
+    if (last !== undefined && a.events <= last.events)
+      errors.push(`anchor line ${i}: ${a.events} events does not follow ${last.events}`);
+    if (a.events > events.length || headAt[a.events] !== a.headSha256)
+      errors.push(
+        `anchor line ${i}: the ledger's head at ${a.events} events is not the anchored one (rewritten or truncated)`,
+      );
+    last = a;
+  }
+  if (last !== undefined) {
+    const head = { events: events.length, headSha256: headAt[events.length] };
+    if (last.events !== head.events || last.headSha256 !== head.headSha256)
+      errors.push("the last anchored head is not the ledger's head");
+    if (pin !== undefined && (pin.events !== last.events || pin.headSha256 !== last.headSha256))
+      errors.push("the pack's pinned head is not the last anchored head");
+  }
+  return errors;
 }

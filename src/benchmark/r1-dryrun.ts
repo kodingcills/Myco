@@ -21,7 +21,7 @@ import { runGatedTrial } from "../gate/gated-trial.ts";
 import { GATE_TOOL } from "../gate/mcp-server.ts";
 import type { AgentLaunchPlan } from "../integrity/launch.ts";
 import { newVaultKey, VerdictVault } from "../integrity/vault.ts";
-import { AttemptLedgerWriter } from "../m2/attempt-ledger.ts";
+import { AttemptLedgerWriter, anchorPathFor } from "../m2/attempt-ledger.ts";
 import { DATA_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import type { BenchmarkArmRow } from "./check.ts";
 import { gatedArmRow, registerTask } from "./gated-rows.ts";
@@ -112,7 +112,12 @@ export async function runDryRun(
   });
   const armRows: BenchmarkArmRow[] = [];
   // The append-only attempt ledger (TIF-274): every attempt is logged as it starts and ends.
-  const attempts = new AttemptLedgerWriter(join(dir, "attempts.jsonl"));
+  // The external anchor sits outside the run directory; neither file may be where the agent
+  // (the vault's agent root) can reach it.
+  const attempts = new AttemptLedgerWriter(join(dir, "attempts.jsonl"), {
+    anchorPath: anchorPathFor(dir),
+    forbiddenRoots: [join(work, "agent")],
+  });
   for (const task of tasks) {
     const trialKey = `dry-${task.taskId}`;
     attempts.start({ trialKey, taskId: task.taskId, arm: "myco-gate" });

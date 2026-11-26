@@ -74,8 +74,10 @@ import { bindToTaskSet, knownTaskSet } from "../benchmark/taskset-binding.ts";
 import { M2_FAULT_CLASSES } from "../faults/security/classes.ts";
 import { clopperPearson, wilson } from "../foundry/stats.ts";
 import {
+  anchorPathFor,
   crossCheckAttempts,
   type DisclosedAttempt,
+  verifyAnchor,
   verifyAttemptLedger,
 } from "./attempt-ledger.ts";
 
@@ -145,6 +147,11 @@ export interface PackInput {
   readonly ops: readonly unknown[];
   /** The append-only attempt ledger (`attempts.jsonl`), when the pack has one. */
   readonly attempts?: readonly unknown[];
+  /**
+   * The external attempt anchor (host-side, OUTSIDE the pack: `anchorPathFor(packDir)`), when
+   * it exists. Required for R1 packs.
+   */
+  readonly anchor?: readonly unknown[];
   /**
    * Attempts replaced in place (`superseded.jsonl`, optional; TIF-274 topped-up runs). Never
    * counted: the row in `arm.jsonl` is the re-run.
@@ -666,6 +673,17 @@ export function checkPack(input: PackInput): PackResult {
           (e) => `attempt ledger: ${e}`,
         ),
       );
+      // The external anchor (lead ruling on #518 D3): required for R1, checked when present.
+      if (input.anchor !== undefined)
+        errors.push(
+          ...verifyAnchor(input.anchor, ledger.events, manifest?.attempts).map(
+            (e) => `attempt anchor: ${e}`,
+          ),
+        );
+      else if (manifest?.rows.includes("R1") === true)
+        errors.push(
+          "attempt anchor: missing (the host-side anchor outside the pack, attempt-anchors/<pack>.jsonl)",
+        );
     }
   }
 
@@ -972,6 +990,9 @@ export function readPack(
     superseded,
     ...(existsSync(attemptsPath)
       ? { attempts: readJsonl(attemptsPath, "attempts.jsonl", readErrors) }
+      : {}),
+    ...(existsSync(anchorPathFor(dir))
+      ? { anchor: readJsonl(anchorPathFor(dir), "attempt anchor", readErrors) }
       : {}),
     readErrors,
     runs,
