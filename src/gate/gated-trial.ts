@@ -68,6 +68,13 @@ export interface GatedTrialOptions {
   readonly onDecision?: GateConfig["onDecision"];
   readonly onDiagnostic?: GateConfig["onDiagnostic"];
   readonly onIntegrity?: (violations: readonly IntegrityViolation[]) => void;
+  /**
+   * Agent-safe corrections (M2 scope add B), off when absent. The outcome's `corrections`
+   * records the setting so the arm row can (`src/benchmark/gated-rows.ts`), and R1 evidence
+   * refuses a row recorded "on" (`correctionsOnError`, `src/benchmark/check.ts`). This
+   * function has no notion of an evidence run, so the ledger check is the enforcement point.
+   */
+  readonly corrections?: GateConfig["corrections"];
 }
 
 export type GatedTrialOutcome =
@@ -77,6 +84,8 @@ export type GatedTrialOutcome =
       readonly audit: LaunchAudit;
       readonly receipt: SealReceipt;
       readonly result: GateResult;
+      /** Whether the gate had corrections on for this trial's task. */
+      readonly corrections: "on" | "off";
     };
 
 function frozenPlan(plan: AgentLaunchPlan): AgentLaunchPlan {
@@ -118,6 +127,7 @@ export async function runGatedTrial(opts: GatedTrialOptions): Promise<GatedTrial
     ...(opts.onDecision ? { onDecision: opts.onDecision } : {}),
     ...(opts.onDiagnostic ? { onDiagnostic: opts.onDiagnostic } : {}),
     ...(opts.onIntegrity ? { onIntegrity: opts.onIntegrity } : {}),
+    ...(opts.corrections ? { corrections: opts.corrections } : {}),
   });
 
   // A transport that rejects has not shown the agent stopped: no stop marker, no capture,
@@ -126,5 +136,6 @@ export async function runGatedTrial(opts: GatedTrialOptions): Promise<GatedTrial
   opts.vault.markAgentStopped(opts.runId);
   opts.vault.capture(opts.runId, await opts.transport.captureAfterStop());
   const result = await gate.check({ taskId: task.id, runId: opts.runId });
-  return { status: "decided", audit, receipt, result };
+  const corrections = opts.corrections?.families.includes(task.family.id) ? "on" : "off";
+  return { status: "decided", audit, receipt, result, corrections };
 }
