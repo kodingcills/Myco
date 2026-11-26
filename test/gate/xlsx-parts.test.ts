@@ -256,8 +256,8 @@ describe("end to end on a real LibreOffice workbook: never verified", () => {
         loWith({
           [WB_RELS]: editOnce(
             loText(WB_RELS),
-            "</Relationships>",
-            `<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>`,
+            "\n</Relationships>",
+            `<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>\n</Relationships>`,
           ),
           "xl/worksheets/sheet2.xml": loText(SHEET1),
         }),
@@ -287,8 +287,8 @@ describe("end to end on a real LibreOffice workbook: never verified", () => {
       () =>
         loEdit(
           TYPES,
-          "</Types>",
-          '<Override PartName="/xl/ghost.xml" ContentType="application/xml"/></Types>',
+          "\n</Types>",
+          '<Override PartName="/xl/ghost.xml" ContentType="application/xml"/>\n</Types>',
         ),
       "XLSX_PART_UNREFERENCED",
     ],

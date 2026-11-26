@@ -74,10 +74,6 @@ export const ACCEPTED: StructureProbe[] = [
     cell: '<c r="REF" t="inlineStr"><is><r><rPr><b/><sz val="10"/></rPr><t>42</t></r><r><t>42</t></r></is></c>',
   },
   {
-    name: "inline string, whitespace between elements",
-    cell: '<c r="REF" t="inlineStr">\n  <is>\n    <t>4242</t>\n  </is>\n</c>',
-  },
-  {
     name: "shared string, one <t>",
     cell: '<c r="REF" s="0" t="s"><v>SI</v></c>',
     sst: "<si><t>4242</t></si>",
@@ -93,6 +89,13 @@ const INLINE = (is: string) => `<c r="REF" s="0" t="inlineStr">${is}</c>`;
 const SHARED = '<c r="REF" s="0" t="s"><v>SI</v></c>';
 
 export const MALFORMED: MalformedProbe[] = [
+  {
+    // Accepted by #503; LibreOffice writes no text inside cell structure, so the raw-byte
+    // pre-scan refuses it.
+    name: "inline string, whitespace between elements",
+    cell: '<c r="REF" t="inlineStr">\n  <is>\n    <t>4242</t>\n  </is>\n</c>',
+    code: "XLSX_PRESCAN_TEXT",
+  },
   // The eight probes of the round-2 verdict (D6), verbatim on C4.
   {
     name: "c01: <v> before <is> on an inlineStr cell",
@@ -200,23 +203,23 @@ export const MALFORMED: MalformedProbe[] = [
   {
     name: "text directly in <c>",
     cell: '<c r="REF" s="0" t="n">42<v>4242</v></c>',
-    code: "XLSX_CELL_MALFORMED",
+    code: "XLSX_PRESCAN_TEXT",
   },
   {
     name: "text directly in <is>",
     cell: INLINE("<is>42<t>42</t></is>"),
-    code: "XLSX_CELL_MALFORMED",
+    code: "XLSX_PRESCAN_TEXT",
   },
   {
     name: "text directly in <r>",
     cell: INLINE("<is><r>42<t>42</t></r></is>"),
-    code: "XLSX_CELL_MALFORMED",
+    code: "XLSX_PRESCAN_TEXT",
   },
   {
     name: "text directly in <si>",
     cell: SHARED,
     sst: "<si>42<t>42</t></si>",
-    code: "XLSX_CELL_MALFORMED",
+    code: "XLSX_PRESCAN_TEXT",
   },
   {
     name: "a foreign-namespace element inside <t>",
@@ -226,7 +229,7 @@ export const MALFORMED: MalformedProbe[] = [
   {
     name: "an element inside <f>",
     cell: '<c r="REF" s="0" t="n"><f>1<v/>+1</f><v>4242</v></c>',
-    code: "XLSX_CELL_MALFORMED",
+    code: "XLSX_PRESCAN_SYNTAX",
   },
   {
     name: "content inside a run property",

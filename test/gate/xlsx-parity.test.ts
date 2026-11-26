@@ -410,8 +410,8 @@ describe("soundness: whenever the gate verifies a workbook, the grader passes th
     );
     expect(TYPED.length).toBe(22);
     expect(XLSX_ONLY.length).toBe(13);
-    expect(ACCEPTED.length).toBe(7);
-    expect(MALFORMED.length).toBe(56);
+    expect(ACCEPTED.length).toBe(6);
+    expect(MALFORMED.length).toBe(57);
     // All eight round-2 D6 probes are in it.
     expect(MALFORMED.filter((p) => p.grader !== undefined)).toHaveLength(8);
   });

@@ -110,7 +110,14 @@ function sheetXml(sheet: XlsxSheet, shared: Map<string, number>): string {
       return `<row r="${r + 1}">${cells}</row>`;
     })
     .join("");
-  return `${XML_HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${REL}" xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xr2="http://schemas.microsoft.com/office/spreadsheetml/2015/revision2" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><sheetPr filterMode="false"><pageSetUpPr fitToPage="false"/></sheetPr><dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="12.8"/><sheetData>${rows}</sheetData><pageMargins left="0.7875" right="0.7875" top="1.05277777777778" bottom="1.05277777777778" header="0.7875" footer="0.7875"/></worksheet>`;
+  // <dimension>: the used range, as LibreOffice writes it ("A1" for an empty sheet).
+  const keys = [...sheet.cells.keys()].map((k) => k.split(",").map(Number) as [number, number]);
+  const lo = keys.reduce((a, [r, c]) => [Math.min(a[0], r), Math.min(a[1], c)], [1e9, 1e9]);
+  const hi = keys.reduce((a, [r, c]) => [Math.max(a[0], r), Math.max(a[1], c)], [-1, -1]);
+  const from = keys.length ? cellRef(lo[0], lo[1]) : "A1";
+  const to = keys.length ? cellRef(hi[0], hi[1]) : "A1";
+  const dimension = from === to ? from : `${from}:${to}`;
+  return `${XML_HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${REL}" xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xr2="http://schemas.microsoft.com/office/spreadsheetml/2015/revision2" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><sheetPr filterMode="false"><pageSetUpPr fitToPage="false"/></sheetPr><dimension ref="${dimension}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="12.8"/><sheetData>${rows}</sheetData><pageMargins left="0.7875" right="0.7875" top="1.05277777777778" bottom="1.05277777777778" header="0.7875" footer="0.7875"/></worksheet>`;
 }
 
 function styleAttr(style: XlsxStyle | undefined): string {

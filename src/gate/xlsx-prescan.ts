@@ -27,7 +27,10 @@
  *   value   := ( any byte except '"' '<' '>' '&' | REF )*
  *   QNAME   := NAME ( ':' NAME )?      NAME := [A-Za-z_] [A-Za-z0-9_.-]*
  *
- * and, in a <v> element, no '&' at all. In the PINNED parts (workbook, worksheet, shared
+ * and, in a <v> element, no '&' at all. In the PINNED parts, no text directly inside a
+ * structure element (sheetData, row, c, is, si, r, rPr, sst, sheets, Relationships, Types;
+ * the one LF LibreOffice writes before `</Types>` and `</Relationships>` aside), and no
+ * self-closing <v/> or <t/>. In the PINNED parts (workbook, worksheet, shared
  * strings, styles, content types, relationships), also: the root element carries exactly LibreOffice's namespace
  * declarations, in LibreOffice's order; no other element declares a namespace; no element
  * name carries a prefix and no attribute carries one other than `r:id` on <sheet> and
@@ -47,6 +50,7 @@ export type PrescanCode =
   | "XLSX_PRESCAN_TAG_SPACE"
   | "XLSX_PRESCAN_NAMESPACE"
   | "XLSX_PRESCAN_ENTITY"
+  | "XLSX_PRESCAN_TEXT"
   | "XLSX_PRESCAN_SYNTAX";
 
 /** The parts whose element and namespace shape is pinned, beyond the generic grammar. */
@@ -94,6 +98,27 @@ export const LO_ROOTS: Readonly<
 
 /** The one namespace declaration LibreOffice writes below a root: on <ext> in an <extLst>. */
 const EXT_XMLNS: readonly [string, string] = ["xmlns:loext", "http://schemas.libreoffice.org/"];
+
+/**
+ * Structure elements of the pinned parts: LibreOffice writes no text at all directly inside
+ * them (not even whitespace), so any is refused (the grader and the gate would each have to
+ * decide what it means).
+ */
+const STRUCTURAL: ReadonlySet<string> = new Set([
+  "sheetData",
+  "row",
+  "c",
+  "is",
+  "si",
+  "r",
+  "rPr",
+  "sst",
+  "sheets",
+  "Relationships",
+  "Types",
+]);
+/** Elements LibreOffice never writes self-closing (an empty value or text). */
+const NEVER_EMPTY: ReadonlySet<string> = new Set(["v", "t"]);
 
 /** Prefixed attributes allowed outside an <extLst>, by element. */
 const PREFIXED_ATTRS: Readonly<Record<string, string>> = { "r:id": "sheet", "xml:space": "t" };
@@ -227,6 +252,13 @@ function scan(bytes: Uint8Array, kind: ContentPartKind | undefined): void {
       // Text. Outside the root only LFs (LibreOffice writes one after the declaration and,
       // in the package parts, one before the closing tag).
       if (stack.length === 0 && b !== LF) refuse("XLSX_PRESCAN_SYNTAX");
+      if (kind && STRUCTURAL.has(stack[stack.length - 1]?.name ?? "")) {
+        // LibreOffice ends [Content_Types].xml and the .rels parts with "\n</Root>": that
+        // one LF before the root's closing tag is the only text it writes in a structure.
+        const closesRoot =
+          b === LF && stack.length === 1 && bytes[i + 1] === LT && bytes[i + 2] === SLASH;
+        if (!closesRoot) refuse("XLSX_PRESCAN_TEXT");
+      }
       if (b === GT) refuse("XLSX_PRESCAN_SYNTAX");
       if (b === AMP) {
         // In <v> (a number, a shared-string index, a boolean, an error), no reference at all.
@@ -301,6 +333,7 @@ function scan(bytes: Uint8Array, kind: ContentPartKind | undefined): void {
     }
     let inExt = false;
     if (kind) inExt = checkElementNamespaces(kind, name, attrs, stack);
+    if (kind && selfClosing && NEVER_EMPTY.has(name)) refuse("XLSX_PRESCAN_SYNTAX");
     if (stack.length === 0) rootSeen = true;
     if (!selfClosing) stack.push({ name, inExt });
     i = j;

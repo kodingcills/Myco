@@ -1087,6 +1087,7 @@ function readSheetCells(
   const sheetData = sheetDataList[0] as XmlElement;
   const cells: Record<string, string> = {};
   const seen = new Set<string>();
+  let [minR, minC, maxR, maxC] = [Infinity, Infinity, -1, -1];
   // sheetData -> row* -> c*: every element below is checked against the allowlist, so no
   // cell can hide in an element the reader skips.
   for (const row of structuralChildren(sheetData)) {
@@ -1101,9 +1102,28 @@ function readSheetCells(
       const key = cellRef(r, col);
       if (seen.has(key)) fail("XLSX_CELL_MALFORMED");
       seen.add(key);
+      [minR, minC, maxR, maxC] = [
+        Math.min(minR, r),
+        Math.min(minC, col),
+        Math.max(maxR, r),
+        Math.max(maxC, col),
+      ];
       const value = cellValue(c, shared, styles, system);
       if (value !== "") cells[key] = value;
     }
+  }
+  // <dimension> must be the range LibreOffice writes for these cells ("A1" when there are
+  // none): a huge or stale dimension is not its output.
+  const dims = elements(sheet, "dimension");
+  if (dims.length > 1) fail("XLSX_CELL_MALFORMED");
+  if (dims.length === 1) {
+    const want =
+      maxR < 0
+        ? "A1"
+        : minR === maxR && minC === maxC
+          ? cellRef(minR, minC)
+          : `${cellRef(minR, minC)}:${cellRef(maxR, maxC)}`;
+    if ((dims[0] as XmlElement).attrs.get("ref") !== want) fail("XLSX_CELL_MALFORMED");
   }
   return cells;
 }
@@ -1142,7 +1162,8 @@ function literalValue(
   // evaluating it, which it never does.
   if (f !== undefined && v === undefined) fail("XLSX_FORMULA_UNCACHED");
   const sRaw = c.attrs.get("s") ?? "0";
-  if (!/^\d{1,6}$/.test(sRaw)) fail("XLSX_STYLE_MALFORMED");
+  // A canonical index, as LibreOffice writes it (no leading zero: s="00" is refused).
+  if (!/^(?:0|[1-9]\d{0,5})$/.test(sRaw)) fail("XLSX_STYLE_MALFORMED");
   const style = styles[Number(sRaw)];
   if (style === undefined && sRaw !== "0") fail("XLSX_STYLE_MALFORMED");
   switch (t) {
@@ -1156,6 +1177,8 @@ function literalValue(
     case "inlineStr":
       return is === undefined ? "" : stringItem(is);
     case "str":
+      // A formula's string result: LibreOffice never writes t="str" without the formula.
+      if (f === undefined) fail("XLSX_CELL_MALFORMED");
       return v ?? "";
     case "b":
       if (v === undefined) return "";
@@ -1170,6 +1193,8 @@ function literalValue(
       if (!NUMBER.test(v)) fail("XLSX_CELL_MALFORMED");
       const value = Number(v);
       if (!Number.isFinite(value)) fail("XLSX_CELL_MALFORMED");
+      // The canonical spelling only (LibreOffice writes `4242`, never `04242` or `4.242E3`).
+      if (String(value) !== v) fail("XLSX_CELL_MALFORMED");
       return renderNumber(value, style ?? { kind: "general" }, system);
     }
     default:

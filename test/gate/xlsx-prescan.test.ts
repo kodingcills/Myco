@@ -314,6 +314,39 @@ const REFUSED: readonly [string, string, ContentPartKind | undefined, PrescanCod
     "worksheet",
     "XLSX_PRESCAN_ENTITY",
   ],
+  // Text inside structure, empty values
+  [
+    "whitespace between cells",
+    sheet('<row r="4"><c r="C4"><v>1</v></c>\n<c r="D4"><v>2</v></c></row>'),
+    "worksheet",
+    "XLSX_PRESCAN_TEXT",
+  ],
+  [
+    "CRLF between rows",
+    sheet(`${C4}\r\n${C4.replace(/4/g, "5")}`),
+    "worksheet",
+    "XLSX_PRESCAN_TEXT",
+  ],
+  [
+    "whitespace between <c> children",
+    sheet('<row r="4"><c r="C4"> <v>1</v></c></row>'),
+    "worksheet",
+    "XLSX_PRESCAN_TEXT",
+  ],
+  ["text directly in <si>", sst("<si>x<t>a</t></si>"), "sst", "XLSX_PRESCAN_TEXT"],
+  [
+    "whitespace between <si>",
+    sst("<si><t>a</t></si>\n<si><t>b</t></si>"),
+    "sst",
+    "XLSX_PRESCAN_TEXT",
+  ],
+  ["an empty <t/>", sst("<si><r><t/></r><r><t>a</t></r></si>"), "sst", "XLSX_PRESCAN_SYNTAX"],
+  [
+    "an empty <v/>",
+    sheet('<row r="4"><c r="C4" t="n"><v/></c></row>'),
+    "worksheet",
+    "XLSX_PRESCAN_SYNTAX",
+  ],
   // Anything else outside the grammar
   ["a literal > in text", sst("<si><t>a>b</t></si>"), "sst", "XLSX_PRESCAN_SYNTAX"],
   [
@@ -343,6 +376,15 @@ describe("refuses everything outside the grammar, with a code", () => {
     const union = /export type PrescanCode =([^;]+);/.exec(source)?.[1] ?? "";
     const declared = [...union.matchAll(/"(XLSX_[A-Z_]+)"/g)].map((m) => m[1]).sort();
     expect([...new Set(REFUSED.map((r) => r[3]))].sort()).toEqual(declared);
+  });
+
+  it("the one LF LibreOffice writes before a package root's closing tag is accepted", () => {
+    const rels = `${DECL}${root("rels")}<Relationship Id="rId1" Type="t" Target="x"/>\n${close("rels")}`;
+    expect(scan(rels, "rels")).toBeUndefined();
+    expect(scan(rels.replace("\n</", "\n\n</"), "rels")).toBe("XLSX_PRESCAN_TEXT");
+    expect(scan(rels.replace("<Relationship ", "\n<Relationship "), "rels")).toBe(
+      "XLSX_PRESCAN_TEXT",
+    );
   });
 
   it("generic parts (docProps, theme) get the grammar but no namespace pin", () => {

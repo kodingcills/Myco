@@ -1090,7 +1090,20 @@ const DOCUMENTED: [string, XlsxErrorCode, () => Uint8Array][] = [
   [
     "an undeclared entity",
     "XLSX_PRESCAN_ENTITY",
-    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData>&custom;")),
+    () =>
+      xlsxFromCsv(EXACT_CSV, {
+        patch: {
+          "xl/sharedStrings.xml": entryText("xl/sharedStrings.xml").replace(
+            "<t>id</t>",
+            "<t>&custom;</t>",
+          ),
+        },
+      }),
+  ],
+  [
+    "text (even whitespace) directly in cell structure",
+    "XLSX_PRESCAN_TEXT",
+    () => withSheetXml((x) => x.replace("<sheetData>", "<sheetData>\n")),
   ],
   [
     "a UTF-16 part",
