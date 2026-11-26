@@ -9,15 +9,18 @@
 #   cycle  N runs of reset -> agent/bootstrap/deploy-to-vm.sh -> session_info.
 #          Needs MYCO_TOKEN_OUT (a private token path, runbook §4).
 #
-# Every VM step takes and releases the VM lock through its own script; this
-# driver never holds it. Before each step it checks, read-only, that nobody owns
+# This driver never takes or holds the VM lock. reset-trial-vm.sh takes and
+# releases it itself; agent/bootstrap/deploy-to-vm.sh does not take it (runbook
+# lock table), so the read-only check right before the deploy is what keeps it
+# off a VM someone else owns. Before each step it checks, read-only, that nobody owns
 # the lock (`lsof`, runbook §2.0) and that the host's 1-minute load is under the
 # guest load gate (10). On a busy lock it stops. On load >= 10 it waits until the
 # load has stayed under 10 for 3 minutes (7 samples, 30 s apart), then resumes.
 #
-# The JSON line holds only timings, exit codes, load and the phase breakdown the
-# reset prints (`reset-trial-vm: timing stop=.. restore=.. ...`). No host paths,
-# no tokens. Raw step logs go to <out.jsonl>.logs/ for the operator; they are
+# The JSON line holds the label, run number, start time, commit, timings, exit
+# codes, load, host swap / free memory / page-ins, QEMU resident size, the phase
+# breakdown the reset prints (`reset-trial-vm: timing stop=.. restore=.. ...`)
+# and, for cycles, session_info's JSON line. No host paths, no tokens. Raw step logs go to <out.jsonl>.logs/ for the operator; they are
 # not part of the evidence pack.
 set -uo pipefail
 
@@ -120,7 +123,8 @@ for i in $(seq 1 "$COUNT"); do
       fi
     fi
   fi
-  # Desktop proof fields only (session_info's documented stdout), nothing else.
+  # session_info's documented stdout JSON line, stored whole: the desktop proof
+  # fields plus the guest account name (`user`). No token is in that line.
   SESSION=null
   if [ "$S_RC" = 0 ]; then
     SESSION=$(grep -m1 '^{"session_id"' "$LOGS/$i-session.log" || echo null)
