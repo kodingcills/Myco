@@ -22,6 +22,7 @@ nothing is skipped or fails for lack of one.
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `linux path (ubuntu-latest)` | yes, when the plan says so | no |
 | `ci.yml` | `m2 evidence and scorecard` | yes, when the plan says so | no |
+| `ci.yml` | `strict isolation (ubuntu-latest)` | yes | no |
 | `ci.yml` | `viewer verdict budget (…)` | only with the `perf` label | no |
 | `tif-170-race-diagnostics.yml` | `race x1` | only when the PR touches its paths | no |
 
@@ -38,6 +39,10 @@ nothing is skipped or fails for lack of one.
   a cause on every non-verified row, the guest load gate record), then
   `scripts/m2-scorecard-check.py` recomputes every number in `docs/m2-scorecard.md`
   (TIF-273). The same tests also run in `check` through `pnpm test`.
+- **Strict isolation.** Lifts Ubuntu 24.04's AppArmor restriction on unprivileged user
+  namespaces, then runs `test/isolation` as the runner user with
+  `MYCO_STRICT_NS_REQUIRED=1`, so a host that cannot start the strict backend fails the
+  suite instead of skipping it. See `docs/product/strict-isolation.md` (track L2).
 - **Viewer verdict budget.** A timing gate that is noisy on shared runners, so it runs
   on pushes to `main` and on PRs a maintainer labels `perf`. Only people with triage
   access or above can add labels, and a labelled fork PR still runs under
