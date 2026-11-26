@@ -28,7 +28,8 @@
  * (`episodeProblem`), or that carries a blob other than one persisted CSV document; a leak
  * (host path, user or host name, planted marker, operator-named string, secret-shaped
  * string) anywhere in ANY output file (episodes, records, manifest, schema, blobs), or a blob
- * that is not UTF-8 text and so cannot be scanned;
+ * that is not UTF-8 text and so cannot be scanned; a value the allowlist may neither keep nor
+ * hash (`OPEN_VALUE`, closed.ts);
  * a scripted, mock or non-gated episode not labelled simulated; a duplicate trial, run or
  * episode; a record that fails its schema; an existing output directory. A refusal names
  * the code and a location (file and JSON path, or candidate index), never the offending
@@ -43,6 +44,7 @@ import {
   datasetRecordSchema,
 } from "../../schemas/dataset-export.ts";
 import { validateSchema } from "../../schemas/validate.ts";
+import { closeEpisode, closeRecordFields, OpenValueError } from "./closed.ts";
 import {
   canonicalJson,
   EPISODE_MIRROR_PINNED_AT,
@@ -121,6 +123,7 @@ export const REFUSAL_CODES = [
   "DUPLICATE_TRIAL",
   "SCHEMA_INVALID",
   "OUT_EXISTS",
+  "OPEN_VALUE",
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -405,6 +408,10 @@ export function exportDataset(
     simulated: boolean;
     episodeText: string;
     line: string;
+    /** The raw (pre-closure) views, scanned for leaks as a signal, never written. */
+    rawEpisodeFile: string;
+    rawEpisodeText: string;
+    rawLine: string;
     blob: { file: string; bytes: Uint8Array };
   }> = [];
   const excluded: Array<{ episodeId: string; code: ExclusionCode }> = [];
@@ -436,14 +443,37 @@ export function exportDataset(
         blobProblem.detail,
       );
     }
-    const episodeText = `${canonicalJson(c.episode)}\n`;
-    const record = {
+    // Only the CLOSED form leaves the machine (closed.ts, TIF-265): free text hashed, ids
+    // closed or hashed, a closed field holding anything else refuses the export. It must pass
+    // every rule again, blobs included.
+    let closedEp: Episode;
+    try {
+      closedEp = closeEpisode(c.episode);
+    } catch (error) {
+      if (error instanceof OpenValueError)
+        throw new ExportRefused("OPEN_VALUE", `${episodeFile(c.episode.episodeId)}:${error.path}`);
+      throw error;
+    }
+    const closedProblem = episodeProblem(
+      closedEp,
+      new Map([[persistedBlobFile(capture.bytes), capture.bytes]]),
+    );
+    if (closedProblem !== null) {
+      throw new ExportRefused(
+        "EPISODE_INVALID",
+        `${episodeFile(c.episode.episodeId)}:${closedProblem.path}`,
+        closedProblem.detail,
+      );
+    }
+    const rawEpisodeText = `${canonicalJson(c.episode)}\n`;
+    const episodeText = `${canonicalJson(closedEp)}\n`;
+    const rawRecord = {
       schema: DATASET_RECORD_SCHEMA_ID,
       label: decision.label,
       episode: {
         schema: EPISODE_SCHEMA,
         id: c.episode.episodeId,
-        sha256: sha256Hex(episodeText),
+        sha256: sha256Hex(rawEpisodeText),
         file: episodeFile(c.episode.episodeId),
       },
       desktop: {
@@ -454,6 +484,15 @@ export function exportDataset(
       },
       capture: { path: capture.path, format: capture.format, size: capture.bytes.byteLength },
     };
+    const record = closeRecordFields({
+      ...rawRecord,
+      episode: {
+        schema: EPISODE_SCHEMA,
+        id: closedEp.episodeId,
+        sha256: sha256Hex(episodeText),
+        file: episodeFile(closedEp.episodeId),
+      },
+    });
     const issues = validateSchema(record, datasetRecordSchema);
     if (issues.length > 0) {
       throw new ExportRefused(
@@ -463,14 +502,20 @@ export function exportDataset(
       );
     }
     exported.push({
-      episodeId: c.episode.episodeId,
+      episodeId: closedEp.episodeId,
       label: decision.label,
       simulated: c.episode.simulated,
       episodeText,
       line: canonicalJson(record),
+      rawEpisodeFile: episodeFile(c.episode.episodeId),
+      rawEpisodeText,
+      rawLine: canonicalJson(rawRecord),
       blob: { file: persistedBlobFile(capture.bytes), bytes: capture.bytes },
     });
   }
+
+  // Records are sorted by the (closed) episode id they reference.
+  exported.sort((a, b) => (a.episodeId < b.episodeId ? -1 : a.episodeId > b.episodeId ? 1 : 0));
 
   // The captured persisted documents, one file per distinct content (two attempts that saved
   // identical bytes share a blob). Each must be UTF-8 text: a blob the leak scan cannot read
@@ -537,7 +582,14 @@ export function exportDataset(
     ["manifest.json", manifestJson],
     ...blobFiles.map((file) => [file, blobs.get(file)!] as const),
   ];
-  const leak = firstLeak(outputs, options.hygiene);
+  // The raw views are scanned first: a planted marker, a secret or a detectable path in an
+  // episode or record still refuses the export (a leak path exists), even though the closed
+  // form would carry it only as a digest. Then every closed output, as a backstop.
+  const rawOutputs: Array<readonly [string, string]> = [
+    ...exported.map((r) => [r.rawEpisodeFile, r.rawEpisodeText] as const),
+    ["records.jsonl", exported.map((r) => `${r.rawLine}\n`).join("")],
+  ];
+  const leak = firstLeak(rawOutputs, options.hygiene) ?? firstLeak(outputs, options.hygiene);
   if (leak !== null) throw new ExportRefused("LEAK", leak.where, leak.kind);
 
   // Write to a sibling temp directory and rename, so a failed write leaves no partial export.

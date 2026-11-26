@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { datasetManifestSchema, datasetRecordSchema } from "../../schemas/dataset-export.ts";
 import { validateSchema } from "../../schemas/validate.ts";
+import { closeEpisode, openEpisodeStrings } from "../../src/dataset/closed.ts";
 import {
   draftEpisode,
   EPISODE_REAL_PLANNERS,
@@ -348,13 +349,16 @@ describe("exportDataset: a container over episodes", () => {
     expect(files(a)).toEqual(files(b));
     for (const f of files(a)) expect(readFileSync(join(a, f))).toEqual(readFileSync(join(b, f)));
     // Only exported episodes are written (the excluded one is not).
+    // Each is written in its CLOSED form (closed.ts, TIF-265), named by its closed id.
     expect(readdirSync(join(a, "episodes")).sort()).toEqual(
-      [cands[0]!, cands[1]!, cands[2]!].map((c) => `${c.episode.episodeId}.json`).sort(),
+      [cands[0]!, cands[1]!, cands[2]!]
+        .map((c) => `${closeEpisode(c.episode).episodeId}.json`)
+        .sort(),
     );
     const lines = readFileSync(join(a, "records.jsonl"), "utf8").trimEnd().split("\n");
     const ids = lines.map((l) => JSON.parse(l).episode.id);
     expect(ids).toEqual([...ids].sort());
-    const byId = new Map(cands.map((c) => [c.episode.episodeId, c]));
+    const byId = new Map(cands.map((c) => [closeEpisode(c.episode).episodeId, c]));
     for (const line of lines) {
       const record = JSON.parse(line);
       expect(validateSchema(record, datasetRecordSchema)).toEqual([]);
@@ -369,13 +373,17 @@ describe("exportDataset: a container over episodes", () => {
       const c = byId.get(record.episode.id)!;
       const text = readFileSync(join(a, record.episode.file), "utf8");
       expect(sha(text)).toBe(record.episode.sha256);
-      // The episode is copied byte for byte (canonical JSON), and is a valid episode.
-      expect(text).toBe(`${canonicalJson(c.episode)}\n`);
+      // The episode is its closed form (canonical JSON): no free text, and a valid episode.
+      expect(text).toBe(`${canonicalJson(closeEpisode(c.episode))}\n`);
+      expect(openEpisodeStrings(JSON.parse(text))).toEqual([]);
       const ep = JSON.parse(text);
       expect(validateSchema(ep, episodeMirrorSchema)).toEqual([]);
       expect(episodeIdOf(ep)).toBe(record.episode.id);
       expect(record.label).toBe(ep.gate.verdict === "verified" ? "positive" : "negative");
-      expect(record.capture).toEqual({ path: "doc.csv", format: "csv", size: DOC.byteLength });
+      // The capture path is free text: hashed, never written.
+      expect(record.capture).toMatchObject({ format: "csv", size: DOC.byteLength });
+      expect(record.capture.path).toMatch(/^h-[0-9a-f]{64}$/);
+      expect(record.desktop).toMatchObject({ backend: c.desktop.backend, image: c.desktop.image });
     }
     const manifest = JSON.parse(readFileSync(join(a, "manifest.json"), "utf8"));
     expect(validateSchema(manifest, datasetManifestSchema)).toEqual([]);
@@ -764,10 +772,17 @@ describe("exportDataset: a container over episodes", () => {
   });
 
   it("refuses a record that fails its schema", () => {
-    const bad = candidate(1, { desktop: { backend: "bad backend!" } });
+    const bad = candidate(1, { desktop: { isolation: "bogus" as "process" } });
     const e = refusal(() => exportDataset([bad], { outDir: out() }));
     expect(e.code).toBe("SCHEMA_INVALID");
-    expect(e.where).toContain("record.desktop.backend");
+    expect(e.where).toContain("record.desktop.isolation");
+  });
+
+  it("a desktop fact that is not a closed id is hashed, never written (TIF-265)", () => {
+    const dir = out();
+    exportDataset([candidate(1, { desktop: { backend: "bad backend!" } })], { outDir: dir });
+    const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
+    expect(record.desktop.backend).toMatch(/^h-[0-9a-f]{64}$/);
   });
 
   // Planted-marker tests: each marker is built at runtime so this file never matches the
@@ -897,7 +912,9 @@ describe("exportDataset: a container over episodes", () => {
       hygiene: { forbiddenStrings: ["zz-operator-planted-marker"] },
     });
     expect(r.manifest.counts).toMatchObject({ records: 1, excluded: { MISSING_GATE: 1 } });
-    expect(readdirSync(join(dir, "episodes"))).toEqual([`${candidate(1).episode.episodeId}.json`]);
+    expect(readdirSync(join(dir, "episodes"))).toEqual([
+      `${closeEpisode(candidate(1).episode).episodeId}.json`,
+    ]);
   });
 
   it("placeholders the backend writes are clean", () => {
