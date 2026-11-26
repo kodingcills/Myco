@@ -4,6 +4,8 @@ Make existing desktop software reliably executable by AI agents: **verified oper
 
 Agents can already touch desktop software. The unsolved problem is *trust* — knowing whether a click actually changed the application, and being able to undo it when it did not. Myco's answer is to treat the desktop as a program: read authoritative app state, drive it through guarded steps, and decide success **only** from persisted state that the agent cannot write.
 
+**Where this is going:** Myco is solving desktop use for agents broadly: letting AI agents operate real desktop software reliably, recoverably and at scale. Verified completion, the gate that checks whether a task really persisted, is the first proven piece, not the whole product. See the roadmap in [docs/product/vision.md](docs/product/vision.md).
+
 **Milestone 1 status:** verified, recoverable `calc-record-edit` execution on real LibreOffice Calc in Windows 11 ARM64. See [docs/m1-scorecard.md](docs/m1-scorecard.md) for the acceptance criteria and their current evidence — that file is the record, not this page.
 
 ---
