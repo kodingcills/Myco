@@ -77,15 +77,24 @@ ROWS = [f"R{n}" for n in range(1, 9)]
 RECOMPUTED = ("R1", "R2", "R3", "R7")
 STATUSES = ("PENDING", "DONE", "NOT DONE")
 NONE_CELL = "—"
+EXPERIMENT_HEADING = "## Experiment row (experiment-only, never R1 evidence)"
 IN_SCOPE = {
+    EXPERIMENT_HEADING: "experiment",
     "## Process checks (CI gates)": "process",
     "## How the check works": "how",
 }
 ROW_LINE = re.compile(r"\| *(R\d+) *\|")
+# The experiment row (plan §2.1a): its own table in its own section, never in the R1-R8 table, never
+# in the status line. Statuses: PENDING (no evidence), PLUMBING (a Stage-0 A/B pack: effect claim
+# null), REPORTED (a Stage-1 A/B pack). The cited pack must be an A/B pack (kind "ab") that passes.
+AB_ROW = "AB"
+AB_STATUSES = ("PENDING", "PLUMBING", "REPORTED")
+AB_ROW_LINE = re.compile(r"\| *AB *\|")
 # Words with a word-internal digit run that no claim covers, per section, in doc order.
 # Regenerate with --identifiers after a deliberate doc edit and check the diff.
 IDENTIFIER_PINS: dict[str, tuple[str, ...]] = {
     "status": ("M2", "M2", "m2-scorecard-check", "R1", "R3"),
+    "experiment": ("M2",),
     "process": ("m2-evidence-check", "m2-", "m2", "m2-evidence"),
     "how": ("python3", "m2-scorecard-check"),
 }
@@ -532,6 +541,110 @@ def check_rows(r: Report, evidence_root: Path) -> Counter:
     return statuses
 
 
+
+# -- the experiment row (plan §2.1a) -----------------------------------------------------------
+def ab_cells(r: Report) -> list[str] | None:
+    """The AB row's five cells. The experiment section holds exactly HEADER, SEPARATOR and one
+    `| AB |` row; an AB row anywhere else (the R1-R8 table included) is a layout error."""
+    seg = r.segment("experiment")
+    for line in r.text.splitlines():
+        if AB_ROW_LINE.match(line) and line not in seg.splitlines():
+            r.fail("layout", "experiment row", f"an AB row outside {EXPERIMENT_HEADING!r}: {line[:40]!r}")
+    if not seg:
+        return None
+    table = [line for line in seg.splitlines() if line.startswith("|")]
+    if table[:2] != [HEADER, SEPARATOR] or len(table) != 3 or not AB_ROW_LINE.match(table[2]):
+        r.fail("experiment", "experiment table",
+               f"the section must hold exactly {HEADER!r}, {SEPARATOR!r} and one `| AB |` row; found {len(table)} table lines")
+        return None
+    cells = [c.strip() for c in re.split(r"(?<!\\)\|", table[2].strip())[1:-1]]
+    if len(cells) != 5 or not table[2].rstrip().endswith("|"):
+        r.fail("experiment", "experiment table", "row AB must have exactly 5 cells")
+        return None
+    return cells
+
+
+def figures_ab(result: dict) -> str:
+    ab = result["ab"]
+    if result["manifest"]["stage"] == 0:
+        return (f"Stage 0 plumbing: {ab['pairs']} pairs; effect claim null (not claimed); "
+                f"experiment-only, never R1 evidence")
+    t, ci95 = ab["table"], ab["difference"]["ci95"]
+    interval = "no interval" if ci95 is None else ci(ci95)
+    effect = {"corrections-help": "corrections help",
+              "corrections-not-shown-to-help": "corrections not shown to help"}[ab["effect"]]
+    return (f"Stage 1: {ab['pairs']} pairs; both {t['both']}, ON only {t['onOnly']}, OFF only {t['offOnly']}, "
+            f"neither {t['neither']}; one-sided sign test p = {ab['signTestOneSidedP']:.3g}; 95% CI on the paired "
+            f"difference {interval}; {effect}; experiment-only, never R1 evidence")
+
+
+def check_ab_bars(r: Report, const: dict, plan: str) -> None:
+    """The AB criterion's pre-registered figures: each from the code constant, and the plan's AB row agrees."""
+    row = plan_row(plan, AB_ROW)
+    bars = [
+        ("Stage 0: {} pairs on the pilot's tasks", const["abStage0Pairs"], r"Stage 0: \*\*(\d+)\*\* pairs", "abStage0Pairs"),
+        ("Stage 1: {} pairs per arm", const["abStage1Pairs"], r"Stage 1: \*\*(\d+)\*\* pairs per arm", "abStage1Pairs"),
+        ("at alpha {}", const["abAlpha"], r"at alpha \*\*([0-9.]+)\*\*", "abAlpha"),
+        ("a {}% CI on the paired difference", 95, r"a (\d+)% CI on the paired difference", None),
+    ]
+    for template, value, pattern, constant in bars:
+        planned = grab(pattern, row)
+        src = f"plan row AB /{pattern}/ = {planned}" + (f"; src/m2/corrections-ab.ts {constant} = {value}" if constant else "")
+        r.check("experiment", f"AB design {template.format(value)!r}", planned == str(value), src, template.format(value),
+                detail="" if planned == str(value) else f"the plan says {planned}, the doc and code {value}")
+    r.unchecked("experiment", "stage names", "the stage names of the lead's design, not figures",
+                ("PLUMBING for a Stage-0 pack", "REPORTED for a Stage-1 pack"))
+    r.unchecked("experiment", "task set", "the published task set's name, bound by src/benchmark/taskset-binding.ts",
+                "per arm on fc-v1")
+    r.quote("experiment", "A/B pack kind", f"`{const['abPackSchema']}` (`schemas/m2-ab-pack.ts`)",
+            "src/m2/ab-pack.ts AB_PACK_SCHEMA")
+    r.unchecked("experiment", "plan and layout references", "a section reference and the R-row range, not figures",
+                ("plan §2.1a", "apart from R1-R8", "can never list an R row", "never R1 evidence, in either arm"))
+    r.quote("experiment", "evidence use", "experiment-only, never R1 evidence)", "src/m2/corrections-ab.ts AB_EVIDENCE_USE")
+
+
+def check_ab_row(r: Report, evidence_root: Path) -> str | None:
+    """The AB row's status, recomputed from its cited pack. Returns the status, or None."""
+    cells = ab_cells(r)
+    if cells is None:
+        if not r.segment("experiment"):
+            r.fail("experiment", "experiment row", f"the doc has no {EXPERIMENT_HEADING!r} section with the AB row")
+        return None
+    _, _, status, evidence, recomputed = cells
+    w = "experiment"
+    if status not in AB_STATUSES:
+        r.fail(w, "AB status", f"status {status!r} is not one of {AB_STATUSES}")
+        return None
+    if evidence == NONE_CELL:
+        r.check(w, "AB status", status == "PENDING", "no evidence cited, so the row is PENDING", f"| {status} |",
+                detail=f"the doc says {status}")
+        r.check(w, "AB recomputed cell", recomputed == NONE_CELL, "a PENDING row quotes no figures", f"| {recomputed} |")
+        return "PENDING"
+    m = re.fullmatch(r"`" + re.escape(EVIDENCE_PREFIX) + r"(" + PACK_NAME.pattern + r")/`", evidence)
+    if not m:
+        r.fail(w, "AB evidence", f"the evidence cell must be one pack, `{EVIDENCE_PREFIX}m2-<name>/`; found {evidence!r}")
+        return None
+    name = m.group(1)
+    if not (evidence_root / name / "pack.json").is_file():
+        r.fail(w, "AB evidence", f"{evidence} is not a committed pack (no pack.json under {name}/)")
+        return None
+    rc, out = evidence_check(str(evidence_root / name))
+    result = out["packs"][0]["result"]
+    if result.get("kind") != "ab":
+        r.fail(w, "AB evidence", f"{name} is not an A/B pack (myco.m2.ab-pack/1); the AB row cites A/B packs only")
+        return None
+    r.check(w, "A/B pack passes every gate", rc == 0 and result["ok"],
+            "scripts/m2-evidence-check.ts (src/m2/ab-pack.ts: the A/B analysis with evidence on, process rules, provenance)",
+            evidence, detail="" if result["ok"] else "; ".join(result["errors"][:5]))
+    if not (rc == 0 and result["ok"]):
+        return None
+    want = "PLUMBING" if result["manifest"]["stage"] == 0 else "REPORTED"
+    r.check(w, "AB status", status == want, f"{name}: a Stage-{result['manifest']['stage']} A/B pack", f"| {status} |",
+            detail=f"the doc says {status}, the pack gives {want}")
+    r.quote(w, "AB recomputed figures", f"| {figures_ab(result)} |", source=f"{name} via src/m2/ab-pack.ts")
+    return want
+
+
 def check_preamble(r: Report, statuses: Counter) -> None:
     r.quote("status", "row statuses",
             f"Status: {statuses['DONE']} of {len(ROWS)} rows DONE, {statuses['PENDING']} PENDING, "
@@ -576,6 +689,8 @@ def main(argv: list[str]) -> int:
     r = Report(args.doc.read_text(encoding="utf-8"))
     check_bars(r, const, args.plan.read_text(encoding="utf-8"))
     statuses = check_rows(r, args.evidence_root.resolve())
+    check_ab_bars(r, const, args.plan.read_text(encoding="utf-8"))
+    ab_status = check_ab_row(r, args.evidence_root.resolve())
     check_preamble(r, statuses)
     check_process(r, const, args.runbook)
     r.sweep_numbers()
@@ -591,7 +706,7 @@ def main(argv: list[str]) -> int:
     print(f"\n{counts['ok']} ok, {counts['MISMATCH']} mismatch, {counts['UNATTRIBUTED']} unattributed, "
           f"{counts['unchecked']} not machine-checked, {counts['artifact']} artifact-consistency, "
           f"{counts['swept']} sections swept clean; rows: {statuses['DONE']} DONE, {statuses['NOT DONE']} NOT DONE, "
-          f"{statuses['PENDING']} PENDING")
+          f"{statuses['PENDING']} PENDING; experiment row AB: {ab_status}")
     bad = r.mismatches()
     if bad:
         for where, claim, status, detail in bad:

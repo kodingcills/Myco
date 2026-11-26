@@ -489,6 +489,46 @@ function costField(
   };
 }
 
+/**
+ * The per-trial process rules (M2 plan §2.2, kept as CI gates): the guest load gate, the TIF-98
+ * cold-boot check, a cause on every non-verified row, the harness class exactly on harness causes,
+ * and `faultLanded` null exactly on unfaulted trials. One function, so the R-pack check and the
+ * A/B pack check (`src/m2/ab-pack.ts`) apply the same rules.
+ */
+export function trialProcessErrors(row: BenchmarkArmRow, o: TrialOps, verified: boolean): string[] {
+  const errors: string[] = [];
+  if (o.hostLoad1mStart >= LOAD_GATE)
+    errors.push(
+      `${row.trialKey}: started at host 1-minute load ${o.hostLoad1mStart} >= ${LOAD_GATE} (guest load gate)`,
+    );
+  // TIF-98: only a full cold boot is the shared starting state. A fast boot (the first start
+  // after a UTM configuration write) skips most of Windows' boot work on the same disk. The
+  // class is checked, and recomputed from the recorded guest CPU against the committed
+  // constant, so a row labelled cold with a fast boot's CPU fails too (#546 round 1 D2).
+  if (o.resetBootClass !== "cold")
+    errors.push(
+      `${row.trialKey}: its reset was a ${o.resetBootClass} boot, not a full cold boot (TIF-98 cold-boot check)`,
+    );
+  else if (o.resetGuestCpuFirstSshS < COLD_MIN_GUEST_CPU)
+    errors.push(
+      `${row.trialKey}: labelled cold but its reset's guest CPU at the first ssh answer was ${o.resetGuestCpuFirstSshS} s < ${COLD_MIN_GUEST_CPU} s (TIF-98 cold-boot check)`,
+    );
+  if (!verified && row.cause === null)
+    errors.push(`${row.trialKey}: non-verified row has no cause`);
+  const harness = row.cause?.kind === "harness";
+  if (harness && o.harnessClass === null)
+    errors.push(`${row.trialKey}: harness cause without a harness class`);
+  if (!harness && o.harnessClass !== null)
+    errors.push(
+      `${row.trialKey}: harness class ${o.harnessClass} on a row whose cause is not the harness`,
+    );
+  if ((row.faultClass === NO_FAULT) !== (o.faultLanded === null))
+    errors.push(
+      `${row.trialKey}: faultLanded is null exactly on an unfaulted trial (faultClass ${row.faultClass}, faultLanded ${o.faultLanded})`,
+    );
+  return errors;
+}
+
 export function checkPack(input: PackInput): PackResult {
   const errors: string[] = [...input.readErrors];
   const manifestIssues = validateSchema(input.manifest, m2PackManifestSchema);
@@ -627,41 +667,12 @@ export function checkPack(input: PackInput): PackResult {
       continue;
     }
     maxLoad = Math.max(maxLoad ?? 0, o.hostLoad1mStart);
-    if (o.hostLoad1mStart >= LOAD_GATE)
-      errors.push(
-        `${row.trialKey}: started at host 1-minute load ${o.hostLoad1mStart} >= ${LOAD_GATE} (guest load gate)`,
-      );
-    // TIF-98: only a full cold boot is the shared starting state. A fast boot (the first start
-    // after a UTM configuration write) skips most of Windows' boot work on the same disk. The
-    // class is checked, and recomputed from the recorded guest CPU against the committed
-    // constant, so a row labelled cold with a fast boot's CPU fails too (#546 round 1 D2).
-    if (o.resetBootClass !== "cold")
-      errors.push(
-        `${row.trialKey}: its reset was a ${o.resetBootClass} boot, not a full cold boot (TIF-98 cold-boot check)`,
-      );
-    else if (o.resetGuestCpuFirstSshS < COLD_MIN_GUEST_CPU)
-      errors.push(
-        `${row.trialKey}: labelled cold but its reset's guest CPU at the first ssh answer was ${o.resetGuestCpuFirstSshS} s < ${COLD_MIN_GUEST_CPU} s (TIF-98 cold-boot check)`,
-      );
     const verified = success(row, grades.get(row.trialKey));
-    if (!verified) {
-      accounting.nonVerified++;
-      if (row.cause === null) errors.push(`${row.trialKey}: non-verified row has no cause`);
-    }
+    errors.push(...trialProcessErrors(row, o, verified));
+    if (!verified) accounting.nonVerified++;
     if (row.cause !== null) accounting[row.cause.kind]++;
-    const harness = row.cause?.kind === "harness";
-    if (harness && o.harnessClass === null)
-      errors.push(`${row.trialKey}: harness cause without a harness class`);
-    if (!harness && o.harnessClass !== null)
-      errors.push(
-        `${row.trialKey}: harness class ${o.harnessClass} on a row whose cause is not the harness`,
-      );
-    if (harness && o.harnessClass !== null)
+    if (row.cause?.kind === "harness" && o.harnessClass !== null)
       byHarnessClass[o.harnessClass] = (byHarnessClass[o.harnessClass] ?? 0) + 1;
-    if ((row.faultClass === NO_FAULT) !== (o.faultLanded === null))
-      errors.push(
-        `${row.trialKey}: faultLanded is null exactly on an unfaulted trial (faultClass ${row.faultClass}, faultLanded ${o.faultLanded})`,
-      );
   }
 
   // The append-only attempt ledger (TIF-274, lead ruling 14:35Z): required for R1 evidence,
