@@ -10,6 +10,11 @@
  * The report is `simulated: true` and `evidence: false` by construction: scripted agents
  * measure the harness (isolation overhead, scaling), never an agent's capability. It
  * carries no cost (`costEstimate: null`), so it can never enter R7.
+ *
+ * On `linux-plain` (the only Linux backend in this PR) every trial carries the
+ * `shared-host-dirs` disqualifier, so `countedVerified` is 0 by design: the harness still
+ * checks that every gate verdict matches the behaviour (`gateVerified`, `correct`), but no
+ * result from a backend that leaves other trials writable is ever counted.
  */
 
 import { join } from "node:path";
@@ -76,7 +81,12 @@ export interface ThroughputPoint {
   readonly trialsPerHour: number;
   readonly countedVerified: number;
   readonly countedVerifiedPerHour: number;
-  /** Trials whose gate verdict matched the behaviour's expected verdict, with no disqualifier. */
+  /** Trials whose gate said `verified` (counted or not). Never a count a report may use. */
+  readonly gateVerified: number;
+  /**
+   * Trials whose gate verdict matched the behaviour's expected verdict, with no
+   * disqualifier other than `shared-host-dirs` (which only withholds the count).
+   */
   readonly correct: number;
   readonly mismatches: readonly string[];
   readonly contaminated: number;
@@ -94,7 +104,7 @@ export interface ThroughputReport {
   readonly label: string | null;
   readonly trialsPerN: number;
   readonly points: readonly ThroughputPoint[];
-  /** Every trial at every N got its expected verdict and no disqualifier. */
+  /** Every trial at every N got its expected verdict and no blocking disqualifier. */
   readonly allCorrect: boolean;
 }
 
@@ -131,7 +141,8 @@ export async function runThroughput(opts: ThroughputOptions): Promise<Throughput
     report.trials.forEach((t, i) => {
       const expected = EXPECTED_VERDICT[behaviours[i] as AgentBehaviour];
       const got = t.gate?.verdict ?? "none";
-      if (got === expected && t.disqualifiers.length === 0) correct++;
+      const blocking = t.disqualifiers.filter((d) => d !== "shared-host-dirs");
+      if (got === expected && blocking.length === 0) correct++;
       else
         mismatches.push(
           `${t.runId} (${behaviours[i]}): expected ${expected}, got ${got}${t.disqualifiers.length ? ` [${t.disqualifiers.join(",")}]` : ""}`,
@@ -146,10 +157,13 @@ export async function runThroughput(opts: ThroughputOptions): Promise<Throughput
       trialsPerHour: rate,
       countedVerified: report.verifiedCount,
       countedVerifiedPerHour: perHour(report.verifiedCount, report.wallMs),
+      gateVerified: report.trials.filter((t) => t.gate?.verdict === "verified").length,
       correct,
       mismatches,
       contaminated: report.contaminatedCount,
-      disqualified: report.trials.filter((t) => t.disqualifiers.length > 0).length,
+      disqualified: report.trials.filter((t) =>
+        t.disqualifiers.some((d) => d !== "shared-host-dirs"),
+      ).length,
       peakConcurrent: report.peakConcurrent,
       speedupVsFirst: firstRate > 0 ? Math.round((rate / firstRate) * 100) / 100 : 0,
     });

@@ -1,37 +1,30 @@
 /**
- * Track L (safe parallelism) — the Linux disposable-desktop backend.
+ * Track L (safe parallelism) — the Linux disposable-desktop backend (`linux-plain`).
  *
- * Two modes, chosen by `probe()` and recorded honestly in every desktop's
- * `IsolationReport` (the pool, not this file, decides whether that is enough):
+ * This is the only Linux backend in this PR. Strict namespace isolation (`linux-ns`:
+ * per-trial user/mount/net/pid namespaces) is NOT here: its round-1 form let a trial
+ * unmount the "hidden" run root and write another trial's saved file, and it needs
+ * privileges cloud sessions lack. It is filed as its own follow-up (see
+ * docs/product/safe-parallelism.md §2).
  *
- * `linux-ns` (unprivileged user namespaces available):
- *   One long-lived namespace "holder" per trial: `unshare -rmnpf --mount-proc --kill-child`.
- *   Inside it, before anything of the agent runs:
- *     - a private tmpfs on /tmp (so every trial can use DISPLAY=:99 and the same /tmp
- *       names without colliding, and nothing in the host /tmp is visible);
- *     - a tmpfs over every `hide` dir (the pool root holding the other trials' roots, the
- *       vault and evidence roots), then the trial's own root bound back at its own path;
- *     - a network namespace with loopback only (no route out, no other trial's sockets;
- *       abstract unix sockets are per network namespace too);
- *     - a pid namespace: SIGKILL to its init kills every process of the trial, Xvfb and
- *       soffice included, with no orphan;
- *     - optionally Xvfb `:99 -nolisten tcp`, private to the namespace.
- *   `exec` enters the namespace with `nsenter -U -m -n -p`.
- *
- * `linux-plain` (no user namespaces, e.g. a host with AppArmor's userns restriction):
- *   A private root, HOME/TMPDIR/XDG dirs inside it, one process group per exec, Xvfb on a
- *   display Xvfb picks itself (`-displayfd`). The network and /tmp are SHARED and other
- *   trials' roots are visible: the report says so, and the pool's strict requirements
- *   refuse it.
- *
- * Both modes:
- *   - The desktop's env is built from an allowlist (PATH, LANG) plus its own dirs: no host
- *     env var (and so no host secret) reaches a trial.
- *   - A watchdog samples the trial's processes from /proc every 200 ms and destroys the
- *     desktop when their RSS sum exceeds `memoryMbPerTrial` or their CPU time exceeds
+ * What `linux-plain` gives each trial, and the report says exactly this:
+ *   - a private root (workspace, HOME, TMPDIR, XDG dirs) no other trial is given;
+ *   - one process group per exec, killed (with its Xvfb) at destroy;
+ *   - Xvfb on a display Xvfb picks itself (`-displayfd`), so trials never share one;
+ *   - an env built from an allowlist (PATH, LANG) plus its own dirs: no host env var (and
+ *     so no host secret) reaches a trial;
+ *   - a watchdog that samples the trial's processes from /proc every 200 ms and destroys
+ *     the desktop when their RSS sum exceeds `memoryMbPerTrial` or their CPU time exceeds
  *     `cpuSecondsPerTrial`.
- *   - `destroy()` kills everything, waits until no process of the trial remains, removes
- *     the root, and reports both facts; it never throws.
+ *
+ * What it does NOT give, and the report says so (`hostDirsHidden: false`, `tmp: "env"`,
+ * `network: "shared"`): the host filesystem, /tmp and network are shared, so a trial can
+ * write another trial's workspace, and a process that leaves its process group (`setsid`)
+ * outlives the desktop. The pool therefore never counts a `linux-plain` trial as verified
+ * (`shared-host-dirs`), and strict requirements refuse it outright.
+ *
+ * `destroy()` kills everything it knows of, waits until no process of the trial's groups
+ * remains, removes the root, and reports both facts; it never throws.
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
@@ -53,15 +46,9 @@ import type {
 const OUTPUT_LIMIT = 1024 * 1024;
 const PAGE_BYTES = 4096;
 const CLOCK_TICKS = 100;
-/** The display every namespaced trial uses: private per network + mount namespace. */
-export const NS_DISPLAY = ":99";
 
 export interface LinuxBackendOptions {
-  readonly unshare?: string;
-  readonly nsenter?: string;
   readonly xvfb?: string;
-  /** "auto" (default) picks ns when available; "ns" / "plain" force a mode. */
-  readonly mode?: "auto" | "ns" | "plain";
   /** Watchdog sampling period. */
   readonly sampleMs?: number;
 }
@@ -117,72 +104,27 @@ function allPids(): number[] {
   }
 }
 
-function pidNs(pid: number): string | undefined {
-  try {
-    return readlinkSync(`/proc/${pid}/ns/pid`);
-  } catch {
-    return undefined;
-  }
-}
-
-function childrenOf(pid: number): number[] {
-  return allPids().filter((p) => readStat(p)?.ppid === pid);
-}
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------------------
 // probe
 // ---------------------------------------------------------------------------------------
 
-function nsWorks(unshare: string): boolean {
-  if (process.platform !== "linux") return false;
-  const r = spawnSync(
-    unshare,
-    [
-      "-rmnpf",
-      "--mount-proc",
-      "--kill-child",
-      "sh",
-      "-c",
-      "mount -t tmpfs tmpfs /tmp && test ! -e /proc/1/ns/net || true",
-    ],
-    { encoding: "utf8", timeout: 10_000 },
-  );
-  return r.status === 0;
-}
-
 function binaryWorks(bin: string, args: readonly string[]): boolean {
   const r = spawnSync(bin, args, { encoding: "utf8", timeout: 10_000 });
   return r.error === undefined;
 }
 
-// ---------------------------------------------------------------------------------------
-// the holder script (runs as pid 1's parent inside the trial's namespaces)
-// ---------------------------------------------------------------------------------------
-
-/**
- * `$1` root, `$2` display ("xvfb" | "none"), `$3` Xvfb binary, `$4…` dirs to hide.
- * Prints READY once the namespace is set up, then becomes a sleeping init.
- */
-export const HOLDER_SCRIPT = [
-  "set -e",
-  'root="$1"; display="$2"; xvfb="$3"; shift 3',
-  'cd "$root"',
-  "mount -t tmpfs -o mode=1777,size=512m tmpfs /tmp",
-  'for d in "$@"; do mkdir -p "$d"; mount -t tmpfs -o mode=700,size=1m tmpfs "$d"; done',
-  'mkdir -p "$root"',
-  'mount --no-canonicalize --bind . "$root"',
-  'if [ "$display" = xvfb ]; then',
-  `  "$xvfb" ${NS_DISPLAY} -nolisten tcp -screen 0 1280x800x24 >/dev/null 2>&1 &`,
-  "  i=0",
-  `  while [ ! -S /tmp/.X11-unix/X${NS_DISPLAY.slice(1)} ]; do`,
-  '    i=$((i+1)); if [ "$i" -gt 200 ]; then echo "NO-DISPLAY"; exit 3; fi; sleep 0.05',
-  "  done",
-  "fi",
-  "echo READY",
-  "exec sleep 2147483647",
-].join("\n");
+/** The isolation every `linux-plain` desktop gets: stated, never hoped. */
+export const PLAIN_ISOLATION = {
+  backend: "linux-plain",
+  kind: "process",
+  privateRoot: true,
+  hostDirsHidden: false,
+  tmp: "env",
+  network: "shared",
+  processes: "process-group",
+} as const satisfies Omit<IsolationReport, "display">;
 
 // ---------------------------------------------------------------------------------------
 // the desktop
@@ -220,8 +162,7 @@ class LinuxDesktop implements TrialDesktop {
     readonly paths: TrialPaths,
     private readonly env: Readonly<Record<string, string>>,
     private readonly spec: TrialDesktopSpec,
-    private readonly opts: Required<LinuxBackendOptions>,
-    private readonly ns: { holder: ChildProcess; init: number; pidNs: string } | undefined,
+    opts: Required<LinuxBackendOptions>,
     xvfb: ChildProcess | undefined,
     isolation: IsolationReport,
   ) {
@@ -235,17 +176,16 @@ class LinuxDesktop implements TrialDesktop {
   }
 
   /**
-   * The trial's live processes, by pid namespace (ns) or process group (plain). Zombies
+   * The trial's live processes: members of its process groups. Zombies
    * are excluded: they run nothing and hold no memory, and an orphaned init can stay a
    * zombie until the host's reaper gets to it.
    */
   private members(): ProcStat[] {
     const out: ProcStat[] = [];
     for (const pid of allPids()) {
-      if (this.ns && pidNs(pid) !== this.ns.pidNs) continue;
       const stat = readStat(pid);
       if (!stat || stat.state === "Z" || stat.state === "X") continue;
-      if (this.ns || this.pgids.has(stat.pgid)) out.push(stat);
+      if (this.pgids.has(stat.pgid)) out.push(stat);
     }
     return out;
   }
@@ -291,26 +231,8 @@ class LinuxDesktop implements TrialDesktop {
         timedOut: false,
       });
     const env = { ...this.env, ...opts.env };
-    const [bin, argv] = this.ns
-      ? [
-          this.opts.nsenter,
-          [
-            "-t",
-            String(this.ns.init),
-            "-U",
-            "-m",
-            "-n",
-            "-p",
-            "--preserve-credentials",
-            `--wd=${this.paths.workspace}`,
-            "--",
-            command,
-            ...args,
-          ],
-        ]
-      : [command, [...args]];
     return new Promise((resolve) => {
-      const child = spawn(bin, argv, {
+      const child = spawn(command, [...args], {
         cwd: this.paths.workspace,
         env,
         detached: true,
@@ -351,8 +273,8 @@ class LinuxDesktop implements TrialDesktop {
       child.on("close", finish);
       // A background child of the command can hold stdout open long after the command
       // exited; the exec is over when the command is, so give the pipes a moment to drain
-      // and then resolve. The background child stays a member of the trial (pid ns or
-      // process group) and dies with the desktop.
+      // and then resolve. The background child stays a member of the trial (its process
+      // group) and dies with the desktop.
       child.on("exit", (code, signal) => {
         setTimeout(() => finish(code, signal), 100).unref();
       });
@@ -362,10 +284,6 @@ class LinuxDesktop implements TrialDesktop {
   }
 
   private killAll(): void {
-    if (this.ns) {
-      killPid(this.ns.init);
-      killPid(this.ns.holder.pid);
-    }
     for (const pgid of this.pgids) killGroup(pgid);
     for (const { child } of this.running) killGroup(child.pid);
   }
@@ -398,15 +316,6 @@ class LinuxDesktop implements TrialDesktop {
       ...(detail ? { detail } : {}),
     };
     return this.destroyed;
-  }
-}
-
-function killPid(pid: number | undefined): void {
-  if (!pid) return;
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    // already gone
   }
 }
 
@@ -446,60 +355,28 @@ function firstLine(
 
 export function linuxBackend(options: LinuxBackendOptions = {}): DesktopBackend {
   const opts: Required<LinuxBackendOptions> = {
-    unshare: options.unshare ?? "unshare",
-    nsenter: options.nsenter ?? "nsenter",
     xvfb: options.xvfb ?? "Xvfb",
-    mode: options.mode ?? "auto",
     sampleMs: options.sampleMs ?? 200,
   };
-  let probed: { ns: boolean; xvfb: boolean } | undefined;
-  const detect = () => {
-    probed ??= {
-      ns:
-        opts.mode !== "plain" && nsWorks(opts.unshare) && binaryWorks(opts.nsenter, ["--version"]),
-      xvfb: binaryWorks(opts.xvfb, ["-help"]),
-    };
-    return probed;
+  let xvfbFound: boolean | undefined;
+  const hasXvfb = () => {
+    xvfbFound ??= binaryWorks(opts.xvfb, ["-help"]);
+    return xvfbFound;
   };
   const backend: DesktopBackend = {
-    get id() {
-      return detect().ns ? "linux-ns" : "linux-plain";
-    },
+    id: "linux-plain",
     async probe(): Promise<BackendProbe> {
       if (process.platform !== "linux")
-        return { available: false, detail: "the Linux backend needs Linux (/proc, namespaces)" };
-      const d = detect();
-      if (opts.mode === "ns" && !d.ns)
-        return { available: false, detail: "unprivileged user namespaces are not available" };
+        return { available: false, detail: "the Linux backend needs Linux (/proc)" };
       return {
         available: true,
-        expected: d.ns
-          ? {
-              backend: "linux-ns",
-              kind: "namespace",
-              privateRoot: true,
-              hostDirsHidden: true,
-              tmp: "mount-ns",
-              network: "netns",
-              processes: "pid-ns",
-            }
-          : {
-              backend: "linux-plain",
-              kind: "process",
-              privateRoot: true,
-              hostDirsHidden: false,
-              tmp: "env",
-              network: "shared",
-              processes: "process-group",
-            },
-        detail: `${d.ns ? "namespaces" : "process groups only"}; Xvfb ${d.xvfb ? "found" : "not found"}`,
+        expected: PLAIN_ISOLATION,
+        detail: `process groups and a private root only (no namespaces: other trials' roots, /tmp and the network are shared); Xvfb ${hasXvfb() ? "found" : "not found"}`,
       };
     },
     async create(spec: TrialDesktopSpec): Promise<TrialDesktop> {
-      const d = detect();
       if (process.platform !== "linux") throw new Error("the Linux backend needs Linux");
-      if (opts.mode === "ns" && !d.ns) throw new Error("namespaces required but unavailable");
-      if (spec.display === "xvfb" && !d.xvfb) throw new Error("Xvfb required but not found");
+      if (spec.display === "xvfb" && !hasXvfb()) throw new Error("Xvfb required but not found");
       const paths = makePaths(spec.root);
       const base: Record<string, string> = {
         ...hostEnv(),
@@ -507,71 +384,11 @@ export function linuxBackend(options: LinuxBackendOptions = {}): DesktopBackend 
         XDG_CONFIG_HOME: join(paths.home, ".config"),
         XDG_CACHE_HOME: join(paths.home, ".cache"),
         XDG_DATA_HOME: join(paths.home, ".local", "share"),
-        XDG_RUNTIME_DIR: d.ns ? "/tmp" : join(paths.root, "tmp", "xdg-runtime"),
-        TMPDIR: d.ns ? "/tmp" : paths.tmp,
+        XDG_RUNTIME_DIR: join(paths.root, "tmp", "xdg-runtime"),
+        TMPDIR: paths.tmp,
         LC_ALL: "C.UTF-8",
         ...spec.env,
       };
-      if (d.ns) {
-        const holder = spawn(
-          opts.unshare,
-          [
-            "-rmnpf",
-            "--mount-proc",
-            "--kill-child",
-            "sh",
-            "-c",
-            HOLDER_SCRIPT,
-            "sh",
-            paths.root,
-            spec.display,
-            opts.xvfb,
-            ...spec.hide,
-          ],
-          { env: hostEnv(), stdio: ["ignore", "pipe", "pipe"] },
-        );
-        const stdout = holder.stdout;
-        if (!stdout || !holder.pid) throw new Error("could not start the namespace holder");
-        try {
-          const line = await firstLine(holder, stdout, 20_000);
-          if (line !== "READY") throw new Error(`desktop setup failed: ${line}`);
-        } catch (e) {
-          killPid(holder.pid);
-          rmSync(paths.root, { recursive: true, force: true });
-          throw e;
-        }
-        let init: number | undefined;
-        for (let i = 0; i < 50 && init === undefined; i++) {
-          init = childrenOf(holder.pid)[0];
-          if (init === undefined) await sleep(20);
-        }
-        const ns = init !== undefined ? pidNs(init) : undefined;
-        if (init === undefined || ns === undefined || ns === pidNs(process.pid)) {
-          killPid(holder.pid);
-          rmSync(paths.root, { recursive: true, force: true });
-          throw new Error("could not find the trial's pid namespace");
-        }
-        if (spec.display === "xvfb") base.DISPLAY = NS_DISPLAY;
-        return new LinuxDesktop(
-          spec.runId,
-          paths,
-          Object.freeze(base),
-          spec,
-          opts,
-          { holder, init, pidNs: ns },
-          undefined,
-          {
-            backend: "linux-ns",
-            kind: "namespace",
-            privateRoot: true,
-            hostDirsHidden: true,
-            tmp: "mount-ns",
-            network: "netns",
-            processes: "pid-ns",
-            display: spec.display === "xvfb" ? { kind: "xvfb", id: NS_DISPLAY } : { kind: "none" },
-          },
-        );
-      }
       mkdirSync(paths.tmp, { recursive: true, mode: 0o700 });
       let xvfb: ChildProcess | undefined;
       let display: IsolationReport["display"] = { kind: "none" };
@@ -598,14 +415,8 @@ export function linuxBackend(options: LinuxBackendOptions = {}): DesktopBackend 
           throw e;
         }
       }
-      return new LinuxDesktop(spec.runId, paths, Object.freeze(base), spec, opts, undefined, xvfb, {
-        backend: "linux-plain",
-        kind: "process",
-        privateRoot: true,
-        hostDirsHidden: false,
-        tmp: "env",
-        network: "shared",
-        processes: "process-group",
+      return new LinuxDesktop(spec.runId, paths, Object.freeze(base), spec, opts, xvfb, {
+        ...PLAIN_ISOLATION,
         display,
       });
     },

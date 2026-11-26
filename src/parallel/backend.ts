@@ -8,10 +8,10 @@
  * not-verified (fail closed).
  *
  * Backends:
- * - `linux-ns` / `linux-plain` (`./linux-backend.ts`): per-trial user+mount+net+pid
- *   namespaces with a private /tmp, private root and in-namespace Xvfb; or, where
- *   unprivileged namespaces are unavailable, a process group with a private root and
- *   TMPDIR only (which an operator requirement of `network: "required"` refuses).
+ * - `linux-plain` (`./linux-backend.ts`): a process group with a private root, TMPDIR and
+ *   its own Xvfb. The host filesystem, /tmp and network are SHARED (`hostDirsHidden:
+ *   false`), so strict requirements refuse it and the pool never counts its trials as
+ *   verified. Strict namespace isolation (`linux-ns`) is NOT in this PR (filed separately).
  * - microVM (lands with U): implements `DesktopBackend` with `kind: "microvm"`. The pool
  *   needs nothing else from it. See docs/product/safe-parallelism.md §6 for the contract.
  */
@@ -22,7 +22,11 @@ export interface IsolationReport {
   readonly kind: "namespace" | "process" | "container" | "microvm" | "fake";
   /** The trial has a private root dir no other trial is given. */
   readonly privateRoot: boolean;
-  /** Other trials' roots and the host's run, vault and evidence dirs are not visible inside. */
+  /**
+   * Other trials' roots and the host's run, vault and evidence dirs can be neither seen nor
+   * written from inside, by any means the agent has (unmounting included). Only a backend
+   * that enforces this may say true: the pool counts a trial as verified only when it is.
+   */
   readonly hostDirsHidden: boolean;
   /** "mount-ns": a private tmpfs on /tmp; "env": only TMPDIR points into the root. */
   readonly tmp: "mount-ns" | "env" | "vm";

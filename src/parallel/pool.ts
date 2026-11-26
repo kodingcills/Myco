@@ -20,7 +20,9 @@
  *
  * After every trial: scan each trial's evidence root and vault dir for other trials'
  * markers. A trial counts as verified only when the gate said `verified` AND no
- * disqualifier applies (isolation, contamination in either direction, missing own marker,
+ * disqualifier applies (isolation, a backend that leaves other trials' roots writable
+ * (`shared-host-dirs`: the marker scan cannot catch a hostile writer that simply does not
+ * write its own marker), contamination in either direction, missing own marker,
  * incomplete scan, failed teardown, cap breach, timeout, agent error). A verdict is never
  * raised by anything here; it can only be withheld.
  *
@@ -37,7 +39,7 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
-  readFileSync,
+  readSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
@@ -98,6 +100,7 @@ export interface PoolOptions {
 export type Disqualifier =
   | "run-id"
   | "isolation"
+  | "shared-host-dirs"
   | "contaminated"
   | "leaked"
   | "own-marker-missing"
@@ -228,10 +231,33 @@ export function scanTree(dir: string, markers: ReadonlyMap<string, string>): Sca
       complete = false;
       return;
     }
+    // The trial's processes may still run: the file can be swapped for a FIFO after the
+    // lstat. Open without blocking, re-check on the fd, and read at most what was budgeted.
+    let fd: number;
     try {
-      scanBytes(readFileSync(path), markers, found);
+      fd = openNoBlock(path);
     } catch {
       complete = false;
+      return;
+    }
+    try {
+      const fst = fstatSync(fd);
+      if (!fst.isFile() || fst.size > st.size + budget) {
+        complete = false;
+        return;
+      }
+      const buf = Buffer.alloc(fst.size);
+      let off = 0;
+      while (off < buf.length) {
+        const n = readSync(fd, buf, off, buf.length - off, off);
+        if (n <= 0) break;
+        off += n;
+      }
+      scanBytes(buf.subarray(0, off), markers, found);
+    } catch {
+      complete = false;
+    } finally {
+      closeSync(fd);
     }
   };
   walk(dir);
@@ -251,17 +277,55 @@ export function scanBytes(
 // capture
 // ---------------------------------------------------------------------------------------
 
-export class CaptureRefused extends Error {}
+/** Why a capture was refused; every code fails the trial closed (`capture-refused`). */
+export type CaptureRefusal =
+  | "missing"
+  | "outside-workspace"
+  | "symlink"
+  | "not-regular"
+  | "hard-linked"
+  | "too-large";
+
+export class CaptureRefused extends Error {
+  constructor(
+    readonly code: CaptureRefusal,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "CaptureRefused";
+  }
+}
+
+/** A saved state file larger than this is refused, never read (no unbounded read). */
+export const CAPTURE_LIMIT_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Open `path` for reading without ever blocking: `O_NONBLOCK` makes opening a FIFO return
+ * at once (it would otherwise wait for a writer forever, freezing the whole event loop),
+ * and `O_NOFOLLOW` refuses a symlink at the last component. The caller must `fstat` the fd
+ * and refuse anything but a regular file BEFORE reading it.
+ */
+export function openNoBlock(path: string): number {
+  return openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+}
 
 /**
  * Read `rel` from the trial's workspace for the vault, refusing anything but a regular
  * file with one link that really lives in that workspace. The agent owns its workspace,
  * so it could plant a symlink (or a hard link) to another trial's saved file, or to a
  * host file it wrote with the right content; following it would let one trial be
- * verified on another's bytes. `workspaceReal` is the workspace's realpath taken by the
- * harness BEFORE the agent ran. `O_NOFOLLOW` refuses a symlink at the last component, the
- * realpath check refuses a symlinked (or swapped) parent, and `nlink === 1` refuses a
- * hard link.
+ * verified on another's bytes. It could also plant a FIFO, a socket or a directory, or a
+ * huge sparse file, to hang or exhaust the harness. `workspaceReal` is the workspace's
+ * realpath taken by the harness BEFORE the agent ran.
+ *
+ * - `lstat` refuses a non-regular file (FIFO, socket, device, dir, symlink) before any
+ *   open; the open is still `O_NONBLOCK | O_NOFOLLOW`, because the agent's processes may
+ *   still be running and can swap the file between the `lstat` and the `open`;
+ * - the realpath check refuses a symlinked (or swapped) parent;
+ * - `fstat` on the open fd re-checks regular file, `nlink === 1` (no hard link) and the
+ *   size cap, so what is read is what was checked.
+ *
+ * Nothing here can block: every refusal is immediate and carries a code.
  */
 export function captureRegularFile(workspaceReal: string, rel: string): Buffer {
   const path = join(workspaceReal, rel);
@@ -269,21 +333,42 @@ export function captureRegularFile(workspaceReal: string, rel: string): Buffer {
   try {
     realParent = realpathSync(dirname(path));
   } catch {
-    throw new CaptureRefused("state file's directory is missing");
+    throw new CaptureRefused("missing", "state file's directory is missing");
   }
   if (realParent !== dirname(path))
-    throw new CaptureRefused("state file's directory is outside the workspace");
+    throw new CaptureRefused(
+      "outside-workspace",
+      "state file's directory is outside the workspace",
+    );
+  let pre: ReturnType<typeof lstatSync>;
+  try {
+    pre = lstatSync(path);
+  } catch {
+    throw new CaptureRefused("missing", "state file is missing");
+  }
+  if (pre.isSymbolicLink()) throw new CaptureRefused("symlink", "state file is a symlink");
+  if (!pre.isFile()) throw new CaptureRefused("not-regular", "state file is not a regular file");
   let fd: number;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openNoBlock(path);
   } catch {
-    throw new CaptureRefused("state file is missing or a symlink");
+    throw new CaptureRefused("symlink", "state file vanished or became a symlink");
   }
   try {
     const st = fstatSync(fd);
-    if (!st.isFile()) throw new CaptureRefused("state file is not a regular file");
-    if (st.nlink !== 1) throw new CaptureRefused("state file has more than one link");
-    return readFileSync(fd);
+    if (!st.isFile()) throw new CaptureRefused("not-regular", "state file is not a regular file");
+    if (st.nlink !== 1)
+      throw new CaptureRefused("hard-linked", "state file has more than one link");
+    if (st.size > CAPTURE_LIMIT_BYTES)
+      throw new CaptureRefused("too-large", `state file is over ${CAPTURE_LIMIT_BYTES} bytes`);
+    const buf = Buffer.alloc(st.size);
+    let off = 0;
+    while (off < buf.length) {
+      const n = readSync(fd, buf, off, buf.length - off, off);
+      if (n <= 0) break;
+      off += n;
+    }
+    return buf.subarray(0, off);
   } finally {
     closeSync(fd);
   }
@@ -407,6 +492,10 @@ export async function runPool(
         w.disqualifiers.add("isolation");
         return;
       }
+      // An operator may accept weak isolation to run trials at all (best-effort), but a
+      // trial another trial could have written is never counted: its gate verdict may rest
+      // on bytes this trial did not save. Not configurable.
+      if (desktop.isolation.hostDirsHidden !== true) w.disqualifiers.add("shared-host-dirs");
       const task = opts.tasks.get(spec.taskId);
       if (!task) throw new Error("task vanished");
       const calc = task.spec as CalcSpec;

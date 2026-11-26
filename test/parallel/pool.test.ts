@@ -6,6 +6,7 @@
  * contamination tests leak on purpose and prove the detector catches it.
  */
 
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   linkSync,
@@ -19,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type AgentBehaviour,
@@ -30,6 +31,7 @@ import {
 } from "../../src/parallel/agents.ts";
 import { STRICT_REQUIREMENTS } from "../../src/parallel/backend.ts";
 import {
+  CAPTURE_LIMIT_BYTES,
   CaptureRefused,
   captureRegularFile,
   MARKER_ENV,
@@ -525,5 +527,119 @@ describe("pool: the host-side capture follows no link the agent planted", () => 
     mkdirSync(ws);
     writeFileSync(join(ws, "sheet.csv"), "ok");
     expect(captureRegularFile(realpathSync(ws), "sheet.csv").toString()).toBe("ok");
+  });
+
+  it("a hard-linked state file is refused with its code", () => {
+    const ws = join(base, "ws3");
+    mkdirSync(ws);
+    writeFileSync(join(ws, "sheet.csv"), "x");
+    linkSync(join(ws, "sheet.csv"), join(base, "elsewhere.csv"));
+    expect(() => captureRegularFile(realpathSync(ws), "sheet.csv")).toThrow(/^hard-linked:/);
+  });
+
+  it("a state file over the capture limit is refused, never read", () => {
+    const ws = join(base, "ws4");
+    mkdirSync(ws);
+    writeFileSync(join(ws, "sheet.csv"), "");
+    // Sparse: no real bytes on disk, but an unbounded read would allocate all of it.
+    spawnSync("truncate", ["-s", String(CAPTURE_LIMIT_BYTES + 1), join(ws, "sheet.csv")]);
+    expect(() => captureRegularFile(realpathSync(ws), "sheet.csv")).toThrow(/^too-large:/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Special files planted as the state file (round-1 D2). A blocking open of a FIFO freezes
+// the event loop, so each case runs in a child process killed after a hard limit: a
+// regression is a failed test, never a frozen run.
+// ---------------------------------------------------------------------------------------
+
+const TSX = resolve(import.meta.dirname, "..", "..", "node_modules", ".bin", "tsx");
+const CHILD = join(import.meta.dirname, "special-file-child.ts");
+const HARD_LIMIT_MS = 30_000;
+
+function child(args: readonly string[]): { refused?: string; bytes?: number } & {
+  disqualifiers?: string[];
+  counted?: boolean;
+  error?: string;
+} {
+  const r = spawnSync(TSX, [CHILD, ...args], {
+    encoding: "utf8",
+    timeout: HARD_LIMIT_MS,
+    killSignal: "SIGKILL",
+  });
+  if (r.error || r.status !== 0)
+    throw new Error(
+      `child did not finish (status ${String(r.status)}, signal ${String(r.signal)}): ${r.stderr}`,
+    );
+  return JSON.parse(r.stdout.trim().split("\n").pop() ?? "{}");
+}
+
+describe.skipIf(process.platform === "win32")(
+  "special file as the state file: fail closed, never hang",
+  () => {
+    it.each([
+      ["fifo", "not-regular"],
+      ["dir", "not-regular"],
+      ["socket", "not-regular"],
+    ] as const)(
+      "capture refuses a %s with code %s, at once",
+      (kind, code) => {
+        const ws = join(base, `ws-${kind}`);
+        mkdirSync(ws);
+        const path = join(ws, "sheet.csv");
+        if (kind === "fifo") spawnSync("mkfifo", [path]);
+        else if (kind === "dir") mkdirSync(path);
+        else
+          spawnSync("python3", [
+            "-c",
+            "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])",
+            path,
+          ]);
+        const t0 = Date.now();
+        expect(child(["capture", ws, "sheet.csv"])).toEqual({ refused: code });
+        expect(Date.now() - t0).toBeLessThan(HARD_LIMIT_MS);
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+
+    it.each(["fifo", "dir", "socket"] as const)(
+      "pool: an agent that plants a %s as its state file gets capture-refused, and the pool returns",
+      (kind) => {
+        const out = child(["pool", join(base, `pool-${kind}`), kind]);
+        expect(out.disqualifiers).toEqual(["capture-refused"]);
+        expect(out.counted).toBe(false);
+        expect(out.error).toMatch(/^not-regular:/);
+      },
+      HARD_LIMIT_MS + 5_000,
+    );
+  },
+);
+
+describe("a backend that leaves other trials' roots writable is never counted", () => {
+  it("best-effort lets the trial run, the gate may say verified, but it is not counted", async () => {
+    const backend = fakeBackend({ isolation: () => ({ ...STRONG, hostDirsHidden: false }) });
+    const report = await runPool(
+      options(backend, {
+        requirements: {
+          network: "best-effort",
+          privateTmp: "best-effort",
+          hideHostDirs: "best-effort",
+          display: "none",
+        },
+      }),
+      [trial("weak-honest", "honest")],
+    );
+    const t = report.trials[0];
+    expect(t?.gate?.verdict).toBe("verified");
+    expect(t?.disqualifiers).toEqual(["shared-host-dirs"]);
+    expect(t?.countedVerified).toBe(false);
+    expect(report.verifiedCount).toBe(0);
+  });
+
+  it("strict requirements still refuse it before anything is sealed", async () => {
+    const backend = fakeBackend({ isolation: () => ({ ...STRONG, hostDirsHidden: false }) });
+    const report = await runPool(options(backend), [trial("strict-weak", "honest")]);
+    expect(report.trials[0]?.disqualifiers).toEqual(["isolation"]);
+    expect(report.trials[0]?.gate).toBeNull();
   });
 });

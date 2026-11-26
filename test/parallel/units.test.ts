@@ -13,6 +13,7 @@ import { parseArgs, requirementsFor } from "../../src/parallel/cli.ts";
 import { scanTree } from "../../src/parallel/pool.ts";
 import {
   assertDistinctFolded,
+  checkRunId,
   foldRunId,
   RunIdError,
   RunIdRegistry,
@@ -41,6 +42,36 @@ describe("run ids collide by their case-folded form", () => {
     expect(() => assertDistinctFolded(["a-1", "a-2"])).not.toThrow();
     for (const bad of ["", "../x", "a/b", ".hidden", "a..b", "x".repeat(129), "café"])
       expect(() => assertDistinctFolded([bad])).toThrow(/bad-run-id/);
+  });
+
+  it("refuses a trailing dot (NTFS drops it: run-a. is run-a) and Windows device names", () => {
+    for (const bad of [
+      "run-a.",
+      "Run-A.",
+      "x...",
+      "con",
+      "CON",
+      "nul.txt",
+      "Com1",
+      "lpt9.csv",
+      "aux",
+    ])
+      expect(() => checkRunId(bad)).toThrow(/^bad-run-id:/);
+    expect(() => assertDistinctFolded(["run-a", "run-a."])).toThrow(/bad-run-id/);
+    expect(() => assertDistinctFolded(["Run-A.", "run-a"])).toThrow(/bad-run-id/);
+    for (const ok of ["run-a", "a.b", "console", "nul-1", "com10", "lpt-1", "run.v2"])
+      expect(checkRunId(ok)).toBe(ok);
+    // Second line: even if a trailing dot got past the rule, it folds onto the bare id.
+    expect(foldRunId("Run-A.")).toBe(foldRunId("run-a"));
+  });
+
+  it("a held run-a refuses a claim of run-a. (in-process and across pools)", () => {
+    const reg = new RunIdRegistry(join(base, "locks-dot"));
+    reg.claim("run-a");
+    expect(() => reg.claim("run-a.")).toThrow(/^bad-run-id:/);
+    expect(() => new RunIdRegistry(join(base, "locks-dot")).claim("RUN-A.")).toThrow(
+      /^bad-run-id:/,
+    );
   });
 
   it("in-process: a second claim of a folded-equal id is refused until released", () => {

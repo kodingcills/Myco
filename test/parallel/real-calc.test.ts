@@ -1,13 +1,18 @@
 /**
- * Track L — the $0 end-to-end run against REAL headless LibreOffice Calc: N namespaced
- * disposable desktops, each with its own Xvfb, a scripted agent driving Calc through the
+ * Track L — the $0 end-to-end run against REAL headless LibreOffice Calc: N `linux-plain`
+ * disposable desktops (private root and HOME, own process group), each with its own Xvfb, a scripted agent driving Calc through the
  * Linux path's actuator, the gate deciding from the sealed capture, contamination checked.
  *
  * Opt-in, like test/linux/linux-path.test.ts: MYCO_PARALLEL_REAL=1 or
  * MYCO_PARALLEL_REQUIRED=1 (several soffice processes per case would load the parallel
- * `pnpm test`). Needs soffice, Python-UNO, Xvfb and user namespaces; skips without them
+ * `pnpm test`). Needs soffice, Python-UNO and Xvfb; skips without them
  * EXCEPT under MYCO_PARALLEL_REQUIRED=1, where it fails instead (it can never pass by
  * skipping in the `safe parallelism` CI job).
+ *
+ * `linux-plain` leaves other trials' roots writable, so no trial here is ever COUNTED as
+ * verified (`shared-host-dirs`): the run checks that every gate verdict is right, that
+ * nothing is contaminated and that every desktop and soffice is gone, and that the count
+ * stays 0. Strict namespace isolation is not in this PR.
  */
 
 import { spawnSync } from "node:child_process";
@@ -18,7 +23,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pythonUnoAvailable } from "../../src/linux/actuator.ts";
 import { sofficeVersion } from "../../src/linux/soffice.ts";
 import { calcActuatorAgent } from "../../src/parallel/agents.ts";
-import { STRICT_REQUIREMENTS } from "../../src/parallel/backend.ts";
 import { linuxBackend } from "../../src/parallel/linux-backend.ts";
 import { runThroughput } from "../../src/parallel/throughput.ts";
 
@@ -30,7 +34,7 @@ const READY =
   sofficeVersion() !== null &&
   pythonUnoAvailable() &&
   spawnSync("Xvfb", ["-help"]).error === undefined &&
-  (await linuxBackend({ mode: "ns" }).probe()).available;
+  (await linuxBackend().probe()).available;
 
 let base: string;
 beforeAll(() => {
@@ -49,11 +53,16 @@ const sofficePids = () =>
   );
 
 describe.skipIf(!READY && !REQUIRED)("real Calc in N isolated desktops ($0, scripted)", () => {
-  it("8 trials at N = 1, 2, 4: every verdict correct, nothing contaminated, every desktop and soffice gone", async () => {
+  it("8 trials at N = 1, 2, 4: every gate verdict correct, none counted, nothing contaminated, every desktop and soffice gone", async () => {
     const before = sofficePids();
     const report = await runThroughput({
-      backend: linuxBackend({ mode: "ns" }),
-      requirements: { ...STRICT_REQUIREMENTS, display: "xvfb" },
+      backend: linuxBackend(),
+      requirements: {
+        network: "best-effort",
+        privateTmp: "best-effort",
+        hideHostDirs: "best-effort",
+        display: "xvfb",
+      },
       runRoot: base,
       ns: [1, 2, 4],
       trialsPerN: 8,
@@ -70,7 +79,9 @@ describe.skipIf(!READY && !REQUIRED)("real Calc in N isolated desktops ($0, scri
     });
     expect(report.allCorrect).toBe(true);
     for (const p of report.points) {
-      expect(p.countedVerified).toBe(4);
+      expect(p.gateVerified).toBe(4);
+      expect(p.countedVerified).toBe(0);
+      expect(p.disqualified).toBe(0);
       expect(p.contaminated).toBe(0);
       expect(p.peakConcurrent).toBe(p.n);
     }

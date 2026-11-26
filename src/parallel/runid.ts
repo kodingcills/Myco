@@ -11,6 +11,11 @@
  *   (two pools started against the same run root). The lock is `open(..., "wx")`, so the
  *   kernel decides the race, not a check-then-create.
  *
+ * Windows NTFS also drops trailing dots (`run-a.` opens `run-a`) and maps reserved device
+ * names (`CON`, `NUL`, `COM1`, … with any extension) to devices, so `checkRunId` refuses
+ * a trailing dot and a reserved name outright, and `foldRunId` strips trailing dots as a
+ * second line, so no two accepted ids can name the same file there.
+ *
  * Fail closed: a malformed id, a held claim or an existing lock file (even a stale one
  * from a crashed pool) is a refusal. Stale locks are not reaped automatically: the
  * operator removes them after checking that the pool that wrote them is gone.
@@ -41,11 +46,25 @@ export class RunIdError extends Error {
  * together even though the run-id rule only admits ASCII today.
  */
 export function foldRunId(runId: string): string {
-  return runId.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
+  return runId
+    .normalize("NFKC")
+    .toUpperCase()
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[. ]+$/, "");
 }
 
+/** Windows device names: `con`, `con.txt` and `CON.anything` all open the device. */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+
 export function checkRunId(runId: unknown): string {
-  if (typeof runId !== "string" || !RUN_ID.test(runId) || runId.includes(".."))
+  if (
+    typeof runId !== "string" ||
+    !RUN_ID.test(runId) ||
+    runId.includes("..") ||
+    runId.endsWith(".") ||
+    WINDOWS_RESERVED.test(runId)
+  )
     throw new RunIdError("bad-run-id", JSON.stringify(runId));
   return runId;
 }
