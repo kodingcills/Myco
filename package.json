@@ -23,7 +23,8 @@
     "myco-run": "tsx scripts/myco-run.ts",
     "myco-linux": "tsx scripts/linux-run.ts",
     "myco-gate": "tsx scripts/myco-gate.ts",
-    "myco": "bash bin/myco"
+    "myco": "bash bin/myco",
+    "myco-record": "tsx scripts/myco-record.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
