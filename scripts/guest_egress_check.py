@@ -13,6 +13,11 @@ usage:
   guest_egress_check.py names    print the running guest's option NAMES (no values),
                                  one per line with "allowed" or "NOT ALLOWED"; a name
                                  outside the fixed QEMU vocabulary prints as its index
+  guest_egress_check.py verify-all
+                                 check the running guest like `live`, but apply every
+                                 rule and print EVERY refusal to the end of argv, one
+                                 "FAIL: <reason>" line each (same fixed text as `live`);
+                                 "ok: <netdev>" if there are none; exit 0 / 1
   guest_egress_check.py argv     print the running guest's argv, one element per
                                  line (operator inspection): only elements that pass
                                  the allowlist print; every other element prints as
@@ -368,7 +373,8 @@ FLAGS = {"-nodefaults", "-S"}
 # read past a short argv (see the module docstring).
 SINGLETONS = {
     "-name", "-uuid", "-m", "-smp", "-machine", "-accel", "-cpu", "-L", "-vga", "-rtc",
-    "-boot", "-mon", "-serial", "-tpmdev", "-spice", "-netdev", "-nodefaults", "-S",
+    "-mon", "-serial", "-tpmdev", "-spice", "-netdev", "-nodefaults", "-S", "-audio",
+    "-audiodev",
 }  # fmt: skip  # LIVE: -nodefaults. -S: UTM starts paused, resumes over QMP.
 
 SAFE = r"[A-Za-z0-9_.:/+@-]*"  # a device property value: no ',' '=' '{' or whitespace
@@ -509,7 +515,14 @@ ALLOWED: dict[str, Callable[[str], None]] = {
             "cache": WORD,
         },
     ),
-    "-boot": kv_rule("-boot", {"menu": "on|off", "order": "[a-z]+", "splash-time": r"\d+"}),
+    # Sound (round 4). LIVE names: -audio and -audiodev. UTM 5.0.9's soundArguments
+    # for a VM with no sound card (no screamer, default sound backend) writes
+    # exactly `-audio none` and `-audiodev spice,id=audio0`: SPICE audio rides the
+    # SPICE unix socket. Every other backend is refused, network or file
+    # (wav,path=...) or host audio (coreaudio, only written when the host's UTM
+    # sound setting is CoreAudio). Exact strings, confirmed by the live run.
+    "-audio": exact("-audio", "none"),
+    "-audiodev": exact("-audiodev", "spice,id=audio0"),
     "-m": shape("-m", r"\d{1,6}[MG]?"),
     "-name": shape("-name", WORD),
     "-uuid": shape("-uuid", UUID),
@@ -550,20 +563,40 @@ def norm(t: str) -> str:
     return t[1:] if t.startswith("--") else t
 
 
-def tokens(args: list[str], off: int) -> list[tuple[int, str, str, str | None]]:
-    """(argv index, as written, normalised name, value) per option, using
-    ALLOWED for arity. Refuses positionals (QEMU would take one as a disk
-    image), `-opt=value` forms, unknown options and a missing value. Names are
+# Known QEMU options that take no value. Used only to keep walking past a refused
+# option in `verify-all`; nothing is accepted because of this set.
+QEMU_FLAG_OPTIONS = {
+    "-nodefaults", "-S", "-s", "-snapshot", "-nographic", "-curses", "-no-reboot",
+    "-no-shutdown", "-enable-kvm", "-usb", "-full-screen", "-no-acpi", "-no-hpet",
+    "-mem-prealloc", "-daemonize", "-only-migratable", "-no-user-config", "-nodefconfig",
+    "-enable-fips", "-preconfig", "-async-teardown", "-alt-grab", "-ctrl-grab", "-no-quit",
+    "-win2k-hack", "-no-fd-bootchk", "-singlestep", "-one-insn-per-tb", "-portrait",
+    "-dump-vmstate", "-enable-sync-profile", "-semihosting", "-h", "-help", "-version",
+    "-sdl",
+}  # fmt: skip
+
+
+def scan(args: list[str], off: int) -> tuple[list[tuple[int, str, str, str | None]], list[str]]:
+    """(tokens, refusals). A token is (argv index, as written, normalised name,
+    value) per allowed option, using ALLOWED for arity. Refuses positionals (QEMU
+    would take one as a disk image), `-opt=value` forms, unknown options and a
+    missing value, in argv order, and keeps walking past each refusal (a refused
+    option is assumed to take a value unless it is a known QEMU flag). Names are
     printed only when they are vocabulary words; anything else by index."""
     out: list[tuple[int, str, str, str | None]] = []
+    refused: list[str] = []
     i = 0
     while i < len(args):
         t, at = args[i], f"argv[{i + off}]"
         if is_positional(t):
-            raise Refused(f"positional argument at {at} (QEMU would take it as a disk image)")
+            refused.append(f"positional argument at {at} (QEMU would take it as a disk image)")
+            i += 1
+            continue
         name = norm(t)
         if "=" in name:
-            raise Refused(f"unparseable option at {at} (an -opt=value form)")
+            refused.append(f"unparseable option at {at} (an -opt=value form)")
+            i += 1
+            continue
         if name in FLAGS:
             out.append((i + off, t, name, None))
             i += 1
@@ -571,16 +604,20 @@ def tokens(args: list[str], off: int) -> list[tuple[int, str, str, str | None]]:
         if name not in ALLOWED:
             why = WHY_NOT.get(name)
             if why:
-                raise Refused(f"{t} is not in the launch allowlist ({why})")
-            if name in QEMU_OPTIONS:
-                raise Refused(f"{t} is not in the launch allowlist ({at})")
-            raise Refused(f"the option at {at} is not in the launch allowlist (not a known QEMU option name)")
+                refused.append(f"{t} is not in the launch allowlist ({why})")
+            elif name in QEMU_OPTIONS:
+                refused.append(f"{t} is not in the launch allowlist ({at})")
+            else:
+                refused.append(f"the option at {at} is not in the launch allowlist (not a known QEMU option name)")
+            i += 1 if name in QEMU_FLAG_OPTIONS else 2
+            continue
         value = args[i + 1] if i + 1 < len(args) else None
         if value is None:
-            raise Refused(f"{t} without a value ({at})")
+            refused.append(f"{t} without a value ({at})")
+            break
         out.append((i + off, t, name, value))
         i += 2
-    return out
+    return out, refused
 
 
 def names_lines(argv: list[str]) -> list[str]:
@@ -650,50 +687,50 @@ def argv_lines(argv: list[str]) -> list[str]:
     return out
 
 
-def check(argv: list[str]) -> str:
-    """Raise Refused unless argv is the one allowed configuration; return the netdev."""
+def refusals(argv: list[str]) -> tuple[list[str], str | None]:
+    """Every refusal for argv, in the order `check` applies its rules, and the
+    netdev if it was vetted. Each message is fixed text, argv indexes and
+    vocabulary words only (see "Value parsing" above). Cross-reference rules
+    look only at values their own rule accepted."""
     off = offset(argv)
     args = argv[off:]
-    for i, a in enumerate(args):
-        if any(c.isspace() for c in a):
-            raise Refused(f"argv[{i + off}] contains whitespace")
-    toks = tokens(args, off)
+    out = [f"argv[{i + off}] contains whitespace" for i, a in enumerate(args) if any(c.isspace() for c in a)]
+    toks, bad = scan(args, off)
+    out += bad
     if not any(n == "-nodefaults" for _, _, n, _ in toks):
-        raise Refused("-nodefaults missing: QEMU would add its default, unrestricted NIC")
+        out.append("-nodefaults missing: QEMU would add its default, unrestricted NIC")
     n_netdevs = sum(n == "-netdev" for _, _, n, _ in toks)
     if n_netdevs != 1:
-        raise Refused(f"expected exactly one -netdev, found {n_netdevs}")
+        out.append(f"expected exactly one -netdev, found {n_netdevs}")
     values: dict[str, list[str]] = {}
     for at, _, name, value in toks:
         if value is not None:
             try:
                 ALLOWED[name](value)
             except Refused as e:
-                raise Refused(f"{e} (argv[{at + 1}])") from None
+                out.append(f"{e} (argv[{at + 1}])")
+                continue
             values.setdefault(name, []).append(value)
     seen: set[str] = set()
     for at, _, name, _ in toks:
         if name in SINGLETONS and name in seen:
-            raise Refused(f"{name} given more than once (argv[{at}]; UTM writes it once)")
+            out.append(f"{name} given more than once (argv[{at}]; UTM writes it once)")
         seen.add(name)
-
-    nd = values["-netdev"][0]  # the only one, fully vetted by netdev_rule
-    nid = dict(options(nd, "netdev"))["id"]
 
     # Chardev ids and what may reference them.
     chardevs: dict[str, str] = {}
     for c in values.get("-chardev", []):
         cid = dict(options(c, "-chardev")).get("id")  # chardev_rule requires it
         if cid in chardevs:
-            raise Refused("a -chardev id is declared twice")
+            out.append("a -chardev id is declared twice")
         chardevs[cid] = c.split(",")[0]
     spice_ids = {i for i, b in chardevs.items() if b in ("spiceport", "spicevmc")}
     if values.get("-mon") and chardevs.get("org.qemu.monitor.qmp") != "spiceport":
-        raise Refused("-mon must sit on UTM's spiceport chardev org.qemu.monitor.qmp")
+        out.append("-mon must sit on UTM's spiceport chardev org.qemu.monitor.qmp")
     if values.get("-serial") and chardevs.get("term0") != "pty":
-        raise Refused("-serial chardev:term0 without UTM's pty term0")
+        out.append("-serial chardev:term0 without UTM's pty term0")
     if values.get("-tpmdev") and "chrtpm0" not in chardevs:
-        raise Refused("-tpmdev without UTM's swtpm socket chrtpm0")
+        out.append("-tpmdev without UTM's swtpm socket chrtpm0")
 
     # D5: nothing may attach to the netdev but the one NIC; device chardevs are SPICE only.
     refs = []
@@ -702,22 +739,36 @@ def check(argv: list[str]) -> str:
         for k, v in options(dev, "device"):
             if k == "netdev":
                 if driver != "virtio-net-pci":
-                    raise Refused(f"netdev= on a {driver} device")
+                    out.append(f"netdev= on a {driver} device")
+                    continue
                 refs.append(v)
             if k == "chardev" and v not in spice_ids:
                 pty = " (it names UTM's pty term0)" if v == "term0" else ""
-                raise Refused(f"a -device chardev= is not one of UTM's SPICE chardevs{pty}")
+                out.append(f"a -device chardev= is not one of UTM's SPICE chardevs{pty}")
+    nds = values.get("-netdev", [])
+    nd = nds[0] if n_netdevs == 1 and len(nds) == 1 else None  # vetted by netdev_rule
     if len(refs) != 1:
-        raise Refused(f"netdev references: {len(refs)} NIC devices name a netdev, want exactly one")
-    if refs[0] != nid:
-        raise Refused("netdev references: the NIC names a netdev other than the -netdev's id")
+        out.append(f"netdev references: {len(refs)} NIC devices name a netdev, want exactly one")
+    elif nd is not None and refs[0] != dict(options(nd, "netdev"))["id"]:
+        out.append("netdev references: the NIC names a netdev other than the -netdev's id")
+    return out, nd
+
+
+def check(argv: list[str]) -> str:
+    """Raise Refused (the first refusal) unless argv is the one allowed
+    configuration; return the netdev."""
+    out, nd = refusals(argv)
+    if out:
+        raise Refused(out[0])
+    if nd is None:  # unreachable: no refusal means exactly one vetted -netdev
+        raise Refused("no vetted -netdev")
     return nd
 
 
 def main(argv: list[str]) -> int:
     mode = argv[0] if argv else ""
     try:
-        if mode not in ("argv", "live", "names"):
+        if mode not in ("argv", "live", "names", "verify-all"):
             print(__doc__, file=sys.stderr)
             return 2
         guest = find_guest_argv()
@@ -726,6 +777,14 @@ def main(argv: list[str]) -> int:
             return 0
         if mode == "names":
             print("\n".join(names_lines(guest)))
+            return 0
+        if mode == "verify-all":
+            out, nd = refusals(guest)
+            if out:
+                print("\n".join(f"FAIL: {r}" for r in out))
+                print(f"FAIL: {len(out)} refusal(s)")
+                return 1
+            print(f"ok: {nd}")
             return 0
         print("ok: " + check(guest))
         return 0

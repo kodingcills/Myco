@@ -63,7 +63,10 @@ const SWTPM = [LAUNCHER, "/Applications/UTM.app/Contents/Frameworks/swtpm.0.fram
  * elements in 10-round3-verify-live.txt are copied verbatim (every -chardev,
  * -mon, -netdev, -serial and -nodefaults); the rest is UTM 5.0.9's argument
  * builder for a wizard-default Windows 11 ARM64 VM (HVF, NVMe, virtio-ramfb,
- * TPM, SPICE). Host paths are placeholders.
+ * TPM, SPICE). Host paths are placeholders. Sound (round 4): the live `names`
+ * run lists -audio and -audiodev, which UTM 5.0.9's soundArguments writes only
+ * for a VM with no sound card, as `-audio none` and `-audiodev spice,id=audio0`
+ * (so no intel-hda / hda-duplex device). UTM never writes -boot.
  */
 const VM_DATA = "/Volumes/vms/myco-win11.utm/Data";
 const DISK = "drive4D2F3A10-1B2C-4D5E-8F90-A1B2C3D4E5F6";
@@ -89,10 +92,6 @@ function utmDefaultArgv(): string[] {
     GOOD_NETDEV,
     "-device",
     "virtio-ramfb-gl",
-    "-device",
-    "intel-hda",
-    "-device",
-    "hda-duplex",
     "-chardev",
     "pty,id=term0",
     "-serial",
@@ -109,8 +108,10 @@ function utmDefaultArgv(): string[] {
     "if=pflash,format=raw,unit=0,file.filename=/Applications/UTM.app/Contents/Resources/qemu/edk2-aarch64-code.fd,file.locking=off,readonly=on",
     "-drive",
     `unit=1,if=pflash,format=raw,file=${VM_DATA}/efi_vars.fd`,
-    "-boot",
-    "menu=on",
+    "-audio",
+    "none",
+    "-audiodev",
+    "spice,id=audio0",
     "-m",
     "6144",
     "-device",
@@ -750,16 +751,18 @@ describe("round 2 V1: argc larger than the argv strings never prints the environ
   };
 
   for (const extra of [1, 2, 3, 5, 7, 8]) {
-    for (const mode of ["verify", "status", "live", "argv", "names"]) {
+    for (const mode of ["verify", "verify-all", "status", "live", "argv", "names"]) {
       it(`argc+${extra}: ${mode} never prints the planted marker`, () => {
         const argv = utmDefaultArgv();
         const r = run([overshoot(argv, extra)], GOOD_UTM, [mode]);
         expect(`${r.stdout}${r.stderr}`).not.toContain(MARKER);
         expect(`${r.stdout}${r.stderr}`).not.toContain("planted-fake-value");
-        if (mode === "verify" || mode === "live") expect(r.status).toBe(1);
+        if (["verify", "verify-all", "live"].includes(mode)) expect(r.status).toBe(1);
         else expect(r.status).toBe(0);
         if (mode === "argv") expect(r.stdout).toContain(`<redacted argv[${argv.length}]>`);
-        if (mode === "live") expect(r.stdout).toContain(`argv[${argv.length}]`);
+        if (mode === "live" || mode === "verify-all") {
+          expect(r.stdout).toContain(`argv[${argv.length}]`);
+        }
       });
     }
   }
@@ -798,6 +801,12 @@ for i in range(2, len(argv)):
         except g.Refused as e:
             refused += 1
             if M in str(e): leaks.append(("check", i, str(e)))
+            # verify-all lists every refusal; its first is the one check raises.
+            every = g.refusals(bad)[0]
+            if not every or every[0] != str(e): leaks.append(("first", i, str(e)))
+        else:
+            if g.refusals(bad)[0]: leaks.append(("refusals-without-check", i))
+        if any(M in r for r in g.refusals(bad)[0]): leaks.append(("verify-all", i))
         if any(M in line for line in g.names_lines(bad)): leaks.append(("names", i))
         if ";" in v and any(M in line for line in g.argv_lines(bad)): leaks.append(("argv", i))
 print(json.dumps({"n": n, "refused": refused, "leaks": leaks[:5]}))
@@ -927,7 +936,8 @@ describe("round 3 N1: an option UTM writes once is refused when repeated", () =>
     ["-L", "/Applications/UTM.app/Contents/Resources/qemu"],
     ["-vga", "none"],
     ["-rtc", "base=localtime"],
-    ["-boot", "menu=on"],
+    ["-audio", "none"],
+    ["-audiodev", "spice,id=audio0"],
     ["-mon", "chardev=org.qemu.monitor.qmp,mode=control"],
     ["-serial", "chardev:term0"],
     ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm0"],
@@ -964,7 +974,7 @@ describe("round 3 N1: an option UTM writes once is refused when repeated", () =>
     b.writeInt32LE(argv.length + 2, 0);
     return { argv, b };
   };
-  for (const mode of ["live", "verify"]) {
+  for (const mode of ["live", "verify", "verify-all"]) {
     it(`${mode} refuses "-name" + a bare marker planted at argc+2, without printing it`, () => {
       const { argv, b } = planted();
       const r = run([b], GOOD_UTM, [mode]);
@@ -1057,6 +1067,156 @@ except g.Refused as e:
     const r = go("/usr/bin/login");
     expect(r.stderr).toBe("");
     expect(r.stdout).toContain("guest argv of 3");
+  });
+});
+
+describe("round 4: verify-all lists every refusal, never a value", () => {
+  const MARKER = "PLANTED_FAKE_MARKER";
+  it("passes UTM's launch (live and UTM both ok), exit 0", () => {
+    const r = run([utmDefaultArgv(), SWTPM], GOOD_UTM, ["verify-all"]);
+    expect(r.stdout).toBe(`ok: ${GOOD_NETDEV}\nok: UTM config matches\n`);
+    expect(r.status).toBe(0);
+  });
+  it("lists every refusal to the end of argv, each by index, with no value", () => {
+    const a = utmDefaultArgv();
+    const n = a.length;
+    const argv = [
+      ...a,
+      "-boot", // n: not emitted by UTM, so off the list
+      `menu=${MARKER}`,
+      "-qmp", // n+2
+      `tcp:${MARKER}:4444`,
+      "-hda", // n+4
+      `/${MARKER}.img`,
+      "-nographic", // n+6: a known QEMU flag, so the walk stays aligned
+      `-${MARKER}`, // n+7: not a QEMU option name
+      `${MARKER}-value`,
+      "-audiodev", // n+9: a second copy, and a wav file backend
+      `wav,id=audio0,path=/${MARKER}.wav`,
+      MARKER, // n+11: positional
+    ];
+    const r = run([argv, SWTPM], GOOD_UTM, ["verify-all"]);
+    const lines = r.stdout.trimEnd().split("\n");
+    expect(lines).toEqual([
+      `FAIL: -boot is not in the launch allowlist (argv[${n}])`,
+      "FAIL: -qmp is not in the launch allowlist (a QMP monitor can add netdevs and filters at run time)",
+      `FAIL: -hda is not in the launch allowlist (argv[${n + 4}])`,
+      `FAIL: -nographic is not in the launch allowlist (argv[${n + 6}])`,
+      `FAIL: the option at argv[${n + 7}] is not in the launch allowlist (not a known QEMU option name)`,
+      `FAIL: positional argument at argv[${n + 11}] (QEMU would take it as a disk image)`,
+      `FAIL: -audiodev value is not in the allowlist (want spice,id=audio0) (argv[${n + 10}])`,
+      `FAIL: -audiodev given more than once (argv[${n + 9}]; UTM writes it once)`,
+      "FAIL: 8 refusal(s)",
+      "ok: UTM config matches",
+    ]);
+    expect(r.stdout).not.toContain(MARKER);
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(1);
+  });
+  it("its first refusal is exactly the one verify stops at", () => {
+    const argv = [...utmDefaultArgv(), "-boot", "menu=on", "-hda", "x"];
+    const all = run([argv], GOOD_UTM, ["verify-all"]);
+    const live = run([argv], GOOD_UTM, ["live"]);
+    expect(all.stdout.split("\n")[0]).toBe(live.stdout.trimEnd());
+    expect(all.stdout).toContain("FAIL: 2 refusal(s)");
+  });
+  it("reports cross-reference refusals after an earlier refusal (pty-wired device, a second NIC)", () => {
+    const a = utmDefaultArgv();
+    const argv = [
+      ...a,
+      "-hda",
+      "x",
+      "-device",
+      "virtserialport,chardev=term0,name=x.0",
+      "-device",
+      "virtio-net-pci,netdev=net0",
+    ];
+    const r = run([argv], GOOD_UTM, ["verify-all"]);
+    expect(r.stdout.split("\n")[0]).toBe(
+      `FAIL: -hda is not in the launch allowlist (argv[${a.length}])`,
+    );
+    expect(r.stdout).toContain(
+      "FAIL: a -device chardev= is not one of UTM's SPICE chardevs (it names UTM's pty term0)\n",
+    );
+    expect(r.stdout).toContain(
+      "FAIL: netdev references: 2 NIC devices name a netdev, want exactly one\n",
+    );
+    expect(r.status).toBe(1);
+  });
+  it("a UTM drift is listed after the live refusals, and fails on its own", () => {
+    const r = run([utmDefaultArgv()], GOOD_UTM.replace("isolate=true", "isolate=false"), [
+      "verify-all",
+    ]);
+    expect(r.stdout).toContain(`ok: ${GOOD_NETDEV}\n`);
+    expect(r.stdout).toContain("FAIL: UTM network configuration is not the allowlist");
+    expect(r.status).toBe(1);
+  });
+  it("an unreadable UTM fails", () => {
+    const r = run([utmDefaultArgv()], null, ["verify-all"]);
+    expect(r.stdout).toContain("FAIL: could not read UTM's network configuration");
+    expect(r.status).toBe(1);
+  });
+  it("no guest running is a refusal", () => {
+    const r = run([SWTPM], GOOD_UTM, ["verify-all"]);
+    expect(r.stdout).toContain("FAIL: expected exactly one running guest, found 0");
+    expect(r.status).toBe(1);
+  });
+});
+
+describe("round 4: sound is exactly UTM's -audio none and -audiodev spice,id=audio0", () => {
+  const refuse = (argv: string[], why: string) => {
+    const r = run([argv]);
+    expect(r.stderr).toContain(why);
+    expect(r.status).toBe(1);
+  };
+  /** UTM's launch with the value after `opt` replaced. */
+  const withValue = (opt: string, value: string) => {
+    const a = utmDefaultArgv();
+    const i = a.indexOf(opt);
+    expect(i).toBeGreaterThan(1);
+    a[i + 1] = value;
+    return a;
+  };
+  const AUDIODEV = "-audiodev value is not in the allowlist (want spice,id=audio0)";
+  it("a network audio backend (PulseAudio on a TCP server)", () => {
+    refuse(withValue("-audiodev", "pa,id=audio0,server=tcp:203.0.113.9:4713"), AUDIODEV);
+  });
+  it("a wav file backend with a path", () => {
+    refuse(withValue("-audiodev", "wav,id=audio0,path=/tmp/out.wav"), AUDIODEV);
+  });
+  it("an unknown backend", () => {
+    refuse(withValue("-audiodev", "sndio,id=audio0"), AUDIODEV);
+  });
+  it("host CoreAudio (only written under a non-default UTM sound setting)", () => {
+    refuse(withValue("-audiodev", "coreaudio,id=audio0"), AUDIODEV);
+  });
+  it("a mismatched id", () => {
+    refuse(withValue("-audiodev", "spice,id=audio1"), AUDIODEV);
+  });
+  it("spice with an extra option", () => {
+    refuse(withValue("-audiodev", "spice,id=audio0,timer-period=1"), AUDIODEV);
+  });
+  it("a second -audiodev, even UTM's own value", () => {
+    refuse([...utmDefaultArgv(), "-audiodev", "spice,id=audio0"], "-audiodev given more than once");
+  });
+  it("a second -audiodev with another backend (CoreAudio beside SPICE)", () => {
+    refuse([...utmDefaultArgv(), "-audiodev", "coreaudio,id=audio1"], AUDIODEV);
+  });
+  it("-audio with a backend instead of none", () => {
+    refuse(withValue("-audio", "spice"), "-audio value is not in the allowlist (want none)");
+  });
+  it("-audio with a network backend", () => {
+    refuse(
+      withValue("-audio", "driver=pa,server=tcp:203.0.113.9:4713"),
+      "-audio value is not in the allowlist (want none)",
+    );
+  });
+  it("a second -audio", () => {
+    refuse([...utmDefaultArgv(), "-audio", "none"], "-audio given more than once");
+  });
+  it("-boot is not modelled: UTM never writes it, so it is refused", () => {
+    const a = utmDefaultArgv();
+    refuse([...a, "-boot", "menu=on"], `-boot is not in the launch allowlist (argv[${a.length}])`);
   });
 });
 

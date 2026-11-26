@@ -85,7 +85,7 @@ This choice over the alternatives:
       the string area is the process's own memory: a process that rewrites it
       (setproctitle-style) can leave fewer argv strings than argc, and then the last
       "elements" read are environment strings. They cannot be told apart, so:
-      - a refusal (`live`, `verify`, `status`) names an element by its argv index and prints
+      - a refusal (`live`, `verify`, `verify-all`, `status`) names an element by its argv index and prints
         only fixed text and words from the script's fixed vocabularies (QEMU option and
         property names, chardev backends, drivers). It never echoes an element's text, so a
         positional or trailing element shows as `positional argument at argv[N]`;
@@ -108,14 +108,23 @@ This choice over the alternatives:
       mode prints the marker. Tests plant `PLANTED_FAKE_MARKER` in the environment with argc raised by 1, 2,
       3, 5, 7 and 8, and assert it is absent from every mode's output. A sweep replaces each
       element of UTM's launch with planted variants (over 1,000 cases) and asserts no
-      refusal or `names` line contains the marker.
+      refusal, `verify-all` refusal list or `names` line contains the marker.
+    - **`verify-all` (round 4)** is a read-only mode for updating the list. `verify` stops at
+      the first refusal; `verify-all` applies every rule and prints every refusal to the end
+      of argv, one `FAIL: …` line each, then a count, then the UTM comparison. Its messages
+      are the same fixed-text ones (`refusals()` in the script; `check()` raises its first,
+      and the sweep asserts the two agree). Past a refused option it keeps walking: the
+      option is taken to have a value unless it is a known QEMU flag (`QEMU_FLAG_OPTIONS`).
+      That set only keeps the walk aligned; nothing is accepted because of it. It exits 1 if
+      any refusal exists.
     - **Process:** exactly one guest process, identified by argv[0] (`QEMULauncher` running a
       qemu binary, or a qemu binary).
     - **Shape:** no argv element may contain whitespace, and `-nodefaults` must be present as
       its own element. Without it QEMU adds a default NIC.
     - **Options UTM writes once appear once** (round 3, N1): `-name`, `-uuid`, `-m`, `-smp`,
-      `-machine`, `-accel`, `-cpu`, `-L`, `-vga`, `-rtc`, `-boot`, `-mon`, `-serial`,
-      `-tpmdev`, `-spice`, `-netdev`, `-nodefaults` and `-S` (`SINGLETONS`). A second copy
+      `-machine`, `-accel`, `-cpu`, `-L`, `-vga`, `-rtc`, `-mon`, `-serial`,
+      `-tpmdev`, `-spice`, `-netdev`, `-audio`, `-audiodev`, `-nodefaults` and `-S`
+      (`SINGLETONS`). A second copy
       is refused. UTM's launch repeats only `-chardev`, `-device` and `-drive` (the committed
       evidence shows nine `-chardev`; the builder writes several `-device` and `-drive`). If
       the read-only live `names` run shows UTM repeating a singleton, the reset refuses
@@ -144,7 +153,11 @@ This choice over the alternatives:
     "Builder" means UTM 5.0.9's QEMU argument builder writes it for this VM type
     (wizard-default Windows 11 ARM64: HVF, NVMe, virtio-ramfb, TPM, SPICE). The committed
     evidence lists 13 of the live launch's 104 elements, so the builder entries still need
-    one read-only `names` run on the live guest (below).
+    one read-only `names` run on the live guest (below). The VM owner's first `names` run
+    (round 4, at `bbab3659`) found 52 options: 50 allowed, plus `-audio` and `-audiodev`,
+    which are now on the list. It did not show `-boot`, which UTM's builder never writes, so
+    `-boot` is off the list. The `-audio`/`-audiodev` values below come from UTM's source and
+    still need the live `verify-all` run to confirm them.
 
     | Option | Value allowed | Source |
     |---|---|---|
@@ -159,8 +172,14 @@ This choice over the alternatives:
     | `-tpmdev` | exactly `emulator,id=tpm0,chardev=chrtpm0` | builder (its chardev is live) |
     | `-drive` | `if` pflash/none, `format` raw/qcow2, `file`/`file.filename` a path with no `:` (so no `nbd:`, `http:`, `json:`), `unit`, `index`, `readonly`, `media`, `id`, `discard`, `detect-zeroes`, `cache`, `file.locking`. No `driver=` | builder |
     | `-L` | an absolute path | builder |
-    | `-cpu`, `-smp`, `-machine virt[,…]`, `-accel hvf\|tcg`, `-m`, `-boot`, `-rtc`, `-vga none` | numeric or word values only | builder |
+    | `-cpu`, `-smp`, `-machine virt[,…]`, `-accel hvf\|tcg`, `-m`, `-rtc`, `-vga none` | numeric or word values only | builder |
     | `-name`, `-uuid` | a word; a UUID | builder |
+    | `-audio` | exactly `none` | live name; value from the builder (`soundArguments`, a VM with no sound card) |
+    | `-audiodev` | exactly `spice,id=audio0`: SPICE audio, which rides the SPICE unix socket. Refused: every other backend, including network ones (`pa,server=tcp:…`), file ones (`wav,path=…`), host CoreAudio (`coreaudio,id=audio1`, which UTM writes only when the host's UTM sound setting is CoreAudio), another id, and extra options | live name; value from the builder |
+
+    `-boot` is **not on the list**. Rounds 1–3 modelled it from the builder, but UTM 5.0.9's
+    builder never writes it (only `bootindex=` on a device), and the live `names` run does not
+    show it.
 
     Kept off the list, with the reason the refusal prints: `-object`, `-qmp`, `-qmp-pretty`,
     `-monitor`, `-gdb`, `-readconfig`, `-set`, `-global`, `-nic`, `-net`, `-parallel`,
@@ -170,7 +189,8 @@ This choice over the alternatives:
     next reset may refuse an option UTM now writes. That failure is closed, never open.
     1. With the VM lock free, run `python3 -I scripts/guest_egress_check.py names`. It prints
        each option NAME of the live launch with `allowed` or `NOT ALLOWED`, and no values, so
-       its output is safe to paste into a PR.
+       its output is safe to paste into a PR. Then run `scripts/guest-egress.sh verify-all`,
+       which lists every value-rule refusal by argv index (no values), also safe to paste.
     2. For each `NOT ALLOWED` name, read what the option can do in QEMU's documentation. If
        it can open a socket, attach to a netdev, add a monitor, or load configuration, do not
        add it; change the UTM setting that produced it instead.
@@ -198,15 +218,19 @@ This choice over the alternatives:
     with no value.
 
   `test/guest-egress.test.ts` has a negative case for each rule, fed fixed `KERN_PROCARGS2`
-  byte buffers. **Mutation claim** (round 3, PR #488): every `raise Refused(…)` in
-  `scripts/guest_egress_check.py` was replaced with `pass`, one at a time, and the suite
-  run. Every replacement fails at least one test, except these five, which are not counted
-  as tested rules:
+  byte buffers. **Mutation claim** (re-run in round 4, PR #488): every `raise Refused(…)` in
+  `scripts/guest_egress_check.py`, and every refusal `append` in `scan()` and `refusals()`
+  (where `verify-all` collects refusals instead of raising), was replaced with `pass`, one at
+  a time, and the suite run. The whitespace refusal list was replaced with an empty list.
+  That is 62 sites. Every replacement fails at least one test, except these six, which are
+  not counted as tested rules:
   - the two real-host `sysctl` failures (`KERN_ARGMAX`, `KERN_PROCARGS2`): tests serve
     fixed buffers, so no test reaches them;
   - the three process-listing refusals in `candidate_pids()` (listing failed, empty or
     non-zero exit, a non-numeric pid): tests supply their own `ps`. The empty-listing case is
-    also backstopped by "expected exactly one running guest, found 0".
+    also backstopped by "expected exactly one running guest, found 0";
+  - `check()`'s "no vetted -netdev" guard, which no input can reach: with no refusal there is
+    exactly one `-netdev` and its rule accepted it.
 
   The two bare re-raises in `find_guest_argv()` (fixture mode, and an unparseable qemu
   process) were mutated the same way and both fail tests. Rules that a later rule

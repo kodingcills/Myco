@@ -426,6 +426,7 @@ Commands (each takes the VM lock where it changes anything; check `lsof` first a
 ```bash
 scripts/guest-egress.sh status   # read-only: UTM flag and network config, the live netdev check
 scripts/guest-egress.sh verify   # exit 0 only if the live guest AND UTM match the allowlist exactly
+scripts/guest-egress.sh verify-all  # read-only: like verify, but lists EVERY refusal (argv index + fixed text, no values)
 scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
 python3 -I scripts/guest_egress_check.py argv   # the guest's argv; elements no rule accepts print as <redacted argv[N]>
 python3 -I scripts/guest_egress_check.py names  # option names only, each marked allowed / NOT ALLOWED (safe to paste)

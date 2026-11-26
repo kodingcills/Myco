@@ -111,6 +111,15 @@ live elements, so the options UTM's argument builder adds (`-L`, `-S`, `-drive`,
 are modelled from UTM 5.0.9's builder, not read from this guest. If one is missing, `verify`
 fails closed and the reset refuses the guest.
 
+**Round 4 (relayed live result, not committed here).** The VM owner ran `names` and `verify`
+read-only at `bbab3659`, with egress denied. `verify` exited 1: `-audio is not in the launch
+allowlist (argv[38])`. `names` marked `-audio` and `-audiodev` NOT ALLOWED; the other 50
+options were allowed, and `-boot` was not present. Round 4 adds `-audio none` and `-audiodev
+spice,id=audio0` (values from UTM 5.0.9's `soundArguments`, not yet read from the guest),
+removes `-boot`, and adds the read-only `scripts/guest-egress.sh verify-all`, which lists
+every refusal by argv index. A `verify-all` run on the live guest is owed before merge, and
+so is committing its output and the `names` output as `11-allowlist-live-names.txt`.
+
 ## Reproduce
 
 ```bash
