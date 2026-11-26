@@ -191,6 +191,25 @@ Contract for the gate:
 The verdict type is the M1 `Verdict` (`src/core/verify.ts`). The surface test stubs a
 `myco-gate` / `verdict` registration locally until TIF-265 lands its real names.
 
+### 3.1 Wired into the gate (TIF-274 prerequisite)
+
+The TIF-265 gate now reads through this seam: `createSealedGate` / `sealedEvidenceReader`
+(`src/gate/sealed.ts`) call `openForTrial(vault, binding, requestedRunId)`, which refuses a
+run id other than the binding's and a receipt that fails `receiptProblem` before opening
+the vault. `gatedVerdict` and `gateForTrial` apply the same runtime receipt check, so
+`AUDIT_WITHOUT_RECEIPT` passed by a cast is `receipt-missing` and a malformed receipt
+object is `receipt-malformed` (#470 N1, N2). See docs/gate/api.md, "The gate on the sealed
+vault".
+
+The surface audit now runs on the launched agent's plan, not a fixed list (#470 F2):
+`runGatedTrial` (`src/gate/gated-trial.ts`) audits an `AgentLaunchPlan` (argv and MCP
+servers with their env) with `auditAgentLaunch` (`src/integrity/launch.ts`) before sealing,
+and starts the agent with that same frozen object. The audit reads `--allowedTools` from
+the argv, refuses widening or unknown flags and unclassified servers, and derives
+`mycoRtSessionPinned` from the `myco-rt` server's real `MYCO_RT_SESSION_ID`, which must
+equal `rtSessionIdFor(runId)` (#470 N3). It does not see permission rules loaded from
+Claude Code settings files: the live driver must launch with those sources off.
+
 ## 4. What this does not do
 
 - It does not stop the agent writing the **guest**. It makes guest state reach the oracle
