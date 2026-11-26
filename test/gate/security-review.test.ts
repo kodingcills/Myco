@@ -99,13 +99,23 @@ const FILES: Record<string, string> = {
 };
 
 /**
+ * Files the doc may cite by symbol without a pin, each with why. Every other `›` ref must
+ * name a file in FILES, so a typo'd or unknown filename fails instead of passing unpinned.
+ */
+const UNPINNED_FILES: Readonly<Record<string, string>> = {
+  "src/watch/page.ts": "on #513's branch, not on main; cited for what that branch will add",
+};
+
+/**
  * Doc ref, then what the named symbol's body must contain. A ref is `file › symbol`, and
  * `›` steps into a nested symbol (`gate.ts › createGate › decide`). A symbol is a function,
  * class, interface, type, enum, const/let or method name; a quoted segment is a
  * `describe`/`it` title prefix in a test file; `(module comment)` is the file's leading doc
- * comment. One symbol can back several claims, each with its own regex.
+ * comment. One symbol can back several claims, each with its own regex. The regex must
+ * match the symbol's code with comments blanked; a third element `"comment"` marks a claim
+ * about a comment, which must then match only inside one.
  */
-const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
+const ANCHORS: ReadonlyArray<readonly [string, RegExp] | readonly [string, RegExp, "comment"]> = [
   // Threat model and authz design
   ["gate.ts › Assignment", /export interface Assignment/],
   ["gate.ts › GateConfig", /readonly assignment: Assignment/],
@@ -142,7 +152,7 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   // H-03
   ["api.ts › parseGateRequest", /claim is longer than/],
   ["cli.ts › operatorGate", /appendFileSync\(audit/],
-  ["api.ts › GateRequest", /never read by the oracle/],
+  ["api.ts › GateRequest", /never read by the oracle/, "comment"],
   // H-04
   ["corrections.ts › documentCorrections", /chars\.slice\(0, CORRECTION_VALUE_LIMIT\)/],
   // H-05
@@ -178,7 +188,7 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["ledger.ts › appendChainedRow", /export function appendChainedRow/],
   ["vault.ts › VaultOptions", /export interface VaultOptions/],
   ["vault.ts › SealInput", /sourceFiles: readonly string\[\]/],
-  ["sealed.ts › (module comment)", /Agent-facing details carry `integrity:<code>` only/],
+  ["sealed.ts › (module comment)", /Agent-facing details carry `integrity:<code>` only/, "comment"],
   [
     'gate.test.ts › "gate: the assignment binds the gate to one trial"',
     /function spyReader[\s\S]*invalid gate assignment/,
@@ -197,7 +207,7 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
   ["gate.ts › createGate › decide", /could not look: \$\{read\.detail\}/],
   ["gate.ts › bindDescriptorPath", /descriptor path check/],
   ["gate.ts › createGate › decide", /could not look: \$\{corrupt\.message\}/],
-  ["gate.ts › EvidenceReader", /must name paths relative to the run/],
+  ["gate.ts › EvidenceReader", /must name paths relative to the run/, "comment"],
   ["gate.ts › bindDescriptorPath", /const shown = actual\.startsWith\(`\$\{realRoot\}\/`\)/],
   ["reasons.ts › errorCode", /export function errorCode\(error: unknown\): string/],
   ["gate.ts › fileEvidenceReader › read", /open failed: \$\{errorCode\(error\)\}/],
@@ -211,7 +221,8 @@ const ANCHORS: ReadonlyArray<readonly [string, RegExp]> = [
 ];
 
 /** `file › symbol` refs in the doc, optionally under a `src/…/` or `test/…/` path. */
-const SYMBOL_REF = /`(?:[\w.-]+\/)*([\w.-]+\.ts)((?: › (?:[\w$]+|"[^"`]+"|\(module comment\)))+)`/g;
+const SYMBOL_REF =
+  /`((?:[\w.-]+\/)*)([\w.-]+\.ts)((?: › (?:[\w$]+|"[^"`]+"|\(module comment\)))+)`/g;
 
 /** The name a declaration introduces, or a test block's title. */
 function declaredName(node: ts.Node): string | undefined {
@@ -268,8 +279,38 @@ function findNamed(root: ts.Node, segment: string): ts.Node[] {
   return found;
 }
 
-/** The node's text from its leading `/** … *\/` comment, if any, to its end. */
-function bodyOf(source: ts.SourceFile, node: ts.Node): string {
+/**
+ * `text` with every comment blanked to spaces (newlines kept), so offsets still line up.
+ * Comments are found as the leading trivia of each token in the AST, so `//` or `/*` inside
+ * a string or template literal is code, not a comment.
+ */
+const BLANKED = new Map<string, string>();
+function blankComments(source: ts.SourceFile): string {
+  const cached = BLANKED.get(source.fileName);
+  if (cached !== undefined) return cached;
+  const text = source.getFullText();
+  const chars = [...text];
+  const blank = (pos: number, end: number) => {
+    for (let i = pos; i < end; i++) if (chars[i] !== "\n") chars[i] = " ";
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isJSDoc(node)) return;
+    const children = node.getChildren(source);
+    if (children.length === 0 || node.kind === ts.SyntaxKind.EndOfFileToken) {
+      ts.forEachLeadingCommentRange(text, node.getFullStart(), blank);
+    }
+    for (const child of children) visit(child);
+  };
+  visit(source);
+  // A source with no code at all (or a file comment) leaves trivia on the first token only.
+  ts.forEachLeadingCommentRange(text, 0, blank);
+  const blanked = chars.join("");
+  BLANKED.set(source.fileName, blanked);
+  return blanked;
+}
+
+/** The node's [start, end) from its leading `/** … *\/` comment, if any, to its end. */
+function bodyRange(source: ts.SourceFile, node: ts.Node): readonly [number, number] {
   // A const's doc comment and `export` sit on its statement, not its declaration.
   const outer =
     ts.isVariableDeclaration(node) && ts.isVariableStatement(node.parent.parent)
@@ -280,7 +321,13 @@ function bodyOf(source: ts.SourceFile, node: ts.Node): string {
     text.startsWith("/**", range.pos),
   );
   const start = docs.at(-1)?.pos ?? outer.getStart(source);
-  return text.slice(start, outer.getEnd());
+  return [start, outer.getEnd()];
+}
+
+/** A symbol's text: `full` with its comments, `code` with them blanked. */
+interface SymbolBody {
+  readonly full: string;
+  readonly code: string;
 }
 
 /**
@@ -288,7 +335,7 @@ function bodyOf(source: ts.SourceFile, node: ts.Node): string {
  * one declaration: the first among the file's top-level statements (any depth for a quoted
  * test title), later ones among the previous step's members.
  */
-function symbolBody(ref: string): string {
+function symbolBody(ref: string): SymbolBody {
   const [name, ...segments] = ref.split(" › ");
   const file = FILES[name ?? ""];
   if (!file || segments.length === 0) throw new Error(`bad ref ${ref}`);
@@ -299,7 +346,8 @@ function symbolBody(ref: string): string {
   if (segments.length === 1 && segments[0] === "(module comment)") {
     const first = ts.getLeadingCommentRanges(text, 0)?.[0];
     expect(first && text.startsWith("/**", first.pos), `${ref}: no module comment`).toBe(true);
-    return text.slice(first?.pos, first?.end);
+    const full = text.slice(first?.pos, first?.end);
+    return { full, code: "" };
   }
   let node: ts.Node = source;
   for (const [i, segment] of segments.entries()) {
@@ -316,24 +364,51 @@ function symbolBody(ref: string): string {
     expect(candidates.length, `${ref}: ${segment} is declared ${candidates.length} times`).toBe(1);
     node = candidates[0] as ts.Node;
   }
-  return bodyOf(source, node);
+  const [start, end] = bodyRange(source, node);
+  return { full: text.slice(start, end), code: blankComments(source).slice(start, end) };
 }
 
 /** Every `file › symbol` ref the doc makes into FILES, with any directory prefix dropped. */
 const DOC_REFS = [...DOC.matchAll(SYMBOL_REF)]
-  .filter(([, name]) => (name ?? "") in FILES)
-  .map(([, name, path]) => `${name}${path}`);
+  .filter(([, , name]) => (name ?? "") in FILES)
+  .map(([, , name, path]) => `${name}${path}`);
 
 describe("the security review's symbol refs hold on main (D1)", () => {
-  it.each(ANCHORS)("%s holds %s", (ref, anchor) => {
+  it.each(ANCHORS)("%s holds %s", (ref, anchor, where?: "comment") => {
     expect(DOC_REFS, `the doc no longer cites ${ref}`).toContain(ref);
-    expect(symbolBody(ref)).toMatch(anchor);
+    const body = symbolBody(ref);
+    // Code by default: a comment that merely mentions the code does not count. An anchor
+    // that cites a comment says so, and must then match inside a comment.
+    if (where === "comment") {
+      expect(body.full).toMatch(anchor);
+      expect(body.code).not.toMatch(anchor);
+    } else {
+      expect(body.code).toMatch(anchor);
+    }
   });
 
   it("every symbol ref the doc makes into these files is pinned above", () => {
     const pinned = new Set(ANCHORS.map(([ref]) => ref));
     expect(new Set(DOC_REFS).size).toBeGreaterThan(40);
     expect(DOC_REFS.filter((ref) => !pinned.has(ref))).toEqual([]);
+  });
+
+  it("every symbol ref names a pinned file, or one allowlisted as unpinned", () => {
+    const unknown: string[] = [];
+    const cited = new Set<string>();
+    for (const [ref, dir = "", name = ""] of DOC.matchAll(SYMBOL_REF)) {
+      const full = `${dir}${name}`;
+      if (full in UNPINNED_FILES) {
+        cited.add(full);
+        continue;
+      }
+      // A directory prefix must be the pinned file's own path, not just end in its name.
+      const pinned = FILES[name];
+      if (!pinned || (dir !== "" && pinned !== full)) unknown.push(ref);
+    }
+    expect(unknown).toEqual([]);
+    // An allowlist entry the doc no longer cites is stale.
+    expect([...cited].sort()).toEqual(Object.keys(UNPINNED_FILES).sort());
   });
 
   it("no line-number ref is left: every code ref is by symbol", () => {
