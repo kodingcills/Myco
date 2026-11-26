@@ -1,0 +1,146 @@
+{
+  "runId": "2c42476d-69c9-42c3-be03-995279beaddf",
+  "taskId": "calc-record-edit",
+  "taskParams": {
+    "fixtureSeed": "m1-013-trial-01",
+    "rowKey": "EMP-0038",
+    "column": "name",
+    "newValue": "REVISED-775494"
+  },
+  "instruction": "Set the cell at record EMP-0038, column name, to \"REVISED-775494\", and save the file.",
+  "startedAt": "2026-11-26T07:03:30.361Z",
+  "steps": [
+    {
+      "step": 0,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "A1"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-013-trial-01\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-8722-1795676611542-670472085\\\\fixture.xlsx\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-8722-1795676611542-670472085\\\\fixture.xlsx\""
+        }
+      ],
+      "stateVersionBefore": 1,
+      "stateVersionAfter": 2
+    },
+    {
+      "step": 1,
+      "action": {
+        "kind": "click",
+        "ref": {
+          "nodeId": "B39"
+        }
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "intent targets an existing record and column (fixture \"m1-013-trial-01\")",
+          "passed": true,
+          "observed": "intent valid"
+        },
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-8722-1795676611542-670472085\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B39 located at record EMP-0038, column name, holds fixture value \"Dara Larsen\"",
+          "passed": true,
+          "observed": "value=\"Dara Larsen\""
+        }
+      ],
+      "postconditionResults": [],
+      "stateVersionBefore": 3,
+      "stateVersionAfter": 4
+    },
+    {
+      "step": 2,
+      "action": {
+        "kind": "setValue",
+        "ref": {
+          "nodeId": "B39"
+        },
+        "value": "REVISED-775494"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "document open",
+          "passed": true,
+          "observed": "documentPath=\"C:/myco/runs/myco-8722-1795676611542-670472085\\\\fixture.xlsx\""
+        },
+        {
+          "predicateName": "cell B39 located at record EMP-0038, column name, holds fixture value \"Dara Larsen\"",
+          "passed": true,
+          "observed": "value=\"Dara Larsen\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "cell B39 holds \"REVISED-775494\"",
+          "passed": true,
+          "observed": "value=\"REVISED-775494\""
+        }
+      ],
+      "stateVersionBefore": 5,
+      "stateVersionAfter": 6
+    },
+    {
+      "step": 3,
+      "action": {
+        "kind": "keyPress",
+        "keys": "ctrl+s"
+      },
+      "preconditionResults": [
+        {
+          "predicateName": "cell B39 holds \"REVISED-775494\"",
+          "passed": true,
+          "observed": "value=\"REVISED-775494\""
+        }
+      ],
+      "postconditionResults": [
+        {
+          "predicateName": "document not dirty after save",
+          "passed": true,
+          "observed": "dirty=false"
+        }
+      ],
+      "stateVersionBefore": 7,
+      "stateVersionAfter": 8
+    }
+  ],
+  "verdict": {
+    "status": "verified",
+    "checks": [
+      {
+        "name": "calc-record-edit:intent-check",
+        "passed": true,
+        "reason": "cell B39 (record EMP-0038, column name) persisted as \"REVISED-775494\"",
+        "partial_score": {
+          "score": 1,
+          "weight": 1,
+          "description": "calc-record-edit:intent-check"
+        }
+      }
+    ],
+    "score": 1,
+    "reasons": [
+      "cell B39 (record EMP-0038, column name) persisted as \"REVISED-775494\""
+    ]
+  }
+}

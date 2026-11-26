@@ -1,0 +1,82 @@
+{
+  "runId": "2fd93a05-3368-4069-8788-47bbec12c241",
+  "verdict": {
+    "status": "verified",
+    "reasons": [
+      "cell B39 (record EMP-0038, column name) persisted as \"REVISED-775494\""
+    ]
+  },
+  "completed": true,
+  "elapsedMs": 59059,
+  "xlsxPath": "C:/myco/runs/myco-55012-1795677070589-472570315\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      4540,
+      6576
+    ],
+    "removed": [
+      "myco-55012-1795677070589-472570315",
+      "myco-55012-1795677070589-590041287"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 13458,
+    "outcome": "arrived",
+    "hostLoadStart": 8.1,
+    "hostLoadEnd": 7.19
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 6380,
+        "durationMs": 7168,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4677,
+        "durationMs": 5029,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3650,
+        "durationMs": 4148,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4563,
+        "durationMs": 4994,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "save",
+        "elapsedMs": 4579,
+        "durationMs": 5019,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 2412,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-013-trial-01",
+    "dataRows": 117,
+    "csvSha256": "365918f0249ad874f93d9d92231d801221aff42f77bce6e464ae175a777bc1f5"
+  }
+}

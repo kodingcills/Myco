@@ -1,0 +1,16 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 3286 vm-session.sh
+base-parity: == clean-base
+base-parity: clean-base normal m1-013-trial-01 exit=0
+base-parity: clean-base normal m1-013-trial-02 exit=0
+base-parity: clean-base normal m1-013-trial-03 exit=0
+base-parity: clean-base kill m1-013-trial-01 exit=0
+base-parity: == trial-base-v2
+base-parity: trial-base-v2 normal m1-013-trial-01 exit=0
+base-parity: trial-base-v2 normal m1-013-trial-02 exit=0
+base-parity: trial-base-v2 normal m1-013-trial-03 exit=0
+base-parity: trial-base-v2 kill m1-013-trial-01 exit=0
+PARITY-DRIVER-RC=0
+COMPARE-RC=0
+POST-RESET-RC=0
+POST-VERIFY-RC=0
+POST-STOPPED

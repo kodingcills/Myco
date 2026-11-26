@@ -1,0 +1,79 @@
+{
+  "runId": "256f5560-f644-4d88-bc6f-95f1c8198163",
+  "verdict": {
+    "status": "uncertain",
+    "reasons": [
+      "could not look: UNO readback of B39 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "observe-after-action",
+    "observed": "agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)",
+    "reason": "app became unobservable after step 2: agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+  },
+  "completed": false,
+  "elapsedMs": 35547,
+  "xlsxPath": "C:/myco/runs/myco-79111-1795676781810-516114043\\fixture.xlsx",
+  "cleanup": {
+    "killed": [],
+    "removed": [
+      "myco-79111-1795676781810-516114043",
+      "myco-79111-1795676781810-536493348"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 6076,
+    "outcome": "arrived",
+    "hostLoadStart": 15.69,
+    "hostLoadEnd": 15.24
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 4941,
+        "durationMs": 6069,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3492,
+        "durationMs": 4410,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3366,
+        "durationMs": 3870,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3950,
+        "durationMs": 4435,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 415,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-013-trial-01",
+    "dataRows": 117,
+    "csvSha256": "365918f0249ad874f93d9d92231d801221aff42f77bce6e464ae175a777bc1f5"
+  }
+}
