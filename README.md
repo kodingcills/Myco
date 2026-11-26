@@ -70,6 +70,33 @@ Core invariant: **`ActResult` never claims goal success, and the runner never de
 
 ---
 
+## Quickstart: one command
+
+After `pnpm install --frozen-lockfile` (see [Setup](#setup)), from the project you want your
+agents to use the gate in:
+
+```sh
+/path/to/Myco/bin/myco init --dry-run   # every check and every planned change; writes nothing
+/path/to/Myco/bin/myco init             # checks, then writes ./.mcp.json and ./.codex/config.toml
+```
+
+`myco init` checks the Linux desktop path (headless LibreOffice Calc and Python-UNO, or says
+exactly what to install), starts the gate once with the launch line it is about to write and
+checks it answers and fails closed, then adds the `myco-gate` MCP server for Claude Code
+(`./.mcp.json`) and Codex (`./.codex/config.toml`). It changes only that entry (one splice; every
+other byte is kept, and a file it cannot merge into valid JSON/TOML is left alone), backs up
+any file it changes, and a second run changes nothing. It never reads or writes `~/.claude`,
+`~/.claude.json` or `~/.codex` unless you pass `--global`: it refuses to run with your home
+directory as the project and never follows a symlink or hard link out of the project. With
+`--global` it only prints the exact diff until you add `--yes`. No config it writes carries a
+key or token. It does not touch the Windows VM path. `--tasks <file>` registers an operator
+task (for example a `calc-record-edit` task for the Linux Calc path); CI's `linux path` job
+runs init end to end: real headless Calc edits the file under the configured evidence root,
+and a scripted MCP client gets `verified` / `refuted` through the written config. Details:
+[docs/product/setup.md](docs/product/setup.md).
+
+---
+
 ## Setup
 
 Prerequisites: Node ≥ 24 (`engines` in `package.json`) and pnpm 10 on your `PATH`; the repo does
@@ -209,6 +236,7 @@ docs/             see below
 | Path | Contents |
 |---|---|
 | [docs/m1-scorecard.md](docs/m1-scorecard.md) | **Acceptance criteria and evidence — the authoritative M1 status** |
+| [docs/product/setup.md](docs/product/setup.md) | `myco init`: one-command setup of the gate's MCP config for Claude Code and Codex |
 | [docs/eval-runbook.md](docs/eval-runbook.md) | How to run the evaluation from a clean snapshot |
 | [docs/product/vision.md](docs/product/vision.md) | Product vision and M1 acceptance criteria |
 | [docs/architecture/m1.md](docs/architecture/m1.md) | ADRs: adapter, verifier, evidence, recovery, baseline |
