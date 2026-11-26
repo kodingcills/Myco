@@ -1,0 +1,23 @@
+{
+  "seed": "tif99-lo",
+  "soffice": "LibreOffice 24.2.7.2 420(Build:2)",
+  "generator": "scripts/writer-lo-fixtures.ts",
+  "files": {
+    "pristine.lo.odt": {
+      "sha256": "403a3c5114a7a1a39fb7143441600ab76f2d78c57eb88426086f7d1b3afa8746",
+      "from": "pristine.docx"
+    },
+    "pristine.lo.docx": {
+      "sha256": "7262bce579f6a6ef4b23b1c954e3c3254bd34328cafb6b6e3b7215b156095864",
+      "from": "pristine.odt"
+    },
+    "edited.lo.odt": {
+      "sha256": "7bb73f0fcafed34cc8322c1d82add96d48c28b41b20e0c85e2ee762a1b99eed3",
+      "from": "edited.docx"
+    },
+    "edited.lo.docx": {
+      "sha256": "7aefea0d7cc61b00b4fbbdebb13a25b8804b88d54a71706850cbb4a0c48eef00",
+      "from": "edited.odt"
+    }
+  }
+}
