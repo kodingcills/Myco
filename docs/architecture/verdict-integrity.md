@@ -217,4 +217,5 @@ Claude Code settings files: the live driver must launch with those sources off.
 - It does not make permissions a boundary against a process running as the same user. The
   boundary is the tool surface (no host tools). Modes and hashes catch what gets past it.
 - It does not run any fault live. TIF-272 (M2-10) adds the tamper fault class on top of
-  `test/integrity/isolation.test.ts`.
+  `test/integrity/isolation.test.ts`: `docs/architecture/m2-fault-classes.md` (non-VM build;
+  the live runs are M2-12).
